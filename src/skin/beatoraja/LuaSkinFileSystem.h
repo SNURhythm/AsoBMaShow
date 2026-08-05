@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <span>
@@ -118,18 +119,26 @@ public:
   // create their own persistent data through skin_config.get_path.
   SkinFileResolveResult normalizeVirtualPath(std::string_view virtualPath,
                                              bool directoryPath = false) const;
-  // Resource preparation may receive either an authored path relative to the
-  // selected entry or an already package-normalized path returned by
-  // skin_config.get_path. Resolve both through the no-follow package reader;
-  // choosing between two different existing files is forbidden.
+  // Resource preparation follows Beatoraja's direct entry-parent path
+  // resolution.  It intentionally does not apply the selected-directory Lua
+  // I/O boundary or reject an authored path solely for its location.
   SkinFileResolveResult resolveResourceCandidates(
       std::string_view entryRelative,
       std::string_view packageNormalized) const;
+  // SkinLoader's custom-file scan is not a Lua file API.  It lists the
+  // entry's parent-relative directory with ordinary File semantics, which
+  // intentionally permits paths such as "../shared".
+  SkinFileListResult listResourceDirectory(
+      std::string_view entryRelativeDirectory) const;
   SkinFileReadResult readResolvedResource(std::string_view packageNormalized,
                                           std::uint64_t maximumBytes) const;
   [[nodiscard]] const SkinEntryId &entry() const noexcept;
   [[nodiscard]] const SkinRevision &revision() const noexcept;
   [[nodiscard]] const std::filesystem::path &revisionRoot() const noexcept;
+  // Beatoraja sets Lua's file and module root to the selected skin file's
+  // directory.  This is intentionally the live Files-visible directory, not
+  // the private catalog snapshot.
+  [[nodiscard]] const std::filesystem::path &skinDirectory() const noexcept;
   SkinFileResolveResult resolveModule(std::string_view moduleName) const;
   SkinFileReadResult readEntry(std::uint64_t maximumBytes) const;
   SkinFileReadResult read(std::string_view virtualPath, SkinFileUse,

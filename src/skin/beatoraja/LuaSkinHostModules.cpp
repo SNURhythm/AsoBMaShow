@@ -17,6 +17,7 @@ extern "C" {
 #include <array>
 #include <bit>
 #include <cmath>
+#include <cctype>
 #include <cstring>
 #include <limits>
 #include <new>
@@ -236,13 +237,12 @@ struct LuaSkinHostModulesImpl {
   LuaSkinEventExecutor eventExecutor;
   SkinCompatibilityDiagnostics diagnostics;
   std::vector<std::weak_ptr<LuaFileHandle>> handles;
-  std::size_t openHandleCount = 0;
-  std::uint64_t openHandleBytes = 0;
   int fileTokenReference = LUA_NOREF;
   int gdxTokenReference = LUA_NOREF;
   const BeatorajaSkinConfiguration *pendingConfiguration = nullptr;
   std::vector<ConfiguredFile> configuredFiles;
   std::vector<std::pair<std::string, std::string>> configuredPathAliases;
+  std::string configurationPathPrefix;
   std::string initialPackagePath;
   std::string resolvedConfigurationPath;
   std::string lastErrorCode;
@@ -286,12 +286,7 @@ struct LuaSkinHostModulesImpl {
       for (const auto &[knownReturnedPath, knownEntryRelativePath] :
            configuredPathAliases) {
         if (knownReturnedPath == returnedPath) {
-          if (knownEntryRelativePath == entryRelativePath) {
-            return true;
-          }
-          storeError("skin_lua_file_operation_failed",
-                     "skin_config.get_path returned an ambiguous path");
-          return false;
+          return true;
         }
       }
       configuredPathAliases.emplace_back(returnedPath, entryRelativePath);
@@ -324,11 +319,6 @@ struct LuaSkinHostModulesImpl {
   void releaseHandle(LuaFileHandle &handle) noexcept;
   bool copyConfiguredFiles(const std::vector<ConfiguredFile> &) noexcept;
   bool resolveConfiguredPath(std::string_view) noexcept;
-  bool reserveHandleBytes(std::uint64_t bytes) noexcept {
-    return bytes <= LuaSkinHostPolicy::maxAggregateHandleBytes -
-                        std::min(openHandleBytes,
-                                 LuaSkinHostPolicy::maxAggregateHandleBytes);
-  }
 };
 
 namespace {
@@ -341,37 +331,26 @@ struct LuaFileHandle {
   std::size_t readOffset = 0;
   bool closed = false;
   bool invalidated = false;
-  bool dirty = false;
-  bool holdsQuota = false;
-  std::uint64_t accountedBytes = 0;
-
-  ~LuaFileHandle() {
-    if (owner != nullptr && holdsQuota) {
-      owner->releaseHandle(*this);
-    }
-  }
 };
 
 } // namespace
 
 void LuaSkinHostModulesImpl::releaseHandle(LuaFileHandle &handle) noexcept {
-  openHandleBytes = handle.accountedBytes <= openHandleBytes
-                        ? openHandleBytes - handle.accountedBytes
-                        : 0;
-  handle.accountedBytes = 0;
-  if (!handle.holdsQuota) {
-    return;
-  }
-  handle.holdsQuota = false;
-  if (openHandleCount > 0) {
-    --openHandleCount;
-  }
+  (void)handle;
 }
 
 bool LuaSkinHostModulesImpl::copyConfiguredFiles(
     const std::vector<ConfiguredFile> &files) noexcept {
   try {
-    configuredFiles = files;
+    configuredFiles.clear();
+    configuredFiles.reserve(files.size());
+    for (const auto &file : files) {
+      ConfiguredFile configured = file;
+      // LuaSkinLoader stores CustomFile paths as p.getParent() + "/" +
+      // the authored pattern before passing them to SkinLoader#getPath.
+      configured.pattern = configurationPathPrefix + "/" + file.pattern;
+      configuredFiles.push_back(std::move(configured));
+    }
     resolvedConfigurationPath.clear();
     return true;
   } catch (...) {
@@ -384,94 +363,87 @@ bool LuaSkinHostModulesImpl::copyConfiguredFiles(
 bool LuaSkinHostModulesImpl::resolveConfiguredPath(
     std::string_view request) noexcept {
   try {
-    const auto retainResolvedPath = [this](std::string_view entryRelativePath,
-                                           SkinFileResolveResult resolved) {
-      if (!resolved.normalizedVirtualPath) {
-        storeError("skin_lua_file_operation_failed",
-                   "skin_config.get_path did not resolve a resource");
-        return false;
-      }
-      if (!rememberConfiguredPathAlias(*resolved.normalizedVirtualPath,
-                                       entryRelativePath)) {
-        return false;
-      }
-      resolvedConfigurationPath = std::move(*resolved.normalizedVirtualPath);
-      return true;
-    };
-    const ConfiguredFile *match = nullptr;
+    // LuaSkinLoader passes p.getParent() + "/" + the authored request to
+    // SkinLoader#getPath.  That helper returns a plain File path; it neither
+    // normalizes nor validates it, and it does not make get_path itself a
+    // filesystem access capability.
+    std::string imagePath = configurationPathPrefix;
+    imagePath.push_back('/');
+    imagePath.append(request);
+
     for (const auto &file : configuredFiles) {
-      if (!request.starts_with(file.pattern)) {
+      if (!imagePath.starts_with(file.pattern)) {
         continue;
       }
-      if (match != nullptr) {
-        storeError("skin_lua_file_operation_failed",
-                   "skin_config.get_path matched multiple configured files");
+      const std::size_t wildcard = imagePath.rfind('*');
+      std::string result = imagePath;
+      if (wildcard != std::string::npos) {
+        result.erase(wildcard);
+        result.append(file.selectedValue);
+        result.append(imagePath.substr(file.pattern.size()));
+      }
+      while (result.size() > configurationPathPrefix.size() + 1 &&
+             result.ends_with('/')) {
+        result.pop_back();
+      }
+      const std::string entryRelative =
+          result.substr(configurationPathPrefix.size() + 1);
+      if (!rememberConfiguredPathAlias(result, entryRelative)) {
         return false;
       }
-      match = &file;
+      resolvedConfigurationPath = std::move(result);
+      return true;
     }
-    if (match == nullptr) {
-      if (request.find('*') == std::string_view::npos) {
-        std::string entryRelativePath(request);
-        while (entryRelativePath.size() > 1 &&
-               entryRelativePath.ends_with('/')) {
-          entryRelativePath.pop_back();
+
+    std::string result = imagePath;
+    const std::size_t wildcard = imagePath.rfind('*');
+    if (wildcard != std::string::npos) {
+      std::string extension = imagePath.substr(wildcard + 1);
+      const std::size_t pipe = imagePath.find('|');
+      if (pipe != std::string::npos) {
+        extension = imagePath.substr(wildcard + 1, pipe - wildcard - 1);
+        if (pipe + 1 < imagePath.size()) {
+          extension += imagePath.substr(pipe + 1);
         }
-        auto resolved =
-            fileSystem->resolve(entryRelativePath, SkinFileUse::Resource);
-        if (!resolved.failure) {
-          return retainResolvedPath(entryRelativePath, std::move(resolved));
-        }
-        if (resolved.failure->code != SkinFileError::Missing &&
-            resolved.failure->code != SkinFileError::NonRegular) {
-          storeFileError(*resolved.failure);
-          return false;
-        }
-        auto normalized =
-            fileSystem->normalizeVirtualPath(entryRelativePath, true);
-        if (normalized.failure) {
-          storeFileError(*normalized.failure);
-          return false;
-        }
-        return retainResolvedPath(entryRelativePath, std::move(normalized));
       }
-      storeError("skin_lua_file_operation_failed",
-                 "skin_config.get_path has no configured file match");
+      const std::size_t slash = imagePath.rfind('/');
+      if (slash != std::string::npos &&
+          slash >= configurationPathPrefix.size()) {
+        const std::string directory = imagePath.substr(
+            configurationPathPrefix.size() + 1,
+            slash - configurationPathPrefix.size() - 1);
+        const auto listed = fileSystem->listResourceDirectory(directory);
+        if (!listed.failure) {
+          const auto lowercase = [](std::string value) {
+            std::ranges::transform(value, value.begin(), [](unsigned char c) {
+              return static_cast<char>(std::tolower(c));
+            });
+            return value;
+          };
+          const std::string lowercaseExtension = lowercase(extension);
+          for (const std::string &path : listed.entries) {
+            const std::string lowercasePath = lowercase(path);
+            if (lowercasePath.ends_with(lowercaseExtension)) {
+              const std::size_t filename = path.rfind('/');
+              result = imagePath.substr(0, slash + 1);
+              result.append(path.substr(filename + 1));
+              break;
+            }
+          }
+        }
+      }
+    }
+    while (result.size() > configurationPathPrefix.size() + 1 &&
+           result.ends_with('/')) {
+      result.pop_back();
+    }
+    const std::string entryRelative =
+        result.substr(configurationPathPrefix.size() + 1);
+    if (!rememberConfiguredPathAlias(result, entryRelative)) {
       return false;
     }
-
-    const std::size_t wildcard = request.rfind('*');
-    if (wildcard == std::string::npos ||
-        request.size() < match->pattern.size()) {
-      storeError("skin_lua_file_operation_failed",
-                 "skin_config.get_path pattern cannot be resolved");
-      return false;
-    }
-    const std::size_t requestSuffixSize =
-        request.size() - match->pattern.size();
-    if (wildcard > SkinPackagePolicy::maxPathBytes ||
-        match->selectedValue.size() >
-            SkinPackagePolicy::maxPathBytes - wildcard ||
-        requestSuffixSize > SkinPackagePolicy::maxPathBytes - wildcard -
-                                match->selectedValue.size()) {
-      storeError("skin_lua_file_operation_failed",
-                 "skin_config.get_path result exceeds its fixed limit");
-      return false;
-    }
-
-    std::string candidate;
-    candidate.reserve(wildcard + match->selectedValue.size() +
-                      requestSuffixSize);
-    candidate.append(request, 0, wildcard);
-    candidate.append(match->selectedValue);
-    candidate.append(request, match->pattern.size(), requestSuffixSize);
-
-    auto resolved = fileSystem->resolve(candidate, SkinFileUse::Resource);
-    if (resolved.failure) {
-      storeFileError(*resolved.failure);
-      return false;
-    }
-    return retainResolvedPath(candidate, std::move(resolved));
+    resolvedConfigurationPath = std::move(result);
+    return true;
   } catch (...) {
     storeError("skin_lua_file_operation_failed",
                "skin_config.get_path failed within host limits");
@@ -872,55 +844,22 @@ int fileWrite(lua_State *state) {
     return raiseStoredError(state, handle->owner);
   }
 
-  bool accepted = true;
-  {
-    std::vector<std::byte> addition;
-    try {
-      for (int index = 2; index <= lua_gettop(state); ++index) {
-        std::size_t size = 0;
-        const char *text = lua_tolstring(state, index, &size);
-        if (text == nullptr ||
-            size > LuaSkinHostPolicy::maxDataReadBytes - addition.size()) {
-          accepted = false;
-          break;
-        }
-        const auto *begin = reinterpret_cast<const std::byte *>(text);
-        addition.insert(addition.end(), begin, begin + size);
-      }
-      if (accepted &&
-          addition.size() <=
-              LuaSkinHostPolicy::maxDataReadBytes - handle->bytes.size() &&
-          handle->owner->reserveHandleBytes(addition.size())) {
-        handle->bytes.insert(handle->bytes.end(), addition.begin(),
-                             addition.end());
-        handle->owner->openHandleBytes += addition.size();
-        handle->accountedBytes += addition.size();
-      } else {
-        accepted = false;
-      }
-    } catch (...) {
-      accepted = false;
+  for (int index = 2; index <= lua_gettop(state); ++index) {
+    std::size_t size = 0;
+    const char *text = lua_tolstring(state, index, &size);
+    if (text == nullptr) {
+      return luaL_argerror(state, index, "string or number expected");
+    }
+    const auto *bytes = reinterpret_cast<const std::byte *>(text);
+    const auto written = handle->owner->fileSystem->writeData(
+        handle->virtualPath, std::span<const std::byte>{bytes, size}, true);
+    if (written.failure) {
+      handle->owner->storeFileError(*written.failure);
+      return raiseStoredError(state, handle->owner);
     }
   }
-  if (!accepted) {
-    handle->owner->storeError("skin_lua_host_limit_exceeded",
-                              "Lua skin write buffer exceeds its limit",
-                              handle->virtualPath);
-    return raiseStoredError(state, handle->owner);
-  }
-  handle->dirty = true;
   lua_pushvalue(state, 1);
   return 1;
-}
-
-bool commitHandle(LuaFileHandle &handle) {
-  const auto result = handle.owner->fileSystem->writeData(
-      handle.virtualPath, handle.bytes, handle.mode == HandleMode::Append);
-  if (!result.failure) {
-    return true;
-  }
-  handle.owner->storeFileError(*result.failure);
-  return false;
 }
 
 int fileClose(lua_State *state) {
@@ -938,14 +877,8 @@ int fileClose(lua_State *state) {
     return raiseStoredError(state, handle->owner);
   }
 
-  const bool committed =
-      handle->mode == HandleMode::Read || commitHandle(*handle);
-  if (!committed) {
-    return raiseStoredError(state, handle->owner);
-  }
   std::vector<std::byte>().swap(handle->bytes);
   handle->closed = true;
-  handle->dirty = false;
   handle->owner->releaseHandle(*handle);
   lua_pushboolean(state, 1);
   return 1;
@@ -975,21 +908,14 @@ int ioOpen(lua_State *state) {
   if (selectedMode != HandleMode::Read && !impl->allowOverlayWrites) {
     return expectedFailure(state, "Lua skin overlay writes are not allowed");
   }
-  std::erase_if(impl->handles, [](const auto &weak) {
-    const auto handle = weak.lock();
-    return !handle || handle->closed;
-  });
-  if (impl->openHandleCount >= LuaSkinHostPolicy::maxOpenHandles) {
-    return expectedFailure(state, "Lua skin file handle quota is exhausted");
-  }
-
   bool ready = false;
   std::vector<std::byte> bytes;
   if (selectedMode == HandleMode::Read) {
     SkinFileReadResult read;
     {
-      read = impl->fileSystem->read(virtualPath, SkinFileUse::DataRead,
-                                    LuaSkinHostPolicy::maxDataReadBytes);
+      read = impl->fileSystem->read(
+          virtualPath, SkinFileUse::DataRead,
+          std::numeric_limits<std::uint64_t>::max());
     }
     if (read.failure) {
       if (read.failure->code == SkinFileError::RenderPhase) {
@@ -1010,32 +936,27 @@ int ioOpen(lua_State *state) {
       }
       return expectedFailure(state, resolved.failure->message);
     }
+    const auto created = impl->fileSystem->writeData(
+        virtualPath, {}, selectedMode == HandleMode::Append);
+    if (created.failure) {
+      return expectedFailure(state, created.failure->message);
+    }
     ready = true;
   }
   if (!ready) {
     return expectedFailure(state, "Lua skin file could not be opened");
   }
-  if (!impl->reserveHandleBytes(bytes.size())) {
-    return expectedFailure(state,
-                           "Lua skin aggregate file buffer quota is exhausted");
-  }
-
   try {
     auto handle = std::make_shared<LuaFileHandle>();
     handle->owner = impl;
     handle->virtualPath.assign(virtualPath);
     handle->mode = selectedMode;
     handle->bytes = std::move(bytes);
-    handle->accountedBytes = handle->bytes.size();
-    handle->dirty = selectedMode == HandleMode::Write;
     void *storage = lua_newuserdata(state, sizeof(SharedLuaFileHandle));
     new (storage) SharedLuaFileHandle(handle);
     luaL_getmetatable(state, kHandleMetatable);
     lua_setmetatable(state, -2);
     impl->handles.push_back(handle);
-    handle->holdsQuota = true;
-    ++impl->openHandleCount;
-    impl->openHandleBytes += handle->accountedBytes;
   } catch (...) {
     return expectedFailure(state, "Lua skin file handle could not allocate");
   }
@@ -1201,8 +1122,9 @@ enum class LegacyListStatus : std::uint8_t {
 
 LegacyListStatus pushLegacyList(lua_State *state, LuaSkinHostModulesImpl &impl,
                                 std::string_view path) {
-  const auto listed =
-      impl.fileSystem->list(path, {}, LuaSkinHostPolicy::maxDirectoryEntries);
+  const std::string_view resolvedPath = impl.configuredPathAlias(path);
+  const auto listed = impl.fileSystem->list(
+      resolvedPath, {}, std::numeric_limits<std::size_t>::max());
   if (listed.failure) {
     if (listed.failure->code == SkinFileError::RenderPhase) {
       impl.storeFileError(*listed.failure);
@@ -1213,7 +1135,13 @@ LegacyListStatus pushLegacyList(lua_State *state, LuaSkinHostModulesImpl &impl,
   lua_createtable(state, static_cast<int>(listed.entries.size()), 0);
   int index = 1;
   for (const auto &entry : listed.entries) {
-    lua_pushlstring(state, entry.data(), entry.size());
+    const std::size_t slash = entry.rfind('/');
+    std::string visiblePath(path);
+    if (!visiblePath.empty() && !visiblePath.ends_with('/')) {
+      visiblePath.push_back('/');
+    }
+    visiblePath.append(entry.substr(slash == std::string::npos ? 0 : slash + 1));
+    lua_pushlstring(state, visiblePath.data(), visiblePath.size());
     lua_rawseti(state, -2, index++);
   }
   return LegacyListStatus::Success;
@@ -1243,7 +1171,8 @@ std::pair<bool, bool> performLegacyMkdir(LuaSkinHostModulesImpl &impl,
   if (!impl.allowOverlayWrites) {
     return {false, false};
   }
-  const auto result = impl.fileSystem->mkdirData(path);
+  const auto result =
+      impl.fileSystem->mkdirData(impl.configuredPathAlias(path));
   if (!result.failure) {
     return {true, false};
   }
@@ -1357,9 +1286,7 @@ int legacyNew(lua_State *state) {
   }
   std::size_t pathSize = 0;
   const char *path = lua_tolstring(state, 2, &pathSize);
-  const std::string_view virtualPath =
-      impl->configuredPathAlias(std::string_view(path, pathSize));
-  pushLegacyFileObject(state, impl, virtualPath.data(), virtualPath.size());
+  pushLegacyFileObject(state, impl, path, pathSize);
   return 1;
 }
 
@@ -1690,24 +1617,24 @@ LuaSkinHostModules::create(lua_State *state,
   impl->coroutineContext = options.coroutineContext;
   impl->coroutineCreated = options.coroutineCreated;
   try {
+    // LuaSkinAccessor.setDirectory() preserves Luaj's default `?.lua` then
+    // appends the selected file's Beatoraja-relative directory.  Some real
+    // skins intentionally inspect this string, so do not substitute absolute
+    // native paths here.
     const std::string_view entryPath =
         options.fileSystem->entry().packageRelativePath;
     const std::size_t slash = entryPath.rfind('/');
     const std::string_view entryDirectory = slash == std::string_view::npos
                                                 ? std::string_view{}
                                                 : entryPath.substr(0, slash);
-    std::string virtualDirectory;
-    if (entryDirectory.empty()) {
-      virtualDirectory = "skin";
-    } else if (entryDirectory == "skin" ||
-               entryDirectory.starts_with("skin/")) {
-      virtualDirectory.assign(entryDirectory);
-    } else {
-      virtualDirectory = "skin/";
+    std::string virtualDirectory = "skin/";
+    virtualDirectory += options.fileSystem->entry().package.directoryName;
+    if (!entryDirectory.empty()) {
+      virtualDirectory.push_back('/');
       virtualDirectory.append(entryDirectory);
     }
-    impl->initialPackagePath =
-        virtualDirectory + "/?.lua;" + virtualDirectory + "/?/init.lua";
+    impl->configurationPathPrefix = virtualDirectory;
+    impl->initialPackagePath = "?.lua;" + virtualDirectory + "/?.lua";
   } catch (...) {
     return {.failure =
                 diagnostic("skin_lua_runtime_create_failed",
@@ -1784,22 +1711,10 @@ void LuaSkinHostModules::setEventExecutor(
 
 LuaFileHandleInvalidationResult
 LuaSkinHostModules::invalidateFileHandles() noexcept {
-  LuaFileHandleInvalidationResult result;
-  for (auto &weak : impl_->handles) {
-    if (auto handle = weak.lock(); handle && !handle->closed) {
-      result.hadDirtyWrite =
-          result.hadDirtyWrite ||
-          (handle->mode != HandleMode::Read && handle->dirty);
-      std::vector<std::byte>().swap(handle->bytes);
-      handle->readOffset = 0;
-      handle->dirty = false;
-      handle->invalidated = true;
-      impl_->releaseHandle(*handle);
-    }
-  }
-  std::erase_if(impl_->handles,
-                [](const auto &handle) { return handle.expired(); });
-  return result;
+  // Beatoraja keeps RestrictedIoLib handles live across gameplay.  Retain the
+  // compatibility hook for callers compiled against the old host surface,
+  // but do not add an app-specific invalidation boundary.
+  return {};
 }
 
 std::span<const SkinCompatibilityDiagnostic>

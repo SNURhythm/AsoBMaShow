@@ -512,6 +512,14 @@ return { type = 0, name = "activation shell", w = 1280, h = 720 }
 )lua";
     writeText(source / "skin/main.luaskin", script);
 
+    // Runtime execution follows the installed, Files-visible package exactly
+    // as Beatoraja follows its selected skin directory.  Keep the immutable
+    // revision for activation identity, but make this fixture exercise the
+    // writable visible copy used by a real installation.
+    fs::create_directories(roots_.visiblePackages);
+    fs::copy(source, roots_.visiblePackages / package_.directoryName,
+             fs::copy_options::recursive | fs::copy_options::overwrite_existing);
+
     SkinTreeSnapshotter snapshotter(roots_, aliases_);
     auto snapshot = snapshotter.snapshot(source, package_, {}, {});
     expect(snapshot.prepared.has_value(),

@@ -19,10 +19,6 @@ struct LuaSkinHostModulesImpl;
 
 struct LuaSkinHostPolicy {
   static constexpr std::uint64_t maxTextChunkBytes = 8ULL * 1024 * 1024;
-  static constexpr std::uint64_t maxDataReadBytes = 16ULL * 1024 * 1024;
-  static constexpr std::size_t maxOpenHandles = 64;
-  static constexpr std::uint64_t maxAggregateHandleBytes = 64ULL * 1024 * 1024;
-  static constexpr std::size_t maxDirectoryEntries = 20'000;
 };
 
 using LuaCoroutineCreatedCallback = void (*)(void *, lua_State *);

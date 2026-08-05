@@ -1182,7 +1182,10 @@ LuaRuntimeCreateResult LuaSkinRuntime::create(LuaSkinRuntimeOptions options) {
   auto installed = LuaSkinHostModules::create(
       state,
       {.fileSystem = impl->fileSystem.get(),
-       .allowOverlayWrites = options.purpose != LuaRuntimePurpose::Catalog,
+       // Beatoraja exposes its selected skin directory to the same Lua file
+       // API during both header and configured execution.  Catalog purpose is
+       // an app scheduling concern, not a separate filesystem authority.
+       .allowOverlayWrites = true,
        .coroutineContext = shared.get(),
        .coroutineCreated = installHook});
   if (!installed.modules) {
@@ -1241,7 +1244,6 @@ LuaOperationResult LuaSkinRuntime::enterRenderPhase() {
                 "skin_lua_phase_invalid",
                 "Lua render transition requires configured gameplay")};
   }
-  const auto handles = impl_->hostModules->invalidateFileHandles();
   const auto transition = impl_->fileSystem->enterRenderPhase();
   if (!transition.ok) {
     impl_->renderTransitionFailed = true;
@@ -1249,12 +1251,6 @@ LuaOperationResult LuaSkinRuntime::enterRenderPhase() {
                 "skin_file_render_phase_denied",
                 transition.failure ? transition.failure->message
                                    : "Lua filesystem transition failed")};
-  }
-  if (handles.hadDirtyWrite) {
-    impl_->renderTransitionFailed = true;
-    return {.failure = makeDiagnostic(
-                "skin_file_render_phase_denied",
-                "dirty Lua file handle was discarded at render transition")};
   }
   impl_->phase = LuaRuntimePhase::Render;
   return {.ok = true};

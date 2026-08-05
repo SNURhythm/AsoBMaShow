@@ -123,15 +123,15 @@ return {}
     writeText(source / "skin/get_path.luaskin", R"lua(
 if not skin_config then return {type = 0} end
 local path = skin_config.get_path("parts/frame/*/panel.png")
-assert(path == "skin/parts/frame/red/panel.png")
+assert(path == "skin/HostContract/skin/parts/frame/red/panel.png")
 assert(not path:find("HOST_ROOT_MUST_NOT_LEAK", 1, true))
 local full_filename = skin_config.get_path("parts/background/*.png")
-assert(full_filename == "skin/parts/background/bg.png")
+assert(full_filename == "skin/HostContract/skin/parts/background/bg.png")
 local ordinary = skin_config.get_path("parts/static/logo.png")
-assert(ordinary == "skin/parts/static/logo.png")
+assert(ordinary == "skin/HostContract/skin/parts/static/logo.png")
 return {}
 )lua");
-    writeText(source / "skin/get_path_denied.luaskin", R"lua(
+    writeText(source / "skin/get_path_source_semantics.luaskin", R"lua(
 if not skin_config then return {type = 0} end
 local requests = {
   "parts/random/*.png",
@@ -142,18 +142,20 @@ local requests = {
   "parts/frame/*/panel.png",
   "parts/frame/*",
 }
-local ok, message = pcall(skin_config.get_path,
-                           requests[skin_config.option.Case])
-assert(not ok, "unsafe get_path request unexpectedly succeeded")
-message = tostring(message)
-assert(message:find("@ASOBMSKIN:skin_lua_file_operation_failed:", 1, true) == 1,
-       "get_path denial must be a protected host error")
+local path = skin_config.get_path(requests[skin_config.option.Case])
+assert(type(path) == "string")
+assert(path:find("skin/HostContract/skin/", 1, true) == 1,
+       "get_path must retain Beatoraja's entry-parent path")
 if skin_config.option.Case == 3 then
-  assert(message:find("[parts/frame/*/variant-red/variant-*.png]", 1, true),
+  assert(path == "skin/HostContract/skin/parts/frame/*/variant-red/variant-*.png",
          "get_path must substitute at the complete request's last wildcard")
 end
-assert(not message:find("HOST_ROOT_MUST_NOT_LEAK", 1, true),
-       "get_path denial leaked the host revision root")
+if skin_config.option.Case == 1 then
+  assert(path == "skin/HostContract/skin/parts/random/fallback.png",
+         "unconfigured wildcards use the ordinary source directory scan")
+end
+assert(not path:find("HOST_ROOT_MUST_NOT_LEAK", 1, true),
+       "get_path must not leak the host revision root")
 return {}
 )lua");
     writeText(source / "skin/captured_get_path.luaskin", R"lua(
@@ -364,7 +366,7 @@ void testExactShapeAndEnabledOptionsPreserveAuthoredDuplicates() {
          "orderedOptions 1:1 without deduplicating selected IDs");
 }
 
-void testGetPathSubstitutesAtWildcardAndKeepsTheSuffixVirtual() {
+void testGetPathUsesBeatorajaEntryParentPaths() {
   auto harness = fixture().create("get_path.luaskin",
                                   LuaRuntimePurpose::Validation);
   if (!harness) {
@@ -376,8 +378,7 @@ void testGetPathSubstitutesAtWildcardAndKeepsTheSuffixVirtual() {
       harness->runtime->loadConfigured(happyConfiguration());
   expect(configured.value.has_value() && !configured.failure,
          "get_path substitutes the selected value at '*' while preserving "
-         "the authored suffix, Resource-resolves an ordinary unmatched path, "
-         "and returns only normalized package paths");
+         "the authored suffix and returns Beatoraja's entry-parent paths");
 }
 
 BeatorajaSkinConfiguration deniedConfiguration(int caseId) {
@@ -422,21 +423,21 @@ BeatorajaSkinConfiguration deniedConfiguration(int caseId) {
   return configuration;
 }
 
-void testGetPathRejectsUnsafeAndNondeterministicResolution() {
+void testGetPathUsesBeatorajaSourceSemantics() {
   static constexpr std::string_view cases[] = {
-      "unconfigured pattern",       "ambiguous configured patterns",
-      "unresolved wildcard",        "absolute host path",
-      "package escape",             "missing selected resource",
+      "unconfigured wildcard", "multiple configured patterns",
+      "last wildcard substitution", "absolute-looking request",
+      "parent traversal", "missing selected resource",
       "non-regular selected resource",
   };
   for (int caseId = 1; caseId <= 7; ++caseId) {
-    auto harness = fixture().create("get_path_denied.luaskin",
+    auto harness = fixture().create("get_path_source_semantics.luaskin",
                                     LuaRuntimePurpose::Validation);
     if (!harness) {
       continue;
     }
     expect(harness->runtime->loadHeader().value.has_value(),
-           "get_path denial fixture loads its header");
+           "get_path source-semantics fixture loads its header");
     const auto configured =
         harness->runtime->loadConfigured(deniedConfiguration(caseId));
     expect(configured.value.has_value() && !configured.failure,
@@ -444,7 +445,7 @@ void testGetPathRejectsUnsafeAndNondeterministicResolution() {
   }
 }
 
-void testCapturedGetPathLosesAuthorityAtRenderTransition() {
+void testCapturedGetPathRemainsAvailableAtRenderTransition() {
   auto harness = fixture().create("captured_get_path.luaskin",
                                   LuaRuntimePurpose::Gameplay);
   if (!harness) {
@@ -466,21 +467,13 @@ void testCapturedGetPathLosesAuthorityAtRenderTransition() {
   expect(harness->runtime->enterRenderPhase().ok &&
              harness->runtime->beginFrame(1).ok,
          "captured get_path fixture reaches render");
-  const auto denied = harness->runtime->invoke(*callback, {});
-  expect(denied.failure &&
-             denied.failure->code == "skin_file_render_phase_denied",
-         "captured get_path closure is denied after render transition");
-  if (denied.failure) {
-    expect(denied.failure->message.find(fixture().hostRoot().string()) ==
-                   std::string::npos &&
-               denied.failure->virtualPath.find(
-                   fixture().hostRoot().string()) == std::string::npos,
-           "post-render get_path denial does not leak the host root");
-  }
+  const auto path = harness->runtime->invoke(*callback, {});
+  expect(path.value.has_value() && !path.failure,
+         "captured get_path closure remains available after render transition");
   const auto counters = harness->fileSystem->activityCounters();
-  expect(counters.renderReadsDenied == 1 &&
+  expect(counters.renderReadsDenied == 0 &&
              counters.renderReadsPerformed == 0,
-         "captured get_path records one denial and performs no render read");
+         "captured get_path performs no render file access");
 }
 
 void testUnsupportedDirectMainStateLookupsRaise() {
@@ -517,9 +510,9 @@ void testSelectedMainStateSurfaceUsesBoundConfiguredState() {
 
 int main() {
   testExactShapeAndEnabledOptionsPreserveAuthoredDuplicates();
-  testGetPathSubstitutesAtWildcardAndKeepsTheSuffixVirtual();
-  testGetPathRejectsUnsafeAndNondeterministicResolution();
-  testCapturedGetPathLosesAuthorityAtRenderTransition();
+  testGetPathUsesBeatorajaEntryParentPaths();
+  testGetPathUsesBeatorajaSourceSemantics();
+  testCapturedGetPathRemainsAvailableAtRenderTransition();
   testUnsupportedDirectMainStateLookupsRaise();
   testSelectedMainStateSurfaceUsesBoundConfiguredState();
   if (failures != 0) {

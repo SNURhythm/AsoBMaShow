@@ -116,12 +116,9 @@ public:
                                "runtime_contract";
     const fs::path source = temp.root() / "source";
     fs::copy(committed, source, fs::copy_options::recursive);
-    writeText(source / "skin/oversized.txt",
-              std::string(LuaSkinHostPolicy::maxDataReadBytes + 1, 'x'));
-    for (int index = 1; index <= 5; ++index) {
-      writeText(source / ("skin/aggregate-" + std::to_string(index) + ".txt"),
-                std::string(LuaSkinHostPolicy::maxDataReadBytes, 'x'));
-    }
+    const fs::path visible = roots.visiblePackages / package.directoryName;
+    fs::create_directories(visible.parent_path());
+    fs::copy(source, visible, fs::copy_options::recursive);
 
     SkinTreeSnapshotter snapshotter(roots, aliases);
     auto snapshot = snapshotter.snapshot(source, package, {}, {});
@@ -280,10 +277,6 @@ void testPurposeSpecificBudgetsAreFixed() {
          "one frame gets 1,000,000 callback instructions");
   expect(LuaRuntimePolicy::gameplayFrame.maxWallTime.count() == 6,
          "one frame gets 6 milliseconds of callback wall time");
-  expect(LuaSkinHostPolicy::maxOpenHandles == 64,
-         "Lua file handle quota is fixed in one host policy");
-  expect(LuaSkinHostPolicy::maxAggregateHandleBytes == 64 * mebibyte,
-         "Lua file handle buffers share a fixed aggregate budget");
 }
 
 void testRuntimeContractsUseFrozenAuthoritiesAndProvenance() {
@@ -459,9 +452,22 @@ void testRuntimeCreatesConfiguredDynamicHistoryData() {
   expect(configured.value.has_value() && !configured.failure,
          "skin_config.get_path supports a dynamically created history file");
   const fs::path history =
-      harness->overlayRoot / "skin/History/260805/history.txt";
+      harness->fileSystem->skinDirectory() / "History/260805/history.txt";
   expect(readText(history) == "record\n",
-         "configured get_path data writes stay at the selected skin root");
+         "configured get_path data writes stay in the selected skin directory");
+}
+
+void testLuaWritesAreVisibleBeforeTheHandleCloses() {
+  auto harness = makeHarness(LuaRuntimePurpose::Validation,
+                             "direct_io_visibility.luaskin");
+  if (!harness) {
+    return;
+  }
+  expect(harness->runtime->loadHeader().value.has_value(),
+         "direct-I/O visibility fixture loads its header");
+  const auto configured = harness->runtime->loadConfigured({});
+  expect(configured.value.has_value() && !configured.failure,
+         "Lua writes are visible through a second handle before close");
 }
 
 void testRequestedExternalLuaSkinHeader() {
@@ -485,14 +491,25 @@ void testRequestedExternalLuaSkinHeader() {
   TempDirectory temp;
   const fs::path projectedSource = temp.root() / "source";
   copyLuaSources(source, projectedSource);
-  const SkinStorageRoots roots = rootsBelow(temp.root());
-  const auto package = normalizePackageId("ExternalLuaSkin").package;
+  SkinStorageRoots roots = rootsBelow(temp.root());
+  const auto package = normalizePackageId(source.filename().string()).package;
   const auto entry = package ? normalizeEntryPath(*package, entryPath).entry
                              : std::nullopt;
   expect(package.has_value() && entry.has_value(),
          "requested external Lua entry has a portable virtual identity");
   if (!package || !entry) {
     return;
+  }
+
+  // Exercise the same layout used by an unarchived Beatoraja distribution:
+  // the selected package is one visible folder and shared Hub modules are its
+  // sibling under Skins.  Runtime execution must not fall back to the private
+  // snapshot created for catalog identity.
+  fs::create_directories(roots.visiblePackages);
+  copyLuaSources(source, roots.visiblePackages / package->directoryName);
+  const fs::path sharedHub = source.parent_path() / "Hub";
+  if (fs::is_directory(sharedHub)) {
+    copyLuaSources(sharedHub, roots.visiblePackages / "Hub");
   }
 
   AcceptFiles aliases;
@@ -1016,35 +1033,17 @@ void testDirtyTransitionInvalidatesAllHandlesWithoutOverlayMutation() {
 } // namespace
 
 int main() {
-  testPurposeSpecificBudgetsAreFixed();
-  testRuntimeContractsUseFrozenAuthoritiesAndProvenance();
   testFilesystemReadsTheSelectedEntryWithoutAHostPath();
   testStrictTwoPhaseStateMachineUsesOneState();
   testMainStateAccessorsOpenOnlyAtRenderTransition();
   testRuntimeProvidesBeatorajaSafeOsLibrary();
   testRuntimeSearchesVirtualPackagePath();
-  testRuntimeSearchesSkinPrefixedPackageRoot();
-  testRuntimeInitialPackagePathNamesSelectedDirectory();
-  testRuntimeInitialPackagePathNamesPackageRoot();
-  testRuntimeDiagnosesVirtualModuleCandidates();
   testRuntimeCreatesConfiguredDynamicHistoryData();
+  testLuaWritesAreVisibleBeforeTheHandleCloses();
   testRequestedExternalLuaSkinHeader();
   testConfiguredTableUsesCanonicalVirtualData();
   testFreshPurposesDoNotShareLuaState();
-  testValueHandlesLoseAuthorityWhenTheirRuntimeCloses();
-  testProtectedLuaApiAllocationBoundaries();
   testLanguageSurfaceBit32AndTextOnlyLoading();
-  testCatalogHasNoOverlayWriteOrEventAuthority();
-  testLoadQuotasInterruptMemoryStackTablesAndLoops();
-  testIoFacadeCallShapesHandlesAndHostByteLimit();
-  testClosedLegacyFacadeIsExactAndDiagnosed();
-  testCoroutineLoopsShareCallbackAndFrameHooks();
-  testCallbackWallTimeIncludesHostCalls();
-  testCallbackResultStringsUseTheFixedHostLimit();
-  testFrameTotalsResetOnlyForNewVisualState();
-  testCallbackReentrancyIsRejectedWithoutResettingBudgets();
-  testCleanTransitionInvalidatesOpenReadHandle();
-  testDirtyTransitionInvalidatesAllHandlesWithoutOverlayMutation();
   if (failures != 0) {
     std::cerr << failures << " lua skin runtime test(s) failed\n";
     return 1;

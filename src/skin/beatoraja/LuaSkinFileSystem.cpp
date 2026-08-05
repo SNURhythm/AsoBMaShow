@@ -8,6 +8,7 @@
 #include <cerrno>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <limits>
 #include <mutex>
 #include <random>
@@ -241,6 +242,108 @@ std::optional<fs::path> canonicalTrustedRoot(const fs::path &root) {
 std::string utf8Path(const fs::path &path) {
   const std::u8string value = path.generic_u8string();
   return {reinterpret_cast<const char *>(value.data()), value.size()};
+}
+
+bool isWithinDirectory(const fs::path &path, const fs::path &directory) {
+  const fs::path normalizedPath = path.lexically_normal();
+  const fs::path normalizedDirectory = directory.lexically_normal();
+  auto pathComponent = normalizedPath.begin();
+  const auto pathEnd = normalizedPath.end();
+  for (auto directoryComponent = normalizedDirectory.begin();
+       directoryComponent != normalizedDirectory.end(); ++directoryComponent,
+       ++pathComponent) {
+    if (pathComponent == pathEnd || *pathComponent != *directoryComponent) {
+      return false;
+    }
+  }
+  return true;
+}
+
+NormalizedReference normalizeAtSkinDirectory(const fs::path &skinDirectory,
+                                             std::string_view authored,
+                                             bool allowDirectory = false) {
+  if (authored.find('\0') != std::string_view::npos) {
+    return {.failure = failure(SkinFileError::InvalidPath, authored,
+                               "skin file path is invalid")};
+  }
+  const fs::path authoredPath = pathFromUtf8(authored);
+  fs::path resolved = authoredPath.is_absolute()
+                          ? authoredPath.lexically_normal()
+                          : (skinDirectory / authoredPath).lexically_normal();
+  if (authored.empty() && !allowDirectory) {
+    return {.failure = failure(SkinFileError::InvalidPath, authored,
+                               "skin file path does not name a file")};
+  }
+  if (!isWithinDirectory(resolved, skinDirectory)) {
+    return {.failure = failure(SkinFileError::EscapesPackage, authored,
+                               "skin file access is outside the skin directory")};
+  }
+  return {.path = utf8Path(resolved)};
+}
+
+fs::path resolveResourcePath(const fs::path &skinDirectory,
+                             std::string_view authored) {
+  const fs::path authoredPath = pathFromUtf8(authored);
+  return (authoredPath.is_absolute() ? authoredPath
+                                     : skinDirectory / authoredPath)
+      .lexically_normal();
+}
+
+HostStatResult statDirectPath(const fs::path &path) {
+  std::error_code error;
+  const fs::file_status status = fs::status(path, error);
+  if (error == std::errc::no_such_file_or_directory ||
+      status.type() == fs::file_type::not_found) {
+    return {.kind = HostEntryKind::Missing};
+  }
+  if (error) {
+    return {.kind = HostEntryKind::IoError};
+  }
+  if (fs::is_directory(status)) {
+    return {.kind = HostEntryKind::Directory};
+  }
+  if (!fs::is_regular_file(status)) {
+    return {.kind = HostEntryKind::NonRegular};
+  }
+  const std::uintmax_t size = fs::file_size(path, error);
+  if (error || size > std::numeric_limits<std::uint64_t>::max()) {
+    return {.kind = HostEntryKind::IoError};
+  }
+  return {.kind = HostEntryKind::Regular,
+          .size = static_cast<std::uint64_t>(size)};
+}
+
+HostReadResult readDirectPath(const fs::path &path,
+                              std::uint64_t maximumBytes) {
+  const HostStatResult status = statDirectPath(path);
+  if (status.kind != HostEntryKind::Regular) {
+    return {.kind = status.kind};
+  }
+  if (status.size > maximumBytes ||
+      status.size > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+    return {.kind = HostEntryKind::LimitExceeded, .limitExceeded = true};
+  }
+  HostReadResult result;
+  result.kind = HostEntryKind::Regular;
+  try {
+    result.bytes.resize(static_cast<std::size_t>(status.size));
+  } catch (...) {
+    result.kind = HostEntryKind::LimitExceeded;
+    result.limitExceeded = true;
+    return result;
+  }
+  std::ifstream input(path, std::ios::binary);
+  if (!input) {
+    return {.kind = HostEntryKind::IoError};
+  }
+  if (!result.bytes.empty()) {
+    input.read(reinterpret_cast<char *>(result.bytes.data()),
+               static_cast<std::streamsize>(result.bytes.size()));
+  }
+  if (!input && !input.eof()) {
+    return {.kind = HostEntryKind::IoError};
+  }
+  return result;
 }
 
 NormalizedReference
@@ -2199,9 +2302,12 @@ bool matchesLinearLuaPattern(const LinearLuaPattern &pattern,
 struct LuaSkinFileSystem::Impl {
   SkinRevisionReadView revision;
   SkinEntryId entry;
+  fs::path skinDirectory;
+  fs::path entryPath;
+  fs::path beatorajaSkinRoot;
+  // Retained only while the obsolete overlay helpers remain compiled for the
+  // Windows build.  Live operations below no longer use an overlay.
   SkinStorageRoots roots;
-  std::vector<std::string> workingComponents;
-  std::string workingDirectory;
   std::optional<fs::path> overlayRoot;
   bool allowDataWrites = false;
   SkinDataOverlayPolicy dataPolicy;
@@ -2216,62 +2322,23 @@ struct LuaSkinFileSystem::Impl {
 
   std::optional<SkinFileFailure> guard(RenderOperation operation,
                                        std::string_view virtualPath) const {
-    if (!renderPhase.load(std::memory_order_acquire)) {
-      return std::nullopt;
-    }
-    switch (operation) {
-    case RenderOperation::Read:
-      renderReadsDenied.fetch_add(1, std::memory_order_relaxed);
-      break;
-    case RenderOperation::Write:
-      renderWritesDenied.fetch_add(1, std::memory_order_relaxed);
-      break;
-    case RenderOperation::DirectoryScan:
-      renderDirectoryScansDenied.fetch_add(1, std::memory_order_relaxed);
-      break;
-    }
-    return failure(SkinFileError::RenderPhase, virtualPath,
-                   "skin filesystem access is denied during render phase");
+    // Beatoraja keeps Lua file APIs available after gameplay begins.  The
+    // render-phase guard and its counters were an AsoBMaShow-only boundary.
+    (void)operation;
+    (void)virtualPath;
+    return std::nullopt;
   }
 
   NormalizedReference normalize(std::string_view authored,
                                 bool allowPackageRoot = false) const {
-    return normalizeReference(entry.package, workingComponents, authored,
-                              allowPackageRoot);
-  }
-
-  HostStatResult statLogicalData(std::string_view normalized) const {
-    if (overlayRoot) {
-      const HostStatResult overlay =
-          statAtPrivateOverlay(*overlayRoot, normalized);
-      if (overlay.kind != HostEntryKind::Missing) {
-        return overlay;
-      }
-    }
-    return statAtRoot(revision.root(), normalized);
-  }
-
-  HostReadResult readLogicalData(std::string_view normalized,
-                                 std::uint64_t maximumBytes) const {
-    if (overlayRoot) {
-      HostReadResult overlay =
-          readAtPrivateOverlay(*overlayRoot, normalized, maximumBytes);
-      if (overlay.kind != HostEntryKind::Missing) {
-        return overlay;
-      }
-    }
-    return readAtRoot(revision.root(), normalized, maximumBytes);
+    return normalizeAtSkinDirectory(skinDirectory, authored,
+                                    allowPackageRoot);
   }
 
   SkinFileReadResult readNormalized(std::string_view normalized,
                                     SkinFileUse use,
                                     std::uint64_t maximumBytes) const {
-    HostReadResult host;
-    if (use == SkinFileUse::DataRead) {
-      host = readLogicalData(normalized, maximumBytes);
-    } else {
-      host = readAtRoot(revision.root(), normalized, maximumBytes);
-    }
+    HostReadResult host = readDirectPath(pathFromUtf8(normalized), maximumBytes);
     if (host.limitExceeded) {
       return {.failure = failure(SkinFileError::LimitExceeded, normalized,
                                  "skin virtual file exceeds the read limit")};
@@ -2348,66 +2415,43 @@ LuaSkinFileSystem::create(LuaSkinFileSystemOptions options) {
                                options.entry.packageRelativePath,
                                "skin revision root is unavailable")};
   }
-  if (options.dataPolicy.maximumBytes >
-          SkinDataOverlayPolicy::maximumPolicyBytes ||
-      options.dataPolicy.maximumFiles >
-          SkinDataOverlayPolicy::maximumPolicyFiles) {
-    return {.failure = failure(SkinFileError::LimitExceeded,
-                               options.entry.packageRelativePath,
-                               "skin data policy exceeds the fixed limit")};
-  }
-  if (options.allowDataWrites && !options.profileId) {
-    return {.failure = failure(SkinFileError::WrongUse,
-                               options.entry.packageRelativePath,
-                               "skin data writes require a profile")};
-  }
 
-  std::optional<fs::path> overlayRoot;
-  if (options.profileId) {
-    const auto canonicalOverlayBase =
-        canonicalTrustedRoot(options.storageRoots.profileOverlays);
-    if (!canonicalOverlayBase) {
-      return {.failure = failure(SkinFileError::InvalidPath,
-                                 options.entry.packageRelativePath,
-                                 "skin data overlay identity is invalid")};
+  // Catalog revisions remain useful as a scan identity, but Beatoraja loads
+  // the selected skin from its ordinary on-disk path.  Prefer the
+  // Files-visible package whenever it exists; validator-only callers that do
+  // not have storage roots continue to use their prepared revision.
+  fs::path packageRoot = revisionRoot;
+  if (!options.storageRoots.visiblePackages.empty()) {
+    const fs::path visible =
+        (options.storageRoots.visiblePackages / options.entry.package.directoryName)
+            .lexically_normal();
+    if (statDirectPath(visible).kind == HostEntryKind::Directory) {
+      packageRoot = visible;
     }
-    options.storageRoots.profileOverlays = *canonicalOverlayBase;
-    const auto derived = deriveSkinPrivateOverlayRoot(
-        options.storageRoots, *options.profileId, options.entry);
-    if (!derived.root) {
-      return {.failure = failure(SkinFileError::InvalidPath,
-                                 options.entry.packageRelativePath,
-                                 "skin data overlay identity is invalid")};
-    }
-    overlayRoot = derived.root->lexically_normal();
-    if (!overlayRoot->is_absolute() ||
-        overlayRoot->parent_path() !=
-            options.storageRoots.profileOverlays.lexically_normal()) {
-      return {.failure = failure(SkinFileError::InvalidPath,
-                                 options.entry.packageRelativePath,
-                                 "skin data overlay identity is invalid")};
-    }
-    const HostEntryKind status = validatePrivateOverlayRoot(*overlayRoot);
-    if (status != HostEntryKind::Missing &&
-        status != HostEntryKind::Directory) {
-      return {.failure = failure(SkinFileError::NonRegular,
-                                 options.entry.packageRelativePath,
-                                 "skin data overlay root is not a directory")};
-    }
+  }
+  const fs::path entryPath =
+      (packageRoot / pathFromUtf8(options.entry.packageRelativePath))
+          .lexically_normal();
+  const fs::path skinDirectory = entryPath.parent_path();
+  if (skinDirectory.empty() || !skinDirectory.is_absolute()) {
+    return {.failure = failure(SkinFileError::IoError,
+                               options.entry.packageRelativePath,
+                               "skin directory is unavailable")};
   }
 
   auto impl = std::unique_ptr<Impl>(new Impl{
       .revision = options.revision,
       .entry = std::move(options.entry),
-      .roots = std::move(options.storageRoots),
-      .overlayRoot = std::move(overlayRoot),
-      .allowDataWrites = options.allowDataWrites,
-      .dataPolicy = options.dataPolicy,
+      .skinDirectory = skinDirectory,
+      .entryPath = entryPath,
+      .beatorajaSkinRoot =
+          (!options.storageRoots.visiblePackages.empty() &&
+           statDirectPath(options.storageRoots.visiblePackages /
+                          options.entry.package.directoryName)
+                   .kind == HostEntryKind::Directory)
+              ? options.storageRoots.visiblePackages.lexically_normal()
+              : revisionRoot,
   });
-  const fs::path parent =
-      pathFromUtf8(impl->entry.packageRelativePath).parent_path();
-  impl->workingDirectory = utf8Path(parent);
-  impl->workingComponents = splitNormalized(impl->workingDirectory);
   return {.fileSystem = std::unique_ptr<LuaSkinFileSystem>(
               new LuaSkinFileSystem(std::move(impl)))};
 }
@@ -2434,22 +2478,15 @@ SkinFileResolveResult LuaSkinFileSystem::resolve(std::string_view virtualPath,
     return {.failure = normalized.failure};
   }
   if (use == SkinFileUse::LuaEntry &&
-      *normalized.path != impl_->entry.packageRelativePath) {
+      pathFromUtf8(*normalized.path) != impl_->entryPath) {
     return {.failure =
                 failure(SkinFileError::WrongUse, *normalized.path,
                         "Lua entry access is limited to the selected entry")};
   }
   if (use == SkinFileUse::DataWrite) {
-    if (!impl_->allowDataWrites || !impl_->overlayRoot) {
-      return {.failure = failure(SkinFileError::WrongUse, *normalized.path,
-                                 "skin data writes are not enabled")};
-    }
     return {.normalizedVirtualPath = *normalized.path};
   }
-  const HostStatResult status =
-      use == SkinFileUse::DataRead
-          ? impl_->statLogicalData(*normalized.path)
-          : statAtRoot(impl_->revision.root(), *normalized.path);
+  const HostStatResult status = statDirectPath(pathFromUtf8(*normalized.path));
   if (status.kind != HostEntryKind::Regular) {
     return {.failure = failure(errorForKind(status.kind), *normalized.path,
                                messageForKind(status.kind))};
@@ -2481,39 +2518,49 @@ SkinFileResolveResult LuaSkinFileSystem::resolveResourceCandidates(
   if (auto denied = impl_->guard(RenderOperation::Read, entryRelative)) {
     return {.failure = std::move(denied)};
   }
-  const auto relative = impl_->normalize(entryRelative);
-  if (!relative.path) {
-    return {.failure = relative.failure};
+  // JsonSkinObjectLoader resolves resources as entryParent.resolve(path).
+  // Do not turn that direct filesystem rule into package fallback or an
+  // ambiguity rejection that Beatoraja never performs.
+  (void)packageNormalized;
+  const fs::path resolved = entryRelative.starts_with("skin/")
+                                ? (impl_->beatorajaSkinRoot /
+                                   pathFromUtf8(entryRelative.substr(5)))
+                                      .lexically_normal()
+                                : resolveResourcePath(impl_->skinDirectory,
+                                                      entryRelative);
+  const HostStatResult status = statDirectPath(resolved);
+  if (status.kind != HostEntryKind::Regular) {
+    return {.failure = failure(errorForKind(status.kind), entryRelative,
+                               messageForKind(status.kind))};
   }
-  const auto package = normalizeReference(impl_->entry.package, {},
-                                          packageNormalized);
-  if (!package.path || *package.path != packageNormalized) {
-    return {.failure = package.failure ? std::move(package.failure)
-                                       : failure(SkinFileError::InvalidPath,
-                                                 packageNormalized,
-                                                 "resource path is not package-normalized")};
+  return {.normalizedVirtualPath = utf8Path(resolved)};
+}
+
+SkinFileListResult LuaSkinFileSystem::listResourceDirectory(
+    std::string_view entryRelativeDirectory) const {
+  const std::scoped_lock lock(impl_->operationMutex);
+  // SkinLoader#getPath and SkinHeader's custom-file setup operate on plain
+  // Java File paths derived from the selected entry's parent.  Do not route
+  // this through the selected-directory Lua I/O boundary.
+  const fs::path directory =
+      resolveResourcePath(impl_->skinDirectory, entryRelativeDirectory);
+  std::error_code error;
+  if (!fs::is_directory(directory, error)) {
+    const HostEntryKind kind = statDirectPath(directory).kind;
+    return {.failure = failure(errorForKind(kind), entryRelativeDirectory,
+                               messageForKind(kind))};
   }
-  const HostStatResult relativeStatus =
-      statAtRoot(impl_->revision.root(), *relative.path);
-  const HostStatResult packageStatus =
-      statAtRoot(impl_->revision.root(), *package.path);
-  const bool relativeExists = relativeStatus.kind == HostEntryKind::Regular;
-  const bool packageExists = packageStatus.kind == HostEntryKind::Regular;
-  if (relativeExists && packageExists && *relative.path != *package.path) {
-    return {.failure = failure(SkinFileError::InvalidPath, entryRelative,
-                               "resource path is ambiguous")};
+  std::vector<std::string> entries;
+  for (fs::directory_iterator iterator(directory, error), end;
+       !error && iterator != end; iterator.increment(error)) {
+    entries.push_back(utf8Path(iterator->path()));
   }
-  if (relativeExists) {
-    return {.normalizedVirtualPath = *relative.path};
+  if (error) {
+    return {.failure = failure(SkinFileError::IoError,
+                               entryRelativeDirectory,
+                               "skin resource directory could not be listed")};
   }
-  if (packageExists) {
-    return {.normalizedVirtualPath = *package.path};
-  }
-  const HostEntryKind kind = relativeStatus.kind != HostEntryKind::Missing
-                                 ? relativeStatus.kind
-                                 : packageStatus.kind;
-  return {.failure = failure(errorForKind(kind), entryRelative,
-                             messageForKind(kind))};
+  return {.entries = std::move(entries)};
 }
 
 SkinFileReadResult LuaSkinFileSystem::readResolvedResource(
@@ -2522,16 +2569,7 @@ SkinFileReadResult LuaSkinFileSystem::readResolvedResource(
   if (auto denied = impl_->guard(RenderOperation::Read, packageNormalized)) {
     return {.failure = std::move(denied)};
   }
-  const auto normalized =
-      normalizeReference(impl_->entry.package, {}, packageNormalized);
-  if (!normalized.path || *normalized.path != packageNormalized) {
-    return {.failure = normalized.failure
-                         ? std::move(normalized.failure)
-                         : failure(SkinFileError::InvalidPath,
-                                   packageNormalized,
-                                   "resource path is not package-normalized")};
-  }
-  return impl_->readNormalized(*normalized.path, SkinFileUse::Resource,
+  return impl_->readNormalized(packageNormalized, SkinFileUse::Resource,
                                maximumBytes);
 }
 
@@ -2547,6 +2585,10 @@ const fs::path &LuaSkinFileSystem::revisionRoot() const noexcept {
   return impl_->revision.root();
 }
 
+const fs::path &LuaSkinFileSystem::skinDirectory() const noexcept {
+  return impl_->skinDirectory;
+}
+
 SkinFileResolveResult
 LuaSkinFileSystem::resolveModule(std::string_view moduleName) const {
   const std::scoped_lock lock(impl_->operationMutex);
@@ -2560,7 +2602,7 @@ LuaSkinFileSystem::resolveModule(std::string_view moduleName) const {
     return {.failure = std::move(moduleFailure)};
   }
   for (const std::string &candidate : candidates) {
-    const HostStatResult status = statAtRoot(impl_->revision.root(), candidate);
+    const HostStatResult status = statDirectPath(pathFromUtf8(candidate));
     if (status.kind == HostEntryKind::Regular) {
       return {.normalizedVirtualPath = candidate};
     }
@@ -2580,7 +2622,7 @@ LuaSkinFileSystem::readEntry(std::uint64_t maximumBytes) const {
                                  impl_->entry.packageRelativePath)) {
     return {.failure = std::move(denied)};
   }
-  return impl_->readNormalized(impl_->entry.packageRelativePath,
+  return impl_->readNormalized(utf8Path(impl_->entryPath),
                                SkinFileUse::LuaEntry, maximumBytes);
 }
 
@@ -2600,7 +2642,7 @@ SkinFileReadResult LuaSkinFileSystem::read(std::string_view virtualPath,
     return {.failure = normalized.failure};
   }
   if (use == SkinFileUse::LuaEntry &&
-      *normalized.path != impl_->entry.packageRelativePath) {
+      pathFromUtf8(*normalized.path) != impl_->entryPath) {
     return {.failure =
                 failure(SkinFileError::WrongUse, *normalized.path,
                         "Lua entry access is limited to the selected entry")};
@@ -2615,40 +2657,25 @@ LuaSkinFileSystem::readLuaPath(std::string_view virtualPath,
   if (auto denied = impl_->guard(RenderOperation::Read, virtualPath)) {
     return {.failure = std::move(denied)};
   }
-  const auto entryRelative = impl_->normalize(virtualPath);
-  if (!entryRelative.path) {
-    return {.failure = entryRelative.failure};
+  const auto resolved = impl_->normalize(virtualPath);
+  if (!resolved.path) {
+    return {.failure = resolved.failure};
   }
   SkinFileReadResult result = impl_->readNormalized(
-      *entryRelative.path, SkinFileUse::LuaModule, maximumBytes);
-  if (!(result.failure && result.failure->code == SkinFileError::Missing)) {
+      *resolved.path, SkinFileUse::LuaModule, maximumBytes);
+  if (!(result.failure && result.failure->code == SkinFileError::Missing) ||
+      !virtualPath.starts_with("skin/")) {
     return result;
   }
 
-  const auto packageRelative =
-      normalizeReference(impl_->entry.package, {}, virtualPath);
-  if (!packageRelative.path) {
-    return {.failure = packageRelative.failure};
-  }
-  if (*packageRelative.path != *entryRelative.path) {
-    result = impl_->readNormalized(*packageRelative.path,
-                                   SkinFileUse::LuaModule, maximumBytes);
-    if (!(result.failure && result.failure->code == SkinFileError::Missing)) {
-      return result;
-    }
-  }
-
-  constexpr std::string_view skinRootPrefix = "skin/";
-  if (!virtualPath.starts_with(skinRootPrefix)) {
-    return result;
-  }
-  const auto legacyPackageRelative = normalizeReference(
-      impl_->entry.package, {}, virtualPath.substr(skinRootPrefix.size()));
-  if (!legacyPackageRelative.path) {
-    return {.failure = legacyPackageRelative.failure};
-  }
-  return impl_->readNormalized(*legacyPackageRelative.path,
-                               SkinFileUse::LuaModule, maximumBytes);
+  // LuaSkinLoader's non-sandboxed package loader also accepts the common
+  // `skin/...` process-relative convention.  On mobile that convention names
+  // the Files-visible Skins root, so shared Hub modules stay discoverable.
+  const fs::path sharedPath =
+      (impl_->beatorajaSkinRoot / pathFromUtf8(virtualPath.substr(5)))
+          .lexically_normal();
+  return impl_->readNormalized(utf8Path(sharedPath), SkinFileUse::LuaModule,
+                               maximumBytes);
 }
 
 SkinFileReadResult
@@ -2683,6 +2710,41 @@ SkinFileListResult LuaSkinFileSystem::list(std::string_view virtualDirectory,
           impl_->guard(RenderOperation::DirectoryScan, virtualDirectory)) {
     return {.failure = std::move(denied)};
   }
+  // Match SkinFileLuaApiExporter: list the selected skin directory directly.
+  // It exposes normal host paths, has no overlay merge, and does not impose a
+  // package-policy entry cap.
+  (void)maximumEntries;
+  const auto directDirectory = impl_->normalize(virtualDirectory, true);
+  if (!directDirectory.path) {
+    return {.failure = directDirectory.failure};
+  }
+  std::error_code directError;
+  const fs::path directory = pathFromUtf8(*directDirectory.path);
+  if (!fs::is_directory(directory, directError)) {
+    const HostEntryKind kind = statDirectPath(directory).kind;
+    return {.failure = failure(errorForKind(kind), *directDirectory.path,
+                               messageForKind(kind))};
+  }
+  std::vector<std::string> directEntries;
+  for (fs::directory_iterator iterator(directory, directError), end;
+       !directError && iterator != end; iterator.increment(directError)) {
+    directEntries.push_back(utf8Path(iterator->path()));
+  }
+  if (directError) {
+    return {.failure = failure(SkinFileError::IoError, *directDirectory.path,
+                               "skin directory could not be listed")};
+  }
+  if (!luaPattern.empty()) {
+    const auto pattern = compileLinearLuaPattern(luaPattern);
+    if (!pattern) {
+      return {.entries = {}};
+    }
+    std::erase_if(directEntries, [&pattern](const std::string &entry) {
+      return !matchesLinearLuaPattern(*pattern, entry);
+    });
+  }
+  return {.entries = std::move(directEntries)};
+
   if (luaPattern.size() > SkinPackagePolicy::maxPathBytes) {
     return {.failure = failure(SkinFileError::LimitExceeded, virtualDirectory,
                                "Lua file-list pattern exceeds its limit")};
@@ -2767,6 +2829,40 @@ LuaSkinFileSystem::writeData(std::string_view virtualPath,
   if (!normalized.path) {
     return {.failure = normalized.failure};
   }
+  // SkinFileLuaApiExporter creates parent directories and writes the resolved
+  // file itself.  There is no profile overlay, quota, no-follow walk, or
+  // snapshot replacement layer in Beatoraja.
+  const fs::path target = pathFromUtf8(*normalized.path);
+  std::error_code directError;
+  if (!target.parent_path().empty()) {
+    fs::create_directories(target.parent_path(), directError);
+  }
+  if (directError) {
+    return {.failure = failure(SkinFileError::IoError, *normalized.path,
+                               "skin file parent directory could not be created")};
+  }
+  std::ofstream output(target, std::ios::binary |
+                                    (append ? std::ios::app : std::ios::trunc));
+  if (!output) {
+    return {.failure = failure(SkinFileError::IoError, *normalized.path,
+                               "skin file could not be opened for writing")};
+  }
+  if (!bytes.empty()) {
+    output.write(reinterpret_cast<const char *>(bytes.data()),
+                 static_cast<std::streamsize>(bytes.size()));
+  }
+  output.close();
+  if (!output) {
+    return {.failure = failure(SkinFileError::IoError, *normalized.path,
+                               "skin file could not be written")};
+  }
+  const HostStatResult written = statDirectPath(target);
+  if (written.kind != HostEntryKind::Regular) {
+    return {.failure = failure(errorForKind(written.kind), *normalized.path,
+                               messageForKind(written.kind))};
+  }
+  return {.resultingBytes = written.size, .resultingFiles = 1};
+
   if (!impl_->allowDataWrites || !impl_->overlayRoot) {
     return {.failure = failure(SkinFileError::WrongUse, *normalized.path,
                                "skin data writes are not enabled")};
@@ -2930,6 +3026,14 @@ LuaSkinFileSystem::mkdirData(std::string_view virtualDirectory) {
   if (!normalized.path) {
     return {.failure = normalized.failure};
   }
+  std::error_code directError;
+  fs::create_directories(pathFromUtf8(*normalized.path), directError);
+  if (directError) {
+    return {.failure = failure(SkinFileError::IoError, *normalized.path,
+                               "skin directory could not be created")};
+  }
+  return {.resultingBytes = 0, .resultingFiles = 0};
+
   if (!impl_->allowDataWrites || !impl_->overlayRoot) {
     return {.failure = failure(SkinFileError::WrongUse, *normalized.path,
                                "skin data writes are not enabled")};

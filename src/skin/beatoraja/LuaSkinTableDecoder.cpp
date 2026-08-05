@@ -4046,8 +4046,7 @@ reconcileSkinConfiguration(const BeatorajaSkinHeader &header,
     const std::size_t slash = file.pattern.rfind('/');
     const std::string directory =
         slash == std::string::npos ? "." : file.pattern.substr(0, slash);
-    auto listed = fileSystem.list(
-        directory, "", static_cast<std::size_t>(SkinPackagePolicy::maxFiles));
+    auto listed = fileSystem.listResourceDirectory(directory);
     std::vector<std::string> choices;
     if (!listed.failure) {
       for (const std::string &entry : listed.entries) {
@@ -4057,7 +4056,7 @@ reconcileSkinConfiguration(const BeatorajaSkinHeader &header,
         }
         const std::string candidate = substitutePattern(file.pattern, filename);
         const auto resolved =
-            fileSystem.resolve(candidate, SkinFileUse::Resource);
+            fileSystem.resolveResourceCandidates(candidate, candidate);
         if (resolved.normalizedVirtualPath) {
           choices.push_back(filename);
         }

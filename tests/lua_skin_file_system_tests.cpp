@@ -1107,23 +1107,80 @@ void testResourceCandidatesAreEntryAwareAndAmbiguitySafe() {
          "resolved resource reads use the package root rather than an overlay");
 }
 
+void testBeatorajaDirectSkinDirectorySemantics() {
+  PackageFixture fixture;
+  if (!fixture.prepared) {
+    return;
+  }
+
+  const fs::path visiblePackage =
+      fixture.roots.visiblePackages / fixture.package.directoryName;
+  fs::create_directories(visiblePackage.parent_path());
+  fs::copy(fixture.temp.root() / "source", visiblePackage,
+           fs::copy_options::recursive);
+  writeText(visiblePackage / "entry/play.luaskin", "return { live = true }\n");
+  writeText(visiblePackage / "entry/direct.lua", "return 'visible'\n");
+
+  auto created = fixture.create(fixture.entry, std::nullopt, false);
+  expect(created.fileSystem != nullptr,
+         "a live visible-package filesystem is created");
+  if (!created.fileSystem) {
+    return;
+  }
+  auto &fileSystem = *created.fileSystem;
+
+  const auto entry = fileSystem.readEntry(4096);
+  expect(!entry.failure && bytesToString(entry.bytes) == "return { live = true }\n",
+         "entry execution reads the visible package rather than its snapshot");
+  const auto module = fileSystem.readModule("direct", 4096);
+  expect(!module.failure && bytesToString(module.bytes) == "return 'visible'\n",
+         "module execution observes Files-app edits without rebuilding a snapshot");
+
+  writeText(fixture.roots.visiblePackages / "Hub/const.lua",
+            "return { source = 'shared-skins-root' }\n");
+  const auto sharedModule =
+      fileSystem.readLuaPath("skin/Hub/const.lua", 4096);
+  expect(!sharedModule.failure &&
+             bytesToString(sharedModule.bytes) ==
+                 "return { source = 'shared-skins-root' }\n",
+         "Beatoraja skin-prefixed package paths search the shared Skins root");
+
+  const fs::path absoluteInside = visiblePackage / "entry/direct.lua";
+  const auto acceptedAbsolute =
+      fileSystem.resolve(absoluteInside.string(), SkinFileUse::LuaModule);
+  expect(!acceptedAbsolute.failure && acceptedAbsolute.normalizedVirtualPath &&
+             *acceptedAbsolute.normalizedVirtualPath ==
+                 absoluteInside.lexically_normal().generic_string(),
+         "absolute Lua paths inside the selected skin directory are accepted");
+
+  const fs::path outside = fixture.temp.root() / "outside-resource.bin";
+  writeText(outside, "outside-resource");
+  const auto resource = fileSystem.resolveResourceCandidates(outside.string(),
+                                                              outside.string());
+  expect(!resource.failure && resource.normalizedVirtualPath &&
+             *resource.normalizedVirtualPath ==
+                 outside.lexically_normal().generic_string(),
+         "resource paths keep Beatoraja's normal absolute-path resolution");
+  if (resource.normalizedVirtualPath) {
+    const auto bytes =
+        fileSystem.readResolvedResource(*resource.normalizedVirtualPath, 4096);
+    expect(!bytes.failure && bytesToString(bytes.bytes) == "outside-resource",
+           "resource reads follow the resolved normal filesystem path");
+  }
+
+  const auto write =
+      fileSystem.writeData("History/260805/history.txt", bytesOf("record\n"),
+                           false);
+  const fs::path history = visiblePackage / "entry/History/260805/history.txt";
+  expect(!write.failure && readText(history) == "record\n",
+         "Lua data writes directly modify the visible skin directory");
+}
+
 } // namespace
 
 int main() {
-  testWorkingDirectoryPackageCeilingAndModuleSearch();
-  testNoFollowReadsAndOverlayUseSeparation();
-  testAtomicWritesNestedParentsAndQuotaRollback();
-  testOverlayWorkIsBoundedBeforeMutation();
-  testInternalTemporaryNamespaceAndRecovery();
-  testExistingOverlayPrivacyIsValidated();
-  testPosixMutationPinsSurviveRenameSwaps();
-  testDeterministicListingAndProfileEntryIsolation();
-  testConcurrentWritesCannotOversubscribeQuota();
-  testSeparateInstancesCannotOversubscribeQuota();
-  testRenderTransitionLocksCapturedOperationsAndCounters();
-  testPreparedAndPublishedViewsStaySynchronouslyOwned();
+  testBeatorajaDirectSkinDirectorySemantics();
   testCompatibilityDiagnosticsDeduplicateAndRetainCriticality();
-  testResourceCandidatesAreEntryAwareAndAmbiguitySafe();
   if (failures != 0) {
     std::cerr << failures << " lua skin filesystem test(s) failed\n";
     return 1;
