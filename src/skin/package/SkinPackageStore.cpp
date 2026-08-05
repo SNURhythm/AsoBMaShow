@@ -394,21 +394,6 @@ bool treeDigestMatches(const fs::path &path, const SkinPackageId &package,
          snapshot.prepared->revision().lowercaseSha256 == expected;
 }
 
-std::optional<std::string>
-treeDigest(const fs::path &path, const SkinPackageId &package,
-           const SkinStorageRoots &roots, const SkinAliasDetector &aliases,
-           std::stop_token stop, std::vector<SkinDiagnostic> &diagnostics) {
-  SkinTreeSnapshotter snapshotter(roots, aliases);
-  auto snapshot = snapshotter.snapshot(path, package, stop, {});
-  diagnostics.insert(diagnostics.end(),
-                     std::make_move_iterator(snapshot.diagnostics.begin()),
-                     std::make_move_iterator(snapshot.diagnostics.end()));
-  if (!snapshot.prepared) {
-    return std::nullopt;
-  }
-  return snapshot.prepared->revision().lowercaseSha256;
-}
-
 struct TreeMetadataRecord {
   std::string relativePath;
   std::uint64_t device = 0;
@@ -3409,9 +3394,6 @@ ScanPackagesResult SkinPackageStore::rescanVisibleSources(
 
   struct ScannedPackage {
     SkinPackageId package;
-    fs::path visiblePath;
-    std::optional<RetainedTreeCapability> visibleCapability;
-    std::optional<std::vector<TreeMetadataRecord>> visibleManifest;
     std::optional<PreparedSkinRevision> revision;
     std::vector<SkinCatalogEntrySnapshot> entries;
     std::vector<SkinDiagnostic> diagnostics;
@@ -3419,7 +3401,6 @@ ScanPackagesResult SkinPackageStore::rescanVisibleSources(
   struct VisibleInventoryEntry {
     SkinPackageId package;
     fs::path path;
-    std::optional<RetainedTreeCapability> capability;
   };
   std::vector<ScannedPackage> scanned;
   std::vector<VisibleInventoryEntry> visibleInventory;
@@ -3460,11 +3441,9 @@ ScanPackagesResult SkinPackageStore::rescanVisibleSources(
           "a direct child of the Skins root has an invalid package name"));
       continue;
     }
-    auto capability = RetainedTreeCapability::issue(iterator->path());
     ++collisionCounts[packageResult.package->collisionKey];
     visibleInventory.push_back({.package = *packageResult.package,
-                                .path = iterator->path(),
-                                .capability = std::move(capability)});
+                                .path = iterator->path()});
   }
   if (iteratorError) {
     result.diagnostics.push_back(
@@ -3488,28 +3467,10 @@ ScanPackagesResult SkinPackageStore::rescanVisibleSources(
       }
       continue;
     }
-    ScannedPackage work{.package = inventoryEntry.package,
-                        .visiblePath = inventoryEntry.path,
-                        .visibleCapability =
-                            std::move(inventoryEntry.capability)};
-    if (!work.visibleCapability || !work.visibleCapability->existed()) {
-      work.diagnostics.push_back(
-          storeDiagnostic("skin_package_source_changed",
-                          "a visible skin package changed before inspection"));
-      scanned.push_back(std::move(work));
-      continue;
-    }
-    work.visibleManifest = treeMetadataManifest(work.visiblePath, aliases_);
-    if (!work.visibleManifest) {
-      work.diagnostics.push_back(storeDiagnostic(
-          "skin_package_source_changed",
-          "a visible skin package could not be inventoried safely"));
-      scanned.push_back(std::move(work));
-      continue;
-    }
+    ScannedPackage work{.package = inventoryEntry.package};
     SkinTreeSnapshotter snapshotter(roots_, aliases_);
     auto snapshot =
-        snapshotter.snapshot(work.visiblePath, work.package, stop, progress);
+        snapshotter.snapshot(inventoryEntry.path, work.package, stop, progress);
     work.diagnostics.insert(
         work.diagnostics.end(),
         std::make_move_iterator(snapshot.diagnostics.begin()),
@@ -3519,15 +3480,6 @@ ScanPackagesResult SkinPackageStore::rescanVisibleSources(
       return result;
     }
     if (!snapshot.prepared) {
-      scanned.push_back(std::move(work));
-      continue;
-    }
-    if (!work.visibleCapability->matchesIssuedIdentity() ||
-        treeMetadataManifest(work.visiblePath, aliases_) !=
-            work.visibleManifest) {
-      work.diagnostics.push_back(
-          storeDiagnostic("skin_package_source_changed",
-                          "a visible skin package changed during inspection"));
       scanned.push_back(std::move(work));
       continue;
     }
@@ -3711,23 +3663,6 @@ ScanPackagesResult SkinPackageStore::rescanVisibleSources(
                         "skin catalog changed before the visible scan commit"));
     return result;
   }
-  for (ScannedPackage &work : scanned) {
-    if (!work.revision) {
-      continue;
-    }
-    if (!work.visibleCapability ||
-        !work.visibleCapability->matchesIssuedIdentity() ||
-        treeMetadataManifest(work.visiblePath, aliases_) !=
-            work.visibleManifest) {
-      result.retryableInventoryRace = !stop.stop_requested();
-      result.cancelled = stop.stop_requested();
-      result.diagnostics.push_back(storeDiagnostic(
-          "skin_package_source_changed",
-          "a visible skin package changed before the scan commit"));
-      return result;
-    }
-  }
-
   {
     std::scoped_lock lock(stateMutex_);
     if (catalogMutationInFlight_ ||

@@ -179,6 +179,9 @@ public:
                                 const EntryProfileSettings *desired,
                                 std::stop_token) override {
     ++calls;
+    if (beforeFirstValidation && calls == 1) {
+      beforeFirstValidation();
+    }
     const bool cancelNow =
         cancelled || (cancelConfigured && desired != nullptr);
     if (cancelNow || (rejectConfigured && desired != nullptr)) {
@@ -237,6 +240,7 @@ public:
   bool cancelConfigured = false;
   std::size_t metadataDeclarations = 0;
   int calls = 0;
+  std::function<void()> beforeFirstValidation;
 };
 
 class OneShotThrowingObserver final : public SkinImportIoObserver {
@@ -1374,6 +1378,37 @@ void testRescanIgnoresLegacyRuntimeDirectory() {
          "the legacy runtime directory is not scanned as a visible skin");
 }
 
+void testRescanAcceptsVisibleEditDuringValidation() {
+  TempDirectory temp;
+  const SkinStorageRoots roots = rootsBelow(temp.root());
+  const fs::path visible = roots.visiblePackages / "FixtureSkin";
+  writeOldTree(visible);
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  FakeProfileSnapshots profiles;
+  NoAliases aliases;
+  SelectableValidator validator;
+  validator.beforeFirstValidation = [&] {
+    writeText(visible / "edited-during-scan.txt", "manual Files edit");
+  };
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  expect(store.recoverBeforeServiceStart().disposition ==
+             SkinRecoveryDisposition::Recovered,
+         "visible-edit scan fixture bootstraps store");
+  const auto scan = store.rescanVisibleSources(
+      {}, {}, ProfileInventorySnapshot{.inventoryGeneration = 1}, validator);
+  expect(!scan.cancelled,
+         "visible edits do not cancel a readable snapshot scan");
+  expect(!scan.retryableInventoryRace,
+         "visible edits do not create an inventory race");
+  expect(!hasDiagnostic(scan.diagnostics, "skin_package_source_changed"),
+         "visible edits do not report a package-source fence failure");
+  expect(catalog.snapshot()->packages.size() == 1 &&
+             catalog.snapshot()->packages.front().directoryName ==
+                 "FixtureSkin",
+         "a readable snapshot remains published after a Files edit during "
+         "validation");
+}
+
 void testEncoderInvalidSnapshotPerformsZeroPublicationMutation() {
   TempDirectory temp;
   const SkinStorageRoots roots = rootsBelow(temp.root());
@@ -2308,6 +2343,7 @@ int main(int argc, char **argv) {
   testNormalizedPhysicalCollisionsRejectOrReplaceAsOnePackage();
   testAmbiguousPhysicalCollisionCannotPersistDuplicateCatalogIdentity();
   testRescanIgnoresLegacyRuntimeDirectory();
+  testRescanAcceptsVisibleEditDuringValidation();
   testEncoderInvalidSnapshotPerformsZeroPublicationMutation();
   testConfiguredValidationFailureAndCancellationPreserveOldPackage();
   testMismatchedValidatorDigestCannotPublishSelectableOrPrepareActivation();
