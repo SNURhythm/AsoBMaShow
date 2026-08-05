@@ -196,7 +196,7 @@ public:
     SkinEntryMetadataSnapshot metadata;
     metadata.displayName = "Synthetic Play";
     metadata.author = "AsoBMaShow tests";
-    metadata.skinType = 0;
+    metadata.skinType = skinType;
     metadata.authoredWidth = 1280;
     metadata.authoredHeight = 720;
     for (std::size_t index = 0; index < metadataDeclarations; ++index) {
@@ -239,6 +239,7 @@ public:
   bool cancelled = false;
   bool cancelConfigured = false;
   std::size_t metadataDeclarations = 0;
+  int skinType = 0;
   int calls = 0;
   std::function<void()> beforeFirstValidation;
 };
@@ -2114,6 +2115,7 @@ void testActivationCommitRemovalAndLeaseAwareGarbageCollection() {
   SkinPackageCatalog catalog(roots.privateCatalog);
   FakeProfileSnapshots profiles;
   SelectableValidator validator;
+  validator.skinType = 1;
   SkinPackageStore store(roots, catalog, aliases, profiles);
   expect(store.recoverBeforeServiceStart().disposition ==
              SkinRecoveryDisposition::Recovered,
@@ -2133,14 +2135,19 @@ void testActivationCommitRemovalAndLeaseAwareGarbageCollection() {
       .profileId =
           SkinProfileId{.opaque = "12345678-1234-1234-1234-123456789abc"},
       .generation = 4};
-  base.settings.gameplayCompatibilityEnabled = true;
-  base.settings.selected7KeyEntry = entry;
+  base.settings.selectedGameplayEntries.emplace(1, entry);
   base.settings.entries.emplace(entry, EntryProfileSettings{});
   SkinProfileSettings candidateSettings = base.settings;
   auto activation =
       store.prepareActivation(base, entry, candidateSettings, validator, {});
   expect(activation.prepared.has_value(),
          "activation preparation validates without mutating store state");
+  expect(activation.prepared &&
+             activation.prepared->candidateProfileSettings
+                     .selectedGameplayEntries.at(1) ==
+                 entry &&
+             !activation.prepared->candidateProfileSettings.selected7KeyEntry,
+         "activation preparation retains the matching non-7K trait selection");
   expect(
       !store.acquireValidatedActivation(base.profileId, entry, activationDigest)
            .activation,

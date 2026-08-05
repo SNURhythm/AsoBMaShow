@@ -4,6 +4,7 @@
 #include "../../FileChecksum.h"
 #include "../../VersionedJson.h"
 #include "../../targets.h"
+#include "../GameplaySkinTraits.h"
 #include "SkinPathPolicy.h"
 
 #include <algorithm>
@@ -22,6 +23,7 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -126,7 +128,7 @@ bool lowercaseSha256(std::string_view digest) {
 bool failClosedMismatchedConfigurationDigest(
     const SkinEntryId &entry, SkinValidationResult &validation) {
   if (validation.cancelled ||
-      validation.disposition != SkinValidationDisposition::Selectable7Key) {
+      validation.disposition != SkinValidationDisposition::SelectableGameplay) {
     return false;
   }
 
@@ -154,6 +156,31 @@ bool failClosedMismatchedConfigurationDigest(
       "skin_configuration_digest_mismatch",
       "validated skin settings do not match their configuration digest"));
   return true;
+}
+
+bool validatesGameplayTrait(const SkinValidationResult &validation,
+                            int skinType) {
+  return validation.disposition ==
+             SkinValidationDisposition::SelectableGameplay &&
+         validation.metadata && validation.metadata->skinType == skinType &&
+         gameplaySkinTraitForSkinType(skinType).has_value();
+}
+
+std::vector<std::pair<int, SkinEntryId>> selectedGameplayEntriesInPackage(
+    const SkinProfileSettings &settings, const SkinPackageId &package) {
+  std::vector<std::pair<int, SkinEntryId>> result;
+  if (settings.selectedGameplayEntries.empty() && settings.selected7KeyEntry) {
+    if (settings.selected7KeyEntry->package == package) {
+      result.emplace_back(0, *settings.selected7KeyEntry);
+    }
+    return result;
+  }
+  for (const auto &[skinType, entry] : settings.selectedGameplayEntries) {
+    if (entry.package == package && gameplaySkinTraitForSkinType(skinType)) {
+      result.emplace_back(skinType, entry);
+    }
+  }
+  return result;
 }
 
 std::optional<PublicationJournal>
@@ -2873,7 +2900,8 @@ PublishPackageResult SkinPackageStore::publish(
         .validation = validation.disposition,
         .metadata = std::move(validation.metadata),
         .diagnostics = {}};
-    if (validation.disposition == SkinValidationDisposition::Selectable7Key &&
+    if (validation.disposition ==
+            SkinValidationDisposition::SelectableGameplay &&
         validation.reconciledSettings &&
         lowercaseSha256(validation.configurationDigest)) {
       catalogEntry.validatedConfigurationDigests.push_back(
@@ -2883,51 +2911,49 @@ PublishPackageResult SkinPackageStore::publish(
   }
 
   for (const VersionedSkinProfileSettings &profile : inventory.profiles) {
-    if (!profile.settings.selected7KeyEntry ||
-        profile.settings.selected7KeyEntry->package != prepared.packageId()) {
-      continue;
-    }
-    const SkinEntryId &selected = *profile.settings.selected7KeyEntry;
-    const auto preparedEntry = std::ranges::find(prepared.entries(), selected);
-    if (preparedEntry == prepared.entries().end()) {
-      result.diagnostics.push_back(storeDiagnostic(
-          "skin_package_selected_entry_missing",
-          "a selected skin entry is absent from the replacement package"));
-      return result;
-    }
-    const auto settings = profile.settings.entries.find(selected);
-    const EntryProfileSettings *desired =
-        settings == profile.settings.entries.end() ? nullptr
-                                                   : &settings->second;
-    auto validation =
-        validator.validate(prepared.readView(), selected, desired, stop);
-    (void)failClosedMismatchedConfigurationDigest(selected, validation);
-    result.diagnostics.insert(
-        result.diagnostics.end(),
-        std::make_move_iterator(validation.diagnostics.begin()),
-        std::make_move_iterator(validation.diagnostics.end()));
-    if (validation.cancelled || stop.stop_requested()) {
-      return result;
-    }
-    if (validation.disposition != SkinValidationDisposition::Selectable7Key ||
-        !validation.reconciledSettings ||
-        !lowercaseSha256(validation.configurationDigest)) {
-      result.diagnostics.push_back(storeDiagnostic(
-          "skin_package_selected_configuration_invalid",
-          "a selected skin configuration rejects the replacement package"));
-      return result;
-    }
-    auto catalogEntry = std::ranges::find_if(
-        validatedEntries,
-        [&selected](const SkinCatalogEntrySnapshot &candidate) {
-          return candidate.entry == selected;
-        });
-    if (catalogEntry != validatedEntries.end() &&
-        std::ranges::find(catalogEntry->validatedConfigurationDigests,
-                          validation.configurationDigest) ==
-            catalogEntry->validatedConfigurationDigests.end()) {
-      catalogEntry->validatedConfigurationDigests.push_back(
-          std::move(validation.configurationDigest));
+    for (const auto &[skinType, selected] :
+         selectedGameplayEntriesInPackage(profile.settings, prepared.packageId())) {
+      const auto preparedEntry = std::ranges::find(prepared.entries(), selected);
+      if (preparedEntry == prepared.entries().end()) {
+        result.diagnostics.push_back(storeDiagnostic(
+            "skin_package_selected_entry_missing",
+            "a selected skin entry is absent from the replacement package"));
+        return result;
+      }
+      const auto settings = profile.settings.entries.find(selected);
+      const EntryProfileSettings *desired =
+          settings == profile.settings.entries.end() ? nullptr
+                                                     : &settings->second;
+      auto validation =
+          validator.validate(prepared.readView(), selected, desired, stop);
+      (void)failClosedMismatchedConfigurationDigest(selected, validation);
+      result.diagnostics.insert(
+          result.diagnostics.end(),
+          std::make_move_iterator(validation.diagnostics.begin()),
+          std::make_move_iterator(validation.diagnostics.end()));
+      if (validation.cancelled || stop.stop_requested()) {
+        return result;
+      }
+      if (!validatesGameplayTrait(validation, skinType) ||
+          !validation.reconciledSettings ||
+          !lowercaseSha256(validation.configurationDigest)) {
+        result.diagnostics.push_back(storeDiagnostic(
+            "skin_package_selected_configuration_invalid",
+            "a selected skin configuration rejects the replacement package"));
+        return result;
+      }
+      auto catalogEntry = std::ranges::find_if(
+          validatedEntries,
+          [&selected](const SkinCatalogEntrySnapshot &candidate) {
+            return candidate.entry == selected;
+          });
+      if (catalogEntry != validatedEntries.end() &&
+          std::ranges::find(catalogEntry->validatedConfigurationDigests,
+                            validation.configurationDigest) ==
+              catalogEntry->validatedConfigurationDigests.end()) {
+        catalogEntry->validatedConfigurationDigests.push_back(
+            std::move(validation.configurationDigest));
+      }
     }
   }
 
@@ -3503,13 +3529,14 @@ ScanPackagesResult SkinPackageStore::rescanVisibleSources(
         result.cancelled = true;
         return result;
       }
-      if (validation.disposition != SkinValidationDisposition::Selectable7Key) {
+      if (validation.disposition !=
+          SkinValidationDisposition::SelectableGameplay) {
         const auto previous = std::ranges::find_if(
             oldCatalog->entries,
             [&](const SkinCatalogEntrySnapshot &candidate) {
               return candidate.entry == entry &&
                      candidate.validation ==
-                         SkinValidationDisposition::Selectable7Key;
+                         SkinValidationDisposition::SelectableGameplay;
             });
         if (previous != oldCatalog->entries.end()) {
           SkinCatalogEntrySnapshot retained = *previous;
@@ -3532,7 +3559,7 @@ ScanPackagesResult SkinPackageStore::rescanVisibleSources(
           .metadata = std::move(validation.metadata),
           .diagnostics = std::move(validation.diagnostics)};
       if (validation.disposition ==
-              SkinValidationDisposition::Selectable7Key &&
+              SkinValidationDisposition::SelectableGameplay &&
           validation.reconciledSettings &&
           lowercaseSha256(validation.configurationDigest)) {
         catalogEntry.validatedConfigurationDigests.push_back(
@@ -3543,62 +3570,60 @@ ScanPackagesResult SkinPackageStore::rescanVisibleSources(
     }
 
     for (const VersionedSkinProfileSettings &profile : inventory.profiles) {
-      if (!profile.settings.selected7KeyEntry ||
-          profile.settings.selected7KeyEntry->package != work.package) {
-        continue;
-      }
-      const SkinEntryId &selected = *profile.settings.selected7KeyEntry;
-      const auto selectedEntry = std::ranges::find_if(
-          work.entries, [&selected](const SkinCatalogEntrySnapshot &candidate) {
-            return candidate.entry == selected;
-          });
-      if (selectedEntry == work.entries.end()) {
-        work.diagnostics.push_back(storeDiagnostic(
-            "skin_package_selected_entry_missing",
-            "a selected skin entry is absent from the visible package"));
-        continue;
-      }
-      const auto desired = profile.settings.entries.find(selected);
-      auto validation = validator.validate(
-          snapshot.prepared->readView(), selected,
-          desired == profile.settings.entries.end() ? nullptr
-                                                    : &desired->second,
-          stop);
-      (void)failClosedMismatchedConfigurationDigest(selected, validation);
-      if (validation.cancelled || stop.stop_requested()) {
-        result.cancelled = true;
-        return result;
-      }
-      selectedEntry->diagnostics.insert(
-          selectedEntry->diagnostics.end(),
-          std::make_move_iterator(validation.diagnostics.begin()),
-          std::make_move_iterator(validation.diagnostics.end()));
-      if (validation.disposition == SkinValidationDisposition::Selectable7Key &&
-          validation.reconciledSettings &&
-          lowercaseSha256(validation.configurationDigest) &&
-          std::ranges::find(selectedEntry->validatedConfigurationDigests,
-                            validation.configurationDigest) ==
-              selectedEntry->validatedConfigurationDigests.end()) {
-        selectedEntry->validatedConfigurationDigests.push_back(
-            std::move(validation.configurationDigest));
-      } else {
-        const auto previous = std::ranges::find_if(
-            oldCatalog->entries,
-            [&](const SkinCatalogEntrySnapshot &candidate) {
-              return candidate.entry == selected &&
-                     candidate.validation ==
-                         SkinValidationDisposition::Selectable7Key;
+      for (const auto &[skinType, selected] :
+           selectedGameplayEntriesInPackage(profile.settings, work.package)) {
+        const auto selectedEntry = std::ranges::find_if(
+            work.entries, [&selected](const SkinCatalogEntrySnapshot &candidate) {
+              return candidate.entry == selected;
             });
-        if (previous != oldCatalog->entries.end()) {
-          SkinCatalogEntrySnapshot retained = *previous;
-          retained.diagnostics.insert(retained.diagnostics.end(),
-                                      selectedEntry->diagnostics.begin(),
-                                      selectedEntry->diagnostics.end());
-          retained.diagnostics.push_back(storeDiagnostic(
-              "skin_package_last_known_good_retained",
-              "an invalid selected configuration retained the last validated "
-              "revision"));
-          *selectedEntry = std::move(retained);
+        if (selectedEntry == work.entries.end()) {
+          work.diagnostics.push_back(storeDiagnostic(
+              "skin_package_selected_entry_missing",
+              "a selected skin entry is absent from the visible package"));
+          continue;
+        }
+        const auto desired = profile.settings.entries.find(selected);
+        auto validation = validator.validate(
+            snapshot.prepared->readView(), selected,
+            desired == profile.settings.entries.end() ? nullptr
+                                                      : &desired->second,
+            stop);
+        (void)failClosedMismatchedConfigurationDigest(selected, validation);
+        if (validation.cancelled || stop.stop_requested()) {
+          result.cancelled = true;
+          return result;
+        }
+        selectedEntry->diagnostics.insert(
+            selectedEntry->diagnostics.end(),
+            std::make_move_iterator(validation.diagnostics.begin()),
+            std::make_move_iterator(validation.diagnostics.end()));
+        if (validatesGameplayTrait(validation, skinType) &&
+            validation.reconciledSettings &&
+            lowercaseSha256(validation.configurationDigest) &&
+            std::ranges::find(selectedEntry->validatedConfigurationDigests,
+                              validation.configurationDigest) ==
+                selectedEntry->validatedConfigurationDigests.end()) {
+          selectedEntry->validatedConfigurationDigests.push_back(
+              std::move(validation.configurationDigest));
+        } else {
+          const auto previous = std::ranges::find_if(
+              oldCatalog->entries,
+              [&](const SkinCatalogEntrySnapshot &candidate) {
+                return candidate.entry == selected &&
+                       candidate.validation ==
+                           SkinValidationDisposition::SelectableGameplay;
+              });
+          if (previous != oldCatalog->entries.end()) {
+            SkinCatalogEntrySnapshot retained = *previous;
+            retained.diagnostics.insert(retained.diagnostics.end(),
+                                        selectedEntry->diagnostics.begin(),
+                                        selectedEntry->diagnostics.end());
+            retained.diagnostics.push_back(storeDiagnostic(
+                "skin_package_last_known_good_retained",
+                "an invalid selected configuration retained the last validated "
+                "revision"));
+            *selectedEntry = std::move(retained);
+          }
         }
       }
     }
@@ -3738,7 +3763,7 @@ ScanPackagesResult SkinPackageStore::rescanVisibleSources(
           next.entries, [&](const SkinCatalogEntrySnapshot &entry) {
             return entry.entry == item.second.entry &&
                    entry.validation ==
-                       SkinValidationDisposition::Selectable7Key &&
+                       SkinValidationDisposition::SelectableGameplay &&
                    entry.revisionDigest ==
                        item.second.revision.revision().lowercaseSha256 &&
                    std::ranges::find(entry.validatedConfigurationDigests,
@@ -3825,15 +3850,19 @@ PrepareActivationResult SkinPackageStore::prepareActivation(
     result.cancelled = true;
     return result;
   }
-  if (validation.disposition != SkinValidationDisposition::Selectable7Key ||
+  if (validation.disposition !=
+          SkinValidationDisposition::SelectableGameplay ||
       !validation.reconciledSettings ||
+      !validation.metadata ||
+      !gameplaySkinTraitForSkinType(validation.metadata->skinType) ||
       !lowercaseSha256(validation.configurationDigest)) {
     result.diagnostics.push_back(
         storeDiagnostic("skin_activation_configuration_invalid",
                         "the requested skin configuration is not selectable"));
     return result;
   }
-  candidateProfileSettings.selected7KeyEntry = entry;
+  candidateProfileSettings.selectedGameplayEntries.insert_or_assign(
+      validation.metadata->skinType, entry);
   candidateProfileSettings.entries.insert_or_assign(
       entry, *validation.reconciledSettings);
   candidateProfileSettings.sanitize();
@@ -4107,7 +4136,7 @@ AcquireActivationResult SkinPackageStore::acquireValidatedActivation(
       [&entry, configurationDigest](const SkinCatalogEntrySnapshot &candidate) {
         return candidate.entry == entry &&
                candidate.validation ==
-                   SkinValidationDisposition::Selectable7Key &&
+                   SkinValidationDisposition::SelectableGameplay &&
                std::ranges::find(candidate.validatedConfigurationDigests,
                                  configurationDigest) !=
                    candidate.validatedConfigurationDigests.end();
