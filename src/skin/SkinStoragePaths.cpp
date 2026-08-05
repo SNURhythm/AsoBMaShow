@@ -58,10 +58,9 @@ SkinStorageRoots deriveSkinStorageRoots(std::filesystem::path visiblePackages,
 SkinStorageRoots defaultSkinStorageRoots() {
   const std::filesystem::path visible = Utils::GetDocumentsPath("Skins");
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  // Every skin file is intentionally Files-visible on iOS. Runtime revisions,
-  // catalog, and profile overlays share this writable workspace so edits may be
-  // made while the app is running.
-  const std::filesystem::path workspace = visible / "_runtime";
+  // Runtime state is Files-visible but sits outside the scanned package root:
+  // catalog writes must not look like an external skin edit during a rescan.
+  const std::filesystem::path workspace = Utils::GetDocumentsPath("_runtime");
   return deriveSkinStorageRoots(visible, workspace);
 #elif TARGET_OS_ANDROID
   std::filesystem::path privateRoot;

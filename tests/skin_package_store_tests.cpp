@@ -1353,6 +1353,27 @@ void testAmbiguousPhysicalCollisionCannotPersistDuplicateCatalogIdentity() {
          "restart never reloads a duplicate normalized catalog identity");
 }
 
+void testRescanIgnoresLegacyRuntimeDirectory() {
+  TempDirectory temp;
+  const SkinStorageRoots roots = rootsBelow(temp.root());
+  writeOldTree(roots.visiblePackages / "FixtureSkin");
+  writeText(roots.visiblePackages / "_runtime/catalog/catalog.json", "{}");
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  FakeProfileSnapshots profiles;
+  NoAliases aliases;
+  SelectableValidator validator;
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  expect(store.recoverBeforeServiceStart().disposition ==
+             SkinRecoveryDisposition::Recovered,
+         "legacy runtime exclusion fixture bootstraps store");
+  const auto scan = store.rescanVisibleSources(
+      {}, {}, ProfileInventorySnapshot{.inventoryGeneration = 1}, validator);
+  expect(!scan.cancelled && catalog.snapshot()->packages.size() == 1 &&
+             catalog.snapshot()->packages.front().directoryName ==
+                 "FixtureSkin",
+         "the legacy runtime directory is not scanned as a visible skin");
+}
+
 void testEncoderInvalidSnapshotPerformsZeroPublicationMutation() {
   TempDirectory temp;
   const SkinStorageRoots roots = rootsBelow(temp.root());
@@ -2286,6 +2307,7 @@ int main(int argc, char **argv) {
   testInventoryFenceAndDescendantEditReturnPreparedWithoutMutation();
   testNormalizedPhysicalCollisionsRejectOrReplaceAsOnePackage();
   testAmbiguousPhysicalCollisionCannotPersistDuplicateCatalogIdentity();
+  testRescanIgnoresLegacyRuntimeDirectory();
   testEncoderInvalidSnapshotPerformsZeroPublicationMutation();
   testConfiguredValidationFailureAndCancellationPreserveOldPackage();
   testMismatchedValidatorDigestCannotPublishSelectableOrPrepareActivation();

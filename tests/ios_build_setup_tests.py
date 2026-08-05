@@ -589,7 +589,7 @@ class IOSBuildSetupTests(unittest.TestCase):
         end = source.index("#endif", start)
         implementation = source[start:end]
         self.assertIn('Utils::GetDocumentsPath("Skins")', implementation)
-        self.assertIn('const std::filesystem::path workspace = visible / "_runtime";', implementation)
+        self.assertIn('Utils::GetDocumentsPath("_runtime")', implementation)
         self.assertIn("return deriveSkinStorageRoots(visible, workspace);", implementation)
         self.assertNotIn("GetIOSApplicationSupportPath", implementation)
 

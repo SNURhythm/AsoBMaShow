@@ -3439,6 +3439,11 @@ ScanPackagesResult SkinPackageStore::rescanVisibleSources(
     const auto nameUtf8 = iterator->path().filename().generic_u8string();
     const std::string directoryName(
         reinterpret_cast<const char *>(nameUtf8.data()), nameUtf8.size());
+    // Older iOS builds placed mutable catalog state below Documents/Skins.
+    // Never treat that migration residue as a user skin package.
+    if (directoryName == "_runtime") {
+      continue;
+    }
     const auto packageResult = normalizePackageId(directoryName);
     std::error_code typeError;
     if (!iterator->is_directory(typeError) || typeError ||
