@@ -2,6 +2,7 @@
 
 #include "../../AtomicFile.h"
 #include "../../FileChecksum.h"
+#include "../../targets.h"
 #include "../beatoraja/SkinDiagnosticHistory.h"
 #include "SkinPathPolicy.h"
 
@@ -41,6 +42,14 @@ constexpr int kDiagnosticHistorySchemaVersion = 1;
 constexpr std::string_view kDiagnosticHistoryFile = "diagnostic-history.json";
 
 bool ensureDirectoryNoFollow(const fs::path &directory) {
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  std::error_code error;
+  if (directory.empty()) {
+    return false;
+  }
+  fs::create_directories(directory, error);
+  return !error && fs::is_directory(directory, error) && !error;
+#else
   try {
     std::error_code error;
     const fs::path absolute = fs::absolute(directory, error).lexically_normal();
@@ -131,6 +140,7 @@ bool ensureDirectoryNoFollow(const fs::path &directory) {
   } catch (...) {
     return false;
   }
+#endif
 }
 
 std::optional<std::string> readBoundedCatalogFile(const fs::path &path,

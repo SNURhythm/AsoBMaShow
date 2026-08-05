@@ -33,6 +33,7 @@ IOS_NATIVES_SOURCE = ROOT / "src/iOSNatives.mm"
 IOS_NATIVES_HEADER = ROOT / "src/iOSNatives.hpp"
 SKIN_STORAGE_PATHS_SOURCE = ROOT / "src/skin/SkinStoragePaths.cpp"
 SKIN_PACKAGE_STORE_SOURCE = ROOT / "src/skin/package/SkinPackageStore.cpp"
+SKIN_PACKAGE_CATALOG_SOURCE = ROOT / "src/skin/package/SkinPackageCatalog.cpp"
 SKIN_ALIAS_DETECTOR_APPLE = ROOT / "src/skin/package/SkinAliasDetectorApple.mm"
 VCPKG_MANIFEST = ROOT / "vcpkg.json"
 IOS_LIB_SCRIPT = ROOT / "scripts/get_ios_libs.py"
@@ -599,6 +600,17 @@ class IOSBuildSetupTests(unittest.TestCase):
         ios_end = source.index("#else", ios_start)
         implementation = source[ios_start:ios_end]
         self.assertIn("bool ensureDirectoryNoFollow", implementation)
+        self.assertIn("fs::create_directories(directory, error)", implementation)
+        self.assertIn("fs::is_directory(directory, error)", implementation)
+        self.assertNotIn("O_NOFOLLOW", implementation)
+
+    def test_ios_catalog_bootstrap_uses_normal_directory_creation(self):
+        source = SKIN_PACKAGE_CATALOG_SOURCE.read_text(encoding="utf-8")
+        self.assertIn("bool ensureDirectoryNoFollow", source)
+        self.assertIn("#if TARGET_OS_IOS || TARGET_OS_SIMULATOR", source)
+        ios_start = source.index("#if TARGET_OS_IOS || TARGET_OS_SIMULATOR")
+        ios_end = source.index("#else", ios_start)
+        implementation = source[ios_start:ios_end]
         self.assertIn("fs::create_directories(directory, error)", implementation)
         self.assertIn("fs::is_directory(directory, error)", implementation)
         self.assertNotIn("O_NOFOLLOW", implementation)
