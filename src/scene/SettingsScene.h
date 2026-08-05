@@ -305,6 +305,8 @@ private:
   std::string gameplaySkinSettingsProfileId;
   std::string gameplaySkinSettingsPresentationKey;
   std::string gameplaySkinUiMessage;
+  int gameplaySkinActiveTraitSkinType = 0;
+  bool gameplaySkinTraitDropdownOpen = false;
   bool gameplaySkinReplaceConfirmationArmed = false;
   std::string gameplaySkinRemovalConfirmationKey;
 #endif

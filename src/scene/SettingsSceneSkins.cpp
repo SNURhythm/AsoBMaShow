@@ -4,13 +4,16 @@
 
 #include "GameplaySkinSettingsController.h"
 #include "GameplaySkinSettingsPresentation.h"
+#include "../skin/GameplaySkinTraits.h"
 #include "../skin/beatoraja/BeatorajaSkinConfiguration.h"
+#include "../view/DropdownView.h"
 
 #include <algorithm>
 #include <cmath>
 #include <iomanip>
 #include <sstream>
 #include <utility>
+#include <vector>
 
 using namespace settings_scene;
 
@@ -42,8 +45,8 @@ Button *makeGameplaySkinAction(const LayoutMetrics &metrics,
 
 const char *validationLabel(skin::SkinValidationDisposition disposition) {
   switch (disposition) {
-  case skin::SkinValidationDisposition::Selectable7Key:
-    return "7-key selectable";
+  case skin::SkinValidationDisposition::SelectableGameplay:
+    return "Gameplay selectable";
   case skin::SkinValidationDisposition::UnavailableType:
     return "Unsupported skin type";
   case skin::SkinValidationDisposition::Invalid:
@@ -262,17 +265,6 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   overview->addView(
       makeWrappedText("Files location: On My iPad/AsoBMaShow/Skins",
                       metrics.smallTextSize, ui_theme::textMuted()));
-  auto *compatibility = makeGameplaySkinAction(
-      metrics,
-      snapshot.compatibilityEnabled ? "Use Beatoraja Gameplay Skin: On"
-                                    : "Use Beatoraja Gameplay Skin: Off",
-      ordinaryActionsEnabled,
-      [this, enabled = snapshot.compatibilityEnabled]() {
-        handleGameplaySkinActionResult(
-            gameplaySkinSettingsController->setCompatibilityEnabled(!enabled));
-      },
-      snapshot.compatibilityEnabled ? ui_theme::lime() : ui_theme::coral());
-  overview->addView(compatibility);
   if (!snapshot.statusMessage.empty()) {
     overview->addView(makeWrappedText(snapshot.statusMessage,
                                       metrics.smallTextSize,
@@ -387,20 +379,164 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
                            "Import a .zip or an unpacked folder.", imports,
                            metrics.modeCardHeight, metrics.cardsWidth));
 
-  for (const auto &row : snapshot.entries) {
+  std::vector<skin::GameplaySkinTrait> traits(
+      skin::gameplaySkinTraits().begin(), skin::gameplaySkinTraits().end());
+  std::ranges::sort(traits, {}, &skin::GameplaySkinTrait::keyMode);
+  if (!std::ranges::any_of(traits, [this](const auto &trait) {
+        return trait.skinType == gameplaySkinActiveTraitSkinType;
+      })) {
+    gameplaySkinActiveTraitSkinType = traits.front().skinType;
+  }
+
+  auto *traitWorkspace = new View();
+  traitWorkspace->setFlexDirection(FlexDirection::Row);
+  traitWorkspace->setGap(static_cast<float>(metrics.secondaryGap));
+  traitWorkspace->setAlignItems(YGAlignStretch);
+  const int traitTabWidth = metrics.compact ? 96 : 124;
+  auto *traitTabs = new View();
+  traitTabs->setFlexDirection(FlexDirection::Column);
+  traitTabs->setGap(metrics.compact ? 8.0f : 10.0f);
+  traitTabs->setWidth(static_cast<float>(traitTabWidth));
+  traitTabs->setFlexShrink(0.0f);
+  for (const auto &trait : traits) {
+    const bool active = trait.skinType == gameplaySkinActiveTraitSkinType;
+    auto *tab = active
+                    ? makeAccentButton(
+                          traitTabWidth, metrics.actionButtonHeight,
+                          makeText(std::string(trait.label),
+                                   metrics.smallTextSize,
+                                   ui_theme::textPrimary(), TextView::CENTER,
+                                   TextView::MIDDLE),
+                          ui_theme::cyan())
+                    : makeControlButton(
+                          traitTabWidth, metrics.actionButtonHeight,
+                          makeText(std::string(trait.label),
+                                   metrics.smallTextSize,
+                                   ui_theme::textPrimary(), TextView::CENTER,
+                                   TextView::MIDDLE));
+    tab->setOnClickListener([this, skinType = trait.skinType]() {
+      if (gameplaySkinActiveTraitSkinType == skinType) {
+        return;
+      }
+      gameplaySkinActiveTraitSkinType = skinType;
+      gameplaySkinTraitDropdownOpen = false;
+      lastLayoutWidth = -1;
+    });
+    traitTabs->addView(tab);
+  }
+  traitWorkspace->addView(traitTabs);
+
+  auto *traitPanel = new View();
+  traitPanel->setFlexDirection(FlexDirection::Column);
+  traitPanel->setGap(metrics.compact ? 10.0f : 12.0f);
+  traitPanel->setFlex(1.0f);
+  traitPanel->setMinWidth(0.0f);
+  const auto activeTrait = std::ranges::find_if(
+      traits, [this](const auto &trait) {
+        return trait.skinType == gameplaySkinActiveTraitSkinType;
+      });
+  const std::string traitLabel = std::string(activeTrait->label);
+  traitPanel->addView(makeWrappedText(
+      traitLabel + " gameplay skin", metrics.bodyTextSize,
+      ui_theme::textPrimary()));
+
+  std::vector<const skin::GameplaySkinEntryRow *> selectableRows;
+  for (const auto &candidate : snapshot.entries) {
+    if (candidate.validation ==
+            skin::SkinValidationDisposition::SelectableGameplay &&
+        candidate.metadata.skinType == gameplaySkinActiveTraitSkinType) {
+      selectableRows.push_back(&candidate);
+    }
+  }
+  const auto selected = snapshot.selectedGameplayEntries.find(
+      gameplaySkinActiveTraitSkinType);
+  const skin::GameplaySkinEntryRow *selectedRow = nullptr;
+  if (selected != snapshot.selectedGameplayEntries.end()) {
+    const auto selectedCandidate = std::ranges::find_if(
+        selectableRows, [&selected](const auto *candidate) {
+          return candidate->entry == selected->second;
+        });
+    if (selectedCandidate != selectableRows.end()) {
+      selectedRow = *selectedCandidate;
+    }
+  }
+
+  std::vector<skin::SkinEntryId> dropdownEntries;
+  std::vector<DropdownView::Option> dropdownOptions = {
+      {.id = "", .label = "Built-in", .available = ordinaryActionsEnabled},
+  };
+  dropdownEntries.reserve(selectableRows.size());
+  for (const auto *candidate : selectableRows) {
+    dropdownEntries.push_back(candidate->entry);
+    const std::string displayName = candidate->metadata.displayName.empty()
+                                        ? candidate->entry.packageRelativePath
+                                        : candidate->metadata.displayName;
+    dropdownOptions.push_back(
+        {.id = candidate->entry.collisionKey,
+         .label = displayName + " — " + candidate->entry.package.directoryName,
+         .available = ordinaryActionsEnabled});
+  }
+  auto *skinDropdown = new DropdownView(
+      {.onOpenChanged =
+           [this](bool open) {
+             gameplaySkinTraitDropdownOpen = open;
+             lastLayoutWidth = -1;
+           },
+       .onOptionSelected =
+           [this, skinType = gameplaySkinActiveTraitSkinType,
+            entries = std::move(dropdownEntries)](const std::string &id) {
+             gameplaySkinTraitDropdownOpen = false;
+             if (id.empty()) {
+               handleGameplaySkinActionResult(
+                   gameplaySkinSettingsController->clearGameplayTrait(skinType));
+               return;
+             }
+             const auto selectedEntry = std::ranges::find_if(
+                 entries, [&id](const auto &entry) {
+                   return entry.collisionKey == id;
+                 });
+             if (selectedEntry != entries.end()) {
+               handleGameplaySkinActionResult(
+                   gameplaySkinSettingsController->selectGameplayTrait(
+                       skinType, *selectedEntry));
+             }
+           }},
+      overlayPortal);
+  skinDropdown->refresh(
+      {.label = "Skin",
+       .selectedId = selectedRow ? selectedRow->entry.collisionKey : "",
+       .options = std::move(dropdownOptions),
+       .open = gameplaySkinTraitDropdownOpen,
+       .enabled = ordinaryActionsEnabled,
+       .maxVisibleItems = metrics.compact ? 5 : 7,
+       .menuWidth = static_cast<float>(
+           std::max(220, metrics.cardsWidth - traitTabWidth -
+                             metrics.secondaryGap - metrics.cardPadding * 2))});
+  traitPanel->addView(skinDropdown);
+  if (selected != snapshot.selectedGameplayEntries.end() &&
+      selectedRow == nullptr) {
+    traitPanel->addView(makeWrappedText(
+        "The selected skin is no longer available. Choose Built-in or another "
+        "validated skin.",
+        metrics.smallTextSize, ui_theme::coral()));
+  } else if (selectableRows.empty()) {
+    traitPanel->addView(makeWrappedText(
+        "No validated " + traitLabel + " gameplay skin is installed.",
+        metrics.smallTextSize, ui_theme::textSecondary()));
+  }
+
+  if (selectedRow != nullptr) {
+    const auto &row = *selectedRow;
     auto *entryBody = new View();
     entryBody->setFlexDirection(FlexDirection::Column);
     entryBody->setGap(metrics.compact ? 10.0f : 12.0f);
     const std::string title = row.metadata.displayName.empty()
                                   ? row.entry.packageRelativePath
                                   : row.metadata.displayName;
-    const bool selectedEntry =
-        snapshot.selected7KeyEntry && *snapshot.selected7KeyEntry == row.entry;
     entryBody->addView(makeWrappedText(
-        title + " — " + validationLabel(row.validation) +
-            (selectedEntry ? " — Selected" : ""),
+        title + " — " + validationLabel(row.validation),
         metrics.bodyTextSize,
-        row.validation == skin::SkinValidationDisposition::Selectable7Key
+        row.validation == skin::SkinValidationDisposition::SelectableGameplay
             ? ui_theme::lime()
             : ui_theme::textSecondary()));
     std::string metadata = "Package: " + row.entry.package.directoryName;
@@ -616,15 +752,6 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
           handleGameplaySkinActionResult(
               gameplaySkinSettingsController->requestRevalidation(entry));
         }));
-    actions->addView(makeGameplaySkinAction(
-        metrics, "Select",
-        ordinaryActionsEnabled &&
-            row.validation == skin::SkinValidationDisposition::Selectable7Key,
-        [this, entry = row.entry]() {
-          handleGameplaySkinActionResult(
-              gameplaySkinSettingsController->select(entry));
-        },
-        ui_theme::lime()));
     const bool confirmingRemoval =
         gameplaySkinRemovalConfirmationKey == row.entry.package.collisionKey;
     actions->addView(makeGameplaySkinAction(
@@ -675,10 +802,14 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
         },
         ui_theme::coral()));
     entryBody->addView(actions);
-    column->addView(makeCard(metrics, title, row.entry.packageRelativePath,
-                             entryBody, metrics.modeCardHeight,
-                             metrics.cardsWidth));
+    traitPanel->addView(entryBody);
   }
+
+  traitWorkspace->addView(traitPanel);
+  column->addView(makeCard(metrics, "Gameplay Skin Traits",
+                           "Choose a keymode, then a skin and its settings.",
+                           traitWorkspace, metrics.modeCardHeight,
+                           metrics.cardsWidth));
 
   if (snapshot.entries.empty()) {
     auto *empty = new View();
