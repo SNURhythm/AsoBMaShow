@@ -140,7 +140,10 @@ bool validPattern(std::string_view pattern) {
     const std::size_t end = pattern.find('/', start);
     const std::string_view component = pattern.substr(
         start, (end == std::string_view::npos ? pattern.size() : end) - start);
-    if (component.empty() || component == "." || component == "..") {
+    // Beatoraja resolves custom-file patterns from the selected entry's
+    // directory. Leave dot components to LuaSkinFileSystem, which normalizes
+    // them against that directory and rejects package escapes.
+    if (component.empty()) {
       return false;
     }
     if (end == std::string_view::npos) {
@@ -562,9 +565,13 @@ bool validateSemantics(BeatorajaSkinHeader &header, DecodeRequest &request) {
   std::set<std::string> fileNames;
   std::vector<std::string> patterns;
   for (const auto &file : header.files) {
-    if (!fileNames.insert(file.name).second || !validPattern(file.pattern)) {
+    if (!fileNames.insert(file.name).second) {
       return fail(request, "skin_lua_header_invalid",
-                  "Lua skin file declaration is invalid or duplicated");
+                  "Lua skin file declaration reuses a name: " + file.name);
+    }
+    if (!validPattern(file.pattern)) {
+      return fail(request, "skin_lua_header_invalid",
+                  "Lua skin file pattern is invalid: " + file.pattern);
     }
     for (const std::string &prior : patterns) {
       if (file.pattern.starts_with(prior) || prior.starts_with(file.pattern)) {
@@ -576,13 +583,13 @@ bool validateSemantics(BeatorajaSkinHeader &header, DecodeRequest &request) {
   }
 
   std::set<std::string> offsetNames;
-  std::set<int> offsetIds;
+  std::set<int> declaredOffsetIds;
   for (const auto &offset : header.offsets) {
-    if (!offsetNames.insert(offset.name).second ||
-        !offsetIds.insert(offset.id).second) {
+    if (!offsetNames.insert(offset.name).second) {
       return fail(request, "skin_lua_header_invalid",
-                  "Lua skin offset names or IDs are ambiguous");
+                  "Lua skin offset names are ambiguous");
     }
+    declaredOffsetIds.insert(offset.id);
   }
   if (header.type != kPlay7KeysType) {
     return true;
@@ -595,13 +602,13 @@ bool validateSemantics(BeatorajaSkinHeader &header, DecodeRequest &request) {
   };
   for (const auto &offset : synthesized) {
     if (offsetNames.find(offset.name) != offsetNames.end() ||
-        offsetIds.find(offset.id) != offsetIds.end()) {
+        declaredOffsetIds.find(offset.id) != declaredOffsetIds.end()) {
       return fail(request, "skin_lua_header_invalid",
                   "Lua skin offset collides with a synthesized control");
     }
     header.offsets.push_back(offset);
     offsetNames.insert(offset.name);
-    offsetIds.insert(offset.id);
+    declaredOffsetIds.insert(offset.id);
   }
   return true;
 }
@@ -4049,11 +4056,22 @@ reconcileSkinConfiguration(const BeatorajaSkinHeader &header,
   std::set<std::string> fileNames;
   std::vector<std::string> patterns;
   for (const auto &file : header.files) {
-    if (file.name.empty() || !fileNames.insert(file.name).second ||
-        !validPattern(file.pattern)) {
+    if (file.name.empty()) {
       result.diagnostics.push_back(
           diagnostic("skin_lua_configuration_invalid",
-                     "Lua skin file declaration is invalid or duplicated"));
+                     "Lua skin file declaration has an empty name"));
+      return result;
+    }
+    if (!fileNames.insert(file.name).second) {
+      result.diagnostics.push_back(
+          diagnostic("skin_lua_configuration_invalid",
+                     "Lua skin file declaration reuses a name: " + file.name));
+      return result;
+    }
+    if (!validPattern(file.pattern)) {
+      result.diagnostics.push_back(
+          diagnostic("skin_lua_configuration_invalid",
+                     "Lua skin file pattern is invalid: " + file.pattern));
       return result;
     }
     for (const std::string &prior : patterns) {
@@ -4125,13 +4143,11 @@ reconcileSkinConfiguration(const BeatorajaSkinHeader &header,
   }
 
   std::set<std::string> offsetNames;
-  std::set<int> offsetIds;
   for (const auto &offset : header.offsets) {
-    if (offset.name.empty() || !offsetNames.insert(offset.name).second ||
-        !offsetIds.insert(offset.id).second) {
+    if (offset.name.empty() || !offsetNames.insert(offset.name).second) {
       result.diagnostics.push_back(
           diagnostic("skin_lua_configuration_invalid",
-                     "Lua skin offset names or IDs are ambiguous"));
+                     "Lua skin offset names are ambiguous"));
       return result;
     }
     ConfigOffset value;
@@ -4145,7 +4161,7 @@ reconcileSkinConfiguration(const BeatorajaSkinHeader &header,
     settings.offsets.emplace(offset.name, value);
     configuration.offsets.emplace(offset.name, value);
     configuration.offsetPermissions.emplace(offset.name, offset.permissions);
-    configuration.offsetsById.emplace(offset.id, value);
+    configuration.offsetsById.insert_or_assign(offset.id, value);
   }
 
   configuration.lowercaseSha256 = skinConfigurationDigest(configuration);

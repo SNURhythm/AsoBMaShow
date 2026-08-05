@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -36,6 +37,23 @@ void writeText(const fs::path &path, std::string_view value) {
   fs::create_directories(path.parent_path());
   std::ofstream output(path, std::ios::binary | std::ios::trunc);
   output.write(value.data(), static_cast<std::streamsize>(value.size()));
+}
+
+void copyLuaSources(const fs::path &source, const fs::path &destination) {
+  for (const fs::directory_entry &entry :
+       fs::recursive_directory_iterator(source)) {
+    if (!entry.is_regular_file()) {
+      continue;
+    }
+    const std::string extension = entry.path().extension().string();
+    if (extension != ".lua" && extension != ".luaskin") {
+      continue;
+    }
+    const fs::path relative = fs::relative(entry.path(), source);
+    fs::create_directories((destination / relative).parent_path());
+    fs::copy_file(entry.path(), destination / relative,
+                  fs::copy_options::overwrite_existing);
+  }
 }
 
 class TempDirectory {
@@ -279,6 +297,28 @@ return {type=0, property={
   {name="A",item={{name="One",op=1}},def="One"},
   {name="A",item={{name="Two",op=2}},def="Two"}}}
 )lua");
+    writeText(source / "skin/duplicate-file-name.luaskin", R"lua(
+return {type=5, filepath={
+  {name="Reused", path="ordinary/*.png"},
+  {name="Reused", path="uppercase/*.png"}
+}}
+)lua");
+    writeText(source / "skin/invalid-file-pattern.luaskin", R"lua(
+return {type=5, filepath={{name="Broken", path="ordinary/no-wildcard.png"}}}
+)lua");
+    writeText(source / "skin/system/relative-file-pattern.luaskin", R"lua(
+return {type=5, filepath={{name="Settings", path="../customize/settings/7keys/*",
+                            def="default.lua"}}}
+)lua");
+    writeText(source / "skin/system/escaping-file-pattern.luaskin", R"lua(
+return {type=5, filepath={{name="Outside", path="../../../outside/*"}}}
+)lua");
+    writeText(source / "skin/duplicate-offset-id.luaskin", R"lua(
+return {type=5, offset={
+  {name="First", id=120, x=true},
+  {name="Second", id=120, y=true}
+}}
+)lua");
     writeText(source / "skin/id-collision.luaskin", R"lua(
 return {type=0, property={
   {name="A",item={{name="One",op=7}},def="One"},
@@ -300,6 +340,7 @@ return {type=0, property=p}
     writeText(source / "skin/characters/Zulu.png", "fixture");
     writeText(source / "skin/portraits/Portrait.PNG", "fixture");
     writeText(source / "skin/portraits/ignored.txt", "fixture");
+    writeText(source / "skin/customize/settings/7keys/default.lua", "fixture");
     for (int index = 0; index < 300; ++index) {
       writeText(source / "skin/crowded" /
                     ("unrelated-" + std::to_string(index) + ".txt"),
@@ -530,6 +571,20 @@ void testSemanticAndSynthesizedCollisionsFailClosed() {
   }
 }
 
+void testRejectedFileDeclarationsIdentifyTheirCause() {
+  const auto duplicate = fixture().decode("duplicate-file-name.luaskin");
+  expect(!duplicate.header && duplicate.diagnostics.size() == 1 &&
+             duplicate.diagnostics.front().message ==
+                 "Lua skin file declaration reuses a name: Reused",
+         "duplicate file declarations identify the reused name");
+
+  const auto invalid = fixture().decode("invalid-file-pattern.luaskin");
+  expect(!invalid.header && invalid.diagnostics.size() == 1 &&
+             invalid.diagnostics.front().message ==
+                 "Lua skin file pattern is invalid: ordinary/no-wildcard.png",
+         "invalid file declarations identify the rejected pattern");
+}
+
 void testReconciliationDefaultsSanitizesAndIndexesConfiguration() {
   const auto decoded = fixture().decode("valid.luaskin");
   auto fileSystem = fixture().fileSystem();
@@ -633,6 +688,58 @@ void testPinnedFilePatternChoicesAreDeterministicAndCaseInsensitive() {
                        {header.files[0].name, std::string(expected)}},
            "ordinary, uppercase, and pinned alternative patterns reconcile");
   }
+}
+
+void testEntryRelativeFilePatternsStayWithinThePackage() {
+  const auto decoded = fixture().decode("system/relative-file-pattern.luaskin");
+  auto fileSystem = fixture().fileSystem("system/relative-file-pattern.luaskin");
+  expect(decoded.header && fileSystem,
+         "entry-relative file pattern fixture is available");
+  if (!decoded.header || !fileSystem) {
+    return;
+  }
+  const auto reconciled =
+      reconcileSkinConfiguration(*decoded.header, nullptr, *fileSystem);
+  expect(reconciled.configuration && reconciled.diagnostics.empty() &&
+             reconciled.configuration->filePaths ==
+                 std::map<std::string, std::string>{{"Settings", "default.lua"}},
+         "a custom file pattern may traverse to the entry's package parent");
+
+  const auto escaped = fixture().decode("system/escaping-file-pattern.luaskin");
+  auto escapedFileSystem =
+      fixture().fileSystem("system/escaping-file-pattern.luaskin");
+  expect(escaped.header && escapedFileSystem,
+         "escaping file pattern fixture reaches reconciliation");
+  if (!escaped.header || !escapedFileSystem) {
+    return;
+  }
+  const auto rejected =
+      reconcileSkinConfiguration(*escaped.header, nullptr, *escapedFileSystem);
+  expect(!rejected.configuration && !rejected.diagnostics.empty(),
+         "a custom file pattern cannot escape the selected package");
+}
+
+void testRepeatedOffsetIdsFollowBeatorajaLastValueSemantics() {
+  const auto decoded = fixture().decode("duplicate-offset-id.luaskin");
+  auto fileSystem = fixture().fileSystem("duplicate-offset-id.luaskin");
+  expect(decoded.header && fileSystem,
+         "duplicate offset ID fixture is available");
+  if (!decoded.header || !fileSystem) {
+    return;
+  }
+  EntryProfileSettings saved;
+  saved.offsets.emplace("First", ConfigOffset{.x = 7});
+  saved.offsets.emplace("Second", ConfigOffset{.y = 9});
+  const auto reconciled =
+      reconcileSkinConfiguration(*decoded.header, &saved, *fileSystem);
+  expect(reconciled.configuration && reconciled.diagnostics.empty() &&
+             reconciled.configuration->offsets.at("First") ==
+                 ConfigOffset{.x = 7} &&
+             reconciled.configuration->offsets.at("Second") ==
+                 ConfigOffset{.y = 9} &&
+             reconciled.configuration->offsetsById.at(120) ==
+                 ConfigOffset{.y = 9},
+         "repeated offset IDs retain both settings and use the final value at runtime");
 }
 
 void testUnrelatedDirectoryEntriesDoNotConsumeTheChoiceLimit() {
@@ -779,6 +886,79 @@ void testGameplayNumericOffsetsAndCumulativeFrameBudgetAreBounded() {
          "model frame budget");
 }
 
+void testRequestedExternalLuaSkinHeaderDecodes() {
+  const char *configuredRoot = std::getenv("ASOBMASHOW_EXTERNAL_LUA_SKIN_ROOT");
+  if (configuredRoot == nullptr || *configuredRoot == '\0') {
+    return;
+  }
+  const fs::path source(configuredRoot);
+  expect(fs::is_directory(source),
+         "requested external Lua skin root is a readable directory");
+  if (!fs::is_directory(source)) {
+    return;
+  }
+  const char *configuredEntry =
+      std::getenv("ASOBMASHOW_EXTERNAL_LUA_SKIN_ENTRY");
+  const std::string entryPath =
+      configuredEntry != nullptr && *configuredEntry != '\0'
+          ? configuredEntry
+          : "result.luaskin";
+
+  TempDirectory temp;
+  const fs::path projectedSource = temp.root() / "source";
+  copyLuaSources(source, projectedSource);
+  const auto package = normalizePackageId("ExternalLuaSkin").package;
+  const auto entry = package ? normalizeEntryPath(*package, entryPath).entry
+                             : std::nullopt;
+  expect(package.has_value() && entry.has_value(),
+         "requested external Lua entry has a portable virtual identity");
+  if (!package || !entry) {
+    return;
+  }
+
+  const SkinStorageRoots roots{.visiblePackages = temp.root() / "visible",
+                               .privateRevisions = temp.root() / "revisions",
+                               .privateCatalog = temp.root() / "catalog",
+                               .profileOverlays = temp.root() / "overlays"};
+  AcceptFiles aliases;
+  SkinTreeSnapshotter snapshotter(roots, aliases);
+  const auto snapshot = snapshotter.snapshot(projectedSource, *package, {}, {});
+  expect(snapshot.prepared.has_value(),
+         "requested external Lua source projection snapshots");
+  if (!snapshot.prepared) {
+    return;
+  }
+  auto fileSystem = LuaSkinFileSystem::create(
+      {.revision = snapshot.prepared->readView(), .entry = *entry,
+       .storageRoots = roots});
+  expect(fileSystem.fileSystem != nullptr,
+         "requested external Lua decoder filesystem is created");
+  if (!fileSystem.fileSystem) {
+    return;
+  }
+  auto runtime = LuaSkinRuntime::create(
+      {.purpose = LuaRuntimePurpose::Catalog,
+       .fileSystem = std::move(fileSystem.fileSystem)});
+  expect(runtime.runtime != nullptr,
+         "requested external Lua decoder runtime is created");
+  if (!runtime.runtime) {
+    return;
+  }
+  const auto header = runtime.runtime->loadHeader();
+  expect(header.value.has_value() && !header.failure,
+         "requested external Lua header executes before decoding");
+  if (!header.value) {
+    return;
+  }
+  const auto decoded = LuaSkinTableDecoder{}.decodeHeader(*header.value);
+  for (const auto &diagnostic : decoded.diagnostics) {
+    std::cerr << "external Lua header decode diagnostic: " << diagnostic.code
+              << ": " << diagnostic.message << '\n';
+  }
+  expect(decoded.header.has_value() && decoded.diagnostics.empty(),
+         "requested external Lua header decodes through the compatibility model");
+}
+
 } // namespace
 
 int main() {
@@ -787,13 +967,17 @@ int main() {
   testAuthoredDimensionsStayWithinTheDecoderBoundary();
   testRequiredHeaderTextCannotBeMissingOrEmpty();
   testSemanticAndSynthesizedCollisionsFailClosed();
+  testRejectedFileDeclarationsIdentifyTheirCause();
   testReconciliationDefaultsSanitizesAndIndexesConfiguration();
   testReconciliationRejectsEmptyConfigurationKeys();
   testPinnedFilePatternChoicesAreDeterministicAndCaseInsensitive();
+  testEntryRelativeFilePatternsStayWithinThePackage();
+  testRepeatedOffsetIdsFollowBeatorajaLastValueSemantics();
   testUnrelatedDirectoryEntriesDoNotConsumeTheChoiceLimit();
   testConfigurationDigestUsesTheFrozenBigEndianGrammar();
   testGameplayNumericGlyphAtlasesNormalizeIntoModelObjects();
   testGameplayNumericOffsetsAndCumulativeFrameBudgetAreBounded();
+  testRequestedExternalLuaSkinHeaderDecodes();
   if (failures != 0) {
     std::cerr << failures << " assertion(s) failed\n";
     return 1;

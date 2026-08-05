@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -329,6 +330,32 @@ return {
       "validation output remains owned after all staging state is destroyed");
 }
 
+void testConfiguredPhaseCanReadStaticMainState() {
+  const SkinValidationResult result = validateScript(R"lua(
+if skin_config then
+  assert(main_state.option(241) == false)
+  assert(main_state.number(107) == 0)
+  assert(main_state.float_number(4) == 0)
+  assert(main_state.text(10) == "")
+  local offset = main_state.offset(10)
+  assert(offset.x == 0 and offset.y == 0 and offset.w == 0 and offset.h == 0)
+  assert(main_state.timer(40) == main_state.timer_off_value)
+  assert(main_state.exscore() == 0 and main_state.judge(1) == 0)
+  assert(main_state.rate() == 0 and main_state.time() == 0)
+  assert(main_state.volume_bg() == 0 and main_state.volume_key() == 0 and main_state.volume_sys() == 0)
+  assert(main_state.gauge() == 0 and main_state.gauge_type() == 0)
+end
+return {
+  type = 0, w = 1280, h = 720, name = "configured state access"
+}
+)lua");
+
+  expect(result.disposition == SkinValidationDisposition::Selectable7Key,
+         "validation supplies deterministic main_state values to configured Lua");
+  expect(!hasDiagnostic(result, "skin_lua_execution_failed"),
+         "configured main_state access does not abort validation");
+}
+
 void testUnsupportedNumericBindingFailsClosed() {
   const SkinValidationResult result = validateScript(R"lua(
 return {
@@ -376,6 +403,59 @@ return {
   expect(!result.reconciledSettings && !result.metadata &&
              result.configurationDigest.empty(),
          "resource failure publishes no partial validation output");
+}
+
+void testRequestedExternalGameplaySkinAvoidsConfiguredStateErrors() {
+  const char *configuredRoot =
+      std::getenv("ASOBMASHOW_EXTERNAL_GAMEPLAY_SKIN_ROOT");
+  if (configuredRoot == nullptr || *configuredRoot == '\0') {
+    return;
+  }
+  const fs::path source(configuredRoot);
+  expect(fs::is_directory(source),
+         "requested external gameplay skin root is a readable directory");
+  if (!fs::is_directory(source)) {
+    return;
+  }
+  const char *configuredEntry =
+      std::getenv("ASOBMASHOW_EXTERNAL_GAMEPLAY_SKIN_ENTRY");
+  const std::string entryPath =
+      configuredEntry != nullptr && *configuredEntry != '\0'
+          ? configuredEntry
+          : "play7.luaskin";
+
+  TempDirectory temp;
+  const auto package = normalizePackageId("ExternalGameplaySkin").package;
+  const auto entry = package ? normalizeEntryPath(*package, entryPath).entry
+                             : std::nullopt;
+  expect(package.has_value() && entry.has_value(),
+         "requested external gameplay entry has a portable virtual identity");
+  if (!package || !entry) {
+    return;
+  }
+  NoAliases aliases;
+  SkinTreeSnapshotter snapshotter(rootsBelow(temp.root()), aliases);
+  const auto snapshot = snapshotter.snapshot(source, *package, {}, {});
+  expect(snapshot.prepared.has_value(),
+         "requested external gameplay package snapshots");
+  if (!snapshot.prepared) {
+    return;
+  }
+
+  SkinResourcePreparationService resources;
+  GameplaySkinValidator validator(resources);
+  const SkinValidationResult result =
+      validator.validate(snapshot.prepared->readView(), *entry, nullptr, {});
+  if (result.disposition != SkinValidationDisposition::Selectable7Key) {
+    for (const auto &diagnostic : result.diagnostics) {
+      std::cerr << "external gameplay validation diagnostic: "
+                << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  expect(!hasDiagnostic(result, "skin_lua_execution_failed"),
+         "requested external gameplay Lua does not require live main_state during validation");
+  expect(result.disposition == SkinValidationDisposition::Selectable7Key,
+         "requested external gameplay skin validates as selectable");
 }
 
 void testCancellationFailsClosedBeforeRetainingTheRevisionView() {
@@ -426,8 +506,10 @@ int main() {
   testConfigurationDigestFramesOnlyPersistedConfigurationMaps();
   testAuthoritativeCatalogAdmitsOnlyExecutableBridgeSelectors();
   testValidNumericBindingPublishesOwnedTwoPhaseMetadata();
+  testConfiguredPhaseCanReadStaticMainState();
   testUnsupportedNumericBindingFailsClosed();
   testMissingCriticalResourceFailsClosed();
+  testRequestedExternalGameplaySkinAvoidsConfiguredStateErrors();
   testCancellationFailsClosedBeforeRetainingTheRevisionView();
   return failures == 0 ? 0 : 1;
 }
