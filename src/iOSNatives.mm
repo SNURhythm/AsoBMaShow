@@ -3896,8 +3896,13 @@ std::string GetIOSApplicationSupportPath() {
     if (base == nil) {
       return {};
     }
-    NSURL *directory = [base URLByAppendingPathComponent:@"AsoBMaShow"
-                                             isDirectory:YES];
+    NSURL *resolvedBase = base.URLByResolvingSymlinksInPath;
+    if (resolvedBase == nil) {
+      return {};
+    }
+    NSURL *directory =
+        [resolvedBase URLByAppendingPathComponent:@"AsoBMaShow"
+                                      isDirectory:YES];
     NSError *error = nil;
     if (![manager createDirectoryAtURL:directory
             withIntermediateDirectories:YES

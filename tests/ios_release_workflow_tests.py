@@ -54,6 +54,7 @@ RELEASE_CRITICAL_SKIN_TESTS = {
     "gameplay_skin_settings_tests": "gameplay_skin_settings_tests",
     "gameplay_skin_settings_presentation_tests": "gameplay_skin_settings_presentation_tests",
     "skin_performance_telemetry_tests": "skin_performance_telemetry_tests",
+    "skin_overlay_digest_provider_tests": "skin_overlay_digest_provider_tests",
     "skin_acceptance_recorder_tests": "skin_acceptance_recorder_tests",
     "gameplay_skin_acceptance_controller_tests": "gameplay_skin_acceptance_controller_tests",
     "player_profile_manager_tests": "foundation_profile_manager",

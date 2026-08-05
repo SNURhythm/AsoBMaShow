@@ -102,6 +102,46 @@ class SkinAcceptanceContractTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("counter", result.stdout)
 
+    def test_redistributable_fixture_digests_are_exact_and_required(self):
+        contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+        expected = [
+            {"path": "charts/acceptance_7k.bms", "sha256": "0060de67ef50532e3747c7ac486045a8ef0c192d34853b1f424d4bc650406f00"},
+            {"path": "charts/acceptance_bga_base.png", "sha256": "54102735089d1f3d5a8838915def4bb18e704e9ecac889c2c8c65ee8e60bbc31"},
+            {"path": "charts/acceptance_bga_layer.png", "sha256": "fc03e493884867abaf863f48ad09fd5ebe3aefd14221ea9ade7a69c361d0615f"},
+            {"path": "charts/acceptance_bga_miss.png", "sha256": "adfa0c7de03bc3bea3de80b4a4514881c8b6296568f43a5acd5cd7a16fffd1c9"},
+            {"path": "charts/acceptance_bga_video.mp4", "sha256": "e947526c2c7e26632b09c4eb3f1ce912bd18094c7f224c0ef09138d70e361946"},
+        ]
+        self.assertEqual(contract["redistributableSyntheticFixtureDigests"], expected)
+        audit_spec = importlib.util.spec_from_file_location(
+            "beatoraja_fixture_digest_audit", ROOT / "scripts/audit_beatoraja_skin.py"
+        )
+        self.assertIsNotNone(audit_spec)
+        self.assertIsNotNone(audit_spec.loader)
+        audit = importlib.util.module_from_spec(audit_spec)
+        sys.modules[audit_spec.name] = audit
+        self.addCleanup(sys.modules.pop, audit_spec.name, None)
+        audit_spec.loader.exec_module(audit)
+        self.assertEqual(audit.redistributable_synthetic_fixture_digests(), expected)
+
+        malformed_contracts = []
+        missing = json.loads(json.dumps(contract))
+        del missing["redistributableSyntheticFixtureDigests"]
+        malformed_contracts.append(missing)
+        duplicate = json.loads(json.dumps(contract))
+        duplicate["redistributableSyntheticFixtureDigests"][1]["path"] = (
+            "charts/acceptance_7k.bms"
+        )
+        malformed_contracts.append(duplicate)
+        changed = json.loads(json.dumps(contract))
+        changed["redistributableSyntheticFixtureDigests"][0]["sha256"] = "0" * 64
+        malformed_contracts.append(changed)
+        with tempfile.TemporaryDirectory() as temporary:
+            contract_path = Path(temporary) / "contract.json"
+            for malformed in malformed_contracts:
+                contract_path.write_text(json.dumps(malformed), encoding="utf-8")
+                result = self.invoke("validate", "--contract", str(contract_path))
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+
     def passing_contract(self) -> dict:
         contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
         acceptance = contract["acceptanceContract"]
@@ -610,7 +650,7 @@ class SkinAcceptanceContractTests(unittest.TestCase):
             self.assertIn(f"separate {mode} runtime/autoplay run", normalized_readme)
 
         expected_hashes = {
-            "README.md": "d2d192a6b2e42923acd2d4d59d53079d78e0cd36d843fcdf13774200fabdff7b",
+            "README.md": "235903883f5be4cc67db382c17c128d4d851e9c31383259f538ef7172786bb1d",
             "acceptance_7k.bms": "0060de67ef50532e3747c7ac486045a8ef0c192d34853b1f424d4bc650406f00",
             "acceptance_bga_base.png": "54102735089d1f3d5a8838915def4bb18e704e9ecac889c2c8c65ee8e60bbc31",
             "acceptance_bga_layer.png": "fc03e493884867abaf863f48ad09fd5ebe3aefd14221ea9ade7a69c361d0615f",

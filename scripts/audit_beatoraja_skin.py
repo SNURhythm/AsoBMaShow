@@ -31,6 +31,13 @@ SELECTED_LUA_CLOSURE_DOMAIN = b"ASOBMSKIN-SELECTED-LUA-CLOSURE-V1\0"
 AUDITED_EFFECTIVE_CONFIGURATION_DOMAIN = b"ASOBMSKIN-AUDITED-EFFECTIVE-CONFIG-V2\0"
 OPAQUE_GUARD_VECTOR_DOMAIN = b"ASOBMSKIN-OPAQUE-GUARD-VECTOR-V2\0"
 RENDER_IO_NEGATIVE_SCENARIO_ID = "scenario-f7395bddf2b0f715a900b5cd"
+REDISTRIBUTABLE_SYNTHETIC_FIXTURE_PATHS = (
+    "charts/acceptance_7k.bms",
+    "charts/acceptance_bga_base.png",
+    "charts/acceptance_bga_layer.png",
+    "charts/acceptance_bga_miss.png",
+    "charts/acceptance_bga_video.mp4",
+)
 
 MAX_ARCHIVE_BYTES = 2 * 1024 * 1024 * 1024
 MAX_REGULAR_FILE_BYTES = 512 * 1024 * 1024
@@ -138,6 +145,19 @@ def sha256_file(path: Path) -> str:
     with path.open("rb") as stream:
         copy_to_digest(stream, digest, MAX_ARCHIVE_BYTES)
     return digest.hexdigest()
+
+
+def redistributable_synthetic_fixture_digests() -> list[dict[str, str]]:
+    fixture_root = Path(__file__).resolve().parents[1] / "tests/fixtures/beatoraja_skin"
+    records: list[dict[str, str]] = []
+    for relative_path in REDISTRIBUTABLE_SYNTHETIC_FIXTURE_PATHS:
+        fixture = fixture_root / relative_path
+        if not fixture.is_file():
+            raise AuditError(
+                "redistributable synthetic fixture is missing: " + relative_path
+            )
+        records.append({"path": relative_path, "sha256": sha256_file(fixture)})
+    return records
 
 
 def copy_to_digest(stream: BinaryIO, digest, maximum: int) -> int:
@@ -3198,6 +3218,7 @@ def build_manifest(arguments, archive_data, disk_tree_sha, provenance):
             closure_contract["sha256"],
             selected_file_io_surface,
         ),
+        "redistributableSyntheticFixtureDigests": redistributable_synthetic_fixture_digests(),
         "entries": [
             {
                 "identity": "entry-" + hashlib.sha256(entry.encode("utf-8")).hexdigest()[:24],

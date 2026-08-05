@@ -534,11 +534,25 @@ class IOSBuildSetupTests(unittest.TestCase):
         header = IOS_NATIVES_HEADER.read_text(encoding="utf-8")
         source = IOS_NATIVES_SOURCE.read_text(encoding="utf-8")
         self.assertIn("std::string GetIOSApplicationSupportPath();", header)
-        implementation = source[source.index("GetIOSApplicationSupportPath()") :]
+        implementation_start = source.index("GetIOSApplicationSupportPath()")
+        implementation_end = source.index("\n}\n\n// get nwh", implementation_start)
+        implementation = source[implementation_start:implementation_end]
         self.assertIn("NSApplicationSupportDirectory", implementation)
         self.assertIn("createDirectoryAtURL", implementation)
         self.assertIn("NSURLIsExcludedFromBackupKey", implementation)
         self.assertIn("setResourceValue", implementation)
+        self.assertIn("URLByResolvingSymlinksInPath", implementation)
+        self.assertLess(
+            implementation.index("URLByResolvingSymlinksInPath"),
+            implementation.index('URLByAppendingPathComponent:@"AsoBMaShow"'),
+        )
+        self.assertIn(
+            "return std::string(directory.fileSystemRepresentation);",
+            implementation,
+        )
+        self.assertNotIn(
+            "directory.URLByResolvingSymlinksInPath", implementation
+        )
 
     def test_ios_folder_handoff_and_files_document_access_are_declared(self):
         with INFO_PLIST.open("rb") as handle:

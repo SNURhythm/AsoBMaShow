@@ -103,6 +103,15 @@ SkinUtf8NfcResult normalizeSkinSourceNameNfc(std::string_view sourceName) {
   return normalized;
 }
 
+std::optional<std::string>
+skinPathCollisionKey(std::string_view nfcVirtualPath) {
+  const auto normalized = normalizeNfc(nfcVirtualPath);
+  if (!normalized.value || *normalized.value != nfcVirtualPath) {
+    return std::nullopt;
+  }
+  return collisionKeyFor(nfcVirtualPath);
+}
+
 SkinPackageIdResult normalizePackageId(std::string_view directoryName) {
   auto normalized = normalizeSkinSourceNameNfc(directoryName);
   if (!normalized.value) {

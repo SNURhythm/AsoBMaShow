@@ -53,6 +53,12 @@ class GameplaySkinSettingsUiContracts(unittest.TestCase):
         ):
             self.assertIn(required, enabled)
 
+    def test_unready_tab_exposes_the_sanitized_startup_diagnostic(self) -> None:
+        enabled = self.read("src/scene/SettingsSceneSkins.cpp")
+        self.assertIn("context.skinRecoveryResult", enabled)
+        self.assertIn("skinRecoveryResult->diagnostics", enabled)
+        self.assertIn("diagnosticPresentation", enabled)
+
     def test_core_operator_labels_and_files_location_are_present(self) -> None:
         enabled = self.read("src/scene/SettingsSceneSkins.cpp")
         for label in (

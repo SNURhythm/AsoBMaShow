@@ -749,30 +749,40 @@ public:
     }
     try {
       if (beforeDigestTicket_) {
-        const auto result =
-            dependencies_.overlayDigests->pollDigest(*beforeDigestTicket_);
+        const auto ticket = *beforeDigestTicket_;
+        const auto result = dependencies_.overlayDigests->pollDigest(ticket);
         if (result.state == SkinOverlayDigestPollState::Unknown ||
             (result.state == SkinOverlayDigestPollState::Ready &&
              (result.failure || !isLowerHex(result.lowercaseSha256, 64)))) {
+          if (result.state == SkinOverlayDigestPollState::Ready) {
+            dependencies_.overlayDigests->cancelDigest(ticket);
+            beforeDigestTicket_.reset();
+          }
           fail(FatalReason::OverlayDigest);
           return;
         }
         if (result.state == SkinOverlayDigestPollState::Ready) {
           beforeDigest_ = result.lowercaseSha256;
+          dependencies_.overlayDigests->cancelDigest(ticket);
           beforeDigestTicket_.reset();
         }
       }
       if (afterDigestTicket_) {
-        const auto result =
-            dependencies_.overlayDigests->pollDigest(*afterDigestTicket_);
+        const auto ticket = *afterDigestTicket_;
+        const auto result = dependencies_.overlayDigests->pollDigest(ticket);
         if (result.state == SkinOverlayDigestPollState::Unknown ||
             (result.state == SkinOverlayDigestPollState::Ready &&
              (result.failure || !isLowerHex(result.lowercaseSha256, 64)))) {
+          if (result.state == SkinOverlayDigestPollState::Ready) {
+            dependencies_.overlayDigests->cancelDigest(ticket);
+            afterDigestTicket_.reset();
+          }
           fail(FatalReason::OverlayDigest);
           return;
         }
         if (result.state == SkinOverlayDigestPollState::Ready) {
           afterDigest_ = result.lowercaseSha256;
+          dependencies_.overlayDigests->cancelDigest(ticket);
           afterDigestTicket_.reset();
           if (!beforeDigest_ || *beforeDigest_ != *afterDigest_) {
             fail(FatalReason::OverlayDigest);

@@ -215,9 +215,16 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
     auto *body = new View();
     body->setFlexDirection(FlexDirection::Column);
     body->setGap(static_cast<float>(metrics.cardGap));
-    body->addView(makeWrappedText(
+    std::string availabilityMessage =
         "Gameplay skin services are not ready. The built-in presentation is "
-        "still available.",
+        "still available.";
+    if (context.skinRecoveryResult &&
+        !context.skinRecoveryResult->diagnostics.empty()) {
+      availabilityMessage += " " + diagnosticPresentation(
+          context.skinRecoveryResult->diagnostics.front());
+    }
+    body->addView(makeWrappedText(
+        availabilityMessage,
         metrics.bodyTextSize, ui_theme::textSecondary()));
     column->addView(makeCard(metrics, "Gameplay Skins", "Availability", body,
                              metrics.modeCardHeight, metrics.cardsWidth));

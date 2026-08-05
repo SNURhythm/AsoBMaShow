@@ -905,6 +905,9 @@ void testNegativeOverlayOrderingCountersAndProviderShutdown() {
   const auto after = provider.latest();
   provider.ready(after, digest('e'));
   recorder.pollAsyncDependencies();
+  expect(provider.cancelled ==
+             std::vector<std::uint64_t>{before.value, after.value},
+         "recorder releases each copied terminal provider result");
   const auto ticket = recorder.currentExportTicket();
   expect(ticket.has_value(), "equal overlay digests trigger negative export");
   const auto result = waitForExport(recorder, *ticket);

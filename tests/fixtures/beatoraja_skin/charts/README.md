@@ -33,5 +33,6 @@ fixture parses.
 
 The base and layer PNG files are 2x2 opaque color cards; the gap PNG is a 2x2
 fully transparent card. The MP4 is a one-frame, silent, generated color card.
-Regenerate only with local deterministic tooling and update the fixture
-contract test hash in the same review.
+Regenerate only with local deterministic tooling and update both the fixture
+contract test and the manifest's redistributable fixture digest record in the
+same review.

@@ -420,6 +420,40 @@ def validate_contract_schema(contract: dict[str, Any]) -> dict[str, Any]:
         payload_digests.add(sha256_at(required(item, "sha256", f"contract.externalPayloadDigests[{index}]"), f"contract.externalPayloadDigests[{index}].sha256"))
     if not payload_digests:
         error("contract.externalPayloadDigests cannot be empty")
+
+    expected_fixture_paths = (
+        "charts/acceptance_7k.bms",
+        "charts/acceptance_bga_base.png",
+        "charts/acceptance_bga_layer.png",
+        "charts/acceptance_bga_miss.png",
+        "charts/acceptance_bga_video.mp4",
+    )
+    fixtures = array_at(
+        contract.get("redistributableSyntheticFixtureDigests"),
+        "contract.redistributableSyntheticFixtureDigests",
+    )
+    if len(fixtures) != len(expected_fixture_paths):
+        error("contract.redistributableSyntheticFixtureDigests must contain the exact five fixtures")
+    fixture_digests: dict[str, str] = {}
+    for index, raw in enumerate(fixtures):
+        path = f"contract.redistributableSyntheticFixtureDigests[{index}]"
+        item = exact_object(object_at(raw, path), path, {"path", "sha256"})
+        relative_path = string_at(item["path"], f"{path}.path")
+        digest = sha256_at(item["sha256"], f"{path}.sha256")
+        if relative_path in fixture_digests:
+            error("contract.redistributableSyntheticFixtureDigests paths must be unique")
+        fixture_digests[relative_path] = digest
+    if tuple(fixture_digests) != expected_fixture_paths:
+        error("contract.redistributableSyntheticFixtureDigests must use the exact fixture paths and order")
+    fixture_root = repository_root() / "tests/fixtures/beatoraja_skin"
+    for relative_path, recorded_digest in fixture_digests.items():
+        fixture = fixture_root / relative_path
+        try:
+            payload = fixture.read_bytes()
+        except OSError as exc:
+            raise AcceptanceError("redistributable synthetic fixture is unreadable") from exc
+        if hashlib.sha256(payload).hexdigest() != recorded_digest:
+            error("contract.redistributableSyntheticFixtureDigests does not match checked-in fixture bytes")
     return acceptance
 
 

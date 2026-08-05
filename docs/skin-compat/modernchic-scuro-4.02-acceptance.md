@@ -61,10 +61,12 @@ requirements before renderer work:
   activated-revision digests, plus the exact selected Lua closure digest over
   every loaded virtual identity and exact source byte, with configuration and
   activated-revision values explicitly pending until physical evidence exists;
-- synthetic chart hashes and fixed autoplay-script hashes for normal notes,
-  every supported LN/CN/HCN phase, BPM/stop/scroll changes, chords, all judgment
-  grades, combo breaks, gauge thresholds/failure, lane cover, BGA transitions,
-  and song end;
+- exact checked-in digests for the five redistributable synthetic BMS/BGA
+  fixture files, independently of the still-pending scenario bindings; and
+- still-pending synthetic chart hashes and fixed autoplay-script hashes for
+  normal notes, every supported LN/CN/HCN phase, BPM/stop/scroll changes,
+  chords, all judgment grades, combo breaks, gauge thresholds/failure, lane
+  cover, BGA transitions, and song end;
 - screenshot timestamps and a per-layout external evidence reference, without
   image bytes in Git;
 - an explicit proof that the selected configured model has zero custom-timer
@@ -122,6 +124,12 @@ is memory-only over precomputed status. Both digest values remain pending until
 the physical run is recorded.
 
 Task 1 permits `pending`. Final acceptance permits only `pass`.
+
+The five checked-in BMS/BGA fixture digests establish redistributable input
+provenance only. They neither bind the static chart to any of the four
+acceptance scenarios nor substitute for autoplay, controlled-miss/retry, or
+physical iPad evidence. Those scenario hashes and all device-derived values
+remain pending until recorded by the real acceptance run.
 
 ### External physical-evidence metadata
 

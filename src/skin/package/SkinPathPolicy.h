@@ -11,6 +11,11 @@ namespace skin {
 // package-relative path, and its result is valid NFC UTF-8.
 SkinUtf8NfcResult normalizeSkinSourceNameNfc(std::string_view sourceName);
 
+// Returns the full Unicode case-folded collision key for an already-NFC
+// virtual path. Invalid UTF-8 or non-canonical input fails closed.
+std::optional<std::string>
+skinPathCollisionKey(std::string_view nfcVirtualPath);
+
 // A package is exactly one direct child of the Skins root.
 SkinPackageIdResult normalizePackageId(std::string_view directoryName);
 
