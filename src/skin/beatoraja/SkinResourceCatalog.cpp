@@ -533,12 +533,11 @@ bool SkinResourceSessionAccounting::addAtlas(
 }
 
 bool skinResourceResolveRect(const SkinSourceRect &a, int iw, int ih, SkinSourceRect &r) noexcept {
-  if (iw <= 0 || ih <= 0 || a.x < 0 || a.y < 0) return false;
+  if (iw <= 0 || ih <= 0) return false;
   const int w = a.w == -1 ? iw : a.w, h = a.h == -1 ? ih : a.h;
   const int cols = a.gridColumns <= 0 ? 1 : a.gridColumns, rows = a.gridRows <= 0 ? 1 : a.gridRows;
-  if (w <= 0 || h <= 0 || cols <= 0 || rows <= 0 || a.gridColumn < 0 || a.gridRow < 0 || a.gridColumn >= cols || a.gridRow >= rows || a.x > iw-w || a.y > ih-h) return false;
+  if (a.gridColumn < 0 || a.gridRow < 0 || a.gridColumn >= cols || a.gridRow >= rows) return false;
   const int cw = w / cols, ch = h / rows;
-  if (cw <= 0 || ch <= 0) return false;
   r = a; r.x = a.x + cw*a.gridColumn; r.y = a.y + ch*a.gridRow; r.w = cw; r.h = ch; r.gridColumn=0; r.gridRow=0; r.gridColumns=1; r.gridRows=1; return true;
 }
 SkinResourceCatalog::SkinResourceCatalog(

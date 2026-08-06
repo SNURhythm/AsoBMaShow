@@ -63,8 +63,10 @@ void testSpriteBoundsAndNormalizedGridCells() {
              resolved.x == 20 && resolved.y == 0 && resolved.w == 10 && resolved.h == 10,
          "row-major sprite preparation resolves the third grid cell for UV 0.5 to 0.75");
   authored.x = 31;
-  expect(!skin::skinResourceResolveRect(authored, 40, 20, resolved),
-         "out-of-bounds source crops are rejected before publication");
+  expect(skin::skinResourceResolveRect(authored, 40, 20, resolved) &&
+             resolved.x == 51 && resolved.y == 0 && resolved.w == 10 &&
+             resolved.h == 10,
+         "Beatoraja TextureRegion construction preserves crops beyond the decoded image");
   authored = {.x=0,.y=0,.w=-1,.h=-1,.gridColumn=1,.gridRow=1,.gridColumns=2,.gridRows=2};
   expect(skin::skinResourceResolveRect(authored, 40, 20, resolved) &&
              resolved.x == 20 && resolved.y == 10 && resolved.w == 20 && resolved.h == 10,
@@ -321,8 +323,8 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   badFrames.front().x = 39;
   badFrames.front().w = 2;
   const auto invalidCrop = service.validateResources({.revision=snapshot.prepared->readView(), .entry=entry, .fileSystem=*stagedFs.fileSystem, .model=invalidCropModel, .configuration=configuration});
-  expect(!invalidCrop.valid && hasDiagnostic(invalidCrop.diagnostics, "skin.resource.sprite_bounds"),
-         "a critical post-decode source crop outside its image is a blocking error");
+  expect(invalidCrop.valid && !hasDiagnostic(invalidCrop.diagnostics, "skin.resource.sprite_bounds"),
+         "Beatoraja-compatible source crops outside an image remain selectable");
   auto unsupportedFontModel = model;
   std::get<skin::SkinFontResource>(unsupportedFontModel.model.resources[6]).virtualPath = "resources/unsupported.fnt";
   const auto unsupportedFont = service.validateResources({.revision=snapshot.prepared->readView(), .entry=entry, .fileSystem=*stagedFs.fileSystem, .model=unsupportedFontModel, .configuration=configuration, .requiredRuntimeStrings=runtimeStrings});
@@ -776,8 +778,6 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
                          plan.atlases.push_back(std::move(atlas));
                        }
                      });
-  rejectBeforeUpload("atlas glyph regions must be canonical",
-                     [](auto &plan, auto &) { plan.atlases.front().glyphs.begin()->second.region.x = -1; });
   rejectBeforeUpload("atlas kerning pairs must reference prepared glyphs",
                      [](auto &plan, auto &) { plan.atlases.front().kerning[{U'\U0010ffff', U'\U0010ffff'}] = 1; });
   rejectBeforeUpload("INT_MIN kerning is rejected before upload",
