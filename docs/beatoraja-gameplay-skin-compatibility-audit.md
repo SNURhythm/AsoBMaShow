@@ -237,6 +237,23 @@
       FAST/SLOW options 1242/1243 invert Aso's `JudgeResult::Diff` sign to
       match `JudgeManager`.
 
+18. **Numeric destination `op` conditions bypassed the BooleanPropertyFactory
+    split.**
+    - Upstream: `SkinObject.setDrawCondition(int[])` passes every nonzero,
+      unique numeric condition through `BooleanPropertyFactory` first. A
+      recognized selector becomes a runtime draw condition; only a factory
+      miss remains a static skin option. `JsonSkinObjectLoader` applies this
+      behavior to ordinary destinations and child destinations of special
+      gameplay objects.
+    - Local (before this patch): `LuaSkinTableDecoder` preserved every numeric
+      `op` entry as a static configuration condition, even when the pinned
+      BooleanPropertyFactory catalog recognized it. Consequently recent-judge
+      selectors such as `1242` (FAST) and `1243` (SLOW) were never evaluated
+      against live gameplay state and their images were always suppressed.
+    - Patch status: patched. Recognized numeric selectors now decode as typed
+      Boolean properties before model normalization; unrecognized numeric
+      selectors remain static skin options, preserving authored order.
+
 ## Patch order
 
 1. Replace destination enum admission checks only after carrying the authored

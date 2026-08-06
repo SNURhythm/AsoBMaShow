@@ -185,6 +185,10 @@ constexpr auto kBuiltins = std::to_array<SkinBuiltinBindingCatalogEntry>({
      .selector = SkinBuiltinPropertySelector{std::string("known_bool")}},
     {.type = {.kind = SkinBindingKind::TimerProperty},
      .selector = SkinBuiltinPropertySelector{7}},
+    {.type = {.kind = SkinBindingKind::BooleanProperty},
+     .selector = SkinBuiltinPropertySelector{1242}},
+    {.type = {.kind = SkinBindingKind::BooleanProperty},
+     .selector = SkinBuiltinPropertySelector{-1243}},
 });
 
 void testScuroShapedModernNoteAndNestedLinesDecodeLive() {
@@ -486,6 +490,56 @@ return {type=0,w=1280,h=720,
          "bindings");
 }
 
+void testNumericJudgeOptionsUseBooleanFactoryBeforeStaticOptions() {
+  constexpr std::string_view source = R"lua(
+return {type=0,w=1280,h=720,
+ source={{id='atlas',path='atlas.png'}},
+ image={{id='judge-fast',src='atlas',x=0,y=0,w=20,h=10}},
+ destination={{id='judge-fast',op={1242,927,-1243},dst={{x=0,y=0,w=20,h=10}}}}}
+)lua";
+  LiveSession session(source);
+  const SkinBuiltinBindingCatalogView builtins(kBuiltins);
+  auto decoded = session.decode(builtins);
+  expect(decoded.model.has_value(),
+         "numeric Judge fast/slow destination options decode live");
+  if (!decoded.model || decoded.model->destinations.empty()) {
+    return;
+  }
+
+  const auto &model = *decoded.model;
+  const auto &conditions = model.destinations.front().presentation.conditions;
+  expect(conditions.size() == 3 &&
+             std::holds_alternative<SkinBooleanPropertyId>(conditions[0]) &&
+             std::holds_alternative<int>(conditions[1]) &&
+             std::get<int>(conditions[1]) == 927 &&
+             std::holds_alternative<SkinBooleanPropertyId>(conditions[2]),
+         "recognized numeric Judge options become runtime Boolean properties "
+         "while an unknown option remains static configuration");
+  if (conditions.size() != 3 ||
+      !std::holds_alternative<SkinBooleanPropertyId>(conditions[0]) ||
+      !std::holds_alternative<SkinBooleanPropertyId>(conditions[2])) {
+    return;
+  }
+
+  const auto first = std::get<SkinBooleanPropertyId>(conditions[0]);
+  const auto third = std::get<SkinBooleanPropertyId>(conditions[2]);
+  const auto selectorFor = [&](SkinBooleanPropertyId id) -> std::optional<int> {
+    const auto found = std::ranges::find_if(
+        model.booleanProperties,
+        [&](const auto &binding) { return binding.id == id; });
+    if (found == model.booleanProperties.end()) {
+      return std::nullopt;
+    }
+    const auto *builtin =
+        std::get_if<SkinBuiltinPropertySelector>(&found->source);
+    const auto *selector = builtin ? std::get_if<int>(&builtin->value) : nullptr;
+    return selector ? std::optional<int>(*selector) : std::nullopt;
+  };
+  expect(selectorFor(first) == 1242 && selectorFor(third) == -1243,
+         "numeric Judge fast/slow options retain their exact signed "
+         "BooleanPropertyFactory selectors");
+}
+
 void testValidatorRetainsMalformedCriticalNoteState() {
   LiveSession session(kLegacyNote);
   auto decoded = session.decode();
@@ -527,6 +581,7 @@ int main() {
   testMalformedCriticalNotePathsFailClosed();
   testCompleteNoteMaterializationBudgets();
   testNoteOnlyImagesIgnoreGenericStateAndActionFields();
+  testNumericJudgeOptionsUseBooleanFactoryBeforeStaticOptions();
   testValidatorRetainsMalformedCriticalNoteState();
   if (failures != 0) {
     std::cerr << failures << " assertion(s) failed\n";

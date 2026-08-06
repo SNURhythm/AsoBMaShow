@@ -2540,10 +2540,10 @@ bool normalizeDestination(GameplayDecodeRequest &request,
   output.mouseRect = raw.mouseRect;
   output.conditions.reserve(raw.conditions.size());
   for (const auto &condition : raw.conditions) {
-    if (condition.optionId && *condition.optionId != 0) {
-      output.conditions.emplace_back(*condition.optionId);
-    } else if (condition.property) {
+    if (condition.property) {
       output.conditions.emplace_back(*condition.property);
+    } else if (condition.optionId && *condition.optionId != 0) {
+      output.conditions.emplace_back(*condition.optionId);
     }
   }
 
@@ -3352,7 +3352,8 @@ bool bindNoteLineDestination(GameplayDecodeRequest &request,
                              LuaSkinBindingDecoder &decoder,
                              const LuaValueHandle &value,
                              std::string_view array,
-                             RawDestination &destination) {
+                             RawDestination &destination,
+                             SkinBuiltinBindingCatalogView builtins) {
   if (!decodeOptionalBinding(
           request, decoder, value, {.kind = SkinBindingKind::TimerProperty},
           noteLineBindingPath(array, destination.authoredIndex, "timer"),
@@ -3362,7 +3363,11 @@ bool bindNoteLineDestination(GameplayDecodeRequest &request,
   }
   for (std::size_t index = 0; index < destination.conditions.size(); ++index) {
     auto &condition = destination.conditions[index];
-    if (condition.optionId) {
+    // SkinObject.setDrawCondition resolves BooleanPropertyFactory values
+    // before retaining unknown numeric values as static skin options.
+    if (condition.optionId &&
+        !builtins.contains({.kind = SkinBindingKind::BooleanProperty},
+                           SkinBuiltinPropertySelector{*condition.optionId})) {
       continue;
     }
     std::optional<SkinBooleanPropertyId> property;
@@ -3389,10 +3394,11 @@ bool bindNoteLinePrefix(GameplayDecodeRequest &request,
                         LuaSkinBindingDecoder &decoder,
                         const LuaValueHandle &value, std::string_view array,
                         std::vector<RawDestination> &destinations,
-                        std::size_t selectedCount) {
+                        std::size_t selectedCount,
+                        SkinBuiltinBindingCatalogView builtins) {
   for (std::size_t index = 0; index < selectedCount; ++index) {
     if (!bindNoteLineDestination(request, decoder, value, array,
-                                 destinations[index])) {
+                                 destinations[index], builtins)) {
       return false;
     }
   }
@@ -3623,13 +3629,16 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
   if (request.note) {
     const std::size_t groupCount = request.note->group.size();
     if (!bindNoteLinePrefix(request, decoder, value, "group",
-                            request.note->group, groupCount) ||
+                            request.note->group, groupCount, builtins) ||
         !bindNoteLinePrefix(request, decoder, value, "bpm", request.note->bpm,
-                            std::min(groupCount, request.note->bpm.size())) ||
+                            std::min(groupCount, request.note->bpm.size()),
+                            builtins) ||
         !bindNoteLinePrefix(request, decoder, value, "stop", request.note->stop,
-                            std::min(groupCount, request.note->stop.size())) ||
+                            std::min(groupCount, request.note->stop.size()),
+                            builtins) ||
         !bindNoteLinePrefix(request, decoder, value, "time", request.note->time,
-                            std::min(groupCount, request.note->time.size()))) {
+                            std::min(groupCount, request.note->time.size()),
+                            builtins)) {
       return false;
     }
   }
@@ -3645,7 +3654,10 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
     for (std::size_t index = 0; index < destination.conditions.size();
          ++index) {
       auto &condition = destination.conditions[index];
-      if (condition.optionId) {
+      // Keep only BooleanPropertyFactory misses as static skin options.
+      if (condition.optionId &&
+          !builtins.contains({.kind = SkinBindingKind::BooleanProperty},
+                             SkinBuiltinPropertySelector{*condition.optionId})) {
         continue;
       }
       std::optional<SkinBooleanPropertyId> property;
@@ -3695,7 +3707,9 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
     for (std::size_t conditionIndex = 0;
          conditionIndex < destination.conditions.size(); ++conditionIndex) {
       auto &condition = destination.conditions[conditionIndex];
-      if (condition.optionId) {
+      if (condition.optionId &&
+          !builtins.contains({.kind = SkinBindingKind::BooleanProperty},
+                             SkinBuiltinPropertySelector{*condition.optionId})) {
         continue;
       }
       std::optional<SkinBooleanPropertyId> property;
