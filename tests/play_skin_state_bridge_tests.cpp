@@ -872,6 +872,51 @@ void testPlayTimerPropertiesMatchPinnedJavaConversions() {
   }
 }
 
+void testReadyAndLiveTimersUseTheSharedSkinStateClock() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = runtime.runtime(),
+                              .mutationTable = mutations});
+
+  auto beforeReady = stateAt(218);
+  beforeReady.clock.visualTimeMicros = 1'499'999;
+  beforeReady.sceneStartMicros = 1'500'000;
+  bridge.beginFrame(beforeReady, projectionAt(218));
+  expect(bridge.timerProperty({40}) == INT64_MIN,
+         "TIMER_READY remains off until the selected skin-state origin");
+  bridge.discardFrame();
+
+  auto state = stateAt(219);
+  state.clock.visualTimeMicros = 2'500'000;
+  state.clock.gameplayTimeMicros = 2'400'000;
+  state.sceneStartMicros = 1'500'000;
+  state.lanes.front().pressMicros = 1'600'000;
+  state.lanes.front().bombMicros = 1'700'000;
+  state.lastJudgeVisualMicros = 1'800'000;
+  state.clock.playTimer = {.active = true,
+                           .startMicros = 1'800'000,
+                           .elapsedMillisExact = true};
+  bridge.beginFrame(state, projectionAt(219));
+  expect(skinStateClockMicros(state) == 1'000'000 &&
+             bridge.timerProperty({40}) == 0 &&
+             bridge.timerProperty({100}) == 100'000 &&
+             bridge.timerProperty({50}) == 200'000 &&
+             bridge.timerProperty({46}) == 300'000 &&
+             bridge.timerProperty({41}) == 400'000,
+         "ready, lane, judgement, and play timers share the renderer's "
+         "Beatoraja-style skin-state clock");
+  bridge.discardFrame();
+}
+
 void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
@@ -1606,6 +1651,7 @@ int main() {
   testFramePropertiesUseAuthoritativeGaugeAndTimerRules();
   testGameplayModeAndLoadingBooleanProperties();
   testPlayTimerPropertiesMatchPinnedJavaConversions();
+  testReadyAndLiveTimersUseTheSharedSkinStateClock();
   testSelectedScuroMappingsUseOnlyAuthoritativeState();
   testEmptyCustomObjectsStayZeroCost();
   testCustomTimersPrecedeAutomaticEventsInAuthoredOrder();

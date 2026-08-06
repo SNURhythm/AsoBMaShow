@@ -618,7 +618,7 @@ PlaySkinFrameTransactionResult PlaySkinSession::runFrameTransaction(
   result.evaluation = context_.renderer.evaluateFrame(
       {.frameSerial = state.clock.serial,
        .sessionSerial = context_.sessionSerial,
-       .visualTimeMicros = state.clock.visualTimeMicros,
+       .visualTimeMicros = skinStateClockMicros(state),
        .model = context_.model,
        .configuration = context_.configuration,
        .resources = context_.resources,
@@ -940,7 +940,11 @@ gameplay::RealtimeTouchLayout PlaySkinSession::touchLayout() const {
   result.keyMode = context_.chartModel.keyCount;
   if (!publishedLayout_ || !context_.viewport.valid ||
       context_.chartModel.laneOrder.empty() || rendering::window_width <= 0 ||
-      rendering::window_height <= 0) {
+      rendering::window_height <= 0 || rendering::render_width <= 0 ||
+      rendering::render_height <= 0 ||
+      !std::isfinite(rendering::ui_scale_x) ||
+      !std::isfinite(rendering::ui_scale_y) || rendering::ui_scale_x <= 0.0F ||
+      rendering::ui_scale_y <= 0.0F) {
     return result;
   }
   const auto &safe = context_.viewport.safeUiBounds;
@@ -957,8 +961,14 @@ gameplay::RealtimeTouchLayout PlaySkinSession::touchLayout() const {
                        affine.tx;
     const double uiY = affine.m10 * authoredX + affine.m11 * authoredY +
                        affine.ty;
-    const double x = uiX / static_cast<double>(rendering::window_width);
-    const double y = uiY / static_cast<double>(rendering::window_height);
+    const double x =
+        (uiX * static_cast<double>(rendering::ui_scale_x) +
+         static_cast<double>(rendering::ui_offset_x)) /
+        static_cast<double>(rendering::render_width);
+    const double y =
+        (uiY * static_cast<double>(rendering::ui_scale_y) +
+         static_cast<double>(rendering::ui_offset_y)) /
+        static_cast<double>(rendering::render_height);
     if (!std::isfinite(x) || !std::isfinite(y)) {
       return std::nullopt;
     }

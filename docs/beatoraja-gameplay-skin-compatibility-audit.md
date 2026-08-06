@@ -11,6 +11,30 @@
 
 ## Source-level mismatches and missing implementations
 
+0. **Gameplay skin time started from the chart clock, and iOS input began
+   before authored geometry existed.**
+   - Upstream: `TimerManager.setMainState` owns one MainState clock;
+     `BMSPlayer` starts `TIMER_READY` on entering `STATE_READY`, and
+     `Skin.drawAllObjects` evaluates ordinary destinations and timer-backed
+     destinations against that same clock. `JsonPlaySkinObjectLoader`'s Note
+     destination remains the skin's lane geometry.
+   - Local (before this patch): `PlaySkinSession` fed destination animation
+     from chart visual time, while live timers carried unshifted timestamps.
+     iOS attempted to construct its raw touch router before the first skin
+     submission had published Note/Slider geometry, then retained the legacy
+     touch conversion.
+   - Patch status: patched. The frame bridge derives one skin-state clock from
+     `sceneStartMicros`; `TIMER_READY` (40), `TIMER_PLAY` (41), lane key/bomb,
+     judge, custom-event, and destination clocks now share it. `GamePlayScene`
+     chooses the first prep-metronome click as that origin when prep is active,
+     preserving the earlier lane-indicator cue without consuming the skin's
+     READY animation. On iOS, authority waits for the first successful skin
+     frame, then builds its router from the published per-lane quadrilaterals;
+     slider hit regions (including lane cover) continue through the same
+     authored UI transform. `PlaySkinSession::touchLayout` now converts that
+     transform to drawable-normalized coordinates exactly like the raw touch
+     snapshot path.
+
 1. **Post-decode dependency rejection has no upstream equivalent.**
    - Upstream: `JSONSkinLoader.loadJsonSkin` asks the object loader for each
      destination, skips a null object, and calls `Skin.add` otherwise.

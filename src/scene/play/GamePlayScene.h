@@ -255,6 +255,7 @@ private:
   RhythmInputHandler *inputHandler = nullptr;
   std::unique_ptr<RealtimeGameplaySession> realtimeGameplaySession;
   std::uint64_t realtimeGameplayEpoch = 0;
+  bool realtimeGameplayAuthorityWaitingForSkinGeometry = false;
   std::unordered_map<int, bool> lanePressed;
   ReplayData recordedReplay;
   ReplayData analyticsReplay;

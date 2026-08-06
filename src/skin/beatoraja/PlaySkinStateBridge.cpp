@@ -246,6 +246,21 @@ std::int64_t playTimerElapsedMillis(const PlayfieldVisualState &snapshot) {
          1000;
 }
 
+std::int64_t saturatingVisualTimestampForGameplayTimestamp(
+    const PlayfieldVisualState &snapshot,
+    std::int64_t gameplayTimestampMicros) {
+  const auto value = static_cast<__int128>(gameplayTimestampMicros) +
+                     static_cast<__int128>(snapshot.clock.visualTimeMicros) -
+                     static_cast<__int128>(snapshot.clock.gameplayTimeMicros);
+  if (value > std::numeric_limits<std::int64_t>::max()) {
+    return std::numeric_limits<std::int64_t>::max();
+  }
+  if (value <= std::numeric_limits<std::int64_t>::min()) {
+    return std::numeric_limits<std::int64_t>::min() + 1;
+  }
+  return static_cast<std::int64_t>(value);
+}
+
 } // namespace
 
 namespace skin {
@@ -423,7 +438,7 @@ PlaySkinStateBridge::executeEvent(int eventId, std::span<const int> arguments) {
           // Pinned CustomEvent.execute shares this clock with automatic update,
           // so a manual invocation suppresses the same event until minInterval.
           customEventLastExecutionMicros_.insert_or_assign(
-              event->id, state_->clock.visualTimeMicros);
+              event->id, skinStateClockMicros(*state_));
         } catch (...) {
           reportDiagnostic({.code = "skin.play_state.custom_event_clock_failed",
                             .message =
@@ -515,7 +530,7 @@ PlaySkinStateBridge::updateCustomEvent(const SkinCustomEvent &event) {
   if (evaluated.status != SkinHostCallStatus::Completed || !condition) {
     return evaluated;
   }
-  const std::int64_t now = state_->clock.visualTimeMicros;
+  const std::int64_t now = skinStateClockMicros(*state_);
   if (const auto previous = customEventLastExecutionMicros_.find(event.id);
       previous != customEventLastExecutionMicros_.end()) {
     const __int128 elapsed = static_cast<__int128>(now) - previous->second;
@@ -1653,7 +1668,7 @@ std::int64_t PlaySkinStateBridge::timerProperty(
     if (requiredPressed && lane.pressed != *requiredPressed) {
       return INT64_MIN;
     }
-    return lane.*field;
+    return skinStateTimestampMicros(*snapshot, lane.*field);
   };
   if (const auto value =
           laneTimer(100, 20, &LanePresentationState::pressMicros, *id,
@@ -1671,13 +1686,25 @@ std::int64_t PlaySkinStateBridge::timerProperty(
     return *value;
   }
   switch (*id) {
+  case 40:
+    return snapshot->sceneStartMicros != kPlayfieldTimestampOff &&
+                   skinStateClockMicros(*snapshot) >= 0
+               ? 0
+               : INT64_MIN;
   case 41:
     return snapshot->clock.playTimer.active &&
                    snapshot->clock.playTimer.elapsedMillisExact
-               ? snapshot->clock.playTimer.startMicros
+               ? (snapshot->sceneStartMicros == kPlayfieldTimestampOff
+                      ? snapshot->clock.playTimer.startMicros
+                      : skinStateTimestampMicros(
+                            *snapshot,
+                            saturatingVisualTimestampForGameplayTimestamp(
+                                *snapshot,
+                                snapshot->clock.playTimer.startMicros)))
                : INT64_MIN;
   case 46:
-    return snapshot->lastJudgeVisualMicros;
+    return skinStateTimestampMicros(*snapshot,
+                                    snapshot->lastJudgeVisualMicros);
   default:
     // MainStatePropertyLuaApiExporter reads arbitrary nonnegative timer IDs
     // directly, and TimerPropertyFactory recognizes every nonnegative ID.

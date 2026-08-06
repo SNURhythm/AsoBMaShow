@@ -1514,6 +1514,57 @@ void testSuccessfulRenderConsumesOnceSubmitsExactBgaAndPublishesLayout() {
          "repeat render cannot resubmit the consumed frame or enqueue writes");
 }
 
+void testSkinLaneTouchLayoutUsesDrawableScreenCoordinates() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addBgaMarker();
+  fixture.addTouchGeometry();
+
+  const auto savedWindowWidth = rendering::window_width;
+  const auto savedWindowHeight = rendering::window_height;
+  const auto savedRenderWidth = rendering::render_width;
+  const auto savedRenderHeight = rendering::render_height;
+  const auto savedScaleX = rendering::ui_scale_x;
+  const auto savedScaleY = rendering::ui_scale_y;
+  const auto savedOffsetX = rendering::ui_offset_x;
+  const auto savedOffsetY = rendering::ui_offset_y;
+  rendering::window_width = 1920;
+  rendering::window_height = 1080;
+  rendering::render_width = 2400;
+  rendering::render_height = 1400;
+  rendering::ui_scale_x = 1.1F;
+  rendering::ui_scale_y = 1.2F;
+  rendering::ui_offset_x = 240;
+  rendering::ui_offset_y = 70;
+
+  SessionBgaSubmitter bga;
+  RenderContext context;
+  expect(fixture.session().prepareFrame(stateAt(1), projectionAt(1)) ==
+                 PresentationFrameOutcome::Ready &&
+             fixture.session().render(context, bgaFrame(71), bga).outcome ==
+                 PresentationFrameOutcome::Ready,
+         "drawable-coordinate fixture publishes skin lane geometry");
+  const auto layout = fixture.session().touchLayout();
+  expect(layout.laneRegions.size() == 2 &&
+             std::abs(layout.laneRegions[0].bottomLeft.x -
+                      (350.0F / 2400.0F)) < 0.0001F &&
+             std::abs(layout.laneRegions[0].bottomLeft.y -
+                      (910.0F / 1400.0F)) < 0.0001F,
+         "skin lane routing uses the same drawable scale and offset as raw "
+         "iOS touch input");
+
+  rendering::window_width = savedWindowWidth;
+  rendering::window_height = savedWindowHeight;
+  rendering::render_width = savedRenderWidth;
+  rendering::render_height = savedRenderHeight;
+  rendering::ui_scale_x = savedScaleX;
+  rendering::ui_scale_y = savedScaleY;
+  rendering::ui_offset_x = savedOffsetX;
+  rendering::ui_offset_y = savedOffsetY;
+}
+
 void testCriticalEvaluationAndPreflightFailuresPublishNoFrameState() {
   {
     SessionFixture fixture;
@@ -2283,6 +2334,7 @@ int main() {
   testPassiveCustomTimerUsesTheSharedSessionFrame();
   testProductionPrepareIsExternallySideEffectFreeAndRejectsDoublePrepare();
   testSuccessfulRenderConsumesOnceSubmitsExactBgaAndPublishesLayout();
+  testSkinLaneTouchLayoutUsesDrawableScreenCoordinates();
   testCriticalEvaluationAndPreflightFailuresPublishNoFrameState();
   testForwardCompatiblePersistedMutationsEnqueueOneExactOrderedBatch();
   testPersistenceRequestIsFullyAllocatedBeforeSkinSubmission();

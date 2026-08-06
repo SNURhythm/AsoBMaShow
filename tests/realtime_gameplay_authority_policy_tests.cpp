@@ -110,6 +110,15 @@ void testExistingExclusionsAndNormalActivationRemain() {
               !gameplay::shouldSuspendRealtimeGameplayForPause(false),
           "realtime scoring suspends only when playback also pauses");
 
+  require(gameplay::shouldRetryRealtimeGameplayAuthorityAfterSkinFrame(
+              true, true) &&
+              !gameplay::shouldRetryRealtimeGameplayAuthorityAfterSkinFrame(
+                  false, true) &&
+              !gameplay::shouldRetryRealtimeGameplayAuthorityAfterSkinFrame(
+                  true, false),
+          "a deferred iOS authority starts only after a skin publishes lane "
+          "geometry");
+
   const std::size_t longSparseReplayCapacity =
       gameplay::realtimeGameplayReplayCapacity(2, 600'000'000);
   require(longSparseReplayCapacity > 4096 &&

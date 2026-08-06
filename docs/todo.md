@@ -15,3 +15,10 @@
   boolean property 400 (`OPTION_CONSTANT`). The current app has no such
   configuration, so the bridge reports the upstream false state (and `-400`
   consequently reports true).
+
+## Gameplay-skin rhythm timer
+
+- Capture Beatoraja `TIMER_RHYTHM` (140) exactly from
+  `play/RhythmTimerProcessor.update`, including its `rhythmtimer` accumulator,
+  section-line reset, current BPM, and play-speed inputs. The current bridge
+  leaves timer 140 off rather than inventing an approximate measure pulse.

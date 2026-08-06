@@ -206,6 +206,33 @@ struct PlayfieldVisualState {
   long long playStartMicros = kPlayfieldTimestampOff;
 };
 
+// Skin destinations and timers share TimerManager's MainState clock. The
+// gameplay projection retains chart/visual time, so derive the skin clock at
+// this boundary without changing note-positioning semantics.
+[[nodiscard]] inline constexpr long long
+skinStateTimestampMicros(const PlayfieldVisualState &state,
+                         long long visualTimestampMicros) noexcept {
+  if (visualTimestampMicros == kPlayfieldTimestampOff ||
+      state.sceneStartMicros == kPlayfieldTimestampOff) {
+    return visualTimestampMicros;
+  }
+  const auto value = static_cast<__int128>(visualTimestampMicros) -
+                     static_cast<__int128>(state.sceneStartMicros);
+  if (value > std::numeric_limits<long long>::max()) {
+    return std::numeric_limits<long long>::max();
+  }
+  // Preserve the explicit OFF sentinel for timer consumers.
+  if (value <= std::numeric_limits<long long>::min()) {
+    return std::numeric_limits<long long>::min() + 1;
+  }
+  return static_cast<long long>(value);
+}
+
+[[nodiscard]] inline constexpr long long
+skinStateClockMicros(const PlayfieldVisualState &state) noexcept {
+  return skinStateTimestampMicros(state, state.clock.visualTimeMicros);
+}
+
 class PlayfieldVisualStateStore final : public IPlayfieldPresentationEvents {
 public:
   PlayfieldVisualStateStore() = default;

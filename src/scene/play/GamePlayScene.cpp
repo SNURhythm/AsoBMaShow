@@ -1411,6 +1411,8 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
     touchLayout = buildRealtimeTouchLayout(
         *presentation, assist_options::isDragMode(options.assistOption));
     if (!touchLayout.has_value()) {
+      realtimeGameplayAuthorityWaitingForSkinGeometry =
+          presentation->activeMode() == PresentationMode::Skin;
       SDL_Log("Realtime iOS gameplay input unavailable: invalid touch layout");
       return false;
     }
@@ -1544,6 +1546,7 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
     inputHandler->discardPendingTouchEvents();
   }
   realtimeGameplaySession = std::move(session);
+  realtimeGameplayAuthorityWaitingForSkinGeometry = false;
   auto &activeSession = *realtimeGameplaySession;
   if (options.autoPlay) {
     SDL_Log("Realtime autoplay authority active (epoch %llu)",
@@ -2619,6 +2622,7 @@ void GamePlayScene::init() {
 
 bool GamePlayScene::reset() {
   stopRealtimeGameplayAuthority(false);
+  realtimeGameplayAuthorityWaitingForSkinGeometry = false;
   playbackInitializationFailed = false;
   context.inputDeviceRegistry.resetGyroscopeTurntableSession();
   ownedState.reset();
@@ -2726,7 +2730,8 @@ bool GamePlayScene::reset() {
           options.replayData->touchSamples);
     }
     playfieldVisualStateStore->setSceneStartMicros(
-        getGameplayTimeMicros(preparationPlan.playbackStartTimeMicros));
+        getVisualTimeMicros(getGameplayTimeMicros(
+            preparationPlan.skinAnimationStartTimeMicros())));
     playfieldVisualStateStore->setPlayStartMicros(getStartPositionMicros());
     playfieldVisualStateStore->clearLiveTouchPoints();
   }
@@ -4589,6 +4594,16 @@ void GamePlayScene::renderScene() {
                                    capturedPlayfieldProjection);
   const PresentationFrameResult presentationFrame =
       presentation->render(renderContext);
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  if (!realtimeGameplayAuthorityActive() && !options.autoPlay &&
+      gameplay::shouldRetryRealtimeGameplayAuthorityAfterSkinFrame(
+          realtimeGameplayAuthorityWaitingForSkinGeometry,
+          presentationFrame.outcome == PresentationFrameOutcome::Ready &&
+              presentationFrame.submittedMode == PresentationMode::Skin &&
+              !presentation->touchLayout().laneRegions.empty())) {
+    (void)startRealtimeGameplayAuthority();
+  }
+#endif
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   context.gameplayBgaCompositeState = {
       .frameSerial = presentationFrame.frameSerial,

@@ -50,6 +50,15 @@ shouldSuspendRealtimeGameplayForPause(bool pausePlayback) noexcept {
   return pausePlayback;
 }
 
+// A skin session publishes authored lane and control geometry only after its
+// first submitted frame. iOS raw input authority retries at that boundary,
+// never against an empty startup layout.
+[[nodiscard]] constexpr bool
+shouldRetryRealtimeGameplayAuthorityAfterSkinFrame(
+    bool awaitingSkinGeometry, bool skinLaneGeometryPublished) noexcept {
+  return awaitingSkinGeometry && skinLaneGeometryPublished;
+}
+
 [[nodiscard]] constexpr std::size_t realtimeGameplayReplayCapacity(
     std::size_t noteCount,
     std::int64_t finalTimelineTimeMicros) noexcept {
