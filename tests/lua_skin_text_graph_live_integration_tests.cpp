@@ -71,6 +71,18 @@ void writeText(const fs::path &path, std::string_view value) {
 BeatorajaSkinModelDecodeResult decodeInline(std::string_view sourceText) {
   static const std::array writerBuiltins{
       SkinBuiltinBindingCatalogEntry{
+          .type = {.kind = SkinBindingKind::StringProperty},
+          .selector = SkinBuiltinPropertySelector{10}},
+      SkinBuiltinBindingCatalogEntry{
+          .type = {.kind = SkinBindingKind::StringProperty},
+          .selector = SkinBuiltinPropertySelector{30}},
+      SkinBuiltinBindingCatalogEntry{
+          .type = {.kind = SkinBindingKind::StringProperty},
+          .selector = SkinBuiltinPropertySelector{102}},
+      SkinBuiltinBindingCatalogEntry{
+          .type = {.kind = SkinBindingKind::StringProperty},
+          .selector = SkinBuiltinPropertySelector{202}},
+      SkinBuiltinBindingCatalogEntry{
           .type = {.kind = SkinBindingKind::StringWriter},
           .selector = SkinBuiltinPropertySelector{102}},
       SkinBuiltinBindingCatalogEntry{
@@ -85,6 +97,48 @@ BeatorajaSkinModelDecodeResult decodeInline(std::string_view sourceText) {
       SkinBuiltinBindingCatalogEntry{
           .type = {.kind = SkinBindingKind::FloatWriter},
           .selector = SkinBuiltinPropertySelector{703}},
+      SkinBuiltinBindingCatalogEntry{
+          .type = {.kind = SkinBindingKind::FloatProperty,
+                   .floatDomain = SkinFloatPropertyDomain::Rate},
+          .selector = SkinBuiltinPropertySelector{501}},
+      SkinBuiltinBindingCatalogEntry{
+          .type = {.kind = SkinBindingKind::FloatProperty,
+                   .floatDomain = SkinFloatPropertyDomain::Rate},
+          .selector = SkinBuiltinPropertySelector{700}},
+      SkinBuiltinBindingCatalogEntry{
+          .type = {.kind = SkinBindingKind::IntegerProperty,
+                   .integerDomain = SkinIntegerPropertyDomain::IntegerValue},
+          .selector = SkinBuiltinPropertySelector{402}},
+      SkinBuiltinBindingCatalogEntry{
+          .type = {.kind = SkinBindingKind::IntegerProperty,
+                   .integerDomain = SkinIntegerPropertyDomain::IntegerValue},
+          .selector = SkinBuiltinPropertySelector{702}},
+      SkinBuiltinBindingCatalogEntry{
+          .type = {.kind = SkinBindingKind::FloatProperty,
+                   .floatDomain = SkinFloatPropertyDomain::Rate},
+          .selector = SkinBuiltinPropertySelector{403}},
+      SkinBuiltinBindingCatalogEntry{
+          .type = {.kind = SkinBindingKind::FloatProperty,
+                   .floatDomain = SkinFloatPropertyDomain::Rate},
+          .selector = SkinBuiltinPropertySelector{601}},
+      SkinBuiltinBindingCatalogEntry{
+          .type = {.kind = SkinBindingKind::FloatProperty,
+                   .floatDomain = SkinFloatPropertyDomain::Rate},
+          .selector = SkinBuiltinPropertySelector{703}},
+      SkinBuiltinBindingCatalogEntry{
+          .type = {.kind = SkinBindingKind::FloatProperty,
+                   .floatDomain = SkinFloatPropertyDomain::Rate},
+          .selector = SkinBuiltinPropertySelector{704}},
+      SkinBuiltinBindingCatalogEntry{
+          .type = {.kind = SkinBindingKind::FloatProperty,
+                   .floatDomain = SkinFloatPropertyDomain::Rate},
+          .selector = SkinBuiltinPropertySelector{705}},
+      SkinBuiltinBindingCatalogEntry{
+          .type = {.kind = SkinBindingKind::TimerProperty},
+          .selector = SkinBuiltinPropertySelector{77}},
+      SkinBuiltinBindingCatalogEntry{
+          .type = {.kind = SkinBindingKind::Event},
+          .selector = SkinBuiltinPropertySelector{74}},
   };
   TempDirectory temp;
   const SkinStorageRoots roots{
@@ -354,6 +408,39 @@ return {type=0,w=1280,h=720,
                !builtinName(binding->source),
            "searchword writer is not interned as decimal string text");
   }
+}
+
+void testStaticTextWithZeroRefKeepsItsLiteral() {
+  const auto decoded = decodeInline(R"lua(
+return {type=0,w=1280,h=720,
+ source={{id='atlas',path='atlas.png'}},
+ font={{id='main',path='main.fnt'}},
+ text={{id='static',font='main',size=20,ref=0,constantText='STATIC'}},
+ image={{id='judge-timing',src='atlas',w=1,h=1,act=74}},
+ destination={{id='static',dst={{}}},{id='judge-timing',dst={{}}}}}
+)lua");
+  expect(decoded.model.has_value() && decoded.diagnostics.empty(),
+         "static Text with Beatoraja's null ref decodes");
+  if (!decoded.model) {
+    return;
+  }
+  const auto *definition = objectNamed(*decoded.model, "static");
+  const auto *text = definition
+                         ? std::get_if<SkinTextObject>(&definition->payload)
+                         : nullptr;
+  expect(text && !text->value && text->literal == "STATIC",
+         "Text.ref=0 leaves the StringProperty unset so constantText renders");
+  expect(decoded.model->stringProperties.empty(),
+         "a null upstream StringProperty does not create a typed binding");
+  const auto *buttonDefinition = objectNamed(*decoded.model, "judge-timing");
+  const auto *button =
+      buttonDefinition
+          ? std::get_if<SkinImageObject>(&buttonDefinition->payload)
+          : nullptr;
+  expect(button && button->clickEvent && decoded.model->events.size() == 1 &&
+             builtinSelector(decoded.model->events.front().source) &&
+             *builtinSelector(decoded.model->events.front().source) == 74,
+         "EventFactory's numeric judge-timing action stays a built-in event");
 }
 
 void testSliderBindingPrecedenceIgnoresInactiveEvents() {
@@ -656,6 +743,7 @@ void testValidatorEnforcesTypedResourcesBindingsAndDestinations() {
 int main() {
   testLiveTextAndFontSemantics();
   testTextRefWriterFallbackUsesOnlySupportedIntegerSelectors();
+  testStaticTextWithZeroRefKeepsItsLiteral();
   testSliderBindingPrecedenceIgnoresInactiveEvents();
   testLiveGraphPrecedenceAndAuthoredOrder();
   testDistributionGraphIsDiagnosedAndDisabled();

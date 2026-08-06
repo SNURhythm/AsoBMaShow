@@ -617,17 +617,9 @@ void testPinnedDispatchAndTypedInterning() {
   const auto unknownNumeric = decoder.decode(
       *session.configured,
       request(SkinBindingKind::BooleanProperty, "unknown_numeric"));
-  const auto unknownNumericId = decodedId<SkinBooleanPropertyId>(
-      unknownNumeric,
-      "unknown numeric remains typed for validator disposition");
-  const auto &unknownBinding =
-      decoder.bindings().booleanProperties[unknownNumericId.value - 1];
-  const auto *unknownBuiltin =
-      std::get_if<SkinBuiltinPropertySelector>(&unknownBinding.source);
-  expect(unknownBuiltin != nullptr &&
-             !builtins.contains({.kind = SkinBindingKind::BooleanProperty},
-                                *unknownBuiltin),
-         "immutable host catalog lets validation reject an unknown numeric ID");
+  expect(!unknownNumeric.id && !unknownNumeric.failure,
+         "a numeric selector absent from its upstream factory remains an "
+         "absent property instead of a validation dependency");
 
   for (const auto field :
        std::array{"invalid_table", "invalid_boolean", "invalid_nil"}) {

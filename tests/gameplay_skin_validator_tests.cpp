@@ -291,10 +291,12 @@ void testAuthoritativeCatalogAdmitsCompatibilityIntegerFactoryDomain() {
                           SkinBuiltinPropertySelector{4}),
          "getFloatProperty retains the upstream RateType fallback, including "
          "the lane-cover rate");
-  expect(!catalog.contains({.kind = SkinBindingKind::Event},
-                           SkinBuiltinPropertySelector{1000}),
-         "catalog rejects custom event IDs from context-free built-in binding "
-         "paths");
+  for (const int selector : {std::numeric_limits<int>::min(), 74, 1000,
+                             std::numeric_limits<int>::max()}) {
+    expect(catalog.contains({.kind = SkinBindingKind::Event},
+                            SkinBuiltinPropertySelector{selector}),
+           "EventFactory dispatches every signed integer event ID");
+  }
   expect(!catalog.contains({.kind = SkinBindingKind::BooleanProperty},
                            SkinBuiltinPropertySelector{34}) &&
              !catalog.contains({.kind = SkinBindingKind::BooleanProperty},

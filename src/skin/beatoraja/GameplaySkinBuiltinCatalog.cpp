@@ -228,16 +228,6 @@ std::vector<SkinBuiltinBindingCatalogEntry> makeCatalog() {
     add(entries, string, "practice_item_value" + std::to_string(index));
   }
 
-  const SkinBindingType event{.kind = SkinBindingKind::Event};
-  for (int selector = 301; selector <= 308; ++selector) {
-    add(entries, event, selector);
-  }
-  // The bridge can dispatch declared custom events 1000-1999 from safe call
-  // sites such as image actions. The typed catalog is also used for a custom
-  // event's own action, however, where admitting that range would permit an
-  // unguarded self/cyclic dispatch. Keep the context-free catalog closed until
-  // validation distinguishes those binding roles or the bridge bounds cycles.
-
   // Timers are not a gap: TimerPropertyFactory and PlaySkinStateBridge both
   // define every nonnegative ID, including an exact inactive fallback. No
   // built-in float or string writer is executable yet.
@@ -270,6 +260,12 @@ SkinBuiltinBindingCatalogView gameplaySkinBuiltinCatalog() {
        .last = 65'535},
       {.type = {.kind = SkinBindingKind::TimerProperty},
        .first = 0,
+       .last = std::numeric_limits<int>::max()},
+      // EventFactory.getEvent(int) returns an EventPattern/EventType value
+      // when present and otherwise creates a two-argument MainState dispatch
+      // event. Every signed integer is therefore a valid numeric event source.
+      {.type = {.kind = SkinBindingKind::Event},
+       .first = std::numeric_limits<int>::min(),
        .last = std::numeric_limits<int>::max()},
   });
   return SkinBuiltinBindingCatalogView(entries, ranges);

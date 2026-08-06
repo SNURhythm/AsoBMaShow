@@ -196,7 +196,15 @@ LuaSkinBindingDecoder::decode(const LuaValueHandle &value,
                   "skin_lua_binding_type_invalid",
                   "Lua binding kind does not accept a numeric selector")};
     }
-    bindingSource = SkinBuiltinPropertySelector{*numeric};
+    SkinBuiltinPropertySelector selector{*numeric};
+    // Each upstream numeric factory returns null when it has no matching
+    // property. Keep that null as an absent binding; manufacturing a typed
+    // dependency here would make model validation reject skins that Beatoraja
+    // loads (notably Text.ref = 0 with constantText).
+    if (!builtins_.contains(request.type, selector)) {
+      return {};
+    }
+    bindingSource = std::move(selector);
   } else if (const auto *callback =
                  std::get_if<LuaCallbackId>(&internKey.source)) {
     if (callback->slot == 0 || callback->generation == 0) {

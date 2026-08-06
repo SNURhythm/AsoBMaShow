@@ -2091,7 +2091,9 @@ bool makeTextObject(GameplayDecodeRequest &request,
                     const RawSkinText &definition, SkinTextObject &output) {
   const auto normalized = normalizeSkinText(
       {.fontName = definition.font,
-       .value = definition.value,
+       .value = definition.value ? std::optional<SkinStringPropertyId>{
+                                           definition.value}
+                                 : std::nullopt,
        .writer = definition.writer,
        .literal = definition.literal,
        .pointSize = definition.pointSize,
