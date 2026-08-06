@@ -535,10 +535,12 @@ void testLiveGraphPrecedenceAndAuthoredOrder() {
              explicitGraph->fill.resource == 1 &&
              explicitGraph->fill.frames.size() == 2 &&
              explicitGraph->fill.frames[0].x == 10 &&
-             explicitGraph->fill.frames[1].x == 20 &&
+             explicitGraph->fill.frames[1].x == 10 &&
+             explicitGraph->fill.frames[0].gridColumn == 0 &&
+             explicitGraph->fill.frames[1].gridColumn == 1 &&
              explicitGraph->fill.cycleMillis == 88 &&
              explicitGraph->fill.timer,
-         "Graph retains fill frames, timing, resource, and down direction");
+         "Graph retains its source rectangle, grid cells, timing, resource, and down direction");
   if (explicitRate) {
     const auto *binding = bindingById(model.floatProperties,
                                       explicitRate->value);
@@ -580,7 +582,7 @@ void testLiveGraphPrecedenceAndAuthoredOrder() {
   }
 }
 
-void testDistributionGraphIsDiagnosedAndDisabled() {
+void testDistributionGraphIsDiagnosedAndRetainedAsBlank() {
   const auto decoded = decodeInline(R"lua(
 return {type=0,w=1280,h=720,
  source={{id='atlas',path='atlas.png'}},
@@ -602,92 +604,118 @@ return {type=0,w=1280,h=720,
   const auto validated =
       test_support::validateWithAuthoredBuiltins(*decoded.model);
   expect(definition && validated.model && !validated.criticalFailure &&
-             std::ranges::find(validated.model->disabledOptionalObjects,
-                               definition->id) !=
-                 validated.model->disabledOptionalObjects.end(),
-         "validator disables the unsupported distribution Graph placeholder");
+             validated.model->disabledOptionalObjects.empty(),
+         "validator retains the unsupported distribution Graph placeholder");
 }
 
-void testValidatorEnforcesTypedResourcesBindingsAndDestinations() {
+void testUnsupportedGraphWidgetsRetainDestinationOrder() {
+  const auto decoded = decodeInline(R"lua(
+return {type=0,w=1280,h=720,
+ gaugegraph={{id='gauge-history'}},
+ timingdistributiongraph={{id='timing-distribution'}},
+ destination={{id='gauge-history',dst={{}}},
+              {id='timing-distribution',dst={{}}}}}
+)lua");
+  const auto hasDiagnostic = [&](std::string_view code) {
+    return std::ranges::any_of(decoded.diagnostics, [&](const auto &item) {
+      return item.code == code;
+    });
+  };
+  expect(decoded.model &&
+             hasDiagnostic("skin_lua_model_gaugegraph_unsupported") &&
+             hasDiagnostic(
+                 "skin_lua_model_timingdistributiongraph_unsupported"),
+         "GaugeGraph and TimingDistributionGraph definitions are decoded "
+         "with explicit v1 compatibility warnings");
+  if (!decoded.model) {
+    return;
+  }
+  const auto &objects = decoded.model->objects;
+  expect(objects.size() == 2 && objects[0].authoredName == "gauge-history" &&
+             objects[1].authoredName == "timing-distribution" &&
+             std::holds_alternative<SkinBlankObject>(objects[0].payload) &&
+             std::holds_alternative<SkinBlankObject>(objects[1].payload),
+         "unsupported graph widgets retain their authored destination order "
+         "as blank objects");
+  const auto validated =
+      test_support::validateWithAuthoredBuiltins(*decoded.model);
+  expect(validated.model && !validated.criticalFailure &&
+             validated.model->disabledOptionalObjects.empty(),
+         "unsupported graph widget placeholders remain selectable");
+}
+
+void testValidatorPreservesUpstreamOptionalDependencies() {
   auto base = decodedValidModel();
   const auto valid = test_support::validateWithAuthoredBuiltins(base);
   const auto *explicitText = objectNamed(base, "text-explicit");
   const auto *fallbackText = objectNamed(base, "text-fallback");
   expect(
       valid.model && !valid.criticalFailure && explicitText && fallbackText &&
-          valid.model->disabledOptionalObjects ==
-              std::vector<SkinObjectId>{explicitText->id, fallbackText->id} &&
-          std::ranges::count_if(
-              valid.diagnostics,
-              [](const auto &item) {
-                return item.code ==
-                       "skin_lua_model_text_interaction_unsupported";
-              }) == 2,
-      "Text event/editable surfaces are diagnosed and disabled");
+          valid.model->disabledOptionalObjects.empty() &&
+          std::ranges::none_of(valid.diagnostics, [](const auto &item) {
+            return item.code == "skin_lua_model_text_interaction_unsupported";
+          }),
+      "Text event/editable surfaces remain admitted like createText");
 
   auto criticalInteraction = base;
   auto *criticalText = objectNamed(criticalInteraction, "text-explicit");
   criticalText->critical = true;
   const auto rejectedInteraction = test_support::validateWithAuthoredBuiltins(
       std::move(criticalInteraction));
-  expect(!rejectedInteraction.model && rejectedInteraction.criticalFailure &&
-             std::ranges::any_of(
-                 rejectedInteraction.diagnostics,
-                 [](const auto &item) {
-                   return item.code ==
-                          "skin_lua_model_text_interaction_unsupported";
-                 }),
-         "critical Text interaction surface is diagnosed and rejected");
+  expect(rejectedInteraction.model && !rejectedInteraction.criticalFailure &&
+             rejectedInteraction.model->disabledOptionalObjects.empty(),
+         "critical Text interaction remains admitted like createText");
 
-  const auto invalidObject = [&](std::string_view name, auto mutate,
-                                 std::string_view message) {
+  const auto preservesObject = [&](std::string_view name, auto mutate,
+                                   std::string_view message) {
     auto model = base;
     auto *object = objectNamed(model, name);
     expect(object != nullptr, "validator mutation target exists");
     if (!object) {
       return;
     }
-    const auto id = object->id;
     mutate(model, *object);
-    expectOnlyDisabled(
-        test_support::validateWithAuthoredBuiltins(std::move(model)), id,
-        message);
+    const auto validated =
+        test_support::validateWithAuthoredBuiltins(std::move(model));
+    expect(validated.model && !validated.criticalFailure &&
+               validated.model->disabledOptionalObjects.empty(),
+           message);
   };
 
-  invalidObject(
+  preservesObject(
       "text-explicit",
       [](auto &, auto &definition) {
         std::get<SkinTextObject>(definition.payload).font = 1;
       },
-      "Text cannot consume an image resource as a font");
-  invalidObject(
+      "an unavailable Text font does not invalidate the whole skin");
+  preservesObject(
       "graph-explicit",
       [](auto &, auto &definition) {
         std::get<SkinGraphObject>(definition.payload).fill.resource = 2;
       },
-      "Graph fill cannot consume a font resource as an image");
-  invalidObject(
+      "an unavailable Graph source does not invalidate the whole skin");
+  preservesObject(
       "text-explicit",
       [](auto &, auto &definition) {
         std::get<SkinTextObject>(definition.payload).writer =
             SkinStringWriterId{999};
       },
-      "Text requires an existing typed string writer");
-  invalidObject(
+      "an unavailable Text writer does not invalidate the whole skin");
+  preservesObject(
       "text-explicit",
       [](auto &, auto &definition) {
         std::get<SkinTextObject>(definition.payload).value =
             SkinStringPropertyId{999};
       },
-      "Text requires an existing typed string value");
-  invalidObject(
+      "an unavailable Text property does not invalidate the whole skin");
+  preservesObject(
       "graph-explicit",
       [](auto &, auto &definition) {
         std::get<SkinGraphObject>(definition.payload).fill.timer =
             SkinTimerPropertyId{999};
       },
-      "Graph fill requires an existing timer");
-  invalidObject(
+      "an unavailable Graph timer does not invalidate the whole skin");
+  preservesObject(
       "graph-explicit",
       [](auto &model, auto &definition) {
         const auto value =
@@ -698,21 +726,21 @@ void testValidatorEnforcesTypedResourcesBindingsAndDestinations() {
             [&](const auto &binding) { return binding.id == value; });
         found->domain = SkinFloatPropertyDomain::FloatValue;
       },
-      "Graph rate rejects a float binding from the FloatValue domain");
-  invalidObject(
+      "a Graph property remains admitted when its factory lookup is absent");
+  preservesObject(
       "image",
       [](auto &, auto &definition) {
         std::get<SkinImageObject>(definition.payload).clickEvent =
             SkinEventBindingId{999};
       },
-      "Image click action requires an existing event binding");
-  invalidObject(
+      "an unavailable Image event does not invalidate the whole skin");
+  preservesObject(
       "slider",
       [](auto &, auto &definition) {
         std::get<SkinSliderObject>(definition.payload).writer =
             SkinFloatWriterId{999};
       },
-      "Slider writer requires an existing float writer binding");
+      "an unavailable Slider writer does not invalidate the whole skin");
 
   auto destinationModel = base;
   const auto *graph = objectNamed(destinationModel, "graph-explicit");
@@ -725,17 +753,20 @@ void testValidatorEnforcesTypedResourcesBindingsAndDestinations() {
     return;
   }
   destination->presentation.timer = SkinTimerPropertyId{999};
-  expectOnlyDisabled(
-      test_support::validateWithAuthoredBuiltins(destinationModel), graph->id,
-      "invalid optional destination timer disables its object");
+  const auto retainedDestination =
+      test_support::validateWithAuthoredBuiltins(destinationModel);
+  expect(retainedDestination.model && !retainedDestination.criticalFailure &&
+             retainedDestination.model->disabledOptionalObjects.empty(),
+         "an unavailable destination timer does not invalidate its object");
 
   auto criticalDestination = destinationModel;
   auto *criticalGraph = objectNamed(criticalDestination, "graph-explicit");
   criticalGraph->critical = true;
   const auto critical = test_support::validateWithAuthoredBuiltins(
       std::move(criticalDestination));
-  expect(!critical.model && critical.criticalFailure,
-         "the same invalid destination fails a critical object");
+  expect(critical.model && !critical.criticalFailure &&
+             critical.model->disabledOptionalObjects.empty(),
+         "the same unavailable destination remains admitted when critical");
 }
 
 } // namespace
@@ -746,8 +777,9 @@ int main() {
   testStaticTextWithZeroRefKeepsItsLiteral();
   testSliderBindingPrecedenceIgnoresInactiveEvents();
   testLiveGraphPrecedenceAndAuthoredOrder();
-  testDistributionGraphIsDiagnosedAndDisabled();
-  testValidatorEnforcesTypedResourcesBindingsAndDestinations();
+  testDistributionGraphIsDiagnosedAndRetainedAsBlank();
+  testUnsupportedGraphWidgetsRetainDestinationOrder();
+  testValidatorPreservesUpstreamOptionalDependencies();
   if (failures != 0) {
     std::cerr << failures << " assertion(s) failed\n";
     return 1;

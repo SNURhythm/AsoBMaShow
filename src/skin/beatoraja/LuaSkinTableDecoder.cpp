@@ -960,6 +960,7 @@ struct GameplayDecodeRequest {
   std::map<std::string, RawSkinSlider, std::less<>> sliders;
   std::map<std::string, RawSkinText, std::less<>> texts;
   std::map<std::string, RawSkinGraph, std::less<>> graphs;
+  std::map<std::string, RawSkinIdentity, std::less<>> gaugeGraphs;
   std::map<std::string, RawSkinCover, std::less<>> hiddenCovers;
   std::map<std::string, RawSkinCover, std::less<>> liftCovers;
   std::map<std::string, RawSkinJudge, std::less<>> judges;
@@ -967,6 +968,7 @@ struct GameplayDecodeRequest {
   std::map<std::string, RawSkinIdentity, std::less<>> hitErrorVisualizers;
   std::map<std::string, RawSkinIdentity, std::less<>> judgeGraphs;
   std::map<std::string, RawSkinIdentity, std::less<>> timingVisualizers;
+  std::map<std::string, RawSkinIdentity, std::less<>> timingDistributionGraphs;
   std::map<std::string, RawSkinIdentity, std::less<>> pmCharas;
   std::optional<RawSkinGauge> gauge;
   std::optional<RawSkinIdentity> bga;
@@ -980,6 +982,7 @@ struct GameplayDecodeRequest {
   std::vector<RawSkinSlider> rawSliders;
   std::vector<RawSkinText> rawTexts;
   std::vector<RawSkinGraph> rawGraphs;
+  std::vector<RawSkinIdentity> rawGaugeGraphs;
   std::vector<RawSkinCover> rawHiddenCovers;
   std::vector<RawSkinCover> rawLiftCovers;
   std::vector<RawSkinJudge> rawJudges;
@@ -987,6 +990,7 @@ struct GameplayDecodeRequest {
   std::vector<RawSkinIdentity> rawHitErrorVisualizers;
   std::vector<RawSkinIdentity> rawJudgeGraphs;
   std::vector<RawSkinIdentity> rawTimingVisualizers;
+  std::vector<RawSkinIdentity> rawTimingDistributionGraphs;
   std::vector<RawSkinIdentity> rawPmCharas;
   std::vector<RawDestination> rawDestinations;
   std::vector<RawCustomTimer> rawCustomTimers;
@@ -2250,10 +2254,13 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
   const auto slider = request.sliders.find(name);
   const auto text = request.texts.find(name);
   const auto graph = request.graphs.find(name);
+  const auto gaugeGraph = request.gaugeGraphs.find(name);
   const auto bpmGraph = request.bpmGraphs.find(name);
   const auto hitErrorVisualizer = request.hitErrorVisualizers.find(name);
   const auto judgeGraph = request.judgeGraphs.find(name);
   const auto timingVisualizer = request.timingVisualizers.find(name);
+  const auto timingDistributionGraph =
+      request.timingDistributionGraphs.find(name);
   const auto pmChara = request.pmCharas.find(name);
   const auto hiddenCover = request.hiddenCovers.find(name);
   const auto liftCover = request.liftCovers.find(name);
@@ -2279,6 +2286,9 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
       SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::Graph,
                                     .matches = graph != request.graphs.end()},
       SkinObjectResolutionCandidate{
+          .kind = SkinObjectResolutionKind::GaugeGraph,
+          .matches = gaugeGraph != request.gaugeGraphs.end()},
+      SkinObjectResolutionCandidate{
           .kind = SkinObjectResolutionKind::JudgeGraph,
           .matches = judgeGraph != request.judgeGraphs.end()},
       SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::BpmGraph,
@@ -2290,6 +2300,10 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
       SkinObjectResolutionCandidate{
           .kind = SkinObjectResolutionKind::TimingVisualizer,
           .matches = timingVisualizer != request.timingVisualizers.end()},
+      SkinObjectResolutionCandidate{
+          .kind = SkinObjectResolutionKind::TimingDistributionGraph,
+          .matches = timingDistributionGraph !=
+                     request.timingDistributionGraphs.end()},
       SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::Gauge,
                                     .matches = isGauge},
       SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::Note,
@@ -2962,7 +2976,11 @@ void decodeGameplayProtected(lua_State *state, int index,
       }
     }
 
-    if (!decodeObjectArrayField(state, index, "bpmgraph", 1,
+    if (!decodeObjectArrayField(state, index, "gaugegraph", 1,
+                                LuaSkinTableDecoderPolicy::maxDecodedObjects,
+                                request->rawGaugeGraphs, request->decoding,
+                                decodeRawIdentity) ||
+        !decodeObjectArrayField(state, index, "bpmgraph", 1,
                                 LuaSkinTableDecoderPolicy::maxDecodedObjects,
                                 request->rawBpmGraphs, request->decoding,
                                 decodeRawIdentity) ||
@@ -2978,6 +2996,11 @@ void decodeGameplayProtected(lua_State *state, int index,
                                 LuaSkinTableDecoderPolicy::maxDecodedObjects,
                                 request->rawTimingVisualizers,
                                 request->decoding, decodeRawIdentity) ||
+        !decodeObjectArrayField(
+            state, index, "timingdistributiongraph", 1,
+            LuaSkinTableDecoderPolicy::maxDecodedObjects,
+            request->rawTimingDistributionGraphs, request->decoding,
+            decodeRawIdentity) ||
         !decodeObjectArrayField(state, index, "pmchara", 1,
                                 LuaSkinTableDecoderPolicy::maxDecodedObjects,
                                 request->rawPmCharas, request->decoding,
@@ -2986,6 +3009,9 @@ void decodeGameplayProtected(lua_State *state, int index,
       request->result.model.reset();
       return;
     }
+    recordUnsupportedDefinitions(*request, request->rawGaugeGraphs,
+                                 "skin_lua_model_gaugegraph_unsupported",
+                                 "gaugegraph");
     recordUnsupportedDefinitions(*request, request->rawBpmGraphs,
                                  "skin_lua_model_bpmgraph_unsupported",
                                  "bpmgraph");
@@ -2998,6 +3024,10 @@ void decodeGameplayProtected(lua_State *state, int index,
     recordUnsupportedDefinitions(*request, request->rawTimingVisualizers,
                                  "skin_lua_model_timingvisualizer_unsupported",
                                  "timingvisualizer");
+    recordUnsupportedDefinitions(
+        *request, request->rawTimingDistributionGraphs,
+        "skin_lua_model_timingdistributiongraph_unsupported",
+        "timingdistributiongraph");
     recordUnsupportedDefinitions(*request, request->rawPmCharas,
                                  "skin_lua_model_pmchara_unsupported",
                                  "pmchara");
@@ -3820,6 +3850,11 @@ bool materializeGameplay(GameplayDecodeRequest &request,
             return graph.image.id;
           });
   moveFirstDefinitions(
+          request.rawGaugeGraphs, request.gaugeGraphs,
+          [](const RawSkinIdentity &identity) -> const std::string & {
+            return identity.id;
+          });
+  moveFirstDefinitions(
           request.rawBpmGraphs, request.bpmGraphs,
           [](const RawSkinIdentity &identity) -> const std::string & {
             return identity.id;
@@ -3836,6 +3871,12 @@ bool materializeGameplay(GameplayDecodeRequest &request,
           });
   moveFirstDefinitions(
           request.rawTimingVisualizers, request.timingVisualizers,
+          [](const RawSkinIdentity &identity) -> const std::string & {
+            return identity.id;
+          });
+  moveFirstDefinitions(
+          request.rawTimingDistributionGraphs,
+          request.timingDistributionGraphs,
           [](const RawSkinIdentity &identity) -> const std::string & {
             return identity.id;
           });

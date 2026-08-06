@@ -68,14 +68,6 @@ bool finiteAndBounded(double value) {
          std::abs(value) <= LuaSkinTableDecoderPolicy::maxGameplayDimension;
 }
 
-bool validIntegerRateRange(
-    const SkinSliderObject::IntegerRangeSource &range) {
-  const auto span = static_cast<std::int64_t>(range.maximum) -
-                    static_cast<std::int64_t>(range.minimum);
-  return span != 0 && span >= std::numeric_limits<int>::min() &&
-         span <= std::numeric_limits<int>::max();
-}
-
 SkinTextNormalizationResult textFailure(SkinTextGraphNormalizationError error) {
   return {.text = std::nullopt, .error = error};
 }
@@ -202,7 +194,7 @@ normalizeSkinGraph(const SkinGraphNormalizationInput &input) {
   if (input.explicitRate) {
     graph.value = *input.explicitRate;
   } else if (input.isRefNum) {
-    if (!input.integerRange || !validIntegerRateRange(*input.integerRange)) {
+    if (!input.integerRange) {
       return graphFailure(SkinTextGraphNormalizationError::InvalidGraphRange);
     }
     graph.value = *input.integerRange;

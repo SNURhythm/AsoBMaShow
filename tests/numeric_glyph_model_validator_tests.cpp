@@ -326,12 +326,15 @@ void validatorRejectsMalformedFloatObjectFormats() {
          "validator rejects visible Float signs without 13-glyph sets");
 }
 
-void validatorRejectsIntegerRateSpansAboveJavaIntMax() {
-  expectOptionalAndCriticalRejected(
-      graphModel({.value = SkinIntegerPropertyId{1},
-                  .minimum = std::numeric_limits<int>::min(),
-                  .maximum = std::numeric_limits<int>::max()}),
-      "validator rejects integer Graph spans above Java INT_MAX");
+void validatorRetainsGraphRangesThatUpstreamConstructs() {
+  const auto result = test_support::validateWithAuthoredBuiltins(graphModel(
+      {.value = SkinIntegerPropertyId{1},
+       .minimum = std::numeric_limits<int>::min(),
+       .maximum = std::numeric_limits<int>::max()}));
+  expect(result.model && !result.criticalFailure &&
+             result.model->disabledOptionalObjects.empty(),
+         "validator retains a Graph range that JsonSkinObjectLoader passes "
+         "directly to SkinGraph");
 }
 
 void validatorAcceptsDescendingIntegerRateRanges() {
@@ -349,7 +352,7 @@ int main() {
   validatorAcceptsKindSpecificGlyphBoundaries();
   validatorRejectsMalformedNumberObjectFormats();
   validatorRejectsMalformedFloatObjectFormats();
-  validatorRejectsIntegerRateSpansAboveJavaIntMax();
+  validatorRetainsGraphRangesThatUpstreamConstructs();
   validatorAcceptsDescendingIntegerRateRanges();
   validatorDiagnosticsNameTheRejectedObject();
   return failures == 0 ? 0 : 1;

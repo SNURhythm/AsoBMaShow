@@ -39,52 +39,6 @@ bool collectBindingIds(const std::vector<Binding> &bindings,
   return true;
 }
 
-template <typename Domain>
-bool hasDomain(const std::map<std::uint32_t, Domain> &domains, std::uint32_t id,
-               Domain expected) {
-  const auto found = domains.find(id);
-  return found != domains.end() && found->second == expected;
-}
-
-template <typename Binding>
-bool validBindingSource(const Binding &binding, SkinBindingType type,
-                        const SkinBindingValidationContext &context) {
-  if (const auto *builtin =
-          std::get_if<SkinBuiltinPropertySelector>(&binding.source)) {
-    return context.builtins.contains(type, *builtin);
-  }
-  return context.callbacks.contains(std::get<LuaCallbackId>(binding.source));
-}
-
-template <typename Binding>
-std::string describeBindingSource(const Binding &binding,
-                                  std::string_view kind) {
-  std::string result(kind);
-  result += " binding ";
-  result += std::to_string(binding.id.value);
-  result += " from ";
-  if (const auto *builtin =
-          std::get_if<SkinBuiltinPropertySelector>(&binding.source)) {
-    std::visit(
-        [&result](const auto &selector) {
-          using T = std::decay_t<decltype(selector)>;
-          if constexpr (std::is_same_v<T, int>) {
-            result += std::to_string(selector);
-          } else {
-            result += "'" + selector + "'";
-          }
-        },
-        builtin->value);
-    return result;
-  }
-  result += "callback ";
-  const auto callback = std::get<LuaCallbackId>(binding.source);
-  result += std::to_string(callback.slot);
-  result += "/";
-  result += std::to_string(callback.generation);
-  return result;
-}
-
 bool laneCoverRateSelector(const SkinBuiltinPropertySelector &builtin) {
   if (const auto *selector = std::get_if<int>(&builtin.value)) {
     return *selector == 4 || *selector == 5;
@@ -115,52 +69,23 @@ std::vector<SkinFloatPropertyId> laneCoverRatePropertyIds(
   return result;
 }
 
-template <typename Binding>
-bool collectValidBindingIds(const std::vector<Binding> &bindings,
-                            SkinBindingType type,
-                            const SkinBindingValidationContext &context,
-                            std::set<std::uint32_t> &result) {
-  bool allValid = true;
-  for (const auto &binding : bindings) {
-    if (validBindingSource(binding, type, context)) {
-      result.insert(binding.id.value);
-    } else {
-      allValid = false;
-    }
-  }
-  return allValid;
+bool validSprite(const SkinSpriteFrames &sprite) {
+  // SkinSourceImage.validate() checks only that at least one decoded image
+  // exists. JsonSkinObjectLoader does not reject an object because a timer,
+  // property, or another post-decode registry cannot resolve it.
+  return sprite.resource != 0 && !sprite.frames.empty();
 }
 
-bool validSprite(const SkinSpriteFrames &sprite,
-                 const std::set<SkinResourceId> &imageResources,
-                 const std::set<std::uint32_t> &timers) {
-  return sprite.resource != 0 && imageResources.contains(sprite.resource) &&
-         !sprite.frames.empty() &&
-         (!sprite.timer || timers.contains(sprite.timer->value));
-}
-
-bool validIntegerRateRange(const SkinSliderObject::IntegerRangeSource &range) {
-  const auto span = static_cast<std::int64_t>(range.maximum) -
-                    static_cast<std::int64_t>(range.minimum);
-  return span != 0 && span >= std::numeric_limits<int>::min() &&
-         span <= std::numeric_limits<int>::max();
-}
-
-bool validDigits(const SkinDigitSpriteSet &digits, NumericGlyphAtlasKind kind,
-                 const std::set<SkinResourceId> &imageResources,
-                 const std::set<std::uint32_t> &timers) {
-  return validSprite(digits.positive, imageResources, timers) &&
-         (!digits.negative ||
-          validSprite(*digits.negative, imageResources, timers)) &&
+bool validDigits(const SkinDigitSpriteSet &digits, NumericGlyphAtlasKind kind) {
+  return validSprite(digits.positive) &&
+         (!digits.negative || validSprite(*digits.negative)) &&
          validateNumericGlyphAtlas(digits, kind) ==
              NumericGlyphAtlasError::None;
 }
 
-bool validNoteVisual(const SkinNoteVisual &visual,
-                     const std::set<SkinResourceId> &imageResources,
-                     const std::set<std::uint32_t> &timers) {
+bool validNoteVisual(const SkinNoteVisual &visual) {
   if (const auto *sprite = std::get_if<SkinSpriteFrames>(&visual)) {
-    return validSprite(*sprite, imageResources, timers);
+    return validSprite(*sprite);
   }
   return true;
 }
@@ -179,18 +104,12 @@ struct ValidationContext {
   const std::set<std::uint32_t> &events;
 };
 
-bool validDestination(const SkinDestinationBody &destination,
-                      const ValidationContext &context) {
-  if ((destination.timer &&
-       !context.timers.contains(destination.timer->value)) ||
-      (destination.drawCondition &&
-       !context.booleans.contains(destination.drawCondition->value))) {
-    return false;
-  }
-  return std::ranges::all_of(destination.conditions, [&](const auto &entry) {
-    const auto *condition = std::get_if<SkinBooleanPropertyId>(&entry);
-    return condition == nullptr || context.booleans.contains(condition->value);
-  });
+bool validDestination(const SkinDestinationBody &,
+                      const ValidationContext &) {
+  // SkinObject.setDestination receives these authored bindings directly.
+  // Beatoraja neither looks them up nor treats an absent factory result as a
+  // reason to reject the enclosing object.
+  return true;
 }
 
 SkinAuthoredNoteVisualSlots noteVisualSlots(const SkinNoteObject &object,
@@ -347,8 +266,7 @@ bool validNoteObject(const SkinNoteObject &object,
                    normalizedLines.lines->groups[group].laneRect)) {
       return false;
     }
-    if ((line.sprite &&
-         !validSprite(*line.sprite, context.imageResources, context.timers)) ||
+    if ((line.sprite && !validSprite(*line.sprite)) ||
         (line.destination && !validDestination(*line.destination, context))) {
       return false;
     }
@@ -356,8 +274,7 @@ bool validNoteObject(const SkinNoteObject &object,
 
   return std::ranges::all_of(object.lanes, [&](const auto &lane) {
     return std::ranges::all_of(lane.visuals, [&](const auto &entry) {
-      return validNoteVisual(entry.second, context.imageResources,
-                             context.timers);
+      return validNoteVisual(entry.second);
     });
   });
 }
@@ -371,29 +288,19 @@ bool validPayload(const SkinObjectPayload &payload,
           return !object.orderedStates.empty() &&
                  std::ranges::all_of(object.orderedStates,
                                      [&](const auto &state) {
-                                       return validSprite(
-                                           state, context.imageResources,
-                                           context.timers);
-                                     }) &&
-                 (!object.stateIndex ||
-                  hasDomain(context.integers, object.stateIndex->value,
-                            SkinIntegerPropertyDomain::ImageIndex)) &&
-                 (!object.clickEvent ||
-                  context.events.contains(object.clickEvent->value));
+                                       return validSprite(state);
+                                     });
         } else if constexpr (std::is_same_v<T, SkinNumberObject>) {
           const NumericGlyphFormat format{
               .integerDigits = object.digitCount,
               .zeroPadding = object.zeroPadding,
               .perDigitOffsets = object.perDigitOffsets,
           };
-          return validDigits(object.digits, NumericGlyphAtlasKind::Number,
-                             context.imageResources, context.timers) &&
+          return validDigits(object.digits, NumericGlyphAtlasKind::Number) &&
                  validateNumericGlyphFormat(
                      format, NumericGlyphAtlasKind::Number,
                      object.digits.glyphsPerAnimationFrame) ==
-                     NumericGlyphAtlasError::None &&
-                 hasDomain(context.integers, object.value.value,
-                           SkinIntegerPropertyDomain::IntegerValue);
+                     NumericGlyphAtlasError::None;
         } else if constexpr (std::is_same_v<T, SkinFloatObject>) {
           const NumericGlyphFormat format{
               .integerDigits = object.integerDigits,
@@ -403,69 +310,33 @@ bool validPayload(const SkinObjectPayload &payload,
               .gain = object.gain,
               .perDigitOffsets = object.perDigitOffsets,
           };
-          return validDigits(object.digits, NumericGlyphAtlasKind::Float,
-                             context.imageResources, context.timers) &&
+          return validDigits(object.digits, NumericGlyphAtlasKind::Float) &&
                  validateNumericGlyphFormat(
                      format, NumericGlyphAtlasKind::Float,
                      object.digits.glyphsPerAnimationFrame) ==
-                     NumericGlyphAtlasError::None &&
-                 hasDomain(context.floats, object.value.value,
-                           SkinFloatPropertyDomain::FloatValue);
+                     NumericGlyphAtlasError::None;
         } else if constexpr (std::is_same_v<T, SkinTextObject>) {
-          return object.font != 0 &&
-                 context.fontResources.contains(object.font) &&
-                 (!object.value ||
-                  context.strings.contains(object.value->value)) &&
-                 (!object.writer ||
-                  context.stringWriters.contains(object.writer->value));
+          // JsonSkinObjectLoader.createText passes font/property/writer
+          // factory results through to SkinText. A missing factory result is
+          // not an admission failure in Beatoraja.
+          return true;
         } else if constexpr (std::is_same_v<T, SkinSliderObject>) {
-          const bool valueValid = std::visit(
-              [&](const auto &source) {
-                using V = std::decay_t<decltype(source)>;
-                if constexpr (std::is_same_v<V, SkinFloatPropertyId>) {
-                  return hasDomain(context.floats, source.value,
-                                   SkinFloatPropertyDomain::Rate);
-                } else {
-                  return hasDomain(context.integers, source.value.value,
-                                   SkinIntegerPropertyDomain::IntegerValue) &&
-                         validIntegerRateRange(source);
-                }
-              },
-              object.value);
-          return validSprite(object.knob, context.imageResources,
-                             context.timers) &&
-                 object.direction <= 3 && valueValid &&
-                 (!object.writer ||
-                  context.floatWriters.contains(object.writer->value));
+          return validSprite(object.knob);
         } else if constexpr (std::is_same_v<T, SkinGraphObject>) {
-          const bool valueValid = std::visit(
-              [&](const auto &source) {
-                using V = std::decay_t<decltype(source)>;
-                if constexpr (std::is_same_v<V, SkinFloatPropertyId>) {
-                  return hasDomain(context.floats, source.value,
-                                   SkinFloatPropertyDomain::Rate);
-                } else {
-                  return hasDomain(context.integers, source.value.value,
-                                   SkinIntegerPropertyDomain::IntegerValue) &&
-                         validIntegerRateRange(source);
-                }
-              },
-              object.value);
-          return validSprite(object.fill, context.imageResources,
-                             context.timers) &&
-                 object.direction >= 0 && object.direction <= 1 && valueValid;
+          // A negative Graph.type has already been preserved as a blank v1
+          // placeholder with no fill. It must remain ordered and selectable
+          // while the dedicated SkinDistributionGraph renderer is pending.
+          return !object.fill.resource || validSprite(object.fill);
         } else if constexpr (std::is_same_v<T, SkinGaugeObject>) {
           return object.orderedNodes.size() == 36 &&
                  std::ranges::all_of(
                      object.orderedNodes, [&](const auto &node) {
-                       return validSprite(node, context.imageResources,
-                                          context.timers);
+                       return validSprite(node);
                      });
         } else if constexpr (std::is_same_v<T, SkinNoteObject>) {
           return validNoteObject(object, context);
         } else if constexpr (std::is_same_v<T, SkinCoverObject>) {
-          return validSprite(object.sprite, context.imageResources,
-                             context.timers);
+          return validSprite(object.sprite);
         } else if constexpr (std::is_same_v<T, SkinJudgeObject>) {
           return std::ranges::all_of(object.grades, [&](const auto &grade) {
             const auto nestedValid = [&](const auto &nested) {
@@ -480,13 +351,6 @@ bool validPayload(const SkinObjectPayload &payload,
         }
       },
       payload);
-}
-
-bool unsupportedTextInteraction(const SkinObjectPayload &payload) noexcept {
-  if (const auto *text = std::get_if<SkinTextObject>(&payload)) {
-    return text->writer || text->editable;
-  }
-  return false;
 }
 
 } // namespace
@@ -597,83 +461,18 @@ SkinModelValidationResult SkinModelValidator::validate(
     objectNames.try_emplace(object.authoredName, object.id);
   }
 
-  std::set<std::uint32_t> validBooleanIds;
-  std::set<std::uint32_t> validIntegerIds;
-  std::set<std::uint32_t> validFloatIds;
-  std::set<std::uint32_t> validStringIds;
-  std::set<std::uint32_t> validTimerIds;
-  std::set<std::uint32_t> validFloatWriterIds;
-  std::set<std::uint32_t> validStringWriterIds;
-  std::set<std::uint32_t> validEventIds;
-  std::vector<std::string> invalidBindingSources;
-  bool allBindingSourcesValid = true;
-  for (const auto &binding : model.booleanProperties) {
-    if (validBindingSource(
-            binding, {.kind = SkinBindingKind::BooleanProperty},
-            bindingContext)) {
-      validBooleanIds.insert(binding.id.value);
-    } else {
-      allBindingSourcesValid = false;
-      invalidBindingSources.push_back(
-          describeBindingSource(binding, "BooleanProperty"));
-    }
-  }
-  for (const auto &binding : model.integerProperties) {
-    const SkinBindingType type{.kind = SkinBindingKind::IntegerProperty,
-                               .integerDomain = binding.domain};
-    if (validBindingSource(binding, type, bindingContext)) {
-      validIntegerIds.insert(binding.id.value);
-    } else {
-      allBindingSourcesValid = false;
-      invalidBindingSources.push_back(
-          describeBindingSource(binding, "IntegerProperty"));
-    }
-  }
-  for (const auto &binding : model.floatProperties) {
-    const SkinBindingType type{.kind = SkinBindingKind::FloatProperty,
-                               .floatDomain = binding.domain};
-    if (validBindingSource(binding, type, bindingContext)) {
-      validFloatIds.insert(binding.id.value);
-    } else {
-      allBindingSourcesValid = false;
-      invalidBindingSources.push_back(
-          describeBindingSource(binding, "FloatProperty"));
-    }
-  }
-  const auto collect = [&](const auto &bindings, SkinBindingType type,
-                           auto &validIds, std::string_view kind) {
-    for (const auto &binding : bindings) {
-      if (validBindingSource(binding, type, bindingContext)) {
-        validIds.insert(binding.id.value);
-      } else {
-        allBindingSourcesValid = false;
-        invalidBindingSources.push_back(describeBindingSource(binding, kind));
-      }
-    }
-  };
-  collect(model.stringProperties, {.kind = SkinBindingKind::StringProperty},
-          validStringIds, "StringProperty");
-  collect(model.timerProperties, {.kind = SkinBindingKind::TimerProperty},
-          validTimerIds, "TimerProperty");
-  collect(model.floatWriters, {.kind = SkinBindingKind::FloatWriter},
-          validFloatWriterIds, "FloatWriter");
-  collect(model.stringWriters, {.kind = SkinBindingKind::StringWriter},
-          validStringWriterIds, "StringWriter");
-  collect(model.events, {.kind = SkinBindingKind::Event}, validEventIds,
-          "Event");
-  if (!allBindingSourcesValid) {
-    std::string detail;
-    for (const auto &source : invalidBindingSources) {
-      if (!detail.empty()) {
-        detail += ", ";
-      }
-      detail += source;
-    }
-    result.diagnostics.push_back(validationDiagnostic(
-        "skin_lua_model_binding_source_invalid",
-        "Lua skin binding source is not present in the typed built-in catalog "
-        "or live callback generation: " + detail));
-  }
+  // The Java factories are deliberately nullable. JSONSkinLoader keeps the
+  // object and passes the factory result to it, so catalog/callback lookup is
+  // a runtime concern rather than a skin-admission condition.
+  (void)bindingContext;
+  const auto validBooleanIds = booleanIds;
+  const auto validIntegerIds = integerIds;
+  const auto validFloatIds = floatIds;
+  const auto validStringIds = stringIds;
+  const auto validTimerIds = timerIds;
+  const auto validFloatWriterIds = floatWriterIds;
+  const auto validStringWriterIds = stringWriterIds;
+  const auto validEventIds = eventIds;
 
   std::map<std::uint32_t, SkinIntegerPropertyDomain> integers;
   for (const auto &binding : model.integerProperties) {
@@ -699,41 +498,10 @@ SkinModelValidationResult SkinModelValidator::validate(
                                   .stringWriters = validStringWriterIds,
                                   .events = validEventIds};
 
-  std::set<int> customTimerIds;
-  const bool customTimersValid =
-      std::ranges::all_of(model.customTimers, [&](const auto &timer) {
-        return timer.id >= 10'000 && timer.id <= 19'999 &&
-               customTimerIds.insert(timer.id).second &&
-               (!timer.timer || validTimerIds.contains(timer.timer->value));
-      });
-  std::set<int> customEventIds;
-  const bool customEventsValid =
-      std::ranges::all_of(model.customEvents, [&](const auto &event) {
-        return event.id >= 1'000 && event.id <= 1'999 &&
-               customEventIds.insert(event.id).second && event.action &&
-               validEventIds.contains(event.action.value) &&
-               (!event.condition ||
-                validBooleanIds.contains(event.condition->value)) &&
-               event.minimumIntervalMillis >= 0;
-      });
-  if (!customTimersValid || !customEventsValid) {
-    result.criticalFailure = true;
-    result.diagnostics.push_back(validationDiagnostic(
-        "skin_lua_model_custom_object_invalid",
-        "Lua skin custom timer/event identities or dependencies are invalid"));
-    return result;
-  }
-
   std::vector<SkinObjectId> disabled;
   std::set<SkinObjectId> disabledIds;
   for (const auto &object : model.objects) {
-    const bool unsupportedText = unsupportedTextInteraction(object.payload);
-    if (unsupportedText) {
-      result.diagnostics.push_back(validationDiagnostic(
-          "skin_lua_model_text_interaction_unsupported",
-          "Lua skin Text event/editable interaction is not supported yet"));
-    }
-    if (!unsupportedText && validPayload(object.payload, context)) {
+    if (validPayload(object.payload, context)) {
       continue;
     }
     if (object.critical) {

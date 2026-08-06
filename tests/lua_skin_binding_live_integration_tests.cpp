@@ -327,9 +327,7 @@ void testAllKindsDecodeWithPinnedDispatchAndLiveCallbacks() {
   const auto *fallbackTextDefinition = objectNamed(model, "text-fallback");
   expect(valid.model && !valid.criticalFailure && stateDefinition &&
              imageSetDefinition && textDefinition && fallbackTextDefinition &&
-             valid.model->disabledOptionalObjects ==
-                 std::vector<SkinObjectId>{
-                     textDefinition->id, fallbackTextDefinition->id} &&
+             valid.model->disabledOptionalObjects.empty() &&
              std::ranges::count_if(
                  valid.diagnostics,
                  [](const auto &item) {
@@ -341,8 +339,8 @@ void testAllKindsDecodeWithPinnedDispatchAndLiveCallbacks() {
                  [](const auto &item) {
                    return item.code ==
                           "skin_lua_model_text_interaction_unsupported";
-                 }) == 2,
-         "Beatoraja Image interactions remain selectable while unsupported Text interactions are disabled");
+                 }) == 0,
+         "Beatoraja Image and Text interactions remain selectable after factory lookup");
 
   auto criticalInteraction = model;
   auto criticalImage =
@@ -396,7 +394,7 @@ void testAllKindsDecodeWithPinnedDispatchAndLiveCallbacks() {
          "Event callback receives the pinned one state argument");
 }
 
-void testValidationRejectsDeadCallbacksAndWrongBuiltinDomain() {
+void testValidationPreservesDeadCallbacksAndWrongBuiltinDomain() {
   LiveSession session(kAllKinds);
   const SkinBuiltinBindingCatalogView builtins(kBuiltins);
   auto decoded = session.decode(builtins);
@@ -423,13 +421,14 @@ void testValidationRejectsDeadCallbacksAndWrongBuiltinDomain() {
   const auto dead = SkinModelValidator{}.validate(
       std::move(optionalDead), {.builtins = builtins, .callbacks = {}});
   expect(dead.model && !dead.criticalFailure &&
-             !dead.model->disabledOptionalObjects.empty(),
-         "dead callback generation disables optional dependents");
+             dead.model->disabledOptionalObjects.empty(),
+         "dead callback generation remains a runtime factory lookup concern");
 
   const auto criticalDead = SkinModelValidator{}.validate(
       *decoded.model, {.builtins = builtins, .callbacks = {}});
-  expect(!criticalDead.model && criticalDead.criticalFailure,
-         "dead callback generation fails a critical Note dependency");
+  expect(criticalDead.model && !criticalDead.criticalFailure &&
+             criticalDead.model->disabledOptionalObjects.empty(),
+         "dead callback generation does not reject a critical object");
 
   auto invalidCallback = *decoded.model;
   const auto *textDefinition = objectNamed(invalidCallback, "text");
@@ -447,18 +446,14 @@ void testValidationRejectsDeadCallbacksAndWrongBuiltinDomain() {
          "invalid callback mutation finds the Text string binding");
   if (textDefinition &&
       invalidString != invalidCallback.stringProperties.end()) {
-    const SkinObjectId textObjectId = textDefinition->id;
     invalidString->source = LuaCallbackId{};
     const auto invalid = SkinModelValidator{}.validate(
         std::move(invalidCallback),
         {.builtins = builtins,
          .callbacks = session.runtime()->callbackLiveness()});
     expect(invalid.model && !invalid.criticalFailure &&
-               std::ranges::find(invalid.model->disabledOptionalObjects,
-                                 textObjectId) !=
-                   invalid.model->disabledOptionalObjects.end(),
-           "zero callback ID disables its optional consumer even in a live "
-           "generation");
+               invalid.model->disabledOptionalObjects.empty(),
+           "zero callback ID remains a runtime factory lookup concern");
   }
 
   auto wrongEntries = kBuiltins;
@@ -468,11 +463,9 @@ void testValidationRejectsDeadCallbacksAndWrongBuiltinDomain() {
       *decoded.model, {.builtins = wrongBuiltins,
                        .callbacks = session.runtime()->callbackLiveness()});
   const auto *slider = objectNamed(*decoded.model, "slider");
-  expect(
-      wrong.model && slider &&
-          std::ranges::find(wrong.model->disabledOptionalObjects, slider->id) !=
-              wrong.model->disabledOptionalObjects.end(),
-      "wrong built-in Float domain disables optional consumers");
+  expect(wrong.model && slider && !wrong.criticalFailure &&
+             wrong.model->disabledOptionalObjects.empty(),
+         "wrong built-in Float domain remains a runtime factory lookup concern");
 
   auto criticalWrong = *decoded.model;
   auto criticalSlider =
@@ -484,8 +477,9 @@ void testValidationRejectsDeadCallbacksAndWrongBuiltinDomain() {
       std::move(criticalWrong),
       {.builtins = wrongBuiltins,
        .callbacks = session.runtime()->callbackLiveness()});
-  expect(!failed.model && failed.criticalFailure,
-         "wrong built-in Float domain fails a critical consumer");
+  expect(failed.model && !failed.criticalFailure &&
+             failed.model->disabledOptionalObjects.empty(),
+         "wrong built-in Float domain does not reject a critical consumer");
 }
 
 void testExactIndexedNonScalarDestinationConditionIsIgnored() {
@@ -645,11 +639,11 @@ return {type=0,w=1280,h=720,
       std::move(duplicateEvent),
       {.builtins = catalog,
        .callbacks = session.runtime()->callbackLiveness()});
-  expect(!duplicateEventResult.model && duplicateEventResult.criticalFailure,
-         "duplicate custom event IDs fail closed");
+  expect(duplicateEventResult.model && !duplicateEventResult.criticalFailure,
+         "duplicate custom event IDs remain available for IntMap replacement");
 }
 
-void testInvalidCustomObjectContractsFailClosed() {
+void testCustomObjectFieldsRemainAvailableForRuntimeResolution() {
   LiveSession session(R"lua(
 return {type=0,w=1280,h=720,
  customTimers={{id=9999,timer={}}},
@@ -663,8 +657,8 @@ return {type=0,w=1280,h=720,
     return;
   }
   const auto invalid = SkinModelValidator{}.validate(*decoded.model, {});
-  expect(!invalid.model && invalid.criticalFailure,
-         "invalid custom IDs, interval, and bindings fail closed globally");
+  expect(invalid.model && !invalid.criticalFailure,
+         "custom IDs, interval, and bindings remain available for runtime resolution");
 
   auto duplicate = *decoded.model;
   duplicate.customTimers[0].id = 10000;
@@ -673,8 +667,8 @@ return {type=0,w=1280,h=720,
   duplicate.customEvents.clear();
   const auto duplicateResult =
       SkinModelValidator{}.validate(std::move(duplicate), {});
-  expect(!duplicateResult.model && duplicateResult.criticalFailure,
-         "duplicate custom IDs fail closed");
+  expect(duplicateResult.model && !duplicateResult.criticalFailure,
+         "duplicate custom IDs remain available for IntMap replacement");
 }
 
 void testCustomBindingsShareAggregateSourceWorkBudget() {
@@ -729,13 +723,13 @@ return {type=0,w=1280,h=720,
 
 int main() {
   testAllKindsDecodeWithPinnedDispatchAndLiveCallbacks();
-  testValidationRejectsDeadCallbacksAndWrongBuiltinDomain();
+  testValidationPreservesDeadCallbacksAndWrongBuiltinDomain();
   testExactIndexedNonScalarDestinationConditionIsIgnored();
   testNonScalarBindingValuesUseBeatorajaNullSemantics();
   testUnusedInvalidDefinitionDoesNotKillSkin();
   testInvalidCriticalBindingFailsDuringValidation();
   testCustomObjectsPreserveOrderBindingsAndValidation();
-  testInvalidCustomObjectContractsFailClosed();
+  testCustomObjectFieldsRemainAvailableForRuntimeResolution();
   testCustomBindingsShareAggregateSourceWorkBudget();
   testLiveAggregateBindingSourceBudget();
   if (failures != 0) {

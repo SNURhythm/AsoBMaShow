@@ -165,11 +165,8 @@ void testTextRejectsAmbiguousOrUnsafeInputs() {
   const auto input = validTextInput();
   const std::vector<SkinFontResource> duplicate{font(7), font(8)};
   const auto duplicateResult = normalizeSkinText(input, duplicate);
-  expect(
-      !duplicateResult.text &&
-          duplicateResult.error ==
-              SkinTextGraphNormalizationError::AmbiguousFont,
-      "duplicate font identities fail closed instead of selecting first match");
+  expect(duplicateResult.text && duplicateResult.text->font == 7,
+         "duplicate font names select the first matching upstream font");
 
   auto missingFont = validTextInput();
   missingFont.fontName = "missing";
@@ -286,10 +283,12 @@ void testGraphRejectsInvalidDependencies() {
   input.isRefNum = true;
   input.integerRange->maximum = input.integerRange->minimum;
   const auto emptyRange = normalizeSkinGraph(input);
-  expect(!emptyRange.graph &&
-             emptyRange.error ==
-                 SkinTextGraphNormalizationError::InvalidGraphRange,
-         "zero-span integer graph range fails closed before runtime");
+  const auto *zeroSpan =
+      emptyRange.graph ? std::get_if<SkinSliderObject::IntegerRangeSource>(
+                             &emptyRange.graph->value)
+                       : nullptr;
+  expect(zeroSpan && zeroSpan->minimum == -50 && zeroSpan->maximum == -50,
+         "zero-span integer graph range reaches pinned RateProperty");
 
   input = validGraphInput();
   input.explicitRate.reset();
@@ -297,10 +296,14 @@ void testGraphRejectsInvalidDependencies() {
   input.integerRange->minimum = std::numeric_limits<int>::min();
   input.integerRange->maximum = std::numeric_limits<int>::max();
   const auto oversizedRange = normalizeSkinGraph(input);
-  expect(!oversizedRange.graph &&
-             oversizedRange.error ==
-                 SkinTextGraphNormalizationError::InvalidGraphRange,
-         "integer graph spans above Java INT_MAX fail during normalization");
+  const auto *wideRange = oversizedRange.graph
+                              ? std::get_if<SkinSliderObject::IntegerRangeSource>(
+                                    &oversizedRange.graph->value)
+                              : nullptr;
+  expect(wideRange && wideRange->minimum == std::numeric_limits<int>::min() &&
+             wideRange->maximum == std::numeric_limits<int>::max(),
+         "integer graph span reaches pinned RateProperty without admission "
+         "validation");
 
   input = validGraphInput();
   input.explicitRate.reset();
