@@ -1352,6 +1352,30 @@ void testGameplayTypeZeroIsRequiredAfterHeaderDecode() {
   }
 }
 
+void testBooleanFieldsUseLuaTruthiness() {
+  const auto decoded = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  source={{id='atlas',path='atlas.png'}},
+  slider={{id='truthy-slider',src='atlas',w=10,h=10,type=800,changeable=0}},
+  destination={{id='truthy-slider',dst={{}}}}
+}
+)lua");
+  expect(decoded.model.has_value(),
+         "non-Boolean Lua values decode in Boolean schema fields");
+  if (!decoded.model) {
+    return;
+  }
+  const auto *definition = findObject(*decoded.model, "truthy-slider");
+  expect(definition != nullptr, "truthy slider definition exists");
+  if (definition == nullptr) {
+    return;
+  }
+  const auto *slider = std::get_if<SkinSliderObject>(&definition->payload);
+  expect(slider != nullptr && slider->changeable,
+         "Boolean schema fields retain LuaJ's non-nil, non-false truthiness");
+}
+
 void testOptionalVisualsAndBuiltinImagesStayLiveAcrossRepeatedDestinations() {
   const auto decoded = decodeInlineModel(R"lua(
 return {
@@ -1449,6 +1473,7 @@ int main() {
   testDuplicateImageDeclarationsUsePinnedFirstDefinition();
   testLiveDestinationMouseRectAndCenterNormalization();
   testGameplayTypeZeroIsRequiredAfterHeaderDecode();
+  testBooleanFieldsUseLuaTruthiness();
   testOptionalVisualsAndBuiltinImagesStayLiveAcrossRepeatedDestinations();
   if (failures != 0) {
     std::cerr << failures << " assertion(s) failed\n";

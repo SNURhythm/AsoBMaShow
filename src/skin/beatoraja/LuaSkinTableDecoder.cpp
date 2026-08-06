@@ -1099,11 +1099,8 @@ bool booleanField(lua_State *state, int index, std::string_view name,
     lua_pop(state, 1);
     return true;
   }
-  if (lua_type(state, -1) != LUA_TBOOLEAN) {
-    lua_pop(state, 1);
-    return fail(request, "skin_lua_model_invalid",
-                "Lua skin Boolean field has an invalid type");
-  }
+  // LuaSkinLoader maps every Java boolean field through LuaValue::toboolean:
+  // only nil and false are false; every other Lua value is true.
   output = lua_toboolean(state, -1) != 0;
   lua_pop(state, 1);
   return true;
