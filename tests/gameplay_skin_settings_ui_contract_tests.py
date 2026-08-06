@@ -164,6 +164,13 @@ class GameplaySkinSettingsUiContracts(unittest.TestCase):
         self.assertIn("actionAvailability.ordinaryActions", enabled)
         self.assertIn("actionAvailability.canCancel", enabled)
 
+    def test_catalog_action_controls_grow_to_their_labels(self) -> None:
+        enabled = self.read("src/scene/SettingsSceneSkins.cpp")
+
+        self.assertIn("labelView->textureWidth()", enabled)
+        self.assertIn("contentWidth + horizontalContentPadding", enabled)
+        self.assertIn("std::max(minimumWidth", enabled)
+
     def test_name_input_and_install_button_use_projected_availability(self) -> None:
         enabled = self.read("src/scene/SettingsSceneSkins.cpp")
 

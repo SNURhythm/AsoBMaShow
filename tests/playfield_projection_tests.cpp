@@ -271,7 +271,7 @@ int main() {
   if (lineKindCount(ProjectedLineKind::Section) != 2 ||
       lineKindCount(ProjectedLineKind::BpmChange) != 1 ||
       lineKindCount(ProjectedLineKind::Stop) != 1 ||
-      lineKindCount(ProjectedLineKind::Time) != 4) {
+      lineKindCount(ProjectedLineKind::Time) != 0) {
     std::cerr << "line descriptor contract failed\n";
     return EXIT_FAILURE;
   }
@@ -295,12 +295,46 @@ int main() {
       !hasSkinLineKind(skin::SkinProjectedLineKind::Group) ||
       !hasSkinLineKind(skin::SkinProjectedLineKind::Bpm) ||
       !hasSkinLineKind(skin::SkinProjectedLineKind::Stop) ||
-      !hasSkinLineKind(skin::SkinProjectedLineKind::Time)) {
+      hasSkinLineKind(skin::SkinProjectedLineKind::Time)) {
     std::cerr << "Task 14 projection adapter contract failed\n";
     return EXIT_FAILURE;
   }
   if (views.lines.empty() || views.lines.front().submissionOrdinal == 0) {
     std::cerr << "Task 14 adapter requires nonzero line submission ordinals\n";
+    return EXIT_FAILURE;
+  }
+
+  // JsonPlaySkin's SkinNote/LaneRenderer indexes the BMS timeline directly:
+  // getNote(0) selects note.dst[0] and getNote(7) selects note.dst[7]. The
+  // scratch-first UI lane order is only a built-in presentation concern and
+  // must not be applied to the skin-facing DTO.
+  PlayfieldChartVisualModel beatorajaLaneModel;
+  beatorajaLaneModel.laneOrder = {7, 0, 1, 2, 3, 4, 5, 6};
+  beatorajaLaneModel.timelines = {
+      {.id = 600,
+       .timeMicros = 1'000'000,
+       .scrollPosition = 1.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 0,
+       .retainedOrdinal = 0},
+  };
+  beatorajaLaneModel.notes = {
+      {.id = 601, .timelineId = 600, .lane = 0, .authoredOrdinal = 0},
+      {.id = 602, .timelineId = 600, .lane = 7, .authoredOrdinal = 1},
+  };
+  PlayfieldVisualState beatorajaLaneState;
+  beatorajaLaneState.clock.visualTimeMicros = 0;
+  const auto beatorajaLaneResult =
+      projection.project(beatorajaLaneModel, beatorajaLaneState, {});
+  const auto beatorajaLaneViews =
+      adaptPlayfieldProjectionForSkin(beatorajaLaneResult);
+  if (beatorajaLaneResult.notes.size() != 2U ||
+      beatorajaLaneResult.notes[0].lane != 0 ||
+      beatorajaLaneResult.notes[1].lane != 7 ||
+      beatorajaLaneViews.notes.size() != 2U ||
+      beatorajaLaneViews.notes[0].lane != 0 ||
+      beatorajaLaneViews.notes[1].lane != 7) {
+    std::cerr << "skin note lanes must retain their direct BMS indices\n";
     return EXIT_FAILURE;
   }
 

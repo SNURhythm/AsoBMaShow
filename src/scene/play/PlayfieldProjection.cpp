@@ -222,7 +222,6 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
         if (timeline->stopMicros > 0) {
           appendLine(*timeline, ProjectedLineKind::Stop, scrollDelta);
         }
-        appendLine(*timeline, ProjectedLineKind::Time, scrollDelta);
       }
     }
     previousTimeline = timeline;
@@ -357,8 +356,8 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
     const auto *timeline = timelineIt->second;
     const double scrollDelta =
         timeline->scrollPosition - result.currentScrollPosition;
-    const auto lane = std::ranges::find(model.laneOrder, note->lane);
-    if (lane == model.laneOrder.end()) {
+    if (std::ranges::find(model.laneOrder, note->lane) ==
+        model.laneOrder.end()) {
       continue;
     }
     const auto *noteState = stateFor(note->id);
@@ -418,7 +417,11 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
              .tailId = tail->id,
              .headTimelineId = timeline->id,
              .tailTimelineId = tailTimeline->id,
-             .lane = static_cast<int>(lane - model.laneOrder.begin()),
+             // JsonPlaySkinObjectLoader preserves the zero-based Note arrays,
+             // and LaneRenderer draws them with TimeLine.getNote(lane).  Its
+             // lane is therefore the BMS lane ID, not the scratch-first UI
+             // display order used by the built-in renderer.
+             .lane = note->lane,
              .mode = note->longNoteMode,
              .headSource = effectiveSource(*note),
              .tailSource = effectiveSource(*tail),
@@ -484,7 +487,8 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
         {.noteId = note->id,
          .timelineId = timeline->id,
          .pairId = note->pairId,
-         .lane = static_cast<int>(lane - model.laneOrder.begin()),
+         // See the direct BMS-lane contract above for long notes too.
+         .lane = note->lane,
          .kind = note->kind,
          .source = effectiveSource(*note),
          .longNoteMode = note->longNoteMode,

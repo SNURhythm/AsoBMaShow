@@ -31,11 +31,15 @@ Button *makeGameplaySkinAction(const LayoutMetrics &metrics,
                                const std::string &label, bool enabled,
                                std::function<void()> action,
                                const Color &accent = ui_theme::cyan()) {
-  auto *button = makeAccentButton(
-      metrics.compact ? 158 : 184, metrics.actionButtonHeight,
+  auto *labelView =
       makeText(label, metrics.smallTextSize, ui_theme::textPrimary(),
-               TextView::CENTER, TextView::MIDDLE),
-      accent);
+               TextView::CENTER, TextView::MIDDLE);
+  constexpr int horizontalContentPadding = 32;
+  const int minimumWidth = metrics.compact ? 158 : 184;
+  const int contentWidth = std::max(0, labelView->textureWidth());
+  auto *button = makeAccentButton(
+      std::max(minimumWidth, contentWidth + horizontalContentPadding),
+      metrics.actionButtonHeight, labelView, accent);
   button->setEnabled(enabled);
   if (enabled) {
     button->setOnClickListener(std::move(action));
