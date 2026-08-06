@@ -139,8 +139,20 @@
       object.
     - Local: `pmchara` is decoded and retained as a blank placeholder with
       `skin_lua_model_pmchara_unsupported`.
-    - Patch status: no admission failure; dedicated animation support remains
-      TODO.
+   - Patch status: no admission failure; dedicated animation support remains
+     TODO.
+
+14. **Integer `RateProperty` ranges were rejected after decode.**
+    - Upstream: `SkinObject.RateProperty.get` evaluates `(max - min)` as a
+      Java `int`, including zero and overflow results; it has no construction
+      or validation rejection path. `SkinGraph` and `SkinSlider` keep the
+      object whenever their `SkinSource` validates.
+    - Local: `Skin2DRenderer::resolveRate` rejected zero and overflow spans
+      with `skin.renderer.rate.range`, even after the model admission change.
+    - Patch status: patched. The renderer now performs the same wrapping
+      32-bit subtraction. If the resulting value cannot produce a bounded
+      textured quad, only that draw is omitted; the skin/session remains
+      active.
 
 ## Patch order
 

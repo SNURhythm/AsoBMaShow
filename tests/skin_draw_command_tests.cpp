@@ -1967,6 +1967,42 @@ void testDescendingIntegerGraphRatesUsePinnedDirection() {
   }
 }
 
+void testIntegerGraphOverflowRangeDoesNotRejectTheFrame() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  const SkinSourceRect region{.x = 10, .y = 20, .w = 10, .h = 8};
+  resources.addImage(31, region, 100, 100);
+  FakeState state;
+  state.integerResult = {.value = 0, .supported = true};
+  SkinGraphObject graph;
+  graph.fill = glyphSprite(31, {region});
+  graph.value = SkinSliderObject::IntegerRangeSource{
+      .value = SkinIntegerPropertyId{1},
+      .minimum = std::numeric_limits<int>::min(),
+      .maximum = std::numeric_limits<int>::max()};
+  graph.direction = 0;
+  ValidatedBeatorajaSkinModel model;
+  model.model.integerProperties.push_back(
+      {.id = SkinIntegerPropertyId{1},
+       .domain = SkinIntegerPropertyDomain::IntegerValue,
+       .source = SkinBuiltinPropertySelector{.value = 95},
+       .authoredOrdinal = 1});
+  model.model.objects.push_back({.id = 1,
+                                 .authoredName = "overflow-range-graph",
+                                 .payload = std::move(graph),
+                                 .authoredOrdinal = 1,
+                                 .critical = true});
+  auto presented = destination(1, 118, 100.0);
+  presented.presentation.loop = 0;
+  model.model.destinations = {std::move(presented)};
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  expect(result.submitReady && result.submitReady->commands.empty() &&
+             !hasDiagnostic(result, "skin.renderer.rate.range"),
+         "a Java-overflow integer Graph range is retained but emits no unsafe quad");
+}
+
 SkinGaugeObject gaugeObject(FakeResources &resources,
                             SkinGaugeAnimationType animation, int parts = 5) {
   SkinGaugeObject gauge;
@@ -4060,6 +4096,7 @@ int main() {
   testSliderAndGraphRatesRoundAtTheJavaFloatBoundary();
   testIntegerGraphRatesUsePinnedFloatSubtractionOrder();
   testDescendingIntegerGraphRatesUsePinnedDirection();
+  testIntegerGraphOverflowRangeDoesNotRejectTheFrame();
   testGaugeMapsFamiliesRolesAndPartGeometry();
   testGaugeSegmentSelectionRoundsAtJavaFloatBoundary();
   testGaugeAnimationUsesStrictDeadlineAndFlickerOverlayOrder();

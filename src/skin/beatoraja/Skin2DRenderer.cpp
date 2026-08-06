@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <cmath>
 #include <limits>
 #include <memory>
@@ -42,6 +43,9 @@ template <typename T> struct ResolvedValue {
   std::optional<T> value;
   std::optional<SkinDiagnostic> failure;
 };
+
+int narrowingJavaInt(std::int64_t value) noexcept;
+int subtractingJavaInt(int left, int right) noexcept;
 
 std::optional<std::int64_t>
 coerceLuaNumericInteger(const LuaScalar &value, std::int64_t minimum,
@@ -502,14 +506,6 @@ resolveRate(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
     return resolved;
   }
   const auto &integer = std::get<SkinSliderObject::IntegerRangeSource>(source);
-  const auto span = static_cast<std::int64_t>(integer.maximum) -
-                    static_cast<std::int64_t>(integer.minimum);
-  if (span == 0 || span < std::numeric_limits<int>::min() ||
-      span > std::numeric_limits<int>::max()) {
-    return {.failure = diagnostic(
-                "skin.renderer.rate.range",
-                "Integer rate needs a nonzero Java int denominator.")};
-  }
   const auto resolved = resolveInteger(inputs, index, integer.value);
   if (resolved.failure) {
     return {.failure = *resolved.failure};
@@ -530,16 +526,19 @@ resolveRate(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
     }
   }
   // Pinned RateProperty casts the selected integer value to float before
-  // subtracting min, while max-min remains Java int arithmetic.
+  // subtracting min, while max-min is wrapping Java int arithmetic.
+  const int denominator =
+      subtractingJavaInt(integer.maximum, integer.minimum);
   const float numerator =
-      static_cast<float>(static_cast<int>(*resolved.value)) -
+      static_cast<float>(narrowingJavaInt(*resolved.value)) -
       static_cast<float>(integer.minimum);
   const float rate =
-      std::abs(numerator / static_cast<float>(static_cast<int>(span)));
-  if (!std::isfinite(rate)) {
-    return {.failure = diagnostic(
-                "skin.renderer.rate.invalid",
-                "Integer rate produced a non-finite Java float value.")};
+      std::abs(numerator / static_cast<float>(denominator));
+  if (!std::isfinite(rate) || rate > 1.0F) {
+    // Java keeps this object admitted even when integer overflow makes its
+    // arithmetic unusable as a finite textured quad. Retain the frame and
+    // omit only this draw rather than rejecting the skin/session.
+    return {.value = 0.0};
   }
   return {.value = static_cast<double>(rate)};
 }
@@ -884,6 +883,17 @@ int truncatingJavaInt(double value) noexcept {
     return std::numeric_limits<int>::min();
   }
   return static_cast<int>(std::trunc(value));
+}
+
+int narrowingJavaInt(std::int64_t value) noexcept {
+  const auto bits = static_cast<std::uint32_t>(value);
+  return std::bit_cast<std::int32_t>(bits);
+}
+
+int subtractingJavaInt(int left, int right) noexcept {
+  const auto bits = static_cast<std::uint32_t>(left) -
+                    static_cast<std::uint32_t>(right);
+  return std::bit_cast<std::int32_t>(bits);
 }
 
 NumericLayout prepareFloatLayout(const SkinFrameInputs &inputs,
