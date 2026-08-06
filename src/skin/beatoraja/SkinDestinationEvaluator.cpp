@@ -241,6 +241,12 @@ SkinDestinationEvaluationResult
 evaluateSkinDestinationAuthored(const SkinDestinationBody &destination,
                                 const SkinDestinationEvaluationInputs &inputs) {
   SkinDestinationEvaluationResult result;
+  // JsonSkinLoader adds the object even when dst is empty; Skin.prepare then
+  // drops it through SkinObject.validate(). It therefore has no conditions,
+  // timer, or frame-validation effect at runtime.
+  if (destination.frames.empty()) {
+    return result;
+  }
   const std::size_t expectedConditions =
       destination.conditions.size() + (destination.drawCondition ? 1U : 0U);
   if (inputs.optionConditions.size() != expectedConditions) {
@@ -252,11 +258,6 @@ evaluateSkinDestinationAuthored(const SkinDestinationBody &destination,
   if (std::any_of(inputs.optionConditions.begin(),
                   inputs.optionConditions.end(),
                   [](bool value) { return !value; })) {
-    return result;
-  }
-  if (destination.frames.empty()) {
-    result.diagnostics.push_back(diagnostic("skin.destination.frames.empty",
-                                            "Destination has no frames."));
     return result;
   }
   for (std::size_t index = 0; index < destination.frames.size(); ++index) {

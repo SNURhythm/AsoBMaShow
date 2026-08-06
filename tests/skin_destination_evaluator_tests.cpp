@@ -184,6 +184,18 @@ void testConditionsAndOrderedOffsets() {
          "quirk");
 }
 
+void testEmptyDestinationIsSilentlyDroppedBeforeConditions() {
+  SkinDestinationBody body;
+  body.conditions = {1, SkinBooleanPropertyId{2}};
+  body.drawCondition = SkinBooleanPropertyId{3};
+  const std::array<bool, 1> intentionallyIncomplete = {false};
+  const auto result = evaluateSkinDestinationAuthored(
+      body, inputs(600'000, 0, intentionallyIncomplete));
+  expect(!result.geometry && result.diagnostics.empty(),
+         "an empty destination is silently dropped before condition "
+         "validation, matching Beatoraja Skin.prepare");
+}
+
 void testObjectAccelerationAndPinnedOffsetAlphaBranches() {
   auto latched = animated();
   latched.frames[0].acceleration = 0;
@@ -358,6 +370,7 @@ int main() {
   testLoopRateAndIndependentMicrosecondTruncation();
   testOmittedLoopUsesPinnedZeroDefaultAndWrapsExactEnd();
   testConditionsAndOrderedOffsets();
+  testEmptyDestinationIsSilentlyDroppedBeforeConditions();
   testObjectAccelerationAndPinnedOffsetAlphaBranches();
   testFractionalOffsetAndClipSuppression();
   testSourceRegionStretchAndProjection();

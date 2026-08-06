@@ -1,5 +1,6 @@
 #include "GameplaySkinBuiltinCatalog.h"
 
+#include <algorithm>
 #include <array>
 #include <limits>
 #include <string>
@@ -7,6 +8,37 @@
 
 namespace skin {
 namespace {
+
+// Pinned from BooleanPropertyFactory.BooleanType at beatoraja
+// c2ed5db1a46145ed10790c3872f717e95b59db9d, plus its two
+// BooleanPropertyPattern practice ranges. Keep this exact, rather than using
+// a permissive numeric range: BooleanPropertyFactory returns null for every
+// other ID below its 65,536 cache boundary.
+constexpr auto kPinnedBooleanPropertyIds = std::to_array<int>({
+    1,    2,    3,    5,    21,   22,   23,   32,   33,   40,   41,
+    42,   43,   50,   51,   60,   61,   62,   80,   81,   82,   84,
+    90,   91,   100,  101,  102,  103,  104,  105,  118,  119,  121,
+    125,  126,  127,  128,  129,  130,  131,  150,  151,  152,  153,
+    154,  155,  160,  161,  162,  163,  164,  170,  171,  172,  173,
+    174,  175,  176,  177,  178,  179,  180,  181,  182,  183,  184,
+    190,  191,  192,  193,  194,  195,  196,  197,  198,  200,  201,
+    202,  203,  204,  205,  206,  207,  220,  221,  222,  223,  224,
+    225,  226,  227,  230,  231,  232,  233,  234,  235,  236,  237,
+    238,  239,  240,  241,  261,  270,  271,  272,  273,  280,  281,
+    282,  283,  289,  290,  300,  301,  302,  303,  304,  305,  306,
+    307,  320,  321,  322,  323,  324,  325,  326,  327,  330,  331,
+    332,  335,  336,  340,  341,  342,  343,  344,  345,  346,  347,
+    352,  353,  354,  361,  400,  603,  604,  606,  608,  624,  625,
+    1002, 1003, 1004, 1005, 1006, 1007, 1008, 1010, 1011, 1012, 1013,
+    1014, 1015, 1016, 1017, 1030, 1031, 1046, 1080, 1100, 1101, 1102,
+    1103, 1104, 1128, 1129, 1130, 1131, 1160, 1161, 1177, 1196, 1197,
+    1198, 1199, 1200, 1201, 1202, 1203, 1204, 1205, 1206, 1207, 1208,
+    1240, 1242, 1243, 1262, 1263, 1330, 1331, 1332, 1335, 1336, 1362,
+    1363, 2241, 2242, 2243, 2244, 2245, 2246, 3000, 3001, 3002, 3003,
+    3004, 3005, 3006, 3007, 3008, 3009, 3010, 3011, 3012, 3013, 3014,
+    3015, 3020, 3021, 3022, 3023, 3024, 3025, 3026, 3027, 3028, 3029,
+    3030, 3031, 3032, 3033, 3034, 3035,
+});
 
 void add(std::vector<SkinBuiltinBindingCatalogEntry> &entries,
          SkinBindingType type, int selector) {
@@ -23,19 +55,14 @@ void add(std::vector<SkinBuiltinBindingCatalogEntry> &entries,
 
 std::vector<SkinBuiltinBindingCatalogEntry> makeCatalog() {
   std::vector<SkinBuiltinBindingCatalogEntry> entries;
-  entries.reserve(240);
+  entries.reserve(600);
 
   const SkinBindingType boolean{.kind = SkinBindingKind::BooleanProperty};
-  for (const int selector : std::to_array(
-           {42,  43,  80,  81,  84,   150, 151,  152,  153,  154,
-            155, 170, 171, 172, 173,  176, 177,  180,  181,  182,
-            183, 184, 190, 191, 194,  195, 241, 271,  272,  273,
-            1080, 1240, 1242,
-            1243, 2243, 2244, 2245})) {
+  for (const int selector : kPinnedBooleanPropertyIds) {
     add(entries, boolean, selector);
-  }
-  for (int selector = 230; selector <= 240; ++selector) {
-    add(entries, boolean, selector);
+    // BooleanPropertyFactory applies Math.abs(optionid) and negates the
+    // resolved property for each negative numeric selector.
+    add(entries, boolean, -selector);
   }
   for (const char *selector :
        {"judge_1p_perfect", "judge_1p_early", "judge_1p_late"}) {
@@ -109,6 +136,11 @@ std::vector<SkinBuiltinBindingCatalogEntry> makeCatalog() {
 }
 
 } // namespace
+
+bool isPinnedBeatorajaBooleanPropertyId(int selector) noexcept {
+  return std::binary_search(kPinnedBooleanPropertyIds.begin(),
+                            kPinnedBooleanPropertyIds.end(), selector);
+}
 
 SkinBuiltinBindingCatalogView gameplaySkinBuiltinCatalog() {
   static const auto entries = makeCatalog();

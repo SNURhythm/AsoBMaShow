@@ -1,5 +1,6 @@
 #include "PlaySkinStateBridge.h"
 
+#include "GameplaySkinBuiltinCatalog.h"
 #include "LuaSkinHostModules.h"
 
 #include <algorithm>
@@ -707,7 +708,24 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
     reportUnsupported("boolean", selector);
     return {};
   }
+  if (*id < 0) {
+    if (*id == std::numeric_limits<int>::min()) {
+      reportUnsupported("boolean", selector);
+      return {};
+    }
+    const auto positive = booleanProperty({-*id});
+    if (!positive.supported) {
+      return {};
+    }
+    return {.value = !positive.value, .supported = true};
+  }
   switch (*id) {
+  case 32:
+    // AsoBMaShow has no autoplay play mode. Its regular gameplay session is
+    // exactly BooleanPropertyFactory's non-autoplay branch.
+    return {.value = true, .supported = true};
+  case 33:
+    return {.value = false, .supported = true};
   case 42:
     return {.value = gaugeTypeIndex(snapshot->authority.gaugeType) <= 2,
             .supported = true};
@@ -726,6 +744,11 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
     return {.value = snapshot->authority.gameplayMode ==
                          PlayfieldGameplayMode::Replay,
             .supported = true};
+  case 400:
+    // BooleanPropertyFactory's OPTION_CONSTANT returns false outside a
+    // player/selector with an enabled constant play config. AsoBMaShow has no
+    // corresponding play-config mode, so its authoritative state is false.
+    return {.value = false, .supported = true};
   case 271:
     return {.value = snapshot->authority.laneCoverEnabled, .supported = true};
   case 272:
@@ -806,8 +829,7 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
   case 1240: {
     const auto gauge = gaugeState();
     if (!gauge.supported) {
-      reportUnsupported("boolean", selector);
-      return {};
+      return {.value = false, .supported = true};
     }
     return {.value = gauge.value > 0.0 && gauge.value >= gauge.border,
             .supported = true};
@@ -843,14 +865,19 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
     const auto gauge = gaugeState();
     if (!gauge.supported || !std::isfinite(gauge.maximum) ||
         gauge.maximum <= 0.0) {
-      reportUnsupported("boolean", selector);
-      return {};
+      return {.value = false, .supported = true};
     }
     const int range = *id - 230;
     const double low = static_cast<double>(range) * 0.1 * gauge.maximum;
     const double high = static_cast<double>(range + 1) * 0.1 * gauge.maximum;
     return {.value = gauge.value >= low && gauge.value < high,
             .supported = true};
+  }
+  if (isPinnedBeatorajaBooleanPropertyId(*id)) {
+    // Beatoraja's implementation makes each official property callable in
+    // every MainState; most non-gameplay branches simply return false. Keep
+    // that behavior for source families AsoBMaShow does not provide yet.
+    return {.value = false, .supported = true};
   }
   reportUnsupported("boolean", selector);
   return {};

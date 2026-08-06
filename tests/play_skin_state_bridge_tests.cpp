@@ -439,6 +439,26 @@ void testFramePropertiesUseAuthoritativeGaugeAndTimerRules() {
              bridge.booleanProperty({43}).supported &&
              !bridge.booleanProperty({43}).value,
          "normal gauge belongs only to the pinned groove family");
+  const auto normalInverse = bridge.booleanProperty({-42});
+  const auto constant = bridge.booleanProperty({400});
+  const auto constantInverse = bridge.booleanProperty({-400});
+  expect(normalInverse.supported && !normalInverse.value &&
+             constant.supported && !constant.value &&
+             constantInverse.supported && constantInverse.value,
+         "negative boolean IDs use Beatoraja BooleanPropertyFactory negation, "
+         "including OPTION_CONSTANT");
+  const auto autoplayOff = bridge.booleanProperty({32});
+  const auto autoplayOn = bridge.booleanProperty({33});
+  expect(autoplayOff.supported && autoplayOff.value && autoplayOn.supported &&
+             !autoplayOn.value,
+         "the full pinned BooleanPropertyFactory domain includes the "
+         "autoplay pair with AsoBMaShow's non-autoplay gameplay state");
+  for (const int id : {603, 1002, 1177, 2246, 3000, 3015, 3020, 3035}) {
+    const auto value = bridge.booleanProperty({id});
+    expect(value.supported && !value.value,
+           "unimplemented but upstream-supported boolean selectors are "
+           "inactive rather than skin-invalidating");
+  }
   expect(bridge.booleanProperty({236}).supported &&
              bridge.booleanProperty({236}).value &&
              bridge.booleanProperty({235}).supported &&
@@ -499,9 +519,11 @@ void testGameplayModeAndLoadingBooleanProperties() {
              bridge.booleanProperty({1080}).supported &&
              !bridge.booleanProperty({1080}).value,
          "loading state exactly selects the pinned preload boolean pair");
-  expect(!bridge.booleanProperty({32}).supported &&
-             !bridge.booleanProperty({33}).supported,
-         "autoplay remains closed without a distinct authoritative mode");
+  expect(bridge.booleanProperty({32}).supported &&
+             bridge.booleanProperty({32}).value &&
+             bridge.booleanProperty({33}).supported &&
+             !bridge.booleanProperty({33}).value,
+         "autoplay booleans expose AsoBMaShow's explicit non-autoplay state");
   bridge.discardFrame();
 
   state = stateAt(202);
@@ -687,6 +709,15 @@ void testPlayTimerPropertiesMatchPinnedJavaConversions() {
   bridge.discardFrame();
 
   const auto catalog = gameplaySkinBuiltinCatalog();
+  for (const int id : {32,   -32,  42,   -42,  400,
+                       -400, 603,  -603, 1002, -1002, 1177, -1177,
+                       2246, -2246, 3000, -3000, 3015, -3015, 3020,
+                       -3020, 3035, -3035}) {
+    expect(catalog.contains({.kind = SkinBindingKind::BooleanProperty},
+                            SkinBuiltinPropertySelector{id}),
+           "gameplay catalog admits each executable signed BooleanProperty "
+           "selector");
+  }
   for (const int id : {161, 162, 163, 164}) {
     expect(catalog.contains({.kind = SkinBindingKind::IntegerProperty,
                              .integerDomain =
@@ -801,9 +832,11 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   }
   bridge.beginFrame(state, projectionAt(101));
 
-  expect(!bridge.booleanProperty({32}).supported &&
-             !bridge.booleanProperty({33}).supported,
-         "autoplay options stay unsupported without a play-mode source");
+  expect(bridge.booleanProperty({32}).supported &&
+             bridge.booleanProperty({32}).value &&
+             bridge.booleanProperty({33}).supported &&
+             !bridge.booleanProperty({33}).value,
+         "autoplay options expose AsoBMaShow's explicit non-autoplay state");
   expect(bridge.booleanProperty({43}).supported &&
              !bridge.booleanProperty({43}).value,
          "gauge-hard option reads the authoritative gauge type");

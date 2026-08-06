@@ -588,6 +588,41 @@ void testHiddenImageStillSelectsSourceAfterRuntimeSuppression() {
          "the false destination condition");
 }
 
+void testEmptyDestinationIsDroppedBeforeObjectStateResolution() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  resources.addImage(1, {.x = 0, .y = 0, .w = 10, .h = 10});
+  FakeState state;
+  state.booleanResult = {.supported = false};
+  state.timerResult = 0;
+
+  ValidatedBeatorajaSkinModel model;
+  model.model.booleanProperties.push_back({
+      .id = SkinBooleanPropertyId{1},
+      .source = SkinBuiltinPropertySelector{.value = 10},
+      .authoredOrdinal = 1,
+  });
+  model.model.timerProperties.push_back({
+      .id = SkinTimerPropertyId{1},
+      .source = SkinBuiltinPropertySelector{.value = 20},
+      .authoredOrdinal = 2,
+  });
+  model.model.objects.push_back(imageObject(1, 1, true));
+  auto presented = destination(1, 10, 10.0);
+  presented.presentation.frames.clear();
+  presented.presentation.conditions.push_back(SkinBooleanPropertyId{1});
+  presented.presentation.timer = SkinTimerPropertyId{1};
+  model.model.destinations.push_back(std::move(presented));
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  expect(result.submitReady && result.submitReady->commands.empty() &&
+             result.diagnostics.empty() && state.booleanCalls == 0 &&
+             state.timerCalls == 0,
+         "an empty destination is removed before it can resolve object state, "
+         "matching Beatoraja Skin.prepare");
+}
+
 bool hasDiagnostic(const SkinFrameEvaluationResult &result,
                    std::string_view code) {
   return std::ranges::any_of(result.diagnostics, [&](const auto &diagnostic) {
@@ -3920,6 +3955,7 @@ int main() {
   testOptionalFailureSuppressesOnlyItsObject();
   testBuiltinImageStateAndOutOfRangeFallback();
   testHiddenImageStillSelectsSourceAfterRuntimeSuppression();
+  testEmptyDestinationIsDroppedBeforeObjectStateResolution();
   testProjectionOrdinalIrregularitiesNeverDiscardAGameplayFrame();
   testLargeProjectionDoesNotHitAnAppSpecificFrameLimit();
   testBindingAndDisabledLookupsStayLogarithmicAtModelLimits();

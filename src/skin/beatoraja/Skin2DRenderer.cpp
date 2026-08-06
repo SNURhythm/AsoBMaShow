@@ -1437,6 +1437,11 @@ resolveDestination(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
                    const SkinDestinationBody &presentation,
                    bool relativeOffsets = false) {
   DestinationResolution result;
+  // Beatoraja's Skin.prepare removes objects with no destination frames.
+  // Suppress them before their conditions or timers can observe state.
+  if (presentation.frames.empty()) {
+    return result;
+  }
   const std::size_t conditionCount =
       presentation.conditions.size() + (presentation.drawCondition ? 1U : 0U);
   std::unique_ptr<bool[]> conditions;
@@ -2804,6 +2809,12 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
         return result;
       }
       if (disabledOptionalObject(lookupIndex, object->id)) {
+        continue;
+      }
+      // JsonSkinLoader permits an empty dst array, then Skin.prepare removes
+      // that object through SkinObject.validate(). Do the equivalent before
+      // any object, condition, or timer lookup.
+      if (destination.presentation.frames.empty()) {
         continue;
       }
       // Numeric option conditions are resolved by Skin.prepare's static

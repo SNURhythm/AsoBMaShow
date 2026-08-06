@@ -4,9 +4,14 @@
 
 namespace skin {
 
-// The authoritative built-in surface that PlaySkinStateBridge can currently
-// execute. Keep this catalog narrower than Beatoraja's upstream factories:
-// admission means the runtime bridge can provide the selected value or event.
+// Numeric IDs accepted by Beatoraja's pinned BooleanPropertyFactory. The
+// runtime uses this to distinguish an official but currently inactive feature
+// from an unknown selector, which must remain a Lua error.
+[[nodiscard]] bool isPinnedBeatorajaBooleanPropertyId(int selector) noexcept;
+
+// The gameplay built-in surface. Every official BooleanPropertyFactory numeric
+// selector is admitted; PlaySkinStateBridge preserves exact available state and
+// provides Beatoraja's inactive result for gameplay features AsoBMaShow lacks.
 [[nodiscard]] SkinBuiltinBindingCatalogView gameplaySkinBuiltinCatalog();
 
 } // namespace skin
