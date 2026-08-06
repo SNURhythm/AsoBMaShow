@@ -78,7 +78,7 @@ std::vector<SkinBuiltinBindingCatalogEntry> makeCatalog() {
 
   constexpr auto integerValueSelectors = std::to_array(
       {14,  71,  74,  75,  90,  91,  92,  96,  101, 102, 103, 105, 106, 107,
-       110, 111, 112, 113, 114, 152, 153, 160, 171, 313, 350, 351, 352,
+       110, 111, 112, 113, 114, 152, 153, 160, 171, 312, 313, 350, 351, 352,
        353, 360, 361, 362, 363, 364, 365, 368, 407, 410, 411, 412, 413, 414,
        415, 416, 417, 418, 419, 420,
        421, 422, 425, 427, 525, 526, 527, 1163, 1164});
@@ -92,6 +92,11 @@ std::vector<SkinBuiltinBindingCatalogEntry> makeCatalog() {
   // Pinned IntegerPropertyFactory exposes the lane-cover family through
   // ValueType, not through getImageIndexProperty.
   for (const int selector : {161, 162, 163, 164, 314, 315, 316}) {
+    add(entries, integerValue, selector);
+  }
+  // ValueType.getProperty accepts this complete contiguous family and creates
+  // the LaneRenderer duration function from its ID bits.
+  for (int selector = 1312; selector <= 1327; ++selector) {
     add(entries, integerValue, selector);
   }
 

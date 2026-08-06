@@ -134,6 +134,7 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
                              const PlayfieldProjectionRequest &request) {
   PlayfieldProjectionResult result;
   result.frameSerial = state.clock.serial;
+  result.builtInTraversal = request.builtInTraversal;
   const long long timeMicros = state.clock.visualTimeMicros;
   result.currentScrollPosition = scrollPositionAtTime(model, timeMicros);
 

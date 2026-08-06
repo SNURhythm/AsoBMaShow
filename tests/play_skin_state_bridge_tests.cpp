@@ -259,12 +259,60 @@ PlayfieldVisualState stateAt(std::uint64_t serial) {
 PlayfieldProjectionResult projectionAt(std::uint64_t serial) {
   PlayfieldProjectionResult projection;
   projection.frameSerial = serial;
+  projection.builtInTraversal = BuiltInRendererTraversal{.hispeed = 2.0F};
   projection.notes.push_back({.noteId = 1,
                               .lane = 0,
                               .kind = ChartVisualNoteKind::Mine,
                               .scrollDelta = 12.0,
                               .submissionOrdinal = 1});
   return projection;
+}
+
+bool hasDiagnostic(const PlaySkinStateBridge &bridge, std::string_view code);
+
+void testDurationBindingsUsePinnedLaneRendererFormula() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+  PlayfieldChartVisualModel chart;
+  chart.staticMetadata = {.minimumBpm = 150.0,
+                          .maximumBpm = 240.0,
+                          .mainBpm = 200.0};
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = runtime.runtime(),
+                              .mutationTable = mutations});
+
+  auto state = stateAt(202);
+  state.authority.currentBpm = 180.0;
+  state.authority.laneCoverPercent = 25;
+  state.authority.laneCoverEnabled = true;
+  const auto projection = projectionAt(202);
+  bridge.beginFrame(state, projection);
+
+  for (const auto [id, expected] : std::array{
+           std::pair{312, 500LL}, std::pair{313, 300LL},
+           std::pair{1312, 500LL}, std::pair{1313, 300LL},
+           std::pair{1314, 667LL}, std::pair{1315, 400LL},
+           std::pair{1316, 450LL}, std::pair{1317, 270LL},
+           std::pair{1318, 600LL}, std::pair{1319, 360LL},
+           std::pair{1320, 600LL}, std::pair{1321, 360LL},
+           std::pair{1322, 800LL}, std::pair{1323, 480LL},
+           std::pair{1324, 375LL}, std::pair{1325, 225LL},
+           std::pair{1326, 500LL}, std::pair{1327, 300LL}}) {
+    const auto value = bridge.integerProperty({id});
+    expect(value.supported && value.value == expected,
+           "duration and lane-cover selector follows IntegerPropertyFactory: " +
+               std::to_string(id));
+  }
+  expect(!hasDiagnostic(bridge, "skin.play_state.unsupported"),
+         "pinned duration selectors do not become app-specific unsupported "
+         "state errors");
 }
 
 bool hasDiagnostic(const PlaySkinStateBridge &bridge, std::string_view code) {
@@ -927,7 +975,7 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
            std::pair{525, -34LL}, std::pair{75, 321LL},
            std::pair{102, 114LL}, std::pair{103, 0LL},
            std::pair{105, 321LL}, std::pair{152, 156LL},
-           std::pair{153, -44LL}, std::pair{313, 400LL},
+           std::pair{153, -44LL}, std::pair{313, 417LL},
            std::pair{410, 4LL}, std::pair{411, 3LL},
            std::pair{412, 2LL}, std::pair{413, 1LL},
            std::pair{414, 6LL}, std::pair{415, 5LL},
@@ -1510,6 +1558,7 @@ void testFloatWritersResolveLocallyAndRollbackCallbackMutations() {
 
 int main() {
   testPinnedMutationTableMatchesFrozenFixtureExhaustively();
+  testDurationBindingsUsePinnedLaneRendererFormula();
   testBridgeOwnsSnapshotAndClosesEachFrameExactlyOnce();
   testFramePropertiesUseAuthoritativeGaugeAndTimerRules();
   testGameplayModeAndLoadingBooleanProperties();

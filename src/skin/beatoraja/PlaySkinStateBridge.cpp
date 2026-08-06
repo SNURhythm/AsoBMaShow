@@ -212,6 +212,19 @@ std::int32_t javaLongToInt(std::int64_t value) {
   return std::bit_cast<std::int32_t>(static_cast<std::uint32_t>(value));
 }
 
+std::int64_t javaMathRoundToInt(double value) {
+  if (std::isnan(value)) {
+    return 0;
+  }
+  if (value >= static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
+    return javaLongToInt(std::numeric_limits<std::int64_t>::max());
+  }
+  if (value <= static_cast<double>(std::numeric_limits<std::int64_t>::min())) {
+    return javaLongToInt(std::numeric_limits<std::int64_t>::min());
+  }
+  return javaLongToInt(static_cast<std::int64_t>(std::floor(value + 0.5)));
+}
+
 std::int32_t javaIntSubtract(std::int32_t left, std::int32_t right) {
   const auto bits = static_cast<std::uint32_t>(left) -
                     static_cast<std::uint32_t>(right);
@@ -315,6 +328,7 @@ void PlaySkinStateBridge::beginFrame(
   }
 
   state_ = state;
+  builtInTraversal_ = projection.builtInTraversal;
   projection_ = adaptPlayfieldProjectionForSkin(projection);
   frameSerial_ = state.clock.serial;
   staged_ = {.frameSerial = frameSerial_};
@@ -1052,6 +1066,68 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
     reportUnsupported("integer", selector);
     return {};
   }
+  const auto durationValue = [&]() -> std::optional<std::int64_t> {
+    if (*id != 312 && *id != 313 && (*id < 1312 || *id > 1327)) {
+      return std::nullopt;
+    }
+    if (!builtInTraversal_ ||
+        !std::isfinite(static_cast<double>(builtInTraversal_->hispeed)) ||
+        builtInTraversal_->hispeed <= 0.0F) {
+      return std::nullopt;
+    }
+    const auto durationFor = [&](double bpm, bool cover, bool green)
+        -> std::optional<std::int64_t> {
+      if (!std::isfinite(bpm) || bpm <= 0.0) {
+        return std::nullopt;
+      }
+      double value = 240000.0 / bpm /
+                     static_cast<double>(builtInTraversal_->hispeed);
+      if (cover) {
+        value *= 1.0 -
+                 static_cast<double>(snapshot->authority.laneCoverPercent) /
+                     100.0;
+      }
+      if (green) {
+        value *= 0.6;
+      }
+      return javaMathRoundToInt(value);
+    };
+    if (*id == 312 || *id == 313) {
+      // LaneRenderer.currentduration rounds its current speed/cover product.
+      // ValueType.duration_green then applies its integer `* 3 / 5`
+      // conversion afterwards.
+      const auto current = durationFor(
+          snapshot->authority.currentBpm, snapshot->authority.laneCoverEnabled,
+          false);
+      if (!current) {
+        return std::nullopt;
+      }
+      return *id == 312 ? *current : (*current * 3) / 5;
+    }
+    const int relative = *id - 1312;
+    const int bpmMode = relative / 4;
+    const bool green = relative % 2 == 1;
+    const bool cover = relative % 4 < 2;
+    const double bpm = [&] {
+      switch (bpmMode) {
+      case 0:
+        return snapshot->authority.currentBpm;
+      case 1:
+        return context_.chartModel.staticMetadata.mainBpm;
+      case 2:
+        return context_.chartModel.staticMetadata.minimumBpm;
+      default:
+        return context_.chartModel.staticMetadata.maximumBpm;
+      }
+    }();
+    // IntegerPropertyFactory.createDurationLanecoverProperty uses the raw
+    // PlayConfig lane-cover value for this family, independently of whether
+    // the lane cover is currently enabled for current-duration rendering.
+    return durationFor(bpm, cover, green);
+  };
+  if (const auto duration = durationValue()) {
+    return {.value = *duration, .supported = true};
+  }
   switch (*id) {
   case 14:
     return {.value = static_cast<std::int64_t>(
@@ -1193,12 +1269,6 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
   case 153:
     return {.value = static_cast<std::int64_t>(snapshot->score) -
                     targetScore(*snapshot),
-            .supported = true};
-  case 313:
-    // Aso's authoritative setting is already expressed in green-number
-    // units; Beatoraja's selector 313 converts its duration into that same
-    // unit.  Do not apply the conversion twice.
-    return {.value = snapshot->configuration.visibleTimeGreenNumber,
             .supported = true};
   case 360:
   case 361:
@@ -1662,6 +1732,7 @@ void PlaySkinStateBridge::closeFrame() noexcept {
   writerInvocationActive_ = false;
   state_.reset();
   frameSerial_ = 0;
+  builtInTraversal_.reset();
   projection_ = {};
   staged_ = {};
   customTimerValues_.clear();

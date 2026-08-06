@@ -158,6 +158,10 @@ struct BuiltInRendererPlan {
 struct PlayfieldProjectionResult {
   std::uint64_t frameSerial = 0;
   double currentScrollPosition = 0.0;
+  // The built-in traversal is captured once by the gameplay renderer. Skin
+  // property bridges consume its hispeed rather than reconstructing it from
+  // settings or chart metadata.
+  std::optional<BuiltInRendererTraversal> builtInTraversal;
   std::vector<ProjectedTimelineDescriptor> timelines;
   std::vector<ProjectedPlayfieldNote> notes;
   std::vector<ProjectedLongNoteDescriptor> longNotes;

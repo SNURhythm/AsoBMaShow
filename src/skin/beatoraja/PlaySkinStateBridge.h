@@ -192,6 +192,7 @@ private:
   std::optional<PlayfieldVisualState> state_;
   std::uint64_t frameSerial_ = 0;
   std::uint64_t lastAcceptedFrameSerial_ = 0;
+  std::optional<BuiltInRendererTraversal> builtInTraversal_;
   PlayfieldSkinProjectionViews projection_;
   PlaySkinFrameCommit staged_;
   std::unordered_map<int, std::int64_t> customTimerValues_;

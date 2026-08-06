@@ -760,7 +760,8 @@ int main() {
        .maxNotes = 1,
        .builtInTraversal = BuiltInRendererTraversal{.judgeY = 0.0F,
                                                      .upperBound = 1.5F,
-                                                     .rxhs = 1.0F}});
+                                                     .rxhs = 1.0F,
+                                                     .hispeed = 1.25F}});
   if (builtInPlanResult.builtInPlan.traversedTimelineOrdinals !=
           std::vector<std::uint32_t>({0, 1, 2, 3, 4}) ||
       builtInPlanResult.builtInPlan.nextStartRetainedOrdinal != 1U ||
@@ -774,9 +775,11 @@ int main() {
           BuiltInRendererPlanEntryKind::LongNote ||
       !builtInPlanResult.builtInPlan.entries[4].tailAtUpperBound ||
       builtInPlanResult.builtInPlan.entries[4].renderY != -1.0F ||
-      builtInPlanResult.builtInPlan.entries[4].tailRenderY != 1.5F) {
+      builtInPlanResult.builtInPlan.entries[4].tailRenderY != 1.5F ||
+      !builtInPlanResult.builtInTraversal ||
+      builtInPlanResult.builtInTraversal->hispeed != 1.25F) {
     std::cerr << "built-in plan must preserve bounded traversal independently "
-                 "of skin DTO limits\n";
+                 "of skin DTO limits and retain its renderer hispeed\n";
     return EXIT_FAILURE;
   }
   const auto repeatedBuiltInPlanResult = projection.project(

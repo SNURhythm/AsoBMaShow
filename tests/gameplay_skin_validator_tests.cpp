@@ -256,11 +256,15 @@ void testAuthoritativeCatalogAdmitsOnlyExecutableBridgeSelectors() {
   expect(!catalog.contains({.kind = SkinBindingKind::TimerProperty},
                            SkinBuiltinPropertySelector{-1}),
          "catalog rejects the negative timer range upstream also rejects");
-  expect(!catalog.contains(
-             {.kind = SkinBindingKind::IntegerProperty,
-              .integerDomain = SkinIntegerPropertyDomain::IntegerValue},
-             SkinBuiltinPropertySelector{312}),
-         "catalog rejects an upstream integer absent from the bridge");
+  for (const int selector : {312, 313, 1312, 1313, 1314, 1315,
+                             1316, 1317, 1318, 1319, 1320, 1321,
+                             1322, 1323, 1324, 1325, 1326, 1327}) {
+    expect(catalog.contains(
+               {.kind = SkinBindingKind::IntegerProperty,
+                .integerDomain = SkinIntegerPropertyDomain::IntegerValue},
+               SkinBuiltinPropertySelector{selector}),
+           "catalog admits every pinned duration and lane-cover selector");
+  }
   expect(!catalog.contains({.kind = SkinBindingKind::FloatWriter},
                            SkinBuiltinPropertySelector{4}),
          "catalog rejects the lane-cover writer until it is executable");
