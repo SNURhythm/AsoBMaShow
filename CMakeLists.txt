@@ -3575,6 +3575,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(image_file_decoder_tests
         tests/image_file_decoder_tests.cpp
+        src/MinizBridge.c
         src/view/DecodedImageCache.cpp
         src/view/ImageFileDecoder.cpp
     )
@@ -3585,6 +3586,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS AND NOT IOS)
         add_executable(gameplay_skin_validator_tests
             tests/gameplay_skin_validator_tests.cpp
+            src/MinizBridge.c
             src/view/DecodedImageCache.cpp
             src/view/ImageDecodeCoordinator.cpp
             src/view/ImageFileDecoder.cpp
@@ -3647,6 +3649,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
         add_executable(skin_resource_catalog_tests
             tests/skin_resource_catalog_tests.cpp
+            src/MinizBridge.c
             src/view/DecodedImageCache.cpp
             src/view/ImageDecodeCoordinator.cpp
             src/view/ImageFileDecoder.cpp
@@ -4532,6 +4535,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
         add_executable(play_skin_session_tests
             tests/play_skin_session_tests.cpp
+            src/MinizBridge.c
             src/FileChecksum.cpp
             src/Utils.cpp
             src/bms_parser.cpp
