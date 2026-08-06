@@ -1504,6 +1504,13 @@ SkinPropertyLookup<ConfigOffset> PlaySkinStateBridge::offsetProperty(int id) {
     if (found != context_.configuration.offsetsById.end()) {
       return {.value = found->second, .supported = true};
     }
+    // MainController constructs a SkinOffset for every slot from zero through
+    // SkinProperty.OFFSET_MAX. JSONSkinLoader configures only the selected
+    // custom offsets, so an otherwise unconfigured valid slot remains the
+    // default all-zero offset rather than becoming an unsupported lookup.
+    if (id >= 0 && id <= SkinCommandPolicy::maximumBeatorajaOffsetId) {
+      return {.value = ConfigOffset{}, .supported = true};
+    }
   }
   reportUnsupported("offset", SkinBuiltinPropertySelector{.value = id});
   return {};

@@ -1208,6 +1208,36 @@ return {
          "unresolved destinations do not become model validation errors");
 }
 
+void testDuplicateSourceDeclarationsUsePinnedLastDefinition() {
+  const auto decoded = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  source={
+    {id="shared",path="first.png"},
+    {id="shared",path="last.png"}
+  },
+  image={{id="visible",src="shared",x=0,y=0,w=1,h=1}},
+  destination={{id="visible",dst={{x=0,y=0,w=1,h=1}}}}
+}
+)lua");
+  expect(decoded.model.has_value(),
+         "duplicate source declarations decode before model validation");
+  if (!decoded.model) {
+    return;
+  }
+  const auto validated =
+      test_support::validateWithAuthoredBuiltins(*decoded.model);
+  expect(!validated.criticalFailure && validated.model.has_value(),
+         "duplicate source declarations validate like JSONSkinLoader's "
+         "last-definition source map");
+  if (!validated.model) {
+    return;
+  }
+  const auto source = validated.model->resourceIds.find("shared");
+  expect(source != validated.model->resourceIds.end() && source->second == 2,
+         "validated source lookup retains the final duplicate declaration");
+}
+
 void testLiveDestinationMouseRectAndCenterNormalization() {
   const auto decoded = decodeInlineModel(R"lua(
 return {
@@ -1391,6 +1421,7 @@ int main() {
   testLiveCoverJudgeAndBgaSpecialObjects();
   testLiveGenericObjectPrecedesSameIdGameplaySpecials();
   testUnresolvedDestinationMatchesPinnedLoaderIgnoreBehavior();
+  testDuplicateSourceDeclarationsUsePinnedLastDefinition();
   testLiveDestinationMouseRectAndCenterNormalization();
   testGameplayTypeZeroIsRequiredAfterHeaderDecode();
   testOptionalVisualsAndBuiltinImagesStayLiveAcrossRepeatedDestinations();

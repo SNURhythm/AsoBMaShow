@@ -815,7 +815,7 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   ValidatedBeatorajaSkinModel model;
   BeatorajaSkinConfiguration configuration;
   configuration.offsetsById = {
-      {1, {.x = 1}}, {3, {.x = 3}}, {4, {.x = 4}},
+      {3, {.x = 3}}, {4, {.x = 4}},
       {30, {.x = 30}}, {32, {.x = 32}}};
   const auto mutations = makePinnedSkinEventMutationTableV1();
   PlaySkinStateBridge bridge({.chartModel = chart,
@@ -1033,10 +1033,16 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   expect(practiceText.supported && practiceText.value.empty(),
          "non-gameplay pinned StringProperty values retain Beatoraja's empty "
          "fallback");
-  for (const int id : {1, 3, 4, 30, 32}) {
+  for (const int id : {3, 4, 30, 32}) {
     const auto offset = bridge.offsetProperty(id);
     expect(offset.supported && offset.value.x == id,
            "configured selected offsets are returned by their exact IDs");
+  }
+  for (const int id : {1, 2, 199}) {
+    const auto offset = bridge.offsetProperty(id);
+    expect(offset.supported && offset.value == ConfigOffset{},
+           "every unconfigured pinned SkinOffset ID returns Beatoraja's "
+           "zero-initialized offset");
   }
 
   for (const auto [id, expected] : std::array{
