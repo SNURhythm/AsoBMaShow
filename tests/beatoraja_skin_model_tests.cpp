@@ -911,13 +911,8 @@ void testValidatorRejectsCriticalNoteDependencyAndDisablesOptionalObject() {
                missing->second == 7,
            "validator publishes stable source-neutral resource and object "
            "identity maps");
-    const auto &expectedDisabled = expected.at("disabledOptionalObjectIds");
-    expect(optionalResult.model->disabledOptionalObjects.size() ==
-                   expectedDisabled.size() &&
-               optionalResult.model->disabledOptionalObjects.front() ==
-                   expectedDisabled.front().get<SkinObjectId>(),
-           "validator reports the exact stable ID of the disabled optional "
-           "object");
+    expect(optionalResult.model->disabledOptionalObjects.empty(),
+           "validator leaves prepare-time object omission to the renderer");
   }
 
   BeatorajaSkinModel missingCriticalNote = *decoded.model;
@@ -938,10 +933,9 @@ void testValidatorRejectsCriticalNoteDependencyAndDisablesOptionalObject() {
   notePayload.lanes.front().visuals.erase(SkinNoteVisualKind::Normal);
   const auto criticalResult = test_support::validateWithAuthoredBuiltins(
       std::move(missingCriticalNote));
-  expect(
-      expected.at("missingNormalNoteIsCritical").get<bool>() &&
-          criticalResult.criticalFailure && !criticalResult.model,
-      "missing critical normal-note presentation rejects the complete model");
+  expect(criticalResult.model && !criticalResult.criticalFailure &&
+             criticalResult.model->disabledOptionalObjects.empty(),
+         "missing Note presentation remains object-local like Skin.prepare");
 
   BeatorajaSkinModel duplicateBindings = *decoded.model;
   duplicateBindings.integerProperties.push_back(
@@ -967,14 +961,11 @@ void testValidatorRejectsCriticalNoteDependencyAndDisablesOptionalObject() {
          "numeric-domain mutation finds the score object");
   if (score != wrongNumericDomain.objects.end()) {
     std::get<SkinNumberObject>(score->payload).value = SkinIntegerPropertyId{1};
-    const SkinObjectId scoreId = score->id;
     const auto domainResult = test_support::validateWithAuthoredBuiltins(
         std::move(wrongNumericDomain));
-    expect(domainResult.model &&
-               std::ranges::find(domainResult.model->disabledOptionalObjects,
-                                 scoreId) !=
-                   domainResult.model->disabledOptionalObjects.end(),
-           "number objects reject image-index bindings with the wrong domain");
+    expect(domainResult.model && !domainResult.criticalFailure &&
+               domainResult.model->disabledOptionalObjects.empty(),
+           "number binding domain remains a runtime object concern");
   }
 }
 
@@ -1152,7 +1143,6 @@ return {
       [](const auto &object) { return object.authoredName == "judge"; });
   if (outer != invalidChild.objects.end()) {
     const auto &outerJudge = std::get<SkinJudgeObject>(outer->payload);
-    const auto outerId = outer->id;
     if (outerJudge.grades[0].image) {
       const auto child = std::find_if(invalidChild.objects.begin(), invalidChild.objects.end(),
           [&](const auto &object) { return object.id == outerJudge.grades[0].image->object; });
@@ -1160,10 +1150,9 @@ return {
         std::get<SkinImageObject>(child->payload).orderedStates.clear();
         const auto validated = test_support::validateWithAuthoredBuiltins(
             std::move(invalidChild));
-        expect(validated.model && std::ranges::find(
-                   validated.model->disabledOptionalObjects, outerId) !=
-                   validated.model->disabledOptionalObjects.end(),
-               "validator disables an outer Judge whose synthetic child is invalid");
+        expect(validated.model && !validated.criticalFailure &&
+                   validated.model->disabledOptionalObjects.empty(),
+               "Judge child presentation remains object-local like Skin.prepare");
       }
     }
   }

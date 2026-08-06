@@ -263,7 +263,10 @@ struct SkinSliderObject {
   SkinSpriteFrames knob;
   std::variant<SkinFloatPropertyId, IntegerRangeSource> value;
   std::optional<SkinFloatWriterId> writer;
-  std::uint8_t direction = 0;
+  // JsonSkinObjectLoader passes JsonSkin.Slider.angle directly to SkinSlider,
+  // whose direction field is an int. Non-cardinal angles draw without a
+  // displacement and do not become a loader error.
+  int direction = 0;
   double range = 0.0;
   bool changeable = true;
 };

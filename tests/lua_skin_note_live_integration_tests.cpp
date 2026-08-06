@@ -486,7 +486,7 @@ return {type=0,w=1280,h=720,
          "bindings");
 }
 
-void testValidatorRejectsMalformedCriticalNoteState() {
+void testValidatorRetainsMalformedCriticalNoteState() {
   LiveSession session(kLegacyNote);
   auto decoded = session.decode();
   if (!decoded.model || !session.runtime()) {
@@ -502,8 +502,9 @@ void testValidatorRejectsMalformedCriticalNoteState() {
   auto missingResult = SkinModelValidator{}.validate(
       std::move(missingVisual),
       {.callbacks = session.runtime()->callbackLiveness()});
-  expect(missingResult.criticalFailure && !missingResult.model,
-         "missing normalized visual rejects the critical Note model");
+  expect(missingResult.model && !missingResult.criticalFailure &&
+             missingResult.model->disabledOptionalObjects.empty(),
+         "missing normalized visual stays object-local like Skin.prepare");
 
   auto invalidGeometry = *decoded.model;
   definition = noteDefinition(invalidGeometry);
@@ -513,8 +514,9 @@ void testValidatorRejectsMalformedCriticalNoteState() {
   auto geometryResult = SkinModelValidator{}.validate(
       std::move(invalidGeometry),
       {.callbacks = session.runtime()->callbackLiveness()});
-  expect(geometryResult.criticalFailure && !geometryResult.model,
-         "out-of-contract lane geometry rejects the critical Note model");
+  expect(geometryResult.model && !geometryResult.criticalFailure &&
+             geometryResult.model->disabledOptionalObjects.empty(),
+         "out-of-contract lane geometry stays object-local like Skin.prepare");
 }
 
 } // namespace
@@ -525,7 +527,7 @@ int main() {
   testMalformedCriticalNotePathsFailClosed();
   testCompleteNoteMaterializationBudgets();
   testNoteOnlyImagesIgnoreGenericStateAndActionFields();
-  testValidatorRejectsMalformedCriticalNoteState();
+  testValidatorRetainsMalformedCriticalNoteState();
   if (failures != 0) {
     std::cerr << failures << " assertion(s) failed\n";
     return 1;

@@ -101,14 +101,10 @@ graphModel(SkinSliderObject::IntegerRangeSource integerRange) {
   return model;
 }
 
-void expectDisabled(SkinModelValidationResult result,
+void expectRetained(SkinModelValidationResult result,
                     std::string_view message) {
   expect(result.model.has_value() && !result.criticalFailure &&
-             result.model->disabledOptionalObjects ==
-                 std::vector<SkinObjectId>{1} &&
-             !result.diagnostics.empty() &&
-             result.diagnostics.front().code ==
-                 "skin_lua_model_optional_object_disabled",
+             result.model->disabledOptionalObjects.empty(),
          message);
 }
 
@@ -134,42 +130,37 @@ SkinFloatObject &floatObject(BeatorajaSkinModel &model) {
   return std::get<SkinFloatObject>(model.objects.front().payload);
 }
 
-void expectOptionalAndCriticalRejected(BeatorajaSkinModel model,
+void expectOptionalAndCriticalRetained(BeatorajaSkinModel model,
                                        std::string_view message) {
   auto optional = test_support::validateWithAuthoredBuiltins(model);
   expect(optional.model.has_value() && !optional.criticalFailure &&
-             optional.model->disabledOptionalObjects ==
-                 std::vector<SkinObjectId>{1},
+             optional.model->disabledOptionalObjects.empty(),
          message);
 
   model.objects.front().critical = true;
   auto critical = test_support::validateWithAuthoredBuiltins(std::move(model));
-  expect(!critical.model && critical.criticalFailure &&
-             !critical.diagnostics.empty() &&
-             critical.diagnostics.front().code ==
-                 "skin_lua_model_critical_dependency_invalid",
+  expect(critical.model && !critical.criticalFailure &&
+             critical.model->disabledOptionalObjects.empty(),
          message);
 }
 
-void validatorDiagnosticsNameTheRejectedObject() {
+void validatorDoesNotDiagnosePostDecodeObjectShapes() {
   auto optionalModel = floatModel(validFloatDigits());
   floatObject(optionalModel).integerDigits = -1;
   const auto optional = test_support::validateWithAuthoredBuiltins(
       std::move(optionalModel));
-  expect(optional.model && !optional.diagnostics.empty() &&
-             optional.diagnostics.front().message.find("'float'") !=
-                 std::string::npos,
-         "optional dependency diagnostics identify their authored object");
+  expect(optional.model && !optional.criticalFailure &&
+             optional.model->disabledOptionalObjects.empty(),
+         "post-decode Float shape remains admitted for object-local handling");
 
   auto criticalModel = floatModel(validFloatDigits());
   floatObject(criticalModel).integerDigits = -1;
   criticalModel.objects.front().critical = true;
   const auto critical = test_support::validateWithAuthoredBuiltins(
       std::move(criticalModel));
-  expect(!critical.model && !critical.diagnostics.empty() &&
-             critical.diagnostics.front().message.find("'float'") !=
-                 std::string::npos,
-         "critical dependency diagnostics identify their authored object");
+  expect(critical.model && !critical.criticalFailure &&
+             critical.model->disabledOptionalObjects.empty(),
+         "critical post-decode Float shape remains object-local");
 }
 
 void validatorRejectsUnequalInvalidAndExcessDigitSets() {
@@ -178,34 +169,34 @@ void validatorRejectsUnequalInvalidAndExcessDigitSets() {
     digits.glyphsPerAnimationFrame = 12;
     digits.positive = sprite(24);
     digits.negative = sprite(12);
-    expectDisabled(test_support::validateWithAuthoredBuiltins(
+    expectRetained(test_support::validateWithAuthoredBuiltins(
                        numberModel(std::move(digits))),
-                   "validator disables unequal signed animation-frame sets");
+                   "validator retains unequal signed animation-frame sets");
   }
   {
     SkinDigitSpriteSet digits;
     digits.glyphsPerAnimationFrame = 10;
     digits.positive = sprite(11);
-    expectDisabled(test_support::validateWithAuthoredBuiltins(
+    expectRetained(test_support::validateWithAuthoredBuiltins(
                        numberModel(std::move(digits))),
-                   "validator disables non-divisible normalized digit sets");
+                   "validator retains non-divisible normalized digit sets");
   }
   {
     SkinDigitSpriteSet digits;
     digits.glyphsPerAnimationFrame = 13;
     digits.positive = sprite(13);
-    expectDisabled(test_support::validateWithAuthoredBuiltins(
+    expectRetained(test_support::validateWithAuthoredBuiltins(
                        numberModel(std::move(digits))),
-                   "validator disables Float-only glyph sets on Number");
+                   "validator retains Float-only glyph sets on Number");
   }
   {
     SkinDigitSpriteSet digits;
     digits.glyphsPerAnimationFrame = 10;
     digits.positive =
         sprite(LuaSkinTableDecoderPolicy::maxMaterializedSpriteFrames + 1);
-    expectDisabled(test_support::validateWithAuthoredBuiltins(
+    expectRetained(test_support::validateWithAuthoredBuiltins(
                        numberModel(std::move(digits))),
-                   "validator disables digit sets above the frame budget");
+                   "validator retains digit sets above the frame budget");
   }
 }
 
@@ -231,99 +222,98 @@ void validatorAcceptsKindSpecificGlyphBoundaries() {
          "validator accepts normalized Float-13 digit sets");
 }
 
-void validatorRejectsMalformedNumberObjectFormats() {
-  const auto reject = [](auto mutate, std::string_view message) {
+void validatorRetainsMalformedNumberObjectFormats() {
+  const auto retain = [](auto mutate, std::string_view message) {
     auto model = numberModel(validNumberDigits());
     mutate(numberObject(model));
-    expectOptionalAndCriticalRejected(std::move(model), message);
+    expectOptionalAndCriticalRetained(std::move(model), message);
   };
 
-  reject([](auto &number) { number.digitCount = -1; },
-         "validator rejects negative Number digitCount for optional and "
-         "critical objects");
-  reject(
+  retain([](auto &number) { number.digitCount = -1; },
+         "validator retains negative Number digitCount for object-local handling");
+  retain(
       [](auto &number) {
         number.digitCount = NumericGlyphAtlasPolicy::maxNumberDigits + 1;
       },
-      "validator rejects Number digitCount above its normalized bound");
-  reject(
+      "validator retains Number digitCount above its normalized bound");
+  retain(
       [](auto &number) {
         number.zeroPadding = static_cast<SkinZeroPaddingMode>(3);
       },
-      "validator rejects invalid Number zero-padding enums");
-  reject(
+      "validator retains invalid Number zero-padding enums");
+  retain(
       [](auto &number) {
         number.perDigitOffsets.resize(
             NumericGlyphAtlasPolicy::maxNumberDigitOffsets + 1);
       },
-      "validator rejects excess Number per-digit offsets");
+      "validator retains excess Number per-digit offsets");
 
   constexpr std::array offsetMembers{&SkinDigitOffset::x, &SkinDigitOffset::y,
                                      &SkinDigitOffset::width,
                                      &SkinDigitOffset::height};
   for (const auto member : offsetMembers) {
-    reject(
+    retain(
         [member](auto &number) {
           number.perDigitOffsets.resize(1);
           number.perDigitOffsets.front().*member =
               std::numeric_limits<double>::quiet_NaN();
         },
-        "validator rejects every non-finite Number offset component");
+        "validator retains non-finite Number offset components");
   }
 }
 
-void validatorRejectsMalformedFloatObjectFormats() {
-  const auto reject = [](auto mutate, std::string_view message) {
+void validatorRetainsMalformedFloatObjectFormats() {
+  const auto retain = [](auto mutate, std::string_view message) {
     auto model = floatModel(validFloatDigits());
     mutate(floatObject(model));
-    expectOptionalAndCriticalRejected(std::move(model), message);
+    expectOptionalAndCriticalRetained(std::move(model), message);
   };
 
-  reject([](auto &floating) { floating.integerDigits = -1; },
-         "validator rejects negative Float integer digits");
-  reject([](auto &floating) { floating.integerDigits = 9; },
-         "validator rejects Float integer digits above eight");
-  reject([](auto &floating) { floating.fractionalDigits = -1; },
-         "validator rejects negative Float fractional digits");
-  reject([](auto &floating) { floating.fractionalDigits = 9; },
-         "validator rejects Float fractional digits above eight");
-  reject(
+  retain([](auto &floating) { floating.integerDigits = -1; },
+         "validator retains negative Float integer digits");
+  retain([](auto &floating) { floating.integerDigits = 9; },
+         "validator retains large Float integer digits");
+  retain([](auto &floating) { floating.fractionalDigits = -1; },
+         "validator retains negative Float fractional digits");
+  retain([](auto &floating) { floating.fractionalDigits = 9; },
+         "validator retains large Float fractional digits");
+  retain(
       [](auto &floating) {
         floating.integerDigits = 5;
         floating.fractionalDigits = 4;
       },
-      "validator rejects Float digit sums above eight");
-  reject(
+      "validator retains Float digit sums above eight");
+  retain(
       [](auto &floating) {
         floating.zeroPadding = static_cast<SkinZeroPaddingMode>(3);
       },
-      "validator rejects invalid Float zero-padding enums");
-  reject(
+      "validator retains invalid Float zero-padding enums");
+  retain(
       [](auto &floating) {
         floating.gain = std::numeric_limits<double>::infinity();
       },
-      "validator rejects non-finite Float gain");
-  reject(
+      "validator retains non-finite Float gain");
+  retain(
       [](auto &floating) {
         floating.perDigitOffsets.resize(
             NumericGlyphAtlasPolicy::maxFloatDigitOffsets + 1);
       },
-      "validator rejects excess Float per-digit offsets");
+      "validator retains excess Float per-digit offsets");
 
   constexpr std::array offsetMembers{&SkinDigitOffset::x, &SkinDigitOffset::y,
                                      &SkinDigitOffset::width,
                                      &SkinDigitOffset::height};
   for (const auto member : offsetMembers) {
-    reject(
+    retain(
         [member](auto &floating) {
           floating.perDigitOffsets.resize(1);
           floating.perDigitOffsets.front().*member =
               -std::numeric_limits<double>::infinity();
         },
-        "validator rejects every non-finite Float offset component");
+        "validator retains non-finite Float offset components");
   }
-  reject([](auto &floating) { floating.signVisible = true; },
-         "validator rejects visible Float signs without 13-glyph sets");
+  retain([](auto &floating) { floating.signVisible = true; },
+         "validator retains visible Float signs without 13-glyph sets");
 }
 
 void validatorRetainsGraphRangesThatUpstreamConstructs() {
@@ -350,10 +340,10 @@ void validatorAcceptsDescendingIntegerRateRanges() {
 int main() {
   validatorRejectsUnequalInvalidAndExcessDigitSets();
   validatorAcceptsKindSpecificGlyphBoundaries();
-  validatorRejectsMalformedNumberObjectFormats();
-  validatorRejectsMalformedFloatObjectFormats();
+  validatorRetainsMalformedNumberObjectFormats();
+  validatorRetainsMalformedFloatObjectFormats();
   validatorRetainsGraphRangesThatUpstreamConstructs();
   validatorAcceptsDescendingIntegerRateRanges();
-  validatorDiagnosticsNameTheRejectedObject();
+  validatorDoesNotDiagnosePostDecodeObjectShapes();
   return failures == 0 ? 0 : 1;
 }

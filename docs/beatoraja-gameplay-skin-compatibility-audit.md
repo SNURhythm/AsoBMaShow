@@ -18,16 +18,21 @@
      returns false. `SkinObject.validate()` checks only that a destination
      exists. `SkinGraph.validate()` and `SkinSlider.validate()` add only
      `SkinSource.validate()`.
-   - Local: `SkinModelValidator::validate` disables optional objects or fails
-     critical ones when `validPayload` or `validDestination` cannot resolve a
-     resource, typed property, writer, timer, event, or condition.
+   - Local (before this patch): `SkinModelValidator::validate` disabled
+     optional objects or failed critical ones when its post-decode
+     `validPayload` / `validDestination` checks found an empty sprite,
+     unsupported numeric shape, missing resource, typed property, writer,
+     timer, event, condition, nested Judge child, or Note geometry.
    - User-visible consequence: `graph_frame_customize` is rejected as
      `skin_lua_model_optional_object_disabled`, even though upstream would
      retain a `SkinGraph` with a null rate property and render it at zero.
-   - Patch status: patched. Resource/property/writer/timer/event/condition
-     catalog lookups no longer disable an otherwise decoded object. The
-     renderer/resource layer remains responsible for omitting a
-     non-renderable draw at the frame where it cannot be drawn.
+   - Patch status: patched. The complete post-decode payload/destination
+     admission pass has been removed. This specifically prevents
+     `graph_frame_customize` from producing
+     `skin_lua_model_optional_object_disabled`: an empty/missing Graph source
+     stays cataloged, then Beatoraja-equivalent prepare/render handling omits
+     only that draw. Resource/property/writer/timer/event/condition catalog
+     lookups and Note/Judge cross-checks likewise cannot invalidate the skin.
 
 2. **Local binding-catalog membership is treated as a validity condition.**
    - Upstream: `JsonSkinObjectLoader` passes `FloatPropertyFactory`,
@@ -149,10 +154,42 @@
       object whenever their `SkinSource` validates.
     - Local: `Skin2DRenderer::resolveRate` rejected zero and overflow spans
       with `skin.renderer.rate.range`, even after the model admission change.
-    - Patch status: patched. The renderer now performs the same wrapping
-      32-bit subtraction. If the resulting value cannot produce a bounded
-      textured quad, only that draw is omitted; the skin/session remains
-      active.
+   - Patch status: patched. The renderer now performs the same wrapping
+     32-bit subtraction. If the resulting value cannot produce a bounded
+     textured quad, only that draw is omitted; the skin/session remains
+     active.
+
+15. **A decoded object was revalidated as a whole, unlike Beatoraja's
+    object-local lifecycle.**
+    - Upstream: `Skin.prepare` removes each failed `SkinObject.validate()`
+      object from the live list. For `SkinGraph`, `SkinSlider`, and
+      `SkinImage`, source validity is determined by their own source class;
+      `SkinGraph.prepare()` additionally sets only its own `draw` flag false
+      when `source.getImage(...)` returns null. `SkinNumber`, `SkinFloat`,
+      `SkinTextFont`, and play-field objects follow their own prepare/validate
+      paths; there is no skin-wide critical/optional dependency classifier.
+    - Local (before this patch): one generic validator imposed a synthetic
+      “critical object” distinction over Graph, slider, number, float, note,
+      gauge, cover, and Judge payload shapes. It could escalate a single
+      unrenderable object into a fullscreen skin error.
+    - Patch status: patched. The generic payload validator and its synthetic
+      optional-object suppression list are gone. Decode-time Lua type safety
+     and fixed resource budgets remain separate from model admission; each
+     object now reaches its frame-local renderer/preparation path.
+
+16. **Slider angle was narrowed to an unsigned byte and then treated as a
+    submission error.**
+    - Upstream: `JsonSkinObjectLoader` passes `JsonSkin.Slider.angle` directly
+      to `SkinSlider`; `SkinSlider` stores it as an `int`. Its draw expression
+      moves only for angles `0`, `1`, `2`, and `3`; every other integer draws
+      at the authored destination. Its mouse switch likewise performs no
+      write for non-cardinal angles.
+    - Local (before this patch): `LuaSkinTableDecoder` rejected values outside
+      `0..255`, narrowed accepted values to `uint8_t`, and the renderer made
+      values above `3` fail a gameplay frame.
+    - Patch status: patched. Slider angle remains a signed authored integer.
+      Non-cardinal values submit a static knob and expose no slider input
+      region, matching Beatoraja's draw and mouse-switch behavior.
 
 ## Patch order
 

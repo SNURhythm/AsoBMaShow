@@ -2567,7 +2567,8 @@ SkinInteractionLayout::hitTestUiControl(UiLogicalPoint point) const noexcept {
           using T = std::decay_t<decltype(candidate)>;
           if constexpr (std::is_same_v<T, SkinSliderInteractionGeometry>) {
             if (!candidate.writer || candidate.range <= 0.0 ||
-                !std::isfinite(candidate.range) || candidate.direction > 3 ||
+                !std::isfinite(candidate.range) || candidate.direction < 0 ||
+                candidate.direction > 3 ||
                 !contains(authored->x, authored->y,
                           candidate.authoredHitRegion)) {
               return std::nullopt;
@@ -2633,7 +2634,8 @@ SkinInteractionLayout::uiHitRegions() const {
           using T = std::decay_t<decltype(candidate)>;
           if constexpr (std::is_same_v<T, SkinSliderInteractionGeometry>) {
             if (!candidate.writer || candidate.range <= 0.0 ||
-                !std::isfinite(candidate.range) || candidate.direction > 3) {
+                !std::isfinite(candidate.range) || candidate.direction < 0 ||
+                candidate.direction > 3) {
               return std::nullopt;
             }
             return std::pair{PresentationUiHit{
@@ -3539,10 +3541,10 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
 
         QuadLoweringResult lowered;
         if (slider) {
-          if (!std::isfinite(slider->range) || slider->direction > 3) {
+          if (!std::isfinite(slider->range)) {
             lowered.failure = diagnostic(
                 "skin.renderer.slider.invalid",
-                "Slider range or direction is outside its safe domain.");
+                "Slider range is outside its safe domain.");
           } else {
             auto geometry = *evaluated.geometry;
             const float displacement =

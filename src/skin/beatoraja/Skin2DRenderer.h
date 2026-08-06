@@ -202,7 +202,7 @@ struct SkinSliderInteractionGeometry {
   AuthoredRect authoredHitRegion;
   AuthoredPoint valueZero;
   AuthoredPoint valueOne;
-  std::uint8_t direction = 0;
+  int direction = 0;
   double range = 0.0;
   bool changeable = false;
   std::optional<SkinFloatWriterId> writer;

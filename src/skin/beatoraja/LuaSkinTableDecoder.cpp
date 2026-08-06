@@ -2421,10 +2421,6 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
     return true;
   }
   if (slider != request.sliders.end()) {
-    if (slider->second.direction < 0 || slider->second.direction > 255) {
-      return fail(request.decoding, "skin_lua_model_invalid",
-                  "Lua skin slider direction is outside byte range");
-    }
     if (!consumeMaterializedSpriteFrames(
             request, slider->second.image.sprite.frames.size())) {
       return false;
@@ -2446,7 +2442,7 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
           slider->second.implicitValue.value_or(SkinFloatPropertyId{});
       object.writer = slider->second.writer;
     }
-    object.direction = static_cast<std::uint8_t>(slider->second.direction);
+    object.direction = slider->second.direction;
     object.range = static_cast<double>(slider->second.range);
     object.changeable = slider->second.changeable;
     output = std::move(object);

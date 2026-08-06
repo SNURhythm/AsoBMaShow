@@ -503,6 +503,27 @@ return {type=0,w=1280,h=720,
   }
 }
 
+void testSliderRetainsAnyAuthoredAngle() {
+  const auto decoded = decodeInline(R"lua(
+return {type=0,w=1280,h=720,
+ source={{id='atlas',path='atlas.png'}},
+ slider={{id='unbounded-angle',src='atlas',w=8,h=8,angle=-44,range=10,
+          type=601,changeable=true}},
+ destination={{id='unbounded-angle',dst={{}}}}}
+)lua");
+  expect(decoded.model.has_value(),
+         "Slider with a non-cardinal authored angle decodes like SkinSlider");
+  if (!decoded.model) {
+    return;
+  }
+  const auto *definition = objectNamed(*decoded.model, "unbounded-angle");
+  const auto *slider = definition
+                           ? std::get_if<SkinSliderObject>(&definition->payload)
+                           : nullptr;
+  expect(slider && slider->direction == -44,
+         "Slider retains the raw int angle accepted by Beatoraja");
+}
+
 void testLiveGraphPrecedenceAndAuthoredOrder() {
   const auto model = decodedValidModel();
   constexpr std::array<std::string_view, 7> expectedOrder{
@@ -695,6 +716,12 @@ void testValidatorPreservesUpstreamOptionalDependencies() {
       },
       "an unavailable Graph source does not invalidate the whole skin");
   preservesObject(
+      "graph-explicit",
+      [](auto &, auto &definition) {
+        std::get<SkinGraphObject>(definition.payload).fill.frames.clear();
+      },
+      "an empty Graph source remains admitted for prepare-time omission");
+  preservesObject(
       "text-explicit",
       [](auto &, auto &definition) {
         std::get<SkinTextObject>(definition.payload).writer =
@@ -776,6 +803,7 @@ int main() {
   testTextRefWriterFallbackUsesOnlySupportedIntegerSelectors();
   testStaticTextWithZeroRefKeepsItsLiteral();
   testSliderBindingPrecedenceIgnoresInactiveEvents();
+  testSliderRetainsAnyAuthoredAngle();
   testLiveGraphPrecedenceAndAuthoredOrder();
   testDistributionGraphIsDiagnosedAndRetainedAsBlank();
   testUnsupportedGraphWidgetsRetainDestinationOrder();

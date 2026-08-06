@@ -1617,6 +1617,48 @@ void testSliderDirectionsMoveBeforeSharedProjection() {
          "slider direction three moves left in authored space");
 }
 
+void testNonCardinalSliderDirectionDrawsWithoutMotion() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  resources.addImage(30, {.x = 0, .y = 0, .w = 10, .h = 10});
+  FakeState state;
+  state.floatResult = {.value = 0.25, .supported = true};
+  ValidatedBeatorajaSkinModel model;
+  model.model.floatProperties.push_back(
+      {.id = SkinFloatPropertyId{1},
+       .domain = SkinFloatPropertyDomain::Rate,
+       .source = SkinBuiltinPropertySelector{.value = 91},
+       .authoredOrdinal = 1});
+  SkinSliderObject slider;
+  slider.knob = glyphSprite(30, {{.x = 0, .y = 0, .w = 10, .h = 10}});
+  slider.value = SkinFloatPropertyId{1};
+  slider.direction = -44;
+  slider.range = 40.0;
+  model.model.objects.push_back({.id = 1,
+                                 .authoredName = "non-cardinal-slider",
+                                 .payload = std::move(slider),
+                                 .authoredOrdinal = 1,
+                                 .critical = true});
+  auto presented = destination(1, 90, 100.0);
+  presented.presentation.frames.front().y = 20.0;
+  presented.presentation.frames.front().width = 40.0;
+  presented.presentation.frames.front().height = 30.0;
+  model.model.destinations.push_back(std::move(presented));
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  expect(result.submitReady && result.submitReady->commands.size() == 1 &&
+             result.diagnostics.empty(),
+         "a non-cardinal Slider angle remains a submitted object");
+  if (!result.submitReady || result.submitReady->commands.size() != 1) {
+    return;
+  }
+  const auto &quad = std::get<SkinTexturedQuadCommand>(
+      result.submitReady->commands.front().payload);
+  expect(quad.vertices[0].x == 100.0F && quad.vertices[0].y == 700.0F,
+         "a non-cardinal Slider angle draws with Beatoraja's zero displacement");
+}
+
 void testGraphCropsLeftOrBottomWithJavaTruncation() {
   RuntimeHarness runtime;
   Skin2DRenderer renderer;
@@ -4089,6 +4131,7 @@ int main() {
   testFalseDestinationSkipsSliderAndGraphSourceAndValueCallbacks();
   testSliderSourceTimerPrecedesValueAndZeroCycleSkipsTimer();
   testSliderDirectionsMoveBeforeSharedProjection();
+  testNonCardinalSliderDirectionDrawsWithoutMotion();
   testGraphCropsLeftOrBottomWithJavaTruncation();
   testExplicitSliderAndGraphRatesRemainUnclamped();
   testNegativeGraphsUseAbsoluteIntrinsicSizeForStretching();
