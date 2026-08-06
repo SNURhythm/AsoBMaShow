@@ -93,17 +93,6 @@ expandSkinGaugeNodes(const SkinGaugeNodeExpansionInput &input) {
     return failure(SkinGaugeNodeExpansionError::InvalidAnimationParameters);
   }
 
-  // JsonSkinObjectLoader walks the image list and would use its first match.
-  // A source-neutral model must instead fail closed rather than preserve an
-  // order-dependent ambiguity.
-  for (std::size_t image = 0; image < input.images.size(); ++image) {
-    for (std::size_t prior = 0; prior < image; ++prior) {
-      if (input.images[prior].id == input.images[image].id) {
-        return failure(SkinGaugeNodeExpansionError::AmbiguousNodeImage);
-      }
-    }
-  }
-
   std::array<const SkinSpriteFrames *, SkinGaugeNodeExpansionPolicy::roleCount>
       resolved{};
   std::size_t animationFrameCount = 0;

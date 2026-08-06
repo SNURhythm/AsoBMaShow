@@ -135,6 +135,7 @@ bool Skin2DRenderer::submit(
   std::vector<BgaDrawTarget> bgaTargets;
   std::vector<SubmissionStep> steps;
   bool hasBgaMarker = false;
+  bool bgaTargetProjectionFailed = false;
   try {
     quadSegments.reserve(buffer.commands.size() / 2U + 1U);
     bgaTargets.reserve(buffer.commands.size() * 2U);
@@ -173,22 +174,22 @@ bool Skin2DRenderer::submit(
       switch (bgaFrame.composition) {
       case GameplayBgaComposition::Blank:
         if (!appendBgaTarget(*bga, GameplayBgaRole::Base)) {
-          return false;
+          bgaTargetProjectionFailed = true;
         }
         break;
       case GameplayBgaComposition::MissOnly:
         if (bgaFrame.miss &&
             !appendBgaTarget(*bga, GameplayBgaRole::Miss)) {
-          return false;
+          bgaTargetProjectionFailed = true;
         }
         break;
       case GameplayBgaComposition::BaseThenLayer:
         if (!appendBgaTarget(*bga, GameplayBgaRole::Base)) {
-          return false;
+          bgaTargetProjectionFailed = true;
         }
         if (bgaFrame.layer &&
             !appendBgaTarget(*bga, GameplayBgaRole::Layer)) {
-          return false;
+          bgaTargetProjectionFailed = true;
         }
         break;
       }
@@ -197,6 +198,15 @@ bool Skin2DRenderer::submit(
     appendQuadSegment(buffer.commands.size());
   } catch (...) {
     return false;
+  }
+
+  if (bgaTargetProjectionFailed) {
+    steps.erase(std::remove_if(steps.begin(), steps.end(), [](const auto &step) {
+                  return step.kind == SubmissionStepKind::BgaTarget;
+                }),
+                steps.end());
+    bgaTargets.clear();
+    hasBgaMarker = false;
   }
 
   renderer.begin(context, resources);
@@ -213,10 +223,21 @@ bool Skin2DRenderer::submit(
       bgaReady = false;
     }
   }
+  if (!bgaReady) {
+    // A BGA source can be absent or unsupported independently of a skin.
+    // JsonPlaySkinObjectLoader leaves the rest of the skin live in that case;
+    // drop only its BGA submission steps and release the prepared frame below.
+    steps.erase(std::remove_if(steps.begin(), steps.end(), [](const auto &step) {
+                  return step.kind == SubmissionStepKind::BgaTarget;
+                }),
+                steps.end());
+    bgaTargets.clear();
+    hasBgaMarker = false;
+  }
   rendering::SkinQuadSubmissionPlan quadPlan;
   const bool quadsReady =
       renderer.prepare(quadSegments, quadPlan, bgaRequirements);
-  if (!quadsReady || !bgaReady) {
+  if (!quadsReady) {
     renderer.discardPrepared(quadPlan);
     return false;
   }
@@ -236,6 +257,8 @@ bool Skin2DRenderer::submit(
   // operations are contractually nonthrowing, and this overload's noexcept
   // boundary prevents any contract violation from unwinding into fullscreen
   // fallback after an authored draw has already been emitted.
+  // A failed BGA preflight owns no committed target plan, but its prepared
+  // frame can still hold a media lease and must be released.
   bgaSubmitter.finalizePrepared(bgaFrame);
   return true;
 }

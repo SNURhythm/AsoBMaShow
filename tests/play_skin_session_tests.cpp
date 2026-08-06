@@ -1574,27 +1574,21 @@ void testCriticalEvaluationAndPreflightFailuresPublishNoFrameState() {
              "preflight failure frame evaluates before submission");
       const auto exactBga = bgaFrame(72);
       const auto result = fixture.session().render(context, exactBga, bga);
-      expect(result.outcome == PresentationFrameOutcome::CriticalFailure &&
-                 result.frameSerial == 2 && result.failure &&
+      expect(result.outcome == PresentationFrameOutcome::Ready &&
+                 result.frameSerial == 2 && !result.failure &&
                  result.preparedBga &&
                  sameBgaFrame(*result.preparedBga, exactBga) &&
-                 result.submittedMode == PresentationMode::BuiltIn &&
+                 result.submittedMode == PresentationMode::Skin &&
                  result.bgaCompositeMode ==
-                     GameplayBgaCompositeMode::FullscreenBuiltIn &&
+                     GameplayBgaCompositeMode::EmbeddedSkin &&
                  bga.preflightCalls == 2 && bga.commitCalls == 1 &&
-                 bga.submitCalls == 1 && bga.finalizeCalls == 1 &&
+                 bga.submitCalls == 1 && bga.finalizeCalls == 2 &&
                  bga.fullscreenCalls == 0 &&
-                 fixture.quadBackend().submitCalls == 1 &&
-                 fixture.session().touchLayout().laneRegions.empty() &&
-                 fixture.session().touchHitRegions().empty() &&
-                 fixture.session().updatePresentationTouch(
-                     {.pointerId = 1,
-                      .uiPoint = oldPoint,
-                      .eventMicros = 2,
-                      .hit = oldHit}) == PresentationTouchResult{} &&
+                 fixture.quadBackend().submitCalls == 2 &&
+                 !fixture.session().touchLayout().laneRegions.empty() &&
                  fixture.configurationWrites().drain().empty(),
-             "BGA preflight failure performs no additional commit, draw, or "
-             "finalize and clears prior layout, capture, and mutations");
+             "BGA preflight failure blanks only BGA while the authored skin "
+             "continues to draw and releases its prepared frame");
     }
   }
 }

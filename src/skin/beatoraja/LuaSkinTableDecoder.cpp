@@ -3746,18 +3746,16 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
 }
 
 template <typename Raw, typename Name>
-bool moveUniqueDefinitions(GameplayDecodeRequest &request,
-                           std::vector<Raw> &definitions,
-                           std::map<std::string, Raw, std::less<>> &output,
-                           Name name, std::string_view kind) {
+void moveFirstDefinitions(std::vector<Raw> &definitions,
+                          std::map<std::string, Raw, std::less<>> &output,
+                          Name name) {
   for (auto &definition : definitions) {
     const std::string id(name(definition));
-    if (!output.emplace(id, std::move(definition)).second) {
-      return fail(request.decoding, "skin_lua_model_invalid",
-                  "Lua skin " + std::string(kind) + " IDs must be unique");
-    }
+    // JsonSkinObjectLoader resolves each authored category by a forward scan
+    // and returns the first matching definition.  Duplicate definitions are
+    // therefore legal; later entries in the same category are inert.
+    output.try_emplace(id, std::move(definition));
   }
-  return true;
 }
 
 void transferBindings(BeatorajaSkinModel &model,
@@ -3787,99 +3785,81 @@ bool materializeGameplay(GameplayDecodeRequest &request,
     return false;
   }
 
-  if (!moveUniqueDefinitions(
-          request, request.rawImages, request.images,
+  moveFirstDefinitions(
+          request.rawImages, request.images,
           [](const RawSkinImage &image) -> const std::string & {
             return image.id;
-          },
-          "Image") ||
-      !moveUniqueDefinitions(
-          request, request.rawImageSets, request.imageSets,
+          });
+  moveFirstDefinitions(
+          request.rawImageSets, request.imageSets,
           [](const RawSkinImageSet &image) -> const std::string & {
             return image.id;
-          },
-          "ImageSet") ||
-      !moveUniqueDefinitions(
-          request, request.rawNumbers, request.numbers,
+          });
+  moveFirstDefinitions(
+          request.rawNumbers, request.numbers,
           [](const RawSkinNumber &number) -> const std::string & {
             return number.image.id;
-          },
-          "Value") ||
-      !moveUniqueDefinitions(
-          request, request.rawFloats, request.floats,
+          });
+  moveFirstDefinitions(
+          request.rawFloats, request.floats,
           [](const RawSkinFloat &number) -> const std::string & {
             return number.image.id;
-          },
-          "FloatValue") ||
-      !moveUniqueDefinitions(
-          request, request.rawSliders, request.sliders,
+          });
+  moveFirstDefinitions(
+          request.rawSliders, request.sliders,
           [](const RawSkinSlider &slider) -> const std::string & {
             return slider.image.id;
-          },
-          "Slider") ||
-      !moveUniqueDefinitions(
-          request, request.rawTexts, request.texts,
+          });
+  moveFirstDefinitions(
+          request.rawTexts, request.texts,
           [](const RawSkinText &text) -> const std::string & {
             return text.id;
-          },
-          "Text") ||
-      !moveUniqueDefinitions(
-          request, request.rawGraphs, request.graphs,
+          });
+  moveFirstDefinitions(
+          request.rawGraphs, request.graphs,
           [](const RawSkinGraph &graph) -> const std::string & {
             return graph.image.id;
-          },
-          "Graph") ||
-      !moveUniqueDefinitions(
-          request, request.rawBpmGraphs, request.bpmGraphs,
+          });
+  moveFirstDefinitions(
+          request.rawBpmGraphs, request.bpmGraphs,
           [](const RawSkinIdentity &identity) -> const std::string & {
             return identity.id;
-          },
-          "BPMGraph") ||
-      !moveUniqueDefinitions(
-          request, request.rawHitErrorVisualizers, request.hitErrorVisualizers,
+          });
+  moveFirstDefinitions(
+          request.rawHitErrorVisualizers, request.hitErrorVisualizers,
           [](const RawSkinIdentity &identity) -> const std::string & {
             return identity.id;
-          },
-          "HitErrorVisualizer") ||
-      !moveUniqueDefinitions(
-          request, request.rawJudgeGraphs, request.judgeGraphs,
+          });
+  moveFirstDefinitions(
+          request.rawJudgeGraphs, request.judgeGraphs,
           [](const RawSkinIdentity &identity) -> const std::string & {
             return identity.id;
-          },
-          "JudgeGraph") ||
-      !moveUniqueDefinitions(
-          request, request.rawTimingVisualizers, request.timingVisualizers,
+          });
+  moveFirstDefinitions(
+          request.rawTimingVisualizers, request.timingVisualizers,
           [](const RawSkinIdentity &identity) -> const std::string & {
             return identity.id;
-          },
-          "TimingVisualizer") ||
-      !moveUniqueDefinitions(
-          request, request.rawPmCharas, request.pmCharas,
+          });
+  moveFirstDefinitions(
+          request.rawPmCharas, request.pmCharas,
           [](const RawSkinIdentity &identity) -> const std::string & {
             return identity.id;
-          },
-          "PMchara") ||
-      !moveUniqueDefinitions(
-          request, request.rawHiddenCovers, request.hiddenCovers,
+          });
+  moveFirstDefinitions(
+          request.rawHiddenCovers, request.hiddenCovers,
           [](const RawSkinCover &cover) -> const std::string & {
             return cover.image.id;
-          },
-          "HiddenCover") ||
-      !moveUniqueDefinitions(
-          request, request.rawLiftCovers, request.liftCovers,
+          });
+  moveFirstDefinitions(
+          request.rawLiftCovers, request.liftCovers,
           [](const RawSkinCover &cover) -> const std::string & {
             return cover.image.id;
-          },
-          "LiftCover") ||
-      !moveUniqueDefinitions(
-          request, request.rawJudges, request.judges,
+          });
+  moveFirstDefinitions(
+          request.rawJudges, request.judges,
           [](const RawSkinJudge &judge) -> const std::string & {
             return judge.id;
-          },
-          "Judge")) {
-    transferDecodeDiagnostics(request);
-    return false;
-  }
+          });
 
   if (request.note && !buildNoteObject(request, *request.note)) {
     transferDecodeDiagnostics(request);

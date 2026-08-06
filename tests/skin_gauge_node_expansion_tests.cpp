@@ -250,13 +250,16 @@ void testInvalidInputsFailClosed() {
 
   auto duplicateDefinition = inputFor(4);
   duplicateDefinition.images.push_back(duplicateDefinition.images.front());
+  duplicateDefinition.images.back().sprite.resource = SkinResourceId{999};
   const auto duplicateDefinitionResult =
       expandSkinGaugeNodes(duplicateDefinition);
-  expect(!duplicateDefinitionResult.gauge.has_value(),
-         "duplicate image definitions have no gauge");
-  expect(duplicateDefinitionResult.error ==
-             SkinGaugeNodeExpansionError::AmbiguousNodeImage,
-         "duplicate image definitions never silently select the first match");
+  expect(duplicateDefinitionResult.gauge.has_value(),
+         "duplicate image definitions retain the first pinned match");
+  if (duplicateDefinitionResult.gauge) {
+    expect(duplicateDefinitionResult.gauge->orderedNodes.front().resource ==
+               duplicateDefinition.images.front().sprite.resource,
+           "duplicate gauge images resolve to the first authored definition");
+  }
 
   auto repeatedNodeReference = inputFor(4);
   repeatedNodeReference.nodes.assign(4, repeatedNodeReference.nodes.front());

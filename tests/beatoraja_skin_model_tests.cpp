@@ -1238,6 +1238,30 @@ return {
          "validated source lookup retains the final duplicate declaration");
 }
 
+void testDuplicateImageDeclarationsUsePinnedFirstDefinition() {
+  const auto decoded = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  source={{id="first",path="first.png"},{id="second",path="second.png"}},
+  image={
+    {id="visible",src="first",x=0,y=0,w=1,h=1},
+    {id="visible",src="second",x=0,y=0,w=1,h=1}
+  },
+  destination={{id="visible",dst={{x=0,y=0,w=1,h=1}}}}
+}
+)lua");
+  expect(decoded.model.has_value(),
+         "duplicate image declarations decode like JsonSkinObjectLoader");
+  if (!decoded.model || decoded.model->objects.empty()) {
+    return;
+  }
+  const auto *image = std::get_if<SkinImageObject>(
+      &decoded.model->objects.front().payload);
+  expect(image && image->orderedStates.size() == 1 &&
+             image->orderedStates.front().resource == SkinResourceId{1},
+         "duplicate image declarations retain the first authored definition");
+}
+
 void testLiveDestinationMouseRectAndCenterNormalization() {
   const auto decoded = decodeInlineModel(R"lua(
 return {
@@ -1422,6 +1446,7 @@ int main() {
   testLiveGenericObjectPrecedesSameIdGameplaySpecials();
   testUnresolvedDestinationMatchesPinnedLoaderIgnoreBehavior();
   testDuplicateSourceDeclarationsUsePinnedLastDefinition();
+  testDuplicateImageDeclarationsUsePinnedFirstDefinition();
   testLiveDestinationMouseRectAndCenterNormalization();
   testGameplayTypeZeroIsRequiredAfterHeaderDecode();
   testOptionalVisualsAndBuiltinImagesStayLiveAcrossRepeatedDestinations();
