@@ -1292,6 +1292,16 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
     return {.value = static_cast<std::int64_t>(snapshot->score) -
                     snapshot->authority.bestScore,
             .supported = true};
+  case 108:
+  case 128:
+    // IntegerPropertyFactory's two diff_exscore variants both delegate to
+    // ScoreDataProperty.createDiffRivalScoreProperty(): current EX score
+    // minus the target's score at the same played-note count.  This is
+    // distinct from selector 153, which compares the current score with the
+    // target's final score. LITONE12 uses 108 for its Ghost target display.
+    return {.value = static_cast<std::int64_t>(snapshot->score) -
+                    snapshot->authority.pacemakerStatus.targetScore,
+            .supported = true};
   case 121:
   case 151:
     return {.value = targetScore(*snapshot), .supported = true};

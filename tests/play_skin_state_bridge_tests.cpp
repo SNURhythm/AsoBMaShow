@@ -1052,6 +1052,10 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   }
   for (const auto [id, expected] : std::array{
            std::pair{14, 450LL}, std::pair{71, 456LL},
+           // LITONE12's Ghost target display uses NUMBER_DIFF_EXSCORE.
+           // IntegerPropertyFactory maps both 108 and 128 to the live score
+           // delta against ScoreDataProperty's projected pacemaker target.
+           std::pair{108, 216LL}, std::pair{128, 216LL},
            std::pair{101, 456LL}, std::pair{107, 62LL},
            std::pair{110, 10LL}, std::pair{111, 9LL},
            std::pair{112, 8LL}, std::pair{113, 7LL},
