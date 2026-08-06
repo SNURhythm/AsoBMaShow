@@ -202,7 +202,9 @@ void testActionDrivingChangesInvalidatePresentation() {
       "feature availability changes invalidate presentation");
   requirePresentationChange(
       base,
-      [](auto &value) { value.selectedGameplayEntries.emplace(1, entryId("-5k")); },
+      [](auto &value) {
+        value.selectedGameplayEntries.emplace(1, entryId("-5k"));
+      },
       "trait-specific selection changes invalidate presentation");
 }
 
@@ -234,6 +236,14 @@ void testPresentationEncodingHasNoDelimiterOrOptionalAmbiguity() {
   require(skin::gameplaySkinSettingsPresentationKey(left) !=
               skin::gameplaySkinSettingsPresentationKey(right),
           "optional history fields encode presence and identity");
+}
+
+void testCachedControllerPresentationKeyAvoidsReencodingStaticCatalogRows() {
+  auto snapshot = snapshotWithEntry();
+  snapshot.cachedPresentationKey = "catalog:12;profile:9;state:ready";
+  require(skin::gameplaySkinSettingsPresentationKey(snapshot) ==
+              snapshot.cachedPresentationKey,
+          "controller-projected settings reuse their cached catalog key");
 }
 
 void testViewportModeChangesPreserveEveryOtherField() {
@@ -269,6 +279,7 @@ int main() {
   testMetadataChangesInvalidateAnUnchangedDigest();
   testActionDrivingChangesInvalidatePresentation();
   testPresentationEncodingHasNoDelimiterOrOptionalAmbiguity();
+  testCachedControllerPresentationKeyAvoidsReencodingStaticCatalogRows();
   testViewportModeChangesPreserveEveryOtherField();
   return 0;
 }

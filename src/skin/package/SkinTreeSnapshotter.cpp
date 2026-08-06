@@ -991,7 +991,8 @@ std::optional<std::string> digestAndMaybeCopy(
     SkinProgressPhase phase, std::stop_token stop,
     const SkinProgressCallback &callback,
     std::vector<SkinDiagnostic> &diagnostics,
-    const std::shared_ptr<const SkinSnapshotFailureInjector> &failures = {}) {
+    const std::shared_ptr<const SkinSnapshotFailureInjector> &failures = {},
+    bool requireStable = true) {
   file_checksum::Sha256 hash;
   hashText(hash, "ASOBMSKIN-TREE-V1");
   const std::array<std::byte, 1> terminator{std::byte{0}};
@@ -1027,7 +1028,8 @@ std::optional<std::string> digestAndMaybeCopy(
 
 #if defined(_WIN32)
     auto input = openInventoryFileNoFollow(inventory, entry);
-    if (!input || !metadataMatchesOpenFile(input->leaf(), entry.metadata)) {
+    if (!input || (requireStable &&
+                   !metadataMatchesOpenFile(input->leaf(), entry.metadata))) {
       diagnostics.push_back(diagnostic("skin_snapshot_source_changed",
                                        "skin source changed before copying",
                                        entry.normalizedPath));
@@ -1085,8 +1087,10 @@ std::optional<std::string> digestAndMaybeCopy(
       }
       readTotal += read;
     }
-    const bool stable = readTotal == entry.metadata.size &&
-                        metadataMatchesOpenFile(input->leaf(), entry.metadata);
+    const bool stable =
+        !requireStable ||
+        (readTotal == entry.metadata.size &&
+         metadataMatchesOpenFile(input->leaf(), entry.metadata));
     if (output &&
         (injectedFailure(failures, SkinSnapshotIoOperation::CopiedFileFsync,
                          entry.sourcePath) ||
@@ -1105,7 +1109,8 @@ std::optional<std::string> digestAndMaybeCopy(
 #else
     const int input =
         openInventoryFileNoFollow(inventory, entry.normalizedPath);
-    if (input < 0 || !metadataMatchesOpenFile(input, entry.metadata)) {
+    if (input < 0 ||
+        (requireStable && !metadataMatchesOpenFile(input, entry.metadata))) {
       if (input >= 0) {
         ::close(input);
       }
@@ -1192,8 +1197,9 @@ std::optional<std::string> digestAndMaybeCopy(
       }
       readTotal += static_cast<std::uint64_t>(count);
     }
-    const bool stable = readTotal == entry.metadata.size &&
-                        metadataMatchesOpenFile(input, entry.metadata);
+    const bool stable =
+        !requireStable || (readTotal == entry.metadata.size &&
+                           metadataMatchesOpenFile(input, entry.metadata));
     if (output >= 0) {
       if (injectedFailure(failures, SkinSnapshotIoOperation::CopiedFileFsync,
                           entry.sourcePath) ||
@@ -1291,19 +1297,21 @@ bool SkinRevisionWeakPin::hasLiveLease() const noexcept {
 struct PreparedSkinRevision::State {
   State(SkinRevision revisionValue, fs::path stagingValue,
         fs::path publishedValue,
-        std::shared_ptr<const SkinSnapshotFailureInjector> failuresValue)
+        std::shared_ptr<const SkinSnapshotFailureInjector> failuresValue,
+        bool liveSourceValue = false)
       : revision(std::move(revisionValue)),
         stagingRoot(std::move(stagingValue)),
         publishedRoot(std::move(publishedValue)),
-        failures(std::move(failuresValue)) {}
+        failures(std::move(failuresValue)), liveSource(liveSourceValue) {}
 
   SkinRevision revision;
   fs::path stagingRoot;
   fs::path publishedRoot;
   std::shared_ptr<const SkinSnapshotFailureInjector> failures;
+  bool liveSource = false;
 
   ~State() {
-    if (stagingRoot.empty()) {
+    if (liveSource || stagingRoot.empty()) {
       return;
     }
     std::error_code ignored;
@@ -1352,6 +1360,16 @@ SkinRevisionWeakPin SkinRevisionLease::weakPin() const noexcept {
   return SkinRevisionWeakPin(pin_);
 }
 
+std::optional<SkinRevisionLease>
+SkinRevisionLease::fromLiveSource(SkinRevision revision, fs::path root) {
+  if (root.empty() || !root.is_absolute()) {
+    return std::nullopt;
+  }
+  auto pin = std::make_shared<SkinRevisionPin>(SkinRevisionPin{
+      .revision = std::move(revision), .root = std::move(root)});
+  return SkinRevisionLease(std::move(pin));
+}
+
 PreparedSkinRevision::PreparedSkinRevision(
     SkinRevision revision, fs::path stagingRoot, fs::path publishedRoot,
     std::shared_ptr<const SkinSnapshotFailureInjector> failures)
@@ -1375,6 +1393,14 @@ const fs::path &PreparedSkinRevision::stagingRoot() const noexcept {
   return state_->stagingRoot;
 }
 
+void PreparedSkinRevision::relocateLiveSourceTo(fs::path destination) noexcept {
+  if (!state_ || !state_->liveSource || destination.empty()) {
+    return;
+  }
+  state_->stagingRoot = std::move(destination);
+  state_->publishedRoot = state_->stagingRoot;
+}
+
 SkinRevisionReadView PreparedSkinRevision::readView() const noexcept {
   return SkinRevisionReadView(&state_->revision, &state_->stagingRoot);
 }
@@ -1385,6 +1411,14 @@ PreparedSkinRevision::publish(std::string &error) && {
   if (!state_ || state_->stagingRoot.empty()) {
     error = "prepared skin revision is no longer publishable";
     return std::nullopt;
+  }
+  if (state_->liveSource) {
+    auto lease = SkinRevisionLease::fromLiveSource(state_->revision,
+                                                   state_->stagingRoot);
+    if (!lease) {
+      error = "live skin package source is unavailable";
+    }
+    return lease;
   }
   if (!verifyPrivateRevisionRoot(state_->stagingRoot, state_->revision, true,
                                  error)) {
@@ -1504,6 +1538,58 @@ SnapshotTreeResult SkinTreeSnapshotter::snapshot(
     const fs::path &sourceRoot, const SkinPackageId &package,
     std::stop_token stop, SkinProgressCallback callback) {
   SnapshotTreeResult result;
+  if (roots_.liveSources) {
+    const auto normalizedPackage = normalizePackageId(package.directoryName);
+    if (!normalizedPackage.package ||
+        normalizedPackage.package->collisionKey != package.collisionKey) {
+      result.diagnostics.push_back(diagnostic(
+          "skin_snapshot_package_invalid", "skin package identity is invalid"));
+      return result;
+    }
+    if (sourceRoot.empty() || !sourceRoot.is_absolute() ||
+        stop.stop_requested()) {
+      result.cancelled = stop.stop_requested();
+      if (!result.cancelled) {
+        result.diagnostics.push_back(diagnostic(
+            "skin_snapshot_source_invalid", "skin source root is unavailable"));
+      }
+      return result;
+    }
+    auto inventory = inventoryTree(sourceRoot, *normalizedPackage.package,
+                                   aliases_, stop, result.diagnostics);
+    if (!inventory) {
+      result.cancelled = stop.stop_requested();
+      return result;
+    }
+    if (inventory->fileCount == 0) {
+      result.diagnostics.push_back(diagnostic(
+          "skin_snapshot_empty_tree", "skin source contains no regular files"));
+      return result;
+    }
+    if (!report(callback,
+                {.phase = SkinProgressPhase::Inspecting,
+                 .completedBytes = inventory->totalBytes,
+                 .totalBytes = inventory->totalBytes,
+                 .completedFiles = inventory->fileCount},
+                result.diagnostics)) {
+      return result;
+    }
+    const auto digest = digestAndMaybeCopy(
+        *inventory, std::nullopt, SkinProgressPhase::Validating, stop,
+        std::move(callback), result.diagnostics, failures_, false);
+    if (!digest) {
+      result.cancelled = stop.stop_requested();
+      return result;
+    }
+    SkinRevision revision{.package = *normalizedPackage.package,
+                          .lowercaseSha256 = *digest,
+                          .fileCount = inventory->fileCount,
+                          .totalBytes = inventory->totalBytes};
+    result.prepared = PreparedSkinRevision(std::move(revision), sourceRoot,
+                                           sourceRoot, failures_);
+    result.prepared->state_->liveSource = true;
+    return result;
+  }
   if (roots_.privateRevisions.empty() ||
       !roots_.privateRevisions.is_absolute()) {
     result.diagnostics.push_back(

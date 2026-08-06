@@ -69,6 +69,12 @@ public:
   SkinRevisionLease clone() const;
   SkinRevisionWeakPin weakPin() const noexcept;
 
+  // The Files-visible package is the source of truth on platforms that opt
+  // into live sources. This is intentionally metadata-only: startup must not
+  // walk or copy every package merely to restore the catalog.
+  static std::optional<SkinRevisionLease> fromLiveSource(SkinRevision,
+                                                         std::filesystem::path);
+
 private:
   explicit SkinRevisionLease(std::shared_ptr<const SkinRevisionPin>);
   std::shared_ptr<const SkinRevisionPin> pin_;
@@ -87,6 +93,7 @@ public:
   const std::filesystem::path &stagingRoot() const noexcept;
   SkinRevisionReadView readView() const noexcept;
   std::optional<SkinRevisionLease> publish(std::string &error) &&;
+  void relocateLiveSourceTo(std::filesystem::path destination) noexcept;
 
 private:
   PreparedSkinRevision(SkinRevision, std::filesystem::path,
@@ -95,6 +102,7 @@ private:
   struct State;
   std::unique_ptr<State> state_;
   friend class SkinTreeSnapshotter;
+  friend class PreparedPackage;
 };
 
 struct SnapshotTreeResult {

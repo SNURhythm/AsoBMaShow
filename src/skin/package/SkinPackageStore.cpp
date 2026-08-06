@@ -125,8 +125,8 @@ bool lowercaseSha256(std::string_view digest) {
          });
 }
 
-bool failClosedMismatchedConfigurationDigest(
-    const SkinEntryId &entry, SkinValidationResult &validation) {
+bool failClosedMismatchedConfigurationDigest(const SkinEntryId &entry,
+                                             SkinValidationResult &validation) {
   if (validation.cancelled ||
       validation.disposition != SkinValidationDisposition::SelectableGameplay) {
     return false;
@@ -138,12 +138,10 @@ bool failClosedMismatchedConfigurationDigest(
     sanitized.entries.emplace(entry, *validation.reconciledSettings);
     sanitized.sanitize();
     const auto retained = sanitized.entries.find(entry);
-    sanitizeIdempotent =
-        retained != sanitized.entries.end() &&
-        retained->second == *validation.reconciledSettings;
+    sanitizeIdempotent = retained != sanitized.entries.end() &&
+                         retained->second == *validation.reconciledSettings;
   }
-  if (sanitizeIdempotent &&
-      lowercaseSha256(validation.configurationDigest) &&
+  if (sanitizeIdempotent && lowercaseSha256(validation.configurationDigest) &&
       validation.configurationDigest ==
           skinConfigurationDigest(*validation.reconciledSettings)) {
     return false;
@@ -166,8 +164,9 @@ bool validatesGameplayTrait(const SkinValidationResult &validation,
          gameplaySkinTraitForSkinType(skinType).has_value();
 }
 
-std::vector<std::pair<int, SkinEntryId>> selectedGameplayEntriesInPackage(
-    const SkinProfileSettings &settings, const SkinPackageId &package) {
+std::vector<std::pair<int, SkinEntryId>>
+selectedGameplayEntriesInPackage(const SkinProfileSettings &settings,
+                                 const SkinPackageId &package) {
   std::vector<std::pair<int, SkinEntryId>> result;
   if (settings.selectedGameplayEntries.empty() && settings.selected7KeyEntry) {
     if (settings.selected7KeyEntry->package == package) {
@@ -2173,7 +2172,8 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
   try {
     std::error_code directoryError;
     if (!ensureDirectoryNoFollow(roots_.visiblePackages) ||
-        !ensureDirectoryNoFollow(roots_.privateRevisions) ||
+        (!roots_.liveSources &&
+         !ensureDirectoryNoFollow(roots_.privateRevisions)) ||
         !ensureDirectoryNoFollow(roots_.privateCatalog)) {
       result.diagnostics.push_back(
           storeDiagnostic("skin_package_recovery_storage_unavailable",
@@ -2191,25 +2191,32 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
         if (hydrated.contains(key)) {
           continue;
         }
-        const fs::path revisionRoot =
-            roots_.privateRevisions / entry.revisionDigest;
-        SkinTreeSnapshotter snapshotter(roots_, aliases_);
-        auto prepared =
-            snapshotter.snapshot(revisionRoot, entry.entry.package, {}, {});
-        if (!prepared.prepared ||
-            prepared.prepared->revision().lowercaseSha256 !=
-                entry.revisionDigest) {
-          result.diagnostics.push_back(storeDiagnostic(
-              "skin_package_recovery_revision_missing",
-              "cataloged skin revision is unavailable or invalid"));
-          return false;
+        std::optional<SkinRevisionLease> lease;
+        if (roots_.liveSources) {
+          // Catalog metadata is enough to restore a live-source lease. Do not
+          // hash, validate, or copy every Documents/Skins package at startup;
+          // explicit Rescan and activation own that work.
+          lease = SkinRevisionLease::fromLiveSource(
+              {.package = entry.entry.package,
+               .lowercaseSha256 = entry.revisionDigest},
+              roots_.visiblePackages / entry.entry.package.directoryName);
+        } else {
+          const fs::path revisionRoot =
+              roots_.privateRevisions / entry.revisionDigest;
+          SkinTreeSnapshotter snapshotter(roots_, aliases_);
+          auto prepared =
+              snapshotter.snapshot(revisionRoot, entry.entry.package, {}, {});
+          if (prepared.prepared &&
+              prepared.prepared->revision().lowercaseSha256 ==
+                  entry.revisionDigest) {
+            std::string publicationError;
+            lease = std::move(*prepared.prepared).publish(publicationError);
+          }
         }
-        std::string publicationError;
-        auto lease = std::move(*prepared.prepared).publish(publicationError);
         if (!lease) {
           result.diagnostics.push_back(
               storeDiagnostic("skin_package_recovery_revision_lease_failed",
-                              "cataloged skin revision cannot be retained"));
+                              "cataloged skin source cannot be retained"));
           return false;
         }
         pins.emplace(key, lease->weakPin());
@@ -2455,6 +2462,31 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
       return result;
     }
     if (!journalExists) {
+      if (roots_.liveSources) {
+        // Builds before live sources kept only catalog metadata under the
+        // Files-visible Documents/_runtime directory. Preserve that small
+        // cache across the storage migration, but never copy its revision
+        // payloads into the new private area.
+        const fs::path catalogFile = roots_.privateCatalog / "catalog.json";
+        std::error_code catalogExistsError;
+        const bool catalogExists = fs::exists(catalogFile, catalogExistsError);
+        if (catalogExistsError) {
+          result.diagnostics.push_back(storeDiagnostic(
+              "skin_package_recovery_catalog_unavailable",
+              "private skin catalog metadata cannot be inspected"));
+          return result;
+        }
+        if (!catalogExists) {
+          const fs::path legacyCatalog = roots_.visiblePackages.parent_path() /
+                                         "_runtime" / "catalog" /
+                                         "catalog.json";
+          if (const auto legacy = readCatalogCapability(legacyCatalog);
+              legacy && !installCatalogBytes(legacy->bytes, catalogFile,
+                                             result.diagnostics)) {
+            return result;
+          }
+        }
+      }
       if (!catalog_.recover()) {
         result.diagnostics.push_back(
             storeDiagnostic("skin_package_recovery_catalog_failed",
@@ -2911,9 +2943,10 @@ PublishPackageResult SkinPackageStore::publish(
   }
 
   for (const VersionedSkinProfileSettings &profile : inventory.profiles) {
-    for (const auto &[skinType, selected] :
-         selectedGameplayEntriesInPackage(profile.settings, prepared.packageId())) {
-      const auto preparedEntry = std::ranges::find(prepared.entries(), selected);
+    for (const auto &[skinType, selected] : selectedGameplayEntriesInPackage(
+             profile.settings, prepared.packageId())) {
+      const auto preparedEntry =
+          std::ranges::find(prepared.entries(), selected);
       if (preparedEntry == prepared.entries().end()) {
         result.diagnostics.push_back(storeDiagnostic(
             "skin_package_selected_entry_missing",
@@ -3470,8 +3503,8 @@ ScanPackagesResult SkinPackageStore::rescanVisibleSources(
       continue;
     }
     ++collisionCounts[packageResult.package->collisionKey];
-    visibleInventory.push_back({.package = *packageResult.package,
-                                .path = iterator->path()});
+    visibleInventory.push_back(
+        {.package = *packageResult.package, .path = iterator->path()});
   }
   if (iteratorError) {
     result.diagnostics.push_back(
@@ -3573,7 +3606,8 @@ ScanPackagesResult SkinPackageStore::rescanVisibleSources(
       for (const auto &[skinType, selected] :
            selectedGameplayEntriesInPackage(profile.settings, work.package)) {
         const auto selectedEntry = std::ranges::find_if(
-            work.entries, [&selected](const SkinCatalogEntrySnapshot &candidate) {
+            work.entries,
+            [&selected](const SkinCatalogEntrySnapshot &candidate) {
               return candidate.entry == selected;
             });
         if (selectedEntry == work.entries.end()) {
@@ -3850,10 +3884,8 @@ PrepareActivationResult SkinPackageStore::prepareActivation(
     result.cancelled = true;
     return result;
   }
-  if (validation.disposition !=
-          SkinValidationDisposition::SelectableGameplay ||
-      !validation.reconciledSettings ||
-      !validation.metadata ||
+  if (validation.disposition != SkinValidationDisposition::SelectableGameplay ||
+      !validation.reconciledSettings || !validation.metadata ||
       !gameplaySkinTraitForSkinType(validation.metadata->skinType) ||
       !lowercaseSha256(validation.configurationDigest)) {
     result.diagnostics.push_back(
@@ -4472,6 +4504,11 @@ GarbageCollectionResult SkinPackageStore::collectGarbage() {
     result.diagnostics.push_back(storeDiagnostic(
         "skin_package_store_poisoned",
         "skin package storage requires a successful restart recovery"));
+    return result;
+  }
+  if (roots_.liveSources) {
+    // Live-source stores own no revision payloads, so garbage collection must
+    // not create an otherwise-unused private revision directory.
     return result;
   }
   {

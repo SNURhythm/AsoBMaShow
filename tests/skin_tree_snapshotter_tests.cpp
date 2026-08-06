@@ -168,6 +168,66 @@ void testDigestUsesExactTreeV1FramingAndStableSorting() {
   }
 }
 
+void testLiveSourceSnapshotNeverCopiesThePackageTree() {
+  TempDirectory temp;
+  auto roots = rootsBelow(temp.root());
+  roots.liveSources = true;
+  const fs::path source = temp.root() / "Documents/Skins/FixtureSkin";
+  writeBytes(source / "asset.bin", std::string(1024 * 1024, 'x'));
+  FakeAliasDetector aliases;
+  SkinTreeSnapshotter snapshotter(roots, aliases);
+
+  auto result = snapshotter.snapshot(source, packageId(), {}, {});
+  expect(result.prepared.has_value(),
+         "a live source tree prepares without a private revision copy");
+  if (!result.prepared) {
+    return;
+  }
+  expect(result.prepared->readView().root() == source,
+         "a live-source read view remains rooted in Documents/Skins");
+  expect(!fs::exists(roots.privateRevisions),
+         "a live-source scan creates no private revision directory");
+  std::string error;
+  const auto lease = std::move(*result.prepared).publish(error);
+  expect(lease.has_value() && error.empty(),
+         "a live-source revision lease publishes without a copy");
+  if (lease) {
+    expect(lease->root() == source,
+           "a published live-source lease reads the visible package directly");
+  }
+  expect(!fs::exists(roots.privateRevisions),
+         "a published live-source lease creates no duplicate revision");
+}
+
+void testLiveSourceSnapshotAcceptsFilesEditsDuringInspection() {
+  TempDirectory temp;
+  auto roots = rootsBelow(temp.root());
+  roots.liveSources = true;
+  const fs::path source = temp.root() / "Documents/Skins/FixtureSkin";
+  writeBytes(source / "a.txt", "before");
+  writeBytes(source / "b.txt", "before");
+  FakeAliasDetector aliases;
+  SkinTreeSnapshotter snapshotter(roots, aliases);
+  bool edited = false;
+  const auto result = snapshotter.snapshot(
+      source, packageId(), {}, [&](const SkinProgress &progress) {
+        if (!edited && progress.phase == SkinProgressPhase::Validating &&
+            progress.completedFiles >= 1) {
+          writeBytes(source / "b.txt", "edited while scanning");
+          edited = true;
+        }
+      });
+  expect(edited, "the live-source fixture edits a Files-visible package");
+  expect(result.prepared.has_value(),
+         "a live-source scan accepts a readable edit during inspection");
+  expect(!std::ranges::any_of(result.diagnostics,
+                              [](const SkinDiagnostic &diagnostic) {
+                                return diagnostic.code ==
+                                       "skin_snapshot_source_changed";
+                              }),
+         "live-source scans do not reject a concurrent Files edit");
+}
+
 void testTask1PythonAuditFixtureMatchesCppSnapshotter() {
   TempDirectory temp;
   const fs::path fixtureRoot =
@@ -986,6 +1046,8 @@ int main() {
   static_assert(!std::is_copy_assignable_v<SkinRevisionLease>);
   static_assert(std::is_move_constructible_v<SkinRevisionLease>);
   testDigestUsesExactTreeV1FramingAndStableSorting();
+  testLiveSourceSnapshotNeverCopiesThePackageTree();
+  testLiveSourceSnapshotAcceptsFilesEditsDuringInspection();
   testTask1PythonAuditFixtureMatchesCppSnapshotter();
   testEmptyTreeIsRejectedForDigestParity();
   testRevisionStoresTheNormalizedCanonicalPackageIdentity();

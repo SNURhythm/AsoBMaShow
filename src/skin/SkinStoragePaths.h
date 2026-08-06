@@ -14,6 +14,10 @@ struct SkinStorageRoots {
   std::filesystem::path privateRevisions;
   std::filesystem::path privateCatalog;
   std::filesystem::path profileOverlays;
+  // A live-source store keeps Documents/Skins as the sole package payload
+  // location. privateRevisions remains only for backwards-compatible callers;
+  // no revision tree is created when this is set.
+  bool liveSources = false;
 };
 
 SkinStorageRoots deriveSkinStorageRoots(std::filesystem::path visiblePackages,

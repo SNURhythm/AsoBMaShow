@@ -418,6 +418,7 @@ struct Fixture {
                 [&](const SkinEntryId &) { ++revalidationRequests; },
             .catalogSnapshot =
                 [&] {
+                  ++catalogSnapshotCalls;
                   return catalogOverride ? catalogOverride
                                          : operations->catalogSnapshot();
                 },
@@ -464,6 +465,7 @@ struct Fixture {
   PlatformDirectoryImportRequest lastFolderRequest;
   int rescanRequests = 0;
   int revalidationRequests = 0;
+  int catalogSnapshotCalls = 0;
   std::shared_ptr<const SkinPackageCatalogSnapshot> catalogOverride;
 };
 
@@ -500,6 +502,20 @@ void testSourceNameSuggestionPreservesTypedSemantics() {
   const auto invalid = suggestSkinPackageName("../ModernChic.zip",
                                               PlatformTemporaryPathKind::File);
   expect(!invalid.ok(), "source-name path components fail typed validation");
+}
+
+void testSnapshotUsesCachedSettingsProjectionUntilTheNextPoll() {
+  Fixture fixture;
+  auto controller = fixture.makeController();
+  expect(fixture.catalogSnapshotCalls == 1,
+         "controller creation captures the initial catalog projection once");
+  (void)controller->snapshot();
+  (void)controller->snapshot();
+  expect(fixture.catalogSnapshotCalls == 1,
+         "repeated Settings reads reuse the cached skin title projection");
+  controller->poll();
+  expect(fixture.catalogSnapshotCalls == 2,
+         "the next controller poll checks for a newer catalog generation");
 }
 
 void installQueuedImport(Fixture &fixture,
@@ -635,15 +651,15 @@ void testSelectionIsScopedToTheSkinDeclaredGameplayTrait() {
          "a 5K skin cannot be selected for the 7K trait");
   expect(controller->selectGameplayTrait(1, entry).accepted,
          "a 5K skin selects its matching trait");
-  expect(pumpUntil(fixture, *controller,
-                   [&] {
-                     const auto settings =
-                         fixture.owner.snapshot(fixture.profileA).settings;
-                     const auto selected = settings.selectedGameplayEntries.find(1);
-                     return selected != settings.selectedGameplayEntries.end() &&
-                            selected->second == entry &&
-                            !settings.selected7KeyEntry;
-                   }),
+  expect(pumpUntil(
+             fixture, *controller,
+             [&] {
+               const auto settings =
+                   fixture.owner.snapshot(fixture.profileA).settings;
+               const auto selected = settings.selectedGameplayEntries.find(1);
+               return selected != settings.selectedGameplayEntries.end() &&
+                      selected->second == entry && !settings.selected7KeyEntry;
+             }),
          "the durable profile retains the 5K mapping without replacing 7K");
 }
 
@@ -1545,6 +1561,7 @@ void testLifecycleCallbacksCustomViewportAndRemoval() {
 
 int main() {
   testSourceNameSuggestionPreservesTypedSemantics();
+  testSnapshotUsesCachedSettingsProjectionUntilTheNextPoll();
   testArchiveFolderSelectionAndDurableLayoutFlow();
   testSelectionIsScopedToTheSkinDeclaredGameplayTrait();
   testRejectedPublishTransfersReservedStagingOffControllerThread();

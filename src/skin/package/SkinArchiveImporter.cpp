@@ -2712,7 +2712,12 @@ bool PreparedPackage::renameVisibleStagingTo(
   assert(state_ != nullptr);
   const auto owner =
       std::static_pointer_cast<SecureStagingTree>(state_->visibleOwner);
-  return owner && owner->renameTo(destination, diagnostics);
+  if (!owner || !owner->renameTo(destination, diagnostics)) {
+    return false;
+  }
+  state_->visibleStagingRoot = destination;
+  state_->revision.relocateLiveSourceTo(destination);
+  return true;
 }
 
 bool PreparedPackage::relocateVisibleOwnershipTo(
@@ -2720,7 +2725,12 @@ bool PreparedPackage::relocateVisibleOwnershipTo(
   assert(state_ != nullptr);
   const auto owner =
       std::static_pointer_cast<SecureStagingTree>(state_->visibleOwner);
-  return owner && owner->renameTo(destination, diagnostics, false);
+  if (!owner || !owner->renameTo(destination, diagnostics, false)) {
+    return false;
+  }
+  state_->visibleStagingRoot = destination;
+  state_->revision.relocateLiveSourceTo(destination);
+  return true;
 }
 
 void PreparedPackage::releaseVisibleOwnership() noexcept {
@@ -2917,6 +2927,26 @@ PreparePackageResult SkinArchiveImporter::prepareFolder(
     return result;
   }
   const fs::path visibleStagingPath = visibleStaging->path();
+  if (roots_.liveSources) {
+    // The direct-source lease must describe the exact tree that will be
+    // renamed into Documents/Skins. The incoming folder remains user-owned
+    // and can be edited while it is being imported.
+    auto staged = snapshotter.snapshot(visibleStagingPath,
+                                       *normalizedPackage.package, stop, {});
+    if (!staged.prepared) {
+      appendSnapshotFailure(staged, result);
+      return result;
+    }
+    auto stagedEntries = discoverEntries(staged.prepared->readView(), stop,
+                                         result.diagnostics, result.cancelled);
+    if (!stagedEntries) {
+      return result;
+    }
+    result.prepared =
+        PreparedPackage(std::move(*staged.prepared), std::move(*stagedEntries),
+                        visibleStagingPath, std::move(visibleStaging));
+    return result;
+  }
   result.prepared =
       PreparedPackage(std::move(*snapshot.prepared), std::move(*entries),
                       visibleStagingPath, std::move(visibleStaging));

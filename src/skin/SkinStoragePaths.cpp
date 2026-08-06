@@ -16,6 +16,10 @@
 #include "../AndroidNatives.h"
 #endif
 
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+#include "../iOSNatives.hpp"
+#endif
+
 namespace skin {
 namespace {
 
@@ -58,24 +62,31 @@ SkinStorageRoots deriveSkinStorageRoots(std::filesystem::path visiblePackages,
 SkinStorageRoots defaultSkinStorageRoots() {
   const std::filesystem::path visible = Utils::GetDocumentsPath("Skins");
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  // Runtime state is Files-visible but sits outside the scanned package root:
-  // catalog writes must not look like an external skin edit during a rescan.
-  const std::filesystem::path workspace = Utils::GetDocumentsPath("_runtime");
-  return deriveSkinStorageRoots(visible, workspace);
+  // Skin payloads are read directly from Documents/Skins so Files edits are
+  // immediately authoritative and are never duplicated under Documents.
+  const std::filesystem::path support = GetIOSApplicationSupportPath();
+  auto roots = deriveSkinStorageRoots(
+      visible, support.empty() ? std::filesystem::path{} : support / "Skins");
+  roots.liveSources = true;
+  return roots;
 #elif TARGET_OS_ANDROID
   std::filesystem::path privateRoot;
   const std::filesystem::path internalFiles = GetAndroidInternalFilesDir();
   if (!internalFiles.empty()) {
     privateRoot = internalFiles / ".asobmashow-private" / "Skins";
   }
-  return deriveSkinStorageRoots(visible, privateRoot);
+  auto roots = deriveSkinStorageRoots(visible, privateRoot);
+  roots.liveSources = true;
+  return roots;
 #else
   std::filesystem::path privateRoot;
   const std::filesystem::path applicationRoot = Utils::GetDocumentsPath();
   if (!applicationRoot.empty()) {
     privateRoot = applicationRoot / ".asobmashow-private" / "Skins";
   }
-  return deriveSkinStorageRoots(visible, privateRoot);
+  auto roots = deriveSkinStorageRoots(visible, privateRoot);
+  roots.liveSources = true;
+  return roots;
 #endif
 }
 #endif

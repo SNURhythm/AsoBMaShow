@@ -40,9 +40,10 @@ void expect(bool condition, std::string_view message) {
 
 bool hasDiagnostic(std::span<const SkinDiagnostic> diagnostics,
                    std::string_view code) {
-  return std::ranges::any_of(diagnostics, [&](const SkinDiagnostic &diagnostic) {
-    return diagnostic.code == code;
-  });
+  return std::ranges::any_of(diagnostics,
+                             [&](const SkinDiagnostic &diagnostic) {
+                               return diagnostic.code == code;
+                             });
 }
 
 class TempDirectory {
@@ -1410,6 +1411,121 @@ void testRescanAcceptsVisibleEditDuringValidation() {
          "validation");
 }
 
+void testLiveSourceRecoveryUsesCatalogMetadataWithoutRevisionCopies() {
+  TempDirectory temp;
+  auto roots = rootsBelow(temp.root());
+  roots.liveSources = true;
+  writeOldTree(roots.visiblePackages / "FixtureSkin");
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  FakeProfileSnapshots profiles;
+  NoAliases aliases;
+  SelectableValidator validator;
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  expect(store.recoverBeforeServiceStart().disposition ==
+             SkinRecoveryDisposition::Recovered,
+         "live-source storage bootstraps from catalog metadata only");
+  const auto scanned = store.rescanVisibleSources(
+      {}, {}, ProfileInventorySnapshot{.inventoryGeneration = 1}, validator);
+  expect(!scanned.cancelled && catalog.snapshot()->entries.size() == 1,
+         "live-source storage publishes the visible package catalog");
+  expect(!fs::exists(roots.privateRevisions),
+         "live-source scans never create a private package revision tree");
+
+  catalog.flush();
+  SkinPackageCatalog restartedCatalog(roots.privateCatalog);
+  FakeProfileSnapshots restartedProfiles;
+  SkinPackageStore restarted(roots, restartedCatalog, aliases,
+                             restartedProfiles);
+  const auto recovered = restarted.recoverBeforeServiceStart();
+  expect(
+      recovered.disposition == SkinRecoveryDisposition::Recovered,
+      "startup rehydrates live package leases without validating every skin");
+  expect(!fs::exists(roots.privateRevisions),
+         "startup never recreates a private live-source revision tree");
+  expect(restarted.collectGarbage().revisionsRemoved == 0 &&
+             !fs::exists(roots.privateRevisions),
+         "live-source garbage collection does not create a revision root");
+}
+
+void testLiveSourceImportPublishesOnlyIntoDocumentsSkins() {
+  TempDirectory temp;
+  auto roots = rootsBelow(temp.root());
+  roots.liveSources = true;
+  const auto package = normalizePackageId("FixtureSkin");
+  const fs::path source = temp.root() / "Unpacked/FixtureSkin";
+  writeNewTree(source);
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  FakeProfileSnapshots profiles;
+  NoAliases aliases;
+  SelectableValidator validator;
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  expect(store.recoverBeforeServiceStart().disposition ==
+             SkinRecoveryDisposition::Recovered,
+         "live-source import storage bootstraps");
+  if (!package.package) {
+    expect(false, "live-source import package identity is valid");
+    return;
+  }
+  auto prepared = store.prepareFolder(source, *package.package, {}, {});
+  expect(prepared.prepared.has_value(),
+         "a folder import prepares a live-source package");
+  if (!prepared.prepared) {
+    return;
+  }
+  expect(prepared.prepared->readView().root() ==
+             prepared.prepared->visibleStagingRoot(),
+         "live folder preparation validates the exact visible staging tree");
+  const auto published = store.publish(
+      std::move(*prepared.prepared), PackageCollisionPolicy::Reject,
+      ProfileInventorySnapshot{.inventoryGeneration = 1}, validator, {}, {});
+  expect(published.published,
+         "a live-source folder import publishes into Documents/Skins");
+  expect(
+      fs::exists(roots.visiblePackages / "FixtureSkin" / "play/play7.luaskin"),
+      "the imported package is available from its visible source root");
+  expect(!fs::exists(roots.privateRevisions),
+         "import completion leaves no private revision payload copy");
+}
+
+void testLiveSourceStartupMigratesOnlyLegacyCatalogMetadata() {
+  TempDirectory temp;
+  auto roots = rootsBelow(temp.root());
+  roots.liveSources = true;
+  writeOldTree(roots.visiblePackages / "FixtureSkin");
+  NoAliases aliases;
+  SelectableValidator validator;
+  const fs::path legacyRoot = roots.visiblePackages.parent_path() / "_runtime";
+  {
+    auto legacyRoots = roots;
+    legacyRoots.liveSources = false;
+    legacyRoots.privateRevisions = legacyRoot / "revisions";
+    legacyRoots.privateCatalog = legacyRoot / "catalog";
+    legacyRoots.profileOverlays = legacyRoot / "profileOverlays";
+    SkinPackageCatalog legacyCatalog(legacyRoots.privateCatalog);
+    FakeProfileSnapshots legacyProfiles;
+    SkinPackageStore legacyStore(legacyRoots, legacyCatalog, aliases,
+                                 legacyProfiles);
+    expect(legacyStore.recoverBeforeServiceStart().disposition ==
+               SkinRecoveryDisposition::Recovered,
+           "legacy runtime fixture creates a catalog generation");
+    const auto scanned = legacyStore.rescanVisibleSources(
+        {}, {}, ProfileInventorySnapshot{.inventoryGeneration = 1}, validator);
+    expect(!scanned.cancelled && legacyCatalog.snapshot()->entries.size() == 1,
+           "legacy runtime fixture writes one cataloged skin");
+    legacyCatalog.flush();
+  }
+
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  FakeProfileSnapshots profiles;
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  expect(store.recoverBeforeServiceStart().disposition ==
+                 SkinRecoveryDisposition::Recovered &&
+             catalog.snapshot()->entries.size() == 1,
+         "live startup migrates catalog metadata without a visible rescan");
+  expect(!fs::exists(roots.privateRevisions),
+         "legacy catalog migration never creates a new revision payload tree");
+}
+
 void testEncoderInvalidSnapshotPerformsZeroPublicationMutation() {
   TempDirectory temp;
   const SkinStorageRoots roots = rootsBelow(temp.root());
@@ -1583,12 +1699,13 @@ void testMismatchedValidatorDigestCannotPublishSelectableOrPrepareActivation() {
                            "skin_configuration_digest_mismatch"),
          "matching raw digest cannot admit reconciliation maps that profile "
          "sanitization would change");
-  expect(std::ranges::none_of(
-             store.catalogSnapshot()->entries.front()
-                 .validatedConfigurationDigests,
-             [&](const std::string &digest) {
-               return digest == matchingRawButNoncanonicalDigest;
-             }),
+  expect(std::ranges::none_of(store.catalogSnapshot()
+                                  ->entries.front()
+                                  .validatedConfigurationDigests,
+                              [&](const std::string &digest) {
+                                return digest ==
+                                       matchingRawButNoncanonicalDigest;
+                              }),
          "a noncanonical raw digest never becomes a durable catalog identity");
   validator.reconciledSettings.filePaths.clear();
   validator.reportedDigestOverride = std::string(64, 'e');
@@ -1644,9 +1761,9 @@ void testConfiguredReplacementRejectsMismatchedValidatorDigest() {
       importer.prepareFolder(replacementSource, *package.package, {}, {});
   validator.useConfiguredDigestOverride = true;
   validator.configuredReportedDigestOverride = std::string(64, 'd');
-  const auto rejected = store.publish(
-      std::move(*replacement.prepared), PackageCollisionPolicy::Replace,
-      std::move(inventory), validator, {}, {});
+  const auto rejected = store.publish(std::move(*replacement.prepared),
+                                      PackageCollisionPolicy::Replace,
+                                      std::move(inventory), validator, {}, {});
   const auto after = store.catalogSnapshot();
   expect(!rejected.published &&
              hasDiagnostic(rejected.diagnostics,
@@ -1697,8 +1814,8 @@ void testRescanDigestMismatchRetainsExactLastKnownGoodEntry() {
     ProfileInventorySnapshot inventory{.inventoryGeneration = 2};
     if (configuredValidation) {
       VersionedSkinProfileSettings selected{
-          .profileId = SkinProfileId{
-              .opaque = "12345678-1234-1234-1234-123456789abc"},
+          .profileId =
+              SkinProfileId{.opaque = "12345678-1234-1234-1234-123456789abc"},
           .generation = 11};
       selected.settings.selected7KeyEntry = entry;
       selected.settings.entries.emplace(entry, EntryProfileSettings{});
@@ -1711,8 +1828,8 @@ void testRescanDigestMismatchRetainsExactLastKnownGoodEntry() {
     fs::remove_all(roots.visiblePackages / "FixtureSkin");
     writeNewTree(roots.visiblePackages / "FixtureSkin");
 
-    const auto scanned = store.rescanVisibleSources(
-        {}, {}, std::move(inventory), validator);
+    const auto scanned =
+        store.rescanVisibleSources({}, {}, std::move(inventory), validator);
     const auto after = store.catalogSnapshot();
     expect(!scanned.cancelled && after->entries.size() == 1,
            "digest-mismatched rescan completes with one retained entry");
@@ -1721,7 +1838,8 @@ void testRescanDigestMismatchRetainsExactLastKnownGoodEntry() {
     }
     const auto &retained = after->entries.front();
     expect(retained.validation == SkinValidationDisposition::Selectable7Key &&
-               retained.revisionDigest == before->entries.front().revisionDigest &&
+               retained.revisionDigest ==
+                   before->entries.front().revisionDigest &&
                retained.validatedConfigurationDigests ==
                    before->entries.front().validatedConfigurationDigests,
            configuredValidation
@@ -2018,11 +2136,10 @@ void testManualInvalidEditRetainsActivationButDeleteHidesIt() {
   validator.disposition = SkinValidationDisposition::Invalid;
   const auto invalidScan = store.rescanVisibleSources(
       {}, {}, ProfileInventorySnapshot{.inventoryGeneration = 2}, validator);
-  expect(
-      !invalidScan.cancelled &&
-          store.acquireValidatedActivation(profile, entry, activatedDigest)
-              .activation.has_value(),
-      "invalid manual edit retains the exact last-known-good activation");
+  expect(!invalidScan.cancelled &&
+             store.acquireValidatedActivation(profile, entry, activatedDigest)
+                 .activation.has_value(),
+         "invalid manual edit retains the exact last-known-good activation");
   expect(readText(roots.visiblePackages / "FixtureSkin/play/play7.luaskin") ==
              "return invalid manual edit",
          "invalid manual edit remains user-visible and diagnosed");
@@ -2033,10 +2150,9 @@ void testManualInvalidEditRetainsActivationButDeleteHidesIt() {
   validator.setConfigurationVariant(3);
   const auto validScan = store.rescanVisibleSources(
       {}, {}, ProfileInventorySnapshot{.inventoryGeneration = 3}, validator);
-  expect(!validScan.cancelled && !store
-                                      .acquireValidatedActivation(
-                                          profile, entry, activatedDigest)
-                                      .activation,
+  expect(!validScan.cancelled &&
+             !store.acquireValidatedActivation(profile, entry, activatedDigest)
+                  .activation,
          "valid manual revision advance invalidates the stale activation");
 
   fs::remove_all(roots.visiblePackages / "FixtureSkin");
@@ -2144,8 +2260,7 @@ void testActivationCommitRemovalAndLeaseAwareGarbageCollection() {
          "activation preparation validates without mutating store state");
   expect(activation.prepared &&
              activation.prepared->candidateProfileSettings
-                     .selectedGameplayEntries.at(1) ==
-                 entry &&
+                     .selectedGameplayEntries.at(1) == entry &&
              !activation.prepared->candidateProfileSettings.selected7KeyEntry,
          "activation preparation retains the matching non-7K trait selection");
   expect(
@@ -2176,9 +2291,8 @@ void testActivationCommitRemovalAndLeaseAwareGarbageCollection() {
       store.acquireValidatedActivation(base.profileId, entry, activationDigest);
   expect(acquired.activation.has_value(),
          "exact profile-entry-configuration activation can be cloned");
-  const auto &validatedDigests = store.catalogSnapshot()
-                                     ->entries.front()
-                                     .validatedConfigurationDigests;
+  const auto &validatedDigests =
+      store.catalogSnapshot()->entries.front().validatedConfigurationDigests;
   expect(std::ranges::find(validatedDigests, activationDigest) !=
              validatedDigests.end(),
          "activation CAS publishes a newly validated configuration digest");
@@ -2351,6 +2465,9 @@ int main(int argc, char **argv) {
   testAmbiguousPhysicalCollisionCannotPersistDuplicateCatalogIdentity();
   testRescanIgnoresLegacyRuntimeDirectory();
   testRescanAcceptsVisibleEditDuringValidation();
+  testLiveSourceRecoveryUsesCatalogMetadataWithoutRevisionCopies();
+  testLiveSourceImportPublishesOnlyIntoDocumentsSkins();
+  testLiveSourceStartupMigratesOnlyLegacyCatalogMetadata();
   testEncoderInvalidSnapshotPerformsZeroPublicationMutation();
   testConfiguredValidationFailureAndCancellationPreserveOldPackage();
   testMismatchedValidatorDigestCannotPublishSelectableOrPrepareActivation();

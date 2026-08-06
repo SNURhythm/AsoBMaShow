@@ -122,6 +122,56 @@ struct GameplaySkinSettingsController::Impl {
   std::uint64_t operationTicket = 0;
   std::shared_ptr<const SkinPackageProgressMailbox> progress;
   std::uint64_t inventoryTicket = 0;
+  std::shared_ptr<const SkinPackageCatalogSnapshot> projectedCatalog;
+  std::string projectedProfileId;
+  std::uint64_t projectedProfileGeneration = 0;
+  bool projectionInputsReady = false;
+
+  void refreshCachedPresentationKey() {
+    std::string key;
+    const auto append = [&key](std::string_view value) {
+      key.append(std::to_string(value.size()));
+      key.push_back(':');
+      key.append(value);
+      key.push_back(';');
+    };
+    const auto number = [&append](auto value) {
+      append(std::to_string(value));
+    };
+    append("v1");
+    number(projectedCatalog ? projectedCatalog->catalogGeneration : 0);
+    number(projectedCatalog ? projectedCatalog->sourceGeneration : 0);
+    append(projectedProfileId);
+    number(projectedProfileGeneration);
+    number(static_cast<unsigned>(projected.state));
+    number(projected.compatibilityEnabled);
+    append(projected.statusMessage);
+    number(projected.canCancel);
+    number(static_cast<unsigned>(projected.progress.phase));
+    number(projected.progress.completedBytes);
+    number(projected.progress.totalBytes);
+    number(projected.progress.completedFiles);
+    if (projected.preparedName) {
+      append(projected.preparedName->originalSourceName);
+      append(projected.preparedName->suggestedPackageName);
+      append(projected.preparedName->validationError);
+    } else {
+      append({});
+      append({});
+      append({});
+    }
+    if (projected.collisionPackage) {
+      append(projected.collisionPackage->directoryName);
+      append(projected.collisionPackage->collisionKey);
+    } else {
+      append({});
+      append({});
+    }
+    number(projected.history.size());
+    number(projected.history.empty() ? 0
+                                     : projected.history.back().recordSerial);
+    projected.cachedPresentationKey = std::move(key);
+  }
 
   [[nodiscard]] bool hasControllerOperation() const noexcept {
     return phase != Phase::Idle;
@@ -159,32 +209,44 @@ struct GameplaySkinSettingsController::Impl {
     const auto profile =
         dependencies.profileOwner.snapshot(dependencies.profileId);
     const auto catalogValue = catalog();
-
-    projected.compatibilityEnabled =
-        profile.settings.gameplayCompatibilityEnabled;
-    projected.selectedGameplayEntries =
-        profile.settings.selectedGameplayEntries;
-    projected.selected7KeyEntry = profile.settings.selected7KeyEntry;
-    projected.entries.clear();
-    if (catalogValue) {
-      projected.entries.reserve(catalogValue->entries.size());
-      for (const auto &source : catalogValue->entries) {
-        GameplaySkinEntryRow row{
-            .entry = source.entry,
-            .revisionDigest = source.revisionDigest,
-            .validation = source.validation,
-            .diagnostics = source.diagnostics,
-        };
-        if (source.metadata) {
-          row.metadata = *source.metadata;
+    const bool inputsChanged = !projectionInputsReady ||
+                               projectedCatalog != catalogValue ||
+                               projectedProfileId != profile.profileId.opaque ||
+                               projectedProfileGeneration != profile.generation;
+    if (inputsChanged) {
+      // Keep the full, display-ready catalog projection stable between catalog
+      // or profile generations. Opening a dropdown must not clone every skin
+      // title, configuration declaration, and diagnostic again.
+      projected.compatibilityEnabled =
+          profile.settings.gameplayCompatibilityEnabled;
+      projected.selectedGameplayEntries =
+          profile.settings.selectedGameplayEntries;
+      projected.selected7KeyEntry = profile.settings.selected7KeyEntry;
+      projected.entries.clear();
+      if (catalogValue) {
+        projected.entries.reserve(catalogValue->entries.size());
+        for (const auto &source : catalogValue->entries) {
+          GameplaySkinEntryRow row{
+              .entry = source.entry,
+              .revisionDigest = source.revisionDigest,
+              .validation = source.validation,
+              .diagnostics = source.diagnostics,
+          };
+          if (source.metadata) {
+            row.metadata = *source.metadata;
+          }
+          if (const auto settings = profile.settings.entries.find(source.entry);
+              settings != profile.settings.entries.end()) {
+            row.settings = settings->second;
+          }
+          row.configurationDigest = skinConfigurationDigest(row.settings);
+          projected.entries.push_back(std::move(row));
         }
-        if (const auto settings = profile.settings.entries.find(source.entry);
-            settings != profile.settings.entries.end()) {
-          row.settings = settings->second;
-        }
-        row.configurationDigest = skinConfigurationDigest(row.settings);
-        projected.entries.push_back(std::move(row));
       }
+      projectedCatalog = catalogValue;
+      projectedProfileId = profile.profileId.opaque;
+      projectedProfileGeneration = profile.generation;
+      projectionInputsReady = true;
     }
     projected.history = dependencies.history.records();
     if (phase == Phase::Idle) {
@@ -199,6 +261,7 @@ struct GameplaySkinSettingsController::Impl {
       projected.state = GameplaySkinSettingsState::Busy;
     }
     projected.canCancel = phaseCanCancel();
+    refreshCachedPresentationKey();
   }
 
   void setBusy(std::string message) {
@@ -206,6 +269,7 @@ struct GameplaySkinSettingsController::Impl {
     projected.state = GameplaySkinSettingsState::Busy;
     projected.statusMessage = std::move(message);
     projected.canCancel = phaseCanCancel();
+    refreshCachedPresentationKey();
   }
 
   void setError(std::string message) {
@@ -216,6 +280,7 @@ struct GameplaySkinSettingsController::Impl {
     projected.canCancel = false;
     projected.progress = {};
     progress.reset();
+    refreshCachedPresentationKey();
   }
 
   void setIdle(std::string message = {}) {
@@ -605,6 +670,7 @@ struct GameplaySkinSettingsController::Impl {
           normalized.package->directoryName;
     }
     projected.collisionPackage.reset();
+    refreshCachedPresentationKey();
     return {.accepted = normalized.package.has_value(),
             .message = normalized.package
                            ? "Package name updated."
@@ -636,6 +702,7 @@ struct GameplaySkinSettingsController::Impl {
       if (collision != catalogValue->packages.end() &&
           requestedPolicy == PackageCollisionPolicy::Reject) {
         projected.collisionPackage = *collision;
+        refreshCachedPresentationKey();
         return rejected("A package with this name is already installed.");
       }
     }
@@ -792,10 +859,6 @@ GameplaySkinSettingsController::~GameplaySkinSettingsController() { close(); }
 
 const GameplaySkinSettingsSnapshot &
 GameplaySkinSettingsController::snapshot() const noexcept {
-  try {
-    impl_->refreshProjection();
-  } catch (...) {
-  }
   return impl_->projected;
 }
 
@@ -869,8 +932,9 @@ GameplaySkinSettingsController::select(const SkinEntryId &entry) {
   return selectGameplayTrait(*skinType, entry);
 }
 
-ControllerActionResult GameplaySkinSettingsController::selectGameplayTrait(
-    int skinType, const SkinEntryId &entry) {
+ControllerActionResult
+GameplaySkinSettingsController::selectGameplayTrait(int skinType,
+                                                    const SkinEntryId &entry) {
   if (impl_->closed || impl_->hasControllerOperation()) {
     return rejected("Another gameplay skin operation is active.");
   }

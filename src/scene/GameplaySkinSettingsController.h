@@ -59,6 +59,10 @@ struct GameplaySkinSettingsSnapshot {
   std::vector<SkinDiagnosticHistoryRecord> history;
   std::string statusMessage;
   bool canCancel = false;
+  // Set only by the controller. It describes catalog/profile generations and
+  // compact live UI state, so Settings does not re-encode every static skin
+  // title and configuration declaration on each frame.
+  std::string cachedPresentationKey;
 };
 
 struct ControllerActionResult {

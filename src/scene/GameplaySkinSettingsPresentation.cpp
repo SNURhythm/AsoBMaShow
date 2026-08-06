@@ -190,6 +190,9 @@ GameplaySkinSettingsActionAvailability gameplaySkinSettingsActionAvailability(
 
 std::string gameplaySkinSettingsPresentationKey(
     const GameplaySkinSettingsSnapshot &snapshot) {
+  if (!snapshot.cachedPresentationKey.empty()) {
+    return snapshot.cachedPresentationKey;
+  }
   PresentationKeyEncoder encoder;
   encodeEnum(encoder, snapshot.state);
   encoder.boolean(snapshot.featureAvailable);
