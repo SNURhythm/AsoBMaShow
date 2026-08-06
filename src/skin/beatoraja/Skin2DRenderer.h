@@ -66,6 +66,10 @@ struct SkinProjectedNoteView {
   std::uint32_t visualId = 0;
   int lane = -1;
   SkinProjectedNoteKind kind = SkinProjectedNoteKind::Normal;
+  // Live gameplay snapshots carry an abstract scroll delta plus the
+  // LaneRenderer hispeed. Hand-authored/test projections leave this empty and
+  // retain the historical pixel-displacement representation.
+  std::optional<double> scrollSpeed;
   double authoredYDisplacement = 0.0;
   bool judged = false;
   std::uint32_t submissionOrdinal = 0;
@@ -78,6 +82,7 @@ struct SkinProjectedLongNoteView {
   std::uint32_t tailVisualId = 0;
   int lane = -1;
   SkinProjectedLongNoteMode mode = SkinProjectedLongNoteMode::LN;
+  std::optional<double> scrollSpeed;
   double headAuthoredYDisplacement = 0.0;
   double tailAuthoredYDisplacement = 0.0;
   bool active = false;
@@ -98,6 +103,7 @@ enum class SkinProjectedLineKind : std::uint8_t {
 struct SkinProjectedLineView {
   std::uint32_t timelineVisualId = 0;
   SkinProjectedLineKind kind = SkinProjectedLineKind::Time;
+  std::optional<double> scrollSpeed;
   double authoredYDisplacement = 0.0;
   std::uint32_t submissionOrdinal = 0;
 };

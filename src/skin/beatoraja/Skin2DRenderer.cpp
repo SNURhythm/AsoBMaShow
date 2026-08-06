@@ -2067,10 +2067,32 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
     return presentation.authoredLane == lane ? &presentation : nullptr;
   };
 
+  const auto resolveScrollDisplacement =
+      [&](double authoredDisplacement,
+          const std::optional<double> &scrollSpeed) -> double {
+    if (!scrollSpeed) {
+      // Unit-test and non-gameplay callers historically publish pixels.
+      return authoredDisplacement;
+    }
+    // Beatoraja LaneRenderer derives one shared rxhs from lanes[0].region,
+    // then applies it to every note and timeline line. `scrollSpeed` is the
+    // captured hispeed, so this is its exact skin-owned pixel conversion.
+    return authoredDisplacement * note.lanes.front().laneDestination.height *
+           *scrollSpeed;
+  };
+
   const auto lowerProjectedNote = [&](const SkinProjectedNoteView &projected,
                                       GameplayVisualLoweringResult &output) {
     const auto *lane = laneAt(projected.lane);
     if (!lane || !std::isfinite(projected.authoredYDisplacement)) {
+      output.failure = diagnostic(
+          "skin.renderer.note.projection",
+          "Projected note lane or authored displacement is invalid.");
+      return;
+    }
+    const double authoredY = resolveScrollDisplacement(
+        projected.authoredYDisplacement, projected.scrollSpeed);
+    if (!std::isfinite(authoredY)) {
       output.failure = diagnostic(
           "skin.renderer.note.projection",
           "Projected note lane or authored displacement is invalid.");
@@ -2098,13 +2120,13 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
     SkinAuthoredRect rect;
     if (applyOffsets) {
       rect = expandChip(
-          lane->laneDestination.x + offsetX,
-          lane->laneDestination.y + projected.authoredYDisplacement + offsetY,
+          lane->laneDestination.x + offsetX, lane->laneDestination.y +
+                                               authoredY + offsetY,
           lane->laneDestination.width + offsetWidth, noteHeight + offsetHeight,
           lane->laneDestination.width, noteHeight);
     } else {
       rect = {.x = lane->laneDestination.x,
-              .y = lane->laneDestination.y + projected.authoredYDisplacement,
+              .y = lane->laneDestination.y + authoredY,
               .width = lane->laneDestination.width,
               .height = noteHeight};
     }
@@ -2122,19 +2144,28 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
               "Projected long-note lane or authored displacement is invalid.");
           return;
         }
+        const double headY = resolveScrollDisplacement(
+            projected.headAuthoredYDisplacement, projected.scrollSpeed);
+        const double tailAuthoredY = resolveScrollDisplacement(
+            projected.tailAuthoredYDisplacement, projected.scrollSpeed);
+        if (!std::isfinite(headY) || !std::isfinite(tailAuthoredY)) {
+          output.failure = diagnostic(
+              "skin.renderer.note.projection",
+              "Projected long-note lane or authored displacement is invalid.");
+          return;
+        }
         if (!resolveExpansion(output)) {
           return;
         }
         const double referenceHeight = lane->authoredNoteHeight.value_or(8.0);
-        const double displacement = projected.tailAuthoredYDisplacement -
-                                    projected.headAuthoredYDisplacement;
+        const double displacement = tailAuthoredY - headY;
         if (displacement <= 0.0) {
           return;
         }
         const auto chip =
             expandChip(lane->laneDestination.x + offsetX,
                        lane->laneDestination.y +
-                           projected.headAuthoredYDisplacement + offsetY,
+                           headY + offsetY,
                        lane->laneDestination.width + offsetWidth,
                        referenceHeight + offsetHeight,
                        lane->laneDestination.width, referenceHeight);
@@ -2187,7 +2218,16 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
 
   const auto lowerProjectedLine = [&](const SkinProjectedLineView &projected,
                                       GameplayVisualLoweringResult &output) {
-    if (!std::isfinite(projected.authoredYDisplacement)) {
+    if (note.lanes.empty() ||
+        !std::isfinite(projected.authoredYDisplacement)) {
+      output.failure =
+          diagnostic("skin.renderer.note.projection",
+                     "Projected line authored displacement is invalid.");
+      return;
+    }
+    const double authoredY = resolveScrollDisplacement(
+        projected.authoredYDisplacement, projected.scrollSpeed);
+    if (!std::isfinite(authoredY)) {
       output.failure =
           diagnostic("skin.renderer.note.projection",
                      "Projected line authored displacement is invalid.");
@@ -2230,7 +2270,7 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
       if (!evaluated.geometry || selected.suppressed || !selected.frame) {
         continue;
       }
-      evaluated.geometry->rect.y += projected.authoredYDisplacement;
+      evaluated.geometry->rect.y += authoredY;
       // LaneRenderer invokes nested line images directly, so their own clip
       // is inert. The containing Note clip remains active for every group.
       evaluated.geometry->clip =

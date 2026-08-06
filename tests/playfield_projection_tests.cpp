@@ -304,6 +304,44 @@ int main() {
     return EXIT_FAILURE;
   }
 
+  // SkinNote/LaneRenderer consumes the abstract scroll delta with its own
+  // note.dst lane height and the captured hispeed. The adapter must preserve
+  // that speed rather than publishing the built-in renderer's pixel rxhs.
+  PlayfieldProjectionResult skinSpeedProjection;
+  skinSpeedProjection.builtInTraversal = BuiltInRendererTraversal{
+      .rxhs = 900.0F, .hispeed = 2.25F};
+  skinSpeedProjection.notes = {{.noteId = 501,
+                                .lane = 0,
+                                .scrollDelta = 0.25,
+                                .submissionOrdinal = 1}};
+  skinSpeedProjection.longNotes = {{.headId = 502,
+                                    .tailId = 503,
+                                    .lane = 0,
+                                    .headScrollDelta = 0.25,
+                                    .tailScrollDelta = 0.5,
+                                    .submissionOrdinal = 2}};
+  skinSpeedProjection.lines = {{.timelineId = 504,
+                                .scrollDelta = 0.25,
+                                .submissionOrdinal = 3}};
+  const auto skinSpeedViews = adaptPlayfieldProjectionForSkin(skinSpeedProjection);
+  if (skinSpeedViews.notes.size() != 1U ||
+      skinSpeedViews.longNotes.size() != 1U ||
+      skinSpeedViews.lines.size() != 1U ||
+      !skinSpeedViews.notes.front().scrollSpeed ||
+      !skinSpeedViews.longNotes.front().scrollSpeed ||
+      !skinSpeedViews.lines.front().scrollSpeed ||
+      !closeTo(*skinSpeedViews.notes.front().scrollSpeed, 2.25) ||
+      !closeTo(*skinSpeedViews.longNotes.front().scrollSpeed, 2.25) ||
+      !closeTo(*skinSpeedViews.lines.front().scrollSpeed, 2.25) ||
+      !closeTo(skinSpeedViews.notes.front().authoredYDisplacement, 0.25) ||
+      !closeTo(skinSpeedViews.longNotes.front().headAuthoredYDisplacement,
+               0.25) ||
+      !closeTo(skinSpeedViews.lines.front().authoredYDisplacement, 0.25)) {
+    std::cerr << "skin projection must preserve LaneRenderer hispeed and "
+                 "abstract scroll deltas\n";
+    return EXIT_FAILURE;
+  }
+
   PlayfieldVisualState crossingState = state;
   crossingState.clock.visualTimeMicros = 2'000'000;
   const auto crossingWindow = projection.project(

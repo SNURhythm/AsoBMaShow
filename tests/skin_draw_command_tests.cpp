@@ -2853,6 +2853,79 @@ void testNoteLongNoteAndLineCommandsPreserveMergedProjectionOrder() {
          "timeline displacement offsets its nested line destination only");
 }
 
+void testLiveScrollUnitsUseSkinLaneHeightAndHispeed() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  state.notes = {{.visualId = 10,
+                  .lane = 0,
+                  .kind = SkinProjectedNoteKind::Normal,
+                  .authoredYDisplacement = 0.0,
+                  .submissionOrdinal = 1}};
+  state.lines = {{.timelineVisualId = 20,
+                  .kind = SkinProjectedLineKind::Group,
+                  .authoredYDisplacement = 0.0,
+                  .submissionOrdinal = 2}};
+
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects = {{.id = 1,
+                          .authoredName = "skin-scroll-units",
+                          .payload = gameplayNoteObject(resources),
+                          .authoredOrdinal = 1,
+                          .critical = true}};
+  auto presented = destination(1, 1, 0.0);
+  presented.presentation.frames.clear();
+  model.model.destinations = {std::move(presented)};
+
+  const auto legacy = evaluate(renderer, runtime, model, resources, state);
+  state.notes.front().scrollSpeed = 2.0;
+  state.notes.front().authoredYDisplacement = 0.25;
+  state.lines.front().scrollSpeed = 2.0;
+  state.lines.front().authoredYDisplacement = 0.25;
+  state.longNotes = {{.headVisualId = 30,
+                      .tailVisualId = 31,
+                      .lane = 0,
+                      .mode = SkinProjectedLongNoteMode::CN,
+                      .scrollSpeed = 2.0,
+                      .headAuthoredYDisplacement = 0.25,
+                      .tailAuthoredYDisplacement = 0.5,
+                      .submissionOrdinal = 3}};
+  const auto scaled = evaluate(renderer, runtime, model, resources, state, 2);
+
+  const auto vertexY = [](const SkinFrameEvaluationResult &result,
+                          SkinResourceId resource) -> std::optional<float> {
+    if (!result.submitReady) {
+      return std::nullopt;
+    }
+    for (const auto &command : result.submitReady->commands) {
+      const auto &quad = std::get<SkinTexturedQuadCommand>(command.payload);
+      if (quad.resource == resource) {
+        return quad.vertices[0].y;
+      }
+    }
+    return std::nullopt;
+  };
+  const auto legacyNoteY = vertexY(legacy, 100);
+  const auto legacyLineY = vertexY(legacy, 200);
+  const auto scaledNoteY = vertexY(scaled, 100);
+  const auto scaledLineY = vertexY(scaled, 200);
+  const auto longBodyY = vertexY(
+      scaled, 100 + static_cast<SkinResourceId>(SkinNoteVisualKind::LnBodyInactive));
+  // Beatoraja LaneRenderer uses (note.dst lane height * hispeed) as rxhs.
+  // A 0.25 scroll delta with a 300px lane and hispeed 2 must therefore travel
+  // 150 authored pixels for both notes and measure lines.
+  expect(legacyNoteY && scaledNoteY &&
+             *legacyNoteY - *scaledNoteY == 150.0F,
+         "live note scroll units are scaled by the skin lane height and hispeed");
+  expect(legacyLineY && scaledLineY &&
+             *legacyLineY - *scaledLineY == 150.0F,
+         "live measure-line scroll units are scaled by the skin lane height and hispeed");
+  expect(scaled.submitReady && scaled.submitReady->commands.size() == 5 &&
+             longBodyY.has_value(),
+         "long-note extent uses the same skin lane height and hispeed");
+}
+
 void testEveryLongNoteBodyStateUsesItsDistinctVisualRole() {
   RuntimeHarness runtime;
   Skin2DRenderer renderer;
@@ -3998,6 +4071,7 @@ int main() {
   testHiddenJudgeStillPreparesChildrenInPinnedCallbackOrder();
   testCriticalJudgeRequiresSupportedState();
   testNoteLongNoteAndLineCommandsPreserveMergedProjectionOrder();
+  testLiveScrollUnitsUseSkinLaneHeightAndHispeed();
   testEveryLongNoteBodyStateUsesItsDistinctVisualRole();
   testProjectedLineEmitsEveryLaneGroupAndIgnoresNestedClip();
   testSynthesizedNoteFallbacksEmitBoundedColoredPrimitives();

@@ -984,10 +984,20 @@ adaptPlayfieldProjectionForSkin(const PlayfieldProjectionResult &projection) {
   result.notes.reserve(projection.notes.size());
   result.longNotes.reserve(projection.longNotes.size());
   result.lines.reserve(projection.lines.size());
+  // SkinNote/LaneRenderer calculates its own rxhs from `lanes[0].region`.
+  // Keep the abstract scroll delta and publish only the captured unitless
+  // hispeed; Skin2DRenderer then applies each skin's note.dst lane height.
+  const std::optional<double> scrollSpeed =
+      projection.builtInTraversal &&
+              std::isfinite(projection.builtInTraversal->hispeed) &&
+              projection.builtInTraversal->hispeed > 0.0F
+          ? std::optional<double>{projection.builtInTraversal->hispeed}
+          : std::nullopt;
   for (const auto &note : projection.notes) {
     result.notes.push_back({.visualId = note.noteId,
                             .lane = note.lane,
                             .kind = toSkinNoteKind(note.source),
+                            .scrollSpeed = scrollSpeed,
                             .authoredYDisplacement = note.scrollDelta,
                             .judged = note.judged,
                             .submissionOrdinal = note.submissionOrdinal});
@@ -998,6 +1008,7 @@ adaptPlayfieldProjectionForSkin(const PlayfieldProjectionResult &projection) {
          .tailVisualId = longNote.tailId,
          .lane = longNote.lane,
          .mode = toSkinLongNoteMode(longNote.mode),
+         .scrollSpeed = scrollSpeed,
          .headAuthoredYDisplacement = longNote.headScrollDelta,
          .tailAuthoredYDisplacement = longNote.tailScrollDelta,
          .active = longNote.active,
@@ -1010,6 +1021,7 @@ adaptPlayfieldProjectionForSkin(const PlayfieldProjectionResult &projection) {
   for (const auto &line : projection.lines) {
     result.lines.push_back({.timelineVisualId = line.timelineId,
                             .kind = toSkinLineKind(line.kind),
+                            .scrollSpeed = scrollSpeed,
                             .authoredYDisplacement = line.scrollDelta,
                             .submissionOrdinal = line.submissionOrdinal});
   }
