@@ -749,14 +749,15 @@ void testTwoPhaseSubmissionFailuresAreZeroDrawAtomic() {
             command(3, quad(12, skin::SkinBlendMode::Normal,
                             skin::SkinFilterMode::Nearest)),
         }};
-    expect(!skinRenderer.submit(buffer, prepared, context, quadRenderer, frame,
-                                submitter) &&
-               backend.reserveCalls == 1 && backend.batches.empty() &&
+    expect(skinRenderer.submit(buffer, prepared, context, quadRenderer, frame,
+                               submitter) &&
+               backend.reserveCalls == 1 && backend.batches.size() == 2 &&
                submitter.preflightCalls == 1 &&
                submitter.commitCalls == 0 &&
+               submitter.finalizeCalls == 1 &&
                submitter.submittedTargets.empty(),
-           "BGA preflight failure occurs after quad planning but before every "
-           "draw");
+           "BGA preflight failure blanks only BGA and still submits every "
+           "non-BGA draw");
   }
 
   {

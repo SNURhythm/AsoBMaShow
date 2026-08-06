@@ -254,6 +254,20 @@ bool isPinnedBeatorajaBooleanPropertyId(int selector) noexcept {
 SkinBuiltinBindingCatalogView gameplaySkinBuiltinCatalog() {
   static const auto entries = makeCatalog();
   static constexpr auto ranges = std::to_array<SkinBuiltinBindingCatalogRange>({
+      // IntegerPropertyFactory owns two independent 65,536-entry caches.
+      // An integer binding is legal throughout either factory's input domain;
+      // the runtime supplies the upstream sentinel where Aso has no matching
+      // gameplay state yet. Do not turn an otherwise loadable skin into a
+      // catalog error merely because its selector is not one of our currently
+      // rendered values.
+      {.type = {.kind = SkinBindingKind::IntegerProperty,
+                .integerDomain = SkinIntegerPropertyDomain::IntegerValue},
+       .first = 0,
+       .last = 65'535},
+      {.type = {.kind = SkinBindingKind::IntegerProperty,
+                .integerDomain = SkinIntegerPropertyDomain::ImageIndex},
+       .first = 0,
+       .last = 65'535},
       {.type = {.kind = SkinBindingKind::TimerProperty},
        .first = 0,
        .last = std::numeric_limits<int>::max()},

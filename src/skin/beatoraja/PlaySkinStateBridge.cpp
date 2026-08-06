@@ -1059,6 +1059,12 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
       return {.value = metadata.selectedLongNoteMode,
               .supported = true};
     }
+    // IntegerPropertyFactory accepts the complete unsigned cache domain.
+    // An unavailable image-index source naturally selects frame zero, which
+    // is the safe source-neutral equivalent of the absent upstream property.
+    if (*id >= 0 && *id <= 65'535) {
+      return {.value = 0, .supported = true};
+    }
     reportUnsupported("image_index", selector);
     return {};
   }
@@ -1129,6 +1135,10 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
     return {.value = *duration, .supported = true};
   }
   switch (*id) {
+  case 12:
+    // PlayerConfig defaults notes-display timing to zero. Aso does not yet
+    // expose a per-profile adjustment, so preserve that upstream default.
+    return {.value = 0, .supported = true};
   case 14:
     return {.value = static_cast<std::int64_t>(
                 snapshot->authority.laneCoverPercent) *
@@ -1150,6 +1160,7 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
             .supported = true};
   }
   case 71:
+  case 100:
   case 101:
   case 171:
     return {.value = snapshot->score, .supported = true};
@@ -1266,6 +1277,9 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
     return {.value = static_cast<std::int64_t>(snapshot->score) -
                     snapshot->authority.bestScore,
             .supported = true};
+  case 121:
+  case 151:
+    return {.value = targetScore(*snapshot), .supported = true};
   case 153:
     return {.value = static_cast<std::int64_t>(snapshot->score) -
                     targetScore(*snapshot),
@@ -1328,8 +1342,23 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
   case 526:
   case 527:
     return {.value = 0, .supported = true};
+  case 165:
+    // Gameplay rendering starts after BMSResource has completed its audio/BGA
+    // load. The equivalent resource progress is therefore 100%; Unknown and
+    // Loading retain the pre-completion value of zero.
+    return {.value = snapshot->authority.loadingState ==
+                             PlayfieldLoadingState::Loaded
+                         ? 100
+                         : 0,
+            .supported = true};
   default:
     break;
+  }
+  // IntegerPropertyFactory has a 0..65535 input domain. For an official
+  // value that has no Aso gameplay counterpart yet, preserve Beatoraja's
+  // common unavailable-state sentinel instead of rejecting the whole skin.
+  if (*id >= 0 && *id <= 65'535) {
+    return {.value = std::numeric_limits<int>::min(), .supported = true};
   }
   reportUnsupported("integer", selector);
   return {};

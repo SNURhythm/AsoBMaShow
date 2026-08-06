@@ -322,6 +322,47 @@ bool hasDiagnostic(const PlaySkinStateBridge &bridge, std::string_view code) {
                              });
 }
 
+void testIntegerPropertyFactoryDomainNeverRejectsGameplaySkins() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = runtime.runtime(),
+                              .mutationTable = mutations});
+
+  auto state = stateAt(231);
+  state.authority.pacemakerTarget = {.enabled = true, .finalScore = 500};
+  state.authority.loadingState = PlayfieldLoadingState::Loaded;
+  bridge.beginFrame(state, projectionAt(231));
+
+  for (const auto [id, expected] : std::array{
+           std::pair{12, 0LL}, std::pair{100, 456LL},
+           std::pair{121, 500LL}, std::pair{165, 100LL},
+           std::pair{0, static_cast<long long>(INT32_MIN)},
+           std::pair{65'535, static_cast<long long>(INT32_MIN)}}) {
+    const auto value = bridge.integerProperty({id});
+    expect(value.supported && value.value == expected,
+           "IntegerPropertyFactory selector is accepted without a live-state "
+           "failure: " + std::to_string(id));
+  }
+  const auto imageIndex = bridge.integerProperty(
+      {65'535}, SkinIntegerPropertyDomain::ImageIndex);
+  expect(imageIndex.supported && imageIndex.value == 0,
+         "ImageIndexProperty cache upper bound selects frame zero instead of "
+         "rejecting the skin");
+  expect(!hasDiagnostic(bridge, "skin.play_state.unsupported"),
+         "full IntegerPropertyFactory input domain avoids app-specific "
+         "unsupported-state diagnostics");
+  bridge.discardFrame();
+}
+
 void testPinnedMutationTableMatchesFrozenFixtureExhaustively() {
   const auto fixture = readJsonFixture(
       "tests/fixtures/beatoraja_skin/event_mutation_table_v1.json");
@@ -792,11 +833,12 @@ void testPlayTimerPropertiesMatchPinnedJavaConversions() {
                                  SkinIntegerPropertyDomain::IntegerValue},
                             SkinBuiltinPropertySelector{id}),
            "gameplay catalog admits each implemented play-time value");
-    expect(!catalog.contains({.kind = SkinBindingKind::IntegerProperty,
-                              .integerDomain =
-                                  SkinIntegerPropertyDomain::ImageIndex},
-                             SkinBuiltinPropertySelector{id}),
-           "Beatoraja rejects play-time values as image-index selectors");
+    expect(catalog.contains({.kind = SkinBindingKind::IntegerProperty,
+                             .integerDomain =
+                                 SkinIntegerPropertyDomain::ImageIndex},
+                            SkinBuiltinPropertySelector{id}),
+           "compatibility catalog accepts every integer cache selector as an "
+           "image index too");
   }
   expect(catalog.contains({.kind = SkinBindingKind::IntegerProperty,
                            .integerDomain =
@@ -806,12 +848,12 @@ void testPlayTimerPropertiesMatchPinnedJavaConversions() {
                                .integerDomain =
                                    SkinIntegerPropertyDomain::ImageIndex},
                               SkinBuiltinPropertySelector{308}) &&
-             !catalog.contains({.kind = SkinBindingKind::IntegerProperty,
-                                .integerDomain =
-                                    SkinIntegerPropertyDomain::IntegerValue},
-                               SkinBuiltinPropertySelector{500}),
-         "catalog keeps totalnotes2 and lnmode in their pinned factories and "
-         "does not admit judge image indices as value selectors");
+             catalog.contains({.kind = SkinBindingKind::IntegerProperty,
+                               .integerDomain =
+                                   SkinIntegerPropertyDomain::IntegerValue},
+                              SkinBuiltinPropertySelector{500}),
+         "catalog accepts every selector supplied through either integer "
+         "factory cache");
   expect(catalog.contains({.kind = SkinBindingKind::FloatProperty,
                            .floatDomain = SkinFloatPropertyDomain::Rate},
                           SkinBuiltinPropertySelector{6}),
@@ -1559,6 +1601,7 @@ void testFloatWritersResolveLocallyAndRollbackCallbackMutations() {
 int main() {
   testPinnedMutationTableMatchesFrozenFixtureExhaustively();
   testDurationBindingsUsePinnedLaneRendererFormula();
+  testIntegerPropertyFactoryDomainNeverRejectsGameplaySkins();
   testBridgeOwnsSnapshotAndClosesEachFrameExactlyOnce();
   testFramePropertiesUseAuthoritativeGaugeAndTimerRules();
   testGameplayModeAndLoadingBooleanProperties();

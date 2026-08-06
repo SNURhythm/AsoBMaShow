@@ -198,7 +198,7 @@ validateScript(std::string_view script,
                             desiredSettings, stop);
 }
 
-void testAuthoritativeCatalogAdmitsOnlyExecutableBridgeSelectors() {
+void testAuthoritativeCatalogAdmitsCompatibilityIntegerFactoryDomain() {
   const SkinBuiltinBindingCatalogView catalog = gameplaySkinBuiltinCatalog();
   expect(catalog.contains({.kind = SkinBindingKind::BooleanProperty},
                           SkinBuiltinPropertySelector{241}),
@@ -221,17 +221,35 @@ void testAuthoritativeCatalogAdmitsOnlyExecutableBridgeSelectors() {
               .integerDomain = SkinIntegerPropertyDomain::IntegerValue},
              SkinBuiltinPropertySelector{107}),
          "catalog admits an authoritative gameplay integer");
+  for (const int selector : {12, 100, 121, 165}) {
+    expect(catalog.contains(
+               {.kind = SkinBindingKind::IntegerProperty,
+                .integerDomain = SkinIntegerPropertyDomain::IntegerValue},
+               SkinBuiltinPropertySelector{selector}),
+           "catalog admits each reported IntegerPropertyFactory ValueType selector");
+  }
+  for (const int selector : {0, 65'535}) {
+    expect(catalog.contains(
+               {.kind = SkinBindingKind::IntegerProperty,
+                .integerDomain = SkinIntegerPropertyDomain::IntegerValue},
+               SkinBuiltinPropertySelector{selector}) &&
+               catalog.contains(
+                   {.kind = SkinBindingKind::IntegerProperty,
+                    .integerDomain = SkinIntegerPropertyDomain::ImageIndex},
+                   SkinBuiltinPropertySelector{selector}),
+           "integer factory cache domain is admitted at both inclusive bounds");
+  }
   for (const int selector : {314, 315, 316}) {
     expect(catalog.contains(
                {.kind = SkinBindingKind::IntegerProperty,
                 .integerDomain = SkinIntegerPropertyDomain::IntegerValue},
                SkinBuiltinPropertySelector{selector}) &&
-               !catalog.contains(
+               catalog.contains(
                    {.kind = SkinBindingKind::IntegerProperty,
                     .integerDomain = SkinIntegerPropertyDomain::ImageIndex},
                    SkinBuiltinPropertySelector{selector}),
-           "validator admits each lane-cover family amount only through the "
-           "upstream Value domain");
+           "compatibility catalog accepts each integer selector in both "
+           "IntegerPropertyFactory input domains");
   }
   for (const int selector : {4, 5}) {
     expect(catalog.contains({.kind = SkinBindingKind::FloatProperty,
@@ -536,7 +554,7 @@ void testCancellationFailsClosedBeforeRetainingTheRevisionView() {
 
 int main() {
   testConfigurationDigestFramesOnlyPersistedConfigurationMaps();
-  testAuthoritativeCatalogAdmitsOnlyExecutableBridgeSelectors();
+  testAuthoritativeCatalogAdmitsCompatibilityIntegerFactoryDomain();
   testCatalogPublishesOwnedHeaderMetadataWithoutLoadingGameplay();
   testCatalogDoesNotExecuteConfiguredLuaOrFabricateMainState();
   testCatalogKeepsBeatorajaEmptyOptionDeclarationsSelectable();
