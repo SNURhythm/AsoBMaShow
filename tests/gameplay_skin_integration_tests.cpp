@@ -93,6 +93,9 @@ void gameplaySceneOwnsOnlyThePresentationBoundary() {
                  "gameplay owns the atomic presentation coordinator");
   expectContains(source, "context.acquireGameplaySkinForNextChart",
                  "gameplay calls only the injected next-chart acquisition seam");
+  expectContains(source, "\n  skin::GameplaySkinAcquisition acquisition =",
+                 "gameplay keeps the move-only selected-skin activation mutable "
+                 "until ownership transfers into its session");
   expectContains(source, "skin::PlaySkinSession::create(",
                  "gameplay creates an owning chart-lifetime skin session");
   expectContains(source, "GameplaySkinAcquisitionDisposition::Failed",

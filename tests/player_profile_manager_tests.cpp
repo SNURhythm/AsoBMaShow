@@ -2520,6 +2520,8 @@ void testProfileCrudConstraintsAndDataIsolation() {
   expect(AppSettingsStore::Save(manager.pathsFor(firstId).settingsJson,
                                 sourceSettings, settingsError),
          "duplicate source ruleset saves: " + settingsError);
+  const auto persistedSourceSettings =
+      AppSettingsStore::Load(manager.pathsFor(firstId).settingsJson);
 
   writeFile(
       manager.pathsFor(firstId).irCredentialsJson,
@@ -2552,8 +2554,9 @@ void testProfileCrudConstraintsAndDataIsolation() {
          "duplicate preserves the per-profile ruleset selection");
   const auto copiedSettings =
       AppSettingsStore::Load(manager.pathsFor(copyId).settingsJson);
-  expect(copiedSettings.status == AppSettingsLoadStatus::Loaded &&
-             copiedSettings.settings.skin == sourceSettings.skin,
+  expect(persistedSourceSettings.status == AppSettingsLoadStatus::Loaded &&
+             copiedSettings.status == AppSettingsLoadStatus::Loaded &&
+             copiedSettings.settings.skin == persistedSourceSettings.settings.skin,
          "duplicate preserves selected skin configuration and viewport");
   expect(matchingRowCount(manager.pathsFor(copyId).scoresDb,
                           "SELECT COUNT(*) FROM scores WHERE score_source=0") ==

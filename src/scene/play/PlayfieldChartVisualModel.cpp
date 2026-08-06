@@ -312,7 +312,7 @@ BeatorajaNoteCounts beatorajaNoteCounts(const bms_parser::Chart &chart,
 
 std::vector<std::string> PlayfieldChartVisualModel::runtimeStrings() const {
   std::vector<std::string> result;
-  result.reserve(5 + text.auditedStringProperties.size());
+  result.reserve(6 + text.auditedStringProperties.size());
   std::unordered_set<std::string> seen;
   const auto append = [&](const std::string &value) {
     if (!value.empty() && seen.insert(value).second) {
@@ -323,6 +323,7 @@ std::vector<std::string> PlayfieldChartVisualModel::runtimeStrings() const {
   append(text.subtitle);
   append(text.artist);
   append(text.subartist);
+  append(text.fullArtist);
   append(text.genre);
   for (const auto &[id, value] : text.auditedStringProperties) {
     (void)id;
@@ -341,6 +342,9 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
   result.text.subtitle = chart.Meta.SubTitle;
   result.text.artist = chart.Meta.Artist;
   result.text.subartist = chart.Meta.SubArtist;
+  result.text.fullArtist = chart.Meta.SubArtist.empty()
+                              ? chart.Meta.Artist
+                              : chart.Meta.Artist + " " + chart.Meta.SubArtist;
   result.text.genre = chart.Meta.Genre;
   const std::string fullTitle =
       chart.Meta.SubTitle.empty()
@@ -351,6 +355,9 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
       {13, chart.Meta.Genre},
       {14, chart.Meta.Artist},
       {15, chart.Meta.SubArtist},
+      // A chart session has no selected table unless the application provides
+      // one.  Beatoraja concatenates two empty resource values in that case.
+      {1003, ""},
   };
   const BeatorajaNoteCounts noteCounts =
       beatorajaNoteCounts(chart, longNoteModeOverride);

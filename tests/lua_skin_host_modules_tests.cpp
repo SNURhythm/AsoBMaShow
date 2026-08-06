@@ -167,6 +167,14 @@ return {
   end,
 }
 )lua");
+    writeText(source / "skin/system/get_path_parent_dofile.luaskin", R"lua(
+if not skin_config then return {type = 0} end
+local path = skin_config.get_path("../customize/settings/7keys/default.lua")
+assert(path == "skin/HostContract/skin/system/../customize/settings/7keys/default.lua")
+local settings = dofile(path)
+assert(settings.marker == "parent-selected")
+return {}
+)lua");
     writeText(source / "skin/main_state_lookup_errors.luaskin", R"lua(
 if not skin_config then return {type = 0} end
 for _, name in ipairs({"option", "number", "float_number", "text"}) do
@@ -211,11 +219,16 @@ return {}
     writeText(source / "skin/parts/static/logo.png", "ordinary-resource");
     writeText(source / "skin/parts/random/fallback.png",
               "random-fallback-must-not-win");
+    writeText(source / "skin/customize/settings/7keys/default.lua",
+              "return {marker = 'parent-selected'}\n");
 
     SkinTreeSnapshotter snapshotter(roots, aliases);
     auto snapshot = snapshotter.snapshot(source, package, {}, {});
     expect(snapshot.prepared.has_value(), "host contract fixture snapshots");
     if (snapshot.prepared) {
+      expect(fs::is_regular_file(snapshot.prepared->readView().root() /
+                                 "skin/customize/settings/7keys/default.lua"),
+             "host contract snapshots the configured entry-parent sibling");
       prepared.emplace(std::move(*snapshot.prepared));
     }
   }
@@ -476,6 +489,29 @@ void testCapturedGetPathRemainsAvailableAtRenderTransition() {
          "captured get_path performs no render file access");
 }
 
+void testGetPathCanLoadAnEntryParentSibling() {
+  auto harness = fixture().create("system/get_path_parent_dofile.luaskin",
+                                  LuaRuntimePurpose::Validation);
+  if (!harness) {
+    return;
+  }
+  const fs::path sibling =
+      harness->fileSystem->skinDirectory() /
+      "../customize/settings/7keys/default.lua";
+  expect(fs::is_regular_file(sibling),
+         "entry-parent sibling exists from the selected Lua directory");
+  expect(harness->runtime->loadHeader().value.has_value(),
+         "entry-parent sibling fixture loads its header");
+  const auto configured = harness->runtime->loadConfigured(happyConfiguration());
+  if (!configured.value && configured.failure) {
+    std::cerr << "entry-parent sibling diagnostic: "
+              << configured.failure->code << ": "
+              << configured.failure->message << '\n';
+  }
+  expect(configured.value.has_value() && !configured.failure,
+         "get_path preserves Beatoraja's selected-package sibling path for dofile");
+}
+
 void testUnsupportedDirectMainStateLookupsRaise() {
   auto harness = fixture().create("main_state_lookup_errors.luaskin",
                                   LuaRuntimePurpose::Validation);
@@ -513,6 +549,7 @@ int main() {
   testGetPathUsesBeatorajaEntryParentPaths();
   testGetPathUsesBeatorajaSourceSemantics();
   testCapturedGetPathRemainsAvailableAtRenderTransition();
+  testGetPathCanLoadAnEntryParentSibling();
   testUnsupportedDirectMainStateLookupsRaise();
   testSelectedMainStateSurfaceUsesBoundConfiguredState();
   if (failures != 0) {

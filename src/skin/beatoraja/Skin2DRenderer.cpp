@@ -2909,14 +2909,26 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       const auto *cover = std::get_if<SkinCoverObject>(&object->payload);
       const auto *judge = std::get_if<SkinJudgeObject>(&object->payload);
       const auto *bga = std::get_if<SkinBgaObject>(&object->payload);
+      const auto *builtinImage =
+          std::get_if<SkinBuiltinImageObject>(&object->payload);
+      const auto *blank = std::get_if<SkinBlankObject>(&object->payload);
       if (!image && !number && !floating && !text && !slider && !graph &&
-          !gauge && !note && !cover && !judge && !bga) {
+          !gauge && !note && !cover && !judge && !bga && !builtinImage &&
+          !blank) {
         if (reportObjectFailure(
                 result, *object,
                 diagnostic("skin.renderer.object.unsupported",
                            "Skin object lowering is not implemented."))) {
           return result;
         }
+        continue;
+      }
+
+      // SkinSourceReference returns null for unavailable system images, and
+      // optional v1 widgets deliberately have no renderer yet.  Both are
+      // valid authored objects that prepare as an empty draw, never a frame
+      // failure or a built-in gameplay fallback trigger.
+      if (builtinImage || blank) {
         continue;
       }
 

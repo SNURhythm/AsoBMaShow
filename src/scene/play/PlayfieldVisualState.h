@@ -75,6 +75,16 @@ struct PlayfieldPresentationConfig {
   bool operator==(const PlayfieldPresentationConfig &) const = default;
 };
 
+// Immutable per-judgement timing counters carried from GameplayScoreState to
+// presentation consumers.  This intentionally mirrors only the read model
+// needed by skins; it must not expose score mutation through the frame view.
+struct PlayfieldJudgementFastSlowCount {
+  int fast = 0;
+  int slow = 0;
+
+  bool operator==(const PlayfieldJudgementFastSlowCount &) const = default;
+};
+
 enum class PlayfieldGameplayMode : std::uint8_t {
   Unknown,
   Play,
@@ -91,7 +101,13 @@ enum class PlayfieldLoadingState : std::uint8_t {
 struct PlayfieldAuthorityUpdate {
   double currentBpm = 0.0;
   std::map<Judgement, int> judgementCounters;
+  std::map<Judgement, PlayfieldJudgementFastSlowCount>
+      judgementFastSlowCounters;
   int comboBreak = 0;
+  int maximumCombo = 0;
+  // ScoreDataProperty's persisted best score.  It is zero when the chart has
+  // no local best record, matching its gameplay-side initialization.
+  int bestScore = 0;
   GaugeType gaugeType = GaugeType::Normal;
   GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
   float currentGauge = 0.0F;
@@ -131,6 +147,9 @@ inline constexpr long long kPlayfieldTimestampOff =
 struct LanePresentationState {
   bool pressed = false;
   JudgeResult lastPressedJudge = JudgeResult(None, 0);
+  // The exact encoded JudgeManager.getJudge() value used by Beatoraja image
+  // selectors 500-519.  A Kpoor deliberately leaves this unchanged.
+  int beatorajaJudgeValue = 0;
   long long pressMicros = kPlayfieldTimestampOff;
   long long releaseMicros = kPlayfieldTimestampOff;
   long long bombMicros = kPlayfieldTimestampOff;
@@ -139,6 +158,7 @@ struct LanePresentationState {
     return pressed == other.pressed &&
            lastPressedJudge.judgement == other.lastPressedJudge.judgement &&
            lastPressedJudge.Diff == other.lastPressedJudge.Diff &&
+           beatorajaJudgeValue == other.beatorajaJudgeValue &&
            pressMicros == other.pressMicros &&
            releaseMicros == other.releaseMicros &&
            bombMicros == other.bombMicros;

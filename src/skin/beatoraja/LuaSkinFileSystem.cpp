@@ -256,6 +256,7 @@ std::optional<std::regex> compileLuaFileListPattern(std::string_view pattern) {
 struct LuaSkinFileSystem::Impl {
   SkinRevisionReadView revision;
   SkinEntryId entry;
+  fs::path packageRoot;
   fs::path skinDirectory;
   fs::path entryPath;
   fs::path beatorajaSkinRoot;
@@ -263,6 +264,38 @@ struct LuaSkinFileSystem::Impl {
 
   NormalizedReference normalize(std::string_view authored,
                                 bool allowPackageRoot = false) const {
+    // SkinLoader#getPath returns paths rooted at Beatoraja's `skin/`
+    // directory.  A configured skin can subsequently pass that exact result
+    // to dofile/io, including a sibling reached through `..` from its entry
+    // directory.  Interpret only this explicit virtual form against the
+    // package root; ordinary relative Lua paths retain SkinLuaPathResolver's
+    // selected-entry-directory boundary below.
+    constexpr std::string_view beatorajaRootPrefix = "skin/";
+    if (authored.starts_with(beatorajaRootPrefix)) {
+      const std::string packagePrefix =
+          std::string(beatorajaRootPrefix) + entry.package.directoryName;
+      const bool currentPackage =
+          authored == packagePrefix ||
+          (authored.size() > packagePrefix.size() &&
+           authored.starts_with(packagePrefix) &&
+           authored[packagePrefix.size()] == '/');
+      std::string_view suffix =
+          currentPackage ? authored.substr(packagePrefix.size())
+                         : authored.substr(beatorajaRootPrefix.size());
+      if (currentPackage && suffix.starts_with('/')) {
+        suffix.remove_prefix(1);
+      }
+      const fs::path resolved =
+          ((currentPackage ? packageRoot : beatorajaSkinRoot) /
+           pathFromUtf8(suffix))
+              .lexically_normal();
+      if (!isWithinDirectory(resolved, beatorajaSkinRoot)) {
+        return {.failure = failure(
+                    SkinFileError::EscapesPackage, authored,
+                    "skin file access is outside Beatoraja's skin directory")};
+      }
+      return {.path = utf8Path(resolved)};
+    }
     return normalizeAtSkinDirectory(skinDirectory, authored,
                                     allowPackageRoot);
   }
@@ -337,7 +370,10 @@ LuaSkinFileSystem::create(LuaSkinFileSystemOptions options) {
   // execution reads the ordinary on-disk skin directory.  Prefer the
   // Files-visible package whenever it is present.
   fs::path packageRoot = revisionRoot;
-  fs::path beatorajaSkinRoot = revisionRoot;
+  // A private revision is laid out as `<revision digest>/<package>`; its
+  // parent supplies the same virtual `skin/` root when a Files-visible
+  // package is not available.
+  fs::path beatorajaSkinRoot = revisionRoot.parent_path();
   if (!options.storageRoots.visiblePackages.empty()) {
     const fs::path visiblePackage =
         (options.storageRoots.visiblePackages / options.entry.package.directoryName)
@@ -360,6 +396,7 @@ LuaSkinFileSystem::create(LuaSkinFileSystemOptions options) {
   auto impl = std::unique_ptr<Impl>(new Impl{
       .revision = options.revision,
       .entry = std::move(options.entry),
+      .packageRoot = packageRoot,
       .skinDirectory = skinDirectory,
       .entryPath = entryPath,
       .beatorajaSkinRoot = beatorajaSkinRoot,

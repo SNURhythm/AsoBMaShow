@@ -56,6 +56,35 @@ bool validBindingSource(const Binding &binding, SkinBindingType type,
   return context.callbacks.contains(std::get<LuaCallbackId>(binding.source));
 }
 
+template <typename Binding>
+std::string describeBindingSource(const Binding &binding,
+                                  std::string_view kind) {
+  std::string result(kind);
+  result += " binding ";
+  result += std::to_string(binding.id.value);
+  result += " from ";
+  if (const auto *builtin =
+          std::get_if<SkinBuiltinPropertySelector>(&binding.source)) {
+    std::visit(
+        [&result](const auto &selector) {
+          using T = std::decay_t<decltype(selector)>;
+          if constexpr (std::is_same_v<T, int>) {
+            result += std::to_string(selector);
+          } else {
+            result += "'" + selector + "'";
+          }
+        },
+        builtin->value);
+    return result;
+  }
+  result += "callback ";
+  const auto callback = std::get<LuaCallbackId>(binding.source);
+  result += std::to_string(callback.slot);
+  result += "/";
+  result += std::to_string(callback.generation);
+  return result;
+}
+
 bool laneCoverRateSelector(const SkinBuiltinPropertySelector &builtin) {
   if (const auto *selector = std::get_if<int>(&builtin.value)) {
     return *selector == 4 || *selector == 5;
@@ -560,14 +589,17 @@ SkinModelValidationResult SkinModelValidator::validate(
 
   for (const auto &object : model.objects) {
     if (object.id == 0 || object.authoredName.empty() ||
-        !objectIds.insert(object.id).second ||
-        !objectNames.emplace(object.authoredName, object.id).second) {
+        !objectIds.insert(object.id).second) {
       result.criticalFailure = true;
       result.diagnostics.push_back(validationDiagnostic(
           "skin_lua_model_object_identity_invalid",
           "Lua skin object identities must be nonzero and unique"));
       return result;
     }
+    // The pinned loader creates a fresh SkinObject for each destination.
+    // Keep the first matching internal ID for legacy lookup clients while
+    // allowing repeated authored destination names.
+    objectNames.try_emplace(object.authoredName, object.id);
   }
 
   std::set<std::uint32_t> validBooleanIds;
@@ -578,10 +610,19 @@ SkinModelValidationResult SkinModelValidator::validate(
   std::set<std::uint32_t> validFloatWriterIds;
   std::set<std::uint32_t> validStringWriterIds;
   std::set<std::uint32_t> validEventIds;
+  std::vector<std::string> invalidBindingSources;
   bool allBindingSourcesValid = true;
-  allBindingSourcesValid &= collectValidBindingIds(
-      model.booleanProperties, {.kind = SkinBindingKind::BooleanProperty},
-      bindingContext, validBooleanIds);
+  for (const auto &binding : model.booleanProperties) {
+    if (validBindingSource(
+            binding, {.kind = SkinBindingKind::BooleanProperty},
+            bindingContext)) {
+      validBooleanIds.insert(binding.id.value);
+    } else {
+      allBindingSourcesValid = false;
+      invalidBindingSources.push_back(
+          describeBindingSource(binding, "BooleanProperty"));
+    }
+  }
   for (const auto &binding : model.integerProperties) {
     const SkinBindingType type{.kind = SkinBindingKind::IntegerProperty,
                                .integerDomain = binding.domain};
@@ -589,6 +630,8 @@ SkinModelValidationResult SkinModelValidator::validate(
       validIntegerIds.insert(binding.id.value);
     } else {
       allBindingSourcesValid = false;
+      invalidBindingSources.push_back(
+          describeBindingSource(binding, "IntegerProperty"));
     }
   }
   for (const auto &binding : model.floatProperties) {
@@ -598,28 +641,43 @@ SkinModelValidationResult SkinModelValidator::validate(
       validFloatIds.insert(binding.id.value);
     } else {
       allBindingSourcesValid = false;
+      invalidBindingSources.push_back(
+          describeBindingSource(binding, "FloatProperty"));
     }
   }
-  allBindingSourcesValid &= collectValidBindingIds(
-      model.stringProperties, {.kind = SkinBindingKind::StringProperty},
-      bindingContext, validStringIds);
-  allBindingSourcesValid &= collectValidBindingIds(
-      model.timerProperties, {.kind = SkinBindingKind::TimerProperty},
-      bindingContext, validTimerIds);
-  allBindingSourcesValid &= collectValidBindingIds(
-      model.floatWriters, {.kind = SkinBindingKind::FloatWriter},
-      bindingContext, validFloatWriterIds);
-  allBindingSourcesValid &= collectValidBindingIds(
-      model.stringWriters, {.kind = SkinBindingKind::StringWriter},
-      bindingContext, validStringWriterIds);
-  allBindingSourcesValid &=
-      collectValidBindingIds(model.events, {.kind = SkinBindingKind::Event},
-                             bindingContext, validEventIds);
+  const auto collect = [&](const auto &bindings, SkinBindingType type,
+                           auto &validIds, std::string_view kind) {
+    for (const auto &binding : bindings) {
+      if (validBindingSource(binding, type, bindingContext)) {
+        validIds.insert(binding.id.value);
+      } else {
+        allBindingSourcesValid = false;
+        invalidBindingSources.push_back(describeBindingSource(binding, kind));
+      }
+    }
+  };
+  collect(model.stringProperties, {.kind = SkinBindingKind::StringProperty},
+          validStringIds, "StringProperty");
+  collect(model.timerProperties, {.kind = SkinBindingKind::TimerProperty},
+          validTimerIds, "TimerProperty");
+  collect(model.floatWriters, {.kind = SkinBindingKind::FloatWriter},
+          validFloatWriterIds, "FloatWriter");
+  collect(model.stringWriters, {.kind = SkinBindingKind::StringWriter},
+          validStringWriterIds, "StringWriter");
+  collect(model.events, {.kind = SkinBindingKind::Event}, validEventIds,
+          "Event");
   if (!allBindingSourcesValid) {
+    std::string detail;
+    for (const auto &source : invalidBindingSources) {
+      if (!detail.empty()) {
+        detail += ", ";
+      }
+      detail += source;
+    }
     result.diagnostics.push_back(validationDiagnostic(
         "skin_lua_model_binding_source_invalid",
         "Lua skin binding source is not present in the typed built-in catalog "
-        "or live callback generation"));
+        "or live callback generation: " + detail));
   }
 
   std::map<std::uint32_t, SkinIntegerPropertyDomain> integers;
@@ -693,14 +751,16 @@ SkinModelValidationResult SkinModelValidator::validate(
       result.criticalFailure = true;
       result.diagnostics.push_back(validationDiagnostic(
           "skin_lua_model_critical_dependency_invalid",
-          "Lua skin critical object has an invalid dependency"));
+          "Lua skin critical object '" + object.authoredName +
+              "' has an invalid dependency"));
       return result;
     }
     disabled.push_back(object.id);
     disabledIds.insert(object.id);
     result.diagnostics.push_back(validationDiagnostic(
         "skin_lua_model_optional_object_disabled",
-        "Lua skin optional object has an invalid dependency"));
+        "Lua skin optional object '" + object.authoredName +
+            "' has an invalid dependency"));
   }
 
   // Judge children are materialized as source-neutral synthetic objects. A
@@ -725,14 +785,16 @@ SkinModelValidationResult SkinModelValidator::validate(
       result.criticalFailure = true;
       result.diagnostics.push_back(validationDiagnostic(
           "skin_lua_model_critical_dependency_invalid",
-          "Lua skin critical Judge references a disabled child"));
+          "Lua skin critical Judge '" + object.authoredName +
+              "' references a disabled child"));
       return result;
     }
     disabled.push_back(object.id);
     disabledIds.insert(object.id);
     result.diagnostics.push_back(
         validationDiagnostic("skin_lua_model_optional_object_disabled",
-                             "Lua skin Judge references a disabled child"));
+                             "Lua skin Judge '" + object.authoredName +
+                                 "' references a disabled child"));
   }
 
   for (const auto &destination : model.destinations) {

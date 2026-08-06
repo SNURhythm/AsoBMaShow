@@ -37,7 +37,9 @@ bool PlayfieldAuthorityUpdate::operator==(
     const PlayfieldAuthorityUpdate &other) const {
   return currentBpm == other.currentBpm &&
          judgementCounters == other.judgementCounters &&
+         judgementFastSlowCounters == other.judgementFastSlowCounters &&
          comboBreak == other.comboBreak && gaugeType == other.gaugeType &&
+         maximumCombo == other.maximumCombo && bestScore == other.bestScore &&
          gaugeAutoShift == other.gaugeAutoShift &&
          currentGauge == other.currentGauge && gaugeRules == other.gaugeRules &&
          sameTarget(pacemakerTarget, other.pacemakerTarget) &&
@@ -272,6 +274,15 @@ void PlayfieldVisualStateStore::onLanePressed(int lane, JudgeResult judge,
   auto &state = lanes_[it->second];
   state.pressed = true;
   state.lastPressedJudge = judge;
+  // JudgeManager.updateMicro uses `judge == 0 ? 1 : judge * 2 +
+  // (mfast > 0 ? 0 : 1)` and does not overwrite the stored lane value for
+  // Kpoor.  Aso's Diff is negative for fast, the inverse of upstream mfast.
+  if (judge.judgement == PGreat) {
+    state.beatorajaJudgeValue = 1;
+  } else if (judge.judgement != None && judge.judgement != Kpoor) {
+    state.beatorajaJudgeValue = static_cast<int>(judge.judgement) * 2 +
+                                (judge.Diff < 0 ? 0 : 1);
+  }
   state.pressMicros = eventMicros;
   if (judge.judgement != None) {
     state.bombMicros = eventMicros;

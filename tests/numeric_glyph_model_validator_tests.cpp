@@ -151,6 +151,27 @@ void expectOptionalAndCriticalRejected(BeatorajaSkinModel model,
          message);
 }
 
+void validatorDiagnosticsNameTheRejectedObject() {
+  auto optionalModel = floatModel(validFloatDigits());
+  floatObject(optionalModel).integerDigits = -1;
+  const auto optional = test_support::validateWithAuthoredBuiltins(
+      std::move(optionalModel));
+  expect(optional.model && !optional.diagnostics.empty() &&
+             optional.diagnostics.front().message.find("'float'") !=
+                 std::string::npos,
+         "optional dependency diagnostics identify their authored object");
+
+  auto criticalModel = floatModel(validFloatDigits());
+  floatObject(criticalModel).integerDigits = -1;
+  criticalModel.objects.front().critical = true;
+  const auto critical = test_support::validateWithAuthoredBuiltins(
+      std::move(criticalModel));
+  expect(!critical.model && !critical.diagnostics.empty() &&
+             critical.diagnostics.front().message.find("'float'") !=
+                 std::string::npos,
+         "critical dependency diagnostics identify their authored object");
+}
+
 void validatorRejectsUnequalInvalidAndExcessDigitSets() {
   {
     SkinDigitSpriteSet digits;
@@ -330,5 +351,6 @@ int main() {
   validatorRejectsMalformedFloatObjectFormats();
   validatorRejectsIntegerRateSpansAboveJavaIntMax();
   validatorAcceptsDescendingIntegerRateRanges();
+  validatorDiagnosticsNameTheRejectedObject();
   return failures == 0 ? 0 : 1;
 }

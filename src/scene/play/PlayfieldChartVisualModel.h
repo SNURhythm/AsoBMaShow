@@ -73,6 +73,7 @@ struct PlayfieldChartTextMetadata {
   std::string subtitle;
   std::string artist;
   std::string subartist;
+  std::string fullArtist;
   std::string genre;
   std::map<int, std::string> auditedStringProperties;
 

@@ -23,7 +23,7 @@ void add(std::vector<SkinBuiltinBindingCatalogEntry> &entries,
 
 std::vector<SkinBuiltinBindingCatalogEntry> makeCatalog() {
   std::vector<SkinBuiltinBindingCatalogEntry> entries;
-  entries.reserve(160);
+  entries.reserve(240);
 
   const SkinBindingType boolean{.kind = SkinBindingKind::BooleanProperty};
   for (const int selector : std::to_array(
@@ -43,13 +43,18 @@ std::vector<SkinBuiltinBindingCatalogEntry> makeCatalog() {
   }
 
   constexpr auto integerSelectors = std::to_array(
-      {14,  71,  74,  90,  91,  92,  96,  101, 107, 110, 111,  112, 113,
-       114, 160, 171, 350, 351, 352, 353, 407, 427, 525, 1163, 1164});
+      {14,  71,  74,  75,  90,  91,  92,  96,  101, 102, 103, 105, 107,
+       110, 111, 112, 113, 114, 152, 153, 160, 171, 313, 350, 351, 352,
+       353, 407, 410, 411, 412, 413, 414, 415, 416, 417, 418, 419, 420,
+       421, 422, 425, 427, 525, 526, 527, 1163, 1164});
   for (const auto domain : {SkinIntegerPropertyDomain::IntegerValue,
                             SkinIntegerPropertyDomain::ImageIndex}) {
     const SkinBindingType integer{.kind = SkinBindingKind::IntegerProperty,
                                   .integerDomain = domain};
     for (const int selector : integerSelectors) {
+      add(entries, integer, selector);
+    }
+    for (int selector = 500; selector <= 519; ++selector) {
       add(entries, integer, selector);
     }
     add(entries, integer, "nowbpm");
@@ -68,13 +73,19 @@ std::vector<SkinBuiltinBindingCatalogEntry> makeCatalog() {
   add(entries, floating, 4);
   add(entries, floating, 5);
   add(entries, floating, 6);
+  for (int selector = 110; selector <= 115; ++selector) {
+    add(entries, floating, selector);
+  }
+  add(entries, floating, 102);
   add(entries, floating, "lanecover");
   add(entries, floating, "lanecover2");
 
   const SkinBindingType string{.kind = SkinBindingKind::StringProperty};
-  constexpr auto stringSelectors = std::to_array({10, 11, 12, 13, 14, 15});
-  constexpr auto stringNames = std::to_array(
-      {"title", "subtitle", "fulltitle", "genre", "artist", "subartist"});
+  constexpr auto stringSelectors =
+      std::to_array({10, 11, 12, 13, 14, 15, 16, 1003});
+  constexpr auto stringNames = std::to_array({
+      "title", "subtitle", "fulltitle", "genre", "artist", "subartist",
+      "fullartist", "tablefull"});
   for (std::size_t index = 0; index < stringSelectors.size(); ++index) {
     add(entries, string, stringSelectors[index]);
     add(entries, string, stringNames[index]);
@@ -90,12 +101,9 @@ std::vector<SkinBuiltinBindingCatalogEntry> makeCatalog() {
   // unguarded self/cyclic dispatch. Keep the context-free catalog closed until
   // validation distinguishes those binding roles or the bridge bounds cycles.
 
-  // Non-exhaustive pinned Beatoraja c2ed5db1 default play/play7main.lua gaps
-  // include integer refs 102/103/121/150/310-312, boolean options
-  // 80/270/901/911/912, and a changeable lane-cover slider whose implicit
-  // type/writer selector is 4. Timers are not a gap: TimerPropertyFactory and
-  // PlaySkinStateBridge both define every nonnegative ID, including an exact
-  // inactive fallback. No built-in float or string writer is executable yet.
+  // Timers are not a gap: TimerPropertyFactory and PlaySkinStateBridge both
+  // define every nonnegative ID, including an exact inactive fallback. No
+  // built-in float or string writer is executable yet.
   return entries;
 }
 

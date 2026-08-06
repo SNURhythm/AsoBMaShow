@@ -18,6 +18,41 @@ std::int64_t capturedJudgeCount(const PlayfieldVisualState &snapshot,
                                                               : found->second;
 }
 
+std::int64_t capturedJudgeFastSlowCount(const PlayfieldVisualState &snapshot,
+                                        Judgement judgement, bool fast) {
+  const auto found = snapshot.authority.judgementFastSlowCounters.find(judgement);
+  if (found == snapshot.authority.judgementFastSlowCounters.end()) {
+    return 0;
+  }
+  return fast ? found->second.fast : found->second.slow;
+}
+
+double scoreRate(int score, int notes) {
+  return notes == 0 ? 1.0
+                    : static_cast<double>(static_cast<float>(score) /
+                                          static_cast<float>(notes * 2));
+}
+
+int targetScore(const PlayfieldVisualState &snapshot) {
+  return snapshot.authority.pacemakerTarget.enabled
+             ? snapshot.authority.pacemakerTarget.finalScore
+             : 0;
+}
+
+std::int64_t beatorajaKeyJudgeValue(const PlayfieldVisualState &snapshot,
+                                    int selector) {
+  // SkinPropertyMapper maps 500-519 as two groups of ten: player then key.
+  // Gameplay is currently single-player, so the absent 2P group follows
+  // JudgeManager.getJudge() and reports -1.
+  const int player = (selector - 500) / 10;
+  const int key = (selector - 500) % 10;
+  if (player != 0 || key < 0 ||
+      static_cast<std::size_t>(key) >= snapshot.lanes.size()) {
+    return -1;
+  }
+  return snapshot.lanes[static_cast<std::size_t>(key)].beatorajaJudgeValue;
+}
+
 std::int64_t javaDoubleToInt(double value) {
   if (std::isnan(value)) {
     return 0;
@@ -29,6 +64,16 @@ std::int64_t javaDoubleToInt(double value) {
     return std::numeric_limits<int>::min();
   }
   return static_cast<int>(value);
+}
+
+std::pair<std::int64_t, std::int64_t> scoreRateParts(double rate) {
+  // ScoreDataProperty stores these intermediate values as Java float before
+  // applying the integer cast, so preserve the single-precision products.
+  const auto javaRate = static_cast<float>(rate);
+  const auto scaled = javaDoubleToInt(static_cast<float>(javaRate * 100.0F));
+  const auto afterDot =
+      javaDoubleToInt(static_cast<float>(javaRate * 10'000.0F)) % 100;
+  return {scaled, afterDot};
 }
 
 std::int64_t javaLongSubtract(std::int64_t left, std::int64_t right) {
@@ -943,19 +988,132 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
                      capturedJudgeCount(*snapshot, Poor) +
                      capturedJudgeCount(*snapshot, Kpoor),
             .supported = true};
+  case 75:
+  case 105:
+    return {.value = snapshot->authority.maximumCombo, .supported = true};
+  case 102:
+  case 103: {
+    const auto [integer, fractional] = scoreRateParts(scoreRate(
+        snapshot->score, snapshot->authority.pacemakerStatus.playedNotes));
+    return {.value = *id == 102 ? integer : fractional, .supported = true};
+  }
+  case 152:
+    return {.value = static_cast<std::int64_t>(snapshot->score) -
+                    snapshot->authority.bestScore,
+            .supported = true};
+  case 153:
+    return {.value = static_cast<std::int64_t>(snapshot->score) -
+                    targetScore(*snapshot),
+            .supported = true};
+  case 313:
+    // Aso's authoritative setting is already expressed in green-number
+    // units; Beatoraja's selector 313 converts its duration into that same
+    // unit.  Do not apply the conversion twice.
+    return {.value = snapshot->configuration.visibleTimeGreenNumber,
+            .supported = true};
+  case 410:
+  case 411:
+  case 412:
+  case 413:
+  case 414:
+  case 415:
+  case 416:
+  case 417:
+  case 418:
+  case 419:
+  case 421:
+  case 422: {
+    const bool fast = *id == 410 || *id == 412 || *id == 414 ||
+                      *id == 416 || *id == 418 || *id == 421;
+    const Judgement judgement = [&] {
+      switch (*id) {
+      case 410:
+      case 411:
+        return PGreat;
+      case 412:
+      case 413:
+        return Great;
+      case 414:
+      case 415:
+        return Good;
+      case 416:
+      case 417:
+        return Bad;
+      case 418:
+      case 419:
+        return Poor;
+      default:
+        return Kpoor;
+      }
+    }();
+    return {.value = capturedJudgeFastSlowCount(*snapshot, judgement, fast),
+            .supported = true};
+  }
+  case 420:
+    return {.value = capturedJudgeCount(*snapshot, Kpoor), .supported = true};
+  case 425:
+    return {.value = snapshot->authority.comboBreak, .supported = true};
   case 525:
     return {.value = snapshot->fastSlowMicros, .supported = true};
+  case 526:
+  case 527:
+    return {.value = 0, .supported = true};
   default:
-    reportUnsupported("integer", selector);
-    return {};
+    break;
   }
+  if (*id >= 500 && *id <= 519) {
+    return {.value = beatorajaKeyJudgeValue(*snapshot, *id), .supported = true};
+  }
+  reportUnsupported("integer", selector);
+  return {};
 }
 
 SkinPropertyLookup<double> PlaySkinStateBridge::floatProperty(
     const SkinBuiltinPropertySelector &selector) {
   const auto *snapshot = state();
   const auto id = numericSelector(selector);
-  if (snapshot != nullptr && id && *id == 6) {
+  if (snapshot == nullptr || !id) {
+    reportUnsupported("float", selector);
+    return {};
+  }
+  const int totalNotes = context_.chartModel.staticMetadata.totalNotes;
+  const int playedNotes = snapshot->authority.pacemakerStatus.playedNotes;
+  const auto currentFullRate = scoreRate(snapshot->score, totalNotes);
+  const auto currentRate = scoreRate(snapshot->score, playedNotes);
+  const auto bestFullRate =
+      scoreRate(snapshot->authority.bestScore, totalNotes);
+  const auto targetFullRate = scoreRate(targetScore(*snapshot), totalNotes);
+  const auto partialRate = [&](int score) {
+    if (totalNotes == 0) {
+      return 0.0;
+    }
+    return static_cast<double>(static_cast<float>(score) * playedNotes /
+                               static_cast<float>(totalNotes * totalNotes * 2));
+  };
+  switch (*id) {
+  case 102:
+    return {.value = snapshot->authority.loadingState ==
+                         PlayfieldLoadingState::Loaded
+                         ? 1.0
+                         : 0.0,
+            .supported = true};
+  case 110:
+    return {.value = currentFullRate, .supported = true};
+  case 111:
+    return {.value = currentRate, .supported = true};
+  case 112:
+    return {.value = partialRate(snapshot->authority.bestScore),
+            .supported = true};
+  case 113:
+    return {.value = bestFullRate, .supported = true};
+  case 114:
+    return {.value = partialRate(targetScore(*snapshot)), .supported = true};
+  case 115:
+    return {.value = targetFullRate, .supported = true};
+  default:
+    break;
+  }
+  if (*id == 6) {
     if (!snapshot->clock.playTimer.elapsedMillisExact) {
       return {};
     }
@@ -970,7 +1128,7 @@ SkinPropertyLookup<double> PlaySkinStateBridge::floatProperty(
         static_cast<float>(*snapshot->clock.playTimer.playtimeMillis);
     return {.value = std::min(progress, 1.0F), .supported = true};
   }
-  if (snapshot != nullptr && id && (*id == 4 || *id == 5)) {
+  if (*id == 4 || *id == 5) {
     if (!snapshot->authority.laneCoverEnabled) {
       return {.value = 0.0, .supported = true};
     }
@@ -1008,6 +1166,18 @@ SkinPropertyLookup<std::string_view> PlaySkinStateBridge::stringProperty(
       return {.value = audited->second, .supported = true};
     }
     break;
+  }
+  case 16:
+    return {.value = text.fullArtist, .supported = true};
+  case 1003: {
+    const auto audited = text.auditedStringProperties.find(*id);
+    if (audited != text.auditedStringProperties.end()) {
+      return {.value = audited->second, .supported = true};
+    }
+    // PlayerResource.getTableFullname() is an empty concatenation when no
+    // table context is selected, which is the authoritative app state here.
+    static constexpr std::string_view empty;
+    return {.value = empty, .supported = true};
   }
   case 13:
     return {.value = text.genre, .supported = true};
@@ -1257,6 +1427,10 @@ std::optional<int> PlaySkinStateBridge::numericSelector(
     return 14;
   if (name == "subartist")
     return 15;
+  if (name == "fullartist")
+    return 16;
+  if (name == "tablefull")
+    return 1003;
   if (name == "nowbpm")
     return 160;
   if (name == "lanecover")

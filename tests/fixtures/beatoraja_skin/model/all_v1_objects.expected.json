@@ -43,16 +43,16 @@
   ],
   "stripStates": [
     [
-      {"x": 0, "y": 0, "w": 10, "h": 10},
-      {"x": 10, "y": 0, "w": 10, "h": 10},
-      {"x": 20, "y": 0, "w": 10, "h": 10},
-      {"x": 30, "y": 0, "w": 10, "h": 10}
+      {"x": 0, "y": 0, "w": 40, "h": 20, "gridColumn": 0, "gridRow": 0, "gridColumns": 4, "gridRows": 2},
+      {"x": 0, "y": 0, "w": 40, "h": 20, "gridColumn": 1, "gridRow": 0, "gridColumns": 4, "gridRows": 2},
+      {"x": 0, "y": 0, "w": 40, "h": 20, "gridColumn": 2, "gridRow": 0, "gridColumns": 4, "gridRows": 2},
+      {"x": 0, "y": 0, "w": 40, "h": 20, "gridColumn": 3, "gridRow": 0, "gridColumns": 4, "gridRows": 2}
     ],
     [
-      {"x": 0, "y": 10, "w": 10, "h": 10},
-      {"x": 10, "y": 10, "w": 10, "h": 10},
-      {"x": 20, "y": 10, "w": 10, "h": 10},
-      {"x": 30, "y": 10, "w": 10, "h": 10}
+      {"x": 0, "y": 0, "w": 40, "h": 20, "gridColumn": 0, "gridRow": 1, "gridColumns": 4, "gridRows": 2},
+      {"x": 0, "y": 0, "w": 40, "h": 20, "gridColumn": 1, "gridRow": 1, "gridColumns": 4, "gridRows": 2},
+      {"x": 0, "y": 0, "w": 40, "h": 20, "gridColumn": 2, "gridRow": 1, "gridColumns": 4, "gridRows": 2},
+      {"x": 0, "y": 0, "w": 40, "h": 20, "gridColumn": 3, "gridRow": 1, "gridColumns": 4, "gridRows": 2}
     ]
   ],
   "imageSetStates": [
@@ -61,8 +61,8 @@
       "cycleMillis": 100,
       "timerSelector": 42,
       "frames": [
-        {"x": 2, "y": 3, "w": 10, "h": 10},
-        {"x": 12, "y": 3, "w": 10, "h": 10}
+        {"x": 2, "y": 3, "w": 20, "h": 10, "gridColumn": 0, "gridRow": 0, "gridColumns": 2, "gridRows": 1},
+        {"x": 2, "y": 3, "w": 20, "h": 10, "gridColumn": 1, "gridRow": 0, "gridColumns": 2, "gridRows": 1}
       ]
     },
     {
@@ -70,9 +70,9 @@
       "cycleMillis": 250,
       "timerSelector": 43,
       "frames": [
-        {"x": 9, "y": 8, "w": -4, "h": 6},
-        {"x": 5, "y": 8, "w": -4, "h": 6},
-        {"x": 1, "y": 8, "w": -4, "h": 6}
+        {"x": 9, "y": 8, "w": -12, "h": 6, "gridColumn": 0, "gridRow": 0, "gridColumns": 3, "gridRows": 1},
+        {"x": 9, "y": 8, "w": -12, "h": 6, "gridColumn": 1, "gridRow": 0, "gridColumns": 3, "gridRows": 1},
+        {"x": 9, "y": 8, "w": -12, "h": 6, "gridColumn": 2, "gridRow": 0, "gridColumns": 3, "gridRows": 1}
       ]
     }
   ],

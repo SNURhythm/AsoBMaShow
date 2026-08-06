@@ -109,8 +109,9 @@ void testChartModelOwnsStablePointerFreeValues() {
               model.text.subtitle == "Immutable Mix" &&
               model.text.artist == "Pointer Free" &&
               model.text.subartist == "Value Copy" &&
+              model.text.fullArtist == "Pointer Free Value Copy" &&
               model.text.genre == "TEST",
-          "all gameplay chart strings are copied");
+          "all gameplay chart strings, including Beatoraja fullartist, are copied");
   require(model.text.auditedStringProperties.at(12) ==
               "Snapshot Song Immutable Mix" &&
               model.text.auditedStringProperties.at(13) == "TEST" &&
@@ -119,7 +120,8 @@ void testChartModelOwnsStablePointerFreeValues() {
           "Task 1 audited chart string properties are preserved exactly");
   require(model.runtimeStrings() ==
               std::vector<std::string>{"Snapshot Song", "Immutable Mix",
-                                       "Pointer Free", "Value Copy", "TEST",
+                                       "Pointer Free", "Value Copy",
+                                       "Pointer Free Value Copy", "TEST",
                                        "Snapshot Song Immutable Mix"},
           "runtime glyph strings are stable and deduplicated");
   require(model.timelines.size() == 4 && model.scrollPrefix.size() == 4 &&

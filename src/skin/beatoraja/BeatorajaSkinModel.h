@@ -406,11 +406,24 @@ struct SkinJudgeObject {
 
 struct SkinBgaObject {};
 
+// JsonSkinLoader recognizes every negative destination ID before resolving
+// authored definitions.  The upstream source reference can legitimately have
+// no texture for an unknown ID, in which case SkinImage simply does not draw.
+struct SkinBuiltinImageObject {
+  int referenceId = 0;
+};
+
+// These gameplay widgets are accepted by the pinned loader.  Their rendering
+// is intentionally deferred, but they remain live objects so their authored
+// destinations do not turn into a validation failure.
+struct SkinBlankObject {};
+
 using SkinObjectPayload =
     std::variant<SkinImageObject, SkinNumberObject, SkinFloatObject,
                  SkinTextObject, SkinSliderObject, SkinGraphObject,
                  SkinGaugeObject, SkinNoteObject, SkinCoverObject,
-                 SkinJudgeObject, SkinBgaObject>;
+                 SkinJudgeObject, SkinBgaObject, SkinBuiltinImageObject,
+                 SkinBlankObject>;
 
 struct SkinObjectDefinition {
   SkinObjectId id = 0;

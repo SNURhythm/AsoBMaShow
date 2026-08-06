@@ -686,6 +686,114 @@ void testConfiguredLoadUsesTheInitializedAuthoritativeState() {
          "configured Lua load receives the initialized authoritative state");
 }
 
+void testRequestedExternalGameplaySkinCreatesARealSession() {
+  const char *configuredRoot =
+      std::getenv("ASOBMASHOW_EXTERNAL_GAMEPLAY_SKIN_ROOT");
+  if (configuredRoot == nullptr || *configuredRoot == '\0') {
+    return;
+  }
+  const fs::path source(configuredRoot);
+  expect(fs::is_directory(source),
+         "requested external gameplay skin root is a readable directory");
+  if (!fs::is_directory(source)) {
+    return;
+  }
+  const char *configuredEntry =
+      std::getenv("ASOBMASHOW_EXTERNAL_GAMEPLAY_SKIN_ENTRY");
+  const std::string entryPath =
+      configuredEntry != nullptr && *configuredEntry != '\0'
+          ? configuredEntry
+          : "play7.luaskin";
+
+  TempDirectory temp;
+  const SkinStorageRoots roots{
+      .visiblePackages = temp.root() / "visible",
+      .privateRevisions = temp.root() / "revisions",
+      .privateCatalog = temp.root() / "catalog",
+      .profileOverlays = temp.root() / "overlays",
+  };
+  const auto package = normalizePackageId("ExternalGameplaySkin").package;
+  const auto entry = package ? normalizeEntryPath(*package, entryPath).entry
+                             : std::nullopt;
+  const auto profile =
+      makeSkinProfileId("77777777-7777-4777-8777-777777777777");
+  expect(package && entry && profile,
+         "requested external gameplay source has portable activation IDs");
+  if (!package || !entry || !profile) {
+    return;
+  }
+
+  AcceptFiles aliases;
+  SkinTreeSnapshotter snapshotter(roots, aliases);
+  auto snapshot = snapshotter.snapshot(source, *package, {}, {});
+  expect(snapshot.prepared.has_value(),
+         "requested external gameplay package snapshots for a real session");
+  if (!snapshot.prepared) {
+    return;
+  }
+  std::string publishError;
+  auto lease = std::move(*snapshot.prepared).publish(publishError);
+  expect(lease.has_value() && publishError.empty(),
+         "requested external gameplay revision publishes for a real session");
+  if (!lease) {
+    return;
+  }
+
+  SkinResourcePreparationService resources;
+  GameplaySkinValidator validator(resources);
+  const auto validation = validator.validate(lease->readView(), *entry, nullptr, {});
+  expect(validation.disposition == SkinValidationDisposition::Selectable7Key &&
+             validation.reconciledSettings.has_value() &&
+             !validation.configurationDigest.empty(),
+         "requested external gameplay skin is selectable before session creation");
+  if (validation.disposition != SkinValidationDisposition::Selectable7Key ||
+      !validation.reconciledSettings || validation.configurationDigest.empty()) {
+    return;
+  }
+
+  PlayfieldChartVisualModel chart;
+  chart.keyCount = 7;
+  chart.text = {.title = "external title",
+                .artist = "external artist",
+                .fullArtist = "external artist"};
+  PlayfieldVisualState initialState = stateAt(1);
+  initialState.authority.loadingState = PlayfieldLoadingState::Loaded;
+  const PlayfieldProjectionResult initialProjection = projectionAt(1);
+  SkinConfigurationWriteQueue configurationWrites;
+  auto device = std::make_shared<SessionTextureDevice>();
+  auto counters = std::make_shared<SkinLiveResourceCounters>();
+  auto created = PlaySkinSession::create(
+      {.revision = std::move(*lease),
+       .entry = *entry,
+       .reconciledSettings = *validation.reconciledSettings,
+       .configurationDigest = validation.configurationDigest},
+      {.sessionSerial = 92,
+       .profileId = *profile,
+       .chartModel = chart,
+       .initialState = &initialState,
+       .initialProjection = &initialProjection,
+       .safeUiBounds = {.x = 0.0, .y = 0.0, .width = 1280.0, .height = 720.0},
+       .storageRoots = roots,
+       .resourcePreparation = resources,
+       .textureDevice = std::move(device),
+       .liveResourceCounters = std::move(counters),
+       .configurationWrites = configurationWrites});
+  if (!created.session) {
+    for (const auto &diagnostic : created.diagnostics) {
+      std::cerr << "external gameplay session diagnostic: " << diagnostic.code
+                << ": " << diagnostic.message << " • "
+                << diagnostic.virtualPath << '\n';
+    }
+  }
+  const bool hasError = std::ranges::any_of(
+      created.diagnostics, [](const SkinDiagnostic &diagnostic) {
+        return diagnostic.severity == DiagnosticSeverity::Error;
+      });
+  expect(created.session != nullptr && !created.cancelled && !hasError,
+         "requested external gameplay skin creates a full configured session; "
+         "unsupported optional visuals may remain visible as warnings");
+}
+
 void testActivationRejectsAReconciledDigestMismatch() {
   ActivationFixture fixture;
   if (!fixture.ready()) {
@@ -2105,6 +2213,7 @@ void testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin() {
 int main() {
   testActivationCreatesAnOwningFreshStateSession();
   testConfiguredLoadUsesTheInitializedAuthoritativeState();
+  testRequestedExternalGameplaySkinCreatesARealSession();
   testActivationRejectsAReconciledDigestMismatch();
   testResourceSessionOwnsUploadsAndExactRuntimeStringAtlas();
   testPostUploadCancellationRollsBackResourcesOnOwnerThread();

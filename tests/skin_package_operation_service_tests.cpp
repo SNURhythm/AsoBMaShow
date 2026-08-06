@@ -129,9 +129,12 @@ public:
                                 const EntryProfileSettings *,
                                 std::stop_token) override {
     EntryProfileSettings reconciled;
+    SkinEntryMetadataSnapshot metadata;
+    metadata.skinType = 0;
     const std::string digest = skinConfigurationDigest(reconciled);
     return {.disposition = SkinValidationDisposition::Selectable7Key,
             .reconciledSettings = std::move(reconciled),
+            .metadata = std::move(metadata),
             .configurationDigest = digest};
   }
 };

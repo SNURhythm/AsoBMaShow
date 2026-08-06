@@ -703,6 +703,11 @@ void testPlayTimerPropertiesMatchPinnedJavaConversions() {
                            .floatDomain = SkinFloatPropertyDomain::Rate},
                           SkinBuiltinPropertySelector{6}),
          "gameplay catalog admits implemented music progress Float 6");
+  for (const int id : {16, 1003}) {
+    expect(catalog.contains({.kind = SkinBindingKind::StringProperty},
+                            SkinBuiltinPropertySelector{id}),
+           "gameplay catalog admits every implemented pinned string state");
+  }
 }
 
 void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
@@ -715,8 +720,10 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
                 .subtitle = "subtitle",
                 .artist = "artist",
                 .subartist = "subartist",
+                .fullArtist = "artist subartist",
                 .genre = "genre",
-                .auditedStringProperties = {{12, "full title"}}};
+                .auditedStringProperties = {{12, "full title"},
+                                            {1003, "leveltable"}}};
   chart.staticMetadata = {.difficulty = 3,
                           .judgeRank = 70,
                           .minimumBpm = 120.9,
@@ -757,15 +764,33 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   state.authority.hiddenEnabled = false;
   state.authority.hiddenRatio = 0.2867F;
   state.authority.currentGauge = 62.3F;
+  state.authority.maximumCombo = 321;
+  state.authority.bestScore = 300;
+  state.authority.pacemakerTarget = {.enabled = true, .finalScore = 500};
+  state.authority.pacemakerStatus = {.enabled = true,
+                                     .currentScore = 456,
+                                     .targetScore = 240,
+                                     .finalTargetScore = 500,
+                                     .maxScore = 834,
+                                     .playedNotes = 200,
+                                     .totalNotes = 417};
   state.authority.judgementCounters = {
       {PGreat, 10}, {Great, 9}, {Good, 8},
       {Bad, 7},    {Kpoor, 6}, {Poor, 5}};
+  state.authority.judgementFastSlowCounters = {
+      {PGreat, {.fast = 4, .slow = 3}}, {Great, {.fast = 2, .slow = 1}},
+      {Good, {.fast = 6, .slow = 5}},   {Bad, {.fast = 8, .slow = 7}},
+      {Kpoor, {.fast = 10, .slow = 9}}, {Poor, {.fast = 12, .slow = 11}}};
+  state.authority.loadingState = PlayfieldLoadingState::Loaded;
+  state.configuration.visibleTimeGreenNumber = 400;
   state.lanes.resize(8);
   for (std::size_t index = 0; index < state.lanes.size(); ++index) {
     state.lanes[index].pressMicros = 1'000 + static_cast<long long>(index);
     state.lanes[index].releaseMicros =
         2'000 + static_cast<long long>(index);
     state.lanes[index].bombMicros = 3'000 + static_cast<long long>(index);
+    state.lanes[index].beatorajaJudgeValue =
+        2 + static_cast<int>(index);
   }
   bridge.beginFrame(state, projectionAt(101));
 
@@ -824,10 +849,36 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
            std::pair{314, 375LL}, std::pair{315, 286LL},
            std::pair{316, 280LL},
            std::pair{407, 3LL}, std::pair{427, 18LL},
-           std::pair{525, -34LL}}) {
+           std::pair{525, -34LL}, std::pair{75, 321LL},
+           std::pair{102, 114LL}, std::pair{103, 0LL},
+           std::pair{105, 321LL}, std::pair{152, 156LL},
+           std::pair{153, -44LL}, std::pair{313, 400LL},
+           std::pair{410, 4LL}, std::pair{411, 3LL},
+           std::pair{412, 2LL}, std::pair{413, 1LL},
+           std::pair{414, 6LL}, std::pair{415, 5LL},
+           std::pair{416, 8LL}, std::pair{417, 7LL},
+           std::pair{418, 12LL}, std::pair{419, 11LL},
+           std::pair{420, 6LL}, std::pair{421, 10LL},
+           std::pair{422, 9LL}, std::pair{425, 0LL},
+           std::pair{500, 2LL}, std::pair{501, 3LL},
+           std::pair{507, 9LL}, std::pair{510, -1LL},
+           std::pair{526, 0LL}, std::pair{527, 0LL}}) {
     const auto value = bridge.integerProperty({id});
     expect(value.supported && value.value == expected,
-           "selected live score, gauge, judgement, and lift number is exact");
+           "selected live score, gauge, judgement, and lift number is exact: " +
+               std::to_string(id));
+  }
+  for (const auto [id, expected] : std::array{
+           std::pair{102, 1.0},
+           std::pair{110, 456.0 / 834.0},
+           std::pair{111, 456.0 / 400.0},
+           std::pair{112, 300.0 / 834.0 * (200.0 / 417.0)},
+           std::pair{113, 300.0 / 834.0},
+           std::pair{114, 500.0 / 834.0 * (200.0 / 417.0)},
+           std::pair{115, 500.0 / 834.0}}) {
+    const auto value = bridge.floatProperty({id});
+    expect(value.supported && std::abs(value.value - expected) < 0.000001,
+           "selected pinned score and loading Float is exact");
   }
   for (const auto [id, expected] : std::array{
            std::pair{74, 417LL}, std::pair{90, 240LL},
@@ -844,8 +895,14 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
              bridge.stringProperty({12}).value == "full title" &&
              bridge.stringProperty({13}).value == "genre" &&
              bridge.stringProperty({14}).value == "artist" &&
-             bridge.stringProperty({15}).value == "subartist",
-         "audited full title and chart text use immutable chart metadata");
+             bridge.stringProperty({15}).value == "subartist" &&
+             bridge.stringProperty({16}).value == "artist subartist" &&
+             bridge.stringProperty({1003}).value == "leveltable" &&
+             bridge.stringProperty({std::string{"fullartist"}}).value ==
+                 "artist subartist" &&
+             bridge.stringProperty({std::string{"tablefull"}}).value ==
+                 "leveltable",
+         "pinned full artist and table text use immutable chart metadata");
   for (const int id : {1, 3, 4, 30, 32}) {
     const auto offset = bridge.offsetProperty(id);
     expect(offset.supported && offset.value.x == id,

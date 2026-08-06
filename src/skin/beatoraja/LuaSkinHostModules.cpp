@@ -384,9 +384,7 @@ bool LuaSkinHostModulesImpl::resolveConfiguredPath(
              result.ends_with('/')) {
         result.pop_back();
       }
-      const std::string entryRelative =
-          result.substr(configurationPathPrefix.size() + 1);
-      if (!rememberConfiguredPathAlias(result, entryRelative)) {
+      if (!rememberConfiguredPathAlias(result, result)) {
         return false;
       }
       resolvedConfigurationPath = std::move(result);
@@ -435,9 +433,7 @@ bool LuaSkinHostModulesImpl::resolveConfiguredPath(
            result.ends_with('/')) {
       result.pop_back();
     }
-    const std::string entryRelative =
-        result.substr(configurationPathPrefix.size() + 1);
-    if (!rememberConfiguredPathAlias(result, entryRelative)) {
+    if (!rememberConfiguredPathAlias(result, result)) {
       return false;
     }
     resolvedConfigurationPath = std::move(result);

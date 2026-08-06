@@ -1233,7 +1233,7 @@ void GamePlayScene::acquireGameplaySkinForAttempt() {
     return;
   }
 
-  const skin::GameplaySkinAcquisition acquisition =
+  skin::GameplaySkinAcquisition acquisition =
       context.acquireGameplaySkinForNextChart(chart->Meta.KeyMode);
   if (acquisition.disposition ==
       skin::GameplaySkinAcquisitionDisposition::Failed) {
@@ -4048,7 +4048,17 @@ void GamePlayScene::capturePlayfieldVisualState(
   PlayfieldAuthorityUpdate authority{
       .currentBpm = currentGameplayBpm,
       .judgementCounters = state->judgeCount,
+      .judgementFastSlowCounters = [&] {
+        std::map<Judgement, PlayfieldJudgementFastSlowCount> counters;
+        for (const auto &[judgement, value] : state->judgementFastSlowCount) {
+          counters.emplace(judgement, PlayfieldJudgementFastSlowCount{
+                                        .fast = value.fast, .slow = value.slow});
+        }
+        return counters;
+      }(),
       .comboBreak = state->comboBreak,
+      .maximumCombo = state->maxCombo,
+      .bestScore = activePacemakerBest ? activePacemakerBest->score : 0,
       .gaugeType = state->gaugeType,
       .gaugeAutoShift = state->gaugeAutoShift,
       .currentGauge = state->currentGauge,

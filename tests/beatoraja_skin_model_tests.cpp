@@ -307,7 +307,11 @@ void expectRect(const SkinSourceRect &actual, const Json &expected,
   expect(actual.x == expected.at("x").get<int>() &&
              actual.y == expected.at("y").get<int>() &&
              actual.w == expected.at("w").get<int>() &&
-             actual.h == expected.at("h").get<int>(),
+             actual.h == expected.at("h").get<int>() &&
+             actual.gridColumn == expected.at("gridColumn").get<int>() &&
+             actual.gridRow == expected.at("gridRow").get<int>() &&
+             actual.gridColumns == expected.at("gridColumns").get<int>() &&
+             actual.gridRows == expected.at("gridRows").get<int>(),
          message);
 }
 
@@ -650,6 +654,7 @@ return {
             divx = 2, divy = 3}},
   destination = {{id = "full", dst = {{}}}},
 }
+
 )lua");
   expect(decoded.model.has_value(),
          "full-texture sentinel model decodes before texture dimensions exist");
@@ -673,6 +678,36 @@ return {
              last.gridColumn == 1 && last.gridRow == 2 &&
              last.gridColumns == 2 && last.gridRows == 3,
          "divx/divy never divide or erase a full-texture -1 sentinel");
+}
+
+void testExplicitSpriteGridsRemainDeferredUntilTexturePreparation() {
+  const auto decoded = decodeInlineModel(R"lua(
+return {
+  type = 0, w = 1280, h = 720,
+  source = {{id = "source", path = "atlas.png"}},
+  image = {{id = "grid", src = "source", x = 7, y = 11, w = 40, h = 20,
+            divx = 2, divy = 2}},
+  destination = {{id = "grid", dst = {{}}}},
+}
+)lua");
+  expect(decoded.model.has_value(),
+         "explicit grid model decodes before texture dimensions exist");
+  if (!decoded.model || decoded.model->objects.empty()) {
+    return;
+  }
+  const auto &frames =
+      std::get<SkinImageObject>(decoded.model->objects.front().payload)
+          .orderedStates.front()
+          .frames;
+  expect(frames.size() == 4 && frames.front().x == 7 &&
+             frames.front().y == 11 && frames.front().w == 40 &&
+             frames.front().h == 20 && frames.front().gridColumn == 0 &&
+             frames.front().gridRow == 0 && frames.back().x == 7 &&
+             frames.back().y == 11 && frames.back().w == 40 &&
+             frames.back().h == 20 && frames.back().gridColumn == 1 &&
+             frames.back().gridRow == 1,
+         "explicit sprite grids preserve their full authored rectangle for "
+         "texture-dimension resolution");
 }
 
 void testSparsePinnedBlendIdsMapExactlyAndRejectUnknownValues() {
@@ -1240,44 +1275,63 @@ void testGameplayTypeZeroIsRequiredAfterHeaderDecode() {
   }
 }
 
-void testUnsupportedOptionalIdentitySurfacesAreDiagnosedAndDisabled() {
+void testOptionalVisualsAndBuiltinImagesStayLiveAcrossRepeatedDestinations() {
   const auto decoded = decodeInlineModel(R"lua(
 return {
-  type=0,w=1280,h=720,source={{id='atlas',path='atlas.png'}},
-  image={{id='generic-wins',src='atlas',w=10,h=10}},
-  hiddenCover={{id='unsupported-wins',src='atlas',w=10,h=10}},
-  bpmgraph={{id='generic-wins'},{id='unsupported-wins'},{id='unused-bpm'}},
-  hiterrorvisualizer={{id='unused-hit'}},
-  judgegraph={{id='unused-judge'}},
-  timingvisualizer={{id='unused-timing'}},
-  destination={{id='generic-wins',dst={{}}},{id='unsupported-wins',dst={{}}}}
+  type=0,w=1280,h=720,
+  bpmgraph={{id='bpm'}},
+  hiterrorvisualizer={{id='hiterror'}},
+  judgegraph={{id='judge'}},
+  timingvisualizer={{id='timing'}},
+  pmchara={{id='pomyu',src='unused',color=1,type=0,side=1}},
+  destination={
+    {id='bpm',dst={{x=10,y=20,w=30,h=40}}},
+    {id='bpm',dst={{x=50,y=60,w=70,h=80}}},
+    {id='hiterror',dst={{x=1,y=2,w=3,h=4}}},
+    {id='judge',dst={{x=5,y=6,w=7,h=8}}},
+    {id='timing',dst={{x=9,y=10,w=11,h=12}}},
+    {id='pomyu',dst={{x=9,y=10,w=11,h=12}}},
+    {id=-100,dst={{x=0,y=0,w=1,h=1}}},
+    {id=-101,dst={{x=0,y=0,w=1,h=1}}},
+    {id=-110,dst={{x=0,y=0,w=1,h=1}}},
+    {id=-111,dst={{x=0,y=0,w=1,h=1}}}
+  }
 }
 )lua");
-  expect(decoded.model && decoded.model->objects.size() == 2 &&
-             std::holds_alternative<SkinImageObject>(
-                 decoded.model->objects[0].payload),
-         "generic Image precedes same-ID unsupported arrays");
+  expect(decoded.model && decoded.model->objects.size() == 10 &&
+             decoded.model->destinations.size() == 10,
+         "every authored destination, including repeated names and negative "
+         "built-in image IDs, remains a live model object");
   const std::array expectedCodes{
       std::string_view("skin_lua_model_bpmgraph_unsupported"),
       std::string_view("skin_lua_model_hiterrorvisualizer_unsupported"),
       std::string_view("skin_lua_model_judgegraph_unsupported"),
       std::string_view("skin_lua_model_timingvisualizer_unsupported"),
+      std::string_view("skin_lua_model_pmchara_unsupported"),
   };
   for (const auto code : expectedCodes) {
     expect(std::ranges::find_if(decoded.diagnostics, [&](const auto &entry) {
-             return entry.code == code;
-           }) != decoded.diagnostics.end(),
+      return entry.code == code;
+    }) != decoded.diagnostics.end(),
            "each authored optional unsupported array emits its exact diagnostic");
   }
-  if (decoded.model && decoded.model->objects.size() == 2) {
-    const auto unsupportedId = decoded.model->objects[1].id;
+  if (decoded.model && decoded.model->objects.size() == 10) {
+    const auto repeatedNames = static_cast<std::size_t>(std::count_if(
+        decoded.model->objects.begin(), decoded.model->objects.end(),
+        [](const auto &object) { return object.authoredName == "bpm"; }));
+    std::set<SkinObjectId> internalIds;
+    for (const auto &object : decoded.model->objects) {
+      internalIds.insert(object.id);
+    }
+    expect(repeatedNames == 2 && internalIds.size() == decoded.model->objects.size(),
+           "repeated destination names produce distinct internal instances in "
+           "pinned authored order");
     const auto validated = test_support::validateWithAuthoredBuiltins(
         *decoded.model);
     expect(validated.model && !validated.criticalFailure &&
-               std::ranges::find(validated.model->disabledOptionalObjects,
-                                 unsupportedId) !=
-                   validated.model->disabledOptionalObjects.end(),
-           "referenced unsupported identity becomes a disabled optional placeholder");
+               validated.model->disabledOptionalObjects.empty(),
+           "optional visual widgets validate as blank render objects instead "
+           "of disabling their destinations");
   }
 
   const auto oversized = decodeInlineModel(R"lua(
@@ -1304,6 +1358,7 @@ int main() {
   testDestinationDefaultsInheritanceAndStableTimeOrder();
   testMaterializedSpriteFrameBudgetRejectsCopyAmplification();
   testFullTextureSentinelsRemainDeferredAcrossSpriteDivisions();
+  testExplicitSpriteGridsRemainDeferredUntilTexturePreparation();
   testSparsePinnedBlendIdsMapExactlyAndRejectUnknownValues();
   testClipComponentsInheritUntilTheFirstCompleteRectangle();
   testLuaProtectedDecodeOwnsEveryRawParseTemporaryInTheRequest();
@@ -1314,7 +1369,7 @@ int main() {
   testLiveGenericObjectPrecedesSameIdGameplaySpecials();
   testLiveDestinationMouseRectAndCenterNormalization();
   testGameplayTypeZeroIsRequiredAfterHeaderDecode();
-  testUnsupportedOptionalIdentitySurfacesAreDiagnosedAndDisabled();
+  testOptionalVisualsAndBuiltinImagesStayLiveAcrossRepeatedDestinations();
   if (failures != 0) {
     std::cerr << failures << " assertion(s) failed\n";
     return 1;

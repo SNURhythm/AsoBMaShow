@@ -28,6 +28,7 @@ extern "C" {
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -966,6 +967,7 @@ struct GameplayDecodeRequest {
   std::map<std::string, RawSkinIdentity, std::less<>> hitErrorVisualizers;
   std::map<std::string, RawSkinIdentity, std::less<>> judgeGraphs;
   std::map<std::string, RawSkinIdentity, std::less<>> timingVisualizers;
+  std::map<std::string, RawSkinIdentity, std::less<>> pmCharas;
   std::optional<RawSkinGauge> gauge;
   std::optional<RawSkinIdentity> bga;
   std::vector<RawSkinSource> rawSources;
@@ -985,6 +987,7 @@ struct GameplayDecodeRequest {
   std::vector<RawSkinIdentity> rawHitErrorVisualizers;
   std::vector<RawSkinIdentity> rawJudgeGraphs;
   std::vector<RawSkinIdentity> rawTimingVisualizers;
+  std::vector<RawSkinIdentity> rawPmCharas;
   std::vector<RawDestination> rawDestinations;
   std::vector<RawCustomTimer> rawCustomTimers;
   std::vector<RawCustomEvent> rawCustomEvents;
@@ -1684,31 +1687,16 @@ bool expandImageFrames(GameplayDecodeRequest &request, RawSkinImage &image) {
                               : SkinResourceId{0};
   image.sprite.cycleMillis = image.cycleMillis;
   image.sprite.frames.reserve(frameCount);
-  const bool fullTextureWidth = image.width == -1;
-  const bool fullTextureHeight = image.height == -1;
-  const int cellWidth = fullTextureWidth ? -1 : image.width / image.divisionsX;
-  const int cellHeight =
-      fullTextureHeight ? -1 : image.height / image.divisionsY;
   for (int row = 0; row < image.divisionsY; ++row) {
     for (int column = 0; column < image.divisionsX; ++column) {
-      const std::int64_t x =
-          static_cast<std::int64_t>(image.x) +
-          (fullTextureWidth ? 0
-                            : static_cast<std::int64_t>(cellWidth) * column);
-      const std::int64_t y =
-          static_cast<std::int64_t>(image.y) +
-          (fullTextureHeight ? 0 : static_cast<std::int64_t>(cellHeight) * row);
-      if (x < std::numeric_limits<int>::min() ||
-          x > std::numeric_limits<int>::max() ||
-          y < std::numeric_limits<int>::min() ||
-          y > std::numeric_limits<int>::max()) {
-        return fail(request.decoding, "skin_lua_model_invalid",
-                    "Lua skin image crop arithmetic overflows");
-      }
-      image.sprite.frames.push_back({.x = static_cast<int>(x),
-                                     .y = static_cast<int>(y),
-                                     .w = cellWidth,
-                                     .h = cellHeight,
+      // JsonSkinObjectLoader keeps the original TextureRegion rectangle and
+      // selects its grid cell at texture preparation.  Preserve that deferred
+      // identity here; pre-dividing and then resolving again shrinks every
+      // cell and rejects valid edge crops.
+      image.sprite.frames.push_back({.x = image.x,
+                                     .y = image.y,
+                                     .w = image.width,
+                                     .h = image.height,
                                      .gridColumn = column,
                                      .gridRow = row,
                                      .gridColumns = image.divisionsX,
@@ -2221,9 +2209,40 @@ bool makeCoverObject(GameplayDecodeRequest &request,
 bool makeJudgeObject(GameplayDecodeRequest &request, BeatorajaSkinModel &model,
                      const RawSkinJudge &definition, SkinJudgeObject &output);
 
+std::optional<int> parsePinnedDestinationInteger(std::string_view value) {
+  if (value.empty()) {
+    return std::nullopt;
+  }
+  const char *first = value.data();
+  const char *last = first + value.size();
+  if (*first == '+') {
+    ++first;
+    if (first == last) {
+      return std::nullopt;
+    }
+  }
+  int parsed = 0;
+  const auto [end, error] = std::from_chars(first, last, parsed);
+  if (error != std::errc{} || end != last) {
+    return std::nullopt;
+  }
+  return parsed;
+}
+
 bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
                        BeatorajaSkinModel &model, SkinObjectPayload &output,
                        bool &critical) {
+  // JSONSkinLoader parses destination IDs before it asks the gameplay object
+  // loader.  A negative ID is always a SkinImage(SkinSourceReference(-id)),
+  // including references whose source resolves to null at frame time.
+  if (const auto destinationId = parsePinnedDestinationInteger(name);
+      destinationId && *destinationId < 0) {
+    const int referenceId = *destinationId == std::numeric_limits<int>::min()
+                                ? std::numeric_limits<int>::min()
+                                : -*destinationId;
+    output = SkinBuiltinImageObject{.referenceId = referenceId};
+    return true;
+  }
   const auto image = request.images.find(name);
   const auto imageSet = request.imageSets.find(name);
   const auto number = request.numbers.find(name);
@@ -2235,6 +2254,7 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
   const auto hitErrorVisualizer = request.hitErrorVisualizers.find(name);
   const auto judgeGraph = request.judgeGraphs.find(name);
   const auto timingVisualizer = request.timingVisualizers.find(name);
+  const auto pmChara = request.pmCharas.find(name);
   const auto hiddenCover = request.hiddenCovers.find(name);
   const auto liftCover = request.liftCovers.find(name);
   const auto judge = request.judges.find(name);
@@ -2284,16 +2304,19 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
                                     .matches = isBga},
       SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::Judge,
                                     .matches = judge != request.judges.end()},
+      SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::PmChara,
+                                    .matches = pmChara != request.pmCharas.end()},
   };
   const auto resolved = resolveSkinObjectPrecedence(candidates);
   if (resolved.status == SkinObjectResolutionStatus::Unsupported) {
-    output = SkinImageObject{};
+    output = SkinBlankObject{};
     return true;
   }
   if (resolved.status != SkinObjectResolutionStatus::Found) {
     return fail(
         request.decoding, "skin_lua_model_unsupported_object",
-        "Lua skin destination does not resolve to an audited v1 object");
+        "Lua skin destination '" + std::string(name) +
+            "' does not resolve to an audited v1 object");
   }
 
   if (image != request.images.end()) {
@@ -2470,7 +2493,8 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
     return true;
   }
   return fail(request.decoding, "skin_lua_model_invalid",
-              "Lua skin destination does not resolve to an audited v1 object");
+              "Lua skin destination '" + std::string(name) +
+                  "' does not resolve to an audited v1 object");
 }
 
 bool normalizeDestination(GameplayDecodeRequest &request,
@@ -2945,7 +2969,11 @@ void decodeGameplayProtected(lua_State *state, int index,
         !decodeObjectArrayField(state, index, "timingvisualizer", 1,
                                 LuaSkinTableDecoderPolicy::maxDecodedObjects,
                                 request->rawTimingVisualizers,
-                                request->decoding, decodeRawIdentity)) {
+                                request->decoding, decodeRawIdentity) ||
+        !decodeObjectArrayField(state, index, "pmchara", 1,
+                                LuaSkinTableDecoderPolicy::maxDecodedObjects,
+                                request->rawPmCharas, request->decoding,
+                                decodeRawIdentity)) {
       transferDecodeDiagnostics(*request);
       request->result.model.reset();
       return;
@@ -2962,6 +2990,9 @@ void decodeGameplayProtected(lua_State *state, int index,
     recordUnsupportedDefinitions(*request, request->rawTimingVisualizers,
                                  "skin_lua_model_timingvisualizer_unsupported",
                                  "timingvisualizer");
+    recordUnsupportedDefinitions(*request, request->rawPmCharas,
+                                 "skin_lua_model_pmchara_unsupported",
+                                 "pmchara");
 
     if (!decodeObjectArrayField(state, index, "hiddenCover", 1,
                                 LuaSkinTableDecoderPolicy::maxDecodedObjects,
@@ -3807,6 +3838,12 @@ bool materializeGameplay(GameplayDecodeRequest &request,
           },
           "TimingVisualizer") ||
       !moveUniqueDefinitions(
+          request, request.rawPmCharas, request.pmCharas,
+          [](const RawSkinIdentity &identity) -> const std::string & {
+            return identity.id;
+          },
+          "PMchara") ||
+      !moveUniqueDefinitions(
           request, request.rawHiddenCovers, request.hiddenCovers,
           [](const RawSkinCover &cover) -> const std::string & {
             return cover.image.id;
@@ -3849,19 +3886,11 @@ bool materializeGameplay(GameplayDecodeRequest &request,
   }
   request.nextSyntheticObjectId =
       static_cast<SkinObjectId>(request.rawDestinations.size() + 1U);
-  std::set<std::string> destinationIds;
   model.objects.reserve(request.rawDestinations.size());
   model.destinations.reserve(request.rawDestinations.size());
   for (std::size_t ordinal = 0; ordinal < request.rawDestinations.size();
        ++ordinal) {
     const auto &destination = request.rawDestinations[ordinal];
-    if (!destinationIds.insert(destination.id).second) {
-      fail(request.decoding, "skin_lua_model_invalid",
-           "Lua skin destination IDs must be unique");
-      transferDecodeDiagnostics(request);
-      return false;
-    }
-
     SkinObjectPayload payload;
     bool critical = false;
     SkinDestinationBody presentation;

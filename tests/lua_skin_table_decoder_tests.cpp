@@ -1062,9 +1062,16 @@ void testGameplayNumericGlyphAtlasesNormalizeIntoModelObjects() {
              number->digits.positive.frames.size() == 24 &&
              number->digits.negative &&
              number->digits.negative->frames.size() == 24 &&
-             number->digits.positive.frames[12].x == 240 &&
-             number->digits.negative->frames[12].x == 360,
-         "Number-24 partitions both signed multi-frame glyph sets");
+             number->digits.positive.frames[12].x == 0 &&
+             number->digits.positive.frames[12].w == 480 &&
+             number->digits.positive.frames[12].gridColumn == 24 &&
+             number->digits.positive.frames[12].gridColumns == 48 &&
+             number->digits.negative->frames[12].x == 0 &&
+             number->digits.negative->frames[12].w == 480 &&
+             number->digits.negative->frames[12].gridColumn == 36 &&
+             number->digits.negative->frames[12].gridColumns == 48,
+         "Number-24 partitions both signed multi-frame glyph sets without "
+         "pre-resolving texture grids");
   expect(number->digits.positive.resource ==
                  number->digits.negative->resource &&
              number->digits.positive.timer == number->digits.negative->timer &&
@@ -1091,12 +1098,17 @@ void testGameplayNumericGlyphAtlasesNormalizeIntoModelObjects() {
              floating->digits.negative &&
              floating->digits.negative->frames.size() == 24 &&
              floating->digits.positive.frames[10].x == 0 &&
-             floating->digits.negative->frames[10].x == 110 &&
-             floating->digits.positive.frames[11].x == 100 &&
-             floating->digits.negative->frames[11].x == 210 &&
-             floating->digits.positive.frames[12].x == 220 &&
-             floating->digits.negative->frames[12].x == 330,
-         "Float-22 duplicates signed reverse-zero and preserves row order");
+             floating->digits.positive.frames[10].w == 440 &&
+             floating->digits.positive.frames[10].gridColumn == 0 &&
+             floating->digits.negative->frames[10].gridColumn == 11 &&
+             floating->digits.positive.frames[11].gridColumn == 10 &&
+             floating->digits.negative->frames[11].gridColumn == 21 &&
+             floating->digits.positive.frames[12].gridColumn == 22 &&
+             floating->digits.negative->frames[12].gridColumn == 33 &&
+             floating->digits.positive.frames[12].gridColumns == 44 &&
+             floating->digits.negative->frames[12].gridColumns == 44,
+         "Float-22 duplicates signed reverse-zero and preserves row order "
+         "without pre-resolving texture grids");
   expect(floating->integerDigits == 3 && floating->fractionalDigits == 5 &&
              floating->zeroPadding == SkinZeroPaddingMode::Zero &&
              !floating->signVisible && floating->gain == 1.25 &&
