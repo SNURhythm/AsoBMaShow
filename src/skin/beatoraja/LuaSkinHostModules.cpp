@@ -327,6 +327,7 @@ struct LuaFileHandle {
   std::fstream file;
   std::streampos cursor = 0;
   bool writable = false;
+  bool closeOnEndOfLines = false;
   bool closed = false;
   bool invalidated = false;
 };
@@ -791,6 +792,11 @@ int fileLineIterator(lua_State *state) {
   if (!std::getline(handle->file, line)) {
     if (handle->file.eof()) {
       handle->file.clear();
+      if (handle->closeOnEndOfLines) {
+        handle->file.close();
+        handle->closed = true;
+        handle->owner->releaseHandle(*handle);
+      }
       return 0;
     }
     handle->owner->storeError("skin_lua_file_operation_failed",
@@ -1210,6 +1216,35 @@ int ioOpen(lua_State *state) {
   } catch (...) {
     return expectedFailure(state, "Lua skin file handle could not allocate");
   }
+  return 1;
+}
+
+int emptyLineIterator(lua_State *) { return 0; }
+
+int ioLines(lua_State *state) {
+  const int argumentCount = lua_gettop(state);
+  luaL_argcheck(state, argumentCount <= 1, 1,
+                "lines accepts an optional path");
+  if (argumentCount == 0 || lua_isnil(state, 1)) {
+    // SandboxIoLib inherits IoLib's no-argument behavior.  Its wrapped stdin
+    // is an empty file, so io.lines() immediately reaches end of input.
+    lua_pushcfunction(state, emptyLineIterator);
+    return 1;
+  }
+
+  const int openResults = ioOpen(state);
+  if (openResults != 1) {
+    return openResults;
+  }
+  SharedLuaFileHandle &shared = checkedHandle(state, -1);
+  LuaFileHandle *handle = shared.get();
+  if (!guardHandle(*handle)) {
+    return raiseStoredError(state, handle->owner);
+  }
+  // LuaJ's IoLib closes the temporary handle returned by io.lines(filename)
+  // when its iterator reaches EOF.  file:lines() deliberately remains open.
+  handle->closeOnEndOfLines = true;
+  lua_pushcclosure(state, fileLineIterator, 1);
   return 1;
 }
 
@@ -1737,9 +1772,11 @@ int installHost(lua_State *state) {
   lua_newtable(state);
   lua_setglobal(state, "main_state");
 
-  lua_createtable(state, 0, 1);
+  lua_createtable(state, 0, 2);
   installClosure(state, impl, ioOpen);
   lua_setfield(state, -2, "open");
+  installClosure(state, impl, ioLines);
+  lua_setfield(state, -2, "lines");
   lua_setglobal(state, "io");
 
   lua_getglobal(state, "coroutine");

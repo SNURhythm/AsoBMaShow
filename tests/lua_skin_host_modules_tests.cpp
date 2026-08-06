@@ -212,6 +212,21 @@ assert(state.volume_key() == 0.4)
 assert(state.volume_sys() == 0.5)
 return {}
 )lua");
+    writeText(source / "skin/io_lines.luaskin", R"lua(
+if not skin_config then return {type = 0} end
+
+local lines = {}
+for line in io.lines("io_lines.txt") do
+  lines[#lines + 1] = line
+end
+assert(#lines == 3)
+assert(lines[1] == "one")
+assert(lines[2] == "two")
+assert(lines[3] == "three")
+assert(io.lines()() == nil)
+assert(io.lines(nil)() == nil)
+return {}
+)lua");
     writeText(source / "skin/parts/frame/red/panel.png", "selected");
     writeText(source / "skin/parts/frame/blue/panel.png",
               "random-fallback-must-not-win");
@@ -223,6 +238,7 @@ return {}
               "random-fallback-must-not-win");
     writeText(source / "skin/customize/settings/7keys/default.lua",
               "return {marker = 'parent-selected'}\n");
+    writeText(source / "skin/io_lines.txt", "one\ntwo\r\nthree\n");
 
     SkinTreeSnapshotter snapshotter(roots, aliases);
     auto snapshot = snapshotter.snapshot(source, package, {}, {});
@@ -551,6 +567,19 @@ void testSelectedMainStateSurfaceUsesBoundConfiguredState() {
   harness->runtime->setFrameState(nullptr);
 }
 
+void testIoLinesUsesTheVirtualSkinFileSystem() {
+  auto harness = fixture().create("io_lines.luaskin",
+                                  LuaRuntimePurpose::Validation);
+  if (!harness) {
+    return;
+  }
+  expect(harness->runtime->loadHeader().value.has_value(),
+         "io.lines fixture loads its header");
+  const auto configured = harness->runtime->loadConfigured(happyConfiguration());
+  expect(configured.value.has_value() && !configured.failure,
+         "io.lines opens and iterates a virtual skin file");
+}
+
 } // namespace
 
 int main() {
@@ -561,6 +590,7 @@ int main() {
   testGetPathCanLoadAnEntryParentSibling();
   testUnsupportedDirectMainStateLookupsRaise();
   testSelectedMainStateSurfaceUsesBoundConfiguredState();
+  testIoLinesUsesTheVirtualSkinFileSystem();
   if (failures != 0) {
     std::cerr << failures << " assertion(s) failed\n";
     return 1;
