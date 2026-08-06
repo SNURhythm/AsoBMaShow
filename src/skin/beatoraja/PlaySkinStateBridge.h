@@ -134,9 +134,12 @@ public:
   SkinPropertyLookup<bool>
   booleanProperty(const SkinBuiltinPropertySelector &) override;
   SkinPropertyLookup<std::int64_t>
-  integerProperty(const SkinBuiltinPropertySelector &) override;
+  integerProperty(const SkinBuiltinPropertySelector &,
+                  SkinIntegerPropertyDomain =
+                      SkinIntegerPropertyDomain::IntegerValue) override;
   SkinPropertyLookup<double>
-  floatProperty(const SkinBuiltinPropertySelector &) override;
+  floatProperty(const SkinBuiltinPropertySelector &,
+                SkinFloatPropertyDomain = SkinFloatPropertyDomain::Rate) override;
   SkinPropertyLookup<std::string_view>
   stringProperty(const SkinBuiltinPropertySelector &) override;
   SkinPropertyLookup<ConfigOffset> offsetProperty(int) override;

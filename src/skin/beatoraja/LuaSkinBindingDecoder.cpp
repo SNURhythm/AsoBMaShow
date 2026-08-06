@@ -154,10 +154,19 @@ LuaSkinBindingDecoder::decode(const LuaValueHandle &value,
   }
   consumedSourceWorkBytes_ += std::min(lookedUp.workBytes, remainingWorkBytes);
   if (!lookedUp.source) {
-    const bool missing = !lookedUp.failure ||
-                         lookedUp.failure->code == "skin_lua_binding_missing";
-    if (missing && request.fallbackNumeric) {
+    // LuaSkinLoader.serializeLuaScript and JsonSkinSerializer both return
+    // null for values that are neither a function, number, nor string.  That
+    // is an absent binding: use the documented numeric ref fallback when one
+    // exists, otherwise leave the property unset.  Runtime/resource failures
+    // remain diagnostics.
+    const bool absent =
+        !lookedUp.failure ||
+        lookedUp.failure->code == "skin_lua_binding_missing" ||
+        lookedUp.failure->code == "skin_lua_binding_type_invalid";
+    if (absent && request.fallbackNumeric) {
       lookedUp.source = *request.fallbackNumeric;
+    } else if (absent) {
+      return {};
     } else {
       return {.failure = lookedUp.failure
                              ? std::move(lookedUp.failure)

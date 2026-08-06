@@ -494,7 +494,8 @@ int mainStateNumber(lua_State *state) {
   if (current == nullptr) {
     return luaL_error(state, "main_state.number has no configured state");
   }
-  const auto result = current->integerProperty({.value = id});
+  const auto result = current->integerProperty(
+      {.value = id}, SkinIntegerPropertyDomain::IntegerValue);
   if (!result.supported) {
     return luaL_error(state, "unsupported main_state.number id: %d", id);
   }
@@ -508,7 +509,8 @@ int mainStateFloatNumber(lua_State *state) {
   if (current == nullptr) {
     return luaL_error(state, "main_state.float_number has no configured state");
   }
-  const auto result = current->floatProperty({.value = id});
+  const auto result = current->floatProperty({.value = id},
+                                             SkinFloatPropertyDomain::Rate);
   if (!result.supported) {
     return luaL_error(state, "unsupported main_state.float_number id: %d", id);
   }
@@ -616,7 +618,8 @@ int pushNamedInteger(lua_State *state, std::string_view name) {
     return luaL_error(state, "main_state.%.*s has no configured state",
                       static_cast<int>(name.size()), name.data());
   }
-  const auto result = current->integerProperty({.value = std::string{name}});
+  const auto result = current->integerProperty(
+      {.value = std::string{name}}, SkinIntegerPropertyDomain::IntegerValue);
   if (!result.supported) {
     return luaL_error(state, "unsupported main_state.%.*s",
                       static_cast<int>(name.size()), name.data());
@@ -631,7 +634,8 @@ int pushNamedFloat(lua_State *state, std::string_view name) {
     return luaL_error(state, "main_state.%.*s has no configured state",
                       static_cast<int>(name.size()), name.data());
   }
-  const auto result = current->floatProperty({.value = std::string{name}});
+  const auto result = current->floatProperty(
+      {.value = std::string{name}}, SkinFloatPropertyDomain::Rate);
   if (!result.supported) {
     return luaL_error(state, "unsupported main_state.%.*s",
                       static_cast<int>(name.size()), name.data());
@@ -646,7 +650,8 @@ int mainStateEventIndex(lua_State *state) {
   if (current == nullptr) {
     return luaL_error(state, "main_state.event_index has no configured state");
   }
-  const auto result = current->integerProperty({.value = id});
+  const auto result = current->integerProperty(
+      {.value = id}, SkinIntegerPropertyDomain::ImageIndex);
   if (!result.supported) {
     return luaL_error(state, "unsupported main_state.event_index id: %d", id);
   }

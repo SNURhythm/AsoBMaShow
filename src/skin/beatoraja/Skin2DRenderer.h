@@ -135,9 +135,12 @@ public:
   virtual SkinPropertyLookup<bool>
   booleanProperty(const SkinBuiltinPropertySelector &) = 0;
   virtual SkinPropertyLookup<std::int64_t>
-  integerProperty(const SkinBuiltinPropertySelector &) = 0;
+  integerProperty(const SkinBuiltinPropertySelector &,
+                  SkinIntegerPropertyDomain =
+                      SkinIntegerPropertyDomain::IntegerValue) = 0;
   virtual SkinPropertyLookup<double>
-  floatProperty(const SkinBuiltinPropertySelector &) = 0;
+  floatProperty(const SkinBuiltinPropertySelector &,
+                SkinFloatPropertyDomain = SkinFloatPropertyDomain::Rate) = 0;
   virtual SkinPropertyLookup<std::string_view>
   stringProperty(const SkinBuiltinPropertySelector &) = 0;
   virtual SkinPropertyLookup<ConfigOffset> offsetProperty(int) = 0;

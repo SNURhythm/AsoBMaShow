@@ -629,16 +629,13 @@ void testPinnedDispatchAndTypedInterning() {
                                 *unknownBuiltin),
          "immutable host catalog lets validation reject an unknown numeric ID");
 
-  for (const auto &[field, code] :
-       std::array{std::pair{"invalid_table", "skin_lua_binding_type_invalid"},
-                  std::pair{"invalid_boolean", "skin_lua_binding_type_invalid"},
-                  std::pair{"invalid_nil", "skin_lua_binding_missing"}}) {
+  for (const auto field :
+       std::array{"invalid_table", "invalid_boolean", "invalid_nil"}) {
     const auto invalidValue = decoder.decode(
         *session.configured, request(SkinBindingKind::BooleanProperty, field));
-    expect(
-        !invalidValue.id && invalidValue.failure &&
-            invalidValue.failure->code == code,
-        "table, Boolean, and nil binding values fail precisely without ID 0");
+    expect(!invalidValue.id && !invalidValue.failure,
+           "Beatoraja's Lua serializer treats table, Boolean, and nil "
+           "binding values as an absent property");
   }
 }
 

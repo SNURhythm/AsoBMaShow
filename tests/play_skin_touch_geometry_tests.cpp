@@ -184,11 +184,13 @@ public:
     return {};
   }
   SkinPropertyLookup<std::int64_t>
-  integerProperty(const SkinBuiltinPropertySelector &) override {
+  integerProperty(const SkinBuiltinPropertySelector &,
+                  SkinIntegerPropertyDomain) override {
     return {};
   }
   SkinPropertyLookup<double>
-  floatProperty(const SkinBuiltinPropertySelector &) override {
+  floatProperty(const SkinBuiltinPropertySelector &,
+                SkinFloatPropertyDomain) override {
     return {.value = 0.5, .supported = true};
   }
   SkinPropertyLookup<std::string_view>

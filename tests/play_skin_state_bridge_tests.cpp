@@ -730,6 +730,20 @@ void testPlayTimerPropertiesMatchPinnedJavaConversions() {
                              SkinBuiltinPropertySelector{id}),
            "Beatoraja rejects play-time values as image-index selectors");
   }
+  expect(catalog.contains({.kind = SkinBindingKind::IntegerProperty,
+                           .integerDomain =
+                               SkinIntegerPropertyDomain::IntegerValue},
+                          SkinBuiltinPropertySelector{106}) &&
+             catalog.contains({.kind = SkinBindingKind::IntegerProperty,
+                               .integerDomain =
+                                   SkinIntegerPropertyDomain::ImageIndex},
+                              SkinBuiltinPropertySelector{308}) &&
+             !catalog.contains({.kind = SkinBindingKind::IntegerProperty,
+                                .integerDomain =
+                                    SkinIntegerPropertyDomain::IntegerValue},
+                               SkinBuiltinPropertySelector{500}),
+         "catalog keeps totalnotes2 and lnmode in their pinned factories and "
+         "does not admit judge image indices as value selectors");
   expect(catalog.contains({.kind = SkinBindingKind::FloatProperty,
                            .floatDomain = SkinFloatPropertyDomain::Rate},
                           SkinBuiltinPropertySelector{6}),
@@ -900,14 +914,28 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
            std::pair{418, 12LL}, std::pair{419, 11LL},
            std::pair{420, 6LL}, std::pair{421, 10LL},
            std::pair{422, 9LL}, std::pair{425, 0LL},
-           std::pair{500, 2LL}, std::pair{501, 3LL},
-           std::pair{507, 9LL}, std::pair{510, -1LL},
            std::pair{526, 0LL}, std::pair{527, 0LL}}) {
     const auto value = bridge.integerProperty({id});
     expect(value.supported && value.value == expected,
            "selected live score, gauge, judgement, and lift number is exact: " +
                std::to_string(id));
   }
+  for (const auto [id, expected] :
+       std::array{std::pair{500, 2LL}, std::pair{501, 3LL},
+                  std::pair{507, 9LL}, std::pair{510, -1LL}}) {
+    const auto value = bridge.integerProperty(
+        {id}, SkinIntegerPropertyDomain::ImageIndex);
+    expect(value.supported && value.value == expected,
+           "selected image-index judgement value is exact: " +
+               std::to_string(id));
+  }
+  chart.staticMetadata.hasAnyLongNote = true;
+  chart.staticMetadata.hasUndefinedLongNote = false;
+  chart.staticMetadata.hasHellChargeNote = true;
+  const auto lnMode = bridge.integerProperty(
+      {308}, SkinIntegerPropertyDomain::ImageIndex);
+  expect(lnMode.supported && lnMode.value == 2,
+         "ImageIndex 308 returns Beatoraja's HCN long-note mode");
   for (const auto [id, expected] : std::array{
            std::pair{102, 1.0},
            std::pair{110, 456.0 / 834.0},
@@ -920,8 +948,34 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
     expect(value.supported && std::abs(value.value - expected) < 0.000001,
            "selected pinned score and loading Float is exact");
   }
+  const auto floatValue = bridge.floatProperty(
+      {1102}, SkinFloatPropertyDomain::FloatValue);
+  expect(floatValue.supported &&
+             std::abs(floatValue.value - 456.0 / 400.0) < 0.000001,
+         "FloatType.score_rate uses getFloatProperty rather than RateType");
+  const auto namedFloatValue = bridge.floatProperty(
+      {std::string{"score_rate"}}, SkinFloatPropertyDomain::FloatValue);
+  expect(namedFloatValue.supported &&
+             std::abs(namedFloatValue.value - floatValue.value) < 0.000001,
+         "named FloatProperty resolves through the same pinned factory");
+  const auto nonSelectJudgeRate =
+      bridge.floatProperty({std::string{"rate_pgreat"}});
+  expect(nonSelectJudgeRate.supported && nonSelectJudgeRate.value == 0.0,
+         "RateType's selection-only judge rate remains its exact gameplay "
+         "zero fallback");
+  const double floatMinimum =
+      static_cast<double>(std::numeric_limits<float>::min());
+  for (const std::string_view selector :
+       {"duration_average", "timing_average", "timign_stddev",
+        "ir_player_failed_rate"}) {
+    const auto value = bridge.floatProperty(
+        {std::string(selector)}, SkinFloatPropertyDomain::FloatValue);
+    expect(value.supported && value.value == floatMinimum,
+           "FloatPropertyFactory's non-gameplay value keeps its exact "
+           "Float.MIN_VALUE fallback");
+  }
   for (const auto [id, expected] : std::array{
-           std::pair{74, 417LL}, std::pair{90, 240LL},
+           std::pair{74, 417LL}, std::pair{106, 417LL}, std::pair{90, 240LL},
            std::pair{91, 120LL}, std::pair{92, 178LL},
            std::pair{96, 12LL}, std::pair{350, 321LL},
            std::pair{351, 54LL}, std::pair{352, 32LL},
@@ -953,6 +1007,11 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
              bridge.stringProperty({std::string{"tablefull"}}).value ==
                  "leveltable",
          "pinned full artist and table text use immutable chart metadata");
+  const auto practiceText =
+      bridge.stringProperty({std::string{"practice_item1"}});
+  expect(practiceText.supported && practiceText.value.empty(),
+         "non-gameplay pinned StringProperty values retain Beatoraja's empty "
+         "fallback");
   for (const int id : {1, 3, 4, 30, 32}) {
     const auto offset = bridge.offsetProperty(id);
     expect(offset.supported && offset.value.x == id,

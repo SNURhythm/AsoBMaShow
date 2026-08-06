@@ -199,6 +199,8 @@ end
 assert(state.timer_off_value == -9223372036854775808)
 assert(state.option(170) == true)
 assert(state.event_index(12) == 9)
+assert(state.number(90) == 900)
+assert(state.event_index(90) == 90)
 assert(state.exscore() == 456)
 assert(state.gauge() == 62.5)
 assert(state.gauge_type() == 3)
@@ -303,9 +305,15 @@ public:
                : SkinPropertyLookup<bool>{};
   }
   SkinPropertyLookup<std::int64_t>
-  integerProperty(const SkinBuiltinPropertySelector &selector) override {
+  integerProperty(const SkinBuiltinPropertySelector &selector,
+                  SkinIntegerPropertyDomain domain) override {
     if (selector.value == decltype(selector.value){12}) {
       return {.value = 9, .supported = true};
+    }
+    if (selector.value == decltype(selector.value){90}) {
+      return {.value = domain == SkinIntegerPropertyDomain::ImageIndex ? 90
+                                                                         : 900,
+              .supported = true};
     }
     if (selector.value == decltype(selector.value){std::string{"exscore"}}) {
       return {.value = 456, .supported = true};
@@ -319,7 +327,8 @@ public:
     return {};
   }
   SkinPropertyLookup<double>
-  floatProperty(const SkinBuiltinPropertySelector &selector) override {
+  floatProperty(const SkinBuiltinPropertySelector &selector,
+                SkinFloatPropertyDomain) override {
     if (selector.value == decltype(selector.value){std::string{"rate"}}) {
       return {.value = 91.25, .supported = true};
     }

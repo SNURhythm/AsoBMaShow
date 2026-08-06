@@ -3247,6 +3247,13 @@ bool decodeRequiredBinding(GameplayDecodeRequest &request,
               .fallbackNumeric = fallbackNumeric});
   if (!decoded.id) {
     output = Id{};
+    if (!decoded.failure) {
+      // JsonSkin's Lua serializer returns null for non-scalar values.  Some
+      // loader fields are structurally required even though the resolved
+      // Beatoraja property is null; preserve that null for model validation
+      // instead of manufacturing a binding-type diagnostic.
+      return true;
+    }
     return retainBindingFailure(request, std::move(decoded),
                                 std::move(pathText));
   }
@@ -3275,7 +3282,7 @@ bool decodeOptionalBinding(GameplayDecodeRequest &request,
               .fallbackNumeric = fallbackNumeric,
               .numericFallbackOnly = numericFallbackOnly});
   if (!decoded.id) {
-    if (decoded.failure &&
+    if (!decoded.failure ||
         decoded.failure->code == "skin_lua_binding_missing") {
       return true;
     }
@@ -3324,18 +3331,18 @@ bool bindNoteLineDestination(GameplayDecodeRequest &request,
     if (condition.optionId) {
       continue;
     }
-    SkinBooleanPropertyId id;
+    std::optional<SkinBooleanPropertyId> property;
     const auto oneBased = static_cast<std::uint32_t>(index + 1);
-    if (!decodeRequiredBinding(
+    if (!decodeOptionalBinding(
             request, decoder, value, {.kind = SkinBindingKind::BooleanProperty},
             noteLineBindingPath(array, destination.authoredIndex, "op",
                                 oneBased),
             noteLineBindingPathText(array, destination.authoredIndex, "op",
                                     oneBased),
-            destination.authoredIndex - 1, std::nullopt, id)) {
+            destination.authoredIndex - 1, property)) {
       return false;
     }
-    condition.property = id;
+    condition.property = property;
   }
   return decodeOptionalBinding(
       request, decoder, value, {.kind = SkinBindingKind::BooleanProperty},
@@ -3607,19 +3614,19 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
       if (condition.optionId) {
         continue;
       }
-      SkinBooleanPropertyId id;
+      std::optional<SkinBooleanPropertyId> property;
       const auto oneBased = static_cast<std::uint32_t>(index + 1);
-      if (!decodeRequiredBinding(
+      if (!decodeOptionalBinding(
               request, decoder, value,
               {.kind = SkinBindingKind::BooleanProperty},
               bindingPath("destination", destination.authoredIndex, "op",
                           oneBased),
               bindingPathText("destination", destination.authoredIndex, "op",
                               oneBased),
-              destination.authoredIndex - 1, std::nullopt, id)) {
+              destination.authoredIndex - 1, property)) {
         return false;
       }
-      condition.property = id;
+      condition.property = property;
     }
     if (!decodeOptionalBinding(
             request, decoder, value, {.kind = SkinBindingKind::BooleanProperty},
@@ -3657,19 +3664,19 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
       if (condition.optionId) {
         continue;
       }
-      SkinBooleanPropertyId id;
+      std::optional<SkinBooleanPropertyId> property;
       auto conditionPath = path("op");
       conditionPath.push_back(LuaValuePathElement::index(
           static_cast<std::uint32_t>(conditionIndex + 1)));
-      if (!decodeRequiredBinding(request, decoder, value,
+      if (!decodeOptionalBinding(request, decoder, value,
                                  {.kind = SkinBindingKind::BooleanProperty},
                                  std::move(conditionPath),
                                  pathText("op") + "[" +
                                      std::to_string(conditionIndex + 1) + "]",
-                                 judgeIndex - 1, std::nullopt, id)) {
+                                 judgeIndex - 1, property)) {
         return false;
       }
-      condition.property = id;
+      condition.property = property;
     }
     return decodeOptionalBinding(request, decoder, value,
                                  {.kind = SkinBindingKind::BooleanProperty},

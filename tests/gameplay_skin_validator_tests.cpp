@@ -264,10 +264,11 @@ void testAuthoritativeCatalogAdmitsOnlyExecutableBridgeSelectors() {
   expect(!catalog.contains({.kind = SkinBindingKind::FloatWriter},
                            SkinBuiltinPropertySelector{4}),
          "catalog rejects the lane-cover writer until it is executable");
-  expect(!catalog.contains({.kind = SkinBindingKind::FloatProperty,
-                            .floatDomain = SkinFloatPropertyDomain::FloatValue},
-                           SkinBuiltinPropertySelector{4}),
-         "catalog does not widen the lane-cover Rate into FloatValue dispatch");
+  expect(catalog.contains({.kind = SkinBindingKind::FloatProperty,
+                           .floatDomain = SkinFloatPropertyDomain::FloatValue},
+                          SkinBuiltinPropertySelector{4}),
+         "getFloatProperty retains the upstream RateType fallback, including "
+         "the lane-cover rate");
   expect(!catalog.contains({.kind = SkinBindingKind::Event},
                            SkinBuiltinPropertySelector{1000}),
          "catalog rejects custom event IDs from context-free built-in binding "

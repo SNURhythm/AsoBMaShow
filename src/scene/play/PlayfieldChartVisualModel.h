@@ -98,6 +98,15 @@ struct PlayfieldChartStaticMetadata {
   int longScratchNotes = 0;
   int totalNotes = 0;
   int totalLandmineNotes = 0;
+  // SongData's four long-note feature bits are consumed by
+  // IntegerPropertyFactory.IndexType.lnmode.  Preserve their pre-override
+  // parser meaning separately from the effective render mode.
+  bool hasAnyLongNote = false;
+  bool hasUndefinedLongNote = false;
+  bool hasLongNote = false;
+  bool hasChargeNote = false;
+  bool hasHellChargeNote = false;
+  int selectedLongNoteMode = 1;
   bool hasBga = false;
   std::string stageFilePath;
   std::string backBmpPath;

@@ -271,6 +271,58 @@ struct BeatorajaNoteCounts {
   int longScratch = 0;
 };
 
+struct BeatorajaLongNoteFeatures {
+  bool any = false;
+  bool undefined = false;
+  bool longNote = false;
+  bool chargeNote = false;
+  bool hellChargeNote = false;
+};
+
+BeatorajaLongNoteFeatures
+beatorajaLongNoteFeatures(const bms_parser::Chart &chart) {
+  BeatorajaLongNoteFeatures result;
+  std::unordered_set<const bms_parser::LongNote *> heads;
+  for (const auto *measure : chart.Measures) {
+    if (measure == nullptr) {
+      continue;
+    }
+    for (const auto *timeline : measure->TimeLines) {
+      if (timeline == nullptr) {
+        continue;
+      }
+      for (const auto *note : timeline->Notes) {
+        const auto *longNote = dynamic_cast<const bms_parser::LongNote *>(note);
+        if (longNote == nullptr) {
+          continue;
+        }
+        const auto *head =
+            longNote->IsTail() && longNote->Head != nullptr ? longNote->Head
+                                                             : longNote;
+        if (!heads.insert(head).second) {
+          continue;
+        }
+        result.any = true;
+        switch (head->Type) {
+        case bms_parser::LongNoteType::Undefined:
+          result.undefined = true;
+          break;
+        case bms_parser::LongNoteType::LongNote:
+          result.longNote = true;
+          break;
+        case bms_parser::LongNoteType::ChargeNote:
+          result.chargeNote = true;
+          break;
+        case bms_parser::LongNoteType::HellChargeNote:
+          result.hellChargeNote = true;
+          break;
+        }
+      }
+    }
+  }
+  return result;
+}
+
 BeatorajaNoteCounts beatorajaNoteCounts(const bms_parser::Chart &chart,
                                         int longNoteModeOverride) {
   BeatorajaNoteCounts result;
@@ -361,6 +413,8 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
   };
   const BeatorajaNoteCounts noteCounts =
       beatorajaNoteCounts(chart, longNoteModeOverride);
+  const BeatorajaLongNoteFeatures longNoteFeatures =
+      beatorajaLongNoteFeatures(chart);
   result.staticMetadata = {
       .difficulty = chart.Meta.Difficulty,
       .judgeRank = chart.Meta.Rank,
@@ -377,6 +431,15 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
       .totalNotes = noteCounts.normalKey + noteCounts.longKey +
                     noteCounts.normalScratch + noteCounts.longScratch,
       .totalLandmineNotes = chart.Meta.TotalLandmineNotes,
+      .hasAnyLongNote = longNoteFeatures.any,
+      .hasUndefinedLongNote = longNoteFeatures.undefined,
+      .hasLongNote = longNoteFeatures.longNote,
+      .hasChargeNote = longNoteFeatures.chargeNote,
+      .hasHellChargeNote = longNoteFeatures.hellChargeNote,
+      .selectedLongNoteMode = longNoteModeOverride >= 1 &&
+                                      longNoteModeOverride <= 3
+                                  ? longNoteModeOverride
+                                  : 1,
       .hasBga = !chart.ReferencedBmpTable.empty(),
       .stageFilePath = chart.Meta.StageFile.generic_string(),
       .backBmpPath = chart.Meta.BackBmp.generic_string(),

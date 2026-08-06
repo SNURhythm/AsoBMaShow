@@ -53,6 +53,13 @@ void add(std::vector<SkinBuiltinBindingCatalogEntry> &entries,
        .selector = SkinBuiltinPropertySelector{std::string(selector)}});
 }
 
+void add(std::vector<SkinBuiltinBindingCatalogEntry> &entries,
+         SkinBindingType type, std::string selector) {
+  entries.push_back(
+      {.type = type,
+       .selector = SkinBuiltinPropertySelector{std::move(selector)}});
+}
+
 std::vector<SkinBuiltinBindingCatalogEntry> makeCatalog() {
   std::vector<SkinBuiltinBindingCatalogEntry> entries;
   entries.reserve(600);
@@ -69,54 +76,151 @@ std::vector<SkinBuiltinBindingCatalogEntry> makeCatalog() {
     add(entries, boolean, selector);
   }
 
-  constexpr auto integerSelectors = std::to_array(
-      {14,  71,  74,  75,  90,  91,  92,  96,  101, 102, 103, 105, 107,
+  constexpr auto integerValueSelectors = std::to_array(
+      {14,  71,  74,  75,  90,  91,  92,  96,  101, 102, 103, 105, 106, 107,
        110, 111, 112, 113, 114, 152, 153, 160, 171, 313, 350, 351, 352,
        353, 360, 361, 362, 363, 364, 365, 368, 407, 410, 411, 412, 413, 414,
        415, 416, 417, 418, 419, 420,
        421, 422, 425, 427, 525, 526, 527, 1163, 1164});
-  for (const auto domain : {SkinIntegerPropertyDomain::IntegerValue,
-                            SkinIntegerPropertyDomain::ImageIndex}) {
-    const SkinBindingType integer{.kind = SkinBindingKind::IntegerProperty,
-                                  .integerDomain = domain};
-    for (const int selector : integerSelectors) {
-      add(entries, integer, selector);
-    }
-    for (int selector = 500; selector <= 519; ++selector) {
-      add(entries, integer, selector);
-    }
-    add(entries, integer, "nowbpm");
-  }
-  // Pinned IntegerPropertyFactory exposes the lane-cover family through
-  // ValueType, not through getImageIndexProperty.
   const SkinBindingType integerValue{
       .kind = SkinBindingKind::IntegerProperty,
       .integerDomain = SkinIntegerPropertyDomain::IntegerValue};
+  for (const int selector : integerValueSelectors) {
+    add(entries, integerValue, selector);
+  }
+  add(entries, integerValue, "nowbpm");
+  // Pinned IntegerPropertyFactory exposes the lane-cover family through
+  // ValueType, not through getImageIndexProperty.
   for (const int selector : {161, 162, 163, 164, 314, 315, 316}) {
     add(entries, integerValue, selector);
   }
 
-  const SkinBindingType floating{.kind = SkinBindingKind::FloatProperty,
-                                 .floatDomain = SkinFloatPropertyDomain::Rate};
-  add(entries, floating, 4);
-  add(entries, floating, 5);
-  add(entries, floating, 6);
-  for (int selector = 110; selector <= 115; ++selector) {
-    add(entries, floating, selector);
+  // Pinned IntegerPropertyFactory.getImageIndexProperty.  This domain is
+  // intentionally separate from ValueType: selector 90, for example, means
+  // max BPM in the latter and favorite-chart state in the former.
+  const SkinBindingType imageIndex{
+      .kind = SkinBindingKind::IntegerProperty,
+      .integerDomain = SkinIntegerPropertyDomain::ImageIndex};
+  for (const int selector : {10,  11,  12,  40,  42,  43,  54,  55,  61,
+                             62,  63,  72,  75,  78,  89,  90,  301, 303,
+                             305, 306, 308, 321, 322, 323, 324, 330, 331,
+                             332, 340, 341, 342, 343, 350, 351, 352, 353,
+                             360, 361, 370, 371, 400, 450, 451, 452, 453,
+                             454, 455, 456, 457, 458, 459, 460, 461, 462,
+                             463, 464, 465, 466, 469}) {
+    add(entries, imageIndex, selector);
   }
-  add(entries, floating, 102);
-  add(entries, floating, "lanecover");
-  add(entries, floating, "lanecover2");
+  for (int selector = 500; selector <= 519; ++selector) {
+    add(entries, imageIndex, selector);
+  }
+  for (int selector = 1510; selector <= 1599; ++selector) {
+    add(entries, imageIndex, selector);
+  }
+  for (int selector = 1610; selector <= 1699; ++selector) {
+    add(entries, imageIndex, selector);
+  }
+
+  constexpr auto rateSelectors = std::to_array(
+      {1,  4,  5,  6,  7,  8,  17, 18, 19, 20, 101, 102, 103,
+       105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115,
+       140, 141, 142, 143, 144, 145, 147});
+  constexpr auto rateNames = std::to_array({
+      "musicselect_position", "lanecover", "lanecover2", "music_progress",
+      "skinselect_position", "ranking_position", "mastervolume", "keyvolume",
+      "bgmvolume", "practice_position", "music_progress_bar", "load_progress",
+      "level", "level_beginner", "level_normal", "level_hyper",
+      "level_another", "level_insane", "scorerate", "scorerate_final",
+      "bestscorerate_now", "bestscorerate", "targetscorerate_now",
+      "targetscorerate", "rate_pgreat", "rate_great", "rate_good",
+      "rate_bad", "rate_poor", "rate_maxcombo", "rate_exscore",
+  });
+  const SkinBindingType rate{.kind = SkinBindingKind::FloatProperty,
+                             .floatDomain = SkinFloatPropertyDomain::Rate};
+  for (const int selector : rateSelectors) {
+    add(entries, rate, selector);
+  }
+  for (const char *selector : rateNames) {
+    add(entries, rate, selector);
+  }
+
+  // getFloatProperty is FloatType + its pattern table + RateType fallback.
+  const SkinBindingType floatValue{
+      .kind = SkinBindingKind::FloatProperty,
+      .floatDomain = SkinFloatPropertyDomain::FloatValue};
+  for (const int selector : rateSelectors) {
+    add(entries, floatValue, selector);
+  }
+  for (const char *selector : rateNames) {
+    add(entries, floatValue, selector);
+  }
+  for (const int selector : {85,  86,  87,  88,  89,  122, 135, 155,
+                             157, 165, 183, 203, 205, 207, 209, 211,
+                             213, 215, 217, 219, 223, 225, 227, 229,
+                             285, 286, 287, 288, 289, 310, 360, 362,
+                             367, 368, 372, 374, 376, 1102, 1107, 1115}) {
+    add(entries, floatValue, selector);
+  }
+  for (const char *selector : {
+           "score_rate", "total_rate", "score_rate2", "duration_average",
+           "timing_average", "timign_stddev", "perfect_rate", "great_rate",
+           "good_rate", "bad_rate", "poor_rate", "rival_perfect_rate",
+           "rival_great_rate", "rival_good_rate", "rival_bad_rate",
+           "rival_poor_rate", "best_rate", "rival_rate", "target_rate",
+           "target_rate2", "hispeed", "groovegauge_1p",
+           "chart_averagedensity", "chart_enddensity", "chart_peakdensity",
+           "chart_totalgauge", "loading_progress", "ir_totalclearrate",
+           "ir_totalfullcomborate", "ir_player_noplay_rate",
+           "ir_player_failed_rate", "ir_player_assist_rate",
+           "ir_player_lightassist_rate", "ir_player_easy_rate",
+           "ir_player_normal_rate", "ir_player_hard_rate",
+           "ir_player_exhard_rate", "ir_player_fullcombo_rate",
+           "ir_player_perfect_rate", "ir_player_max_rate",
+       }) {
+    add(entries, floatValue, selector);
+  }
 
   const SkinBindingType string{.kind = SkinBindingKind::StringProperty};
-  constexpr auto stringSelectors =
-      std::to_array({10, 11, 12, 13, 14, 15, 16, 1003});
+  constexpr auto stringSelectors = std::to_array(
+      {1,  2,  3,  10, 11, 12, 13, 14, 15, 16, 30, 50, 51,
+       60, 61, 62, 86, 1000, 1001, 1002, 1003, 1010, 1020, 1021,
+       1030, 1031});
   constexpr auto stringNames = std::to_array({
-      "title", "subtitle", "fulltitle", "genre", "artist", "subartist",
-      "fullartist", "tablefull"});
+      "rival", "player", "target", "title", "subtitle", "fulltitle",
+      "genre", "artist", "subartist", "fullartist", "searchword",
+      "skinname", "skinauthor", "mode", "sort", "difficulty",
+      "chartreplication", "directory", "tablename", "tablelevel",
+      "tablefull", "version", "irname", "irUserName", "songhashmd5",
+      "songhashsha256"});
   for (std::size_t index = 0; index < stringSelectors.size(); ++index) {
     add(entries, string, stringSelectors[index]);
     add(entries, string, stringNames[index]);
+  }
+  const auto addIndexedStrings = [&](int first, int count,
+                                     std::string_view prefix,
+                                     std::string_view suffix = {}) {
+    for (int offset = 0; offset < count; ++offset) {
+      add(entries, string, first + offset);
+      add(entries, string, std::string(prefix) + std::to_string(offset + 1) +
+                              std::string(suffix));
+    }
+  };
+  addIndexedStrings(40, 10, "key");
+  for (int index = 11; index <= 54; ++index) {
+    add(entries, string, 240 + (index - 11));
+    add(entries, string, "key" + std::to_string(index));
+  }
+  addIndexedStrings(100, 10, "skincategory");
+  addIndexedStrings(110, 10, "skinitem");
+  addIndexedStrings(120, 10, "rankingname");
+  addIndexedStrings(150, 10, "coursetitle");
+  addIndexedStrings(200, 10, "targetnamep");
+  addIndexedStrings(210, 10, "targetnamen");
+  addIndexedStrings(1040, 16, "practice_item");
+  addIndexedStrings(1060, 16, "practice_item", "_label");
+  addIndexedStrings(1080, 16, "practice_item", "_value");
+  for (int index = 1; index <= 16; ++index) {
+    add(entries, string, "practice_item_label" + std::to_string(index));
+    add(entries, string, "practice_item_value" + std::to_string(index));
   }
 
   const SkinBindingType event{.kind = SkinBindingKind::Event};

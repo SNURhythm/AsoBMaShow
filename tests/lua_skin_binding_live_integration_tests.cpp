@@ -489,7 +489,7 @@ void testValidationRejectsDeadCallbacksAndWrongBuiltinDomain() {
          "wrong built-in Float domain fails a critical consumer");
 }
 
-void testExactIndexedBindingFailurePath() {
+void testExactIndexedNonScalarDestinationConditionIsIgnored() {
   LiveSession session(R"lua(
 return {type=0,w=1280,h=720,
  source={{id='atlas',path='atlas.png'}},
@@ -499,11 +499,9 @@ return {type=0,w=1280,h=720,
               {id='second',op={1,2,{}},dst={{}}}}}
 )lua");
   const auto decoded = session.decode();
-  expect(decoded.model && decoded.diagnostics.size() == 1 &&
-             decoded.diagnostics.front().code ==
-                 "skin_lua_binding_type_invalid" &&
-             decoded.diagnostics.front().virtualPath == "destination[2].op[3]",
-         "invalid optional binding survives with its exact indexed path");
+  expect(decoded.model && decoded.diagnostics.empty(),
+         "Beatoraja's Lua serializer ignores a non-scalar destination "
+         "condition without producing a model diagnostic");
   if (!decoded.model) {
     return;
   }
@@ -511,12 +509,12 @@ return {type=0,w=1280,h=720,
   const auto *second = objectNamed(*decoded.model, "second");
   expect(validated.model && second &&
              std::ranges::find(validated.model->disabledOptionalObjects,
-                               second->id) !=
+                               second->id) ==
                  validated.model->disabledOptionalObjects.end(),
-         "invalid optional binding is disposed by model validation");
+         "an ignored destination condition leaves its object selectable");
 }
 
-void testAllEightInvalidBindingKindsRemainTypedDependencies() {
+void testNonScalarBindingValuesUseBeatorajaNullSemantics() {
   LiveSession session(R"lua(
 return {type=0,w=1280,h=720,
  source={{id='atlas',path='atlas.png'}},
@@ -544,67 +542,17 @@ return {type=0,w=1280,h=720,
   });
   const SkinBuiltinBindingCatalogView catalog(builtins);
   const auto decoded = session.decode(catalog);
-  constexpr std::array<std::string_view, 8> expectedPaths{
-      "image[1].timer",      "image[2].act",        "value[1].value",
-      "floatvalue[1].value", "slider[1].event",     "text[1].value",
-      "text[2].event",       "destination[8].draw",
-  };
-  expect(decoded.model && decoded.diagnostics.size() == expectedPaths.size(),
-         "all eight invalid binding kinds preserve the decoded model");
-  for (const auto path : expectedPaths) {
-    expect(std::ranges::any_of(decoded.diagnostics,
-                               [&](const auto &item) {
-                                 return item.code ==
-                                            "skin_lua_binding_type_invalid" &&
-                                        item.virtualPath == path;
-                               }),
-           "invalid binding retains its exact authored field path");
-  }
+  expect(decoded.model && decoded.diagnostics.empty(),
+         "non-scalar Lua binding fields are null properties, not decoder "
+         "errors");
   if (!decoded.model) {
     return;
   }
-  const auto *badTimer = objectNamed(*decoded.model, "bad-timer");
-  const auto *badEvent = objectNamed(*decoded.model, "bad-event");
-  const auto *badInteger = objectNamed(*decoded.model, "bad-integer");
-  const auto *badFloat = objectNamed(*decoded.model, "bad-float");
-  const auto *badFloatWriter = objectNamed(*decoded.model, "bad-float-writer");
-  const auto *badString = objectNamed(*decoded.model, "bad-string");
-  const auto *badStringWriter =
-      objectNamed(*decoded.model, "bad-string-writer");
-  const auto *timerImage =
-      badTimer ? std::get_if<SkinImageObject>(&badTimer->payload) : nullptr;
-  const auto *eventImage =
-      badEvent ? std::get_if<SkinImageObject>(&badEvent->payload) : nullptr;
-  const auto *integer =
-      badInteger ? std::get_if<SkinNumberObject>(&badInteger->payload)
-                 : nullptr;
-  const auto *floating =
-      badFloat ? std::get_if<SkinFloatObject>(&badFloat->payload) : nullptr;
-  const auto *slider =
-      badFloatWriter ? std::get_if<SkinSliderObject>(&badFloatWriter->payload)
-                     : nullptr;
-  const auto *string =
-      badString ? std::get_if<SkinTextObject>(&badString->payload) : nullptr;
-  const auto *stringWriter =
-      badStringWriter ? std::get_if<SkinTextObject>(&badStringWriter->payload)
-                      : nullptr;
-  expect(timerImage && timerImage->orderedStates.front().timer &&
-             !*timerImage->orderedStates.front().timer && eventImage &&
-             eventImage->clickEvent && !*eventImage->clickEvent && integer &&
-             !integer->value && floating && !floating->value && slider &&
-             slider->writer && !*slider->writer && string && string->value &&
-             !*string->value && stringWriter && stringWriter->writer &&
-             !*stringWriter->writer,
-         "invalid definitions retain typed zero sentinels through "
-         "materialization");
-
   const auto validated = SkinModelValidator{}.validate(
       *decoded.model, {.builtins = catalog,
                        .callbacks = session.runtime()->callbackLiveness()});
-  expect(validated.model && !validated.criticalFailure &&
-             validated.model->disabledOptionalObjects.size() ==
-                 decoded.model->objects.size(),
-         "validator disables every optional object with an invalid binding");
+  expect(validated.model && !validated.criticalFailure,
+         "null Lua properties leave an optional model that can be prepared");
 }
 
 void testUnusedInvalidDefinitionDoesNotKillSkin() {
@@ -616,9 +564,8 @@ return {type=0,w=1280,h=720,
  destination={{id='visible',dst={{}}}}}
 )lua");
   const auto decoded = session.decode();
-  expect(decoded.model && decoded.diagnostics.size() == 1 &&
-             decoded.diagnostics.front().virtualPath == "image[1].timer",
-         "unused invalid definition retains a diagnostic without killing skin");
+  expect(decoded.model && decoded.diagnostics.empty(),
+         "an unused non-scalar timer is a null property without a diagnostic");
   if (!decoded.model) {
     return;
   }
@@ -641,15 +588,14 @@ return {type=0,w=1280,h=720,
  destination={{id='note',dst={{}}}}}
 )lua");
   const auto decoded = session.decode();
-  expect(decoded.model && decoded.diagnostics.size() == 1 &&
-             decoded.diagnostics.front().virtualPath == "image[1].timer",
-         "critical dependency survives decoding as a typed sentinel");
+  expect(decoded.model && decoded.diagnostics.empty(),
+         "a non-scalar timer is absent before critical-object validation");
   if (!decoded.model) {
     return;
   }
   const auto validated = SkinModelValidator{}.validate(*decoded.model, {});
-  expect(!validated.model && validated.criticalFailure,
-         "validator rejects a critical object with an invalid binding");
+  expect(validated.model && !validated.criticalFailure,
+         "an absent timer remains a valid critical gameplay dependency");
 }
 
 void testCustomObjectsPreserveOrderBindingsAndValidation() {
@@ -711,17 +657,9 @@ return {type=0,w=1280,h=720,
  customEvents={{id=999,action={},condition={},minInterval=-1}}}
 )lua");
   const auto decoded = session.decode();
-  constexpr std::array<std::string_view, 3> paths{"customTimers[1].timer",
-                                                  "customEvents[1].action",
-                                                  "customEvents[1].condition"};
-  expect(decoded.model && decoded.diagnostics.size() == paths.size() + 1,
-         "invalid custom dependencies remain available for validation");
-  for (const auto path : paths) {
-    expect(std::ranges::any_of(
-               decoded.diagnostics,
-               [&](const auto &item) { return item.virtualPath == path; }),
-           "custom dependency diagnostic retains its exact path");
-  }
+  expect(decoded.model.has_value(),
+         "non-scalar custom fields remain null properties until custom "
+         "identity and interval contracts are validated");
   if (!decoded.model) {
     return;
   }
@@ -793,8 +731,8 @@ return {type=0,w=1280,h=720,
 int main() {
   testAllKindsDecodeWithPinnedDispatchAndLiveCallbacks();
   testValidationRejectsDeadCallbacksAndWrongBuiltinDomain();
-  testExactIndexedBindingFailurePath();
-  testAllEightInvalidBindingKindsRemainTypedDependencies();
+  testExactIndexedNonScalarDestinationConditionIsIgnored();
+  testNonScalarBindingValuesUseBeatorajaNullSemantics();
   testUnusedInvalidDefinitionDoesNotKillSkin();
   testInvalidCriticalBindingFailsDuringValidation();
   testCustomObjectsPreserveOrderBindingsAndValidation();

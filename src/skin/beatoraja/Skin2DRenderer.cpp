@@ -407,7 +407,7 @@ ResolvedValue<std::int64_t> resolveInteger(const SkinFrameInputs &inputs,
   }
   if (const auto *builtin =
           std::get_if<SkinBuiltinPropertySelector>(&binding->source)) {
-    const auto found = inputs.state.integerProperty(*builtin);
+    const auto found = inputs.state.integerProperty(*builtin, binding->domain);
     if (!found.supported) {
       return {.failure = diagnostic(
                   "skin.renderer.binding.unsupported",
@@ -447,7 +447,7 @@ ResolvedValue<double> resolveFloat(const SkinFrameInputs &inputs,
   }
   if (const auto *builtin =
           std::get_if<SkinBuiltinPropertySelector>(&binding->source)) {
-    const auto found = inputs.state.floatProperty(*builtin);
+    const auto found = inputs.state.floatProperty(*builtin, binding->domain);
     if (!found.supported) {
       return {.failure = diagnostic(
                   "skin.renderer.binding.unsupported",

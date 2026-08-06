@@ -8,6 +8,7 @@
 #include <cmath>
 #include <limits>
 #include <type_traits>
+#include <tuple>
 #include <utility>
 
 namespace {
@@ -52,6 +53,130 @@ std::int64_t beatorajaKeyJudgeValue(const PlayfieldVisualState &snapshot,
     return -1;
   }
   return snapshot.lanes[static_cast<std::size_t>(key)].beatorajaJudgeValue;
+}
+
+std::optional<int> decimalSuffix(std::string_view value, std::string_view prefix,
+                                 std::string_view suffix, int first,
+                                 int count, int authoredFirst = 1) {
+  if (!value.starts_with(prefix) || !value.ends_with(suffix) ||
+      value.size() <= prefix.size() + suffix.size()) {
+    return std::nullopt;
+  }
+  const std::string_view digits =
+      value.substr(prefix.size(), value.size() - prefix.size() - suffix.size());
+  int parsed = 0;
+  for (const char character : digits) {
+    if (character < '0' || character > '9' ||
+        parsed > (std::numeric_limits<int>::max() - 9) / 10) {
+      return std::nullopt;
+    }
+    parsed = parsed * 10 + (character - '0');
+  }
+  const int offset = parsed - authoredFirst;
+  return offset >= 0 && offset < count ? std::optional<int>(first + offset)
+                                        : std::nullopt;
+}
+
+std::optional<int> namedStringPropertySelector(std::string_view name) {
+  constexpr std::array<std::pair<std::string_view, int>, 26> direct = {{
+      {"rival", 1},          {"player", 2},
+      {"target", 3},         {"title", 10},
+      {"subtitle", 11},      {"fulltitle", 12},
+      {"genre", 13},         {"artist", 14},
+      {"subartist", 15},     {"fullartist", 16},
+      {"searchword", 30},    {"skinname", 50},
+      {"skinauthor", 51},    {"mode", 60},
+      {"sort", 61},          {"difficulty", 62},
+      {"chartreplication", 86}, {"directory", 1000},
+      {"tablename", 1001},   {"tablelevel", 1002},
+      {"tablefull", 1003},   {"version", 1010},
+      {"irname", 1020},      {"irUserName", 1021},
+      {"songhashmd5", 1030}, {"songhashsha256", 1031},
+  }};
+  for (const auto &[candidate, id] : direct) {
+    if (name == candidate) {
+      return id;
+    }
+  }
+  // StringPropertyFactory reverses the numeric order of targetnamep: its
+  // authored name 1 resolves to the closest previous target (numeric 209),
+  // while numeric 200 is the farthest one.  Preserve that source mapping
+  // rather than treating the name as a conventional ascending alias.
+  if (const auto previous = decimalSuffix(name, "targetnamep", "", 0, 10)) {
+    return 209 - *previous;
+  }
+  constexpr std::array<std::tuple<std::string_view, std::string_view, int,
+                                  int, int>,
+                       12>
+      patterns = {{{"key", "", 40, 10, 1},
+                   {"key", "", 240, 44, 11},
+                   {"skincategory", "", 100, 10, 1},
+                   {"skinitem", "", 110, 10, 1},
+                   {"rankingname", "", 120, 10, 1},
+                   {"coursetitle", "", 150, 10, 1},
+                   {"targetnamen", "", 210, 10, 1},
+                   {"practice_item", "", 1040, 16, 1},
+                   {"practice_item", "_label", 1060, 16, 1},
+                   {"practice_item", "_value", 1080, 16, 1},
+                   {"practice_item_label", "", 1060, 16, 1},
+                   {"practice_item_value", "", 1080, 16, 1}}};
+  for (const auto &[prefix, suffix, first, count, authoredFirst] : patterns) {
+    if (const auto id = decimalSuffix(name, prefix, suffix, first, count,
+                                      authoredFirst)) {
+      return id;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<int> namedFloatPropertySelector(std::string_view name) {
+  constexpr std::array<std::pair<std::string_view, int>, 71> direct = {{
+      {"musicselect_position", 1}, {"lanecover", 4},
+      {"lanecover2", 5},            {"music_progress", 6},
+      {"skinselect_position", 7},  {"ranking_position", 8},
+      {"mastervolume", 17},         {"keyvolume", 18},
+      {"bgmvolume", 19},            {"practice_position", 20},
+      {"music_progress_bar", 101},  {"load_progress", 102},
+      {"level", 103},                {"level_beginner", 105},
+      {"level_normal", 106},         {"level_hyper", 107},
+      {"level_another", 108},        {"level_insane", 109},
+      {"scorerate", 110},           {"scorerate_final", 111},
+      {"bestscorerate_now", 112},   {"bestscorerate", 113},
+      {"targetscorerate_now", 114}, {"targetscorerate", 115},
+      {"rate_pgreat", 140},          {"rate_great", 141},
+      {"rate_good", 142},            {"rate_bad", 143},
+      {"rate_poor", 144},            {"rate_maxcombo", 145},
+      {"rate_exscore", 147},
+      {"score_rate", 1102},         {"total_rate", 1115},
+      {"score_rate2", 155},         {"duration_average", 372},
+      {"timing_average", 374},       {"timign_stddev", 376},
+      {"perfect_rate", 85},          {"great_rate", 86},
+      {"good_rate", 87},             {"bad_rate", 88},
+      {"poor_rate", 89},             {"rival_perfect_rate", 285},
+      {"rival_great_rate", 286},     {"rival_good_rate", 287},
+      {"rival_bad_rate", 288},       {"rival_poor_rate", 289},
+      {"best_rate", 183},            {"rival_rate", 122},
+      {"target_rate", 135},          {"target_rate2", 157},
+      {"hispeed", 310},              {"groovegauge_1p", 1107},
+      {"chart_averagedensity", 367}, {"chart_enddensity", 362},
+      {"chart_peakdensity", 360},    {"chart_totalgauge", 368},
+      {"loading_progress", 165},     {"ir_totalclearrate", 227},
+      {"ir_totalfullcomborate", 229},
+      {"ir_player_noplay_rate", 203}, {"ir_player_failed_rate", 211},
+      {"ir_player_assist_rate", 205},
+      {"ir_player_lightassist_rate", 207},
+      {"ir_player_easy_rate", 213}, {"ir_player_normal_rate", 215},
+      {"ir_player_hard_rate", 217}, {"ir_player_exhard_rate", 209},
+      {"ir_player_fullcombo_rate", 219},
+      {"ir_player_perfect_rate", 223},
+      {"ir_player_max_rate", 225},
+  }};
+  for (const auto &[candidate, id] : direct) {
+    if (name == candidate) {
+      return id;
+    }
+  }
+  return std::nullopt;
 }
 
 std::int64_t javaDoubleToInt(double value) {
@@ -884,10 +1009,46 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
 }
 
 SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
-    const SkinBuiltinPropertySelector &selector) {
+    const SkinBuiltinPropertySelector &selector, SkinIntegerPropertyDomain domain) {
   const auto *snapshot = state();
-  const auto id = numericSelector(selector);
+  auto id = numericSelector(selector);
+  if (!id && selector.value == decltype(selector.value){std::string{"nowbpm"}}) {
+    id = 160;
+  }
   if (snapshot == nullptr || !id) {
+    reportUnsupported("integer", selector);
+    return {};
+  }
+  if (domain == SkinIntegerPropertyDomain::ImageIndex) {
+    // IntegerPropertyFactory.getImageIndexProperty is a distinct factory from
+    // getIntegerProperty.  Keep selectors shared by both factories (for
+    // example 90) out of this value-domain switch.
+    if (*id >= 500 && *id <= 519) {
+      return {.value = beatorajaKeyJudgeValue(*snapshot, *id),
+              .supported = true};
+    }
+    if (*id == 308) {
+      const auto &metadata = context_.chartModel.staticMetadata;
+      if (metadata.hasAnyLongNote && !metadata.hasUndefinedLongNote) {
+        if (metadata.hasLongNote) {
+          return {.value = 0, .supported = true};
+        }
+        if (metadata.hasChargeNote) {
+          return {.value = 1, .supported = true};
+        }
+        return {.value = 2, .supported = true};
+      }
+      // PlayerConfig.getLnmode() is one-based (LN/CN/HCN); IndexType.lnmode
+      // exposes the zero-based skin value only for a chart with a declared
+      // long-note type.  For undefined/no-long-note charts it returns that
+      // configuration value directly.
+      return {.value = metadata.selectedLongNoteMode,
+              .supported = true};
+    }
+    reportUnsupported("image_index", selector);
+    return {};
+  }
+  if (domain != SkinIntegerPropertyDomain::IntegerValue) {
     reportUnsupported("integer", selector);
     return {};
   }
@@ -965,6 +1126,7 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
             .supported = true};
   }
   case 74:
+  case 106:
     return {.value = context_.chartModel.staticMetadata.totalNotes,
             .supported = true};
   case 90:
@@ -1099,17 +1261,19 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
   default:
     break;
   }
-  if (*id >= 500 && *id <= 519) {
-    return {.value = beatorajaKeyJudgeValue(*snapshot, *id), .supported = true};
-  }
   reportUnsupported("integer", selector);
   return {};
 }
 
 SkinPropertyLookup<double> PlaySkinStateBridge::floatProperty(
-    const SkinBuiltinPropertySelector &selector) {
+    const SkinBuiltinPropertySelector &selector, SkinFloatPropertyDomain domain) {
   const auto *snapshot = state();
-  const auto id = numericSelector(selector);
+  auto id = numericSelector(selector);
+  if (!id) {
+    if (const auto *name = std::get_if<std::string>(&selector.value)) {
+      id = namedFloatPropertySelector(*name);
+    }
+  }
   if (snapshot == nullptr || !id) {
     reportUnsupported("float", selector);
     return {};
@@ -1128,6 +1292,70 @@ SkinPropertyLookup<double> PlaySkinStateBridge::floatProperty(
     return static_cast<double>(static_cast<float>(score) * playedNotes /
                                static_cast<float>(totalNotes * totalNotes * 2));
   };
+  if (domain == SkinFloatPropertyDomain::FloatValue) {
+    const double floatMinimum =
+        static_cast<double>(std::numeric_limits<float>::min());
+    switch (*id) {
+    case 1102:
+      return {.value = currentRate, .supported = true};
+    case 1115:
+    case 155:
+      return {.value = currentFullRate, .supported = true};
+    case 85:
+    case 86:
+    case 87:
+    case 88:
+    case 89: {
+      if (totalNotes <= 0) {
+        return {.value = floatMinimum, .supported = true};
+      }
+      const Judgement judgement = *id == 85   ? PGreat
+                                  : *id == 86 ? Great
+                                  : *id == 87 ? Good
+                                  : *id == 88 ? Bad
+                                              : Poor;
+      return {.value = static_cast<double>(capturedJudgeCount(*snapshot, judgement)) /
+                           static_cast<double>(totalNotes),
+              .supported = true};
+    }
+    case 183:
+      return {.value = bestFullRate, .supported = true};
+    case 122:
+    case 135:
+    case 157:
+      return {.value = targetFullRate, .supported = true};
+    case 1107:
+      return {.value = snapshot->authority.currentGauge, .supported = true};
+    case 360:
+    case 362:
+    case 367:
+    case 368:
+    case 372:
+    case 374:
+    case 376:
+    case 203:
+    case 205:
+    case 207:
+    case 209:
+    case 211:
+    case 213:
+    case 215:
+    case 217:
+    case 219:
+    case 223:
+    case 225:
+    case 227:
+    case 229:
+      return {.value = floatMinimum, .supported = true};
+    default:
+      break;
+    }
+    // FloatPropertyFactory.getFloatProperty falls through to RateType after
+    // its FloatType and pattern tables, so continue with the rate switch.
+  } else if (domain != SkinFloatPropertyDomain::Rate) {
+    reportUnsupported("float", selector);
+    return {};
+  }
   switch (*id) {
   case 102:
     return {.value = snapshot->authority.loadingState ==
@@ -1148,6 +1376,26 @@ SkinPropertyLookup<double> PlaySkinStateBridge::floatProperty(
     return {.value = partialRate(targetScore(*snapshot)), .supported = true};
   case 115:
     return {.value = targetFullRate, .supported = true};
+  // These RateType values only have an implementation in music selection or
+  // skin configuration.  FloatPropertyFactory returns zero for BMSPlayer,
+  // which is the authoritative gameplay-state fallback.
+  case 1:
+  case 7:
+  case 8:
+  case 103:
+  case 105:
+  case 106:
+  case 107:
+  case 108:
+  case 109:
+  case 140:
+  case 141:
+  case 142:
+  case 143:
+  case 144:
+  case 145:
+  case 147:
+    return {.value = 0.0, .supported = true};
   default:
     break;
   }
@@ -1187,7 +1435,12 @@ SkinPropertyLookup<std::string_view> PlaySkinStateBridge::stringProperty(
     reportUnsupported("string", selector);
     return {};
   }
-  const auto id = numericSelector(selector);
+  auto id = numericSelector(selector);
+  if (!id) {
+    if (const auto *name = std::get_if<std::string>(&selector.value)) {
+      id = namedStringPropertySelector(*name);
+    }
+  }
   if (!id) {
     reportUnsupported("string", selector);
     return {};
@@ -1225,6 +1478,21 @@ SkinPropertyLookup<std::string_view> PlaySkinStateBridge::stringProperty(
     return {.value = text.subartist, .supported = true};
   default:
     break;
+  }
+  // These StringPropertyFactory families intentionally return an empty string
+  // outside their owning scenes (selection, result, key config, or practice).
+  // A gameplay skin may still declare them, so preserve the upstream empty
+  // value instead of turning the destination into an app-specific failure.
+  if (*id == 1 || *id == 2 || *id == 3 || *id == 30 || *id == 50 ||
+      *id == 51 || *id == 60 || *id == 61 || *id == 62 || *id == 86 ||
+      *id == 1000 || *id == 1001 || *id == 1002 || *id == 1010 ||
+      *id == 1020 || *id == 1021 || *id == 1030 || *id == 1031 ||
+      (*id >= 40 && *id <= 49) || (*id >= 100 && *id <= 129) ||
+      (*id >= 150 && *id <= 159) || (*id >= 200 && *id <= 219) ||
+      (*id >= 240 && *id <= 283) || (*id >= 1040 && *id <= 1055) ||
+      (*id >= 1060 && *id <= 1075) || (*id >= 1080 && *id <= 1095)) {
+    static constexpr std::string_view empty;
+    return {.value = empty, .supported = true};
   }
   reportUnsupported("string", selector);
   return {};
