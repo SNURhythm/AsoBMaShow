@@ -1185,6 +1185,29 @@ return {
          "generic Image wins same-ID Hidden/BGA/Judge specials without rejecting the model");
 }
 
+void testUnresolvedDestinationMatchesPinnedLoaderIgnoreBehavior() {
+  const auto decoded = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  source={{id='atlas',path='atlas.png'}},
+  image={{id='known',src='atlas',w=10,h=10}},
+  destination={
+    {id='lamp',dst={{x=1,y=2,w=3,h=4}}},
+    {id='known',dst={{x=5,y=6,w=7,h=8}}}
+  }
+}
+)lua");
+  expect(decoded.model && decoded.model->objects.size() == 1 &&
+             decoded.model->destinations.size() == 1 &&
+             decoded.model->objects.front().authoredName == "known",
+         "an unresolved destination is ignored while later resolved "
+         "destinations remain live");
+  expect(std::ranges::find_if(decoded.diagnostics, [](const auto &entry) {
+           return entry.code == "skin_lua_model_unsupported_object";
+         }) == decoded.diagnostics.end(),
+         "unresolved destinations do not become model validation errors");
+}
+
 void testLiveDestinationMouseRectAndCenterNormalization() {
   const auto decoded = decodeInlineModel(R"lua(
 return {
@@ -1367,6 +1390,7 @@ int main() {
   testValidatedLaneCoverRateIndexClassifiesOnlyPinnedSelectors();
   testLiveCoverJudgeAndBgaSpecialObjects();
   testLiveGenericObjectPrecedesSameIdGameplaySpecials();
+  testUnresolvedDestinationMatchesPinnedLoaderIgnoreBehavior();
   testLiveDestinationMouseRectAndCenterNormalization();
   testGameplayTypeZeroIsRequiredAfterHeaderDecode();
   testOptionalVisualsAndBuiltinImagesStayLiveAcrossRepeatedDestinations();

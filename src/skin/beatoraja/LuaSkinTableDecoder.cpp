@@ -2231,7 +2231,8 @@ std::optional<int> parsePinnedDestinationInteger(std::string_view value) {
 
 bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
                        BeatorajaSkinModel &model, SkinObjectPayload &output,
-                       bool &critical) {
+                       bool &critical, bool &ignored) {
+  ignored = false;
   // JSONSkinLoader parses destination IDs before it asks the gameplay object
   // loader.  A negative ID is always a SkinImage(SkinSourceReference(-id)),
   // including references whose source resolves to null at frame time.
@@ -2310,6 +2311,14 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
   const auto resolved = resolveSkinObjectPrecedence(candidates);
   if (resolved.status == SkinObjectResolutionStatus::Unsupported) {
     output = SkinBlankObject{};
+    return true;
+  }
+  // JSONSkinLoader simply leaves obj null when neither its generic loader nor
+  // JsonPlaySkinObjectLoader resolves a destination ID, then skips that
+  // destination. This is common in skins that share a module-level
+  // destination name with a configuration-dependent object definition.
+  if (resolved.status == SkinObjectResolutionStatus::NotFound) {
+    ignored = true;
     return true;
   }
   if (resolved.status != SkinObjectResolutionStatus::Found) {
@@ -3900,9 +3909,17 @@ bool materializeGameplay(GameplayDecodeRequest &request,
     const auto &destination = request.rawDestinations[ordinal];
     SkinObjectPayload payload;
     bool critical = false;
+    bool ignored = false;
     SkinDestinationBody presentation;
-    if (!makeObjectPayload(request, destination.id, model, payload, critical) ||
-        !normalizeDestination(request, destination,
+    if (!makeObjectPayload(request, destination.id, model, payload, critical,
+                           ignored)) {
+      transferDecodeDiagnostics(request);
+      return false;
+    }
+    if (ignored) {
+      continue;
+    }
+    if (!normalizeDestination(request, destination,
                               static_cast<std::uint32_t>(ordinal), presentation,
                               true)) {
       transferDecodeDiagnostics(request);

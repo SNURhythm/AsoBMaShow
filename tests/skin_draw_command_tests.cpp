@@ -977,7 +977,7 @@ void testZeroCycleNumericSpriteDoesNotConsultItsTimer() {
   if (result.submitReady && !result.submitReady->commands.empty()) {
     for (const auto &command : result.submitReady->commands) {
       const auto &quad = std::get<SkinTexturedQuadCommand>(command.payload);
-      expect(quad.vertices[0].v == 0.0F,
+      expect(quad.vertices[0].v == 0.5F,
              "zero-cycle and off-timer sprites both select row zero");
     }
   }
@@ -1184,7 +1184,7 @@ void testTextUsesPreparedMetricsKerningAndAtlasUvs() {
   expect(run.glyphs[0].codepoint == U'A' &&
              run.glyphs[0].vertices[0].x == 100.0F &&
              run.glyphs[0].vertices[0].u == 0.1F &&
-             run.glyphs[0].vertices[0].v == 0.1F,
+             run.glyphs[0].vertices[0].v == 0.5F,
          "first text glyph uses prepared bearing and nontrivial atlas UV");
   expect(run.glyphs[1].codepoint == U'V' &&
              run.glyphs[1].vertices[0].x == 111.0F,
@@ -1663,8 +1663,8 @@ void testGraphCropsLeftOrBottomWithJavaTruncation() {
       horizontal.vertices[1].x == 120.0F && horizontal.vertices[1].u == 0.14F,
       "horizontal graph truncates nine source pixels to four and halves width");
   expect(
-      vertical.vertices[2].y == 685.0F && vertical.vertices[0].v == 0.24F &&
-          vertical.vertices[2].v == 0.27F,
+      vertical.vertices[2].y == 685.0F && vertical.vertices[0].v == 0.27F &&
+          vertical.vertices[2].v == 0.24F,
       "vertical graph keeps the bottom three source pixels and halves height");
 }
 
@@ -1793,7 +1793,7 @@ void testNegativeGraphsUseAbsoluteIntrinsicSizeForStretching() {
          "no-resize centers a positive intrinsic width while retaining "
          "reversed horizontal UVs");
   expect(vertical.vertices[0].y == 709.0F && vertical.vertices[2].y == 706.0F &&
-             vertical.vertices[0].v == 0.30F && vertical.vertices[2].v == 0.27F,
+             vertical.vertices[0].v == 0.27F && vertical.vertices[2].v == 0.30F,
          "no-resize centers a positive intrinsic height while retaining "
          "reversed vertical UVs");
   expect(aspect.vertices[0].y == 667.5F && aspect.vertices[2].y == 702.5F,
@@ -2803,7 +2803,10 @@ void testNoteLongNoteAndLineCommandsPreserveMergedProjectionOrder() {
                           .critical = true}};
   auto presented = destination(1, 77, 0.0);
   presented.presentation.offsetIds = {7};
-  presented.presentation.frames.front().rgba[3] = 0;
+  // JsonPlaySkinObjectLoader builds SkinNote's drawable lane geometry from
+  // note.dst. The containing destination may intentionally omit dst frames,
+  // as simple-play-simple does for its `notes` entry.
+  presented.presentation.frames.clear();
   model.model.destinations = {std::move(presented)};
   BeatorajaSkinConfiguration configuration;
   configuration.offsetsById.emplace(

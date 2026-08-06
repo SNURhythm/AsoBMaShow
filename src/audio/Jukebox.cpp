@@ -284,7 +284,13 @@ resolveGameplayBgaTargetQuad(const BgaDrawTarget &target, int sourceWidth,
       const double projectedX = projected.vertices[index][0];
       const double projectedY = projected.vertices[index][1];
       const double u = projected.normalizedUvs[index][0];
-      const double v = 1.0 - projected.normalizedUvs[index][1];
+      // SkinDestinationEvaluator exposes regular skin-image UVs with the
+      // source's top row on the on-screen top row.  BGA submission uses its
+      // own long-standing bottom-v=1/top-v=0 contract, so its authored path
+      // now passes those coordinates through directly.  Applying another
+      // inversion here would make authored skin BGAs diverge from the raw
+      // BGA target path.
+      const double v = projected.normalizedUvs[index][1];
       if (!std::isfinite(projectedX) || !std::isfinite(projectedY) ||
           !std::isfinite(u) || !std::isfinite(v) ||
           std::abs(projectedX) > std::numeric_limits<float>::max() ||

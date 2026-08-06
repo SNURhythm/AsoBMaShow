@@ -398,13 +398,33 @@ void testBridgeOwnsSnapshotAndClosesEachFrameExactlyOnce() {
              hasDiagnostic(bridge, "skin.play_state.frame_already_closed"),
          "double commit cannot replay a transaction");
 
+  // KeyInputProccessor turns the key-on timer off as it starts key-off on a
+  // physical release, and does the inverse on a subsequent press. The skin
+  // may render both destinations simultaneously, so publishing both stale
+  // timestamps makes the key-on visual mask the release animation.
+  state = stateAt(72);
+  state.lanes.front().pressed = false;
+  bridge.beginFrame(state, projectionAt(72));
+  expect(bridge.timerProperty({100}) == kPlayfieldTimestampOff &&
+             bridge.timerProperty({120}) == 2'000,
+         "a released lane exposes only the pinned key-off timer");
+  bridge.discardFrame();
+
+  state = stateAt(73);
+  state.lanes.front().pressed = true;
+  bridge.beginFrame(state, projectionAt(73));
+  expect(bridge.timerProperty({100}) == 1'000 &&
+             bridge.timerProperty({120}) == kPlayfieldTimestampOff,
+         "a pressed lane clears its previous key-off timer");
+  bridge.discardFrame();
+
   bridge.beginFrame(stateAt(71), projectionAt(71));
   expect(
       bridge.frameSerial() == 0 &&
           hasDiagnostic(bridge, "skin.play_state.frame_serial_not_increasing"),
       "a reused serial cannot reopen the runtime frame");
-  bridge.beginFrame(stateAt(72), projectionAt(72));
-  expect(bridge.frameSerial() == 72, "a strictly increasing serial begins");
+  bridge.beginFrame(stateAt(74), projectionAt(74));
+  expect(bridge.frameSerial() == 74, "a strictly increasing serial begins");
   bridge.discardFrame();
   bridge.discardFrame();
   expect(bridge.frameSerial() == 0 && bridge.projectedNotes().empty(),
@@ -837,6 +857,7 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   state.configuration.visibleTimeGreenNumber = 400;
   state.lanes.resize(8);
   for (std::size_t index = 0; index < state.lanes.size(); ++index) {
+    state.lanes[index].pressed = true;
     state.lanes[index].pressMicros = 1'000 + static_cast<long long>(index);
     state.lanes[index].releaseMicros =
         2'000 + static_cast<long long>(index);
@@ -1028,10 +1049,14 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
            std::pair{102, 1'002LL}, std::pair{103, 1'003LL},
            std::pair{104, 1'004LL}, std::pair{105, 1'005LL},
            std::pair{106, 1'006LL}, std::pair{107, 1'007LL},
-           std::pair{120, 2'000LL}, std::pair{121, 2'001LL},
-           std::pair{122, 2'002LL}, std::pair{123, 2'003LL},
-           std::pair{124, 2'004LL}, std::pair{125, 2'005LL},
-           std::pair{126, 2'006LL}, std::pair{127, 2'007LL}}) {
+           std::pair{120, kPlayfieldTimestampOff},
+           std::pair{121, kPlayfieldTimestampOff},
+           std::pair{122, kPlayfieldTimestampOff},
+           std::pair{123, kPlayfieldTimestampOff},
+           std::pair{124, kPlayfieldTimestampOff},
+           std::pair{125, kPlayfieldTimestampOff},
+           std::pair{126, kPlayfieldTimestampOff},
+           std::pair{127, kPlayfieldTimestampOff}}) {
     expect(bridge.timerProperty({id}) == expected,
            "selected live timer reads its authoritative presentation clock");
   }

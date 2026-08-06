@@ -1527,28 +1527,41 @@ std::int64_t PlaySkinStateBridge::timerProperty(
   }
   const auto laneTimer =
       [snapshot](int firstId, int count,
-                 long long LanePresentationState::*field,
-                 int timerId) -> std::optional<std::int64_t> {
+                 long long LanePresentationState::*field, int timerId,
+                 std::optional<bool> requiredPressed)
+          -> std::optional<std::int64_t> {
     const auto wide = static_cast<std::int64_t>(timerId);
     const auto first = static_cast<std::int64_t>(firstId);
     if (wide < first || wide >= first + count) {
       return std::nullopt;
     }
     const auto index = static_cast<std::size_t>(wide - first);
-    return index < snapshot->lanes.size()
-               ? std::optional<std::int64_t>{snapshot->lanes[index].*field}
-               : std::optional<std::int64_t>{INT64_MIN};
+    if (index >= snapshot->lanes.size()) {
+      return INT64_MIN;
+    }
+    const auto &lane = snapshot->lanes[index];
+    // KeyInputProccessor starts key-off and clears key-on on release, then
+    // clears key-off before starting key-on on the following press.  Retaining
+    // both timestamps makes skins such as simple-play-simple draw the stale
+    // key-on destination over their release animation.
+    if (requiredPressed && lane.pressed != *requiredPressed) {
+      return INT64_MIN;
+    }
+    return lane.*field;
   };
   if (const auto value =
-          laneTimer(100, 20, &LanePresentationState::pressMicros, *id)) {
+          laneTimer(100, 20, &LanePresentationState::pressMicros, *id,
+                    true)) {
     return *value;
   }
   if (const auto value =
-          laneTimer(120, 20, &LanePresentationState::releaseMicros, *id)) {
+          laneTimer(120, 20, &LanePresentationState::releaseMicros, *id,
+                    false)) {
     return *value;
   }
   if (const auto value =
-          laneTimer(50, 20, &LanePresentationState::bombMicros, *id)) {
+          laneTimer(50, 20, &LanePresentationState::bombMicros, *id,
+                    std::nullopt)) {
     return *value;
   }
   switch (*id) {

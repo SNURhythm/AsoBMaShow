@@ -1948,9 +1948,6 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
                 std::span<const ProjectionElement> mergedElements,
                 const PreparedNoteVisuals &preparedVisuals) {
   GameplayVisualLoweringResult result;
-  if (!outerGeometry) {
-    return result;
-  }
   double offsetX = 0.0;
   double offsetY = 0.0;
   double offsetWidth = 0.0;
@@ -2036,7 +2033,10 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
     }
     auto lowered = lowerNoteVisual(
         inputs, index, object.id, destination.presentation.authoredOrdinal,
-        gameplayVisualGeometry(rect, outerGeometry->clip), *visual,
+        gameplayVisualGeometry(rect,
+                               outerGeometry ? outerGeometry->clip
+                                             : std::nullopt),
+        *visual,
         &preparedVisuals[static_cast<std::size_t>(lane.authoredLane)]
                         [static_cast<std::size_t>(kind)]);
     if (lowered.failure) {
@@ -2233,7 +2233,8 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
       evaluated.geometry->rect.y += projected.authoredYDisplacement;
       // LaneRenderer invokes nested line images directly, so their own clip
       // is inert. The containing Note clip remains active for every group.
-      evaluated.geometry->clip = outerGeometry->clip;
+      evaluated.geometry->clip =
+          outerGeometry ? outerGeometry->clip : std::nullopt;
       auto lowered = lowerSpriteQuad(
           inputs, object.id, destination.presentation.authoredOrdinal,
           *evaluated.geometry, *line.sprite, *selected.frame);
@@ -2793,7 +2794,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       const SkinObjectDefinition *object = nullptr;
       const SkinDestination *destination = nullptr;
       const SkinNoteObject *note = nullptr;
-      AuthoredDestinationGeometry geometry;
+      std::optional<AuthoredDestinationGeometry> geometry;
       std::vector<ConfigOffset> offsets;
       PreparedNoteVisuals preparedVisuals;
     };
@@ -2811,10 +2812,15 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       if (disabledOptionalObject(lookupIndex, object->id)) {
         continue;
       }
-      // JsonSkinLoader permits an empty dst array, then Skin.prepare removes
-      // that object through SkinObject.validate(). Do the equivalent before
-      // any object, condition, or timer lookup.
-      if (destination.presentation.frames.empty()) {
+      // JsonSkinLoader removes ordinary empty-dst SkinObjects during
+      // validation. SkinNote is the exception: JsonPlaySkinObjectLoader gives
+      // it independent per-lane note.dst geometry, and real Lua skins use an
+      // intentionally empty containing destination to activate it.
+      const bool isNoteObject =
+          std::holds_alternative<SkinNoteObject>(object->payload);
+      const bool noteUsesLaneGeometryWithoutFrame =
+          isNoteObject && destination.presentation.frames.empty();
+      if (destination.presentation.frames.empty() && !isNoteObject) {
         continue;
       }
       // Numeric option conditions are resolved by Skin.prepare's static
@@ -3021,7 +3027,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
         timerOff = timer.off;
       }
       SkinDestinationEvaluationResult evaluated;
-      if (destinationVisible) {
+      if (destinationVisible && !noteUsesLaneGeometryWithoutFrame) {
         evaluated = evaluateSkinDestinationAuthored(
             destination.presentation,
             {.nowMicros = inputs.visualTimeMicros,
@@ -3091,7 +3097,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
         continue;
       }
 
-      if (destinationVisible) {
+      if (destinationVisible && !noteUsesLaneGeometryWithoutFrame) {
         evaluated = evaluateSkinDestinationAuthored(
             destination.presentation,
             {.nowMicros = inputs.visualTimeMicros,
@@ -3500,7 +3506,10 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           }
           continue;
         }
-        if (!evaluated.geometry ||
+        if (!destinationVisible) {
+          continue;
+        }
+        if (evaluated.geometry &&
             !noteOuterClipDrawable(inputs, *evaluated.geometry)) {
           continue;
         }
@@ -3509,7 +3518,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
              .object = object,
              .destination = &destination,
              .note = note,
-             .geometry = *evaluated.geometry,
+             .geometry = std::move(evaluated.geometry),
              .offsets = std::move(offsets),
              .preparedVisuals = std::move(prepared.visuals)});
         continue;
@@ -3764,7 +3773,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
     for (auto &deferred : deferredNotes) {
       auto lowered = lowerNoteObject(
           inputs, lookupIndex, *deferred.object, *deferred.destination,
-          *deferred.note, &deferred.geometry, deferred.offsets,
+          *deferred.note,
+          deferred.geometry ? &*deferred.geometry : nullptr, deferred.offsets,
           mergedProjectionElements, deferred.preparedVisuals);
       if (lowered.failure) {
         if (reportObjectFailure(result, *deferred.object, *lowered.failure)) {

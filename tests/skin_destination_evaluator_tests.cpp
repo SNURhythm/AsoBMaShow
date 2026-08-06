@@ -295,19 +295,21 @@ void testSourceRegionStretchAndProjection() {
         near(projected.normalizedUvs[0][0],
              static_cast<double>(want.regionX) / 400.0) &&
             near(projected.normalizedUvs[0][1],
-                 static_cast<double>(want.regionY) / 300.0) &&
+                 static_cast<double>(want.regionY + want.regionHeight) /
+                     300.0) &&
             near(projected.normalizedUvs[2][0],
                  static_cast<double>(want.regionX + want.regionWidth) /
                      400.0) &&
             near(projected.normalizedUvs[2][1],
-                 static_cast<double>(want.regionY + want.regionHeight) / 300.0),
-        "every stretch id has exact full-texture UVs");
+                 static_cast<double>(want.regionY) / 300.0),
+        "every stretch id binds the top-origin source rows to the matching "
+        "screen rows");
   }
 
   geometry.stretch = SkinStretchMode::KeepAspectRatioFitWidthTrimmed;
   const auto trimmed = projectSkinDestinationToUi(geometry, source, viewport);
-  expect(near(trimmed.normalizedUvs[0][1], 61.0 / 300.0) &&
-             near(trimmed.normalizedUvs[2][1], 81.0 / 300.0),
+  expect(near(trimmed.normalizedUvs[0][1], 81.0 / 300.0) &&
+             near(trimmed.normalizedUvs[2][1], 61.0 / 300.0),
          "trimmed cropping uses centered Java truncation inside a non-origin "
          "source region");
   geometry.stretch = SkinStretchMode::NoResize;
@@ -321,9 +323,9 @@ void testSourceRegionStretchAndProjection() {
   const auto bothTrimmed =
       projectSkinDestinationToUi(geometry, source, viewport);
   expect(near(bothTrimmed.normalizedUvs[0][0], 106.0 / 400.0) &&
-             near(bothTrimmed.normalizedUvs[0][1], 56.0 / 300.0) &&
+             near(bothTrimmed.normalizedUvs[0][1], 86.0 / 300.0) &&
              near(bothTrimmed.normalizedUvs[2][0], 156.0 / 400.0) &&
-             near(bothTrimmed.normalizedUvs[2][1], 86.0 / 300.0),
+             near(bothTrimmed.normalizedUvs[2][1], 56.0 / 300.0),
          "no-resize-trimmed crops both source axes in copied-region order");
 
   geometry.rect = {.x = 10.0, .y = 20.0, .width = 90.0, .height = 30.0};

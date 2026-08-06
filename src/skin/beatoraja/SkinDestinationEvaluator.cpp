@@ -445,7 +445,11 @@ projectSkinDestinationToUi(const AuthoredDestinationGeometry &destination,
   const double v1 =
       (static_cast<double>(region.y) + static_cast<double>(region.h)) /
       source.textureHeight;
-  result.normalizedUvs = {{{u0, v0}, {u1, v0}, {u1, v1}, {u0, v1}}};
+  // UiDestinationGeometry is ordered bottom-left, bottom-right, top-right,
+  // top-left, while Beatoraja texture regions use a top-origin source Y. Bind
+  // each source row to its corresponding on-screen row; otherwise every skin
+  // image (including notes and lane effects) is vertically mirrored.
+  result.normalizedUvs = {{{u0, v1}, {u1, v1}, {u1, v0}, {u0, v0}}};
   if (destination.clip && destination.clip->width > 0.0 &&
       destination.clip->height > 0.0) {
     const auto topLeft = apply(viewport.authoredToUi, destination.clip->x,
