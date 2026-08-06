@@ -215,6 +215,28 @@
       Non-cardinal values submit a static knob and expose no slider input
       region, matching Beatoraja's draw and mouse-switch behavior.
 
+17. **Judge wrappers without destination frames were discarded, and recent
+    judgement duration used the wrong unit and polarity.**
+    - Upstream: `JsonPlaySkinObjectLoader` constructs `SkinJudge` before the
+      outer `JsonSkinObjectLoader.setDestination` call. `SkinJudge`'s
+      constructor supplies its own destination, while `SkinJudge.prepare`
+      prepares and draws its selected nested `SkinImage` / `SkinNumber`.
+      Consequently an authored outer `{id = "judge"}` with no `dst` frames
+      still renders the nested judge text and combo. `JudgeManager.updateMicro`
+      stores `mfast / 1000` in `judgefast`; `IntegerPropertyFactory` exposes
+      it through `judge_duration1` (525). Upstream `mfast > 0` is FAST.
+    - Local (before this patch): the renderer dropped every non-Note empty
+      wrapper destination, so common `SkinJudge` declarations rendered neither
+      their judgement image nor combo count. It exposed Aso's `JudgeResult`
+      timing in microseconds under property 525 and tested its inverse sign as
+      FAST, producing oversized/wrong fast-slow values.
+    - Patch status: patched. Empty Judge wrappers now retain only the
+      constructor-backed nested-child path; wrappers with actual frames still
+      suppress drawing when their conditions fail. Property 525 converts to
+      signed milliseconds with Java-compatible truncation toward zero, and
+      FAST/SLOW options 1242/1243 invert Aso's `JudgeResult::Diff` sign to
+      match `JudgeManager`.
+
 ## Patch order
 
 1. Replace destination enum admission checks only after carrying the authored

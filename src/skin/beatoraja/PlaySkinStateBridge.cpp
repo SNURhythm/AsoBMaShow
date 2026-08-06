@@ -993,11 +993,11 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
             .supported = true};
   case 1242:
     return {.value = snapshot->lastJudge.judgement != None &&
-                     snapshot->fastSlowMicros > 0,
+                     snapshot->fastSlowMicros < 0,
             .supported = true};
   case 1243:
     return {.value = snapshot->lastJudge.judgement != None &&
-                     snapshot->fastSlowMicros < 0,
+                     snapshot->fastSlowMicros > 0,
             .supported = true};
   case 2243:
     return {.value = capturedJudgeCount(*snapshot, Good) > 0,
@@ -1353,7 +1353,11 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
   case 425:
     return {.value = snapshot->authority.comboBreak, .supported = true};
   case 525:
-    return {.value = snapshot->fastSlowMicros, .supported = true};
+    // IntegerPropertyFactory's judge_duration1 reads
+    // JudgeManager.getRecentJudgeTiming(), whose mfast source is explicitly
+    // converted from microseconds to milliseconds before the integer value
+    // is exposed. C++ signed division has Java's truncation-toward-zero rule.
+    return {.value = snapshot->fastSlowMicros / 1'000, .supported = true};
   case 526:
   case 527:
     return {.value = 0, .supported = true};

@@ -965,7 +965,7 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
                              .startMicros = 6'001,
                              .elapsedMillisExact = true};
   state.lastJudgeVisualMicros = 6'002;
-  state.fastSlowMicros = -34;
+  state.fastSlowMicros = -34'000;
   state.authority.liftEnabled = false;
   state.authority.liftRatio = 0.3759F;
   state.authority.hiddenEnabled = false;
@@ -1225,7 +1225,7 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   state.authority.laneCoverEnabled = true;
   state.authority.laneCoverPercent = 0;
   state.lastJudge = JudgeResult(Great, 20);
-  state.fastSlowMicros = 20;
+  state.fastSlowMicros = -20;
   bridge.beginFrame(state, projectionAt(102));
   expect(bridge.floatProperty({4}).supported &&
              bridge.floatProperty({4}).value == 0.0,
@@ -1237,7 +1237,7 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
              bridge.booleanProperty({1242}).value &&
              bridge.booleanProperty({1243}).supported &&
              !bridge.booleanProperty({1243}).value,
-         "positive recent timing selects pinned early option");
+         "negative Aso timing selects Beatoraja's positive early option");
   bridge.discardFrame();
 
   state = stateAt(103);
@@ -1246,7 +1246,7 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   state.authority.liftRatio = 0.2F;
   state.authority.hiddenEnabled = true;
   state.lastJudge = JudgeResult(Great, -20);
-  state.fastSlowMicros = -20;
+  state.fastSlowMicros = 20;
   bridge.beginFrame(state, projectionAt(103));
   expect(bridge.floatProperty({4}).supported &&
              std::abs(bridge.floatProperty({4}).value - 0.36) < 0.000001,
@@ -1265,7 +1265,7 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
              !bridge.booleanProperty({1242}).value &&
              bridge.booleanProperty({1243}).supported &&
              bridge.booleanProperty({1243}).value,
-         "negative recent timing selects pinned late option");
+         "positive Aso timing selects Beatoraja's negative late option");
   bridge.discardFrame();
 
   for (const auto [serial, gauge, option] : std::array{

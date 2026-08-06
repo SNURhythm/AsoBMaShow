@@ -2348,7 +2348,8 @@ lowerJudge(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
            std::span<const SkinObjectDefinition *const> objects,
            const SkinDestination &outerDestination,
            const SkinJudgeObject &judge, const SkinJudgeStateView &state,
-           const AuthoredDestinationGeometry *outerGeometry) {
+           const AuthoredDestinationGeometry *outerGeometry,
+           bool wrapperVisible) {
   JudgeLoweringResult result;
   if (!state.supported) {
     result.failure =
@@ -2484,7 +2485,7 @@ lowerJudge(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
         detailLength =
             (detailDestination.geometry->rect.width + layout.spacing) *
             static_cast<double>(visible);
-        if (outerGeometry && detailDestination.geometry->rgba[3] > 0.0F) {
+        if (wrapperVisible && detailDestination.geometry->rgba[3] > 0.0F) {
           SkinDestination nestedDestination{
               .object = detailObject->id,
               .presentation = detailPresentation->destination};
@@ -2505,7 +2506,12 @@ lowerJudge(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
   if (judge.shiftImageByHalfDetailWidth) {
     imageDestination.geometry->rect.x -= detailLength * 0.5;
   }
-  if (!outerGeometry) {
+  // SkinJudge has its own constructor destination, so a top-level Judge may
+  // legitimately be registered without `dst` frames. Its nested image still
+  // owns the rendered geometry; the absent wrapper only means no outer clip.
+  // A configured wrapper with frames remains a normal SkinObject: its failed
+  // destination condition suppresses draw while nested children still prepare.
+  if (!wrapperVisible || imageDestination.geometry->rgba[3] <= 0.0F) {
     return result;
   }
   auto loweredImage = lowerPreparedQuad(
@@ -2987,14 +2993,21 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
         continue;
       }
       // JsonSkinLoader removes ordinary empty-dst SkinObjects during
-      // validation. SkinNote is the exception: JsonPlaySkinObjectLoader gives
-      // it independent per-lane note.dst geometry, and real Lua skins use an
-      // intentionally empty containing destination to activate it.
+      // validation. JsonPlaySkinObjectLoader has two exceptions: SkinNote
+      // owns independent per-lane note.dst geometry, while SkinJudge keeps
+      // its constructor destination and renders its nested children directly.
+      // Real Lua skins use an intentionally empty containing destination for
+      // both forms.
       const bool isNoteObject =
           std::holds_alternative<SkinNoteObject>(object->payload);
+      const bool isJudgeObject =
+          std::holds_alternative<SkinJudgeObject>(object->payload);
       const bool noteUsesLaneGeometryWithoutFrame =
           isNoteObject && destination.presentation.frames.empty();
-      if (destination.presentation.frames.empty() && !isNoteObject) {
+      const bool judgeUsesConstructorDestinationWithoutFrame =
+          isJudgeObject && destination.presentation.frames.empty();
+      if (destination.presentation.frames.empty() && !isNoteObject &&
+          !isJudgeObject) {
         continue;
       }
       // Numeric option conditions are resolved by Skin.prepare's static
@@ -3003,16 +3016,18 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       // child preparation; only runtime Boolean dstdraw rejection continues
       // through those overrides.
       bool rejectedByConfiguredOption = false;
-      for (const auto &condition : destination.presentation.conditions) {
-        const auto *configured = std::get_if<int>(&condition);
-        if (!configured) {
-          continue;
-        }
-        bool enabled = false;
-        if (!configuredCondition(inputs.configuration, *configured, enabled) ||
-            !enabled) {
-          rejectedByConfiguredOption = true;
-          break;
+      if (!judgeUsesConstructorDestinationWithoutFrame) {
+        for (const auto &condition : destination.presentation.conditions) {
+          const auto *configured = std::get_if<int>(&condition);
+          if (!configured) {
+            continue;
+          }
+          bool enabled = false;
+          if (!configuredCondition(inputs.configuration, *configured, enabled) ||
+              !enabled) {
+            rejectedByConfiguredOption = true;
+            break;
+          }
         }
       }
       if (rejectedByConfiguredOption) {
@@ -3127,8 +3142,10 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       }
 
       const std::size_t conditionCount =
-          destination.presentation.conditions.size() +
-          (destination.presentation.drawCondition ? 1U : 0U);
+          judgeUsesConstructorDestinationWithoutFrame
+              ? 0U
+              : destination.presentation.conditions.size() +
+                    (destination.presentation.drawCondition ? 1U : 0U);
       std::unique_ptr<bool[]> conditions;
       if (conditionCount != 0) {
         conditions = std::make_unique<bool[]>(conditionCount);
@@ -3136,39 +3153,42 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       std::size_t conditionIndex = 0;
       bool conditionFailure = false;
       bool destinationVisible = true;
-      for (const auto &condition : destination.presentation.conditions) {
-        if (const auto *configured = std::get_if<int>(&condition)) {
-          bool value = false;
-          if (!configuredCondition(inputs.configuration, *configured, value)) {
-            conditionFailure = true;
-            break;
-          }
-          conditions[conditionIndex++] = value;
-          if (!value) {
-            destinationVisible = false;
-            break;
-          }
-        } else {
-          const auto resolved = resolveBoolean(
-              inputs, lookupIndex, std::get<SkinBooleanPropertyId>(condition));
-          if (resolved.failure) {
-            if (reportObjectFailure(result, *object, *resolved.failure)) {
-              return result;
+      if (!judgeUsesConstructorDestinationWithoutFrame) {
+        for (const auto &condition : destination.presentation.conditions) {
+          if (const auto *configured = std::get_if<int>(&condition)) {
+            bool value = false;
+            if (!configuredCondition(inputs.configuration, *configured, value)) {
+              conditionFailure = true;
+              break;
             }
-            conditionFailure = true;
-            break;
-          }
-          conditions[conditionIndex++] = *resolved.value;
-          if (!*resolved.value) {
-            destinationVisible = false;
-            break;
+            conditions[conditionIndex++] = value;
+            if (!value) {
+              destinationVisible = false;
+              break;
+            }
+          } else {
+            const auto resolved = resolveBoolean(
+                inputs, lookupIndex, std::get<SkinBooleanPropertyId>(condition));
+            if (resolved.failure) {
+              if (reportObjectFailure(result, *object, *resolved.failure)) {
+                return result;
+              }
+              conditionFailure = true;
+              break;
+            }
+            conditions[conditionIndex++] = *resolved.value;
+            if (!*resolved.value) {
+              destinationVisible = false;
+              break;
+            }
           }
         }
       }
       if (conditionFailure) {
         continue;
       }
-      if (destinationVisible && destination.presentation.drawCondition) {
+      if (!judgeUsesConstructorDestinationWithoutFrame && destinationVisible &&
+          destination.presentation.drawCondition) {
         const auto resolved = resolveBoolean(
             inputs, lookupIndex, *destination.presentation.drawCondition);
         if (resolved.failure) {
@@ -3188,7 +3208,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
 
       std::int64_t timerStartMicros = INT64_MIN;
       bool timerOff = false;
-      if (destinationVisible && destination.presentation.timer) {
+      if (!judgeUsesConstructorDestinationWithoutFrame && destinationVisible &&
+          destination.presentation.timer) {
         const auto timer = resolveTimerUse(inputs, lookupIndex,
                                            *destination.presentation.timer);
         if (timer.failure) {
@@ -3201,7 +3222,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
         timerOff = timer.off;
       }
       SkinDestinationEvaluationResult evaluated;
-      if (destinationVisible && !noteUsesLaneGeometryWithoutFrame) {
+      if (!judgeUsesConstructorDestinationWithoutFrame && destinationVisible &&
+          !noteUsesLaneGeometryWithoutFrame) {
         evaluated = evaluateSkinDestinationAuthored(
             destination.presentation,
             {.nowMicros = inputs.visualTimeMicros,
@@ -3230,11 +3252,11 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
 
       std::vector<ConfigOffset> offsets;
       std::optional<double> coverLiftOffsetY;
-      if (destinationVisible) {
+      if (!judgeUsesConstructorDestinationWithoutFrame && destinationVisible) {
         offsets.reserve(destination.presentation.offsetIds.size());
       }
       bool offsetFailure = false;
-      if (destinationVisible) {
+      if (!judgeUsesConstructorDestinationWithoutFrame && destinationVisible) {
         for (const int id : destination.presentation.offsetIds) {
           // SkinObject.setOffsetID ignores the decoder's zero default and
           // every ID outside SkinProperty's pinned 1...199 range.
@@ -3271,7 +3293,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
         continue;
       }
 
-      if (destinationVisible && !noteUsesLaneGeometryWithoutFrame) {
+      if (!judgeUsesConstructorDestinationWithoutFrame && destinationVisible &&
+          !noteUsesLaneGeometryWithoutFrame) {
         evaluated = evaluateSkinDestinationAuthored(
             destination.presentation,
             {.nowMicros = inputs.visualTimeMicros,
@@ -3650,7 +3673,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       if (judge) {
         auto lowered = lowerJudge(
             inputs, lookupIndex, objects, destination, *judge, *judgeState,
-            evaluated.geometry ? &*evaluated.geometry : nullptr);
+            evaluated.geometry ? &*evaluated.geometry : nullptr,
+            destinationVisible || destination.presentation.frames.empty());
         if (lowered.failure) {
           if (reportObjectFailure(result, *object, *lowered.failure)) {
             return result;

@@ -2551,6 +2551,54 @@ void testJudgeLowersRelativeComboBeforeShiftedImage() {
          "judge image shifts left by half the rendered detail width");
 }
 
+void testJudgeWithoutWrapperDestinationRendersChildren() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  resources.addImage(20, {.x = 0, .y = 0, .w = 10, .h = 10}, 20, 10);
+  FakeState state;
+  state.judgeResult = {.supported = true,
+                       .optionalZeroBasedGrade = 0,
+                       .combo = 1,
+                       .maximumGauge = false};
+
+  SkinJudgeObject judge;
+  judge.grades.resize(7);
+  SkinDestinationBody childDestination;
+  childDestination.loop = -1;
+  childDestination.frames = {
+      {.timeMillis = 0, .x = 100.0, .y = 200.0, .width = 40.0, .height = 20.0}};
+  judge.grades[0].image = SkinNestedObjectPresentation{
+      .object = 2, .destination = std::move(childDestination)};
+
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects = {{.id = 1,
+                          .authoredName = "judge",
+                          .payload = std::move(judge),
+                          .authoredOrdinal = 1,
+                          .critical = true},
+                         imageObject(2, 20, false)};
+  SkinDestination outerDestination;
+  outerDestination.object = 1;
+  outerDestination.presentation.authoredOrdinal = 51;
+  outerDestination.presentation.conditions = {42};
+  model.model.destinations = {std::move(outerDestination)};
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  expect(result.submitReady && result.submitReady->commands.size() == 1,
+         "SkinJudge's constructor destination keeps nested children live when "
+         "the authored wrapper has no dst frames or wrapper conditions");
+  if (!result.submitReady || result.submitReady->commands.size() != 1) {
+    return;
+  }
+  const auto &command = std::get<SkinTexturedQuadCommand>(
+      result.submitReady->commands.front().payload);
+  expect(command.resource == 20 && command.vertices[0].x == 100.0F &&
+             command.vertices[0].y == 520.0F,
+         "wrapper-less Judge renders its selected child at the child's "
+         "destination");
+}
+
 void testJudgeMaxGaugeFallsBackImageAndDetailIndependently() {
   RuntimeHarness runtime;
   Skin2DRenderer renderer;
@@ -4147,6 +4195,7 @@ int main() {
   testGaugeAnimationStateResetsWhenSessionChangesInSameModelStorage();
   testGaugeRandomUsesBoundedSessionSourceAndFailsAtomically();
   testJudgeLowersRelativeComboBeforeShiftedImage();
+  testJudgeWithoutWrapperDestinationRendersChildren();
   testJudgeMaxGaugeFallsBackImageAndDetailIndependently();
   testHiddenJudgeStillPreparesChildrenInPinnedCallbackOrder();
   testCriticalJudgeRequiresSupportedState();
