@@ -1059,7 +1059,10 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
            std::pair{314, 375LL}, std::pair{315, 286LL},
            std::pair{316, 280LL},
            std::pair{407, 3LL}, std::pair{427, 18LL},
-           std::pair{525, -34LL}, std::pair{75, 321LL},
+           // Judge.Diff is negative for an early input, whereas Beatoraja's
+           // JudgeManager.getRecentJudgeTiming() is positive for that same
+           // input.  IntegerPropertyFactory.ValueType 525 exposes the latter.
+           std::pair{525, 34LL}, std::pair{75, 321LL},
            std::pair{102, 114LL}, std::pair{103, 0LL},
            std::pair{105, 321LL}, std::pair{152, 156LL},
            std::pair{153, -44LL}, std::pair{313, 417LL},

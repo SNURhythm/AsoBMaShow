@@ -1354,10 +1354,14 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
     return {.value = snapshot->authority.comboBreak, .supported = true};
   case 525:
     // IntegerPropertyFactory's judge_duration1 reads
-    // JudgeManager.getRecentJudgeTiming(), whose mfast source is explicitly
-    // converted from microseconds to milliseconds before the integer value
-    // is exposed. C++ signed division has Java's truncation-toward-zero rule.
-    return {.value = snapshot->fastSlowMicros / 1'000, .supported = true};
+    // JudgeManager.getRecentJudgeTiming().  Beatoraja stores an early input
+    // as positive mfast; AsoBMaShow's Judge.Diff (captured in
+    // fastSlowMicros) stores that same input as negative.  Convert both its
+    // sign and unit here. C++ signed division has Java's
+    // truncation-toward-zero rule.
+    return {.value = -static_cast<std::int64_t>(snapshot->fastSlowMicros) /
+                         1'000,
+            .supported = true};
   case 526:
   case 527:
     return {.value = 0, .supported = true};

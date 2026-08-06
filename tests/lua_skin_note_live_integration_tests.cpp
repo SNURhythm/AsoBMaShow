@@ -189,6 +189,13 @@ constexpr auto kBuiltins = std::to_array<SkinBuiltinBindingCatalogEntry>({
      .selector = SkinBuiltinPropertySelector{1242}},
     {.type = {.kind = SkinBindingKind::BooleanProperty},
      .selector = SkinBuiltinPropertySelector{-1243}},
+    {.type = {.kind = SkinBindingKind::BooleanProperty},
+     .selector = SkinBuiltinPropertySelector{-241}},
+    {.type = {.kind = SkinBindingKind::IntegerProperty,
+              .integerDomain = SkinIntegerPropertyDomain::IntegerValue},
+     .selector = SkinBuiltinPropertySelector{525}},
+    {.type = {.kind = SkinBindingKind::TimerProperty},
+     .selector = SkinBuiltinPropertySelector{46}},
 });
 
 void testScuroShapedModernNoteAndNestedLinesDecodeLive() {
@@ -540,6 +547,80 @@ return {type=0,w=1280,h=720,
          "BooleanPropertyFactory selectors");
 }
 
+void testMillisecondsJudgeNumberUsesRefAndNegativePerfectCondition() {
+  // LITONE12's Old ghost module uses this exact numeric property shape.  Its
+  // ref field, not value, selects IntegerPropertyFactory.ValueType 525; the
+  // negative perfect option remains a BooleanPropertyFactory condition while
+  // 926 stays a static skin-config selection.
+  constexpr std::string_view source = R"lua(
+return {type=0,w=1280,h=720,
+ source={{id='atlas',path='atlas.png'}},
+ value={{id='judge-ms',src='atlas',x=0,y=0,w=240,h=40,divx=12,divy=2,
+         digit=5,align=2,zeropadding=1,ref=525}},
+ destination={{id='judge-ms',loop=-1,timer=46,op={-241,926},
+              dst={{x=40,y=30,w=20,h=30},{time=500}}}}}
+)lua";
+  LiveSession session(source);
+  const SkinBuiltinBindingCatalogView builtins(kBuiltins);
+  const auto decoded = session.decode(builtins);
+  expect(decoded.model.has_value(),
+         "LITONE-shaped milliseconds judge number decodes live");
+  if (!decoded.model || decoded.model->objects.empty() ||
+      decoded.model->destinations.empty()) {
+    return;
+  }
+
+  const auto *number =
+      std::get_if<SkinNumberObject>(&decoded.model->objects.front().payload);
+  expect(number != nullptr && number->digits.negative.has_value() &&
+             number->digits.glyphsPerAnimationFrame == 12,
+         "24-cell LITONE milliseconds atlas retains its signed 12-glyph sets");
+  if (number == nullptr) {
+    return;
+  }
+  const auto valueBinding = std::ranges::find_if(
+      decoded.model->integerProperties, [&](const auto &binding) {
+        return binding.id == number->value;
+      });
+  const auto *valueBuiltin =
+      valueBinding == decoded.model->integerProperties.end()
+          ? nullptr
+          : std::get_if<SkinBuiltinPropertySelector>(&valueBinding->source);
+  const auto *valueSelector =
+      valueBuiltin ? std::get_if<int>(&valueBuiltin->value) : nullptr;
+  expect(valueBinding != decoded.model->integerProperties.end() &&
+             valueBinding->domain == SkinIntegerPropertyDomain::IntegerValue &&
+             valueSelector != nullptr && *valueSelector == 525,
+         "numeric ref 525 binds the exact Beatoraja judge-duration value");
+
+  const auto &conditions =
+      decoded.model->destinations.front().presentation.conditions;
+  expect(conditions.size() == 2 &&
+             std::holds_alternative<SkinBooleanPropertyId>(conditions[0]) &&
+             std::holds_alternative<int>(conditions[1]) &&
+             std::get<int>(conditions[1]) == 926,
+         "negative perfect condition stays dynamic before static layout choice");
+  if (conditions.empty() ||
+      !std::holds_alternative<SkinBooleanPropertyId>(conditions.front())) {
+    return;
+  }
+  const auto conditionId = std::get<SkinBooleanPropertyId>(conditions.front());
+  const auto conditionBinding = std::ranges::find_if(
+      decoded.model->booleanProperties, [&](const auto &binding) {
+        return binding.id == conditionId;
+      });
+  const auto *conditionBuiltin =
+      conditionBinding == decoded.model->booleanProperties.end()
+          ? nullptr
+          : std::get_if<SkinBuiltinPropertySelector>(
+                &conditionBinding->source);
+  const auto *conditionSelector = conditionBuiltin
+                                      ? std::get_if<int>(&conditionBuiltin->value)
+                                      : nullptr;
+  expect(conditionSelector != nullptr && *conditionSelector == -241,
+         "negative perfect condition retains its exact signed selector");
+}
+
 void testValidatorRetainsMalformedCriticalNoteState() {
   LiveSession session(kLegacyNote);
   auto decoded = session.decode();
@@ -582,6 +663,7 @@ int main() {
   testCompleteNoteMaterializationBudgets();
   testNoteOnlyImagesIgnoreGenericStateAndActionFields();
   testNumericJudgeOptionsUseBooleanFactoryBeforeStaticOptions();
+  testMillisecondsJudgeNumberUsesRefAndNegativePerfectCondition();
   testValidatorRetainsMalformedCriticalNoteState();
   if (failures != 0) {
     std::cerr << failures << " assertion(s) failed\n";
