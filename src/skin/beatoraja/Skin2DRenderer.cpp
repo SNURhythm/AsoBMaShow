@@ -159,6 +159,16 @@ SkinSliderInteractionGeometry sliderInteraction(
   return result;
 }
 
+SkinImageInteractionGeometry imageInteraction(
+    SkinObjectId sourceObject, std::uint32_t authoredOrdinal,
+    const AuthoredDestinationGeometry &geometry, const SkinImageObject &image) {
+  return {.sourceObject = sourceObject,
+          .authoredOrdinal = authoredOrdinal,
+          .authoredRegion = geometry.rect,
+          .event = *image.clickEvent,
+          .clickMode = image.clickMode};
+}
+
 bool laneCoverRateSelector(const SkinBuiltinPropertySelector &builtin) {
   if (const auto *selector = std::get_if<int>(&builtin.value)) {
     return *selector == 4 || *selector == 5;
@@ -2541,17 +2551,41 @@ SkinInteractionLayout::hitTestUiControl(UiLogicalPoint point) const noexcept {
   if (!authored) {
     return {};
   }
-  for (const auto &slider : slidersTopmostFirst) {
-    if (!slider.writer || slider.range <= 0.0 ||
-        !std::isfinite(slider.range) || slider.direction > 3 ||
-        !contains(authored->x, authored->y, slider.authoredHitRegion)) {
-      continue;
+  for (const auto &control : controlsTopmostFirst) {
+    const auto hit = std::visit(
+        [&](const auto &candidate) -> std::optional<PresentationUiHit> {
+          using T = std::decay_t<decltype(candidate)>;
+          if constexpr (std::is_same_v<T, SkinSliderInteractionGeometry>) {
+            if (!candidate.writer || candidate.range <= 0.0 ||
+                !std::isfinite(candidate.range) || candidate.direction > 3 ||
+                !contains(authored->x, authored->y,
+                          candidate.authoredHitRegion)) {
+              return std::nullopt;
+            }
+            return PresentationUiHit{
+                .kind = candidate.kind,
+                .layoutRevision = revision,
+                .sourceObject = candidate.sourceObject,
+                .authoredOrdinal = candidate.authoredOrdinal,
+                .writer = candidate.writer};
+          } else {
+            if (!candidate.event || candidate.clickMode < 0 ||
+                candidate.clickMode > 3 ||
+                !contains(authored->x, authored->y, candidate.authoredRegion)) {
+              return std::nullopt;
+            }
+            return PresentationUiHit{
+                .kind = PresentationUiControlKind::Image,
+                .layoutRevision = revision,
+                .sourceObject = candidate.sourceObject,
+                .authoredOrdinal = candidate.authoredOrdinal,
+                .eventBinding = candidate.event.value};
+          }
+        },
+        control);
+    if (hit) {
+      return *hit;
     }
-    return {.kind = slider.kind,
-            .layoutRevision = revision,
-            .sourceObject = slider.sourceObject,
-            .authoredOrdinal = slider.authoredOrdinal,
-            .writer = slider.writer};
   }
   return {};
 }
@@ -2559,7 +2593,7 @@ SkinInteractionLayout::hitTestUiControl(UiLogicalPoint point) const noexcept {
 std::vector<PresentationUiHitRegion>
 SkinInteractionLayout::uiHitRegions() const {
   std::vector<PresentationUiHitRegion> result;
-  result.reserve(slidersTopmostFirst.size());
+  result.reserve(controlsTopmostFirst.size());
   const double determinant =
       uiToAuthored.m00 * uiToAuthored.m11 -
       uiToAuthored.m01 * uiToAuthored.m10;
@@ -2582,21 +2616,51 @@ SkinInteractionLayout::uiHitRegions() const {
     return UiLogicalPoint{.x = static_cast<float>(uiX),
                           .y = static_cast<float>(uiY)};
   };
-  for (const auto &slider : slidersTopmostFirst) {
-    if (!slider.writer || slider.range <= 0.0 ||
-        !std::isfinite(slider.range) || slider.direction > 3 ||
-        !std::isfinite(slider.authoredHitRegion.x) ||
-        !std::isfinite(slider.authoredHitRegion.y) ||
-        !std::isfinite(slider.authoredHitRegion.width) ||
-        !std::isfinite(slider.authoredHitRegion.height) ||
-        slider.authoredHitRegion.width < 0.0 ||
-        slider.authoredHitRegion.height < 0.0) {
+  for (const auto &control : controlsTopmostFirst) {
+    const auto source = std::visit(
+        [&](const auto &candidate)
+            -> std::optional<std::pair<PresentationUiHit, AuthoredRect>> {
+          using T = std::decay_t<decltype(candidate)>;
+          if constexpr (std::is_same_v<T, SkinSliderInteractionGeometry>) {
+            if (!candidate.writer || candidate.range <= 0.0 ||
+                !std::isfinite(candidate.range) || candidate.direction > 3) {
+              return std::nullopt;
+            }
+            return std::pair{PresentationUiHit{
+                                 .kind = candidate.kind,
+                                 .layoutRevision = revision,
+                                 .sourceObject = candidate.sourceObject,
+                                 .authoredOrdinal = candidate.authoredOrdinal,
+                                 .writer = candidate.writer},
+                             candidate.authoredHitRegion};
+          } else {
+            if (!candidate.event || candidate.clickMode < 0 ||
+                candidate.clickMode > 3) {
+              return std::nullopt;
+            }
+            return std::pair{PresentationUiHit{
+                                 .kind = PresentationUiControlKind::Image,
+                                 .layoutRevision = revision,
+                                 .sourceObject = candidate.sourceObject,
+                                 .authoredOrdinal = candidate.authoredOrdinal,
+                                 .eventBinding = candidate.event.value},
+                             candidate.authoredRegion};
+          }
+        },
+        control);
+    if (!source) {
       continue;
     }
-    const double left = slider.authoredHitRegion.x;
-    const double right = left + slider.authoredHitRegion.width;
-    const double top = slider.authoredHitRegion.y;
-    const double bottom = top + slider.authoredHitRegion.height;
+    const auto &rect = source->second;
+    if (!std::isfinite(rect.x) || !std::isfinite(rect.y) ||
+        !std::isfinite(rect.width) || !std::isfinite(rect.height) ||
+        rect.width < 0.0 || rect.height < 0.0) {
+      continue;
+    }
+    const double left = rect.x;
+    const double right = left + rect.width;
+    const double top = rect.y;
+    const double bottom = top + rect.height;
     const auto first = toUi(left, top);
     const auto second = toUi(right, top);
     const auto third = toUi(right, bottom);
@@ -2605,12 +2669,7 @@ SkinInteractionLayout::uiHitRegions() const {
       continue;
     }
     result.push_back(
-        {.hit = {.kind = slider.kind,
-                 .layoutRevision = revision,
-                 .sourceObject = slider.sourceObject,
-                 .authoredOrdinal = slider.authoredOrdinal,
-                 .writer = slider.writer},
-         .boundary = {*first, *second, *third, *fourth}});
+        {.hit = source->first, .boundary = {*first, *second, *third, *fourth}});
   }
   return result;
 }
@@ -2638,28 +2697,32 @@ SkinInteractionLayout::writerInvocationFor(const PresentationUiHit &hit,
            candidate.x >= rect.x && candidate.x <= rect.x + rect.width &&
            candidate.y >= rect.y && candidate.y <= rect.y + rect.height;
   };
-  for (const auto &slider : slidersTopmostFirst) {
-    if (slider.sourceObject != hit.sourceObject ||
-        slider.kind != hit.kind ||
-        slider.authoredOrdinal != hit.authoredOrdinal ||
-        slider.writer != hit.writer || !slider.writer ||
-        slider.range <= 0.0 || !std::isfinite(slider.range) ||
-        !contains(*authored, slider.authoredHitRegion)) {
+  for (const auto &control : controlsTopmostFirst) {
+    const auto *slider = std::get_if<SkinSliderInteractionGeometry>(&control);
+    if (slider == nullptr) {
+      continue;
+    }
+    if (slider->sourceObject != hit.sourceObject ||
+        slider->kind != hit.kind ||
+        slider->authoredOrdinal != hit.authoredOrdinal ||
+        slider->writer != hit.writer || !slider->writer ||
+        slider->range <= 0.0 || !std::isfinite(slider->range) ||
+        !contains(*authored, slider->authoredHitRegion)) {
       continue;
     }
     double displacement = 0.0;
-    switch (slider.direction) {
+    switch (slider->direction) {
     case 0:
-      displacement = authored->y - slider.valueZero.y;
+      displacement = authored->y - slider->valueZero.y;
       break;
     case 1:
-      displacement = authored->x - slider.valueZero.x;
+      displacement = authored->x - slider->valueZero.x;
       break;
     case 2:
-      displacement = slider.valueZero.y - authored->y;
+      displacement = slider->valueZero.y - authored->y;
       break;
     case 3:
-      displacement = slider.valueZero.x - authored->x;
+      displacement = slider->valueZero.x - authored->x;
       break;
     default:
       return std::nullopt;
@@ -2667,15 +2730,74 @@ SkinInteractionLayout::writerInvocationFor(const PresentationUiHit &hit,
     double normalizedValue = 0.0;
     if (std::abs(displacement) < 1.0) {
       normalizedValue = 0.0;
-    } else if (std::abs(displacement - slider.range) < 1.0) {
+    } else if (std::abs(displacement - slider->range) < 1.0) {
       normalizedValue = 1.0;
     } else {
-      normalizedValue = std::clamp(displacement / slider.range, 0.0, 1.0);
+      normalizedValue = std::clamp(displacement / slider->range, 0.0, 1.0);
     }
     return SkinWriterInvocation{
-        .writer = *slider.writer,
+        .writer = *slider->writer,
         .normalizedValue = static_cast<float>(normalizedValue),
         .eventMicros = eventMicros};
+  }
+  return std::nullopt;
+}
+
+std::optional<SkinEventInvocation>
+SkinInteractionLayout::eventInvocationFor(const PresentationUiHit &hit,
+                                          UiLogicalPoint point,
+                                          long long eventMicros) const noexcept {
+  if (hit.kind != PresentationUiControlKind::Image ||
+      hit.layoutRevision != revision || !hit.eventBinding) {
+    return std::nullopt;
+  }
+  const auto authored = authoredPointForUi(point.x, point.y);
+  if (!authored) {
+    return std::nullopt;
+  }
+  const auto contains = [](const AuthoredPoint &candidate,
+                           const AuthoredRect &rect) {
+    return std::isfinite(candidate.x) && std::isfinite(candidate.y) &&
+           std::isfinite(rect.x) && std::isfinite(rect.y) &&
+           std::isfinite(rect.width) && std::isfinite(rect.height) &&
+           rect.width >= 0.0 && rect.height >= 0.0 &&
+           candidate.x >= rect.x && candidate.x <= rect.x + rect.width &&
+           candidate.y >= rect.y && candidate.y <= rect.y + rect.height;
+  };
+  for (const auto &control : controlsTopmostFirst) {
+    const auto *image = std::get_if<SkinImageInteractionGeometry>(&control);
+    if (image == nullptr || image->sourceObject != hit.sourceObject ||
+        image->authoredOrdinal != hit.authoredOrdinal ||
+        image->event.value != *hit.eventBinding ||
+        !contains(*authored, image->authoredRegion)) {
+      continue;
+    }
+    int argument = 0;
+    switch (image->clickMode) {
+    case 0:
+      argument = 1;
+      break;
+    case 1:
+      argument = -1;
+      break;
+    case 2:
+      argument = authored->x >= image->authoredRegion.x +
+                                  image->authoredRegion.width / 2.0
+                     ? 1
+                     : -1;
+      break;
+    case 3:
+      argument = authored->y >= image->authoredRegion.y +
+                                  image->authoredRegion.height / 2.0
+                     ? 1
+                     : -1;
+      break;
+    default:
+      return std::nullopt;
+    }
+    return SkinEventInvocation{.eventBinding = image->event.value,
+                               .argument = argument,
+                               .eventMicros = eventMicros};
   }
   return std::nullopt;
 }
@@ -3506,6 +3628,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
                                   destination.presentation.authoredOrdinal,
                                   *evaluated.geometry, *slider,
                                   interactionKind));
+            interactionLayout.controlsTopmostFirst.push_back(
+                interactionLayout.slidersTopmostFirst.back());
           }
         }
         continue;
@@ -3807,6 +3931,14 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           {.authoredOrdinal = destination.presentation.authoredOrdinal,
            .sourceObject = object->id,
            .payload = std::move(command)});
+      if (image->clickEvent && image->clickMode >= 0 &&
+          image->clickMode <= 3) {
+        interactionLayout.imagesTopmostFirst.push_back(imageInteraction(
+            object->id, destination.presentation.authoredOrdinal,
+            *evaluated.geometry, *image));
+        interactionLayout.controlsTopmostFirst.push_back(
+            interactionLayout.imagesTopmostFirst.back());
+      }
     }
 
     std::size_t insertedNoteCommands = 0;
@@ -3847,6 +3979,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
 
     buildAdjacentBatches(buffer);
     std::ranges::reverse(interactionLayout.slidersTopmostFirst);
+    std::ranges::reverse(interactionLayout.imagesTopmostFirst);
+    std::ranges::reverse(interactionLayout.controlsTopmostFirst);
     result.submitReady = std::move(buffer);
     result.interactionLayout = std::move(interactionLayout);
     return result;

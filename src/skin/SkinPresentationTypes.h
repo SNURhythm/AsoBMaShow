@@ -22,6 +22,17 @@ struct SkinWriterInvocation {
   bool operator==(const SkinWriterInvocation &) const = default;
 };
 
+// Beatoraja Image.act invokes an Event with one integer argument selected by
+// the image's click mode. Keep the model binding opaque at this presentation
+// boundary so input routing does not depend on Lua runtime ownership.
+struct SkinEventInvocation {
+  std::uint32_t eventBinding = 0;
+  int argument = 0;
+  long long eventMicros = 0;
+
+  bool operator==(const SkinEventInvocation &) const = default;
+};
+
 enum class SkinBlendMode : std::uint8_t {
   Normal,
   Additive,
@@ -62,6 +73,7 @@ enum class PresentationUiControlKind : std::uint8_t {
   None,
   LaneCover,
   Slider,
+  Image,
   NativeOverlay,
 };
 
@@ -74,6 +86,7 @@ struct PresentationUiHit {
   std::uint32_t sourceObject = 0;
   std::uint32_t authoredOrdinal = 0;
   std::optional<skin::SkinFloatWriterId> writer;
+  std::optional<std::uint32_t> eventBinding;
   // Only the built-in BMS lane-cover adapter opts into the legacy scene
   // handler. Topmost skin controls and native overlays remain authoritative
   // even when their main-thread callback rejects or becomes stale.

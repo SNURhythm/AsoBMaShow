@@ -126,6 +126,8 @@ public:
                   const PlayfieldProjectionResult &);
   SkinHostCallResult updateCustomObjects();
   SkinHostCallResult executeEvent(int, std::span<const int> arguments);
+  SkinHostCallResult invokeEventBinding(SkinEventBindingId,
+                                        std::span<const int> arguments);
   SkinHostCallResult invokeWriter(SkinFloatWriterId, double normalizedValue);
   [[nodiscard]] PlaySkinFrameCommit commitFrame();
   void discardFrame() noexcept;
@@ -170,8 +172,6 @@ private:
   [[nodiscard]] SkinHostCallResult updateCustomEvent(const SkinCustomEvent &);
   [[nodiscard]] SkinHostCallResult invokeCustomEvent(
       const SkinCustomEvent &, std::span<const int> arguments);
-  [[nodiscard]] SkinHostCallResult invokeEventBinding(
-      SkinEventBindingId, std::span<const int> arguments);
   [[nodiscard]] SkinHostCallResult evaluateCustomCondition(
       SkinBooleanPropertyId, bool &condition);
   [[nodiscard]] SkinHostCallResult evaluateCustomTimer(

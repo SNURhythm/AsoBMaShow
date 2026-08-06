@@ -556,7 +556,8 @@ const PlaySkinSessionIdentity &PlaySkinSession::identity() const noexcept {
 PlaySkinFrameTransactionResult PlaySkinSession::runFrameTransaction(
     const PlayfieldVisualState &state,
     const PlayfieldProjectionResult &projection,
-    std::span<const SkinWriterInvocation> queuedWriters) {
+    std::span<const SkinWriterInvocation> queuedWriters,
+    std::span<const SkinEventInvocation> queuedEvents) {
   PlaySkinFrameTransactionResult result{.frameSerial = state.clock.serial};
   if (context_.sessionSerial == 0) {
     result.diagnostics.push_back(transactionDiagnostic(
@@ -581,6 +582,19 @@ PlaySkinFrameTransactionResult PlaySkinSession::runFrameTransaction(
   }
   SkinExternalFrameOwnership ownership(state.clock.serial,
                                        context_.sessionSerial);
+
+  for (const auto &event : queuedEvents) {
+    // SkinObject.mousePressed dispatches the image event on primary pointer
+    // down. Touch delivery is frame-bound here, so preserve its single signed
+    // argument at the next valid transaction boundary.
+    const std::array<int, 1> arguments{event.argument};
+    const auto invoked = context_.bridge.invokeEventBinding(
+        SkinEventBindingId{event.eventBinding}, arguments);
+    if (!invoked.ok()) {
+      appendDiagnostics(result.diagnostics, invoked.diagnostics);
+      return result;
+    }
+  }
 
   for (const auto &writer : queuedWriters) {
     // Pinned FloatWriter receives only the normalized value. eventMicros is
@@ -637,12 +651,14 @@ PresentationFrameOutcome PlaySkinSession::preparePendingFrame(
     const PlayfieldVisualState &state,
     const PlayfieldProjectionResult &projection,
     std::span<const SkinWriterInvocation> queuedWriters,
+    std::span<const SkinEventInvocation> queuedEvents,
     std::span<const SkinFrameMutation> extraMutations) {
   if (pendingFrame_) {
     return PresentationFrameOutcome::CriticalFailure;
   }
 
-  auto transaction = runFrameTransaction(state, projection, queuedWriters);
+  auto transaction = runFrameTransaction(state, projection, queuedWriters,
+                                         queuedEvents);
   if (transaction.ready() && !extraMutations.empty()) {
     try {
       transaction.committed.orderedMutations.insert(
@@ -671,11 +687,14 @@ PresentationFrameOutcome PlaySkinSession::prepareFrame(
     return PresentationFrameOutcome::CriticalFailure;
   }
   const std::size_t writerCount = queuedWriterCount_;
+  const std::size_t eventCount = queuedEventCount_;
   queuedWriterCount_ = 0;
+  queuedEventCount_ = 0;
   return preparePendingFrame(
       state, projection,
       std::span<const SkinWriterInvocation>{queuedWriters_.data(),
-                                            writerCount});
+                                            writerCount},
+      std::span<const SkinEventInvocation>{queuedEvents_.data(), eventCount});
 }
 
 #if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
@@ -692,7 +711,7 @@ PresentationFrameOutcome PlaySkinSession::prepareFrameForTesting(
     std::span<const SkinWriterInvocation> queuedWriters,
     std::span<const SkinFrameMutation> extraMutations) {
   return preparePendingFrame(state, projection, queuedWriters,
-                             extraMutations);
+                             {}, extraMutations);
 }
 #endif
 
@@ -886,6 +905,7 @@ void PlaySkinSession::clearPublishedGeometry(bool advanceTopology) noexcept {
   captures_.fill({});
   publishedLayout_.reset();
   queuedWriterCount_ = 0;
+  queuedEventCount_ = 0;
   if (advanceTopology) {
     advanceRevision(touchLayoutRevision_);
   }
@@ -1020,7 +1040,7 @@ PlaySkinSession::hitTestUiControl(UiLogicalPoint point) const {
 
 PresentationTouchResult PlaySkinSession::beginPresentationTouch(
     const PresentationTouchEvent &event) {
-  if (!publishedLayout_ || queuedWriterCount_ == queuedWriters_.size() ||
+  if (!publishedLayout_ ||
       std::ranges::any_of(captures_, [&](const TouchCapture &capture) {
         return capture.active && capture.pointerId == event.pointerId;
       })) {
@@ -1034,12 +1054,20 @@ PresentationTouchResult PlaySkinSession::beginPresentationTouch(
       publishedLayout_->hitTestUiControl(event.uiPoint) != event.hit) {
     return {};
   }
-  const auto invocation = publishedLayout_->writerInvocationFor(
-      event.hit, event.uiPoint, event.eventMicros);
-  if (!invocation) {
-    return {};
+  if (const auto eventInvocation = publishedLayout_->eventInvocationFor(
+          event.hit, event.uiPoint, event.eventMicros)) {
+    if (queuedEventCount_ == queuedEvents_.size()) {
+      return {};
+    }
+    queuedEvents_[queuedEventCount_++] = *eventInvocation;
+  } else {
+    const auto writerInvocation = publishedLayout_->writerInvocationFor(
+        event.hit, event.uiPoint, event.eventMicros);
+    if (!writerInvocation || queuedWriterCount_ == queuedWriters_.size()) {
+      return {};
+    }
+    queuedWriters_[queuedWriterCount_++] = *writerInvocation;
   }
-  queuedWriters_[queuedWriterCount_++] = *invocation;
   *capture = {.pointerId = event.pointerId,
               .active = true,
               .hit = event.hit};

@@ -272,6 +272,23 @@ void addSlider(ValidatedBeatorajaSkinModel &model,
                                  .critical = critical});
 }
 
+void addClickableImage(ValidatedBeatorajaSkinModel &model,
+                       FakeResources &resources, SkinObjectId id,
+                       SkinEventBindingId event, int clickMode,
+                       std::uint32_t objectOrdinal) {
+  resources.addImage(id);
+  SkinImageObject image;
+  image.orderedStates = {sprite(id)};
+  image.clickEvent = event;
+  image.clickMode = clickMode;
+  model.model.objects.push_back({.id = id,
+                                 .authoredName = "image-" +
+                                                     std::to_string(id),
+                                 .payload = std::move(image),
+                                 .authoredOrdinal = objectOrdinal,
+                                 .critical = true});
+}
+
 class TestContext final {
 public:
   TestContext() {
@@ -480,6 +497,64 @@ void testOverlappingSlidersPublishReverseAuthoredTopmostOrder() {
                publishedRegions.front().hit == hit,
            "immutable presentation geometry preserves reverse-authored overlap identity");
   }
+}
+
+void testImageActPublishesPointerDownHitGeometry() {
+  TestContext context;
+  context.model.model.events.push_back(
+      {.id = SkinEventBindingId{7},
+       .source = SkinBuiltinPropertySelector{.value = 42},
+       .authoredOrdinal = 1});
+  addClickableImage(context.model, context.resources, 7, SkinEventBindingId{7},
+                    2, 1);
+  context.model.model.destinations = {destination(7, 1, 10.0, 20.0, 40.0,
+                                                   20.0)};
+  const auto viewport = evaluatePlaySkinViewport(
+      {.width = 100.0, .height = 50.0},
+      {.x = 0.0, .y = 0.0, .width = 100.0, .height = 50.0}, {});
+  const auto result = context.evaluate(viewport);
+  const auto hit = result.interactionLayout
+                       ? result.interactionLayout->hitTestUiControl(
+                             uiPointForAuthored(viewport, 35.0, 25.0))
+                       : PresentationUiHit{};
+  const auto right = result.interactionLayout
+                         ? result.interactionLayout->eventInvocationFor(
+                               hit, uiPointForAuthored(viewport, 35.0, 25.0),
+                               7'000)
+                         : std::optional<SkinEventInvocation>{};
+  const auto left = result.interactionLayout
+                        ? result.interactionLayout->eventInvocationFor(
+                              hit, uiPointForAuthored(viewport, 15.0, 25.0),
+                              8'000)
+                        : std::optional<SkinEventInvocation>{};
+  expect(result.interactionLayout &&
+             hit.kind == PresentationUiControlKind::Image &&
+             hit.sourceObject == 7 && hit.eventBinding == 7U && right && left &&
+             right->argument == 1 && right->eventMicros == 7'000 &&
+             left->argument == -1 && left->eventMicros == 8'000,
+         "a visible Image act publishes Beatoraja's split click event arguments");
+
+  const auto eventArgumentFor = [](int clickMode, UiLogicalPoint point) {
+    SkinInteractionLayout layout;
+    layout.revision = 17;
+    layout.controlsTopmostFirst.push_back(SkinImageInteractionGeometry{
+        .sourceObject = 90,
+        .authoredOrdinal = 91,
+        .authoredRegion = {.x = 10.0, .y = 20.0, .width = 40.0, .height = 20.0},
+        .event = SkinEventBindingId{92},
+        .clickMode = clickMode});
+    const auto modeHit = layout.hitTestUiControl(point);
+    const auto invocation = layout.eventInvocationFor(modeHit, point, 9'000);
+    return invocation ? std::optional<int>{invocation->argument}
+                      : std::optional<int>{};
+  };
+  expect(eventArgumentFor(0, {.x = 15.0F, .y = 25.0F}) == 1 &&
+             eventArgumentFor(1, {.x = 45.0F, .y = 35.0F}) == -1 &&
+             eventArgumentFor(2, {.x = 15.0F, .y = 25.0F}) == -1 &&
+             eventArgumentFor(2, {.x = 35.0F, .y = 25.0F}) == 1 &&
+             eventArgumentFor(3, {.x = 15.0F, .y = 25.0F}) == -1 &&
+             eventArgumentFor(3, {.x = 15.0F, .y = 35.0F}) == 1,
+         "all four pinned Image click modes preserve their signed arguments");
 }
 
 void testLaneCoverWriterUsesTypedHitAndQueueOnlyDrag() {
@@ -888,6 +963,7 @@ int main() {
   testViewportInverseMappingUsesUiLogicalSafeArea();
   testSliderTracksPreservePinnedDirectionsAndEndpoints();
   testOverlappingSlidersPublishReverseAuthoredTopmostOrder();
+  testImageActPublishesPointerDownHitGeometry();
   testLaneCoverWriterUsesTypedHitAndQueueOnlyDrag();
   testRendererUsesLaneCoverRateIndexAndDirectPropertyFallback();
   testInvalidSliderGeometryCannotCaptureGameplayTouch();

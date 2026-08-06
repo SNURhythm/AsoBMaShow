@@ -482,20 +482,11 @@ bool validPayload(const SkinObjectPayload &payload,
       payload);
 }
 
-enum class UnsupportedInteraction : std::uint8_t { None, Image, Text };
-
-UnsupportedInteraction
-unsupportedInteraction(const SkinObjectPayload &payload) noexcept {
-  if (const auto *image = std::get_if<SkinImageObject>(&payload)) {
-    return image->clickEvent || image->clickMode != 0
-               ? UnsupportedInteraction::Image
-               : UnsupportedInteraction::None;
-  }
+bool unsupportedTextInteraction(const SkinObjectPayload &payload) noexcept {
   if (const auto *text = std::get_if<SkinTextObject>(&payload)) {
-    return text->writer || text->editable ? UnsupportedInteraction::Text
-                                          : UnsupportedInteraction::None;
+    return text->writer || text->editable;
   }
-  return UnsupportedInteraction::None;
+  return false;
 }
 
 } // namespace
@@ -736,19 +727,13 @@ SkinModelValidationResult SkinModelValidator::validate(
   std::vector<SkinObjectId> disabled;
   std::set<SkinObjectId> disabledIds;
   for (const auto &object : model.objects) {
-    const auto interaction = unsupportedInteraction(object.payload);
-    if (interaction != UnsupportedInteraction::None) {
+    const bool unsupportedText = unsupportedTextInteraction(object.payload);
+    if (unsupportedText) {
       result.diagnostics.push_back(validationDiagnostic(
-          interaction == UnsupportedInteraction::Image
-              ? "skin_lua_model_image_interaction_unsupported"
-              : "skin_lua_model_text_interaction_unsupported",
-          interaction == UnsupportedInteraction::Image
-              ? "Lua skin Image act/click interaction is not supported yet"
-              : "Lua skin Text event/editable interaction is not supported "
-                "yet"));
+          "skin_lua_model_text_interaction_unsupported",
+          "Lua skin Text event/editable interaction is not supported yet"));
     }
-    if (interaction == UnsupportedInteraction::None &&
-        validPayload(object.payload, context)) {
+    if (!unsupportedText && validPayload(object.payload, context)) {
       continue;
     }
     if (object.critical) {

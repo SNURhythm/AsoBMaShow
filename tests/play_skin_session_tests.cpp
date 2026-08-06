@@ -1198,6 +1198,34 @@ return {
               .authoredOrdinal = 800}});
   }
 
+  void addClickableImage() {
+    resources_.addImage(82);
+    model_.model.events.push_back(
+        {.id = SkinEventBindingId{1},
+         .source = SkinBuiltinPropertySelector{.value = 900},
+         .authoredOrdinal = 1});
+    SkinImageObject image;
+    image.orderedStates = {{.resource = 82,
+                            .frames = {{.x = 0, .y = 0, .w = 10, .h = 10}}}};
+    image.clickEvent = SkinEventBindingId{1};
+    image.clickMode = 2;
+    model_.model.objects.push_back(
+        {.id = 82,
+         .authoredName = "session-click-image",
+         .payload = std::move(image),
+         .authoredOrdinal = 82,
+         .critical = true});
+    model_.model.destinations.push_back(
+        {.object = 82,
+         .presentation = {.loop = 0,
+                          .frames = {{.timeMillis = 0,
+                                      .x = 100.0,
+                                      .y = 100.0,
+                                      .width = 40.0,
+                                      .height = 20.0}},
+                          .authoredOrdinal = 820}});
+  }
+
   void destroySession() { session_.reset(); }
 
 private:
@@ -1895,6 +1923,38 @@ void testTouchCaptureLifecycleFailsClosedAndQueuesOnlyDown() {
          "a cancelled matching End consumes and releases without a writer");
 }
 
+void testImageActTouchQueuesPinnedEventOnDown() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addClickableImage();
+  SessionBgaSubmitter bga;
+  RenderContext context;
+  expect(fixture.session().prepareFrame(stateAt(1), projectionAt(1)) ==
+                 PresentationFrameOutcome::Ready &&
+             fixture.session().render(context, bgaFrame(120), bga).outcome ==
+                 PresentationFrameOutcome::Ready,
+         "Image act fixture publishes its first rendered hit region");
+  const UiLogicalPoint point{.x = 130.0F, .y = 610.0F};
+  const auto hit = fixture.session().hitTestUiControl(point);
+  expect(hit.kind == PresentationUiControlKind::Image &&
+             hit.eventBinding == 1U &&
+             fixture.session().beginPresentationTouch(
+                 {.pointerId = 1,
+                  .uiPoint = point,
+                  .eventMicros = 2'000,
+                  .hit = hit}) ==
+                 PresentationTouchResult{.consumed = true,
+                                         .excludeFromGameplay = true},
+         "Image act consumes the primary pointer-down and queues its event");
+  expect(fixture.session().prepareFrame(stateAt(2), projectionAt(2)) ==
+                 PresentationFrameOutcome::Ready &&
+             fixture.session().render(context, bgaFrame(121), bga).outcome ==
+                 PresentationFrameOutcome::Ready,
+         "the queued Image act event reaches the next frame transaction");
+}
+
 void testViewportChangeCancelsCapturesAndInvalidatesPublishedGeometry() {
   SessionFixture fixture;
   if (!fixture.ready()) {
@@ -2228,6 +2288,7 @@ int main() {
   testPersistenceRequestIsFullyAllocatedBeforeSkinSubmission();
   testQueueFullAndClosedAreRecoverableOnlyAfterSuccessfulSkinDraw();
   testTouchCaptureLifecycleFailsClosedAndQueuesOnlyDown();
+  testImageActTouchQueuesPinnedEventOnDown();
   testViewportChangeCancelsCapturesAndInvalidatesPublishedGeometry();
   testViewportGeometryChangeCancelsOldInputAndPreservesSessionIdentity();
   testTouchLayoutNormalizesAgainstTheWholeWindowWithSafeOrigin();

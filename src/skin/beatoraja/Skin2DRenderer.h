@@ -11,6 +11,7 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 struct RenderContext;
@@ -207,6 +208,17 @@ struct SkinSliderInteractionGeometry {
   std::optional<SkinFloatWriterId> writer;
 };
 
+struct SkinImageInteractionGeometry {
+  SkinObjectId sourceObject = 0;
+  std::uint32_t authoredOrdinal = 0;
+  AuthoredRect authoredRegion;
+  SkinEventBindingId event{};
+  int clickMode = 0;
+};
+
+using SkinInteractionControl =
+    std::variant<SkinSliderInteractionGeometry, SkinImageInteractionGeometry>;
+
 struct SkinLaneInteractionRegion {
   SkinObjectId sourceObject = 0;
   int authoredLane = -1;
@@ -230,6 +242,10 @@ struct SkinInteractionLayout {
   Affine2D uiToAuthored;
   UiLogicalRect safeUiBounds;
   std::vector<SkinSliderInteractionGeometry> slidersTopmostFirst;
+  std::vector<SkinImageInteractionGeometry> imagesTopmostFirst;
+  // Pinned Skin.mousePressed walks every visible SkinObject in reverse draw
+  // order. This heterogeneous sequence retains that cross-object ordering.
+  std::vector<SkinInteractionControl> controlsTopmostFirst;
   std::vector<SkinLaneInteractionRegion> laneRegions;
   std::vector<SkinLaneGroupInteractionRegion> laneGroupRegions;
 
@@ -242,6 +258,9 @@ struct SkinInteractionLayout {
   [[nodiscard]] std::optional<SkinWriterInvocation>
   writerInvocationFor(const PresentationUiHit &hit, UiLogicalPoint point,
                       long long eventMicros) const noexcept;
+  [[nodiscard]] std::optional<SkinEventInvocation>
+  eventInvocationFor(const PresentationUiHit &hit, UiLogicalPoint point,
+                     long long eventMicros) const noexcept;
 };
 
 struct SkinFrameEvaluationResult {

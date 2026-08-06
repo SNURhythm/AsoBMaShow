@@ -182,10 +182,12 @@ private:
   explicit PlaySkinSession(std::unique_ptr<OwnedActivation>);
   [[nodiscard]] PlaySkinFrameTransactionResult runFrameTransaction(
       const PlayfieldVisualState &, const PlayfieldProjectionResult &,
-      std::span<const SkinWriterInvocation>);
+      std::span<const SkinWriterInvocation>,
+      std::span<const SkinEventInvocation> = {});
   [[nodiscard]] PresentationFrameOutcome preparePendingFrame(
       const PlayfieldVisualState &, const PlayfieldProjectionResult &,
       std::span<const SkinWriterInvocation>,
+      std::span<const SkinEventInvocation> = {},
       std::span<const SkinFrameMutation> extraMutations = {});
   void clearPublishedGeometry(bool advanceTopology) noexcept;
 
@@ -199,9 +201,11 @@ private:
   std::optional<PendingFrame> pendingFrame_;
   std::array<TouchCapture, gameplay::kRealtimeTouchFingerCapacity> captures_;
   std::optional<SkinInteractionLayout> publishedLayout_;
-  static constexpr std::size_t maximumQueuedWriters = 256;
-  std::array<SkinWriterInvocation, maximumQueuedWriters> queuedWriters_{};
+  static constexpr std::size_t maximumQueuedInteractions = 256;
+  std::array<SkinWriterInvocation, maximumQueuedInteractions> queuedWriters_{};
   std::size_t queuedWriterCount_ = 0;
+  std::array<SkinEventInvocation, maximumQueuedInteractions> queuedEvents_{};
+  std::size_t queuedEventCount_ = 0;
   std::uint64_t touchLayoutRevision_ = 1;
   std::uint64_t touchHitRegionsRevision_ = 1;
 };

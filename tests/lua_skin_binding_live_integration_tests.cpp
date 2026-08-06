@@ -329,21 +329,20 @@ void testAllKindsDecodeWithPinnedDispatchAndLiveCallbacks() {
              imageSetDefinition && textDefinition && fallbackTextDefinition &&
              valid.model->disabledOptionalObjects ==
                  std::vector<SkinObjectId>{
-                     stateDefinition->id, imageSetDefinition->id,
                      textDefinition->id, fallbackTextDefinition->id} &&
              std::ranges::count_if(
                  valid.diagnostics,
                  [](const auto &item) {
                    return item.code ==
                           "skin_lua_model_image_interaction_unsupported";
-                 }) == 2 &&
+                 }) == 0 &&
              std::ranges::count_if(
                  valid.diagnostics,
                  [](const auto &item) {
                    return item.code ==
                           "skin_lua_model_text_interaction_unsupported";
                  }) == 2,
-         "unsupported Image/Text interactions are diagnosed and disabled");
+         "Beatoraja Image interactions remain selectable while unsupported Text interactions are disabled");
 
   auto criticalInteraction = model;
   auto criticalImage =
@@ -355,14 +354,14 @@ void testAllKindsDecodeWithPinnedDispatchAndLiveCallbacks() {
       std::move(criticalInteraction),
       {.builtins = builtins,
        .callbacks = session.runtime()->callbackLiveness()});
-  expect(!interactionRejected.model && interactionRejected.criticalFailure &&
-             std::ranges::any_of(
+  expect(interactionRejected.model && !interactionRejected.criticalFailure &&
+             !std::ranges::any_of(
                  interactionRejected.diagnostics,
                  [](const auto &item) {
                    return item.code ==
                           "skin_lua_model_image_interaction_unsupported";
                  }),
-         "critical Image click interaction is diagnosed and rejected");
+         "critical Image click interaction remains valid for Beatoraja dispatch");
 
   const auto timerCallback =
       std::ranges::find_if(model.timerProperties, [](const auto &binding) {
