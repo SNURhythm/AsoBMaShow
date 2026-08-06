@@ -166,10 +166,6 @@ struct SkinCommandPolicy {
   static constexpr std::size_t maximumCommands = 131'072;
   static constexpr std::size_t maximumGlyphInstances = 65'536;
   static constexpr std::size_t maximumPrimitiveVertices = 524'288;
-  static constexpr std::size_t maximumProjectedNotes = 32'768;
-  static constexpr std::size_t maximumProjectedLongNotes = 32'768;
-  static constexpr std::size_t maximumProjectedLines = 8'192;
-  static constexpr std::size_t maximumProjectedElements = 73'728;
 };
 
 struct SkinFrameInputs {

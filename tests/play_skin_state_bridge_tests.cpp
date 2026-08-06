@@ -708,6 +708,13 @@ void testPlayTimerPropertiesMatchPinnedJavaConversions() {
                             SkinBuiltinPropertySelector{id}),
            "gameplay catalog admits every implemented pinned string state");
   }
+  for (const int id : {360, 361, 362, 363, 364, 365, 368}) {
+    expect(catalog.contains({.kind = SkinBindingKind::IntegerProperty,
+                             .integerDomain =
+                                 SkinIntegerPropertyDomain::IntegerValue},
+                            SkinBuiltinPropertySelector{id}),
+           "gameplay catalog admits each pinned chart-information number");
+  }
 }
 
 void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
@@ -891,6 +898,16 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
     expect(value.supported && value.value == expected,
            "selected static chart number uses its exact immutable source");
   }
+  const auto densityDiagnosticCount = bridge.diagnostics().size();
+  for (const int id : {360, 361, 362, 363, 364, 365, 368}) {
+    const auto value = bridge.integerProperty({id});
+    expect(value.supported && value.value == INT32_MIN,
+           "absent Beatoraja SongInformation uses its Integer.MIN_VALUE "
+           "sentinel: " + std::to_string(id));
+  }
+  expect(bridge.diagnostics().size() == densityDiagnosticCount,
+         "recognized density properties do not become app-specific unsupported "
+         "state errors");
   expect(bridge.stringProperty({12}).supported &&
              bridge.stringProperty({12}).value == "full title" &&
              bridge.stringProperty({13}).value == "genre" &&

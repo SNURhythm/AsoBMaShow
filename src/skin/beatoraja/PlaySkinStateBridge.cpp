@@ -1011,6 +1011,17 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
     // unit.  Do not apply the conversion twice.
     return {.value = snapshot->configuration.visibleTimeGreenNumber,
             .supported = true};
+  case 360:
+  case 361:
+  case 362:
+  case 363:
+  case 364:
+  case 365:
+  case 368:
+    // IntegerPropertyFactory reads SongInformation for these selectors and
+    // returns Integer.MIN_VALUE when it is absent. Aso does not retain that
+    // optional analysis object in the immutable chart state.
+    return {.value = std::numeric_limits<int>::min(), .supported = true};
   case 410:
   case 411:
   case 412:

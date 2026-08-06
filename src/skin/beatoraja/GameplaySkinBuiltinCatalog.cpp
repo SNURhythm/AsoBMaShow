@@ -45,7 +45,8 @@ std::vector<SkinBuiltinBindingCatalogEntry> makeCatalog() {
   constexpr auto integerSelectors = std::to_array(
       {14,  71,  74,  75,  90,  91,  92,  96,  101, 102, 103, 105, 107,
        110, 111, 112, 113, 114, 152, 153, 160, 171, 313, 350, 351, 352,
-       353, 407, 410, 411, 412, 413, 414, 415, 416, 417, 418, 419, 420,
+       353, 360, 361, 362, 363, 364, 365, 368, 407, 410, 411, 412, 413, 414,
+       415, 416, 417, 418, 419, 420,
        421, 422, 425, 427, 525, 526, 527, 1163, 1164});
   for (const auto domain : {SkinIntegerPropertyDomain::IntegerValue,
                             SkinIntegerPropertyDomain::ImageIndex}) {

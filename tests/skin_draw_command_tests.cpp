@@ -632,7 +632,7 @@ void testOptionalFailureSuppressesOnlyItsObject() {
          "only the optional dependent command is suppressed");
 }
 
-void testProjectionOrderAndCrossSpanUniquenessAreFrameCritical() {
+void testProjectionOrdinalIrregularitiesNeverDiscardAGameplayFrame() {
   {
     RuntimeHarness runtime;
     Skin2DRenderer renderer;
@@ -641,9 +641,9 @@ void testProjectionOrderAndCrossSpanUniquenessAreFrameCritical() {
     state.notes = {{.submissionOrdinal = 2}, {.submissionOrdinal = 1}};
     ValidatedBeatorajaSkinModel model;
     const auto result = evaluate(renderer, runtime, model, resources, state);
-    expect(!result.submitReady &&
-               hasDiagnostic(result, "skin.renderer.projection.order"),
-           "out-of-order projection ordinals discard the frame");
+    expect(result.submitReady &&
+               !hasDiagnostic(result, "skin.renderer.projection.order"),
+           "out-of-order internal projection ordinals do not discard a frame");
   }
   {
     RuntimeHarness runtime;
@@ -654,27 +654,40 @@ void testProjectionOrderAndCrossSpanUniquenessAreFrameCritical() {
     state.lines = {{.submissionOrdinal = 1}};
     ValidatedBeatorajaSkinModel model;
     const auto result = evaluate(renderer, runtime, model, resources, state);
-    expect(!result.submitReady &&
-               hasDiagnostic(result, "skin.renderer.projection.order"),
-           "duplicate ordinals across projection spans discard the frame");
+    expect(result.submitReady &&
+               !hasDiagnostic(result, "skin.renderer.projection.order"),
+           "duplicate internal projection ordinals do not discard a frame");
+  }
+  {
+    RuntimeHarness runtime;
+    Skin2DRenderer renderer;
+    FakeResources resources;
+    FakeState state;
+    state.notes = {{.submissionOrdinal = 0}};
+    ValidatedBeatorajaSkinModel model;
+    const auto result = evaluate(renderer, runtime, model, resources, state);
+    expect(result.submitReady &&
+               !hasDiagnostic(result, "skin.renderer.projection.order"),
+           "the native zero-based projection ordinal is valid");
   }
 }
 
-void testProjectionLimitsAreCheckedBeforeEvaluation() {
+void testLargeProjectionDoesNotHitAnAppSpecificFrameLimit() {
   RuntimeHarness runtime;
   Skin2DRenderer renderer;
   FakeResources resources;
   FakeState state;
-  state.notes.resize(SkinCommandPolicy::maximumProjectedNotes + 1);
+  // This exceeds the former app-defined 32,768-note gate.
+  state.notes.resize(32'769);
   for (std::size_t index = 0; index < state.notes.size(); ++index) {
     state.notes[index].submissionOrdinal =
         static_cast<std::uint32_t>(index + 1);
   }
   ValidatedBeatorajaSkinModel model;
   const auto result = evaluate(renderer, runtime, model, resources, state);
-  expect(!result.submitReady &&
-             hasDiagnostic(result, "skin.renderer.projection.limit"),
-         "oversized projection span cannot publish a buffer");
+  expect(result.submitReady &&
+             !hasDiagnostic(result, "skin.renderer.projection.limit"),
+         "large valid projection does not hit an app-specific frame limit");
 }
 
 void testBindingAndDisabledLookupsStayLogarithmicAtModelLimits() {
@@ -3907,8 +3920,8 @@ int main() {
   testOptionalFailureSuppressesOnlyItsObject();
   testBuiltinImageStateAndOutOfRangeFallback();
   testHiddenImageStillSelectsSourceAfterRuntimeSuppression();
-  testProjectionOrderAndCrossSpanUniquenessAreFrameCritical();
-  testProjectionLimitsAreCheckedBeforeEvaluation();
+  testProjectionOrdinalIrregularitiesNeverDiscardAGameplayFrame();
+  testLargeProjectionDoesNotHitAnAppSpecificFrameLimit();
   testBindingAndDisabledLookupsStayLogarithmicAtModelLimits();
   testImageCommandsPreserveOrderAndBatchOnlyAdjacentCompatibility();
   testNumberUsesSignedGlyphSetPaddingAndNegativeAlignmentShift();

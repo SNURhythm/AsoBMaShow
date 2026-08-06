@@ -243,106 +243,38 @@ void buildAdjacentBatches(SkinCommandBuffer &buffer) {
       {.firstCommand = first, .commandCount = buffer.commands.size() - first});
 }
 
-template <typename View>
-bool strictlyIncreasingOrdinals(std::span<const View> values) noexcept {
-  std::uint32_t previous = 0;
-  for (const auto &value : values) {
-    if (value.submissionOrdinal == 0 || value.submissionOrdinal <= previous) {
-      return false;
-    }
-    previous = value.submissionOrdinal;
-  }
-  return true;
-}
+enum class ProjectionElementKind : std::uint8_t { Note, LongNote, Line };
 
-bool checkedAdd(std::size_t &value, std::size_t increment,
-                std::size_t maximum) noexcept {
-  if (increment > maximum - value) {
-    return false;
-  }
-  value += increment;
-  return true;
-}
+struct ProjectionElement {
+  ProjectionElementKind kind = ProjectionElementKind::Note;
+  std::size_t index = 0;
+  std::uint32_t ordinal = 0;
+};
 
 bool validateAndMergeProjection(const ISkinFrameState &state,
-                                std::vector<std::uint32_t> &merged,
-                                std::vector<SkinDiagnostic> &diagnostics) {
+                                std::vector<ProjectionElement> &merged) {
   const auto notes = state.projectedNotes();
   const auto longNotes = state.projectedLongNotes();
   const auto lines = state.projectedLines();
-  if (notes.size() > SkinCommandPolicy::maximumProjectedNotes ||
-      longNotes.size() > SkinCommandPolicy::maximumProjectedLongNotes ||
-      lines.size() > SkinCommandPolicy::maximumProjectedLines) {
-    diagnostics.push_back(
-        diagnostic("skin.renderer.projection.limit",
-                   "Projected gameplay span exceeds its fixed frame limit."));
-    return false;
-  }
-  std::size_t total = 0;
-  if (!checkedAdd(total, notes.size(),
-                  SkinCommandPolicy::maximumProjectedElements) ||
-      !checkedAdd(total, longNotes.size(),
-                  SkinCommandPolicy::maximumProjectedElements) ||
-      !checkedAdd(total, lines.size(),
-                  SkinCommandPolicy::maximumProjectedElements)) {
-    diagnostics.push_back(diagnostic(
-        "skin.renderer.projection.limit",
-        "Projected gameplay spans exceed the aggregate frame limit."));
-    return false;
-  }
-  if (!strictlyIncreasingOrdinals(notes) ||
-      !strictlyIncreasingOrdinals(longNotes) ||
-      !strictlyIncreasingOrdinals(lines)) {
-    diagnostics.push_back(diagnostic(
-        "skin.renderer.projection.order",
-        "Projection ordinals must be nonzero and strictly increasing."));
-    return false;
-  }
-
   merged.clear();
-  merged.reserve(total);
-  std::array<std::size_t, 3> index{};
-  while (merged.size() < total) {
-    std::uint32_t candidate = std::numeric_limits<std::uint32_t>::max();
-    if (index[0] < notes.size()) {
-      candidate = std::min(candidate, notes[index[0]].submissionOrdinal);
+  const auto append = [&merged](auto values, ProjectionElementKind kind) {
+    for (std::size_t index = 0; index < values.size(); ++index) {
+      merged.push_back(
+          {.kind = kind, .index = index, .ordinal = values[index].submissionOrdinal});
     }
-    if (index[1] < longNotes.size()) {
-      candidate = std::min(candidate, longNotes[index[1]].submissionOrdinal);
-    }
-    if (index[2] < lines.size()) {
-      candidate = std::min(candidate, lines[index[2]].submissionOrdinal);
-    }
-    int matches = 0;
-    if (index[0] < notes.size() &&
-        notes[index[0]].submissionOrdinal == candidate) {
-      ++matches;
-    }
-    if (index[1] < longNotes.size() &&
-        longNotes[index[1]].submissionOrdinal == candidate) {
-      ++matches;
-    }
-    if (index[2] < lines.size() &&
-        lines[index[2]].submissionOrdinal == candidate) {
-      ++matches;
-    }
-    if (matches != 1) {
-      diagnostics.push_back(diagnostic(
-          "skin.renderer.projection.order",
-          "Projection ordinals must be unique across all gameplay spans."));
-      return false;
-    }
-    merged.push_back(candidate);
-    if (index[0] < notes.size() &&
-        notes[index[0]].submissionOrdinal == candidate) {
-      ++index[0];
-    } else if (index[1] < longNotes.size() &&
-               longNotes[index[1]].submissionOrdinal == candidate) {
-      ++index[1];
-    } else {
-      ++index[2];
-    }
-  }
+  };
+  append(notes, ProjectionElementKind::Note);
+  append(longNotes, ProjectionElementKind::LongNote);
+  append(lines, ProjectionElementKind::Line);
+  // Beatoraja draws each prepared skin object in array order and does not
+  // impose a separate gameplay-projection ordinal contract.  The ordinal is
+  // Aso's internal ordering hint only: stable sorting keeps it useful while
+  // zero, duplicate, or non-monotonic values remain drawable.
+  std::stable_sort(merged.begin(), merged.end(),
+                   [](const ProjectionElement &left,
+                      const ProjectionElement &right) {
+                     return left.ordinal < right.ordinal;
+                   });
   return true;
 }
 
@@ -2008,7 +1940,7 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
                 const SkinDestination &destination, const SkinNoteObject &note,
                 const AuthoredDestinationGeometry *outerGeometry,
                 std::span<const ConfigOffset> offsets,
-                std::span<const std::uint32_t> mergedOrdinals,
+                std::span<const ProjectionElement> mergedElements,
                 const PreparedNoteVisuals &preparedVisuals) {
   GameplayVisualLoweringResult result;
   if (!outerGeometry) {
@@ -2319,17 +2251,17 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
   const auto notes = inputs.state.projectedNotes();
   const auto longNotes = inputs.state.projectedLongNotes();
   const auto lines = inputs.state.projectedLines();
-  std::array<std::size_t, 3> indices{};
-  for (const std::uint32_t ordinal : mergedOrdinals) {
-    if (indices[0] < notes.size() &&
-        notes[indices[0]].submissionOrdinal == ordinal) {
-      lowerProjectedNote(notes[indices[0]++], result);
-    } else if (indices[1] < longNotes.size() &&
-               longNotes[indices[1]].submissionOrdinal == ordinal) {
-      lowerProjectedLongNote(longNotes[indices[1]++], result);
-    } else if (indices[2] < lines.size() &&
-               lines[indices[2]].submissionOrdinal == ordinal) {
-      lowerProjectedLine(lines[indices[2]++], result);
+  for (const auto &element : mergedElements) {
+    switch (element.kind) {
+    case ProjectionElementKind::Note:
+      lowerProjectedNote(notes[element.index], result);
+      break;
+    case ProjectionElementKind::LongNote:
+      lowerProjectedLongNote(longNotes[element.index], result);
+      break;
+    case ProjectionElementKind::Line:
+      lowerProjectedLine(lines[element.index], result);
+      break;
     }
     if (result.failure) {
       result.commands.clear();
@@ -2781,11 +2713,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       gaugeAnimationSessionSerial_ = inputs.sessionSerial;
     }
 
-    std::vector<std::uint32_t> mergedProjectionOrdinals;
-    if (!validateAndMergeProjection(inputs.state, mergedProjectionOrdinals,
-                                    result.diagnostics)) {
-      return result;
-    }
+    std::vector<ProjectionElement> mergedProjectionElements;
+    validateAndMergeProjection(inputs.state, mergedProjectionElements);
 
     const auto lookupIndex = buildFrameLookupIndex(inputs.model);
     if (!lookupIndex.uniqueBindingIds) {
@@ -3825,7 +3754,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       auto lowered = lowerNoteObject(
           inputs, lookupIndex, *deferred.object, *deferred.destination,
           *deferred.note, &deferred.geometry, deferred.offsets,
-          mergedProjectionOrdinals, deferred.preparedVisuals);
+          mergedProjectionElements, deferred.preparedVisuals);
       if (lowered.failure) {
         if (reportObjectFailure(result, *deferred.object, *lowered.failure)) {
           return result;
