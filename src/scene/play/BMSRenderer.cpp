@@ -2278,7 +2278,8 @@ BuiltInRendererTraversal BMSRenderer::builtInProjectionTraversal() const {
   const float hispeed =
       240000.0F / static_cast<float>(visibleTimeReferenceBpm()) /
       visibleTimeMs *
-      static_cast<float>(gameplay_timing::playbackTravelScale(playbackRate));
+      static_cast<float>(gameplay_timing::playbackTravelScale(playbackRate)) *
+      hispeedMultiplier;
   const float laneHeight = std::max(0.001F, upperBound - judgeY);
   const float hiddenRatio =
       static_cast<float>(noteStartPositionPercent) / 100.0F;
@@ -2757,7 +2758,7 @@ PresentationFrameOutcome BMSRenderer::prepareFrame(
     setAutoPlayMarkVisible(authority.autoPlayMarkVisible);
     setStartLaneIndicators(authority.startLaneIndicators);
     setStartLaneIndicatorsVisible(authority.startLaneIndicatorsVisible);
-    applyLaneCoverState(authority.laneCoverPercent,
+    applyLaneCoverState(authority.laneCoverPercent, authority.laneCoverEnabled,
                         authority.resetLaneCoverVisibleTimeReference);
 
     const std::size_t laneCount =
@@ -4075,6 +4076,7 @@ void BMSRenderer::updateJudgementCounterText() {
 void BMSRenderer::configure(
     const PlayfieldPresentationConfig &configuration) {
   setVisibleTimeGreenNumber(configuration.visibleTimeGreenNumber);
+  setHispeedMultiplier(configuration.hispeedMultiplier);
   setVisibleTimeUseMilliseconds(configuration.visibleTimeUseMilliseconds);
   setVisibleTimeBpmStrategy(configuration.visibleTimeBpmStrategy);
   setPlayAreaWidth(configuration.playAreaWidth);
@@ -4269,6 +4271,12 @@ void BMSRenderer::setVisibleTimeGreenNumber(int greenNumber) {
   visibleTimeGreenNumber = greenNumber;
 }
 
+void BMSRenderer::setHispeedMultiplier(float multiplier) {
+  hispeedMultiplier = std::isfinite(multiplier)
+                          ? std::clamp(multiplier, 0.01F, 19.99F)
+                          : 1.0F;
+}
+
 void BMSRenderer::setVisibleTimeUseMilliseconds(bool enabled) {
   visibleTimeUseMilliseconds = enabled;
 }
@@ -4347,7 +4355,12 @@ void BMSRenderer::setNoteStartPositionPercent(int percent) {
 
 void BMSRenderer::applyLaneCoverState(int percent,
                                       bool resetVisibleTimeReference) {
-  setNoteStartPositionPercent(percent);
+  applyLaneCoverState(percent, true, resetVisibleTimeReference);
+}
+
+void BMSRenderer::applyLaneCoverState(int percent, bool enabled,
+                                      bool resetVisibleTimeReference) {
+  setNoteStartPositionPercent(enabled ? percent : 0);
   if (resetVisibleTimeReference) {
     floatingVisibleTimeReferenceBpm =
         currentBpm > 0.0 ? currentBpm : visibleTimeReferenceBpm();

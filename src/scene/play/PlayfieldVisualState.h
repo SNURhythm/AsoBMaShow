@@ -44,6 +44,7 @@ struct PlayfieldFrameClock {
 
 struct PlayfieldPresentationConfig {
   int visibleTimeGreenNumber = 0;
+  float hispeedMultiplier = 1.0F;
   bool visibleTimeUseMilliseconds = false;
   AppSettings::VisibleTimeBpmStrategy visibleTimeBpmStrategy =
       AppSettings::VisibleTimeBpmStrategy::Chart;
@@ -141,8 +142,8 @@ struct GameplayLaneCoverAuthority {
 };
 
 inline constexpr GameplayLaneCoverAuthority
-gameplayLaneCoverAuthority(int percent) noexcept {
-  return {.percent = percent, .enabled = true};
+gameplayLaneCoverAuthority(int percent, bool enabled = true) noexcept {
+  return {.percent = percent, .enabled = enabled};
 }
 
 inline constexpr long long kPlayfieldTimestampOff =

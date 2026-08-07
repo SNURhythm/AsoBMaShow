@@ -173,6 +173,8 @@ void testJsonRoundTripIncludesAudioAndVideo() {
   expected.musicPlayerClubModeEnabled = true;
   expected.judgementIndicatorRangeMilliseconds = 333;
   expected.selectedGameplayRuleset = "beatoraja";
+  expected.gameplayHispeedMultiplier = 1.75F;
+  expected.laneCoverEnabled = false;
   expected.irProviders["tachi"] = {
       .enabled = true,
       .autoSubmit = true,
@@ -233,6 +235,11 @@ void testJsonRoundTripIncludesAudioAndVideo() {
   expect(readFile(path).find("\"startLaneIndicatorsEnabled\": false") !=
              std::string::npos,
          "saved JSON includes the start lane indicator setting");
+  expect(readFile(path).find("\"gameplayHispeedMultiplier\": 1.75") !=
+                 std::string::npos &&
+             readFile(path).find("\"laneCoverEnabled\": false") !=
+                 std::string::npos,
+         "saved JSON includes Start/Select hi-speed and lane-cover state");
   expect(readFile(path).find("\"judgementIndicatorRangeMilliseconds\": 333") !=
              std::string::npos,
          "saved JSON includes the judgement indicator range");
@@ -673,6 +680,20 @@ void testJudgementIndicatorRangeDefaultsAndSanitization() {
                        "judgementIndicatorRangeMilliseconds",
                        "expected integer"),
          "malformed range emits a setting diagnostic");
+}
+
+void testBeatorajaStartSelectDurationRange() {
+  AppSettings lower;
+  lower.visibleTimeGreenNumber = 0;
+  lower.sanitize();
+  expect(lower.visibleTimeGreenNumber == 1,
+         "Start/Select duration preserves Beatoraja's minimum of one");
+
+  AppSettings upper;
+  upper.visibleTimeGreenNumber = 20'000;
+  upper.sanitize();
+  expect(upper.visibleTimeGreenNumber == 10'000,
+         "Start/Select duration preserves Beatoraja's maximum of 10000");
 }
 
 void testGameplayRulesetDefaultsMigrationAndValidation() {
@@ -1189,6 +1210,7 @@ int main() {
   testDecodeBoundsDerivedUniqueIdentitiesBeforeAllocatingValues();
   testFindBmsArchivePreferenceDefaultsAndRoundTrips();
   testJudgementIndicatorRangeDefaultsAndSanitization();
+  testBeatorajaStartSelectDurationRange();
   testGameplayRulesetDefaultsMigrationAndValidation();
   testIrDefaultsMigrationAndOriginSanitization();
   testPlaybackSelectionSanitizationAndLegacyDefaults();

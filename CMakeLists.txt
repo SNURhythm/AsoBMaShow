@@ -5406,6 +5406,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(logical_gameplay_input_tests PRIVATE SDL2)
     endif()
 
+    add_executable(start_select_control_tests
+        tests/start_select_control_tests.cpp
+    )
+    target_include_directories(start_select_control_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(start_select_control_tests PRIVATE cxx_std_23)
+
     add_executable(display_settings_manager_tests
         tests/display_settings_manager_tests.cpp
         src/video/DisplaySettingsManager.cpp
@@ -6247,6 +6255,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(profile_runtime_reapply_tests foundation_profile_runtime)
     asobmashow_register_test(input_device_registry_tests foundation_input_registry)
     asobmashow_register_test(logical_gameplay_input_tests foundation_input_gameplay)
+    asobmashow_register_test(start_select_control_tests)
     asobmashow_register_test(input_timestamp_tests foundation_input_timestamp)
     asobmashow_register_test(windows_realtime_input_mapping_tests foundation_input_windows_realtime_mapping)
     asobmashow_register_test(settings_audio_video_model_tests foundation_av_settings_ui)

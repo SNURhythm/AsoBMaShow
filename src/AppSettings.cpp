@@ -422,6 +422,10 @@ void AppSettings::sanitize() {
   visibleTimeGreenNumber =
       std::clamp(visibleTimeGreenNumber, kMinVisibleTimeGreenNumber,
                  kMaxVisibleTimeGreenNumber);
+  gameplayHispeedMultiplier =
+      sanitizeFloat(gameplayHispeedMultiplier, 1.0F,
+                    kMinGameplayHispeedMultiplier,
+                    kMaxGameplayHispeedMultiplier);
   bgaBrightnessPercent = std::clamp(
       bgaBrightnessPercent, kMinBgaBrightnessPercent, kMaxBgaBrightnessPercent);
   bgaBlurStrength = sanitizeFloat(bgaBlurStrength, kDefaultBgaBlurStrength,
@@ -657,6 +661,8 @@ bool AppSettings::parseLegacyCfg(std::istream &file, AppSettings &settings,
         settings.visualOffsetMs = std::stoi(value);
       } else if (key == "visible_time_green_number") {
         settings.visibleTimeGreenNumber = std::stoi(value);
+      } else if (key == "gameplay_hispeed_multiplier") {
+        settings.gameplayHispeedMultiplier = std::stof(value);
       } else if (key == "visible_time_use_milliseconds") {
         bool parsed = settings.visibleTimeUseMilliseconds;
         if (parseBool(value, parsed)) {
@@ -715,6 +721,11 @@ bool AppSettings::parseLegacyCfg(std::istream &file, AppSettings &settings,
         settings.laneBeamLengthPercent = std::stoi(value);
       } else if (key == "note_start_position_percent") {
         settings.noteStartPositionPercent = std::stoi(value);
+      } else if (key == "lane_cover_enabled") {
+        bool parsed = settings.laneCoverEnabled;
+        if (parseBool(value, parsed)) {
+          settings.laneCoverEnabled = parsed;
+        }
       } else if (key == "floating_lane_cover_enabled") {
         bool parsed = settings.floatingLaneCoverEnabled;
         if (parseBool(value, parsed)) {

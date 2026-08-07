@@ -433,6 +433,7 @@ json settingsToJson(const AppSettings &settings) {
       {"audioOffsetMs", settings.audioOffsetMs},
       {"visualOffsetMs", settings.visualOffsetMs},
       {"visibleTimeGreenNumber", settings.visibleTimeGreenNumber},
+      {"gameplayHispeedMultiplier", settings.gameplayHispeedMultiplier},
       {"visibleTimeUseMilliseconds", settings.visibleTimeUseMilliseconds},
       {"visibleTimeBpmStrategy",
        static_cast<int>(settings.visibleTimeBpmStrategy)},
@@ -452,6 +453,7 @@ json settingsToJson(const AppSettings &settings) {
       {"laneLength", settings.laneLength},
       {"laneBeamLengthPercent", settings.laneBeamLengthPercent},
       {"noteStartPositionPercent", settings.noteStartPositionPercent},
+      {"laneCoverEnabled", settings.laneCoverEnabled},
       {"floatingLaneCoverEnabled", settings.floatingLaneCoverEnabled},
       {"playAreaWidth4K", settings.playAreaWidth4K},
       {"playAreaWidth5K", settings.playAreaWidth5K},
@@ -539,6 +541,8 @@ AppSettings settingsFromJson(const json &document,
   readValue(document, "visualOffsetMs", settings.visualOffsetMs, diagnostics);
   readValue(document, "visibleTimeGreenNumber", settings.visibleTimeGreenNumber,
             diagnostics);
+  readValue(document, "gameplayHispeedMultiplier",
+            settings.gameplayHispeedMultiplier, diagnostics);
   readValue(document, "visibleTimeUseMilliseconds",
             settings.visibleTimeUseMilliseconds, diagnostics);
   readEnum(document, "visibleTimeBpmStrategy", settings.visibleTimeBpmStrategy,
@@ -569,6 +573,8 @@ AppSettings settingsFromJson(const json &document,
             diagnostics);
   readValue(document, "noteStartPositionPercent",
             settings.noteStartPositionPercent, diagnostics);
+  readValue(document, "laneCoverEnabled", settings.laneCoverEnabled,
+            diagnostics);
   readValue(document, "floatingLaneCoverEnabled",
             settings.floatingLaneCoverEnabled, diagnostics);
   readValue(document, "playAreaWidth4K", settings.playAreaWidth4K, diagnostics);

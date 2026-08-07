@@ -330,6 +330,7 @@ private:
   float judgeY = 0.0f;
   long long latePoorTiming;
   int visibleTimeGreenNumber = 400;
+  float hispeedMultiplier = 1.0F;
   audio::PlaybackRate playbackRate;
   bool visibleTimeUseMilliseconds = false;
   double currentBpm = 0.0;
@@ -578,6 +579,7 @@ public:
   [[nodiscard]] std::optional<PresentationFailure>
   lastFailure() const override;
   void setVisibleTimeGreenNumber(int greenNumber);
+  void setHispeedMultiplier(float multiplier);
   void setVisibleTimeUseMilliseconds(bool enabled);
   void setCurrentBpm(double bpm);
   void setVisibleTimeBpmStrategy(
@@ -590,6 +592,8 @@ public:
   void setLaneBeamLengthPercent(int percent);
   void setNoteStartPositionPercent(int percent);
   void applyLaneCoverState(int percent, bool resetVisibleTimeReference);
+  void applyLaneCoverState(int percent, bool enabled,
+                           bool resetVisibleTimeReference);
   bool isLaneCoverHandleHit(float renderX, float renderY) const;
   std::optional<float> laneCoverHandleGrabOffset(float renderX,
                                                  float renderY) const override;

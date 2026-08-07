@@ -822,6 +822,7 @@ replayActionFromRealtime(gameplay::GameplayReplayAction action) {
 struct GamePlayScene::RealtimeGameplaySession {
   static constexpr std::size_t kAuxiliaryTouchCapacity = 4096;
   static constexpr std::size_t kInputCommandCapacity = 256;
+  static constexpr std::size_t kStartSelectInputCapacity = 512;
 
   GamePlayScene *scene = nullptr;
   AudioWrapper *audio = nullptr;
@@ -847,6 +848,10 @@ struct GamePlayScene::RealtimeGameplaySession {
                              kInputCommandCapacity>
       inputCommands;
   std::atomic_bool inputCommandOverflow{false};
+  gameplay::BoundedMpscQueue<gameplay::StartSelectControlInput,
+                             kStartSelectInputCapacity>
+      startSelectInputs;
+  std::atomic_bool startSelectInputOverflow{false};
   bool sdlInputWatchRegistered = false;
   std::uint64_t realtimeInputSubscription = 0;
   std::uint64_t realtimeDeviceSubscription = 0;
@@ -869,6 +874,30 @@ struct GamePlayScene::RealtimeGameplaySession {
   gameplay::RealtimeTouchLayoutRefreshKey layoutRefreshKey;
   bool touchHitSnapshotDirty = true;
   bool touchIngressDesired = false;
+
+  void enqueueStartSelectInput(
+      const gameplay::RealtimeGameplayInput &input) noexcept {
+    if (!input.hasReplayControl) {
+      return;
+    }
+    const auto kind = input.replayControl.kind;
+    const bool systemControl =
+        kind == replay::LogicalControlKind::Start ||
+        kind == replay::LogicalControlKind::Select;
+    const bool gameplayControl =
+        kind == replay::LogicalControlKind::Lane ||
+        kind == replay::LogicalControlKind::ScratchClockwise ||
+        kind == replay::LogicalControlKind::ScratchCounterClockwise;
+    if (!systemControl && (!gameplayControl || input.replayOnly)) {
+      return;
+    }
+    if (!startSelectInputs.tryPush(
+            {.control = input.replayControl,
+             .pressed = input.type == gameplay::RealtimeGameplayInputType::Press,
+             .timestampMicros = input.steadyTimestampMicros})) {
+      startSelectInputOverflow.store(true, std::memory_order_release);
+    }
+  }
 
   void populateImmutableHit(gameplay::RealtimeTouchSample &sample) {
     const auto requested =
@@ -973,7 +1002,11 @@ struct GamePlayScene::RealtimeGameplaySession {
     }
     auto owned = input;
     owned.source = gameplay::RealtimeGameplayInputSource::Touch;
-    return session.worker->enqueueInput(owned);
+    const bool accepted = session.worker->enqueueInput(owned);
+    if (accepted) {
+      session.enqueueStartSelectInput(owned);
+    }
+    return accepted;
   }
 
   static bool emitLegacyInput(void *context,
@@ -1068,8 +1101,8 @@ struct GamePlayScene::RealtimeGameplaySession {
     if (session.worker == nullptr) {
       return false;
     }
-    return session.worker->enqueueInput(
-        {.epoch = session.epoch,
+    const gameplay::RealtimeGameplayInput input{
+        .epoch = session.epoch,
          .type = transition.type ==
                          input::RealtimePhysicalInputTransitionType::Press
                      ? gameplay::RealtimeGameplayInputType::Press
@@ -1080,8 +1113,13 @@ struct GamePlayScene::RealtimeGameplaySession {
          .backSpin = transition.backSpin,
          .steadyTimestampMicros = transition.steadyTimestampMicros,
          .hasReplayControl = transition.hasReplayControl,
-         .replayControl = transition.replayControl,
-         .replayOnly = transition.replayOnly});
+        .replayControl = transition.replayControl,
+        .replayOnly = transition.replayOnly};
+    const bool accepted = session.worker->enqueueInput(input);
+    if (accepted) {
+      session.enqueueStartSelectInput(input);
+    }
+    return accepted;
   }
 
   static int SDLCALL sdlInputWatch(void *context, SDL_Event *event) {
@@ -1952,6 +1990,25 @@ void GamePlayScene::drainRealtimeInputCommands() {
   }
 }
 
+void GamePlayScene::drainRealtimeStartSelectInputs() {
+  if (!realtimeGameplayAuthorityActive()) {
+    return;
+  }
+  auto &session = *realtimeGameplaySession;
+  gameplay::StartSelectControlInput input;
+  while (session.startSelectInputs.tryPop(input)) {
+    consumeStartSelectInput(input);
+    if (!realtimeGameplayAuthorityActive()) {
+      return;
+    }
+  }
+  if (session.startSelectInputOverflow.exchange(false,
+                                                std::memory_order_acq_rel)) {
+    SDL_LogWarn(SDL_LOG_CATEGORY_INPUT,
+                "Start/Select input queue overflowed; a control edge was dropped");
+  }
+}
+
 void GamePlayScene::refreshRealtimeTouchLayout() {
   if (!realtimeGameplayAuthorityActive() || chart == nullptr ||
       presentation == nullptr || realtimeGameplaySession->worker == nullptr ||
@@ -2371,6 +2428,10 @@ void GamePlayScene::init() {
                                                   ? replayLongNoteMode
                                                   : options.longNoteMode);
   }
+  startSelectControl.emplace(
+      gameplay::StartSelectControl::Configuration{.keyMode = chart->Meta.KeyMode});
+  playfieldHispeedMultiplier = context.settings.gameplayHispeedMultiplier;
+  playfieldLaneCoverEnabled = context.settings.laneCoverEnabled;
   playfieldChartVisualModel =
       buildPlayfieldChartVisualModel(*chart, options.longNoteMode);
   initializePlayfieldVisualNoteSources();
@@ -2423,8 +2484,9 @@ void GamePlayScene::init() {
   ownedPresentation = std::move(builtIn);
 #endif
   presentation = ownedPresentation.get();
-  PlayfieldPresentationConfig presentationConfiguration{
+  playfieldPresentationConfiguration = {
       .visibleTimeGreenNumber = effectiveVisibleTimeGreenNumber(),
+      .hispeedMultiplier = playfieldHispeedMultiplier,
       .visibleTimeUseMilliseconds =
           !courseNoSpeed() && context.settings.visibleTimeUseMilliseconds,
       .visibleTimeBpmStrategy =
@@ -2465,8 +2527,8 @@ void GamePlayScene::init() {
       .replayGhostRenderingEnabled =
           options.replayGhostRenderingEnabled.value_or(true),
   };
-  playfieldVisualStateStore->setConfiguration(presentationConfiguration);
-  presentation->configure(presentationConfiguration);
+  playfieldVisualStateStore->setConfiguration(playfieldPresentationConfiguration);
+  presentation->configure(playfieldPresentationConfiguration);
   ownedPresentationEventFanout =
       std::make_unique<PlayfieldPresentationEventFanout>(
           *playfieldVisualStateStore, *presentation);
@@ -2496,6 +2558,15 @@ void GamePlayScene::init() {
               transition.physicalLane, transition.control,
               transition.hasReplayControl, transition.pressed,
               transition.replayOnly);
+          if (transition.hasReplayControl &&
+              (!transition.replayOnly ||
+               transition.control.kind == replay::LogicalControlKind::Start ||
+               transition.control.kind == replay::LogicalControlKind::Select)) {
+            consumeStartSelectInput(
+                {.control = transition.control,
+                 .pressed = transition.pressed,
+                 .timestampMicros = nowMicros()});
+          }
         });
     inputHandler = ownedInputHandler.get();
     inputHandler->setDragModeEnabled(
@@ -2844,7 +2915,12 @@ bool GamePlayScene::reset() {
   }
   playfieldFrameSerial = 0;
   playfieldLaneCoverPercent = effectiveNoteStartPositionPercent();
+  playfieldLaneCoverPercentExact =
+      static_cast<float>(playfieldLaneCoverPercent);
   playfieldLaneCoverResetPending = false;
+  if (startSelectControl.has_value()) {
+    startSelectControl->reset();
+  }
   if (playfieldVisualStateStore != nullptr) {
     playfieldVisualStateStore->resetModel(playfieldChartVisualModel);
     if (options.replayData != nullptr) {
@@ -3148,6 +3224,126 @@ void GamePlayScene::handleLogicalInputCommand(
   }
 }
 
+void GamePlayScene::consumeStartSelectInput(
+    const gameplay::StartSelectControlInput &input) {
+  if (!startSelectControl.has_value() || isReplayPlayback() ||
+      options.autoPlay) {
+    return;
+  }
+  const bool noteEnd = state != nullptr && state->isEnding;
+  applyStartSelectControlActions(startSelectControl->apply(
+      input.control, input.pressed, input.timestampMicros, {.noteEnd = noteEnd}));
+}
+
+void GamePlayScene::applyStartSelectControlActions(
+    const std::vector<gameplay::StartSelectControlAction> &actions) {
+  for (const auto &action : actions) {
+    switch (action.kind) {
+    case gameplay::StartSelectControlActionKind::AdjustHispeed:
+      if (!courseNoSpeed() && action.delta != 0) {
+        playfieldHispeedMultiplier = std::clamp(
+            playfieldHispeedMultiplier + 0.25F * static_cast<float>(action.delta),
+            0.01F, 19.99F);
+        context.settings.gameplayHispeedMultiplier = playfieldHispeedMultiplier;
+        refreshRuntimePresentationConfiguration();
+        (void)context.saveSettings();
+      }
+      break;
+    case gameplay::StartSelectControlActionKind::AdjustDuration:
+      if (!courseNoSpeed() && action.delta != 0) {
+        context.settings.visibleTimeGreenNumber = std::clamp(
+            context.settings.visibleTimeGreenNumber + action.delta,
+            AppSettings::kMinVisibleTimeGreenNumber,
+            AppSettings::kMaxVisibleTimeGreenNumber);
+        refreshRuntimePresentationConfiguration();
+        (void)context.saveSettings();
+      }
+      break;
+    case gameplay::StartSelectControlActionKind::AdjustLaneCover:
+      if (!courseNoSpeed() && action.delta != 0) {
+        const float next = std::clamp(
+            playfieldLaneCoverPercentExact +
+                static_cast<float>(action.delta) * 0.1F,
+            static_cast<float>(AppSettings::kMinNoteStartPositionPercent),
+            static_cast<float>(AppSettings::kMaxNoteStartPositionPercent));
+        const int nextPercent = static_cast<int>(std::lround(next));
+        if (next != playfieldLaneCoverPercentExact) {
+          playfieldLaneCoverPercentExact = next;
+          context.settings.noteStartPositionPercent = nextPercent;
+          playfieldLaneCoverPercent = nextPercent;
+          playfieldLaneCoverResetPending = true;
+          appendReplayLaneCoverEvent(
+              nextPercent,
+              getGameplayTimeMicros(context.jukebox.getTimeMicros()), true);
+          (void)context.saveSettings();
+        }
+      }
+      break;
+    case gameplay::StartSelectControlActionKind::ToggleLaneCover:
+      if (!courseNoSpeed()) {
+        playfieldLaneCoverEnabled = !playfieldLaneCoverEnabled;
+        context.settings.laneCoverEnabled = playfieldLaneCoverEnabled;
+        (void)context.saveSettings();
+      }
+      break;
+    case gameplay::StartSelectControlActionKind::ToggleLiftHiddenTarget:
+      // Aso has no configurable Lift/Hidden planes yet.  The control-state
+      // edge is intentionally retained here so its future renderer support
+      // can use the same source-faithful input stream.
+      break;
+    case gameplay::StartSelectControlActionKind::Exit:
+      abortPlayFromStartSelectControl();
+      return;
+    }
+  }
+}
+
+void GamePlayScene::refreshRuntimePresentationConfiguration() {
+  if (playfieldVisualStateStore == nullptr || presentation == nullptr) {
+    return;
+  }
+  playfieldPresentationConfiguration.visibleTimeGreenNumber =
+      effectiveVisibleTimeGreenNumber();
+  playfieldPresentationConfiguration.hispeedMultiplier =
+      playfieldHispeedMultiplier;
+  playfieldVisualStateStore->setConfiguration(
+      playfieldPresentationConfiguration);
+  presentation->configure(playfieldPresentationConfiguration);
+}
+
+void GamePlayScene::abortPlayFromStartSelectControl() {
+  if (state == nullptr || state->isEnding || resultTransitionScheduled) {
+    return;
+  }
+  if (options.practiceSession != nullptr) {
+    finishPractice();
+    return;
+  }
+  state->isEnding = true;
+  context.jukebox.stop();
+  stopRealtimeGameplayAuthority(true);
+  finishReplayRecording();
+  recordedAttemptCompleted = options.practiceMode;
+  publishPracticeGhost();
+  if (isCoursePlayback()) {
+    if (!usesModernCourseContinuation()) {
+      options.courseSession->carriedGauge = state->gaugeSnapshot();
+      options.courseSession->carriedCombo = state->combo;
+      options.courseSession->maxCombo =
+          std::max(options.courseSession->maxCombo, state->maxCombo);
+    }
+    options.courseSession->recordResult(chart->Meta, *state);
+    if (!options.courseSession->courseReplayPlayback) {
+      options.courseSession->recordStageProvenance(
+          options.courseSession->currentIndex, attemptProvenance);
+    }
+    if (shouldRecordReplay()) {
+      options.courseSession->recordReplayStage(recordedReplay);
+    }
+  }
+  scheduleResultTransition(0);
+}
+
 void GamePlayScene::adjustLaneCoverFromInput(int deltaPercent) {
   const long long chartTimeMicros =
       getGameplayTimeMicros(context.jukebox.getTimeMicros());
@@ -3167,6 +3363,7 @@ void GamePlayScene::adjustLaneCoverFromInput(int deltaPercent) {
   }
   context.settings.noteStartPositionPercent = next;
   playfieldLaneCoverPercent = next;
+  playfieldLaneCoverPercentExact = static_cast<float>(next);
   playfieldLaneCoverResetPending = true;
   floatingLaneCoverSettingsDirty = true;
   appendReplayLaneCoverEvent(next, chartTimeMicros, true);
@@ -4173,8 +4370,8 @@ void GamePlayScene::capturePlayfieldVisualState(
     return;
   }
 
-  const auto laneCover =
-      gameplayLaneCoverAuthority(playfieldLaneCoverPercent);
+  const auto laneCover = gameplayLaneCoverAuthority(
+      playfieldLaneCoverPercent, playfieldLaneCoverEnabled);
   PlayfieldAuthorityUpdate authority{
       .currentBpm = currentGameplayBpm,
       .judgementCounters = state->judgeCount,
@@ -4552,7 +4749,13 @@ void GamePlayScene::update(float dt) {
   }
   if (realtimeAtFrameStart) {
     drainRealtimeInputCommands();
+    drainRealtimeStartSelectInputs();
     drainRealtimeTouchSamples();
+  }
+  if (startSelectControl.has_value() && !isReplayPlayback() &&
+      !options.autoPlay) {
+    applyStartSelectControlActions(startSelectControl->tick(
+        nowMicros(), {.noteEnd = state != nullptr && state->isEnding}));
   }
   updateCoursePauseHoldProgress(nowMicros());
   if (state == nullptr || !state->isPlaying || state->isEnding) {
@@ -5388,6 +5591,8 @@ void GamePlayScene::processReplayLaneCoverEvents(long long gameplayTimeMicros) {
 void GamePlayScene::applyReplayLaneCoverEvent(
     const ReplayLaneCoverEvent &event) {
   playfieldLaneCoverPercent = event.noteStartPositionPercent;
+  playfieldLaneCoverPercentExact =
+      static_cast<float>(event.noteStartPositionPercent);
   playfieldLaneCoverResetPending = event.resetVisibleTimeReference;
 }
 
@@ -5807,6 +6012,7 @@ bool GamePlayScene::handleFloatingLaneCoverInput(SDL_FingerID fingerIndex,
         renderX, renderY, floatingLaneCoverDragOffsetY);
     context.settings.noteStartPositionPercent = next;
     playfieldLaneCoverPercent = next;
+    playfieldLaneCoverPercentExact = static_cast<float>(next);
     if (next == previous) {
       return false;
     }

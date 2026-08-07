@@ -490,6 +490,7 @@ PlayfieldAuthorityUpdate authorityFor(const bms_parser::Chart &chart,
   authority.startLaneIndicators = {7, 0};
   authority.startLaneIndicatorsVisible = true;
   authority.laneCoverPercent = coverPercent;
+  authority.laneCoverEnabled = true;
   authority.resetLaneCoverVisibleTimeReference = true;
   return authority;
 }

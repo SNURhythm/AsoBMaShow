@@ -16,6 +16,14 @@
   configuration, so the bridge reports the upstream false state (and `-400`
   consequently reports true).
 
+- Implement Beatoraja's configurable Lift and Hidden planes, then apply the
+  `isChangeLift` selector toggled by a short Start+Select conjunction. Pinned
+  source `ControlInputProcessor.java` at
+  `c2ed5db1a46145ed10790c3872f717e95b59db9d` uses that selector only when
+  lane cover is disabled and both Lift and Hidden are enabled. AsoBMaShow
+  currently has neither configuration nor renderer plane, so the input edge
+  is preserved by `StartSelectControl` but intentionally has no visual effect.
+
 ## Gameplay-skin rhythm timer
 
 - Capture Beatoraja `TIMER_RHYTHM` (140) exactly from

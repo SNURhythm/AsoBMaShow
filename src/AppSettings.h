@@ -68,10 +68,15 @@ public:
   static constexpr int kMaxAudioOffsetMs = 300;
   static constexpr int kMinVisualOffsetMs = -500;
   static constexpr int kMaxVisualOffsetMs = 500;
-  static constexpr int kMinVisibleTimeGreenNumber = 60;
-  static constexpr int kMaxVisibleTimeGreenNumber = 1200;
+  // Beatoraja PlayConfig.DURATION_MIN/MAX.  START/SELECT changes this same
+  // persisted duration, so clamping it to the source range keeps physical and
+  // virtual controller adjustment semantics identical.
+  static constexpr int kMinVisibleTimeGreenNumber = 1;
+  static constexpr int kMaxVisibleTimeGreenNumber = 10000;
   static constexpr int kMinVisibleTimeMs = 100;
   static constexpr int kMaxVisibleTimeMs = 2000;
+  static constexpr float kMinGameplayHispeedMultiplier = 0.01F;
+  static constexpr float kMaxGameplayHispeedMultiplier = 19.99F;
   static constexpr int kMinBgaBrightnessPercent = 0;
   static constexpr int kMaxBgaBrightnessPercent = 100;
   static constexpr int kDefaultBgaBrightnessPercent = 100;
@@ -119,6 +124,7 @@ public:
   int audioOffsetMs = 0;
   int visualOffsetMs = 0;
   int visibleTimeGreenNumber = 400;
+  float gameplayHispeedMultiplier = 1.0F;
   bool visibleTimeUseMilliseconds = false;
   VisibleTimeBpmStrategy visibleTimeBpmStrategy = VisibleTimeBpmStrategy::Chart;
   bool inputKeysoundEnabled = true;
@@ -136,6 +142,7 @@ public:
   float laneLength = kDefaultLaneLength;
   int laneBeamLengthPercent = kDefaultLaneBeamLengthPercent;
   int noteStartPositionPercent = kDefaultNoteStartPositionPercent;
+  bool laneCoverEnabled = true;
   bool floatingLaneCoverEnabled = true;
   float playAreaWidth4K = kDefaultPlayAreaWidth;
   float playAreaWidth5K = kDefaultPlayAreaWidth;

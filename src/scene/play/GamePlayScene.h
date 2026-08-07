@@ -14,6 +14,7 @@
 #include "PlayfieldChartVisualModel.h"
 #include "PlayfieldProjection.h"
 #include "PlayfieldVisualState.h"
+#include "StartSelectControl.h"
 #include "RhythmState.h"
 #include "../Scene.h"
 #include "../../bms_parser.hpp"
@@ -87,6 +88,7 @@ private:
       std::optional<long long> cancelPresentationAtSteadyMicros =
           std::nullopt);
   void drainRealtimeInputCommands();
+  void drainRealtimeStartSelectInputs();
   void refreshRealtimeTouchLayout();
   void refreshGameplayPresentationGeometry();
   void updateSkinResetLayoutVisibility();
@@ -107,6 +109,11 @@ private:
   void togglePauseMenuFromInput();
   void
   handleLogicalInputCommand(const input::LogicalInputTransition &transition);
+  void consumeStartSelectInput(const gameplay::StartSelectControlInput &input);
+  void applyStartSelectControlActions(
+      const std::vector<gameplay::StartSelectControlAction> &actions);
+  void refreshRuntimePresentationConfiguration();
+  void abortPlayFromStartSelectControl();
   void adjustLaneCoverFromInput(int deltaPercent);
   void restartCurrentPattern();
   bool restartCourseFromBeginning();
@@ -244,6 +251,7 @@ private:
   PlayfieldProjection playfieldProjection;
   std::unique_ptr<PlayfieldVisualStateStore> ownedPlayfieldVisualStateStore;
   PlayfieldVisualStateStore *playfieldVisualStateStore = nullptr;
+  PlayfieldPresentationConfig playfieldPresentationConfiguration;
   std::unique_ptr<PlayfieldPresentation> ownedPresentation;
   BuiltInPlayfieldPresentation *builtInPresentation = nullptr;
   PlayfieldPresentation *presentation = nullptr;
@@ -280,6 +288,9 @@ private:
   bool recordedAttemptCompleted = false;
   bool resultTransitionScheduled = false;
   bool resultPersistenceAttemptCreationTried = false;
+  std::optional<gameplay::StartSelectControl> startSelectControl;
+  float playfieldHispeedMultiplier = 1.0F;
+  bool playfieldLaneCoverEnabled = true;
   bool floatingLaneCoverDragActive = false;
   bool floatingLaneCoverDragChanged = false;
   bool floatingLaneCoverSettingsDirty = false;
@@ -290,6 +301,7 @@ private:
   PlayfieldProjectionResult capturedPlayfieldProjection;
   std::vector<const bms_parser::Note *> playfieldVisualNoteSources;
   int playfieldLaneCoverPercent = 0;
+  float playfieldLaneCoverPercentExact = 0.0F;
   bool playfieldLaneCoverResetPending = false;
   bool gameplaySkinSafeBoundsInitialized = false;
   double gameplaySkinSafeBoundsX = 0.0;
