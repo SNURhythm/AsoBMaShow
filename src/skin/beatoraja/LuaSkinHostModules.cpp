@@ -1867,10 +1867,6 @@ int installPendingConfiguration(lua_State *state) {
     lua_pushinteger(state, option.value);
     lua_setfield(state, -2, option.name.c_str());
   }
-  for (const auto &[name, value] : configuration.options) {
-    lua_pushinteger(state, value);
-    lua_setfield(state, -2, name.c_str());
-  }
   lua_setfield(state, -2, "option");
 
   lua_createtable(state, static_cast<int>(configuration.orderedOptions.size()),

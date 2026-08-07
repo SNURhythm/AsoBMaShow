@@ -18,6 +18,28 @@ external SCURO package.
 | Table conversion recursively maps exact public field names. Tables become arrays in the order returned by `LuaTable.keys()`; a non-table array becomes empty, unmatched fields are ignored, and non-table object records retain Java field defaults. | `src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java`, `LuaSkinLoader.fromLuaValue`; `src/bms/player/beatoraja/skin/json/JsonSkin.java`, `JsonSkin.Skin` |
 | Header conversion preserves declared properties, selectable file globs, custom offsets/categories, and adds the four play offsets: All, Notes, Judge, and Judge Detail. | `src/bms/player/beatoraja/skin/json/JSONSkinLoader.java`, `JSONSkinLoader.loadJsonSkinHeader`; `src/bms/player/beatoraja/skin/SkinHeader.java`, `SkinHeader.setSkinConfigProperty` |
 
+## Catalog settings presentation
+
+Verified against pinned commit `c2ed5db1a46145ed10790c3872f717e95b59db9d` on
+2026-08-07. `JSONSkinLoader.loadJsonSkinHeader` resolves each declared
+`category.item` string through one `CustomItem[]` slot: its option pass assigns
+matching options, its file pass overwrites that slot with matching files, and
+its offset pass overwrites it with matching offsets; within each pass, the last
+matching declaration wins. `SkinConfigurationView.create` then renders, in
+declaration order: the category name as a non-interactive heading, its resolved
+items, a blank separator, and finally an `Other` heading followed by all items
+not included by any category. Repeated category references remain repeated;
+their first appearance only removes them from `Other`.
+
+`SkinConfigurationView.create` appends `Random` to every custom-option combo
+box, using `SkinProperty.OPTION_RANDOM_VALUE` (`-1`).
+`SkinHeader.setSkinConfigProperty` retains that `-1` preference but chooses a
+fresh authored option before configured Lua is executed, and
+`SkinLuaAccessor.exportSkinPropertyToTable` exports the chosen option. A
+decorative, ungrouped singleton option is therefore still a custom option, not
+a category divider: LITONE12's dashed `PLAY OPTION` declaration belongs under
+`Other` and must not be reclassified from its label.
+
 ## Properties, timers, and events
 
 The audited surface records every resolved property, timer, event, module, file

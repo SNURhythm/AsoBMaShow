@@ -624,29 +624,15 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
         makeWrappedText("Revision: " + row.revisionDigest +
                             " • Configuration: " + row.configurationDigest,
                         metrics.smallTextSize, ui_theme::textMuted()));
-    for (const auto &category : row.metadata.categories) {
-      std::string categoryText = "Category: " + category.name;
-      if (!category.items.empty()) {
-        categoryText += " • ";
-        for (std::size_t index = 0; index < category.items.size(); ++index) {
-          if (index != 0) {
-            categoryText += ", ";
-          }
-          categoryText += category.items[index];
-        }
-      }
-      entryBody->addView(makeWrappedText(categoryText, metrics.smallTextSize,
-                                         ui_theme::textSecondary()));
-    }
     for (const auto &diagnostic : row.diagnostics) {
       entryBody->addView(makeWrappedText(diagnosticPresentation(diagnostic),
                                          metrics.smallTextSize,
                                          ui_theme::textSecondary()));
     }
 
-    for (const auto &option : row.metadata.options) {
+    const auto appendOption = [&](const auto &option) {
       if (option.choices.empty()) {
-        continue;
+        return;
       }
       auto selected = option.choices.begin();
       if (const auto configured = row.settings.options.find(option.name);
@@ -669,7 +655,10 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
       }
       const auto selectedIndex = static_cast<std::size_t>(
           std::distance(option.choices.begin(), selected));
-      if (option.choices.size() >= 3) {
+      const bool hasBeatorajaRandomChoice =
+          !option.choices.empty() && option.choices.back().label == "Random" &&
+          option.choices.back().value == -1;
+      if (option.choices.size() >= 3 || hasBeatorajaRandomChoice) {
         const std::string dropdownKey =
             row.entry.collisionKey + "|option|" + option.name;
         std::vector<DropdownView::Option> options;
@@ -745,11 +734,11 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
         entryBody->addView(makeGameplaySkinChoiceRow(
             metrics, option.name, ordinaryActionsEnabled, std::move(choices)));
       }
-    }
+    };
 
-    for (const auto &file : row.metadata.files) {
+    const auto appendFile = [&](const auto &file) {
       if (file.choices.empty()) {
-        continue;
+        return;
       }
       std::string selected = file.defaultValue;
       if (const auto configured = row.settings.filePaths.find(file.name);
@@ -835,9 +824,9 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
         entryBody->addView(makeGameplaySkinChoiceRow(
             metrics, file.name, ordinaryActionsEnabled, std::move(choices)));
       }
-    }
+    };
 
-    for (const auto &offset : row.metadata.offsets) {
+    const auto appendOffset = [&](const auto &offset) {
       skin::ConfigOffset configured{};
       if (const auto saved = row.settings.offsets.find(offset.name);
           saved != row.settings.offsets.end()) {
@@ -886,6 +875,37 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
       addOffsetComponent("R", skin::kOffsetPermissionR, &skin::ConfigOffset::r);
       addOffsetComponent("A", skin::kOffsetPermissionA, &skin::ConfigOffset::a);
       entryBody->addView(offsetControls);
+    };
+
+    for (const auto &catalogItem :
+         skin::gameplaySkinSettingsCatalogItems(row.metadata)) {
+      switch (catalogItem.kind) {
+      case skin::GameplaySkinCatalogItemKind::CategoryHeading:
+        entryBody->addView(makeWrappedText(
+            catalogItem.label, metrics.bodyTextSize, ui_theme::cyan()));
+        break;
+      case skin::GameplaySkinCatalogItemKind::Separator: {
+        auto *separator = new View();
+        separator->setHeight(metrics.compact ? 8.0f : 10.0f);
+        entryBody->addView(separator);
+        break;
+      }
+      case skin::GameplaySkinCatalogItemKind::Option:
+        if (catalogItem.declarationIndex < row.metadata.options.size()) {
+          appendOption(row.metadata.options[catalogItem.declarationIndex]);
+        }
+        break;
+      case skin::GameplaySkinCatalogItemKind::File:
+        if (catalogItem.declarationIndex < row.metadata.files.size()) {
+          appendFile(row.metadata.files[catalogItem.declarationIndex]);
+        }
+        break;
+      case skin::GameplaySkinCatalogItemKind::Offset:
+        if (catalogItem.declarationIndex < row.metadata.offsets.size()) {
+          appendOffset(row.metadata.offsets[catalogItem.declarationIndex]);
+        }
+        break;
+      }
     }
 
     auto *customViewport = new View();

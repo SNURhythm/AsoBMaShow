@@ -2,7 +2,9 @@
 
 #include "GameplaySkinSettingsController.h"
 
+#include <cstddef>
 #include <string>
+#include <vector>
 
 namespace skin {
 
@@ -12,6 +14,27 @@ struct GameplaySkinSettingsActionAvailability {
   bool canEditPreparedName = false;
   bool canInstallPrepared = false;
 };
+
+// The native settings screen consumes this projection in the same sequence as
+// Beatoraja's SkinConfigurationView: declared category heading, its resolved
+// items, a separator, then ungrouped declarations under Other.  Declaration
+// indices address the corresponding metadata vectors.
+enum class GameplaySkinCatalogItemKind {
+  CategoryHeading,
+  Separator,
+  Option,
+  File,
+  Offset,
+};
+
+struct GameplaySkinCatalogItem {
+  GameplaySkinCatalogItemKind kind = GameplaySkinCatalogItemKind::Separator;
+  std::size_t declarationIndex = 0;
+  std::string label;
+};
+
+[[nodiscard]] std::vector<GameplaySkinCatalogItem>
+gameplaySkinSettingsCatalogItems(const SkinEntryMetadataSnapshot &metadata);
 
 [[nodiscard]] GameplaySkinSettingsActionAvailability
 gameplaySkinSettingsActionAvailability(

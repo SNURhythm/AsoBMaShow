@@ -705,15 +705,21 @@ std::string substitutePattern(std::string_view pattern,
   return result;
 }
 
+std::size_t chooseRandomIndex(std::size_t count) {
+  if (count == 0) {
+    return 0;
+  }
+  std::random_device entropy;
+  std::mt19937 generator(entropy());
+  std::uniform_int_distribution<std::size_t> distribution(0, count - 1);
+  return distribution(generator);
+}
+
 std::string chooseRandomFile(const std::vector<std::string> &choices) {
   if (choices.empty()) {
     return {};
   }
-  std::random_device entropy;
-  std::mt19937 generator(entropy());
-  std::uniform_int_distribution<std::size_t> distribution(0,
-                                                          choices.size() - 1);
-  return choices[distribution(generator)];
+  return choices[chooseRandomIndex(choices.size())];
 }
 
 struct RawSkinSource {
@@ -4070,26 +4076,38 @@ reconcileSkinConfiguration(const BeatorajaSkinHeader &header,
       continue;
     }
     const SkinHeaderOptionChoice *selected = &option.choices.front();
+    int persistedValue = selected->value;
     for (const auto &choice : option.choices) {
       if (choice.label == option.defaultLabel) {
         selected = &choice;
+        persistedValue = choice.value;
       }
     }
     if (saved != nullptr) {
       const auto desired = saved->options.find(option.name);
       if (desired != saved->options.end()) {
-        for (const auto &choice : option.choices) {
-          if (choice.value == desired->second) {
-            selected = &choice;
-            break;
+        // SkinHeader#setSkinConfigProperty stores OPTION_RANDOM_VALUE (-1)
+        // but picks a fresh authored option for this configured execution.
+        // Preserve -1 in profile/digest state while exporting that actual
+        // selection through orderedOptions below.
+        if (desired->second == -1) {
+          selected = &option.choices[chooseRandomIndex(option.choices.size())];
+          persistedValue = -1;
+        } else {
+          for (const auto &choice : option.choices) {
+            if (choice.value == desired->second) {
+              selected = &choice;
+              persistedValue = choice.value;
+              break;
+            }
           }
         }
       }
     }
-    settings.options.insert_or_assign(option.name, selected->value);
+    settings.options.insert_or_assign(option.name, persistedValue);
     configuration.orderedOptions.push_back(
         {.name = option.name, .value = selected->value});
-    configuration.options.insert_or_assign(option.name, selected->value);
+    configuration.options.insert_or_assign(option.name, persistedValue);
     configuration.enabledOptionIds.insert(selected->value);
   }
 

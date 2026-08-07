@@ -56,6 +56,10 @@ metadataFor(const BeatorajaSkinHeader &header,
       catalogOption.choices.push_back(
           {.label = choice.label, .value = choice.value});
     }
+    // SkinConfigurationView always appends this synthetic entry after the
+    // authored CustomOption values.  It is a real selectable configuration,
+    // not a presentation convention inferred from an option's label.
+    catalogOption.choices.push_back({.label = "Random", .value = -1});
     metadata.options.push_back(std::move(catalogOption));
   }
   for (std::size_t index = 0; index < header.files.size(); ++index) {

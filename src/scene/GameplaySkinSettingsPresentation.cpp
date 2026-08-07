@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -209,6 +210,99 @@ std::string formatProgressBytes(std::uint64_t bytes) {
 }
 
 } // namespace
+
+std::vector<GameplaySkinCatalogItem>
+gameplaySkinSettingsCatalogItems(const SkinEntryMetadataSnapshot &metadata) {
+  std::vector<GameplaySkinCatalogItem> result;
+  std::vector<bool> groupedOptions(metadata.options.size(), false);
+  std::vector<bool> groupedFiles(metadata.files.size(), false);
+  std::vector<bool> groupedOffsets(metadata.offsets.size(), false);
+
+  const auto markGrouped = [&groupedOptions, &groupedFiles, &groupedOffsets](
+                               const GameplaySkinCatalogItem &item) {
+    switch (item.kind) {
+    case GameplaySkinCatalogItemKind::Option:
+      groupedOptions[item.declarationIndex] = true;
+      break;
+    case GameplaySkinCatalogItemKind::File:
+      groupedFiles[item.declarationIndex] = true;
+      break;
+    case GameplaySkinCatalogItemKind::Offset:
+      groupedOffsets[item.declarationIndex] = true;
+      break;
+    case GameplaySkinCatalogItemKind::CategoryHeading:
+    case GameplaySkinCatalogItemKind::Separator:
+      break;
+    }
+  };
+
+  const auto resolveCategoryItem = [&metadata](std::string_view category) {
+    std::optional<GameplaySkinCatalogItem> resolved;
+    // JSONSkinLoader reuses one CustomItem[] slot per category.item entry.
+    // Its option, file, and offset passes each assign that same slot, so the
+    // last matching declaration in the last pass wins.
+    for (std::size_t index = 0; index < metadata.options.size(); ++index) {
+      if (metadata.options[index].category == category) {
+        resolved = {.kind = GameplaySkinCatalogItemKind::Option,
+                    .declarationIndex = index};
+      }
+    }
+    for (std::size_t index = 0; index < metadata.files.size(); ++index) {
+      if (metadata.files[index].category == category) {
+        resolved = {.kind = GameplaySkinCatalogItemKind::File,
+                    .declarationIndex = index};
+      }
+    }
+    for (std::size_t index = 0; index < metadata.offsets.size(); ++index) {
+      if (metadata.offsets[index].category == category) {
+        resolved = {.kind = GameplaySkinCatalogItemKind::Offset,
+                    .declarationIndex = index};
+      }
+    }
+    return resolved;
+  };
+
+  // SkinConfigurationView emits categories in their declared order. Do not
+  // infer hierarchy from labels or declaration names.
+  for (const auto &category : metadata.categories) {
+    result.push_back({.kind = GameplaySkinCatalogItemKind::CategoryHeading,
+                      .label = category.name});
+    for (const auto &item : category.items) {
+      if (const auto resolved = resolveCategoryItem(item)) {
+        result.push_back(*resolved);
+        markGrouped(*resolved);
+      }
+    }
+    result.push_back({.kind = GameplaySkinCatalogItemKind::Separator});
+  }
+
+  const auto hasUngrouped = [](const std::vector<bool> &grouped) {
+    return std::ranges::any_of(grouped, [](bool value) { return !value; });
+  };
+  if (!metadata.categories.empty() &&
+      (hasUngrouped(groupedOptions) || hasUngrouped(groupedFiles) ||
+       hasUngrouped(groupedOffsets))) {
+    result.push_back(
+        {.kind = GameplaySkinCatalogItemKind::CategoryHeading, .label = "Other"});
+  }
+
+  const auto appendUngrouped =
+      [&result](const auto &declarations, const std::vector<bool> &grouped,
+                GameplaySkinCatalogItemKind kind) {
+        for (std::size_t index = 0; index < declarations.size(); ++index) {
+          if (!grouped[index]) {
+            result.push_back({.kind = kind, .declarationIndex = index});
+          }
+        }
+      };
+  appendUngrouped(metadata.options, groupedOptions,
+                  GameplaySkinCatalogItemKind::Option);
+  appendUngrouped(metadata.files, groupedFiles,
+                  GameplaySkinCatalogItemKind::File);
+  appendUngrouped(metadata.offsets, groupedOffsets,
+                  GameplaySkinCatalogItemKind::Offset);
+  return result;
+}
 
 GameplaySkinSettingsActionAvailability gameplaySkinSettingsActionAvailability(
     const GameplaySkinSettingsSnapshot &snapshot) noexcept {

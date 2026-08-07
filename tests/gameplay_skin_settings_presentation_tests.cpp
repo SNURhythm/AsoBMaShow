@@ -5,6 +5,7 @@
 #include <iostream>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -258,6 +259,67 @@ void testCachedControllerPresentationKeyAvoidsReencodingStaticCatalogRows() {
           "controller-projected settings reuse their cached catalog key");
 }
 
+void testCatalogItemsFollowBeatorajaCategoryAndOtherOrder() {
+  skin::SkinEntryMetadataSnapshot metadata;
+  metadata.categories = {
+      {.name = "Gameplay", .items = {"lane", "judge"}},
+      {.name = "Appearance", .items = {"appearance"}},
+  };
+  metadata.options = {
+      {.category = "lane", .name = "Lane position"},
+      {.category = "", .name = "---------PLAY OPTION---------"},
+      {.category = "appearance", .name = "Frame"},
+  };
+  metadata.files = {
+      {.category = "judge", .name = "Judge font"},
+      {.category = "", .name = "Loose file"},
+  };
+  metadata.offsets = {
+      {.category = "lane", .name = "Lane offset"},
+      {.category = "appearance", .name = "Frame offset"},
+      {.category = "", .name = "Loose offset"},
+  };
+
+  const auto items = skin::gameplaySkinSettingsCatalogItems(metadata);
+  const std::vector<skin::GameplaySkinCatalogItem> expected = {
+      {.kind = skin::GameplaySkinCatalogItemKind::CategoryHeading,
+       .label = "Gameplay"},
+      {.kind = skin::GameplaySkinCatalogItemKind::Offset,
+       .declarationIndex = 0},
+      {.kind = skin::GameplaySkinCatalogItemKind::File,
+       .declarationIndex = 0},
+      {.kind = skin::GameplaySkinCatalogItemKind::Separator},
+      {.kind = skin::GameplaySkinCatalogItemKind::CategoryHeading,
+       .label = "Appearance"},
+      {.kind = skin::GameplaySkinCatalogItemKind::Offset,
+       .declarationIndex = 1},
+      {.kind = skin::GameplaySkinCatalogItemKind::Separator},
+      {.kind = skin::GameplaySkinCatalogItemKind::CategoryHeading,
+       .label = "Other"},
+      {.kind = skin::GameplaySkinCatalogItemKind::Option,
+       .declarationIndex = 0},
+      {.kind = skin::GameplaySkinCatalogItemKind::Option,
+       .declarationIndex = 1},
+      {.kind = skin::GameplaySkinCatalogItemKind::Option,
+       .declarationIndex = 2},
+      {.kind = skin::GameplaySkinCatalogItemKind::File,
+       .declarationIndex = 1},
+      {.kind = skin::GameplaySkinCatalogItemKind::Offset,
+       .declarationIndex = 2},
+  };
+  require(items.size() == expected.size(),
+          "catalog projection has the pinned Beatoraja item count");
+  if (items.size() != expected.size()) {
+    return;
+  }
+  for (std::size_t index = 0; index < expected.size(); ++index) {
+    require(items[index].kind == expected[index].kind &&
+                items[index].declarationIndex == expected[index].declarationIndex &&
+                items[index].label == expected[index].label,
+            "catalog projection preserves Beatoraja category and Other order");
+  }
+}
+
 void testSkinPackageProgressUsesMeasuredWork() {
   require(
       skin::gameplaySkinPackageProgressDisplayText(
@@ -322,6 +384,7 @@ int main() {
   testActionDrivingChangesInvalidatePresentation();
   testPresentationEncodingHasNoDelimiterOrOptionalAmbiguity();
   testCachedControllerPresentationKeyAvoidsReencodingStaticCatalogRows();
+  testCatalogItemsFollowBeatorajaCategoryAndOtherOrder();
   testSkinPackageProgressUsesMeasuredWork();
   testSkinRescanProgressAvoidsInventedWorkTotals();
   testViewportModeChangesPreserveEveryOtherField();

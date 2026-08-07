@@ -178,6 +178,24 @@ class GameplaySkinSettingsUiContracts(unittest.TestCase):
         self.assertIn("std::max(current.menuWidth, preferredWidth())", dropdown)
         self.assertNotIn("nextChoice", enabled)
 
+    def test_catalog_uses_beatoraja_category_order_and_random_dropdowns(self) -> None:
+        enabled = self.read("src/scene/SettingsSceneSkins.cpp")
+        presentation = self.read("src/scene/GameplaySkinSettingsPresentation.cpp")
+        validator = self.read("src/skin/beatoraja/GameplaySkinValidator.cpp")
+
+        self.assertIn("gameplaySkinSettingsCatalogItems(row.metadata)", enabled)
+        self.assertIn("GameplaySkinCatalogItemKind::CategoryHeading", enabled)
+        self.assertIn("GameplaySkinCatalogItemKind::Separator", enabled)
+        self.assertNotIn('"Category: "', enabled)
+        self.assertIn("hasBeatorajaRandomChoice", enabled)
+        self.assertIn("option.choices.size() >= 3 || hasBeatorajaRandomChoice", enabled)
+        self.assertIn("resolveCategoryItem", presentation)
+        self.assertIn("metadata.options[index].category == category", presentation)
+        self.assertIn("metadata.files[index].category == category", presentation)
+        self.assertIn("metadata.offsets[index].category == category", presentation)
+        self.assertIn('GameplaySkinCatalogItemKind::CategoryHeading, .label = "Other"', presentation)
+        self.assertIn('catalogOption.choices.push_back({.label = "Random", .value = -1})', validator)
+
     def test_action_controls_use_the_pure_availability_projection(self) -> None:
         enabled = self.read("src/scene/SettingsSceneSkins.cpp")
 

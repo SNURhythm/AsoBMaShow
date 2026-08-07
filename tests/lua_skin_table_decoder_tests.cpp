@@ -882,6 +882,47 @@ void testReconciliationDefaultsSanitizesAndIndexesConfiguration() {
          "sanitized offsets are indexed by unambiguous declared IDs");
 }
 
+void testRandomOptionKeepsPersistedSentinelAndExportsAnAuthoredChoice() {
+  const auto decoded = fixture().decode("valid.luaskin");
+  auto fileSystem = fixture().fileSystem();
+  expect(decoded.header && fileSystem,
+         "random-option reconciliation fixture is available");
+  if (!decoded.header || !fileSystem) {
+    return;
+  }
+
+  EntryProfileSettings saved;
+  saved.options = {{"Lane type", -1}, {"Gauge", 11}};
+  const auto reconciled =
+      reconcileSkinConfiguration(*decoded.header, &saved, *fileSystem);
+  if (!reconciled.configuration) {
+    expect(false, "random custom option reconciles successfully");
+    return;
+  }
+
+  const auto &configuration = *reconciled.configuration;
+  const auto lane = std::find_if(
+      configuration.orderedOptions.begin(), configuration.orderedOptions.end(),
+      [](const auto &option) { return option.name == "Lane type"; });
+  expect(reconciled.diagnostics.empty(),
+         "a saved Beatoraja Random option reconciles without diagnostics");
+  expect(reconciled.reconciledSettings.options == saved.options,
+         "a saved Beatoraja Random option preserves -1 in profile state");
+  expect(configuration.options == saved.options,
+         "the runtime digest state preserves the saved random sentinel");
+  expect(lane != configuration.orderedOptions.end() &&
+             (lane->value == 927 || lane->value == 928),
+         "configured Lua receives a fresh authored option");
+  if (lane == configuration.orderedOptions.end()) {
+    return;
+  }
+  expect(configuration.enabledOptionIds.contains(lane->value),
+         "the fresh authored option enables its Beatoraja condition ID");
+  expect(configuration.lowercaseSha256 ==
+             skinConfigurationDigest(reconciled.reconciledSettings),
+         "the persistent random sentinel owns the configuration digest");
+}
+
 void testReconciliationRejectsEmptyConfigurationKeys() {
   auto fileSystem = fixture().fileSystem("optional-text.luaskin");
   expect(fileSystem != nullptr, "empty-key reconciliation filesystem exists");
@@ -1258,6 +1299,7 @@ int main() {
   testDuplicateFontNamesUseTheFirstBeatorajaDefinition();
   testResourcePathsFollowBeatorajaResolution();
   testReconciliationDefaultsSanitizesAndIndexesConfiguration();
+  testRandomOptionKeepsPersistedSentinelAndExportsAnAuthoredChoice();
   testReconciliationRejectsEmptyConfigurationKeys();
   testPinnedFilePatternChoicesAreDeterministicAndCaseInsensitive();
   testEntryRelativeFilePatternsStayWithinThePackage();

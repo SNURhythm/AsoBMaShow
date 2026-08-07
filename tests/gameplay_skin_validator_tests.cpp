@@ -366,7 +366,9 @@ return {
   expect(
       result.metadata && result.metadata->options.size() == 1 &&
           result.metadata->options.front().name == "Gauge" &&
-          result.metadata->options.front().choices.size() == 2,
+          result.metadata->options.front().choices.size() == 3 &&
+          result.metadata->options.front().choices.back().label == "Random" &&
+          result.metadata->options.front().choices.back().value == -1,
       "validation output remains owned after all staging state is destroyed");
 }
 
@@ -401,6 +403,36 @@ return {
              result.reconciledSettings->filePaths == desired.filePaths,
          "catalog preserves the saved custom-file selection while presenting "
          "the other available choices");
+}
+
+void testCatalogAppendsBeatorajaRandomToCustomOptions() {
+  constexpr std::string_view script = R"lua(
+return {
+  type = 0, w = 1280, h = 720, name = "one choice catalog",
+  property = {{
+    name = "---------PLAY OPTION---------",
+    item = {{name = "-", op = 998}}
+  }}
+}
+)lua";
+
+  EntryProfileSettings desired;
+  desired.options["---------PLAY OPTION---------"] = -1;
+  const SkinValidationResult result = validateScript(script, &desired);
+  const bool choicesMatch =
+      result.metadata && result.metadata->options.size() == 1 &&
+      result.metadata->options.front().choices.size() == 2 &&
+      result.metadata->options.front().choices[0].label == "-" &&
+      result.metadata->options.front().choices[0].value == 998 &&
+      result.metadata->options.front().choices[1].label == "Random" &&
+      result.metadata->options.front().choices[1].value == -1;
+
+  expect(
+      result.disposition == SkinValidationDisposition::SelectableGameplay &&
+          choicesMatch && result.reconciledSettings &&
+          result.reconciledSettings->options == desired.options,
+      "catalog appends Beatoraja's Random entry to a singleton CustomOption "
+      "and persists its random sentinel");
 }
 
 void testCatalogDoesNotExecuteConfiguredLuaOrFabricateMainState() {
@@ -598,6 +630,7 @@ int main() {
   testAuthoritativeCatalogAdmitsCompatibilityIntegerFactoryDomain();
   testCatalogPublishesOwnedHeaderMetadataWithoutLoadingGameplay();
   testCatalogPublishesFilePathChoicesAfterSavedSelection();
+  testCatalogAppendsBeatorajaRandomToCustomOptions();
   testCatalogDoesNotExecuteConfiguredLuaOrFabricateMainState();
   testCatalogKeepsBeatorajaEmptyOptionDeclarationsSelectable();
   testCatalogRejectsNonGameplayBeatorajaSkinTypes();
