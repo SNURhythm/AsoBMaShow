@@ -407,6 +407,39 @@ void testIntegerPropertyFactoryDomainNeverRejectsGameplaySkins() {
   bridge.discardFrame();
 }
 
+void testMarkProcessedNoteImageIndexTracksPlayerConfiguration() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = runtime.runtime(),
+                              .mutationTable = mutations});
+
+  auto state = stateAt(232);
+  bridge.beginFrame(state, projectionAt(232));
+  const auto disabled = bridge.integerProperty(
+      {305}, SkinIntegerPropertyDomain::ImageIndex);
+  expect(disabled.supported && disabled.value == 0,
+         "ImageIndex 305 defaults to Beatoraja's disabled processed marker");
+  bridge.discardFrame();
+
+  state = stateAt(233);
+  state.configuration.markProcessedNotes = true;
+  bridge.beginFrame(state, projectionAt(233));
+  const auto enabled = bridge.integerProperty(
+      {305}, SkinIntegerPropertyDomain::ImageIndex);
+  expect(enabled.supported && enabled.value == 1,
+         "ImageIndex 305 reflects the enabled processed-note marker");
+  bridge.discardFrame();
+}
+
 void testPinnedMutationTableMatchesFrozenFixtureExhaustively() {
   const auto fixture = readJsonFixture(
       "tests/fixtures/beatoraja_skin/event_mutation_table_v1.json");
@@ -1715,6 +1748,7 @@ int main() {
   testDurationBindingsUsePinnedLaneRendererFormula();
   testHispeedBindingsUsePinnedIntegerAndFloatProperties();
   testIntegerPropertyFactoryDomainNeverRejectsGameplaySkins();
+  testMarkProcessedNoteImageIndexTracksPlayerConfiguration();
   testBridgeOwnsSnapshotAndClosesEachFrameExactlyOnce();
   testFramePropertiesUseAuthoritativeGaugeAndTimerRules();
   testGameplayModeAndLoadingBooleanProperties();

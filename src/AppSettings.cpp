@@ -691,6 +691,11 @@ bool AppSettings::parseLegacyCfg(std::istream &file, AppSettings &settings,
         if (parseBool(value, parsed)) {
           settings.showInvisibleNotes = parsed;
         }
+      } else if (key == "mark_processed_notes") {
+        bool parsed = settings.markProcessedNotes;
+        if (parseBool(value, parsed)) {
+          settings.markProcessedNotes = parsed;
+        }
       } else if (key == "touch_visualization_enabled") {
         bool parsed = settings.touchVisualizationEnabled;
         if (parseBool(value, parsed)) {

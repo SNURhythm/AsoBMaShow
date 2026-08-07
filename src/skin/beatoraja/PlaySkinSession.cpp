@@ -625,6 +625,7 @@ PlaySkinFrameTransactionResult PlaySkinSession::runFrameTransaction(
        .viewport = context_.viewport,
        .runtime = context_.runtime,
        .state = context_.bridge,
+       .markProcessedNotes = state.configuration.markProcessedNotes,
        .gaugeRandomSource = context_.gaugeRandomSource},
       std::move(ownership));
   appendDiagnostics(result.diagnostics, context_.bridge.diagnostics());

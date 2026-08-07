@@ -84,9 +84,12 @@ remaining object array in authored order.
 
 - `SkinNote.prepare` samples normal, mine, hidden, processed, and all ten
   long-note image roles before `SkinNote.draw` delegates the geometry to
-  `LaneRenderer.drawLane`. `LaneRenderer.drawLongNote` selects distinct LN,
-  CN, and HCN start/end/body phases, including active, missed, damaged, and
-  reactive HCN bodies according to the current judge state.
+  `LaneRenderer.drawLane`. Missing `processed` is a synthesized cyan double
+  outline; `LaneRenderer` selects it only for an already-processed normal note
+  when `PlayerConfig.markprocessednote` is enabled (default: false).
+  `LaneRenderer.drawLongNote` selects distinct LN, CN, and HCN start/end/body
+  phases, including active, missed, damaged, and reactive HCN bodies according
+  to the current judge state.
 - `SkinBGA.prepare` advances `BGAProcessor.prepareBGA` with the play timer.
   `BGAProcessor.drawBGA` makes an active miss sequence exclusive; otherwise it
   draws the base BGA (or blank) and then the layer. Image/video renderer type

@@ -2504,6 +2504,7 @@ void GamePlayScene::init() {
       .noteStartPositionPercent = effectiveNoteStartPositionPercent(),
       .laneBeamClockUsesRenderTime = true,
       .showInvisibleNotes = context.settings.showInvisibleNotes,
+      .markProcessedNotes = context.settings.markProcessedNotes,
       .judgementIndicatorEnabled =
           context.settings.judgementIndicatorEnabled,
       .judgementIndicatorY = context.settings.judgementIndicatorY,

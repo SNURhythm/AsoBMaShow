@@ -414,7 +414,8 @@ evaluate(Skin2DRenderer &renderer, RuntimeHarness &runtime,
          const BeatorajaSkinConfiguration *configured = nullptr,
          std::optional<std::uint64_t> capturedSerial = std::nullopt,
          ISkinGaugeRandomSource *gaugeRandomSource = nullptr,
-         std::uint64_t sessionSerial = 1) {
+         std::uint64_t sessionSerial = 1,
+         bool markProcessedNotes = false) {
   static const BeatorajaSkinConfiguration emptyConfiguration;
   const auto &configuration = configured ? *configured : emptyConfiguration;
   const auto playViewport = viewport();
@@ -428,6 +429,7 @@ evaluate(Skin2DRenderer &renderer, RuntimeHarness &runtime,
                                  .viewport = playViewport,
                                  .runtime = runtime.runtime(),
                                  .state = state,
+                                 .markProcessedNotes = markProcessedNotes,
                                  .gaugeRandomSource = gaugeRandomSource});
 }
 
@@ -2947,7 +2949,7 @@ void testNoteLongNoteAndLineCommandsPreserveMergedProjectionOrder() {
   }
   const std::vector<SkinResourceId> expectedResources = {
       200, 100, 107, 105, 102, 201, 106, 104,
-      105, 101, 112, 108, 109, 103, 202, 203};
+      105, 101, 112, 108, 109, 100, 202, 203};
   std::vector<SkinResourceId> actualResources;
   for (const auto &command : result.submitReady->commands) {
     actualResources.push_back(
@@ -2955,6 +2957,15 @@ void testNoteLongNoteAndLineCommandsPreserveMergedProjectionOrder() {
   }
   expect(actualResources == expectedResources,
          "projection merge and pinned long-note body/cap order are exact");
+  const auto marked = evaluate(renderer, runtime, model, resources, state, 2,
+                               0, &configuration, std::nullopt, nullptr, 1,
+                               true);
+  expect(marked.submitReady && marked.submitReady->commands.size() == 16 &&
+             std::get<SkinTexturedQuadCommand>(
+                 marked.submitReady->commands[13].payload)
+                     .resource == 103,
+         "Mark Processed Note selects the processed visual only for judged "
+         "normal notes");
   expect(std::ranges::all_of(result.submitReady->commands,
                              [](const SkinDrawCommand &command) {
                                return command.authoredOrdinal == 77;
@@ -3191,7 +3202,7 @@ void testProjectedLineEmitsEveryLaneGroupAndIgnoresNestedClip() {
          "a projected sparse line hole fails the critical note atomically");
 }
 
-void testSynthesizedNoteFallbacksDoNotDrawProcessedOutline() {
+void testSynthesizedNoteFallbacksHonorMarkProcessedNote() {
   RuntimeHarness runtime;
   Skin2DRenderer renderer;
   FakeResources resources;
@@ -3223,9 +3234,9 @@ void testSynthesizedNoteFallbacksDoNotDrawProcessedOutline() {
   model.model.destinations = {destination(1, 89, 0.0)};
 
   const auto result = evaluate(renderer, runtime, model, resources, state);
-  expect(result.submitReady && result.submitReady->commands.size() == 10,
-         "a missing processed sprite does not synthesize a judged-note outline");
-  if (!result.submitReady || result.submitReady->commands.size() != 10) {
+  expect(result.submitReady && result.submitReady->commands.size() == 11,
+         "the default source option keeps judged notes on their normal visual");
+  if (!result.submitReady || result.submitReady->commands.size() != 11) {
     return;
   }
   const auto &normal =
@@ -3245,15 +3256,16 @@ void testSynthesizedNoteFallbacksDoNotDrawProcessedOutline() {
              hiddenInnerBottom.vertices.size() == 4 &&
              mine.vertices.front().rgba == 0xff0000ffU,
          "non-processed fallback shapes retain their explicit colors");
-  expect(std::ranges::none_of(
-             result.submitReady->commands,
-             [](const SkinDrawCommand &command) {
-               const auto &primitive =
-                   std::get<SkinPrimitiveCommand>(command.payload);
-               return !primitive.vertices.empty() &&
-                      primitive.vertices.front().rgba == 0xffffff00U;
-             }),
-         "the cyan processed-note fallback is never submitted");
+  const auto marked = evaluate(renderer, runtime, model, resources, state, 2,
+                               0, nullptr, std::nullopt, nullptr, 1, true);
+  expect(marked.submitReady && marked.submitReady->commands.size() == 18,
+         "a marked processed note synthesizes Beatoraja's cyan double outline");
+  if (marked.submitReady && marked.submitReady->commands.size() == 18) {
+    const auto &processedOuter = std::get<SkinPrimitiveCommand>(
+        marked.submitReady->commands[10].payload);
+    expect(processedOuter.vertices.front().rgba == 0xffffff00U,
+           "the processed-note fallback keeps Beatoraja's cyan color");
+  }
   expect(hiddenOuterBottom.vertices[0].x == 100.0F &&
              hiddenOuterBottom.vertices[0].y == 520.0F &&
              hiddenOuterBottom.vertices[2].x == 140.0F &&
@@ -4226,7 +4238,7 @@ int main() {
   testLiveScrollUnitsUseSkinLaneHeightAndHispeed();
   testEveryLongNoteBodyStateUsesItsDistinctVisualRole();
   testProjectedLineEmitsEveryLaneGroupAndIgnoresNestedClip();
-  testSynthesizedNoteFallbacksDoNotDrawProcessedOutline();
+  testSynthesizedNoteFallbacksHonorMarkProcessedNote();
   testHiddenAndLiftCoversApplyDisappearLineClipping();
   testHiddenCoverStillSelectsSourceAfterRuntimeSuppression();
   testBgaEmitsOneRoleFreePreStretchCommand();

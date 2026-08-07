@@ -188,6 +188,8 @@ struct SkinFrameInputs {
   const PlaySkinViewport &viewport;
   LuaSkinRuntime &runtime;
   ISkinFrameState &state;
+  // Pinned PlayerConfig.markprocessednote; false by Beatoraja default.
+  bool markProcessedNotes = false;
   ISkinGaugeRandomSource *gaugeRandomSource = nullptr;
 };
 

@@ -106,6 +106,7 @@ previewPresentationConfiguration(const AppSettings &settings,
       .noteStartPositionPercent = settings.noteStartPositionPercent,
       .laneBeamClockUsesRenderTime = true,
       .showInvisibleNotes = settings.showInvisibleNotes,
+      .markProcessedNotes = settings.markProcessedNotes,
       .judgementIndicatorEnabled = settings.judgementIndicatorEnabled,
       .judgementIndicatorY = settings.judgementIndicatorY,
       .judgementIndicatorWidthScale =

@@ -99,6 +99,7 @@ AppSettings makeDistinctSettings() {
   value.prepMetronomeEnabled = true;
   value.startLaneIndicatorsEnabled = false;
   value.showInvisibleNotes = true;
+  value.markProcessedNotes = true;
   value.touchVisualizationEnabled = false;
   value.archiveChartPreviewEnabled = false;
   value.findBmsSkipUnarchivingForNonSolidArchives = true;
@@ -153,6 +154,7 @@ void testLegacyFixtureLoadsEverySetting() {
   AppSettings expected = makeDistinctSettings();
   expected.audioVideo = player_settings::defaultAudioVideoSettingsForPlatform();
   expected.findBmsSkipUnarchivingForNonSolidArchives = false;
+  expected.markProcessedNotes = false;
   // The retired floating-cover UI field must not silently opt legacy users
   // into current-BPM Hi-Speed Auto Adjust.
   expected.hispeedAutoAdjust = false;
@@ -238,6 +240,9 @@ void testJsonRoundTripIncludesAudioAndVideo() {
   expect(readFile(path).find("\"startLaneIndicatorsEnabled\": false") !=
              std::string::npos,
          "saved JSON includes the start lane indicator setting");
+  expect(readFile(path).find("\"markProcessedNotes\": true") !=
+             std::string::npos,
+         "saved JSON includes the Beatoraja processed-note marker setting");
   expect(readFile(path).find("\"gameplayHispeedMultiplier\": 1.75") !=
                  std::string::npos &&
              readFile(path).find("\"laneCoverEnabled\": false") !=
@@ -926,6 +931,7 @@ void testVersionFixturesAndNoRewrite() {
   AppSettings expectedV0 = makeDistinctSettings();
   expectedV0.findBmsSkipUnarchivingForNonSolidArchives = false;
   expectedV0.hispeedAutoAdjust = false;
+  expectedV0.markProcessedNotes = false;
   expect(v0.settings == expectedV0, "v0 migration is lossless");
 
   const auto v1 = AppSettingsStore::Load(fixture("settings-v1.json"));

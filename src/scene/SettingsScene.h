@@ -141,6 +141,7 @@ private:
   TextView *prepMetronomeModeText = nullptr;
   TextView *startLaneIndicatorsModeText = nullptr;
   TextView *showInvisibleNotesModeText = nullptr;
+  TextView *markProcessedNotesModeText = nullptr;
   TextView *touchVisualizationModeText = nullptr;
   TextView *hispeedAutoAdjustModeText = nullptr;
   TextView *archiveChartPreviewModeText = nullptr;
@@ -168,6 +169,7 @@ private:
   Button *prepMetronomeModeButton = nullptr;
   Button *startLaneIndicatorsModeButton = nullptr;
   Button *showInvisibleNotesModeButton = nullptr;
+  Button *markProcessedNotesModeButton = nullptr;
   Button *touchVisualizationModeButton = nullptr;
   Button *hispeedAutoAdjustModeButton = nullptr;
   Button *archiveChartPreviewModeButton = nullptr;

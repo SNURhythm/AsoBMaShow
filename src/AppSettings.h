@@ -131,6 +131,9 @@ public:
   bool prepMetronomeEnabled = false;
   bool startLaneIndicatorsEnabled = true;
   bool showInvisibleNotes = false;
+  // Beatoraja PlayerConfig.markprocessednote. When enabled, judged normal
+  // notes use SkinNote's processed-note visual instead of the normal visual.
+  bool markProcessedNotes = false;
   bool touchVisualizationEnabled = true;
   bool archiveChartPreviewEnabled = true;
   bool findBmsSkipUnarchivingForNonSolidArchives = false;

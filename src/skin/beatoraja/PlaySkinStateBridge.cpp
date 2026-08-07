@@ -1094,6 +1094,12 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
       return {.value = metadata.selectedLongNoteMode,
               .supported = true};
     }
+    // IntegerPropertyFactory.IndexType.markprocessednote is the source's
+    // image-index reflection of PlayerConfig.markprocessednote.
+    if (*id == 305) {
+      return {.value = snapshot->configuration.markProcessedNotes ? 1 : 0,
+              .supported = true};
+    }
     // IntegerPropertyFactory accepts the complete unsigned cache domain.
     // An unavailable image-index source naturally selects frame zero, which
     // is the safe source-neutral equivalent of the absent upstream property.

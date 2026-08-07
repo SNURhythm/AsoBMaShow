@@ -58,6 +58,7 @@ struct PlayfieldPresentationConfig {
   int noteStartPositionPercent = 0;
   bool laneBeamClockUsesRenderTime = false;
   bool showInvisibleNotes = false;
+  bool markProcessedNotes = false;
   bool judgementIndicatorEnabled = true;
   float judgementIndicatorY = 0.0F;
   float judgementIndicatorWidthScale = 1.0F;

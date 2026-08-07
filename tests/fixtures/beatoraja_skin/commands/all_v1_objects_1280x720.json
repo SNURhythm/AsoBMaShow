@@ -11,8 +11,8 @@
     "Note.HCN.Reactive", "Line.Group", "Line.Bpm", "Line.Stop",
     "Line.Time", "Note.Synthesized", "Cover.Hidden", "Cover.Lift", "BGA"
   ],
-  "commandCount": 75,
+  "commandCount": 76,
   "batchCount": 44,
-  "payloadCounts": {"quad": 44, "glyph": 1, "primitive": 29, "bga": 1},
-  "canonicalSha256": "1425be585fd04e83577a51b2c00b4be2c17e005b63a164a428a65f05ae0629f4"
+  "payloadCounts": {"quad": 44, "glyph": 1, "primitive": 30, "bga": 1},
+  "canonicalSha256": "7b4721e2029208f2b7a641fb900615daffdec51073fe8b18215b0b94c599643d"
 }

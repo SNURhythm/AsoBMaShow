@@ -195,6 +195,8 @@ void SettingsScene::refreshSettingsText() {
       formatNotePriorityModeLabel(context.settings.notePriorityMode);
   const std::string invisibleNotesLabel =
       context.settings.showInvisibleNotes ? "Shown" : "Hidden";
+  const std::string markProcessedNotesLabel =
+      context.settings.markProcessedNotes ? "Enabled" : "Disabled";
   const std::string startLaneIndicatorsLabel =
       context.settings.startLaneIndicatorsEnabled ? "Shown" : "Hidden";
   const std::string touchVisualizationLabel =
@@ -329,6 +331,9 @@ void SettingsScene::refreshSettingsText() {
   if (showInvisibleNotesModeText != nullptr) {
     showInvisibleNotesModeText->setText(invisibleNotesLabel);
   }
+  if (markProcessedNotesModeText != nullptr) {
+    markProcessedNotesModeText->setText(markProcessedNotesLabel);
+  }
   if (startLaneIndicatorsModeText != nullptr) {
     startLaneIndicatorsModeText->setText(startLaneIndicatorsLabel);
   }
@@ -412,6 +417,10 @@ void SettingsScene::refreshSettingsText() {
       showInvisibleNotesModeButton, showInvisibleNotesModeText,
       context.settings.showInvisibleNotes ? SettingsButtonTone::Success
                                           : SettingsButtonTone::Info);
+  applySemanticButtonStyle(
+      markProcessedNotesModeButton, markProcessedNotesModeText,
+      context.settings.markProcessedNotes ? SettingsButtonTone::Success
+                                           : SettingsButtonTone::Info);
   applySemanticButtonStyle(
       startLaneIndicatorsModeButton, startLaneIndicatorsModeText,
       context.settings.startLaneIndicatorsEnabled ? SettingsButtonTone::Success

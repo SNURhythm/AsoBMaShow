@@ -87,6 +87,7 @@ void SettingsScene::resetViewState() {
   prepMetronomeModeText = nullptr;
   startLaneIndicatorsModeText = nullptr;
   showInvisibleNotesModeText = nullptr;
+  markProcessedNotesModeText = nullptr;
   touchVisualizationModeText = nullptr;
   hispeedAutoAdjustModeText = nullptr;
   archiveChartPreviewModeText = nullptr;
@@ -114,6 +115,7 @@ void SettingsScene::resetViewState() {
   prepMetronomeModeButton = nullptr;
   startLaneIndicatorsModeButton = nullptr;
   showInvisibleNotesModeButton = nullptr;
+  markProcessedNotesModeButton = nullptr;
   touchVisualizationModeButton = nullptr;
   hispeedAutoAdjustModeButton = nullptr;
   archiveChartPreviewModeButton = nullptr;
@@ -1508,6 +1510,26 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
   cardsColumn->addView(makeCard(
       metrics, "Invisible Notes", "Show invisible notes as lane markers.",
       invisibleNoteControls, metrics.modeCardHeight, metrics.cardsWidth));
+
+  auto *processedNoteControls = new View();
+  processedNoteControls->setFlexDirection(FlexDirection::Column);
+  processedNoteControls->setGap(metrics.compact ? 12.0f : 16.0f);
+  processedNoteControls->setAlignItems(YGAlignFlexStart);
+  markProcessedNotesModeText =
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE);
+  markProcessedNotesModeButton =
+      makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                        markProcessedNotesModeText);
+  markProcessedNotesModeButton->setOnClickListener([this]() {
+    context.settings.markProcessedNotes = !context.settings.markProcessedNotes;
+    persistSettings();
+  });
+  processedNoteControls->addView(markProcessedNotesModeButton);
+  cardsColumn->addView(makeCard(
+      metrics, "Mark Processed Notes",
+      "Replace judged normal notes with Beatoraja's processed-note visual.",
+      processedNoteControls, metrics.modeCardHeight, metrics.cardsWidth));
 
   auto *startLaneIndicatorControls = new View();
   startLaneIndicatorControls->setFlexDirection(FlexDirection::Column);

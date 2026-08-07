@@ -1737,13 +1737,6 @@ GameplayVisualLoweringResult lowerSynthesizedNoteVisual(
     std::uint32_t authoredOrdinal, const AuthoredDestinationGeometry &geometry,
     const SkinSynthesizedNoteVisual &visual) {
   GameplayVisualLoweringResult result;
-  // A missing processed sprite used to produce Aso's cyan double outline.
-  // It is not authored by the skin, and it competes visually with the skin's
-  // own judgement feedback, so an absent processed visual is intentionally
-  // silent. Authored processed sprites continue through lowerSpriteQuad.
-  if (visual.kind == SkinNoteVisualKind::Processed) {
-    return result;
-  }
   std::array<float, 4> rgba{};
   bool outline = false;
   switch (visual.kind) {
@@ -2138,8 +2131,11 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
     bool applyOffsets = true;
     switch (projected.kind) {
     case SkinProjectedNoteKind::Normal:
-      kind = projected.judged ? SkinNoteVisualKind::Processed
-                              : SkinNoteVisualKind::Normal;
+      // LaneRenderer selects processedImage only when PlayerConfig's
+      // Mark Processed Note option is enabled; the default is normalImage.
+      kind = projected.judged && inputs.markProcessedNotes
+                 ? SkinNoteVisualKind::Processed
+                 : SkinNoteVisualKind::Normal;
       break;
     case SkinProjectedNoteKind::Invisible:
       kind = SkinNoteVisualKind::Hidden;

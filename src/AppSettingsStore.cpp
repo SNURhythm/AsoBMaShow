@@ -441,6 +441,7 @@ json settingsToJson(const AppSettings &settings) {
       {"prepMetronomeEnabled", settings.prepMetronomeEnabled},
       {"startLaneIndicatorsEnabled", settings.startLaneIndicatorsEnabled},
       {"showInvisibleNotes", settings.showInvisibleNotes},
+      {"markProcessedNotes", settings.markProcessedNotes},
       {"touchVisualizationEnabled", settings.touchVisualizationEnabled},
       {"archiveChartPreviewEnabled", settings.archiveChartPreviewEnabled},
       {"findBmsSkipUnarchivingForNonSolidArchives",
@@ -554,6 +555,8 @@ AppSettings settingsFromJson(const json &document,
   readValue(document, "startLaneIndicatorsEnabled",
             settings.startLaneIndicatorsEnabled, diagnostics);
   readValue(document, "showInvisibleNotes", settings.showInvisibleNotes,
+            diagnostics);
+  readValue(document, "markProcessedNotes", settings.markProcessedNotes,
             diagnostics);
   readValue(document, "touchVisualizationEnabled",
             settings.touchVisualizationEnabled, diagnostics);
