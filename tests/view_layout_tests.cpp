@@ -94,6 +94,36 @@ private:
   }
 };
 
+class RenderProbeView final : public View {
+public:
+  using View::View;
+  int renderCalls = 0;
+
+private:
+  void renderImpl(RenderContext &) override { ++renderCalls; }
+};
+
+void testViewSkipsOffscreenPaintingButStillVisitsVisibleChildren() {
+  RenderContext context;
+  context.pushScissor(0, 0, 100, 100);
+
+  RenderProbeView visible(10, 10, 40, 40);
+  visible.render(context);
+  assert(visible.renderCalls == 1);
+
+  RenderProbeView offscreenParent(0, 150, 40, 40);
+  auto *visibleAbsoluteChild = new RenderProbeView(10, 0, 30, 30);
+  offscreenParent.addView(visibleAbsoluteChild);
+  visibleAbsoluteChild->setPositionNoLayout(10, -150);
+  assert(visibleAbsoluteChild->getY() == 0);
+
+  offscreenParent.render(context);
+  assert(offscreenParent.renderCalls == 0);
+  assert(visibleAbsoluteChild->renderCalls == 1);
+
+  context.popScissor();
+}
+
 void testViewRotationTransformsRenderingAndScissor() {
   TransformRecordingView view(20, 30, 40, 20);
   view.setRotationDegrees(90.0f);
@@ -793,6 +823,7 @@ void testProfileInlineEditorClearsWhenUnavailable() {
 } // namespace
 
 int main() {
+  testViewSkipsOffscreenPaintingButStillVisitsVisibleChildren();
   testViewRotationTransformsRenderingAndScissor();
   testOverlayPortalDispatchesPresentedViewsAboveContent();
   testRankingModalPanelStaysCenteredInsideSafeArea();
