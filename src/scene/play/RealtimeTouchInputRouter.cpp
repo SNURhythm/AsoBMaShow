@@ -10,8 +10,9 @@ constexpr std::int64_t kCancelledTouchGraceMicros = 50'000;
 constexpr float kHitTestEpsilon = 0.000001F;
 constexpr float kPi = 3.14159265358979323846F;
 constexpr float kRadiansToDegrees = 180.0F / kPi;
-// Spin uses Aso's existing 3-degree turntable step and Beatoraja's
-// pointer-scratch default stop threshold (MouseScratchInput: 150 ms).
+// A virtual turntable has a stable three-degree angular tick. Its gameplay
+// direction remains held through Beatoraja's pointer-scratch stop threshold,
+// while Start/Select controls consume these angle ticks directly.
 constexpr float kSpinScratchStepDegrees = 3.0F;
 constexpr std::int64_t kSpinScratchGraceMicros = 150'000;
 
@@ -492,7 +493,8 @@ bool RealtimeTouchInputRouter::emit(RealtimeGameplayInputType type, int lane,
                                     std::optional<replay::LogicalControl>
                                         replayControl,
                                     std::int64_t timestampMicros,
-                                    bool backSpin) noexcept {
+                                    bool backSpin,
+                                    bool analogScratch) noexcept {
   return sink_.emit != nullptr &&
          sink_.emit(sink_.context,
                     {.epoch = epoch_,
@@ -501,10 +503,20 @@ bool RealtimeTouchInputRouter::emit(RealtimeGameplayInputType type, int lane,
                      .lane = lane,
                      .compensateLane = lane,
                      .backSpin = backSpin,
+                     .analogScratch = analogScratch,
                      .steadyTimestampMicros = timestampMicros,
                      .hasReplayControl = replayControl.has_value(),
                      .replayControl = replayControl.value_or(
                          replay::LogicalControl{})});
+}
+
+void RealtimeTouchInputRouter::emitAnalogScratchTicks(
+    replay::LogicalControl control, int ticks,
+    std::int64_t timestampMicros) noexcept {
+  if (ticks > 0 && sink_.emitAnalogScratchTicks != nullptr) {
+    sink_.emitAnalogScratchTicks(sink_.context, control, ticks,
+                                 timestampMicros);
+  }
 }
 
 bool RealtimeTouchInputRouter::beginLane(
@@ -558,7 +570,7 @@ bool RealtimeTouchInputRouter::releaseLane(FingerState &finger,
   const auto replayControl = finger.replayControl;
   if (shouldEmit &&
       !emit(RealtimeGameplayInputType::Release, lane, replayControl,
-            timestampMicros, backSpin)) {
+            timestampMicros, backSpin, finger.spinScratch)) {
     return false;
   }
   finger.lane = -1;
@@ -640,35 +652,43 @@ bool RealtimeTouchInputRouter::handleSpinScratchMove(
     finger.spinAccumulatedDegrees = 0.0F;
   }
   finger.spinAccumulatedDegrees += deltaDegrees;
-  const float completedSteps = std::trunc(
-      finger.spinAccumulatedDegrees / kSpinScratchStepDegrees);
-  if (completedSteps == 0.0F) {
+  const int completedTicks = static_cast<int>(std::trunc(
+      finger.spinAccumulatedDegrees / kSpinScratchStepDegrees));
+  if (completedTicks == 0) {
     return true;
   }
   finger.spinAccumulatedDegrees -=
-      completedSteps * kSpinScratchStepDegrees;
+      static_cast<float>(completedTicks) * kSpinScratchStepDegrees;
   finger.spinLastStepMicros = sample.steadyTimestampMicros;
-  const int direction = completedSteps > 0.0F ? 1 : -1;
-  if (finger.pressed && direction == finger.scratchDirection) {
-    return true;
-  }
-  if (finger.pressed &&
-      !emit(RealtimeGameplayInputType::Release, finger.lane,
-            finger.replayControl, sample.steadyTimestampMicros, true)) {
-    return false;
-  }
-  finger.pressed = false;
+  const int direction = completedTicks > 0 ? 1 : -1;
   const auto replayControl = replay::logicalControlForChartLane(
       layout_.keyMode, finger.lane, true,
       direction > 0 ? replay::LogicalControlKind::ScratchClockwise
                     : replay::LogicalControlKind::ScratchCounterClockwise);
+  if (finger.pressed && direction == finger.scratchDirection) {
+    if (replayControl.has_value()) {
+      emitAnalogScratchTicks(*replayControl, std::abs(completedTicks),
+                             sample.steadyTimestampMicros);
+    }
+    return true;
+  }
+  if (finger.pressed &&
+      !emit(RealtimeGameplayInputType::Release, finger.lane,
+            finger.replayControl, sample.steadyTimestampMicros, true, true)) {
+    return false;
+  }
+  finger.pressed = false;
   if (!emit(RealtimeGameplayInputType::Press, finger.lane, replayControl,
-            sample.steadyTimestampMicros)) {
+            sample.steadyTimestampMicros, false, true)) {
     return false;
   }
   finger.pressed = true;
   finger.scratchDirection = direction;
   finger.replayControl = replayControl;
+  if (replayControl.has_value()) {
+    emitAnalogScratchTicks(*replayControl, std::abs(completedTicks),
+                           sample.steadyTimestampMicros);
+  }
   return true;
 }
 
@@ -918,7 +938,7 @@ bool RealtimeTouchInputRouter::advanceSpinScratch(
       continue;
     }
     if (!emit(RealtimeGameplayInputType::Release, finger.lane,
-              finger.replayControl, steadyTimestampMicros)) {
+              finger.replayControl, steadyTimestampMicros, false, true)) {
       return false;
     }
     // Keep the physical contact captured so a later turn starts a fresh

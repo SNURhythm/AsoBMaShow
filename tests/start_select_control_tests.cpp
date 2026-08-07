@@ -31,6 +31,14 @@ Control lane(int lane) {
   return {.kind = ControlKind::Lane, .player = 1, .lane = lane};
 }
 
+Control scratchClockwise() {
+  return {.kind = ControlKind::ScratchClockwise, .player = 1, .lane = 7};
+}
+
+Control scratchCounterClockwise() {
+  return {.kind = ControlKind::ScratchCounterClockwise, .player = 1, .lane = 7};
+}
+
 void testStartAndSelectUseBeatorajaKeyBindings() {
   gameplay::StartSelectControl control({.keyMode = 7});
 
@@ -112,6 +120,33 @@ void testHeldSpecialKeysRepeatLikeBeatorajaScratchBindings() {
           "the same held control uses Beatoraja's fast repeat step after 500 ms");
 }
 
+void testAnalogScratchUsesTurntableTicksInsteadOfFrameRepeat() {
+  gameplay::StartSelectControl control({.keyMode = 7});
+  require(control.apply(start(), true, 100'000).empty(),
+          "Start arms the analog scratch control path");
+  require(control.apply(scratchClockwise(), true, 100'001, {}, true).empty(),
+          "an analog scratch edge only records the physical scratch direction");
+  require(control.tick(200'000).empty(),
+          "a stationary analog scratch does not repeat from rendered frames");
+  require(control.applyAnalogScratchTicks(scratchClockwise(), 3, 200'001) ==
+              std::vector<Action>{{.kind = ActionKind::AdjustLaneCover,
+                                   .delta = 3}},
+          "Start plus analog scratch changes lane cover by completed turntable ticks");
+
+  require(control.apply(start(), false, 200'002).empty() &&
+              control.apply(select(), true, 200'003).empty(),
+          "Select replaces Start without changing the analog scratch direction");
+  require(control.applyAnalogScratchTicks(scratchClockwise(), 2, 200'004) ==
+              std::vector<Action>{{.kind = ActionKind::AdjustDuration,
+                                   .delta = 2}},
+          "Select plus analog scratch changes green number by completed turntable ticks");
+  require(control.applyAnalogScratchTicks(scratchCounterClockwise(), 2,
+                                          200'005) ==
+              std::vector<Action>{{.kind = ActionKind::AdjustDuration,
+                                   .delta = -2}},
+          "counter-clockwise angular ticks preserve Beatoraja's opposite adjustment direction");
+}
+
 } // namespace
 
 int main() {
@@ -119,5 +154,6 @@ int main() {
   testStartDoublePressAndConjunctionMatchBeatorajaEdges();
   testStartAndSelectAtNoteEndExitImmediately();
   testHeldSpecialKeysRepeatLikeBeatorajaScratchBindings();
+  testAnalogScratchUsesTurntableTicksInsteadOfFrameRepeat();
   return 0;
 }

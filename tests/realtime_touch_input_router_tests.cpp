@@ -215,9 +215,16 @@ void testLegacyBuiltInTouchFallbackRequiresExplicitOwnership() {
 }
 
 struct InputCapture {
+  struct AnalogScratchTick {
+    replay::LogicalControl control;
+    int ticks = 0;
+    std::int64_t timestampMicros = 0;
+  };
+
   std::vector<gameplay::RealtimeGameplayInput> events;
   std::vector<gameplay::RealtimeGameplayInput> attempts;
   std::vector<gameplay::RealtimeTouchSample> cancelledTouches;
+  std::vector<AnalogScratchTick> analogScratchTicks;
   bool scratchLongNoteHeld = false;
   int failedPressAttemptsRemaining = 0;
   int failedReleaseAttemptsRemaining = 0;
@@ -243,6 +250,14 @@ struct InputCapture {
 
   static bool longScratchNoteHeld(void *context, int) {
     return static_cast<InputCapture *>(context)->scratchLongNoteHeld;
+  }
+
+  static void emitAnalogScratchTicks(void *context,
+                                     replay::LogicalControl control,
+                                     int ticks,
+                                     std::int64_t timestampMicros) {
+    static_cast<InputCapture *>(context)->analogScratchTicks.push_back(
+        {.control = control, .ticks = ticks, .timestampMicros = timestampMicros});
   }
 
   static bool cancelTouchLifecycle(
@@ -1047,6 +1062,60 @@ void testSpinScratchWaitsForAnAngularStepBeforePressing() {
               capture.events.front().replayControl.kind ==
                   replay::LogicalControlKind::ScratchClockwise,
           "a completed clockwise angular step produces the canonical scratch press");
+}
+
+void testSpinScratchPublishesOnlyCompletedAngularTicksForControls() {
+  gameplay::RealtimeTouchLayout layout;
+  layout.keyMode = 7;
+  layout.laneRegions = {{
+      .bottomLeft = {0.20F, 0.80F},
+      .bottomRight = {0.80F, 0.80F},
+      .topLeft = {0.20F, 0.20F},
+      .topRight = {0.80F, 0.20F},
+      .lane = 7,
+      .scratch = true,
+      .spinScratch = true,
+      .requiresInside = true,
+      .circle = gameplay::RealtimeTouchCircle{
+          .center = {0.50F, 0.50F}, .radiusX = 0.30F, .radiusY = 0.30F},
+  }};
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      96, std::move(layout),
+      {.context = &capture,
+       .emit = &InputCapture::emit,
+       .emitAnalogScratchTicks = &InputCapture::emitAnalogScratchTicks});
+
+  require(router.consume({.fingerId = 303,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = 0.80F,
+                          .normalizedY = 0.50F,
+                          .steadyTimestampMicros = 1'000}) &&
+              router.consume({.fingerId = 303,
+                              .phase = gameplay::RealtimeTouchPhase::Move,
+                              .normalizedX = 0.799F,
+                              .normalizedY = 0.510F,
+                              .steadyTimestampMicros = 1'010}),
+          "spin scratch accepts a sub-tick angular movement");
+  require(capture.analogScratchTicks.empty(),
+          "a sub-tick angular movement publishes no Start/Select adjustment");
+
+  require(router.consume({.fingerId = 303,
+                          .phase = gameplay::RealtimeTouchPhase::Move,
+                          .normalizedX = 0.799F,
+                          .normalizedY = 0.521F,
+                          .steadyTimestampMicros = 1'020}),
+          "spin scratch accepts the first completed angular tick");
+  require(capture.analogScratchTicks.size() == 1 &&
+              capture.analogScratchTicks.front().control.kind ==
+                  replay::LogicalControlKind::ScratchClockwise &&
+              capture.analogScratchTicks.front().ticks == 1 &&
+              capture.analogScratchTicks.front().timestampMicros == 1'020,
+          "a completed turntable angle tick publishes one canonical analog scratch delta");
+
+  require(router.advanceSpinScratch(2'000'000) &&
+              capture.analogScratchTicks.size() == 1,
+          "stopping the turntable does not synthesize time-based control ticks");
 }
 
 void testSpinScratchRefreshesAndExpiresItsHeldDirection() {
@@ -2061,6 +2130,7 @@ int main() {
   testScratchFlickEmitsAtomicBackspinAndPressPair();
   testScratchLongNoteIgnoresSmallDirectionJitter();
   testSpinScratchWaitsForAnAngularStepBeforePressing();
+  testSpinScratchPublishesOnlyCompletedAngularTicksForControls();
   testSpinScratchRefreshesAndExpiresItsHeldDirection();
   testNormalModeMapsTouchesBelowProjectedPlayfield();
   testUiExcludedFingerNeverEmitsGameplayEdges();

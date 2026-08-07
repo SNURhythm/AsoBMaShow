@@ -37,6 +37,10 @@ struct RealtimeGameplayInput {
   int lane = -1;
   int compensateLane = -1;
   bool backSpin = false;
+  // Analog turntables keep their gameplay direction held independently, but
+  // Start/Select controls must consume their discrete position ticks rather
+  // than frame-time repeats.
+  bool analogScratch = false;
   std::int64_t steadyTimestampMicros = 0;
   std::int64_t inputDelayMicros = 0;
   bool hasReplayControl = false;

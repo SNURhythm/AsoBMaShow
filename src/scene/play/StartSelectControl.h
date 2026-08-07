@@ -11,7 +11,10 @@ namespace gameplay {
 // This is a direct state-machine port of the Start/Select branches in
 // Beatoraja's ControlInputProcessor.  It deliberately consumes the canonical
 // BRD control stream, so physical and virtual controllers use the same
-// gesture semantics.
+// gesture semantics. The analog scratch branch was refreshed against
+// Beatoraja c2ed5db1a46145ed10790c3872f717e95b59db9d:
+// ControlInputProcessor.changeCoverValue/changeDuration consume the current
+// turntable delta through getAnalogDiffAndReset rather than a held-key timer.
 enum class StartSelectControlActionKind : std::uint8_t {
   AdjustHispeed,
   AdjustDuration,
@@ -37,6 +40,8 @@ struct StartSelectControlInput {
   replay::LogicalControl control;
   bool pressed = false;
   std::int64_t timestampMicros = 0;
+  bool analogScratch = false;
+  int analogScratchTicks = 0;
 };
 
 class StartSelectControl {
@@ -55,7 +60,8 @@ public:
   [[nodiscard]] std::vector<StartSelectControlAction>
   apply(const replay::LogicalControl &control, bool pressed,
         std::int64_t timestampMicros,
-        StartSelectControlFrameContext context = {}) {
+        StartSelectControlFrameContext context = {},
+        bool analogScratch = false) {
     std::vector<StartSelectControlAction> actions;
     switch (control.kind) {
     case replay::LogicalControlKind::Start:
@@ -68,10 +74,10 @@ public:
       applyLane(control, pressed, timestampMicros, actions);
       break;
     case replay::LogicalControlKind::ScratchClockwise:
-      applyScratch(control.player, 1, pressed, timestampMicros);
+      applyScratch(control.player, 1, pressed, timestampMicros, analogScratch);
       break;
     case replay::LogicalControlKind::ScratchCounterClockwise:
-      applyScratch(control.player, -1, pressed, timestampMicros);
+      applyScratch(control.player, -1, pressed, timestampMicros, analogScratch);
       break;
     }
     appendConjunctionActions(timestampMicros, context, actions);
@@ -83,6 +89,39 @@ public:
        StartSelectControlFrameContext context = {}) {
     std::vector<StartSelectControlAction> actions;
     appendScratchActions(timestampMicros, actions);
+    appendConjunctionActions(timestampMicros, context, actions);
+    return actions;
+  }
+
+  // Beatoraja's analog scratch path consumes the controller's accumulated
+  // hardware ticks in ControlInputProcessor rather than repeating a held
+  // digital scratch once per frame. Virtual Spin Mode supplies those ticks
+  // after each completed angular step.
+  [[nodiscard]] std::vector<StartSelectControlAction>
+  applyAnalogScratchTicks(const replay::LogicalControl &control, int ticks,
+                          std::int64_t timestampMicros,
+                          StartSelectControlFrameContext context = {}) {
+    std::vector<StartSelectControlAction> actions;
+    if (ticks <= 0 || startHeld_ == selectHeld_) {
+      appendConjunctionActions(timestampMicros, context, actions);
+      return actions;
+    }
+    const int direction = [&]() noexcept {
+      switch (control.kind) {
+      case replay::LogicalControlKind::ScratchClockwise:
+        return 1;
+      case replay::LogicalControlKind::ScratchCounterClockwise:
+        return -1;
+      default:
+        return 0;
+      }
+    }();
+    if (direction != 0) {
+      actions.push_back(
+          {.kind = startHeld_ ? StartSelectControlActionKind::AdjustLaneCover
+                              : StartSelectControlActionKind::AdjustDuration,
+           .delta = direction * ticks});
+    }
     appendConjunctionActions(timestampMicros, context, actions);
     return actions;
   }
@@ -102,6 +141,7 @@ private:
     int direction = 0;
     std::int64_t heldSinceMicros = 0;
     std::int64_t lastAppliedMicros = 0;
+    bool analog = false;
   };
 
   [[nodiscard]] int laneBinding(int lane) const noexcept {
@@ -181,7 +221,7 @@ private:
     // through the same repeat state as a scratch control.
     if (binding == 2 || binding == -2) {
       applyScratch(control.player, binding > 0 ? 1 : -1, pressed,
-                   timestampMicros);
+                   timestampMicros, false);
       return;
     }
     if (!pressed || startHeld_ == selectHeld_) {
@@ -197,13 +237,16 @@ private:
   }
 
   void applyScratch(int player, int direction, bool pressed,
-                    std::int64_t timestampMicros) noexcept {
+                    std::int64_t timestampMicros,
+                    bool analogScratch = false) noexcept {
     auto &scratch = scratch_[playerIndex(player)];
     if (pressed) {
       if (scratch.direction == direction) {
         return;
       }
-      scratch = {.direction = direction, .heldSinceMicros = timestampMicros};
+      scratch = {.direction = direction,
+                 .heldSinceMicros = timestampMicros,
+                 .analog = analogScratch};
       return;
     }
     if (scratch.direction == direction) {
@@ -218,7 +261,7 @@ private:
       return;
     }
     for (auto &scratch : scratch_) {
-      if (scratch.direction == 0 ||
+      if (scratch.direction == 0 || scratch.analog ||
           timestampMicros - scratch.lastAppliedMicros <=
               configuration_.scratchRepeatMicros) {
         continue;

@@ -909,7 +909,24 @@ struct GamePlayScene::RealtimeGameplaySession {
     if (!startSelectInputs.tryPush(
             {.control = input.replayControl,
              .pressed = input.type == gameplay::RealtimeGameplayInputType::Press,
-             .timestampMicros = input.steadyTimestampMicros})) {
+             .timestampMicros = input.steadyTimestampMicros,
+             .analogScratch = input.analogScratch})) {
+      startSelectInputOverflow.store(true, std::memory_order_release);
+    }
+  }
+
+  void enqueueAnalogScratchTicks(replay::LogicalControl control, int ticks,
+                                 std::int64_t timestampMicros) noexcept {
+    if (worker == nullptr || ticks <= 0 ||
+        (control.kind != replay::LogicalControlKind::ScratchClockwise &&
+         control.kind != replay::LogicalControlKind::ScratchCounterClockwise)) {
+      return;
+    }
+    if (!startSelectInputs.tryPush(
+            {.control = control,
+             .timestampMicros = timestampMicros,
+             .analogScratch = true,
+             .analogScratchTicks = ticks})) {
       startSelectInputOverflow.store(true, std::memory_order_release);
     }
   }
@@ -1022,6 +1039,14 @@ struct GamePlayScene::RealtimeGameplaySession {
       session.enqueueStartSelectInput(owned);
     }
     return accepted;
+  }
+
+  static void emitTouchAnalogScratchTicks(void *context,
+                                          replay::LogicalControl control,
+                                          int ticks,
+                                          std::int64_t timestampMicros) {
+    auto &session = *static_cast<RealtimeGameplaySession *>(context);
+    session.enqueueAnalogScratchTicks(control, ticks, timestampMicros);
   }
 
   static bool emitLegacyInput(void *context,
@@ -1664,6 +1689,8 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
         gameplay::RealtimeTouchInputSink{
             .context = session.get(),
             .emit = &RealtimeGameplaySession::emitTouchInput,
+            .emitAnalogScratchTicks =
+                &RealtimeGameplaySession::emitTouchAnalogScratchTicks,
             .scratchLongNoteHeld =
                 &RealtimeGameplaySession::scratchLongNoteHeld,
             .cancelTouchLifecycle =
@@ -3247,8 +3274,15 @@ void GamePlayScene::consumeStartSelectInput(
     return;
   }
   const bool noteEnd = state != nullptr && state->isEnding;
-  applyStartSelectControlActions(startSelectControl->apply(
-      input.control, input.pressed, input.timestampMicros, {.noteEnd = noteEnd}));
+  applyStartSelectControlActions(
+      input.analogScratchTicks > 0
+          ? startSelectControl->applyAnalogScratchTicks(
+                input.control, input.analogScratchTicks, input.timestampMicros,
+                {.noteEnd = noteEnd})
+          : startSelectControl->apply(input.control, input.pressed,
+                                      input.timestampMicros,
+                                      {.noteEnd = noteEnd},
+                                      input.analogScratch));
 }
 
 void GamePlayScene::applyStartSelectControlActions(

@@ -249,6 +249,8 @@ private:
 struct RealtimeTouchInputSink {
   void *context = nullptr;
   bool (*emit)(void *, const RealtimeGameplayInput &) = nullptr;
+  void (*emitAnalogScratchTicks)(void *, replay::LogicalControl, int ticks,
+                                 std::int64_t timestampMicros) = nullptr;
   bool (*scratchLongNoteHeld)(void *, int lane) = nullptr;
   bool (*cancelTouchLifecycle)(void *, const RealtimeTouchSample &) = nullptr;
 };
@@ -311,7 +313,10 @@ private:
                    bool &publishAuxiliary) noexcept;
   bool emit(RealtimeGameplayInputType type, int lane,
             std::optional<replay::LogicalControl> replayControl,
-            std::int64_t timestampMicros, bool backSpin = false) noexcept;
+            std::int64_t timestampMicros, bool backSpin = false,
+            bool analogScratch = false) noexcept;
+  void emitAnalogScratchTicks(replay::LogicalControl control, int ticks,
+                              std::int64_t timestampMicros) noexcept;
   bool beginLane(FingerState &finger, std::size_t laneIndex,
                  const RealtimeTouchSample &sample) noexcept;
   bool releaseLane(FingerState &finger, std::int64_t timestampMicros,
