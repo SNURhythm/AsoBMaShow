@@ -312,6 +312,7 @@ private:
   std::string gameplaySkinUiMessage;
   int gameplaySkinActiveTraitSkinType = 0;
   bool gameplaySkinTraitDropdownOpen = false;
+  std::string gameplaySkinConfigurationDropdownOpenKey;
   bool gameplaySkinReplaceConfirmationArmed = false;
   std::string gameplaySkinRemovalConfirmationKey;
 #endif

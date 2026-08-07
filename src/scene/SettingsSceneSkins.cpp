@@ -9,6 +9,7 @@
 #include "../view/DropdownView.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <iomanip>
 #include <sstream>
@@ -84,6 +85,15 @@ float sanitizeViewportComponent(std::string_view text, float fallback,
   } catch (...) {
     return fallback;
   }
+}
+
+int sanitizeOffsetComponent(std::string_view text, int fallback) {
+  int value = 0;
+  const auto result =
+      std::from_chars(text.data(), text.data() + text.size(), value);
+  return result.ec == std::errc{} && result.ptr == text.data() + text.size()
+             ? value
+             : fallback;
 }
 
 std::string formatViewportComponent(float value) {
@@ -190,6 +200,7 @@ void SettingsScene::ensureGameplaySkinSettingsController() {
   gameplaySkinSettingsProfileId = profileId->opaque;
   gameplaySkinSettingsPresentationKey.clear();
   gameplaySkinUiMessage.clear();
+  gameplaySkinConfigurationDropdownOpenKey.clear();
   gameplaySkinReplaceConfirmationArmed = false;
   gameplaySkinRemovalConfirmationKey.clear();
 }
@@ -416,6 +427,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
       }
       gameplaySkinActiveTraitSkinType = skinType;
       gameplaySkinTraitDropdownOpen = false;
+      gameplaySkinConfigurationDropdownOpenKey.clear();
       lastLayoutWidth = -1;
     });
     traitTabs->addView(tab);
@@ -482,6 +494,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
            [this, skinType = gameplaySkinActiveTraitSkinType,
             entries = std::move(dropdownEntries)](const std::string &id) {
              gameplaySkinTraitDropdownOpen = false;
+             gameplaySkinConfigurationDropdownOpenKey.clear();
              if (id.empty()) {
                handleGameplaySkinActionResult(
                    gameplaySkinSettingsController->clearGameplayTrait(skinType));
@@ -592,15 +605,69 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
                  match != option.choices.end()) {
         selected = match;
       }
-      const auto next = option.choices.begin() +
-                        ((std::distance(option.choices.begin(), selected) + 1) %
-                         static_cast<std::ptrdiff_t>(option.choices.size()));
-      entryBody->addView(makeGameplaySkinAction(
-          metrics, option.name + ": " + selected->label, ordinaryActionsEnabled,
-          [this, entry = row.entry, name = option.name, value = next->value]() {
-            handleGameplaySkinActionResult(
-                gameplaySkinSettingsController->setOption(entry, name, value));
-          }));
+      const auto selectedIndex = static_cast<std::size_t>(
+          std::distance(option.choices.begin(), selected));
+      if (option.choices.size() >= 3) {
+        const std::string dropdownKey =
+            row.entry.collisionKey + "|option|" + option.name;
+        std::vector<DropdownView::Option> options;
+        std::vector<int> values;
+        options.reserve(option.choices.size());
+        values.reserve(option.choices.size());
+        for (std::size_t index = 0; index < option.choices.size(); ++index) {
+          options.push_back(
+              {.id = std::to_string(index),
+               .label = option.choices[index].label,
+               .available = ordinaryActionsEnabled});
+          values.push_back(option.choices[index].value);
+        }
+        auto *dropdown = new DropdownView(
+            {.onOpenChanged =
+                 [this, dropdownKey](bool open) {
+                   gameplaySkinConfigurationDropdownOpenKey =
+                       open ? dropdownKey : std::string{};
+                   lastLayoutWidth = -1;
+                 },
+             .onOptionSelected =
+                 [this, entry = row.entry, name = option.name,
+                  values = std::move(values)](const std::string &id) {
+                   gameplaySkinConfigurationDropdownOpenKey.clear();
+                   std::size_t index = 0;
+                   const auto parsed = std::from_chars(
+                       id.data(), id.data() + id.size(), index);
+                   if (parsed.ec == std::errc{} &&
+                       parsed.ptr == id.data() + id.size() &&
+                       index < values.size()) {
+                     handleGameplaySkinActionResult(
+                         gameplaySkinSettingsController->setOption(
+                             entry, name, values[index]));
+                   }
+                 }},
+            overlayPortal);
+        dropdown->refresh(
+            {.label = option.name,
+             .selectedId = std::to_string(selectedIndex),
+             .options = std::move(options),
+             .open = gameplaySkinConfigurationDropdownOpenKey == dropdownKey,
+             .enabled = ordinaryActionsEnabled,
+             .maxVisibleItems = metrics.compact ? 5 : 7,
+             .menuWidth = static_cast<float>(
+                 std::max(220, metrics.cardsWidth - traitTabWidth -
+                                   metrics.secondaryGap -
+                                   metrics.cardPadding * 2))});
+        entryBody->addView(dropdown);
+      } else {
+        const auto nextChoice = option.choices.begin() +
+                                ((selectedIndex + 1) % option.choices.size());
+        entryBody->addView(makeGameplaySkinAction(
+            metrics, option.name + ": " + selected->label,
+            ordinaryActionsEnabled,
+            [this, entry = row.entry, name = option.name,
+             value = nextChoice->value]() {
+              handleGameplaySkinActionResult(
+                  gameplaySkinSettingsController->setOption(entry, name, value));
+            }));
+      }
     }
 
     for (const auto &file : row.metadata.files) {
@@ -617,16 +684,66 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
       if (current == file.choices.end()) {
         current = file.choices.begin();
       }
-      const auto next = file.choices.begin() +
-                        ((std::distance(file.choices.begin(), current) + 1) %
-                         static_cast<std::ptrdiff_t>(file.choices.size()));
-      entryBody->addView(makeGameplaySkinAction(
-          metrics, file.name + ": " + *current, ordinaryActionsEnabled,
-          [this, entry = row.entry, name = file.name, value = *next]() {
-            handleGameplaySkinActionResult(
-                gameplaySkinSettingsController->setFileChoice(entry, name,
-                                                              value));
-          }));
+      const auto selectedIndex = static_cast<std::size_t>(
+          std::distance(file.choices.begin(), current));
+      if (file.choices.size() >= 3) {
+        const std::string dropdownKey =
+            row.entry.collisionKey + "|file|" + file.name;
+        std::vector<DropdownView::Option> options;
+        options.reserve(file.choices.size());
+        for (std::size_t index = 0; index < file.choices.size(); ++index) {
+          options.push_back(
+              {.id = std::to_string(index),
+               .label = file.choices[index],
+               .available = ordinaryActionsEnabled});
+        }
+        auto *dropdown = new DropdownView(
+            {.onOpenChanged =
+                 [this, dropdownKey](bool open) {
+                   gameplaySkinConfigurationDropdownOpenKey =
+                       open ? dropdownKey : std::string{};
+                   lastLayoutWidth = -1;
+                 },
+             .onOptionSelected =
+                 [this, entry = row.entry, name = file.name,
+                  choices = file.choices](const std::string &id) {
+                   gameplaySkinConfigurationDropdownOpenKey.clear();
+                   std::size_t index = 0;
+                   const auto parsed = std::from_chars(
+                       id.data(), id.data() + id.size(), index);
+                   if (parsed.ec == std::errc{} &&
+                       parsed.ptr == id.data() + id.size() &&
+                       index < choices.size()) {
+                     handleGameplaySkinActionResult(
+                         gameplaySkinSettingsController->setFileChoice(
+                             entry, name, choices[index]));
+                   }
+                 }},
+            overlayPortal);
+        dropdown->refresh(
+            {.label = file.name,
+             .selectedId = std::to_string(selectedIndex),
+             .options = std::move(options),
+             .open = gameplaySkinConfigurationDropdownOpenKey == dropdownKey,
+             .enabled = ordinaryActionsEnabled,
+             .maxVisibleItems = metrics.compact ? 5 : 7,
+             .menuWidth = static_cast<float>(
+                 std::max(220, metrics.cardsWidth - traitTabWidth -
+                                   metrics.secondaryGap -
+                                   metrics.cardPadding * 2))});
+        entryBody->addView(dropdown);
+      } else {
+        const auto nextChoice = file.choices.begin() +
+                                ((selectedIndex + 1) % file.choices.size());
+        entryBody->addView(makeGameplaySkinAction(
+            metrics, file.name + ": " + *current, ordinaryActionsEnabled,
+            [this, entry = row.entry, name = file.name,
+             value = *nextChoice]() {
+              handleGameplaySkinActionResult(
+                  gameplaySkinSettingsController->setFileChoice(entry, name,
+                                                                value));
+            }));
+      }
     }
 
     for (const auto &offset : row.metadata.offsets) {
@@ -649,21 +766,27 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
             if ((offset.permissions & permission) == 0) {
               return;
             }
-            for (const int delta : {-1, 1}) {
-              const int value = configured.*member;
-              const std::string actionLabel = std::string(label) + " " +
-                                              std::to_string(value) +
-                                              (delta < 0 ? " −" : " +");
-              offsetControls->addView(makeGameplaySkinAction(
-                  metrics, actionLabel, ordinaryActionsEnabled,
-                  [this, entry = row.entry, name = offset.name, configured,
-                   member, delta]() mutable {
-                    (configured.*member) += delta;
+            auto *group = new View();
+            group->setFlexDirection(FlexDirection::Column);
+            group->setGap(metrics.compact ? 4.0f : 6.0f);
+            group->addView(makeWrappedText(label, metrics.smallTextSize,
+                                           ui_theme::textSecondary()));
+            auto *input =
+                makeTextInput(metrics, metrics.compact ? 96 : 112);
+            input->setText(std::to_string(configured.*member));
+            if (ordinaryActionsEnabled) {
+              input->onEditingFinished(
+                  [this, input, entry = row.entry, name = offset.name,
+                   configured, member](const std::string &) mutable {
+                    configured.*member = sanitizeOffsetComponent(
+                        input->getText(), configured.*member);
                     handleGameplaySkinActionResult(
                         gameplaySkinSettingsController->setOffset(entry, name,
                                                                   configured));
-                  }));
+                  });
             }
+            group->addView(input);
+            offsetControls->addView(group);
           };
       addOffsetComponent("X", skin::kOffsetPermissionX, &skin::ConfigOffset::x);
       addOffsetComponent("Y", skin::kOffsetPermissionY, &skin::ConfigOffset::y);

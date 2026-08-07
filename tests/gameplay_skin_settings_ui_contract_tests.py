@@ -157,6 +157,19 @@ class GameplaySkinSettingsUiContracts(unittest.TestCase):
         self.assertIn("SkinProfileSettingsPolicy::minCustomScale", enabled)
         self.assertIn("SkinProfileSettingsPolicy::maxCustomTranslation", enabled)
 
+    def test_catalog_choices_and_offsets_use_semantic_controls(self) -> None:
+        enabled = self.read("src/scene/SettingsSceneSkins.cpp")
+
+        self.assertIn("option.choices.size() >= 3", enabled)
+        self.assertIn("file.choices.size() >= 3", enabled)
+        self.assertIn("std::vector<DropdownView::Option>", enabled)
+        self.assertIn("sanitizeOffsetComponent", enabled)
+        self.assertIn(
+            "makeTextInput(metrics, metrics.compact ? 96 : 112)", enabled
+        )
+        self.assertNotIn("const auto next = option.choices.begin()", enabled)
+        self.assertNotIn("const auto next = file.choices.begin()", enabled)
+
     def test_action_controls_use_the_pure_availability_projection(self) -> None:
         enabled = self.read("src/scene/SettingsSceneSkins.cpp")
 
