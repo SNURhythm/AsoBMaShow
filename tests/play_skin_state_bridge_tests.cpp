@@ -315,6 +315,45 @@ void testDurationBindingsUsePinnedLaneRendererFormula() {
          "state errors");
 }
 
+void testHispeedBindingsUsePinnedIntegerAndFloatProperties() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = runtime.runtime(),
+                              .mutationTable = mutations});
+
+  auto state = stateAt(203);
+  // Pinned from IntegerPropertyFactory.createHispeedProperty and
+  // FloatPropertyFactory.FloatType.hispeed: each selector reads the raw
+  // PlayConfig/LaneRenderer hispeed, not the skin's note traversal speed.
+  state.configuration.hispeedMultiplier = 1.75F;
+  bridge.beginFrame(state, projectionAt(203));
+
+  for (const auto [id, expected] : std::array{
+           std::pair{10, 175LL}, std::pair{310, 1LL},
+           std::pair{311, 75LL}}) {
+    const auto value = bridge.integerProperty({id});
+    expect(value.supported && value.value == expected,
+           "hispeed selector follows IntegerPropertyFactory: " +
+               std::to_string(id));
+  }
+  const auto raw = bridge.floatProperty(
+      {310}, SkinFloatPropertyDomain::FloatValue);
+  expect(raw.supported && std::abs(raw.value - 1.75) < 0.0001,
+         "float hispeed selector follows FloatPropertyFactory");
+  expect(!hasDiagnostic(bridge, "skin.play_state.unsupported"),
+         "pinned hispeed selectors do not become app-specific unsupported "
+         "state errors");
+}
+
 bool hasDiagnostic(const PlaySkinStateBridge &bridge, std::string_view code) {
   return std::ranges::any_of(bridge.diagnostics(),
                              [code](const SkinDiagnostic &diagnostic) {
@@ -1669,6 +1708,7 @@ void testFloatWritersResolveLocallyAndRollbackCallbackMutations() {
 int main() {
   testPinnedMutationTableMatchesFrozenFixtureExhaustively();
   testDurationBindingsUsePinnedLaneRendererFormula();
+  testHispeedBindingsUsePinnedIntegerAndFloatProperties();
   testIntegerPropertyFactoryDomainNeverRejectsGameplaySkins();
   testBridgeOwnsSnapshotAndClosesEachFrameExactlyOnce();
   testFramePropertiesUseAuthoritativeGaugeAndTimerRules();

@@ -1107,6 +1107,24 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
     reportUnsupported("integer", selector);
     return {};
   }
+  // Pinned from IntegerPropertyFactory.createHispeedProperty() at Beatoraja
+  // c2ed5db1a46145ed10790c3872f717e95b59db9d. These are display fields for
+  // PlayConfig/LaneRenderer's raw hi-speed setting, not the renderer's
+  // per-pixel traversal value used to project skin notes. Keep the float
+  // intermediate before Java's integer conversion.
+  const float configuredHispeed = snapshot->configuration.hispeedMultiplier;
+  switch (*id) {
+  case 10:
+    return {.value = javaDoubleToInt(configuredHispeed * 100.0F),
+            .supported = true};
+  case 310:
+    return {.value = javaDoubleToInt(configuredHispeed), .supported = true};
+  case 311:
+    return {.value = javaDoubleToInt(configuredHispeed * 100.0F) % 100,
+            .supported = true};
+  default:
+    break;
+  }
   const auto durationValue = [&]() -> std::optional<std::int64_t> {
     if (*id != 312 && *id != 313 && (*id < 1312 || *id > 1327)) {
       return std::nullopt;
@@ -1448,6 +1466,13 @@ SkinPropertyLookup<double> PlaySkinStateBridge::floatProperty(
     const double floatMinimum =
         static_cast<double>(std::numeric_limits<float>::min());
     switch (*id) {
+    case 310:
+      // Pinned from FloatPropertyFactory.FloatType.hispeed.  See the
+      // matching integer cases above: this reports the configured raw
+      // PlayConfig/LaneRenderer value, not BuiltInRendererTraversal::hispeed.
+      return {.value =
+                  static_cast<double>(snapshot->configuration.hispeedMultiplier),
+              .supported = true};
     case 1102:
       return {.value = currentRate, .supported = true};
     case 1115:
