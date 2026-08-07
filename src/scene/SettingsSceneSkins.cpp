@@ -48,6 +48,56 @@ Button *makeGameplaySkinAction(const LayoutMetrics &metrics,
   return button;
 }
 
+struct GameplaySkinChoiceButton {
+  std::string label;
+  bool selected = false;
+  std::function<void()> action;
+};
+
+View *makeGameplaySkinChoiceRow(
+    const LayoutMetrics &metrics, const std::string &label, bool enabled,
+    std::vector<GameplaySkinChoiceButton> choices) {
+  auto *row = new View();
+  row->setFlexDirection(FlexDirection::Row);
+  row->setFlexWrap(YGWrapWrap);
+  row->setAlignItems(YGAlignCenter);
+  row->setGap(metrics.compact ? 8.0f : 10.0f);
+
+  auto *labelView = makeText(label, metrics.smallTextSize,
+                             ui_theme::textSecondary(), TextView::LEFT,
+                             TextView::MIDDLE);
+  labelView->setMinWidth(0.0f);
+  labelView->setFlexShrink(1.0f);
+  row->addView(labelView);
+
+  auto *buttons = new View();
+  buttons->setFlexDirection(FlexDirection::Row);
+  buttons->setFlexWrap(YGWrapWrap);
+  buttons->setGap(metrics.compact ? 6.0f : 8.0f);
+  for (auto &choice : choices) {
+    auto *choiceLabel = makeText(choice.label, metrics.smallTextSize,
+                                 ui_theme::textPrimary(), TextView::CENTER,
+                                 TextView::MIDDLE);
+    constexpr int horizontalContentPadding = 28;
+    const int minimumWidth = metrics.compact ? 84 : 96;
+    const int width = std::max(
+        minimumWidth,
+        std::max(0, choiceLabel->textureWidth()) + horizontalContentPadding);
+    auto *button = choice.selected
+                       ? makeAccentButton(width, metrics.actionButtonHeight,
+                                          choiceLabel, ui_theme::cyan())
+                       : makeControlButton(width, metrics.actionButtonHeight,
+                                           choiceLabel);
+    button->setEnabled(enabled);
+    if (enabled) {
+      button->setOnClickListener(std::move(choice.action));
+    }
+    buttons->addView(button);
+  }
+  row->addView(buttons);
+  return row;
+}
+
 const char *validationLabel(skin::SkinValidationDisposition disposition) {
   switch (disposition) {
   case skin::SkinValidationDisposition::SelectableGameplay:
@@ -512,7 +562,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
            }},
       overlayPortal);
   skinDropdown->refresh(
-      {.label = "Skin",
+      {.label = "",
        .selectedId = selectedRow ? selectedRow->entry.collisionKey : "",
        .options = std::move(dropdownOptions),
        .open = gameplaySkinTraitDropdownOpen,
@@ -521,7 +571,19 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
        .menuWidth = static_cast<float>(
            std::max(220, metrics.cardsWidth - traitTabWidth -
                              metrics.secondaryGap - metrics.cardPadding * 2))});
-  traitPanel->addView(skinDropdown);
+  auto *skinDropdownRow = new View();
+  skinDropdownRow->setFlexDirection(FlexDirection::Row);
+  skinDropdownRow->setFlexWrap(YGWrapWrap);
+  skinDropdownRow->setAlignItems(YGAlignCenter);
+  skinDropdownRow->setGap(metrics.compact ? 8.0f : 10.0f);
+  auto *skinDropdownLabel =
+      makeText("Skin", metrics.smallTextSize, ui_theme::textSecondary(),
+               TextView::LEFT, TextView::MIDDLE);
+  skinDropdownLabel->setMinWidth(0.0f);
+  skinDropdownLabel->setFlexShrink(1.0f);
+  skinDropdownRow->addView(skinDropdownLabel);
+  skinDropdownRow->addView(skinDropdown);
+  traitPanel->addView(skinDropdownRow);
   if (selected != snapshot.selectedGameplayEntries.end() &&
       selectedRow == nullptr) {
     traitPanel->addView(makeWrappedText(
@@ -645,28 +707,43 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
                  }},
             overlayPortal);
         dropdown->refresh(
-            {.label = option.name,
+            {.label = "",
              .selectedId = std::to_string(selectedIndex),
              .options = std::move(options),
              .open = gameplaySkinConfigurationDropdownOpenKey == dropdownKey,
              .enabled = ordinaryActionsEnabled,
              .maxVisibleItems = metrics.compact ? 5 : 7,
-             .menuWidth = static_cast<float>(
-                 std::max(220, metrics.cardsWidth - traitTabWidth -
-                                   metrics.secondaryGap -
-                                   metrics.cardPadding * 2))});
-        entryBody->addView(dropdown);
+             .menuWidth = 0.0f});
+        auto *dropdownRow = new View();
+        dropdownRow->setFlexDirection(FlexDirection::Row);
+        dropdownRow->setFlexWrap(YGWrapWrap);
+        dropdownRow->setAlignItems(YGAlignCenter);
+        dropdownRow->setGap(metrics.compact ? 8.0f : 10.0f);
+        auto *dropdownLabel =
+            makeText(option.name, metrics.smallTextSize,
+                     ui_theme::textSecondary(), TextView::LEFT,
+                     TextView::MIDDLE);
+        dropdownLabel->setMinWidth(0.0f);
+        dropdownLabel->setFlexShrink(1.0f);
+        dropdownRow->addView(dropdownLabel);
+        dropdownRow->addView(dropdown);
+        entryBody->addView(dropdownRow);
       } else {
-        const auto nextChoice = option.choices.begin() +
-                                ((selectedIndex + 1) % option.choices.size());
-        entryBody->addView(makeGameplaySkinAction(
-            metrics, option.name + ": " + selected->label,
-            ordinaryActionsEnabled,
-            [this, entry = row.entry, name = option.name,
-             value = nextChoice->value]() {
-              handleGameplaySkinActionResult(
-                  gameplaySkinSettingsController->setOption(entry, name, value));
-            }));
+        std::vector<GameplaySkinChoiceButton> choices;
+        choices.reserve(option.choices.size());
+        for (const auto &choice : option.choices) {
+          choices.push_back(
+              {.label = choice.label,
+               .selected = choice.value == selected->value,
+               .action = [this, entry = row.entry, name = option.name,
+                          value = choice.value]() {
+                 handleGameplaySkinActionResult(
+                     gameplaySkinSettingsController->setOption(entry, name,
+                                                               value));
+               }});
+        }
+        entryBody->addView(makeGameplaySkinChoiceRow(
+            metrics, option.name, ordinaryActionsEnabled, std::move(choices)));
       }
     }
 
@@ -721,33 +798,47 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
                  }},
             overlayPortal);
         dropdown->refresh(
-            {.label = file.name,
+            {.label = "",
              .selectedId = std::to_string(selectedIndex),
              .options = std::move(options),
              .open = gameplaySkinConfigurationDropdownOpenKey == dropdownKey,
              .enabled = ordinaryActionsEnabled,
              .maxVisibleItems = metrics.compact ? 5 : 7,
-             .menuWidth = static_cast<float>(
-                 std::max(220, metrics.cardsWidth - traitTabWidth -
-                                   metrics.secondaryGap -
-                                   metrics.cardPadding * 2))});
-        entryBody->addView(dropdown);
+             .menuWidth = 0.0f});
+        auto *dropdownRow = new View();
+        dropdownRow->setFlexDirection(FlexDirection::Row);
+        dropdownRow->setFlexWrap(YGWrapWrap);
+        dropdownRow->setAlignItems(YGAlignCenter);
+        dropdownRow->setGap(metrics.compact ? 8.0f : 10.0f);
+        auto *dropdownLabel =
+            makeText(file.name, metrics.smallTextSize, ui_theme::textSecondary(),
+                     TextView::LEFT, TextView::MIDDLE);
+        dropdownLabel->setMinWidth(0.0f);
+        dropdownLabel->setFlexShrink(1.0f);
+        dropdownRow->addView(dropdownLabel);
+        dropdownRow->addView(dropdown);
+        entryBody->addView(dropdownRow);
       } else {
-        const auto nextChoice = file.choices.begin() +
-                                ((selectedIndex + 1) % file.choices.size());
-        entryBody->addView(makeGameplaySkinAction(
-            metrics, file.name + ": " + *current, ordinaryActionsEnabled,
-            [this, entry = row.entry, name = file.name,
-             value = *nextChoice]() {
-              handleGameplaySkinActionResult(
-                  gameplaySkinSettingsController->setFileChoice(entry, name,
-                                                                value));
-            }));
+        std::vector<GameplaySkinChoiceButton> choices;
+        choices.reserve(file.choices.size());
+        for (const auto &choice : file.choices) {
+          choices.push_back(
+              {.label = choice,
+               .selected = choice == *current,
+               .action = [this, entry = row.entry, name = file.name,
+                          value = choice]() {
+                 handleGameplaySkinActionResult(
+                     gameplaySkinSettingsController->setFileChoice(entry, name,
+                                                                   value));
+               }});
+        }
+        entryBody->addView(makeGameplaySkinChoiceRow(
+            metrics, file.name, ordinaryActionsEnabled, std::move(choices)));
       }
     }
 
     for (const auto &offset : row.metadata.offsets) {
-      skin::ConfigOffset configured;
+      skin::ConfigOffset configured{};
       if (const auto saved = row.settings.offsets.find(offset.name);
           saved != row.settings.offsets.end()) {
         configured = saved->second;
@@ -773,7 +864,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
                                            ui_theme::textSecondary()));
             auto *input =
                 makeTextInput(metrics, metrics.compact ? 96 : 112);
-            input->setText(std::to_string(configured.*member));
+            input->setEditingText(std::to_string(configured.*member));
             if (ordinaryActionsEnabled) {
               input->onEditingFinished(
                   [this, input, entry = row.entry, name = offset.name,
@@ -826,7 +917,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
       group->addView(makeWrappedText(label, metrics.smallTextSize,
                                      ui_theme::textSecondary()));
       auto *input = makeTextInput(metrics, metrics.compact ? 132 : 156);
-      input->setText(formatViewportComponent(value));
+      input->setEditingText(formatViewportComponent(value));
       if (ordinaryActionsEnabled) {
         input->onEditingFinished([this, input, entry = row.entry,
                                   viewport = row.settings.viewport, scale,

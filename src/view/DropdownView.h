@@ -72,6 +72,7 @@ private:
   bool menuOwnedByPortal = false;
   bool dispatchingOptionCallback = false;
   bool deferredRefreshScheduled = false;
+  float resolvedWidth = kDefaultWidth;
 
   void buildView();
   void applyRefresh(State state);
@@ -79,6 +80,7 @@ private:
   void refreshVisualState();
   void updateMenuPlacement();
   void scheduleDeferredRefresh();
+  [[nodiscard]] float preferredWidth() const;
   [[nodiscard]] std::string selectedLabel() const;
   [[nodiscard]] std::optional<Color> selectedLeadingColor() const;
   [[nodiscard]] bool optionsMatch(const std::vector<Option> &options) const;

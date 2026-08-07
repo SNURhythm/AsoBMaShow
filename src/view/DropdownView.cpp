@@ -23,6 +23,8 @@ constexpr float kWindowMargin = 10.0f;
 constexpr float kIndicatorWidth = 5.0f;
 constexpr float kTriggerIndicatorHeight = 26.0f;
 constexpr float kOptionIndicatorHeight = 28.0f;
+constexpr float kTriggerHorizontalChrome = 50.0f;
+constexpr float kIndicatorHorizontalChrome = 13.0f;
 
 class ScopedBoolFlag {
 public:
@@ -213,6 +215,9 @@ void DropdownView::applyRefresh(State state) {
     rebuildOptions();
   }
   refreshVisualState();
+  resolvedWidth = std::max(current.menuWidth, preferredWidth());
+  setWidth(resolvedWidth);
+  setMinWidth(resolvedWidth);
   updateMenuPlacement();
 }
 
@@ -340,10 +345,8 @@ void DropdownView::updateMenuPlacement() {
   const int minimumHeight =
       static_cast<int>(std::round(kOptionHeight + kMenuPadding * 2.0f));
 
-  int menuWidth = static_cast<int>(std::round(current.menuWidth));
-  if (menuWidth <= 0) {
-    menuWidth = getWidth() > 0 ? getWidth() : static_cast<int>(kDefaultWidth);
-  }
+  const int menuWidth =
+      static_cast<int>(std::round(std::max(1.0f, resolvedWidth)));
 
   const OverlayPlacement placement = placeAnchoredOverlay(
       {.x = getX(), .y = getY(), .width = getWidth(), .height = getHeight()},
@@ -356,6 +359,31 @@ void DropdownView::updateMenuPlacement() {
   menuScroll->setSize(placement.width, placement.height);
   menuScroll->refreshContentLayout();
   placementUpdating = false;
+}
+
+float DropdownView::preferredWidth() const {
+  if (triggerText == nullptr) {
+    return kDefaultWidth;
+  }
+
+  const std::string displayed = triggerText->getText();
+  int widestValue = 0;
+  bool hasLeadingIndicator = false;
+  for (const auto &option : current.options) {
+    const std::string text = current.label.empty()
+                                 ? option.label
+                                 : current.label + ": " + option.label;
+    triggerText->setText(text);
+    widestValue = std::max(widestValue, triggerText->textureWidth());
+    hasLeadingIndicator = hasLeadingIndicator || option.leadingColor.has_value();
+  }
+  triggerText->setText(displayed);
+
+  const float horizontalChrome =
+      kTriggerHorizontalChrome +
+      (hasLeadingIndicator ? kIndicatorHorizontalChrome : 0.0f);
+  return std::max(kDefaultWidth,
+                  static_cast<float>(widestValue) + horizontalChrome);
 }
 
 void DropdownView::scheduleDeferredRefresh() {

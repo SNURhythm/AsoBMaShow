@@ -159,16 +159,24 @@ class GameplaySkinSettingsUiContracts(unittest.TestCase):
 
     def test_catalog_choices_and_offsets_use_semantic_controls(self) -> None:
         enabled = self.read("src/scene/SettingsSceneSkins.cpp")
+        dropdown = self.read("src/view/DropdownView.cpp")
 
         self.assertIn("option.choices.size() >= 3", enabled)
         self.assertIn("file.choices.size() >= 3", enabled)
+        self.assertIn("makeGameplaySkinChoiceRow(", enabled)
+        self.assertIn("dropdownRow->setAlignItems(YGAlignCenter)", enabled)
+        self.assertIn(".label = \"\"", enabled)
         self.assertIn("std::vector<DropdownView::Option>", enabled)
         self.assertIn("sanitizeOffsetComponent", enabled)
         self.assertIn(
             "makeTextInput(metrics, metrics.compact ? 96 : 112)", enabled
         )
-        self.assertNotIn("const auto next = option.choices.begin()", enabled)
-        self.assertNotIn("const auto next = file.choices.begin()", enabled)
+        self.assertIn("input->setEditingText", enabled)
+        self.assertIn("skin::ConfigOffset configured{}", enabled)
+        self.assertIn("preferredWidth()", dropdown)
+        self.assertIn("setWidth(resolvedWidth)", dropdown)
+        self.assertIn("std::max(current.menuWidth, preferredWidth())", dropdown)
+        self.assertNotIn("nextChoice", enabled)
 
     def test_action_controls_use_the_pure_availability_projection(self) -> None:
         enabled = self.read("src/scene/SettingsSceneSkins.cpp")
