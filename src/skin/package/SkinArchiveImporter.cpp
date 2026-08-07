@@ -1469,7 +1469,7 @@ public:
     activeLeaf_ = leaf;
     const int file =
         ::openat(parent, leaf.c_str(),
-                 O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+                 O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
     if (file < 0) {
       activeParentFd_ = -1;
       activeParentPath_.clear();
@@ -1776,7 +1776,7 @@ private:
       int next = ::openat(current, component.c_str(),
                           O_RDONLY | O_DIRECTORY | O_CLOEXEC);
       if (next < 0 && create && errno == ENOENT &&
-          ::mkdirat(current, component.c_str(), 0700) == 0) {
+          ::mkdirat(current, component.c_str(), 0777) == 0) {
         next = ::openat(current, component.c_str(),
                         O_RDONLY | O_DIRECTORY | O_CLOEXEC);
       }
@@ -1804,7 +1804,7 @@ private:
       int next = ::openat(current, component.c_str(),
                           O_RDONLY | O_DIRECTORY | O_CLOEXEC);
       if (next < 0 && create && errno == ENOENT &&
-          ::mkdirat(current, component.c_str(), 0700) == 0) {
+          ::mkdirat(current, component.c_str(), 0777) == 0) {
         next = ::openat(current, component.c_str(),
                         O_RDONLY | O_DIRECTORY | O_CLOEXEC);
       }
@@ -1933,51 +1933,76 @@ private:
       }
       break;
     }
+    diagnostics.push_back(diagnostic(
+        "skin_import_staging_create_failed",
+        "unable to create issued visible package staging"));
+    return false;
 #else
-    parentFd_ = openAbsoluteDirectory(parentPath, true);
-    if (parentFd_ >= 0) {
-      struct stat parentStatus{};
-      // Documents/Skins is deliberately user-editable. iOS File Provider
-      // roots can reject chmod even though creating and renaming a child is
-      // allowed, so do not turn a visible package root into owner-only
-      // storage. The descriptor was opened component-by-component without
-      // following links; retaining that descriptor preserves the identity
-      // boundary without imposing POSIX ownership or mode requirements.
-      if (::fstat(parentFd_, &parentStatus) != 0 ||
-          !S_ISDIR(parentStatus.st_mode)) {
+    std::error_code createError;
+    fs::create_directories(parentPath, createError);
+    if (createError) {
+      diagnostics.push_back(diagnostic(
+          "skin_import_staging_create_failed",
+          "unable to create the Documents/Skins staging parent at " +
+              utf8Path(parentPath) + ": " + createError.message()));
+      return false;
+    }
+    for (int attempt = 0; attempt < 128; ++attempt) {
+      name_ = uniqueStagingName();
+      path_ = parentPath / name_;
+      createError.clear();
+      if (!fs::create_directory(path_, createError)) {
+        std::error_code existsError;
+        const bool occupied =
+            !createError && fs::exists(path_, existsError) && !existsError;
+        if (createError == std::errc::file_exists || occupied) {
+          continue;
+        }
+        diagnostics.push_back(diagnostic(
+            "skin_import_staging_create_failed",
+            "unable to create visible staging directory at " +
+                utf8Path(path_) + ": " +
+                (createError ? createError.message()
+                             : std::string("path state is unavailable"))));
+        path_.clear();
+        return false;
+      }
+
+      // File Provider backs Documents/Skins. Create the directory through the
+      // normal filesystem API, then retain descriptors only for the existing
+      // extraction lifetime machinery below.
+      parentFd_ = openAbsoluteDirectory(parentPath, false);
+      if (parentFd_ >= 0) {
+        rootFd_ = openAbsoluteDirectory(path_, false);
+      }
+      if (parentFd_ >= 0 && rootFd_ >= 0) {
+        return true;
+      }
+
+      const int openError = errno;
+      if (rootFd_ >= 0) {
+        ::close(rootFd_);
+        rootFd_ = -1;
+      }
+      if (parentFd_ >= 0) {
         ::close(parentFd_);
         parentFd_ = -1;
       }
+      std::error_code removeError;
+      fs::remove(path_, removeError);
+      diagnostics.push_back(diagnostic(
+          "skin_import_staging_create_failed",
+          "unable to open visible staging directory at " + utf8Path(path_) +
+              ": " + std::string(std::strerror(openError))));
+      path_.clear();
+      return false;
     }
-    if (parentFd_ >= 0) {
-      for (int attempt = 0; attempt < 128; ++attempt) {
-        name_ = uniqueStagingName();
-        if (::mkdirat(parentFd_, name_.c_str(), 0700) != 0) {
-          if (errno == EEXIST) {
-            continue;
-          }
-          break;
-        }
-        rootFd_ = ::openat(parentFd_, name_.c_str(),
-                           O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-        if (rootFd_ >= 0) {
-          path_ = parentPath / name_;
-          return true;
-        }
-        if (rootFd_ >= 0) {
-          ::close(rootFd_);
-          rootFd_ = -1;
-        }
-        ::unlinkat(parentFd_, name_.c_str(), AT_REMOVEDIR);
-        break;
-      }
-    }
-#endif
     diagnostics.push_back(diagnostic(
         "skin_import_staging_create_failed",
-        "unable to create issued visible package staging: " +
-            std::string(std::strerror(errno))));
+        "unable to allocate an unused visible staging directory in " +
+            utf8Path(parentPath)));
     return false;
+#endif
   }
 
   void cleanup() noexcept {

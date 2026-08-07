@@ -1401,6 +1401,38 @@ void testVisibleStagingPreservesExistingFileProviderPermissions() {
 #endif
 }
 
+void testVisibleStagingIsNotCreatedOwnerOnly() {
+#if defined(_WIN32)
+  return;
+#else
+  TempDirectory temp;
+  const auto roots = rootsBelow(temp.root());
+  const mode_t previousMask = ::umask(0);
+  const auto result = prepareZip(
+      makeZip(temp.root() / "visible-staging-mode.zip",
+              {{"play.luaskin", "return {type = 0}\\n"},
+               {"assets/tile.txt", "visible"}}),
+      roots);
+  ::umask(previousMask);
+
+  struct stat rootStatus {};
+  struct stat directoryStatus {};
+  struct stat fileStatus {};
+  expect(result.prepared.has_value() &&
+             ::stat(result.prepared->visibleStagingRoot().c_str(),
+                    &rootStatus) == 0 &&
+             ::stat((result.prepared->visibleStagingRoot() / "assets").c_str(),
+                    &directoryStatus) == 0 &&
+             ::stat((result.prepared->visibleStagingRoot() / "assets/tile.txt")
+                        .c_str(),
+                    &fileStatus) == 0 &&
+             (rootStatus.st_mode & 0777) == 0777 &&
+             (directoryStatus.st_mode & 0777) == 0777 &&
+             (fileStatus.st_mode & 0777) == 0666,
+         "Files-visible staging does not impose owner-only permissions");
+#endif
+}
+
 void testPreparedPackageMovesOwnCleanupAndReadViewLifetime() {
   TempDirectory temp;
   const auto roots = rootsBelow(temp.root());
@@ -1513,6 +1545,7 @@ int main() {
   testCancellationCoversOwnedCopyRawScanAndHash();
   testVisibleSkinsRootIsNotWidenedIntoOnePackage();
   testVisibleStagingPreservesExistingFileProviderPermissions();
+  testVisibleStagingIsNotCreatedOwnerOnly();
   testPreparedPackageMovesOwnCleanupAndReadViewLifetime();
   testCancellationAndPreparedDestructionCleanAllStaging();
   if (failures != 0) {
