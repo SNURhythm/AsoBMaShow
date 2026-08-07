@@ -1935,10 +1935,14 @@ private:
     parentFd_ = openAbsoluteDirectory(parentPath, true);
     if (parentFd_ >= 0) {
       struct stat parentStatus{};
-      if (::fchmod(parentFd_, 0700) != 0 ||
-          ::fstat(parentFd_, &parentStatus) != 0 ||
-          !S_ISDIR(parentStatus.st_mode) || parentStatus.st_uid != geteuid() ||
-          (parentStatus.st_mode & 0777) != 0700) {
+      // Documents/Skins is deliberately user-editable. iOS File Provider
+      // roots can reject chmod even though creating and renaming a child is
+      // allowed, so do not turn a visible package root into owner-only
+      // storage. The descriptor was opened component-by-component without
+      // following links; retaining that descriptor preserves the identity
+      // boundary without imposing POSIX ownership or mode requirements.
+      if (::fstat(parentFd_, &parentStatus) != 0 ||
+          !S_ISDIR(parentStatus.st_mode)) {
         ::close(parentFd_);
         parentFd_ = -1;
       }
@@ -1954,7 +1958,7 @@ private:
         }
         rootFd_ = ::openat(parentFd_, name_.c_str(),
                            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-        if (rootFd_ >= 0 && ::fchmod(rootFd_, 0700) == 0) {
+        if (rootFd_ >= 0) {
           path_ = parentPath / name_;
           return true;
         }
@@ -1969,7 +1973,7 @@ private:
 #endif
     diagnostics.push_back(diagnostic(
         "skin_import_staging_create_failed",
-        "unable to create owner-only issued visible package staging: " +
+        "unable to create issued visible package staging: " +
             std::string(std::strerror(errno))));
     return false;
   }

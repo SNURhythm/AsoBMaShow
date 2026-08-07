@@ -1361,6 +1361,30 @@ void testVisibleSkinsRootIsNotWidenedIntoOnePackage() {
   }
 }
 
+void testVisibleStagingPreservesExistingFileProviderPermissions() {
+#if defined(_WIN32)
+  return;
+#else
+  TempDirectory temp;
+  const auto roots = rootsBelow(temp.root());
+  const fs::path stagingParent =
+      roots.visiblePackages.parent_path() / ".skin-import-staging";
+  fs::create_directories(stagingParent);
+  expect(::chmod(stagingParent.c_str(), 0755) == 0,
+         "fixture makes Documents-visible staging provider-readable");
+
+  const auto result = prepareZip(
+      makeZip(temp.root() / "provider-permissions.zip",
+              {{"play.luaskin", "return {type = 0}\\n"}}),
+      roots);
+  struct stat status {};
+  expect(result.prepared.has_value() &&
+             ::stat(stagingParent.c_str(), &status) == 0 &&
+             (status.st_mode & 0777) == 0755,
+         "visible staging does not require or overwrite File Provider permissions");
+#endif
+}
+
 void testPreparedPackageMovesOwnCleanupAndReadViewLifetime() {
   TempDirectory temp;
   const auto roots = rootsBelow(temp.root());
@@ -1474,6 +1498,7 @@ int main() {
   testArchiveMutationAndMidOperationCancellationRejectCleanly();
   testCancellationCoversOwnedCopyRawScanAndHash();
   testVisibleSkinsRootIsNotWidenedIntoOnePackage();
+  testVisibleStagingPreservesExistingFileProviderPermissions();
   testPreparedPackageMovesOwnCleanupAndReadViewLifetime();
   testCancellationAndPreparedDestructionCleanAllStaging();
   if (failures != 0) {

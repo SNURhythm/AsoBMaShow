@@ -1830,10 +1830,17 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   noteStartPanel->addView(noteStartControls);
 
   hispeedAutoAdjustModeText =
-      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+      makeText("Hi-Speed Auto Adjust: Off", metrics.bodyTextSize + 6,
+               ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
+  constexpr int hispeedAutoAdjustHorizontalPadding = 32;
+  const int hispeedAutoAdjustButtonWidth =
+      std::max(metrics.actionButtonWidth,
+               hispeedAutoAdjustModeText->textureWidth() +
+                   hispeedAutoAdjustHorizontalPadding);
   hispeedAutoAdjustModeButton =
-      makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+      makeControlButton(hispeedAutoAdjustButtonWidth,
+                        metrics.actionButtonHeight,
                         hispeedAutoAdjustModeText);
   hispeedAutoAdjustModeButton->setOnClickListener([this]() {
     context.settings.hispeedAutoAdjust = !context.settings.hispeedAutoAdjust;
