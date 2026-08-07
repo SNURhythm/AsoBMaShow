@@ -1195,7 +1195,19 @@ public:
       observe(observer_, SkinImportIoOperation::BeforeVisiblePublication,
               absolute);
     }
-#if defined(_WIN32)
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+    std::error_code renameError;
+    fs::rename(path_, absolute, renameError);
+    if (renameError) {
+      diagnostics.push_back(diagnostic(
+          "skin_import_publication_rename_failed",
+          "unable to publish visible package at " + utf8Path(absolute) +
+              ": " + renameError.message()));
+      return false;
+    }
+    path_ = absolute;
+    return true;
+#elif defined(_WIN32)
     if (!verifyIdentity(diagnostics)) {
       return false;
     }
@@ -1288,7 +1300,10 @@ public:
   }
 
   void releaseOwnership() noexcept {
-#if defined(_WIN32)
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+    path_.clear();
+    return;
+#elif defined(_WIN32)
     if (issuedRootHandle_ != INVALID_HANDLE_VALUE) {
       CloseHandle(issuedRootHandle_);
       issuedRootHandle_ = INVALID_HANDLE_VALUE;
@@ -1315,7 +1330,10 @@ public:
   }
 
   bool verifyIdentity(std::vector<SkinDiagnostic> &diagnostics) const {
-#if defined(_WIN32)
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+    std::error_code error;
+    const bool same = fs::is_directory(path_, error) && !error;
+#elif defined(_WIN32)
     const HANDLE current = CreateFileW(
         path_.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE,
         nullptr, OPEN_EXISTING,
@@ -1363,7 +1381,14 @@ public:
                   std::vector<SkinDiagnostic> &diagnostics) {
     observe(observer, SkinImportIoOperation::BeforeVisibleDirectory,
             path_ / pathFromUtf8(relative));
-#if defined(_WIN32)
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+    const fs::path directory = path_ / pathFromUtf8(relative);
+    std::error_code error;
+    fs::create_directories(directory, error);
+    if (!error && fs::is_directory(directory, error) && !error) {
+      return true;
+    }
+#elif defined(_WIN32)
     std::vector<HANDLE> opened;
     if (openWindowsDirectories(relative, true, opened)) {
       closeWindowsHandles(opened);
@@ -1384,7 +1409,30 @@ public:
     return false;
   }
 
-#if defined(_WIN32)
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  int createFile(std::string_view relative,
+                 const std::shared_ptr<const SkinImportIoObserver> &observer,
+                 std::vector<SkinDiagnostic> &diagnostics) {
+    const fs::path target = path_ / pathFromUtf8(relative);
+    std::error_code error;
+    fs::create_directories(target.parent_path(), error);
+    if (error) {
+      diagnostics.push_back(diagnostic("skin_import_visible_copy_failed",
+                                       "unable to create visible staging parent",
+                                       std::string(relative)));
+      return -1;
+    }
+    observe(observer, SkinImportIoOperation::BeforeVisibleFile, target);
+    const int file =
+        ::open(target.c_str(), O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
+    if (file < 0) {
+      diagnostics.push_back(diagnostic("skin_import_visible_copy_failed",
+                                       "unable to create visible staging file",
+                                       std::string(relative)));
+    }
+    return file;
+  }
+#elif defined(_WIN32)
   HANDLE createFile(std::string_view relative,
                     const std::shared_ptr<const SkinImportIoObserver> &observer,
                     std::vector<SkinDiagnostic> &diagnostics) {
@@ -1485,7 +1533,7 @@ public:
 
   bool finishFile(std::string_view relative,
                   std::vector<SkinDiagnostic> &diagnostics) {
-#if defined(_WIN32)
+#if (TARGET_OS_IOS || TARGET_OS_SIMULATOR) || defined(_WIN32)
     return true;
 #else
     const std::size_t separator = relative.rfind('/');
@@ -1514,7 +1562,12 @@ public:
 #endif
   }
 
-#if defined(_WIN32)
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  int openFileForRead(std::string_view relative) const {
+    const fs::path target = path_ / pathFromUtf8(relative);
+    return ::open(target.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+  }
+#elif defined(_WIN32)
   HANDLE openFileForRead(std::string_view relative) const {
     const fs::path target = path_ / pathFromUtf8(relative);
     HANDLE file = CreateFileW(
@@ -1864,7 +1917,44 @@ private:
 
   bool allocate(const fs::path &parentPath,
                 std::vector<SkinDiagnostic> &diagnostics) {
-#if defined(_WIN32)
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+    std::error_code createError;
+    fs::create_directories(parentPath, createError);
+    if (createError) {
+      diagnostics.push_back(diagnostic(
+          "skin_import_staging_create_failed",
+          "unable to create the Documents/Skins staging parent at " +
+              utf8Path(parentPath) + ": " + createError.message()));
+      return false;
+    }
+    for (int attempt = 0; attempt < 128; ++attempt) {
+      name_ = uniqueStagingName();
+      path_ = parentPath / name_;
+      createError.clear();
+      if (fs::create_directory(path_, createError)) {
+        return true;
+      }
+      std::error_code existsError;
+      const bool occupied =
+          !createError && fs::exists(path_, existsError) && !existsError;
+      if (createError == std::errc::file_exists || occupied) {
+        continue;
+      }
+      diagnostics.push_back(diagnostic(
+          "skin_import_staging_create_failed",
+          "unable to create visible staging directory at " +
+              utf8Path(path_) + ": " +
+              (createError ? createError.message()
+                           : std::string("path state is unavailable"))));
+      path_.clear();
+      return false;
+    }
+    diagnostics.push_back(diagnostic(
+        "skin_import_staging_create_failed",
+        "unable to allocate an unused visible staging directory in " +
+            utf8Path(parentPath)));
+    return false;
+#elif defined(_WIN32)
     fs::path ancestryPath;
     if (!security_.initialize() ||
         !openExistingAbsoluteWindowsDirectoryChain(
@@ -2006,7 +2096,11 @@ private:
   }
 
   void cleanup() noexcept {
-#if defined(_WIN32)
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+    std::error_code ignored;
+    fs::remove_all(path_, ignored);
+    path_.clear();
+#elif defined(_WIN32)
     if (issuedRootHandle_ == INVALID_HANDLE_VALUE) {
       closeWindowsHandles(ancestryHandles_);
       return;
