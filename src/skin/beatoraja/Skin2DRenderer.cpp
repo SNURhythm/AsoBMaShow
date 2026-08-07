@@ -1737,6 +1737,13 @@ GameplayVisualLoweringResult lowerSynthesizedNoteVisual(
     std::uint32_t authoredOrdinal, const AuthoredDestinationGeometry &geometry,
     const SkinSynthesizedNoteVisual &visual) {
   GameplayVisualLoweringResult result;
+  // A missing processed sprite used to produce Aso's cyan double outline.
+  // It is not authored by the skin, and it competes visually with the skin's
+  // own judgement feedback, so an absent processed visual is intentionally
+  // silent. Authored processed sprites continue through lowerSpriteQuad.
+  if (visual.kind == SkinNoteVisualKind::Processed) {
+    return result;
+  }
   std::array<float, 4> rgba{};
   bool outline = false;
   switch (visual.kind) {
@@ -2051,11 +2058,20 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
                      "Projected note selected a visual absent from its lane.");
       return;
     }
+    bool emptyClip = false;
+    const auto laneClip = intersectAuthoredRects(
+        outerGeometry ? outerGeometry->clip : std::nullopt,
+        AuthoredRect{.x = lane.laneDestination.x,
+                     .y = lane.laneDestination.y,
+                     .width = lane.laneDestination.width,
+                     .height = lane.laneDestination.height},
+        emptyClip);
+    if (emptyClip) {
+      return;
+    }
     auto lowered = lowerNoteVisual(
         inputs, index, object.id, destination.presentation.authoredOrdinal,
-        gameplayVisualGeometry(rect,
-                               outerGeometry ? outerGeometry->clip
-                                             : std::nullopt),
+        gameplayVisualGeometry(rect, laneClip),
         *visual,
         &preparedVisuals[static_cast<std::size_t>(lane.authoredLane)]
                         [static_cast<std::size_t>(kind)]);
@@ -2293,8 +2309,20 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
       evaluated.geometry->rect.y += authoredY;
       // LaneRenderer invokes nested line images directly, so their own clip
       // is inert. The containing Note clip remains active for every group.
-      evaluated.geometry->clip =
-          outerGeometry ? outerGeometry->clip : std::nullopt;
+      // Unlike the thin group-image destination, the default vertical play
+      // area comes from the lane geometry used by LaneRenderer's shared
+      // scroll calculation. The group image supplies its horizontal span.
+      bool emptyClip = false;
+      evaluated.geometry->clip = intersectAuthoredRects(
+          outerGeometry ? outerGeometry->clip : std::nullopt,
+          AuthoredRect{.x = line.laneGroupDestination.x,
+                       .y = note.lanes.front().laneDestination.y,
+                       .width = line.laneGroupDestination.width,
+                       .height = note.lanes.front().laneDestination.height},
+          emptyClip);
+      if (emptyClip) {
+        continue;
+      }
       auto lowered = lowerSpriteQuad(
           inputs, object.id, destination.presentation.authoredOrdinal,
           *evaluated.geometry, *line.sprite, *selected.frame);

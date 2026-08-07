@@ -433,10 +433,58 @@ void testStartupUsesRecoveredCatalogWithoutRescan() {
   GameplaySkinLifecycle lifecycle(fake.dependencies());
   lifecycle.startAfterProfileInitialization(fake.profile);
   require(lifecycle.acquireForNextChart().has_value() &&
-              fake.operationEvents == std::vector<std::string>{"acquire"} &&
-              fake.acquireCalls == 1,
+              std::ranges::none_of(fake.operationEvents,
+                                   [](std::string_view event) {
+                                     return event == "inventory" ||
+                                            event == "reconcile" ||
+                                            event == "rescan";
+                                   }) &&
+              fake.acquireCalls >= 1,
           "startup acquires from the recovered catalog without an automatic "
           "rescan");
+}
+
+void testStartupRestoresPersistedSelectionWithoutRescan() {
+  LifecycleFake fake;
+  // A process restart recovers the catalog and persisted profile selection,
+  // but intentionally has no in-memory activation lease yet.
+  fake.currentLease = nullptr;
+  GameplaySkinLifecycle lifecycle(fake.dependencies());
+  lifecycle.startAfterProfileInitialization(fake.profile);
+  lifecycle.poll();
+  require(fake.prepares.size() == 1 &&
+              std::ranges::none_of(fake.operationEvents,
+                                   [](std::string_view event) {
+                                     return event == "inventory" ||
+                                            event == "reconcile" ||
+                                            event == "rescan";
+                                   }) &&
+              lifecycle.acquireForNextChart().disposition ==
+                  GameplaySkinAcquisitionDisposition::Failed,
+          "startup prepares the persisted selected entry without a rescan "
+          "while it is not yet acquired");
+
+  // Preparation rebuilds the process-local activation from the recovered
+  // catalog revision; it must not require a user to reselect the entry.
+  fake.currentLease = &*fake.firstLease;
+  fake.completePrepare();
+  lifecycle.poll();
+  require(fake.pendingCommits.size() == 1,
+          "startup preparation submits exactly one restored activation");
+  fake.completeActivation(fake.pendingCommits.begin()->first);
+  lifecycle.poll();
+
+  const auto acquired = lifecycle.acquireForNextChart();
+  require(acquired.disposition == GameplaySkinAcquisitionDisposition::Ready &&
+              acquired.request && acquired.request->activation.entry == fake.entry &&
+              std::ranges::none_of(fake.operationEvents,
+                                   [](std::string_view event) {
+                                     return event == "inventory" ||
+                                            event == "reconcile" ||
+                                            event == "rescan";
+                                   }),
+          "the persisted selected skin is ready after restart without "
+          "reselection or a catalog rescan");
 }
 
 void testLaterFailedRescanPreservesReadyAcquisitionAndCatalog() {
@@ -1001,6 +1049,7 @@ void testShutdownClosesBeforeDrainAndIsolatesCleanupFailures() {
 
 int main() {
   testStartupUsesRecoveredCatalogWithoutRescan();
+  testStartupRestoresPersistedSelectionWithoutRescan();
   testLaterFailedRescanPreservesReadyAcquisitionAndCatalog();
   testAcquisitionUsesOwningActivationAndMonotonicSessionSerial();
   testSelectedActivationFailureIsNotTreatedAsBuiltIn();

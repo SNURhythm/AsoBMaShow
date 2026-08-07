@@ -2960,6 +2960,22 @@ void testNoteLongNoteAndLineCommandsPreserveMergedProjectionOrder() {
                                return command.authoredOrdinal == 77;
                              }),
          "all projected commands retain their containing destination order");
+  expect(std::ranges::all_of(
+             result.submitReady->commands,
+             [](const SkinDrawCommand &command) {
+               const auto &quad =
+                   std::get<SkinTexturedQuadCommand>(command.payload);
+               const bool timelineLine = quad.resource >= 200;
+               return quad.state.scissor &&
+                      quad.state.scissor->x ==
+                          (timelineLine ? 50.0 : 100.0) &&
+                      quad.state.scissor->y == 220.0 &&
+                      quad.state.scissor->width ==
+                          (timelineLine ? 80.0 : 40.0) &&
+                      quad.state.scissor->height == 300.0;
+             }),
+         "projected notes, long notes, and timeline lines default to the "
+         "authored play-area scissor");
 
   const auto &normal = std::get<SkinTexturedQuadCommand>(
       result.submitReady->commands[1].payload);
@@ -3154,11 +3170,12 @@ void testProjectedLineEmitsEveryLaneGroupAndIgnoresNestedClip() {
   for (const auto &command : result.submitReady->commands) {
     const auto &quad = std::get<SkinTexturedQuadCommand>(command.payload);
     actualResources.push_back(quad.resource);
-    expect(quad.state.scissor && quad.state.scissor->x == 20.0 &&
-               quad.state.scissor->y == 290.0 &&
-               quad.state.scissor->width == 500.0 &&
-               quad.state.scissor->height == 400.0,
-           "nested line clip is inert while the outer Note clip remains");
+    expect(quad.state.scissor && quad.state.scissor->x ==
+                                       (quad.resource >= 210 ? 150.0 : 50.0) &&
+               quad.state.scissor->y == 290.0 && quad.state.scissor->width == 80.0 &&
+               quad.state.scissor->height == 230.0,
+           "timeline lines intersect their group play area with the outer "
+           "Note clip while nested line clips remain inert");
   }
   expect(actualResources == expectedResources,
          "line groups remain increasing inside each projected kind");
@@ -3174,7 +3191,7 @@ void testProjectedLineEmitsEveryLaneGroupAndIgnoresNestedClip() {
          "a projected sparse line hole fails the critical note atomically");
 }
 
-void testSynthesizedNoteFallbacksEmitBoundedColoredPrimitives() {
+void testSynthesizedNoteFallbacksDoNotDrawProcessedOutline() {
   RuntimeHarness runtime;
   Skin2DRenderer renderer;
   FakeResources resources;
@@ -3206,9 +3223,9 @@ void testSynthesizedNoteFallbacksEmitBoundedColoredPrimitives() {
   model.model.destinations = {destination(1, 89, 0.0)};
 
   const auto result = evaluate(renderer, runtime, model, resources, state);
-  expect(result.submitReady && result.submitReady->commands.size() == 18,
-         "solid and double-outline note fallbacks emit fixed-width strips");
-  if (!result.submitReady || result.submitReady->commands.size() != 18) {
+  expect(result.submitReady && result.submitReady->commands.size() == 10,
+         "a missing processed sprite does not synthesize a judged-note outline");
+  if (!result.submitReady || result.submitReady->commands.size() != 10) {
     return;
   }
   const auto &normal =
@@ -3219,8 +3236,6 @@ void testSynthesizedNoteFallbacksEmitBoundedColoredPrimitives() {
       std::get<SkinPrimitiveCommand>(result.submitReady->commands[5].payload);
   const auto &mine =
       std::get<SkinPrimitiveCommand>(result.submitReady->commands[9].payload);
-  const auto &processedOuter =
-      std::get<SkinPrimitiveCommand>(result.submitReady->commands[10].payload);
   expect(normal.kind == SkinPrimitiveKind::SolidQuad &&
              normal.vertices.size() == 4 &&
              normal.vertices.front().rgba == 0xffffffffU &&
@@ -3228,9 +3243,17 @@ void testSynthesizedNoteFallbacksEmitBoundedColoredPrimitives() {
              hiddenOuterBottom.vertices.size() == 4 &&
              hiddenOuterBottom.vertices.front().rgba == 0xff007fffU &&
              hiddenInnerBottom.vertices.size() == 4 &&
-             mine.vertices.front().rgba == 0xff0000ffU &&
-             processedOuter.vertices.front().rgba == 0xffffff00U,
-         "fallback shapes, vertex bounds, and pinned colors are explicit");
+             mine.vertices.front().rgba == 0xff0000ffU,
+         "non-processed fallback shapes retain their explicit colors");
+  expect(std::ranges::none_of(
+             result.submitReady->commands,
+             [](const SkinDrawCommand &command) {
+               const auto &primitive =
+                   std::get<SkinPrimitiveCommand>(command.payload);
+               return !primitive.vertices.empty() &&
+                      primitive.vertices.front().rgba == 0xffffff00U;
+             }),
+         "the cyan processed-note fallback is never submitted");
   expect(hiddenOuterBottom.vertices[0].x == 100.0F &&
              hiddenOuterBottom.vertices[0].y == 520.0F &&
              hiddenOuterBottom.vertices[2].x == 140.0F &&
@@ -4203,7 +4226,7 @@ int main() {
   testLiveScrollUnitsUseSkinLaneHeightAndHispeed();
   testEveryLongNoteBodyStateUsesItsDistinctVisualRole();
   testProjectedLineEmitsEveryLaneGroupAndIgnoresNestedClip();
-  testSynthesizedNoteFallbacksEmitBoundedColoredPrimitives();
+  testSynthesizedNoteFallbacksDoNotDrawProcessedOutline();
   testHiddenAndLiftCoversApplyDisappearLineClipping();
   testHiddenCoverStillSelectsSourceAfterRuntimeSuppression();
   testBgaEmitsOneRoleFreePreStretchCommand();

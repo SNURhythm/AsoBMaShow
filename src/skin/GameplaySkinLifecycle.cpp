@@ -966,6 +966,37 @@ void GameplaySkinLifecycle::startAfterProfileInitialization(
   // user initiated, so recovery is sufficient to serve the next chart.
   impl_->acquisitionReady = true;
   impl_->activeProfile = std::move(profile);
+  // Activations own process-local revision leases.  The profile persists only
+  // the user's selected entry/configuration, so a fresh process must rebuild
+  // each selected activation from the recovered catalog before a chart can
+  // acquire it.  This is deliberately a targeted prepare queue, not a
+  // filesystem rescan: untouched packages remain uninspected at startup.
+  if (!impl_->deps.snapshotProfile) {
+    return;
+  }
+  try {
+    const auto snapshot = impl_->deps.snapshotProfile(*impl_->activeProfile);
+    for (const auto &[skinType, entry] :
+         snapshot.settings.selectedGameplayEntries) {
+      (void)skinType;
+      const auto configured = snapshot.settings.entries.find(entry);
+      if (configured == snapshot.settings.entries.end()) {
+        impl_->pendingRevalidations.push_back({.base = snapshot, .entry = entry});
+        continue;
+      }
+      const auto digest = skinConfigurationDigest(configured->second);
+      const auto acquired =
+          impl_->deps.acquireActivation
+              ? impl_->deps.acquireActivation(snapshot.profileId, entry, digest)
+              : AcquireActivationResult{};
+      if (!acquired.activation || acquired.activation->entry != entry ||
+          acquired.activation->configurationDigest != digest) {
+        impl_->pendingRevalidations.push_back(
+            {.base = snapshot, .entry = entry});
+      }
+    }
+  } catch (...) {
+  }
 }
 
 void GameplaySkinLifecycle::profileChanged(SkinProfileId profile) {
