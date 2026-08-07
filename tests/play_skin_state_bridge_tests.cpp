@@ -973,6 +973,10 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   state.authority.currentGauge = 62.3F;
   state.authority.maximumCombo = 321;
   state.authority.bestScore = 300;
+  state.authority.bestScoreTarget = {.enabled = true,
+                                     .label = "BEST",
+                                     .finalScore = 300,
+                                     .totalNotes = 417};
   state.authority.pacemakerTarget = {.enabled = true, .finalScore = 500};
   state.authority.pacemakerStatus = {.enabled = true,
                                      .currentScore = 456,
@@ -1053,8 +1057,10 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   for (const auto [id, expected] : std::array{
            std::pair{14, 450LL}, std::pair{71, 456LL},
            // LITONE12's Ghost target display uses NUMBER_DIFF_EXSCORE.
-           // IntegerPropertyFactory maps both 108 and 128 to the live score
+           // IntegerPropertyFactory maps 108, 128, and 153 to the live score
            // delta against ScoreDataProperty's projected pacemaker target.
+           // This must stay distinct from 121/151, which expose the target's
+           // final score.
            std::pair{108, 216LL}, std::pair{128, 216LL},
            std::pair{101, 456LL}, std::pair{107, 62LL},
            std::pair{110, 10LL}, std::pair{111, 9LL},
@@ -1068,8 +1074,10 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
            // input.  IntegerPropertyFactory.ValueType 525 exposes the latter.
            std::pair{525, 34LL}, std::pair{75, 321LL},
            std::pair{102, 114LL}, std::pair{103, 0LL},
-           std::pair{105, 321LL}, std::pair{152, 156LL},
-           std::pair{153, -44LL}, std::pair{313, 417LL},
+           // NUMBER_DIFF_HIGHSCORE compares with ScoreDataProperty's
+           // projected current best score, rather than its final score.
+           std::pair{105, 321LL}, std::pair{152, 428LL},
+           std::pair{153, 216LL}, std::pair{313, 417LL},
            std::pair{410, 4LL}, std::pair{411, 3LL},
            std::pair{412, 2LL}, std::pair{413, 1LL},
            std::pair{414, 6LL}, std::pair{415, 5LL},
@@ -1083,6 +1091,12 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
            "selected live score, gauge, judgement, and lift number is exact: " +
                std::to_string(id));
   }
+  const auto currentBestRate =
+      bridge.floatProperty({112}, SkinFloatPropertyDomain::Rate);
+  expect(currentBestRate.supported &&
+             std::abs(currentBestRate.value - 28.0 / 834.0) < 0.000001,
+         "current-best rate uses the same passed-note projection as "
+         "ScoreDataProperty.getNowBestScore");
   for (const auto [id, expected] :
        std::array{std::pair{500, 2LL}, std::pair{501, 3LL},
                   std::pair{507, 9LL}, std::pair{510, -1LL}}) {
@@ -1103,9 +1117,9 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
            std::pair{102, 1.0},
            std::pair{110, 456.0 / 834.0},
            std::pair{111, 456.0 / 400.0},
-           std::pair{112, 300.0 / 834.0 * (200.0 / 417.0)},
+           std::pair{112, 28.0 / 834.0},
            std::pair{113, 300.0 / 834.0},
-           std::pair{114, 500.0 / 834.0 * (200.0 / 417.0)},
+           std::pair{114, 240.0 / 834.0},
            std::pair{115, 500.0 / 834.0}}) {
     const auto value = bridge.floatProperty({id});
     expect(value.supported && std::abs(value.value - expected) < 0.000001,

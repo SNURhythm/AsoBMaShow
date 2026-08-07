@@ -3247,6 +3247,7 @@ practice::ResultCapturePolicy GamePlayScene::resultCapturePolicy() const {
 void GamePlayScene::configurePacemakerTarget() {
   stopBestReplayLoad();
   activePacemakerTarget = {};
+  activeBestScoreTarget = {};
   activePacemakerBest.reset();
   activeReplayPacemakerPreviousBest.reset();
 
@@ -3254,16 +3255,6 @@ void GamePlayScene::configurePacemakerTarget() {
       pacemaker::normalizeTargetId(options.pacemakerTarget);
   if (chart == nullptr || options.autoPlay || options.practiceMode ||
       isCoursePlayback()) {
-    return;
-  }
-
-  if (options.gbattleRecordData != nullptr) {
-    activePacemakerTarget =
-        gbattle::targetFromRecord(*chart, *options.gbattleRecordData);
-    return;
-  }
-
-  if (selected == pacemaker::kTargetOff) {
     return;
   }
 
@@ -3276,26 +3267,39 @@ void GamePlayScene::configurePacemakerTarget() {
         result_presentation::previousBestForReplayChart(
             context.scoreRepository, chart->Meta, *options.replayData);
     activeReplayPacemakerPreviousBest = previousBest;
-    activePacemakerTarget = result_presentation::pacemakerTargetForReplay(
-        *chart, *options.replayData, selected, previousBest, nullptr);
-    if (selected == pacemaker::kTargetBest && previousBest.has_value() &&
-        previousBest->attemptId.has_value()) {
-      startBestReplayLoad(*previousBest->attemptId, chart->Meta.BmsPath);
+    if (previousBest.has_value()) {
+      activePacemakerBest =
+          result_presentation::scoreBestSnapshotFromPreviousBest(*previousBest);
     }
-    return;
-  }
-
-  if (selected == pacemaker::kTargetBest) {
+  } else {
     activePacemakerBest = context.scoreRepository.LoadBestScore(chart->Meta);
   }
 
+  if (activePacemakerBest.has_value()) {
+    activeBestScoreTarget =
+        pacemaker::targetFromBestSnapshot(*chart, *activePacemakerBest);
+    if (activePacemakerBest->attemptId.has_value()) {
+      startBestReplayLoad(*activePacemakerBest->attemptId,
+                          chart->Meta.BmsPath);
+    }
+  }
+
+  if (options.gbattleRecordData != nullptr) {
+    activePacemakerTarget =
+        gbattle::targetFromRecord(*chart, *options.gbattleRecordData);
+    return;
+  }
+
+  if (selected == pacemaker::kTargetOff) {
+    return;
+  }
+
+  // Beatoraja's BMSPlayer passes a decoded ghost for the personal best, but
+  // explicitly passes null for the selected target ghost.  Its target score
+  // therefore stays proportional to passed notes, including when BEST is the
+  // selected pacemaker; do not substitute our persisted-best replay here.
   activePacemakerTarget = pacemaker::targetFromSelection(
       *chart, selected, activePacemakerBest, nullptr);
-  if (activePacemakerBest.has_value() &&
-      activePacemakerBest->attemptId.has_value()) {
-    startBestReplayLoad(*activePacemakerBest->attemptId,
-                        chart->Meta.BmsPath);
-  }
 }
 
 void GamePlayScene::startBestReplayLoad(
@@ -3329,13 +3333,12 @@ void GamePlayScene::applyPendingBestReplay() {
     return;
   }
 
-  if (isReplayPlayback() && options.replayData != nullptr) {
-    activePacemakerTarget = result_presentation::pacemakerTargetForReplay(
-        *chart, *options.replayData, options.pacemakerTarget,
-        activeReplayPacemakerPreviousBest, loaded.get());
-  } else {
-    activePacemakerTarget = pacemaker::targetFromSelection(
-        *chart, options.pacemakerTarget, activePacemakerBest, loaded.get());
+  if (activePacemakerBest.has_value()) {
+    // The saved best maps to ScoreDataProperty.bestGhost.  This is the only
+    // ghost BMSPlayer supplies to ScoreDataProperty during gameplay.
+    activeBestScoreTarget =
+        pacemaker::targetFromBestSnapshot(*chart, *activePacemakerBest,
+                                          loaded.get());
   }
 }
 
@@ -4064,6 +4067,7 @@ void GamePlayScene::capturePlayfieldVisualState(
       .comboBreak = state->comboBreak,
       .maximumCombo = state->maxCombo,
       .bestScore = activePacemakerBest ? activePacemakerBest->score : 0,
+      .bestScoreTarget = activeBestScoreTarget,
       .gaugeType = state->gaugeType,
       .gaugeAutoShift = state->gaugeAutoShift,
       .currentGauge = state->currentGauge,

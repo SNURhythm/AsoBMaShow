@@ -108,6 +108,10 @@ struct PlayfieldAuthorityUpdate {
   // ScoreDataProperty's persisted best score.  It is zero when the chart has
   // no local best record, matching its gameplay-side initialization.
   int bestScore = 0;
+  // ScoreDataProperty projects the persisted best ghost to the current passed
+  // note count for NUMBER_DIFF_HIGHSCORE.  This target carries that optional
+  // progression independently of the player-selected pacemaker target.
+  pacemaker::Target bestScoreTarget;
   GaugeType gaugeType = GaugeType::Normal;
   GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
   float currentGauge = 0.0F;

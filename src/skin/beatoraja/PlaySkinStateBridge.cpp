@@ -41,6 +41,26 @@ int targetScore(const PlayfieldVisualState &snapshot) {
              : 0;
 }
 
+int passedNotes(const PlayfieldVisualState &snapshot, int totalNotes) {
+  int passed = 0;
+  for (const Judgement judgement : {PGreat, Great, Good, Bad, Poor}) {
+    const auto found = snapshot.authority.judgementCounters.find(judgement);
+    if (found != snapshot.authority.judgementCounters.end()) {
+      passed += found->second;
+    }
+  }
+  return std::clamp(passed, 0, std::max(0, totalNotes));
+}
+
+int bestScoreAtPassedNotes(const PlayfieldVisualState &snapshot) {
+  const auto &target = snapshot.authority.bestScoreTarget;
+  if (!target.enabled) {
+    return 0;
+  }
+  return pacemaker::targetScoreAtPlayedNotes(
+      target, passedNotes(snapshot, target.totalNotes));
+}
+
 std::int64_t beatorajaKeyJudgeValue(const PlayfieldVisualState &snapshot,
                                     int selector) {
   // SkinPropertyMapper maps 500-519 as two groups of ten: player then key.
@@ -1288,27 +1308,26 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
         snapshot->score, snapshot->authority.pacemakerStatus.playedNotes));
     return {.value = *id == 102 ? integer : fractional, .supported = true};
   }
-  case 152:
-    return {.value = static_cast<std::int64_t>(snapshot->score) -
-                    snapshot->authority.bestScore,
-            .supported = true};
   case 108:
   case 128:
-    // IntegerPropertyFactory's two diff_exscore variants both delegate to
-    // ScoreDataProperty.createDiffRivalScoreProperty(): current EX score
-    // minus the target's score at the same played-note count.  This is
-    // distinct from selector 153, which compares the current score with the
-    // target's final score. LITONE12 uses 108 for its Ghost target display.
+  case 153:
+    // IntegerPropertyFactory's diff_exscore, diff_exscore2, and
+    // diff_targetscore all delegate to createDiffRivalScoreProperty():
+    // current EX score minus ScoreDataProperty's live rival score. LITONE12
+    // uses 108 for Ghost and 153 for its graph difference.
     return {.value = static_cast<std::int64_t>(snapshot->score) -
                     snapshot->authority.pacemakerStatus.targetScore,
+            .supported = true};
+  case 152:
+    // NUMBER_DIFF_HIGHSCORE delegates to createDiffHighScoreProperty(),
+    // which compares against ScoreDataProperty.getNowBestScore(), including
+    // its persisted-ghost progression when available.
+    return {.value = static_cast<std::int64_t>(snapshot->score) -
+                    bestScoreAtPassedNotes(*snapshot),
             .supported = true};
   case 121:
   case 151:
     return {.value = targetScore(*snapshot), .supported = true};
-  case 153:
-    return {.value = static_cast<std::int64_t>(snapshot->score) -
-                    targetScore(*snapshot),
-            .supported = true};
   case 360:
   case 361:
   case 362:
@@ -1417,12 +1436,8 @@ SkinPropertyLookup<double> PlaySkinStateBridge::floatProperty(
   const auto bestFullRate =
       scoreRate(snapshot->authority.bestScore, totalNotes);
   const auto targetFullRate = scoreRate(targetScore(*snapshot), totalNotes);
-  const auto partialRate = [&](int score) {
-    if (totalNotes == 0) {
-      return 0.0;
-    }
-    return static_cast<double>(static_cast<float>(score) * playedNotes /
-                               static_cast<float>(totalNotes * totalNotes * 2));
+  const auto referenceCurrentRate = [&](int score) {
+    return totalNotes == 0 ? 0.0 : scoreRate(score, totalNotes);
   };
   if (domain == SkinFloatPropertyDomain::FloatValue) {
     const double floatMinimum =
@@ -1500,12 +1515,14 @@ SkinPropertyLookup<double> PlaySkinStateBridge::floatProperty(
   case 111:
     return {.value = currentRate, .supported = true};
   case 112:
-    return {.value = partialRate(snapshot->authority.bestScore),
+    return {.value = referenceCurrentRate(bestScoreAtPassedNotes(*snapshot)),
             .supported = true};
   case 113:
     return {.value = bestFullRate, .supported = true};
   case 114:
-    return {.value = partialRate(targetScore(*snapshot)), .supported = true};
+    return {.value = referenceCurrentRate(
+                snapshot->authority.pacemakerStatus.targetScore),
+            .supported = true};
   case 115:
     return {.value = targetFullRate, .supported = true};
   // These RateType values only have an implementation in music selection or

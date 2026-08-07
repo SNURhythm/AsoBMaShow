@@ -232,6 +232,7 @@ private:
   std::unique_ptr<RhythmState> ownedState;
   RhythmState *state = nullptr;
   pacemaker::Target activePacemakerTarget;
+  pacemaker::Target activeBestScoreTarget;
   std::optional<ScoreBestSnapshot> activePacemakerBest;
   std::optional<ResultPreviousBestData> activeReplayPacemakerPreviousBest;
   std::jthread bestReplayLoadThread;

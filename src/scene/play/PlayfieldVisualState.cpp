@@ -40,6 +40,7 @@ bool PlayfieldAuthorityUpdate::operator==(
          judgementFastSlowCounters == other.judgementFastSlowCounters &&
          comboBreak == other.comboBreak && gaugeType == other.gaugeType &&
          maximumCombo == other.maximumCombo && bestScore == other.bestScore &&
+         sameTarget(bestScoreTarget, other.bestScoreTarget) &&
          gaugeAutoShift == other.gaugeAutoShift &&
          currentGauge == other.currentGauge && gaugeRules == other.gaugeRules &&
          sameTarget(pacemakerTarget, other.pacemakerTarget) &&
