@@ -155,6 +155,57 @@ void parseGyroscopeConfig(const Json &document, InputProfile &profile,
       profile.gyroscopeTurntable.releaseDelayMs, diagnostics);
 }
 
+void parseVirtualControllerConfigMember(const Json &config, const char *name,
+                                        float defaultValue, float &destination,
+                                        std::vector<std::string> &diagnostics) {
+  const auto member = config.find(name);
+  if (member == config.end() || !member->is_number()) {
+    destination = defaultValue;
+    diagnostics.emplace_back("Reset missing or invalid virtual controller " +
+                             std::string(name) + ".");
+    return;
+  }
+  try {
+    destination = member->get<float>();
+  } catch (const std::exception &) {
+    destination = defaultValue;
+    diagnostics.emplace_back("Reset invalid virtual controller " +
+                             std::string(name) + ".");
+  }
+}
+
+void parseVirtualControllerConfig(const Json &document, InputProfile &profile,
+                                  std::vector<std::string> &diagnostics) {
+  const auto config = document.find("virtualController");
+  if (config == document.end() || !config->is_object()) {
+    profile.virtualController = {};
+    diagnostics.emplace_back(
+        "Reset missing or invalid virtual controller settings.");
+    return;
+  }
+  const auto enabled = config->find("enabled");
+  if (enabled == config->end() || !enabled->is_boolean()) {
+    profile.virtualController.enabled = false;
+    diagnostics.emplace_back(
+        "Reset missing or invalid virtual controller enabled setting.");
+  } else {
+    profile.virtualController.enabled = enabled->get<bool>();
+  }
+  parseVirtualControllerConfigMember(
+      *config, "centerX", input::VirtualControllerConfig::kDefaultCenterX,
+      profile.virtualController.centerX, diagnostics);
+  parseVirtualControllerConfigMember(
+      *config, "centerY", input::VirtualControllerConfig::kDefaultCenterY,
+      profile.virtualController.centerY, diagnostics);
+  parseVirtualControllerConfigMember(
+      *config, "buttonSize",
+      input::VirtualControllerConfig::kDefaultButtonSize,
+      profile.virtualController.buttonSize, diagnostics);
+  parseVirtualControllerConfigMember(
+      *config, "keyGap", input::VirtualControllerConfig::kDefaultKeyGap,
+      profile.virtualController.keyGap, diagnostics);
+}
+
 input::ControlKind parseControlKind(std::string_view value) {
   if (value == "key")
     return input::ControlKind::Key;
@@ -345,6 +396,10 @@ InputProfileStore::load(const std::filesystem::path &path) {
     if (schemaVersion >= 2) {
       parseGyroscopeConfig(document, result.profile, result.diagnostics);
     }
+    if (schemaVersion >= 4) {
+      parseVirtualControllerConfig(document, result.profile,
+                                   result.diagnostics);
+    }
     result.profile.bindings.reserve(bindings.size());
     for (const auto &binding : bindings) {
       result.profile.bindings.push_back(parseBinding(binding));
@@ -410,6 +465,12 @@ bool InputProfileStore::saveAtomic(const std::filesystem::path &path,
          {{"stepAngleDegrees",
            sanitized.gyroscopeTurntable.stepAngleDegrees},
           {"releaseDelayMs", sanitized.gyroscopeTurntable.releaseDelayMs}}},
+        {"virtualController",
+         {{"enabled", sanitized.virtualController.enabled},
+          {"centerX", sanitized.virtualController.centerX},
+          {"centerY", sanitized.virtualController.centerY},
+          {"buttonSize", sanitized.virtualController.buttonSize},
+          {"keyGap", sanitized.virtualController.keyGap}}},
         {"bindings", Json::array()}};
     for (const auto &binding : sanitized.bindings) {
       document["bindings"].push_back(serializeBinding(binding));

@@ -22,6 +22,12 @@ struct RealtimeTouchPoint {
   bool operator==(const RealtimeTouchPoint &) const = default;
 };
 
+struct RealtimeTouchCircle {
+  RealtimeTouchPoint center;
+  float radiusX = 0.0F;
+  float radiusY = 0.0F;
+};
+
 // Ordered hit region authored by the gameplay skin. Regions are tested in
 // vector order, so an earlier region owns a shared edge or overlap.
 struct RealtimeTouchLaneRegion {
@@ -31,6 +37,11 @@ struct RealtimeTouchLaneRegion {
   RealtimeTouchPoint topRight;
   int lane = -1;
   bool scratch = false;
+  std::optional<replay::LogicalControl> replayControl;
+  // Virtual controls require an actual hit. Skin lanes retain the legacy
+  // vertical clamping behavior below their authored playfield.
+  bool requiresInside = false;
+  std::optional<RealtimeTouchCircle> circle;
 };
 
 struct RealtimeTouchLayout {

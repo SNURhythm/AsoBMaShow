@@ -26,6 +26,17 @@ bool contains(const RealtimeTouchLaneRegion &region,
       !isFinite(region.topRight)) {
     return false;
   }
+  if (region.circle.has_value()) {
+    const auto &circle = *region.circle;
+    if (!isFinite(circle.center) || !std::isfinite(circle.radiusX) ||
+        !std::isfinite(circle.radiusY) || circle.radiusX <= 0.0F ||
+        circle.radiusY <= 0.0F) {
+      return false;
+    }
+    const float dx = (point.x - circle.center.x) / circle.radiusX;
+    const float dy = (point.y - circle.center.y) / circle.radiusY;
+    return dx * dx + dy * dy <= 1.0F;
+  }
   const std::array points{region.bottomLeft, region.bottomRight,
                           region.topRight, region.topLeft};
   int winding = 0;
@@ -48,6 +59,16 @@ bool contains(const PresentationUiHitRegion &region,
               UiLogicalPoint point) noexcept {
   if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
     return false;
+  }
+  if (region.circle.has_value()) {
+    const auto &circle = *region.circle;
+    if (!std::isfinite(circle.center.x) || !std::isfinite(circle.center.y) ||
+        !std::isfinite(circle.radius) || circle.radius <= 0.0F) {
+      return false;
+    }
+    const float dx = point.x - circle.center.x;
+    const float dy = point.y - circle.center.y;
+    return dx * dx + dy * dy <= circle.radius * circle.radius;
   }
   int winding = 0;
   for (std::size_t index = 0; index < region.boundary.size(); ++index) {
@@ -236,6 +257,8 @@ PresentationTouchResult RealtimeTouchPresentationDispatcher::consume(
     if (sample.presentationHit.kind == PresentationUiControlKind::None ||
         sample.presentationHit.kind ==
             PresentationUiControlKind::NativeOverlay ||
+        sample.presentationHit.kind ==
+            PresentationUiControlKind::VirtualController ||
         !sample.presentationUiPoint ||
         find(sample.fingerId) != nullptr || sink_.begin == nullptr) {
       return {};
@@ -359,6 +382,9 @@ RealtimeTouchInputRouter::laneIndexAt(float x, float y,
     return layout_.laneCount - 1 - originalIndex;
   }
   for (std::size_t index = 0; index < layout_.laneRegions.size(); ++index) {
+    if (layout_.laneRegions[index].requiresInside) {
+      continue;
+    }
     if (contains(layout_.laneRegions[index],
                  clampedVertically(layout_.laneRegions[index], point))) {
       return index;
@@ -432,6 +458,9 @@ RealtimeTouchInputRouter::allocateFinger(std::int64_t fingerId) noexcept {
 
 bool RealtimeTouchInputRouter::laneOccupied(
     int lane, std::int64_t exceptFinger) const noexcept {
+  if (lane < 0) {
+    return false;
+  }
   return std::ranges::any_of(fingers_, [&](const FingerState &finger) {
     return finger.active && finger.fingerId != exceptFinger &&
            finger.lane == lane;
@@ -470,8 +499,10 @@ bool RealtimeTouchInputRouter::beginLane(
   }
   finger.lane = lane;
   finger.scratch = region.scratch;
-  const auto replayControl = replay::logicalControlForChartLane(
-      layout_.keyMode, lane, finger.scratch);
+  const auto replayControl = region.replayControl.has_value()
+                                 ? region.replayControl
+                                 : replay::logicalControlForChartLane(
+                                       layout_.keyMode, lane, finger.scratch);
   finger.replayControl = replayControl;
   finger.pressed = false;
   finger.scratchDirection = 0;
@@ -494,7 +525,7 @@ bool RealtimeTouchInputRouter::releaseLane(FingerState &finger,
                                            std::int64_t timestampMicros,
                                            bool backSpin) noexcept {
   const int lane = finger.lane;
-  const bool shouldEmit = lane >= 0 && finger.pressed;
+  const bool shouldEmit = finger.pressed;
   const auto replayControl = finger.replayControl;
   if (shouldEmit &&
       !emit(RealtimeGameplayInputType::Release, lane, replayControl,
@@ -687,8 +718,15 @@ bool RealtimeTouchInputRouter::consumeImpl(
       finger->lastY = sample.normalizedY;
       return releaseLane(*finger, sample.steadyTimestampMicros);
     }
-    const int nextLane = layout_.laneRegions[*lane].lane;
-    if (finger->lane == nextLane) {
+    const auto &nextRegion = layout_.laneRegions[*lane];
+    const int nextLane = nextRegion.lane;
+    const auto nextReplayControl =
+        nextRegion.replayControl.has_value()
+            ? nextRegion.replayControl
+            : replay::logicalControlForChartLane(layout_.keyMode, nextLane,
+                                                 nextRegion.scratch);
+    if (finger->lane == nextLane && finger->scratch == nextRegion.scratch &&
+        finger->replayControl == nextReplayControl) {
       if (finger->scratch) {
         return handleScratchMove(*finger, sample);
       }

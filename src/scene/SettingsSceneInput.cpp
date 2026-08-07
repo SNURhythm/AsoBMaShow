@@ -5,6 +5,7 @@
 #include "../input/InputCaptureController.h"
 #include "../view/BlockingOverlayView.h"
 #include "../view/DropdownView.h"
+#include "VirtualControllerEditorView.h"
 
 #include <SDL2/SDL_mouse.h>
 #include <SDL2/SDL_scancode.h>
@@ -266,6 +267,19 @@ void SettingsScene::commitGyroscopeTurntableSetting(bool stepAngle,
   requestInputViewRebuild();
 }
 
+void SettingsScene::commitVirtualControllerSetting(
+    input::VirtualControllerConfig config) {
+  if (inputCaptureController->updateVirtualControllerConfig(config)) {
+    inputVirtualControllerSettingsError.clear();
+  } else {
+    inputVirtualControllerSettingsError =
+        inputCaptureController->lastError().empty()
+            ? "Failed to save input profile."
+            : std::string(inputCaptureController->lastError());
+  }
+  requestInputViewRebuild();
+}
+
 std::string SettingsScene::inputViewSignature() const {
   if (inputCaptureController == nullptr) {
     return {};
@@ -276,8 +290,14 @@ std::string SettingsScene::inputViewSignature() const {
          << static_cast<int>(inputCaptureController->state()) << ':'
          << inputCaptureController->lastError() << ':'
          << inputGyroscopeSettingsError << ':'
+         << inputVirtualControllerSettingsError << ':'
          << context.inputProfile.gyroscopeTurntable.stepAngleDegrees << ':'
-         << context.inputProfile.gyroscopeTurntable.releaseDelayMs << ':';
+         << context.inputProfile.gyroscopeTurntable.releaseDelayMs << ':'
+         << context.inputProfile.virtualController.enabled << ':'
+         << context.inputProfile.virtualController.centerX << ':'
+         << context.inputProfile.virtualController.centerY << ':'
+         << context.inputProfile.virtualController.buttonSize << ':'
+         << context.inputProfile.virtualController.keyGap << ':';
   if (inputCaptureAction.has_value()) {
     output << static_cast<int>(inputCaptureAction->kind) << ':'
            << inputCaptureAction->lane;
@@ -564,6 +584,49 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
   cards->addView(makeCard(
       metrics, "Binding Scope", "Choose player, key mode, and device.",
       selectorBody, metrics.compact ? 280 : 220, metrics.cardsWidth));
+
+  auto *virtualControllerBody = new View();
+  virtualControllerBody->setFlexDirection(FlexDirection::Column);
+  virtualControllerBody->setGap(metrics.compact ? 10.0F : 14.0F);
+  const auto virtualControllerConfig = context.inputProfile.virtualController;
+  auto *virtualControllerToggle = makeAccentButton(
+      std::min(bodyWidth, metrics.actionButtonWidth), metrics.actionButtonHeight,
+      makeText(virtualControllerConfig.enabled ? "Virtual Controller: On"
+                                                : "Virtual Controller: Off",
+               metrics.bodyTextSize + 1, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE),
+      virtualControllerConfig.enabled ? ui_theme::cyan() : ui_theme::coral());
+  virtualControllerToggle->setOnClickListener([this, virtualControllerConfig]() {
+    auto next = virtualControllerConfig;
+    next.enabled = !next.enabled;
+    commitVirtualControllerSetting(next);
+  });
+  virtualControllerBody->addView(virtualControllerToggle);
+  if (virtualControllerConfig.enabled) {
+    virtualControllerBody->addView(makeWrappedText(
+        "Drag the controller to move it. Green moves it, amber resizes it, and coral changes key spacing.",
+        metrics.smallTextSize, ui_theme::textSecondary()));
+    auto *editor = new VirtualControllerEditorView(
+        virtualControllerConfig,
+        [this](input::VirtualControllerConfig config) {
+          commitVirtualControllerSetting(config);
+        });
+    editor->setWidth(static_cast<float>(bodyWidth));
+    editor->setHeight(static_cast<float>(metrics.compact ? 300 : 360));
+    virtualControllerBody->addView(editor);
+  }
+  virtualControllerBody->addView(makeWrappedText(
+      inputVirtualControllerSettingsError.empty()
+          ? ""
+          : "Not saved: " + inputVirtualControllerSettingsError,
+      metrics.smallTextSize, ui_theme::coral()));
+  cards->addView(makeCard(
+      metrics, "Virtual Controller",
+      "Optional 5-key and 7-key mobile controls. It stays above the selected gameplay skin.",
+      virtualControllerBody,
+      virtualControllerConfig.enabled ? (metrics.compact ? 590 : 680)
+                                      : (metrics.compact ? 220 : 200),
+      metrics.cardsWidth));
 
   const bool showGyroscopeSettings =
       shouldShowGyroscopeSettingsCard(inputSelectedDeviceId);

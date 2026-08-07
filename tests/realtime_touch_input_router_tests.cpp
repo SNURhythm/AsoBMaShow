@@ -2,6 +2,7 @@
 #include "scene/play/RealtimeTouchPresentation.h"
 #include "scene/play/PlayfieldPresentation.h"
 #include "scene/play/PlayfieldProjection.h"
+#include "scene/play/VirtualControllerLayout.h"
 
 #include <cmath>
 #include <cstdlib>
@@ -1744,6 +1745,158 @@ void testFailedCancelExpiryRequestsRecovery() {
           "a failed grace-expiry release remains owned and succeeds through fail-closed recovery");
 }
 
+void testVirtualControllerLayoutRoutesKeysAndSystemControls() {
+  input::VirtualControllerConfig config;
+  config.enabled = true;
+  config.centerX = 0.5F;
+  config.centerY = 0.70F;
+  config.buttonSize = 0.10F;
+  config.keyGap = 0.20F;
+  const gameplay::VirtualControllerCanvas canvas{
+      .x = 0.0F, .y = 0.0F, .width = 1000.0F, .height = 600.0F};
+  const auto controller =
+      gameplay::makeVirtualControllerLayout(config, 7, canvas);
+  require(controller.valid() && controller.elements.size() == 10,
+          "the 7-key virtual controller has scratch, seven keys, Start, and Select");
+
+  const auto findElement = [&](gameplay::VirtualControllerControl control,
+                               int keyPosition = -1)
+      -> const gameplay::VirtualControllerElement * {
+    for (const auto &element : controller.elements) {
+      if (element.control == control && element.keyPosition == keyPosition) {
+        return &element;
+      }
+    }
+    return nullptr;
+  };
+  const auto *scratch =
+      findElement(gameplay::VirtualControllerControl::Scratch);
+  const auto *keyOne = findElement(gameplay::VirtualControllerControl::Key, 0);
+  const auto *keyTwo = findElement(gameplay::VirtualControllerControl::Key, 1);
+  const auto *start = findElement(gameplay::VirtualControllerControl::Start);
+  const auto *select = findElement(gameplay::VirtualControllerControl::Select);
+  require(scratch != nullptr && scratch->scratch && scratch->lane == 7 &&
+              keyOne != nullptr && keyOne->lane == 0 && keyTwo != nullptr &&
+              keyTwo->lane == 1 && keyTwo->bounds.y < keyOne->bounds.y &&
+              start != nullptr &&
+              start->replayControl == replay::LogicalControl{
+                                          .kind = replay::LogicalControlKind::Start,
+                                          .player = 1,
+                                          .lane = -1} &&
+              select != nullptr &&
+              select->replayControl == replay::LogicalControl{
+                                           .kind = replay::LogicalControlKind::Select,
+                                           .player = 1,
+                                           .lane = -1},
+          "virtual controls preserve canonical lanes and the alternating key rows");
+
+  const gameplay::RealtimeTouchUiTransform transform{
+      .renderWidth = 1000,
+      .renderHeight = 600,
+      .uiScaleX = 1.0F,
+      .uiScaleY = 1.0F,
+      .uiWidth = 1000,
+      .uiHeight = 600,
+  };
+  gameplay::RealtimeTouchHitSnapshot circularHitSnapshot{
+      .uiTransform = transform,
+      .regionsTopmostFirst = {
+          {.hit = {.kind = PresentationUiControlKind::VirtualController},
+           .boundary = {{{470.0F, 270.0F},
+                         {530.0F, 270.0F},
+                         {530.0F, 330.0F},
+                         {470.0F, 330.0F}}},
+           .circle = PresentationUiCircle{
+               .center = {.x = 500.0F, .y = 300.0F}, .radius = 30.0F}}}};
+  require(circularHitSnapshot.hitTest(0.5F, 0.5F).kind ==
+                  PresentationUiControlKind::VirtualController &&
+              circularHitSnapshot.hitTest(0.529F, 0.529F).kind ==
+                  PresentationUiControlKind::None,
+          "the scratch overlay uses its circular geometry instead of a bounding box");
+  gameplay::RealtimeTouchLayout touchLayout;
+  touchLayout.revision = 1;
+  touchLayout.keyMode = 7;
+  touchLayout.laneRegions =
+      gameplay::makeVirtualControllerTouchRegions(controller, transform);
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      92, std::move(touchLayout), {.context = &capture, .emit = &InputCapture::emit});
+  const auto center = [&](const gameplay::VirtualControllerElement &element) {
+    return std::pair{(element.bounds.x + element.bounds.width * 0.5F) /
+                         canvas.width,
+                     (element.bounds.y + element.bounds.height * 0.5F) /
+                         canvas.height};
+  };
+  const auto [keyX, keyY] = center(*keyOne);
+  const auto [startX, startY] = center(*start);
+  require(router.consume({.fingerId = 201,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = keyX,
+                          .normalizedY = keyY,
+                          .steadyTimestampMicros = 10}) &&
+              router.consume({.fingerId = 201,
+                              .phase = gameplay::RealtimeTouchPhase::Up,
+                              .normalizedX = keyX,
+                              .normalizedY = keyY,
+                              .steadyTimestampMicros = 11}) &&
+              router.consume({.fingerId = 202,
+                              .phase = gameplay::RealtimeTouchPhase::Down,
+                              .normalizedX = startX,
+                              .normalizedY = startY,
+                              .steadyTimestampMicros = 12}) &&
+              router.consume({.fingerId = 202,
+                              .phase = gameplay::RealtimeTouchPhase::Up,
+                              .normalizedX = startX,
+                              .normalizedY = startY,
+                              .steadyTimestampMicros = 13}),
+          "virtual control contacts are routable through the real-time router");
+  require(capture.events.size() == 4 && capture.events[0].lane == 0 &&
+              capture.events[1].lane == 0 && capture.events[2].lane == -1 &&
+              capture.events[3].lane == -1 &&
+              capture.events[2].replayControl.kind ==
+                  replay::LogicalControlKind::Start &&
+              capture.events[3].replayControl.kind ==
+                  replay::LogicalControlKind::Start,
+          "virtual keys and Start emit their canonical replay edges");
+
+  gameplay::RealtimeTouchLayout dragLayout;
+  dragLayout.revision = 2;
+  dragLayout.keyMode = 7;
+  dragLayout.dragMode = true;
+  dragLayout.laneRegions =
+      gameplay::makeVirtualControllerTouchRegions(controller, transform);
+  InputCapture dragCapture;
+  gameplay::RealtimeTouchInputRouter dragRouter(
+      93, std::move(dragLayout),
+      {.context = &dragCapture, .emit = &InputCapture::emit});
+  const auto [selectX, selectY] = center(*select);
+  require(dragRouter.consume({.fingerId = 203,
+                              .phase = gameplay::RealtimeTouchPhase::Down,
+                              .normalizedX = startX,
+                              .normalizedY = startY,
+                              .steadyTimestampMicros = 20}) &&
+              dragRouter.consume({.fingerId = 203,
+                                  .phase = gameplay::RealtimeTouchPhase::Move,
+                                  .normalizedX = selectX,
+                                  .normalizedY = selectY,
+                                  .steadyTimestampMicros = 21}) &&
+              dragRouter.consume({.fingerId = 203,
+                                  .phase = gameplay::RealtimeTouchPhase::Up,
+                                  .normalizedX = selectX,
+                                  .normalizedY = selectY,
+                                  .steadyTimestampMicros = 22}) &&
+              dragCapture.events.size() == 4 &&
+              dragCapture.events[0].replayControl.kind ==
+                  replay::LogicalControlKind::Start &&
+              dragCapture.events[1].replayControl.kind ==
+                  replay::LogicalControlKind::Start &&
+              dragCapture.events[2].replayControl.kind ==
+                  replay::LogicalControlKind::Select &&
+              dragCapture.events[3].replayControl.kind ==
+                  replay::LogicalControlKind::Select,
+          "drag mode changes between Start and Select instead of conflating their shared lane sentinel");
+}
+
 } // namespace
 
 int main() {
@@ -1788,5 +1941,6 @@ int main() {
   testPublishedNativeCancelIsNotSynthesizedAgain();
   testUnpublishedNativeCancelIsSynthesizedDuringRecovery();
   testFailedCancelExpiryRequestsRecovery();
+  testVirtualControllerLayoutRoutesKeysAndSystemControls();
   return 0;
 }

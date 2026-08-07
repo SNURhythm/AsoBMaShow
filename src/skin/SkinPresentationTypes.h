@@ -75,6 +75,7 @@ enum class PresentationUiControlKind : std::uint8_t {
   Slider,
   Image,
   NativeOverlay,
+  VirtualController,
 };
 
 struct PresentationUiHit {
@@ -95,9 +96,19 @@ struct PresentationUiHit {
   bool operator==(const PresentationUiHit &) const = default;
 };
 
+struct PresentationUiCircle {
+  UiLogicalPoint center;
+  float radius = 0.0F;
+
+  bool operator==(const PresentationUiCircle &) const = default;
+};
+
 struct PresentationUiHitRegion {
   PresentationUiHit hit;
   std::array<UiLogicalPoint, 4> boundary{};
+  // Most authored skin controls are quadrilaterals. The native virtual
+  // controller also needs an exact circular scratch hit target.
+  std::optional<PresentationUiCircle> circle;
 
   bool operator==(const PresentationUiHitRegion &) const = default;
 };

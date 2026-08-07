@@ -28,6 +28,7 @@
 #include "ReplayKeysoundSchedule.h"
 #include "RealtimeTouchInputRouter.h"
 #include "RealtimeTouchPresentation.h"
+#include "VirtualControllerLayout.h"
 #include "../../input/RhythmInputHandler.h"
 #include "../../input/RealtimePhysicalInputRouter.h"
 #include "../../input/InputTimestamp.h"
@@ -360,20 +361,103 @@ realtimeTouchOverlayRegion(const Button *button) noexcept {
           .bottom = top + static_cast<float>(button->getHeight())};
 }
 
+gameplay::RealtimeTouchUiTransform realtimeTouchUiTransform() noexcept {
+  return {.renderWidth = rendering::render_width,
+          .renderHeight = rendering::render_height,
+          .uiScaleX = rendering::ui_scale_x,
+          .uiScaleY = rendering::ui_scale_y,
+          .uiOffsetX = rendering::ui_offset_x,
+          .uiOffsetY = rendering::ui_offset_y,
+          .uiWidth = rendering::window_width,
+          .uiHeight = rendering::window_height};
+}
+
+std::uint64_t effectiveRealtimeTouchLayoutRevision(
+    std::uint64_t presentationRevision,
+    const input::VirtualControllerConfig &virtualController,
+    int keyMode) noexcept {
+  if (virtualController.enabled &&
+      gameplay::supportsVirtualControllerKeyMode(keyMode)) {
+    return presentationRevision == 0 ? 1 : presentationRevision;
+  }
+  return presentationRevision;
+}
+
+gameplay::VirtualControllerLayout currentVirtualControllerLayout(
+    const input::VirtualControllerConfig &config, int keyMode,
+    const gameplay::RealtimeTouchUiTransform &transform) {
+  return gameplay::makeVirtualControllerLayout(
+      config, keyMode,
+      {.x = 0.0F,
+       .y = 0.0F,
+       .width = static_cast<float>(transform.uiWidth),
+       .height = static_cast<float>(transform.uiHeight)});
+}
+
+void appendVirtualControllerHitRegions(
+    std::vector<PresentationUiHitRegion> &regions,
+    const gameplay::VirtualControllerLayout &layout,
+    std::uint64_t layoutRevision) {
+  if (!layout.valid()) {
+    return;
+  }
+  regions.reserve(regions.size() + layout.elements.size());
+  for (const auto &element : layout.elements) {
+    const auto &bounds = element.bounds;
+    std::optional<PresentationUiCircle> circle;
+    if (element.shape == gameplay::VirtualControllerShape::Circle) {
+      circle = PresentationUiCircle{
+          .center = {.x = bounds.centerX(), .y = bounds.centerY()},
+          .radius = std::min(bounds.width, bounds.height) * 0.5F};
+    }
+    regions.push_back(
+        {.hit = {.kind = PresentationUiControlKind::VirtualController,
+                 .layoutRevision = layoutRevision},
+         .boundary = {{{bounds.x, bounds.y},
+                       {bounds.x + bounds.width, bounds.y},
+                       {bounds.x + bounds.width, bounds.y + bounds.height},
+                       {bounds.x, bounds.y + bounds.height}}},
+         .circle = circle});
+  }
+}
+
+void renderVirtualControllerOverlay(const gameplay::VirtualControllerLayout &layout) {
+  if (!layout.valid()) {
+    return;
+  }
+  constexpr float kBorder = 3.0F;
+  const uint32_t border = Color(177, 243, 255, 112).toABGR();
+  const uint32_t fill = Color(28, 77, 90, 54).toABGR();
+  rendering::SimpleBatchRenderer batch;
+  batch.setSubmitView(rendering::ui_view);
+  batch.begin();
+  for (const auto &element : layout.elements) {
+    const auto &bounds = element.bounds;
+    if (element.shape == gameplay::VirtualControllerShape::Circle) {
+      const float radius = std::min(bounds.width, bounds.height) * 0.5F;
+      batch.addCircle(bounds.centerX(), bounds.centerY(), radius, border);
+      batch.addCircle(bounds.centerX(), bounds.centerY(),
+                      std::max(0.0F, radius - kBorder), fill);
+      continue;
+    }
+    const float radius = std::min(bounds.height * 0.22F, 12.0F);
+    batch.addRoundedRect(bounds.x, bounds.y, bounds.width, bounds.height,
+                         radius, border);
+    batch.addRoundedRect(bounds.x + kBorder, bounds.y + kBorder,
+                         std::max(0.0F, bounds.width - kBorder * 2.0F),
+                         std::max(0.0F, bounds.height - kBorder * 2.0F),
+                         std::max(0.0F, radius - kBorder), fill);
+  }
+  batch.end();
+}
+
 gameplay::RealtimeTouchLayoutRefreshKey makeRealtimeTouchLayoutRefreshKey(
     std::uint64_t layoutRevision, std::uint64_t hitRegionRevision,
     const Button *pauseButton, const Button *practiceRestartButton,
     const Button *skinResetLayoutButton) noexcept {
   return {.layoutRevision = layoutRevision,
           .hitRegionRevision = hitRegionRevision,
-          .uiTransform = {.renderWidth = rendering::render_width,
-                          .renderHeight = rendering::render_height,
-                          .uiScaleX = rendering::ui_scale_x,
-                          .uiScaleY = rendering::ui_scale_y,
-                          .uiOffsetX = rendering::ui_offset_x,
-                          .uiOffsetY = rendering::ui_offset_y,
-                          .uiWidth = rendering::window_width,
-                          .uiHeight = rendering::window_height},
+          .uiTransform = realtimeTouchUiTransform(),
           .nativeOverlays = {
               realtimeTouchOverlayRegion(pauseButton),
               realtimeTouchOverlayRegion(practiceRestartButton),
@@ -688,9 +772,24 @@ buildRealtimeGameplayNoteLookup(const bms_parser::Chart &chart) {
 
 std::optional<gameplay::RealtimeTouchLayout>
 buildRealtimeTouchLayout(const PlayfieldPresentation &presentation,
-                         bool dragMode) {
+                         bool dragMode, const bms_parser::ChartMeta &chartMeta,
+                         const input::VirtualControllerConfig &virtualController,
+                         const gameplay::RealtimeTouchUiTransform &transform) {
   auto layout = presentation.touchLayout();
   layout.dragMode = dragMode;
+  const auto controller = currentVirtualControllerLayout(
+      virtualController, chartMeta.KeyMode, transform);
+  auto controllerRegions =
+      gameplay::makeVirtualControllerTouchRegions(controller, transform);
+  if (!controllerRegions.empty()) {
+    layout.laneRegions.insert(
+        layout.laneRegions.begin(),
+        std::make_move_iterator(controllerRegions.begin()),
+        std::make_move_iterator(controllerRegions.end()));
+    if (layout.revision == 0) {
+      layout.revision = 1;
+    }
+  }
   if (layout.revision == 0 ||
       (layout.laneRegions.empty() &&
       (layout.laneCount == 0 || layout.lanes.size() < layout.laneCount ||
@@ -1159,7 +1258,9 @@ struct GamePlayScene::RealtimeGameplaySession {
     };
     session.populateImmutableHit(sample);
     sample.excludedFromGameplay =
-        sample.presentationHit.kind != PresentationUiControlKind::None;
+        sample.presentationHit.kind != PresentationUiControlKind::None &&
+        sample.presentationHit.kind !=
+            PresentationUiControlKind::VirtualController;
     gameplay::RealtimeTouchRoutingDisposition disposition =
         gameplay::RealtimeTouchRoutingDisposition::RetryRequired;
     {
@@ -1409,7 +1510,9 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
   if (!options.autoPlay) {
     presentation->refreshGeometry();
     touchLayout = buildRealtimeTouchLayout(
-        *presentation, assist_options::isDragMode(options.assistOption));
+        *presentation, assist_options::isDragMode(options.assistOption),
+        chart->Meta, context.inputProfile.virtualController,
+        realtimeTouchUiTransform());
     if (!touchLayout.has_value()) {
       realtimeGameplayAuthorityWaitingForSkinGeometry =
           presentation->activeMode() == PresentationMode::Skin;
@@ -1531,7 +1634,9 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
   session->visualTimelineIndex = state->passedTimelineCount;
   session->layoutRefreshKey = makeRealtimeTouchLayoutRefreshKey(
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
-      touchLayout ? touchLayout->revision : 0,
+      effectiveRealtimeTouchLayoutRevision(
+          presentation->touchLayoutRevision(),
+          context.inputProfile.virtualController, chart->Meta.KeyMode),
       presentation->touchHitRegionsRevision(),
 #else
       0, 0,
@@ -1634,7 +1739,12 @@ void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled) {
     IOSSetRawTouchEventSink(nullptr, nullptr);
     session.acceptingTouch.store(false, std::memory_order_release);
     const auto expectedKey = makeRealtimeTouchLayoutRefreshKey(
-        presentation != nullptr ? presentation->touchLayoutRevision() : 0,
+        presentation != nullptr
+            ? effectiveRealtimeTouchLayoutRevision(
+                  presentation->touchLayoutRevision(),
+                  context.inputProfile.virtualController,
+                  chart != nullptr ? chart->Meta.KeyMode : 0)
+            : 0,
         presentation != nullptr ? presentation->touchHitRegionsRevision() : 0,
         pauseButton, practiceRestartButton, skinResetLayoutButton);
     if (presentation == nullptr || session.layoutRefreshKey != expectedKey) {
@@ -1710,6 +1820,14 @@ bool GamePlayScene::publishRealtimeTouchHitSnapshot() {
   try {
     for (const auto &overlay : session.layoutRefreshKey.nativeOverlays) {
       appendNativeOverlay(overlay);
+    }
+    if (chart != nullptr) {
+      appendVirtualControllerHitRegions(
+          snapshot.regionsTopmostFirst,
+          currentVirtualControllerLayout(context.inputProfile.virtualController,
+                                         chart->Meta.KeyMode,
+                                         session.layoutRefreshKey.uiTransform),
+          session.layoutRefreshKey.layoutRevision);
     }
     auto presentationRegions = presentation->touchHitRegions();
     snapshot.regionsTopmostFirst.insert(
@@ -1851,7 +1969,9 @@ void GamePlayScene::refreshRealtimeTouchLayout() {
   }
   refreshGameplayPresentationGeometry();
   const auto currentKey = makeRealtimeTouchLayoutRefreshKey(
-      presentation->touchLayoutRevision(),
+      effectiveRealtimeTouchLayoutRevision(
+          presentation->touchLayoutRevision(),
+          context.inputProfile.virtualController, chart->Meta.KeyMode),
       presentation->touchHitRegionsRevision(), pauseButton,
       practiceRestartButton, skinResetLayoutButton);
   if (session.layoutRefreshKey == currentKey &&
@@ -1884,7 +2004,9 @@ void GamePlayScene::refreshRealtimeTouchLayout() {
   const auto switchMicros = nowMicros();
   presentation->refreshGeometry();
   const auto layout = buildRealtimeTouchLayout(
-      *presentation, assist_options::isDragMode(options.assistOption));
+      *presentation, assist_options::isDragMode(options.assistOption),
+      chart->Meta, context.inputProfile.virtualController,
+      currentKey.uiTransform);
   if (!layout.has_value()) {
     SDL_LogError(SDL_LOG_CATEGORY_INPUT,
                  "Realtime touch layout refresh failed");
@@ -4598,6 +4720,11 @@ void GamePlayScene::renderScene() {
                                    capturedPlayfieldProjection);
   const PresentationFrameResult presentationFrame =
       presentation->render(renderContext);
+  if (!options.autoPlay && chart != nullptr) {
+    renderVirtualControllerOverlay(currentVirtualControllerLayout(
+        context.inputProfile.virtualController, chart->Meta.KeyMode,
+        realtimeTouchUiTransform()));
+  }
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   if (!realtimeGameplayAuthorityActive() && !options.autoPlay &&
       gameplay::shouldRetryRealtimeGameplayAuthorityAfterSkinFrame(

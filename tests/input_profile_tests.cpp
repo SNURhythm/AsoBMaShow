@@ -158,6 +158,8 @@ int main() {
     require(defaults.gyroscopeTurntable ==
                 input::GyroscopeTurntableConfig{},
             "defaults use the canonical gyroscope turntable settings");
+    require(defaults.virtualController == input::VirtualControllerConfig{},
+            "defaults keep the optional virtual controller disabled");
     verifyCurrentKeyboardDefaults(defaults);
 
     input::InputBinding invalid = defaults.bindings.front();
@@ -198,7 +200,7 @@ int main() {
     require(oldSchemaProfile.schemaVersion == InputProfile::kSchemaVersion &&
                 std::ranges::find(
                     diagnostics,
-                    "Reset unsupported input schema version to 3.") !=
+                    "Reset unsupported input schema version to 4.") !=
                     diagnostics.end(),
             "schema repair diagnostics report the real current version");
 
@@ -360,7 +362,8 @@ int main() {
     const auto compactScratchlessV2 =
         InputProfileStore::load(compactScratchlessV2Path);
     require(compactScratchlessV2.status == InputProfileLoadStatus::Loaded &&
-                compactScratchlessV2.profile.schemaVersion == 3,
+                compactScratchlessV2.profile.schemaVersion ==
+                    InputProfile::kSchemaVersion,
             "version-two scratchless bindings migrate to the current schema");
     const std::vector<int> migratedScratchlessLanes = [&] {
       std::vector<int> lanes;
@@ -404,7 +407,8 @@ int main() {
     const auto gyroscopeV2Result = InputProfileStore::load(gyroscopeV2Path);
     require(gyroscopeV2Result.status == InputProfileLoadStatus::Loaded,
             "version-two gyroscope profile loads");
-    require(gyroscopeV2Result.profile.schemaVersion == 3 &&
+    require(gyroscopeV2Result.profile.schemaVersion ==
+                InputProfile::kSchemaVersion &&
                 gyroscopeV2Result.profile.gyroscopeTurntable.stepAngleDegrees ==
                     7 &&
                 gyroscopeV2Result.profile.gyroscopeTurntable.releaseDelayMs ==
@@ -544,7 +548,7 @@ int main() {
     require(
         InputProfileStore::saveAtomic(
             migratedVersionZeroPath, versionZeroResult.profile, errorMessage) &&
-            readFile(migratedVersionZeroPath).find("\"schemaVersion\": 3") !=
+            readFile(migratedVersionZeroPath).find("\"schemaVersion\": 4") !=
                 std::string::npos,
         "saving migrated version zero persists the current schema");
 
@@ -574,7 +578,7 @@ int main() {
                 errorMessage),
             "gyroscope profile saves atomically");
     const std::string gyroscopeRoundTripJson = readFile(gyroscopeRoundTripPath);
-    require(gyroscopeRoundTripJson.find("\"schemaVersion\": 3") !=
+    require(gyroscopeRoundTripJson.find("\"schemaVersion\": 4") !=
                     std::string::npos &&
                 gyroscopeRoundTripJson.find("\"gyroscopeTurntable\"") !=
                     std::string::npos &&
@@ -594,6 +598,28 @@ int main() {
                 sameBinding(gyroscopeRoundTripResult.profile.bindings.front(),
                             gyroscopeV2Result.profile.bindings.front()),
             "version-two gyroscope profile round trips without loss");
+
+    InputProfile virtualControllerProfile = defaults;
+    virtualControllerProfile.virtualController = {
+        .enabled = true,
+        .centerX = 0.41F,
+        .centerY = 0.72F,
+        .buttonSize = 0.16F,
+        .keyGap = 0.34F,
+    };
+    const auto virtualControllerRoundTripPath =
+        testRoot / "virtual-controller-round-trip.json";
+    errorMessage.clear();
+    require(InputProfileStore::saveAtomic(virtualControllerRoundTripPath,
+                                          virtualControllerProfile,
+                                          errorMessage),
+            "virtual controller profile saves atomically");
+    const auto virtualControllerRoundTrip =
+        InputProfileStore::load(virtualControllerRoundTripPath);
+    require(virtualControllerRoundTrip.status == InputProfileLoadStatus::Loaded &&
+                virtualControllerRoundTrip.profile.virtualController ==
+                    virtualControllerProfile.virtualController,
+            "virtual controller enablement, placement, size, and spacing round trip");
 
     const auto malformedPath = testRoot / "malformed.json";
     writeFile(malformedPath, "{ not valid json");

@@ -4,6 +4,7 @@ target_sources(main PRIVATE
     InputNormalizer.cpp
     SDLTouchInputSource.cpp
     InputProfile.cpp
+    VirtualControllerConfig.cpp
     InputDefaults.cpp
     InputProfileStore.cpp
     InputBindingResolver.cpp

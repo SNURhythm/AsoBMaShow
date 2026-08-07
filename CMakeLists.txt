@@ -4074,6 +4074,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         tests/input_profile_tests.cpp
         src/input/GyroscopeTurntable.cpp
         src/input/InputProfile.cpp
+        src/input/VirtualControllerConfig.cpp
         src/input/InputDefaults.cpp
         src/input/InputProfileStore.cpp
     )
@@ -4167,6 +4168,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/input/InputDeviceIdentity.cpp
         src/input/InputDeviceRegistry.cpp
         src/input/InputProfile.cpp
+        src/input/VirtualControllerConfig.cpp
         src/input/SDLInputBackend.cpp
     )
     target_include_directories(input_capture_controller_tests PRIVATE
@@ -4232,6 +4234,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/settings/AudioVideoSettings.cpp
         src/input/GyroscopeTurntable.cpp
         src/input/InputProfile.cpp
+        src/input/VirtualControllerConfig.cpp
         src/input/InputDefaults.cpp
         src/input/InputProfileStore.cpp
         src/practice/PracticeConfiguration.cpp
@@ -4913,6 +4916,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(realtime_touch_input_router_tests
         tests/realtime_touch_input_router_tests.cpp
         src/scene/play/RealtimeTouchInputRouter.cpp
+        src/scene/play/VirtualControllerLayout.cpp
     )
     target_include_directories(realtime_touch_input_router_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
@@ -5151,6 +5155,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/settings/AudioVideoSettings.cpp
         src/input/GyroscopeTurntable.cpp
         src/input/InputProfile.cpp
+        src/input/VirtualControllerConfig.cpp
         src/input/InputDefaults.cpp
         src/input/InputProfileStore.cpp
         src/repositories/ScoreRepository.cpp
@@ -5222,6 +5227,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/settings/AudioVideoSettings.cpp
         src/input/GyroscopeTurntable.cpp
         src/input/InputProfile.cpp
+        src/input/VirtualControllerConfig.cpp
         src/input/InputDefaults.cpp
         src/input/InputProfileStore.cpp
         src/ArchiveFile.cpp
@@ -5306,6 +5312,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/settings/AudioVideoSettings.cpp
         src/input/GyroscopeTurntable.cpp
         src/input/InputProfile.cpp
+        src/input/VirtualControllerConfig.cpp
         src/input/InputDefaults.cpp
         src/input/InputProfileStore.cpp
         src/repositories/ScoreRepository.cpp

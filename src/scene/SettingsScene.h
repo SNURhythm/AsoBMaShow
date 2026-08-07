@@ -268,6 +268,7 @@ private:
   std::optional<input::LogicalAction> inputCaptureAction;
   float inputGyroscopeAxisValue = 0.0F;
   std::string inputGyroscopeSettingsError;
+  std::string inputVirtualControllerSettingsError;
   settings_scene::InputSettingsRebuildGate inputViewRebuildGate;
   std::string inputLastViewSignature;
   bool previewActive = false;
@@ -432,6 +433,7 @@ private:
   void refreshInputDropdowns();
   void requestInputViewRebuild();
   void commitGyroscopeTurntableSetting(bool stepAngle, std::string_view text);
+  void commitVirtualControllerSetting(input::VirtualControllerConfig config);
   std::string inputViewSignature() const;
   void forwardPreviewInputEvent(SDL_Event &event);
   void syncPreviewInputPlayAreaWidth();

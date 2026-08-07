@@ -26,6 +26,7 @@ target_sources(main PRIVATE
     SettingsSceneSkins.cpp
     SettingsSceneSkinsUnavailable.cpp
     SettingsSceneInput.cpp
+    VirtualControllerEditorView.cpp
     SettingsSceneIr.cpp
     SettingsSceneLayout.cpp
     SettingsScenePreview.cpp
