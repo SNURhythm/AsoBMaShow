@@ -421,7 +421,8 @@ void appendVirtualControllerHitRegions(
   }
 }
 
-void renderVirtualControllerOverlay(const gameplay::VirtualControllerLayout &layout) {
+void renderVirtualControllerOverlay(const gameplay::VirtualControllerLayout &layout,
+                                    float spinScratchRotationDegrees) {
   if (!layout.valid()) {
     return;
   }
@@ -438,6 +439,20 @@ void renderVirtualControllerOverlay(const gameplay::VirtualControllerLayout &lay
       batch.addCircle(bounds.centerX(), bounds.centerY(), radius, border);
       batch.addCircle(bounds.centerX(), bounds.centerY(),
                       std::max(0.0F, radius - kBorder), fill);
+      // A hub and spoke give the transparent platter a stable visual
+      // orientation. Spin Mode rotates this decoration with the finger.
+      const float angle = element.spinScratch
+                              ? spinScratchRotationDegrees *
+                                    kPi / 180.0F
+                              : 0.0F;
+      const float markerRadius = radius * 0.66F;
+      const float markerX = bounds.centerX() + std::cos(angle) * markerRadius;
+      const float markerY = bounds.centerY() + std::sin(angle) * markerRadius;
+      batch.addLine(bounds.centerX(), bounds.centerY(), markerX, markerY,
+                    std::max(2.0F, radius * 0.045F), border);
+      batch.addCircle(bounds.centerX(), bounds.centerY(), radius * 0.14F,
+                      border);
+      batch.addCircle(markerX, markerY, radius * 0.09F, border);
       continue;
     }
     const float radius = std::min(bounds.height * 0.22F, 12.0F);
@@ -4758,6 +4773,20 @@ void GamePlayScene::update(float dt) {
     drainRealtimeInputCommands();
     drainRealtimeStartSelectInputs();
     drainRealtimeTouchSamples();
+    bool spinScratchAdvanced = true;
+    {
+      std::lock_guard lock(realtimeGameplaySession->touchRouterMutex);
+      if (realtimeGameplaySession->touchRouter != nullptr) {
+        spinScratchAdvanced = realtimeGameplaySession->touchRouter
+                                  ->advanceSpinScratch(nowMicros());
+      }
+    }
+    if (!spinScratchAdvanced) {
+      realtimeGameplaySession->acceptingTouch.store(false,
+                                                     std::memory_order_release);
+      realtimeGameplaySession->touchRoutingRecoveryRequested.store(
+          true, std::memory_order_release);
+    }
   }
   if (startSelectControl.has_value() && !isReplayPlayback() &&
       !options.autoPlay) {
@@ -4931,9 +4960,17 @@ void GamePlayScene::renderScene() {
   const PresentationFrameResult presentationFrame =
       presentation->render(renderContext);
   if (!options.autoPlay && chart != nullptr) {
+    float spinScratchRotationDegrees = 0.0F;
+    if (realtimeGameplaySession != nullptr) {
+      std::lock_guard lock(realtimeGameplaySession->touchRouterMutex);
+      if (realtimeGameplaySession->touchRouter != nullptr) {
+        spinScratchRotationDegrees =
+            realtimeGameplaySession->touchRouter->spinScratchRotationDegrees();
+      }
+    }
     renderVirtualControllerOverlay(currentVirtualControllerLayout(
         context.inputProfile.virtualController, chart->Meta.KeyMode,
-        realtimeTouchUiTransform()));
+        realtimeTouchUiTransform()), spinScratchRotationDegrees);
   }
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   if (!realtimeGameplayAuthorityActive() && !options.autoPlay &&

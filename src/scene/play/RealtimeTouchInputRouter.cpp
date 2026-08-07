@@ -8,6 +8,27 @@ namespace gameplay {
 namespace {
 constexpr std::int64_t kCancelledTouchGraceMicros = 50'000;
 constexpr float kHitTestEpsilon = 0.000001F;
+constexpr float kPi = 3.14159265358979323846F;
+constexpr float kRadiansToDegrees = 180.0F / kPi;
+// Spin uses Aso's existing 3-degree turntable step and Beatoraja's
+// pointer-scratch default stop threshold (MouseScratchInput: 150 ms).
+constexpr float kSpinScratchStepDegrees = 3.0F;
+constexpr std::int64_t kSpinScratchGraceMicros = 150'000;
+
+float shortestAngleDeltaRadians(float current, float previous) noexcept {
+  float delta = std::fmod(current - previous, 2.0F * kPi);
+  if (delta > kPi) {
+    delta -= 2.0F * kPi;
+  } else if (delta < -kPi) {
+    delta += 2.0F * kPi;
+  }
+  return delta;
+}
+
+bool sameNonzeroSign(float left, float right) noexcept {
+  return left != 0.0F && right != 0.0F &&
+         std::signbit(left) == std::signbit(right);
+}
 
 bool isFinite(const RealtimeTouchPoint &point) noexcept {
   return std::isfinite(point.x) && std::isfinite(point.y);
@@ -499,6 +520,8 @@ bool RealtimeTouchInputRouter::beginLane(
   }
   finger.lane = lane;
   finger.scratch = region.scratch;
+  finger.spinScratch = region.scratch && region.spinScratch &&
+                       region.circle.has_value();
   const auto replayControl = region.replayControl.has_value()
                                  ? region.replayControl
                                  : replay::logicalControlForChartLane(
@@ -508,6 +531,12 @@ bool RealtimeTouchInputRouter::beginLane(
   finger.scratchDirection = 0;
   finger.lastX = sample.normalizedX;
   finger.lastY = sample.normalizedY;
+  if (finger.spinScratch) {
+    finger.spinCenter = region.circle->center;
+    finger.spinPreviousAngleRadians = std::atan2(
+        sample.normalizedY - finger.spinCenter.y,
+        sample.normalizedX - finger.spinCenter.x);
+  }
   finger.cancelDeadlineMicros = 0;
   if (finger.scratch) {
     return true;
@@ -535,13 +564,19 @@ bool RealtimeTouchInputRouter::releaseLane(FingerState &finger,
   finger.lane = -1;
   finger.pressed = false;
   finger.scratch = false;
+  finger.spinScratch = false;
   finger.scratchDirection = 0;
+  finger.spinAccumulatedDegrees = 0.0F;
+  finger.spinLastStepMicros = 0;
   finger.cancelDeadlineMicros = 0;
   return true;
 }
 
 bool RealtimeTouchInputRouter::handleScratchMove(
     FingerState &finger, const RealtimeTouchSample &sample) noexcept {
+  if (finger.spinScratch) {
+    return handleSpinScratchMove(finger, sample);
+  }
   const float dx = sample.normalizedX - finger.lastX;
   const float dy = sample.normalizedY - finger.lastY;
   finger.lastX = sample.normalizedX;
@@ -558,6 +593,63 @@ bool RealtimeTouchInputRouter::handleScratchMove(
   }
   const int direction = dy < 0.0F ? 1 : -1;
   if (direction == finger.scratchDirection) {
+    return true;
+  }
+  if (finger.pressed &&
+      !emit(RealtimeGameplayInputType::Release, finger.lane,
+            finger.replayControl, sample.steadyTimestampMicros, true)) {
+    return false;
+  }
+  finger.pressed = false;
+  const auto replayControl = replay::logicalControlForChartLane(
+      layout_.keyMode, finger.lane, true,
+      direction > 0 ? replay::LogicalControlKind::ScratchClockwise
+                    : replay::LogicalControlKind::ScratchCounterClockwise);
+  if (!emit(RealtimeGameplayInputType::Press, finger.lane, replayControl,
+            sample.steadyTimestampMicros)) {
+    return false;
+  }
+  finger.pressed = true;
+  finger.scratchDirection = direction;
+  finger.replayControl = replayControl;
+  return true;
+}
+
+bool RealtimeTouchInputRouter::handleSpinScratchMove(
+    FingerState &finger, const RealtimeTouchSample &sample) noexcept {
+  const float currentAngle = std::atan2(sample.normalizedY - finger.spinCenter.y,
+                                        sample.normalizedX - finger.spinCenter.x);
+  if (!std::isfinite(currentAngle)) {
+    return true;
+  }
+  const float deltaRadians = shortestAngleDeltaRadians(
+      currentAngle, finger.spinPreviousAngleRadians);
+  finger.spinPreviousAngleRadians = currentAngle;
+  finger.lastX = sample.normalizedX;
+  finger.lastY = sample.normalizedY;
+  if (!std::isfinite(deltaRadians)) {
+    return true;
+  }
+  const float deltaDegrees = deltaRadians * kRadiansToDegrees;
+  spinScratchRotationDegrees_ += deltaDegrees;
+  if (deltaDegrees == 0.0F) {
+    return true;
+  }
+  if (finger.spinAccumulatedDegrees != 0.0F &&
+      !sameNonzeroSign(finger.spinAccumulatedDegrees, deltaDegrees)) {
+    finger.spinAccumulatedDegrees = 0.0F;
+  }
+  finger.spinAccumulatedDegrees += deltaDegrees;
+  const float completedSteps = std::trunc(
+      finger.spinAccumulatedDegrees / kSpinScratchStepDegrees);
+  if (completedSteps == 0.0F) {
+    return true;
+  }
+  finger.spinAccumulatedDegrees -=
+      completedSteps * kSpinScratchStepDegrees;
+  finger.spinLastStepMicros = sample.steadyTimestampMicros;
+  const int direction = completedSteps > 0.0F ? 1 : -1;
+  if (finger.pressed && direction == finger.scratchDirection) {
     return true;
   }
   if (finger.pressed &&
@@ -815,6 +907,33 @@ bool RealtimeTouchInputRouter::acknowledgePublishedCancellation(
   return true;
 }
 
+bool RealtimeTouchInputRouter::advanceSpinScratch(
+    std::int64_t steadyTimestampMicros) noexcept {
+  for (auto &finger : fingers_) {
+    if (!finger.active || !finger.spinScratch || !finger.pressed ||
+        finger.spinLastStepMicros <= 0 ||
+        steadyTimestampMicros < finger.spinLastStepMicros ||
+        steadyTimestampMicros - finger.spinLastStepMicros <
+            kSpinScratchGraceMicros) {
+      continue;
+    }
+    if (!emit(RealtimeGameplayInputType::Release, finger.lane,
+              finger.replayControl, steadyTimestampMicros)) {
+      return false;
+    }
+    // Keep the physical contact captured so a later turn starts a fresh
+    // direction without requiring another finger-down.
+    finger.pressed = false;
+    finger.scratchDirection = 0;
+    finger.spinLastStepMicros = 0;
+  }
+  return true;
+}
+
+float RealtimeTouchInputRouter::spinScratchRotationDegrees() const noexcept {
+  return spinScratchRotationDegrees_;
+}
+
 bool RealtimeTouchInputRouter::setGameplayEnabled(
     bool enabled, std::int64_t steadyTimestampMicros) noexcept {
   if (!enabled) {
@@ -833,6 +952,7 @@ void RealtimeTouchInputRouter::reset() noexcept {
   for (auto &finger : fingers_) {
     finger = {};
   }
+  spinScratchRotationDegrees_ = 0.0F;
 }
 
 bool RealtimeTouchInputRouter::cancelAll(

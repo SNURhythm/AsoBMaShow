@@ -40,6 +40,11 @@ void clampValue(float &value, float minimum, float maximum, const char *label,
 } // namespace
 
 void VirtualControllerConfig::sanitize(std::vector<std::string> &diagnostics) {
+  if (scratchMode != VirtualControllerScratchMode::Flick &&
+      scratchMode != VirtualControllerScratchMode::Spin) {
+    scratchMode = VirtualControllerScratchMode::Flick;
+    diagnostics.emplace_back("Reset invalid virtual controller scratch mode.");
+  }
   centerX = finiteOrDefault(centerX, kDefaultCenterX, "horizontal position",
                             diagnostics);
   centerY = finiteOrDefault(centerY, kDefaultCenterY, "vertical position",

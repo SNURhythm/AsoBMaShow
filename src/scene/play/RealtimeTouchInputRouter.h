@@ -37,6 +37,10 @@ struct RealtimeTouchLaneRegion {
   RealtimeTouchPoint topRight;
   int lane = -1;
   bool scratch = false;
+  // Only the virtual controller opts into angular turntable handling. Skin
+  // and built-in playfield scratch regions retain their established flick
+  // gesture semantics.
+  bool spinScratch = false;
   std::optional<replay::LogicalControl> replayControl;
   // Virtual controls require an actual hit. Skin lanes retain the legacy
   // vertical clamping behavior below their authored playfield.
@@ -262,9 +266,13 @@ public:
   bool cancelAll(std::int64_t steadyTimestampMicros) noexcept;
   bool updateLayout(RealtimeTouchLayout layout,
                     std::int64_t steadyTimestampMicros) noexcept;
+  // Advances the source-compatible stop threshold for active virtual
+  // turntable gestures. The caller supplies the monotonic gameplay clock.
+  bool advanceSpinScratch(std::int64_t steadyTimestampMicros) noexcept;
   bool setGameplayEnabled(bool enabled,
                           std::int64_t steadyTimestampMicros) noexcept;
   void reset() noexcept;
+  [[nodiscard]] float spinScratchRotationDegrees() const noexcept;
 
 private:
   struct FingerState {
@@ -274,10 +282,15 @@ private:
     bool excluded = false;
     bool pressed = false;
     bool scratch = false;
+    bool spinScratch = false;
     int scratchDirection = 0;
     std::optional<replay::LogicalControl> replayControl;
     float lastX = 0.0F;
     float lastY = 0.0F;
+    RealtimeTouchPoint spinCenter;
+    float spinPreviousAngleRadians = 0.0F;
+    float spinAccumulatedDegrees = 0.0F;
+    std::int64_t spinLastStepMicros = 0;
     std::int64_t cancelDeadlineMicros = 0;
     PresentationUiHit presentationHit;
     std::optional<UiLogicalPoint> presentationUiPoint;
@@ -305,12 +318,15 @@ private:
                    bool backSpin = false) noexcept;
   bool handleScratchMove(FingerState &finger,
                          const RealtimeTouchSample &sample) noexcept;
+  bool handleSpinScratchMove(FingerState &finger,
+                             const RealtimeTouchSample &sample) noexcept;
 
   std::uint64_t epoch_ = 0;
   RealtimeTouchLayout layout_;
   RealtimeTouchInputSink sink_;
   bool legacyUniformLayout_ = false;
   bool gameplayEnabled_ = true;
+  float spinScratchRotationDegrees_ = 0.0F;
   std::array<FingerState, kRealtimeTouchFingerCapacity> fingers_{};
 };
 

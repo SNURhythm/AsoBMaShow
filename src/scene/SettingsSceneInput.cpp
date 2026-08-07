@@ -294,6 +294,8 @@ std::string SettingsScene::inputViewSignature() const {
          << context.inputProfile.gyroscopeTurntable.stepAngleDegrees << ':'
          << context.inputProfile.gyroscopeTurntable.releaseDelayMs << ':'
          << context.inputProfile.virtualController.enabled << ':'
+         << static_cast<int>(context.inputProfile.virtualController.scratchMode)
+         << ':'
          << context.inputProfile.virtualController.centerX << ':'
          << context.inputProfile.virtualController.centerY << ':'
          << context.inputProfile.virtualController.buttonSize << ':'
@@ -606,6 +608,29 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
   });
   virtualControllerBody->addView(virtualControllerToggle);
   if (virtualControllerConfig.enabled) {
+    const bool spinScratch =
+        virtualControllerConfig.scratchMode ==
+        input::VirtualControllerScratchMode::Spin;
+    auto *scratchModeButton = makeControlButton(
+        std::min(bodyWidth, metrics.actionButtonWidth),
+        metrics.actionButtonHeight,
+        makeText(spinScratch ? "Scratch: Spin Mode" : "Scratch: Flick Mode",
+                 metrics.bodyTextSize + 1, ui_theme::textPrimary(),
+                 TextView::CENTER, TextView::MIDDLE));
+    scratchModeButton->setOnClickListener(
+        [this, virtualControllerConfig, spinScratch]() {
+          auto next = virtualControllerConfig;
+          next.scratchMode = spinScratch
+                                 ? input::VirtualControllerScratchMode::Flick
+                                 : input::VirtualControllerScratchMode::Spin;
+          commitVirtualControllerSetting(next);
+        });
+    virtualControllerBody->addView(scratchModeButton);
+    virtualControllerBody->addView(makeWrappedText(
+        spinScratch
+            ? "Spin the platter. Each 3° turn refreshes the held scratch direction for 150 ms."
+            : "Flick Mode: swipe the scratch vertically, matching the original virtual controller.",
+        metrics.smallTextSize, ui_theme::textSecondary()));
     virtualControllerBody->addView(makeWrappedText(
         "Use the full-screen editor to place, resize, overlap key rows, and tune independent X/Y and scratch spacing.",
         metrics.smallTextSize, ui_theme::textSecondary()));
@@ -629,7 +654,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
       metrics, "Virtual Controller",
       "Optional 5-key and 7-key mobile controls. It stays above the selected gameplay skin.",
       virtualControllerBody,
-      virtualControllerConfig.enabled ? (metrics.compact ? 290 : 270)
+      virtualControllerConfig.enabled ? (metrics.compact ? 390 : 350)
                                       : (metrics.compact ? 220 : 200),
       metrics.cardsWidth));
 
@@ -1038,7 +1063,7 @@ void SettingsScene::buildInputVirtualControllerEditorOverlay(
   title->addView(makeText("Virtual Controller Layout", metrics.sectionTitleSize,
                            ui_theme::textPrimary()));
   title->addView(makeWrappedText(
-      "Drag the controller to move it. Use the colored handles for size and spacing.",
+      "Drag the controller to move it. Use the colored handles for size and spacing; the scratch mode is selected on the Input page.",
       metrics.smallTextSize, ui_theme::textSecondary()));
   header->addView(title);
 

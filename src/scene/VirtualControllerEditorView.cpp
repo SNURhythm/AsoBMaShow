@@ -23,6 +23,13 @@ void renderElement(rendering::SimpleBatchRenderer &batch,
     batch.addCircle(bounds.centerX(), bounds.centerY(), radius, border);
     batch.addCircle(bounds.centerX(), bounds.centerY(),
                     std::max(0.0F, radius - borderWidth), fill);
+    const float markerRadius = radius * 0.66F;
+    const float markerX = bounds.centerX() + markerRadius;
+    const float markerY = bounds.centerY();
+    batch.addLine(bounds.centerX(), bounds.centerY(), markerX, markerY,
+                  std::max(2.0F, radius * 0.045F), border);
+    batch.addCircle(bounds.centerX(), bounds.centerY(), radius * 0.14F, border);
+    batch.addCircle(markerX, markerY, radius * 0.09F, border);
     return;
   }
   const float radius = std::min(bounds.height * 0.2F, 10.0F);

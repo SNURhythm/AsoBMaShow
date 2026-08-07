@@ -46,6 +46,7 @@ struct VirtualControllerElement {
   int keyPosition = -1;
   int lane = -1;
   bool scratch = false;
+  bool spinScratch = false;
   std::optional<replay::LogicalControl> replayControl;
   VirtualControllerRect bounds;
 };

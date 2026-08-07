@@ -176,6 +176,7 @@ void parseVirtualControllerConfigMember(const Json &config, const char *name,
 
 void parseVirtualControllerConfig(const Json &document, InputProfile &profile,
                                   bool hasAxisSpacing,
+                                  bool hasScratchMode,
                                   std::vector<std::string> &diagnostics) {
   const auto config = document.find("virtualController");
   if (config == document.end() || !config->is_object()) {
@@ -191,6 +192,28 @@ void parseVirtualControllerConfig(const Json &document, InputProfile &profile,
         "Reset missing or invalid virtual controller enabled setting.");
   } else {
     profile.virtualController.enabled = enabled->get<bool>();
+  }
+  if (hasScratchMode) {
+    const auto scratchMode = config->find("scratchMode");
+    if (scratchMode == config->end() || !scratchMode->is_string()) {
+      profile.virtualController.scratchMode =
+          input::VirtualControllerScratchMode::Flick;
+      diagnostics.emplace_back(
+          "Reset missing or invalid virtual controller scratch mode.");
+    } else if (*scratchMode == "flick") {
+      profile.virtualController.scratchMode =
+          input::VirtualControllerScratchMode::Flick;
+    } else if (*scratchMode == "spin") {
+      profile.virtualController.scratchMode =
+          input::VirtualControllerScratchMode::Spin;
+    } else {
+      profile.virtualController.scratchMode =
+          input::VirtualControllerScratchMode::Flick;
+      diagnostics.emplace_back("Reset invalid virtual controller scratch mode.");
+    }
+  } else {
+    profile.virtualController.scratchMode =
+        input::VirtualControllerScratchMode::Flick;
   }
   parseVirtualControllerConfigMember(
       *config, "centerX", input::VirtualControllerConfig::kDefaultCenterX,
@@ -421,7 +444,7 @@ InputProfileStore::load(const std::filesystem::path &path) {
     }
     if (schemaVersion >= 4) {
       parseVirtualControllerConfig(document, result.profile, schemaVersion >= 5,
-                                   result.diagnostics);
+                                   schemaVersion >= 6, result.diagnostics);
     }
     result.profile.bindings.reserve(bindings.size());
     for (const auto &binding : bindings) {
@@ -490,6 +513,10 @@ bool InputProfileStore::saveAtomic(const std::filesystem::path &path,
           {"releaseDelayMs", sanitized.gyroscopeTurntable.releaseDelayMs}}},
         {"virtualController",
          {{"enabled", sanitized.virtualController.enabled},
+          {"scratchMode", sanitized.virtualController.scratchMode ==
+                                  input::VirtualControllerScratchMode::Spin
+                              ? "spin"
+                              : "flick"},
           {"centerX", sanitized.virtualController.centerX},
           {"centerY", sanitized.virtualController.centerY},
           {"buttonSize", sanitized.virtualController.buttonSize},

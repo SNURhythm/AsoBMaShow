@@ -6,6 +6,11 @@
 
 namespace input {
 
+enum class VirtualControllerScratchMode : unsigned char {
+  Flick,
+  Spin,
+};
+
 // Values are fractions of the current mobile canvas. The layout code derives
 // pixels from the shorter canvas edge so a profile feels consistent across
 // landscape iPhones and iPads.
@@ -21,6 +26,9 @@ struct VirtualControllerConfig {
   static constexpr float kDefaultScratchKeyplateSpacing = 0.25F;
 
   bool enabled = false;
+  // Flick preserves the original vertical-swipe behavior. Spin is an
+  // opt-in turntable gesture whose rotation is quantized by the touch router.
+  VirtualControllerScratchMode scratchMode = VirtualControllerScratchMode::Flick;
   float centerX = kDefaultCenterX;
   float centerY = kDefaultCenterY;
   float buttonSize = kDefaultButtonSize;

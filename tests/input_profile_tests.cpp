@@ -200,7 +200,7 @@ int main() {
     require(oldSchemaProfile.schemaVersion == InputProfile::kSchemaVersion &&
                 std::ranges::find(
                     diagnostics,
-                    "Reset unsupported input schema version to 5.") !=
+                    "Reset unsupported input schema version to 6.") !=
                     diagnostics.end(),
             "schema repair diagnostics report the real current version");
 
@@ -548,7 +548,7 @@ int main() {
     require(
         InputProfileStore::saveAtomic(
             migratedVersionZeroPath, versionZeroResult.profile, errorMessage) &&
-            readFile(migratedVersionZeroPath).find("\"schemaVersion\": 5") !=
+            readFile(migratedVersionZeroPath).find("\"schemaVersion\": 6") !=
                 std::string::npos,
         "saving migrated version zero persists the current schema");
 
@@ -578,7 +578,7 @@ int main() {
                 errorMessage),
             "gyroscope profile saves atomically");
     const std::string gyroscopeRoundTripJson = readFile(gyroscopeRoundTripPath);
-    require(gyroscopeRoundTripJson.find("\"schemaVersion\": 5") !=
+    require(gyroscopeRoundTripJson.find("\"schemaVersion\": 6") !=
                     std::string::npos &&
                 gyroscopeRoundTripJson.find("\"gyroscopeTurntable\"") !=
                     std::string::npos &&
@@ -602,6 +602,7 @@ int main() {
     InputProfile virtualControllerProfile = defaults;
     virtualControllerProfile.virtualController = {
         .enabled = true,
+        .scratchMode = input::VirtualControllerScratchMode::Spin,
         .centerX = 0.41F,
         .centerY = 0.72F,
         .buttonSize = 0.16F,
@@ -624,7 +625,9 @@ int main() {
             "virtual controller enablement, placement, size, and independent signed spacing round trip");
     const std::string virtualControllerJson =
         readFile(virtualControllerRoundTripPath);
-    require(virtualControllerJson.find("\"schemaVersion\": 5") !=
+    require(virtualControllerJson.find("\"schemaVersion\": 6") !=
+                    std::string::npos &&
+                virtualControllerJson.find("\"scratchMode\": \"spin\"") !=
                     std::string::npos &&
                 virtualControllerJson.find("\"keySpacingX\"") !=
                     std::string::npos &&
@@ -634,7 +637,7 @@ int main() {
                     std::string::npos &&
                 virtualControllerJson.find("\"keyGap\"") ==
                     std::string::npos,
-            "axis-based virtual-controller geometry serializes in schema five");
+            "virtual-controller geometry and scratch mode serialize in schema six");
 
     const auto legacyVirtualControllerPath =
         testRoot / "virtual-controller-v4.json";
@@ -644,6 +647,8 @@ int main() {
         InputProfileStore::load(legacyVirtualControllerPath);
     require(legacyVirtualController.status == InputProfileLoadStatus::Loaded &&
                 legacyVirtualController.profile.virtualController.enabled &&
+                legacyVirtualController.profile.virtualController.scratchMode ==
+                    input::VirtualControllerScratchMode::Flick &&
                 legacyVirtualController.profile.virtualController.keySpacingX ==
                     0.3F &&
                 legacyVirtualController.profile.virtualController.keySpacingY ==

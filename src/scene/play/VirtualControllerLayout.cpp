@@ -163,6 +163,8 @@ VirtualControllerLayout makeVirtualControllerLayout(
          .shape = VirtualControllerShape::Circle,
          .lane = scratchLanes.front(),
          .scratch = true,
+         .spinScratch = config.scratchMode ==
+                        input::VirtualControllerScratchMode::Spin,
          .bounds = {.x = 0.0F,
                     .y = scratchTop,
                     .width = scratchDiameter,
@@ -252,6 +254,7 @@ makeVirtualControllerTouchRegions(const VirtualControllerLayout &layout,
                                     .topRight = *topRight,
                                     .lane = element.lane,
                                     .scratch = element.scratch,
+                                    .spinScratch = element.spinScratch,
                                     .replayControl = element.replayControl,
                                     .requiresInside = true};
     if (element.shape == VirtualControllerShape::Circle) {

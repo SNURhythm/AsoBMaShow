@@ -1001,6 +1001,113 @@ void testScratchLongNoteIgnoresSmallDirectionJitter() {
           "active scratch LN jitter emits neither release nor re-press");
 }
 
+void testSpinScratchWaitsForAnAngularStepBeforePressing() {
+  gameplay::RealtimeTouchLayout layout;
+  layout.keyMode = 7;
+  layout.laneRegions = {{
+      .bottomLeft = {0.20F, 0.80F},
+      .bottomRight = {0.80F, 0.80F},
+      .topLeft = {0.20F, 0.20F},
+      .topRight = {0.80F, 0.20F},
+      .lane = 7,
+      .scratch = true,
+      .spinScratch = true,
+      .requiresInside = true,
+      .circle = gameplay::RealtimeTouchCircle{
+          .center = {0.50F, 0.50F}, .radiusX = 0.30F, .radiusY = 0.30F},
+  }};
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      94, std::move(layout), {.context = &capture, .emit = &InputCapture::emit});
+
+  require(router.consume({.fingerId = 301,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = 0.80F,
+                          .normalizedY = 0.50F,
+                          .steadyTimestampMicros = 1'000}) &&
+              router.consume({.fingerId = 301,
+                              .phase = gameplay::RealtimeTouchPhase::Move,
+                              .normalizedX = 0.799F,
+                              .normalizedY = 0.510F,
+                              .steadyTimestampMicros = 1'010}),
+          "spin scratch accepts a movement smaller than its first angular step");
+  require(capture.events.empty(),
+          "spin scratch does not treat a sub-step circular movement as a flick");
+
+  require(router.consume({.fingerId = 301,
+                          .phase = gameplay::RealtimeTouchPhase::Move,
+                          .normalizedX = 0.799F,
+                          .normalizedY = 0.521F,
+                          .steadyTimestampMicros = 1'020}),
+          "spin scratch accepts the movement that completes its first step");
+  require(capture.events.size() == 1 &&
+              capture.events.front().type ==
+                  gameplay::RealtimeGameplayInputType::Press &&
+              capture.events.front().lane == 7 &&
+              capture.events.front().replayControl.kind ==
+                  replay::LogicalControlKind::ScratchClockwise,
+          "a completed clockwise angular step produces the canonical scratch press");
+}
+
+void testSpinScratchRefreshesAndExpiresItsHeldDirection() {
+  gameplay::RealtimeTouchLayout layout;
+  layout.keyMode = 7;
+  layout.laneRegions = {{
+      .bottomLeft = {0.20F, 0.80F},
+      .bottomRight = {0.80F, 0.80F},
+      .topLeft = {0.20F, 0.20F},
+      .topRight = {0.80F, 0.20F},
+      .lane = 7,
+      .scratch = true,
+      .spinScratch = true,
+      .requiresInside = true,
+      .circle = gameplay::RealtimeTouchCircle{
+          .center = {0.50F, 0.50F}, .radiusX = 0.30F, .radiusY = 0.30F},
+  }};
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      95, std::move(layout), {.context = &capture, .emit = &InputCapture::emit});
+
+  require(router.consume({.fingerId = 302,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = 0.80F,
+                          .normalizedY = 0.50F,
+                          .steadyTimestampMicros = 1'000}) &&
+              router.consume({.fingerId = 302,
+                              .phase = gameplay::RealtimeTouchPhase::Move,
+                              .normalizedX = 0.799F,
+                              .normalizedY = 0.521F,
+                              .steadyTimestampMicros = 1'020}) &&
+              router.advanceSpinScratch(151'019),
+          "spin scratch remains held until its movement grace expires");
+  require(capture.events.size() == 1 &&
+              capture.events.front().type ==
+                  gameplay::RealtimeGameplayInputType::Press,
+          "the grace period retains the completed scratch direction");
+
+  require(router.advanceSpinScratch(151'020),
+          "spin scratch can release exactly at the grace deadline");
+  require(capture.events.size() == 2 &&
+              capture.events.back().type ==
+                  gameplay::RealtimeGameplayInputType::Release &&
+              capture.events.back().lane == 7,
+          "spin scratch releases when the turntable has stopped moving");
+
+  require(router.consume({.fingerId = 302,
+                          .phase = gameplay::RealtimeTouchPhase::Move,
+                          .normalizedX = 0.797F,
+                          .normalizedY = 0.542F,
+                          .steadyTimestampMicros = 151'030}),
+          "the retained physical contact accepts another turn after timeout");
+  require(capture.events.size() == 3 &&
+              capture.events.back().type ==
+                  gameplay::RealtimeGameplayInputType::Press &&
+              capture.events.back().replayControl.kind ==
+                  replay::LogicalControlKind::ScratchClockwise &&
+              std::abs(router.spinScratchRotationDegrees()) > 6.0F,
+          "a renewed circular turn re-presses and advances the rotating visual marker");
+}
+
 void testNormalModeMapsTouchesBelowProjectedPlayfield() {
   InputCapture capture;
   gameplay::RealtimeTouchInputRouter router(
@@ -1779,6 +1886,7 @@ void testVirtualControllerLayoutRoutesKeysAndSystemControls() {
   const auto *start = findElement(gameplay::VirtualControllerControl::Start);
   const auto *select = findElement(gameplay::VirtualControllerControl::Select);
   require(scratch != nullptr && scratch->scratch && scratch->lane == 7 &&
+              !scratch->spinScratch &&
               keyOne != nullptr && keyOne->lane == 0 && keyTwo != nullptr &&
               keyTwo->lane == 1 && keyTwo->bounds.y < keyOne->bounds.y &&
               keyThree != nullptr && keyThree->lane == 2 &&
@@ -1793,6 +1901,19 @@ void testVirtualControllerLayoutRoutesKeysAndSystemControls() {
                                            .player = 1,
                                            .lane = -1},
           "virtual controls preserve canonical lanes and the alternating key rows");
+  auto spinConfig = config;
+  spinConfig.scratchMode = input::VirtualControllerScratchMode::Spin;
+  const auto spinController =
+      gameplay::makeVirtualControllerLayout(spinConfig, 7, canvas);
+  require(!spinController.elements.empty() &&
+              std::ranges::any_of(
+                  spinController.elements,
+                  [](const gameplay::VirtualControllerElement &element) {
+                    return element.control ==
+                               gameplay::VirtualControllerControl::Scratch &&
+                           element.spinScratch;
+                  }),
+          "Spin Mode opts in only the virtual scratch circle while Flick Mode remains legacy-compatible");
   const auto near = [](float left, float right) {
     return std::abs(left - right) < 0.01F;
   };
@@ -1939,6 +2060,8 @@ int main() {
   testDragModeChangesLaneWithoutWaitingForAFrame();
   testScratchFlickEmitsAtomicBackspinAndPressPair();
   testScratchLongNoteIgnoresSmallDirectionJitter();
+  testSpinScratchWaitsForAnAngularStepBeforePressing();
+  testSpinScratchRefreshesAndExpiresItsHeldDirection();
   testNormalModeMapsTouchesBelowProjectedPlayfield();
   testUiExcludedFingerNeverEmitsGameplayEdges();
   testPresentationTouchIsDeliveredOnceAndLayoutSwitchCancelsCapture();
