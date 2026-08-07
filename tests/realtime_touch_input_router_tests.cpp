@@ -1751,7 +1751,9 @@ void testVirtualControllerLayoutRoutesKeysAndSystemControls() {
   config.centerX = 0.5F;
   config.centerY = 0.70F;
   config.buttonSize = 0.10F;
-  config.keyGap = 0.20F;
+  config.keySpacingX = -0.35F;
+  config.keySpacingY = 0.20F;
+  config.scratchKeyplateSpacing = -0.25F;
   const gameplay::VirtualControllerCanvas canvas{
       .x = 0.0F, .y = 0.0F, .width = 1000.0F, .height = 600.0F};
   const auto controller =
@@ -1773,11 +1775,13 @@ void testVirtualControllerLayoutRoutesKeysAndSystemControls() {
       findElement(gameplay::VirtualControllerControl::Scratch);
   const auto *keyOne = findElement(gameplay::VirtualControllerControl::Key, 0);
   const auto *keyTwo = findElement(gameplay::VirtualControllerControl::Key, 1);
+  const auto *keyThree = findElement(gameplay::VirtualControllerControl::Key, 2);
   const auto *start = findElement(gameplay::VirtualControllerControl::Start);
   const auto *select = findElement(gameplay::VirtualControllerControl::Select);
   require(scratch != nullptr && scratch->scratch && scratch->lane == 7 &&
               keyOne != nullptr && keyOne->lane == 0 && keyTwo != nullptr &&
               keyTwo->lane == 1 && keyTwo->bounds.y < keyOne->bounds.y &&
+              keyThree != nullptr && keyThree->lane == 2 &&
               start != nullptr &&
               start->replayControl == replay::LogicalControl{
                                           .kind = replay::LogicalControlKind::Start,
@@ -1789,6 +1793,19 @@ void testVirtualControllerLayoutRoutesKeysAndSystemControls() {
                                            .player = 1,
                                            .lane = -1},
           "virtual controls preserve canonical lanes and the alternating key rows");
+  const auto near = [](float left, float right) {
+    return std::abs(left - right) < 0.01F;
+  };
+  require(near(start->bounds.width, start->bounds.height) &&
+              near(select->bounds.width, select->bounds.height) &&
+              near(keyOne->bounds.height, keyOne->bounds.width * 2.0F) &&
+              near(keyTwo->bounds.x - keyOne->bounds.x,
+                   keyOne->bounds.width * (1.0F + config.keySpacingX)) &&
+              near(keyOne->bounds.y - keyTwo->bounds.y,
+                   keyOne->bounds.height * (1.0F + config.keySpacingY)) &&
+              near(keyOne->bounds.x - (scratch->bounds.x + scratch->bounds.width),
+                   keyOne->bounds.width * config.scratchKeyplateSpacing),
+          "virtual-controller geometry preserves square system buttons, 1:2 keys, and independent signed spacing");
 
   const gameplay::RealtimeTouchUiTransform transform{
       .renderWidth = 1000,

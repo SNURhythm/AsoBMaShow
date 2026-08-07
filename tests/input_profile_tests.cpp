@@ -200,7 +200,7 @@ int main() {
     require(oldSchemaProfile.schemaVersion == InputProfile::kSchemaVersion &&
                 std::ranges::find(
                     diagnostics,
-                    "Reset unsupported input schema version to 4.") !=
+                    "Reset unsupported input schema version to 5.") !=
                     diagnostics.end(),
             "schema repair diagnostics report the real current version");
 
@@ -548,7 +548,7 @@ int main() {
     require(
         InputProfileStore::saveAtomic(
             migratedVersionZeroPath, versionZeroResult.profile, errorMessage) &&
-            readFile(migratedVersionZeroPath).find("\"schemaVersion\": 4") !=
+            readFile(migratedVersionZeroPath).find("\"schemaVersion\": 5") !=
                 std::string::npos,
         "saving migrated version zero persists the current schema");
 
@@ -578,7 +578,7 @@ int main() {
                 errorMessage),
             "gyroscope profile saves atomically");
     const std::string gyroscopeRoundTripJson = readFile(gyroscopeRoundTripPath);
-    require(gyroscopeRoundTripJson.find("\"schemaVersion\": 4") !=
+    require(gyroscopeRoundTripJson.find("\"schemaVersion\": 5") !=
                     std::string::npos &&
                 gyroscopeRoundTripJson.find("\"gyroscopeTurntable\"") !=
                     std::string::npos &&
@@ -605,7 +605,9 @@ int main() {
         .centerX = 0.41F,
         .centerY = 0.72F,
         .buttonSize = 0.16F,
-        .keyGap = 0.34F,
+        .keySpacingX = -0.34F,
+        .keySpacingY = 0.21F,
+        .scratchKeyplateSpacing = -0.12F,
     };
     const auto virtualControllerRoundTripPath =
         testRoot / "virtual-controller-round-trip.json";
@@ -619,7 +621,36 @@ int main() {
     require(virtualControllerRoundTrip.status == InputProfileLoadStatus::Loaded &&
                 virtualControllerRoundTrip.profile.virtualController ==
                     virtualControllerProfile.virtualController,
-            "virtual controller enablement, placement, size, and spacing round trip");
+            "virtual controller enablement, placement, size, and independent signed spacing round trip");
+    const std::string virtualControllerJson =
+        readFile(virtualControllerRoundTripPath);
+    require(virtualControllerJson.find("\"schemaVersion\": 5") !=
+                    std::string::npos &&
+                virtualControllerJson.find("\"keySpacingX\"") !=
+                    std::string::npos &&
+                virtualControllerJson.find("\"keySpacingY\"") !=
+                    std::string::npos &&
+                virtualControllerJson.find("\"scratchKeyplateSpacing\"") !=
+                    std::string::npos &&
+                virtualControllerJson.find("\"keyGap\"") ==
+                    std::string::npos,
+            "axis-based virtual-controller geometry serializes in schema five");
+
+    const auto legacyVirtualControllerPath =
+        testRoot / "virtual-controller-v4.json";
+    writeFile(legacyVirtualControllerPath,
+              R"({"schemaVersion":4,"gyroscopeTurntable":{"stepAngleDegrees":6,"releaseDelayMs":250},"virtualController":{"enabled":true,"centerX":0.5,"centerY":0.7,"buttonSize":0.1,"keyGap":0.3},"bindings":[]})");
+    const auto legacyVirtualController =
+        InputProfileStore::load(legacyVirtualControllerPath);
+    require(legacyVirtualController.status == InputProfileLoadStatus::Loaded &&
+                legacyVirtualController.profile.virtualController.enabled &&
+                legacyVirtualController.profile.virtualController.keySpacingX ==
+                    0.3F &&
+                legacyVirtualController.profile.virtualController.keySpacingY ==
+                    0.3F &&
+                legacyVirtualController.profile.virtualController
+                        .scratchKeyplateSpacing == 0.3F,
+            "schema-four virtual controller profiles migrate their legacy gap to every explicit spacing relation");
 
     const auto malformedPath = testRoot / "malformed.json";
     writeFile(malformedPath, "{ not valid json");

@@ -297,7 +297,10 @@ std::string SettingsScene::inputViewSignature() const {
          << context.inputProfile.virtualController.centerX << ':'
          << context.inputProfile.virtualController.centerY << ':'
          << context.inputProfile.virtualController.buttonSize << ':'
-         << context.inputProfile.virtualController.keyGap << ':';
+         << context.inputProfile.virtualController.keySpacingX << ':'
+         << context.inputProfile.virtualController.keySpacingY << ':'
+         << context.inputProfile.virtualController.scratchKeyplateSpacing
+         << ':' << inputVirtualControllerEditorVisible << ':';
   if (inputCaptureAction.has_value()) {
     output << static_cast<int>(inputCaptureAction->kind) << ':'
            << inputCaptureAction->lane;
@@ -604,16 +607,18 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
   virtualControllerBody->addView(virtualControllerToggle);
   if (virtualControllerConfig.enabled) {
     virtualControllerBody->addView(makeWrappedText(
-        "Drag the controller to move it. Green moves it, amber resizes it, and coral changes key spacing.",
+        "Use the full-screen editor to place, resize, overlap key rows, and tune independent X/Y and scratch spacing.",
         metrics.smallTextSize, ui_theme::textSecondary()));
-    auto *editor = new VirtualControllerEditorView(
-        virtualControllerConfig,
-        [this](input::VirtualControllerConfig config) {
-          commitVirtualControllerSetting(config);
-        });
-    editor->setWidth(static_cast<float>(bodyWidth));
-    editor->setHeight(static_cast<float>(metrics.compact ? 300 : 360));
-    virtualControllerBody->addView(editor);
+    auto *editButton = makeControlButton(
+        std::min(bodyWidth, metrics.actionButtonWidth),
+        metrics.actionButtonHeight,
+        makeText("Edit Layout", metrics.bodyTextSize + 1,
+                 ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
+    editButton->setOnClickListener([this]() {
+      inputVirtualControllerEditorVisible = true;
+      requestInputViewRebuild();
+    });
+    virtualControllerBody->addView(editButton);
   }
   virtualControllerBody->addView(makeWrappedText(
       inputVirtualControllerSettingsError.empty()
@@ -624,7 +629,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
       metrics, "Virtual Controller",
       "Optional 5-key and 7-key mobile controls. It stays above the selected gameplay skin.",
       virtualControllerBody,
-      virtualControllerConfig.enabled ? (metrics.compact ? 590 : 680)
+      virtualControllerConfig.enabled ? (metrics.compact ? 290 : 270)
                                       : (metrics.compact ? 220 : 200),
       metrics.cardsWidth));
 
@@ -990,4 +995,76 @@ void SettingsScene::buildInputConflictOverlay(const LayoutMetrics &metrics) {
 
   inputConflictOverlayRoot->addView(panel);
   rootLayout->addView(inputConflictOverlayRoot);
+}
+
+void SettingsScene::buildInputVirtualControllerEditorOverlay(
+    const LayoutMetrics &metrics) {
+  if (activeTab != SettingsTab::Input || !inputVirtualControllerEditorVisible ||
+      !context.inputProfile.virtualController.enabled) {
+    return;
+  }
+
+  inputVirtualControllerEditorOverlayRoot = new BlockingOverlayView(
+      0, 0, rendering::window_width, rendering::window_height);
+  inputVirtualControllerEditorOverlayRoot->setPositionType(
+      YGPositionTypeAbsolute);
+  inputVirtualControllerEditorOverlayRoot->setPosition(Edge::Left, 0);
+  inputVirtualControllerEditorOverlayRoot->setPosition(Edge::Top, 0);
+  inputVirtualControllerEditorOverlayRoot->setZIndex(1060);
+  inputVirtualControllerEditorOverlayRoot->setFlexDirection(
+      FlexDirection::Column);
+  inputVirtualControllerEditorOverlayRoot->setAlignItems(YGAlignStretch);
+  inputVirtualControllerEditorOverlayRoot->setGap(metrics.compact ? 10.0F
+                                                                    : 14.0F);
+  inputVirtualControllerEditorOverlayRoot->setPadding(
+      Edge::Top, static_cast<float>(metrics.safe.top + 18));
+  inputVirtualControllerEditorOverlayRoot->setPadding(
+      Edge::Left, static_cast<float>(metrics.safe.left + 18));
+  inputVirtualControllerEditorOverlayRoot->setPadding(
+      Edge::Right, static_cast<float>(metrics.safe.right + 18));
+  inputVirtualControllerEditorOverlayRoot->setPadding(
+      Edge::Bottom, static_cast<float>(metrics.safe.bottom + 18));
+  inputVirtualControllerEditorOverlayRoot->setThemedBackgroundColor(
+      ui_theme::backdrop);
+
+  auto *header = new View();
+  header->setFlexDirection(FlexDirection::Row);
+  header->setAlignItems(YGAlignCenter);
+  header->setJustifyContent(YGJustifySpaceBetween);
+  auto *title = new View();
+  title->setFlexDirection(FlexDirection::Column);
+  title->setFlex(1.0F);
+  title->setGap(4.0F);
+  title->addView(makeText("Virtual Controller Layout", metrics.sectionTitleSize,
+                           ui_theme::textPrimary()));
+  title->addView(makeWrappedText(
+      "Drag the controller to move it. Use the colored handles for size and spacing.",
+      metrics.smallTextSize, ui_theme::textSecondary()));
+  header->addView(title);
+
+  auto *doneButton = makeAccentButton(
+      metrics.actionButtonWidth, metrics.actionButtonHeight,
+      makeText("Done", metrics.bodyTextSize + 2, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE),
+      ui_theme::cyan());
+  doneButton->setFlexShrink(0.0F);
+  doneButton->setOnClickListener([this]() {
+    inputVirtualControllerEditorVisible = false;
+    requestInputViewRebuild();
+  });
+  header->addView(doneButton);
+  inputVirtualControllerEditorOverlayRoot->addView(header);
+
+  inputVirtualControllerEditorOverlayRoot->addView(makeWrappedText(
+      "Lime: position · Amber: size · Cyan: key X spacing · Violet: key Y spacing · Coral: scratch-to-keyplate spacing. Negative spacing overlaps controls.",
+      metrics.smallTextSize, ui_theme::textSecondary()));
+
+  auto *editor = new VirtualControllerEditorView(
+      context.inputProfile.virtualController,
+      [this](input::VirtualControllerConfig config) {
+        commitVirtualControllerSetting(config);
+      });
+  editor->setFlex(1.0F);
+  inputVirtualControllerEditorOverlayRoot->addView(editor);
+  rootLayout->addView(inputVirtualControllerEditorOverlayRoot);
 }

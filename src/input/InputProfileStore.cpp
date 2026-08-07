@@ -175,6 +175,7 @@ void parseVirtualControllerConfigMember(const Json &config, const char *name,
 }
 
 void parseVirtualControllerConfig(const Json &document, InputProfile &profile,
+                                  bool hasAxisSpacing,
                                   std::vector<std::string> &diagnostics) {
   const auto config = document.find("virtualController");
   if (config == document.end() || !config->is_object()) {
@@ -201,9 +202,31 @@ void parseVirtualControllerConfig(const Json &document, InputProfile &profile,
       *config, "buttonSize",
       input::VirtualControllerConfig::kDefaultButtonSize,
       profile.virtualController.buttonSize, diagnostics);
+  if (hasAxisSpacing) {
+    parseVirtualControllerConfigMember(
+        *config, "keySpacingX",
+        input::VirtualControllerConfig::kDefaultKeySpacingX,
+        profile.virtualController.keySpacingX, diagnostics);
+    parseVirtualControllerConfigMember(
+        *config, "keySpacingY",
+        input::VirtualControllerConfig::kDefaultKeySpacingY,
+        profile.virtualController.keySpacingY, diagnostics);
+    parseVirtualControllerConfigMember(
+        *config, "scratchKeyplateSpacing",
+        input::VirtualControllerConfig::kDefaultScratchKeyplateSpacing,
+        profile.virtualController.scratchKeyplateSpacing, diagnostics);
+    return;
+  }
+
+  // Schema four used one non-negative gap for every relation. Preserve that
+  // user's deliberate geometry during migration, then write the explicit
+  // axis-based values at schema five on the next save.
+  float legacyKeyGap = input::VirtualControllerConfig::kDefaultKeySpacingY;
   parseVirtualControllerConfigMember(
-      *config, "keyGap", input::VirtualControllerConfig::kDefaultKeyGap,
-      profile.virtualController.keyGap, diagnostics);
+      *config, "keyGap", legacyKeyGap, legacyKeyGap, diagnostics);
+  profile.virtualController.keySpacingX = legacyKeyGap;
+  profile.virtualController.keySpacingY = legacyKeyGap;
+  profile.virtualController.scratchKeyplateSpacing = legacyKeyGap;
 }
 
 input::ControlKind parseControlKind(std::string_view value) {
@@ -397,7 +420,7 @@ InputProfileStore::load(const std::filesystem::path &path) {
       parseGyroscopeConfig(document, result.profile, result.diagnostics);
     }
     if (schemaVersion >= 4) {
-      parseVirtualControllerConfig(document, result.profile,
+      parseVirtualControllerConfig(document, result.profile, schemaVersion >= 5,
                                    result.diagnostics);
     }
     result.profile.bindings.reserve(bindings.size());
@@ -470,7 +493,10 @@ bool InputProfileStore::saveAtomic(const std::filesystem::path &path,
           {"centerX", sanitized.virtualController.centerX},
           {"centerY", sanitized.virtualController.centerY},
           {"buttonSize", sanitized.virtualController.buttonSize},
-          {"keyGap", sanitized.virtualController.keyGap}}},
+          {"keySpacingX", sanitized.virtualController.keySpacingX},
+          {"keySpacingY", sanitized.virtualController.keySpacingY},
+          {"scratchKeyplateSpacing",
+           sanitized.virtualController.scratchKeyplateSpacing}}},
         {"bindings", Json::array()}};
     for (const auto &binding : sanitized.bindings) {
       document["bindings"].push_back(serializeBinding(binding));

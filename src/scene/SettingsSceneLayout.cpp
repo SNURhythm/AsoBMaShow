@@ -2822,6 +2822,7 @@ void SettingsScene::initView() {
 
   buildDifficultyTableImportModal(metrics);
   buildInputConflictOverlay(metrics);
+  buildInputVirtualControllerEditorOverlay(metrics);
   buildDisplayPreviewOverlay(metrics);
 
   rootLayout->applyYogaLayout();

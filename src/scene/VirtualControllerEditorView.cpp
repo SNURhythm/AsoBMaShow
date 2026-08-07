@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 namespace {
@@ -56,6 +57,55 @@ gameplay::VirtualControllerLayout VirtualControllerEditorView::layout() const {
   return gameplay::makeVirtualControllerLayout(config_, 7, canvas());
 }
 
+VirtualControllerEditorView::HandleCenters
+VirtualControllerEditorView::handleCenters(
+    const gameplay::VirtualControllerLayout &layout) noexcept {
+  HandleCenters centers;
+  if (!layout.valid()) {
+    return centers;
+  }
+  const gameplay::VirtualControllerElement *scratch = nullptr;
+  const gameplay::VirtualControllerElement *firstKey = nullptr;
+  const gameplay::VirtualControllerElement *secondRowKey = nullptr;
+  float keyplateLeft = std::numeric_limits<float>::infinity();
+  float keyplateRight = -std::numeric_limits<float>::infinity();
+  for (const auto &element : layout.elements) {
+    if (element.control == gameplay::VirtualControllerControl::Scratch) {
+      scratch = &element;
+    }
+    if (element.control != gameplay::VirtualControllerControl::Key) {
+      continue;
+    }
+    keyplateLeft = std::min(keyplateLeft, element.bounds.x);
+    keyplateRight = std::max(keyplateRight,
+                             element.bounds.x + element.bounds.width);
+    if (element.keyPosition == 0) {
+      firstKey = &element;
+    } else if (element.keyPosition == 1) {
+      secondRowKey = &element;
+    }
+  }
+  const auto &bounds = layout.bounds;
+  centers.moveX = bounds.x;
+  centers.moveY = bounds.y;
+  centers.resizeX = bounds.x + bounds.width;
+  centers.resizeY = bounds.y + bounds.height;
+  if (firstKey != nullptr && secondRowKey != nullptr &&
+      std::isfinite(keyplateLeft) && std::isfinite(keyplateRight)) {
+    centers.keySpacingXX = keyplateRight + kHandleSize * 0.75F;
+    centers.keySpacingXY =
+        (firstKey->bounds.centerY() + secondRowKey->bounds.centerY()) * 0.5F;
+    centers.keySpacingYX = (keyplateLeft + keyplateRight) * 0.5F;
+    centers.keySpacingYY = centers.keySpacingXY;
+  }
+  if (scratch != nullptr && std::isfinite(keyplateLeft)) {
+    centers.scratchSpacingX =
+        (scratch->bounds.x + scratch->bounds.width + keyplateLeft) * 0.5F;
+    centers.scratchSpacingY = scratch->bounds.centerY();
+  }
+  return centers;
+}
+
 bool VirtualControllerEditorView::contains(
     const gameplay::VirtualControllerRect &rect, float x, float y) noexcept {
   return rect.valid() && x >= rect.x && x <= rect.x + rect.width &&
@@ -77,17 +127,24 @@ VirtualControllerEditorView::hitDragMode(float uiX, float uiY) const {
     return DragMode::None;
   }
   const auto &bounds = currentLayout.bounds;
-  if (contains(handleRect(bounds.x, bounds.y), uiX, uiY)) {
-    return DragMode::Move;
-  }
-  if (contains(handleRect(bounds.x + bounds.width, bounds.y + bounds.height),
-               uiX, uiY)) {
+  const auto handles = handleCenters(currentLayout);
+  if (contains(handleRect(handles.resizeX, handles.resizeY), uiX, uiY)) {
     return DragMode::Resize;
   }
-  if (contains(handleRect(bounds.x + bounds.width,
-                          bounds.y + bounds.height * 0.5F),
+  if (contains(handleRect(handles.keySpacingXX, handles.keySpacingXY), uiX,
+               uiY)) {
+    return DragMode::KeySpacingX;
+  }
+  if (contains(handleRect(handles.keySpacingYX, handles.keySpacingYY), uiX,
+               uiY)) {
+    return DragMode::KeySpacingY;
+  }
+  if (contains(handleRect(handles.scratchSpacingX, handles.scratchSpacingY),
                uiX, uiY)) {
-    return DragMode::Spacing;
+    return DragMode::ScratchKeyplateSpacing;
+  }
+  if (contains(handleRect(handles.moveX, handles.moveY), uiX, uiY)) {
+    return DragMode::Move;
   }
   return contains(bounds, uiX, uiY) ? DragMode::Move : DragMode::None;
 }
@@ -103,6 +160,7 @@ bool VirtualControllerEditorView::beginDrag(std::int64_t pointerId, float uiX,
   }
   activePointerId_ = pointerId;
   dragStartConfig_ = config_;
+  dragStartLayout_ = layout();
   dragStartX_ = uiX;
   dragStartY_ = uiY;
   return true;
@@ -119,6 +177,18 @@ bool VirtualControllerEditorView::updateDrag(float uiX, float uiY) noexcept {
   const float dx = uiX - dragStartX_;
   const float dy = uiY - dragStartY_;
   config_ = dragStartConfig_;
+  const auto firstKey = std::find_if(
+      dragStartLayout_.elements.begin(), dragStartLayout_.elements.end(),
+      [](const gameplay::VirtualControllerElement &element) {
+        return element.control == gameplay::VirtualControllerControl::Key &&
+               element.keyPosition == 0;
+      });
+  const float keyWidth =
+      firstKey == dragStartLayout_.elements.end() ? 0.0F
+                                                   : firstKey->bounds.width;
+  const float keyHeight =
+      firstKey == dragStartLayout_.elements.end() ? 0.0F
+                                                   : firstKey->bounds.height;
   switch (dragMode_) {
   case DragMode::Move:
     config_.centerX += dx / editCanvas.width;
@@ -128,12 +198,23 @@ bool VirtualControllerEditorView::updateDrag(float uiX, float uiY) noexcept {
     config_.buttonSize +=
         (dx + dy) * 0.5F / std::min(editCanvas.width, editCanvas.height);
     break;
-  case DragMode::Spacing:
-    config_.keyGap += dx /
-                      std::max(1.0F, std::min(editCanvas.width,
-                                               editCanvas.height) *
-                                        std::max(dragStartConfig_.buttonSize,
-                                                 0.025F));
+  case DragMode::KeySpacingX:
+    if (keyWidth <= 0.0F) {
+      return false;
+    }
+    config_.keySpacingX += dx / keyWidth;
+    break;
+  case DragMode::KeySpacingY:
+    if (keyHeight <= 0.0F) {
+      return false;
+    }
+    config_.keySpacingY += dy / keyHeight;
+    break;
+  case DragMode::ScratchKeyplateSpacing:
+    if (keyWidth <= 0.0F) {
+      return false;
+    }
+    config_.scratchKeyplateSpacing += dx / keyWidth;
     break;
   case DragMode::None:
     return false;
@@ -149,6 +230,7 @@ void VirtualControllerEditorView::endDrag(std::int64_t pointerId) {
   }
   dragMode_ = DragMode::None;
   activePointerId_ = -1;
+  dragStartLayout_ = {};
   if (onCommit_) {
     onCommit_(config_);
   }
@@ -242,16 +324,18 @@ void VirtualControllerEditorView::renderImpl(RenderContext &context) {
     for (const auto &element : currentLayout.elements) {
       renderElement(batch, element, border, fill);
     }
-    const auto &bounds = currentLayout.bounds;
+    const auto handles = handleCenters(currentLayout);
     const auto addHandle = [&](float x, float y, const Color &color) {
       const auto handle = handleRect(x, y);
       batch.addRoundedRect(handle.x, handle.y, handle.width, handle.height,
                            5.0F, color.toABGR());
     };
-    addHandle(bounds.x, bounds.y, ui_theme::lime());
-    addHandle(bounds.x + bounds.width, bounds.y + bounds.height,
-              ui_theme::amber());
-    addHandle(bounds.x + bounds.width, bounds.y + bounds.height * 0.5F,
+    addHandle(handles.moveX, handles.moveY, ui_theme::lime());
+    addHandle(handles.resizeX, handles.resizeY, ui_theme::amber());
+    addHandle(handles.keySpacingXX, handles.keySpacingXY, ui_theme::cyan());
+    addHandle(handles.keySpacingYX, handles.keySpacingYY,
+              ui_theme::violetAction());
+    addHandle(handles.scratchSpacingX, handles.scratchSpacingY,
               ui_theme::coral());
   }
   rendering::setScissorUI(context.scissor.x, context.scissor.y,

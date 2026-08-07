@@ -311,6 +311,10 @@ void SettingsScene::renderScene() {
     inputConflictOverlayRoot->setSize(rendering::window_width,
                                       rendering::window_height);
   }
+  if (inputVirtualControllerEditorOverlayRoot != nullptr) {
+    inputVirtualControllerEditorOverlayRoot->setSize(rendering::window_width,
+                                                      rendering::window_height);
+  }
   if (previewActive && previewRenderer != nullptr) {
     syncPreviewPresentationConfiguration();
     capturePreviewVisualState();
@@ -534,6 +538,7 @@ void SettingsScene::cleanupScene() {
   inputCaptureStateText = nullptr;
   inputErrorText = nullptr;
   inputConflictOverlayRoot = nullptr;
+  inputVirtualControllerEditorOverlayRoot = nullptr;
   lastLayoutWidth = -1;
   lastLayoutHeight = -1;
   lastSafeTop = -1;

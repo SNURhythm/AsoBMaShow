@@ -6,8 +6,9 @@
 
 #include <functional>
 
-// A compact direct-manipulation preview used by Settings > Input. It retains
-// edits locally during a drag and commits only when the pointer is lifted.
+// A direct-manipulation canvas used by the full-screen Settings > Input
+// layout editor. It retains edits locally during a drag and commits only when
+// the pointer is lifted.
 class VirtualControllerEditorView final : public View {
 public:
   using CommitCallback = std::function<void(input::VirtualControllerConfig)>;
@@ -20,10 +21,32 @@ protected:
   bool handleEventsImpl(SDL_Event &event) override;
 
 private:
-  enum class DragMode : unsigned char { None, Move, Resize, Spacing };
+  enum class DragMode : unsigned char {
+    None,
+    Move,
+    Resize,
+    KeySpacingX,
+    KeySpacingY,
+    ScratchKeyplateSpacing,
+  };
+
+  struct HandleCenters {
+    float moveX = 0.0F;
+    float moveY = 0.0F;
+    float resizeX = 0.0F;
+    float resizeY = 0.0F;
+    float keySpacingXX = 0.0F;
+    float keySpacingXY = 0.0F;
+    float keySpacingYX = 0.0F;
+    float keySpacingYY = 0.0F;
+    float scratchSpacingX = 0.0F;
+    float scratchSpacingY = 0.0F;
+  };
 
   [[nodiscard]] gameplay::VirtualControllerCanvas canvas() const noexcept;
   [[nodiscard]] gameplay::VirtualControllerLayout layout() const;
+  [[nodiscard]] static HandleCenters
+  handleCenters(const gameplay::VirtualControllerLayout &layout) noexcept;
   [[nodiscard]] DragMode hitDragMode(float uiX, float uiY) const;
   [[nodiscard]] bool beginDrag(std::int64_t pointerId, float uiX,
                                float uiY) noexcept;
@@ -45,6 +68,7 @@ private:
   DragMode dragMode_ = DragMode::None;
   std::int64_t activePointerId_ = -1;
   input::VirtualControllerConfig dragStartConfig_;
+  gameplay::VirtualControllerLayout dragStartLayout_;
   float dragStartX_ = 0.0F;
   float dragStartY_ = 0.0F;
 };

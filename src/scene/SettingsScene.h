@@ -256,6 +256,7 @@ private:
   TextView *inputCaptureStateText = nullptr;
   TextView *inputErrorText = nullptr;
   View *inputConflictOverlayRoot = nullptr;
+  View *inputVirtualControllerEditorOverlayRoot = nullptr;
   std::unique_ptr<InputCaptureController> inputCaptureController;
   InputProfileReplacementNotifier::Registration
       inputProfileReplacementRegistration;
@@ -269,6 +270,7 @@ private:
   float inputGyroscopeAxisValue = 0.0F;
   std::string inputGyroscopeSettingsError;
   std::string inputVirtualControllerSettingsError;
+  bool inputVirtualControllerEditorVisible = false;
   settings_scene::InputSettingsRebuildGate inputViewRebuildGate;
   std::string inputLastViewSignature;
   bool previewActive = false;
@@ -407,6 +409,8 @@ private:
   View *buildLaneTab(const settings_scene::LayoutMetrics &metrics);
   View *buildInputTab(const settings_scene::LayoutMetrics &metrics);
   void buildInputConflictOverlay(
+      const settings_scene::LayoutMetrics &metrics);
+  void buildInputVirtualControllerEditorOverlay(
       const settings_scene::LayoutMetrics &metrics);
   View *buildMiscTab(const settings_scene::LayoutMetrics &metrics);
   View *buildAudioTab(const settings_scene::LayoutMetrics &metrics);
