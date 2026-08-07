@@ -547,14 +547,18 @@ void testHeaderArraysFollowBeatorajaTableKeys() {
          "sparse authored option tables retain their present values");
   const auto mixed = fixture().decode("mixed.luaskin");
   expect(mixed.header && mixed.header->options.size() == 2 &&
-             std::ranges::any_of(mixed.header->options, [](const auto &option) {
-               return option.name == "A" && option.choices.size() == 1 &&
-                      option.choices.front().value == 1;
-             }) &&
-             std::ranges::any_of(mixed.header->options, [](const auto &option) {
-               return option.name == "B" && option.choices.size() == 1 &&
-                      option.choices.front().value == 2;
-             }),
+             std::ranges::any_of(mixed.header->options,
+                                 [](const auto &option) {
+                                   return option.name == "A" &&
+                                          option.choices.size() == 1 &&
+                                          option.choices.front().value == 1;
+                                 }) &&
+             std::ranges::any_of(mixed.header->options,
+                                 [](const auto &option) {
+                                   return option.name == "B" &&
+                                          option.choices.size() == 1 &&
+                                          option.choices.front().value == 2;
+                                 }),
          "mixed-key authored option tables retain every table value");
   const auto numericString = fixture().decode("numeric-string.luaskin");
   expect(numericString.header && numericString.header->options.size() == 1 &&
@@ -604,8 +608,8 @@ void testAuthoredDimensionsStayWithinTheDecoderBoundary() {
   }
   const auto tooWide = fixture().decode("dimension-too-wide.luaskin");
   const auto tooTall = fixture().decode("dimension-too-tall.luaskin");
-  expect(tooWide.header && tooWide.header->width == 8193 &&
-             tooTall.header && tooTall.header->height == 8193,
+  expect(tooWide.header && tooWide.header->width == 8193 && tooTall.header &&
+             tooTall.header->height == 8193,
          "catalog headers preserve authored dimensions without an app-defined "
          "maximum");
   const auto boundaries = fixture().decode("dimension-boundaries.luaskin");
@@ -818,7 +822,8 @@ void testDuplicateFontNamesUseTheFirstBeatorajaDefinition() {
 }
 
 void testResourcePathsFollowBeatorajaResolution() {
-  const auto decoded = fixture().decodeGameplay("external-resource-paths.luaskin");
+  const auto decoded =
+      fixture().decodeGameplay("external-resource-paths.luaskin");
   const auto *caption =
       decoded.model ? objectNamed(*decoded.model, "caption") : nullptr;
   const auto *text =
@@ -933,6 +938,20 @@ void testPinnedFilePatternChoicesAreDeterministicAndCaseInsensitive() {
                        {header.files[0].name, std::string(expected)}},
            "ordinary, uppercase, and pinned alternative patterns reconcile");
   }
+
+  BeatorajaSkinHeader randomHeader = *decoded.header;
+  randomHeader.files = {decoded.header->files.front()};
+  EntryProfileSettings savedRandom;
+  savedRandom.filePaths.emplace("Ordinary", "Random");
+  const auto random =
+      reconcileSkinConfiguration(randomHeader, &savedRandom, *fileSystem);
+  expect(random.configuration && random.diagnostics.empty() &&
+             random.reconciledSettings.filePaths == savedRandom.filePaths &&
+             random.configuration->orderedFiles.size() == 1 &&
+             random.configuration->orderedFiles.front().selectedValue ==
+                 "plain.png",
+         "a persisted Random custom-file choice stays exported as Random while "
+         "the loader receives one matching file");
 }
 
 void testEntryRelativeFilePatternsStayWithinThePackage() {

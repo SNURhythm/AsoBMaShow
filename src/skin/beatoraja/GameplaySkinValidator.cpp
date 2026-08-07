@@ -34,7 +34,9 @@ void appendFailure(std::vector<SkinDiagnostic> &diagnostics,
   }
 }
 
-SkinEntryMetadataSnapshot metadataFor(const BeatorajaSkinHeader &header) {
+SkinEntryMetadataSnapshot
+metadataFor(const BeatorajaSkinHeader &header,
+            const BeatorajaSkinConfiguration &configuration) {
   SkinEntryMetadataSnapshot metadata;
   metadata.displayName = header.name;
   metadata.author = header.author;
@@ -56,11 +58,17 @@ SkinEntryMetadataSnapshot metadataFor(const BeatorajaSkinHeader &header) {
     }
     metadata.options.push_back(std::move(catalogOption));
   }
-  for (const auto &file : header.files) {
+  for (std::size_t index = 0; index < header.files.size(); ++index) {
+    const auto &file = header.files[index];
+    std::vector<std::string> choices;
+    if (index < configuration.orderedFiles.size()) {
+      choices = configuration.orderedFiles[index].choices;
+    }
     metadata.files.push_back({.category = file.category,
                               .name = file.name,
                               .pattern = file.pattern,
-                              .defaultValue = file.defaultValue});
+                              .defaultValue = file.defaultValue,
+                              .choices = std::move(choices)});
   }
   for (const auto &offset : header.offsets) {
     metadata.offsets.push_back({.category = offset.category,
@@ -183,7 +191,7 @@ SkinValidationResult GameplaySkinValidator::validate(
       return result;
     }
 
-    result.metadata = metadataFor(*decodedHeader.header);
+    result.metadata = metadataFor(*decodedHeader.header, configuration);
     if (!gameplaySkinTraitForSkinType(result.metadata->skinType)) {
       result.disposition = SkinValidationDisposition::UnavailableType;
       result.diagnostics.push_back(validationDiagnostic(

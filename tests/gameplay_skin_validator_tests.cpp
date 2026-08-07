@@ -98,8 +98,7 @@ void expectDiagnostic(const SkinValidationResult &result, std::string_view code,
 }
 
 bool isLowercaseSha256(std::string_view value) {
-  return value.size() == 64 &&
-         std::ranges::all_of(value, [](char character) {
+  return value.size() == 64 && std::ranges::all_of(value, [](char character) {
            return (character >= '0' && character <= '9') ||
                   (character >= 'a' && character <= 'f');
          });
@@ -131,8 +130,8 @@ void testConfigurationDigestFramesOnlyPersistedConfigurationMaps() {
   auto offsetMutation = configured;
   offsetMutation.offsets["Lane"].a = 7;
   mapDigests.insert(skinConfigurationDigest(offsetMutation));
-  expect(mapDigests.size() == 4,
-         "each persisted option, file, and offset map mutation changes the digest");
+  expect(mapDigests.size() == 4, "each persisted option, file, and offset map "
+                                 "mutation changes the digest");
 
   auto viewportMutation = configured;
   viewportMutation.viewport = {
@@ -168,7 +167,8 @@ void testConfigurationDigestFramesOnlyPersistedConfigurationMaps() {
 SkinValidationResult
 validateScript(std::string_view script,
                const EntryProfileSettings *desiredSettings = nullptr,
-               std::stop_token stop = {}) {
+               std::stop_token stop = {},
+               const std::map<std::string, std::string> &resourceFiles = {}) {
   TempDirectory temp;
   const auto package = normalizePackageId("FixtureSkin");
   expect(package.package.has_value(), "fixture package ID is valid");
@@ -183,6 +183,9 @@ validateScript(std::string_view script,
 
   const fs::path source = temp.root() / "source";
   writeText(source / "play/play7.luaskin", script);
+  for (const auto &[path, contents] : resourceFiles) {
+    writeText(source / path, contents);
+  }
   NoAliases aliases;
   SkinTreeSnapshotter snapshotter(rootsBelow(temp.root()), aliases);
   const auto snapshot = snapshotter.snapshot(source, *package.package, {}, {});
@@ -204,14 +207,14 @@ void testAuthoritativeCatalogAdmitsCompatibilityIntegerFactoryDomain() {
                           SkinBuiltinPropertySelector{241}),
          "catalog admits an authoritative gameplay boolean");
   for (const int selector : {80, 81, 84, 271, 272, 273, 1080, 1243}) {
-    expect(catalog.contains({.kind = SkinBindingKind::BooleanProperty},
-                            SkinBuiltinPropertySelector{selector}),
-           "catalog admits every implemented gameplay mode/loading/judge boolean");
+    expect(
+        catalog.contains({.kind = SkinBindingKind::BooleanProperty},
+                         SkinBuiltinPropertySelector{selector}),
+        "catalog admits every implemented gameplay mode/loading/judge boolean");
   }
-  for (const int selector : {32,   -32,  42,   -42,  400,
-                             -400, 603,  -603, 1002, -1002, 1177, -1177,
-                             2246, -2246, 3000, -3000, 3015, -3015, 3020,
-                             -3020, 3035, -3035}) {
+  for (const int selector : {32,   -32,   42,   -42,   400,  -400,  603,  -603,
+                             1002, -1002, 1177, -1177, 2246, -2246, 3000, -3000,
+                             3015, -3015, 3020, -3020, 3035, -3035}) {
     expect(catalog.contains({.kind = SkinBindingKind::BooleanProperty},
                             SkinBuiltinPropertySelector{selector}),
            "catalog admits each executable signed Beatoraja boolean selector");
@@ -226,7 +229,8 @@ void testAuthoritativeCatalogAdmitsCompatibilityIntegerFactoryDomain() {
                {.kind = SkinBindingKind::IntegerProperty,
                 .integerDomain = SkinIntegerPropertyDomain::IntegerValue},
                SkinBuiltinPropertySelector{selector}),
-           "catalog admits each reported IntegerPropertyFactory ValueType selector");
+           "catalog admits each reported IntegerPropertyFactory ValueType "
+           "selector");
   }
   for (const int selector : {0, 65'535}) {
     expect(catalog.contains(
@@ -274,9 +278,9 @@ void testAuthoritativeCatalogAdmitsCompatibilityIntegerFactoryDomain() {
   expect(!catalog.contains({.kind = SkinBindingKind::TimerProperty},
                            SkinBuiltinPropertySelector{-1}),
          "catalog rejects the negative timer range upstream also rejects");
-  for (const int selector : {312, 313, 1312, 1313, 1314, 1315,
-                             1316, 1317, 1318, 1319, 1320, 1321,
-                             1322, 1323, 1324, 1325, 1326, 1327}) {
+  for (const int selector :
+       {312, 313, 1312, 1313, 1314, 1315, 1316, 1317, 1318, 1319, 1320, 1321,
+        1322, 1323, 1324, 1325, 1326, 1327}) {
     expect(catalog.contains(
                {.kind = SkinBindingKind::IntegerProperty,
                 .integerDomain = SkinIntegerPropertyDomain::IntegerValue},
@@ -319,6 +323,7 @@ return {
   }},
   customTimers = {{id = 10000, timer = 41}}
 }
+
 )lua";
 
   EntryProfileSettings desired;
@@ -331,13 +336,13 @@ return {
              !hasDiagnostic(result, "skin_lua_validation_failed"),
          "positive validation completes without cancellation or catch-all "
          "failure");
-  expect(
-      result.metadata && result.metadata->displayName == "configured-phase-1" &&
-          result.metadata->author == "validator fixture" &&
-          result.metadata->skinType == 0 &&
-          result.metadata->authoredWidth == 1280 &&
-          result.metadata->authoredHeight == 720,
-      "catalog publishes metadata from the header-only Lua execution");
+  expect(result.metadata &&
+             result.metadata->displayName == "configured-phase-1" &&
+             result.metadata->author == "validator fixture" &&
+             result.metadata->skinType == 0 &&
+             result.metadata->authoredWidth == 1280 &&
+             result.metadata->authoredHeight == 720,
+         "catalog publishes metadata from the header-only Lua execution");
   expect(result.reconciledSettings &&
              result.reconciledSettings->options.at("Gauge") == 12,
          "validated result publishes reconciled profile settings");
@@ -365,6 +370,39 @@ return {
       "validation output remains owned after all staging state is destroyed");
 }
 
+void testCatalogPublishesFilePathChoicesAfterSavedSelection() {
+  constexpr std::string_view script = R"lua(
+return {
+  type = 0, w = 1280, h = 720, name = "file-path catalog",
+  filepath = {{
+    category = "Play", name = "Settings File(7keys)",
+    path = "customize/settings/*.lua", def = "FHD_default_1P.lua"
+  }}
+}
+)lua";
+
+  EntryProfileSettings desired;
+  desired.filePaths["Settings File(7keys)"] = "alternate.lua";
+  const SkinValidationResult result = validateScript(
+      script, &desired, {},
+      {{"play/customize/settings/FHD_default_1P.lua", "return {}"},
+       {"play/customize/settings/alternate.lua", "return {}"},
+       {"play/customize/settings/not-a-choice.txt", "ignored"}});
+
+  expect(result.disposition == SkinValidationDisposition::SelectableGameplay &&
+             result.metadata && result.metadata->files.size() == 1 &&
+             result.metadata->files.front().name == "Settings File(7keys)" &&
+             result.metadata->files.front().choices ==
+                 std::vector<std::string>{"FHD_default_1P.lua", "alternate.lua",
+                                          "Random"},
+         "catalog retains every Beatoraja custom-file choice after a saved "
+         "selection, including Random");
+  expect(result.reconciledSettings &&
+             result.reconciledSettings->filePaths == desired.filePaths,
+         "catalog preserves the saved custom-file selection while presenting "
+         "the other available choices");
+}
+
 void testCatalogDoesNotExecuteConfiguredLuaOrFabricateMainState() {
   const SkinValidationResult result = validateScript(R"lua(
 if skin_config then
@@ -375,9 +413,10 @@ return {
 }
 )lua");
 
-  expect(result.disposition == SkinValidationDisposition::SelectableGameplay,
-         "catalog selection is based on a Beatoraja header pass, not fabricated "
-         "main_state values");
+  expect(
+      result.disposition == SkinValidationDisposition::SelectableGameplay,
+      "catalog selection is based on a Beatoraja header pass, not fabricated "
+      "main_state values");
   expect(!hasDiagnostic(result, "skin_lua_execution_failed"),
          "unexecuted configured Lua cannot abort catalog validation");
 }
@@ -472,14 +511,13 @@ void testRequestedExternalGameplaySkinAvoidsConfiguredStateErrors() {
   const char *configuredEntry =
       std::getenv("ASOBMASHOW_EXTERNAL_GAMEPLAY_SKIN_ENTRY");
   const std::string entryPath =
-      configuredEntry != nullptr && *configuredEntry != '\0'
-          ? configuredEntry
-          : "play7.luaskin";
+      configuredEntry != nullptr && *configuredEntry != '\0' ? configuredEntry
+                                                             : "play7.luaskin";
 
   TempDirectory temp;
   const auto package = normalizePackageId("ExternalGameplaySkin").package;
-  const auto entry = package ? normalizeEntryPath(*package, entryPath).entry
-                             : std::nullopt;
+  const auto entry =
+      package ? normalizeEntryPath(*package, entryPath).entry : std::nullopt;
   expect(package.has_value() && entry.has_value(),
          "requested external gameplay entry has a portable virtual identity");
   if (!package || !entry) {
@@ -505,7 +543,8 @@ void testRequestedExternalGameplaySkinAvoidsConfiguredStateErrors() {
     }
   }
   expect(!hasDiagnostic(result, "skin_lua_execution_failed"),
-         "requested external gameplay Lua does not require live main_state during validation");
+         "requested external gameplay Lua does not require live main_state "
+         "during validation");
   expect(result.disposition == SkinValidationDisposition::SelectableGameplay,
          "requested external gameplay skin validates as selectable");
 }
@@ -558,6 +597,7 @@ int main() {
   testConfigurationDigestFramesOnlyPersistedConfigurationMaps();
   testAuthoritativeCatalogAdmitsCompatibilityIntegerFactoryDomain();
   testCatalogPublishesOwnedHeaderMetadataWithoutLoadingGameplay();
+  testCatalogPublishesFilePathChoicesAfterSavedSelection();
   testCatalogDoesNotExecuteConfiguredLuaOrFabricateMainState();
   testCatalogKeepsBeatorajaEmptyOptionDeclarationsSelectable();
   testCatalogRejectsNonGameplayBeatorajaSkinTypes();

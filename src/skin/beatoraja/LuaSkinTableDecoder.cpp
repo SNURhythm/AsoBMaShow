@@ -35,6 +35,7 @@ extern "C" {
 #include <limits>
 #include <map>
 #include <optional>
+#include <random>
 #include <set>
 #include <string>
 #include <string_view>
@@ -349,8 +350,8 @@ bool permissionField(lua_State *state, int index, std::string_view name,
 }
 
 bool strictArrayLength(lua_State *state, int index,
-                       std::optional<std::size_t> maximum,
-                       std::size_t &length, DecodeRequest &request) {
+                       std::optional<std::size_t> maximum, std::size_t &length,
+                       DecodeRequest &request) {
   if (!lua_istable(state, index)) {
     return fail(request, "skin_lua_header_invalid",
                 "Lua skin header array field is not a table");
@@ -374,8 +375,7 @@ bool strictArrayLength(lua_State *state, int index,
     }
     const double numeric = static_cast<double>(lua_tonumber(state, -2));
     if (!std::isfinite(numeric) || std::trunc(numeric) != numeric ||
-        numeric < 1.0 ||
-        (maximum && numeric > static_cast<double>(*maximum))) {
+        numeric < 1.0 || (maximum && numeric > static_cast<double>(*maximum))) {
       return fail(request, "skin_lua_header_invalid",
                   "Lua skin header array key is not a positive integer");
     }
@@ -391,8 +391,8 @@ bool strictArrayLength(lua_State *state, int index,
 }
 
 template <typename DecodeValue>
-bool forEachHeaderTableValue(lua_State *state, int index, DecodeRequest &request,
-                             DecodeValue decodeValue) {
+bool forEachHeaderTableValue(lua_State *state, int index,
+                             DecodeRequest &request, DecodeValue decodeValue) {
   if (!lua_istable(state, index)) {
     return fail(request, "skin_lua_header_invalid",
                 "Lua skin header array field is not a table");
@@ -560,8 +560,7 @@ template <typename Output, typename DecodeElement>
 bool decodeObjectArrayField(lua_State *state, int rootIndex,
                             std::string_view field, std::size_t depth,
                             std::optional<std::size_t> maximum,
-                            std::vector<Output> &output,
-                            DecodeRequest &request,
+                            std::vector<Output> &output, DecodeRequest &request,
                             DecodeElement decodeElement) {
   if (!rawGetField(state, rootIndex, field, request)) {
     return false;
@@ -704,6 +703,17 @@ std::string substitutePattern(std::string_view pattern,
   std::string result(pattern.substr(0, star));
   result.append(selected);
   return result;
+}
+
+std::string chooseRandomFile(const std::vector<std::string> &choices) {
+  if (choices.empty()) {
+    return {};
+  }
+  std::random_device entropy;
+  std::mt19937 generator(entropy());
+  std::uniform_int_distribution<std::size_t> distribution(0,
+                                                          choices.size() - 1);
+  return choices[distribution(generator)];
 }
 
 struct RawSkinSource {
@@ -1514,8 +1524,9 @@ bool integerArrayField(lua_State *state, int index, std::string_view name,
     return true;
   }
   std::size_t length = 0;
-  if (!strictArrayLength(state, -1, LuaSkinTableDecoderPolicy::maxGameplayOffsets,
-                         length, request)) {
+  if (!strictArrayLength(state, -1,
+                         LuaSkinTableDecoderPolicy::maxGameplayOffsets, length,
+                         request)) {
     return false;
   }
   const int tableIndex = absoluteIndex(state, -1);
@@ -2092,9 +2103,9 @@ bool makeTextObject(GameplayDecodeRequest &request,
                     const RawSkinText &definition, SkinTextObject &output) {
   const auto normalized = normalizeSkinText(
       {.fontName = definition.font,
-       .value = definition.value ? std::optional<SkinStringPropertyId>{
-                                           definition.value}
-                                 : std::nullopt,
+       .value = definition.value
+                    ? std::optional<SkinStringPropertyId>{definition.value}
+                    : std::nullopt,
        .writer = definition.writer,
        .literal = definition.literal,
        .pointSize = definition.pointSize,
@@ -2319,7 +2330,8 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
       SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::Judge,
                                     .matches = judge != request.judges.end()},
       SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::PmChara,
-                                    .matches = pmChara != request.pmCharas.end()},
+                                    .matches =
+                                        pmChara != request.pmCharas.end()},
   };
   const auto resolved = resolveSkinObjectPrecedence(candidates);
   if (resolved.status == SkinObjectResolutionStatus::Unsupported) {
@@ -2335,10 +2347,9 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
     return true;
   }
   if (resolved.status != SkinObjectResolutionStatus::Found) {
-    return fail(
-        request.decoding, "skin_lua_model_unsupported_object",
-        "Lua skin destination '" + std::string(name) +
-            "' does not resolve to an audited v1 object");
+    return fail(request.decoding, "skin_lua_model_unsupported_object",
+                "Lua skin destination '" + std::string(name) +
+                    "' does not resolve to an audited v1 object");
   }
 
   if (image != request.images.end()) {
@@ -2992,11 +3003,10 @@ void decodeGameplayProtected(lua_State *state, int index,
                                 LuaSkinTableDecoderPolicy::maxDecodedObjects,
                                 request->rawTimingVisualizers,
                                 request->decoding, decodeRawIdentity) ||
-        !decodeObjectArrayField(
-            state, index, "timingdistributiongraph", 1,
-            LuaSkinTableDecoderPolicy::maxDecodedObjects,
-            request->rawTimingDistributionGraphs, request->decoding,
-            decodeRawIdentity) ||
+        !decodeObjectArrayField(state, index, "timingdistributiongraph", 1,
+                                LuaSkinTableDecoderPolicy::maxDecodedObjects,
+                                request->rawTimingDistributionGraphs,
+                                request->decoding, decodeRawIdentity) ||
         !decodeObjectArrayField(state, index, "pmchara", 1,
                                 LuaSkinTableDecoderPolicy::maxDecodedObjects,
                                 request->rawPmCharas, request->decoding,
@@ -3656,8 +3666,9 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
       auto &condition = destination.conditions[index];
       // Keep only BooleanPropertyFactory misses as static skin options.
       if (condition.optionId &&
-          !builtins.contains({.kind = SkinBindingKind::BooleanProperty},
-                             SkinBuiltinPropertySelector{*condition.optionId})) {
+          !builtins.contains(
+              {.kind = SkinBindingKind::BooleanProperty},
+              SkinBuiltinPropertySelector{*condition.optionId})) {
         continue;
       }
       std::optional<SkinBooleanPropertyId> property;
@@ -3708,8 +3719,9 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
          conditionIndex < destination.conditions.size(); ++conditionIndex) {
       auto &condition = destination.conditions[conditionIndex];
       if (condition.optionId &&
-          !builtins.contains({.kind = SkinBindingKind::BooleanProperty},
-                             SkinBuiltinPropertySelector{*condition.optionId})) {
+          !builtins.contains(
+              {.kind = SkinBindingKind::BooleanProperty},
+              SkinBuiltinPropertySelector{*condition.optionId})) {
         continue;
       }
       std::optional<SkinBooleanPropertyId> property;
@@ -3824,92 +3836,80 @@ bool materializeGameplay(GameplayDecodeRequest &request,
     return false;
   }
 
+  moveFirstDefinitions(request.rawImages, request.images,
+                       [](const RawSkinImage &image) -> const std::string & {
+                         return image.id;
+                       });
+  moveFirstDefinitions(request.rawImageSets, request.imageSets,
+                       [](const RawSkinImageSet &image) -> const std::string & {
+                         return image.id;
+                       });
+  moveFirstDefinitions(request.rawNumbers, request.numbers,
+                       [](const RawSkinNumber &number) -> const std::string & {
+                         return number.image.id;
+                       });
+  moveFirstDefinitions(request.rawFloats, request.floats,
+                       [](const RawSkinFloat &number) -> const std::string & {
+                         return number.image.id;
+                       });
+  moveFirstDefinitions(request.rawSliders, request.sliders,
+                       [](const RawSkinSlider &slider) -> const std::string & {
+                         return slider.image.id;
+                       });
   moveFirstDefinitions(
-          request.rawImages, request.images,
-          [](const RawSkinImage &image) -> const std::string & {
-            return image.id;
-          });
+      request.rawTexts, request.texts,
+      [](const RawSkinText &text) -> const std::string & { return text.id; });
+  moveFirstDefinitions(request.rawGraphs, request.graphs,
+                       [](const RawSkinGraph &graph) -> const std::string & {
+                         return graph.image.id;
+                       });
   moveFirstDefinitions(
-          request.rawImageSets, request.imageSets,
-          [](const RawSkinImageSet &image) -> const std::string & {
-            return image.id;
-          });
+      request.rawGaugeGraphs, request.gaugeGraphs,
+      [](const RawSkinIdentity &identity) -> const std::string & {
+        return identity.id;
+      });
   moveFirstDefinitions(
-          request.rawNumbers, request.numbers,
-          [](const RawSkinNumber &number) -> const std::string & {
-            return number.image.id;
-          });
+      request.rawBpmGraphs, request.bpmGraphs,
+      [](const RawSkinIdentity &identity) -> const std::string & {
+        return identity.id;
+      });
   moveFirstDefinitions(
-          request.rawFloats, request.floats,
-          [](const RawSkinFloat &number) -> const std::string & {
-            return number.image.id;
-          });
+      request.rawHitErrorVisualizers, request.hitErrorVisualizers,
+      [](const RawSkinIdentity &identity) -> const std::string & {
+        return identity.id;
+      });
   moveFirstDefinitions(
-          request.rawSliders, request.sliders,
-          [](const RawSkinSlider &slider) -> const std::string & {
-            return slider.image.id;
-          });
+      request.rawJudgeGraphs, request.judgeGraphs,
+      [](const RawSkinIdentity &identity) -> const std::string & {
+        return identity.id;
+      });
   moveFirstDefinitions(
-          request.rawTexts, request.texts,
-          [](const RawSkinText &text) -> const std::string & {
-            return text.id;
-          });
+      request.rawTimingVisualizers, request.timingVisualizers,
+      [](const RawSkinIdentity &identity) -> const std::string & {
+        return identity.id;
+      });
   moveFirstDefinitions(
-          request.rawGraphs, request.graphs,
-          [](const RawSkinGraph &graph) -> const std::string & {
-            return graph.image.id;
-          });
+      request.rawTimingDistributionGraphs, request.timingDistributionGraphs,
+      [](const RawSkinIdentity &identity) -> const std::string & {
+        return identity.id;
+      });
   moveFirstDefinitions(
-          request.rawGaugeGraphs, request.gaugeGraphs,
-          [](const RawSkinIdentity &identity) -> const std::string & {
-            return identity.id;
-          });
-  moveFirstDefinitions(
-          request.rawBpmGraphs, request.bpmGraphs,
-          [](const RawSkinIdentity &identity) -> const std::string & {
-            return identity.id;
-          });
-  moveFirstDefinitions(
-          request.rawHitErrorVisualizers, request.hitErrorVisualizers,
-          [](const RawSkinIdentity &identity) -> const std::string & {
-            return identity.id;
-          });
-  moveFirstDefinitions(
-          request.rawJudgeGraphs, request.judgeGraphs,
-          [](const RawSkinIdentity &identity) -> const std::string & {
-            return identity.id;
-          });
-  moveFirstDefinitions(
-          request.rawTimingVisualizers, request.timingVisualizers,
-          [](const RawSkinIdentity &identity) -> const std::string & {
-            return identity.id;
-          });
-  moveFirstDefinitions(
-          request.rawTimingDistributionGraphs,
-          request.timingDistributionGraphs,
-          [](const RawSkinIdentity &identity) -> const std::string & {
-            return identity.id;
-          });
-  moveFirstDefinitions(
-          request.rawPmCharas, request.pmCharas,
-          [](const RawSkinIdentity &identity) -> const std::string & {
-            return identity.id;
-          });
-  moveFirstDefinitions(
-          request.rawHiddenCovers, request.hiddenCovers,
-          [](const RawSkinCover &cover) -> const std::string & {
-            return cover.image.id;
-          });
-  moveFirstDefinitions(
-          request.rawLiftCovers, request.liftCovers,
-          [](const RawSkinCover &cover) -> const std::string & {
-            return cover.image.id;
-          });
-  moveFirstDefinitions(
-          request.rawJudges, request.judges,
-          [](const RawSkinJudge &judge) -> const std::string & {
-            return judge.id;
-          });
+      request.rawPmCharas, request.pmCharas,
+      [](const RawSkinIdentity &identity) -> const std::string & {
+        return identity.id;
+      });
+  moveFirstDefinitions(request.rawHiddenCovers, request.hiddenCovers,
+                       [](const RawSkinCover &cover) -> const std::string & {
+                         return cover.image.id;
+                       });
+  moveFirstDefinitions(request.rawLiftCovers, request.liftCovers,
+                       [](const RawSkinCover &cover) -> const std::string & {
+                         return cover.image.id;
+                       });
+  moveFirstDefinitions(request.rawJudges, request.judges,
+                       [](const RawSkinJudge &judge) -> const std::string & {
+                         return judge.id;
+                       });
 
   if (request.note && !buildNoteObject(request, *request.note)) {
     transferDecodeDiagnostics(request);
@@ -4101,71 +4101,75 @@ reconcileSkinConfiguration(const BeatorajaSkinHeader &header,
       return result;
     }
 
+    std::vector<std::string> choices;
+    bool directoryAvailable = false;
+    if (validPattern(file.pattern)) {
+      const std::size_t slash = file.pattern.rfind('/');
+      const std::string directory =
+          slash == std::string::npos ? "." : file.pattern.substr(0, slash);
+      auto listed = fileSystem.listResourceDirectory(directory);
+      if (!listed.failure) {
+        directoryAvailable = true;
+        for (const std::string &entry : listed.entries) {
+          const std::string filename = filenameOf(entry);
+          if (!matchesFilePattern(file.pattern, filename)) {
+            continue;
+          }
+          const std::string candidate =
+              substitutePattern(file.pattern, filename);
+          const auto resolved =
+              fileSystem.resolveResourceCandidates(candidate, candidate);
+          if (resolved.normalizedVirtualPath) {
+            choices.push_back(filename);
+          }
+        }
+      }
+    }
+    std::sort(choices.begin(), choices.end());
+    choices.erase(std::unique(choices.begin(), choices.end()), choices.end());
+
+    std::vector<std::string> catalogChoices = choices;
+    if (directoryAvailable) {
+      // SkinConfiguration.updateCustomFiles adds Random after every file it
+      // discovers, including a directory with no matching files.
+      catalogChoices.push_back("Random");
+    }
+
+    std::optional<std::string> selected;
     // SkinHeader#setSkinConfigProperty accepts an existing FilePath by name
     // without requiring it to still match the declaration or exist on disk.
     // This also makes repeated CustomFile names share one persisted choice.
     if (saved != nullptr) {
       const auto desired = saved->filePaths.find(file.name);
       if (desired != saved->filePaths.end()) {
-        settings.filePaths.insert_or_assign(file.name, desired->second);
-        configuration.orderedFiles.push_back(
-            {.name = file.name,
-             .pattern = file.pattern,
-             .selectedValue = desired->second});
-        configuration.filePaths.insert_or_assign(file.name, desired->second);
-        continue;
+        selected = desired->second;
       }
     }
-
-    // A missing directory is skipped by SkinConfiguration.updateCustomFiles.
-    // Keep the declaration for load-time path semantics, but do not invent a
-    // selection or reject the skin.
-    if (!validPattern(file.pattern)) {
-      configuration.orderedFiles.push_back(
-          {.name = file.name, .pattern = file.pattern, .selectedValue = {}});
-      continue;
-    }
-
-    const std::size_t slash = file.pattern.rfind('/');
-    const std::string directory =
-        slash == std::string::npos ? "." : file.pattern.substr(0, slash);
-    auto listed = fileSystem.listResourceDirectory(directory);
-    std::vector<std::string> choices;
-    if (!listed.failure) {
-      for (const std::string &entry : listed.entries) {
-        const std::string filename = filenameOf(entry);
-        if (!matchesFilePattern(file.pattern, filename)) {
-          continue;
-        }
-        const std::string candidate = substitutePattern(file.pattern, filename);
-        const auto resolved =
-            fileSystem.resolveResourceCandidates(candidate, candidate);
-        if (resolved.normalizedVirtualPath) {
-          choices.push_back(filename);
+    if (!selected && !choices.empty()) {
+      selected = choices.front();
+      for (const std::string &choice : choices) {
+        if (asciiCaseEqual(choice, file.defaultValue) ||
+            asciiCaseEqual(stemOf(choice), file.defaultValue)) {
+          selected = choice;
+          break;
         }
       }
-    }
-    std::sort(choices.begin(), choices.end());
-    choices.erase(std::unique(choices.begin(), choices.end()), choices.end());
-    if (choices.empty()) {
-      configuration.orderedFiles.push_back(
-          {.name = file.name, .pattern = file.pattern, .selectedValue = {}});
-      continue;
+    } else if (!selected && directoryAvailable) {
+      selected = "Random";
     }
 
-    std::string selected = choices.front();
-    for (const std::string &choice : choices) {
-      if (asciiCaseEqual(choice, file.defaultValue) ||
-          asciiCaseEqual(stemOf(choice), file.defaultValue)) {
-        selected = choice;
-        break;
-      }
+    std::string runtimeSelection;
+    if (selected) {
+      runtimeSelection =
+          *selected == "Random" ? chooseRandomFile(choices) : *selected;
+      settings.filePaths.insert_or_assign(file.name, *selected);
+      configuration.filePaths.insert_or_assign(file.name, *selected);
     }
-    settings.filePaths.insert_or_assign(file.name, selected);
-    configuration.orderedFiles.push_back({.name = file.name,
-                                          .pattern = file.pattern,
-                                          .selectedValue = selected});
-    configuration.filePaths.insert_or_assign(file.name, selected);
+    configuration.orderedFiles.push_back(
+        {.name = file.name,
+         .pattern = file.pattern,
+         .selectedValue = std::move(runtimeSelection),
+         .choices = std::move(catalogChoices)});
   }
 
   for (const auto &offset : header.offsets) {

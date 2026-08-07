@@ -19,6 +19,7 @@ struct ConfiguredFile {
   std::string name;
   std::string pattern;
   std::string selectedValue;
+  std::vector<std::string> choices;
 };
 
 using OffsetPermissionMask = std::uint8_t;
