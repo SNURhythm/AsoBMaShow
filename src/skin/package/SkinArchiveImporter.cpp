@@ -271,7 +271,7 @@ copyArchiveSource(const fs::path &path, std::stop_token stop, bool &cancelled,
   }
 #else
   const int source =
-      ::open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+      ::open(path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
   struct stat before{};
   if (source < 0 || ::fstat(source, &before) != 0 || !S_ISREG(before.st_mode) ||
       before.st_size < 0 ||
@@ -1467,7 +1467,7 @@ public:
     activeLeaf_ = leaf;
     const int file =
         ::openat(parent, leaf.c_str(),
-                 O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+                 O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
     if (file < 0) {
       activeParentFd_ = -1;
       activeParentPath_.clear();
@@ -1546,7 +1546,7 @@ public:
       return -1;
     }
     const int file = ::openat(parent, leaf.c_str(),
-                              O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC);
+                              O_RDONLY | O_NONBLOCK | O_CLOEXEC);
     ::close(parent);
     return file;
   }
@@ -1764,7 +1764,7 @@ private:
       return -1;
     }
     int current = ::open(absolute.root_path().c_str(),
-                         O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+                         O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (current < 0) {
       return -1;
     }
@@ -1772,11 +1772,11 @@ private:
     for (const fs::path &componentPath : relative) {
       const std::string component = componentPath.string();
       int next = ::openat(current, component.c_str(),
-                          O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+                          O_RDONLY | O_DIRECTORY | O_CLOEXEC);
       if (next < 0 && create && errno == ENOENT &&
           ::mkdirat(current, component.c_str(), 0700) == 0) {
         next = ::openat(current, component.c_str(),
-                        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+                        O_RDONLY | O_DIRECTORY | O_CLOEXEC);
       }
       ::close(current);
       if (next < 0) {
@@ -1800,11 +1800,11 @@ private:
           start, separator == std::string_view::npos ? std::string_view::npos
                                                      : separator - start));
       int next = ::openat(current, component.c_str(),
-                          O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+                          O_RDONLY | O_DIRECTORY | O_CLOEXEC);
       if (next < 0 && create && errno == ENOENT &&
           ::mkdirat(current, component.c_str(), 0700) == 0) {
         next = ::openat(current, component.c_str(),
-                        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+                        O_RDONLY | O_DIRECTORY | O_CLOEXEC);
       }
       ::close(current);
       if (next < 0) {
@@ -1843,7 +1843,7 @@ private:
       if (S_ISDIR(status.st_mode)) {
         const int child =
             ::openat(directory, entry->d_name,
-                     O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+                     O_RDONLY | O_DIRECTORY | O_CLOEXEC);
         if (child < 0 || !clearDirectory(child) ||
             ::unlinkat(directory, entry->d_name, AT_REMOVEDIR) != 0) {
           ok = false;
@@ -1957,7 +1957,7 @@ private:
           break;
         }
         rootFd_ = ::openat(parentFd_, name_.c_str(),
-                           O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+                           O_RDONLY | O_DIRECTORY | O_CLOEXEC);
         if (rootFd_ >= 0) {
           path_ = parentPath / name_;
           return true;
