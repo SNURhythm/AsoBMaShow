@@ -1076,7 +1076,9 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
            std::pair{102, 114LL}, std::pair{103, 0LL},
            // NUMBER_DIFF_HIGHSCORE compares with ScoreDataProperty's
            // projected current best score, rather than its final score.
-           std::pair{105, 321LL}, std::pair{152, 428LL},
+           // NUMBER_HIGHSCORE instead exposes the persisted final best score.
+           std::pair{105, 321LL}, std::pair{150, 300LL},
+           std::pair{152, 428LL},
            std::pair{153, 216LL}, std::pair{313, 417LL},
            std::pair{410, 4LL}, std::pair{411, 3LL},
            std::pair{412, 2LL}, std::pair{413, 1LL},

@@ -1318,6 +1318,11 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
     return {.value = static_cast<std::int64_t>(snapshot->score) -
                     snapshot->authority.pacemakerStatus.targetScore,
             .supported = true};
+  case 150:
+    // NUMBER_HIGHSCORE delegates to createHighScoreProperty(), which reads
+    // ScoreDataProperty.getBestScore(): the persisted final EX score.
+    return {.value = static_cast<std::int64_t>(snapshot->authority.bestScore),
+            .supported = true};
   case 152:
     // NUMBER_DIFF_HIGHSCORE delegates to createDiffHighScoreProperty(),
     // which compares against ScoreDataProperty.getNowBestScore(), including
