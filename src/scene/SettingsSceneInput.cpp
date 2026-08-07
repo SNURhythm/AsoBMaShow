@@ -296,6 +296,8 @@ std::string SettingsScene::inputViewSignature() const {
          << context.inputProfile.virtualController.enabled << ':'
          << static_cast<int>(context.inputProfile.virtualController.scratchMode)
          << ':'
+         << static_cast<int>(context.inputProfile.virtualController.player)
+         << ':'
          << context.inputProfile.virtualController.centerX << ':'
          << context.inputProfile.virtualController.centerY << ':'
          << context.inputProfile.virtualController.buttonSize << ':'
@@ -626,14 +628,22 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
           commitVirtualControllerSetting(next);
         });
     virtualControllerBody->addView(scratchModeButton);
-    virtualControllerBody->addView(makeWrappedText(
-        spinScratch
-            ? "Spin the platter. Each 3° turn refreshes the held scratch direction for 150 ms."
-            : "Flick Mode: swipe the scratch vertically, matching the original virtual controller.",
-        metrics.smallTextSize, ui_theme::textSecondary()));
-    virtualControllerBody->addView(makeWrappedText(
-        "Use the full-screen editor to place, resize, overlap key rows, and tune independent X/Y and scratch spacing.",
-        metrics.smallTextSize, ui_theme::textSecondary()));
+    const bool playerTwo = virtualControllerConfig.player ==
+                           input::VirtualControllerPlayer::Player2;
+    auto *playerButton = makeControlButton(
+        std::min(bodyWidth, metrics.actionButtonWidth),
+        metrics.actionButtonHeight,
+        makeText(playerTwo ? "Player: 2P" : "Player: 1P",
+                 metrics.bodyTextSize + 1, ui_theme::textPrimary(),
+                 TextView::CENTER, TextView::MIDDLE));
+    playerButton->setOnClickListener(
+        [this, virtualControllerConfig, playerTwo]() {
+          auto next = virtualControllerConfig;
+          next.player = playerTwo ? input::VirtualControllerPlayer::Player1
+                                  : input::VirtualControllerPlayer::Player2;
+          commitVirtualControllerSetting(next);
+        });
+    virtualControllerBody->addView(playerButton);
     auto *editButton = makeControlButton(
         std::min(bodyWidth, metrics.actionButtonWidth),
         metrics.actionButtonHeight,
@@ -645,18 +655,16 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
     });
     virtualControllerBody->addView(editButton);
   }
-  virtualControllerBody->addView(makeWrappedText(
-      inputVirtualControllerSettingsError.empty()
-          ? ""
-          : "Not saved: " + inputVirtualControllerSettingsError,
-      metrics.smallTextSize, ui_theme::coral()));
-  cards->addView(makeCard(
-      metrics, "Virtual Controller",
-      "Optional 5-key and 7-key mobile controls. It stays above the selected gameplay skin.",
-      virtualControllerBody,
-      virtualControllerConfig.enabled ? (metrics.compact ? 390 : 350)
-                                      : (metrics.compact ? 220 : 200),
-      metrics.cardsWidth));
+  virtualControllerBody->addView(
+      makeWrappedText(inputVirtualControllerSettingsError.empty()
+                          ? ""
+                          : "Not saved: " + inputVirtualControllerSettingsError,
+                      metrics.smallTextSize, ui_theme::coral()));
+  cards->addView(
+      makeCard(metrics, "Virtual Controller", "", virtualControllerBody,
+               virtualControllerConfig.enabled ? (metrics.compact ? 340 : 300)
+                                               : (metrics.compact ? 220 : 200),
+               metrics.cardsWidth));
 
   const bool showGyroscopeSettings =
       shouldShowGyroscopeSettingsCard(inputSelectedDeviceId);

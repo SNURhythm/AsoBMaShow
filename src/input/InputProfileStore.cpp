@@ -177,6 +177,7 @@ void parseVirtualControllerConfigMember(const Json &config, const char *name,
 void parseVirtualControllerConfig(const Json &document, InputProfile &profile,
                                   bool hasAxisSpacing,
                                   bool hasScratchMode,
+                                  bool hasPlayer,
                                   std::vector<std::string> &diagnostics) {
   const auto config = document.find("virtualController");
   if (config == document.end() || !config->is_object()) {
@@ -214,6 +215,27 @@ void parseVirtualControllerConfig(const Json &document, InputProfile &profile,
   } else {
     profile.virtualController.scratchMode =
         input::VirtualControllerScratchMode::Flick;
+  }
+  if (hasPlayer) {
+    const auto player = config->find("player");
+    if (player == config->end() || !player->is_number_integer()) {
+      profile.virtualController.player =
+          input::VirtualControllerPlayer::Player1;
+      diagnostics.emplace_back(
+          "Reset missing or invalid virtual controller player.");
+    } else if (*player == 1) {
+      profile.virtualController.player =
+          input::VirtualControllerPlayer::Player1;
+    } else if (*player == 2) {
+      profile.virtualController.player =
+          input::VirtualControllerPlayer::Player2;
+    } else {
+      profile.virtualController.player =
+          input::VirtualControllerPlayer::Player1;
+      diagnostics.emplace_back("Reset invalid virtual controller player.");
+    }
+  } else {
+    profile.virtualController.player = input::VirtualControllerPlayer::Player1;
   }
   parseVirtualControllerConfigMember(
       *config, "centerX", input::VirtualControllerConfig::kDefaultCenterX,
@@ -444,7 +466,8 @@ InputProfileStore::load(const std::filesystem::path &path) {
     }
     if (schemaVersion >= 4) {
       parseVirtualControllerConfig(document, result.profile, schemaVersion >= 5,
-                                   schemaVersion >= 6, result.diagnostics);
+                                   schemaVersion >= 6, schemaVersion >= 7,
+                                   result.diagnostics);
     }
     result.profile.bindings.reserve(bindings.size());
     for (const auto &binding : bindings) {
@@ -517,6 +540,7 @@ bool InputProfileStore::saveAtomic(const std::filesystem::path &path,
                                   input::VirtualControllerScratchMode::Spin
                               ? "spin"
                               : "flick"},
+          {"player", static_cast<int>(sanitized.virtualController.player)},
           {"centerX", sanitized.virtualController.centerX},
           {"centerY", sanitized.virtualController.centerY},
           {"buttonSize", sanitized.virtualController.buttonSize},

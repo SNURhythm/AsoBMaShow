@@ -1535,6 +1535,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(lua_skin_file_system_windows_contract PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
+    add_test(NAME settings_virtual_controller_ui_contract
+        COMMAND ${Python3_EXECUTABLE}
+                -m unittest
+                tests/settings_virtual_controller_ui_contract_tests.py -v)
+    set_tests_properties(settings_virtual_controller_ui_contract PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
     add_library(ir_submission_eligibility_test_support STATIC
         src/ir/tachi/TachiEligibility.cpp
         src/ir/IrOutboxModels.cpp

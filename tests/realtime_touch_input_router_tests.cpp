@@ -1997,6 +1997,37 @@ void testVirtualControllerLayoutRoutesKeysAndSystemControls() {
                    keyOne->bounds.width * config.scratchKeyplateSpacing),
           "virtual-controller geometry preserves square system buttons, 1:2 keys, and independent signed spacing");
 
+  auto playerTwoConfig = config;
+  playerTwoConfig.player = input::VirtualControllerPlayer::Player2;
+  const auto playerTwoController =
+      gameplay::makeVirtualControllerLayout(playerTwoConfig, 14, canvas);
+  const auto findPlayerTwoElement =
+      [&](gameplay::VirtualControllerControl control,
+          int keyPosition = -1) -> const gameplay::VirtualControllerElement * {
+    for (const auto &element : playerTwoController.elements) {
+      if (element.control == control && element.keyPosition == keyPosition) {
+        return &element;
+      }
+    }
+    return nullptr;
+  };
+  const auto *playerTwoScratch =
+      findPlayerTwoElement(gameplay::VirtualControllerControl::Scratch);
+  const auto *playerTwoKeyOne =
+      findPlayerTwoElement(gameplay::VirtualControllerControl::Key, 0);
+  const auto *playerTwoStart =
+      findPlayerTwoElement(gameplay::VirtualControllerControl::Start);
+  require(
+      playerTwoController.valid() && playerTwoScratch != nullptr &&
+          playerTwoKeyOne != nullptr && playerTwoStart != nullptr &&
+          playerTwoScratch->lane == 15 && playerTwoKeyOne->lane == 8 &&
+          playerTwoScratch->bounds.x > playerTwoKeyOne->bounds.x &&
+          playerTwoStart->replayControl ==
+              replay::LogicalControl{.kind = replay::LogicalControlKind::Start,
+                                     .player = 2,
+                                     .lane = -1},
+      "the 2P controller mirrors the deck and routes the double-play lanes");
+
   const gameplay::RealtimeTouchUiTransform transform{
       .renderWidth = 1000,
       .renderHeight = 600,
@@ -2104,6 +2135,55 @@ void testVirtualControllerLayoutRoutesKeysAndSystemControls() {
           "drag mode changes between Start and Select instead of conflating their shared lane sentinel");
 }
 
+void testVirtualControllerFlickOnePlayerUpwardIsCounterClockwise() {
+  input::VirtualControllerConfig config;
+  config.enabled = true;
+  const gameplay::VirtualControllerCanvas canvas{
+      .x = 0.0F, .y = 0.0F, .width = 1000.0F, .height = 600.0F};
+  const auto controller =
+      gameplay::makeVirtualControllerLayout(config, 7, canvas);
+  const auto scratch = std::ranges::find_if(
+      controller.elements,
+      [](const gameplay::VirtualControllerElement &element) {
+        return element.control == gameplay::VirtualControllerControl::Scratch;
+      });
+  require(scratch != controller.elements.end(),
+          "the virtual controller exposes its scratch circle");
+
+  gameplay::RealtimeTouchLayout layout;
+  layout.revision = 1;
+  layout.keyMode = 7;
+  layout.laneRegions = gameplay::makeVirtualControllerTouchRegions(
+      controller, {.renderWidth = 1000,
+                   .renderHeight = 600,
+                   .uiScaleX = 1.0F,
+                   .uiScaleY = 1.0F,
+                   .uiWidth = 1000,
+                   .uiHeight = 600});
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      94, std::move(layout),
+      {.context = &capture, .emit = &InputCapture::emit});
+  const float centerX =
+      (scratch->bounds.x + scratch->bounds.width * 0.5F) / canvas.width;
+  const float centerY =
+      (scratch->bounds.y + scratch->bounds.height * 0.5F) / canvas.height;
+  require(router.consume({.fingerId = 301,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = centerX,
+                          .normalizedY = centerY,
+                          .steadyTimestampMicros = 10}) &&
+              router.consume({.fingerId = 301,
+                              .phase = gameplay::RealtimeTouchPhase::Move,
+                              .normalizedX = centerX,
+                              .normalizedY = centerY - 0.04F,
+                              .steadyTimestampMicros = 11}) &&
+              capture.events.size() == 1 &&
+              capture.events.front().replayControl.kind ==
+                  replay::LogicalControlKind::ScratchCounterClockwise,
+          "on the left 1P platter, an upward flick is counter-clockwise");
+}
+
 } // namespace
 
 int main() {
@@ -2152,5 +2232,6 @@ int main() {
   testUnpublishedNativeCancelIsSynthesizedDuringRecovery();
   testFailedCancelExpiryRequestsRecovery();
   testVirtualControllerLayoutRoutesKeysAndSystemControls();
+  testVirtualControllerFlickOnePlayerUpwardIsCounterClockwise();
   return 0;
 }

@@ -534,6 +534,8 @@ bool RealtimeTouchInputRouter::beginLane(
   finger.scratch = region.scratch;
   finger.spinScratch = region.scratch && region.spinScratch &&
                        region.circle.has_value();
+  finger.invertFlickScratchDirection = region.scratch && !finger.spinScratch &&
+                                       region.invertFlickScratchDirection;
   const auto replayControl = region.replayControl.has_value()
                                  ? region.replayControl
                                  : replay::logicalControlForChartLane(
@@ -603,7 +605,10 @@ bool RealtimeTouchInputRouter::handleScratchMove(
   if (distance <= threshold) {
     return true;
   }
-  const int direction = dy < 0.0F ? 1 : -1;
+  int direction = dy < 0.0F ? 1 : -1;
+  if (finger.invertFlickScratchDirection) {
+    direction = -direction;
+  }
   if (direction == finger.scratchDirection) {
     return true;
   }

@@ -203,6 +203,7 @@ void SettingsScene::resetViewState() {
   inputCaptureStateText = nullptr;
   inputErrorText = nullptr;
   inputConflictOverlayRoot = nullptr;
+  inputVirtualControllerEditorOverlayRoot = nullptr;
 }
 
 void SettingsScene::ensureLayoutUpToDate() {

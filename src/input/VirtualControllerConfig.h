@@ -11,6 +11,11 @@ enum class VirtualControllerScratchMode : unsigned char {
   Spin,
 };
 
+enum class VirtualControllerPlayer : unsigned char {
+  Player1 = 1,
+  Player2 = 2,
+};
+
 // Values are fractions of the current mobile canvas. The layout code derives
 // pixels from the shorter canvas edge so a profile feels consistent across
 // landscape iPhones and iPads.
@@ -29,6 +34,9 @@ struct VirtualControllerConfig {
   // Flick preserves the original vertical-swipe behavior. Spin is an
   // opt-in turntable gesture whose rotation is quantized by the touch router.
   VirtualControllerScratchMode scratchMode = VirtualControllerScratchMode::Flick;
+  // The selected arcade side determines the deck orientation. On double-play
+  // charts it also selects the matching player lanes.
+  VirtualControllerPlayer player = VirtualControllerPlayer::Player1;
   float centerX = kDefaultCenterX;
   float centerY = kDefaultCenterY;
   float buttonSize = kDefaultButtonSize;

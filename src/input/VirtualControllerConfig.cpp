@@ -45,6 +45,11 @@ void VirtualControllerConfig::sanitize(std::vector<std::string> &diagnostics) {
     scratchMode = VirtualControllerScratchMode::Flick;
     diagnostics.emplace_back("Reset invalid virtual controller scratch mode.");
   }
+  if (player != VirtualControllerPlayer::Player1 &&
+      player != VirtualControllerPlayer::Player2) {
+    player = VirtualControllerPlayer::Player1;
+    diagnostics.emplace_back("Reset invalid virtual controller player.");
+  }
   centerX = finiteOrDefault(centerX, kDefaultCenterX, "horizontal position",
                             diagnostics);
   centerY = finiteOrDefault(centerY, kDefaultCenterY, "vertical position",

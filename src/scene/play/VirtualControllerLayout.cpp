@@ -11,6 +11,23 @@ namespace {
 
 [[nodiscard]] bool finite(float value) noexcept { return std::isfinite(value); }
 
+[[nodiscard]] int keysPerVirtualControllerPlayer(int keyMode) noexcept {
+  switch (keyMode) {
+  case 5:
+  case 10:
+    return 5;
+  case 7:
+  case 14:
+    return 7;
+  default:
+    return 0;
+  }
+}
+
+[[nodiscard]] bool isDoublePlayKeyMode(int keyMode) noexcept {
+  return keyMode == 10 || keyMode == 14;
+}
+
 [[nodiscard]] float clampOrigin(float desired, float minimum,
                                 float maximum) noexcept {
   if (maximum < minimum) {
@@ -68,7 +85,7 @@ bool VirtualControllerLayout::valid() const noexcept {
 }
 
 bool supportsVirtualControllerKeyMode(int keyMode) noexcept {
-  return keyMode == 5 || keyMode == 7;
+  return keysPerVirtualControllerPlayer(keyMode) != 0;
 }
 
 VirtualControllerLayout makeVirtualControllerLayout(
@@ -94,18 +111,25 @@ VirtualControllerLayout makeVirtualControllerLayout(
 
   bms_parser::ChartMeta meta;
   meta.KeyMode = keyMode;
+  const int keysPerPlayer = keysPerVirtualControllerPlayer(keyMode);
+  const bool drawPlayerTwo =
+      config.player == input::VirtualControllerPlayer::Player2;
+  const int chartPlayer = drawPlayerTwo && isDoublePlayKeyMode(keyMode) ? 2 : 1;
   const auto scratchLanes = meta.GetScratchLaneIndices();
-  if (scratchLanes.empty()) {
+  const auto allKeyLanes = meta.GetKeyLaneIndices();
+  const std::size_t keyOffset =
+      chartPlayer == 2 ? static_cast<std::size_t>(keysPerPlayer) : 0U;
+  const std::size_t scratchOffset = chartPlayer == 2 ? 1U : 0U;
+  if (keysPerPlayer <= 0 || scratchOffset >= scratchLanes.size() ||
+      keyOffset + static_cast<std::size_t>(keysPerPlayer) >
+          allKeyLanes.size()) {
     return {};
   }
   std::vector<int> keyLanes;
-  keyLanes.reserve(static_cast<std::size_t>(keyMode));
-  for (int keyPosition = 0; keyPosition < keyMode; ++keyPosition) {
-    const auto lane = input_profile::chartLaneForKeyPosition(keyMode, keyPosition);
-    if (!lane.has_value()) {
-      return {};
-    }
-    keyLanes.push_back(*lane);
+  keyLanes.reserve(static_cast<std::size_t>(keysPerPlayer));
+  for (int keyPosition = 0; keyPosition < keysPerPlayer; ++keyPosition) {
+    keyLanes.push_back(
+        allKeyLanes[keyOffset + static_cast<std::size_t>(keyPosition)]);
   }
 
   const auto makeElements = [&](float unit) {
@@ -131,18 +155,21 @@ VirtualControllerLayout makeVirtualControllerLayout(
     const float upperKeyTop = systemSize + keyHeight * 0.25F;
     const float lowerKeyTop = upperKeyTop + keyPitchY;
     const float keyplateRight =
-        keyplateLeft + static_cast<float>(keyMode - 1) * keyPitchX + keyWidth;
+        keyplateLeft + static_cast<float>(keysPerPlayer - 1) * keyPitchX +
+        keyWidth;
     const float systemsLeft =
         (keyplateLeft + keyplateRight) * 0.5F - (systemSize * 2.0F + systemGap) * 0.5F;
     const float scratchTop = upperKeyTop +
                              (keyPitchY + keyHeight - scratchDiameter) * 0.5F;
 
-    elements.reserve(static_cast<std::size_t>(keyMode) + 3U);
+    elements.reserve(static_cast<std::size_t>(keysPerPlayer) + 3U);
     elements.push_back(
         {.control = VirtualControllerControl::Start,
          .shape = VirtualControllerShape::Rectangle,
-         .replayControl = replay::LogicalControl{
-             .kind = replay::LogicalControlKind::Start, .player = 1, .lane = -1},
+         .replayControl =
+             replay::LogicalControl{.kind = replay::LogicalControlKind::Start,
+                                    .player = chartPlayer,
+                                    .lane = -1},
          .bounds = {.x = systemsLeft,
                     .y = 0.0F,
                     .width = systemSize,
@@ -150,10 +177,10 @@ VirtualControllerLayout makeVirtualControllerLayout(
     elements.push_back(
         {.control = VirtualControllerControl::Select,
          .shape = VirtualControllerShape::Rectangle,
-         .replayControl = replay::LogicalControl{
-             .kind = replay::LogicalControlKind::Select,
-             .player = 1,
-             .lane = -1},
+         .replayControl =
+             replay::LogicalControl{.kind = replay::LogicalControlKind::Select,
+                                    .player = chartPlayer,
+                                    .lane = -1},
          .bounds = {.x = systemsLeft + systemSize + systemGap,
                     .y = 0.0F,
                     .width = systemSize,
@@ -161,15 +188,18 @@ VirtualControllerLayout makeVirtualControllerLayout(
     elements.push_back(
         {.control = VirtualControllerControl::Scratch,
          .shape = VirtualControllerShape::Circle,
-         .lane = scratchLanes.front(),
+         .lane = scratchLanes[scratchOffset],
          .scratch = true,
          .spinScratch = config.scratchMode ==
                         input::VirtualControllerScratchMode::Spin,
+         .invertFlickScratchDirection =
+             config.scratchMode == input::VirtualControllerScratchMode::Flick &&
+             !drawPlayerTwo,
          .bounds = {.x = 0.0F,
                     .y = scratchTop,
                     .width = scratchDiameter,
                     .height = scratchDiameter}});
-    for (int keyPosition = 0; keyPosition < keyMode; ++keyPosition) {
+    for (int keyPosition = 0; keyPosition < keysPerPlayer; ++keyPosition) {
       elements.push_back(
           {.control = VirtualControllerControl::Key,
            .shape = VirtualControllerShape::Rectangle,
@@ -180,6 +210,18 @@ VirtualControllerLayout makeVirtualControllerLayout(
                       .y = keyPosition % 2 == 0 ? lowerKeyTop : upperKeyTop,
                       .width = keyWidth,
                       .height = keyHeight}});
+    }
+    if (drawPlayerTwo) {
+      float left = std::numeric_limits<float>::infinity();
+      float right = -std::numeric_limits<float>::infinity();
+      for (const auto &element : elements) {
+        left = std::min(left, element.bounds.x);
+        right = std::max(right, element.bounds.x + element.bounds.width);
+      }
+      for (auto &element : elements) {
+        element.bounds.x =
+            left + right - (element.bounds.x + element.bounds.width);
+      }
     }
     return elements;
   };
@@ -249,14 +291,16 @@ makeVirtualControllerTouchRegions(const VirtualControllerLayout &layout,
       return {};
     }
     RealtimeTouchLaneRegion region{.bottomLeft = *bottomLeft,
-                                    .bottomRight = *bottomRight,
-                                    .topLeft = *topLeft,
-                                    .topRight = *topRight,
-                                    .lane = element.lane,
-                                    .scratch = element.scratch,
-                                    .spinScratch = element.spinScratch,
-                                    .replayControl = element.replayControl,
-                                    .requiresInside = true};
+                                   .bottomRight = *bottomRight,
+                                   .topLeft = *topLeft,
+                                   .topRight = *topRight,
+                                   .lane = element.lane,
+                                   .scratch = element.scratch,
+                                   .spinScratch = element.spinScratch,
+                                   .invertFlickScratchDirection =
+                                       element.invertFlickScratchDirection,
+                                   .replayControl = element.replayControl,
+                                   .requiresInside = true};
     if (element.shape == VirtualControllerShape::Circle) {
       const auto center = normalizedPoint(element.bounds.centerX(),
                                           element.bounds.centerY(), transform);

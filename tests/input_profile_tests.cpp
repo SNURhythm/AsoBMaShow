@@ -197,12 +197,12 @@ int main() {
     oldSchemaProfile.schemaVersion = 1;
     diagnostics.clear();
     oldSchemaProfile.sanitize(diagnostics);
-    require(oldSchemaProfile.schemaVersion == InputProfile::kSchemaVersion &&
-                std::ranges::find(
-                    diagnostics,
-                    "Reset unsupported input schema version to 6.") !=
-                    diagnostics.end(),
-            "schema repair diagnostics report the real current version");
+    require(
+        oldSchemaProfile.schemaVersion == InputProfile::kSchemaVersion &&
+            std::ranges::find(diagnostics,
+                              "Reset unsupported input schema version to 7.") !=
+                diagnostics.end(),
+        "schema repair diagnostics report the real current version");
 
     input::InputBinding invalidOrder = defaults.bindings.front();
     invalidOrder.deadZone = 0.0F;
@@ -548,7 +548,7 @@ int main() {
     require(
         InputProfileStore::saveAtomic(
             migratedVersionZeroPath, versionZeroResult.profile, errorMessage) &&
-            readFile(migratedVersionZeroPath).find("\"schemaVersion\": 6") !=
+            readFile(migratedVersionZeroPath).find("\"schemaVersion\": 7") !=
                 std::string::npos,
         "saving migrated version zero persists the current schema");
 
@@ -578,17 +578,18 @@ int main() {
                 errorMessage),
             "gyroscope profile saves atomically");
     const std::string gyroscopeRoundTripJson = readFile(gyroscopeRoundTripPath);
-    require(gyroscopeRoundTripJson.find("\"schemaVersion\": 6") !=
-                    std::string::npos &&
-                gyroscopeRoundTripJson.find("\"gyroscopeTurntable\"") !=
-                    std::string::npos &&
-                gyroscopeRoundTripJson.find("\"stepAngleDegrees\": 7") !=
-                    std::string::npos &&
-                gyroscopeRoundTripJson.find("\"releaseDelayMs\": 350") !=
-                    std::string::npos &&
-                gyroscopeRoundTripJson.find("\"deviceClass\": \"gyroscope\"") !=
-                    std::string::npos,
-            "current schema serialization includes config and device vocabulary");
+    require(
+        gyroscopeRoundTripJson.find("\"schemaVersion\": 7") !=
+                std::string::npos &&
+            gyroscopeRoundTripJson.find("\"gyroscopeTurntable\"") !=
+                std::string::npos &&
+            gyroscopeRoundTripJson.find("\"stepAngleDegrees\": 7") !=
+                std::string::npos &&
+            gyroscopeRoundTripJson.find("\"releaseDelayMs\": 350") !=
+                std::string::npos &&
+            gyroscopeRoundTripJson.find("\"deviceClass\": \"gyroscope\"") !=
+                std::string::npos,
+        "current schema serialization includes config and device vocabulary");
     const auto gyroscopeRoundTripResult =
         InputProfileStore::load(gyroscopeRoundTripPath);
     require(gyroscopeRoundTripResult.status == InputProfileLoadStatus::Loaded &&
@@ -603,6 +604,7 @@ int main() {
     virtualControllerProfile.virtualController = {
         .enabled = true,
         .scratchMode = input::VirtualControllerScratchMode::Spin,
+        .player = input::VirtualControllerPlayer::Player2,
         .centerX = 0.41F,
         .centerY = 0.72F,
         .buttonSize = 0.16F,
@@ -625,9 +627,11 @@ int main() {
             "virtual controller enablement, placement, size, and independent signed spacing round trip");
     const std::string virtualControllerJson =
         readFile(virtualControllerRoundTripPath);
-    require(virtualControllerJson.find("\"schemaVersion\": 6") !=
+    require(virtualControllerJson.find("\"schemaVersion\": 7") !=
                     std::string::npos &&
                 virtualControllerJson.find("\"scratchMode\": \"spin\"") !=
+                    std::string::npos &&
+                virtualControllerJson.find("\"player\": 2") !=
                     std::string::npos &&
                 virtualControllerJson.find("\"keySpacingX\"") !=
                     std::string::npos &&
@@ -635,9 +639,9 @@ int main() {
                     std::string::npos &&
                 virtualControllerJson.find("\"scratchKeyplateSpacing\"") !=
                     std::string::npos &&
-                virtualControllerJson.find("\"keyGap\"") ==
-                    std::string::npos,
-            "virtual-controller geometry and scratch mode serialize in schema six");
+                virtualControllerJson.find("\"keyGap\"") == std::string::npos,
+            "virtual-controller geometry, player, and scratch mode serialize "
+            "in schema seven");
 
     const auto legacyVirtualControllerPath =
         testRoot / "virtual-controller-v4.json";
@@ -649,6 +653,8 @@ int main() {
                 legacyVirtualController.profile.virtualController.enabled &&
                 legacyVirtualController.profile.virtualController.scratchMode ==
                     input::VirtualControllerScratchMode::Flick &&
+                legacyVirtualController.profile.virtualController.player ==
+                    input::VirtualControllerPlayer::Player1 &&
                 legacyVirtualController.profile.virtualController.keySpacingX ==
                     0.3F &&
                 legacyVirtualController.profile.virtualController.keySpacingY ==

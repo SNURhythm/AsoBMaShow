@@ -47,6 +47,10 @@ struct VirtualControllerElement {
   int lane = -1;
   bool scratch = false;
   bool spinScratch = false;
+  // A 1P platter is drawn on the left. An upward flick along its practical
+  // right-hand edge is counter-clockwise, unlike the historical generic
+  // vertical-swipe mapping used by skin-authored scratch lanes.
+  bool invertFlickScratchDirection = false;
   std::optional<replay::LogicalControl> replayControl;
   VirtualControllerRect bounds;
 };
@@ -60,9 +64,9 @@ struct VirtualControllerLayout {
 
 [[nodiscard]] bool supportsVirtualControllerKeyMode(int keyMode) noexcept;
 
-// The controller intentionally owns only 5-key and 7-key single-play. The
-// layout mirrors their physical button rows and uses the chart's canonical
-// lane mapping rather than a visual-column-to-lane assumption.
+// The controller owns 5/7-key single-play and either independently selected
+// deck on 10/14-key double-play. It uses the chart's canonical lane mapping
+// rather than a visual-column-to-lane assumption.
 [[nodiscard]] VirtualControllerLayout makeVirtualControllerLayout(
     const input::VirtualControllerConfig &config, int keyMode,
     VirtualControllerCanvas canvas);
