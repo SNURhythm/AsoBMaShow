@@ -1162,9 +1162,11 @@ public:
     }
     auto tree = std::shared_ptr<SecureStagingTree>(new SecureStagingTree());
     tree->observer_ = observer;
-    if (!tree->allocate(roots.visiblePackages.parent_path() /
-                            ".skin-import-staging",
-                        diagnostics)) {
+    // iOS grants the app its writable Files surface at Documents/Skins. Keep
+    // the temporary import tree beneath that same root instead of creating a
+    // hidden sibling in Documents, which some File Provider implementations
+    // reject even when Skins itself is writable.
+    if (!tree->allocate(roots.visiblePackages, diagnostics)) {
       return {};
     }
     observe(observer, SkinImportIoOperation::VisibleRootIssued, tree->path_);

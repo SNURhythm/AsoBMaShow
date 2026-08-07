@@ -371,6 +371,22 @@ std::size_t childCount(const fs::path &path) {
       fs::directory_iterator(path, error), fs::directory_iterator{}));
 }
 
+std::size_t visibleImportStagingCount(const fs::path &skinsRoot) {
+  std::error_code error;
+  if (!fs::exists(skinsRoot, error)) {
+    return 0;
+  }
+  std::size_t count = 0;
+  for (const fs::directory_entry &entry : fs::directory_iterator(skinsRoot,
+                                                                  error)) {
+    if (entry.is_directory(error) &&
+        entry.path().filename().string().starts_with("import-")) {
+      ++count;
+    }
+  }
+  return count;
+}
+
 std::size_t publishedRevisionCount(const fs::path &privateRevisions) {
   std::error_code error;
   if (!fs::exists(privateRevisions, error)) {
@@ -394,8 +410,7 @@ void expectRejectedAndClean(const PreparePackageResult &result,
          "rejection reports a diagnostic or cancellation");
   expect(childCount(roots.privateRevisions / ".staging") == 0,
          "rejection leaves no private revision staging");
-  expect(childCount(roots.visiblePackages.parent_path() /
-                    ".skin-import-staging") == 0,
+  expect(visibleImportStagingCount(roots.visiblePackages) == 0,
          "rejection leaves no visible publication staging");
   expect(publishedRevisionCount(roots.privateRevisions) == 0,
          "rejection publishes no immutable revision");
@@ -1367,8 +1382,7 @@ void testVisibleStagingPreservesExistingFileProviderPermissions() {
 #else
   TempDirectory temp;
   const auto roots = rootsBelow(temp.root());
-  const fs::path stagingParent =
-      roots.visiblePackages.parent_path() / ".skin-import-staging";
+  const fs::path stagingParent = roots.visiblePackages;
   fs::create_directories(stagingParent);
   expect(::chmod(stagingParent.c_str(), 0755) == 0,
          "fixture makes Documents-visible staging provider-readable");
@@ -1379,9 +1393,11 @@ void testVisibleStagingPreservesExistingFileProviderPermissions() {
       roots);
   struct stat status {};
   expect(result.prepared.has_value() &&
+             result.prepared->visibleStagingRoot().parent_path() ==
+                 roots.visiblePackages &&
              ::stat(stagingParent.c_str(), &status) == 0 &&
              (status.st_mode & 0777) == 0755,
-         "visible staging does not require or overwrite File Provider permissions");
+         "visible staging stays inside Skins without changing File Provider permissions");
 #endif
 }
 
@@ -1462,14 +1478,12 @@ void testCancellationAndPreparedDestructionCleanAllStaging() {
       expect(result.prepared.has_value(), "valid archive prepares");
       expect(childCount(roots.privateRevisions / ".staging") == 1,
              "prepared package owns private revision staging");
-      expect(childCount(roots.visiblePackages.parent_path() /
-                        ".skin-import-staging") == 1,
+      expect(visibleImportStagingCount(roots.visiblePackages) == 1,
              "prepared package owns visible staging");
     }
     expect(childCount(roots.privateRevisions / ".staging") == 0,
            "PreparedPackage destruction cleans private revision staging");
-    expect(childCount(roots.visiblePackages.parent_path() /
-                      ".skin-import-staging") == 0,
+    expect(visibleImportStagingCount(roots.visiblePackages) == 0,
            "PreparedPackage destruction cleans visible staging");
   }
 }

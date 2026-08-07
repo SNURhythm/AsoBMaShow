@@ -613,8 +613,8 @@ void testCatalogJournalReplayAtEveryDurabilityBoundary() {
     TempDirectory temp;
     const SkinStorageRoots roots = rootsBelow(temp.root());
     const fs::path visible = roots.visiblePackages / "FixtureSkin";
-    const fs::path visibleStaging = roots.visiblePackages.parent_path() /
-                                    ".skin-import-staging/import-op-17";
+    const fs::path visibleStaging =
+        roots.visiblePackages / "import-op-17";
     const fs::path visibleBackup =
         roots.visiblePackages.parent_path() /
         ".skin-publication-backups/op-17/FixtureSkin";
@@ -737,8 +737,8 @@ void testCreateJournalRestoresAbsenceOrCompleteNewPackage() {
     TempDirectory temp;
     const SkinStorageRoots roots = rootsBelow(temp.root());
     const fs::path visible = roots.visiblePackages / "FixtureSkin";
-    const fs::path visibleStaging = roots.visiblePackages.parent_path() /
-                                    ".skin-import-staging/import-create-17";
+    const fs::path visibleStaging =
+        roots.visiblePackages / "import-create-17";
     const fs::path newRevision =
         roots.privateRevisions / std::string(kNewTreeDigest);
     const fs::path catalogFile = roots.privateCatalog / "catalog.json";
@@ -844,8 +844,7 @@ void testRecoveryRejectsOverlappingBootstrapOwnership() {
   TempDirectory temp;
   const SkinStorageRoots roots = rootsBelow(temp.root());
   const fs::path visible = roots.visiblePackages / "FixtureSkin";
-  const fs::path visibleStaging =
-      roots.visiblePackages.parent_path() / ".skin-import-staging/import-op-17";
+  const fs::path visibleStaging = roots.visiblePackages / "import-op-17";
   const fs::path oldRevision =
       roots.privateRevisions / std::string(kOldTreeDigest);
   const fs::path newRevisionStaging =

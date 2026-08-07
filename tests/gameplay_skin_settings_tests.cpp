@@ -76,6 +76,21 @@ void writeText(const fs::path &path, std::string_view text) {
   output << text;
 }
 
+bool hasVisibleImportStaging(const fs::path &skinsRoot) {
+  std::error_code error;
+  if (!fs::exists(skinsRoot, error)) {
+    return false;
+  }
+  for (const fs::directory_entry &entry : fs::directory_iterator(skinsRoot,
+                                                                  error)) {
+    if (entry.is_directory(error) &&
+        entry.path().filename().string().starts_with("import-")) {
+      return true;
+    }
+  }
+  return false;
+}
+
 fs::path makeZip(const fs::path &path, std::string_view member,
                  std::string_view contents) {
   archive *writer = archive_write_new();
@@ -719,13 +734,10 @@ void testRejectedPublishTransfersReservedStagingOffControllerThread() {
   const auto closeElapsed = std::chrono::steady_clock::now() - closeStarted;
   expect(closeElapsed < std::chrono::milliseconds(100),
          "controller close never waits for recursive staging deletion");
-  const auto stagingParent =
-      fixture.roots.visiblePackages.parent_path() / ".skin-import-staging";
   expect(pumpUntil(fixture, *controller,
                    [&] {
-                     std::error_code error;
-                     return !fs::exists(stagingParent, error) ||
-                            fs::is_empty(stagingParent, error);
+                     return !hasVisibleImportStaging(
+                         fixture.roots.visiblePackages);
                    }),
          "reserved disposal eventually removes rejected staging off-thread");
   expect(fixture.operations->catalogSnapshot()->packages.empty(),
@@ -967,13 +979,10 @@ void testReservationPrecedesPickerAndCancelTransfersLocalStaging() {
   expect(std::chrono::steady_clock::now() - closeStarted <
              std::chrono::milliseconds(100),
          "closing inventory-held staging is nonblocking");
-  const auto stagingParent =
-      fixture.roots.visiblePackages.parent_path() / ".skin-import-staging";
   expect(pumpUntil(fixture, *staging,
                    [&] {
-                     std::error_code error;
-                     return !fs::exists(stagingParent, error) ||
-                            fs::is_empty(stagingParent, error);
+                     return !hasVisibleImportStaging(
+                         fixture.roots.visiblePackages);
                    }),
          "cancel transfers prepared staging to reserved worker disposal");
 }
@@ -1153,13 +1162,10 @@ void testInventoryRaceRetriesThenSucceedsAndCancelDisposesRetry() {
                 }),
       "retryable publication race returns exact staging for fresh inventory");
   controller->close();
-  const auto stagingParent =
-      fixture.roots.visiblePackages.parent_path() / ".skin-import-staging";
   expect(pumpUntil(fixture, *controller,
                    [&] {
-                     std::error_code error;
-                     return !fs::exists(stagingParent, error) ||
-                            fs::is_empty(stagingParent, error);
+                     return !hasVisibleImportStaging(
+                         fixture.roots.visiblePackages);
                    }),
          "cancelling a retry-held package disposes staging on service worker");
   expect(fixture.operations->catalogSnapshot()->packages.empty(),
@@ -1190,19 +1196,14 @@ void testMalformedProfileInventoriesDisposePreparedStagingOnReservedLane() {
                      }),
            "malformed profile inventory becomes a terminal controller error");
 
-    const auto stagingParent =
-        fixture.roots.visiblePackages.parent_path() / ".skin-import-staging";
     const bool disposalStarted = observer->waitForReservedDisposal();
-    std::error_code stagingError;
-    expect(disposalStarted && fs::exists(stagingParent, stagingError) &&
-               !fs::is_empty(stagingParent, stagingError),
+    expect(disposalStarted && hasVisibleImportStaging(fixture.roots.visiblePackages),
            "prepared staging remains owned while reserved disposal is blocked");
     observer->releaseDisposal();
     expect(pumpUntil(fixture, *controller,
                      [&] {
-                       std::error_code error;
-                       return !fs::exists(stagingParent, error) ||
-                              fs::is_empty(stagingParent, error);
+                       return !hasVisibleImportStaging(
+                           fixture.roots.visiblePackages);
                      }),
            "reserved disposal drains malformed-inventory staging");
     expect(
@@ -1247,13 +1248,10 @@ void testPermanentPublishFailureCleansStagingAndPublishesNothing() {
                 }),
       "unavailable destination produces a permanent publication failure");
 
-  const auto stagingParent =
-      fixture.roots.visiblePackages.parent_path() / ".skin-import-staging";
   expect(pumpUntil(fixture, *controller,
                    [&] {
-                     std::error_code error;
-                     return !fs::exists(stagingParent, error) ||
-                            fs::is_empty(stagingParent, error);
+                     return !hasVisibleImportStaging(
+                         fixture.roots.visiblePackages);
                    }),
          "terminal publication failure leaves no prepared staging");
   expect(fixture.operations->catalogSnapshot()->packages.empty(),

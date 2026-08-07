@@ -2510,9 +2510,8 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
         roots_.visiblePackages / journal->destinationDirectory;
     const fs::path oldVisible =
         roots_.visiblePackages / journal->oldVisibleDirectory;
-    const fs::path visibleStaging = roots_.visiblePackages.parent_path() /
-                                    ".skin-import-staging" /
-                                    journal->visibleStagingToken;
+    const fs::path visibleStaging =
+        roots_.visiblePackages / journal->visibleStagingToken;
     const fs::path visibleBackup =
         roots_.visiblePackages.parent_path() / ".skin-publication-backups" /
         journal->visibleBackupToken / journal->oldVisibleDirectory;
