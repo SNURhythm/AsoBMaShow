@@ -50,7 +50,10 @@ struct PlayfieldPresentationConfig {
       AppSettings::VisibleTimeBpmStrategy::Chart;
   float playAreaWidth = 0.0F;
   bool laneBeamsEnabled = true;
-  bool laneCoverFloatingEnabled = true;
+  // Live LaneRenderer::getHispeed() cover factor.  It is intentionally kept
+  // separate from noteStartPositionPercent because toggling lane cover in
+  // Beatoraja does not reset Hi-Speed.
+  float laneCoverHispeedFactor = 1.0F;
   int laneBeamLengthPercent = 100;
   int noteStartPositionPercent = 0;
   bool laneBeamClockUsesRenderTime = false;

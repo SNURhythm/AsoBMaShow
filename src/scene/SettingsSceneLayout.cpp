@@ -88,7 +88,7 @@ void SettingsScene::resetViewState() {
   startLaneIndicatorsModeText = nullptr;
   showInvisibleNotesModeText = nullptr;
   touchVisualizationModeText = nullptr;
-  floatingLaneCoverModeText = nullptr;
+  hispeedAutoAdjustModeText = nullptr;
   archiveChartPreviewModeText = nullptr;
   findBmsSkipUnarchivingModeText = nullptr;
   notePriorityModeText = nullptr;
@@ -115,7 +115,7 @@ void SettingsScene::resetViewState() {
   startLaneIndicatorsModeButton = nullptr;
   showInvisibleNotesModeButton = nullptr;
   touchVisualizationModeButton = nullptr;
-  floatingLaneCoverModeButton = nullptr;
+  hispeedAutoAdjustModeButton = nullptr;
   archiveChartPreviewModeButton = nullptr;
   findBmsSkipUnarchivingModeButton = nullptr;
   notePriorityModeButton = nullptr;
@@ -1806,18 +1806,17 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   noteStartControls->addView(resetNoteStart);
   noteStartPanel->addView(noteStartControls);
 
-  floatingLaneCoverModeText =
+  hispeedAutoAdjustModeText =
       makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
-  floatingLaneCoverModeButton =
+  hispeedAutoAdjustModeButton =
       makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
-                        floatingLaneCoverModeText);
-  floatingLaneCoverModeButton->setOnClickListener([this]() {
-    context.settings.floatingLaneCoverEnabled =
-        !context.settings.floatingLaneCoverEnabled;
+                        hispeedAutoAdjustModeText);
+  hispeedAutoAdjustModeButton->setOnClickListener([this]() {
+    context.settings.hispeedAutoAdjust = !context.settings.hispeedAutoAdjust;
     persistSettings();
   });
-  noteStartPanel->addView(floatingLaneCoverModeButton);
+  noteStartPanel->addView(hispeedAutoAdjustModeButton);
   cardsColumn->addView(makeCard(
       metrics, "Note Start Position", "Set where notes enter the lane.",
       noteStartPanel, metrics.offsetCardHeight, metrics.cardsWidth));

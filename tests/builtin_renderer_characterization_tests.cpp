@@ -435,7 +435,8 @@ PlayfieldPresentationConfig presentationConfig(int coverPercent) {
       .visibleTimeBpmStrategy = AppSettings::VisibleTimeBpmStrategy::Chart,
       .playAreaWidth = AppSettings::kDefaultPlayAreaWidth,
       .laneBeamsEnabled = true,
-      .laneCoverFloatingEnabled = true,
+      .laneCoverHispeedFactor =
+          1.0F - static_cast<float>(coverPercent) / 100.0F,
       .laneBeamLengthPercent = 82,
       .noteStartPositionPercent = coverPercent,
       .laneBeamClockUsesRenderTime = true,
@@ -1105,7 +1106,7 @@ Json configurationJson(const PlayfieldPresentationConfig &config) {
       {"visibleTimeBpmStrategy", static_cast<int>(config.visibleTimeBpmStrategy)},
       {"playAreaWidth", canonical(config.playAreaWidth)},
       {"laneBeamsEnabled", config.laneBeamsEnabled},
-      {"laneCoverFloatingEnabled", config.laneCoverFloatingEnabled},
+      {"laneCoverHispeedFactor", canonical(config.laneCoverHispeedFactor)},
       {"laneBeamLengthPercent", config.laneBeamLengthPercent},
       {"noteStartPositionPercent", config.noteStartPositionPercent},
       {"laneBeamClockUsesRenderTime", config.laneBeamClockUsesRenderTime},

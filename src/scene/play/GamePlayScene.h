@@ -225,6 +225,7 @@ private:
                                     long long songTimeMicros);
   void cancelLegacyFloatingLaneCoverTouch();
   void persistFloatingLaneCoverSettings();
+  void refreshLaneCoverHispeedFactor();
   void appendReplayTouchSample(SDL_FingerID fingerIndex,
                                ReplayTouchAction action,
                                Vector3 normalizedLocation,
@@ -302,6 +303,7 @@ private:
   std::vector<const bms_parser::Note *> playfieldVisualNoteSources;
   int playfieldLaneCoverPercent = 0;
   float playfieldLaneCoverPercentExact = 0.0F;
+  float playfieldLaneCoverHispeedFactor = 1.0F;
   bool playfieldLaneCoverResetPending = false;
   bool gameplaySkinSafeBoundsInitialized = false;
   double gameplaySkinSafeBoundsX = 0.0;

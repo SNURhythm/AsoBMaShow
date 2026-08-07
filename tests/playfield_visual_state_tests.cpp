@@ -235,7 +235,7 @@ void testVisualStateCaptureAndFanoutAreCoherentValueSnapshots() {
           AppSettings::VisibleTimeBpmStrategy::MostPrevalent,
       .playAreaWidth = 6.5F,
       .laneBeamsEnabled = false,
-      .laneCoverFloatingEnabled = false,
+      .laneCoverHispeedFactor = 0.78F,
       .laneBeamLengthPercent = 73,
       .noteStartPositionPercent = 22,
       .laneBeamClockUsesRenderTime = true,

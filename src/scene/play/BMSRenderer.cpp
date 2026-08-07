@@ -2275,11 +2275,12 @@ BuiltInRendererTraversal BMSRenderer::builtInProjectionTraversal() const {
   // PlayfieldProjectionRequest without reimplementing green-number math.
   const float visibleTimeMs = std::max(
       1.0F, static_cast<float>(visibleTimeGreenNumber) * (1000.0F / 600.0F));
-  const float hispeed =
+  const float configuredHispeed =
       240000.0F / static_cast<float>(visibleTimeReferenceBpm()) /
-      visibleTimeMs *
-      static_cast<float>(gameplay_timing::playbackTravelScale(playbackRate)) *
-      hispeedMultiplier;
+      visibleTimeMs * hispeedMultiplier * laneCoverHispeedFactor;
+  const float hispeed =
+      configuredHispeed *
+      static_cast<float>(gameplay_timing::playbackTravelScale(playbackRate));
   const float laneHeight = std::max(0.001F, upperBound - judgeY);
   const float hiddenRatio =
       static_cast<float>(noteStartPositionPercent) / 100.0F;
@@ -2288,7 +2289,11 @@ BuiltInRendererTraversal BMSRenderer::builtInProjectionTraversal() const {
       .lowerBound = lowerBound,
       .judgeY = judgeY,
       .upperBound = upperBound,
-      .rxhs = std::max(0.001F, visibleUpper - judgeY) * hispeed,
+      // Beatoraja changes the live Hi-Speed when cover moves.  Keeping that
+      // factor in the raw speed preserves the built-in product while giving
+      // skins the same LaneRenderer::getHispeed() semantics.
+      .rxhs = laneHeight * hispeed,
+      .configuredHispeed = configuredHispeed,
       .hispeed = hispeed,
       .noteVisibleUpperBound = visibleUpper};
   traversal.playableLaneOrder.reserve(laneOrder.size());
@@ -4081,7 +4086,7 @@ void BMSRenderer::configure(
   setVisibleTimeBpmStrategy(configuration.visibleTimeBpmStrategy);
   setPlayAreaWidth(configuration.playAreaWidth);
   setLaneBeamsEnabled(configuration.laneBeamsEnabled);
-  setLaneCoverFloatingEnabled(configuration.laneCoverFloatingEnabled);
+  setLaneCoverHispeedFactor(configuration.laneCoverHispeedFactor);
   setLaneBeamLengthPercent(configuration.laneBeamLengthPercent);
   setNoteStartPositionPercent(configuration.noteStartPositionPercent);
   setLaneBeamClockUsesRenderTime(
@@ -4146,9 +4151,6 @@ std::uint64_t BMSRenderer::touchHitRegionsRevision() const noexcept {
 
 std::vector<PresentationUiHitRegion> BMSRenderer::touchHitRegions() const {
   std::vector<PresentationUiHitRegion> result;
-  if (!laneCoverFloatingEnabled) {
-    return result;
-  }
   const PresentationUiHit laneCover{
       .kind = PresentationUiControlKind::LaneCover,
       .layoutRevision = touchLayoutRevision(),
@@ -4310,12 +4312,8 @@ void BMSRenderer::setLaneBeamsEnabled(bool enabled) {
   renderLaneBeams = enabled;
 }
 
-void BMSRenderer::setLaneCoverFloatingEnabled(bool enabled) {
-  if (laneCoverFloatingEnabled == enabled) {
-    return;
-  }
-  laneCoverFloatingEnabled = enabled;
-  advanceTouchRevision(touchHitRegionsRevision_);
+void BMSRenderer::setLaneCoverHispeedFactor(float factor) {
+  laneCoverHispeedFactor = factor;
 }
 
 std::optional<std::array<std::pair<float, float>, 4>>
@@ -4474,9 +4472,6 @@ bool BMSRenderer::isLaneCoverHandleHit(float renderX, float renderY) const {
 
 std::optional<float>
 BMSRenderer::laneCoverHandleGrabOffset(float renderX, float renderY) const {
-  if (!laneCoverFloatingEnabled) {
-    return std::nullopt;
-  }
   const auto point = lanePlanePointAtRenderPosition(renderX, renderY);
   if (!point.has_value()) {
     return std::nullopt;
@@ -4886,7 +4881,7 @@ void BMSRenderer::layoutLaneCoverNumberTexts() {
   }
 
   const LaneCoverHandleGeometry handle = laneCoverHandleGeometry();
-  const bool handleVisible = laneCoverFloatingEnabled && handle.height > 0.0f;
+  const bool handleVisible = handle.height > 0.0f;
   const float labelBottomWorldY =
       handleVisible ? handle.y + handle.height : noteVisibleUpperBound;
   if (labelBottomWorldY >= upperBound) {
@@ -4963,10 +4958,6 @@ void BMSRenderer::drawLaneCover() {
     drawRect(playAreaWidth, edgeHeight, playAreaLeftX,
              noteVisibleUpperBound - edgeHeight * 0.5f,
              Color(214, 224, 236, 255));
-  }
-
-  if (!laneCoverFloatingEnabled) {
-    return;
   }
 
   const LaneCoverHandleGeometry handle = laneCoverHandleGeometry();

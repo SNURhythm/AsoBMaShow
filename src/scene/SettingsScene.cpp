@@ -438,7 +438,7 @@ void SettingsScene::cleanupScene() {
   startLaneIndicatorsModeText = nullptr;
   showInvisibleNotesModeText = nullptr;
   touchVisualizationModeText = nullptr;
-  floatingLaneCoverModeText = nullptr;
+  hispeedAutoAdjustModeText = nullptr;
   notePriorityModeText = nullptr;
   judgementIndicatorModeText = nullptr;
   judgementIndicatorRenderModeText = nullptr;
@@ -457,7 +457,7 @@ void SettingsScene::cleanupScene() {
   startLaneIndicatorsModeButton = nullptr;
   showInvisibleNotesModeButton = nullptr;
   touchVisualizationModeButton = nullptr;
-  floatingLaneCoverModeButton = nullptr;
+  hispeedAutoAdjustModeButton = nullptr;
   notePriorityModeButton = nullptr;
   judgementIndicatorModeButton = nullptr;
   judgementIndicatorRenderModeButton = nullptr;

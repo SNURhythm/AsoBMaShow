@@ -259,7 +259,8 @@ PlayfieldVisualState stateAt(std::uint64_t serial) {
 PlayfieldProjectionResult projectionAt(std::uint64_t serial) {
   PlayfieldProjectionResult projection;
   projection.frameSerial = serial;
-  projection.builtInTraversal = BuiltInRendererTraversal{.hispeed = 2.0F};
+  projection.builtInTraversal =
+      BuiltInRendererTraversal{.hispeed = 2.0F, .configuredHispeed = 2.0F};
   projection.notes.push_back({.noteId = 1,
                               .lane = 0,
                               .kind = ChartVisualNoteKind::Mine,
@@ -335,11 +336,15 @@ void testHispeedBindingsUsePinnedIntegerAndFloatProperties() {
   // FloatPropertyFactory.FloatType.hispeed: each selector reads the raw
   // PlayConfig/LaneRenderer hispeed, not the skin's note traversal speed.
   state.configuration.hispeedMultiplier = 1.75F;
-  bridge.beginFrame(state, projectionAt(203));
+  auto projection = projectionAt(203);
+  // LaneRenderer::getHispeed() is the live cover-compensated PlayConfig
+  // value, not the preference and not the playback-scaled skin traversal.
+  projection.builtInTraversal->configuredHispeed = 1.3125F;
+  bridge.beginFrame(state, projection);
 
   for (const auto [id, expected] : std::array{
-           std::pair{10, 175LL}, std::pair{310, 1LL},
-           std::pair{311, 75LL}}) {
+           std::pair{10, 131LL}, std::pair{310, 1LL},
+           std::pair{311, 31LL}}) {
     const auto value = bridge.integerProperty({id});
     expect(value.supported && value.value == expected,
            "hispeed selector follows IntegerPropertyFactory: " +
@@ -347,7 +352,7 @@ void testHispeedBindingsUsePinnedIntegerAndFloatProperties() {
   }
   const auto raw = bridge.floatProperty(
       {310}, SkinFloatPropertyDomain::FloatValue);
-  expect(raw.supported && std::abs(raw.value - 1.75) < 0.0001,
+  expect(raw.supported && std::abs(raw.value - 1.3125) < 0.0001,
          "float hispeed selector follows FloatPropertyFactory");
   expect(!hasDiagnostic(bridge, "skin.play_state.unsupported"),
          "pinned hispeed selectors do not become app-specific unsupported "

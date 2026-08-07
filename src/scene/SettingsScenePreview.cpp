@@ -97,7 +97,11 @@ previewPresentationConfiguration(const AppSettings &settings,
       .visibleTimeBpmStrategy = settings.visibleTimeBpmStrategy,
       .playAreaWidth = settings.playAreaWidthForKeyMode(chart.Meta.KeyMode),
       .laneBeamsEnabled = true,
-      .laneCoverFloatingEnabled = settings.floatingLaneCoverEnabled,
+      .laneCoverHispeedFactor = settings.laneCoverEnabled
+                                    ? 1.0F - static_cast<float>(
+                                                 settings.noteStartPositionPercent) /
+                                                 100.0F
+                                    : 1.0F,
       .laneBeamLengthPercent = settings.laneBeamLengthPercent,
       .noteStartPositionPercent = settings.noteStartPositionPercent,
       .laneBeamClockUsesRenderTime = true,

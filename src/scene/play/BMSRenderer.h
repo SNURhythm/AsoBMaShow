@@ -358,7 +358,7 @@ private:
   float currentGaugeBorder = 80.0f;
   float currentGaugeReducedDamageZone = 0.0f;
   bool renderLaneBeams = true;
-  bool laneCoverFloatingEnabled = true;
+  float laneCoverHispeedFactor = 1.0F;
   std::uint64_t touchLayoutRevision_ = 1;
   std::uint64_t touchHitRegionsRevision_ = 1;
   bool useRenderTimeForLaneBeams = false;
@@ -586,7 +586,7 @@ public:
       AppSettings::VisibleTimeBpmStrategy strategy);
   void setPlayAreaWidth(float width);
   void setLaneBeamsEnabled(bool enabled);
-  void setLaneCoverFloatingEnabled(bool enabled);
+  void setLaneCoverHispeedFactor(float factor);
   [[nodiscard]] std::optional<std::array<std::pair<float, float>, 4>>
   gameplayTouchBoundsUi() const;
   void setLaneBeamLengthPercent(int percent);

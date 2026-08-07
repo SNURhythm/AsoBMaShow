@@ -726,10 +726,10 @@ bool AppSettings::parseLegacyCfg(std::istream &file, AppSettings &settings,
         if (parseBool(value, parsed)) {
           settings.laneCoverEnabled = parsed;
         }
-      } else if (key == "floating_lane_cover_enabled") {
-        bool parsed = settings.floatingLaneCoverEnabled;
+      } else if (key == "hispeed_auto_adjust") {
+        bool parsed = settings.hispeedAutoAdjust;
         if (parseBool(value, parsed)) {
-          settings.floatingLaneCoverEnabled = parsed;
+          settings.hispeedAutoAdjust = parsed;
         }
       } else if (key == "play_area_width_4k") {
         settings.playAreaWidth4K = std::stof(value);

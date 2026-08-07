@@ -110,7 +110,7 @@ AppSettings makeDistinctSettings() {
   value.laneLength = 10.25f;
   value.laneBeamLengthPercent = 61;
   value.noteStartPositionPercent = 33;
-  value.floatingLaneCoverEnabled = false;
+  value.hispeedAutoAdjust = true;
   value.playAreaWidth4K = 5.1f;
   value.playAreaWidth5K = 5.2f;
   value.playAreaWidth6K = 6.3f;
@@ -153,6 +153,9 @@ void testLegacyFixtureLoadsEverySetting() {
   AppSettings expected = makeDistinctSettings();
   expected.audioVideo = player_settings::defaultAudioVideoSettingsForPlatform();
   expected.findBmsSkipUnarchivingForNonSolidArchives = false;
+  // The retired floating-cover UI field must not silently opt legacy users
+  // into current-BPM Hi-Speed Auto Adjust.
+  expected.hispeedAutoAdjust = false;
   expect(result.status == AppSettingsLoadStatus::Loaded,
          "complete legacy fixture loads");
   expect(result.settings == expected,
@@ -240,6 +243,11 @@ void testJsonRoundTripIncludesAudioAndVideo() {
              readFile(path).find("\"laneCoverEnabled\": false") !=
                  std::string::npos,
          "saved JSON includes Start/Select hi-speed and lane-cover state");
+  const std::string saved = readFile(path);
+  expect(saved.find("\"hispeedAutoAdjust\": true") != std::string::npos,
+         "saved JSON persists the Beatoraja Hi-Speed Auto Adjust setting");
+  expect(saved.find("floatingLaneCoverEnabled") == std::string::npos,
+         "saved JSON no longer emits the retired floating lane-cover toggle");
   expect(readFile(path).find("\"judgementIndicatorRangeMilliseconds\": 333") !=
              std::string::npos,
          "saved JSON includes the judgement indicator range");
@@ -917,6 +925,7 @@ void testVersionFixturesAndNoRewrite() {
          "missing schema version migrates from v0");
   AppSettings expectedV0 = makeDistinctSettings();
   expectedV0.findBmsSkipUnarchivingForNonSolidArchives = false;
+  expectedV0.hispeedAutoAdjust = false;
   expect(v0.settings == expectedV0, "v0 migration is lossless");
 
   const auto v1 = AppSettingsStore::Load(fixture("settings-v1.json"));

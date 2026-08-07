@@ -143,7 +143,10 @@ public:
   int laneBeamLengthPercent = kDefaultLaneBeamLengthPercent;
   int noteStartPositionPercent = kDefaultNoteStartPositionPercent;
   bool laneCoverEnabled = true;
-  bool floatingLaneCoverEnabled = true;
+  // Matches PlayConfig.hispeedautoadjust. When lane cover changes during play,
+  // keep the green number at the current BPM instead of the configured
+  // reference BPM.
+  bool hispeedAutoAdjust = false;
   float playAreaWidth4K = kDefaultPlayAreaWidth;
   float playAreaWidth5K = kDefaultPlayAreaWidth;
   float playAreaWidth6K = kDefaultPlayAreaWidth;

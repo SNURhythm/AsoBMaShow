@@ -142,7 +142,7 @@ private:
   TextView *startLaneIndicatorsModeText = nullptr;
   TextView *showInvisibleNotesModeText = nullptr;
   TextView *touchVisualizationModeText = nullptr;
-  TextView *floatingLaneCoverModeText = nullptr;
+  TextView *hispeedAutoAdjustModeText = nullptr;
   TextView *archiveChartPreviewModeText = nullptr;
   TextView *findBmsSkipUnarchivingModeText = nullptr;
   TextView *notePriorityModeText = nullptr;
@@ -169,7 +169,7 @@ private:
   Button *startLaneIndicatorsModeButton = nullptr;
   Button *showInvisibleNotesModeButton = nullptr;
   Button *touchVisualizationModeButton = nullptr;
-  Button *floatingLaneCoverModeButton = nullptr;
+  Button *hispeedAutoAdjustModeButton = nullptr;
   Button *archiveChartPreviewModeButton = nullptr;
   Button *findBmsSkipUnarchivingModeButton = nullptr;
   Button *notePriorityModeButton = nullptr;

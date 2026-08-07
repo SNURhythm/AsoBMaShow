@@ -1108,11 +1108,11 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
     return {};
   }
   // Pinned from IntegerPropertyFactory.createHispeedProperty() at Beatoraja
-  // c2ed5db1a46145ed10790c3872f717e95b59db9d. These are display fields for
-  // PlayConfig/LaneRenderer's raw hi-speed setting, not the renderer's
-  // per-pixel traversal value used to project skin notes. Keep the float
-  // intermediate before Java's integer conversion.
-  const float configuredHispeed = snapshot->configuration.hispeedMultiplier;
+  // c2ed5db1a46145ed10790c3872f717e95b59db9d. The source reads
+  // LaneRenderer.getHispeed(), i.e. the live cover-compensated PlayConfig
+  // value, not the app preference or playback-scaled skin traversal value.
+  const float configuredHispeed =
+      builtInTraversal_ ? builtInTraversal_->configuredHispeed : 0.0F;
   switch (*id) {
   case 10:
     return {.value = javaDoubleToInt(configuredHispeed * 100.0F),
@@ -1130,8 +1130,9 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
       return std::nullopt;
     }
     if (!builtInTraversal_ ||
-        !std::isfinite(static_cast<double>(builtInTraversal_->hispeed)) ||
-        builtInTraversal_->hispeed <= 0.0F) {
+        !std::isfinite(
+            static_cast<double>(builtInTraversal_->configuredHispeed)) ||
+        builtInTraversal_->configuredHispeed <= 0.0F) {
       return std::nullopt;
     }
     const auto durationFor = [&](double bpm, bool cover, bool green)
@@ -1140,7 +1141,7 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
         return std::nullopt;
       }
       double value = 240000.0 / bpm /
-                     static_cast<double>(builtInTraversal_->hispeed);
+                     static_cast<double>(builtInTraversal_->configuredHispeed);
       if (cover) {
         value *= 1.0 -
                  static_cast<double>(snapshot->authority.laneCoverPercent) /
@@ -1467,11 +1468,11 @@ SkinPropertyLookup<double> PlaySkinStateBridge::floatProperty(
         static_cast<double>(std::numeric_limits<float>::min());
     switch (*id) {
     case 310:
-      // Pinned from FloatPropertyFactory.FloatType.hispeed.  See the
-      // matching integer cases above: this reports the configured raw
-      // PlayConfig/LaneRenderer value, not BuiltInRendererTraversal::hispeed.
-      return {.value =
-                  static_cast<double>(snapshot->configuration.hispeedMultiplier),
+      // Pinned from FloatPropertyFactory.FloatType.hispeed. The source reads
+      // the live LaneRenderer value, not the preference or skin traversal.
+      return {.value = static_cast<double>(
+                  builtInTraversal_ ? builtInTraversal_->configuredHispeed
+                                    : 0.0F),
               .supported = true};
     case 1102:
       return {.value = currentRate, .supported = true};

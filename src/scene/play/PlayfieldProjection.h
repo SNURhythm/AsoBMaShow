@@ -24,6 +24,9 @@ struct BuiltInRendererTraversal {
   float judgeY = 0.0F;
   float upperBound = 0.0F;
   float rxhs = 0.0F;
+  // The raw LaneRenderer::getHispeed()-equivalent value exposed to skin
+  // properties. `hispeed` remains the playback-scaled traversal speed.
+  float configuredHispeed = 0.0F;
   float hispeed = 0.0F;
   float noteVisibleUpperBound = 0.0F;
   // Raw parser lane IDs in the exact white, blue, scratch traversal order.
