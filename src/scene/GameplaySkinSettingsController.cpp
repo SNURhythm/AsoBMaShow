@@ -61,6 +61,24 @@ selectableGameplaySkinType(const SkinCatalogEntrySnapshot *catalogEntry) {
   return catalogEntry->metadata->skinType;
 }
 
+SkinPackageId automaticPackageId(SkinPackageNameSuggestion &suggestion) {
+  if (const auto normalized =
+          normalizePackageId(suggestion.suggestedPackageName);
+      normalized.package) {
+    suggestion.suggestedPackageName = normalized.package->directoryName;
+    suggestion.validationError.clear();
+    return *normalized.package;
+  }
+
+  // A picker normally supplies a valid basename. If a third-party provider
+  // does not, continue with a stable, safe package root instead of requiring
+  // the user to diagnose its malformed display name.
+  const auto fallback = normalizePackageId("Imported Skin");
+  suggestion.suggestedPackageName = fallback.package->directoryName;
+  suggestion.validationError.clear();
+  return *fallback.package;
+}
+
 } // namespace
 
 SkinPackageNameSuggestion
@@ -102,6 +120,7 @@ struct GameplaySkinSettingsController::Impl {
     WaitingActivationCommit,
     WaitingProfileCommit,
     Removing,
+    Rescanning,
   };
 
   explicit Impl(GameplaySkinSettingsControllerDependencies dependencies)
@@ -138,7 +157,7 @@ struct GameplaySkinSettingsController::Impl {
     const auto number = [&append](auto value) {
       append(std::to_string(value));
     };
-    append("v1");
+    append("v2");
     number(projectedCatalog ? projectedCatalog->catalogGeneration : 0);
     number(projectedCatalog ? projectedCatalog->sourceGeneration : 0);
     append(projectedProfileId);
@@ -147,10 +166,16 @@ struct GameplaySkinSettingsController::Impl {
     number(projected.compatibilityEnabled);
     append(projected.statusMessage);
     number(projected.canCancel);
+    number(projected.hasPackageProgress);
     number(static_cast<unsigned>(projected.progress.phase));
     number(projected.progress.completedBytes);
     number(projected.progress.totalBytes);
     number(projected.progress.completedFiles);
+    number(static_cast<unsigned>(projected.rescanProgress.phase));
+    number(static_cast<unsigned>(projected.rescanProgress.packageProgress.phase));
+    number(projected.rescanProgress.packageProgress.completedBytes);
+    number(projected.rescanProgress.packageProgress.totalBytes);
+    number(projected.rescanProgress.packageProgress.completedFiles);
     if (projected.preparedName) {
       append(projected.preparedName->originalSourceName);
       append(projected.preparedName->suggestedPackageName);
@@ -278,7 +303,9 @@ struct GameplaySkinSettingsController::Impl {
     projected.state = GameplaySkinSettingsState::Error;
     projected.statusMessage = std::move(message);
     projected.canCancel = false;
+    projected.hasPackageProgress = false;
     projected.progress = {};
+    projected.rescanProgress = {};
     progress.reset();
     refreshCachedPresentationKey();
   }
@@ -288,7 +315,9 @@ struct GameplaySkinSettingsController::Impl {
     phase = Phase::Idle;
     projected.statusMessage = std::move(message);
     projected.canCancel = false;
+    projected.hasPackageProgress = false;
     projected.progress = {};
+    projected.rescanProgress = {};
     progress.reset();
     refreshProjection();
   }
@@ -366,6 +395,7 @@ struct GameplaySkinSettingsController::Impl {
         return false;
       }
       phase = Phase::LoadingInventory;
+      projected.hasPackageProgress = false;
       setBusy("Loading profile inventory…");
       return true;
     } catch (const std::exception &exception) {
@@ -392,6 +422,7 @@ struct GameplaySkinSettingsController::Impl {
     }
     operationTicket = handle.ticket;
     progress = std::move(handle.progress);
+    projected.hasPackageProgress = true;
     phase = Phase::Publishing;
     setBusy("Publishing skin package…");
   }
@@ -428,13 +459,58 @@ struct GameplaySkinSettingsController::Impl {
         std::make_shared<PlatformDocumentHandoffResult>(std::move(*result));
     projected.preparedName = suggestSkinPackageName(
         pickedSource->originalSourceName, pickedSource->temporaryPathKind);
+    const auto package = automaticPackageId(*projected.preparedName);
+    const auto catalogValue = catalog();
+    if (catalogValue) {
+      const auto collision = std::ranges::find_if(
+          catalogValue->packages, [&](const SkinPackageId &candidate) {
+            return candidate.collisionKey == package.collisionKey;
+          });
+      if (collision != catalogValue->packages.end()) {
+        projected.collisionPackage = *collision;
+        errorState = false;
+        phase = Phase::NameReady;
+        projected.state = GameplaySkinSettingsState::Ready;
+        projected.statusMessage =
+            "A package with this name is already installed. Confirm replacement.";
+        projected.canCancel = true;
+        refreshProjection();
+        return;
+      }
+    }
+    (void)submitPreparedSource(package, PackageCollisionPolicy::Reject);
+  }
+
+  ControllerActionResult submitPreparedSource(const SkinPackageId &package,
+                                              PackageCollisionPolicy policy) {
+    if (!pickedSource || !disposalReservation) {
+      return rejected("No selected skin source is ready to import.");
+    }
+    SkinPackageOperationHandle handle;
+    if (pickedSource->temporaryPathKind == PlatformTemporaryPathKind::File) {
+      handle = dependencies.operations.submitPrepareArchive(
+          pickedSource->localPath, package, sourceCleanup(pickedSource));
+    } else if (pickedSource->temporaryPathKind ==
+               PlatformTemporaryPathKind::Directory) {
+      handle = dependencies.operations.submitPrepareFolder(
+          pickedSource->localPath, package, sourceCleanup(pickedSource));
+    } else {
+      return rejected("The selected source has no supported path kind.");
+    }
+    if (handle.ticket == 0) {
+      rejectPrepareSubmission(std::move(handle));
+      return rejected(projected.statusMessage);
+    }
+    pickedSource.reset();
+    operationTicket = handle.ticket;
+    progress = std::move(handle.progress);
+    projected.hasPackageProgress = true;
+    collisionPolicy = policy;
+    phase = Phase::PreparingPackage;
+    projected.preparedName.reset();
     projected.collisionPackage.reset();
-    errorState = false;
-    phase = Phase::NameReady;
-    projected.state = GameplaySkinSettingsState::Ready;
-    projected.statusMessage = "Confirm the skin package name.";
-    projected.canCancel = true;
-    refreshProjection();
+    setBusy("Preparing skin package…");
+    return accepted("Skin package preparation started.");
   }
 
   void pollInventory() {
@@ -590,6 +666,38 @@ struct GameplaySkinSettingsController::Impl {
     }
   }
 
+  void pollRescan() {
+    if (!dependencies.rescanProgress) {
+      setError("The gameplay skin rescan service is unavailable.");
+      return;
+    }
+    try {
+      projected.rescanProgress = dependencies.rescanProgress();
+    } catch (...) {
+      setError("The gameplay skin rescan could not be observed.");
+      return;
+    }
+    switch (projected.rescanProgress.phase) {
+    case SkinRescanProgressPhase::Idle:
+      return;
+    case SkinRescanProgressPhase::LoadingProfileInventory:
+      projected.statusMessage = "Loading skin profile inventory…";
+      return;
+    case SkinRescanProgressPhase::ReconcilingActivations:
+      projected.statusMessage = "Reconciling skin activations…";
+      return;
+    case SkinRescanProgressPhase::ScanningVisiblePackages:
+      projected.statusMessage = "Scanning skin packages…";
+      return;
+    case SkinRescanProgressPhase::Succeeded:
+      setIdle("Skin scan complete.");
+      return;
+    case SkinRescanProgressPhase::Failed:
+      setError("Skin scan did not complete. Check diagnostics.");
+      return;
+    }
+  }
+
   void poll() {
     if (closed) {
       return;
@@ -602,6 +710,8 @@ struct GameplaySkinSettingsController::Impl {
                phase == Phase::PreparingActivation ||
                phase == Phase::Removing) {
       pollPackageOperation();
+    } else if (phase == Phase::Rescanning) {
+      pollRescan();
     }
     pollCommitCompletions();
     refreshProjection();
@@ -621,6 +731,7 @@ struct GameplaySkinSettingsController::Impl {
     disposalReservation.emplace(std::move(*reservation));
     projected.preparedName.reset();
     projected.collisionPackage.reset();
+    projected.hasPackageProgress = false;
     try {
       if (archive) {
         handoff =
@@ -707,31 +818,7 @@ struct GameplaySkinSettingsController::Impl {
       }
     }
 
-    collisionPolicy = requestedPolicy;
-    SkinPackageOperationHandle handle;
-    if (pickedSource->temporaryPathKind == PlatformTemporaryPathKind::File) {
-      handle = dependencies.operations.submitPrepareArchive(
-          pickedSource->localPath, *normalized.package,
-          sourceCleanup(pickedSource));
-    } else if (pickedSource->temporaryPathKind ==
-               PlatformTemporaryPathKind::Directory) {
-      handle = dependencies.operations.submitPrepareFolder(
-          pickedSource->localPath, *normalized.package,
-          sourceCleanup(pickedSource));
-    } else {
-      return rejected("The selected source has no supported path kind.");
-    }
-    if (handle.ticket == 0) {
-      rejectPrepareSubmission(std::move(handle));
-      return rejected(projected.statusMessage);
-    }
-    pickedSource.reset();
-    operationTicket = handle.ticket;
-    progress = std::move(handle.progress);
-    phase = Phase::PreparingPackage;
-    projected.collisionPackage.reset();
-    setBusy("Preparing skin package…");
-    return accepted("Skin package preparation started.");
+    return submitPreparedSource(*normalized.package, requestedPolicy);
   }
 
   ControllerActionResult prepareActivation(SkinEntryId entry,
@@ -749,6 +836,7 @@ struct GameplaySkinSettingsController::Impl {
     }
     operationTicket = handle.ticket;
     progress = std::move(handle.progress);
+    projected.hasPackageProgress = true;
     phase = Phase::PreparingActivation;
     setBusy(std::move(message));
     return accepted("Skin activation preparation started.");
@@ -781,7 +869,7 @@ struct GameplaySkinSettingsController::Impl {
       return;
     }
     if (phase == Phase::WaitingActivationCommit ||
-        phase == Phase::WaitingProfileCommit) {
+        phase == Phase::WaitingProfileCommit || phase == Phase::Rescanning) {
       return;
     }
     try {
@@ -804,6 +892,7 @@ struct GameplaySkinSettingsController::Impl {
       }
       projected.preparedName.reset();
       projected.collisionPackage.reset();
+      projected.hasPackageProgress = false;
       progress.reset();
       phase = Phase::Idle;
       errorState = false;
@@ -839,6 +928,7 @@ struct GameplaySkinSettingsController::Impl {
       }
       projected.preparedName.reset();
       projected.collisionPackage.reset();
+      projected.hasPackageProgress = false;
       progress.reset();
       dependencies.commits.detachClient(dependencies.clientId);
       closed = true;
@@ -876,6 +966,7 @@ void GameplaySkinSettingsController::profileChanged(
   impl_->phase = Impl::Phase::Idle;
   impl_->errorState = false;
   impl_->progress.reset();
+  impl_->projected.hasPackageProgress = false;
   impl_->projected.progress = {};
   impl_->projected.canCancel = false;
   impl_->dependencies.profileId = std::move(profileId);
@@ -904,10 +995,20 @@ ControllerActionResult GameplaySkinSettingsController::confirmPreparedImport(
 
 ControllerActionResult GameplaySkinSettingsController::requestRescan() {
   if (impl_->closed || impl_->hasControllerOperation() ||
-      !impl_->dependencies.requestRescan) {
+      !impl_->dependencies.requestRescan || !impl_->dependencies.rescanProgress) {
     return rejected("A gameplay skin rescan is not currently available.");
   }
   impl_->dependencies.requestRescan();
+  impl_->phase = Impl::Phase::Rescanning;
+  impl_->projected.hasPackageProgress = false;
+  impl_->projected.progress = {};
+  try {
+    impl_->projected.rescanProgress = impl_->dependencies.rescanProgress();
+  } catch (...) {
+    impl_->setError("The gameplay skin rescan could not be observed.");
+    return rejected(impl_->projected.statusMessage);
+  }
+  impl_->setBusy("Preparing skin scan…");
   return accepted("Gameplay skin rescan requested.");
 }
 

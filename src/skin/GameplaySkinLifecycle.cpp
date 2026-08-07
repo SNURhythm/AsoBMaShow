@@ -122,8 +122,12 @@ GameplaySkinLifecycleDependencies makeProductionDependencies(
       .submitRescan =
           [&operations](ProfileInventorySnapshot inventory) {
             auto handle = operations.submitRescan(std::move(inventory));
-            GameplaySkinLifecycleOperationSubmission result{.ticket =
-                                                                handle.ticket};
+            auto progress = std::move(handle.progress);
+            GameplaySkinLifecycleOperationSubmission result{
+                .ticket = handle.ticket,
+                .progress = [progress = std::move(progress)] {
+                  return progress ? progress->snapshot() : SkinProgress{};
+                }};
             if (handle.ticket == 0) {
               result.diagnostics.push_back(lifecycleDiagnostic(
                   "skin.lifecycle.rescan_rejected",
@@ -208,6 +212,7 @@ struct GameplaySkinLifecycle::Impl {
   struct PrepareOperation {
     PreparePurpose purpose = PreparePurpose::Revalidation;
     std::uint64_t chainGeneration = 0;
+    std::function<SkinProgress()> progress;
   };
 
   struct CommitPurpose {
@@ -483,6 +488,7 @@ struct GameplaySkinLifecycle::Impl {
       if (reconciled == nullptr || !reconciled->completed ||
           !pendingRescanInventory) {
         pendingRescanInventory.reset();
+        rescanProgress.phase = SkinRescanProgressPhase::Failed;
         append(lifecycleDiagnostic(
                    "skin.lifecycle.reconcile_failed",
                    "Gameplay skin activation reconciliation did not complete"),
@@ -491,6 +497,7 @@ struct GameplaySkinLifecycle::Impl {
       }
       if (!deps.submitRescan) {
         pendingRescanInventory.reset();
+        rescanProgress.phase = SkinRescanProgressPhase::Failed;
         append(lifecycleDiagnostic(
                    "skin.lifecycle.rescan_rejected",
                    "The gameplay skin rescan service is unavailable"),
@@ -502,6 +509,7 @@ struct GameplaySkinLifecycle::Impl {
       pendingRescanInventory.reset();
       appendAll(std::move(submission.diagnostics), SkinDiagnosticPhase::Scan);
       if (submission.ticket == 0) {
+        rescanProgress.phase = SkinRescanProgressPhase::Failed;
         append(lifecycleDiagnostic(
                    "skin.lifecycle.rescan_rejected",
                    "The gameplay skin rescan was not admitted"),
@@ -510,7 +518,9 @@ struct GameplaySkinLifecycle::Impl {
       }
       prepareOperations.emplace(
           submission.ticket,
-          PrepareOperation{.purpose = PreparePurpose::Rescan});
+          PrepareOperation{.purpose = PreparePurpose::Rescan,
+                           .progress = std::move(submission.progress)});
+      rescanProgress.phase = SkinRescanProgressPhase::ScanningVisiblePackages;
       return;
     }
 
@@ -523,6 +533,7 @@ struct GameplaySkinLifecycle::Impl {
                              !scan->retryableInventoryRace &&
                              scan->sourceGeneration != 0;
       if (!succeeded) {
+        rescanProgress.phase = SkinRescanProgressPhase::Failed;
         append(lifecycleDiagnostic(
                    "skin.lifecycle.rescan_failed",
                    "The gameplay skin rescan did not complete successfully"),
@@ -530,6 +541,7 @@ struct GameplaySkinLifecycle::Impl {
         return;
       }
       acquisitionReady = true;
+      rescanProgress.phase = SkinRescanProgressPhase::Succeeded;
       if (activeProfile && deps.snapshotProfile) {
         try {
           const auto base = deps.snapshotProfile(*activeProfile);
@@ -862,6 +874,8 @@ struct GameplaySkinLifecycle::Impl {
         appendAll(std::move(result->diagnostics), SkinDiagnosticPhase::Scan);
         if (result->complete && !result->cancelled && result->inventory) {
           pendingRescanInventory = std::move(*result->inventory);
+          rescanProgress.phase =
+              SkinRescanProgressPhase::ReconcilingActivations;
           std::vector<SkinProfileId> profiles;
           profiles.reserve(pendingRescanInventory->profiles.size());
           for (const auto &snapshot : pendingRescanInventory->profiles) {
@@ -876,6 +890,7 @@ struct GameplaySkinLifecycle::Impl {
                     SkinDiagnosticPhase::Scan);
           if (submission.ticket == 0) {
             pendingRescanInventory.reset();
+            rescanProgress.phase = SkinRescanProgressPhase::Failed;
             append(lifecycleDiagnostic(
                        "skin.lifecycle.reconcile_rejected",
                        "The gameplay skin activation reconciliation was not "
@@ -887,6 +902,7 @@ struct GameplaySkinLifecycle::Impl {
                 PrepareOperation{.purpose = PreparePurpose::Reconcile});
           }
         } else {
+          rescanProgress.phase = SkinRescanProgressPhase::Failed;
           append(lifecycleDiagnostic(
                      "skin.lifecycle.inventory_failed",
                      "A complete all-profile gameplay skin inventory was not "
@@ -906,6 +922,7 @@ struct GameplaySkinLifecycle::Impl {
       rescanRequested = false;
       inventoryTicket = deps.beginProfileInventory();
       if (inventoryTicket == 0) {
+        rescanProgress.phase = SkinRescanProgressPhase::Failed;
         append(lifecycleDiagnostic(
                    "skin.lifecycle.inventory_rejected",
                    "The all-profile inventory was not admitted for rescan"),
@@ -925,6 +942,7 @@ struct GameplaySkinLifecycle::Impl {
   std::optional<DeferredViewport> deferredViewport;
   std::optional<ProfileInventorySnapshot> pendingRescanInventory;
   std::uint64_t inventoryTicket = 0;
+  SkinRescanProgress rescanProgress;
   std::uint64_t nextChainGeneration = 0;
   bool initialized = false;
   bool acquisitionReady = false;
@@ -1043,7 +1061,31 @@ void GameplaySkinLifecycle::profileChanged(SkinProfileId profile) {
 void GameplaySkinLifecycle::requestRescan(SkinRescanReason) {
   if (!impl_->stopped && impl_->initialized) {
     impl_->rescanRequested = true;
+    impl_->rescanProgress.phase = SkinRescanProgressPhase::LoadingProfileInventory;
   }
+}
+
+SkinRescanProgress GameplaySkinLifecycle::rescanProgress() const noexcept {
+  if (!impl_) {
+    return {};
+  }
+  auto progress = impl_->rescanProgress;
+  if (progress.phase != SkinRescanProgressPhase::ScanningVisiblePackages) {
+    return progress;
+  }
+  const auto operation = std::ranges::find_if(
+      impl_->prepareOperations, [](const auto &item) {
+        return item.second.purpose == Impl::PreparePurpose::Rescan;
+      });
+  if (operation == impl_->prepareOperations.end() ||
+      !operation->second.progress) {
+    return progress;
+  }
+  try {
+    progress.packageProgress = operation->second.progress();
+  } catch (...) {
+  }
+  return progress;
 }
 
 void GameplaySkinLifecycle::requestRevalidation(const SkinEntryId &entry) {

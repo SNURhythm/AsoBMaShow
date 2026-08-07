@@ -512,6 +512,33 @@ void testLaterFailedRescanPreservesReadyAcquisitionAndCatalog() {
           "acquisition available");
 }
 
+void testRescanProgressReportsEachLifecycleStage() {
+  LifecycleFake fake;
+  GameplaySkinLifecycle lifecycle(fake.dependencies());
+  lifecycle.startAfterProfileInitialization(fake.profile);
+  fake.completeReadiness(lifecycle);
+
+  lifecycle.requestRescan(SkinRescanReason::Explicit);
+  require(lifecycle.rescanProgress().phase ==
+              SkinRescanProgressPhase::LoadingProfileInventory,
+          "a requested rescan reports profile inventory before work starts");
+  lifecycle.poll();
+  fake.completeInventory();
+  lifecycle.poll();
+  require(lifecycle.rescanProgress().phase ==
+              SkinRescanProgressPhase::ReconcilingActivations,
+          "a rescan reports activation reconciliation before scanning files");
+  fake.completeReconcile();
+  lifecycle.poll();
+  require(lifecycle.rescanProgress().phase ==
+              SkinRescanProgressPhase::ScanningVisiblePackages,
+          "a submitted rescan reports its visible-package scan stage");
+  fake.completeRescan();
+  lifecycle.poll();
+  require(lifecycle.rescanProgress().phase == SkinRescanProgressPhase::Succeeded,
+          "a completed visible-package scan reports success");
+}
+
 void testAcquisitionUsesOwningActivationAndMonotonicSessionSerial() {
   LifecycleFake fake;
   GameplaySkinLifecycle lifecycle(fake.dependencies());
@@ -1051,6 +1078,7 @@ int main() {
   testStartupUsesRecoveredCatalogWithoutRescan();
   testStartupRestoresPersistedSelectionWithoutRescan();
   testLaterFailedRescanPreservesReadyAcquisitionAndCatalog();
+  testRescanProgressReportsEachLifecycleStage();
   testAcquisitionUsesOwningActivationAndMonotonicSessionSerial();
   testSelectedActivationFailureIsNotTreatedAsBuiltIn();
   testWriterChainRebasesBOnlyAfterASuccess();

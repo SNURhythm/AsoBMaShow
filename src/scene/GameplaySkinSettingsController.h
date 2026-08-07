@@ -55,7 +55,9 @@ struct GameplaySkinSettingsSnapshot {
   std::vector<GameplaySkinEntryRow> entries;
   std::optional<SkinPackageNameSuggestion> preparedName;
   std::optional<SkinPackageId> collisionPackage;
+  bool hasPackageProgress = false;
   SkinProgress progress;
+  SkinRescanProgress rescanProgress;
   std::vector<SkinDiagnosticHistoryRecord> history;
   std::string statusMessage;
   bool canCancel = false;
@@ -81,6 +83,7 @@ struct GameplaySkinSettingsControllerDependencies {
   SkinCommitCoordinator &commits;
   SkinActivationClientId clientId;
   std::function<void()> requestRescan;
+  std::function<SkinRescanProgress()> rescanProgress;
   std::function<void(const SkinEntryId &)> requestRevalidation;
   std::function<std::shared_ptr<const SkinPackageCatalogSnapshot>()>
       catalogSnapshot;

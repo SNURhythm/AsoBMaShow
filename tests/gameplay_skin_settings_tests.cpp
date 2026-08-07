@@ -414,6 +414,7 @@ struct Fixture {
             .commits = commits,
             .clientId = commits.createClient(),
             .requestRescan = [&] { ++rescanRequests; },
+            .rescanProgress = [&] { return rescanProgress; },
             .requestRevalidation =
                 [&](const SkinEntryId &) { ++revalidationRequests; },
             .catalogSnapshot =
@@ -464,6 +465,7 @@ struct Fixture {
   std::deque<PlatformDocumentHandoffResult> folderResults;
   PlatformDirectoryImportRequest lastFolderRequest;
   int rescanRequests = 0;
+  SkinRescanProgress rescanProgress;
   int revalidationRequests = 0;
   int catalogSnapshotCalls = 0;
   std::shared_ptr<const SkinPackageCatalogSnapshot> catalogOverride;
@@ -525,21 +527,13 @@ void installQueuedImport(Fixture &fixture,
                              : controller.beginFolderImport();
   expect(begun.accepted && begun.asynchronous,
          "document import starts asynchronously");
-  expect(
-      pumpUntil(fixture, controller,
-                [&] { return controller.snapshot().preparedName.has_value(); }),
-      "picked source produces an editable package-name suggestion");
-  const auto confirmed =
-      controller.confirmPreparedImport(PackageCollisionPolicy::Reject);
-  expect(confirmed.accepted && confirmed.asynchronous,
-         "confirmed source starts package preparation");
   expect(pumpUntil(fixture, controller,
                    [&] {
                      return controller.snapshot().state ==
                                 GameplaySkinSettingsState::Ready &&
                             !controller.snapshot().entries.empty();
                    }),
-         "prepared package publishes and refreshes the immutable snapshot");
+         "picked source prepares and publishes without a package-name gate");
 }
 
 void testArchiveFolderSelectionAndDurableLayoutFlow() {
@@ -636,6 +630,45 @@ void testArchiveFolderSelectionAndDurableLayoutFlow() {
   controller->close();
 }
 
+void testPickedArchiveAndFolderInstallWithoutPackageNameConfirmation() {
+  Fixture fixture;
+  const auto archive = makeZip(fixture.temp.root() / "AutomaticArchive.zip",
+                               "play/play7.luaskin", "return { type = 0 }");
+  const auto folder = fixture.temp.root() / "AutomaticFolder";
+  writeText(folder / "play/play7.luaskin", "return { type = 0 }");
+  fixture.archiveResults.push_back(
+      picked(archive, "AutomaticArchive.zip", PlatformTemporaryPathKind::File));
+  fixture.folderResults.push_back(
+      picked(folder, "AutomaticFolder", PlatformTemporaryPathKind::Directory));
+  auto controller = fixture.makeController();
+
+  expect(controller->beginArchiveImport().accepted,
+         "automatic archive fixture opens the source picker");
+  expect(pumpUntil(fixture, *controller,
+                   [&] {
+                     return controller->snapshot().state ==
+                                GameplaySkinSettingsState::Ready &&
+                            controller->snapshot().entries.size() == 1;
+                   }),
+         "a picked archive installs without a package-name confirmation");
+  expect(!controller->snapshot().preparedName.has_value() &&
+             controller->snapshot().entries.front().entry.package.directoryName ==
+                 "AutomaticArchive",
+         "archive identity is derived from its source name without exposing a gate");
+
+  expect(controller->beginFolderImport().accepted,
+         "automatic folder fixture opens the source picker");
+  expect(pumpUntil(fixture, *controller,
+                   [&] {
+                     return controller->snapshot().state ==
+                                GameplaySkinSettingsState::Ready &&
+                            controller->snapshot().entries.size() == 2;
+                   }),
+         "a picked folder installs without a package-name confirmation");
+  expect(!controller->snapshot().preparedName.has_value(),
+         "folder installation leaves no package-name confirmation state");
+}
+
 void testSelectionIsScopedToTheSkinDeclaredGameplayTrait() {
   Fixture fixture;
   fixture.validator.skinType = 1;
@@ -674,13 +707,6 @@ void testRejectedPublishTransfersReservedStagingOffControllerThread() {
 
   expect(controller->beginFolderImport().accepted,
          "rejected-publish fixture starts its folder picker");
-  expect(pumpUntil(
-             fixture, *controller,
-             [&] { return controller->snapshot().preparedName.has_value(); }),
-         "rejected-publish fixture receives its source name");
-  expect(controller->confirmPreparedImport(PackageCollisionPolicy::Reject)
-             .accepted,
-         "package preparation is admitted before the injected publish fault");
   expect(pumpUntil(fixture, *controller,
                    [&] {
                      return controller->snapshot().state ==
@@ -724,17 +750,12 @@ void testRejectedPrepareTransfersExactTemporaryCleanupOffControllerThread() {
 
   expect(controller->beginFolderImport().accepted,
          "prepare-rejection fixture starts folder selection");
-  expect(pumpUntil(
-             fixture, *controller,
-             [&] { return controller->snapshot().preparedName.has_value(); }),
-         "prepare-rejection fixture receives the owned folder");
-  const auto confirmStarted = std::chrono::steady_clock::now();
-  const auto confirmation =
-      controller->confirmPreparedImport(PackageCollisionPolicy::Reject);
-  expect(!confirmation.accepted &&
-             std::chrono::steady_clock::now() - confirmStarted <
-                 std::chrono::milliseconds(100),
-         "zero-ticket prepare rejection returns without running cleanup");
+  expect(pumpUntil(fixture, *controller,
+                   [&] {
+                     return controller->snapshot().state ==
+                            GameplaySkinSettingsState::Error;
+                   }),
+         "automatic preparation reports a zero-ticket rejection without a gate");
 
   const bool disposalStarted = observer->waitForReservedDisposal();
   expect(disposalStarted && fs::exists(ownedFolder),
@@ -934,13 +955,6 @@ void testReservationPrecedesPickerAndCancelTransfersLocalStaging() {
   auto staging = fixture.makeController();
   expect(staging->beginFolderImport().accepted,
          "staging-cancel fixture starts folder selection");
-  expect(
-      pumpUntil(fixture, *staging,
-                [&] { return staging->snapshot().preparedName.has_value(); }),
-      "staging-cancel fixture receives the selected folder");
-  expect(
-      staging->confirmPreparedImport(PackageCollisionPolicy::Reject).accepted,
-      "staging-cancel fixture starts preparation");
   expect(pumpUntil(fixture, *staging,
                    [&] {
                      return staging->snapshot().statusMessage ==
@@ -1130,13 +1144,6 @@ void testInventoryRaceRetriesThenSucceedsAndCancelDisposesRetry() {
   auto controller = fixture.makeController();
   expect(controller->beginFolderImport().accepted,
          "inventory-cancel fixture starts folder selection");
-  expect(pumpUntil(
-             fixture, *controller,
-             [&] { return controller->snapshot().preparedName.has_value(); }),
-         "inventory-cancel fixture receives its source");
-  expect(controller->confirmPreparedImport(PackageCollisionPolicy::Reject)
-             .accepted,
-         "inventory-cancel fixture starts package preparation");
   expect(
       pumpUntil(fixture, *controller,
                 [&] {
@@ -1174,13 +1181,6 @@ void testMalformedProfileInventoriesDisposePreparedStagingOnReservedLane() {
 
     expect(controller->beginFolderImport().accepted,
            "malformed-inventory fixture starts folder selection");
-    expect(pumpUntil(
-               fixture, *controller,
-               [&] { return controller->snapshot().preparedName.has_value(); }),
-           "malformed-inventory fixture reaches NameReady");
-    expect(controller->confirmPreparedImport(PackageCollisionPolicy::Reject)
-               .accepted,
-           "malformed-inventory fixture starts preparation");
     expect(pumpUntil(fixture, *controller,
                      [&] {
                        return controller->snapshot().state ==
@@ -1226,13 +1226,6 @@ void testPermanentPublishFailureCleansStagingAndPublishesNothing() {
 
   expect(controller->beginFolderImport().accepted,
          "permanent-publish fixture starts folder selection");
-  expect(pumpUntil(
-             fixture, *controller,
-             [&] { return controller->snapshot().preparedName.has_value(); }),
-         "permanent-publish fixture reaches NameReady");
-  expect(controller->confirmPreparedImport(PackageCollisionPolicy::Reject)
-             .accepted,
-         "permanent-publish fixture starts preparation");
   expect(pumpUntil(fixture, *controller,
                    [&] {
                      return controller->snapshot().statusMessage ==
@@ -1287,28 +1280,16 @@ void testEditableConfigurationValidationAndDiagnosticProjection() {
       picked(folder, "OriginalName", PlatformTemporaryPathKind::Directory));
   expect(controller->beginFolderImport().accepted,
          "editable-configuration fixture starts folder selection");
-  expect(pumpUntil(
-             fixture, *controller,
-             [&] { return controller->snapshot().preparedName.has_value(); }),
-         "editable-configuration fixture reaches NameReady");
-  expect(!controller->setSuggestedPackageName("../invalid").accepted &&
-             !controller->snapshot().preparedName->validationError.empty(),
-         "invalid edited package name remains at NameReady with a diagnostic");
-  expect(controller->setSuggestedPackageName("EditedPackage").accepted,
-         "valid edited package name replaces the picker suggestion");
-  expect(controller->confirmPreparedImport(PackageCollisionPolicy::Reject)
-             .accepted,
-         "edited package name can be confirmed");
   expect(pumpUntil(fixture, *controller,
                    [&] {
                      return controller->snapshot().state ==
                                 GameplaySkinSettingsState::Ready &&
                             !controller->snapshot().entries.empty();
                    }),
-         "edited package publishes successfully");
+         "automatic package publishes successfully");
   const SkinEntryId entry = controller->snapshot().entries.front().entry;
-  expect(entry.package.directoryName == "EditedPackage",
-         "publication uses the normalized edited package name");
+  expect(entry.package.directoryName == "OriginalName",
+         "publication uses the source-derived package name without editing");
 
   expect(
       controller->setFileChoice(entry, "Judge image", "judge/2p.png").accepted,
@@ -1514,11 +1495,15 @@ void testLifecycleCallbacksCustomViewportAndRemoval() {
   installQueuedImport(fixture, *controller, false);
   const SkinEntryId entry = controller->snapshot().entries.front().entry;
 
-  expect(
-      controller->requestRescan().accepted &&
-          controller->requestRevalidation(entry).accepted &&
-          fixture.rescanRequests == 1 && fixture.revalidationRequests == 1,
-      "manual lifecycle actions use only injected rescan/revalidation owners");
+  expect(controller->requestRescan().accepted && fixture.rescanRequests == 1 &&
+             controller->snapshot().state == GameplaySkinSettingsState::Busy,
+         "manual rescans stay busy until the lifecycle reports a terminal state");
+  fixture.rescanProgress.phase = SkinRescanProgressPhase::Succeeded;
+  controller->poll();
+  expect(controller->snapshot().state == GameplaySkinSettingsState::Ready &&
+             controller->requestRevalidation(entry).accepted &&
+             fixture.revalidationRequests == 1,
+         "manual lifecycle actions use only injected rescan/revalidation owners");
 
   const ViewportSettings excessiveCustom{.mode = ViewportMode::Custom,
                                          .customBase =
@@ -1563,12 +1548,10 @@ int main() {
   testSourceNameSuggestionPreservesTypedSemantics();
   testSnapshotUsesCachedSettingsProjectionUntilTheNextPoll();
   testArchiveFolderSelectionAndDurableLayoutFlow();
+  testPickedArchiveAndFolderInstallWithoutPackageNameConfirmation();
   testSelectionIsScopedToTheSkinDeclaredGameplayTrait();
   testRejectedPublishTransfersReservedStagingOffControllerThread();
   testRejectedPrepareTransfersExactTemporaryCleanupOffControllerThread();
-  testNameReadyCancelTransfersOwnedSourceThroughReservedLane();
-  testNameReadyCloseTransfersOwnedSourceThroughReservedLane();
-  testProfileSwitchTransfersNameReadyOwnedSourceThroughReservedLane();
   testCancelledPickerTransfersOwnedResultThroughReservedLane();
   testFailedPickerTransfersOwnedResultThroughReservedLane();
   testReservationPrecedesPickerAndCancelTransfersLocalStaging();

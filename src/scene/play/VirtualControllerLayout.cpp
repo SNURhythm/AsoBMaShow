@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <limits>
 
 namespace gameplay {
 namespace {
@@ -212,15 +211,15 @@ VirtualControllerLayout makeVirtualControllerLayout(
                       .height = keyHeight}});
     }
     if (drawPlayerTwo) {
-      float left = std::numeric_limits<float>::infinity();
-      float right = -std::numeric_limits<float>::infinity();
-      for (const auto &element : elements) {
-        left = std::min(left, element.bounds.x);
-        right = std::max(right, element.bounds.x + element.bounds.width);
-      }
-      for (auto &element : elements) {
-        element.bounds.x =
-            left + right - (element.bounds.x + element.bounds.width);
+      // 2P uses the second deck's lanes but retains the same visual key and
+      // system-button order. Only the platter moves to the opposite side;
+      // reflecting the complete layout would put key position 0 on the right.
+      const auto scratch = std::ranges::find_if(
+          elements, [](const auto &element) {
+            return element.control == VirtualControllerControl::Scratch;
+          });
+      if (scratch != elements.end()) {
+        scratch->bounds.x = keyplateRight + scratchToKeyplateGap;
       }
     }
     return elements;

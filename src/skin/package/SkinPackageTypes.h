@@ -76,6 +76,23 @@ struct SkinProgress {
   std::uint64_t completedFiles = 0;
 };
 
+// A rescan has lifecycle stages before and after the package worker can
+// provide measured byte/file progress. Keep those stages explicit rather than
+// inventing totals for profile inventory or activation reconciliation.
+enum class SkinRescanProgressPhase : std::uint8_t {
+  Idle,
+  LoadingProfileInventory,
+  ReconcilingActivations,
+  ScanningVisiblePackages,
+  Succeeded,
+  Failed,
+};
+
+struct SkinRescanProgress {
+  SkinRescanProgressPhase phase = SkinRescanProgressPhase::Idle;
+  SkinProgress packageProgress;
+};
+
 using SkinProgressCallback = std::function<void(const SkinProgress &)>;
 
 struct SkinRevision {

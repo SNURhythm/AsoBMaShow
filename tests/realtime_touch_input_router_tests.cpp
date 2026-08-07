@@ -2015,18 +2015,26 @@ void testVirtualControllerLayoutRoutesKeysAndSystemControls() {
       findPlayerTwoElement(gameplay::VirtualControllerControl::Scratch);
   const auto *playerTwoKeyOne =
       findPlayerTwoElement(gameplay::VirtualControllerControl::Key, 0);
+  const auto *playerTwoKeySeven =
+      findPlayerTwoElement(gameplay::VirtualControllerControl::Key, 6);
   const auto *playerTwoStart =
       findPlayerTwoElement(gameplay::VirtualControllerControl::Start);
+  const auto *playerTwoSelect =
+      findPlayerTwoElement(gameplay::VirtualControllerControl::Select);
   require(
       playerTwoController.valid() && playerTwoScratch != nullptr &&
-          playerTwoKeyOne != nullptr && playerTwoStart != nullptr &&
+          playerTwoKeyOne != nullptr && playerTwoKeySeven != nullptr &&
+          playerTwoStart != nullptr && playerTwoSelect != nullptr &&
           playerTwoScratch->lane == 15 && playerTwoKeyOne->lane == 8 &&
+          playerTwoKeySeven->lane == 14 &&
+          playerTwoKeyOne->bounds.x < playerTwoKeySeven->bounds.x &&
           playerTwoScratch->bounds.x > playerTwoKeyOne->bounds.x &&
+          playerTwoStart->bounds.x < playerTwoSelect->bounds.x &&
           playerTwoStart->replayControl ==
               replay::LogicalControl{.kind = replay::LogicalControlKind::Start,
                                      .player = 2,
                                      .lane = -1},
-      "the 2P controller mirrors the deck and routes the double-play lanes");
+      "the 2P controller keeps key and system ordering while moving only the scratch right");
 
   const gameplay::RealtimeTouchUiTransform transform{
       .renderWidth = 1000,

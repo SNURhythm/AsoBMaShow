@@ -77,6 +77,7 @@ skin::GameplaySkinSettingsSnapshot snapshotWithEntry() {
   snapshot.selected7KeyEntry = entryId();
   snapshot.selectedGameplayEntries.emplace(0, entryId());
   snapshot.entries = {entryRow()};
+  snapshot.hasPackageProgress = true;
   snapshot.progress = {.phase = skin::SkinProgressPhase::Publishing,
                        .completedBytes = 10,
                        .totalBytes = 20,
@@ -95,7 +96,7 @@ void requirePresentationChange(const skin::GameplaySkinSettingsSnapshot &base,
           message);
 }
 
-void testNameReadyAvailabilityIsExact() {
+void testCollisionConfirmationAvailabilityIsExact() {
   skin::GameplaySkinSettingsSnapshot snapshot;
   snapshot.state = skin::GameplaySkinSettingsState::Ready;
   snapshot.canCancel = true;
@@ -104,17 +105,17 @@ void testNameReadyAvailabilityIsExact() {
 
   auto availability = skin::gameplaySkinSettingsActionAvailability(snapshot);
   require(!availability.ordinaryActions,
-          "ordinary actions stay disabled during NameReady");
-  require(availability.canCancel, "NameReady remains cancellable");
-  require(availability.canEditPreparedName,
-          "NameReady permits package-name editing");
+          "ordinary actions stay disabled during collision confirmation");
+  require(availability.canCancel, "collision confirmation remains cancellable");
+  require(!availability.canEditPreparedName,
+          "automatic installs never expose a package-name edit gate");
   require(availability.canInstallPrepared,
-          "valid NameReady permits installation");
+          "a collision confirmation permits replacement");
 
   snapshot.preparedName->validationError = "invalid";
   availability = skin::gameplaySkinSettingsActionAvailability(snapshot);
-  require(availability.canEditPreparedName,
-          "invalid NameReady still permits correcting the name");
+  require(!availability.canEditPreparedName,
+          "an invalid stale suggestion never exposes name editing");
   require(!availability.canInstallPrepared,
           "invalid NameReady cannot be installed");
 
@@ -123,14 +124,14 @@ void testNameReadyAvailabilityIsExact() {
   availability = skin::gameplaySkinSettingsActionAvailability(snapshot);
   require(!availability.canEditPreparedName &&
               !availability.canInstallPrepared && availability.canCancel,
-          "Busy never exposes NameReady editing or installation");
+          "Busy never exposes collision confirmation actions");
 
   snapshot.state = skin::GameplaySkinSettingsState::Ready;
   snapshot.canCancel = false;
   availability = skin::gameplaySkinSettingsActionAvailability(snapshot);
   require(availability.ordinaryActions && !availability.canEditPreparedName &&
               !availability.canInstallPrepared,
-          "idle Ready with stale name data is not NameReady");
+          "idle Ready with stale name data is not a collision confirmation");
 
   snapshot.canCancel = true;
   snapshot.preparedName.reset();
@@ -138,8 +139,8 @@ void testNameReadyAvailabilityIsExact() {
   require(!availability.ordinaryActions && availability.canCancel &&
               !availability.canEditPreparedName &&
               !availability.canInstallPrepared,
-          "a cancellable Ready snapshot without a prepared name is not "
-          "NameReady");
+          "a cancellable Ready snapshot without a prepared name is not a "
+          "collision confirmation");
 
   snapshot.state = skin::GameplaySkinSettingsState::Error;
   snapshot.canCancel = false;
@@ -149,7 +150,8 @@ void testNameReadyAvailabilityIsExact() {
   require(availability.ordinaryActions && !availability.canCancel &&
               !availability.canEditPreparedName &&
               !availability.canInstallPrepared,
-          "terminal Error is not NameReady even when stale name data exists");
+          "terminal Error is not a collision confirmation even when stale "
+          "name data exists");
 }
 
 void testMetadataChangesInvalidateAnUnchangedDigest() {
@@ -190,6 +192,16 @@ void testActionDrivingChangesInvalidatePresentation() {
   requirePresentationChange(
       base, [](auto &value) { value.canCancel = true; },
       "cancellability changes invalidate presentation");
+  requirePresentationChange(
+      base, [](auto &value) { value.hasPackageProgress = false; },
+      "package-progress visibility changes invalidate presentation");
+  requirePresentationChange(
+      base,
+      [](auto &value) {
+        value.rescanProgress.phase =
+            skin::SkinRescanProgressPhase::ScanningVisiblePackages;
+      },
+      "rescan lifecycle phase changes invalidate presentation");
   requirePresentationChange(
       base,
       [](auto &value) {
@@ -246,6 +258,36 @@ void testCachedControllerPresentationKeyAvoidsReencodingStaticCatalogRows() {
           "controller-projected settings reuse their cached catalog key");
 }
 
+void testSkinPackageProgressUsesMeasuredWork() {
+  require(
+      skin::gameplaySkinPackageProgressDisplayText(
+          {.phase = skin::SkinProgressPhase::Copying,
+           .completedBytes = 1'536,
+           .totalBytes = 3'072,
+           .completedFiles = 7}) ==
+          "Copying skin files — 50% (1.5 KB / 3.0 KB) • 7 files",
+      "copy progress presents the operation service's measured byte and file work");
+  require(skin::gameplaySkinPackageProgressDisplayText(
+              {.phase = skin::SkinProgressPhase::Validating,
+               .completedFiles = 3}) == "Validating skin • 3 files",
+          "non-byte validation progress remains meaningful to the user");
+}
+
+void testSkinRescanProgressAvoidsInventedWorkTotals() {
+  require(skin::gameplaySkinRescanProgressDisplayText(
+              {.phase = skin::SkinRescanProgressPhase::LoadingProfileInventory}) ==
+              "Loading skin profile inventory",
+          "profile inventory has a concrete rescan status without fake totals");
+  require(skin::gameplaySkinRescanProgressDisplayText(
+              {.phase = skin::SkinRescanProgressPhase::ScanningVisiblePackages,
+               .packageProgress = {.phase = skin::SkinProgressPhase::Copying,
+                                   .completedBytes = 1,
+                                   .totalBytes = 2,
+                                   .completedFiles = 1}}) ==
+              "Copying skin files — 50% (1 B / 2 B) • 1 file",
+          "package scan delegates to measured package-worker progress");
+}
+
 void testViewportModeChangesPreserveEveryOtherField() {
   const skin::ViewportSettings original = {
       .mode = skin::ViewportMode::Custom,
@@ -275,11 +317,13 @@ void testViewportModeChangesPreserveEveryOtherField() {
 } // namespace
 
 int main() {
-  testNameReadyAvailabilityIsExact();
+  testCollisionConfirmationAvailabilityIsExact();
   testMetadataChangesInvalidateAnUnchangedDigest();
   testActionDrivingChangesInvalidatePresentation();
   testPresentationEncodingHasNoDelimiterOrOptionalAmbiguity();
   testCachedControllerPresentationKeyAvoidsReencodingStaticCatalogRows();
+  testSkinPackageProgressUsesMeasuredWork();
+  testSkinRescanProgressAvoidsInventedWorkTotals();
   testViewportModeChangesPreserveEveryOtherField();
   return 0;
 }

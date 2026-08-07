@@ -1,8 +1,12 @@
 #include "GameplaySkinSettingsPresentation.h"
 
 #include <bit>
+#include <algorithm>
 #include <charconv>
+#include <cmath>
 #include <cstdint>
+#include <iomanip>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -172,6 +176,38 @@ void encodeSettings(PresentationKeyEncoder &encoder,
   encodeViewport(encoder, settings.viewport);
 }
 
+const char *progressPhaseLabel(SkinProgressPhase phase) {
+  switch (phase) {
+  case SkinProgressPhase::Inspecting:
+    return "Inspecting skin files";
+  case SkinProgressPhase::Copying:
+    return "Copying skin files";
+  case SkinProgressPhase::Validating:
+    return "Validating skin";
+  case SkinProgressPhase::Publishing:
+    return "Publishing skin";
+  }
+  return "Working on skin";
+}
+
+std::string formatProgressBytes(std::uint64_t bytes) {
+  constexpr double kib = 1024.0;
+  constexpr double mib = kib * 1024.0;
+  constexpr double gib = mib * 1024.0;
+  std::ostringstream stream;
+  stream << std::fixed << std::setprecision(1);
+  if (bytes >= static_cast<std::uint64_t>(gib)) {
+    stream << static_cast<double>(bytes) / gib << " GB";
+  } else if (bytes >= static_cast<std::uint64_t>(mib)) {
+    stream << static_cast<double>(bytes) / mib << " MB";
+  } else if (bytes >= static_cast<std::uint64_t>(kib)) {
+    stream << static_cast<double>(bytes) / kib << " KB";
+  } else {
+    return std::to_string(bytes) + " B";
+  }
+  return std::move(stream).str();
+}
+
 } // namespace
 
 GameplaySkinSettingsActionAvailability gameplaySkinSettingsActionAvailability(
@@ -183,7 +219,7 @@ GameplaySkinSettingsActionAvailability gameplaySkinSettingsActionAvailability(
       .ordinaryActions = snapshot.state != GameplaySkinSettingsState::Busy &&
                          !snapshot.canCancel,
       .canCancel = snapshot.canCancel,
-      .canEditPreparedName = nameReady,
+      .canEditPreparedName = false,
       .canInstallPrepared = nameReady && snapshot.preparedName->ok(),
   };
 }
@@ -199,11 +235,17 @@ std::string gameplaySkinSettingsPresentationKey(
   encoder.boolean(snapshot.compatibilityEnabled);
   encoder.text(snapshot.statusMessage);
   encoder.boolean(snapshot.canCancel);
+  encoder.boolean(snapshot.hasPackageProgress);
 
   encodeEnum(encoder, snapshot.progress.phase);
   encoder.unsignedNumber(snapshot.progress.completedBytes);
   encoder.unsignedNumber(snapshot.progress.totalBytes);
   encoder.unsignedNumber(snapshot.progress.completedFiles);
+  encodeEnum(encoder, snapshot.rescanProgress.phase);
+  encodeEnum(encoder, snapshot.rescanProgress.packageProgress.phase);
+  encoder.unsignedNumber(snapshot.rescanProgress.packageProgress.completedBytes);
+  encoder.unsignedNumber(snapshot.rescanProgress.packageProgress.totalBytes);
+  encoder.unsignedNumber(snapshot.rescanProgress.packageProgress.completedFiles);
 
   encoder.unsignedNumber(snapshot.selectedGameplayEntries.size());
   for (const auto &[skinType, entry] : snapshot.selectedGameplayEntries) {
@@ -255,6 +297,44 @@ std::string gameplaySkinSettingsPresentationKey(
     }
   }
   return std::move(encoder).finish();
+}
+
+std::string gameplaySkinPackageProgressDisplayText(const SkinProgress &progress) {
+  std::string text = progressPhaseLabel(progress.phase);
+  if (progress.totalBytes > 0) {
+    const auto percent = static_cast<int>(std::lround(
+        std::clamp(static_cast<double>(progress.completedBytes) /
+                       static_cast<double>(progress.totalBytes),
+                   0.0, 1.0) *
+        100.0));
+    text += " — " + std::to_string(percent) + "% (" +
+            formatProgressBytes(progress.completedBytes) + " / " +
+            formatProgressBytes(progress.totalBytes) + ")";
+  }
+  if (progress.completedFiles > 0) {
+    text += " • " + std::to_string(progress.completedFiles) +
+            (progress.completedFiles == 1 ? " file" : " files");
+  }
+  return text;
+}
+
+std::string
+gameplaySkinRescanProgressDisplayText(const SkinRescanProgress &progress) {
+  switch (progress.phase) {
+  case SkinRescanProgressPhase::Idle:
+    return {};
+  case SkinRescanProgressPhase::LoadingProfileInventory:
+    return "Loading skin profile inventory";
+  case SkinRescanProgressPhase::ReconcilingActivations:
+    return "Reconciling skin activations";
+  case SkinRescanProgressPhase::ScanningVisiblePackages:
+    return gameplaySkinPackageProgressDisplayText(progress.packageProgress);
+  case SkinRescanProgressPhase::Succeeded:
+    return "Skin scan complete.";
+  case SkinRescanProgressPhase::Failed:
+    return "Skin scan did not complete.";
+  }
+  return "Scanning skin packages";
 }
 
 ViewportSettings gameplaySkinViewportWithMode(ViewportSettings current,

@@ -21,6 +21,10 @@ enum class SkinRescanReason : std::uint8_t { Explicit };
 
 struct GameplaySkinLifecycleOperationSubmission {
   std::uint64_t ticket = 0;
+  // The lifecycle is also linked into focused tests without the operation
+  // service implementation. Expose a value getter at this boundary rather
+  // than making that test-only linkage depend on the worker mailbox type.
+  std::function<SkinProgress()> progress;
   std::vector<SkinDiagnostic> diagnostics;
 };
 
@@ -99,6 +103,7 @@ public:
   void startAfterProfileInitialization(SkinProfileId);
   void profileChanged(SkinProfileId);
   void requestRescan(SkinRescanReason);
+  [[nodiscard]] SkinRescanProgress rescanProgress() const noexcept;
   void requestRevalidation(const SkinEntryId &);
   GameplayViewportPersistenceResult
   requestViewportReset(const PlaySkinSessionIdentity &, ViewportSettings);

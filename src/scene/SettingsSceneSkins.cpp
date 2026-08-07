@@ -153,6 +153,12 @@ void SettingsScene::ensureGameplaySkinSettingsController() {
                         skin::SkinRescanReason::Explicit);
                   }
                 },
+            .rescanProgress =
+                [this]() {
+                  return context.gameplaySkinLifecycle != nullptr
+                             ? context.gameplaySkinLifecycle->rescanProgress()
+                             : skin::SkinRescanProgress{};
+                },
             .requestRevalidation =
                 [this](const skin::SkinEntryId &entry) {
                   if (context.gameplaySkinLifecycle != nullptr) {
@@ -318,49 +324,42 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
         ui_theme::coral()));
   }
   imports->addView(importActions);
+  if (snapshot.hasPackageProgress) {
+    imports->addView(makeWrappedText(
+        skin::gameplaySkinPackageProgressDisplayText(snapshot.progress),
+        metrics.smallTextSize, ui_theme::cyan()));
+  }
+  if (snapshot.rescanProgress.phase != skin::SkinRescanProgressPhase::Idle &&
+      snapshot.rescanProgress.phase !=
+          skin::SkinRescanProgressPhase::Succeeded &&
+      snapshot.rescanProgress.phase != skin::SkinRescanProgressPhase::Failed) {
+    imports->addView(makeWrappedText(
+        skin::gameplaySkinRescanProgressDisplayText(snapshot.rescanProgress),
+        metrics.smallTextSize, ui_theme::cyan()));
+  }
   if (snapshot.preparedName) {
     auto *nameRow = new View();
     nameRow->setFlexDirection(FlexDirection::Row);
     nameRow->setFlexWrap(YGWrapWrap);
     nameRow->setGap(metrics.compact ? 8.0f : 10.0f);
-    TextInputBox *nameInput = nullptr;
-    if (actionAvailability.canEditPreparedName) {
-      nameInput = makeTextInput(metrics, metrics.compact ? 240 : 320);
-      nameInput->setText(snapshot.preparedName->suggestedPackageName);
-      nameInput->onEditingFinished([this, nameInput](const std::string &) {
-        gameplaySkinReplaceConfirmationArmed = false;
-        handleGameplaySkinActionResult(
-            gameplaySkinSettingsController->setSuggestedPackageName(
-                nameInput->getText()));
-      });
-      nameRow->addView(nameInput);
-    } else {
-      nameRow->addView(
-          makeWrappedText(snapshot.preparedName->suggestedPackageName,
-                          metrics.bodyTextSize, ui_theme::textSecondary()));
-    }
     const bool collision = snapshot.collisionPackage.has_value();
+    if (collision) {
+      nameRow->addView(makeWrappedText(
+          "Existing package: " + snapshot.collisionPackage->directoryName,
+          metrics.bodyTextSize, ui_theme::textSecondary()));
+    }
     const std::string installLabel =
         collision ? (gameplaySkinReplaceConfirmationArmed ? "Confirm Replace"
                                                           : "Replace Existing")
                   : "Install";
     nameRow->addView(makeGameplaySkinAction(
         metrics, installLabel, actionAvailability.canInstallPrepared,
-        [this, nameInput, collision]() {
-          if (nameInput == nullptr) {
-            return;
-          }
+        [this, collision]() {
           if (collision && !gameplaySkinReplaceConfirmationArmed) {
             gameplaySkinReplaceConfirmationArmed = true;
             gameplaySkinUiMessage =
                 "Tap Confirm Replace to replace the installed package.";
             lastLayoutWidth = -1;
-            return;
-          }
-          if (!handleGameplaySkinActionResult(
-                  gameplaySkinSettingsController->setSuggestedPackageName(
-                      nameInput->getText()))) {
-            gameplaySkinReplaceConfirmationArmed = false;
             return;
           }
           handleGameplaySkinActionResult(
@@ -370,13 +369,6 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
           gameplaySkinReplaceConfirmationArmed = false;
         },
         ui_theme::lime()));
-    imports->addView(makeWrappedText("Package name", metrics.smallTextSize,
-                                     ui_theme::textSecondary()));
-    if (!snapshot.preparedName->validationError.empty()) {
-      imports->addView(makeWrappedText(snapshot.preparedName->validationError,
-                                       metrics.smallTextSize,
-                                       ui_theme::coral()));
-    }
     imports->addView(nameRow);
   }
   column->addView(makeCard(metrics, "Install",
