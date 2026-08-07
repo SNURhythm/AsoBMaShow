@@ -3838,6 +3838,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/rendering/common.cpp
         src/rendering/UniformCache.cpp
         src/view/Button.cpp
+        src/view/SdlTtfRuntime.cpp
         src/view/TextInputBox.cpp
         src/view/TextView.cpp
         src/view/View.cpp
@@ -3891,6 +3892,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/view/DropdownView.cpp
         src/view/PlayOptionSectionView.cpp
         src/view/PlayOptionsPanelView.cpp
+        src/view/SdlTtfRuntime.cpp
         src/view/ScrollView.cpp
         src/view/SnappedSlider.cpp
         src/view/TextInputBox.cpp
