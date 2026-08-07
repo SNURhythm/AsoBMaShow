@@ -1047,6 +1047,90 @@ bool safeLeaf(const fs::path &path) {
          leaf.native().find('/') == std::string::npos;
 }
 
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+// The Files-backed Documents provider accepts normal path operations, but can
+// reject directory descriptor opens even for the application's own container.
+// Keep the iOS transaction lifetime path-based so package publication does not
+// depend on directory-descriptor support that is unavailable on device.
+class RetainedTreeCapability {
+public:
+  static std::optional<RetainedTreeCapability> issue(const fs::path &path) {
+    std::error_code error;
+    const auto status = fs::symlink_status(path, error);
+    if (error && error != std::errc::no_such_file_or_directory) {
+      return std::nullopt;
+    }
+    if (status.type() == fs::file_type::not_found ||
+        error == std::errc::no_such_file_or_directory) {
+      return RetainedTreeCapability(path, false);
+    }
+    if (status.type() != fs::file_type::directory) {
+      return std::nullopt;
+    }
+    return RetainedTreeCapability(path, true);
+  }
+
+  bool existed() const noexcept { return existed_; }
+  const fs::path &currentPath() const noexcept { return path_; }
+
+  bool matchesIssuedIdentity() const noexcept {
+    std::error_code error;
+    const auto status = fs::symlink_status(path_, error);
+    if (error && error != std::errc::no_such_file_or_directory) {
+      return false;
+    }
+    if (!existed_) {
+      return status.type() == fs::file_type::not_found ||
+             error == std::errc::no_such_file_or_directory;
+    }
+    return status.type() == fs::file_type::directory;
+  }
+
+  bool renameTo(const fs::path &destination) noexcept {
+    try {
+      if (!existed_ || !matchesIssuedIdentity()) {
+        return false;
+      }
+      std::error_code error;
+      if (fs::exists(destination, error) || error) {
+        return false;
+      }
+      fs::rename(path_, destination, error);
+      if (error) {
+        return false;
+      }
+      path_ = destination;
+      return matchesIssuedIdentity();
+    } catch (...) {
+      return false;
+    }
+  }
+
+  bool removeTreeExact() noexcept {
+    try {
+      if (!existed_ || !matchesIssuedIdentity()) {
+        return false;
+      }
+      std::error_code error;
+      const auto removed = fs::remove_all(path_, error);
+      if (error || removed == 0) {
+        return false;
+      }
+      existed_ = false;
+      return true;
+    } catch (...) {
+      return false;
+    }
+  }
+
+private:
+  RetainedTreeCapability(fs::path path, bool existed)
+      : path_(std::move(path)), existed_(existed) {}
+
+  fs::path path_;
+  bool existed_ = false;
+};
+#else
 class RetainedTreeCapability {
 public:
   static std::optional<RetainedTreeCapability> issue(const fs::path &path) {
@@ -1217,6 +1301,7 @@ private:
   bool existed_ = false;
 };
 #endif
+#endif
 
 class RetainedEntryCapability {
 public:
@@ -1252,7 +1337,9 @@ public:
       }
       return RetainedEntryCapability(path, std::move(*tree));
     }
-#if defined(_WIN32)
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+    return RetainedEntryCapability(path);
+#elif defined(_WIN32)
     std::vector<HANDLE> parents;
     if (!openDirectoryChain(path.parent_path(), parents)) {
       return std::nullopt;
@@ -1314,7 +1401,10 @@ public:
     if (tree_) {
       return tree_->matchesIssuedIdentity();
     }
-#if defined(_WIN32)
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+    std::error_code error;
+    return fs::is_regular_file(path_, error) && !error;
+#elif defined(_WIN32)
     HANDLE probe = CreateFileW(
         path_.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE,
         nullptr, OPEN_EXISTING,
@@ -1355,7 +1445,18 @@ public:
       if (!matchesIssuedIdentity()) {
         return false;
       }
-#if defined(_WIN32)
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+      std::error_code error;
+      if (fs::exists(destination, error) || error) {
+        return false;
+      }
+      fs::rename(path_, destination, error);
+      if (error) {
+        return false;
+      }
+      path_ = destination;
+      return matchesIssuedIdentity();
+#elif defined(_WIN32)
       std::vector<HANDLE> destinationParents;
       const fs::path destinationLeaf = destination.filename();
       const std::wstring destinationLeafNative = destinationLeaf.native();
@@ -1440,7 +1541,10 @@ public:
       if (!matchesIssuedIdentity()) {
         return false;
       }
-#if defined(_WIN32)
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+      std::error_code error;
+      return fs::remove(path_, error) && !error;
+#elif defined(_WIN32)
       FILE_BASIC_INFO basic{};
       if (GetFileInformationByHandleEx(file_, FileBasicInfo, &basic,
                                        sizeof(basic))) {
@@ -1478,7 +1582,12 @@ public:
 private:
   RetainedEntryCapability(fs::path path, RetainedTreeCapability tree)
       : path_(std::move(path)), tree_(std::move(tree)) {}
-#if defined(_WIN32)
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  explicit RetainedEntryCapability(fs::path path) : path_(std::move(path)) {}
+
+  fs::path path_;
+  std::optional<RetainedTreeCapability> tree_;
+#elif defined(_WIN32)
   RetainedEntryCapability(fs::path path, std::vector<HANDLE> parents,
                           HANDLE file, DWORD volume, std::uint64_t fileIndex)
       : path_(std::move(path)), parents_(std::move(parents)), file_(file),
@@ -1692,7 +1801,15 @@ reserveOperation(const fs::path &privateCatalog) {
   for (int attempt = 0; attempt < 32; ++attempt) {
     const std::string operationId = nextOperationId();
     const fs::path reservation = reservationRoot / operationId;
-#if defined(_WIN32)
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+    std::error_code error;
+    if (!fs::create_directory(reservation, error)) {
+      if (error == std::errc::file_exists) {
+        continue;
+      }
+      return std::nullopt;
+    }
+#elif defined(_WIN32)
     if (!CreateDirectoryW(reservation.c_str(), nullptr)) {
       if (GetLastError() == ERROR_ALREADY_EXISTS) {
         continue;

@@ -102,6 +102,32 @@ int main() { return 0; }
         )
         self.assertEqual(0, result.returncode, result.stderr)
 
+    def test_ios_skin_publication_uses_files_paths_for_transaction_reservations(self):
+        source = SKIN_PACKAGE_STORE_SOURCE.read_text(encoding="utf-8")
+        reservation = source[
+            source.index("reserveOperation(const fs::path &privateCatalog)") : source.index(
+                "bool releaseOperationReservation"
+            )
+        ]
+        self.assertRegex(
+            reservation,
+            re.compile(
+                r"#if TARGET_OS_IOS \|\| TARGET_OS_SIMULATOR"
+                r"[\s\S]*fs::create_directory\(reservation, error\)"
+                r"[\s\S]*#else[\s\S]*openDirectoryNoFollow\(reservationRoot\)",
+            ),
+        )
+        tree_start = source.index(
+            "// The Files-backed Documents provider accepts normal path operations"
+        )
+        ios_tree = source[
+            tree_start : source.index("#else\nclass RetainedTreeCapability", tree_start)
+        ]
+        self.assertNotIn("openDirectoryNoFollow", ios_tree)
+        self.assertNotIn("O_DIRECTORY", ios_tree)
+        self.assertIn("fs::rename", ios_tree)
+        self.assertIn("fs::remove_all", ios_tree)
+
     def test_only_platform_and_build_metadata_are_membership_exceptions(self):
         exceptions = object_block(
             self.project,
