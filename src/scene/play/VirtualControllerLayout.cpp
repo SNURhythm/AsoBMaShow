@@ -275,17 +275,23 @@ makeVirtualControllerTouchRegions(const VirtualControllerLayout &layout,
   if (!layout.valid()) {
     return regions;
   }
+  constexpr float kTouchRegionScale = 1.2F;
   regions.reserve(layout.elements.size());
   for (const auto &element : layout.elements) {
-    const auto bottomLeft = normalizedPoint(element.bounds.x,
-                                            element.bounds.y + element.bounds.height,
-                                            transform);
-    const auto bottomRight = normalizedPoint(
-        element.bounds.x + element.bounds.width,
-        element.bounds.y + element.bounds.height, transform);
-    const auto topLeft = normalizedPoint(element.bounds.x, element.bounds.y, transform);
-    const auto topRight = normalizedPoint(element.bounds.x + element.bounds.width,
-                                          element.bounds.y, transform);
+    const float centerX = element.bounds.centerX();
+    const float centerY = element.bounds.centerY();
+    const float halfWidth = element.bounds.width * 0.5F * kTouchRegionScale;
+    const float halfHeight = element.bounds.height * 0.5F * kTouchRegionScale;
+    const auto expandedLeft = centerX - halfWidth;
+    const auto expandedRight = centerX + halfWidth;
+    const auto expandedBottom = centerY + halfHeight;
+    const auto expandedTop = centerY - halfHeight;
+    const auto bottomLeft = normalizedPoint(expandedLeft, expandedBottom, transform);
+    const auto bottomRight =
+        normalizedPoint(expandedRight, expandedBottom, transform);
+    const auto topLeft = normalizedPoint(expandedLeft, expandedTop, transform);
+    const auto topRight =
+        normalizedPoint(expandedRight, expandedTop, transform);
     if (!bottomLeft || !bottomRight || !topLeft || !topRight) {
       return {};
     }
@@ -301,14 +307,10 @@ makeVirtualControllerTouchRegions(const VirtualControllerLayout &layout,
                                    .replayControl = element.replayControl,
                                    .requiresInside = true};
     if (element.shape == VirtualControllerShape::Circle) {
-      const auto center = normalizedPoint(element.bounds.centerX(),
-                                          element.bounds.centerY(), transform);
-      const auto edge = normalizedPoint(
-          element.bounds.centerX() + element.bounds.width * 0.5F,
-          element.bounds.centerY(), transform);
+      const auto center = normalizedPoint(centerX, centerY, transform);
+      const auto edge = normalizedPoint(centerX + halfWidth, centerY, transform);
       const auto verticalEdge = normalizedPoint(
-          element.bounds.centerX(),
-          element.bounds.centerY() + element.bounds.height * 0.5F, transform);
+          centerX, centerY + halfHeight, transform);
       if (!center || !edge || !verticalEdge) {
         return {};
       }

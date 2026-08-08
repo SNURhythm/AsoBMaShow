@@ -422,23 +422,33 @@ void appendVirtualControllerHitRegions(
 }
 
 void renderVirtualControllerOverlay(const gameplay::VirtualControllerLayout &layout,
-                                    float spinScratchRotationDegrees) {
+                                  float spinScratchRotationDegrees,
+                                  const std::unordered_map<int, bool> &lanePressed) {
   if (!layout.valid()) {
     return;
   }
   constexpr float kBorder = 3.0F;
   const uint32_t border = Color(177, 243, 255, 112).toABGR();
   const uint32_t fill = Color(28, 77, 90, 54).toABGR();
+  const uint32_t pressedBorder =
+      ui_theme::withAlpha(ui_theme::amber(), 198).toABGR();
+  const uint32_t pressedFill =
+      ui_theme::withAlpha(ui_theme::amber(), 72).toABGR();
   rendering::SimpleBatchRenderer batch;
   batch.setSubmitView(rendering::ui_view);
   batch.begin();
   for (const auto &element : layout.elements) {
     const auto &bounds = element.bounds;
+    const bool pressed =
+        element.lane >= 0 && lanePressed.contains(element.lane) &&
+        lanePressed.at(element.lane);
+    const uint32_t elementBorder = pressed ? pressedBorder : border;
+    const uint32_t elementFill = pressed ? pressedFill : fill;
     if (element.shape == gameplay::VirtualControllerShape::Circle) {
       const float radius = std::min(bounds.width, bounds.height) * 0.5F;
-      batch.addCircle(bounds.centerX(), bounds.centerY(), radius, border);
+      batch.addCircle(bounds.centerX(), bounds.centerY(), radius, elementBorder);
       batch.addCircle(bounds.centerX(), bounds.centerY(),
-                      std::max(0.0F, radius - kBorder), fill);
+                      std::max(0.0F, radius - kBorder), elementFill);
       // A hub and spoke give the transparent platter a stable visual
       // orientation. Spin Mode rotates this decoration with the finger.
       const float angle = element.spinScratch
@@ -449,19 +459,19 @@ void renderVirtualControllerOverlay(const gameplay::VirtualControllerLayout &lay
       const float markerX = bounds.centerX() + std::cos(angle) * markerRadius;
       const float markerY = bounds.centerY() + std::sin(angle) * markerRadius;
       batch.addLine(bounds.centerX(), bounds.centerY(), markerX, markerY,
-                    std::max(2.0F, radius * 0.045F), border);
+                    std::max(2.0F, radius * 0.045F), elementBorder);
       batch.addCircle(bounds.centerX(), bounds.centerY(), radius * 0.14F,
-                      border);
-      batch.addCircle(markerX, markerY, radius * 0.09F, border);
+                      elementBorder);
+      batch.addCircle(markerX, markerY, radius * 0.09F, elementBorder);
       continue;
     }
     const float radius = std::min(bounds.height * 0.22F, 12.0F);
     batch.addRoundedRect(bounds.x, bounds.y, bounds.width, bounds.height,
-                         radius, border);
+                        radius, elementBorder);
     batch.addRoundedRect(bounds.x + kBorder, bounds.y + kBorder,
                          std::max(0.0F, bounds.width - kBorder * 2.0F),
                          std::max(0.0F, bounds.height - kBorder * 2.0F),
-                         std::max(0.0F, radius - kBorder), fill);
+                         std::max(0.0F, radius - kBorder), elementFill);
   }
   batch.end();
 }
@@ -5004,7 +5014,8 @@ void GamePlayScene::renderScene() {
     }
     renderVirtualControllerOverlay(currentVirtualControllerLayout(
         context.inputProfile.virtualController, chart->Meta.KeyMode,
-        realtimeTouchUiTransform()), spinScratchRotationDegrees);
+        realtimeTouchUiTransform()),
+                                   spinScratchRotationDegrees, lanePressed);
   }
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   if (!realtimeGameplayAuthorityActive() && !options.autoPlay &&
