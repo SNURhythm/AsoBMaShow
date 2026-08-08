@@ -423,7 +423,9 @@ void appendVirtualControllerHitRegions(
 
 void renderVirtualControllerOverlay(const gameplay::VirtualControllerLayout &layout,
                                   float spinScratchRotationDegrees,
-                                  const std::unordered_map<int, bool> &lanePressed) {
+                                  const std::unordered_map<int, bool> &lanePressed,
+                                  bool startButtonPressed,
+                                  bool selectButtonPressed) {
   if (!layout.valid()) {
     return;
   }
@@ -434,6 +436,14 @@ void renderVirtualControllerOverlay(const gameplay::VirtualControllerLayout &lay
       ui_theme::withAlpha(ui_theme::amber(), 198).toABGR();
   const uint32_t pressedFill =
       ui_theme::withAlpha(ui_theme::amber(), 72).toABGR();
+  const uint32_t startPressedBorder =
+      ui_theme::withAlpha(ui_theme::coral(), 198).toABGR();
+  const uint32_t startPressedFill =
+      ui_theme::withAlpha(ui_theme::coral(), 72).toABGR();
+  const uint32_t selectPressedBorder =
+      ui_theme::withAlpha(ui_theme::lime(), 198).toABGR();
+  const uint32_t selectPressedFill =
+      ui_theme::withAlpha(ui_theme::lime(), 72).toABGR();
   rendering::SimpleBatchRenderer batch;
   batch.setSubmitView(rendering::ui_view);
   batch.begin();
@@ -442,8 +452,23 @@ void renderVirtualControllerOverlay(const gameplay::VirtualControllerLayout &lay
     const bool pressed =
         element.lane >= 0 && lanePressed.contains(element.lane) &&
         lanePressed.at(element.lane);
-    const uint32_t elementBorder = pressed ? pressedBorder : border;
-    const uint32_t elementFill = pressed ? pressedFill : fill;
+    const bool startPressed =
+        element.control == gameplay::VirtualControllerControl::Start &&
+        startButtonPressed;
+    const bool selectPressed =
+        element.control == gameplay::VirtualControllerControl::Select &&
+        selectButtonPressed;
+    const bool isPressed = pressed || startPressed || selectPressed;
+    const uint32_t elementBorder =
+        isPressed ? (startPressed
+                         ? startPressedBorder
+                         : selectPressed ? selectPressedBorder : pressedBorder)
+                  : border;
+    const uint32_t elementFill =
+        isPressed ? (startPressed ? startPressedFill
+                                  : selectPressed ? selectPressedFill
+                                                 : pressedFill)
+                  : fill;
     if (element.shape == gameplay::VirtualControllerShape::Circle) {
       const float radius = std::min(bounds.width, bounds.height) * 0.5F;
       batch.addCircle(bounds.centerX(), bounds.centerY(), radius, elementBorder);
@@ -2482,6 +2507,8 @@ void GamePlayScene::init() {
   }
   startSelectControl.emplace(
       gameplay::StartSelectControl::Configuration{.keyMode = chart->Meta.KeyMode});
+  startButtonPressed = false;
+  selectButtonPressed = false;
   playfieldHispeedMultiplier = context.settings.gameplayHispeedMultiplier;
   playfieldLaneCoverEnabled = context.settings.laneCoverEnabled;
   playfieldLaneCoverPercent = effectiveNoteStartPositionPercent();
@@ -2642,6 +2669,8 @@ void GamePlayScene::init() {
   for (const auto &lane : chart->Meta.GetTotalLaneIndices()) {
     lanePressed[lane] = false;
   }
+  startButtonPressed = false;
+  selectButtonPressed = false;
 
   ownedLaneInputController = std::make_unique<RhythmLaneInputController>(
       chart, presentationEventFanout, lanePressed,
@@ -3284,6 +3313,16 @@ void GamePlayScene::consumeStartSelectInput(
     return;
   }
   const bool noteEnd = state != nullptr && state->isEnding;
+  switch (input.control.kind) {
+  case replay::LogicalControlKind::Start:
+    startButtonPressed = input.pressed;
+    break;
+  case replay::LogicalControlKind::Select:
+    selectButtonPressed = input.pressed;
+    break;
+  default:
+    break;
+  }
   applyStartSelectControlActions(
       input.analogScratchTicks > 0
           ? startSelectControl->applyAnalogScratchTicks(
@@ -5015,7 +5054,8 @@ void GamePlayScene::renderScene() {
     renderVirtualControllerOverlay(currentVirtualControllerLayout(
         context.inputProfile.virtualController, chart->Meta.KeyMode,
         realtimeTouchUiTransform()),
-                                   spinScratchRotationDegrees, lanePressed);
+                                   spinScratchRotationDegrees, lanePressed,
+                                   startButtonPressed, selectButtonPressed);
   }
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   if (!realtimeGameplayAuthorityActive() && !options.autoPlay &&

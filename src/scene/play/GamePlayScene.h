@@ -267,6 +267,8 @@ private:
   std::uint64_t realtimeGameplayEpoch = 0;
   bool realtimeGameplayAuthorityWaitingForSkinGeometry = false;
   std::unordered_map<int, bool> lanePressed;
+  bool startButtonPressed = false;
+  bool selectButtonPressed = false;
   ReplayData recordedReplay;
   ReplayData analyticsReplay;
   std::unique_ptr<replay::ReplayInputRecorder> modernReplayInputRecorder;
