@@ -305,7 +305,7 @@ makeVirtualControllerTouchRegions(const VirtualControllerLayout &layout,
                                    .invertFlickScratchDirection =
                                        element.invertFlickScratchDirection,
                                    .replayControl = element.replayControl,
-                                   .requiresInside = true};
+                                   .requiresInside = !element.scratch};
     if (element.shape == VirtualControllerShape::Circle) {
       const auto center = normalizedPoint(centerX, centerY, transform);
       const auto edge = normalizedPoint(centerX + halfWidth, centerY, transform);
