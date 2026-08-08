@@ -142,9 +142,14 @@ struct RenderContext {
     if (scissor.width < 0 || scissor.height < 0) {
       return true;
     }
-    if (width <= 0.0f || height <= 0.0f || scissor.width == 0 ||
-        scissor.height == 0) {
+    if (scissor.width == 0 || scissor.height == 0) {
       return false;
+    }
+    // A custom view may deliberately paint visible overflow from a collapsed
+    // layout slot (for example, a TextView whose label flex-shrank to zero).
+    // Its layout extent is not enough information to cull it safely.
+    if (width <= 0.0f || height <= 0.0f) {
+      return true;
     }
     if (transformStack.empty()) {
       return x + width > static_cast<float>(scissor.x) &&

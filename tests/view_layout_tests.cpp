@@ -124,6 +124,20 @@ void testViewSkipsOffscreenPaintingButStillVisitsVisibleChildren() {
   context.popScissor();
 }
 
+void testViewDoesNotCullCustomPaintingWithZeroLayoutExtent() {
+  RenderContext context;
+  context.pushScissor(0, 0, 100, 100);
+
+  // TextView permits visible overflow from a layout slot that flex-shrank to
+  // zero width. A generic View must not assume that a zero-sized custom view
+  // has no own drawing work.
+  RenderProbeView zeroExtent(10, 10, 0, 0);
+  zeroExtent.render(context);
+  assert(zeroExtent.renderCalls == 1);
+
+  context.popScissor();
+}
+
 void testViewRotationTransformsRenderingAndScissor() {
   TransformRecordingView view(20, 30, 40, 20);
   view.setRotationDegrees(90.0f);
@@ -824,6 +838,7 @@ void testProfileInlineEditorClearsWhenUnavailable() {
 
 int main() {
   testViewSkipsOffscreenPaintingButStillVisitsVisibleChildren();
+  testViewDoesNotCullCustomPaintingWithZeroLayoutExtent();
   testViewRotationTransformsRenderingAndScissor();
   testOverlayPortalDispatchesPresentedViewsAboveContent();
   testRankingModalPanelStaysCenteredInsideSafeArea();
