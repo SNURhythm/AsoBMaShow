@@ -275,13 +275,16 @@ makeVirtualControllerTouchRegions(const VirtualControllerLayout &layout,
   if (!layout.valid()) {
     return regions;
   }
-  constexpr float kTouchRegionScale = 1.5F;
+  constexpr float kTouchRegionExtra = 0.1F;
   regions.reserve(layout.elements.size());
   for (const auto &element : layout.elements) {
     const float centerX = element.bounds.centerX();
     const float centerY = element.bounds.centerY();
-    const float halfWidth = element.bounds.width * 0.5F * kTouchRegionScale;
-    const float halfHeight = element.bounds.height * 0.5F * kTouchRegionScale;
+    const float uniformExtra =
+        0.5F * std::min(element.bounds.width, element.bounds.height) *
+        kTouchRegionExtra;
+    const float halfWidth = element.bounds.width * 0.5F + uniformExtra;
+    const float halfHeight = element.bounds.height * 0.5F + uniformExtra;
     const auto expandedLeft = centerX - halfWidth;
     const auto expandedRight = centerX + halfWidth;
     const auto expandedBottom = centerY + halfHeight;
