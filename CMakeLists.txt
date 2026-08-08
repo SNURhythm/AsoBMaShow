@@ -1542,6 +1542,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(settings_virtual_controller_ui_contract PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
+    add_test(NAME text_view_transient_buffer_contract
+        COMMAND ${Python3_EXECUTABLE}
+                -m unittest
+                tests/text_view_transient_buffer_contract_tests.py -v)
+    set_tests_properties(text_view_transient_buffer_contract PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
     add_library(ir_submission_eligibility_test_support STATIC
         src/ir/tachi/TachiEligibility.cpp
         src/ir/IrOutboxModels.cpp

@@ -378,6 +378,11 @@ void TextView::renderImpl(RenderContext &context) {
     const uint16_t indices[] = {0, 1, 2, 0, 2, 3};
     bgfx::TransientVertexBuffer tvb;
     bgfx::TransientIndexBuffer tib;
+    if (bgfx::getAvailTransientVertexBuffer(
+            4, rendering::PosTexVertex::ms_decl) < 4 ||
+        bgfx::getAvailTransientIndexBuffer(6) < 6) {
+      return;
+    }
     bgfx::allocTransientVertexBuffer(&tvb, 4, rendering::PosTexVertex::ms_decl);
     bgfx::allocTransientIndexBuffer(&tib, 6);
     bx::memCopy(tvb.data, vertices, sizeof(vertices));
@@ -434,6 +439,14 @@ SDL_Rect TextView::resolvedTextRect() const {
   }
 
   return drawRect;
+}
+
+View::RenderBounds TextView::renderingBounds() const {
+  const SDL_Rect drawRect = resolvedTextRect();
+  return {.x = static_cast<float>(drawRect.x),
+          .y = static_cast<float>(drawRect.y),
+          .width = static_cast<float>(drawRect.w),
+          .height = static_cast<float>(drawRect.h)};
 }
 
 int TextView::textLineHeight() const {

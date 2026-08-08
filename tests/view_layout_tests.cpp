@@ -103,6 +103,25 @@ private:
   void renderImpl(RenderContext &) override { ++renderCalls; }
 };
 
+class VisibleOverflowProbeView final : public View {
+public:
+  VisibleOverflowProbeView(int layoutX, int layoutY, int layoutWidth,
+                           int layoutHeight, int paintX, int paintY,
+                           int paintWidth, int paintHeight)
+      : View(layoutX, layoutY, layoutWidth, layoutHeight),
+        paintBounds{static_cast<float>(paintX), static_cast<float>(paintY),
+                    static_cast<float>(paintWidth),
+                    static_cast<float>(paintHeight)} {}
+
+  int renderCalls = 0;
+
+private:
+  RenderBounds renderingBounds() const override { return paintBounds; }
+  void renderImpl(RenderContext &) override { ++renderCalls; }
+
+  RenderBounds paintBounds;
+};
+
 void testViewSkipsOffscreenPaintingButStillVisitsVisibleChildren() {
   RenderContext context;
   context.pushScissor(0, 0, 100, 100);
@@ -124,16 +143,29 @@ void testViewSkipsOffscreenPaintingButStillVisitsVisibleChildren() {
   context.popScissor();
 }
 
-void testViewDoesNotCullCustomPaintingWithZeroLayoutExtent() {
+void testViewSkipsZeroExtentPaintingWithoutVisibleOverflowBounds() {
   RenderContext context;
   context.pushScissor(0, 0, 100, 100);
 
-  // TextView permits visible overflow from a layout slot that flex-shrank to
-  // zero width. A generic View must not assume that a zero-sized custom view
-  // has no own drawing work.
+  // A collapsed ordinary view has no paint extent. Views that deliberately
+  // overflow must provide their real bounds through renderingBounds().
   RenderProbeView zeroExtent(10, 10, 0, 0);
   zeroExtent.render(context);
-  assert(zeroExtent.renderCalls == 1);
+  assert(zeroExtent.renderCalls == 0);
+
+  context.popScissor();
+}
+
+void testViewUsesVisibleOverflowBoundsForOwnPainting() {
+  RenderContext context;
+  context.pushScissor(0, 0, 100, 100);
+
+  // TextView's visible overflow may lie inside the viewport even when Yoga
+  // positioned its layout slot outside it. Culling must use the actual paint
+  // bounds rather than the layout slot.
+  VisibleOverflowProbeView overflowing(0, 160, 20, 20, 10, 10, 40, 20);
+  overflowing.render(context);
+  assert(overflowing.renderCalls == 1);
 
   context.popScissor();
 }
@@ -838,7 +870,8 @@ void testProfileInlineEditorClearsWhenUnavailable() {
 
 int main() {
   testViewSkipsOffscreenPaintingButStillVisitsVisibleChildren();
-  testViewDoesNotCullCustomPaintingWithZeroLayoutExtent();
+  testViewSkipsZeroExtentPaintingWithoutVisibleOverflowBounds();
+  testViewUsesVisibleOverflowBoundsForOwnPainting();
   testViewRotationTransformsRenderingAndScissor();
   testOverlayPortalDispatchesPresentedViewsAboveContent();
   testRankingModalPanelStaysCenteredInsideSafeArea();

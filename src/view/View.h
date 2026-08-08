@@ -145,11 +145,8 @@ struct RenderContext {
     if (scissor.width == 0 || scissor.height == 0) {
       return false;
     }
-    // A custom view may deliberately paint visible overflow from a collapsed
-    // layout slot (for example, a TextView whose label flex-shrank to zero).
-    // Its layout extent is not enough information to cull it safely.
     if (width <= 0.0f || height <= 0.0f) {
-      return true;
+      return false;
     }
     if (transformStack.empty()) {
       return x + width > static_cast<float>(scissor.x) &&
@@ -258,6 +255,13 @@ class View {
 public:
   using ThemeColorProvider = std::function<Color()>;
 
+  struct RenderBounds {
+    float x = 0.0f;
+    float y = 0.0f;
+    float width = 0.0f;
+    float height = 0.0f;
+  };
+
   struct LayoutBatchScope {
     LayoutBatchScope() { View::beginLayoutBatch(); }
     ~LayoutBatchScope() { View::endLayoutBatch(); }
@@ -316,9 +320,9 @@ public:
         context, rotationDegrees,
         static_cast<float>(getX()) + static_cast<float>(getWidth()) * 0.5f,
         static_cast<float>(getY()) + static_cast<float>(getHeight()) * 0.5f);
+    const RenderBounds bounds = renderingBounds();
     const bool selfIntersectsScissor = context.boundsIntersectScissor(
-        static_cast<float>(getX()), static_cast<float>(getY()),
-        static_cast<float>(getWidth()), static_cast<float>(getHeight()));
+        bounds.x, bounds.y, bounds.width, bounds.height);
     if (selfIntersectsScissor) {
 #if DEBUG
       if (drawBoundingBox) {
@@ -553,6 +557,12 @@ public:
   }
 
 protected:
+  [[nodiscard]] virtual RenderBounds renderingBounds() const {
+    return {.x = static_cast<float>(getX()),
+            .y = static_cast<float>(getY()),
+            .width = static_cast<float>(getWidth()),
+            .height = static_cast<float>(getHeight())};
+  }
   virtual void renderImpl(RenderContext &context) {};
   virtual inline bool handleEventsImpl(SDL_Event &event) { return true; };
   virtual void onThemeChanged();
