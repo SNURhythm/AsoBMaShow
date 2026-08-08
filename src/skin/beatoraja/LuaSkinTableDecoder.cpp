@@ -18,6 +18,7 @@
 #include "SkinNoteLineNormalization.h"
 #include "SkinNoteNormalization.h"
 #include "SkinTextGraphNormalization.h"
+#include "../GameplaySkinTraits.h"
 #include "../package/SkinPackageTypes.h"
 
 extern "C" {
@@ -2786,9 +2787,9 @@ void decodeGameplayProtected(lua_State *state, int index,
     request->result.model.emplace();
     auto &model = *request->result.model;
     model.header = std::move(*request->decoding.result.header);
-    if (model.header.type != kPlay7KeysType) {
+    if (!gameplaySkinTraitForSkinType(model.header.type)) {
       fail(request->decoding, "skin_lua_model_type_unsupported",
-           "Lua gameplay skins require Beatoraja play type 0 (7 keys)");
+           "Lua gameplay skins require a supported Beatoraja gameplay type");
       transferDecodeDiagnostics(*request);
       request->result.model.reset();
       return;

@@ -1315,29 +1315,30 @@ return {
   }
 }
 
-void testGameplayTypeZeroIsRequiredAfterHeaderDecode() {
+void testGameplayTypeMustBeSupported() {
   BeatorajaSkinHeader header;
   const auto decoded = decodeInlineModel(
-      "return {type=1,w=1280,h=720,destination={}}", &header);
-  expect(header.type == 1,
-         "header-only decoding continues to accept pinned non-gameplay types");
+      "return {type=18,w=1280,h=720,destination={}}", &header);
+  expect(header.type == 18,
+         "header-only decoding continues to accept non-gameplay types");
   expect(!decoded.model && !decoded.diagnostics.empty() &&
              decoded.diagnostics.front().code ==
                  "skin_lua_model_type_unsupported",
-         "gameplay decoding critically rejects every non-7-key skin type");
+         "gameplay decoding rejects non-gameplay skin types");
 
   auto valid = decodeInlineModel(
-      "return {type=0,w=1280,h=720,destination={}}");
-  expect(valid.model.has_value(), "type-zero gameplay model decodes before validation mutation");
+      "return {type=1,w=1280,h=720,destination={}}");
+  expect(valid.model.has_value(),
+         "supported gameplay type decodes before validation mutation");
   if (valid.model) {
-    valid.model->header.type = 1;
+    valid.model->header.type = 18;
     const auto validated = test_support::validateWithAuthoredBuiltins(
         std::move(*valid.model));
     expect(validated.criticalFailure && !validated.model &&
                !validated.diagnostics.empty() &&
                validated.diagnostics.front().code ==
                    "skin_lua_model_type_unsupported",
-           "model validation independently enforces the type-zero critical gate");
+           "model validation independently enforces a supported gameplay type gate");
   }
 }
 
@@ -1461,7 +1462,7 @@ int main() {
   testDuplicateSourceDeclarationsUsePinnedLastDefinition();
   testDuplicateImageDeclarationsUsePinnedFirstDefinition();
   testLiveDestinationMouseRectAndCenterNormalization();
-  testGameplayTypeZeroIsRequiredAfterHeaderDecode();
+  testGameplayTypeMustBeSupported();
   testBooleanFieldsUseLuaTruthiness();
   testOptionalVisualsAndBuiltinImagesStayLiveAcrossRepeatedDestinations();
   if (failures != 0) {
