@@ -275,7 +275,7 @@ makeVirtualControllerTouchRegions(const VirtualControllerLayout &layout,
   if (!layout.valid()) {
     return regions;
   }
-  constexpr float kTouchRegionExtra = 0.1F;
+  constexpr float kTouchRegionExtra = 0.5F;
   regions.reserve(layout.elements.size());
   for (const auto &element : layout.elements) {
     const float centerX = element.bounds.centerX();
