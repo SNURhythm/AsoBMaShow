@@ -954,8 +954,17 @@ void TextView::createTexture(bool markDirty, bool force,
   int fallbackSurfaceHeight = 0;
   const bool usePrimaryFont = font != nullptr && primaryFontSupportsText(text);
   if (usePrimaryFont && wrapEnabled && rasterWrapWidth > 0) {
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+    // SDL_ttf's wrapped compositor is the one path that loses all settings
+    // text on iOS. The existing fallback composes the same primary font one
+    // measured line at a time through the unwrapped renderer instead.
+    surface.reset(renderFallbackTextSurface(rasterWrapWidth,
+                                            fallbackSurfaceWidth,
+                                            fallbackSurfaceHeight));
+#else
     surface.reset(TTF_RenderUTF8_Blended_Wrapped(font, text.c_str(), color,
                                                  rasterWrapWidth));
+#endif
   } else if (usePrimaryFont) {
     surface.reset(TTF_RenderUTF8_Blended(font, text.c_str(), color));
   } else {
