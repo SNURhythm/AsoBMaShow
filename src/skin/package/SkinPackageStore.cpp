@@ -117,6 +117,15 @@ std::string filenameUtf8(const fs::path &path) {
   return {reinterpret_cast<const char *>(value.data()), value.size()};
 }
 
+fs::path pathFromUtf8(std::string_view value) {
+  std::u8string utf8;
+  utf8.reserve(value.size());
+  for (const unsigned char byte : value) {
+    utf8.push_back(static_cast<char8_t>(byte));
+  }
+  return fs::path(utf8);
+}
+
 bool lowercaseSha256(std::string_view digest) {
   return digest.size() == 64 &&
          std::ranges::all_of(digest, [](unsigned char character) {
@@ -411,13 +420,15 @@ loadRemovalJournal(const fs::path &path,
 
 bool treeDigestMatches(const fs::path &path, const SkinPackageId &package,
                        std::string_view expected, const SkinStorageRoots &roots,
-                       const SkinAliasDetector &aliases) {
+                       const SkinAliasDetector &aliases,
+                       SkinSnapshotSourceRootPin sourceRootPin =
+                           SkinSnapshotSourceRootPin::None) {
   std::error_code error;
   if (!fs::is_directory(path, error) || error) {
     return false;
   }
   SkinTreeSnapshotter snapshotter(roots, aliases);
-  auto snapshot = snapshotter.snapshot(path, package, {}, {});
+  auto snapshot = snapshotter.snapshot(path, package, {}, {}, sourceRootPin);
   return snapshot.prepared &&
          snapshot.prepared->revision().lowercaseSha256 == expected;
 }
@@ -436,7 +447,8 @@ struct TreeMetadataRecord {
 };
 
 std::optional<std::vector<TreeMetadataRecord>>
-treeMetadataManifest(const fs::path &root, const SkinAliasDetector &aliases) {
+treeMetadataManifest(const fs::path &root, const SkinAliasDetector &aliases,
+                     bool externallyPinnedRoot = false) {
   std::vector<TreeMetadataRecord> records;
   const auto append = [&](const fs::path &path, std::string relative,
                           std::vector<TreeMetadataRecord> &target) -> bool {
@@ -445,7 +457,9 @@ treeMetadataManifest(const fs::path &root, const SkinAliasDetector &aliases) {
     }
 #if defined(_WIN32)
     HANDLE handle = CreateFileW(
-        path.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE,
+        path.c_str(), FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE |
+            (externallyPinnedRoot && path == root ? FILE_SHARE_DELETE : 0),
         nullptr, OPEN_EXISTING,
         FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
     BY_HANDLE_FILE_INFORMATION information{};
@@ -538,7 +552,8 @@ bool ensureDirectoryNoFollow(const fs::path &directory) {
     fs::path current = absolute.root_path();
     std::vector<HANDLE> retained;
     HANDLE root = CreateFileW(
-        current.c_str(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+        current.c_str(),
+        FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES,
         FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
         FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
     if (root == INVALID_HANDLE_VALUE) {
@@ -621,7 +636,8 @@ public:
       return std::nullopt;
     }
     HANDLE root = CreateFileW(
-        path.c_str(), DELETE | FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY,
+        path.c_str(), DELETE | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES |
+                          FILE_LIST_DIRECTORY,
         FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
         FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
     if (root == INVALID_HANDLE_VALUE) {
@@ -660,8 +676,9 @@ public:
              GetLastError() == ERROR_PATH_NOT_FOUND;
     }
     HANDLE probe = CreateFileW(
-        path_.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE,
-        nullptr, OPEN_EXISTING,
+        path_.c_str(), FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+        OPEN_EXISTING,
         FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
     BY_HANDLE_FILE_INFORMATION retainedIdentity{};
     BY_HANDLE_FILE_INFORMATION pathIdentity{};
@@ -689,20 +706,25 @@ public:
       if (!existed_ || !matchesIssuedIdentity()) {
         return false;
       }
-      std::vector<HANDLE> destinationParents;
-      if (!openDirectoryChain(destination.parent_path(), destinationParents)) {
+      std::error_code destinationError;
+      fs::path retainedDestination =
+          fs::absolute(destination, destinationError).lexically_normal();
+      if (destinationError || !retainedDestination.is_absolute()) {
         return false;
       }
-      fs::path retainedDestination = destination;
-      const std::wstring leaf = retainedDestination.filename().native();
-      const std::size_t leafBytes = leaf.size() * sizeof(wchar_t);
-      std::vector<std::byte> storage(offsetof(FILE_RENAME_INFO, FileName) +
-                                     leafBytes);
+      std::vector<HANDLE> destinationParents;
+      if (!openDirectoryChain(retainedDestination.parent_path(),
+                              destinationParents)) {
+        return false;
+      }
+      const std::wstring target = retainedDestination.native();
+      const std::size_t leafBytes = target.size() * sizeof(wchar_t);
+      std::vector<std::byte> storage(sizeof(FILE_RENAME_INFO) + leafBytes);
       auto *rename = reinterpret_cast<FILE_RENAME_INFO *>(storage.data());
       rename->ReplaceIfExists = FALSE;
-      rename->RootDirectory = destinationParents.back();
+      rename->RootDirectory = nullptr;
       rename->FileNameLength = static_cast<DWORD>(leafBytes);
-      std::memcpy(rename->FileName, leaf.data(), leafBytes);
+      std::memcpy(rename->FileName, target.data(), leafBytes);
       const bool renamed =
           SetFileInformationByHandle(root_, FileRenameInfo, rename,
                                      static_cast<DWORD>(storage.size())) != 0;
@@ -712,7 +734,8 @@ public:
       }
       HANDLE destinationProbe = CreateFileW(
           retainedDestination.c_str(), FILE_READ_ATTRIBUTES,
-          FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+          OPEN_EXISTING,
           FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
       BY_HANDLE_FILE_INFORMATION retainedIdentity{};
       BY_HANDLE_FILE_INFORMATION destinationIdentity{};
@@ -745,8 +768,13 @@ public:
 
   bool removeTreeExact() noexcept {
     try {
-      if (!existed_ || !matchesIssuedIdentity() ||
-          !clearDirectoryExact(path_, root_) || !markDelete(root_)) {
+      if (!existed_ || !matchesIssuedIdentity()) {
+        return false;
+      }
+      if (!clearDirectoryExact(path_, root_)) {
+        return false;
+      }
+      if (!markDelete(root_)) {
         return false;
       }
       CloseHandle(root_);
@@ -786,7 +814,8 @@ private:
     fs::path current = absolute.root_path();
     const fs::path relative = absolute.lexically_relative(current);
     HANDLE root = CreateFileW(
-        current.c_str(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+        current.c_str(),
+        FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES,
         FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
         FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
     if (root == INVALID_HANDLE_VALUE) {
@@ -796,7 +825,8 @@ private:
     for (const fs::path &component : relative) {
       current /= component;
       HANDLE next = CreateFileW(
-          current.c_str(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+          current.c_str(),
+          FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES,
           FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
           FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
       FILE_ATTRIBUTE_TAG_INFO attributes{};
@@ -857,7 +887,8 @@ private:
       const fs::path childPath = path / entry.cFileName;
       HANDLE child = CreateFileW(
           childPath.c_str(),
-          DELETE | FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY,
+          DELETE | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES |
+              FILE_LIST_DIRECTORY,
           FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
           FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
       FILE_ATTRIBUTE_TAG_INFO childTags{};
@@ -1406,8 +1437,9 @@ public:
     return fs::is_regular_file(path_, error) && !error;
 #elif defined(_WIN32)
     HANDLE probe = CreateFileW(
-        path_.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE,
-        nullptr, OPEN_EXISTING,
+        path_.c_str(), FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+        OPEN_EXISTING,
         FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
     BY_HANDLE_FILE_INFORMATION identity{};
     FILE_ATTRIBUTE_TAG_INFO tags{};
@@ -1458,24 +1490,28 @@ public:
       return matchesIssuedIdentity();
 #elif defined(_WIN32)
       std::vector<HANDLE> destinationParents;
-      const fs::path destinationLeaf = destination.filename();
+      std::error_code destinationError;
+      const fs::path retainedDestination =
+          fs::absolute(destination, destinationError).lexically_normal();
+      const fs::path destinationLeaf = retainedDestination.filename();
       const std::wstring destinationLeafNative = destinationLeaf.native();
-      if (destinationLeaf.empty() || destinationLeaf == "." ||
+      if (destinationError || !retainedDestination.is_absolute() ||
+          destinationLeaf.empty() || destinationLeaf == "." ||
           destinationLeaf == ".." ||
           destinationLeafNative.find(L'/') != std::wstring::npos ||
           destinationLeafNative.find(L'\\') != std::wstring::npos ||
-          !openDirectoryChain(destination.parent_path(), destinationParents)) {
+          !openDirectoryChain(retainedDestination.parent_path(),
+                              destinationParents)) {
         return false;
       }
-      const std::wstring leaf = destinationLeafNative;
-      const std::size_t leafBytes = leaf.size() * sizeof(wchar_t);
-      std::vector<std::byte> storage(offsetof(FILE_RENAME_INFO, FileName) +
-                                     leafBytes);
+      const std::wstring target = retainedDestination.native();
+      const std::size_t leafBytes = target.size() * sizeof(wchar_t);
+      std::vector<std::byte> storage(sizeof(FILE_RENAME_INFO) + leafBytes);
       auto *rename = reinterpret_cast<FILE_RENAME_INFO *>(storage.data());
       rename->ReplaceIfExists = FALSE;
-      rename->RootDirectory = destinationParents.back();
+      rename->RootDirectory = nullptr;
       rename->FileNameLength = static_cast<DWORD>(leafBytes);
-      std::memcpy(rename->FileName, leaf.data(), leafBytes);
+      std::memcpy(rename->FileName, target.data(), leafBytes);
       if (!SetFileInformationByHandle(file_, FileRenameInfo, rename,
                                       static_cast<DWORD>(storage.size()))) {
         closeAll(destinationParents);
@@ -1483,7 +1519,7 @@ public:
       }
       closeAll(parents_);
       parents_ = std::move(destinationParents);
-      path_ = destination;
+      path_ = retainedDestination;
       return matchesIssuedIdentity();
 #else
       if (!safeLeaf(destination)) {
@@ -1611,7 +1647,8 @@ private:
     }
     fs::path current = absolute.root_path();
     HANDLE root = CreateFileW(
-        current.c_str(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+        current.c_str(),
+        FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES,
         FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
         FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
     FILE_ATTRIBUTE_TAG_INFO rootTags{};
@@ -1629,7 +1666,8 @@ private:
     for (const fs::path &component : absolute.lexically_relative(current)) {
       current /= component;
       HANDLE next = CreateFileW(
-          current.c_str(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+          current.c_str(),
+          FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES,
           FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
           FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
       FILE_ATTRIBUTE_TAG_INFO tags{};
@@ -2270,7 +2308,8 @@ bool SkinPackageStore::materializeStableRevision(
   }
   prepared.prepared->releaseVisibleOwnership();
   return treeDigestMatches(destination, package, expectedDigest, roots_,
-                           aliases_);
+                           aliases_,
+                           SkinSnapshotSourceRootPin::RetainedByCaller);
 }
 
 SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
@@ -2316,7 +2355,8 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
           lease = SkinRevisionLease::fromLiveSource(
               {.package = entry.entry.package,
                .lowercaseSha256 = entry.revisionDigest},
-              roots_.visiblePackages / entry.entry.package.directoryName);
+              roots_.visiblePackages /
+                  pathFromUtf8(entry.entry.package.directoryName));
         } else {
           const fs::path revisionRoot =
               roots_.privateRevisions / entry.revisionDigest;
@@ -2373,10 +2413,11 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
         return result;
       }
       const fs::path visible =
-          roots_.visiblePackages / journal->package.directoryName;
+          roots_.visiblePackages / pathFromUtf8(journal->package.directoryName);
       const fs::path retained =
           roots_.visiblePackages.parent_path() / ".skin-removal-staging" /
-          journal->retainedToken / journal->package.directoryName;
+          journal->retainedToken /
+          pathFromUtf8(journal->package.directoryName);
       const fs::path oldRevision =
           roots_.privateRevisions / journal->oldRevisionDigest;
       const fs::path oldRevisionStaging =
@@ -2402,11 +2443,13 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
       }
       const bool visibleOld =
           treeDigestMatches(visible, journal->package, journal->oldTreeDigest,
-                            roots_, aliases_) &&
+                            roots_, aliases_,
+                            SkinSnapshotSourceRootPin::RetainedByCaller) &&
           visibleCapability->matchesIssuedIdentity();
       const bool retainedOld =
           treeDigestMatches(retained, journal->package, journal->oldTreeDigest,
-                            roots_, aliases_) &&
+                            roots_, aliases_,
+                            SkinSnapshotSourceRootPin::RetainedByCaller) &&
           retainedCapability->matchesIssuedIdentity();
       const bool oldRevisionValid =
           treeDigestMatches(oldRevision, journal->package,
@@ -2624,14 +2667,15 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
       return result;
     }
     const fs::path visible =
-        roots_.visiblePackages / journal->destinationDirectory;
+        roots_.visiblePackages / pathFromUtf8(journal->destinationDirectory);
     const fs::path oldVisible =
-        roots_.visiblePackages / journal->oldVisibleDirectory;
+        roots_.visiblePackages / pathFromUtf8(journal->oldVisibleDirectory);
     const fs::path visibleStaging =
         roots_.visiblePackages / journal->visibleStagingToken;
     const fs::path visibleBackup =
         roots_.visiblePackages.parent_path() / ".skin-publication-backups" /
-        journal->visibleBackupToken / journal->oldVisibleDirectory;
+        journal->visibleBackupToken /
+        pathFromUtf8(journal->oldVisibleDirectory);
     const fs::path newRevision =
         roots_.privateRevisions / journal->newRevisionDigest;
     const fs::path oldRevision =
@@ -2657,10 +2701,9 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
         visible == oldVisible ||
         fs::equivalent(visible, oldVisible, equivalentError);
     auto visibleCapability = RetainedTreeCapability::issue(visible);
-    std::optional<RetainedTreeCapability> distinctOldVisibleCapability;
-    if (!sameVisibleEntry) {
-      distinctOldVisibleCapability = RetainedTreeCapability::issue(oldVisible);
-    }
+    auto distinctOldVisibleCapability =
+        sameVisibleEntry ? std::optional<RetainedTreeCapability>{}
+                         : RetainedTreeCapability::issue(oldVisible);
     auto backupCapability = RetainedTreeCapability::issue(visibleBackup);
     auto stagingCapability = RetainedTreeCapability::issue(visibleStaging);
     auto newRevisionCapability = RetainedTreeCapability::issue(newRevision);
@@ -2677,27 +2720,32 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
     const bool oldVisibleIsOld =
         journal->oldPresent && oldVisibleCapability.existed() &&
         treeDigestMatches(oldVisible, journal->package, journal->oldTreeDigest,
-                          roots_, aliases_) &&
+                          roots_, aliases_,
+                          SkinSnapshotSourceRootPin::RetainedByCaller) &&
         oldVisibleCapability.matchesIssuedIdentity();
     const bool visibleIsNew =
         visibleCapability->existed() &&
         treeDigestMatches(visible, journal->package, journal->newTreeDigest,
-                          roots_, aliases_) &&
+                          roots_, aliases_,
+                          SkinSnapshotSourceRootPin::RetainedByCaller) &&
         visibleCapability->matchesIssuedIdentity();
     const bool backupIsOld =
         journal->oldPresent && backupCapability->existed() &&
         treeDigestMatches(visibleBackup, journal->package,
-                          journal->oldTreeDigest, roots_, aliases_) &&
+                          journal->oldTreeDigest, roots_, aliases_,
+                          SkinSnapshotSourceRootPin::RetainedByCaller) &&
         backupCapability->matchesIssuedIdentity();
     const bool stagingIsNew =
         stagingCapability->existed() &&
         treeDigestMatches(visibleStaging, journal->package,
-                          journal->newTreeDigest, roots_, aliases_) &&
+                          journal->newTreeDigest, roots_, aliases_,
+                          SkinSnapshotSourceRootPin::RetainedByCaller) &&
         stagingCapability->matchesIssuedIdentity();
     const bool newRevisionValid =
         newRevisionCapability->existed() &&
         treeDigestMatches(newRevision, journal->package,
-                          journal->newRevisionDigest, roots_, aliases_) &&
+                          journal->newRevisionDigest, roots_, aliases_,
+                          SkinSnapshotSourceRootPin::RetainedByCaller) &&
         newRevisionCapability->matchesIssuedIdentity();
     const bool oldRevisionValid =
         journal->oldPresent &&
@@ -2745,7 +2793,11 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
         if (verified.insert(key).second &&
             !treeDigestMatches(roots_.privateRevisions / entry.revisionDigest,
                                entry.entry.package, entry.revisionDigest,
-                               roots_, aliases_)) {
+                               roots_, aliases_,
+                               entry.revisionDigest ==
+                                       journal->newRevisionDigest
+                                   ? SkinSnapshotSourceRootPin::RetainedByCaller
+                                   : SkinSnapshotSourceRootPin::None)) {
           return std::nullopt;
         }
       }
@@ -2917,6 +2969,10 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
           "digest-matched skin catalog has inconsistent typed identity"));
       return result;
     }
+    // The selected revision has already been verified while its exact identity
+    // was pinned. Release that transaction handle before the ordinary lease
+    // hydrator reopens and re-verifies the immutable content-addressed tree.
+    newRevisionCapability.reset();
     if (!hydrateRevisionLeases()) {
       return result;
     }
@@ -3157,7 +3213,8 @@ PublishPackageResult SkinPackageStore::publish(
   }
 
   const fs::path visible =
-      roots_.visiblePackages / prepared.packageId().directoryName;
+      roots_.visiblePackages /
+      pathFromUtf8(prepared.packageId().directoryName);
   const fs::path oldVisible =
       physicalCollisions.empty() ? visible : physicalCollisions.front().path;
   auto visibleCapability =
@@ -3192,10 +3249,11 @@ PublishPackageResult SkinPackageStore::publish(
   std::optional<std::vector<TreeMetadataRecord>> oldTreeManifest;
   std::optional<PreparedSkinRevision> oldRevisionPrepared;
   if (destinationExists) {
-    oldTreeManifest = treeMetadataManifest(oldVisible, aliases_);
+    oldTreeManifest = treeMetadataManifest(oldVisible, aliases_, true);
     SkinTreeSnapshotter snapshotter(roots_, aliases_);
-    auto oldSnapshot =
-        snapshotter.snapshot(oldVisible, prepared.packageId(), stop, progress);
+    auto oldSnapshot = snapshotter.snapshot(
+        oldVisible, prepared.packageId(), stop, progress,
+        SkinSnapshotSourceRootPin::RetainedByCaller);
     result.diagnostics.insert(
         result.diagnostics.end(),
         std::make_move_iterator(oldSnapshot.diagnostics.begin()),
@@ -3205,7 +3263,7 @@ PublishPackageResult SkinPackageStore::publish(
     }
     oldTreeDigest = oldSnapshot.prepared->revision().lowercaseSha256;
     if (!visibleCapability->matchesIssuedIdentity() ||
-        treeMetadataManifest(oldVisible, aliases_) != oldTreeManifest) {
+        treeMetadataManifest(oldVisible, aliases_, true) != oldTreeManifest) {
       result.diagnostics.push_back(
           storeDiagnostic("skin_package_source_changed",
                           "visible skin package changed during inspection"));
@@ -3289,7 +3347,7 @@ PublishPackageResult SkinPackageStore::publish(
   const bool physicalMatches =
       visibleCapability->matchesIssuedIdentity() &&
       (!destinationExists ||
-       treeMetadataManifest(oldVisible, aliases_) == oldTreeManifest);
+       treeMetadataManifest(oldVisible, aliases_, true) == oldTreeManifest);
   if (!physicalMatches || stop.stop_requested()) {
     clearMutation();
     result.retryableInventoryRace = !stop.stop_requested();
@@ -3329,7 +3387,8 @@ PublishPackageResult SkinPackageStore::publish(
       bool visibleRestored = true;
       const bool newVisible =
           treeDigestMatches(visible, prepared.packageId(),
-                            journal.newTreeDigest, roots_, aliases_);
+                            journal.newTreeDigest, roots_, aliases_,
+                            SkinSnapshotSourceRootPin::RetainedByCaller);
       if (newVisible) {
         const fs::path rollbackQuarantine =
             roots_.visiblePackages.parent_path() / ".skin-recovery-quarantine" /
@@ -3342,10 +3401,12 @@ PublishPackageResult SkinPackageStore::publish(
       }
       if (destinationExists &&
           !treeDigestMatches(oldVisible, prepared.packageId(), oldTreeDigest,
-                             roots_, aliases_)) {
+                             roots_, aliases_,
+                             SkinSnapshotSourceRootPin::RetainedByCaller)) {
         const bool restoredFromBackup =
             treeDigestMatches(backup, prepared.packageId(), oldTreeDigest,
-                              roots_, aliases_) &&
+                              roots_, aliases_,
+                              SkinSnapshotSourceRootPin::RetainedByCaller) &&
             visibleCapability->matchesIssuedIdentity() &&
             visibleCapability->renameTo(oldVisible);
         const fs::path stableOldRevision =
@@ -4343,7 +4404,8 @@ SkinPackageStore::removePackage(const SkinPackageId &package,
   ++next.catalogGeneration;
   ++next.sourceGeneration;
 
-  const fs::path visible = roots_.visiblePackages / package.directoryName;
+  const fs::path visible =
+      roots_.visiblePackages / pathFromUtf8(package.directoryName);
   auto operationReservation = reserveOperation(roots_.privateCatalog);
   if (!operationReservation) {
     result.diagnostics.push_back(storeDiagnostic(
@@ -4354,7 +4416,7 @@ SkinPackageStore::removePackage(const SkinPackageId &package,
   const std::string operation = operationReservation->operationId();
   const fs::path retained = roots_.visiblePackages.parent_path() /
                             ".skin-removal-staging" / operation /
-                            package.directoryName;
+                            pathFromUtf8(package.directoryName);
   auto visibleCapability = RetainedTreeCapability::issue(visible);
   if (!visibleCapability) {
     result.diagnostics.push_back(
@@ -4368,9 +4430,11 @@ SkinPackageStore::removePackage(const SkinPackageId &package,
   std::optional<std::vector<TreeMetadataRecord>> oldTreeManifest;
   std::optional<PreparedSkinRevision> oldRevisionPrepared;
   if (exists) {
-    oldTreeManifest = treeMetadataManifest(visible, aliases_);
+    oldTreeManifest = treeMetadataManifest(visible, aliases_, true);
     SkinTreeSnapshotter snapshotter(roots_, aliases_);
-    auto oldSnapshot = snapshotter.snapshot(visible, package, stop, {});
+    auto oldSnapshot = snapshotter.snapshot(
+        visible, package, stop, {},
+        SkinSnapshotSourceRootPin::RetainedByCaller);
     result.diagnostics.insert(
         result.diagnostics.end(),
         std::make_move_iterator(oldSnapshot.diagnostics.begin()),
@@ -4380,7 +4444,7 @@ SkinPackageStore::removePackage(const SkinPackageId &package,
     }
     oldTreeDigest = oldSnapshot.prepared->revision().lowercaseSha256;
     if (!visibleCapability->matchesIssuedIdentity() ||
-        treeMetadataManifest(visible, aliases_) != oldTreeManifest) {
+        treeMetadataManifest(visible, aliases_, true) != oldTreeManifest) {
       result.diagnostics.push_back(storeDiagnostic(
           "skin_package_source_changed",
           "visible skin package changed during removal inspection"));
@@ -4448,10 +4512,12 @@ SkinPackageStore::removePackage(const SkinPackageId &package,
       std::vector<SkinDiagnostic> rollbackDiagnostics;
       bool visibleRestored = true;
       if (exists && !treeDigestMatches(visible, package, oldTreeDigest, roots_,
-                                       aliases_)) {
+                                       aliases_,
+                                       SkinSnapshotSourceRootPin::RetainedByCaller)) {
         const bool restoredFromRetained =
             treeDigestMatches(retained, package, oldTreeDigest, roots_,
-                              aliases_) &&
+                              aliases_,
+                              SkinSnapshotSourceRootPin::RetainedByCaller) &&
             visibleCapability->matchesIssuedIdentity() &&
             visibleCapability->renameTo(visible);
         const fs::path stableOldRevision =
@@ -4530,7 +4596,7 @@ SkinPackageStore::removePackage(const SkinPackageId &package,
       error = std::make_error_code(std::errc::io_error);
     }
     if (error || !visibleCapability->matchesIssuedIdentity() ||
-        treeMetadataManifest(visible, aliases_) != oldTreeManifest ||
+        treeMetadataManifest(visible, aliases_, true) != oldTreeManifest ||
         !visibleCapability->renameTo(retained)) {
       result.diagnostics.push_back(storeDiagnostic(
           "skin_package_remove_failed",
@@ -4692,7 +4758,8 @@ GarbageCollectionResult SkinPackageStore::collectGarbage() {
       continue;
     }
     auto capability = RetainedTreeCapability::issue(iterator->path());
-    const auto manifest = treeMetadataManifest(iterator->path(), aliases_);
+    const auto manifest =
+        treeMetadataManifest(iterator->path(), aliases_, true);
     if (!capability || !capability->existed() || !manifest ||
         !capability->matchesIssuedIdentity()) {
       result.diagnostics.push_back(storeDiagnostic(

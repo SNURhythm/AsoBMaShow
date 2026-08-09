@@ -7,7 +7,7 @@
 #include <array>
 
 namespace bms_parser {
-struct ChartMeta;
+class ChartMeta;
 }
 
 struct CompiledGaugeDefinition {

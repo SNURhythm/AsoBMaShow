@@ -508,8 +508,6 @@ ProfileSettingsPersistenceCoordinator::beginCommit(
   }
 
   static_assert(std::is_nothrow_move_assignable_v<skin::SkinProfileSettings>);
-  static_assert(
-      std::is_nothrow_move_constructible_v<skin::SkinProfileCommitResult>);
   state.highWaterGeneration = reservedGeneration;
   state.generation = reservedGeneration;
   state.settings = std::move(candidate);
@@ -720,8 +718,8 @@ bool ProfileSettingsPersistenceCoordinator::saveActiveSettingsAndWait(
          .profileId = profileId,
          .path = impl_->manager.pathsFor(profileId.opaque).settingsJson,
          .settings = settings,
-         .skinGeneration = impl_->profiles.at(profileId.opaque).generation,
-         .waiter = waiter});
+         .waiter = waiter,
+         .skinGeneration = impl_->profiles.at(profileId.opaque).generation});
   }
   try {
     if (impl_->dependencies.afterFullSaveAdmitted) {

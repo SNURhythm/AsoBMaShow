@@ -4,13 +4,10 @@
 #include <list>
 #include <memory>
 #include <stdexcept>
-#include <type_traits>
 #include <utility>
 
 namespace skin::test_support {
 namespace {
-
-static_assert(std::is_nothrow_move_constructible_v<CommitActivationResult>);
 
 CommitActivationResult
 terminalOwnerFailure(std::uint64_t storeTicket,

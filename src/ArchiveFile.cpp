@@ -60,6 +60,12 @@
 #if __has_include(<7zip/CPP/7zip/Archive/IArchive.h>) &&                  \
     __has_include(<7zip/CPP/7zip/IStream.h>) &&                           \
     __has_include(<7zip/CPP/Common/MyCom.h>)
+#if defined(_WIN32)
+// The Windows 7-Zip package exposes the SDK interfaces from a DLL, so this
+// translation unit owns their GUID definitions instead of expecting them from
+// the DLL's deliberately small import library.
+#include <7zip/CPP/Common/MyInitGuid.h>
+#endif
 #include <7zip/CPP/7zip/Archive/IArchive.h>
 #include <7zip/CPP/7zip/IStream.h>
 #include <7zip/CPP/Common/MyCom.h>
@@ -1075,8 +1081,50 @@ std::string wideStringToUtf8(const wchar_t *input, std::size_t length) {
 
 #if ASOBMSHOW_ARCHIVEFILE_HAS_SEVENZIP
 
+#if defined(_WIN32)
+using SevenZipCreateObject = HRESULT(WINAPI *)(const GUID *, const GUID *,
+                                               void **);
+
+SevenZipCreateObject resolveSevenZipCreateObject() noexcept {
+  static const SevenZipCreateObject createObject = []() noexcept {
+    std::array<wchar_t, 32768> executablePath{};
+    const DWORD pathLength = GetModuleFileNameW(
+        nullptr, executablePath.data(),
+        static_cast<DWORD>(executablePath.size()));
+    if (pathLength == 0 || pathLength >= executablePath.size()) {
+      return static_cast<SevenZipCreateObject>(nullptr);
+    }
+
+    std::filesystem::path modulePath(
+        std::wstring_view(executablePath.data(), pathLength));
+    modulePath.replace_filename(L"7zip.dll");
+    HMODULE module = LoadLibraryW(modulePath.c_str());
+    if (module == nullptr) {
+      return static_cast<SevenZipCreateObject>(nullptr);
+    }
+    return reinterpret_cast<SevenZipCreateObject>(
+        GetProcAddress(module, "CreateObject"));
+  }();
+  return createObject;
+}
+
+HRESULT createSevenZipObject(const GUID *clsID, const GUID *interfaceID,
+                             void **out) noexcept {
+  const auto createObject = resolveSevenZipCreateObject();
+  if (createObject == nullptr) {
+    return HRESULT_FROM_WIN32(ERROR_PROC_NOT_FOUND);
+  }
+  return createObject(clsID, interfaceID, out);
+}
+#else
 extern "C" HRESULT WINAPI CreateObject(const GUID *clsID,
                                         const GUID *interfaceID, void **out);
+
+HRESULT createSevenZipObject(const GUID *clsID, const GUID *interfaceID,
+                             void **out) noexcept {
+  return CreateObject(clsID, interfaceID, out);
+}
+#endif
 
 std::string sevenZipResultMessage(HRESULT result) {
   return "7-Zip SDK error: " + std::to_string(static_cast<long long>(result));
@@ -2019,8 +2067,8 @@ bool openSevenZipArchiveWithFormat(const std::filesystem::path &archivePath,
   IInArchive *rawArchive = nullptr;
   const GUID formatId = sevenZipFormatGuid(format);
   HRESULT result =
-      CreateObject(&formatId, &IID_IInArchive,
-                   reinterpret_cast<void **>(&rawArchive));
+      createSevenZipObject(&formatId, &IID_IInArchive,
+                           reinterpret_cast<void **>(&rawArchive));
   if (result != S_OK || rawArchive == nullptr) {
     if (errorMessage != nullptr) {
       *errorMessage = sevenZipResultMessage(result);

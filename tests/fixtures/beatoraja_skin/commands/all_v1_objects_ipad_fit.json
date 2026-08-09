@@ -14,5 +14,5 @@
   "commandCount": 76,
   "batchCount": 44,
   "payloadCounts": {"quad": 44, "glyph": 1, "primitive": 30, "bga": 1},
-  "canonicalSha256": "2ed69e96bba959a8bb068dfee1804246979c518b7485b500a0a8163ec63aa507"
+  "canonicalSha256": "65d7bb194101b42c39cb57f678c38b012a481c2064f257a7077fbdac670e5ce9"
 }

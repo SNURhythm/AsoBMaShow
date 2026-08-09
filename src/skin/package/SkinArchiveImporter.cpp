@@ -633,8 +633,9 @@ bool validateRawZipEnvelope(
     }
     const unsigned char creatorSystem = central[5];
     if (creatorSystem == 3) {
-      const mode_t type =
-          static_cast<mode_t>((externalAttributes >> 16U) & AE_IFMT);
+      const auto type =
+          static_cast<decltype(archive_entry_filetype(nullptr))>(
+              (externalAttributes >> 16U) & AE_IFMT);
       if (type != 0 && type != AE_IFREG && type != AE_IFDIR) {
         diagnostics.push_back(
             diagnostic("skin_archive_special_entry_rejected",
@@ -873,7 +874,7 @@ inventoryArchive(OwnedArchiveFile &owned, const SkinPackageId &package,
           authoredPath));
       return std::nullopt;
     }
-    const mode_t fileType = archive_entry_filetype(entry);
+    const auto fileType = archive_entry_filetype(entry);
     const bool directory = fileType == AE_IFDIR;
     const bool regular = fileType == AE_IFREG;
     if ((!directory && !regular) || archive_entry_symlink(entry) != nullptr ||
@@ -1049,6 +1050,9 @@ public:
   PrivateWindowsSecurity(const PrivateWindowsSecurity &) = delete;
   PrivateWindowsSecurity &operator=(const PrivateWindowsSecurity &) = delete;
   ~PrivateWindowsSecurity() {
+    if (inheritedAccessControlList_ != nullptr) {
+      LocalFree(inheritedAccessControlList_);
+    }
     if (accessControlList_ != nullptr) {
       LocalFree(accessControlList_);
     }
@@ -1079,7 +1083,12 @@ public:
     access.Trustee.TrusteeType = TRUSTEE_IS_USER;
     access.Trustee.ptstrName = static_cast<LPWSTR>(userSid());
     if (SetEntriesInAclW(1, &access, nullptr, &accessControlList_) !=
-            ERROR_SUCCESS ||
+        ERROR_SUCCESS) {
+      return false;
+    }
+    access.grfInheritance = SUB_CONTAINERS_AND_OBJECTS_INHERIT;
+    if (SetEntriesInAclW(1, &access, nullptr,
+                         &inheritedAccessControlList_) != ERROR_SUCCESS ||
         !InitializeSecurityDescriptor(&descriptor_,
                                       SECURITY_DESCRIPTOR_REVISION) ||
         !SetSecurityDescriptorOwner(&descriptor_, userSid(), FALSE) ||
@@ -1095,9 +1104,11 @@ public:
     return true;
   }
 
-  SECURITY_ATTRIBUTES *attributes() noexcept { return &attributes_; }
+  SECURITY_ATTRIBUTES *attributes() const noexcept {
+    return const_cast<SECURITY_ATTRIBUTES *>(&attributes_);
+  }
 
-  bool verify(HANDLE handle) const {
+  bool verify(HANDLE handle, bool allowInheritance = false) const {
     PSID owner = nullptr;
     PACL dacl = nullptr;
     PSECURITY_DESCRIPTOR descriptor = nullptr;
@@ -1118,14 +1129,40 @@ public:
     if (valid) {
       const auto *header = static_cast<const ACE_HEADER *>(rawAce);
       const auto *ace = static_cast<const ACCESS_ALLOWED_ACE *>(rawAce);
+      const BYTE inheritableFlags =
+          CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE;
       valid = header->AceType == ACCESS_ALLOWED_ACE_TYPE &&
-              header->AceFlags == 0 && ace->Mask == FILE_ALL_ACCESS &&
+              (header->AceFlags == 0 ||
+               (allowInheritance &&
+                header->AceFlags == inheritableFlags)) &&
+              ace->Mask == FILE_ALL_ACCESS &&
               EqualSid(const_cast<DWORD *>(&ace->SidStart), userSid()) != FALSE;
     }
     if (descriptor != nullptr) {
       LocalFree(descriptor);
     }
     return valid;
+  }
+
+  bool protect(HANDLE handle) const {
+    PSID owner = nullptr;
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    const DWORD ownerResult =
+        GetSecurityInfo(handle, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION,
+                        &owner, nullptr, nullptr, nullptr, &descriptor);
+    const bool owned = ownerResult == ERROR_SUCCESS && owner != nullptr &&
+                       EqualSid(owner, userSid()) != FALSE;
+    if (descriptor != nullptr) {
+      LocalFree(descriptor);
+    }
+    if (!owned) {
+      return false;
+    }
+    return SetSecurityInfo(
+               handle, SE_FILE_OBJECT,
+               DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+               nullptr, nullptr, inheritedAccessControlList_, nullptr) ==
+           ERROR_SUCCESS;
   }
 
 private:
@@ -1139,6 +1176,7 @@ private:
   HANDLE token_ = nullptr;
   std::vector<std::byte> tokenUser_;
   PACL accessControlList_ = nullptr;
+  PACL inheritedAccessControlList_ = nullptr;
   SECURITY_DESCRIPTOR descriptor_{};
   SECURITY_ATTRIBUTES attributes_{};
 };
@@ -1220,16 +1258,15 @@ public:
                      "visible package publication parent is unavailable"));
       return false;
     }
-    const std::wstring leaf = leafPath.native();
-    const std::size_t leafBytes = leaf.size() * sizeof(wchar_t);
-    const std::size_t allocation =
-        offsetof(FILE_RENAME_INFO, FileName) + leafBytes;
+    const std::wstring target = absolute.native();
+    const std::size_t leafBytes = target.size() * sizeof(wchar_t);
+    const std::size_t allocation = sizeof(FILE_RENAME_INFO) + leafBytes;
     std::vector<std::byte> storage(allocation);
     auto *rename = reinterpret_cast<FILE_RENAME_INFO *>(storage.data());
     rename->ReplaceIfExists = FALSE;
-    rename->RootDirectory = destinationHandles.back();
+    rename->RootDirectory = nullptr;
     rename->FileNameLength = static_cast<DWORD>(leafBytes);
-    std::memcpy(rename->FileName, leaf.data(), leafBytes);
+    std::memcpy(rename->FileName, target.data(), leafBytes);
     const bool renamed =
         SetFileInformationByHandle(issuedRootHandle_, FileRenameInfo, rename,
                                    static_cast<DWORD>(allocation)) != 0;
@@ -1640,7 +1677,8 @@ private:
     }
     fs::path current = absolute.root_path();
     HANDLE root = CreateFileW(
-        current.c_str(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+        current.c_str(),
+        FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES,
         FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
         FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
     if (!safeWindowsDirectory(root)) {
@@ -1655,7 +1693,8 @@ private:
       current /= component;
       HANDLE next = CreateFileW(
           current.c_str(),
-          FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | READ_CONTROL,
+          FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES |
+              READ_CONTROL,
           FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
           FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
       if (!safeWindowsDirectory(next)) {
@@ -1955,8 +1994,10 @@ private:
             utf8Path(parentPath)));
     return false;
 #elif defined(_WIN32)
+    std::error_code parentCreateError;
+    fs::create_directories(parentPath.parent_path(), parentCreateError);
     fs::path ancestryPath;
-    if (!security_.initialize() ||
+    if (parentCreateError || !security_.initialize() ||
         !openExistingAbsoluteWindowsDirectoryChain(
             parentPath.parent_path(), ancestryHandles_, ancestryPath)) {
       closeWindowsHandles(ancestryHandles_);
@@ -1976,11 +2017,16 @@ private:
     }
     HANDLE stagingParent = CreateFileW(
         parentPath_.c_str(),
-        FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | READ_CONTROL,
+        FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC,
         FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
         FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-    if (!safeWindowsDirectory(stagingParent) ||
-        !security_.verify(stagingParent)) {
+    const bool safeStagingParent = safeWindowsDirectory(stagingParent);
+    const bool privateStagingParent =
+        safeStagingParent &&
+        (security_.verify(stagingParent, true) ||
+         (security_.protect(stagingParent) &&
+          security_.verify(stagingParent, true)));
+    if (!privateStagingParent) {
       if (stagingParent != INVALID_HANDLE_VALUE) {
         CloseHandle(stagingParent);
       }
@@ -2194,7 +2240,7 @@ bool archiveMemberMatches(const ArchiveMember &expected, archive_entry *entry,
       archive_entry_sparse_count(entry) != 0) {
     return false;
   }
-  const mode_t expectedType =
+  const auto expectedType =
       expected.kind == MemberKind::Regular ? AE_IFREG : AE_IFDIR;
   return archive_entry_filetype(entry) == expectedType &&
          archive_entry_size_is_set(entry) != 0 &&
@@ -2964,7 +3010,8 @@ PreparePackageResult SkinArchiveImporter::prepareArchive(
   SkinTreeSnapshotter snapshotter(roots_, aliases_);
   auto snapshot =
       snapshotter.snapshot(visibleStaging->path(), *normalizedPackage.package,
-                           stop, std::move(callback));
+                           stop, std::move(callback),
+                           SkinSnapshotSourceRootPin::RetainedByCaller);
   if (!snapshot.prepared) {
     appendSnapshotFailure(snapshot, result);
     return result;
@@ -3057,7 +3104,8 @@ PreparePackageResult SkinArchiveImporter::prepareFolder(
     // renamed into Documents/Skins. The incoming folder remains user-owned
     // and can be edited while it is being imported.
     auto staged = snapshotter.snapshot(visibleStagingPath,
-                                       *normalizedPackage.package, stop, {});
+                                       *normalizedPackage.package, stop, {},
+                                       SkinSnapshotSourceRootPin::RetainedByCaller);
     if (!staged.prepared) {
       appendSnapshotFailure(staged, result);
       return result;

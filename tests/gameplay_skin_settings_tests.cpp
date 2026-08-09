@@ -580,10 +580,12 @@ void testArchiveFolderSelectionAndDurableLayoutFlow() {
   expect(selected.accepted && selected.asynchronous,
          "validated 7-key selection enters activation preparation");
   expect(pumpUntil(fixture, *controller,
-                   [&] {
-                     return fixture.owner.snapshot(fixture.profileA)
-                                .settings.selected7KeyEntry == entry;
-                   }),
+                    [&] {
+                      return fixture.owner.snapshot(fixture.profileA)
+                                 .settings.selected7KeyEntry == entry &&
+                             controller->snapshot().state ==
+                                 GameplaySkinSettingsState::Ready;
+                    }),
          "selection commits through the durable profile owner");
 
   const auto enabled = controller->setCompatibilityEnabled(true);
@@ -1234,9 +1236,9 @@ void testPermanentPublishFailureCleansStagingAndPublishesNothing() {
                    }),
          "prepared package waits before publication");
 
-  std::error_code storageError;
-  fs::remove_all(fixture.roots.visiblePackages, storageError);
-  writeText(fixture.roots.visiblePackages, "blocked by deterministic test");
+  const auto blockedDestination =
+      fixture.roots.visiblePackages / "PermanentPublishFailure";
+  writeText(blockedDestination, "blocked by deterministic test");
   fixture.owner.inventoryReady = true;
   expect(
       pumpUntil(fixture, *controller,
@@ -1244,7 +1246,8 @@ void testPermanentPublishFailureCleansStagingAndPublishesNothing() {
                   return controller->snapshot().state ==
                              GameplaySkinSettingsState::Error &&
                          controller->snapshot().statusMessage ==
-                             "visible skin package storage cannot be inspected";
+                             "visible skin package destination cannot be "
+                             "inspected";
                 }),
       "unavailable destination produces a permanent publication failure");
 
@@ -1256,8 +1259,8 @@ void testPermanentPublishFailureCleansStagingAndPublishesNothing() {
          "terminal publication failure leaves no prepared staging");
   expect(fixture.operations->catalogSnapshot()->packages.empty(),
          "terminal publication failure exposes no partial catalog package");
-  fs::remove(fixture.roots.visiblePackages, storageError);
-  fs::create_directories(fixture.roots.visiblePackages, storageError);
+  std::error_code storageError;
+  fs::remove(blockedDestination, storageError);
 }
 
 void testEditableConfigurationValidationAndDiagnosticProjection() {

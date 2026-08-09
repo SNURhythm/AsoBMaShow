@@ -26,7 +26,9 @@
 #include <vector>
 
 #if defined(_WIN32)
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <aclapi.h>
 #include <windows.h>
 #else
@@ -663,20 +665,24 @@ bool verifyOwnerPrivatePath(const std::filesystem::path &path, bool directory,
   }
 
   bool privateAcl = ownerSid != nullptr && EqualSid(ownerSid, userSid) &&
-                    dacl != nullptr && dacl->AceCount == 1;
-  if (privateAcl) {
+                    dacl != nullptr && dacl->AceCount != 0;
+  for (DWORD index = 0; privateAcl && index < dacl->AceCount; ++index) {
     void *rawAce = nullptr;
-    if (!GetAce(dacl, 0, &rawAce)) {
+    if (!GetAce(dacl, index, &rawAce)) {
       privateAcl = false;
-    } else {
-      const auto *header = static_cast<const ACE_HEADER *>(rawAce);
-      if (header->AceType != ACCESS_ALLOWED_ACE_TYPE) {
-        privateAcl = false;
-      } else {
-        const auto *ace = static_cast<const ACCESS_ALLOWED_ACE *>(rawAce);
-        privateAcl = EqualSid(const_cast<DWORD *>(&ace->SidStart), userSid);
-      }
+      break;
     }
+    const auto *header = static_cast<const ACE_HEADER *>(rawAce);
+    if (header->AceType != ACCESS_ALLOWED_ACE_TYPE) {
+      privateAcl = false;
+      break;
+    }
+    const auto *ace = static_cast<const ACCESS_ALLOWED_ACE *>(rawAce);
+    const bool grantsFullControl =
+        (ace->Mask & GENERIC_ALL) == GENERIC_ALL ||
+        (ace->Mask & FILE_ALL_ACCESS) == FILE_ALL_ACCESS;
+    privateAcl = EqualSid(const_cast<DWORD *>(&ace->SidStart), userSid) &&
+                 grantsFullControl;
   }
   LocalFree(securityDescriptor);
   if (!privateAcl) {

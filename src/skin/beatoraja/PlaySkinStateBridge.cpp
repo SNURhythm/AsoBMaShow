@@ -266,19 +266,54 @@ std::int64_t playTimerElapsedMillis(const PlayfieldVisualState &snapshot) {
          1000;
 }
 
+constexpr std::int64_t saturatingSubtract(std::int64_t left,
+                                          std::int64_t right) noexcept {
+  if (right > 0 &&
+      left < std::numeric_limits<std::int64_t>::min() + right) {
+    return std::numeric_limits<std::int64_t>::min();
+  }
+  if (right < 0 &&
+      left > std::numeric_limits<std::int64_t>::max() + right) {
+    return std::numeric_limits<std::int64_t>::max();
+  }
+  return left - right;
+}
+
+constexpr std::int64_t addVisualTimestamp(std::int64_t left,
+                                          std::int64_t right) noexcept {
+  if (right > 0 &&
+      left > std::numeric_limits<std::int64_t>::max() - right) {
+    return std::numeric_limits<std::int64_t>::max();
+  }
+  // INT64_MIN is the timer-off sentinel, so clamp both an exact result and
+  // negative overflow to the first representable active timestamp.
+  if (right < 0 &&
+      left <= std::numeric_limits<std::int64_t>::min() - right) {
+    return std::numeric_limits<std::int64_t>::min() + 1;
+  }
+  return left + right;
+}
+
 std::int64_t saturatingVisualTimestampForGameplayTimestamp(
     const PlayfieldVisualState &snapshot,
     std::int64_t gameplayTimestampMicros) {
-  const auto value = static_cast<__int128>(gameplayTimestampMicros) +
-                     static_cast<__int128>(snapshot.clock.visualTimeMicros) -
-                     static_cast<__int128>(snapshot.clock.gameplayTimeMicros);
-  if (value > std::numeric_limits<std::int64_t>::max()) {
-    return std::numeric_limits<std::int64_t>::max();
+  const auto visual = snapshot.clock.visualTimeMicros;
+  const auto gameplay = snapshot.clock.gameplayTimeMicros;
+  if (visual >= 0 && gameplay < 0 &&
+      visual > std::numeric_limits<std::int64_t>::max() + gameplay) {
+    if (gameplayTimestampMicros >= 0) {
+      return std::numeric_limits<std::int64_t>::max();
+    }
+    return addVisualTimestamp(gameplayTimestampMicros - gameplay, visual);
   }
-  if (value <= std::numeric_limits<std::int64_t>::min()) {
-    return std::numeric_limits<std::int64_t>::min() + 1;
+  if (visual < 0 && gameplay > 0 &&
+      visual < std::numeric_limits<std::int64_t>::min() + gameplay) {
+    if (gameplayTimestampMicros <= 0) {
+      return std::numeric_limits<std::int64_t>::min() + 1;
+    }
+    return addVisualTimestamp(gameplayTimestampMicros - gameplay, visual);
   }
-  return static_cast<std::int64_t>(value);
+  return addVisualTimestamp(gameplayTimestampMicros, visual - gameplay);
 }
 
 } // namespace
@@ -553,7 +588,7 @@ PlaySkinStateBridge::updateCustomEvent(const SkinCustomEvent &event) {
   const std::int64_t now = skinStateClockMicros(*state_);
   if (const auto previous = customEventLastExecutionMicros_.find(event.id);
       previous != customEventLastExecutionMicros_.end()) {
-    const __int128 elapsed = static_cast<__int128>(now) - previous->second;
+    const auto elapsed = saturatingSubtract(now, previous->second);
     if (elapsed / 1000 < event.minimumIntervalMillis) {
       return evaluated;
     }

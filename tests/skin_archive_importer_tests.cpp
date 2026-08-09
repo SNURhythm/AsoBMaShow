@@ -37,6 +37,7 @@
 namespace {
 
 namespace fs = std::filesystem;
+using ArchiveFileType = decltype(archive_entry_filetype(nullptr));
 using namespace skin;
 
 int failures = 0;
@@ -104,7 +105,7 @@ private:
 struct ZipMember {
   std::string path;
   std::string bytes;
-  mode_t type = AE_IFREG;
+  ArchiveFileType type = AE_IFREG;
 };
 
 SkinStorageRoots rootsBelow(const fs::path &root) {
@@ -217,7 +218,7 @@ std::vector<std::uint16_t> centralCompressionMethods(const fs::path &path) {
   return methods;
 }
 
-std::optional<mode_t> firstCentralUnixType(const fs::path &path) {
+std::optional<ArchiveFileType> firstCentralUnixType(const fs::path &path) {
   const auto bytes = readFile(path);
   for (std::size_t index = 0; index + 42 < bytes.size(); ++index) {
     if (bytes[index] == 0x50 && bytes[index + 1] == 0x4b &&
@@ -225,7 +226,7 @@ std::optional<mode_t> firstCentralUnixType(const fs::path &path) {
       const std::uint16_t mode =
           static_cast<std::uint16_t>(bytes[index + 40]) |
           (static_cast<std::uint16_t>(bytes[index + 41]) << 8U);
-      return static_cast<mode_t>(mode & AE_IFMT);
+      return static_cast<ArchiveFileType>(mode & AE_IFMT);
     }
   }
   return std::nullopt;
@@ -257,7 +258,7 @@ void patchDeclaredSize(const fs::path &path, std::uint32_t size,
   writeFile(path, bytes);
 }
 
-void patchCentralUnixType(const fs::path &path, mode_t type) {
+void patchCentralUnixType(const fs::path &path, ArchiveFileType type) {
   auto bytes = readFile(path);
   bool patched = false;
   for (std::size_t index = 0; index + 42 < bytes.size(); ++index) {
@@ -290,6 +291,23 @@ void patchFilenameByte(const fs::path &path, unsigned char from,
     }
   }
   expect(patches >= 2, "local and central ZIP names are patched");
+  writeFile(path, bytes);
+}
+
+void patchZipMemberName(const fs::path &path, std::string_view from,
+                        std::string_view to) {
+  expect(from.size() == to.size(), "patched ZIP member names have equal size");
+  auto bytes = readFile(path);
+  std::size_t patches = 0;
+  for (std::size_t index = 0; index + from.size() <= bytes.size(); ++index) {
+    if (std::equal(from.begin(), from.end(), bytes.begin() + index)) {
+      std::copy(to.begin(), to.end(), bytes.begin() + index);
+      ++patches;
+      index += from.size() - 1;
+    }
+  }
+  expect(patches == 2,
+         "exactly the local and central ZIP member names are patched");
   writeFile(path, bytes);
 }
 
@@ -621,10 +639,13 @@ void testUnsafeNamesAndCollisionsRejectWholePackage() {
   for (std::size_t index = 0; index < cases.size(); ++index) {
     TempDirectory temp;
     const auto roots = rootsBelow(temp.root());
-    auto result =
-        prepareZip(makeZip(temp.root() / (std::to_string(index) + ".zip"),
-                           cases[index].members),
-                   roots);
+    fs::path zip =
+        makeZip(temp.root() / (std::to_string(index) + ".zip"),
+                cases[index].members);
+    if (std::string_view(cases[index].label) == "backslash") {
+      patchZipMemberName(zip, "skin/play.luaskin", "skin\\play.luaskin");
+    }
+    auto result = prepareZip(zip, roots);
     expectRejectedAndClean(result, roots, cases[index].label);
   }
 }
@@ -661,7 +682,7 @@ void testLinksAndNonregularEntriesRejectWholePackage() {
         roots);
     expectRejectedAndClean(result, roots, "symbolic links reject");
   }
-  const std::vector<std::pair<std::string, mode_t>> patchedTypes = {
+  const std::vector<std::pair<std::string, ArchiveFileType>> patchedTypes = {
       {"FIFO", AE_IFIFO},
       {"socket", AE_IFSOCK},
       {"character device", AE_IFCHR},
@@ -1012,10 +1033,14 @@ bool hasProtectedCurrentUserOnlyDacl(const fs::path &path) {
   if (privateAcl) {
     const auto *user = reinterpret_cast<const TOKEN_USER *>(tokenUser.data());
     const auto *ace = static_cast<const ACCESS_ALLOWED_ACE *>(rawAce);
+    const BYTE inheritableFlags =
+        CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE;
     privateAcl =
         EqualSid(owner, user->User.Sid) &&
         EqualSid(const_cast<DWORD *>(&ace->SidStart), user->User.Sid) &&
-        ace->Header.AceFlags == 0 && ace->Mask == FILE_ALL_ACCESS;
+        (ace->Header.AceFlags == 0 ||
+         ace->Header.AceFlags == inheritableFlags) &&
+        ace->Mask == FILE_ALL_ACCESS;
   }
   if (token != nullptr) {
     CloseHandle(token);

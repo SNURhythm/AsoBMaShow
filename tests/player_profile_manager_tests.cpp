@@ -617,6 +617,24 @@ void testSqliteSnapshotIncludesWalAndValidatesIdentifiers() {
          "unsafe table identifiers are rejected");
 }
 
+void testFirstRunCreatesMissingApplicationDataRoot() {
+  TempDirectory temp("profile-missing-root");
+  const auto applicationRoot = temp.path() / "AsoBMaShow";
+  expect(!std::filesystem::exists(applicationRoot),
+         "missing-root fixture starts without the application directory");
+
+  PlayerProfileManager manager(applicationRoot, dependenciesFor());
+  const ProfileResult initialized = manager.Initialize();
+
+  expect(initialized.ok(),
+         "first-run initialization creates a missing application root: " +
+             initialized.message);
+  expect(std::filesystem::is_directory(applicationRoot),
+         "first-run initialization creates the application directory");
+  expect(std::filesystem::is_directory(applicationRoot / "profiles"),
+         "first-run initialization creates the profiles directory");
+}
+
 void testFirstRunMigrationIsLosslessAndIdempotent() {
   TempDirectory temp("profile-migration");
   LegacyData legacy = seedLegacyData(temp.path());
@@ -2913,6 +2931,7 @@ void testFutureVersionsFailClosed() {
 
 int main() {
   testSqliteSnapshotIncludesWalAndValidatesIdentifiers();
+  testFirstRunCreatesMissingApplicationDataRoot();
   testFirstRunMigrationIsLosslessAndIdempotent();
   testEveryPreFinalizeFailureCleansStaging();
   testFinalizedOrphanRecoversAfterBootstrapFailure();

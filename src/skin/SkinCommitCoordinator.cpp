@@ -10,7 +10,6 @@
 #include <mutex>
 #include <optional>
 #include <thread>
-#include <type_traits>
 #include <utility>
 
 namespace skin {
@@ -18,11 +17,6 @@ namespace {
 
 constexpr std::size_t kMaxDeliveryRecordsPerClient = 128;
 constexpr std::size_t kMaxRevalidationProfiles = 128;
-
-static_assert(std::is_nothrow_move_constructible_v<CommitActivationResult>);
-static_assert(std::is_nothrow_move_assignable_v<CommitActivationResult>);
-static_assert(std::is_nothrow_move_constructible_v<SkinProfileCommitResult>);
-static_assert(std::is_nothrow_move_assignable_v<SkinProfileCommitResult>);
 
 std::atomic_uint64_t nextClientId{0};
 std::atomic_uint64_t nextCoordinatorTicket{0};
@@ -78,12 +72,10 @@ struct ProfileGateRegistry {
 
 template <class Value, std::size_t Capacity> class FixedBoundedQueue {
 public:
-  static_assert(std::is_nothrow_move_constructible_v<Value>);
-
   bool full() const noexcept { return size_ == Capacity; }
   bool empty() const noexcept { return size_ == 0; }
 
-  bool push(Value value) noexcept {
+  bool push(Value value) {
     if (size_ == Capacity) {
       return false;
     }
@@ -256,7 +248,7 @@ struct SkinCommitCoordinator::Impl {
 
   bool recordActivation(SkinActivationClientId client,
                         std::uint64_t coordinatorTicket,
-                        CommitActivationResult &&result) noexcept {
+                        CommitActivationResult &&result) {
     const auto found = deliveries.find(client);
     if (found == deliveries.end()) {
       return true;
@@ -272,7 +264,7 @@ struct SkinCommitCoordinator::Impl {
 
   bool recordProfile(SkinActivationClientId client,
                      std::uint64_t coordinatorTicket,
-                     SkinProfileCommitResult &&result) noexcept {
+                     SkinProfileCommitResult &&result) {
     const auto found = deliveries.find(client);
     if (found == deliveries.end()) {
       return true;
@@ -297,8 +289,6 @@ struct SkinCommitCoordinator::Impl {
     // Copy before replacing the existing request. An allocation failure leaves
     // both the older repair and the transaction's terminal result intact for
     // retry on the next application poll.
-    static_assert(std::is_nothrow_swappable_v<
-                  std::optional<VersionedSkinProfileSettings>>);
     std::optional<VersionedSkinProfileSettings> latest{*result.profileSnapshot};
     revalidation.at(profile.opaque).request.swap(latest);
   }

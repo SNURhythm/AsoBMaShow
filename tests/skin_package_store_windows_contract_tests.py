@@ -10,10 +10,41 @@ class WindowsSkinPackageStoreContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.source = STORE.read_text(encoding="utf-8")
+        cls.tree = cls.source[
+            cls.source.index("class RetainedTreeCapability") :
+            cls.source.index("class RetainedEntryCapability")
+        ]
         cls.entry = cls.source[
             cls.source.index("class RetainedEntryCapability") :
             cls.source.index("bool renameTreeNoReplace")
         ]
+
+    def test_tree_identity_probes_share_delete_with_the_retained_delete_handle(self):
+        matches = self.tree[
+            self.tree.index("bool matchesIssuedIdentity") :
+            self.tree.index("bool renameTo")
+        ]
+        rename = self.tree[
+            self.tree.index("bool renameTo") : self.tree.index("bool removeTreeExact")
+        ]
+        share_mode = "FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE"
+        self.assertIn(share_mode, matches)
+        self.assertIn(share_mode, rename)
+
+        entry_matches = self.entry[
+            self.entry.index("bool matchesIssuedIdentity") :
+            self.entry.index("bool renameTo")
+        ]
+        self.assertIn(share_mode, entry_matches)
+
+    def test_rename_buffers_include_the_complete_variable_length_structure(self):
+        self.assertNotIn("offsetof(FILE_RENAME_INFO, FileName)", self.tree)
+        self.assertNotIn("offsetof(FILE_RENAME_INFO, FileName)", self.entry)
+        allocation = "sizeof(FILE_RENAME_INFO) + leafBytes"
+        self.assertIn(allocation, self.tree)
+        self.assertIn(allocation, self.entry)
+        self.assertIn("rename->RootDirectory = nullptr", self.tree)
+        self.assertIn("rename->RootDirectory = nullptr", self.entry)
 
     def test_regular_entry_handle_pins_identity_without_delete_sharing(self):
         issue = self.entry[
@@ -38,6 +69,7 @@ class WindowsSkinPackageStoreContractTests(unittest.TestCase):
     def test_windows_directory_chain_validates_root_and_every_component(self):
         chain = self.entry[self.entry.index("static bool openDirectoryChain") :]
         for token in (
+            "FILE_TRAVERSE",
             "FILE_FLAG_OPEN_REPARSE_POINT",
             "GetFileType(root) != FILE_TYPE_DISK",
             "FileAttributeTagInfo, &rootTags",
@@ -81,6 +113,7 @@ class WindowsSkinPackageStoreContractTests(unittest.TestCase):
         self.assertIn("fs::file_type::regular", cleanup)
         self.assertIn("RetainedEntryCapability::issue(entry->path())", cleanup)
         self.assertIn("capability->removeExact()", cleanup)
+        self.assertIn("FILE_WRITE_ATTRIBUTES", self.tree)
 
     def test_transaction_intent_precedes_catalog_artifact_creation(self):
         publish = self.source[
@@ -111,6 +144,25 @@ class WindowsSkinPackageStoreContractTests(unittest.TestCase):
             'journal.phase = "old-revision-parent-synced"',
         ):
             self.assertIn(token, self.source)
+
+    def test_retained_tree_reads_declare_the_caller_root_pin(self):
+        self.assertGreaterEqual(
+            self.source.count("SkinSnapshotSourceRootPin::RetainedByCaller"), 8
+        )
+        manifest = self.source[
+            self.source.index("treeMetadataManifest") :
+            self.source.index("#if defined(_WIN32)", self.source.index("treeMetadataManifest"))
+            + 500
+        ]
+        self.assertIn("externallyPinnedRoot", manifest)
+        self.assertIn("FILE_SHARE_DELETE", manifest)
+
+    def test_utf8_package_names_become_native_paths_explicitly(self):
+        self.assertIn("fs::path pathFromUtf8(std::string_view value)", self.source)
+        self.assertNotIn(
+            "visiblePackages / prepared.packageId().directoryName", self.source
+        )
+        self.assertNotIn("visiblePackages / package.directoryName", self.source)
 
 
 if __name__ == "__main__":

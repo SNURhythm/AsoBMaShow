@@ -1,7 +1,7 @@
+#include "../../bms_parser.hpp"
 #include "GameplaySimulation.h"
 #include "GameplayNoteJudgeRole.h"
 #include "ManualKeysoundSelection.h"
-#include "../../bms_parser.hpp"
 
 #include <algorithm>
 #include <array>

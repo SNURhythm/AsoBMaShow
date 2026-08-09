@@ -225,16 +225,18 @@ skinStateTimestampMicros(const PlayfieldVisualState &state,
       state.sceneStartMicros == kPlayfieldTimestampOff) {
     return visualTimestampMicros;
   }
-  const auto value = static_cast<__int128>(visualTimestampMicros) -
-                     static_cast<__int128>(state.sceneStartMicros);
-  if (value > std::numeric_limits<long long>::max()) {
+  if (state.sceneStartMicros < 0 &&
+      visualTimestampMicros >
+          std::numeric_limits<long long>::max() + state.sceneStartMicros) {
     return std::numeric_limits<long long>::max();
   }
   // Preserve the explicit OFF sentinel for timer consumers.
-  if (value <= std::numeric_limits<long long>::min()) {
+  if (state.sceneStartMicros > 0 &&
+      visualTimestampMicros <=
+          std::numeric_limits<long long>::min() + state.sceneStartMicros) {
     return std::numeric_limits<long long>::min() + 1;
   }
-  return static_cast<long long>(value);
+  return visualTimestampMicros - state.sceneStartMicros;
 }
 
 [[nodiscard]] inline constexpr long long

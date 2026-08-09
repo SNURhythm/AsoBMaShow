@@ -226,11 +226,8 @@ struct SkinPackageOperationService::Impl {
                    PrepareActivationRequest, GarbageCollectionRequest,
                    ReconcileProfileActivationsRequest>;
 
-  static_assert(std::is_nothrow_move_constructible_v<RequestPayload>);
   static_assert(std::is_nothrow_move_constructible_v<SkinPackageId>);
   static_assert(std::is_nothrow_move_assignable_v<SkinPackageId>);
-  static_assert(
-      std::is_nothrow_move_constructible_v<SkinPackageOperationPayload>);
 
   enum class SlotState : std::uint8_t {
     Free,

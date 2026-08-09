@@ -26,7 +26,9 @@ class WindowsSkinTreeSnapshotContractTests(unittest.TestCase):
             "openInventoryFileNoFollow",
         ):
             self.assertIn(token, source)
-        self.assertNotIn("FILE_SHARE_DELETE", source)
+        self.assertIn("shareDeleteForPinnedRoot", source)
+        self.assertIn("SkinSnapshotSourceRootPin::RetainedByCaller", source)
+        self.assertEqual(source.count("FILE_SHARE_DELETE"), 1)
         self.assertNotIn("GetFileAttributesW", self.alias_detector)
         self.assertIn("CreateFileW(", self.alias_detector)
         self.assertNotIn("FILE_SHARE_DELETE", self.alias_detector)

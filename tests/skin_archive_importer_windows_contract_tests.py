@@ -34,7 +34,9 @@ class WindowsSkinArchiveImporterContractTests(unittest.TestCase):
             source.index("createDirectory(std::string_view relative") :
             source.index("HANDLE createFile(std::string_view relative")
         ]
-        failure_tail = create_directory[create_directory.index("#if defined(_WIN32)") :]
+        failure_tail = create_directory[
+            create_directory.index("#elif defined(_WIN32)") :
+        ]
         self.assertGreaterEqual(failure_tail.count("closeWindowsHandles(opened);"), 2)
 
     def test_windows_staging_objects_use_and_validate_private_security(self):
@@ -69,14 +71,35 @@ class WindowsSkinArchiveImporterContractTests(unittest.TestCase):
             source.index("bool allocate(const fs::path &parentPath") :
             source.index("void cleanup() noexcept")
         ]
+        self.assertIn("fs::create_directories(parentPath.parent_path()", allocate)
         self.assertIn("parentPath.parent_path(),", allocate)
         self.assertIn("CreateDirectoryW(parentPath_.c_str(),", allocate)
-        self.assertIn("security_.verify(stagingParent)", allocate)
+        self.assertIn("security_.verify(stagingParent, true)", allocate)
         ancestry_chain = source[
             source.index("openExistingAbsoluteWindowsDirectoryChain") :
             source.index("bool openWindowsDirectories")
         ]
+        self.assertIn("FILE_TRAVERSE", ancestry_chain)
         self.assertNotIn("CreateDirectoryW(", ancestry_chain)
+
+    def test_windows_build_uses_libarchive_types_and_const_security_access(self):
+        source = self.source
+        self.assertNotRegex(source, r"\bmode_t\b")
+        self.assertIn(
+            "SECURITY_ATTRIBUTES *attributes() const noexcept", source
+        )
+
+    def test_existing_windows_staging_parent_is_hardened_through_its_handle(self):
+        source = self.source
+        self.assertIn("bool protect(HANDLE handle) const", source)
+        self.assertRegex(source, r"SetSecurityInfo\(\s*handle,\s*SE_FILE_OBJECT")
+        self.assertIn("PROTECTED_DACL_SECURITY_INFORMATION", source)
+        allocate = source[
+            source.index("bool allocate(const fs::path &parentPath") :
+            source.index("void cleanup() noexcept")
+        ]
+        self.assertIn("WRITE_DAC", allocate)
+        self.assertIn("security_.protect(stagingParent)", allocate)
 
     def test_windows_root_and_recursive_cleanup_handles_pin_names(self):
         source = self.source
@@ -144,6 +167,11 @@ class WindowsSkinArchiveImporterContractTests(unittest.TestCase):
         source = self.source
         self.assertNotIn("FlushFileBuffers(output) && CloseHandle(output)", source)
         self.assertNotIn("::fsync(output) == 0 && ::close(output) == 0", source)
+
+    def test_rename_buffer_includes_the_complete_variable_length_structure(self):
+        self.assertNotIn("offsetof(FILE_RENAME_INFO, FileName)", self.source)
+        self.assertIn("sizeof(FILE_RENAME_INFO) + leafBytes", self.source)
+        self.assertIn("rename->RootDirectory = nullptr", self.source)
 
 
 if __name__ == "__main__":

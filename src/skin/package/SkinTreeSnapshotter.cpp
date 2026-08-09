@@ -20,7 +20,6 @@
 #else
 #include <dirent.h>
 #include <fcntl.h>
-#include <cstdio>
 #include <sys/stat.h>
 #include <unistd.h>
 #if defined(__linux__)
@@ -64,6 +63,7 @@ struct InventoryEntry {
 struct Inventory {
   fs::path rootPath;
   FileMetadata rootMetadata;
+  bool externallyPinnedRoot = false;
   std::vector<InventoryEntry> entries;
   std::uint64_t fileCount = 0;
   std::uint64_t totalBytes = 0;
@@ -195,7 +195,8 @@ struct WindowsHandleWalk {
 bool appendWindowsPathComponent(WindowsHandleWalk &walk,
                                 const fs::path &component, DWORD desiredAccess,
                                 std::optional<bool> expectedDirectory,
-                                DWORD disposition, std::error_code &error) {
+                                DWORD disposition, std::error_code &error,
+                                bool shareDelete = false) {
   if (component.empty() || component == fs::path(L".") ||
       component == fs::path(L"..")) {
     error = std::make_error_code(std::errc::invalid_argument);
@@ -216,10 +217,12 @@ bool appendWindowsPathComponent(WindowsHandleWalk &walk,
   if (disposition != OPEN_EXISTING) {
     flags |= FILE_ATTRIBUTE_NORMAL;
   }
+  const DWORD shareMode = FILE_SHARE_READ | FILE_SHARE_WRITE |
+                          (shareDelete ? FILE_SHARE_DELETE : 0);
   UniqueHandle handle(CreateFileW(walk.currentPath.c_str(),
                                   desiredAccess | FILE_READ_ATTRIBUTES,
-                                  FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
-                                  disposition, flags, nullptr));
+                                  shareMode, nullptr, disposition, flags,
+                                  nullptr));
   if (!handle) {
     error = std::error_code(static_cast<int>(GetLastError()),
                             std::system_category());
@@ -240,7 +243,8 @@ bool appendWindowsPathComponent(WindowsHandleWalk &walk,
 std::optional<WindowsHandleWalk>
 openWindowsPathNoFollow(const fs::path &path, DWORD desiredAccess,
                         std::optional<bool> expectedDirectory,
-                        DWORD disposition, std::error_code &error) {
+                        DWORD disposition, std::error_code &error,
+                        const fs::path *deleteSharedRoot = nullptr) {
   fs::path absolute = fs::absolute(path, error);
   if (error) {
     return std::nullopt;
@@ -273,16 +277,24 @@ openWindowsPathNoFollow(const fs::path &path, DWORD desiredAccess,
   walk.handles.push_back(std::move(rootHandle));
 
   const fs::path relative = absolute.lexically_relative(root);
+  const fs::path normalizedDeleteSharedRoot =
+      deleteSharedRoot == nullptr ? fs::path{}
+                                  : deleteSharedRoot->lexically_normal();
   auto iterator = relative.begin();
   while (iterator != relative.end()) {
     const fs::path component = *iterator;
     ++iterator;
     const bool final = iterator == relative.end();
+    const bool shareDeleteForPinnedRoot =
+        deleteSharedRoot != nullptr &&
+        (walk.currentPath / component).lexically_normal() ==
+            normalizedDeleteSharedRoot;
     if (!appendWindowsPathComponent(
             walk, component,
             final ? desiredAccess : FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
             final ? expectedDirectory : std::optional<bool>(true),
-            final ? disposition : OPEN_EXISTING, error)) {
+            final ? disposition : OPEN_EXISTING, error,
+            shareDeleteForPinnedRoot)) {
       return std::nullopt;
     }
   }
@@ -302,14 +314,15 @@ openWindowsPathNoFollow(const fs::path &path, DWORD desiredAccess,
 }
 
 bool readMetadata(const fs::path &path, FileMetadata &metadata,
-                  std::error_code &error) {
+                  std::error_code &error,
+                  const fs::path *deleteSharedRoot = nullptr) {
   auto walk = openWindowsPathNoFollow(path, FILE_READ_ATTRIBUTES, std::nullopt,
-                                      OPEN_EXISTING, error);
+                                      OPEN_EXISTING, error, deleteSharedRoot);
   return walk && metadataFromHandle(walk->leaf(), metadata, error);
 }
 #else
 bool readMetadata(const fs::path &path, FileMetadata &metadata,
-                  std::error_code &error) {
+                  std::error_code &error, const fs::path * = nullptr) {
   struct stat status{};
   if (::lstat(path.c_str(), &status) != 0) {
     error = std::error_code(errno, std::generic_category());
@@ -341,12 +354,14 @@ bool inspectTree(const fs::path &directory, const fs::path &root,
                  const SkinPackageId &package, const SkinAliasDetector &aliases,
                  Inventory &inventory, std::map<std::string, bool> &identities,
                  std::stop_token stop,
-                 std::vector<SkinDiagnostic> &diagnostics) {
+                 std::vector<SkinDiagnostic> &diagnostics,
+                 bool externallyPinnedRoot) {
 #if defined(_WIN32)
   std::error_code directoryHandleError;
   auto directoryHandle = openWindowsPathNoFollow(
       directory, FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES, true,
-      OPEN_EXISTING, directoryHandleError);
+      OPEN_EXISTING, directoryHandleError,
+      externallyPinnedRoot ? &root : nullptr);
   if (!directoryHandle) {
     diagnostics.push_back(diagnostic(
         "skin_snapshot_directory_read_failed",
@@ -387,7 +402,8 @@ bool inspectTree(const fs::path &directory, const fs::path &root,
 
     std::error_code metadataError;
     FileMetadata metadata;
-    if (!readMetadata(path, metadata, metadataError)) {
+    if (!readMetadata(path, metadata, metadataError,
+                      externallyPinnedRoot ? &root : nullptr)) {
       diagnostics.push_back(
           diagnostic("skin_snapshot_nonregular_rejected",
                      "skin source contains an unreadable or non-regular node",
@@ -419,7 +435,7 @@ bool inspectTree(const fs::path &directory, const fs::path &root,
          .metadata = metadata});
     if (metadata.directory) {
       if (!inspectTree(path, root, package, aliases, inventory, identities,
-                       stop, diagnostics)) {
+                       stop, diagnostics, externallyPinnedRoot)) {
         return false;
       }
       continue;
@@ -447,7 +463,8 @@ bool inspectTree(const fs::path &directory, const fs::path &root,
 std::optional<Inventory>
 inventoryTree(const fs::path &root, const SkinPackageId &package,
               const SkinAliasDetector &aliases, std::stop_token stop,
-              std::vector<SkinDiagnostic> &diagnostics) {
+              std::vector<SkinDiagnostic> &diagnostics,
+              bool externallyPinnedRoot) {
   if (aliases.inspectNoFollow(root) != SkinRejectedLinkKind::None) {
     diagnostics.push_back(diagnostic(
         "skin_snapshot_root_rejected",
@@ -456,7 +473,9 @@ inventoryTree(const fs::path &root, const SkinPackageId &package,
   }
   FileMetadata rootMetadata;
   std::error_code rootError;
-  if (!readMetadata(root, rootMetadata, rootError) || !rootMetadata.directory) {
+  if (!readMetadata(root, rootMetadata, rootError,
+                    externallyPinnedRoot ? &root : nullptr) ||
+      !rootMetadata.directory) {
     diagnostics.push_back(diagnostic("skin_snapshot_root_invalid",
                                      "skin source root is not a directory"));
     return std::nullopt;
@@ -464,9 +483,10 @@ inventoryTree(const fs::path &root, const SkinPackageId &package,
   Inventory inventory;
   inventory.rootPath = root;
   inventory.rootMetadata = rootMetadata;
+  inventory.externallyPinnedRoot = externallyPinnedRoot;
   std::map<std::string, bool> identities;
   if (!inspectTree(root, root, package, aliases, inventory, identities, stop,
-                   diagnostics)) {
+                   diagnostics, externallyPinnedRoot)) {
     return std::nullopt;
   }
   std::sort(inventory.entries.begin(), inventory.entries.end(),
@@ -532,7 +552,8 @@ openInventoryFileNoFollow(const Inventory &inventory,
   std::error_code error;
   auto walk = openWindowsPathNoFollow(
       inventory.rootPath, FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES, true,
-      OPEN_EXISTING, error);
+      OPEN_EXISTING, error,
+      inventory.externallyPinnedRoot ? &inventory.rootPath : nullptr);
   if (!walk || !metadataMatchesOpenFile(walk->leaf(), inventory.rootMetadata)) {
     return std::nullopt;
   }
@@ -1257,7 +1278,7 @@ bool verifyPrivateRevisionRoot(const fs::path &root,
   auto detector = createPlatformSkinAliasDetector();
   std::vector<SkinDiagnostic> diagnostics;
   const auto inventory =
-      inventoryTree(root, expected.package, *detector, {}, diagnostics);
+      inventoryTree(root, expected.package, *detector, {}, diagnostics, false);
   if (!inventory || inventory->fileCount != expected.fileCount ||
       inventory->totalBytes != expected.totalBytes ||
       (requireImmutable && !inventoryIsImmutable(*inventory))) {
@@ -1536,8 +1557,11 @@ SkinTreeSnapshotter::SkinTreeSnapshotter(
 
 SnapshotTreeResult SkinTreeSnapshotter::snapshot(
     const fs::path &sourceRoot, const SkinPackageId &package,
-    std::stop_token stop, SkinProgressCallback callback) {
+    std::stop_token stop, SkinProgressCallback callback,
+    SkinSnapshotSourceRootPin sourceRootPin) {
   SnapshotTreeResult result;
+  const bool externallyPinnedRoot =
+      sourceRootPin == SkinSnapshotSourceRootPin::RetainedByCaller;
   if (roots_.liveSources) {
     const auto normalizedPackage = normalizePackageId(package.directoryName);
     if (!normalizedPackage.package ||
@@ -1556,7 +1580,8 @@ SnapshotTreeResult SkinTreeSnapshotter::snapshot(
       return result;
     }
     auto inventory = inventoryTree(sourceRoot, *normalizedPackage.package,
-                                   aliases_, stop, result.diagnostics);
+                                   aliases_, stop, result.diagnostics,
+                                   externallyPinnedRoot);
     if (!inventory) {
       result.cancelled = stop.stop_requested();
       return result;
@@ -1611,7 +1636,7 @@ SnapshotTreeResult SkinTreeSnapshotter::snapshot(
 
   const SkinPackageId &canonicalPackage = *normalizedPackage.package;
   auto first = inventoryTree(sourceRoot, canonicalPackage, aliases_, stop,
-                             result.diagnostics);
+                             result.diagnostics, externallyPinnedRoot);
   if (!first) {
     result.cancelled = stop.stop_requested();
     return result;
@@ -1679,7 +1704,7 @@ SnapshotTreeResult SkinTreeSnapshotter::snapshot(
     return result;
   }
   auto second = inventoryTree(sourceRoot, canonicalPackage, aliases_, stop,
-                              result.diagnostics);
+                              result.diagnostics, externallyPinnedRoot);
   if (!second) {
     result.cancelled = stop.stop_requested();
     return result;
@@ -1720,7 +1745,7 @@ SnapshotTreeResult SkinTreeSnapshotter::snapshot(
     return result;
   }
   auto finalSource = inventoryTree(sourceRoot, canonicalPackage, aliases_, stop,
-                                   result.diagnostics);
+                                   result.diagnostics, externallyPinnedRoot);
   if (!finalSource) {
     result.cancelled = stop.stop_requested();
     return result;

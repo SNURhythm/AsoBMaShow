@@ -12,6 +12,7 @@
 #include <functional>
 #include <future>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -23,6 +24,10 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 namespace {
 
@@ -92,6 +97,78 @@ void writeText(const fs::path &path, std::string_view contents) {
   std::ofstream output(path, std::ios::binary | std::ios::trunc);
   output << contents;
 }
+
+fs::path pathFromUtf8(std::string_view value) {
+  std::u8string utf8;
+  utf8.reserve(value.size());
+  for (const unsigned char byte : value) {
+    utf8.push_back(static_cast<char8_t>(byte));
+  }
+  return fs::path(utf8);
+}
+
+class SharedDeleteWriter {
+public:
+  explicit SharedDeleteWriter(const fs::path &path) {
+#if defined(_WIN32)
+    handle_ = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE,
+                          FILE_SHARE_READ | FILE_SHARE_WRITE |
+                              FILE_SHARE_DELETE,
+                          nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
+                          nullptr);
+#else
+    stream_.open(path, std::ios::in | std::ios::out);
+#endif
+  }
+
+  ~SharedDeleteWriter() { close(); }
+
+  bool isOpen() const noexcept {
+#if defined(_WIN32)
+    return handle_ != INVALID_HANDLE_VALUE;
+#else
+    return stream_.is_open();
+#endif
+  }
+
+  bool overwrite(std::string_view bytes) {
+#if defined(_WIN32)
+    if (!isOpen() || SetFilePointer(handle_, 0, nullptr, FILE_BEGIN) ==
+                         INVALID_SET_FILE_POINTER) {
+      return false;
+    }
+    DWORD written = 0;
+    return WriteFile(handle_, bytes.data(), static_cast<DWORD>(bytes.size()),
+                     &written, nullptr) &&
+           written == bytes.size() && FlushFileBuffers(handle_);
+#else
+    stream_.seekp(0);
+    stream_ << bytes;
+    stream_.flush();
+    return stream_.good();
+#endif
+  }
+
+  void close() noexcept {
+#if defined(_WIN32)
+    if (handle_ != INVALID_HANDLE_VALUE) {
+      CloseHandle(handle_);
+      handle_ = INVALID_HANDLE_VALUE;
+    }
+#else
+    if (stream_.is_open()) {
+      stream_.close();
+    }
+#endif
+  }
+
+private:
+#if defined(_WIN32)
+  HANDLE handle_ = INVALID_HANDLE_VALUE;
+#else
+  std::fstream stream_;
+#endif
+};
 
 std::string readText(const fs::path &path) {
   std::ifstream input(path, std::ios::binary);
@@ -268,22 +345,22 @@ private:
 
 class RemovalMutationObserver final : public SkinPackageStoreIoObserver {
 public:
-  explicit RemovalMutationObserver(std::function<void()> mutate)
+  explicit RemovalMutationObserver(std::function<void(const fs::path &)> mutate)
       : mutate_(std::move(mutate)) {}
 
   void reached(SkinPackageStoreIoOperation operation,
-               const fs::path &) const noexcept override {
+               const fs::path &path) const noexcept override {
     if (operation != SkinPackageStoreIoOperation::RemovalVisibleRetained) {
       return;
     }
     try {
-      mutate_();
+      mutate_(path);
     } catch (...) {
     }
   }
 
 private:
-  std::function<void()> mutate_;
+  std::function<void(const fs::path &)> mutate_;
 };
 
 class FakeProfileOwner final : public ISkinProfileSettingsOwner {
@@ -1278,13 +1355,24 @@ void testNormalizedPhysicalCollisionsRejectOrReplaceAsOnePackage() {
          {PackageCollisionPolicy::Reject, PackageCollisionPolicy::Replace}) {
       TempDirectory temp;
       const SkinStorageRoots roots = rootsBelow(temp.root());
-      writeOldTree(roots.visiblePackages / pair.existing);
+      const fs::path existingPath =
+          roots.visiblePackages / pathFromUtf8(pair.existing);
+      writeOldTree(existingPath);
       const fs::path source = temp.root() / "collision-candidate";
       writeNewTree(source);
       NoAliases aliases;
       SkinArchiveImporter importer(roots, aliases);
       auto prepared =
           importer.prepareFolder(source, *candidateId.package, {}, {});
+      expect(prepared.prepared.has_value(),
+             "normalized-collision candidate prepares");
+      if (!prepared.prepared) {
+        for (const auto &diagnostic : prepared.diagnostics) {
+          std::cerr << "  preparation diagnostic " << diagnostic.code << ": "
+                    << diagnostic.message << '\n';
+        }
+        continue;
+      }
       SkinPackageCatalog catalog(roots.privateCatalog);
       FakeProfileSnapshots profiles;
       SelectableValidator validator;
@@ -1311,7 +1399,7 @@ void testNormalizedPhysicalCollisionsRejectOrReplaceAsOnePackage() {
       }
       if (policy == PackageCollisionPolicy::Reject) {
         expect(!result.published && matchingChildren == 1 &&
-                   treeIsOld(roots.visiblePackages / pair.existing),
+                   treeIsOld(existingPath),
                "Reject uses normalized collision identity without adding an "
                "alias root");
       } else {
@@ -1538,6 +1626,15 @@ void testEncoderInvalidSnapshotPerformsZeroPublicationMutation() {
   NoAliases aliases;
   SkinArchiveImporter importer(roots, aliases);
   auto prepared = importer.prepareFolder(source, *package.package, {}, {});
+  expect(prepared.prepared.has_value(),
+         "encoder-invalid candidate prepares");
+  if (!prepared.prepared) {
+    for (const auto &diagnostic : prepared.diagnostics) {
+      std::cerr << "  preparation diagnostic " << diagnostic.code << ": "
+                << diagnostic.message << '\n';
+    }
+    return;
+  }
   const std::string revision =
       prepared.prepared->candidateRevision().lowercaseSha256;
   SkinPackageCatalog catalog(roots.privateCatalog);
@@ -1874,11 +1971,12 @@ void testTransactionFailureRetainsJournalForRestartRecovery() {
     SkinPackageCatalog catalog(roots.privateCatalog);
     FakeProfileSnapshots profiles;
     SelectableValidator validator;
-    SkinPackageStore store(roots, catalog, aliases, profiles);
-    expect(store.recoverBeforeServiceStart().disposition ==
+    auto store = std::make_unique<SkinPackageStore>(roots, catalog, aliases,
+                                                    profiles);
+    expect(store->recoverBeforeServiceStart().disposition ==
                SkinRecoveryDisposition::Recovered,
            "publication rollback fixture bootstraps store roots");
-    auto initial = store.publish(
+    auto initial = store->publish(
         std::move(*oldPrepared.prepared), PackageCollisionPolicy::Reject,
         ProfileInventorySnapshot{.inventoryGeneration = 1}, validator, {}, {});
     expect(initial.published,
@@ -1886,32 +1984,53 @@ void testTransactionFailureRetainsJournalForRestartRecovery() {
 
     const fs::path newSource = temp.root() / "rollback-new";
     writeNewTree(newSource);
-    auto openOldWriter = std::make_shared<std::fstream>(
-        roots.visiblePackages / "FixtureSkin/old-only.txt",
-        std::ios::in | std::ios::out);
-    expect(openOldWriter->is_open(),
+#if defined(_WIN32)
+    std::shared_ptr<SharedDeleteWriter> openOldWriter;
+#else
+    auto openOldWriter = std::make_shared<SharedDeleteWriter>(
+        roots.visiblePackages / "FixtureSkin/old-only.txt");
+    expect(openOldWriter->isOpen(),
            "publication rollback keeps an old descendant writer open");
+#endif
     std::atomic_bool oldBackupMutated{false};
     auto observer = std::make_shared<OneShotThrowingObserver>([&] {
-      openOldWriter->seekp(0);
-      *openOldWriter << "corrupted-through-open-handle";
-      openOldWriter->flush();
-      oldBackupMutated.store(openOldWriter->good(), std::memory_order_release);
+#if defined(_WIN32)
+      std::error_code walkError;
+      const fs::path backupRoot = roots.visiblePackages.parent_path() /
+                                  ".skin-publication-backups";
+      for (fs::recursive_directory_iterator iterator(backupRoot, walkError),
+           end;
+           !walkError && iterator != end; ++iterator) {
+        if (iterator->path().filename() == "old-only.txt") {
+          writeText(iterator->path(), "corrupted-through-renamed-path");
+          oldBackupMutated.store(true, std::memory_order_release);
+          break;
+        }
+      }
+#else
+      oldBackupMutated.store(
+          openOldWriter->overwrite("corrupted-through-open-handle"),
+          std::memory_order_release);
+#endif
     });
-    SkinArchiveImporter throwingImporter(roots, aliases, observer);
-    auto replacement =
-        throwingImporter.prepareFolder(newSource, *package.package, {}, {});
+    auto throwingImporter =
+        std::make_unique<SkinArchiveImporter>(roots, aliases, observer);
+    auto replacement = throwingImporter->prepareFolder(
+        newSource, *package.package, {}, {});
     catalog.shutdown();
     bool threw = false;
     try {
-      (void)store.publish(std::move(*replacement.prepared),
-                          PackageCollisionPolicy::Replace,
-                          ProfileInventorySnapshot{.inventoryGeneration = 2},
-                          validator, {}, {});
+      const auto attempted = store->publish(
+          std::move(*replacement.prepared), PackageCollisionPolicy::Replace,
+          ProfileInventorySnapshot{.inventoryGeneration = 2}, validator, {},
+          {});
+      (void)attempted;
     } catch (const std::runtime_error &) {
       threw = true;
     }
-    openOldWriter->close();
+    if (openOldWriter) {
+      openOldWriter->close();
+    }
     expect(oldBackupMutated.load(std::memory_order_acquire),
            "open descendant writer corrupts the renamed publication backup");
     expect(
@@ -1919,12 +2038,22 @@ void testTransactionFailureRetainsJournalForRestartRecovery() {
         "throw after old visible move retains publication recovery evidence");
     expect(treeIsOld(roots.visiblePackages / "FixtureSkin"),
            "best-effort publication rollback restores old visible identity");
+    replacement.prepared.reset();
+    throwingImporter.reset();
+    observer.reset();
+    store.reset();
     SkinPackageCatalog restartedCatalog(roots.privateCatalog);
     FakeProfileSnapshots restartedProfiles;
     SkinPackageStore restarted(roots, restartedCatalog, aliases,
                                restartedProfiles);
-    expect(restarted.recoverBeforeServiceStart().disposition ==
-               SkinRecoveryDisposition::Recovered,
+    const auto restartedRecovery = restarted.recoverBeforeServiceStart();
+    if (restartedRecovery.disposition != SkinRecoveryDisposition::Recovered) {
+      for (const auto &diagnostic : restartedRecovery.diagnostics) {
+        std::cerr << "  publication restart diagnostic " << diagnostic.code
+                  << ": " << diagnostic.message << '\n';
+      }
+    }
+    expect(restartedRecovery.disposition == SkinRecoveryDisposition::Recovered,
            "restart consumes retained publication evidence");
     expect(treeIsOld(roots.visiblePackages / "FixtureSkin"),
            "publication restart recovery selects the complete old generation");
@@ -1947,17 +2076,22 @@ void testTransactionFailureRetainsJournalForRestartRecovery() {
     SkinPackageCatalog catalog(roots.privateCatalog);
     FakeProfileSnapshots profiles;
     SelectableValidator validator;
-    std::shared_ptr<std::fstream> openOldWriter;
+    std::shared_ptr<SharedDeleteWriter> openOldWriter;
     std::atomic_bool retainedTreeMutated{false};
-    auto removalObserver = std::make_shared<RemovalMutationObserver>([&] {
+    auto removalObserver = std::make_shared<RemovalMutationObserver>(
+        [&](const fs::path &retainedRoot) {
+#if defined(_WIN32)
+      writeText(retainedRoot / "old-only.txt",
+                "corrupted-through-renamed-path");
+      retainedTreeMutated.store(true, std::memory_order_release);
+#else
       if (!openOldWriter) {
         return;
       }
-      openOldWriter->seekp(0);
-      *openOldWriter << "corrupted-through-open-handle";
-      openOldWriter->flush();
-      retainedTreeMutated.store(openOldWriter->good(),
+      retainedTreeMutated.store(
+          openOldWriter->overwrite("corrupted-through-open-handle"),
                                 std::memory_order_release);
+#endif
     });
     SkinPackageStore store(roots, catalog, aliases, profiles, removalObserver);
     expect(store.recoverBeforeServiceStart().disposition ==
@@ -1970,14 +2104,17 @@ void testTransactionFailureRetainsJournalForRestartRecovery() {
                         validator, {}, {})
                .published,
            "removal rollback fixture publishes old tree");
-    openOldWriter = std::make_shared<std::fstream>(
-        roots.visiblePackages / "FixtureSkin/old-only.txt",
-        std::ios::in | std::ios::out);
-    expect(openOldWriter->is_open(),
+#if !defined(_WIN32)
+    openOldWriter = std::make_shared<SharedDeleteWriter>(
+        roots.visiblePackages / "FixtureSkin/old-only.txt");
+    expect(openOldWriter->isOpen(),
            "removal rollback keeps an old descendant writer open");
+#endif
     catalog.shutdown();
     const auto removed = store.removePackage(*package.package, {});
-    openOldWriter->close();
+    if (openOldWriter) {
+      openOldWriter->close();
+    }
     expect(retainedTreeMutated.load(std::memory_order_acquire),
            "open descendant writer corrupts retained removal staging");
     expect(!removed.removed &&

@@ -1,7 +1,7 @@
+#include "../../bms_parser.hpp"
 #include "GameplayRulesetPolicy.h"
 
 #include "../../CoursePlaySession.h"
-#include "../../bms_parser.hpp"
 
 #include <algorithm>
 #include <array>

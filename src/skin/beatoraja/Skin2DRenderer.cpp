@@ -666,16 +666,13 @@ selectAnimationFrame(const SkinFrameInputs &inputs,
     if (resolved.off) {
       return {.frame = 0};
     }
+    // Dividing each operand first bounds their difference to less than 2^55.
     const auto difference =
-        static_cast<__int128>(inputs.visualTimeMicros / 1000) -
-        static_cast<__int128>(resolved.value / 1000);
+        inputs.visualTimeMicros / 1000 - resolved.value / 1000;
     if (difference < 0) {
       return {.frame = 0};
     }
-    const auto elapsedMillis =
-        difference > std::numeric_limits<std::int64_t>::max()
-            ? std::numeric_limits<std::int64_t>::max()
-            : static_cast<std::int64_t>(difference);
+    const auto elapsedMillis = difference;
     elapsedMicros =
         elapsedMillis > std::numeric_limits<std::int64_t>::max() / 1000
             ? std::numeric_limits<std::int64_t>::max()
@@ -686,9 +683,12 @@ selectAnimationFrame(const SkinFrameInputs &inputs,
     const std::int64_t elapsedMillis =
         std::max<std::int64_t>(0, elapsedMicros / 1000);
     const std::int64_t position = elapsedMillis % cycleMillis;
-    const auto scaled =
-        static_cast<__int128>(position) * static_cast<__int128>(frameCount);
-    frame = static_cast<std::size_t>(scaled / cycleMillis);
+    const auto cycle = static_cast<std::size_t>(cycleMillis);
+    const auto positionInCycle = static_cast<std::size_t>(position);
+    // Quotient/remainder decomposition computes position * frameCount / cycle
+    // exactly without requiring a non-standard integer type or overflowing.
+    frame = (frameCount / cycle) * positionInCycle +
+            ((frameCount % cycle) * positionInCycle) / cycle;
     frame = std::min(frame, frameCount - 1);
   }
   return {.frame = frame};

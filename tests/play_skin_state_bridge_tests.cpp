@@ -260,7 +260,7 @@ PlayfieldProjectionResult projectionAt(std::uint64_t serial) {
   PlayfieldProjectionResult projection;
   projection.frameSerial = serial;
   projection.builtInTraversal =
-      BuiltInRendererTraversal{.hispeed = 2.0F, .configuredHispeed = 2.0F};
+      BuiltInRendererTraversal{.configuredHispeed = 2.0F, .hispeed = 2.0F};
   projection.notes.push_back({.noteId = 1,
                               .lane = 0,
                               .kind = ChartVisualNoteKind::Mine,
@@ -992,6 +992,45 @@ void testReadyAndLiveTimersUseTheSharedSkinStateClock() {
          "ready, lane, judgement, and play timers share the renderer's "
          "Beatoraja-style skin-state clock");
   bridge.discardFrame();
+}
+
+void testPlayTimerVisualRebaseSaturatesWithoutLosingCancellation() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = runtime.runtime(),
+                              .mutationTable = mutations});
+
+  const auto timer = [&](std::uint64_t serial, std::int64_t start,
+                         std::int64_t visual, std::int64_t gameplay) {
+    auto state = stateAt(serial);
+    state.sceneStartMicros = 0;
+    state.clock.visualTimeMicros = visual;
+    state.clock.gameplayTimeMicros = gameplay;
+    state.clock.playTimer = {
+        .active = true, .startMicros = start, .elapsedMillisExact = true};
+    bridge.beginFrame(state, projectionAt(serial));
+    const auto result = bridge.timerProperty({41});
+    bridge.discardFrame();
+    return result;
+  };
+
+  const auto maximum = std::numeric_limits<std::int64_t>::max();
+  const auto minimum = std::numeric_limits<std::int64_t>::min();
+  expect(timer(220, -1, maximum, -1) == maximum,
+         "play-timer rebasing retains negative cancellation at the upper bound");
+  expect(timer(221, 1, minimum + 1, 1) == minimum + 1 &&
+             timer(222, 0, minimum + 1, 1) == minimum + 1,
+         "play-timer rebasing retains lower-bound cancellation and preserves "
+         "the off sentinel");
 }
 
 void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
@@ -1754,6 +1793,7 @@ int main() {
   testGameplayModeAndLoadingBooleanProperties();
   testPlayTimerPropertiesMatchPinnedJavaConversions();
   testReadyAndLiveTimersUseTheSharedSkinStateClock();
+  testPlayTimerVisualRebaseSaturatesWithoutLosingCancellation();
   testSelectedScuroMappingsUseOnlyAuthoritativeState();
   testEmptyCustomObjectsStayZeroCost();
   testCustomTimersPrecedeAutomaticEventsInAuthoredOrder();

@@ -111,6 +111,11 @@ struct SnapshotTreeResult {
   std::vector<SkinDiagnostic> diagnostics;
 };
 
+enum class SkinSnapshotSourceRootPin : std::uint8_t {
+  None,
+  RetainedByCaller,
+};
+
 class SkinTreeSnapshotter {
 public:
   SkinTreeSnapshotter(
@@ -118,7 +123,9 @@ public:
       std::shared_ptr<const SkinSnapshotFailureInjector> failures = {});
   SnapshotTreeResult snapshot(const std::filesystem::path &sourceRoot,
                               const SkinPackageId &, std::stop_token,
-                              SkinProgressCallback);
+                              SkinProgressCallback,
+                              SkinSnapshotSourceRootPin =
+                                  SkinSnapshotSourceRootPin::None);
 
 private:
   SkinStorageRoots roots_;

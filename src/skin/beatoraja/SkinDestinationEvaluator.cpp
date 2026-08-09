@@ -24,15 +24,8 @@ bool finite(const SkinDestinationFrame &frame) {
 }
 
 std::int64_t subtractMillis(std::int64_t now, std::int64_t start) {
-  const auto value =
-      static_cast<__int128>(now / 1000) - static_cast<__int128>(start / 1000);
-  if (value > std::numeric_limits<std::int64_t>::max()) {
-    return std::numeric_limits<std::int64_t>::max();
-  }
-  if (value < std::numeric_limits<std::int64_t>::min()) {
-    return std::numeric_limits<std::int64_t>::min();
-  }
-  return static_cast<std::int64_t>(value);
+  // Dividing each operand first bounds their difference to less than 2^55.
+  return now / 1000 - start / 1000;
 }
 
 float easedRate(float rate, int acceleration) {

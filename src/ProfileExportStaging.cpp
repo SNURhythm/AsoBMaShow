@@ -11,7 +11,9 @@
 #include <vector>
 
 #if defined(_WIN32)
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include "PlatformDocumentHandoff.h"
 #include <windows.h>
 #else

@@ -94,7 +94,10 @@ include_directories(yoga/lib)
 
 # Compiler definitions for MSVC/others
 if (MSVC)
-    add_compile_options(/Zc:__cplusplus /Zc:preprocessor /wd4819 /utf-8 /bigobj)
+    # Let cl.exe compile the sources from each large target concurrently. /FS
+    # keeps those compiler workers' shared PDB writes serialized and avoids
+    # C1041 when /MP is active.
+    add_compile_options(/Zc:__cplusplus /Zc:preprocessor /wd4819 /utf-8 /bigobj /MP /FS)
     add_definitions(-DSTBI_WINDOWS_UTF8)
     if (CMAKE_SIZEOF_VOID_P EQUAL 8)
         add_definitions(-DAMD64)
@@ -300,9 +303,6 @@ else()
         list(APPEND COMMON_LIBS unarr::unarr)
     endif()
 
-    if (WIN32)
-        set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -mwindows")
-    endif()
 endif()
 
 # ------------------------------------------------------------------------------
@@ -338,6 +338,9 @@ elseif (PLATFORM_MACOS AND BUILD_MACOS_BUNDLE)
     )
 else()
     add_executable(main)
+endif()
+if (WIN32)
+    set_target_properties(main PROPERTIES WIN32_EXECUTABLE TRUE)
 endif()
 
 # Freeze the source identity into every CMake-built binary at configure time.
@@ -490,6 +493,19 @@ if (WIN32)
     target_link_libraries(main PRIVATE shell32 ole32 advapi32)
 endif()
 
+function(asobmashow_stage_sevenzip_runtime target_name)
+    if(WIN32)
+        add_custom_command(TARGET ${target_name} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "$<TARGET_FILE:7zip::7zip>"
+                "$<TARGET_FILE_DIR:${target_name}>"
+            COMMENT "Staging the 7-Zip runtime for ${target_name}"
+            VERBATIM
+        )
+    endif()
+endfunction()
+asobmashow_stage_sevenzip_runtime(main)
+
 # Platform specific system libs for macOS
 if (PLATFORM_MACOS)
     find_library(FOUNDATION Foundation)
@@ -601,6 +617,9 @@ endif()
 
 if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    find_package(BZip2 REQUIRED)
+    find_package(LibLZMA REQUIRED)
+    find_package(ZLIB REQUIRED)
 
     if(APPLE AND NOT IOS)
         add_executable(builtin_renderer_characterization_tests
@@ -5746,6 +5765,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
              COMMAND $<TARGET_FILE:skin_package_operation_service_tests>)
     set_tests_properties(skin_package_operation_service_tests PROPERTIES
         WORKING_DIRECTORY $<TARGET_FILE_DIR:skin_package_operation_service_tests>)
+    if(MSVC)
+        target_sources(skin_package_operation_service_tests PRIVATE
+            tests/support/MsvcTestDiagnostics.cpp
+        )
+    endif()
 
     # Transactional skin package store/catalog contract suite.
     find_package(zstd CONFIG QUIET)
@@ -5866,6 +5890,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     add_test(NAME skin_commit_coordinator_tests
              COMMAND skin_commit_coordinator_tests)
+    if(MSVC)
+        target_sources(skin_commit_coordinator_tests PRIVATE
+            tests/support/MsvcTestDiagnostics.cpp
+        )
+    endif()
 
     add_executable(lua_skin_file_system_tests
         tests/lua_skin_file_system_tests.cpp
@@ -5901,16 +5930,42 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         )
     endif()
 
+    foreach(archive_file_target IN ITEMS
+        builtin_renderer_characterization_tests
+        ir_upload_candidates_tests
+        music_playlist_repository_tests
+        chart_repository_tests
+        archive_file_concurrency_tests
+        chart_library_scanner_tests
+        difficulty_table_importer_tests
+        modern_result_recall_tests
+        jukebox_restore_tests
+        image_view_fade_tests
+        chart_list_item_view_tests
+        ir_upload_candidate_list_view_tests
+        find_bms_download_tests
+        gameplay_bga_target_tests
+        profile_switch_tests
+    )
+        if(TARGET ${archive_file_target})
+            asobmashow_stage_sevenzip_runtime(${archive_file_target})
+        endif()
+    endforeach()
+
     function(asobmashow_register_test target_name)
         set(test_name ${target_name})
         if(ARGC GREATER 1)
             set(test_name ${ARGV1})
         endif()
+        target_compile_definitions(${target_name} PRIVATE SDL_MAIN_HANDLED)
         # Many legacy fixtures use assert() for setup as well as validation.
         # Release's NDEBUG would otherwise remove database/resource setup calls
         # and make the test binaries exercise a different program.
         if(MSVC)
             target_compile_options(${target_name} PRIVATE /UNDEBUG)
+            target_sources(${target_name} PRIVATE
+                tests/support/MsvcTestDiagnostics.cpp
+            )
         else()
             target_compile_options(${target_name} PRIVATE -UNDEBUG)
         endif()

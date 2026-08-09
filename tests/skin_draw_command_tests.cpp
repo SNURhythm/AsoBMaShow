@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -3734,15 +3735,24 @@ void testHiddenNoteStillPreparesEveryLaneSourceInPinnedOrder() {
          "and processed sources before drawing nothing");
 }
 
+std::int64_t fixtureFixed(double value) {
+  // Floating-point to_chars implementations can choose different shortest
+  // spellings for the same value. Store micro-units as integers so fixture
+  // hashes characterize the render data rather than the standard library.
+  return std::llround(value * 1'000'000.0);
+}
+
 nlohmann::json fixtureVertex(const SkinVertex &vertex) {
-  return {vertex.x, vertex.y, vertex.u, vertex.v, vertex.rgba};
+  return {fixtureFixed(vertex.x), fixtureFixed(vertex.y), fixtureFixed(vertex.u),
+          fixtureFixed(vertex.v), vertex.rgba};
 }
 
 nlohmann::json fixtureState(const SkinRenderState &state) {
   nlohmann::json scissor = nullptr;
   if (state.scissor) {
-    scissor = {state.scissor->x, state.scissor->y, state.scissor->width,
-               state.scissor->height};
+    scissor = {fixtureFixed(state.scissor->x), fixtureFixed(state.scissor->y),
+               fixtureFixed(state.scissor->width),
+               fixtureFixed(state.scissor->height)};
   }
   return {{"blend", static_cast<int>(state.blend)},
           {"filter", static_cast<int>(state.filter)},
@@ -3752,16 +3762,21 @@ nlohmann::json fixtureState(const SkinRenderState &state) {
 nlohmann::json fixtureGeometry(const AuthoredDestinationGeometry &geometry) {
   nlohmann::json clip = nullptr;
   if (geometry.clip) {
-    clip = {geometry.clip->x, geometry.clip->y, geometry.clip->width,
-            geometry.clip->height};
+    clip = {fixtureFixed(geometry.clip->x), fixtureFixed(geometry.clip->y),
+            fixtureFixed(geometry.clip->width),
+            fixtureFixed(geometry.clip->height)};
   }
   return {{"rect",
-           {geometry.rect.x, geometry.rect.y, geometry.rect.width,
-            geometry.rect.height}},
+           {fixtureFixed(geometry.rect.x), fixtureFixed(geometry.rect.y),
+            fixtureFixed(geometry.rect.width),
+            fixtureFixed(geometry.rect.height)}},
           {"clip", std::move(clip)},
-          {"center", {geometry.centerX, geometry.centerY}},
-          {"angle", geometry.angleDegrees},
-          {"rgba", geometry.rgba},
+          {"center",
+           {fixtureFixed(geometry.centerX), fixtureFixed(geometry.centerY)}},
+          {"angle", fixtureFixed(geometry.angleDegrees)},
+          {"rgba",
+           {fixtureFixed(geometry.rgba[0]), fixtureFixed(geometry.rgba[1]),
+            fixtureFixed(geometry.rgba[2]), fixtureFixed(geometry.rgba[3])}},
           {"blend", static_cast<int>(geometry.blend)},
           {"filter", static_cast<int>(geometry.filter)},
           {"stretch", static_cast<int>(geometry.stretch)}};
@@ -3769,19 +3784,23 @@ nlohmann::json fixtureGeometry(const AuthoredDestinationGeometry &geometry) {
 
 nlohmann::json fixtureViewport(const PlaySkinViewport &viewport) {
   const auto matrix = [](const Affine2D &value) {
-    return nlohmann::json{value.m00, value.m01, value.tx,
-                          value.m10, value.m11, value.ty};
+    return nlohmann::json{fixtureFixed(value.m00), fixtureFixed(value.m01),
+                          fixtureFixed(value.tx), fixtureFixed(value.m10),
+                          fixtureFixed(value.m11), fixtureFixed(value.ty)};
   };
   return {
       {"authoredToUi", matrix(viewport.authoredToUi)},
       {"uiToAuthored", matrix(viewport.uiToAuthored)},
       {"drawableAuthoredBounds",
-       {viewport.drawableAuthoredBounds.x, viewport.drawableAuthoredBounds.y,
-        viewport.drawableAuthoredBounds.width,
-        viewport.drawableAuthoredBounds.height}},
+       {fixtureFixed(viewport.drawableAuthoredBounds.x),
+        fixtureFixed(viewport.drawableAuthoredBounds.y),
+        fixtureFixed(viewport.drawableAuthoredBounds.width),
+        fixtureFixed(viewport.drawableAuthoredBounds.height)}},
       {"safeUiBounds",
-       {viewport.safeUiBounds.x, viewport.safeUiBounds.y,
-        viewport.safeUiBounds.width, viewport.safeUiBounds.height}},
+       {fixtureFixed(viewport.safeUiBounds.x),
+        fixtureFixed(viewport.safeUiBounds.y),
+        fixtureFixed(viewport.safeUiBounds.width),
+        fixtureFixed(viewport.safeUiBounds.height)}},
       {"valid", viewport.valid}};
 }
 
