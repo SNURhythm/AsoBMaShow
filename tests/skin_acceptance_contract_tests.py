@@ -66,7 +66,63 @@ class SkinAcceptanceContractTests(unittest.TestCase):
     def test_default_contract_validation_is_clone_and_device_independent(self):
         result = self.invoke("validate", "--contract", str(CONTRACT))
         self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertIn("schema-v1 contract valid", result.stdout)
+        self.assertIn("schema-v2 acceptance contract valid", result.stdout)
+
+    def schema_v2_contract(self) -> dict:
+        contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+        acceptance = contract["acceptanceContract"]
+        acceptance["schemaVersion"] = 2
+        for legacy_key in ("negativeScenarios", "passingGuardVectorSha256"):
+            acceptance.pop(legacy_key, None)
+        acceptance["ordinaryRuntimeIo"] = {
+            "status": "pending",
+            "configuredLoadOperations": [],
+            "renderCallbackOperations": [],
+            "evidenceReference": None,
+        }
+        acceptance["limits"] = {
+            "liveResourceGrowthAfterTenExits": 0,
+            "missedPresentationPercent": 0.5,
+            "p99SkinCpuFrameFraction": 0.9,
+            "residentMemoryDriftMiB": 32,
+        }
+        return contract
+
+    def test_schema_v2_accepts_observed_ordinary_selected_root_io(self):
+        contract = self.schema_v2_contract()
+        contract["acceptanceContract"]["ordinaryRuntimeIo"].update(
+            status="pass",
+            configuredLoadOperations=[
+                "filesystemRead",
+                "filesystemWrite",
+                "filesystemDirectoryScan",
+            ],
+            renderCallbackOperations=["filesystemRead", "filesystemWrite"],
+            evidenceReference="ordinary-runtime-io",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            contract_path = Path(temporary) / "contract.json"
+            contract_path.write_text(json.dumps(contract), encoding="utf-8")
+            result = self.invoke("validate", "--contract", str(contract_path))
+        self.assertEqual(result.returncode, 0, result.stdout)
+
+    def test_schema_v2_rejects_legacy_render_io_restriction_fields(self):
+        legacy_fields = {
+            "negativeScenarios": [],
+            "passingGuardVectorSha256": ["a" * 64],
+            "overlayDigestBefore": "a" * 64,
+            "overlayDigestAfter": "a" * 64,
+            "deniedCountersExpected": {"filesystemReads": 1},
+        }
+        for field, value in legacy_fields.items():
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as temporary:
+                contract = self.schema_v2_contract()
+                contract["acceptanceContract"][field] = value
+                contract_path = Path(temporary) / "contract.json"
+                contract_path.write_text(json.dumps(contract), encoding="utf-8")
+                result = self.invoke("validate", "--contract", str(contract_path))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("legacy schema-v1 field", result.stdout)
 
     def test_verify_refuses_committed_pending_physical_evidence(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -92,15 +148,15 @@ class SkinAcceptanceContractTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("physicalEvidence", result.stdout)
 
-    def test_validate_rejects_mutated_frozen_negative_counter_contract(self):
-        contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
-        contract["acceptanceContract"]["negativeScenarios"][0]["deniedCountersExpected"]["filesystemWrites"] = "positive"
+    def test_validate_rejects_legacy_negative_counter_contract(self):
+        contract = self.schema_v2_contract()
+        contract["acceptanceContract"]["deniedCountersExpected"] = {"filesystemWrites": "positive"}
         with tempfile.TemporaryDirectory() as temporary:
             contract_path = Path(temporary) / "contract.json"
             contract_path.write_text(json.dumps(contract), encoding="utf-8")
             result = self.invoke("validate", "--contract", str(contract_path))
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("counter", result.stdout)
+        self.assertIn("legacy schema-v1 field", result.stdout)
 
     def test_redistributable_fixture_digests_are_exact_and_required(self):
         contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
@@ -143,7 +199,7 @@ class SkinAcceptanceContractTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0, result.stdout)
 
     def passing_contract(self) -> dict:
-        contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+        contract = self.schema_v2_contract()
         acceptance = contract["acceptanceContract"]
 
         def mark_pass(value: object) -> None:
@@ -187,11 +243,17 @@ class SkinAcceptanceContractTests(unittest.TestCase):
         acceptance["timerEventTrace"].update(
             evidenceReference="evidence-timer-event", observedOrder=[1], selectedIds=[1]
         )
+        acceptance["ordinaryRuntimeIo"].update(
+            configuredLoadOperations=[
+                "filesystemRead",
+                "filesystemWrite",
+                "filesystemDirectoryScan",
+            ],
+            renderCallbackOperations=["filesystemRead", "filesystemWrite"],
+            evidenceReference="ordinary-runtime-io",
+        )
         acceptance["externalDigests"]["activatedRevisionSha256"]["value"] = digest
         acceptance["externalDigests"]["configurationSha256"]["value"] = digest
-        for scenario in acceptance["negativeScenarios"]:
-            scenario["overlayDigestBefore"] = digest
-            scenario["overlayDigestAfter"] = digest
         acceptance["physicalEvidence"].update(
             status="pass",
             recordId="record-0123456789abcdef",
@@ -234,7 +296,6 @@ class SkinAcceptanceContractTests(unittest.TestCase):
                         "autoplayScriptSha256": autoplay_hashes[scenario],
                         "activatedRevisionSha256": digest,
                         "configurationSha256": digest,
-                        "guardVectorSha256": acceptance["passingGuardVectorSha256"][0],
                         "warmupStartMicros": warmup_start,
                         "recordingStartMicros": warmup_start + 30_000_000,
                         "recordingEndMicros": warmup_start + 210_000_000,
@@ -249,19 +310,9 @@ class SkinAcceptanceContractTests(unittest.TestCase):
                             "incompleteSampleCount": 0,
                             "mismatchedSampleCount": 0,
                         },
-                        "renderIo": {
-                            "filesystemReadsPerformed": 0,
-                            "filesystemReadsDenied": 0,
-                            "filesystemWritesPerformed": 0,
-                            "filesystemWritesDenied": 0,
-                            "filesystemDirectoryScansPerformed": 0,
-                            "filesystemDirectoryScansDenied": 0,
-                            "resourceUploadsPerformed": 0,
-                            "resourceUploadsDenied": 0,
-                        },
                     })
         evidence = {
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "recordId": acceptance["physicalEvidence"]["recordId"],
             "accessControlledLocalEvidenceId": acceptance["physicalEvidence"][
                 "accessControlledLocalEvidenceId"
@@ -302,27 +353,10 @@ class SkinAcceptanceContractTests(unittest.TestCase):
                     for cycle in range(1, 11)
                 ],
             },
-            "negativeScenario": {
-                "scenarioId": acceptance["negativeScenarios"][0]["id"],
-                "activatedRevisionSha256": digest,
-                "configurationSha256": digest,
-                "guardVectorSha256": acceptance["negativeScenarios"][0]["expectedGuardVectorSha256"],
-                "diagnostic": "skin_file_render_phase_denied",
-                "action": "discard_frame_disable_session_same_frame_builtin",
-                "overlayDigestBefore": digest,
-                "overlayDigestAfter": digest,
-                "performedCounters": {
-                    "filesystemReads": 0,
-                    "filesystemWrites": 0,
-                    "filesystemDirectoryScans": 0,
-                    "resourceUploads": 0,
-                },
-                "deniedCounters": {
-                    "filesystemReads": 1,
-                    "filesystemWrites": 0,
-                    "filesystemDirectoryScans": 0,
-                    "resourceUploads": 0,
-                },
+            "ordinaryRuntimeIo": {
+                "configuredLoadOperations": acceptance["ordinaryRuntimeIo"]["configuredLoadOperations"],
+                "renderCallbackOperations": acceptance["ordinaryRuntimeIo"]["renderCallbackOperations"],
+                "evidenceReference": acceptance["ordinaryRuntimeIo"]["evidenceReference"],
             },
         }
         if unsafe:
@@ -418,9 +452,8 @@ class SkinAcceptanceContractTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("deletionProcedure", result.stdout)
 
-    def test_verify_rejects_unequal_negative_overlay_digests(self):
+    def test_verify_rejects_mismatched_ordinary_runtime_io_observations(self):
         contract = self.passing_contract()
-        contract["acceptanceContract"]["negativeScenarios"][0]["overlayDigestAfter"] = "b" * 64
         with tempfile.TemporaryDirectory() as temporary:
             temporary_root = Path(temporary)
             contract_path = temporary_root / "contract.json"
@@ -428,7 +461,7 @@ class SkinAcceptanceContractTests(unittest.TestCase):
             self.write_passing_evidence(temporary_root, contract)
             evidence_path = temporary_root / "acceptance-evidence.json"
             evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-            evidence["negativeScenario"]["overlayDigestAfter"] = "b" * 64
+            evidence["ordinaryRuntimeIo"]["renderCallbackOperations"] = ["filesystemRead"]
             evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
             result = self.invoke(
                 "verify",
@@ -437,16 +470,21 @@ class SkinAcceptanceContractTests(unittest.TestCase):
                 "--expected-app-commit", PINNED_COMMIT,
             )
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("overlay", result.stdout)
+        self.assertIn("ordinary runtime I/O", result.stdout)
 
-    def test_verify_rejects_pending_negative_overlay_digest(self):
+    def test_verify_rejects_noncanonical_ordinary_runtime_io_observations(self):
         contract = self.passing_contract()
-        contract["acceptanceContract"]["negativeScenarios"][0]["overlayDigestAfter"] = "pending"
         with tempfile.TemporaryDirectory() as temporary:
             temporary_root = Path(temporary)
             contract_path = temporary_root / "contract.json"
             contract_path.write_text(json.dumps(contract), encoding="utf-8")
             self.write_passing_evidence(temporary_root, contract)
+            evidence_path = temporary_root / "acceptance-evidence.json"
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["ordinaryRuntimeIo"]["configuredLoadOperations"] = [
+                "filesystemWrite", "filesystemRead",
+            ]
+            evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
             result = self.invoke(
                 "verify",
                 "--contract", str(contract_path),
@@ -454,7 +492,7 @@ class SkinAcceptanceContractTests(unittest.TestCase):
                 "--expected-app-commit", PINNED_COMMIT,
             )
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("overlayDigestAfter", result.stdout)
+        self.assertIn("canonical operation order", result.stdout)
 
     def test_verify_rejects_missing_retention_metadata(self):
         contract = self.passing_contract()
@@ -521,7 +559,7 @@ class SkinAcceptanceContractTests(unittest.TestCase):
 
     def test_verify_rejects_missing_or_incomplete_execution_reports(self):
         contract = self.passing_contract()
-        for missing in ("performanceRuns", "resourceLifecycle", "negativeScenario"):
+        for missing in ("performanceRuns", "resourceLifecycle", "ordinaryRuntimeIo"):
             with self.subTest(missing=missing), tempfile.TemporaryDirectory() as temporary:
                 temporary_root = Path(temporary)
                 contract_path = temporary_root / "contract.json"
@@ -538,7 +576,7 @@ class SkinAcceptanceContractTests(unittest.TestCase):
                 )
                 self.assertNotEqual(result.returncode, 0)
 
-    def test_schema_v1_requires_measured_lifecycle_resident_bytes(self):
+    def test_schema_v2_requires_measured_lifecycle_resident_bytes(self):
         contract = self.passing_contract()
         with tempfile.TemporaryDirectory() as temporary:
             temporary_root = Path(temporary)
@@ -566,7 +604,9 @@ class SkinAcceptanceContractTests(unittest.TestCase):
             lambda evidence: evidence["performanceRuns"].pop(),
             lambda evidence: evidence["performanceRuns"][0].update(p99SkinCpuMicros=1_000_000),
             lambda evidence: evidence["resourceLifecycle"]["postDestruction"].pop(),
-            lambda evidence: evidence["negativeScenario"]["deniedCounters"].update(filesystemReads=0),
+            lambda evidence: evidence["ordinaryRuntimeIo"].update(
+                renderCallbackOperations=[]
+            ),
         )
         for mutation in mutations:
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:

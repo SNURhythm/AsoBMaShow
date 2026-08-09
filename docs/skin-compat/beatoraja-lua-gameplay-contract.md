@@ -117,14 +117,22 @@ remaining object array in authored order.
   draws the base BGA (or blank) and then the layer. Image/video renderer type
   and the configured BGA stretch are selected before submission.
 
-The selected closure also uses package-local `dofile` and `io.open`. V1 does
-not expose the LuaJIT standard filesystem implementations. It replaces them
-with text-only activated-revision `dofile` and a virtual `io.open` supporting
-only the audited default/`r`/`w`/`a`, `lines`, `write`, and `close` shapes.
-Reads are bounded overlay-first data reads, writes commit atomically to the
-quota-limited private overlay, and every captured function/handle is denied
-after render phase begins. No wrapper returns or accepts an unrestricted host
-path.
+The selected closure also uses package-local `dofile` and `io.open`. The
+pinned source's `SkinLuaAccessor.RestrictedIoLib` resolves a requested path
+against the selected skin directory and rejects a lexical escape from that
+directory (`SkinLuaAccessor.java`, `openFile`, lines 340–391). Once the path
+is selected, it performs ordinary LuaJ file opening: writes create the target
+parent directory and open/truncate the selected file. `LuaSkinLoader.load`
+loads the same live selected closure again on each load (`LuaSkinLoader.java`,
+lines 69–90).
+
+Consequently, compatible selected-root I/O remains ordinary and live during
+configured loading and any render callback that the skin invokes. It may read,
+write, or scan the selected root. There is no Beatoraja render-phase filesystem
+freeze, private overlay, quota, handle invalidation boundary, denied-I/O
+counter, or automatic built-in fallback caused solely by selected-root file
+I/O. Compatibility evidence serializes only operation kinds and opaque IDs;
+it never records host paths or copied skin data.
 
 Before any configured-model or retained-operation claim is produced, the
 auditor checks `SelectedLuaClosureContractV1` for the pinned SCURO 4.6 target.
@@ -144,48 +152,19 @@ calls, sixteen `write` calls (one zero-argument and fifteen one-argument),
 fourteen zero-argument `close` calls, and one configured-load `listFiles`
 directory scan. `write` accepts zero or more string arguments and returns its
 same handle so the selected chained call remains valid; `close` returns true
-on success. Nested overlay writes create only validated, package-relative
-overlay parent directories.
+on success. These counts characterize only this pinned closure; they are not a
+general Lua verifier or a reason to deny a supported selected-root operation.
 
 Configured loading may perform the audited reads, writes, and directory scan.
-Two selected option guards can instead retain filesystem-reading/writing
-callbacks into render phase. The audit reconstructs their effective runtime
-option keys, choice labels, and numeric `op` values from the selected header,
-then serializes only opaque option, choice, and guard IDs. Each guard records
-the ordered operation kinds derived from its retained callback's scoped,
-transitive call graph. The passing vector makes both callbacks unreachable.
-The negative vector makes exactly one callback reachable, takes the denied
-kind from that callback's first operation, and leaves the other callback
-unreachable.
-
-At the configured-load-to-render transition, read buffers are released, all
-handles are invalidated, and unclosed write buffers are discarded. A dirty
-handle at that boundary is a validation failure. Every later operation through
-an invalidated handle or captured filesystem function is session-critical and
-must be denied before effect. Performed filesystem/resource-upload counters and
-denied-attempt counters are separate.
-
-`auditedGuardConfigurationSha256` is domain-separated static audit evidence
-over the selected revision, selected entry, and effective opaque runtime
-option/choice selections. The public guard-vector digest is a second
-domain-separated hash over that audit digest and the ordered opaque
-guard/option/choice/outcome tuples. Neither digest is
-`SkinConfigurationDigestV1`; neither attests to physical configuration bytes
-or may populate the acceptance record's pending
-`externalDigests.configurationSha256`.
-
-Any post-transition filesystem or resource-upload attempt is a
-session-critical sandbox-integrity violation even when its caller belongs to
-an otherwise optional object. The operation is denied before I/O, that skin
-frame is discarded, and the initialized built-in presentation takes over in
-the same frame. Performed and denied counters remain distinct in acceptance
-evidence.
-
-For the negative overlay-integrity probe, the before digest is computed
-asynchronously to completion before chart/session binding. The after digest is
-computed only after session teardown, and the two digests must be equal.
-Timed-path polling is memory-only: it may read precomputed status but may not
-hash or enumerate overlay storage during rendering.
+Two selected option guards can retain filesystem-reading/writing callbacks into
+render phase. The audit reconstructs their effective runtime option keys,
+choice labels, and numeric `op` values from the selected header, then
+serializes only opaque option, choice, and guard IDs. The runtime observation
+record deliberately reports only operations actually seen in a manual run; it
+does not infer or require a denial, counter, overlay digest, or fallback from a
+static guard disposition. Static option/guard evidence is not a physical
+`SkinConfigurationDigestV1` and must not populate the pending physical
+configuration digest.
 
 ## Audited closed legacy facade and sandbox divergence
 
@@ -206,10 +185,10 @@ selected-entry caller. It does not bind Gdx or reach an audio facade.
 
 The committed `legacyLuaApiSurface` records those site counts and reachability
 without storing external helper paths. The reviewed design maps File
-construction/listing to the package virtual filesystem and maps latent `mkdir`
-to the private overlay. It exposes neither a Java value nor a host path and it
-adds no network access. Physical acceptance remains `pending` until that exact
-facade and every other runtime/renderer criterion are implemented and measured.
+construction/listing and the deferred `mkdir` to the selected-root virtual
+facade. It exposes neither a Java value nor a host path and it adds no network
+access. Physical acceptance remains `pending` until that exact facade and every
+other runtime/renderer criterion are implemented and measured.
 
 ## Evidence and redistribution boundary
 
@@ -232,10 +211,11 @@ record only: screenshot references carry an opaque ID, SHA-256, dimensions,
 and timestamp, never a path or payload. The record must remain outside the
 repository with completed redaction, retention, and an opaque
 deletion-procedure identifier containing no path syntax. Its
-fixed metadata-only schema also binds every frozen scenario/layout/repetition
-run to its chart/autoplay, activation/configuration, and guard-vector digests;
-records trusted 30-second warm-up plus 180-second measurement timestamps and
-the bounded telemetry thresholds; contains a baseline and exactly ten
-post-destruction resource samples; and records the one frozen sandbox-negative
-operation. No URL, file URI/path, account/device identifier, UDID, screenshot
-payload, or unrecognized field is permitted in that physical-evidence record.
+fixed metadata-only schema binds every frozen scenario/layout/repetition run to
+its chart/autoplay and activation/configuration digests; records trusted
+30-second warm-up plus 180-second measurement timestamps and the bounded
+telemetry thresholds; contains a baseline and exactly ten post-destruction
+resource samples; and records the ordinary selected-root I/O operations
+observed in the manual run. No URL, file URI/path, account/device identifier,
+UDID, screenshot payload, or unrecognized field is permitted in that
+physical-evidence record.

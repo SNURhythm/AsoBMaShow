@@ -24,9 +24,6 @@ CHECKER_PATH = ROOT / "scripts/check_beatoraja_reference.py"
 AUDIT_PATH = ROOT / "scripts/audit_beatoraja_skin.py"
 TRACE_CAPTURE_PATH = ROOT / "scripts/capture_beatoraja_skin_traces.py"
 TRACE_ROOT = ROOT / "tests/fixtures/beatoraja_skin/traces"
-SANDBOX_POLICY_PATH = (
-    ROOT / "tests/fixtures/beatoraja_skin/policies/lua_sandbox_v1.json"
-)
 TWO_PHASE_ENTRY_PATH = (
     ROOT / "tests/fixtures/beatoraja_skin/lua/two_phase/entry.luaskin"
 )
@@ -194,7 +191,6 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
             "tests/fixtures/beatoraja_skin/lua/two_phase/entry.luaskin",
             "tests/fixtures/beatoraja_skin/lua/two_phase/shared.lua",
             "tests/fixtures/beatoraja_skin/lua/sandbox_probe.luaskin",
-            "tests/fixtures/beatoraja_skin/policies/lua_sandbox_v1.json",
             *(f"tests/fixtures/beatoraja_skin/traces/{name}" for name in TRACE_FILES.values()),
         )
         for relative_path in required:
@@ -486,163 +482,14 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
         ):
             self.assertNotIn(policy_only_claim, upstream_serialized)
 
-    def test_sandbox_policy_is_separate_aso_authority_bound_to_task_1a(self):
-        self.assertTrue(SANDBOX_POLICY_PATH.is_file(), "sandbox policy must be committed separately")
-        policy = json.loads(SANDBOX_POLICY_PATH.read_text(encoding="utf-8"))
+    def test_runtime_io_contract_has_no_separate_aso_phase_policy(self):
         manifest = self.require_manifest()
-        self.assertEqual(
-            set(policy),
-            {
-                "schemaVersion",
-                "authority",
-                "selectedSurfaceDigest",
-                "policyBodyDigest",
-                "allowed",
-                "denied",
-                "phaseRules",
-                "handlePolicy",
-                "serialization",
-                "closedLegacyFacade",
-            },
+        selected = manifest["selectedFileIoSurface"]
+        self.assertNotIn("asoBMaShowPolicy", selected)
+        self.assertNotIn("negativeExpectedDeniedOperation", selected)
+        self.assertFalse(
+            (ROOT / "tests/fixtures/beatoraja_skin/policies/lua_sandbox_v1.json").exists()
         )
-        self.assertEqual(
-            policy["selectedSurfaceDigest"],
-            canonical_json_sha256(manifest["selectedFileIoSurface"]),
-        )
-        self.assertRegex(policy["selectedSurfaceDigest"], LOWER_SHA256)
-        body = {key: value for key, value in policy.items() if key != "policyBodyDigest"}
-        self.assertRegex(policy["policyBodyDigest"], LOWER_SHA256)
-        self.assertEqual(policy["policyBodyDigest"], canonical_json_sha256(body))
-        self.assertNotEqual(policy["policyBodyDigest"], policy["selectedSurfaceDigest"])
-        self.assertEqual(
-            body,
-            {
-                "schemaVersion": 1,
-                "authority": "AsoBMaShow",
-                "selectedSurfaceDigest": canonical_json_sha256(
-                    manifest["selectedFileIoSurface"]
-                ),
-                "allowed": [
-                    {
-                        "capability": "package-text-dofile",
-                        "constraints": [
-                            "activated-revision-text-only",
-                            "load-phase-only",
-                            "virtual-path-enforcement",
-                        ],
-                    },
-                    {
-                        "capability": "restricted-io-open",
-                        "constraints": [
-                            "modes-default-r-w-a",
-                            "handle-members-lines-write-close",
-                            "overlay-first-read",
-                            "overlay-only-writes",
-                            "automatic-overlay-parents",
-                        ],
-                    },
-                    {
-                        "capability": "legacy-file-list",
-                        "constraints": [
-                            "load-phase-only",
-                            "package-local-bounded-scan",
-                            "normalized-virtual-results",
-                        ],
-                    },
-                    {
-                        "capability": "legacy-overlay-mkdir",
-                        "constraints": [
-                            "load-phase-only",
-                            "overlay-only-writes",
-                            "automatic-overlay-parents",
-                        ],
-                    },
-                ],
-                "denied": [
-                    {"capability": "network", "effect": "deny-before-effect"},
-                    {
-                        "capability": "arbitrary-class-member",
-                        "effect": "class-member-denial",
-                    },
-                    {"capability": "reflection", "effect": "deny-before-effect"},
-                    {"capability": "native-access", "effect": "deny-before-effect"},
-                    {
-                        "capability": "process-execution",
-                        "effect": "deny-before-effect",
-                    },
-                    {
-                        "capability": "unaudited-legacy-surface",
-                        "effect": "compatibility-error",
-                    },
-                ],
-                "phaseRules": [
-                    {
-                        "phase": "load",
-                        "allowedOperations": [
-                            "filesystem-read",
-                            "filesystem-write",
-                            "directory-scan",
-                            "resource-upload",
-                        ],
-                        "effect": "audited-bounded-execution",
-                    },
-                    {
-                        "phase": "render",
-                        "deniedOperations": [
-                            "filesystem-read",
-                            "filesystem-write",
-                            "directory-scan",
-                            "resource-upload",
-                        ],
-                        "effect": "deny-before-effect",
-                    },
-                ],
-                "handlePolicy": {
-                    "configuredToRenderTransition": "handle-invalidation",
-                    "dirtyHandleTransition": "validation-failure",
-                    "readBuffers": "release",
-                    "unclosedWriteBuffers": "discard",
-                },
-                "serialization": {
-                    "externalIdentity": "opaque-ids-and-digests-only",
-                    "order": "deterministic",
-                },
-                "closedLegacyFacade": {
-                    "tableKind": "ordinary-lua-closed-host-table",
-                    "module": "luajava",
-                    "exports": ["bindClass", "new"],
-                    "classes": [
-                        {
-                            "class": "java.io.File",
-                            "token": "unforgeable-lua-class-token",
-                            "constructorArguments": ["virtual-path"],
-                            "members": ["listFiles", "mkdir"],
-                        },
-                        {
-                            "class": "com.badlogic.gdx.Gdx",
-                            "members": [],
-                            "absentMembers": ["app"],
-                        },
-                    ],
-                    "rejected": [
-                        "all-other-classes",
-                        "all-other-constructors",
-                        "all-other-members",
-                        "all-other-argument-shapes",
-                        "newInstance",
-                        "url-http-reader",
-                        "controller-input",
-                        "reflection",
-                        "java-objects",
-                        "native-handles",
-                        "debug",
-                        "class-loaders",
-                    ],
-                },
-            },
-        )
-        for trace_path in TRACE_ROOT.glob("*.json"):
-            self.assertNotEqual(trace_path.resolve(), SANDBOX_POLICY_PATH.resolve())
 
     def test_capture_tool_requires_explicit_reference_root(self):
         result = run_python(TRACE_CAPTURE_PATH, "--output-dir", TRACE_ROOT)
@@ -653,7 +500,7 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
         manifest = self.require_manifest()
         self.assertEqual(manifest["schemaVersion"], 1)
         self.assertEqual(manifest["beatorajaCommit"], PINNED_COMMIT)
-        self.assertEqual(manifest["acceptanceContract"]["schemaVersion"], 1)
+        self.assertEqual(manifest["acceptanceContract"]["schemaVersion"], 2)
         self.assertEqual(manifest["targetVersion"], TARGET_VERSION)
 
     def test_archive_and_source_tree_are_cryptographically_bound(self):
@@ -761,7 +608,7 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
 
     def test_acceptance_schema_freezes_device_protocol_and_completion_evidence(self):
         contract = self.require_manifest()["acceptanceContract"]
-        self.assertEqual(contract["schemaVersion"], 1)
+        self.assertEqual(contract["schemaVersion"], 2)
         self.assertEqual(contract["protocol"]["warmupSeconds"], 30)
         self.assertEqual(contract["protocol"]["measurementSeconds"], 180)
         self.assertEqual(contract["protocol"]["repetitions"], 3)
@@ -779,11 +626,10 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
         self.assertEqual(contract["limits"]["p99SkinCpuFrameFraction"], 0.9)
         self.assertEqual(contract["limits"]["missedPresentationPercent"], 0.5)
         self.assertEqual(contract["limits"]["residentMemoryDriftMiB"], 32)
-        self.assertEqual(contract["limits"]["activeRenderFilesystemReads"], 0)
-        self.assertEqual(contract["limits"]["activeRenderFilesystemWrites"], 0)
-        self.assertEqual(contract["limits"]["activeRenderFilesystemDirectoryScans"], 0)
-        self.assertEqual(contract["limits"]["activeRenderResourceUploads"], 0)
-        self.assertNotIn("activeRenderUploads", contract["limits"])
+        self.assertNotIn("activeRenderFilesystemReads", contract["limits"])
+        self.assertNotIn("activeRenderFilesystemWrites", contract["limits"])
+        self.assertNotIn("activeRenderFilesystemDirectoryScans", contract["limits"])
+        self.assertNotIn("activeRenderResourceUploads", contract["limits"])
         self.assertEqual(contract["limits"]["liveResourceGrowthAfterTenExits"], 0)
         external_digests = contract["externalDigests"]
         self.assertIn("activatedRevisionSha256", external_digests)
@@ -809,6 +655,17 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
                 "evidenceReference": None,
             },
         )
+        self.assertEqual(
+            contract["ordinaryRuntimeIo"],
+            {
+                "status": "pending",
+                "configuredLoadOperations": [],
+                "renderCallbackOperations": [],
+                "evidenceReference": None,
+            },
+        )
+        self.assertNotIn("negativeScenarios", contract)
+        self.assertNotIn("passingGuardVectorSha256", contract)
         for key in (
             "hardwareModel",
             "iPadOS",
@@ -980,101 +837,44 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
                     else "not-reachable",
                 )
 
-        policy = selected["asoBMaShowPolicy"]
-        self.assertEqual(policy["authority"], "AsoBMaShow")
-        self.assertEqual(
-            policy["nestedWriteParentCreation"],
-            "safe-automatic-overlay-parents",
-        )
-        self.assertEqual(
-            policy["renderTransitionHandles"],
-            "invalidate-release-read-buffers-discard-unclosed-write-buffers",
-        )
-        self.assertEqual(policy["dirtyHandleTransition"], "validation-failure")
-        self.assertEqual(policy["postTransitionOperationCriticality"], "session-critical")
-        self.assertTrue(policy["denyBeforeEffect"])
-        self.assertTrue(policy["performedAndDeniedCountersSeparate"])
-        self.assertEqual(policy["externalIdentitySerialization"], "opaque-ids-and-digests-only")
-        self.assertEqual(policy["serializationOrder"], "deterministic")
+        self.assertNotIn("negativeExpectedDeniedOperation", selected)
+        self.assertNotIn("asoBMaShowPolicy", selected)
 
         serialized = json.dumps(selected, ensure_ascii=False, sort_keys=True)
         self.assertNotIn(manifest["entries"][0]["path"], serialized)
         self.assertNotRegex(serialized, r"(?:^|[\"/])(?:Play|Root)/")
         self.assertNotRegex(serialized, r"\.lua(?:skin)?")
 
-    def test_render_io_negative_policy_is_frozen(self):
+    def test_ordinary_runtime_io_contract_has_no_denial_policy(self):
         manifest = self.require_manifest()
         contract = manifest["acceptanceContract"]
-        scenarios = contract["negativeScenarios"]
-        self.assertEqual(len(scenarios), 1)
-        scenario = scenarios[0]
-        negative = next(
-            item for item in manifest["selectedFileIoSurface"]["auditedGuardConfigurations"]
-            if item["role"] == "negative"
-        )
-        self.assertEqual(scenario["guardConfigurationId"], negative["id"])
         self.assertEqual(
-            scenario["auditedGuardConfigurationSha256"],
-            negative["auditedGuardConfigurationSha256"],
-        )
-        self.assertEqual(scenario["expectedGuardVectorSha256"], negative["guardVectorSha256"])
-        reachable = [item for item in negative["guardVector"] if item["value"] == "reachable"]
-        self.assertEqual(len(reachable), 1)
-        self.assertTrue(all(
-            item["value"] == "not-reachable"
-            for item in negative["guardVector"]
-            if item["guardId"] != reachable[0]["guardId"]
-        ))
-        self.assertIn(
-            "runtimeConfigurationBinding",
-            manifest["selectedFileIoSurface"],
-        )
-        binding = next(
-            item for item in manifest["selectedFileIoSurface"]["runtimeConfigurationBinding"]["guardBindings"]
-            if item["guardId"] == reachable[0]["guardId"]
-        )
-        self.assertEqual(scenario["expectedDeniedOperation"], binding["orderedOperationKinds"][0])
-        self.assertEqual(scenario["expectedDiagnostic"], "skin_file_render_phase_denied")
-        self.assertEqual(
-            scenario["expectedAction"],
-            "discard_frame_disable_session_same_frame_builtin",
-        )
-        self.assertEqual(scenario["criticality"], "session-critical-sandbox-integrity")
-        self.assertEqual(
-            scenario["performedCountersExpected"],
+            contract["ordinaryRuntimeIo"],
             {
-                "filesystemReads": 0,
-                "filesystemWrites": 0,
-                "filesystemDirectoryScans": 0,
-                "resourceUploads": 0,
+                "status": "pending",
+                "configuredLoadOperations": [],
+                "renderCallbackOperations": [],
+                "evidenceReference": None,
             },
         )
-        denied = scenario["deniedCountersExpected"]
-        self.assertEqual(sum(value == "positive" for value in denied.values()), 1)
-        self.assertEqual(scenario["overlayDigestBeforeCapture"], "complete-before-chart-session-bind")
-        self.assertEqual(scenario["overlayDigestAfterCapture"], "asynchronous-after-session-teardown")
-        self.assertEqual(scenario["overlayDigestComparison"], "equal")
-        self.assertEqual(scenario["overlayDigestPolling"], "memory-only-precomputed-status")
-        self.assertEqual(scenario["overlayDigestBefore"], "pending")
-        self.assertEqual(scenario["overlayDigestAfter"], "pending")
-        passing = [
-            item["guardVectorSha256"]
-            for item in manifest["selectedFileIoSurface"]["auditedGuardConfigurations"]
-            if item["role"] == "passing"
-        ]
-        self.assertEqual(contract["passingGuardVectorSha256"], passing)
+        serialized = json.dumps(contract, ensure_ascii=False, sort_keys=True)
+        for legacy in (
+            "negativeScenarios", "passingGuardVectorSha256", "overlayDigestBefore",
+            "overlayDigestAfter", "deniedCountersExpected",
+        ):
+            self.assertNotIn(legacy, serialized)
+        self.assertNotIn("negativeExpectedDeniedOperation", manifest["selectedFileIoSurface"])
+        self.assertNotIn("asoBMaShowPolicy", manifest["selectedFileIoSurface"])
         self.assertEqual(
             contract["externalDigests"]["configurationSha256"],
             {"status": "pending", "value": None},
-            "static guard evidence must not populate physical SkinConfigurationDigestV1",
+            "static closure analysis must not populate physical SkinConfigurationDigestV1",
         )
         for document in (GAMEPLAY_CONTRACT_PATH, ACCEPTANCE_PATH):
             text = document.read_text(encoding="utf-8")
             with self.subTest(document=document.name):
-                self.assertIn("before chart/session binding", text)
-                self.assertIn("only after session teardown", text)
-                self.assertIn("must be equal", text)
-                self.assertIn("memory-only", text)
+                self.assertIn("selected-root", text)
+                self.assertNotIn("skin_file_render_phase_denied", text)
 
     def test_external_payload_digest_set_covers_every_sensitive_file_kind(self):
         payloads = self.require_manifest()["externalPayloadDigests"]
@@ -2034,7 +1834,7 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
                 "11" * 32,
             )
 
-    def test_negative_kind_comes_from_selected_first_operation_and_is_order_independent(self):
+    def test_runtime_guard_operation_order_is_source_derived_and_deterministic(self):
         read_then_write = self.make_render_policy_closure(operations=("read", "write"))
         selected, _ = self.analyze_render_policy(read_then_write)
         reordered, _ = self.analyze_render_policy(dict(reversed(list(read_then_write.items()))))
@@ -2055,7 +1855,7 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
             item for item in selected["runtimeConfigurationBinding"]["guardBindings"]
             if item["guardId"] == reachable[0]["guardId"]
         )
-        self.assertEqual(selected["negativeExpectedDeniedOperation"], binding["orderedOperationKinds"][0])
+        self.assertEqual(binding["orderedOperationKinds"][0], "filesystemRead")
 
         swapped, _ = self.analyze_render_policy(
             self.make_render_policy_closure(operations=("write", "read"))
@@ -2068,10 +1868,11 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
             item for item in swapped_negative["guardVector"] if item["value"] == "reachable"
         )
         self.assertEqual(reachable[0]["guardId"], swapped_reachable["guardId"])
-        self.assertNotEqual(
-            selected["negativeExpectedDeniedOperation"],
-            swapped["negativeExpectedDeniedOperation"],
+        swapped_binding = next(
+            item for item in swapped["runtimeConfigurationBinding"]["guardBindings"]
+            if item["guardId"] == swapped_reachable["guardId"]
         )
+        self.assertEqual(swapped_binding["orderedOperationKinds"][0], "filesystemWrite")
 
     def test_configured_model_counts_literal_custom_maps_and_rejects_computed_keys(self):
         _, counts = self.analyze_render_policy(

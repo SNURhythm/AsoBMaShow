@@ -21,7 +21,9 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-SCHEMA_VERSION = 1
+MANIFEST_SCHEMA_VERSION = 1
+ACCEPTANCE_SCHEMA_VERSION = 2
+EVIDENCE_SCHEMA_VERSION = 2
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 OPAQUE_ID = re.compile(r"^[a-z0-9][a-z0-9:-]{3,127}$")
@@ -32,6 +34,26 @@ PUBLIC_URL = re.compile(r"https?://", re.IGNORECASE)
 WINDOWS_ABSOLUTE = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\)")
 MAX_METADATA_BYTES = 1024 * 1024
 METADATA_FILENAME = "acceptance-evidence.json"
+ORDINARY_RUNTIME_IO_OPERATIONS = (
+    "filesystemRead",
+    "filesystemWrite",
+    "filesystemDirectoryScan",
+)
+LEGACY_RENDER_IO_FIELDS = frozenset({
+    "negativeScenarios",
+    "passingGuardVectorSha256",
+    "overlayDigestBefore",
+    "overlayDigestAfter",
+    "deniedCountersExpected",
+    "expectedDeniedOperation",
+    "expectedDiagnostic",
+    "expectedAction",
+    "performedCountersExpected",
+    "overlayDigestBeforeCapture",
+    "overlayDigestAfterCapture",
+    "overlayDigestComparison",
+    "overlayDigestPolling",
+})
 
 
 class AcceptanceError(ValueError):
@@ -196,26 +218,67 @@ def validate_pair_records(records: Any, path: str, *, screenshot: bool = False) 
         error(f"{path} must contain all six Fit/Stretch/Custom layout cases")
 
 
+def validate_ordinary_runtime_operations(value: Any, path: str) -> list[str]:
+    operations = array_at(value, path)
+    if len(operations) != len(set(operations)):
+        error(f"{path} must not repeat an operation")
+    for index, operation in enumerate(operations):
+        if operation not in ORDINARY_RUNTIME_IO_OPERATIONS:
+            error(f"{path}[{index}] is not an ordinary selected-root file-I/O operation")
+    canonical = [operation for operation in ORDINARY_RUNTIME_IO_OPERATIONS if operation in operations]
+    if operations != canonical:
+        error(f"{path} must use canonical operation order")
+    return operations
+
+
+def validate_ordinary_runtime_io(value: Any, path: str) -> dict[str, Any]:
+    ordinary = exact_object(value, path, {
+        "status", "configuredLoadOperations", "renderCallbackOperations", "evidenceReference",
+    })
+    status = status_at(ordinary["status"], f"{path}.status")
+    configured = validate_ordinary_runtime_operations(
+        ordinary["configuredLoadOperations"], f"{path}.configuredLoadOperations"
+    )
+    render = validate_ordinary_runtime_operations(
+        ordinary["renderCallbackOperations"], f"{path}.renderCallbackOperations"
+    )
+    if status == "pass":
+        opaque_id_at(ordinary["evidenceReference"], f"{path}.evidenceReference")
+    elif configured or render or ordinary["evidenceReference"] is not None:
+        error(f"{path} pending or failed observations must remain empty")
+    return ordinary
+
+
+def reject_legacy_render_io_fields(acceptance: dict[str, Any]) -> None:
+    for path, _ in walk_metadata(acceptance):
+        if path and path[-1] in LEGACY_RENDER_IO_FIELDS:
+            error("acceptanceContract contains legacy schema-v1 field: " + ".".join(path))
+
+
 def validate_contract_schema(contract: dict[str, Any]) -> dict[str, Any]:
-    if contract.get("schemaVersion") != SCHEMA_VERSION:
+    if contract.get("schemaVersion") != MANIFEST_SCHEMA_VERSION:
         error("contract.schemaVersion must be 1")
     if not COMMIT.fullmatch(string_at(contract.get("beatorajaCommit"), "contract.beatorajaCommit")):
         error("contract.beatorajaCommit must be a lowercase commit")
     validate_safe_metadata(contract, label="contract", allow_contract_urls=True)
 
     acceptance = object_at(required(contract, "acceptanceContract", "contract"), "contract.acceptanceContract")
+    reject_legacy_render_io_fields(acceptance)
     required_keys = {
         "autoplayScripts", "completionCriteria", "configuredHz", "drawableSize",
         "externalDigests", "hardwareModel", "iPadOS", "layouts", "limits",
-        "measurementBuild", "negativeScenarios", "passingGuardVectorSha256",
-        "physicalEvidence", "protocol", "safeInsets", "schemaVersion",
+        "measurementBuild", "ordinaryRuntimeIo", "physicalEvidence", "protocol",
+        "safeInsets", "schemaVersion",
         "screenshotTimestamps", "syntheticChartHashes", "timerEventTrace",
     }
-    missing = sorted(required_keys - set(acceptance))
-    if missing:
-        error("acceptanceContract is missing schema-v1 fields")
-    if acceptance.get("schemaVersion") != SCHEMA_VERSION:
-        error("acceptanceContract.schemaVersion must be 1")
+    if set(acceptance) != required_keys:
+        missing = sorted(required_keys - set(acceptance))
+        unexpected = sorted(set(acceptance) - required_keys)
+        if missing:
+            error("acceptanceContract is missing schema-v2 fields: " + ", ".join(missing))
+        error("acceptanceContract has unexpected schema-v2 fields: " + ", ".join(unexpected))
+    if acceptance.get("schemaVersion") != ACCEPTANCE_SCHEMA_VERSION:
+        error("acceptanceContract.schemaVersion must be 2")
 
     for path, item in status_objects(acceptance):
         validate_statused_value(item, path)
@@ -226,17 +289,13 @@ def validate_contract_schema(contract: dict[str, Any]) -> dict[str, Any]:
 
     limits = object_at(required(acceptance, "limits", "acceptanceContract"), "acceptanceContract.limits")
     expected_limits = {
-        "activeRenderFilesystemDirectoryScans": 0,
-        "activeRenderFilesystemReads": 0,
-        "activeRenderFilesystemWrites": 0,
-        "activeRenderResourceUploads": 0,
         "liveResourceGrowthAfterTenExits": 0,
         "missedPresentationPercent": 0.5,
         "p99SkinCpuFrameFraction": 0.9,
         "residentMemoryDriftMiB": 32,
     }
     if limits != expected_limits:
-        error("acceptanceContract.limits differs from the frozen schema-v1 limits")
+        error("acceptanceContract.limits differs from the frozen schema-v2 limits")
 
     external = object_at(required(acceptance, "externalDigests", "acceptanceContract"), "acceptanceContract.externalDigests")
     for key in ("archiveSha256", "entrySha256", "payloadTreeSha256", "selectedLuaClosureSha256"):
@@ -251,6 +310,9 @@ def validate_contract_schema(contract: dict[str, Any]) -> dict[str, Any]:
 
     for name in ("hardwareModel", "iPadOS", "configuredHz", "drawableSize", "safeInsets", "measurementBuild", "physicalEvidence", "timerEventTrace"):
         object_at(required(acceptance, name, "acceptanceContract"), f"acceptanceContract.{name}")
+    validate_ordinary_runtime_io(
+        acceptance["ordinaryRuntimeIo"], "acceptanceContract.ordinaryRuntimeIo"
+    )
 
     physical = exact_object(acceptance["physicalEvidence"], "acceptanceContract.physicalEvidence", {
         "accessControlledLocalEvidenceId", "deletionProcedure", "metadataFile",
@@ -359,61 +421,6 @@ def validate_contract_schema(contract: dict[str, Any]) -> dict[str, Any]:
             integer_at(value, "acceptanceContract.timerEventTrace ID", 0)
         opaque_id_at(trace.get("evidenceReference"), "acceptanceContract.timerEventTrace.evidenceReference")
 
-    guard_vectors = array_at(acceptance["passingGuardVectorSha256"], "acceptanceContract.passingGuardVectorSha256")
-    if not guard_vectors:
-        error("acceptanceContract.passingGuardVectorSha256 cannot be empty")
-    for index, value in enumerate(guard_vectors):
-        sha256_at(value, f"acceptanceContract.passingGuardVectorSha256[{index}]")
-    negative_scenarios = array_at(acceptance["negativeScenarios"], "acceptanceContract.negativeScenarios")
-    if not negative_scenarios:
-        error("acceptanceContract.negativeScenarios cannot be empty")
-    expected_counter_keys = {"filesystemReads", "filesystemWrites", "filesystemDirectoryScans", "resourceUploads"}
-    frozen_performed_counters = {
-        "filesystemReads": 0,
-        "filesystemWrites": 0,
-        "filesystemDirectoryScans": 0,
-        "resourceUploads": 0,
-    }
-    frozen_denied_counters = {
-        "filesystemReads": "positive",
-        "filesystemWrites": 0,
-        "filesystemDirectoryScans": 0,
-        "resourceUploads": 0,
-    }
-    for index, raw in enumerate(negative_scenarios):
-        path = f"acceptanceContract.negativeScenarios[{index}]"
-        scenario = object_at(raw, path)
-        for key in ("id", "guardConfigurationId", "criticality", "expectedAction", "expectedDeniedOperation", "expectedDiagnostic", "overlayDigestBeforeCapture", "overlayDigestAfterCapture", "overlayDigestComparison", "overlayDigestPolling"):
-            string_at(required(scenario, key, path), f"{path}.{key}")
-        opaque_id_at(scenario["id"], f"{path}.id")
-        opaque_id_at(scenario["guardConfigurationId"], f"{path}.guardConfigurationId")
-        for key in ("auditedGuardConfigurationSha256", "expectedGuardVectorSha256"):
-            sha256_at(required(scenario, key, path), f"{path}.{key}")
-        for key in ("performedCountersExpected", "deniedCountersExpected"):
-            counters = object_at(required(scenario, key, path), f"{path}.{key}")
-            if set(counters) != expected_counter_keys:
-                error(f"{path}.{key} must contain all render-I/O counter kinds")
-            frozen = frozen_performed_counters if key == "performedCountersExpected" else frozen_denied_counters
-            for counter_name, expected_value in frozen.items():
-                if type(counters[counter_name]) is not type(expected_value) or counters[counter_name] != expected_value:
-                    error(f"{path}.{key} must preserve the frozen counter contract")
-        if scenario["criticality"] != "session-critical-sandbox-integrity":
-            error(f"{path}.criticality must remain session-critical sandbox integrity")
-        if scenario["expectedDeniedOperation"] != "filesystemRead":
-            error(f"{path}.expectedDeniedOperation must remain filesystemRead")
-        if scenario["expectedDiagnostic"] != "skin_file_render_phase_denied" or scenario["expectedAction"] != "discard_frame_disable_session_same_frame_builtin":
-            error(f"{path} must preserve the frozen diagnostic and same-frame fallback")
-        if scenario["overlayDigestComparison"] != "equal":
-            error(f"{path}.overlayDigestComparison must remain equal")
-        for key in ("overlayDigestBefore", "overlayDigestAfter"):
-            value = required(scenario, key, path)
-            if value != "pending":
-                sha256_at(value, f"{path}.{key}")
-        before = scenario["overlayDigestBefore"]
-        after = scenario["overlayDigestAfter"]
-        if before != "pending" and after != "pending" and before != after:
-            error(f"{path} overlay digests must be equal")
-
     payload_digests: set[str] = set()
     for index, raw in enumerate(array_at(contract.get("externalPayloadDigests"), "contract.externalPayloadDigests")):
         item = object_at(raw, f"contract.externalPayloadDigests[{index}]")
@@ -495,9 +502,6 @@ def require_all_pass(acceptance: dict[str, Any]) -> None:
     for path, item in status_objects(acceptance):
         if status_at(item["status"], f"{path}.status") != "pass":
             error(f"{path}.status is pending or failed; physical acceptance requires pass")
-    for index, scenario in enumerate(acceptance["negativeScenarios"]):
-        for key in ("overlayDigestBefore", "overlayDigestAfter"):
-            sha256_at(scenario[key], f"acceptanceContract.negativeScenarios[{index}].{key}")
 
 
 def external_root(path: Path, root: Path) -> Path:
@@ -590,19 +594,13 @@ def validate_performance_runs(acceptance: dict[str, Any], evidence: dict[str, An
     expected_fields = {
         "scenario", "aspect", "mode", "repetition", "chartSha256",
         "autoplayScriptSha256", "activatedRevisionSha256", "configurationSha256",
-        "guardVectorSha256", "warmupStartMicros", "recordingStartMicros",
-        "recordingEndMicros", "configuredRefreshHz", "p99SkinCpuMicros",
-        "missedPresentationPercent", "residentDriftBytes", "telemetry", "renderIo",
+        "warmupStartMicros", "recordingStartMicros", "recordingEndMicros",
+        "configuredRefreshHz", "p99SkinCpuMicros", "missedPresentationPercent",
+        "residentDriftBytes", "telemetry",
     }
     telemetry_fields = {
         "receivedSampleCount", "retainedSampleCount", "overflowSampleCount",
         "incompleteSampleCount", "mismatchedSampleCount",
-    }
-    render_io_fields = {
-        "filesystemReadsPerformed", "filesystemReadsDenied",
-        "filesystemWritesPerformed", "filesystemWritesDenied",
-        "filesystemDirectoryScansPerformed", "filesystemDirectoryScansDenied",
-        "resourceUploadsPerformed", "resourceUploadsDenied",
     }
     observed: set[tuple[str, str, str, int]] = set()
     for index, raw in enumerate(array_at(evidence["performanceRuns"], "external evidence metadata.performanceRuns")):
@@ -617,12 +615,10 @@ def validate_performance_runs(acceptance: dict[str, Any], evidence: dict[str, An
         observed.add(identity)
         if run["chartSha256"] != chart_hashes[scenario] or run["autoplayScriptSha256"] != autoplay_hashes[scenario]:
             error("external evidence metadata performance chart or autoplay digest does not match the contract")
-        for key in ("chartSha256", "autoplayScriptSha256", "activatedRevisionSha256", "configurationSha256", "guardVectorSha256"):
+        for key in ("chartSha256", "autoplayScriptSha256", "activatedRevisionSha256", "configurationSha256"):
             sha256_at(run[key], f"{path}.{key}")
         if run["activatedRevisionSha256"] != external["activatedRevisionSha256"]["value"] or run["configurationSha256"] != external["configurationSha256"]["value"]:
             error("external evidence metadata performance activation digest does not match the contract")
-        if run["guardVectorSha256"] not in acceptance["passingGuardVectorSha256"]:
-            error("external evidence metadata performance guard digest is not a frozen passing vector")
         warmup_start = integer_at(run["warmupStartMicros"], f"{path}.warmupStartMicros", 0)
         recording_start = integer_at(run["recordingStartMicros"], f"{path}.recordingStartMicros", 0)
         recording_end = integer_at(run["recordingEndMicros"], f"{path}.recordingEndMicros", 0)
@@ -639,8 +635,6 @@ def validate_performance_runs(acceptance: dict[str, Any], evidence: dict[str, An
         telemetry = exact_counter_record(run["telemetry"], f"{path}.telemetry", telemetry_fields)
         if telemetry["receivedSampleCount"] == 0 or telemetry["retainedSampleCount"] != telemetry["receivedSampleCount"] or any(telemetry[key] != 0 for key in ("overflowSampleCount", "incompleteSampleCount", "mismatchedSampleCount")):
             error("external evidence metadata performance telemetry is incomplete, mismatched, or overflowed")
-        if any(value != 0 for value in exact_counter_record(run["renderIo"], f"{path}.renderIo", render_io_fields).values()):
-            error("external evidence metadata performance render-I/O counters must all be zero")
     if observed != expected_runs:
         error("external evidence metadata performance runs are missing a required scenario/layout repetition")
 
@@ -664,35 +658,33 @@ def validate_resource_lifecycle(evidence: dict[str, Any]) -> None:
         error("external evidence metadata resource lifecycle must contain all ten post-destruction samples")
 
 
-def validate_negative_scenario(acceptance: dict[str, Any], evidence: dict[str, Any]) -> None:
-    scenarios = acceptance["negativeScenarios"]
-    if len(scenarios) != 1:
-        error("schema-v1 verifier requires exactly one frozen negative scenario")
-    expected = scenarios[0]
-    fields = {
-        "scenarioId", "activatedRevisionSha256", "configurationSha256", "guardVectorSha256",
-        "diagnostic", "action", "overlayDigestBefore", "overlayDigestAfter",
-        "performedCounters", "deniedCounters",
-    }
-    observed = exact_object(evidence["negativeScenario"], "external evidence metadata.negativeScenario", fields)
-    if observed["scenarioId"] != expected["id"] or observed["diagnostic"] != expected["expectedDiagnostic"] or observed["action"] != expected["expectedAction"]:
-        error("external evidence metadata negative scenario does not match the frozen diagnostic or action")
-    external = acceptance["externalDigests"]
-    for key in ("activatedRevisionSha256", "configurationSha256", "guardVectorSha256", "overlayDigestBefore", "overlayDigestAfter"):
-        sha256_at(observed[key], f"external evidence metadata.negativeScenario.{key}")
-    if observed["activatedRevisionSha256"] != external["activatedRevisionSha256"]["value"] or observed["configurationSha256"] != external["configurationSha256"]["value"] or observed["guardVectorSha256"] != expected["expectedGuardVectorSha256"] or observed["overlayDigestBefore"] != expected["overlayDigestBefore"] or observed["overlayDigestAfter"] != expected["overlayDigestAfter"]:
-        error("external evidence metadata negative scenario digests do not match the contract")
-    if observed["overlayDigestBefore"] != observed["overlayDigestAfter"]:
-        error("external evidence metadata negative scenario overlay digests must be equal")
-    counter_fields = {"filesystemReads", "filesystemWrites", "filesystemDirectoryScans", "resourceUploads"}
-    for name, expected_counters in (("performedCounters", expected["performedCountersExpected"]), ("deniedCounters", expected["deniedCountersExpected"])):
-        actual = exact_counter_record(observed[name], f"external evidence metadata.negativeScenario.{name}", counter_fields)
-        for key, expectation in expected_counters.items():
-            if expectation == "positive":
-                if actual[key] == 0:
-                    error("external evidence metadata negative scenario required denied counter is not positive")
-            elif actual[key] != expectation:
-                error("external evidence metadata negative scenario counters do not match the contract")
+def validate_ordinary_runtime_io_evidence(
+    acceptance: dict[str, Any], evidence: dict[str, Any]
+) -> None:
+    expected = acceptance["ordinaryRuntimeIo"]
+    observed = exact_object(
+        evidence["ordinaryRuntimeIo"],
+        "external evidence metadata.ordinaryRuntimeIo",
+        {"configuredLoadOperations", "renderCallbackOperations", "evidenceReference"},
+    )
+    configured = validate_ordinary_runtime_operations(
+        observed["configuredLoadOperations"],
+        "external evidence metadata.ordinaryRuntimeIo.configuredLoadOperations",
+    )
+    render = validate_ordinary_runtime_operations(
+        observed["renderCallbackOperations"],
+        "external evidence metadata.ordinaryRuntimeIo.renderCallbackOperations",
+    )
+    evidence_reference = opaque_id_at(
+        observed["evidenceReference"],
+        "external evidence metadata.ordinaryRuntimeIo.evidenceReference",
+    )
+    if (
+        configured != expected["configuredLoadOperations"]
+        or render != expected["renderCallbackOperations"]
+        or evidence_reference != expected["evidenceReference"]
+    ):
+        error("external evidence metadata ordinary runtime I/O observations do not match the contract")
 
 
 def validate_evidence(acceptance: dict[str, Any], evidence: dict[str, Any], expected_commit: str) -> None:
@@ -700,10 +692,10 @@ def validate_evidence(acceptance: dict[str, Any], evidence: dict[str, Any], expe
     evidence = exact_object(evidence, "external evidence metadata", {
         "schemaVersion", "recordId", "accessControlledLocalEvidenceId", "redactionStatus",
         "retentionUntil", "deletionProcedure", "completionEvidence", "screenshots",
-        "performanceRuns", "resourceLifecycle", "negativeScenario",
+        "performanceRuns", "resourceLifecycle", "ordinaryRuntimeIo",
     })
-    if evidence.get("schemaVersion") != SCHEMA_VERSION:
-        error("external evidence metadata.schemaVersion must be 1")
+    if evidence.get("schemaVersion") != EVIDENCE_SCHEMA_VERSION:
+        error("external evidence metadata.schemaVersion must be 2")
     physical = acceptance["physicalEvidence"]
     for key in ("recordId", "accessControlledLocalEvidenceId", "redactionStatus", "retentionUntil", "deletionProcedure"):
         if evidence.get(key) != physical.get(key):
@@ -757,7 +749,7 @@ def validate_evidence(acceptance: dict[str, Any], evidence: dict[str, Any], expe
         error("external evidence metadata must contain one screenshot metadata record per layout")
     validate_performance_runs(acceptance, evidence)
     validate_resource_lifecycle(evidence)
-    validate_negative_scenario(acceptance, evidence)
+    validate_ordinary_runtime_io_evidence(acceptance, evidence)
 
 
 def validate(contract_path: Path) -> None:
@@ -787,7 +779,7 @@ def verify(contract_path: Path, evidence_root_path: Path, expected_commit: str) 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     subcommands = parser.add_subparsers(dest="command", required=True)
-    validate_parser = subcommands.add_parser("validate", help="validate the committed schema-v1 contract")
+    validate_parser = subcommands.add_parser("validate", help="validate the committed schema-v2 acceptance contract")
     validate_parser.add_argument("--contract", required=True, type=Path)
     verify_parser = subcommands.add_parser("verify", help="validate completed external physical evidence")
     verify_parser.add_argument("--contract", required=True, type=Path)
@@ -801,7 +793,7 @@ def main() -> int:
     try:
         if arguments.command == "validate":
             validate(arguments.contract)
-            print("schema-v1 contract valid")
+            print("schema-v2 acceptance contract valid")
         else:
             verify(arguments.contract, arguments.evidence_root, arguments.expected_app_commit)
             print("physical SCURO acceptance evidence verified")

@@ -4714,7 +4714,13 @@ TEST_CASE("profile switch affects only the next chart") {
   git commit -m "feat: wire gameplay skin lifecycle"
   ```
 
-### Task 25: Close SCURO compatibility and physical-iPad acceptance
+### Task 25: Close ModernChic 4.6 compatibility and physical-iPad acceptance
+
+> **Superseded runtime-I/O policy:** The original render-transition denial,
+> overlay-digest, and same-frame-fallback requirements below are not Beatoraja
+> behavior. Task 25/26 now use the schema-v2 ordinary selected-root I/O record
+> in `modernchic-scuro-4.6-acceptance.md`; do not use the superseded negative
+> scenario as an acceptance condition.
 
 **Reference refresh:** reread every baseline file, then every task-specific Beatoraja file referenced by a remaining manifest gap. Rerun the source audit before changing code for a gap.
 
@@ -5093,16 +5099,16 @@ def test_physical_evidence_stays_external(self):
   aso_root="$(git rev-parse --show-toplevel)"
   beatoraja_ref_root="${ASOBMASHOW_BEATORAJA_ROOT:-$(cd "$aso_root/.." && pwd)/beatoraja}"
   python3 scripts/check_beatoraja_reference.py --root "$beatoraja_ref_root" --require-clean
-  : "${SCURO_ARCHIVE_PATH:?set external SCURO archive path}"
-  : "${SCURO_ARCHIVE_PACKAGE_PREFIX:?set . or the inferred wrapper}"
-  : "${SCURO_ARCHIVE_SHA256:?set pinned SCURO archive digest}"
-  : "${SCURO_SKIN_ROOT:?set corresponding extracted package root}"
+  : "${SKIN_ACCEPTANCE_ARCHIVE_PATH:?set external ModernChic archive path}"
+  : "${SKIN_ACCEPTANCE_ARCHIVE_PACKAGE_PREFIX:?set . or the inferred wrapper}"
+  : "${SKIN_ACCEPTANCE_ARCHIVE_SHA256:?set pinned ModernChic archive digest}"
+  : "${SKIN_ACCEPTANCE_ROOT:?set corresponding extracted package root}"
   python3 scripts/audit_beatoraja_skin.py \
     --beatoraja-root "$beatoraja_ref_root" \
-    --archive-path "$SCURO_ARCHIVE_PATH" \
-    --archive-package-prefix "$SCURO_ARCHIVE_PACKAGE_PREFIX" \
-    --skin-root "$SCURO_SKIN_ROOT" \
-    --expected-archive-sha256 "$SCURO_ARCHIVE_SHA256" \
+    --archive-path "$SKIN_ACCEPTANCE_ARCHIVE_PATH" \
+    --archive-package-prefix "$SKIN_ACCEPTANCE_ARCHIVE_PACKAGE_PREFIX" \
+    --skin-root "$SKIN_ACCEPTANCE_ROOT" \
+    --expected-archive-sha256 "$SKIN_ACCEPTANCE_ARCHIVE_SHA256" \
     --verify tests/fixtures/beatoraja_skin/reference_manifest.json
   ```
 
@@ -5150,23 +5156,23 @@ def test_physical_evidence_stays_external(self):
   aso_root="$(git rev-parse --show-toplevel)"
   beatoraja_ref_root="${ASOBMASHOW_BEATORAJA_ROOT:-$(cd "$aso_root/.." && pwd)/beatoraja}"
   python3 scripts/check_beatoraja_reference.py --root "$beatoraja_ref_root" --require-clean
-  : "${SCURO_ARCHIVE_PATH:?set external SCURO archive path}"
-  : "${SCURO_ARCHIVE_PACKAGE_PREFIX:?set . or the inferred wrapper}"
-  : "${SCURO_ARCHIVE_SHA256:?set pinned SCURO archive digest}"
-  : "${SCURO_SKIN_ROOT:?set corresponding extracted package root}"
-  : "${SCURO_ACCEPTANCE_EVIDENCE_ROOT:?set external physical-iPad evidence root}"
+  : "${SKIN_ACCEPTANCE_ARCHIVE_PATH:?set external ModernChic archive path}"
+  : "${SKIN_ACCEPTANCE_ARCHIVE_PACKAGE_PREFIX:?set . or the inferred wrapper}"
+  : "${SKIN_ACCEPTANCE_ARCHIVE_SHA256:?set pinned ModernChic archive digest}"
+  : "${SKIN_ACCEPTANCE_ROOT:?set corresponding extracted package root}"
+  : "${SKIN_ACCEPTANCE_EVIDENCE_ROOT:?set external physical-iPad evidence root}"
   : "${MEASUREMENT_COMMIT:?set Task 25 measurement commit}"
   test -z "$(git diff --name-only "$MEASUREMENT_COMMIT" | rg -v '^(docs/skin-compat/modernchic-scuro-4\.6-acceptance\.md|tests/fixtures/beatoraja_skin/reference_manifest\.json)$')"
   python3 scripts/run_skin_acceptance.py verify \
     --contract tests/fixtures/beatoraja_skin/reference_manifest.json \
-    --evidence-root "$SCURO_ACCEPTANCE_EVIDENCE_ROOT" \
+    --evidence-root "$SKIN_ACCEPTANCE_EVIDENCE_ROOT" \
     --expected-app-commit "$MEASUREMENT_COMMIT"
   python3 scripts/audit_beatoraja_skin.py \
     --beatoraja-root "$beatoraja_ref_root" \
-    --archive-path "$SCURO_ARCHIVE_PATH" \
-    --archive-package-prefix "$SCURO_ARCHIVE_PACKAGE_PREFIX" \
-    --skin-root "$SCURO_SKIN_ROOT" \
-    --expected-archive-sha256 "$SCURO_ARCHIVE_SHA256" \
+    --archive-path "$SKIN_ACCEPTANCE_ARCHIVE_PATH" \
+    --archive-package-prefix "$SKIN_ACCEPTANCE_ARCHIVE_PACKAGE_PREFIX" \
+    --skin-root "$SKIN_ACCEPTANCE_ROOT" \
+    --expected-archive-sha256 "$SKIN_ACCEPTANCE_ARCHIVE_SHA256" \
     --verify tests/fixtures/beatoraja_skin/reference_manifest.json
   python3 -m unittest tests/skin_acceptance_contract_tests.py tests/ios_release_workflow_tests.py tests/ios_build_setup_tests.py tests/ios_artifact_audit_tests.py -v
   cmake --build cmake-build-debug -j 6
@@ -5195,8 +5201,8 @@ def test_physical_evidence_stays_external(self):
 
 **Interfaces:**
 
-- Consumes: explicit `SCURO_ARCHIVE_PATH`, `SCURO_ARCHIVE_PACKAGE_PREFIX`, `SCURO_ARCHIVE_SHA256`, `SCURO_SKIN_ROOT`, `SCURO_ACCEPTANCE_EVIDENCE_ROOT`, `SCURO_MEASUREMENT_COMMIT`, pinned Beatoraja root, Task 25's clean evidence-closure commit, and the measurement commit recorded in the manifest.
-- Produces: a code-reviewed `REVIEWED_COMMIT` plus one docs-only descendant `FINAL_COMMIT` for which the opt-in external audit, physical-evidence verifier bound to `SCURO_MEASUREMENT_COMMIT`, Python contracts, full CTest suite, desktop target, and unsigned iOS verification all exit 0. The final diff may contain only the review record and its acceptance-document link; no command rewrites evidence, deploys, or uploads.
+- Consumes: explicit `SKIN_ACCEPTANCE_ARCHIVE_PATH`, `SKIN_ACCEPTANCE_ARCHIVE_PACKAGE_PREFIX`, `SKIN_ACCEPTANCE_ARCHIVE_SHA256`, `SKIN_ACCEPTANCE_ROOT`, `SKIN_ACCEPTANCE_EVIDENCE_ROOT`, `SKIN_ACCEPTANCE_MEASUREMENT_COMMIT`, pinned Beatoraja root, Task 25's clean evidence-closure commit, and the measurement commit recorded in the manifest.
+- Produces: a code-reviewed `REVIEWED_COMMIT` plus one docs-only descendant `FINAL_COMMIT` for which the opt-in external audit, physical-evidence verifier bound to `SKIN_ACCEPTANCE_MEASUREMENT_COMMIT`, Python contracts, full CTest suite, desktop target, and unsigned iOS verification all exit 0. The final diff may contain only the review record and its acceptance-document link; no command rewrites evidence, deploys, or uploads.
 
 - [ ] **Step 1: Refresh the pinned Beatoraja reference** — Run the mandatory checker (or Task 1 bootstrap), reopen every file in this task's **Reference refresh** from `beatoraja_ref_root`, and record the pinned path/symbol/behavior before writing the test or editing production code.
 
@@ -5225,31 +5231,31 @@ test "$(git rev-parse HEAD)" = "$REVIEWED_COMMIT"
   beatoraja_ref_root="${ASOBMASHOW_BEATORAJA_ROOT:-$(cd "$aso_root/.." && pwd)/beatoraja}"
   python3 scripts/check_beatoraja_reference.py --root "$beatoraja_ref_root" --require-clean
 
-  : "${SCURO_ARCHIVE_PATH:?set external SCURO archive path}"
-  : "${SCURO_ARCHIVE_PACKAGE_PREFIX:?set . or the inferred wrapper}"
-  : "${SCURO_ARCHIVE_SHA256:?set pinned SCURO archive digest}"
-  : "${SCURO_SKIN_ROOT:?set external extracted SCURO root}"
-  : "${SCURO_ACCEPTANCE_EVIDENCE_ROOT:?set external evidence root}"
-  : "${SCURO_MEASUREMENT_COMMIT:?set Task 25 measured app commit}"
+  : "${SKIN_ACCEPTANCE_ARCHIVE_PATH:?set external ModernChic archive path}"
+  : "${SKIN_ACCEPTANCE_ARCHIVE_PACKAGE_PREFIX:?set . or the inferred wrapper}"
+  : "${SKIN_ACCEPTANCE_ARCHIVE_SHA256:?set pinned ModernChic archive digest}"
+  : "${SKIN_ACCEPTANCE_ROOT:?set external extracted ModernChic root}"
+  : "${SKIN_ACCEPTANCE_EVIDENCE_ROOT:?set external evidence root}"
+  : "${SKIN_ACCEPTANCE_MEASUREMENT_COMMIT:?set Task 25 measured app commit}"
 
   FINAL_COMMIT="$(git rev-parse HEAD)"
   REVIEWED_COMMIT="$(git rev-parse HEAD^)"
   test -z "$(git status --porcelain)"
-  test -z "$(git diff --name-only "$REVIEWED_COMMIT" "$FINAL_COMMIT" | rg -v '^(docs/skin-compat/beatoraja-lua-gameplay-final-review\.md|docs/skin-compat/modernchic-scuro-4\.02-acceptance\.md)$')"
-  test "$(shasum -a 256 "$SCURO_ARCHIVE_PATH" | awk '{print $1}')" = "$SCURO_ARCHIVE_SHA256"
+  test -z "$(git diff --name-only "$REVIEWED_COMMIT" "$FINAL_COMMIT" | rg -v '^(docs/skin-compat/beatoraja-lua-gameplay-final-review\.md|docs/skin-compat/modernchic-scuro-4\.6-acceptance\.md)$')"
+  test "$(shasum -a 256 "$SKIN_ACCEPTANCE_ARCHIVE_PATH" | awk '{print $1}')" = "$SKIN_ACCEPTANCE_ARCHIVE_SHA256"
 
   python3 scripts/audit_beatoraja_skin.py \
     --beatoraja-root "$beatoraja_ref_root" \
-    --archive-path "$SCURO_ARCHIVE_PATH" \
-    --archive-package-prefix "$SCURO_ARCHIVE_PACKAGE_PREFIX" \
-    --skin-root "$SCURO_SKIN_ROOT" \
-    --expected-archive-sha256 "$SCURO_ARCHIVE_SHA256" \
+    --archive-path "$SKIN_ACCEPTANCE_ARCHIVE_PATH" \
+    --archive-package-prefix "$SKIN_ACCEPTANCE_ARCHIVE_PACKAGE_PREFIX" \
+    --skin-root "$SKIN_ACCEPTANCE_ROOT" \
+    --expected-archive-sha256 "$SKIN_ACCEPTANCE_ARCHIVE_SHA256" \
     --verify tests/fixtures/beatoraja_skin/reference_manifest.json
 
   python3 scripts/run_skin_acceptance.py verify \
     --contract tests/fixtures/beatoraja_skin/reference_manifest.json \
-    --evidence-root "$SCURO_ACCEPTANCE_EVIDENCE_ROOT" \
-    --expected-app-commit "$SCURO_MEASUREMENT_COMMIT"
+    --evidence-root "$SKIN_ACCEPTANCE_EVIDENCE_ROOT" \
+    --expected-app-commit "$SKIN_ACCEPTANCE_MEASUREMENT_COMMIT"
 
   python3 -m unittest \
     tests/beatoraja_skin_reference_tests.py \

@@ -95,12 +95,7 @@
       },
       {
         "evidenceReference": null,
-        "id": "sandbox",
-        "status": "pending"
-      },
-      {
-        "evidenceReference": null,
-        "id": "same-frame-fallback",
+        "id": "selected-root-runtime-io",
         "status": "pending"
       },
       {
@@ -186,10 +181,6 @@
       }
     ],
     "limits": {
-      "activeRenderFilesystemDirectoryScans": 0,
-      "activeRenderFilesystemReads": 0,
-      "activeRenderFilesystemWrites": 0,
-      "activeRenderResourceUploads": 0,
       "liveResourceGrowthAfterTenExits": 0,
       "missedPresentationPercent": 0.5,
       "p99SkinCpuFrameFraction": 0.9,
@@ -203,39 +194,12 @@
         "sourceClean": null
       }
     },
-    "negativeScenarios": [
-      {
-        "auditedGuardConfigurationSha256": "afb7be52dd8e384f7a030ce4a419fed24c1a261ef2254f7008a6f70ded370ef2",
-        "criticality": "session-critical-sandbox-integrity",
-        "deniedCountersExpected": {
-          "filesystemDirectoryScans": 0,
-          "filesystemReads": "positive",
-          "filesystemWrites": 0,
-          "resourceUploads": 0
-        },
-        "expectedAction": "discard_frame_disable_session_same_frame_builtin",
-        "expectedDeniedOperation": "filesystemRead",
-        "expectedDiagnostic": "skin_file_render_phase_denied",
-        "expectedGuardVectorSha256": "08d59b63dc1ed53154ac07baa9d5c72d2a0111ea8a5fd451f8ebc149537009bb",
-        "guardConfigurationId": "configuration-239e9833572d3000b43903c1",
-        "id": "scenario-f7395bddf2b0f715a900b5cd",
-        "overlayDigestAfter": "pending",
-        "overlayDigestAfterCapture": "asynchronous-after-session-teardown",
-        "overlayDigestBefore": "pending",
-        "overlayDigestBeforeCapture": "complete-before-chart-session-bind",
-        "overlayDigestComparison": "equal",
-        "overlayDigestPolling": "memory-only-precomputed-status",
-        "performedCountersExpected": {
-          "filesystemDirectoryScans": 0,
-          "filesystemReads": 0,
-          "filesystemWrites": 0,
-          "resourceUploads": 0
-        }
-      }
-    ],
-    "passingGuardVectorSha256": [
-      "38fe362a92f6ca0109effaa706d1ec42d6b08d28a394db738d2bccd8f63f7450"
-    ],
+    "ordinaryRuntimeIo": {
+      "configuredLoadOperations": [],
+      "evidenceReference": null,
+      "renderCallbackOperations": [],
+      "status": "pending"
+    },
     "physicalEvidence": {
       "accessControlledLocalEvidenceId": null,
       "deletionProcedure": null,
@@ -259,7 +223,7 @@
         "top": null
       }
     },
-    "schemaVersion": 1,
+    "schemaVersion": 2,
     "screenshotTimestamps": [
       {
         "aspect": "16:9",
@@ -3869,17 +3833,6 @@
     "customTimers": 0
   },
   "selectedFileIoSurface": {
-    "asoBMaShowPolicy": {
-      "authority": "AsoBMaShow",
-      "denyBeforeEffect": true,
-      "dirtyHandleTransition": "validation-failure",
-      "externalIdentitySerialization": "opaque-ids-and-digests-only",
-      "nestedWriteParentCreation": "safe-automatic-overlay-parents",
-      "performedAndDeniedCountersSeparate": true,
-      "postTransitionOperationCriticality": "session-critical",
-      "renderTransitionHandles": "invalidate-release-read-buffers-discard-unclosed-write-buffers",
-      "serializationOrder": "deterministic"
-    },
     "auditedGuardConfigurations": [
       {
         "auditedGuardConfigurationSha256": "acb619e78fb3d8435fd7486f815fd54deccfa4bbe5dbf7b1d2d0796452559256",
@@ -3951,7 +3904,6 @@
       },
       "evaluator": "bounded-return-model-v1"
     },
-    "negativeExpectedDeniedOperation": "filesystemRead",
     "runtimeConfigurationBinding": {
       "algorithm": "opaque-header-option-choice-v1",
       "entrySha256": "aac73c59526e74f159731608b3b54e58a7e534537503acb88565a4c175cf8f13",

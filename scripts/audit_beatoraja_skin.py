@@ -24,7 +24,6 @@ TREE_DOMAIN = b"ASOBMSKIN-TREE-V1\0"
 SELECTED_LUA_CLOSURE_DOMAIN = b"ASOBMSKIN-SELECTED-LUA-CLOSURE-V1\0"
 AUDITED_EFFECTIVE_CONFIGURATION_DOMAIN = b"ASOBMSKIN-AUDITED-EFFECTIVE-CONFIG-V2\0"
 OPAQUE_GUARD_VECTOR_DOMAIN = b"ASOBMSKIN-OPAQUE-GUARD-VECTOR-V2\0"
-RENDER_IO_NEGATIVE_SCENARIO_ID = "scenario-f7395bddf2b0f715a900b5cd"
 REDISTRIBUTABLE_SYNTHETIC_FIXTURE_PATHS = (
     "charts/acceptance_7k.bms",
     "charts/acceptance_bga_base.png",
@@ -2609,16 +2608,6 @@ def _analyze_selected_file_io_surface_unpinned(
         guard_bindings,
     )
     render_phases = bool(guard_bindings)
-    negative = next((item for item in configurations if item["role"] == "negative"), None)
-    negative_operation = None
-    if negative is not None:
-        reachable = [item for item in negative["guardVector"] if item["value"] == "reachable"]
-        if len(reachable) != 1:
-            raise AuditError("negative render-I/O configuration must reach exactly one guard")
-        negative_binding = next(
-            item for item in guard_bindings if item["guardId"] == reachable[0]["guardId"]
-        )
-        negative_operation = negative_binding["orderedOperationKinds"][0]
     selected = {
         "schemaVersion": 1,
         "authority": "audited-upstream-selected-closure",
@@ -2700,18 +2689,6 @@ def _analyze_selected_file_io_surface_unpinned(
             "customObjectMaps": custom_object_maps,
         },
         "auditedGuardConfigurations": configurations,
-        "negativeExpectedDeniedOperation": negative_operation,
-        "asoBMaShowPolicy": {
-            "authority": "AsoBMaShow",
-            "nestedWriteParentCreation": "safe-automatic-overlay-parents",
-            "renderTransitionHandles": "invalidate-release-read-buffers-discard-unclosed-write-buffers",
-            "dirtyHandleTransition": "validation-failure",
-            "postTransitionOperationCriticality": "session-critical",
-            "denyBeforeEffect": True,
-            "performedAndDeniedCountersSeparate": True,
-            "externalIdentitySerialization": "opaque-ids-and-digests-only",
-            "serializationOrder": "deterministic",
-        },
     }
     return selected, custom_object_maps
 
@@ -3148,7 +3125,6 @@ def acceptance_contract(
     tree_sha: str,
     entry_sha: str,
     selected_lua_closure_sha: str,
-    selected_file_io_surface: dict,
 ) -> dict:
     layouts = [
         {"aspect": aspect, "mode": mode, "status": "pending", "evidenceReference": None}
@@ -3160,58 +3136,10 @@ def acceptance_contract(
         "zip-install", "folder-import", "manual-files-install", "entry-discovery",
         "configuration-persistence", "seven-key-gameplay", "bga-and-hud",
         "fit-layout", "stretch-layout", "custom-layout", "compatibility-diagnostics",
-        "sandbox", "same-frame-fallback", "built-in-renderer-regression", "performance",
+        "selected-root-runtime-io", "built-in-renderer-regression", "performance",
     )
-    configurations = selected_file_io_surface["auditedGuardConfigurations"]
-    passing_vectors = [
-        item["guardVectorSha256"] for item in configurations if item["role"] == "passing"
-    ]
-    negative_configurations = [item for item in configurations if item["role"] == "negative"]
-    negative_scenarios = []
-    if negative_configurations:
-        negative = negative_configurations[0]
-        denied_operation = selected_file_io_surface["negativeExpectedDeniedOperation"]
-        denied_counter = {
-            "filesystemRead": "filesystemReads",
-            "filesystemWrite": "filesystemWrites",
-            "filesystemDirectoryScan": "filesystemDirectoryScans",
-        }.get(denied_operation)
-        if denied_counter is None:
-            raise AuditError("negative render-I/O scenario has no supported denied counter")
-        denied_counters = {
-            "filesystemReads": 0,
-            "filesystemWrites": 0,
-            "filesystemDirectoryScans": 0,
-            "resourceUploads": 0,
-        }
-        denied_counters[denied_counter] = "positive"
-        negative_scenarios.append(
-            {
-                "id": RENDER_IO_NEGATIVE_SCENARIO_ID,
-                "guardConfigurationId": negative["id"],
-                "auditedGuardConfigurationSha256": negative["auditedGuardConfigurationSha256"],
-                "expectedGuardVectorSha256": negative["guardVectorSha256"],
-                "expectedDeniedOperation": denied_operation,
-                "expectedDiagnostic": "skin_file_render_phase_denied",
-                "expectedAction": "discard_frame_disable_session_same_frame_builtin",
-                "criticality": "session-critical-sandbox-integrity",
-                "performedCountersExpected": {
-                    "filesystemReads": 0,
-                    "filesystemWrites": 0,
-                    "filesystemDirectoryScans": 0,
-                    "resourceUploads": 0,
-                },
-                "deniedCountersExpected": denied_counters,
-                "overlayDigestBeforeCapture": "complete-before-chart-session-bind",
-                "overlayDigestAfterCapture": "asynchronous-after-session-teardown",
-                "overlayDigestComparison": "equal",
-                "overlayDigestPolling": "memory-only-precomputed-status",
-                "overlayDigestBefore": "pending",
-                "overlayDigestAfter": "pending",
-            }
-        )
     return {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "hardwareModel": pending_field("non-unique model identifier required"),
         "iPadOS": pending_field("exact version required"),
         "drawableSize": pending_field({"width": None, "height": None}),
@@ -3259,18 +3187,18 @@ def acceptance_contract(
             "observedOrder": [],
             "evidenceReference": None,
         },
-        "passingGuardVectorSha256": passing_vectors,
-        "negativeScenarios": negative_scenarios,
+        "ordinaryRuntimeIo": {
+            "status": "pending",
+            "configuredLoadOperations": [],
+            "renderCallbackOperations": [],
+            "evidenceReference": None,
+        },
         "protocol": {"warmupSeconds": 30, "measurementSeconds": 180, "repetitions": 3},
         "layouts": layouts,
         "limits": {
             "p99SkinCpuFrameFraction": 0.9,
             "missedPresentationPercent": 0.5,
             "residentMemoryDriftMiB": 32,
-            "activeRenderFilesystemReads": 0,
-            "activeRenderFilesystemWrites": 0,
-            "activeRenderFilesystemDirectoryScans": 0,
-            "activeRenderResourceUploads": 0,
             "liveResourceGrowthAfterTenExits": 0,
         },
         "completionCriteria": [
@@ -3351,7 +3279,6 @@ def build_manifest(arguments, archive_data, disk_tree_sha, provenance, target: T
             disk_tree_sha,
             entry_sha,
             closure_contract["sha256"],
-            selected_file_io_surface,
         ),
         "redistributableSyntheticFixtureDigests": redistributable_synthetic_fixture_digests(),
         "entries": [

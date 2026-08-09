@@ -1,7 +1,7 @@
 # ModernChic/SCURO 4.6 acceptance record
 
 Status: **pending**. Task 1 pins the source/package contract; milestone closure
-requires every schema-v1 completion criterion to be `pass` with external
+requires every schema-v2 completion criterion to be `pass` with external
 evidence.
 
 ## Official package provenance
@@ -47,80 +47,33 @@ Decision for this project:
 - any later public screenshot publication requires a separate review of the
   captured third-party content and attribution.
 
-## Frozen acceptance schema version 1
+## Frozen acceptance schema version 2
 
 The machine-readable source of truth is
-`tests/fixtures/beatoraja_skin/reference_manifest.json`. It freezes these
-requirements before renderer work:
+`tests/fixtures/beatoraja_skin/reference_manifest.json`. It freezes the
+archive, payload-tree, selected-entry, selected-closure, configuration and
+activated-revision identities; non-identifying device/display/build records;
+the five redistributable fixture digests; four chart/autoplay scenarios; six
+Fit/Stretch/Custom layouts; the 30-second warm-up and three 180-second runs;
+and resource-lifecycle limits. Third-party payloads, host paths, screenshot
+bytes, and personal identifiers remain outside Git.
 
-- a non-unique iPad hardware model identifier, exact iPadOS version, drawable
-  width/height, safe insets, and actual configured refresh rate;
-- a clean measurement build commit/configuration;
-- exact external archive, payload-tree, selected-entry, configuration, and
-  activated-revision digests, plus the exact selected Lua closure digest over
-  every loaded virtual identity and exact source byte, with configuration and
-  activated-revision values explicitly pending until physical evidence exists;
-- exact checked-in digests for the five redistributable synthetic BMS/BGA
-  fixture files, independently of the still-pending scenario bindings; and
-- still-pending synthetic chart hashes and fixed autoplay-script hashes for
-  normal notes, every supported LN/CN/HCN phase, BPM/stop/scroll changes,
-  chords, all judgment grades, combo breaks, gauge thresholds/failure, lane
-  cover, BGA transitions, and song end;
-- screenshot timestamps and a per-layout external evidence reference, without
-  image bytes in Git;
-- an explicit proof that the selected configured model has zero custom-timer
-  and custom-event map entries, while synthetic evidence documents the pinned
-  `IntMap` RNG-dependent order and AsoBMaShow's deterministic authored-order
-  divergence for future nonempty maps;
-- an opaque aggregate of every selected `dofile`/`io.open` mode, handle method,
-  load/render reachability, and configuration guard without external paths or
-  option labels;
-- a frozen session-critical negative render-I/O scenario with exact
-  diagnostic/fallback, a before overlay digest completed asynchronously before
-  chart/session binding, an after digest computed only after session teardown,
-  required digest equality, memory-only timed-path polling, the selected
-  denied-operation kind, and expected/observed canonical opaque guard-vector
-  digests for both negative and passing configurations;
-- all six 16:9 and 4:3 Fit/Stretch/Custom layout cases;
-- a 30-second warm-up followed by three complete 180-second repetitions for
-  every scenario/layout; and
-- `pending|pass|fail` plus an evidence reference for every completion criterion.
+`ordinaryRuntimeIo` is the source-aligned runtime record. The pinned
+`SkinLuaAccessor.RestrictedIoLib` bounds paths lexically to the selected skin
+root, then performs normal reads/writes/directory operations there; the pinned
+`LuaSkinLoader` reloads the live selected closure. A completed manual run may
+therefore record observed selected-root reads, writes, and directory scans from
+configured load or render callbacks. It does not require a file-I/O denial,
+guard digest, overlay digest, synthetic counter, or built-in fallback. The
+observation stores only canonical operation kinds and an opaque evidence ID.
 
 The limits are p99 skin CPU time at or below 90% of the actual refresh interval,
-missed presentations at or below 0.5%, zero performed and zero denied
-active-render filesystem reads, writes, directory scans, or resource uploads
-for every passing run, no live texture/resource growth after ten completed
-exits, and no more than 32 MiB resident-memory drift after warm-up. The negative
-probe still requires every performed counter to remain zero and only its frozen
-denied-operation counter to become nonzero.
-
-The passing audit vector is
-`38fe362a92f6ca0109effaa706d1ec42d6b08d28a394db738d2bccd8f63f7450`;
-both opaque render-I/O guards are `not-reachable`. The negative audit vector is
-`08d59b63dc1ed53154ac07baa9d5c72d2a0111ea8a5fd451f8ebc149537009bb`;
-exactly one guard is `reachable`, its first post-transition attempt is the
-frozen `filesystemRead` kind, and the other guard remains `not-reachable`.
-These values are static, domain-separated evidence over the selected revision,
-entry, effective opaque runtime option/choice selections, and guard outcomes.
-They do not replace the still-pending physical `SkinConfigurationDigestV1`
-value.
-
-The selected-closure digest is an input gate, not evidence inferred from the
-Lua scanner. It is domain-separated and canonically ordered; only its digest is
-stored. All configured-model and retained-operation evidence is conditional on
-an exact match. Any closure byte/path/add/remove change requires explicit
-manifest and acceptance review. The scanner tests characterize
-this pinned SCURO 4.6 closure and do not claim general Lua verification.
-
-The negative run must deny the read before effect, emit
-`skin_file_render_phase_denied`, discard that frame, disable the skin session,
-and present the initialized built-in renderer in the same frame. Its performed
-read/write/directory-scan/resource-upload counters remain zero; only the denied
-read counter becomes positive. The before overlay digest must complete
-asynchronously before chart/session binding; the after digest is computed only
-after session teardown, and the two digests must be equal. Timed-path polling
-is memory-only over precomputed status. Both digest values remain pending until
-the physical run is recorded.
+missed presentations at or below 0.5%, no live texture/resource growth after
+ten completed exits, and no more than 32 MiB resident-memory drift after
+warm-up. The selected-closure digest remains an input gate: a closure byte or
+identity change requires explicit manifest and acceptance review. The scanner
+characterizes this pinned ModernChic 4.6 closure only; it is not a general Lua
+verifier.
 
 Task 1 permits `pending`. Final acceptance permits only `pass`.
 
@@ -147,15 +100,14 @@ measurement commit, matching external metadata, and an evidence root that is
 not contained by the repository. The external JSON has a fixed top-level
 schema: completion IDs, six screenshot metadata records, all three complete
 180-second repetitions for every frozen scenario/layout after its 30-second
-warm-up, the bounded per-run telemetry/CPU/missed-presentation/memory/render-I/O
-facts, a baseline plus exactly ten post-destruction resource samples, and the
-single frozen negative-sandbox result. It carries no provenance URL, host path,
-account, device name, UDID, image payload, or unrecognized field. Each run is
-bound to the manifest's chart/autoplay, activation/configuration, and expected
-guard-vector digests; the verifier rejects overflows, incomplete/mismatched
-samples, nonzero passing render-I/O counters, threshold violations, resource
-growth, or a negative result that differs from its exact diagnostic, action,
-counter, or equal-overlay-digest contract.
+warm-up, the bounded per-run telemetry/CPU/missed-presentation/memory facts, a
+baseline plus exactly ten post-destruction resource samples, and the single
+ordinary selected-root I/O observation. It carries no provenance URL, host
+path, account, device name, UDID, image payload, or unrecognized field. Each
+run is bound to the manifest's chart/autoplay and activation/configuration
+digests. The verifier rejects overflows, incomplete/mismatched samples,
+threshold violations, resource growth, or an I/O observation that differs from
+the opaque, canonical operation record in the contract.
 
 ### Resident-memory provenance
 
@@ -166,7 +118,7 @@ resource bytes. Schema-v1 external evidence deliberately remains stricter and
 requires a measured numeric `residentBytes` value for its baseline and every
 post-destruction sample. Consequently, an export with omitted residency remains
 honest but cannot satisfy final physical acceptance until a real process-memory
-measurement is supplied. This preserves the frozen schema-v1 compatibility
+measurement is supplied. This preserves the frozen schema-v2 compatibility
 contract rather than treating unmeasured memory as proof of no drift.
 
 ## Audited compatibility decision and remaining work
@@ -180,5 +132,5 @@ the corresponding closed non-Java virtual File behavior; URL/HTTP,
 Java/reflection, controllers/input, native access, host paths, and every
 unaudited class/member remain denied. Physical screenshots remain permitted by
 the author terms, but no screenshot counts as passing evidence until the exact
-facade, restricted `dofile`/`io.open`, renderer, sandbox, and all other
-schema-v1 criteria are implemented and pass.
+facade, selected-root `dofile`/`io.open`, renderer, and all other
+schema-v2 criteria are implemented and pass.

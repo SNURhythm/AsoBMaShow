@@ -279,31 +279,22 @@ void testPurposeSpecificBudgetsAreFixed() {
          "one frame gets 6 milliseconds of callback wall time");
 }
 
-void testRuntimeContractsUseFrozenAuthoritiesAndProvenance() {
+void testRuntimeContractsUseSourceAuthoritiesAndProvenance() {
   const auto manifest =
       readFixture("tests/fixtures/beatoraja_skin/reference_manifest.json");
-  const auto policy =
-      readFixture("tests/fixtures/beatoraja_skin/policies/lua_sandbox_v1.json");
   const auto legacyTrace = readFixture(
       "tests/fixtures/beatoraja_skin/traces/legacy_lua_upstream_v1.json");
   const auto provenance = readFixture("tests/fixtures/beatoraja_skin/packages/"
                                       "runtime_contract/provenance.json");
 
-  expect(!manifest.empty() && !policy.empty() && !legacyTrace.empty() &&
-             !provenance.empty(),
-         "runtime consumes committed audit, policy, trace, and provenance");
-  expect(
-      policy.find(
-          "ccfd3ed2e67b991815aefe000fbc221b37064366bd37c148ea2504c0e423a8ed") !=
-          std::string::npos,
-      "sandbox authority remains bound to the audited selected surface");
-  for (const auto capability :
-       {"package-text-dofile", "restricted-io-open", "legacy-file-list",
-        "legacy-overlay-mkdir", "network", "reflection", "native-access",
-        "process-execution", "unaudited-legacy-surface"}) {
-    expect(policy.find(capability) != std::string::npos,
-           "runtime authority names every allowed and denied capability");
-  }
+  expect(!manifest.empty() && !legacyTrace.empty() && !provenance.empty(),
+         "runtime consumes committed audit, trace, and provenance");
+  expect(manifest.find("\"schemaVersion\": 2") != std::string::npos,
+         "runtime fixture uses the schema-v2 acceptance contract");
+  expect(manifest.find("ordinaryRuntimeIo") != std::string::npos,
+         "runtime fixture records ordinary selected-root I/O");
+  expect(manifest.find("negativeScenarios") == std::string::npos,
+         "runtime fixture does not preserve a synthetic render-I/O denial");
   expect(provenance.find("c2ed5db1a46145ed10790c3872f717e95b59db9d") !=
              std::string::npos,
          "runtime fixtures record the pinned source commit");
@@ -1048,6 +1039,7 @@ void testDirtyTransitionInvalidatesAllHandlesWithoutOverlayMutation() {
 } // namespace
 
 int main() {
+  testRuntimeContractsUseSourceAuthoritiesAndProvenance();
   testFilesystemReadsTheSelectedEntryWithoutAHostPath();
   testStrictTwoPhaseStateMachineUsesOneState();
   testMainStateAccessorsOpenOnlyAtRenderTransition();
