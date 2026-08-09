@@ -3,7 +3,6 @@
 #include "BuiltInPlayfieldPresentation.h"
 
 #include <algorithm>
-#include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -20,16 +19,13 @@ PlayfieldProjectionRequest initialProjectionRequest(
   };
 }
 
-bool isJudgeEvent(const ReplayEvent &event) noexcept {
-  return event.judgement != None;
+bool isLongNote(const ChartVisualNote &note) noexcept {
+  return note.kind == ChartVisualNoteKind::LongHead ||
+         note.kind == ChartVisualNoteKind::LongTail;
 }
 
-bool isLongHead(const ChartVisualNote &note) noexcept {
-  return note.kind == ChartVisualNoteKind::LongHead;
-}
-
-bool isLongTail(const ChartVisualNote &note) noexcept {
-  return note.kind == ChartVisualNoteKind::LongTail;
+bool isClassicLongNote(const ChartVisualNote &note) noexcept {
+  return note.longNoteMode == ChartLongNoteMode::LN;
 }
 
 } // namespace
@@ -47,6 +43,9 @@ ReplayPlayfieldPresentation::ReplayPlayfieldPresentation(
     throw std::invalid_argument(
         "ReplayPlayfieldPresentation requires a coordinator and BMSRenderer");
   }
+  for (const auto &note : chartModel_->notes) {
+    noteStates_.emplace(note.id, NotePresentationState{.id = note.id});
+  }
   events_ = std::make_unique<PlayfieldPresentationEventFanout>(*state_,
                                                                  *coordinator_);
 }
@@ -59,6 +58,7 @@ ReplayPlayfieldPresentationCreateResult ReplayPlayfieldPresentation::create(
       buildPlayfieldChartVisualModel(creation.chart, creation.chart.Meta.LnMode));
   auto state = std::make_unique<PlayfieldVisualStateStore>(*model);
   state->setConfiguration(creation.configuration);
+  state->setReplayTouchSamples(creation.replayTouchSamples);
 
   auto builtIn = createBuiltInPlayfieldPresentation({
       .chart = creation.chart,
@@ -132,101 +132,199 @@ void ReplayPlayfieldPresentation::applyAuthorityUpdate(
   state_->applyAuthorityUpdate(authority_);
 }
 
-std::optional<ChartVisualId>
-ReplayPlayfieldPresentation::replayNoteId(const ReplayEvent &event) const {
+const ChartVisualNote *
+ReplayPlayfieldPresentation::replayNote(const ReplayEvent &event) const {
+  if (event.noteTimeMicros < 0) {
+    return nullptr;
+  }
   const auto timeline = std::ranges::find_if(
       chartModel_->timelines, [&event](const ChartVisualTimeline &value) {
         return value.timeMicros == event.noteTimeMicros;
       });
   if (timeline == chartModel_->timelines.end()) {
-    return std::nullopt;
+    return nullptr;
   }
   const auto note = std::ranges::find_if(
       chartModel_->notes, [&event, timeline](const ChartVisualNote &value) {
         return value.timelineId == timeline->id && value.lane == event.lane &&
                value.source == ChartVisualNoteSource::Playable;
       });
-  return note == chartModel_->notes.end() ? std::nullopt
-                                         : std::optional<ChartVisualId>(note->id);
+  return note == chartModel_->notes.end() ? nullptr : &*note;
 }
 
-void ReplayPlayfieldPresentation::applyReplayNote(const ReplayEvent &event,
-                                                   bool judged, bool dead,
-                                                   bool longActive) {
-  const auto id = replayNoteId(event);
-  if (!id) {
-    return;
-  }
-  state_->setNoteState({.id = *id,
-                       .judged = judged,
-                       .dead = dead,
-                       .playedTimeMicros = judged ? event.judgeTimeMicros
-                                                   : kPlayfieldTimestampOff,
-                       .longActive = longActive});
+NotePresentationState *
+ReplayPlayfieldPresentation::noteState(ChartVisualId id) noexcept {
+  const auto it = noteStates_.find(id);
+  return it == noteStates_.end() ? nullptr : &it->second;
 }
 
-void ReplayPlayfieldPresentation::applyReplayEvent(
-    const ReplayEvent &event, const PlayfieldJudgeEventClock &clock,
-    bool recordTimingSample) {
-  const JudgeResult judge(event.judgement, event.diffMicros);
-  const auto applyJudge = [&] {
-    if (isJudgeEvent(event)) {
-      events_->onJudge(judge, event.combo, event.score, clock,
-                       recordTimingSample);
-    }
-  };
-
-  switch (event.action) {
-  case ReplayEventAction::MultiBad:
-    applyReplayNote(event, true, true, false);
-    applyJudge();
-    break;
-  case ReplayEventAction::Press: {
-    const auto id = replayNoteId(event);
-    bool longHead = false;
-    if (id) {
-      const auto note = std::ranges::find(chartModel_->notes, *id,
-                                          &ChartVisualNote::id);
-      longHead = note != chartModel_->notes.end() && isLongHead(*note);
-    }
-    if (judge.isNotePlayed()) {
-      applyReplayNote(event, !longHead, !longHead, longHead);
-    }
-    applyJudge();
-    events_->onLanePressed(event.lane, judge, clock.visualTimeMicros);
-    break;
+void ReplayPlayfieldPresentation::publishNoteState(ChartVisualId id) {
+  if (const auto *current = noteState(id); current != nullptr) {
+    state_->setNoteState(*current);
   }
-  case ReplayEventAction::Release:
-    applyReplayNote(event, isJudgeEvent(event), isJudgeEvent(event), false);
-    applyJudge();
-    events_->onLaneReleased(event.lane, clock.visualTimeMicros);
-    break;
-  case ReplayEventAction::Miss:
-    applyReplayNote(event, true, true, false);
-    applyJudge();
-    break;
-  case ReplayEventAction::Mine:
-    applyReplayNote(event, true, true, false);
-    break;
-  case ReplayEventAction::Gauge:
-    break;
-  }
+}
 
+void ReplayPlayfieldPresentation::setReplayGauge(const ReplayEvent &event) {
   authority_.gaugeType = event.gaugeType;
   authority_.currentGauge = event.gauge;
   state_->applyAuthorityUpdate(authority_);
 }
 
-PresentationFailure ReplayPlayfieldPresentation::makeReplayFrameFailure(
-    std::uint64_t serial) const {
-  if (const auto failure = coordinator_->lastFailure()) {
-    return *failure;
+void ReplayPlayfieldPresentation::updateLongVisualState(
+    const ChartVisualNote &note) {
+  if (!isLongNote(note)) {
+    return;
   }
-  return {.diagnostic = {.code = "skin.presentation.prepare_failed",
-                         .message = "The gameplay skin could not prepare the "
-                                    "replay frame.",
-                         .severity = skin::DiagnosticSeverity::Error},
-          .frameSerial = serial};
+  const auto *self = noteState(note.id);
+  const auto *paired = noteState(note.pairId);
+  const bool active = (self != nullptr && self->longActive) ||
+                      (paired != nullptr && paired->longActive);
+  if (auto *current = noteState(note.id); current != nullptr) {
+    current->longActive = active;
+    publishNoteState(note.id);
+  }
+  if (auto *pairedState = noteState(note.pairId); pairedState != nullptr) {
+    pairedState->longActive = active;
+    publishNoteState(note.pairId);
+  }
+}
+
+void ReplayPlayfieldPresentation::markReplayMissedNote(
+    const ChartVisualNote &note, long long judgedTimeMicros) {
+  auto *current = noteState(note.id);
+  if (current == nullptr) {
+    return;
+  }
+  current->judged = true;
+  current->playedTimeMicros = judgedTimeMicros;
+  if (!isLongNote(note)) {
+    current->dead = true;
+    publishNoteState(note.id);
+    return;
+  }
+
+  // This is the visual equivalent of the export reducer's
+  // longNoteTailJudgedBeforeTiming()/markReplayMissedNote().  A tail missed
+  // before its authored time stays non-dead; both endpoints lose holding.
+  const bool tailJudgedBeforeTiming =
+      note.kind == ChartVisualNoteKind::LongTail &&
+      judgedTimeMicros < std::ranges::find(chartModel_->timelines, note.timelineId,
+                                            &ChartVisualTimeline::id)
+                             ->timeMicros;
+  current->dead = !tailJudgedBeforeTiming;
+  current->longActive = false;
+  publishNoteState(note.id);
+  if (auto *paired = noteState(note.pairId); paired != nullptr) {
+    paired->longActive = false;
+    publishNoteState(note.pairId);
+  }
+}
+
+bool ReplayPlayfieldPresentation::applyReplayEvent(
+    const ReplayEvent &event, const PlayfieldJudgeEventClock &clock,
+    bool /*recordTimingSample*/) {
+  const JudgeResult recordedJudge(event.judgement, event.diffMicros);
+  const auto applyHud = [&]() -> bool {
+    if (event.judgement == None) {
+      return false;
+    }
+    events_->onJudge(recordedJudge, event.combo, event.score, clock,
+                     event.action != ReplayEventAction::Miss);
+    setReplayGauge(event);
+    return true;
+  };
+
+  switch (event.action) {
+  case ReplayEventAction::MultiBad: {
+    if (const auto *note = replayNote(event); note != nullptr) {
+      if (auto *current = noteState(note->id); current != nullptr) {
+        current->judged = true;
+        current->playedTimeMicros = event.judgeTimeMicros;
+        publishNoteState(note->id);
+      }
+      if (note->kind == ChartVisualNoteKind::LongHead) {
+        if (auto *tail = noteState(note->pairId);
+            tail != nullptr && !tail->judged) {
+          tail->judged = true;
+          tail->playedTimeMicros = event.judgeTimeMicros;
+          publishNoteState(note->pairId);
+        }
+      }
+    }
+    return applyHud();
+  }
+  case ReplayEventAction::Press: {
+    bool suppressHudForLongNoteHead = false;
+    if (const auto *note = replayNote(event); note != nullptr) {
+      if (isLongNote(*note)) {
+        suppressHudForLongNoteHead =
+            note->kind == ChartVisualNoteKind::LongHead &&
+            recordedJudge.isNotePlayed() && isClassicLongNote(*note);
+        if (recordedJudge.isNotePlayed() &&
+            note->kind == ChartVisualNoteKind::LongHead) {
+          if (auto *current = noteState(note->id); current != nullptr) {
+            current->judged = true;
+            current->playedTimeMicros = event.judgeTimeMicros;
+            current->longActive = true;
+            publishNoteState(note->id);
+            updateLongVisualState(*note);
+          }
+        }
+      } else if (recordedJudge.isNotePlayed()) {
+        if (auto *current = noteState(note->id); current != nullptr) {
+          current->judged = true;
+          current->playedTimeMicros = event.judgeTimeMicros;
+          publishNoteState(note->id);
+        }
+      }
+    }
+    if (!suppressHudForLongNoteHead) {
+      const bool appliedHud = applyHud();
+      events_->onLanePressed(event.lane, recordedJudge,
+                             clock.visualTimeMicros);
+      return appliedHud;
+    }
+    events_->onLanePressed(event.lane, recordedJudge, clock.visualTimeMicros);
+    return false;
+  }
+  case ReplayEventAction::Release: {
+    if (const auto *note = replayNote(event);
+        note != nullptr && isLongNote(*note) && event.judgement != None &&
+        note->kind == ChartVisualNoteKind::LongTail) {
+      if (auto *current = noteState(note->id);
+          current != nullptr && current->longActive) {
+        current->judged = true;
+        current->playedTimeMicros = event.judgeTimeMicros;
+        current->longActive = false;
+        publishNoteState(note->id);
+        updateLongVisualState(*note);
+      }
+    }
+    const bool appliedHud = applyHud();
+    events_->onLaneReleased(event.lane, clock.visualTimeMicros);
+    return appliedHud;
+  }
+  case ReplayEventAction::Miss:
+    if (const auto *note = replayNote(event); note != nullptr) {
+      markReplayMissedNote(*note, event.judgeTimeMicros);
+    }
+    return applyHud();
+  case ReplayEventAction::Mine:
+    if (const auto *note = replayNote(event); note != nullptr) {
+      if (auto *current = noteState(note->id); current != nullptr) {
+        current->judged = true;
+        current->dead = true;
+        current->playedTimeMicros = event.judgeTimeMicros;
+        publishNoteState(note->id);
+      }
+    }
+    setReplayGauge(event);
+    return false;
+  case ReplayEventAction::Gauge:
+    setReplayGauge(event);
+    return false;
+  }
+  return false;
 }
 
 PresentationFrameResult ReplayPlayfieldPresentation::renderFrame(
@@ -251,3 +349,10 @@ PresentationFrameResult ReplayPlayfieldPresentation::renderFrame(
 BMSRenderer &ReplayPlayfieldPresentation::builtInRenderer() noexcept {
   return *builtIn_;
 }
+
+#if defined(ASOBMASHOW_REPLAY_PLAYFIELD_PRESENTATION_TESTING)
+PlayfieldVisualState ReplayPlayfieldPresentation::captureVisualStateForTesting(
+    PlayfieldFrameClock clock) const {
+  return state_->capture(clock);
+}
+#endif

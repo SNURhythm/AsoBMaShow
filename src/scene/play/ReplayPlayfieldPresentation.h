@@ -12,7 +12,9 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <unordered_map>
 #include <utility>
+#include <vector>
 
 struct ReplayPlayfieldPresentationCreateInfo {
   bms_parser::Chart &chart;
@@ -23,6 +25,10 @@ struct ReplayPlayfieldPresentationCreateInfo {
   IGameplayBgaSubmitter &bga;
   GameplaySkinSessionServices skinServices;
   GameplaySkinSessionInput skinInput;
+  // Replay input is copied into the visual store before the initial state is
+  // captured, so both selected skins and built-in projection observe one
+  // authoritative touch timeline.
+  std::vector<ReplayTouchSample> replayTouchSamples;
   std::function<void(const PresentationFailure &)> recordFailure;
 };
 
@@ -41,13 +47,22 @@ public:
   static ReplayPlayfieldPresentationCreateResult
   create(ReplayPlayfieldPresentationCreateInfo);
 
-  void applyReplayEvent(const ReplayEvent &, const PlayfieldJudgeEventClock &,
-                        bool recordTimingSample);
+  // Mirrors the export reducer's HUD-applied result. Callers use it for the
+  // same replay-only counter/pacemaker side effects as normal and course
+  // export loops; classic LN heads deliberately return false.
+  [[nodiscard]] bool applyReplayEvent(const ReplayEvent &,
+                                      const PlayfieldJudgeEventClock &,
+                                      bool recordTimingSample);
   void applyAuthorityUpdate(const PlayfieldAuthorityUpdate &);
   [[nodiscard]] PresentationFrameResult
   renderFrame(RenderContext &, PlayfieldFrameClock,
               const PlayfieldProjectionRequest &);
   [[nodiscard]] BMSRenderer &builtInRenderer() noexcept;
+
+#if defined(ASOBMASHOW_REPLAY_PLAYFIELD_PRESENTATION_TESTING)
+  [[nodiscard]] PlayfieldVisualState
+  captureVisualStateForTesting(PlayfieldFrameClock) const;
+#endif
 
 private:
   ReplayPlayfieldPresentation(std::unique_ptr<PlayfieldChartVisualModel>,
@@ -56,12 +71,12 @@ private:
                               std::unique_ptr<PlayfieldPresentationCoordinator>,
                               BMSRenderer *, PlayfieldAuthorityUpdate);
 
-  [[nodiscard]] std::optional<ChartVisualId>
-  replayNoteId(const ReplayEvent &) const;
-  void applyReplayNote(const ReplayEvent &, bool judged, bool dead,
-                       bool longActive);
-  [[nodiscard]] PresentationFailure
-  makeReplayFrameFailure(std::uint64_t serial) const;
+  [[nodiscard]] const ChartVisualNote *replayNote(const ReplayEvent &) const;
+  [[nodiscard]] NotePresentationState *noteState(ChartVisualId) noexcept;
+  void publishNoteState(ChartVisualId);
+  void setReplayGauge(const ReplayEvent &);
+  void markReplayMissedNote(const ChartVisualNote &, long long);
+  void updateLongVisualState(const ChartVisualNote &);
 
   std::unique_ptr<PlayfieldChartVisualModel> chartModel_;
   std::unique_ptr<PlayfieldVisualStateStore> state_;
@@ -70,4 +85,5 @@ private:
   std::unique_ptr<PlayfieldPresentationEventFanout> events_;
   BMSRenderer *builtIn_ = nullptr;
   PlayfieldAuthorityUpdate authority_;
+  std::unordered_map<ChartVisualId, NotePresentationState> noteStates_;
 };
