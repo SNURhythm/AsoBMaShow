@@ -1,4 +1,4 @@
-target_sources(main PRIVATE GamePlayScene.cpp GameplaySkinSessionFactory.cpp BMSRenderer.cpp
+target_sources(main PRIVATE GamePlayScene.cpp BMSRenderer.cpp
                             BuiltInPlayfieldPresentation.cpp
                             PlayfieldChartVisualModel.cpp
                             PlayfieldProjection.cpp
@@ -19,7 +19,8 @@ target_sources(main PRIVATE GamePlayScene.cpp GameplaySkinSessionFactory.cpp BMS
                             VirtualControllerLayout.cpp
                             ReplayKeysoundSchedule.cpp)
 if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
-    target_sources(main PRIVATE PlayfieldPresentationCoordinator.cpp)
+    target_sources(main PRIVATE GameplaySkinSessionFactory.cpp
+                                PlayfieldPresentationCoordinator.cpp)
 endif()
 if(WIN32)
     target_link_libraries(main PRIVATE avrt)
