@@ -271,7 +271,7 @@ copyArchiveSource(const fs::path &path, std::stop_token stop, bool &cancelled,
   }
 #else
   const int source =
-      ::open(path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+      ::open(path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW);
   struct stat before{};
   if (source < 0 || ::fstat(source, &before) != 0 || !S_ISREG(before.st_mode) ||
       before.st_size < 0 ||

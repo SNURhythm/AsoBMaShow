@@ -294,23 +294,6 @@ void patchFilenameByte(const fs::path &path, unsigned char from,
   writeFile(path, bytes);
 }
 
-void patchZipMemberName(const fs::path &path, std::string_view from,
-                        std::string_view to) {
-  expect(from.size() == to.size(), "patched ZIP member names have equal size");
-  auto bytes = readFile(path);
-  std::size_t patches = 0;
-  for (std::size_t index = 0; index + from.size() <= bytes.size(); ++index) {
-    if (std::equal(from.begin(), from.end(), bytes.begin() + index)) {
-      std::copy(to.begin(), to.end(), bytes.begin() + index);
-      ++patches;
-      index += from.size() - 1;
-    }
-  }
-  expect(patches == 2,
-         "exactly the local and central ZIP member names are patched");
-  writeFile(path, bytes);
-}
-
 void corruptStoredPayload(const fs::path &path, std::string_view payload) {
   auto bytes = readFile(path);
   const auto found =
@@ -642,9 +625,6 @@ void testUnsafeNamesAndCollisionsRejectWholePackage() {
     fs::path zip =
         makeZip(temp.root() / (std::to_string(index) + ".zip"),
                 cases[index].members);
-    if (std::string_view(cases[index].label) == "backslash") {
-      patchZipMemberName(zip, "skin/play.luaskin", "skin\\play.luaskin");
-    }
     auto result = prepareZip(zip, roots);
     expectRejectedAndClean(result, roots, cases[index].label);
   }
@@ -698,6 +678,28 @@ void testLinksAndNonregularEntriesRejectWholePackage() {
     expectRejectedAndClean(result, roots, patchedTypes[index].first);
   }
 }
+
+#ifndef _WIN32
+void testArchiveSourceSymlinkRejectsBeforeCopy() {
+  TempDirectory temp;
+  const auto roots = rootsBelow(temp.root());
+  const fs::path archive =
+      makeZip(temp.root() / "regular.zip", {{"play.luaskin", "return {}\n"}});
+  const fs::path linkedArchive = temp.root() / "archive-link.zip";
+  std::error_code error;
+  fs::create_symlink(archive, linkedArchive, error);
+  expect(!error, "archive source test symlink is created");
+  if (error) {
+    return;
+  }
+
+  const auto result = prepareZip(linkedArchive, roots);
+  expectRejectedAndClean(result, roots,
+                         "archive source symlink is rejected before copy");
+  expect(hasDiagnosticCode(result, "skin_archive_input_invalid"),
+         "archive source symlink uses the stable invalid-input diagnostic");
+}
+#endif
 
 void testEncryptedTruncatedCrcAndUnsupportedCompressionReject() {
   {
@@ -1554,6 +1556,9 @@ int main() {
   testUnsafeNamesAndCollisionsRejectWholePackage();
   testInvalidUtf8AndNulNamesReject();
   testLinksAndNonregularEntriesRejectWholePackage();
+#ifndef _WIN32
+  testArchiveSourceSymlinkRejectsBeforeCopy();
+#endif
   testEncryptedTruncatedCrcAndUnsupportedCompressionReject();
   testProgressCallbackFailureRejectsAndCleans();
   testArchivePayloadDigestMustMatchTask5Snapshot();
