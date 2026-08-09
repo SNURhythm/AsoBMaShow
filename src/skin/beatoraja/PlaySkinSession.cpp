@@ -851,6 +851,20 @@ PresentationFrameResult PlaySkinSession::render(
     }
   }
 
+  // Stage interaction geometry before the renderer's commit point. MSVC's
+  // Debug STL can allocate an iterator-debug proxy while moving a vector even
+  // when the value type reports a nothrow move; doing this here keeps every
+  // potentially allocating operation ahead of authored GPU submission.
+  if (transaction.evaluation.interactionLayout) {
+    transaction.evaluation.interactionLayout->revision =
+        touchLayoutRevision_;
+    publishedLayout_ =
+        std::move(transaction.evaluation.interactionLayout);
+  } else {
+    publishedLayout_.reset();
+    captures_.fill({});
+  }
+
   // The prepared-BGA overload is noexcept and returns false only before its
   // atomic commit point. Session code must not turn a post-commit exception
   // into built-in fallback; the renderer boundary prevents one escaping.
@@ -867,15 +881,6 @@ PresentationFrameResult PlaySkinSession::render(
     return result;
   }
 
-  if (transaction.evaluation.interactionLayout) {
-    transaction.evaluation.interactionLayout->revision =
-        touchLayoutRevision_;
-    publishedLayout_ =
-        std::move(transaction.evaluation.interactionLayout);
-  } else {
-    publishedLayout_.reset();
-    captures_.fill({});
-  }
   advanceRevision(touchHitRegionsRevision_);
 
   result.outcome = PresentationFrameOutcome::Ready;

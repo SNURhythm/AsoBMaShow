@@ -6,9 +6,17 @@
 namespace skin {
 
 static_assert(std::is_nothrow_move_constructible_v<SkinConfigurationWriteRequest>);
+static_assert(std::is_nothrow_move_assignable_v<SkinConfigurationWriteRequest>);
+
+SkinConfigurationEnqueueResult SkinConfigurationWriteQueue::enqueue(
+    const SkinConfigurationWriteRequest &request) {
+  auto owned = request;
+  return enqueue(std::move(owned));
+}
 
 SkinConfigurationEnqueueResult
-SkinConfigurationWriteQueue::enqueue(SkinConfigurationWriteRequest request) noexcept {
+SkinConfigurationWriteQueue::enqueue(
+    SkinConfigurationWriteRequest &&request) noexcept {
   const std::lock_guard lock(mutex_);
   if (closed_) {
     return SkinConfigurationEnqueueResult::Closed;
@@ -18,7 +26,7 @@ SkinConfigurationWriteQueue::enqueue(SkinConfigurationWriteRequest request) noex
   }
 
   const std::size_t tail = (head_ + count_) % maxPending;
-  pending_[tail].emplace(std::move(request));
+  pending_[tail] = std::move(request);
   ++count_;
   return SkinConfigurationEnqueueResult::Enqueued;
 }
@@ -28,8 +36,7 @@ std::vector<SkinConfigurationWriteRequest> SkinConfigurationWriteQueue::drain() 
   std::vector<SkinConfigurationWriteRequest> drained;
   drained.reserve(count_);
   while (count_ != 0) {
-    drained.emplace_back(std::move(*pending_[head_]));
-    pending_[head_].reset();
+    drained.emplace_back(std::move(pending_[head_]));
     head_ = (head_ + 1) % maxPending;
     --count_;
   }

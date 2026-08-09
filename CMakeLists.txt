@@ -554,6 +554,22 @@ endif()
 # Shaders
 file(GLOB_RECURSE SHADER_FILES "${CMAKE_SOURCE_DIR}/shaders/*.*")
 
+if (WIN32 AND ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
+    set(WINDOWS_GAMEPLAY_SKIN_SHADERS
+        shaders/dx11/vs_skin_quad.bin
+        shaders/dx11/fs_skin_quad.bin
+        shaders/dx11/vs_skin_yuvrgb.bin
+        shaders/dx11/fs_skin_yuvrgb.bin
+    )
+    foreach(shader IN LISTS WINDOWS_GAMEPLAY_SKIN_SHADERS)
+        if (NOT EXISTS "${CMAKE_SOURCE_DIR}/${shader}")
+            message(FATAL_ERROR
+                "Missing required DX11 gameplay skin shader: ${shader}. "
+                "Run shader_src/make.py on Windows before building.")
+        endif()
+    endforeach()
+endif()
+
 if (ANDROID)
     # Android reads packaged shader assets with SDL_RWFromFile.
 elseif (PLATFORM_MACOS)
@@ -1664,6 +1680,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 ${CMAKE_SOURCE_DIR}/scripts/check_shader_compile_workflow.py
                 ${CMAKE_SOURCE_DIR})
     set_tests_properties(shader_compile_workflow_audit PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+    add_test(NAME windows_skin_shader_artifact_contract
+        COMMAND ${Python3_EXECUTABLE}
+                -B
+                -m unittest tests/windows_skin_shader_artifact_tests.py -v)
+    set_tests_properties(windows_skin_shader_artifact_contract PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
     add_test(NAME records_ir_marker_audit

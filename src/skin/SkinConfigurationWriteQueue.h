@@ -8,7 +8,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -35,13 +34,15 @@ public:
   static constexpr std::size_t maxPending = 256;
 
   SkinConfigurationEnqueueResult
-  enqueue(SkinConfigurationWriteRequest request) noexcept;
+  enqueue(const SkinConfigurationWriteRequest &request);
+  SkinConfigurationEnqueueResult
+  enqueue(SkinConfigurationWriteRequest &&request) noexcept;
   [[nodiscard]] std::vector<SkinConfigurationWriteRequest> drain();
   void close() noexcept;
 
 private:
   std::mutex mutex_;
-  std::array<std::optional<SkinConfigurationWriteRequest>, maxPending> pending_;
+  std::array<SkinConfigurationWriteRequest, maxPending> pending_;
   std::size_t head_ = 0;
   std::size_t count_ = 0;
   bool closed_ = false;
