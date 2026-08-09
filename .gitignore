@@ -53,3 +53,10 @@ android/app/build/
 lib/**/.DS_Store
 !ios/Xcode/AsoBMaShow/lib/**
 ios/Xcode/AsoBMaShow/lib/**/.DS_Store
+
+# Generated iOS utf8proc build artifacts.
+/ios/Xcode/AsoBMaShow/include/utf8proc.h
+/ios/Xcode/AsoBMaShow/lib/libutf8proc.xcframework/
+
+# Python bytecode caches.
+__pycache__/
