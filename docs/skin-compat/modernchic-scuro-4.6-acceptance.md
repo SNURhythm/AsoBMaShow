@@ -77,6 +77,13 @@ verifier.
 
 Task 1 permits `pending`. Final acceptance permits only `pass`.
 
+## Desktop review
+
+The source-aligned desktop review is recorded in
+[`beatoraja-lua-gameplay-final-review.md`](beatoraja-lua-gameplay-final-review.md).
+It verifies the desktop and contract gates at `e4f9ee10`; physical evidence
+remains pending.
+
 The five checked-in BMS/BGA fixture digests establish redistributable input
 provenance only. They neither bind the static chart to any of the four
 acceptance scenarios nor substitute for autoplay, controlled-miss/retry, or
