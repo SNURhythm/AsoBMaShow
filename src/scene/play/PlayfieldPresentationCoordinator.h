@@ -76,6 +76,10 @@ struct PlayfieldPresentationCoordinatorDependencies {
   IGameplayBgaSubmitter &bga;
   PersistGameplayViewport persistViewport;
   std::function<void(const PresentationFailure &)> recordFailure;
+  // Interactive gameplay keeps the prepared built-in fallback. Replay export
+  // instead aborts on a selected-skin failure so its encoded frame is never a
+  // mixed or substituted presentation.
+  bool allowBuiltInFallback = true;
 };
 
 // Owns both presentation candidates for one chart.  The built-in adapter is
@@ -183,6 +187,7 @@ private:
   IGameplayBgaSubmitter &bga_;
   PersistGameplayViewport persistViewport_;
   std::function<void(const PresentationFailure &)> recordFailure_;
+  bool allowBuiltInFallback_ = true;
   std::optional<PendingFrame> pending_;
   std::optional<PresentationFailure> lastFailure_;
   long long lastEventMicros_ = 0;

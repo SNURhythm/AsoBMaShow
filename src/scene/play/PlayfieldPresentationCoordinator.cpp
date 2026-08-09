@@ -29,7 +29,8 @@ PlayfieldPresentationCoordinator::PlayfieldPresentationCoordinator(
     : builtIn_(std::move(dependencies.builtIn)),
       skin_(std::move(dependencies.skin)), bga_(dependencies.bga),
       persistViewport_(std::move(dependencies.persistViewport)),
-      recordFailure_(std::move(dependencies.recordFailure)) {
+      recordFailure_(std::move(dependencies.recordFailure)),
+      allowBuiltInFallback_(dependencies.allowBuiltInFallback) {
   if (!builtIn_) {
     throw std::invalid_argument(
         "PlayfieldPresentationCoordinator requires a built-in presentation");
@@ -243,6 +244,24 @@ PlayfieldPresentationCoordinator::render(RenderContext &context) {
   PendingFrame pending = std::move(*pending_);
   pending_.reset();
 
+  const auto abortSelectedSkinFrame =
+      [this, &pending](PresentationFailure failure,
+                       PresentationFrameOutcome outcome) {
+        cancelAndClearActiveTouches();
+        skin_.reset();
+        markTouchTargetChanged();
+        failure.frameSerial = pending.frameSerial;
+        publishFailure(failure);
+        return PresentationFrameResult{
+            .frameSerial = pending.frameSerial,
+            .outcome = outcome,
+            .submittedMode = PresentationMode::Skin,
+            .bgaCompositeMode = GameplayBgaCompositeMode::EmbeddedSkin,
+            .preparedBga = std::move(pending.bga),
+            .failure = std::move(failure),
+        };
+      };
+
   if (!pending.hadSkin) {
     std::optional<PresentationFailure> preparationFailure;
     if (pending.preparationFailure ==
@@ -270,6 +289,10 @@ PlayfieldPresentationCoordinator::render(RenderContext &context) {
     } else {
       failure.emplace(std::move(pending.bgaPrepareExceptionFailure));
     }
+    if (!allowBuiltInFallback_) {
+      return abortSelectedSkinFrame(
+          std::move(*failure), PresentationFrameOutcome::CriticalFailure);
+    }
     cancelAndClearActiveTouches();
     skin_.reset();
     markTouchTargetChanged();
@@ -279,6 +302,12 @@ PlayfieldPresentationCoordinator::render(RenderContext &context) {
       publishFailure(*result.failure);
     }
     return result;
+  }
+
+  if (!allowBuiltInFallback_ &&
+      pending.skinPrepare == PresentationFrameOutcome::CriticalFailure) {
+    return abortSelectedSkinFrame(std::move(pending.skinNoSubmissionFailure),
+                                  PresentationFrameOutcome::CriticalFailure);
   }
 
   PresentationFrameResult skinResult;
@@ -292,6 +321,10 @@ PlayfieldPresentationCoordinator::render(RenderContext &context) {
   if (skinRenderThrew) {
     std::optional<PresentationFailure> failure;
     failure.emplace(std::move(pending.skinRenderExceptionFailure));
+    if (!allowBuiltInFallback_) {
+      return abortSelectedSkinFrame(
+          std::move(*failure), PresentationFrameOutcome::CriticalFailure);
+    }
     cancelAndClearActiveTouches();
     skin_.reset();
     markTouchTargetChanged();
@@ -339,6 +372,9 @@ PlayfieldPresentationCoordinator::render(RenderContext &context) {
       skinResult.outcome == PresentationFrameOutcome::Ready
           ? PresentationFrameOutcome::CriticalFailure
           : skinResult.outcome;
+  if (!allowBuiltInFallback_) {
+    return abortSelectedSkinFrame(std::move(*failure), failureOutcome);
+  }
   cancelAndClearActiveTouches();
   skin_.reset();
   markTouchTargetChanged();

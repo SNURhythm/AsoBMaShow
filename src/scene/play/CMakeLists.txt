@@ -20,7 +20,8 @@ target_sources(main PRIVATE GamePlayScene.cpp BMSRenderer.cpp
                             ReplayKeysoundSchedule.cpp)
 if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
     target_sources(main PRIVATE GameplaySkinSessionFactory.cpp
-                                PlayfieldPresentationCoordinator.cpp)
+                                PlayfieldPresentationCoordinator.cpp
+                                ReplayPlayfieldPresentation.cpp)
 endif()
 if(WIN32)
     target_link_libraries(main PRIVATE avrt)
