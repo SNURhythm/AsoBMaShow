@@ -130,14 +130,14 @@
         "status": "pending",
         "value": null
       },
-      "archiveSha256": "06ad5a4c5a1b6d0ece08b79475cbe2b4a5187ce07e490752e141518ee4fcc41c",
+      "archiveSha256": "3e36eef69d2f5f3b117696e22936347d9c8f5e379f8912d763a074ca9bcbbe4c",
       "configurationSha256": {
         "status": "pending",
         "value": null
       },
       "entrySha256": "aac73c59526e74f159731608b3b54e58a7e534537503acb88565a4c175cf8f13",
-      "payloadTreeSha256": "448a5b031b153c3424e5d5ca6b07ab1fe832dabbe18c0faf6f72bc17bc4af18d",
-      "selectedLuaClosureSha256": "717b46b6641c84e431490fff24f45a0ee23a1208017cc4dae4ea2cad438f5bb0"
+      "payloadTreeSha256": "515d52ba1a00a6067f636f838c935328b7765aef8f0019557748a2441ebb89df",
+      "selectedLuaClosureSha256": "9d2a5acafc57edd6fa958c86fd92b861b851d952581a6828c1beb5b7fde67c0d"
     },
     "hardwareModel": {
       "status": "pending",
@@ -203,18 +203,9 @@
         "sourceClean": null
       }
     },
-    "physicalEvidence": {
-      "accessControlledLocalEvidenceId": null,
-      "deletionProcedure": null,
-      "metadataFile": "acceptance-evidence.json",
-      "recordId": null,
-      "redactionStatus": "pending",
-      "retentionUntil": null,
-      "status": "pending"
-    },
     "negativeScenarios": [
       {
-        "auditedGuardConfigurationSha256": "dd6c3fcf4ffdc4e72882e47294a29c2f845c599f624d0948f72988c9be330b74",
+        "auditedGuardConfigurationSha256": "afb7be52dd8e384f7a030ce4a419fed24c1a261ef2254f7008a6f70ded370ef2",
         "criticality": "session-critical-sandbox-integrity",
         "deniedCountersExpected": {
           "filesystemDirectoryScans": 0,
@@ -225,8 +216,8 @@
         "expectedAction": "discard_frame_disable_session_same_frame_builtin",
         "expectedDeniedOperation": "filesystemRead",
         "expectedDiagnostic": "skin_file_render_phase_denied",
-        "expectedGuardVectorSha256": "e4f5da4b24ae219320023f32820569fb442ceb0b6ad0a4823de74325ddc07552",
-        "guardConfigurationId": "configuration-b1b2944d536e73ad930ac77e",
+        "expectedGuardVectorSha256": "08d59b63dc1ed53154ac07baa9d5c72d2a0111ea8a5fd451f8ebc149537009bb",
+        "guardConfigurationId": "configuration-239e9833572d3000b43903c1",
         "id": "scenario-f7395bddf2b0f715a900b5cd",
         "overlayDigestAfter": "pending",
         "overlayDigestAfterCapture": "asynchronous-after-session-teardown",
@@ -243,8 +234,17 @@
       }
     ],
     "passingGuardVectorSha256": [
-      "eb52ec905a507efe50273b2ff09d91d10f025d5019c7bf3d4330ee31e3445e13"
+      "38fe362a92f6ca0109effaa706d1ec42d6b08d28a394db738d2bccd8f63f7450"
     ],
+    "physicalEvidence": {
+      "accessControlledLocalEvidenceId": null,
+      "deletionProcedure": null,
+      "metadataFile": "acceptance-evidence.json",
+      "recordId": null,
+      "redactionStatus": "pending",
+      "retentionUntil": null,
+      "status": "pending"
+    },
     "protocol": {
       "measurementSeconds": 180,
       "repetitions": 3,
@@ -333,12 +333,12 @@
       "status": "pending"
     }
   },
-  "archiveByteCount": 445591453,
-  "archiveFilename": "ModernChic402.zip",
+  "archiveByteCount": 453707440,
+  "archiveFilename": "ModernChic460.zip",
   "archivePackagePrefix": "ModernChic",
-  "archivePayloadTreeSha256": "448a5b031b153c3424e5d5ca6b07ab1fe832dabbe18c0faf6f72bc17bc4af18d",
-  "archiveSha256": "06ad5a4c5a1b6d0ece08b79475cbe2b4a5187ce07e490752e141518ee4fcc41c",
-  "auditedSourceTreeSha256": "448a5b031b153c3424e5d5ca6b07ab1fe832dabbe18c0faf6f72bc17bc4af18d",
+  "archivePayloadTreeSha256": "515d52ba1a00a6067f636f838c935328b7765aef8f0019557748a2441ebb89df",
+  "archiveSha256": "3e36eef69d2f5f3b117696e22936347d9c8f5e379f8912d763a074ca9bcbbe4c",
+  "auditedSourceTreeSha256": "515d52ba1a00a6067f636f838c935328b7765aef8f0019557748a2441ebb89df",
   "beatorajaCommit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
   "entries": [
     {
@@ -364,10 +364,10 @@
       "sha256": "fae145eacee98134317a3fdfc06e8435edaf0e1a0eecc2c9e6b890e741f39637"
     },
     {
-      "byteCount": 3295,
+      "byteCount": 4182,
       "id": "payload-011d83ac970c84286be5ee51",
       "kind": "lua",
-      "sha256": "4355a4e270b38766d703e28b354fdf104cd48d4958ca3e1cb50e899c7191d8a9"
+      "sha256": "fc36ade0ea716044e8e8797253c044ce777e192026b8bfa92630bb7f0a269ed7"
     },
     {
       "byteCount": 2145767,
@@ -382,10 +382,10 @@
       "sha256": "fc419b056745895a6a56e7eed43395bf64347c6bb7826e362eb7c074a136e625"
     },
     {
-      "byteCount": 335,
+      "byteCount": 359,
       "id": "payload-02c3054f566b00a368af2b62",
       "kind": "lua",
-      "sha256": "96f04a49b175021c030286ff69a3e86c9c2fdf6dab70b2fee75725328cec3a1a"
+      "sha256": "f99a69d3841cb62d70b857484099db16d1aac254c3d6596e7d12b88f79d9a3e0"
     },
     {
       "byteCount": 877152,
@@ -400,10 +400,10 @@
       "sha256": "7822b94cd8a653d767b26e81e6c3aaf75aec786256e06aecf4d8e89dc52877f2"
     },
     {
-      "byteCount": 2120,
+      "byteCount": 2007,
       "id": "payload-04387410886a3887a9a2c840",
       "kind": "image",
-      "sha256": "d3215be7860ac291f057905a0334e7be14fe984440898510585d54061acf6911"
+      "sha256": "f9786984c01c736123f08102b7e09feffa32c28ea3bd50ec7349ec87cdedbac4"
     },
     {
       "byteCount": 2831,
@@ -412,10 +412,10 @@
       "sha256": "f0d98542bbded6d26f3f21ae6cc7fb2b0caead985133e00c7347c3660a0c6659"
     },
     {
-      "byteCount": 17296,
+      "byteCount": 17342,
       "id": "payload-051d6750887c2c2a51ba739c",
       "kind": "lua",
-      "sha256": "2aa9fd3ef7c24ab4f0de8ef97ab8d98e4b014c268aae05a481278c03cf51ce9b"
+      "sha256": "b97490ea19092338c4e8dff62f0e9ac44f196b7430d78c92e956cc2396ea8895"
     },
     {
       "byteCount": 3366,
@@ -424,16 +424,22 @@
       "sha256": "a40158f7d13378823e4e5504f9d23e07db1c4fa77f00f0228c5fd0a62b9aa233"
     },
     {
-      "byteCount": 7066,
-      "id": "payload-06d12df37f68adfc73d285a4",
+      "byteCount": 52,
+      "id": "payload-06304e62cd846376f23ab8e6",
       "kind": "lua",
-      "sha256": "e6f6f53bdd0074073f51f72f331dadb9e87b8da20134772596cc4a221f2404da"
+      "sha256": "95681085962c5d8e812898b31729100245afa324bb029b5a1ebf83f28ed3fb8a"
     },
     {
-      "byteCount": 18,
+      "byteCount": 7064,
+      "id": "payload-06d12df37f68adfc73d285a4",
+      "kind": "lua",
+      "sha256": "c049ab9a2c4c4bcd4ba09c4a7df529b76fc19e219d41013a04dd481b76f65f1b"
+    },
+    {
+      "byteCount": 17,
       "id": "payload-06e93bb50da42315b35722a6",
       "kind": "other",
-      "sha256": "f6392ee8a28e6612fbeeb0bbc58e22a6eb6eef7dcfb4593a9c3ae813adc2bfc7"
+      "sha256": "dd3434945d74448fc25b45634f2ebf4cfbaaa89d375ef55322f12cf78fb1ca79"
     },
     {
       "byteCount": 1647,
@@ -460,10 +466,10 @@
       "sha256": "e54e045614ec1f689804c4c0068eda4d680e3faad830c5a933859961f841080a"
     },
     {
-      "byteCount": 10871,
+      "byteCount": 11432,
       "id": "payload-07f7c319415c0d1fca9ecccc",
       "kind": "lua",
-      "sha256": "124fc465505356712c73d08a4b328c643c8f93f3a481c733f681be7b4b6c61bc"
+      "sha256": "b2a161c3736772b521783eed3381e7380196d5dcf41a797889d20c72091f17fa"
     },
     {
       "byteCount": 1092463,
@@ -496,10 +502,10 @@
       "sha256": "a8b20f6442d14ee898b9b90a1b55432c3f65135a45e7eb9ed46a0ad61ea3544c"
     },
     {
-      "byteCount": 7152,
+      "byteCount": 9561,
       "id": "payload-0cb92dc3d9335ec4c65d67d5",
       "kind": "lua",
-      "sha256": "fa2578fbf931f7e86ae6b4a9dfdcd7ac58388a293d093c7d03fbe3797c0d5846"
+      "sha256": "3a8725c84aab5f367c72d901da4e24093def1934c94498d69c412d7a5d199e9f"
     },
     {
       "byteCount": 283,
@@ -520,10 +526,10 @@
       "sha256": "a2589be3b842c64940c48ebdf56a76c73f281d29b30c87ce422e55428fe47b07"
     },
     {
-      "byteCount": 24504,
+      "byteCount": 25046,
       "id": "payload-0def5b7c012c6a4c70ad149c",
       "kind": "audio",
-      "sha256": "1c7df4fd9d8f114c09ca10e3dcf21fee0ae325a3fe87ec47b7e7cc03a1128eb1"
+      "sha256": "eb243ac1df9a57cc200463649597042f58b292bb5889670af8e4cf1364f22e05"
     },
     {
       "byteCount": 1341418,
@@ -568,10 +574,10 @@
       "sha256": "380f0138c72ad9c0ac6b7848e8c0476889a3813a18c1791120c70434e904bfb8"
     },
     {
-      "byteCount": 9693,
+      "byteCount": 9723,
       "id": "payload-11c090c6327098c15082b500",
       "kind": "lua",
-      "sha256": "653449879a678b6c14aaa593672cf090c8bb11a77667788bbdca9324223a7e50"
+      "sha256": "eb90e5fb7bf4f764d2f69cf532ddaa4cc42f6e0ce73fabe51922fe3c8890e6bd"
     },
     {
       "byteCount": 969385,
@@ -610,16 +616,28 @@
       "sha256": "0ffe873a62d3e397a6c67781bd2d012879d0b89e3263fe472efa075d3b49ed4a"
     },
     {
+      "byteCount": 2639,
+      "id": "payload-1373f78ac621ea1dbc097eeb",
+      "kind": "lua",
+      "sha256": "4b9084394c5cbfa692f52f00d063b17206759778f895774c4f326c4ed58f850e"
+    },
+    {
+      "byteCount": 5246920,
+      "id": "payload-140b0f8556c3c15bdb360f8a",
+      "kind": "font",
+      "sha256": "5972115579879b84f4834146984ccba40fc631545e84a49e03cf692660ef0d40"
+    },
+    {
       "byteCount": 857832,
       "id": "payload-140fb378f2ea373c6d7ab1bb",
       "kind": "image",
       "sha256": "0d959e850b4a35d4511faca545f920b34c6d5e5d7b431ecddc3ee90444df23c7"
     },
     {
-      "byteCount": 30336,
+      "byteCount": 30160,
       "id": "payload-1472c712afaf36b0ceaff514",
       "kind": "audio",
-      "sha256": "803bdc5b542c90900163d56c5ba2c5557c33a034c1ab6c971b58cd5e55c383be"
+      "sha256": "41611bd49773022f116ebd9234289eadd1ce3c631acbb77d005aea84d3e4bbc9"
     },
     {
       "byteCount": 1115,
@@ -628,16 +646,16 @@
       "sha256": "c8f1b1448aab65a2796f224cb2594acd8718569ae85d302a34eff1c551a9ce82"
     },
     {
-      "byteCount": 0,
+      "byteCount": 82,
       "id": "payload-1596e05965ee56a2bca533be",
       "kind": "other",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      "sha256": "128aac5a01d1919a070dfbb0d442e366070114eaff08da9b9c68c62399596074"
     },
     {
-      "byteCount": 18041,
+      "byteCount": 18140,
       "id": "payload-163a90d66d5f61b6a5ba99c8",
       "kind": "audio",
-      "sha256": "86f50c7cc625dc8e14d89d4b0406055c55b4c557698581f1b490e9cd0f34b311"
+      "sha256": "411d6c9a90ac5d84f2e60a5fe3fea5b85a0119f356d6c8900d652ff97f3d8a5e"
     },
     {
       "byteCount": 3628,
@@ -652,10 +670,10 @@
       "sha256": "90dce8be91674c6e1fd8273d14a2e8cbb1422b9d80eb2ea3a472836cbf80e368"
     },
     {
-      "byteCount": 11857,
+      "byteCount": 11851,
       "id": "payload-175d41622c8eb86ce01827e5",
       "kind": "lua",
-      "sha256": "aa14db88b96ee39f7870d3d9eb783ec8fe6d147484ec5e0b70d784c79b344811"
+      "sha256": "fa05afad3bf2e86f0150633d1b68c368acc32ced875af26fbfa9f57516089cfc"
     },
     {
       "byteCount": 2164300,
@@ -676,10 +694,10 @@
       "sha256": "0b48f1b526e6751004fbe32c1573dfaa24e03651542bf834a8ef8676880aa2bd"
     },
     {
-      "byteCount": 20437,
+      "byteCount": 20583,
       "id": "payload-1a073ee6272c97866de2cd3d",
       "kind": "audio",
-      "sha256": "f0216b1a30fc48afbe2a7b2f800f8fa700ebe762c2f665ec352eeaf4263701d7"
+      "sha256": "068f3ffcc42a05ab99151cd93baaebe5d3b992808d1aa0bd02582f6bc1af0244"
     },
     {
       "byteCount": 2032704,
@@ -712,10 +730,16 @@
       "sha256": "43bd550c17f96a91359719fc0286448774da79fe85de3c39ab3cb23ae4509bb3"
     },
     {
-      "byteCount": 33126,
+      "byteCount": 99,
+      "id": "payload-1c255d0c9b48e831b7d42b57",
+      "kind": "lua",
+      "sha256": "cb8b6c925eb9fca52e417ed6fce0ef71b1dcec12908b884a357ee03b7270a7f4"
+    },
+    {
+      "byteCount": 34399,
       "id": "payload-1c3b44fae73a718c99aa13f9",
       "kind": "lua",
-      "sha256": "095a30de4acb2a27617d9640e9c003e5bbb8ea85baef49a4d022f2200b4b50e1"
+      "sha256": "8e1450b607a3d7c6f0a8632327782f97ab45bcf7008ba2d1ee3cd0f64522f1cf"
     },
     {
       "byteCount": 9204,
@@ -730,16 +754,16 @@
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
-      "byteCount": 23872,
+      "byteCount": 23979,
       "id": "payload-1d05d3a8c29632607cd1b41a",
       "kind": "audio",
-      "sha256": "ac0be12c1dfd5e609b214ef1fa0aa5ffb18f0af52d3ae2ddec5b4c3161e18d7b"
+      "sha256": "0e3878028d8149bdb4b4494b0cda42337c71e4193014f8ee154c7a6a9f2a6fea"
     },
     {
-      "byteCount": 27141,
+      "byteCount": 27404,
       "id": "payload-1d9dd48018fda6eb3fdec777",
       "kind": "audio",
-      "sha256": "0c882253c191b57509a8eb847aa4ac7b66a6089f003992d838558c07dd40755a"
+      "sha256": "2619a43156aac84f40ee65d3bbcc254609388ac7be40a61ea514e63b33c7c94a"
     },
     {
       "byteCount": 819910,
@@ -748,10 +772,10 @@
       "sha256": "ce044a819bd8b3f907d8f0f4f8b9e7a1d30e9b1e5ccf65bcfad6d277b17547a5"
     },
     {
-      "byteCount": 28955,
+      "byteCount": 28946,
       "id": "payload-1ef76ff7a56e9bb0ddb857f1",
       "kind": "lua",
-      "sha256": "3bf66ea6fa94379c9c058f046883e41336ff903bcb86ae7f3b1584cf42ae2c92"
+      "sha256": "410c07449bacb46a422e87264a5e18d822b017e1e098d85b4cdb41b9dd27e24b"
     },
     {
       "byteCount": 1325048,
@@ -784,16 +808,16 @@
       "sha256": "488f6aa25e3f75a6ef9d1d6c3f11ab697e99767db6e72427f506bdf8d9e3edd9"
     },
     {
-      "byteCount": 14404,
+      "byteCount": 15085,
       "id": "payload-2272f202c0a395e2c097ae12",
       "kind": "lua",
-      "sha256": "2677802eddb07e2654b19d438fb16cc853df77398ab9df81a07f1526b4ce7a50"
+      "sha256": "f02a2ce3085cf3c4daa36f090a6a6fe9886b37ae59f59ac647e54bd955d0a1d2"
     },
     {
-      "byteCount": 24491,
+      "byteCount": 24677,
       "id": "payload-22fbd8b862109482cb990c3c",
       "kind": "audio",
-      "sha256": "d281a291645d6f8b0797010968bb5ef38fedd0b9dd82438bd38299318f1f2522"
+      "sha256": "c038706beaa19af29c18ee9244c658002310601cc17a4df7e68d3efb2bf4eac9"
     },
     {
       "byteCount": 2109419,
@@ -874,10 +898,10 @@
       "sha256": "8d37752e21cf06ec01d5571ef12bbdd9be1547fcb04c97141912b8ace34f17f2"
     },
     {
-      "byteCount": 9914,
+      "byteCount": 9918,
       "id": "payload-27e3695b808fcdb714f42d4c",
       "kind": "lua",
-      "sha256": "8489e60da47485b6bbfc9e64cf1c8248d1f76d73b390f2c9bf5f27c2433bf7d0"
+      "sha256": "0995cefada56d6569da11985cd5bc55d9738cc071e6a9de11b0b06d7ed28c710"
     },
     {
       "byteCount": 1264,
@@ -892,10 +916,10 @@
       "sha256": "d69a5d3998bc96fe0f1fa06a1d2cc74f073da819ddbcec21368b47ff4a293077"
     },
     {
-      "byteCount": 601995,
+      "byteCount": 629984,
       "id": "payload-29e67fb1d0822f7ac718d185",
       "kind": "image",
-      "sha256": "8e3cdbd69a05629849e42787e0c29e8afe5d49ebd09446bdee1bc5c93c67bcc3"
+      "sha256": "09ff1c724da27029b8232fb1b00cd457ecfd95708bab74bb6e9db401a72e8cb4"
     },
     {
       "byteCount": 12934,
@@ -952,12 +976,6 @@
       "sha256": "a515c18b8de8f86143867dc04b3744c6e9eef1fa52ab459f428603bc5510a17c"
     },
     {
-      "byteCount": 445591453,
-      "id": "payload-2e4eeda14e6190f224fbcd82",
-      "kind": "archive",
-      "sha256": "06ad5a4c5a1b6d0ece08b79475cbe2b4a5187ce07e490752e141518ee4fcc41c"
-    },
-    {
       "byteCount": 0,
       "id": "payload-2efe5cc126a692c154d83499",
       "kind": "other",
@@ -976,10 +994,10 @@
       "sha256": "fa1f97daec8fa7b30a57e87556c2ce7feb58622db2caa1fa6e60387fb4ad2d69"
     },
     {
-      "byteCount": 807,
+      "byteCount": 872,
       "id": "payload-3147abd8a28dc48bfadd85ca",
       "kind": "lua",
-      "sha256": "e26236ab6718c8884fd20fb8e74c960d6d8ee4972217ac9e3ab56c2e4b83598c"
+      "sha256": "14c192dc33aaa84f86d8af43f5d2f2e5d27bc4919ecf30cfaef9c2d513d4e2a6"
     },
     {
       "byteCount": 2020378,
@@ -1006,22 +1024,22 @@
       "sha256": "c06d8a001bfc5db04e2762be4f3eef0c144a7e03adeaea1bf2516007a36bf178"
     },
     {
-      "byteCount": 181230,
+      "byteCount": 190301,
       "id": "payload-32342e07cde700c87569836c",
       "kind": "image",
-      "sha256": "ccadef7f3bc5ef860b1ef0fa4de5fee53c7ee4b4681d1a1ffd999ead241ad27f"
+      "sha256": "a10a1ec98b15fa7b4593eac02b48734a9de5b3d40fc4c593350951311cf87551"
     },
     {
-      "byteCount": 17962,
+      "byteCount": 18374,
       "id": "payload-32550dd3e7b2aff5a5b64c06",
       "kind": "audio",
-      "sha256": "611257b0a3ee7c859ef544507f511fb05f517e57892c5aa2558a2c15d8d3ad54"
+      "sha256": "4d3439b7e6519abe4073facca4bf966d1f48f49a3a97483c9151f692d4927cf0"
     },
     {
-      "byteCount": 26957,
+      "byteCount": 27349,
       "id": "payload-33d32a94f0112f7d7a4bac02",
       "kind": "audio",
-      "sha256": "46289f5459e025d1e18c34f5545195f4f08d8e8f245c8d26ad72b170d217401f"
+      "sha256": "4aca762692476cd276386ac630812b0898ba0cf066ceb87033b1c4e065696333"
     },
     {
       "byteCount": 5001,
@@ -1030,10 +1048,10 @@
       "sha256": "fb14310c170ed402c28ecda40965a7bccf3e41c5a4184b07eedae93861bf40c1"
     },
     {
-      "byteCount": 16090,
+      "byteCount": 17944,
       "id": "payload-35ad8b9c517b2202f6549ac7",
       "kind": "audio",
-      "sha256": "d2f2112233acb481eddd79467875f8deb883498b6766c0799182f9dd8da0b8c4"
+      "sha256": "a242d7f6a6b3dea908ed8097727dbabca5b1c0aee4c4ccd989f62c91e4180b86"
     },
     {
       "byteCount": 2101226,
@@ -1054,10 +1072,10 @@
       "sha256": "586e60fd28de4f0a0be18485a32d014d820baadfccfcaaf8dadd87bfc6cd579d"
     },
     {
-      "byteCount": 16678,
+      "byteCount": 17045,
       "id": "payload-372783fe882030c88b42ff83",
       "kind": "audio",
-      "sha256": "e609e9d00e78a0280ef2dfe6ec4c3b72ab4e12a293318c6c09e34b5670987251"
+      "sha256": "1859b936a4b3ba1995dfd64b70b800584655189dfd207d61772e66d40785aa17"
     },
     {
       "byteCount": 9690,
@@ -1082,6 +1100,12 @@
       "id": "payload-3847256cbf146019f907b6ca",
       "kind": "image",
       "sha256": "7906502effe3b188824ace1a63cb73c80b250462c7d6a7e9348426e4877ab314"
+    },
+    {
+      "byteCount": 128126,
+      "id": "payload-3889706552040076787440d1",
+      "kind": "audio",
+      "sha256": "be8a2417c0298b50713139602bd84cb6ff1e2becfacad835f25b9d7e68ebd5bf"
     },
     {
       "byteCount": 11414,
@@ -1120,10 +1144,10 @@
       "sha256": "a515c18b8de8f86143867dc04b3744c6e9eef1fa52ab459f428603bc5510a17c"
     },
     {
-      "byteCount": 18700,
+      "byteCount": 18616,
       "id": "payload-3d6373fa64613fb3188803e5",
       "kind": "audio",
-      "sha256": "4b3ff675ea4a35e242fcd97f2dd7c2508a7acdc13cc64e0795a96c3bd6402835"
+      "sha256": "4823a744855fd5f628d50a188315ce9999185b34f780db75729a47e1d26bfb1a"
     },
     {
       "byteCount": 5247,
@@ -1156,10 +1180,10 @@
       "sha256": "234085e9a467a9eebc8111f71c5501f73f62c40567a0abea82a23c182bd941ee"
     },
     {
-      "byteCount": 22610,
+      "byteCount": 22791,
       "id": "payload-3fd51287a9da86c145154eb3",
       "kind": "audio",
-      "sha256": "b50da572c52e33e19f6a08595602ad6b1ef8f7452aa2e0e2c3c6fcf757fc9171"
+      "sha256": "43d9e06e65937e29476d64d7dc9e0b649f0151b0837f116334a38da86265c4c5"
     },
     {
       "byteCount": 46206,
@@ -1174,10 +1198,10 @@
       "sha256": "380f0138c72ad9c0ac6b7848e8c0476889a3813a18c1791120c70434e904bfb8"
     },
     {
-      "byteCount": 2123,
+      "byteCount": 2007,
       "id": "payload-408c36cb862e40e58da8bffa",
       "kind": "image",
-      "sha256": "20ad5aceaf8ba830fdc83e303fa02037b421f040e67f30414baee24e9dcb56e1"
+      "sha256": "426944aa80f86dea0c3b0aab12a9558a6e409750a2dd2f914343a39a437329ef"
     },
     {
       "byteCount": 2258708,
@@ -1186,16 +1210,16 @@
       "sha256": "3699ba6764e1b98c55c9a8df8e924ec0648cbd8af7aacec360644f1b87031f32"
     },
     {
-      "byteCount": 16917,
+      "byteCount": 17010,
       "id": "payload-415259e073662525281af6d2",
       "kind": "audio",
-      "sha256": "9685792c9d64f63d56ecb5a785d9fd48d39f2c06fe0e5e961c6981df7f741b8b"
+      "sha256": "a07895789847de580a87eb85470354c93f2709af09bfecc36adb602c151680bb"
     },
     {
-      "byteCount": 23313,
+      "byteCount": 23147,
       "id": "payload-4155824209e9f930a03fac74",
       "kind": "audio",
-      "sha256": "7517ee41e59aa01f2eafe0337567d845fe061cc6d0e55bed128a7eefac761340"
+      "sha256": "ecfd91d87df492ce182efdfb052ce3f391cdcb2bcce1191ba745c8ea75c517cb"
     },
     {
       "byteCount": 10220,
@@ -1240,10 +1264,10 @@
       "sha256": "0742d4b2cc7fa9848dd74d778a1a8cba14fda259d6060fb4df41dda9c777d8fc"
     },
     {
-      "byteCount": 7803,
+      "byteCount": 7954,
       "id": "payload-43561d3dcc5a6e4df575c681",
       "kind": "other",
-      "sha256": "25f63d6be5f62424f7cab5a8123f40a259867808c6f29c1c8a66f54c169fdc17"
+      "sha256": "c2c8042aad4193842d7072929a30da24f5b1f7c08b1dd0474dbe35713e33c1e7"
     },
     {
       "byteCount": 5373,
@@ -1264,6 +1288,12 @@
       "sha256": "c324071f869f8bcd35a41e9faf8e0a3539b8a0b1f199e171cf9f1e58f7819126"
     },
     {
+      "byteCount": 204481,
+      "id": "payload-472f8c28877710b891ae2194",
+      "kind": "image",
+      "sha256": "90c176dc1d4838a1cefe21aaf4785b1eb00a4eef6a46b66f5a08412fb6324468"
+    },
+    {
       "byteCount": 11266,
       "id": "payload-473c25cbdc0ad9fd1c5f7bf8",
       "kind": "lua",
@@ -1282,10 +1312,10 @@
       "sha256": "380f0138c72ad9c0ac6b7848e8c0476889a3813a18c1791120c70434e904bfb8"
     },
     {
-      "byteCount": 16687,
+      "byteCount": 17140,
       "id": "payload-48a389c8a9712edba115b71f",
       "kind": "audio",
-      "sha256": "007278aed36b370caab0849146c04082fba9dc57cdbb6758b70523e63189125e"
+      "sha256": "8817e780d899827eb1a6c8d572b6f946697744c3bc60c369cc93f75f7719d92f"
     },
     {
       "byteCount": 46206,
@@ -1300,16 +1330,16 @@
       "sha256": "669ce9c01a906be68dc9b36538246dc249ce359e136156da607e54faf8cf4d12"
     },
     {
-      "byteCount": 14344,
+      "byteCount": 14275,
       "id": "payload-48e438579a924d7194ef0e46",
       "kind": "audio",
-      "sha256": "4a2b77efdbefeb5ba03cfb3254aa76842b6ab902838b391bcbafeb5aadb81bf4"
+      "sha256": "35722ae67bbf2ee5372a06716f1567a57215afd3e7ef27c03072a371d0c08d5a"
     },
     {
-      "byteCount": 16550,
+      "byteCount": 16632,
       "id": "payload-49a12ee8c7d4223f434852b4",
       "kind": "audio",
-      "sha256": "1896fb767d30636eb686226f516809c63ae8ece9face739aaa3f23ebefff772a"
+      "sha256": "4fc0a334fbda51d4454b7ddff481ec7eed7190d1fc343a72b44580e577317505"
     },
     {
       "byteCount": 784332,
@@ -1318,10 +1348,10 @@
       "sha256": "eb9593ff3616bf48508f01260254f8b8ddcf575c16fee10402ce5dfc8e513b16"
     },
     {
-      "byteCount": 13839,
+      "byteCount": 14167,
       "id": "payload-49bdea4b25cffd2aea898338",
       "kind": "lua",
-      "sha256": "c39343244e3b392202be20aa024521a09410343d62add2984de2a64198cd849d"
+      "sha256": "880373052cad9434d5fd5b957eff80d649c70abb5a41ea52c9543d2f8231a0c5"
     },
     {
       "byteCount": 7219,
@@ -1330,10 +1360,10 @@
       "sha256": "7e7b6be3ef92862d586daa9aa4ede220a2ec3c576b037cb46d79c36d19828a13"
     },
     {
-      "byteCount": 29436,
+      "byteCount": 29371,
       "id": "payload-4b4047ddf556cb0d863ea598",
       "kind": "audio",
-      "sha256": "a6b0c0b0b7743b9052415d85c967380c8df7d74008e84f48a2784c2aaa1eaaaf"
+      "sha256": "abce7fd631e7b19ed91cafc0044f9162d4ea652db0ecfbc0de07caa1256dcfda"
     },
     {
       "byteCount": 2168152,
@@ -1378,16 +1408,16 @@
       "sha256": "e3edd1dcf749f1dd404ec8bb2055c06cdfc42f80cdb1d0107ff43208c52a1174"
     },
     {
-      "byteCount": 416,
+      "byteCount": 477,
       "id": "payload-4f977d3935ba851a3ca4ed60",
       "kind": "lua",
-      "sha256": "c1eed3ce5afc04a4c5a9cba209ef90b3f7ae7b5b5c89793dcd3d0ece6b106dde"
+      "sha256": "0a130a7bfc73aa6b4257bec92890d552380414221fb385db31d435a261721917"
     },
     {
-      "byteCount": 30239,
+      "byteCount": 30512,
       "id": "payload-501fdc511bccff355eade064",
       "kind": "audio",
-      "sha256": "a67db5abe1ed5a62e36620754b30e9d62918e66bf04edc0ab6f00fca06276645"
+      "sha256": "77a04a22cff3bee5f19798d256bcee37d6e840c51854a5808fafc7440a1d9b35"
     },
     {
       "byteCount": 84583,
@@ -1420,10 +1450,10 @@
       "sha256": "0cf7e9dba14dc2a0376c26c0b93df79dbd70b5414d47d4f540dc817f812d39a7"
     },
     {
-      "byteCount": 128,
+      "byteCount": 3086,
       "id": "payload-51b4677c023b6b8446cb3603",
       "kind": "lua",
-      "sha256": "7535fc93c2fdf6cd73861bda243255df47acf7e72eca91db3fafbf4eb9d874f5"
+      "sha256": "fa701f8a9d394f06066ff99de4926205d0bcfdb5bef0fb7caaf81ea47d7799d1"
     },
     {
       "byteCount": 196821,
@@ -1438,10 +1468,16 @@
       "sha256": "267248491b1e3c48eb54c78c041604efd1d28c47f82721c8a5a5607599520e3f"
     },
     {
-      "byteCount": 6485,
+      "byteCount": 98,
+      "id": "payload-544f88d19b1d6ecb2f33dd3c",
+      "kind": "lua",
+      "sha256": "8bc9d5208d61f89d7c37c5003eb25b5cc52dc6fc1488e171e816124d41b6896b"
+    },
+    {
+      "byteCount": 6506,
       "id": "payload-55847047623e948c739eefce",
       "kind": "lua",
-      "sha256": "4f55836a53380e27417009e994fb45e8c406e7e4205386e2051740996df95f57"
+      "sha256": "6e1b2ac758cfce7afba862fc9188400333f4d3b817c0262fa8ee0eaa07440057"
     },
     {
       "byteCount": 97,
@@ -1474,10 +1510,10 @@
       "sha256": "1e50d78491a1693c6902ec20185e280becb5824fd96190cc87dcf71e2dd17c35"
     },
     {
-      "byteCount": 11023,
+      "byteCount": 11325,
       "id": "payload-5893915fc50dcef9d184c379",
       "kind": "lua",
-      "sha256": "627ef8ef687b4cc48b99465e0988e27184e0988388edb49078197f9e6cf7153e"
+      "sha256": "1935001dc74da3b0c779e51535722520564553936e80f27890dd8db40a1802ff"
     },
     {
       "byteCount": 9924,
@@ -1486,10 +1522,10 @@
       "sha256": "1a59451aecd693e1fb3b1f78755d1e05a41a1a1a2546e0a94d5778b025547067"
     },
     {
-      "byteCount": 5337,
+      "byteCount": 5710,
       "id": "payload-595a0eae60aa63561703eb2c",
       "kind": "lua",
-      "sha256": "9449112e5c2695200ae3064abfb7c1b1d666eb4960638f6c8c2cdbe2e274c7f8"
+      "sha256": "2c310b91552b5bf716d064afb5963887f4796cbf8dbf83e1ba948378c6872b1d"
     },
     {
       "byteCount": 1079,
@@ -1504,16 +1540,22 @@
       "sha256": "dbf663bf6f5730cea03195c1a40d5c1003f602e7c65c59c6ed91c4432161529a"
     },
     {
-      "byteCount": 9824,
+      "byteCount": 10169,
       "id": "payload-59ed305ed89b1944b5eb8b96",
       "kind": "other",
-      "sha256": "cbb0bd253137f7a6c5cc2184617a8db7e7d221b44c043ece6bd518cb2829b088"
+      "sha256": "b27d347cab3865eb1e4e038bf8d636cc9519a49554ef87884e5e3d94ad752973"
     },
     {
       "byteCount": 4301,
       "id": "payload-5a528f134c8258ade4d32087",
       "kind": "other",
       "sha256": "697383c6addd5dd14d7e1ff053aaa44520ce86a58589eef1f9985ab66e08db08"
+    },
+    {
+      "byteCount": 189746,
+      "id": "payload-5ad65d6e6b60bdf9b7d4eca5",
+      "kind": "image",
+      "sha256": "af536b3a6bb8ba44246500fc5681d3b4999f8f91f22977ed4fa8a128d3e749f4"
     },
     {
       "byteCount": 248975,
@@ -1526,6 +1568,12 @@
       "id": "payload-5b3ad26f708f414040613861",
       "kind": "audio",
       "sha256": "4e510d740e2727d6eba8066407eb56d3b2c0ce386b90f79295f7a20878250da4"
+    },
+    {
+      "byteCount": 5183500,
+      "id": "payload-5bfc4ea9661917f1f7cd10c7",
+      "kind": "font",
+      "sha256": "a515c18b8de8f86143867dc04b3744c6e9eef1fa52ab459f428603bc5510a17c"
     },
     {
       "byteCount": 1246008,
@@ -1570,10 +1618,16 @@
       "sha256": "81d68de7a546b6acfd4b8464fa006f1f81f1dfd61a683111c7cb3e529c5042e4"
     },
     {
-      "byteCount": 19598,
+      "byteCount": 23279,
       "id": "payload-5e795a04ab5b494a4d59d775",
       "kind": "image",
-      "sha256": "fbcaef6146fb0ea526763a2429df247e8d9f0bddce7c31dfc3602b10812af145"
+      "sha256": "331b631777b72373648f94e00f13498945e5c2f69d4f662951a2d87b725d318b"
+    },
+    {
+      "byteCount": 453707440,
+      "id": "payload-5e7b775378f28a11eac48527",
+      "kind": "archive",
+      "sha256": "3e36eef69d2f5f3b117696e22936347d9c8f5e379f8912d763a074ca9bcbbe4c"
     },
     {
       "byteCount": 215193,
@@ -1606,16 +1660,22 @@
       "sha256": "cb37c2607bfccc1cdec04fe4e694b8cdcc0f42319b71aaeb00f56f29834dda43"
     },
     {
-      "byteCount": 21460,
-      "id": "payload-5f816d70a9f31e172a5fc5a3",
-      "kind": "audio",
-      "sha256": "9281ca08662f84c3ad4a689b46a1d6e3a5cec09d2c73bb1764fec967f5a5fc1e"
+      "byteCount": 214,
+      "id": "payload-5f72b227fe78f1cc272e13c3",
+      "kind": "other",
+      "sha256": "46c7ca0c4ef33ea506ed583706e1fe0f576e1d9bee566a48ff2ca979924b4b8f"
     },
     {
-      "byteCount": 24863,
+      "byteCount": 21624,
+      "id": "payload-5f816d70a9f31e172a5fc5a3",
+      "kind": "audio",
+      "sha256": "4dc37271f44237f516e6dde2b6c520f9355e075027cd72c364be274d37e225fe"
+    },
+    {
+      "byteCount": 24981,
       "id": "payload-5f928c52cebbf8e3c94377b1",
       "kind": "audio",
-      "sha256": "99f4929531db7443b31e92d853a5ef5486c45c8686345317a5511d480a2a0d83"
+      "sha256": "f3ef70553c199662a0696e5f87bc5bb9e9a3effaa709ae93dbce80b93228860d"
     },
     {
       "byteCount": 2936,
@@ -1624,10 +1684,10 @@
       "sha256": "ddbd8e1fd113252ef5458e3b170e1ccea4af90e14fa09e65287d6fce70b5d40c"
     },
     {
-      "byteCount": 6370,
+      "byteCount": 7524,
       "id": "payload-600e47acd85c4ef7c685088f",
       "kind": "lua",
-      "sha256": "6a7a1f103ea192be30c115894be80399bfe15d3ac18e2bef528f435a6bf50e41"
+      "sha256": "dce23561ffb31453bb011cd1527ae493b26832c730239b003973c1f2ebb01826"
     },
     {
       "byteCount": 889494,
@@ -1636,10 +1696,10 @@
       "sha256": "1c6f8a50d85657625429ebae50e5bee4af9f401fd453ebd7bdc9d57d2d689cce"
     },
     {
-      "byteCount": 17290,
+      "byteCount": 17288,
       "id": "payload-60ffd4f7146d95756c230ecd",
       "kind": "lua",
-      "sha256": "6c0d9dd8d81225256e28e30dc37b6764312e0d27b035795081ed6bb756ac9dc5"
+      "sha256": "89bdd7e42b5c1fd25b81dbd5baccddae50c75b73f8bd9b62792776c3b554ea11"
     },
     {
       "byteCount": 1897894,
@@ -1654,10 +1714,10 @@
       "sha256": "dab01ec92ca4ec4abad17c42c533fac2c545bc17d45f8b746a2b4c51796d5df6"
     },
     {
-      "byteCount": 56,
+      "byteCount": 55,
       "id": "payload-61ef7b63e67540b4af170f39",
       "kind": "lua",
-      "sha256": "6d4f3d31698a5f64537d113c45358d86495b300e99f9df7c000cef45b60e0988"
+      "sha256": "4d511d2908430b5f803750568036193e1419d1cb280e2862143b92c01070739b"
     },
     {
       "byteCount": 65,
@@ -1678,10 +1738,10 @@
       "sha256": "843cb617ad5434b785ab300b9ff2aa49cf7e6315f7dd67ece6cb8ea01376d291"
     },
     {
-      "byteCount": 24672,
+      "byteCount": 25488,
       "id": "payload-64fd5e6b5f7a0b610a824dbe",
       "kind": "audio",
-      "sha256": "37e9f40d7769a9597a79562d77bb84b7b20400eb003b018f5b47153d16844637"
+      "sha256": "9a7d529fb3dab6c6101ae4d7fbfabe07e81733fa491a087c2db61c92bd574988"
     },
     {
       "byteCount": 4301,
@@ -1708,16 +1768,16 @@
       "sha256": "245e0d724db26dfd4de16c5d2fe2b7433d64084944ae41b86f3325ffa7d9c61d"
     },
     {
-      "byteCount": 40343,
+      "byteCount": 40915,
       "id": "payload-6695d4225166484f11eed434",
       "kind": "lua",
-      "sha256": "de4b26547a88c321d93db0189ae04b8627591e08e902fb8d17a09a7ac054d156"
+      "sha256": "5b0caa0fcf7f6166b8a1405e1640c85317773fec11112e20550e38d8f0efa754"
     },
     {
-      "byteCount": 452,
+      "byteCount": 33,
       "id": "payload-66c747360819fc27ca5cd30f",
       "kind": "other",
-      "sha256": "bdf851b3704aef2c7f073b3846477d421ae525e414089839b31ba8e215e6db43"
+      "sha256": "06f8beeb144acdebc9ef3dcbe50928feed73158cec89e2ee69cf5c93aec9aa44"
     },
     {
       "byteCount": 4458,
@@ -1738,10 +1798,16 @@
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
-      "byteCount": 7727,
+      "byteCount": 7853,
       "id": "payload-693d1394421d7edc08e9ec72",
       "kind": "lua",
-      "sha256": "ebe381a723161d07a8d70793a6c13c44c1d9d2924e260a6031c5f9aad82db6eb"
+      "sha256": "0214e36fb98f054a12e86d44e5787ae0bbf141c3be863dcab7f0f8876131434c"
+    },
+    {
+      "byteCount": 2525,
+      "id": "payload-699e7577583055fb6610c3d3",
+      "kind": "lua",
+      "sha256": "aeeb9d306a3b2b32b038bf790a88f077f0a5493c1ffa60816ea27bd0e3687e74"
     },
     {
       "byteCount": 3741,
@@ -1750,10 +1816,10 @@
       "sha256": "46e0a8bb14f70c332b9d29a518a70d0eaa994db8849f443d309be3b959af0e10"
     },
     {
-      "byteCount": 4031,
+      "byteCount": 4048,
       "id": "payload-6a052d02484bf22360134e3b",
       "kind": "lua",
-      "sha256": "698fa18ad9fc13179dba4999f83a438ec8bfbb44e1d3ef4dc34683f106ecd3ed"
+      "sha256": "440f798cc606a8f622eb3535a3d2f3080e404458989e5d8d7fc3a19debb7d197"
     },
     {
       "byteCount": 1153886,
@@ -1771,13 +1837,25 @@
       "byteCount": 9701,
       "id": "payload-6a6d98dcb63dbb70cf3b6602",
       "kind": "lua",
-      "sha256": "0ef539505b7681046ad152d9dce0851470331f9e4bb987bc7a18213e6fde7404"
+      "sha256": "732934dbff6e3676935418a97d4d3a26915bcec52e0b45e7b9e3c4bfb8c15aee"
     },
     {
-      "byteCount": 0,
+      "byteCount": 8319,
+      "id": "payload-6b1b538c91c60604cbec7a5f",
+      "kind": "lua",
+      "sha256": "c4fb2ba55610f810ff02b957a5b220aba4ebe63cfa6a687c1ddc083999bf7c25"
+    },
+    {
+      "byteCount": 7389,
+      "id": "payload-6b608ae459a4addcb5971aac",
+      "kind": "image",
+      "sha256": "42edbb02579500153687eeed9f83cbe9358ba60a5139b520ab2382d315f3a414"
+    },
+    {
+      "byteCount": 41,
       "id": "payload-6bd8a63c3037572210e21330",
       "kind": "other",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      "sha256": "e5714a6af2519a4199fa0fbd1883c6b3f4977a9f13ce6bcc2628f9b5b6c19831"
     },
     {
       "byteCount": 2774,
@@ -1798,10 +1876,10 @@
       "sha256": "0ef6663479b35a0e647d1606d5a5284a1a9e084ff9b2d5c11e143346acc45838"
     },
     {
-      "byteCount": 41694,
+      "byteCount": 42108,
       "id": "payload-6e30c4048fd1d35a00ee3eb3",
       "kind": "audio",
-      "sha256": "814acdd8eecf9ad5e4c6fa50e3b69eafb00876b5e4d11899db269fcefe3be77e"
+      "sha256": "53d27be63e30c18d64f61e882b36436a4f85d88a2c1dc2d608911297fafa822a"
     },
     {
       "byteCount": 5013592,
@@ -1846,10 +1924,10 @@
       "sha256": "2ec2d57263ad97eaad1a046bcb972f1b76afc45dc3be853f2c81988bc19019b5"
     },
     {
-      "byteCount": 10495,
+      "byteCount": 10534,
       "id": "payload-70a4385adadac2a98b904c75",
       "kind": "lua",
-      "sha256": "1966b4e8609d491297324dbd7a12915c2854158d1836a2111aadbefd5fd1a6a3"
+      "sha256": "6ac6d9ef73eba362ba6d36dbd0bb9e85fb0fddf879d3884b611082bdab1201c8"
     },
     {
       "byteCount": 60912,
@@ -1864,10 +1942,10 @@
       "sha256": "380f0138c72ad9c0ac6b7848e8c0476889a3813a18c1791120c70434e904bfb8"
     },
     {
-      "byteCount": 32192,
+      "byteCount": 32709,
       "id": "payload-7116deb5da28b9ed18d12056",
       "kind": "audio",
-      "sha256": "d928fe16ae6111997c4f3d4b507a641c869a3a8ee6221b8b2f1a773fbcc2b607"
+      "sha256": "ad0cb9c95038ae7daf147dc212592419cbe9dad6ca5e8ae8c941608f7a4cf723"
     },
     {
       "byteCount": 4301,
@@ -1894,10 +1972,10 @@
       "sha256": "505bdab79808e48714588794622ec286c644db0d2d9a117c7087b3c4437e5b3f"
     },
     {
-      "byteCount": 7230,
+      "byteCount": 7743,
       "id": "payload-73bf380b0163ead41cda0f0b",
       "kind": "lua",
-      "sha256": "ab824612613226f932b813221a613f225015e0e2f13241ce1d850c4aeaba4193"
+      "sha256": "176f01c015bcc1974d41ebd4d369e5d71c252af347068dbb113aa389f0fdf397"
     },
     {
       "byteCount": 3086,
@@ -1906,28 +1984,28 @@
       "sha256": "e554d84c1da9425dabe3540c081607acd02c99e3dedc2a9f1c568529ae4b6f6b"
     },
     {
-      "byteCount": 6812,
+      "byteCount": 24410,
       "id": "payload-74cc742e1dc88883c7082eff",
       "kind": "lua",
-      "sha256": "90695e4e3ad9965cc789150a7c5c0aaeac94766f1817b1a70467b06b9c1c1bd9"
+      "sha256": "4edfcdc9ae12109bce4ac6c36e8545068f219eb31adf3aa5a4bfa90709773490"
     },
     {
-      "byteCount": 18358,
+      "byteCount": 18982,
       "id": "payload-756934c9f4141f617dde1ec6",
       "kind": "audio",
-      "sha256": "a5ec76470639e1be0c1ced0d42c54da36ae32253b98013f4e39e2e1a507f57e3"
+      "sha256": "02a044b6f07239f1b8070c8c691a9efd3419bfd75bc68635bb7fba4d0e47ff08"
     },
     {
-      "byteCount": 4793,
+      "byteCount": 5431,
       "id": "payload-75ec61dc21e716732596f19c",
       "kind": "other",
-      "sha256": "27e166965d88c91deeb30b8b654499a6f8c8ae7e883a7f73a7e55ab111539c99"
+      "sha256": "4a53fcb962aaa3f864a519b029bc2a27ae5c8dee6e1b6c1e7806db9148c250eb"
     },
     {
-      "byteCount": 25492,
+      "byteCount": 26078,
       "id": "payload-75f0fe4cf15083c4d660b235",
       "kind": "lua",
-      "sha256": "106adb93f3642adfe8223a83251c293e0158c98b1077263ce1ac410195ef604d"
+      "sha256": "feca6d7e1eea02290ca26b4530f2b30a5ceabad6c09d8dc331b05e7a698e6aca"
     },
     {
       "byteCount": 98,
@@ -1948,10 +2026,10 @@
       "sha256": "e43a9b7804bb678998795605e6735d04136965a54d8bcc922472174dfbf4a41c"
     },
     {
-      "byteCount": 17226,
+      "byteCount": 17568,
       "id": "payload-7693ba8c094116ab7787d27b",
       "kind": "audio",
-      "sha256": "21d031c00c4cd8bcc856834fc86223101c51feac6b892daa39889edfae61e51c"
+      "sha256": "78ef444371eda9acc3d03f832b430bf79bc755f218a895da2fe574d0877d3fb3"
     },
     {
       "byteCount": 2093627,
@@ -1984,10 +2062,10 @@
       "sha256": "eb4fa417f97eaba1b12fd5eeac1e2b0b6b315bd3529fee9ec581a013b45764f2"
     },
     {
-      "byteCount": 2215,
+      "byteCount": 2468,
       "id": "payload-78c5b47ab91aed9e0d76d41b",
       "kind": "lua",
-      "sha256": "451b1cbe4387ee258a73afc704f7343666769b7c2d24d001736004ad68e31742"
+      "sha256": "29a65fcb6f43eb1a8bd78f4f9b3971227710d18311f17f441c54b1eab77821f6"
     },
     {
       "byteCount": 320814,
@@ -2008,10 +2086,10 @@
       "sha256": "1c078e31719d503d0821b6f154fc5059eb6bb24d3a92f3cefc5977cc363a9371"
     },
     {
-      "byteCount": 37831,
+      "byteCount": 38384,
       "id": "payload-7c1b3a61fc0b890b2fc7f1cd",
       "kind": "audio",
-      "sha256": "27b8706db26262940d2df0c3bf925b6c5872da94a0cf606bd6c9e44115db839e"
+      "sha256": "437accf1460c31118fee5c192743d15b8c65c49a823cf962e7a126795913f355"
     },
     {
       "byteCount": 69,
@@ -2020,16 +2098,22 @@
       "sha256": "8c57d0973a63b0e897e53511e7e7e0851440bac1c2029f209a2ed5f7ccc45482"
     },
     {
-      "byteCount": 19129,
+      "byteCount": 19604,
       "id": "payload-7c7f74a9364d649a96c1a1a8",
       "kind": "audio",
-      "sha256": "5b4c88bc75cb237419c3d79289c407cdd550f24ff9f8e836ee1cea7c8e33dbea"
+      "sha256": "d66ba6a5aeac0a154a2c75d5310bd15f20567638c51b734a91c7b6fb7c298ae0"
     },
     {
       "byteCount": 0,
       "id": "payload-7caf1bb83ee62dd1881d24b2",
       "kind": "other",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "byteCount": 1963,
+      "id": "payload-7daee29162e0609333929c79",
+      "kind": "lua",
+      "sha256": "39afa28569848654079e93044282cd74f604e853f9e4c30ea3babbffa5815e75"
     },
     {
       "byteCount": 74177,
@@ -2050,10 +2134,10 @@
       "sha256": "c2641c769df97a8918aa618ead0d347a987ac928f61dbe048a517e1a23b06d85"
     },
     {
-      "byteCount": 1046,
+      "byteCount": 1111,
       "id": "payload-7e2513fb5acc0eec135e5bec",
       "kind": "lua",
-      "sha256": "420d74524840714a5187e98ced540f6366784ebd7af9d372bae5b05995b94b5d"
+      "sha256": "2fa0f3a85c62986b937f707b69275566a72961e43ed3ef8e34f2a4ff1dc09715"
     },
     {
       "byteCount": 10948,
@@ -2092,10 +2176,10 @@
       "sha256": "53c4f5ff28ae08f41a4bb6e1bf034226e3f80759aac3e137dfd95527b0eb5a89"
     },
     {
-      "byteCount": 40281,
+      "byteCount": 40739,
       "id": "payload-843555ff39599a924bb8d0b4",
       "kind": "audio",
-      "sha256": "e79d6465fca946004e99db670ea4d0036a4b3d951bbba965307bded1a6acb5a1"
+      "sha256": "8e0cc2a3bdad17365394e6dfee66452465b52ccd268de17f882c7ace31a12888"
     },
     {
       "byteCount": 1136350,
@@ -2104,10 +2188,10 @@
       "sha256": "69c0c7e654c78078b4352fd5de7773bafc21de718a9094470e017921ae156df0"
     },
     {
-      "byteCount": 21699,
+      "byteCount": 22751,
       "id": "payload-85a78606be35deb2438c4bd2",
       "kind": "audio",
-      "sha256": "8f58c3bb3aa8fbae3aac7cd88442b24fcd716aaf92ad6690921ebda9067830b2"
+      "sha256": "056278b59b1cdc1093c28895a20a018154619bc7b41fefe2fff907702cb23c41"
     },
     {
       "byteCount": 10304,
@@ -2116,16 +2200,16 @@
       "sha256": "8a1ea63d29521c755599139ff9a42e9a596e23fb0a9696ce898ec181dbc889a9"
     },
     {
-      "byteCount": 13959,
+      "byteCount": 14108,
       "id": "payload-868e2c816e240b0474a9c6a5",
       "kind": "lua",
-      "sha256": "e01072a6391904c66335627b20a6e30a3ae4908da1fb8c82c31fd7461a9224d8"
+      "sha256": "7d5a6f1804d21589a255cfe46feb3f230cf7ed87965df1fb6bc65a7b9d34fc08"
     },
     {
-      "byteCount": 11108,
+      "byteCount": 12479,
       "id": "payload-87967b0ae0d1e7fdd236f532",
       "kind": "audio",
-      "sha256": "d755b4223e21e408068714b8dac5e56cfaa3c6dabb8e1970d24c77a2dd597a8f"
+      "sha256": "7c836a807162d02f9355177fc3822d04e2a216c51685b81be1baf9fd781d0cea"
     },
     {
       "byteCount": 5183500,
@@ -2134,10 +2218,10 @@
       "sha256": "a515c18b8de8f86143867dc04b3744c6e9eef1fa52ab459f428603bc5510a17c"
     },
     {
-      "byteCount": 22558,
+      "byteCount": 22580,
       "id": "payload-88a79b6865cb7b84b74fe012",
       "kind": "audio",
-      "sha256": "367c8df8027c736cb43cc279aaf2e31696352126dac69da8c379cd9dc1f5e005"
+      "sha256": "514dc13f368207fb97ac5dc558f9ae1bb3dacc8ac32538aabb0df33492217645"
     },
     {
       "byteCount": 58,
@@ -2164,10 +2248,10 @@
       "sha256": "09bd977170057ad95e4edb643a0eeb138e32b620de4d55cfc03cf963506a62c8"
     },
     {
-      "byteCount": 17496,
+      "byteCount": 17859,
       "id": "payload-8b2e0689b312f1e7f9077403",
       "kind": "audio",
-      "sha256": "be63d7f892079aca6245ed8b46cd1e1385da50d3d959dbcd1226f30601a0b45e"
+      "sha256": "47ece62c33961dd8186a08d1af8a167bed91fa4fb14915faebc4c29383ed9f83"
     },
     {
       "byteCount": 681620,
@@ -2200,10 +2284,10 @@
       "sha256": "0865c986193bd9abcdf2dd519b0cfa562e471042794d78214d01d4af15dfdfef"
     },
     {
-      "byteCount": 231986,
+      "byteCount": 239916,
       "id": "payload-8d13a2321716dccbc77817e0",
       "kind": "image",
-      "sha256": "563d5465e99483812bb631296e99e21913beaa5cd90b95bcb75939addb990ee2"
+      "sha256": "1129a7168ebc702f4b3ff6546222346b9fc86c564ed3354bb0bbc14dbc1aede1"
     },
     {
       "byteCount": 9096,
@@ -2272,6 +2356,12 @@
       "sha256": "948b9ca3a5c2a240763700bb4be7148b423878035d2be2d1442cb8af52042b8e"
     },
     {
+      "byteCount": 4404,
+      "id": "payload-8fbba862a330ff0849708fca",
+      "kind": "image",
+      "sha256": "03cc02d27c1a0d792e0371978443db2cddcc8ed33b8e7afa089d284e345dad17"
+    },
+    {
       "byteCount": 2046416,
       "id": "payload-9038970499feff06e72ffb33",
       "kind": "image",
@@ -2296,10 +2386,10 @@
       "sha256": "dd1dc5495f62ef13f9cfd3120effa8eabc4066462d8ac650c6251b8b516412ec"
     },
     {
-      "byteCount": 8885,
+      "byteCount": 8978,
       "id": "payload-90e287b641d9602c71042e18",
       "kind": "lua",
-      "sha256": "59e99ce8a70ef1f078f352d45b1260071fb2eb868e6837cd62568e3b8ae2d93f"
+      "sha256": "d29e5da5410f89581a753f6dcc632523742a042b8962f21a4315535a4eeb66ef"
     },
     {
       "byteCount": 8428,
@@ -2428,22 +2518,22 @@
       "sha256": "7d184eed288c59f563d9f34d535dd520ded0c4bb363d4f98b8d5b55b71f7bd70"
     },
     {
-      "byteCount": 440,
+      "byteCount": 467,
       "id": "payload-9cfed539554e8601fde8ca9a",
       "kind": "lua",
-      "sha256": "87ab2a907dd13865353a5a53eb5804072b0e40b5cbaaee62c903575edf57c863"
+      "sha256": "3fa5cb863dba3dcc9343b8b6835a21ca01407051ab35db56496826f7f1d3a023"
     },
     {
-      "byteCount": 22279,
+      "byteCount": 22944,
       "id": "payload-9df63ecb18e87c363e34b250",
       "kind": "audio",
-      "sha256": "b6dd1067346ef9ddc8234ba406bedf5acfc329fc5520967022b741946f5be563"
+      "sha256": "1a20e0759225474c01038d00dc94fcaf1c8893966312efe080719fba52f36482"
     },
     {
-      "byteCount": 0,
-      "id": "payload-9e1933287b621ce569afba05",
-      "kind": "other",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      "byteCount": 872,
+      "id": "payload-9e0692ebe4876294a2d89964",
+      "kind": "lua",
+      "sha256": "7ddab3c85e9751c899a731ce65cbfc149be3eccad7e200b236ffc92a094acfa8"
     },
     {
       "byteCount": 6176,
@@ -2494,6 +2584,12 @@
       "sha256": "b7f25269263f0dfc1225ddbc15860c51a24e24c7f33c53fd889602a7282cbce1"
     },
     {
+      "byteCount": 293608,
+      "id": "payload-a303c53135d1cce90747e147",
+      "kind": "image",
+      "sha256": "432d141ceba6bcb90784ff90e063c90c9577f202b8b4ab1801777fd2ec4259c7"
+    },
+    {
       "byteCount": 2168152,
       "id": "payload-a36d47438a02019293452335",
       "kind": "image",
@@ -2512,10 +2608,10 @@
       "sha256": "f116c7334c96e1e104e40a19ca327862a059277bfb1ab1e22601cde62180bce4"
     },
     {
-      "byteCount": 3885,
+      "byteCount": 3904,
       "id": "payload-a597b48e385258bd7f327d5d",
       "kind": "lua",
-      "sha256": "70fe0cd0d28e2ebb91b677924086fa3f3e3db85649ba756dc557488b526c8a2c"
+      "sha256": "6c1a9e043fe2f38ee2472ea3325c6374cb6f360a6543042045f4a1bf00aaf565"
     },
     {
       "byteCount": 100,
@@ -2554,10 +2650,16 @@
       "sha256": "3d15c433fff4d07ea4c936290c9a0053f275dfc11511535dda3d553925d29392"
     },
     {
-      "byteCount": 5303,
+      "byteCount": 5595,
       "id": "payload-a82f1066ac459ced7b2e56f7",
       "kind": "lua",
-      "sha256": "caee04343655590087df01ea7addb94653197c2bb6408b513fb1260380075b6f"
+      "sha256": "5c7c777182bd6102cdaf4cc47bb5062a017d404248b07a7dd4eb7122780ef066"
+    },
+    {
+      "byteCount": 2237,
+      "id": "payload-a840f7ece53ef225d92006af",
+      "kind": "lua",
+      "sha256": "e450a14be0c6e90be6ff60ac376a4bec035b5f550f571f384ba2d5f87665cc3f"
     },
     {
       "byteCount": 4668,
@@ -2614,16 +2716,22 @@
       "sha256": "0c677d3177c79410a1f2e5cf9b8c9fec38a87991bbe872a41f9e2888afbb2ea0"
     },
     {
-      "byteCount": 31845,
+      "byteCount": 31748,
       "id": "payload-abc378a3b074d0450f2ee954",
       "kind": "audio",
-      "sha256": "1f1801679bd7744725689a1475a5c497d4dd0507d376c3e12757f5f535963109"
+      "sha256": "3b7541986a6770bd4d1721acd803e309076d1941a20cd3a88541931a314c6f78"
     },
     {
       "byteCount": 5454,
       "id": "payload-ada8f4e9af485e1db54dd99b",
       "kind": "lua",
       "sha256": "d298d259dfcd2506f8a58764ba6a92a3d8e21b052823a276a2e17472c2bf7657"
+    },
+    {
+      "byteCount": 219919,
+      "id": "payload-adae6eae3ea8efb0e92bc216",
+      "kind": "image",
+      "sha256": "09678750d063bfbf242b22a86533487b2b91074833a5a9bf07e2818c98c5cebd"
     },
     {
       "byteCount": 2099032,
@@ -2641,13 +2749,13 @@
       "byteCount": 152,
       "id": "payload-af76765ff9c487c964ec6a9c",
       "kind": "other",
-      "sha256": "827842c0268e23739ea68980c5f4ff3c444816bab776bbe4fc1cee057fac487c"
+      "sha256": "2758c28976eeb46fedf50a9dcbcc51184501c902b1734d7595cf3e265c63fc50"
     },
     {
-      "byteCount": 21946,
+      "byteCount": 22538,
       "id": "payload-afdfed2d917a8dc0e1fc4255",
       "kind": "audio",
-      "sha256": "2f71bb325663a623f1d784151752952f484558389855f7b02bf82c144ef4e1d5"
+      "sha256": "f121cbb401e995e317cfc9583e52b6b24c251434a710852329ef2f75b87f8472"
     },
     {
       "byteCount": 21393,
@@ -2680,16 +2788,10 @@
       "sha256": "c2d7f55dbbe3673c8981dd18a1e891e8793fcda1a9451138dfff95f8fff92d9d"
     },
     {
-      "byteCount": 211885,
-      "id": "payload-b284e4b9b7ab3e5f0851e85e",
-      "kind": "image",
-      "sha256": "adde8e6ebcf2654aadfcfd894a596dbbe0c806d30a5286e5155c2792ed700f7c"
-    },
-    {
-      "byteCount": 2040,
+      "byteCount": 2825,
       "id": "payload-b2acdf46efe4d1adf2599581",
       "kind": "lua",
-      "sha256": "afbeff9e194b49f24c329c00cf1e65a2a3572ac5dc7a295546cdedc71485e7ed"
+      "sha256": "61e65f9f556dfae9f0b0c2dd5ae731e57d45d982b3b7e0e0d96de11d8fb2287c"
     },
     {
       "byteCount": 2712,
@@ -2716,10 +2818,10 @@
       "sha256": "088dfa564b0357123f02713f80ea1c7111f08d37d4f51ee591d64a8adf1091e1"
     },
     {
-      "byteCount": 9921,
+      "byteCount": 44802,
       "id": "payload-b44325a9489cac9b15bd6654",
       "kind": "lua",
-      "sha256": "3b8db657c4d64625b081eff61166ed22ad6c4a82384c741c0f001be0745a2c83"
+      "sha256": "660f5358ad92f5c40eb9952b32104c44622808098738a87fa98d5a968d1d8764"
     },
     {
       "byteCount": 2090,
@@ -2776,10 +2878,10 @@
       "sha256": "0b985f43a9900c4ac06266f1a60adfb99bdf7cc3381cbdaa246d365a8cd395fc"
     },
     {
-      "byteCount": 3043,
+      "byteCount": 3752,
       "id": "payload-ba6398004675bdf98a90f9ac",
       "kind": "lua",
-      "sha256": "587dd00a629b6f39d1ce10cb71d969c36ca6ebea9e582ce8bfc8c1dff400bfd7"
+      "sha256": "44d2cd9c648a5869ea48cf0b68f24943263fdebf6933478f2a72f82b438e7ba8"
     },
     {
       "byteCount": 561590,
@@ -2800,6 +2902,12 @@
       "sha256": "e5714a6af2519a4199fa0fbd1883c6b3f4977a9f13ce6bcc2628f9b5b6c19831"
     },
     {
+      "byteCount": 4404,
+      "id": "payload-bc70d2630641d2eb22fa7371",
+      "kind": "image",
+      "sha256": "03cc02d27c1a0d792e0371978443db2cddcc8ed33b8e7afa089d284e345dad17"
+    },
+    {
       "byteCount": 11414,
       "id": "payload-bcc188e15fee271eafa2210d",
       "kind": "image",
@@ -2812,10 +2920,10 @@
       "sha256": "b332a6d826d3153abb324ad671c550251d07b85aa6f45aca8f1cb711744465cc"
     },
     {
-      "byteCount": 950,
+      "byteCount": 1308,
       "id": "payload-bd93998773a6bec5a8e4267d",
       "kind": "lua",
-      "sha256": "ba38a2448e65b0443659a9b88e131ef3a05edaa4f0f43b0c78a2963f985843c2"
+      "sha256": "57bb4739a3d93daf818db5f1b4406b41e549188fa88e22d9b960e3b414d1a242"
     },
     {
       "byteCount": 1991599,
@@ -2830,10 +2938,16 @@
       "sha256": "53ae5e5c097993c581c13085e64897f47068721bd4ea74f894285f4c24cfa483"
     },
     {
-      "byteCount": 16801,
+      "byteCount": 16889,
       "id": "payload-bf064eb1650c5afc6a9a53e6",
       "kind": "audio",
-      "sha256": "37e0ee99b490fc7584e56d6361e295c08d3e0e028eae8a1955b9ad63253f8cdf"
+      "sha256": "91b70af35e5a238af6621ebd729f1a1c74af27678b214101549d32de80874774"
+    },
+    {
+      "byteCount": 590929,
+      "id": "payload-bf4005b840e7bc0324d2c76e",
+      "kind": "image",
+      "sha256": "c787673f0bc0c93cca9174c6f0ae09765a97ea03a92d2b09d6b33fc87da419b4"
     },
     {
       "byteCount": 598092,
@@ -2872,10 +2986,10 @@
       "sha256": "b09112f0d601a3c5398726dd8915393740ff8959543ec87359b5585844458e22"
     },
     {
-      "byteCount": 10711,
+      "byteCount": 10683,
       "id": "payload-c132bbe6a07eab3d6eb49be9",
       "kind": "lua",
-      "sha256": "c81e9f12b83b050c2445a573b587d6d5914cbc5d6e7a8315265b7071ecfa57db"
+      "sha256": "2fe280add152b97d0cb590a60f8d66f39fcfd82879f42a9020b4d6703faff5ac"
     },
     {
       "byteCount": 893567,
@@ -2908,10 +3022,10 @@
       "sha256": "ecc294001751b3913948d69a3f71045933653032ddda2bd34aa755588d316f95"
     },
     {
-      "byteCount": 30605,
+      "byteCount": 30696,
       "id": "payload-c3338c9eb7755220bbdc3ef8",
       "kind": "audio",
-      "sha256": "1d7b5cf5a9c4e0c05e3d1d562a78d4767b60a04ef10e6521618bd9f5c5d126e7"
+      "sha256": "5cbedfd87575cb37b002ce51477c33cc2eb882982f3862ca9a04824b7cdab811"
     },
     {
       "byteCount": 48388349,
@@ -2986,10 +3100,10 @@
       "sha256": "a45ca9f88c3abd5c501b59cd7789ac7b95606004612aed33c447e4253afb4b19"
     },
     {
-      "byteCount": 38219,
+      "byteCount": 38209,
       "id": "payload-c69e32eb217a9efe426629f5",
       "kind": "audio",
-      "sha256": "a545083a112e5bd262f9176a8833fff62997db0981b16ceec14c96e8ae9f94a3"
+      "sha256": "de5c7b7fc1a5fc18b9ace4f179a937ad9c9e574e0ed814950a618e5ad07f51d3"
     },
     {
       "byteCount": 5232132,
@@ -3004,10 +3118,10 @@
       "sha256": "af17e74304319b60734c19c84344cb640beb2032dd00f0d7405b419d798322d8"
     },
     {
-      "byteCount": 16335,
+      "byteCount": 16800,
       "id": "payload-c744664466475814e12f5e99",
       "kind": "audio",
-      "sha256": "6c718bbc36f8cd7bd847305337c15360d3c1d3843132f50b47d874e965b724a3"
+      "sha256": "420382db0f6e36130e7b242aa9d33cf5f8b07c840f0fe05f954f702b838595b1"
     },
     {
       "byteCount": 20517,
@@ -3028,16 +3142,16 @@
       "sha256": "80835f01603da13d327179f76366f2eb73835531411da443c4dc48ef761100a3"
     },
     {
-      "byteCount": 25492,
+      "byteCount": 28391,
       "id": "payload-c9e4d565e85c5a3814f4fd32",
       "kind": "lua",
-      "sha256": "b68a084dc6c9fb865b350cc2cdbaceda463fc9146e2cdd13eab5907798c8a8ca"
+      "sha256": "6efc53f30cd51b2b6209b1319685402c1f7f7816db478d79139a26408d9dec84"
     },
     {
-      "byteCount": 17359,
+      "byteCount": 17539,
       "id": "payload-c9e596e3388787632bddabb0",
       "kind": "audio",
-      "sha256": "58dc140c75e09da0a7157fa41e78ab4f7399f0ec0d128965ae53fa252f213ea2"
+      "sha256": "1e565fb779ab24f7277c8d6fcfed68852b463c079e58c109dfc88fa334538466"
     },
     {
       "byteCount": 1337603,
@@ -3046,10 +3160,16 @@
       "sha256": "0823dba5e36cf02ab53f92f5e93cb192f236bf9329eeac383a377edd7ed033d5"
     },
     {
-      "byteCount": 15969,
+      "byteCount": 517,
+      "id": "payload-cad3f2304f7815f14ffcfc34",
+      "kind": "lua",
+      "sha256": "49c21a51d0823db55fc5eab7b97d36bccd481427a44a2dbc0e10d64a500be310"
+    },
+    {
+      "byteCount": 16585,
       "id": "payload-cb9ccd4730724f890c7a380b",
       "kind": "audio",
-      "sha256": "2b4ab51174898bdbd3a4402797e9d669572be596df89440562cfb860ad9251e4"
+      "sha256": "59a4cc1484e9b830ba0113bd1fd33f3813058de4b15bfb05ddb8ba3eec6ff08f"
     },
     {
       "byteCount": 878164,
@@ -3070,10 +3190,10 @@
       "sha256": "5ed87403c67d4680402510cffff3165dbd797d5e393089f29661e19cc5d35334"
     },
     {
-      "byteCount": 17386,
+      "byteCount": 17636,
       "id": "payload-ce526ff40a3be8eead181368",
       "kind": "lua",
-      "sha256": "67f83c9da07fb782ee1576d58b8eaf104488cf86785a6627dbb3d1b9c2843fac"
+      "sha256": "d7f01e41586ad03196deea889aa816798f8122eee0dbd1d9865c18e9faf85bad"
     },
     {
       "byteCount": 11414,
@@ -3082,10 +3202,10 @@
       "sha256": "380f0138c72ad9c0ac6b7848e8c0476889a3813a18c1791120c70434e904bfb8"
     },
     {
-      "byteCount": 17206,
+      "byteCount": 17128,
       "id": "payload-ceccb047845ab19400564426",
       "kind": "audio",
-      "sha256": "dd809c99524e35a62942bade77e189ab4cf21d036bfe7a6ff21e92fce144a4d3"
+      "sha256": "371d535c73a5b74328de1414567f1144c69719d0d67cb111866d4ef06ea870ad"
     },
     {
       "byteCount": 2296,
@@ -3130,10 +3250,10 @@
       "sha256": "18a9a3e7b09956850d6d227f54567f785e7c1411fcfda6157a71b2d4009a8991"
     },
     {
-      "byteCount": 456,
+      "byteCount": 514,
       "id": "payload-d26eff6794454931b3ab6b45",
       "kind": "lua",
-      "sha256": "370470c60d57c13f9deaa76fc7c775c603d69a3cf9e0dbfb8795355b4a06bc56"
+      "sha256": "5e72b0aab45b57a0f3eb73757f1251f8fc18dbaf02530d31be700e044d4d968c"
     },
     {
       "byteCount": 795389,
@@ -3154,10 +3274,10 @@
       "sha256": "c76db9cc03341785c12b2207ffca7c8ded890dc508f59801c269793c1a8439c3"
     },
     {
-      "byteCount": 17227,
+      "byteCount": 17725,
       "id": "payload-d371c0d36caff4fb3b9e2620",
       "kind": "audio",
-      "sha256": "5d88f09bf3ad5b17152f8a43400f5248b673633d6a394b5769e6526b76b94a4c"
+      "sha256": "37166295942d310d4a2c422a9fc187724646e5d2524aca0b1fb844d668bda6cb"
     },
     {
       "byteCount": 4301,
@@ -3166,10 +3286,10 @@
       "sha256": "697383c6addd5dd14d7e1ff053aaa44520ce86a58589eef1f9985ab66e08db08"
     },
     {
-      "byteCount": 24660,
+      "byteCount": 25571,
       "id": "payload-d57f20c1d03ba4cdcab72a98",
       "kind": "audio",
-      "sha256": "1385c0810f3d8a83f5687cfc195a511e834e170fa3c98f6517ebdc073829eee1"
+      "sha256": "d29bba31be366ae3e4965567c61632fad6841b5f2849ffd1db18c8d42b42c29d"
     },
     {
       "byteCount": 1938030,
@@ -3184,10 +3304,10 @@
       "sha256": "6082f4691bb07cfd6106086db6bf0642655db0b0b595224788dbf93af287ccec"
     },
     {
-      "byteCount": 10631,
+      "byteCount": 13827,
       "id": "payload-d6a9377fabfc6993930961f6",
       "kind": "lua",
-      "sha256": "d3ebee95104acb183fd61900d663993d297206962bc9e36708ec05510f014626"
+      "sha256": "304a78030a83eed8081631fc189c252a4db7793f345412a88127be95ea6781e0"
     },
     {
       "byteCount": 14416,
@@ -3232,10 +3352,10 @@
       "sha256": "85ce13d0dbc4ecad7eb0e69513bc8fb9e7b1ebf1c97a71b04de9522623d49241"
     },
     {
-      "byteCount": 19555,
+      "byteCount": 20108,
       "id": "payload-dae1d74fd38f729bce0ec9a4",
       "kind": "image",
-      "sha256": "5482eb59f9732fcec9a9dca45e72d9921edde793950dbe1ce42450b51f5bee39"
+      "sha256": "eef246c54674ab944dcd2a73d6bf7b8a61e1ad031ca5e3fb3ad2b22882244243"
     },
     {
       "byteCount": 11414,
@@ -3244,22 +3364,22 @@
       "sha256": "380f0138c72ad9c0ac6b7848e8c0476889a3813a18c1791120c70434e904bfb8"
     },
     {
-      "byteCount": 26431,
+      "byteCount": 26620,
       "id": "payload-dc0b13a2932427a40eecfc8b",
       "kind": "audio",
-      "sha256": "0427d9b38e43ac8289d66c92ca0341ea4e141980b3d6d72bc3c388aa26de6d76"
+      "sha256": "9d36990e5dfcc218a4375e1f3bbc0355431e46f88882036367706d2e61e867bd"
     },
     {
-      "byteCount": 2130,
+      "byteCount": 2059,
       "id": "payload-dc317883483cc48127671b0c",
       "kind": "image",
-      "sha256": "3df48ac1f9a33f891d11a70e9651bac94daebf4751b75c4b118dff5ad6965b44"
+      "sha256": "5b31aae47dcedcb925503179d642ef5e1198942ca5b7e6d2979377a15d5762ed"
     },
     {
-      "byteCount": 2133,
+      "byteCount": 2001,
       "id": "payload-dc548593474d1ee2b0b15912",
       "kind": "image",
-      "sha256": "696d39ed8e15362bd0ffe0712c44a7990eaf50e24459d32ed90d9eec5c00db43"
+      "sha256": "ed29c25fb66fa730c24056de3a71347f5d249c061ca7e00cda3baef4997279fd"
     },
     {
       "byteCount": 7850,
@@ -3274,10 +3394,10 @@
       "sha256": "3ee7da4632c0d7b47c74d44c79e15daa21aa0f18398b9a27a0b4d62affb90dee"
     },
     {
-      "byteCount": 1311,
+      "byteCount": 30,
       "id": "payload-de377f2d7236b44e0ba2bcf9",
       "kind": "other",
-      "sha256": "1b9a14bad7483c1266b63c138dce1fcd01819fcd79be3ccb8d6bfdd2ac30b8a3"
+      "sha256": "ff2e78b3a2e5587252baa9a401c1e6bd9cd037934216d62c78c6ba43e733e29d"
     },
     {
       "byteCount": 107062,
@@ -3286,10 +3406,10 @@
       "sha256": "a035dbaff81f5aec93a7d162ef24840428b5970bd6fd08b435793d91a6278363"
     },
     {
-      "byteCount": 10212,
+      "byteCount": 12530,
       "id": "payload-de63888dea0e4bd443974525",
       "kind": "lua",
-      "sha256": "57081e3d33f27d62e1d1d803f05d7c393e6dd3e334b215205951d9474c806ad3"
+      "sha256": "11d1cd32b13c1fb369aef992b1444a2c9da69375c548d2d726bcec9b9ba07db5"
     },
     {
       "byteCount": 5569,
@@ -3320,6 +3440,18 @@
       "id": "payload-dfcf04441ee0d742062a6815",
       "kind": "audio",
       "sha256": "c425226b8517708ef1d5e3997f79160191c98d9b085e48be085049c4d8d2d7ce"
+    },
+    {
+      "byteCount": 16,
+      "id": "payload-e0f5d848cad6d7cffdbd0ee7",
+      "kind": "other",
+      "sha256": "2de84622a56b51c09e96feabbe375cb7b1fdb1502810076b130475a40a7dc5a1"
+    },
+    {
+      "byteCount": 179793,
+      "id": "payload-e165fb1f582c7733afe06134",
+      "kind": "image",
+      "sha256": "68ea70eef7221efa88762750dfd49f1f0eeff55b16ed9c026a96af18af06af58"
     },
     {
       "byteCount": 870945,
@@ -3376,6 +3508,12 @@
       "sha256": "01c6256a7595364819f2a3ca23a6da16bbd48712e835bd345c1a82edaa7fb80d"
     },
     {
+      "byteCount": 16,
+      "id": "payload-e63cf04eea381ad7f3d0eda4",
+      "kind": "other",
+      "sha256": "2de84622a56b51c09e96feabbe375cb7b1fdb1502810076b130475a40a7dc5a1"
+    },
+    {
       "byteCount": 23005,
       "id": "payload-e6915fda1ff9f733ab7336a2",
       "kind": "audio",
@@ -3386,6 +3524,12 @@
       "id": "payload-e8570a627ee370d6feac8e0b",
       "kind": "image",
       "sha256": "9279dfa44cb1b58721a619ba121c44217b1f7855450f19f36f5f9157ad9a70b7"
+    },
+    {
+      "byteCount": 93734,
+      "id": "payload-e8e61585666d951ec6241f96",
+      "kind": "image",
+      "sha256": "9dc8dfdf217b13dce622c962df463295ae64f0ba9b3e9e557ec79150b3bee4e0"
     },
     {
       "byteCount": 2067680,
@@ -3400,10 +3544,10 @@
       "sha256": "043bb5ca45884390fcfdbc23e1018f29008f2149fbcf537da26c16469abc0091"
     },
     {
-      "byteCount": 178909,
+      "byteCount": 179459,
       "id": "payload-e9bfd1b676fd9107b41c08fd",
       "kind": "image",
-      "sha256": "31e4e71c3eaf945cbe0c3aa9cc81f89b18e71aa2f68e602b66fa98967da64a9c"
+      "sha256": "bfd3796347bd5469469b307f8980565a36de5091139508222a89e199c1b5bfbb"
     },
     {
       "byteCount": 11414,
@@ -3430,22 +3574,22 @@
       "sha256": "9b0bdb02b7b14bec090f02225b6a080afc9e43e3379af50570c8c0ce9742a391"
     },
     {
-      "byteCount": 16947,
+      "byteCount": 17920,
       "id": "payload-ec6201952bf765baf6b639f9",
       "kind": "audio",
-      "sha256": "82e765655f96a703686aa1c4c400dec869b57e0f0274a7c53b02dfde08ee5a3f"
+      "sha256": "cdae56bf3be3cdcc26e82912447bbfc31133e3e2c1351319b51b62aae6e9d002"
     },
     {
-      "byteCount": 180103,
+      "byteCount": 228682,
       "id": "payload-ecc6dba9be015b4ee22933a6",
       "kind": "image",
-      "sha256": "cf1ee84028725d68911b053888dd231b148f531e5ff53d45c0b21188a9439708"
+      "sha256": "c4852ac8fc5031486163c3f32371a2273aa57e1cda9df832f6703547c8bbba5a"
     },
     {
-      "byteCount": 24656,
+      "byteCount": 24938,
       "id": "payload-ed07ca043225a3b9552af8b2",
       "kind": "audio",
-      "sha256": "4d1b0e78978b558ffcbbe19a5ae0a30a4ba528f3b76cab25ac55d90a01a20395"
+      "sha256": "0c98fc1876652a1d785480f5aea02bce07d1183e4318f3dcddc8def604ce072f"
     },
     {
       "byteCount": 2296,
@@ -3490,10 +3634,10 @@
       "sha256": "3584778c235031d1442c44ac38f895f08e2982d56c9893b33b36e77bd6d1f209"
     },
     {
-      "byteCount": 22306,
+      "byteCount": 22801,
       "id": "payload-f1f1b17df77e37b9de7e4c6e",
       "kind": "lua",
-      "sha256": "b86e3eacb243fb76b45dbe3f082ebd194205e8e01f2a2166cb2578b589e0a2fe"
+      "sha256": "39498156e0bc424a8cdd8dda4dc5926fde9962d6b37b7993aba1579b50ffeab2"
     },
     {
       "byteCount": 13962,
@@ -3562,10 +3706,10 @@
       "sha256": "4b44705e3bac9bf944d990bf9caedcd57c85823ce63bca86a3f5f2152874373a"
     },
     {
-      "byteCount": 21584,
+      "byteCount": 22088,
       "id": "payload-fab146612314dc08ec508102",
       "kind": "lua",
-      "sha256": "6b8aa1af2ea2072f91291b1148cdb82ef017dbdfd6d07150c2e39dc08a7d5363"
+      "sha256": "39abcbf9992f8e64e98e002294369521b1545fdcf9da398334270038eebcd150"
     },
     {
       "byteCount": 51879,
@@ -3592,6 +3736,12 @@
       "sha256": "e0628621e757bc412eb0508c9ec5da25019457391c240b20062f3734343a66e6"
     },
     {
+      "byteCount": 518,
+      "id": "payload-fbf96fc5a41baf18137511dd",
+      "kind": "lua",
+      "sha256": "fcba1385b0b32eeb184bab7156de44558261b9046db59e89812e0d271c7690d5"
+    },
+    {
       "byteCount": 28344,
       "id": "payload-fc7ee8065000f0159eb1c99e",
       "kind": "image",
@@ -3610,10 +3760,10 @@
       "sha256": "bab2c0738526e8e1e942b4c317b78d33497264b709ff9bb19569878d3b3107ef"
     },
     {
-      "byteCount": 33133,
+      "byteCount": 36785,
       "id": "payload-fd6799a4f37514fe0910b2b7",
       "kind": "audio",
-      "sha256": "393261d6fcaae25c4fc6afac46cdfaf081b891fc76418d7c35bbdbd8161fa5e2"
+      "sha256": "14394b6c1a2c0390bfb959a90942cf1e10343d995607650d037ab9251c58f24a"
     },
     {
       "byteCount": 24991514,
@@ -3634,10 +3784,10 @@
       "sha256": "01216409dfcc79b9dfd8be515bdb23f98ef871bec4ad257d29a6a00f2b0d7b91"
     },
     {
-      "byteCount": 31825,
+      "byteCount": 31910,
       "id": "payload-fec602f6feffa480f09a5294",
       "kind": "audio",
-      "sha256": "37011818bb306e98c20384ffdabff68ee1fe70adc12e75213bcfed019a255a31"
+      "sha256": "4131c9ac986e270af035db82fa343237294d92a07388ebd80c85b9c75ee47278"
     },
     {
       "byteCount": 1670260,
@@ -3652,22 +3802,16 @@
       "sha256": "ab8cb717ff79c8d4e090ce7e3d9d719d611bc8fc12824709ec3e97a17c3cb664"
     }
   ],
-  "extractedPackageRootIdentity": "skin-tree:448a5b031b153c3424e5d5ca6b07ab1fe832dabbe18c0faf6f72bc17bc4af18d",
+  "extractedPackageRootIdentity": "skin-tree:515d52ba1a00a6067f636f838c935328b7765aef8f0019557748a2441ebb89df",
   "legacyLuaApiSurface": {
     "audioFacade": {
       "criticality": "optional",
-      "disposeSiteCount": 1,
-      "initializationSiteCount": 1,
-      "playSiteCount": 1,
+      "disposeSiteCount": 0,
+      "initializationSiteCount": 0,
+      "playSiteCount": 0,
       "reachability": "pcall-guarded"
     },
     "bindClass": [
-      {
-        "className": "com.badlogic.gdx.Gdx",
-        "criticality": "critical",
-        "reachability": "unguarded-top-level",
-        "siteCount": 1
-      },
       {
         "className": "java.io.File",
         "criticality": "critical",
@@ -3685,19 +3829,18 @@
       "reachability": "configured-load-listFiles-deferred-mkdir",
       "reachableConstructorSiteCount": 1
     },
-    "helperCount": 2,
+    "helperCount": 1,
     "imports": {
       "criticality": "critical",
       "reachability": "unguarded-top-level",
-      "siteCount": 2
+      "siteCount": 1
     },
     "module": "luajava"
   },
   "officialSource": {
-    "accessed": "2026-08-03",
-    "url": "https://www.kasacontent.com/musicgame/beatoraja/4226/"
+    "accessed": "2026-08-09",
+    "url": "https://www.kasacontent.com/musicgame/beatoraja/6088/"
   },
-  "schemaVersion": 1,
   "redistributableSyntheticFixtureDigests": [
     {
       "path": "charts/acceptance_7k.bms",
@@ -3720,6 +3863,7 @@
       "sha256": "e947526c2c7e26632b09c4eb3f1ce912bd18094c7f224c0ef09138d70e361946"
     }
   ],
+  "schemaVersion": 1,
   "selectedCustomObjectMaps": {
     "customEvents": 0,
     "customTimers": 0
@@ -3738,7 +3882,7 @@
     },
     "auditedGuardConfigurations": [
       {
-        "auditedGuardConfigurationSha256": "4d5d525e5f44acd7498f1382ee0e74944156d266768decc54b8243e98dc17f21",
+        "auditedGuardConfigurationSha256": "acb619e78fb3d8435fd7486f815fd54deccfa4bbe5dbf7b1d2d0796452559256",
         "guardVector": [
           {
             "choiceId": "choice-9aae8d1a7118c18c8f42f448",
@@ -3753,8 +3897,8 @@
             "value": "not-reachable"
           }
         ],
-        "guardVectorSha256": "eb52ec905a507efe50273b2ff09d91d10f025d5019c7bf3d4330ee31e3445e13",
-        "id": "configuration-567caba6ccfd1b47b897cc03",
+        "guardVectorSha256": "38fe362a92f6ca0109effaa706d1ec42d6b08d28a394db738d2bccd8f63f7450",
+        "id": "configuration-0d31ddc28e5ece1a43b8c010",
         "optionSelections": [
           {
             "choiceId": "choice-9aae8d1a7118c18c8f42f448",
@@ -3768,7 +3912,7 @@
         "role": "passing"
       },
       {
-        "auditedGuardConfigurationSha256": "dd6c3fcf4ffdc4e72882e47294a29c2f845c599f624d0948f72988c9be330b74",
+        "auditedGuardConfigurationSha256": "afb7be52dd8e384f7a030ce4a419fed24c1a261ef2254f7008a6f70ded370ef2",
         "guardVector": [
           {
             "choiceId": "choice-1849467b7df203f302951bd5",
@@ -3783,8 +3927,8 @@
             "value": "not-reachable"
           }
         ],
-        "guardVectorSha256": "e4f5da4b24ae219320023f32820569fb442ceb0b6ad0a4823de74325ddc07552",
-        "id": "configuration-b1b2944d536e73ad930ac77e",
+        "guardVectorSha256": "08d59b63dc1ed53154ac07baa9d5c72d2a0111ea8a5fd451f8ebc149537009bb",
+        "id": "configuration-239e9833572d3000b43903c1",
         "optionSelections": [
           {
             "choiceId": "choice-1849467b7df203f302951bd5",
@@ -3859,7 +4003,7 @@
         }
       ],
       "schemaVersion": 1,
-      "selectedRevisionSha256": "448a5b031b153c3424e5d5ca6b07ab1fe832dabbe18c0faf6f72bc17bc4af18d"
+      "selectedRevisionSha256": "515d52ba1a00a6067f636f838c935328b7765aef8f0019557748a2441ebb89df"
     },
     "schemaVersion": 1,
     "upstreamFacts": {
@@ -3952,9 +4096,9 @@
   },
   "selectedLuaClosureContract": {
     "algorithm": "SelectedLuaClosureContractV1",
-    "changePolicy": "explicit-source-constant-manifest-and-acceptance-review",
+    "changePolicy": "explicit-manifest-and-acceptance-review",
     "schemaVersion": 1,
-    "sha256": "717b46b6641c84e431490fff24f45a0ee23a1208017cc4dae4ea2cad438f5bb0"
+    "sha256": "9d2a5acafc57edd6fa958c86fd92b861b851d952581a6828c1beb5b7fde67c0d"
   },
   "sourceProvenance": [
     {
@@ -4305,6 +4449,19 @@
     },
     {
       "criticality": "optional",
+      "id": "55",
+      "kind": "event",
+      "provenance": [
+        {
+          "behavior": "maps supported event IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/EventFactory.java",
+          "symbol": "EventFactory.getEvent"
+        }
+      ]
+    },
+    {
+      "criticality": "optional",
       "id": "74",
       "kind": "event",
       "provenance": [
@@ -4365,6 +4522,19 @@
           "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
           "path": "src/bms/player/beatoraja/skin/lua/LegacySkinLuaApi.java",
           "symbol": "LegacySkinLuaApi.install"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "main_state.audio_play",
+      "kind": "file-api",
+      "provenance": [
+        {
+          "behavior": "publishes property, timer, event, score, gauge, volume, and judgment functions on main_state",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java",
+          "symbol": "MainStatePropertyLuaApiExporter.export"
         }
       ]
     },
@@ -5216,6 +5386,19 @@
     {
       "criticality": "critical",
       "id": "module-d005a14a200ad08a636c0e90",
+      "kind": "module",
+      "provenance": [
+        {
+          "behavior": "sets the package-local Lua module search directory",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
+          "symbol": "SkinLuaAccessor.setDirectory"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "module-d71e6a681d72cd6e85eab73d",
       "kind": "module",
       "provenance": [
         {
@@ -6151,6 +6334,32 @@
     },
     {
       "criticality": "critical",
+      "id": "boolean:271",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported boolean IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/BooleanPropertyFactory.java",
+          "symbol": "BooleanPropertyFactory.getBooleanProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "boolean:272",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported boolean IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/BooleanPropertyFactory.java",
+          "symbol": "BooleanPropertyFactory.getBooleanProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
       "id": "boolean:290",
       "kind": "property",
       "provenance": [
@@ -6412,6 +6621,19 @@
     {
       "criticality": "critical",
       "id": "boolean:330",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported boolean IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/BooleanPropertyFactory.java",
+          "symbol": "BooleanPropertyFactory.getBooleanProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "boolean:400",
       "kind": "property",
       "provenance": [
         {
@@ -6905,6 +7127,19 @@
     },
     {
       "criticality": "critical",
+      "id": "integer:1321",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
       "id": "integer:1322",
       "kind": "property",
       "provenance": [
@@ -6919,6 +7154,19 @@
     {
       "criticality": "critical",
       "id": "integer:1324",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:1325",
       "kind": "property",
       "provenance": [
         {
@@ -8132,6 +8380,19 @@
     },
     {
       "criticality": "critical",
+      "id": "141",
+      "kind": "timer",
+      "provenance": [
+        {
+          "behavior": "maps nonnegative timer IDs and rejects negative IDs",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/TimerPropertyFactory.java",
+          "symbol": "TimerPropertyFactory.getTimerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
       "id": "143",
       "kind": "timer",
       "provenance": [
@@ -8508,7 +8769,7 @@
       ]
     }
   ],
-  "targetVersion": "4.02",
+  "targetVersion": "4.6",
   "timerEventOrdering": {
     "phaseOrder": [
       "customTimers",
@@ -8525,10 +8786,10 @@
     "timersEvents": 1
   },
   "usageTerms": {
-    "accessed": "2026-08-03",
+    "accessed": "2026-08-09",
     "localTestingPermitted": true,
     "privateScreenshotsPermitted": true,
     "redistributionPermitted": false,
-    "url": "https://www.kasacontent.com/musicgame/beatoraja/4635/"
+    "source": "packaged-readme"
   }
 }

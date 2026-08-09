@@ -127,13 +127,13 @@ after render phase begins. No wrapper returns or accepts an unrestricted host
 path.
 
 Before any configured-model or retained-operation claim is produced, the
-auditor checks `SelectedLuaClosureContractV1` for the pinned SCURO 4.02 target.
+auditor checks `SelectedLuaClosureContractV1` for the pinned SCURO 4.6 target.
 The domain-separated digest covers every loaded closure virtual path identity
 and the corresponding exact ZIP source bytes in canonical UTF-8 path order.
 The manifest serializes only this digest and contract metadata, never the
 closure paths or source. Any byte or identity change, loaded-file addition or
-removal, or archive replacement fails closed and requires explicit review of
-the source constant, manifest, and acceptance record. The subsequent scanner
+removal, or archive replacement fails closed and requires explicit manifest
+and acceptance review. The subsequent scanner
 is a characterization of that exact reviewed closure, not a sound or complete
 general Lua verifier; arbitrary Lua-syntax support is outside this contract.
 
@@ -193,35 +193,23 @@ AsoBMaShow v1 exposes no network API, Java interoperability, reflection,
 controller/input access, or native object. It resolves the selected target's
 load-blocking evidence by installing a closed ordinary-Lua compatibility table
 under the historical name `luajava`; this table is not a Java bridge. It
-contains only the audited File/Gdx class-token behavior below. Every other
+contains only the bounded legacy capability set described below. Every other
 `LegacySkinLuaApi` class, constructor, member, URL/HTTP/reader branch, and
 `newInstance` request is a compatibility error rather than a successful no-op.
 
-The pinned SCURO 4.02 7-key closure has two unguarded, top-level
-`require("luajava")` sites in two always-loaded opaque helpers. Opaque helper A
-then performs one top-level `luajava.bindClass("java.io.File")`; its two
-`luajava.new(File, path)` constructor sites back single `mkdir` and `listFiles`
-facade sites. The selected configured-load path reaches `listFiles` through its
-rotation wrapper; `mkdir` remains deferred with no selected-entry caller.
-Opaque helper B
-performs one top-level `luajava.bindClass("com.badlogic.gdx.Gdx")`. Its one
-application-listener/audio-processor initialization site, one `play` site, and
-one `dispose` site are all guarded by `pcall`, so loss of that audio behavior
-is optional. Pinned `LegacySkinLuaApi.BindClassFunction`,
-`LegacySkinLuaApi.NewFunction`, `LegacySkinLuaApi.fileFacade`, and
-`LegacySkinLuaApi.gdxFacade` define the corresponding Beatoraja facade; the GDX
-facade exposes `graphics` and `input`, not `app`.
+The pinned SCURO 4.6 7-key closure has one unguarded, top-level
+`require("luajava")` site. It then performs one top-level
+`luajava.bindClass("java.io.File")`; its two `luajava.new(File, path)`
+constructor sites back one `mkdir` and one `listFiles` facade site. The selected
+configured-load path reaches `listFiles`; `mkdir` remains deferred with no
+selected-entry caller. It does not bind Gdx or reach an audio facade.
 
-The guarded audio calls do not make the module optional: either unguarded
-`require` would fail immediately without the closed table. The committed
-`legacyLuaApiSurface` records the site counts, load-time reachability, deferred
-file reachability, and guarded audio disposition without storing either helper
-path. The reviewed design decision maps File construction/listing to the
-package virtual filesystem, maps latent `mkdir` to the private overlay, and
-returns a GDX table with no `app`, matching the pinned optional-audio failure.
-It exposes neither a Java value nor a host path and it adds no network access.
-Physical acceptance remains `pending` until that exact facade and every other
-runtime/renderer criterion are implemented and measured.
+The committed `legacyLuaApiSurface` records those site counts and reachability
+without storing external helper paths. The reviewed design maps File
+construction/listing to the package virtual filesystem and maps latent `mkdir`
+to the private overlay. It exposes neither a Java value nor a host path and it
+adds no network access. Physical acceptance remains `pending` until that exact
+facade and every other runtime/renderer criterion are implemented and measured.
 
 ## Evidence and redistribution boundary
 
@@ -230,8 +218,10 @@ Beatoraja, archive, wrapper-prefix, and extracted-root arguments. It validates
 the pinned clean clone, safely inventories the ZIP, computes the archive hash,
 computes `SkinTreeDigestV1` independently over the archive payload and the
 extracted tree, and refuses to emit a manifest unless the two tree digests are
-identical. It also requires the exact reviewed archive hash and selected Lua
-closure digest before emitting the configured evidence described above.
+identical. Capture additionally requires explicit target metadata plus the
+expected archive SHA-256; verification derives the frozen archive and selected
+Lua-closure digests from the committed manifest and rejects any mismatch before
+it accepts regenerated evidence.
 
 The manifest retains the selected entry path and official provenance URLs.
 Other external module/resource names are replaced by stable opaque IDs. No

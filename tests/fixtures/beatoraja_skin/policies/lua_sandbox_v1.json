@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "authority": "AsoBMaShow",
-  "selectedSurfaceDigest": "ccfd3ed2e67b991815aefe000fbc221b37064366bd37c148ea2504c0e423a8ed",
-  "policyBodyDigest": "686d4752196eebacccf63dbc71b6266d152a991c00003c60a07b2cb652899d29",
+  "selectedSurfaceDigest": "9ad5c63158a7462faa67d5b31553b0b41667fc3eb7de9f45b2863627b9eceefd",
+  "policyBodyDigest": "a0317c4ad9defb4701ea240f0091d9d2d706dfe6ff342b28588d0eb5a0ff2078",
   "allowed": [
     {
       "capability": "package-text-dofile",

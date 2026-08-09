@@ -18,7 +18,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 PINNED_COMMIT = "c2ed5db1a46145ed10790c3872f717e95b59db9d"
-PINNED_SELECTED_LUA_CLOSURE_SHA256 = "717b46b6641c84e431490fff24f45a0ee23a1208017cc4dae4ea2cad438f5bb0"
+TARGET_VERSION = "4.6"
 MANIFEST_PATH = ROOT / "tests/fixtures/beatoraja_skin/reference_manifest.json"
 CHECKER_PATH = ROOT / "scripts/check_beatoraja_reference.py"
 AUDIT_PATH = ROOT / "scripts/audit_beatoraja_skin.py"
@@ -38,7 +38,7 @@ SANDBOX_PROBE_PATH = (
 )
 TREE_DIGEST_PARITY_ROOT = ROOT / "tests/fixtures/skin_tree_digest_v1"
 GAMEPLAY_CONTRACT_PATH = ROOT / "docs/skin-compat/beatoraja-lua-gameplay-contract.md"
-ACCEPTANCE_PATH = ROOT / "docs/skin-compat/modernchic-scuro-4.02-acceptance.md"
+ACCEPTANCE_PATH = ROOT / "docs/skin-compat/modernchic-scuro-4.6-acceptance.md"
 LOWER_SHA256 = __import__("re").compile(r"^[0-9a-f]{64}$")
 
 TRACE_FILES = {
@@ -185,7 +185,7 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
     def test_required_contract_artifacts_are_committed(self):
         required = (
             "docs/skin-compat/beatoraja-lua-gameplay-contract.md",
-            "docs/skin-compat/modernchic-scuro-4.02-acceptance.md",
+            "docs/skin-compat/modernchic-scuro-4.6-acceptance.md",
             "tests/fixtures/beatoraja_skin/reference_manifest.json",
             "tests/fixtures/beatoraja_skin/README.md",
             "scripts/check_beatoraja_reference.py",
@@ -654,7 +654,7 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
         self.assertEqual(manifest["schemaVersion"], 1)
         self.assertEqual(manifest["beatorajaCommit"], PINNED_COMMIT)
         self.assertEqual(manifest["acceptanceContract"]["schemaVersion"], 1)
-        self.assertEqual(manifest["targetVersion"], "4.02")
+        self.assertEqual(manifest["targetVersion"], TARGET_VERSION)
 
     def test_archive_and_source_tree_are_cryptographically_bound(self):
         manifest = self.require_manifest()
@@ -671,21 +671,18 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
         self.assertNotEqual(manifest["archivePackagePrefix"], "")
         closure = manifest.get("selectedLuaClosureContract")
         self.assertIsNotNone(closure, "the selected Lua closure must be version-locked")
+        self.assertEqual(closure["schemaVersion"], 1)
+        self.assertEqual(closure["algorithm"], "SelectedLuaClosureContractV1")
+        self.assertRegex(closure["sha256"], LOWER_SHA256)
         self.assertEqual(
-            closure,
-            {
-                "schemaVersion": 1,
-                "algorithm": "SelectedLuaClosureContractV1",
-                "sha256": PINNED_SELECTED_LUA_CLOSURE_SHA256,
-                "changePolicy": "explicit-source-constant-manifest-and-acceptance-review",
-            },
-            "the closure contract must serialize metadata and one opaque digest only",
+            closure["changePolicy"],
+            "explicit-manifest-and-acceptance-review",
         )
         self.assertEqual(
             manifest["acceptanceContract"]["externalDigests"][
                 "selectedLuaClosureSha256"
             ],
-            PINNED_SELECTED_LUA_CLOSURE_SHA256,
+            closure["sha256"],
         )
 
     def test_selected_entry_and_surface_have_complete_dispositions(self):
@@ -709,11 +706,11 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
         legacy = manifest.get("legacyLuaApiSurface")
         self.assertIsNotNone(legacy, "the exact selected-closure legacy API surface is required")
         self.assertEqual(legacy["module"], "luajava")
-        self.assertEqual(legacy["helperCount"], 2)
+        self.assertEqual(legacy["helperCount"], 1)
         self.assertEqual(
             legacy["imports"],
             {
-                "siteCount": 2,
+                "siteCount": 1,
                 "criticality": "critical",
                 "reachability": "unguarded-top-level",
             },
@@ -721,12 +718,6 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
         self.assertEqual(
             legacy["bindClass"],
             [
-                {
-                    "className": "com.badlogic.gdx.Gdx",
-                    "siteCount": 1,
-                    "criticality": "critical",
-                    "reachability": "unguarded-top-level",
-                },
                 {
                     "className": "java.io.File",
                     "siteCount": 1,
@@ -751,9 +742,9 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
         self.assertEqual(
             legacy["audioFacade"],
             {
-                "initializationSiteCount": 1,
-                "playSiteCount": 1,
-                "disposeSiteCount": 1,
+                "initializationSiteCount": 0,
+                "playSiteCount": 0,
+                "disposeSiteCount": 0,
                 "criticality": "optional",
                 "reachability": "pcall-guarded",
             },
@@ -1441,6 +1432,22 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
             path: archive_data["luaSourceBytes"][path]
             for path in loaded
         }
+
+    def target_metadata(self, audit, archive_data, version="fixture-4.6"):
+        return audit.TargetMetadata(
+            version=version,
+            archive_sha256=archive_data["archiveSha256"],
+            selected_lua_closure_sha256=selected_lua_closure_sha256(
+                self.selected_closure_sources(audit, archive_data)
+            ),
+            official_source_url="https://example.invalid/fixture-release",
+            source_accessed="2026-08-09",
+            terms_reference="fixture-packaged-readme",
+            terms_accessed="2026-08-09",
+            local_testing_permitted=True,
+            private_screenshots_permitted=True,
+            redistribution_permitted=False,
+        )
 
     def mutate_archive_lua(self, archive_data, label):
         mutated = {
@@ -2149,50 +2156,37 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
     def test_build_manifest_rejects_every_selected_closure_byte_and_identity_mutation(self):
         audit = load_audit_module()
         archive, archive_data = self.synthetic_archive_data(audit)
-        reviewed_digest = selected_lua_closure_sha256(
-            self.selected_closure_sources(audit, archive_data)
-        )
         arguments = type("Arguments", (), {"archive_path": archive})()
-        with (
-            mock.patch.object(
-                audit,
-                "PINNED_SELECTED_LUA_CLOSURE_SHA256",
-                reviewed_digest,
-                create=True,
-            ),
-            mock.patch.object(
-                audit,
-                "PINNED_ARCHIVE_SHA256",
-                archive_data["archiveSha256"],
-            ),
+        target = self.target_metadata(audit, archive_data)
+        baseline = audit.build_manifest(arguments, archive_data, "11" * 32, [], target)
+        self.assertIn("selectedLuaClosureContract", baseline)
+        self.assertEqual(
+            baseline["selectedLuaClosureContract"]["sha256"],
+            target.selected_lua_closure_sha256,
+        )
+        for label in (
+            "computed-custom-key",
+            "tuple-reassignment",
+            "dynamic-global-alias",
+            "source-object-reassignment",
+            "one-byte",
+            "path-identity",
+            "add-loaded-source",
+            "remove-loaded-source",
         ):
-            baseline = audit.build_manifest(arguments, archive_data, "11" * 32, [])
-            self.assertIn("selectedLuaClosureContract", baseline)
-            self.assertEqual(
-                baseline["selectedLuaClosureContract"]["sha256"], reviewed_digest
-            )
-            for label in (
-                "computed-custom-key",
-                "tuple-reassignment",
-                "dynamic-global-alias",
-                "source-object-reassignment",
-                "one-byte",
-                "path-identity",
-                "add-loaded-source",
-                "remove-loaded-source",
-            ):
-                with self.subTest(mutation=label):
-                    with self.assertRaisesRegex(
-                        audit.AuditError, "selected Lua closure contract"
-                    ):
-                        audit.build_manifest(
-                            arguments,
-                            self.mutate_archive_lua(archive_data, label),
-                            "11" * 32,
-                            [],
-                        )
+            with self.subTest(mutation=label):
+                with self.assertRaisesRegex(
+                    audit.AuditError, "selected Lua closure contract"
+                ):
+                    audit.build_manifest(
+                        arguments,
+                        self.mutate_archive_lua(archive_data, label),
+                        "11" * 32,
+                        [],
+                        target,
+                    )
 
-    def test_audit_entrypoint_rejects_an_unpinned_selected_closure_before_evidence(self):
+    def test_audit_capture_requires_explicit_target_metadata_before_evidence(self):
         reference_root = self.make_reference_root()
         archive, skin_root = self.make_skin_archive()
         manifest_path = self.temp_path / "unreviewed.json"
@@ -2202,8 +2196,62 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
             env=self.tool_env,
         )
         self.assertNotEqual(result.returncode, 0, result.stdout)
-        self.assertIn("selected Lua closure contract", result.stdout)
+        self.assertIn("--target-version", result.stdout)
         self.assertFalse(manifest_path.exists())
+
+    def test_audit_capture_requires_explicit_terms_dispositions(self):
+        reference_root = self.make_reference_root()
+        archive, skin_root = self.make_skin_archive()
+        manifest_path = self.temp_path / "terms-unreviewed.json"
+        result = run_python(
+            AUDIT_PATH,
+            *self.audit_arguments(reference_root, archive, skin_root, "--output", manifest_path),
+            "--target-version", "fixture-4.6",
+            "--official-source-url", "https://example.invalid/fixture-release",
+            "--terms-reference", "fixture-packaged-readme",
+            "--acquisition-date", "2026-08-09",
+            env=self.tool_env,
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("--local-testing-permitted", result.stdout)
+        self.assertFalse(manifest_path.exists())
+
+    def test_audit_capture_records_explicit_target_metadata_and_verify_reuses_it(self):
+        reference_root = self.make_reference_root()
+        archive, skin_root = self.make_skin_archive()
+        manifest_path = self.temp_path / "captured.json"
+        capture = run_python(
+            AUDIT_PATH,
+            *self.audit_arguments(reference_root, archive, skin_root, "--output", manifest_path),
+            "--target-version", "fixture-4.6",
+            "--official-source-url", "https://example.invalid/fixture-release",
+            "--terms-reference", "fixture-packaged-readme",
+            "--acquisition-date", "2026-08-09",
+            "--local-testing-permitted", "true",
+            "--private-screenshots-permitted", "true",
+            "--redistribution-permitted", "false",
+            env=self.tool_env,
+        )
+        self.assertEqual(capture.returncode, 0, capture.stdout)
+        captured = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(captured["targetVersion"], "fixture-4.6")
+        self.assertEqual(
+            captured["officialSource"],
+            {
+                "url": "https://example.invalid/fixture-release",
+                "accessed": "2026-08-09",
+            },
+        )
+        self.assertEqual(
+            captured["usageTerms"]["source"],
+            "fixture-packaged-readme",
+        )
+        verify = run_python(
+            AUDIT_PATH,
+            *self.audit_arguments(reference_root, archive, skin_root, "--verify", manifest_path),
+            env=self.tool_env,
+        )
+        self.assertEqual(verify.returncode, 0, verify.stdout)
 
     def test_audit_hashes_archive_and_extracted_tree_and_verifies_deterministically(self):
         self.assertTrue(AUDIT_PATH.is_file(), str(AUDIT_PATH))
@@ -2211,24 +2259,10 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
         audit = load_audit_module()
         archive_data = audit.inspect_archive(archive, "Bundle")
         disk_tree_sha, _ = audit.inspect_disk_tree(skin_root)
-        reviewed_digest = selected_lua_closure_sha256(
-            self.selected_closure_sources(audit, archive_data)
-        )
         arguments = type("Arguments", (), {"archive_path": archive})()
-        with (
-            mock.patch.object(
-                audit,
-                "PINNED_SELECTED_LUA_CLOSURE_SHA256",
-                reviewed_digest,
-            ),
-            mock.patch.object(
-                audit,
-                "PINNED_ARCHIVE_SHA256",
-                archive_data["archiveSha256"],
-            ),
-        ):
-            manifest = audit.build_manifest(arguments, archive_data, disk_tree_sha, [])
-            regenerated = audit.build_manifest(arguments, archive_data, disk_tree_sha, [])
+        target = self.target_metadata(audit, archive_data)
+        manifest = audit.build_manifest(arguments, archive_data, disk_tree_sha, [], target)
+        regenerated = audit.build_manifest(arguments, archive_data, disk_tree_sha, [], target)
         self.assertEqual(manifest, regenerated)
         self.assertEqual(manifest["archiveSha256"], sha256(archive))
         self.assertEqual(

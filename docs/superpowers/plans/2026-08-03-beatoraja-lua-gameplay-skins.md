@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Install, configure, and run an unmodified ModernChicPlay (SCURO) 4.02 7-key Beatoraja Lua gameplay skin on iPad, with Files-app editing, Fit/Stretch/Custom layouts, a package-scoped sandbox, authoritative AsoBMaShow gameplay, and immediate built-in-renderer fallback.
+**Goal:** Install, configure, and run an unmodified ModernChicPlay (SCURO) 4.6 7-key Beatoraja Lua gameplay skin on iPad, with Files-app editing, Fit/Stretch/Custom layouts, a package-scoped sandbox, authoritative AsoBMaShow gameplay, and immediate built-in-renderer fallback.
 
 **Architecture:** Treat `Documents/Skins` as a mutable user source and activate only immutable, validated private revisions. Decode Beatoraja's two-phase Lua return tables into a typed source-neutral model, map one immutable AsoBMaShow gameplay snapshot into Beatoraja properties/timers/events, evaluate a whole ordered command buffer before submitting it, and keep the current `BMSRenderer` initialized as the same-frame fallback. Portable C++ owns package, Lua, model, projection, and rendering logic; Objective-C++ is limited to cancellable folder handoff, Application Support path resolution, and no-follow Apple alias classification.
 
@@ -99,7 +99,7 @@ All integer fields below are unsigned big-endian unless explicitly signed. Text 
 ### Compatibility evidence
 
 - `docs/skin-compat/beatoraja-lua-gameplay-contract.md`: pinned source symbols, Lua/model/property semantics, intentional divergences, and criticality decisions.
-- `docs/skin-compat/modernchic-scuro-4.02-acceptance.md`: external package provenance, local digest, entry inventory, iPad/chart/performance matrix, and final results without assets.
+- `docs/skin-compat/modernchic-scuro-4.6-acceptance.md`: external package provenance, local digest, entry inventory, iPad/chart/performance matrix, and final results without assets.
 - `tests/fixtures/beatoraja_skin/reference_manifest.json`: machine-readable reference commit, trace versions, object/property/timer/event surface, and fixture provenance.
 - `tests/fixtures/beatoraja_skin/`: small synthetic Lua, package, trace, and expected-command fixtures only.
 - `scripts/check_beatoraja_reference.py`: read-only pinned-SHA/clean-tree implementation gate with an explicit root.
@@ -170,7 +170,7 @@ All integer fields below are unsigned big-endian unless explicitly signed. Text 
 **Files:**
 
 - Create: `docs/skin-compat/beatoraja-lua-gameplay-contract.md`
-- Create: `docs/skin-compat/modernchic-scuro-4.02-acceptance.md`
+- Create: `docs/skin-compat/modernchic-scuro-4.6-acceptance.md`
 - Create: `tests/fixtures/beatoraja_skin/reference_manifest.json`
 - Create: `tests/fixtures/beatoraja_skin/README.md`
 - Create: `scripts/check_beatoraja_reference.py`
@@ -193,7 +193,7 @@ def test_committed_contract_is_clone_independent(self):
     self.assertEqual(self.manifest["acceptanceContract"]["schemaVersion"], 1)
 ```
 
-- [ ] **Step 2: Write `tests/beatoraja_skin_reference_tests.py` first**. Make the default test clone-independent: validate the committed pinned SHA string, manifest schema, nonempty source-symbol provenance, exact official target version `4.02`, lowercase 64-character archive/archive-tree/audited-tree SHA-256 values with the two tree digests equal, at least one 7-key Lua entry, complete criticality for every audited object/property/timer/event/module/file API, and absence of external payload hashes anywhere in `git ls-files` (not only images or one fixture directory). Check all audited file kinds, including Lua, fonts, audio, video, archives, and images. Do not inspect a live clone or external package from default CTest.
+- [ ] **Step 2: Write `tests/beatoraja_skin_reference_tests.py` first**. Make the default test clone-independent: validate the committed pinned SHA string, manifest schema, nonempty source-symbol provenance, exact official target version `4.6`, lowercase 64-character archive/archive-tree/audited-tree SHA-256 values with the two tree digests equal, at least one 7-key Lua entry, complete criticality for every audited object/property/timer/event/module/file API, and absence of external payload hashes anywhere in `git ls-files` (not only images or one fixture directory). Check all audited file kinds, including Lua, fonts, audio, video, archives, and images. Do not inspect a live clone or external package from default CTest.
 - [ ] **Step 3: Register only that clone-independent Python test with CTest, then run**:
 
   ```sh
@@ -202,7 +202,7 @@ def test_committed_contract_is_clone_independent(self):
 
   Expected RED: missing contract, acceptance document, manifest, and audit tool assertions fail.
 - [ ] **Step 4: Implement `scripts/check_beatoraja_reference.py` and `scripts/audit_beatoraja_skin.py`**. The checker accepts `--root` and `--require-clean`, verifies the exact pinned commit, and never mutates Git. The opt-in audit accepts `--beatoraja-root`, `--archive-path`, required `--archive-package-prefix`, `--skin-root`, optional `--expected-archive-sha256`, `--output`, and `--verify`; it parses Lua source conservatively, inventories modules/resources and numeric/string callback identifiers, computes the archive SHA-256, applies the canonical deterministic wrapper rule and requires the CLI prefix to match it, computes exact `SkinTreeDigestV1` streams directly from safe regular ZIP entries after the inferred strip and from the extracted root, and fails on a digest mismatch or a dependency without a critical/optional disposition. Allow safe explicit directories only under the canonical structural-directory rule (including an ignored wrapper-root directory); reject links/special nodes, payload outside the prefix, empty regular-file post-strip paths, duplicate/colliding normalized paths, file/directory collisions, traversal, encrypted entries, unsupported compression, or policy-limit violations while reading the archive. Neither tool downloads nor copies the package.
-- [ ] **Step 5: Obtain SCURO 4.02 from the official KasaBlog Google Drive folder linked at `https://www.kasacontent.com/musicgame/beatoraja/4226/`, store it outside the repository, compute the archive and payload-tree SHA-256 values, and record the exact archive filename, byte count, digests, acquisition date, official source URL, exact archive package prefix, corresponding extracted package root identity, and selected 7-key `.luaskin` entry identity/path in the acceptance document and manifest**. Also record the author's published license/usage/screenshot terms URL, access date, and whether local testing plus private screenshots are permitted; unresolved or prohibitive terms block physical screenshot capture. Source/terms URLs and the selected entry path are allowed provenance; other proprietary resource/module paths remain opaque. Digests are evidence, not bundled dependencies.
+- [ ] **Step 5: Obtain SCURO 4.6 from the official KasaBlog release page at `https://www.kasacontent.com/musicgame/beatoraja/6088/`, store it outside the repository, compute the archive and payload-tree SHA-256 values, and record the exact archive filename, byte count, digests, acquisition date, official source URL, exact archive package prefix, corresponding extracted package root identity, and selected 7-key `.luaskin` entry identity/path in the acceptance document and manifest**. Record the package-readme terms source, access date, and whether local testing plus private screenshots are permitted; unresolved or prohibitive terms block physical screenshot capture. The source URL and selected entry path are allowed provenance; other proprietary resource/module paths remain opaque. Digests are evidence, not bundled dependencies.
 - [ ] **Step 6: Freeze acceptance schema version 1 before renderer work**. Require fields for non-unique iPad hardware model, exact iPadOS, drawable size, safe insets, configured Hz, measurement build/commit, external archive/entry/configuration digests, synthetic chart hashes, fixed autoplay scripts, screenshot timestamps, 30-second warm-up, three 180-second repetitions per scenario/layout, all six 16:9 and 4:3 Fit/Stretch/Custom layout cases, p99/missed-presentation/memory/resource limits from this plan, and a `pending|pass|fail` status plus evidence reference for every completion criterion. Task 1 accepts `pending`; Task 25 requires only `pass`.
 - [ ] **Step 7: Fill the source contract with observed two-phase loading, table conversion, missing property behavior, actual libGDX `IntMap` timer/event ordering, destination interpolation, note/LN phases, BGA ordering, the no-network boundary, and the exact audited legacy-module surface that must be resolved before runtime acceptance**. Every claim must name a pinned Java method or Lua symbol.
 - [ ] **Step 8: Run the audit against the external package and commit its machine-readable surface in `reference_manifest.json`**. Preserve only the selected entry identity/path plus allowed official source/terms provenance URLs; represent all other proprietary modules/resources as opaque stable IDs, kind, byte count, and digest, with their real package-relative names solely in the external audit report/evidence root. Do not commit extracted source, assets, absolute local paths, account/device names, or public physical-evidence URLs.
@@ -248,7 +248,7 @@ def test_committed_contract_is_clone_independent(self):
 - Modify: `tests/fixtures/beatoraja_skin/reference_manifest.json`
 - Modify: `tests/fixtures/beatoraja_skin/README.md`
 - Modify: `docs/skin-compat/beatoraja-lua-gameplay-contract.md`
-- Modify: `docs/skin-compat/modernchic-scuro-4.02-acceptance.md`
+- Modify: `docs/skin-compat/modernchic-scuro-4.6-acceptance.md`
 
 **Interfaces:**
 
@@ -4721,7 +4721,7 @@ TEST_CASE("profile switch affects only the next chart") {
 **Files:**
 
 - Modify: `docs/skin-compat/beatoraja-lua-gameplay-contract.md`
-- Modify: `docs/skin-compat/modernchic-scuro-4.02-acceptance.md`
+- Modify: `docs/skin-compat/modernchic-scuro-4.6-acceptance.md`
 - Modify: `tests/fixtures/beatoraja_skin/reference_manifest.json`
 - Create: `src/skin/beatoraja/SkinPerformanceTelemetry.h`
 - Create: `src/skin/beatoraja/SkinPerformanceTelemetry.cpp`
@@ -5106,7 +5106,7 @@ def test_physical_evidence_stays_external(self):
     --verify tests/fixtures/beatoraja_skin/reference_manifest.json
   ```
 
-  Require archive SHA-256, archive payload-tree SHA-256, audited source-tree SHA-256, and inferred wrapper to match the frozen manifest. Confirm Task 1's recorded usage/private-screenshot terms still permit this acceptance work. Reconfirm the package's `legacyLuaApiSurface` is exactly the Task 9 closed facade: the two imports, File/Gdx class binds, configured-load `listFiles`, latent `mkdir`, and guarded absent-`Gdx.app` audio path are present, while `newInstance`, URL/HTTP, controllers/input, reflection, native access, or another class/member remain absent. Any remaining compatibility or permission gap blocks Task 25: create `docs/superpowers/plans/2026-08-03-beatoraja-lua-gameplay-skin-gap-remediation.md` with exact failing fixtures/files/interfaces via `superpowers:writing-plans`, implement it separately with RED/GREEN commits, then restart this task. Do not modify an unspecified production file or add an unaudited API inside acceptance work.
+  Require archive SHA-256, archive payload-tree SHA-256, audited source-tree SHA-256, and inferred wrapper to match the frozen manifest. Confirm Task 1's recorded usage/private-screenshot terms still permit this acceptance work. Reconfirm the package's `legacyLuaApiSurface` is exactly the Task 9 closed facade: one File-only import and bind, configured-load `listFiles`, latent `mkdir`, and no Gdx/audio facade, while `newInstance`, URL/HTTP, controllers/input, reflection, native access, or another class/member remain absent. Any remaining compatibility or permission gap blocks Task 25: create `docs/superpowers/plans/2026-08-03-beatoraja-lua-gameplay-skin-gap-remediation.md` with exact failing fixtures/files/interfaces via `superpowers:writing-plans`, implement it separately with RED/GREEN commits, then restart this task. Do not modify an unspecified production file or add an unaudited API inside acceptance work.
 - [ ] **Step 7: Run the automation GREEN check before device measurement**
 
   ```sh
@@ -5123,7 +5123,7 @@ def test_physical_evidence_stays_external(self):
 - [ ] **Step 8: Commit the clean measurement candidate, then set `MEASUREMENT_COMMIT="$(git rev-parse HEAD)"`**. This commit contains every executable/native/script/test/fixture change used by the measured app; no production or acceptance-runner file may change after it without discarding evidence and restarting Task 25.
 
   ```sh
-  git add CMakeLists.txt src/skin/CMakeLists.txt docs/skin-compat/beatoraja-lua-gameplay-contract.md docs/skin-compat/modernchic-scuro-4.02-acceptance.md tests/fixtures/beatoraja_skin/reference_manifest.json tests/fixtures/beatoraja_skin/charts src/BuildIdentity.h src/BuildIdentity.cpp src/skin/beatoraja/SkinPerformanceTelemetry.h src/skin/beatoraja/SkinPerformanceTelemetry.cpp src/skin/beatoraja/SkinAcceptanceRecorder.h src/skin/beatoraja/SkinAcceptanceRecorder.cpp src/skin/beatoraja/SkinOverlayDigestProvider.h src/skin/beatoraja/SkinOverlayDigestProvider.cpp src/skin/beatoraja/LuaSkinFileSystem.h src/skin/beatoraja/LuaSkinFileSystem.cpp src/skin/beatoraja/LuaSkinRuntime.h src/skin/beatoraja/LuaSkinRuntime.cpp src/skin/beatoraja/SkinResourceCatalog.h src/skin/beatoraja/SkinResourceCatalog.cpp src/skin/beatoraja/Skin2DRenderer.h src/skin/beatoraja/Skin2DRenderer.cpp src/skin/beatoraja/PlaySkinSession.h src/skin/beatoraja/PlaySkinSession.cpp src/scene/play/PlayfieldPresentation.h src/scene/play/PlayfieldPresentationCoordinator.h src/scene/play/PlayfieldPresentationCoordinator.cpp src/scene/play/GamePlayScene.h src/scene/play/GamePlayScene.cpp src/scene/GameplaySkinSettingsController.h src/scene/GameplaySkinSettingsController.cpp src/scene/SettingsScene.h src/scene/SettingsSceneSkins.cpp src/context.h src/main.cpp ios/Xcode/AsoBMaShow/AsoBMaShow/Info.plist ios/Xcode/AsoBMaShow/AsoBMaShow.xcodeproj/project.pbxproj scripts/ios_artifact_audit.sh scripts/ios_build_install_for_skin_acceptance.sh scripts/run_skin_acceptance.py tests/skin_acceptance_contract_tests.py tests/ios_artifact_audit_tests.py tests/ios_build_setup_tests.py tests/skin_performance_telemetry_tests.cpp
+  git add CMakeLists.txt src/skin/CMakeLists.txt docs/skin-compat/beatoraja-lua-gameplay-contract.md docs/skin-compat/modernchic-scuro-4.6-acceptance.md tests/fixtures/beatoraja_skin/reference_manifest.json tests/fixtures/beatoraja_skin/charts src/BuildIdentity.h src/BuildIdentity.cpp src/skin/beatoraja/SkinPerformanceTelemetry.h src/skin/beatoraja/SkinPerformanceTelemetry.cpp src/skin/beatoraja/SkinAcceptanceRecorder.h src/skin/beatoraja/SkinAcceptanceRecorder.cpp src/skin/beatoraja/SkinOverlayDigestProvider.h src/skin/beatoraja/SkinOverlayDigestProvider.cpp src/skin/beatoraja/LuaSkinFileSystem.h src/skin/beatoraja/LuaSkinFileSystem.cpp src/skin/beatoraja/LuaSkinRuntime.h src/skin/beatoraja/LuaSkinRuntime.cpp src/skin/beatoraja/SkinResourceCatalog.h src/skin/beatoraja/SkinResourceCatalog.cpp src/skin/beatoraja/Skin2DRenderer.h src/skin/beatoraja/Skin2DRenderer.cpp src/skin/beatoraja/PlaySkinSession.h src/skin/beatoraja/PlaySkinSession.cpp src/scene/play/PlayfieldPresentation.h src/scene/play/PlayfieldPresentationCoordinator.h src/scene/play/PlayfieldPresentationCoordinator.cpp src/scene/play/GamePlayScene.h src/scene/play/GamePlayScene.cpp src/scene/GameplaySkinSettingsController.h src/scene/GameplaySkinSettingsController.cpp src/scene/SettingsScene.h src/scene/SettingsSceneSkins.cpp src/context.h src/main.cpp ios/Xcode/AsoBMaShow/AsoBMaShow/Info.plist ios/Xcode/AsoBMaShow/AsoBMaShow.xcodeproj/project.pbxproj scripts/ios_artifact_audit.sh scripts/ios_build_install_for_skin_acceptance.sh scripts/run_skin_acceptance.py tests/skin_acceptance_contract_tests.py tests/ios_artifact_audit_tests.py tests/ios_build_setup_tests.py tests/skin_performance_telemetry_tests.cpp
   git commit -m "feat: add gameplay skin acceptance telemetry"
   MEASUREMENT_COMMIT="$(git rev-parse HEAD)"
   test -z "$(git status --porcelain)"
@@ -5156,7 +5156,7 @@ def test_physical_evidence_stays_external(self):
   : "${SCURO_SKIN_ROOT:?set corresponding extracted package root}"
   : "${SCURO_ACCEPTANCE_EVIDENCE_ROOT:?set external physical-iPad evidence root}"
   : "${MEASUREMENT_COMMIT:?set Task 25 measurement commit}"
-  test -z "$(git diff --name-only "$MEASUREMENT_COMMIT" | rg -v '^(docs/skin-compat/modernchic-scuro-4\.02-acceptance\.md|tests/fixtures/beatoraja_skin/reference_manifest\.json)$')"
+  test -z "$(git diff --name-only "$MEASUREMENT_COMMIT" | rg -v '^(docs/skin-compat/modernchic-scuro-4\.6-acceptance\.md|tests/fixtures/beatoraja_skin/reference_manifest\.json)$')"
   python3 scripts/run_skin_acceptance.py verify \
     --contract tests/fixtures/beatoraja_skin/reference_manifest.json \
     --evidence-root "$SCURO_ACCEPTANCE_EVIDENCE_ROOT" \
@@ -5179,8 +5179,8 @@ def test_physical_evidence_stays_external(self):
 - [ ] **Step 13: Commit only the evidence summary**
 
   ```sh
-  git add docs/skin-compat/modernchic-scuro-4.02-acceptance.md tests/fixtures/beatoraja_skin/reference_manifest.json
-  test -z "$(git diff --cached --name-only | rg -v '^(docs/skin-compat/modernchic-scuro-4\.02-acceptance\.md|tests/fixtures/beatoraja_skin/reference_manifest\.json)$')"
+  git add docs/skin-compat/modernchic-scuro-4.6-acceptance.md tests/fixtures/beatoraja_skin/reference_manifest.json
+  test -z "$(git diff --cached --name-only | rg -v '^(docs/skin-compat/modernchic-scuro-4\.6-acceptance\.md|tests/fixtures/beatoraja_skin/reference_manifest\.json)$')"
   git commit -m "test: close SCURO gameplay skin acceptance"
   ```
 
@@ -5191,7 +5191,7 @@ def test_physical_evidence_stays_external(self):
 **Files:**
 
 - Create: `docs/skin-compat/beatoraja-lua-gameplay-final-review.md`
-- Modify: `docs/skin-compat/modernchic-scuro-4.02-acceptance.md`
+- Modify: `docs/skin-compat/modernchic-scuro-4.6-acceptance.md`
 
 **Interfaces:**
 
@@ -5214,7 +5214,7 @@ test "$(git rev-parse HEAD)" = "$REVIEWED_COMMIT"
 - [ ] **Step 5: Commit the final review record and its link from the acceptance document, then set `FINAL_COMMIT="$(git rev-parse HEAD)"`**. Require `FINAL_COMMIT^ == REVIEWED_COMMIT` and require `git diff --name-only "$REVIEWED_COMMIT" "$FINAL_COMMIT"` to contain only the two files listed for this task. No tracked file may change afterward.
 
   ```sh
-  git add docs/skin-compat/beatoraja-lua-gameplay-final-review.md docs/skin-compat/modernchic-scuro-4.02-acceptance.md
+  git add docs/skin-compat/beatoraja-lua-gameplay-final-review.md docs/skin-compat/modernchic-scuro-4.6-acceptance.md
   git commit -m "docs: record gameplay skin milestone verification"
   ```
 

@@ -20,12 +20,6 @@ from typing import BinaryIO, Iterable, Iterator
 
 
 PINNED_COMMIT = "c2ed5db1a46145ed10790c3872f717e95b59db9d"
-TARGET_VERSION = "4.02"
-PINNED_ARCHIVE_SHA256 = "06ad5a4c5a1b6d0ece08b79475cbe2b4a5187ce07e490752e141518ee4fcc41c"
-PINNED_SELECTED_LUA_CLOSURE_SHA256 = "717b46b6641c84e431490fff24f45a0ee23a1208017cc4dae4ea2cad438f5bb0"
-OFFICIAL_SOURCE_URL = "https://www.kasacontent.com/musicgame/beatoraja/4226/"
-TERMS_URL = "https://www.kasacontent.com/musicgame/beatoraja/4635/"
-ACQUISITION_DATE = "2026-08-03"
 TREE_DOMAIN = b"ASOBMSKIN-TREE-V1\0"
 SELECTED_LUA_CLOSURE_DOMAIN = b"ASOBMSKIN-SELECTED-LUA-CLOSURE-V1\0"
 AUDITED_EFFECTIVE_CONFIGURATION_DOMAIN = b"ASOBMSKIN-AUDITED-EFFECTIVE-CONFIG-V2\0"
@@ -112,6 +106,20 @@ PROPERTY_CATEGORIES = {
 
 class AuditError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class TargetMetadata:
+    version: str
+    archive_sha256: str
+    selected_lua_closure_sha256: str | None
+    official_source_url: str
+    source_accessed: str
+    terms_reference: str
+    terms_accessed: str
+    local_testing_permitted: bool
+    private_screenshots_permitted: bool
+    redistribution_permitted: bool
 
 
 @dataclass(frozen=True)
@@ -1072,18 +1080,19 @@ def selected_lua_closure_sha256(
 def require_pinned_selected_lua_closure(
     loaded: dict[str, str],
     source_bytes: dict[str, bytes],
+    expected_sha256: str | None,
 ) -> dict:
     computed = selected_lua_closure_sha256(loaded, source_bytes)
-    if computed != PINNED_SELECTED_LUA_CLOSURE_SHA256:
+    if expected_sha256 is not None and computed != expected_sha256:
         raise AuditError(
             "selected Lua closure contract mismatch: expected "
-            f"{PINNED_SELECTED_LUA_CLOSURE_SHA256}, computed {computed}"
+            f"{expected_sha256}, computed {computed}"
         )
     return {
         "schemaVersion": 1,
         "algorithm": "SelectedLuaClosureContractV1",
         "sha256": computed,
-        "changePolicy": "explicit-source-constant-manifest-and-acceptance-review",
+        "changePolicy": "explicit-manifest-and-acceptance-review",
     }
 
 
@@ -3021,6 +3030,119 @@ def pending_field(value=None) -> dict:
     return {"status": "pending", "value": value}
 
 
+def _required_string(value: object, label: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise AuditError(f"{label} must be a nonempty string")
+    return value
+
+
+def _required_lower_sha256(value: object, label: str) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+        raise AuditError(f"{label} must be a lowercase 64-character SHA-256")
+    return value
+
+
+def _capture_bool(value: object, label: str) -> bool:
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    raise AuditError(f"{label} must be true or false")
+
+
+def _required_bool(value: object, label: str) -> bool:
+    if not isinstance(value, bool):
+        raise AuditError(f"{label} must be a boolean")
+    return value
+
+
+def target_metadata_from_capture_arguments(arguments: argparse.Namespace) -> TargetMetadata:
+    if arguments.expected_archive_sha256 is None:
+        raise AuditError("capture requires --expected-archive-sha256")
+    return TargetMetadata(
+        version=_required_string(arguments.target_version, "--target-version"),
+        archive_sha256=_required_lower_sha256(
+            arguments.expected_archive_sha256,
+            "--expected-archive-sha256",
+        ),
+        selected_lua_closure_sha256=None,
+        official_source_url=_required_string(
+            arguments.official_source_url,
+            "--official-source-url",
+        ),
+        source_accessed=_required_string(
+            arguments.acquisition_date,
+            "--acquisition-date",
+        ),
+        terms_reference=_required_string(
+            arguments.terms_reference,
+            "--terms-reference",
+        ),
+        terms_accessed=_required_string(
+            arguments.acquisition_date,
+            "--acquisition-date",
+        ),
+        local_testing_permitted=_capture_bool(
+            arguments.local_testing_permitted,
+            "--local-testing-permitted",
+        ),
+        private_screenshots_permitted=_capture_bool(
+            arguments.private_screenshots_permitted,
+            "--private-screenshots-permitted",
+        ),
+        redistribution_permitted=_capture_bool(
+            arguments.redistribution_permitted,
+            "--redistribution-permitted",
+        ),
+    )
+
+
+def target_metadata_from_manifest(manifest: object) -> TargetMetadata:
+    if not isinstance(manifest, dict):
+        raise AuditError("verification manifest must be a JSON object")
+    source = manifest.get("officialSource")
+    terms = manifest.get("usageTerms")
+    closure = manifest.get("selectedLuaClosureContract")
+    if not isinstance(source, dict):
+        raise AuditError("verification manifest is missing officialSource")
+    if not isinstance(terms, dict):
+        raise AuditError("verification manifest is missing usageTerms")
+    if not isinstance(closure, dict):
+        raise AuditError("verification manifest is missing selectedLuaClosureContract")
+    if closure.get("schemaVersion") != 1 or closure.get("algorithm") != "SelectedLuaClosureContractV1":
+        raise AuditError("verification manifest has an unsupported selected Lua closure contract")
+    return TargetMetadata(
+        version=_required_string(manifest.get("targetVersion"), "manifest targetVersion"),
+        archive_sha256=_required_lower_sha256(
+            manifest.get("archiveSha256"),
+            "manifest archiveSha256",
+        ),
+        selected_lua_closure_sha256=_required_lower_sha256(
+            closure.get("sha256"),
+            "manifest selectedLuaClosureContract.sha256",
+        ),
+        official_source_url=_required_string(source.get("url"), "manifest officialSource.url"),
+        source_accessed=_required_string(source.get("accessed"), "manifest officialSource.accessed"),
+        terms_reference=_required_string(
+            terms.get("source"),
+            "manifest usageTerms.source",
+        ),
+        terms_accessed=_required_string(terms.get("accessed"), "manifest usageTerms.accessed"),
+        local_testing_permitted=_required_bool(
+            terms.get("localTestingPermitted"),
+            "manifest usageTerms.localTestingPermitted",
+        ),
+        private_screenshots_permitted=_required_bool(
+            terms.get("privateScreenshotsPermitted"),
+            "manifest usageTerms.privateScreenshotsPermitted",
+        ),
+        redistribution_permitted=_required_bool(
+            terms.get("redistributionPermitted"),
+            "manifest usageTerms.redistributionPermitted",
+        ),
+    )
+
+
 def acceptance_contract(
     archive_sha: str,
     tree_sha: str,
@@ -3096,6 +3218,15 @@ def acceptance_contract(
         "safeInsets": pending_field({"top": None, "right": None, "bottom": None, "left": None}),
         "configuredHz": pending_field(),
         "measurementBuild": pending_field({"commit": None, "configuration": None, "sourceClean": None}),
+        "physicalEvidence": {
+            "status": "pending",
+            "recordId": None,
+            "accessControlledLocalEvidenceId": None,
+            "redactionStatus": "pending",
+            "retentionUntil": None,
+            "deletionProcedure": None,
+            "metadataFile": "acceptance-evidence.json",
+        },
         "externalDigests": {
             "archiveSha256": archive_sha,
             "payloadTreeSha256": tree_sha,
@@ -3149,7 +3280,7 @@ def acceptance_contract(
     }
 
 
-def build_manifest(arguments, archive_data, disk_tree_sha, provenance):
+def build_manifest(arguments, archive_data, disk_tree_sha, provenance, target: TargetMetadata):
     lua_text = archive_data["luaText"]
     entry = choose_entry(lua_text)
     loaded, module_criticality, host_modules = loaded_lua_closure(entry, lua_text)
@@ -3165,11 +3296,12 @@ def build_manifest(arguments, archive_data, disk_tree_sha, provenance):
     closure_contract = require_pinned_selected_lua_closure(
         loaded,
         closure_source_bytes,
+        target.selected_lua_closure_sha256,
     )
-    if archive_data["archiveSha256"] != PINNED_ARCHIVE_SHA256:
+    if archive_data["archiveSha256"] != target.archive_sha256:
         raise AuditError(
-            "pinned SCURO archive contract mismatch: expected "
-            f"{PINNED_ARCHIVE_SHA256}, computed {archive_data['archiveSha256']}"
+            "target archive contract mismatch: expected "
+            f"{target.archive_sha256}, computed {archive_data['archiveSha256']}"
         )
     surface = build_surface(entry, loaded, module_criticality, host_modules)
     legacy_surface = analyze_legacy_lua_api(loaded, module_criticality)
@@ -3194,7 +3326,7 @@ def build_manifest(arguments, archive_data, disk_tree_sha, provenance):
     return {
         "schemaVersion": 1,
         "beatorajaCommit": PINNED_COMMIT,
-        "targetVersion": TARGET_VERSION,
+        "targetVersion": target.version,
         "archiveFilename": arguments.archive_path.name,
         "archiveByteCount": archive_data["archiveByteCount"],
         "archiveSha256": archive_data["archiveSha256"],
@@ -3203,13 +3335,16 @@ def build_manifest(arguments, archive_data, disk_tree_sha, provenance):
         "auditedSourceTreeSha256": disk_tree_sha,
         "selectedLuaClosureContract": closure_contract,
         "extractedPackageRootIdentity": "skin-tree:" + disk_tree_sha,
-        "officialSource": {"url": OFFICIAL_SOURCE_URL, "accessed": ACQUISITION_DATE},
+        "officialSource": {
+            "url": target.official_source_url,
+            "accessed": target.source_accessed,
+        },
         "usageTerms": {
-            "url": TERMS_URL,
-            "accessed": ACQUISITION_DATE,
-            "localTestingPermitted": True,
-            "privateScreenshotsPermitted": True,
-            "redistributionPermitted": False,
+            "source": target.terms_reference,
+            "accessed": target.terms_accessed,
+            "localTestingPermitted": target.local_testing_permitted,
+            "privateScreenshotsPermitted": target.private_screenshots_permitted,
+            "redistributionPermitted": target.redistribution_permitted,
         },
         "acceptanceContract": acceptance_contract(
             archive_data["archiveSha256"],
@@ -3257,6 +3392,13 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--archive-package-prefix", required=True)
     parser.add_argument("--skin-root", required=True, type=Path)
     parser.add_argument("--expected-archive-sha256")
+    parser.add_argument("--target-version")
+    parser.add_argument("--official-source-url")
+    parser.add_argument("--terms-reference")
+    parser.add_argument("--acquisition-date")
+    parser.add_argument("--local-testing-permitted")
+    parser.add_argument("--private-screenshots-permitted")
+    parser.add_argument("--redistribution-permitted")
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--output", type=Path)
     mode.add_argument("--verify", type=Path)
@@ -3280,19 +3422,27 @@ def main() -> int:
                 "archive SHA-256 mismatch: expected "
                 f"{arguments.expected_archive_sha256}, computed {archive_data['archiveSha256']}"
             )
+        expected_text = None
+        if arguments.verify is not None:
+            if not arguments.verify.is_file():
+                raise AuditError(f"verification manifest does not exist: {arguments.verify}")
+            expected_text = arguments.verify.read_text(encoding="utf-8")
+            try:
+                target = target_metadata_from_manifest(json.loads(expected_text))
+            except json.JSONDecodeError as error:
+                raise AuditError(f"verification manifest is not valid JSON: {error}") from error
+        else:
+            target = target_metadata_from_capture_arguments(arguments)
         disk_tree_sha, _ = inspect_disk_tree(arguments.skin_root)
         if disk_tree_sha != archive_data["treeSha256"]:
             raise AuditError(
                 "archive payload and extracted skin root have different SkinTreeDigestV1 values: "
                 f"{archive_data['treeSha256']} != {disk_tree_sha}"
             )
-        manifest = build_manifest(arguments, archive_data, disk_tree_sha, provenance)
+        manifest = build_manifest(arguments, archive_data, disk_tree_sha, provenance, target)
         rendered = json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
         if arguments.verify is not None:
-            if not arguments.verify.is_file():
-                raise AuditError(f"verification manifest does not exist: {arguments.verify}")
-            expected = arguments.verify.read_text(encoding="utf-8")
-            if expected != rendered:
+            if expected_text != rendered:
                 raise AuditError(f"verification manifest is stale: {arguments.verify}")
             print(f"Beatoraja skin reference manifest verified: {arguments.verify}")
         else:

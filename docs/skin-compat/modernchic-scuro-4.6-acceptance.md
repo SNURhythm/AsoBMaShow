@@ -1,4 +1,4 @@
-# ModernChic/SCURO 4.02 acceptance record
+# ModernChic/SCURO 4.6 acceptance record
 
 Status: **pending**. Task 1 pins the source/package contract; milestone closure
 requires every schema-v1 completion criterion to be `pass` with external
@@ -8,21 +8,21 @@ evidence.
 
 | Field | Pinned value |
 | --- | --- |
-| Product/version | ModernChicPlay (SCURO) 4.02 |
-| Official release page | <https://www.kasacontent.com/musicgame/beatoraja/4226/> |
-| Official download collection | KasaBlog-linked Google Drive folder `1OZYZ09n1XKIcStIW9LboYlVR659vtxg6`, historical `before` folder |
-| Exact archive filename | `ModernChic402.zip` |
-| Archive bytes | `445591453` |
-| Archive SHA-256 | `06ad5a4c5a1b6d0ece08b79475cbe2b4a5187ce07e490752e141518ee4fcc41c` |
-| Acquisition/access date | 2026-08-03 |
+| Product/version | ModernChicPlay (SCURO) 4.6 |
+| Official release page | <https://www.kasacontent.com/musicgame/beatoraja/6088/> |
+| Official download | The release page's linked ModernChic 4.6 download |
+| Exact archive filename | `ModernChic460.zip` |
+| Archive bytes | `453707440` |
+| Archive SHA-256 | `3e36eef69d2f5f3b117696e22936347d9c8f5e379f8912d763a074ca9bcbbe4c` |
+| Acquisition/access date | 2026-08-09 |
 | Canonical archive package prefix | `ModernChic` |
-| Corresponding extracted root identity | `skin-tree:448a5b031b153c3424e5d5ca6b07ab1fe832dabbe18c0faf6f72bc17bc4af18d` |
-| Archive payload `SkinTreeDigestV1` | `448a5b031b153c3424e5d5ca6b07ab1fe832dabbe18c0faf6f72bc17bc4af18d` |
-| Extracted source `SkinTreeDigestV1` | `448a5b031b153c3424e5d5ca6b07ab1fe832dabbe18c0faf6f72bc17bc4af18d` |
+| Corresponding extracted root identity | `skin-tree:515d52ba1a00a6067f636f838c935328b7765aef8f0019557748a2441ebb89df` |
+| Archive payload `SkinTreeDigestV1` | `515d52ba1a00a6067f636f838c935328b7765aef8f0019557748a2441ebb89df` |
+| Extracted source `SkinTreeDigestV1` | `515d52ba1a00a6067f636f838c935328b7765aef8f0019557748a2441ebb89df` |
 | Selected 7-key entry | `play7_hw.luaskin` |
 | Selected entry identity | `entry-d5399e62255ddbda273e7a63` |
 | Selected entry SHA-256 | `aac73c59526e74f159731608b3b54e58a7e534537503acb88565a4c175cf8f13` |
-| Selected Lua closure `SelectedLuaClosureContractV1` SHA-256 | `717b46b6641c84e431490fff24f45a0ee23a1208017cc4dae4ea2cad438f5bb0` |
+| Selected Lua closure `SelectedLuaClosureContractV1` SHA-256 | `9d2a5acafc57edd6fa958c86fd92b861b851d952581a6828c1beb5b7fde67c0d` |
 
 The archive and extraction live outside the repository. The equal, independently
 computed tree digests bind the audited source tree to the exact official ZIP.
@@ -31,13 +31,12 @@ and the selected entry identity.
 
 ## Author terms and screenshot decision
 
-The authoritative package readme inside the hashed official archive permits
-use of the included data, prohibits redistribution of the skin itself without
-permission, requests KASAKO attribution for published modifications, and
-disclaims responsibility for modified skins. The author-published usage page
-at <https://www.kasacontent.com/musicgame/beatoraja/4635/> (accessed
-2026-08-03) explicitly describes ModernChic features intended for YouTube/OBS
-streaming. The release page also publicly illustrates gameplay screenshots.
+The authoritative packaged readme inside the hashed archive permits use of the
+included data, prohibits redistribution of the skin itself without permission,
+requests KASAKO attribution for published modifications, and disclaims
+responsibility for modified skins. The exact 4.6 release page above was
+accessed on 2026-08-09; it identifies the package/version and linked download,
+but is not used as a substitute for the packaged-readme terms.
 
 Decision for this project:
 
@@ -96,9 +95,9 @@ probe still requires every performed counter to remain zero and only its frozen
 denied-operation counter to become nonzero.
 
 The passing audit vector is
-`eb52ec905a507efe50273b2ff09d91d10f025d5019c7bf3d4330ee31e3445e13`;
+`38fe362a92f6ca0109effaa706d1ec42d6b08d28a394db738d2bccd8f63f7450`;
 both opaque render-I/O guards are `not-reachable`. The negative audit vector is
-`e4f5da4b24ae219320023f32820569fb442ceb0b6ad0a4823de74325ddc07552`;
+`08d59b63dc1ed53154ac07baa9d5c72d2a0111ea8a5fd451f8ebc149537009bb`;
 exactly one guard is `reachable`, its first post-transition attempt is the
 frozen `filesystemRead` kind, and the other guard remains `not-reachable`.
 These values are static, domain-separated evidence over the selected revision,
@@ -110,8 +109,8 @@ The selected-closure digest is an input gate, not evidence inferred from the
 Lua scanner. It is domain-separated and canonically ordered; only its digest is
 stored. All configured-model and retained-operation evidence is conditional on
 an exact match. Any closure byte/path/add/remove change requires explicit
-source-constant, manifest, and acceptance review. The scanner tests characterize
-this pinned SCURO 4.02 closure and do not claim general Lua verification.
+manifest and acceptance review. The scanner tests characterize
+this pinned SCURO 4.6 closure and do not claim general Lua verification.
 
 The negative run must deny the read before effect, emit
 `skin_file_render_phase_denied`, discard that frame, disable the skin session,
@@ -173,12 +172,13 @@ contract rather than treating unmeasured memory as proof of no drift.
 ## Audited compatibility decision and remaining work
 
 The selected 7-key entry's loaded closure critically imports Beatoraja's
-restricted legacy `luajava` facade for package file behavior and a guarded
-audio probe. The reviewed v1 design now resolves only that exact surface with a
-closed non-Java Lua table: virtual File listing, overlay-only latent `mkdir`,
-and a GDX table whose absent `app` preserves pinned Beatoraja's optional audio
-failure. URL/HTTP, Java/reflection, controllers/input, native access, host paths,
-and every unaudited class/member remain denied. Physical screenshots remain
-permitted by the author terms, but no screenshot counts as passing evidence
-until the exact facade, restricted `dofile`/`io.open`, renderer, sandbox, and all
-other schema-v1 criteria are implemented and pass.
+restricted legacy `luajava` facade for package file behavior. The reviewed v1
+surface contains one unguarded `java.io.File` class bind, two File-constructor
+sites, one configured-load `listFiles` site, and one deferred `mkdir` site. It
+does not import Gdx or use its audio facade. The v1 implementation exposes only
+the corresponding closed non-Java virtual File behavior; URL/HTTP,
+Java/reflection, controllers/input, native access, host paths, and every
+unaudited class/member remain denied. Physical screenshots remain permitted by
+the author terms, but no screenshot counts as passing evidence until the exact
+facade, restricted `dofile`/`io.open`, renderer, sandbox, and all other
+schema-v1 criteria are implemented and pass.
