@@ -1041,6 +1041,67 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
                            traitWorkspace, metrics.modeCardHeight,
                            metrics.cardsWidth));
 
+  const auto managementRows = skin::gameplaySkinManagementEntries(snapshot);
+  if (!managementRows.empty()) {
+    auto *management = new View();
+    management->setFlexDirection(FlexDirection::Column);
+    management->setGap(metrics.compact ? 10.0f : 12.0f);
+    for (const auto *row : managementRows) {
+      auto *entryBody = new View();
+      entryBody->setFlexDirection(FlexDirection::Column);
+      entryBody->setGap(metrics.compact ? 6.0f : 8.0f);
+      const std::string title = row->metadata.displayName.empty()
+                                    ? row->entry.packageRelativePath
+                                    : row->metadata.displayName;
+      entryBody->addView(makeWrappedText(
+          title + " — " + validationLabel(row->validation),
+          metrics.bodyTextSize, ui_theme::coral()));
+      entryBody->addView(makeWrappedText(
+          "Package: " + row->entry.package.directoryName + " • Entry: " +
+              row->entry.packageRelativePath,
+          metrics.smallTextSize, ui_theme::textMuted()));
+      for (const auto &diagnostic : row->diagnostics) {
+        entryBody->addView(makeWrappedText(diagnosticPresentation(diagnostic),
+                                           metrics.smallTextSize,
+                                           ui_theme::textSecondary()));
+      }
+      auto *actions = new View();
+      actions->setFlexDirection(FlexDirection::Row);
+      actions->setFlexWrap(YGWrapWrap);
+      actions->setGap(metrics.compact ? 8.0f : 10.0f);
+      actions->addView(makeGameplaySkinAction(
+          metrics, "Revalidate", ordinaryActionsEnabled,
+          [this, entry = row->entry]() {
+            handleGameplaySkinActionResult(
+                gameplaySkinSettingsController->requestRevalidation(entry));
+          }));
+      const bool confirmingRemoval =
+          gameplaySkinRemovalConfirmationKey == row->entry.package.collisionKey;
+      actions->addView(makeGameplaySkinAction(
+          metrics, confirmingRemoval ? "Confirm Remove" : "Remove",
+          ordinaryActionsEnabled,
+          [this, package = row->entry.package, confirmingRemoval]() {
+            if (!confirmingRemoval) {
+              gameplaySkinRemovalConfirmationKey = package.collisionKey;
+              gameplaySkinUiMessage =
+                  "Tap Confirm Remove to uninstall this package.";
+              lastLayoutWidth = -1;
+              return;
+            }
+            handleGameplaySkinActionResult(
+                gameplaySkinSettingsController->requestRemoval(package));
+            gameplaySkinRemovalConfirmationKey.clear();
+          },
+          ui_theme::coral()));
+      entryBody->addView(actions);
+      management->addView(entryBody);
+    }
+    column->addView(makeCard(
+        metrics, "Unavailable Installed Skins",
+        "Review validation details, then revalidate or remove an entry.",
+        management, metrics.modeCardHeight, metrics.cardsWidth));
+  }
+
   if (snapshot.entries.empty()) {
     auto *empty = new View();
     empty->setFlexDirection(FlexDirection::Column);

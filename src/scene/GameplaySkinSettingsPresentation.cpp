@@ -304,6 +304,17 @@ gameplaySkinSettingsCatalogItems(const SkinEntryMetadataSnapshot &metadata) {
   return result;
 }
 
+std::vector<const GameplaySkinEntryRow *>
+gameplaySkinManagementEntries(const GameplaySkinSettingsSnapshot &snapshot) {
+  std::vector<const GameplaySkinEntryRow *> result;
+  for (const auto &entry : snapshot.entries) {
+    if (entry.validation != SkinValidationDisposition::SelectableGameplay) {
+      result.push_back(&entry);
+    }
+  }
+  return result;
+}
+
 GameplaySkinSettingsActionAvailability gameplaySkinSettingsActionAvailability(
     const GameplaySkinSettingsSnapshot &snapshot) noexcept {
   const bool nameReady = snapshot.state == GameplaySkinSettingsState::Ready &&

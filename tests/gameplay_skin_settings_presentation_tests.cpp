@@ -320,6 +320,28 @@ void testCatalogItemsFollowBeatorajaCategoryAndOtherOrder() {
   }
 }
 
+void testNonSelectableEntriesRemainInManagementProjection() {
+  auto snapshot = snapshotWithEntry();
+  auto invalid = entryRow();
+  invalid.entry = entryId("-invalid");
+  invalid.validation = skin::SkinValidationDisposition::Invalid;
+  auto unavailable = entryRow();
+  unavailable.entry = entryId("-unavailable");
+  unavailable.validation = skin::SkinValidationDisposition::UnavailableType;
+  snapshot.entries.push_back(std::move(invalid));
+  snapshot.entries.push_back(std::move(unavailable));
+
+  const auto management = skin::gameplaySkinManagementEntries(snapshot);
+  require(management.size() == 2,
+          "invalid and unavailable entries remain reachable for management");
+  if (management.size() != 2) {
+    return;
+  }
+  require(management[0]->entry == entryId("-invalid") &&
+              management[1]->entry == entryId("-unavailable"),
+          "management projection preserves catalog order for unavailable entries");
+}
+
 void testSkinPackageProgressUsesMeasuredWork() {
   require(
       skin::gameplaySkinPackageProgressDisplayText(
@@ -385,6 +407,7 @@ int main() {
   testPresentationEncodingHasNoDelimiterOrOptionalAmbiguity();
   testCachedControllerPresentationKeyAvoidsReencodingStaticCatalogRows();
   testCatalogItemsFollowBeatorajaCategoryAndOtherOrder();
+  testNonSelectableEntriesRemainInManagementProjection();
   testSkinPackageProgressUsesMeasuredWork();
   testSkinRescanProgressAvoidsInventedWorkTotals();
   testViewportModeChangesPreserveEveryOtherField();

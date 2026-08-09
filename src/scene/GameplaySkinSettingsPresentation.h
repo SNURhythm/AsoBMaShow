@@ -36,6 +36,11 @@ struct GameplaySkinCatalogItem {
 [[nodiscard]] std::vector<GameplaySkinCatalogItem>
 gameplaySkinSettingsCatalogItems(const SkinEntryMetadataSnapshot &metadata);
 
+// Invalid and unavailable entries are not selectable gameplay skins, but they
+// must remain reachable for revalidation and removal.
+[[nodiscard]] std::vector<const GameplaySkinEntryRow *>
+gameplaySkinManagementEntries(const GameplaySkinSettingsSnapshot &snapshot);
+
 [[nodiscard]] GameplaySkinSettingsActionAvailability
 gameplaySkinSettingsActionAvailability(
     const GameplaySkinSettingsSnapshot &snapshot) noexcept;
