@@ -2,6 +2,10 @@
 
 #include <string_view>
 
+#if __has_include("BuildIdentityConfig.h")
+#include "BuildIdentityConfig.h"
+#endif
+
 #ifndef ASOBMASHOW_BUILD_COMMIT
 #error "ASOBMASHOW_BUILD_COMMIT must be supplied by the build system"
 #endif

@@ -279,11 +279,34 @@ struct ProfileSettingsPersistenceCoordinator::Impl {
       if (inserted) {
         state->second.settings = loaded.settings.skin;
         state->second.durableSettings = loaded.settings;
+      } else if (state->second.settings != loaded.settings.skin ||
+                 state->second.durableSettings != loaded.settings) {
+        if (state->second.highWaterGeneration ==
+            std::numeric_limits<std::uint64_t>::max()) {
+          result.diagnostics.push_back(failureDiagnostic(
+              "skin_profile_generation_exhausted",
+              "Profile generations are exhausted during inventory refresh"));
+          continue;
+        }
+        ++state->second.highWaterGeneration;
+        state->second.generation = state->second.highWaterGeneration;
+        state->second.settings = loaded.settings.skin;
+        state->second.durableSettings = loaded.settings;
       }
       inventory.profiles.push_back(snapshotLocked(input.id));
     }
     if (!result.cancelled && result.diagnostics.empty() &&
         inventory.profiles.size() == job.snapshotInputs.size()) {
+      std::set<std::string, std::less<>> capturedProfileIds;
+      for (const auto &input : job.snapshotInputs) {
+        capturedProfileIds.insert(input.id.opaque);
+      }
+      {
+        std::lock_guard lock(mutex);
+        std::erase_if(profiles, [&capturedProfileIds](const auto &profile) {
+          return !capturedProfileIds.contains(profile.first);
+        });
+      }
       std::sort(inventory.profiles.begin(), inventory.profiles.end(),
                 [](const auto &left, const auto &right) {
                   return left.profileId < right.profileId;
@@ -624,10 +647,12 @@ ProfileSettingsPersistenceCoordinator::pollSnapshotAllProfiles(
     std::uint64_t ticket) {
   std::lock_guard lock(impl_->mutex);
   const auto found = impl_->snapshots.find(ticket);
-  return found == impl_->snapshots.end()
-             ? std::nullopt
-             : std::optional<skin::AllSkinProfileSnapshotsResult>(
-                   found->second);
+  if (found == impl_->snapshots.end()) {
+    return std::nullopt;
+  }
+  auto result = std::move(found->second);
+  impl_->snapshots.erase(found);
+  return result;
 }
 
 void ProfileSettingsPersistenceCoordinator::cancelSnapshotAllProfiles(

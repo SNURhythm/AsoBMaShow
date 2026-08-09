@@ -637,6 +637,156 @@ void testInventoryRaiiTokensCanOutliveCoordinatorShutdown() {
   barrier.reset();
   expect(true, "fences and barriers release safely after owner destruction");
 }
+
+void testSnapshotPollConsumesTerminalResult() {
+  TempDirectory temp;
+  PlayerProfileManager manager(temp.path(), managerDependencies());
+  expect(manager.Initialize().ok(),
+         "profile manager initializes for terminal snapshot consumption");
+  AppSettings active;
+  ProfileSettingsPersistenceCoordinator coordinator(manager, active);
+
+  const auto ticket = coordinator.beginSnapshotAllProfiles();
+  std::optional<skin::AllSkinProfileSnapshotsResult> terminal;
+  for (int attempt = 0; attempt < 500 && !terminal; ++attempt) {
+    terminal = coordinator.pollSnapshotAllProfiles(ticket);
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  expect(terminal && terminal->complete && terminal->inventory,
+         "terminal snapshot remains available until its first completed poll");
+  expect(!coordinator.pollSnapshotAllProfiles(ticket),
+         "completed snapshot is consumed so repeated scans do not retain it");
+}
+
+void testSnapshotReconcilesDeletedInactiveProfileCache() {
+  TempDirectory temp;
+  PlayerProfileManager manager(temp.path(), managerDependencies());
+  expect(manager.Initialize().ok(),
+         "profile manager initializes for snapshot cache reconciliation");
+  const auto created = manager.createProfile("Disposable");
+  expect(created.ok() && created.profile,
+         "snapshot cache reconciliation fixture creates an inactive profile");
+  AppSettings active;
+  ProfileSettingsPersistenceCoordinator coordinator(manager, active);
+
+  const auto initialTicket = coordinator.beginSnapshotAllProfiles();
+  std::optional<skin::AllSkinProfileSnapshotsResult> initial;
+  for (int attempt = 0; attempt < 500 && !initial; ++attempt) {
+    initial = coordinator.pollSnapshotAllProfiles(initialTicket);
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  expect(initial && initial->complete && initial->inventory &&
+             initial->inventory->profiles.size() == 2,
+         "initial snapshot caches the inactive profile");
+
+  auto mutation = coordinator.beginInventoryMutation();
+  expect(manager.deleteProfile(created.profile->id).ok(),
+         "inactive profile deletion succeeds under the inventory mutation");
+  coordinator.finishInventoryMutation(std::move(mutation));
+
+  const auto refreshedTicket = coordinator.beginSnapshotAllProfiles();
+  std::optional<skin::AllSkinProfileSnapshotsResult> refreshed;
+  for (int attempt = 0; attempt < 500 && !refreshed; ++attempt) {
+    refreshed = coordinator.pollSnapshotAllProfiles(refreshedTicket);
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  expect(refreshed && refreshed->complete && refreshed->inventory &&
+             refreshed->inventory->profiles.size() == 1 &&
+             coordinator.tryAcquireInventoryCommitFence(*refreshed->inventory),
+         "a refreshed snapshot drops the deleted cache entry and can publish");
+}
+
+void testSnapshotRefreshesOverwrittenInactiveProfileSettings() {
+  TempDirectory temp;
+  PlayerProfileManager manager(temp.path(), managerDependencies());
+  expect(manager.Initialize().ok(),
+         "profile manager initializes for overwritten snapshot refresh");
+  const auto created = manager.createProfile("Replaceable");
+  expect(created.ok() && created.profile,
+         "overwritten snapshot fixture creates an inactive profile");
+  AppSettings active;
+  ProfileSettingsPersistenceCoordinator coordinator(manager, active);
+
+  const auto typedId = skin::makeSkinProfileId(created.profile->id);
+  const auto initialTicket = coordinator.beginSnapshotAllProfiles();
+  std::optional<skin::AllSkinProfileSnapshotsResult> initial;
+  for (int attempt = 0; attempt < 500 && !initial; ++attempt) {
+    initial = coordinator.pollSnapshotAllProfiles(initialTicket);
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  std::uint64_t initialGeneration = 0;
+  if (initial && initial->inventory && typedId) {
+    for (const auto &profile : initial->inventory->profiles) {
+      if (profile.profileId == *typedId) {
+        initialGeneration = profile.generation;
+      }
+    }
+  }
+
+  const auto sourcePaths = manager.pathsFor(created.profile->id);
+  const auto beforeReplacement = AppSettingsStore::Load(sourcePaths.settingsJson);
+  expect(beforeReplacement.status == AppSettingsLoadStatus::Loaded,
+         "overwritten snapshot fixture loads its initial inactive settings");
+  AppSettings replacement = beforeReplacement.settings;
+  const auto replacementEntry = sampleEntry("Replacement");
+  replacement.skin.selectedGameplayEntries[0] = replacementEntry;
+  replacement.skin.entries[replacementEntry].options["variant"] = 73;
+  replacement.skin.sanitize();
+  expect(replacement.skin != beforeReplacement.settings.skin,
+         "replacement fixture changes the inactive skin settings");
+  auto mutation = coordinator.beginInventoryMutation();
+  const auto overwritten = manager.installProfile(
+      *created.profile, created.profile->id,
+      [sourcePaths, replacement](const PlayerProfilePaths &staging,
+                                 std::string &stagingError) {
+        std::error_code copyError;
+        for (const auto &source :
+             std::filesystem::directory_iterator(sourcePaths.root, copyError)) {
+          if (copyError) {
+            break;
+          }
+          std::filesystem::copy(
+              source.path(), staging.root / source.path().filename(),
+              std::filesystem::copy_options::recursive, copyError);
+          if (copyError) {
+            break;
+          }
+        }
+        if (copyError) {
+          stagingError = copyError.message();
+          return false;
+        }
+        return AppSettingsStore::Save(staging.settingsJson, replacement,
+                                      stagingError);
+      });
+  expect(overwritten.ok(), "inactive profile overwrite succeeds: " +
+                               overwritten.message);
+  coordinator.finishInventoryMutation(std::move(mutation));
+  const auto durable =
+      AppSettingsStore::Load(manager.pathsFor(created.profile->id).settingsJson);
+  expect(durable.status == AppSettingsLoadStatus::Loaded,
+         "overwritten inactive profile settings remain loadable");
+  expect(durable.settings.skin == replacement.skin,
+         "overwritten inactive profile has replacement settings on disk");
+
+  const auto refreshedTicket = coordinator.beginSnapshotAllProfiles();
+  std::optional<skin::AllSkinProfileSnapshotsResult> refreshed;
+  for (int attempt = 0; attempt < 500 && !refreshed; ++attempt) {
+    refreshed = coordinator.pollSnapshotAllProfiles(refreshedTicket);
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  const auto cached = typedId ? coordinator.snapshot(*typedId)
+                              : skin::VersionedSkinProfileSettings{};
+  expect(refreshed && refreshed->complete && refreshed->inventory,
+         "overwritten profile refresh completes with an inventory");
+  expect(typedId && cached.settings == replacement.skin,
+         "overwritten profile refresh updates cached skin settings");
+  expect(cached.generation > initialGeneration,
+         "overwritten profile refresh advances its generation");
+  expect(refreshed && refreshed->inventory &&
+             coordinator.tryAcquireInventoryCommitFence(*refreshed->inventory),
+         "overwritten profile refresh can publish its refreshed inventory");
+}
 } // namespace
 
 int main() {
@@ -650,6 +800,9 @@ int main() {
   testNonStandardSkinWorkerFailureRollsBackAndTerminatesTicket();
   testNonStandardSnapshotWorkerFailureTerminatesTicket();
   testInventoryRaiiTokensCanOutliveCoordinatorShutdown();
+  testSnapshotPollConsumesTerminalResult();
+  testSnapshotReconcilesDeletedInactiveProfileCache();
+  testSnapshotRefreshesOverwrittenInactiveProfileSettings();
   if (failures != 0) {
     std::cerr << failures
               << " profile settings persistence assertion(s) failed\n";
