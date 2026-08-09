@@ -1084,7 +1084,13 @@ std::string sevenZipResultMessage(HRESULT result) {
 
 struct SevenZipPropVariant : PROPVARIANT {
   SevenZipPropVariant() { std::memset(this, 0, sizeof(PROPVARIANT)); }
-  ~SevenZipPropVariant() { VariantClear(this); }
+  ~SevenZipPropVariant() {
+#if defined(_WIN32)
+    PropVariantClear(this);
+#else
+    VariantClear(this);
+#endif
+  }
 };
 
 std::optional<std::string> sevenZipStringProperty(IInArchive *archive,
