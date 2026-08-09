@@ -15,6 +15,9 @@ Review date: 2026-08-09
 - The focused reference, acceptance, iOS-build-setup, and iOS-artifact Python
   suite completed with **138 tests passed** and one expected skip: the optional
   live pinned-reference coupling probe requires an explicit root.
+- `scripts/ios_release_verify.sh` completed its 61 release-critical tests,
+  produced an unsigned arm64 `BUILD SUCCEEDED`, and passed the iOS artifact
+  audit.
 - The external ModernChic 4.6 audit verified the committed reference manifest
   against the reviewed archive and corresponding extracted root. This audit did
   not copy package payload into the repository.
