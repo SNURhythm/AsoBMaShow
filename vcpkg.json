@@ -32,7 +32,7 @@
         "7zip",
         {
             "name": "unarr",
-            "platform": "!ios"
+            "platform": "!ios & !windows"
         },
         {
             "name": "lua",

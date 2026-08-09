@@ -94,7 +94,7 @@ include_directories(yoga/lib)
 
 # Compiler definitions for MSVC/others
 if (MSVC)
-    add_compile_options(/Zc:__cplusplus /Zc:preprocessor /wd4819 /utf-8)
+    add_compile_options(/Zc:__cplusplus /Zc:preprocessor /wd4819 /utf-8 /bigobj)
     add_definitions(-DSTBI_WINDOWS_UTF8)
     if (CMAKE_SIZEOF_VOID_P EQUAL 8)
         add_definitions(-DAMD64)
@@ -240,10 +240,6 @@ else()
     find_package(7zip CONFIG REQUIRED)
     list(APPEND COMMON_LIBS 7zip::7zip)
 
-    # unarr gives direct offset-based reads for non-solid RAR4 archives.
-    find_package(unarr CONFIG REQUIRED)
-    list(APPEND COMMON_LIBS unarr::unarr)
-
     # # Fontconfig & LibASS (Required by FFmpeg[all-gpl] static build)
     # find_package(PkgConfig REQUIRED)
 
@@ -299,6 +295,9 @@ else()
         include_directories(BEFORE ${LUAJIT_INCLUDE_DIRS})
         link_directories(${LUAJIT_LIBRARY_DIRS})
         list(APPEND COMMON_LIBS ${LUAJIT_LIBRARIES})
+        # unarr gives direct offset-based reads for non-solid RAR4 archives.
+        find_package(unarr CONFIG REQUIRED)
+        list(APPEND COMMON_LIBS unarr::unarr)
     endif()
 
     if (WIN32)
