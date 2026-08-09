@@ -77,6 +77,8 @@ void activationRequestBoundaryIsDefaultEmpty() {
 void gameplaySceneOwnsOnlyThePresentationBoundary() {
   const auto header = readSource("src/scene/play/GamePlayScene.h");
   const auto source = readSource("src/scene/play/GamePlayScene.cpp");
+  const auto factory =
+      readSource("src/scene/play/GameplaySkinSessionFactory.cpp");
 
   expectAbsent(header, "ownedRenderer",
                "GamePlayScene header has no direct renderer owner");
@@ -91,17 +93,22 @@ void gameplaySceneOwnsOnlyThePresentationBoundary() {
                  "gameplay constructs the built-in through its factory");
   expectContains(source, "PlayfieldPresentationCoordinatorDependencies",
                  "gameplay owns the atomic presentation coordinator");
-  expectContains(source, "context.acquireGameplaySkinForNextChart",
-                 "gameplay calls only the injected next-chart acquisition seam");
-  expectContains(source, "\n  skin::GameplaySkinAcquisition acquisition =",
-                 "gameplay keeps the move-only selected-skin activation mutable "
+  expectContains(source, "#include \"GameplaySkinSessionFactory.h\"",
+                 "gameplay uses the shared selected-skin session factory");
+  expectContains(source, "createGameplaySkinSession(",
+                 "gameplay requests a selected session through the shared factory");
+  expectContains(source, "gameplaySkinSessionServices(context)",
+                 "gameplay supplies lifecycle-owned services to the shared factory");
+  expectContains(factory, "skin::GameplaySkinAcquisition acquisition",
+                 "the factory keeps the move-only selected-skin activation mutable "
                  "until ownership transfers into its session");
-  expectContains(source, "skin::PlaySkinSession::create(",
-                 "gameplay creates an owning chart-lifetime skin session");
-  expectContains(source, "GameplaySkinAcquisitionDisposition::Failed",
+  expectContains(factory, "skin::PlaySkinSession::create(",
+                 "the factory creates an owning chart-lifetime skin session");
+  expectContains(source,
+                 "if (result.disposition == GameplaySkinSessionDisposition::Failed)",
                  "gameplay distinguishes a selected-skin acquisition failure");
   expectContains(source,
-                 "showPlaybackInitializationFailure(gameplaySkinFailureMessage(diagnostic));",
+                 "gameplaySkinFailureMessage(result.failure->diagnostic)",
                  "selected-skin acquisition and session failures open the full-screen error page");
   expectContains(source,
                  "if (playbackInitializationFailed) {\n    return false;\n  }\n  updateSkinResetLayoutVisibility();",
@@ -134,11 +141,16 @@ void gameplaySceneOwnsOnlyThePresentationBoundary() {
          "gameplay renders the matched presentation exactly once per frame");
   expectAbsent(source, "chart->Meta.KeyMode != 7",
                "gameplay does not hard-code 7K skin acquisition");
-  expectContains(source, "acquireGameplaySkinForNextChart(chart->Meta.KeyMode)",
+  expectContains(source, ".keyMode = chart->Meta.KeyMode",
                  "gameplay requests the selected skin for the chart keymode");
-  expectContains(source,
-                 "capturePlayfieldVisualState(\n      initialGameplayTimeMicros,\n      getVisualTimeMicros(initialGameplayTimeMicros),\n      preparationIndicatorActive(initialRawSongTimeMicros));\n  acquireGameplaySkinForAttempt();",
-                 "every retry captures authoritative initial state before reacquiring through the injected attempt boundary");
+  const auto initialCapture = source.find("capturePlayfieldVisualState(");
+  const auto acquireAfterInitialCapture =
+      source.find("acquireGameplaySkinForAttempt();", initialCapture);
+  expect(initialCapture != std::string::npos &&
+             acquireAfterInitialCapture != std::string::npos &&
+             initialCapture < acquireAfterInitialCapture,
+         "every retry captures authoritative initial state before reacquiring "
+         "through the injected attempt boundary");
   expectContains(source,
                  "acquireGameplaySkinForAttempt();\n  if (playbackInitializationFailed) {\n    return false;\n  }\n  updateSkinResetLayoutVisibility();\n#endif\n  context.jukebox.play",
                  "configured skin loading either completes or stops before attempt audio starts");
