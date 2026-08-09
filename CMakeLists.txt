@@ -3846,6 +3846,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/view/Button.cpp
         src/view/ContextMenuView.cpp
         src/view/ScrollView.cpp
+        src/view/SdlTtfRuntime.cpp
         src/view/TextView.cpp
         src/view/View.cpp
     )
@@ -3908,6 +3909,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/rendering/common.cpp
         src/rendering/UniformCache.cpp
         src/view/CheckboxButtonContent.cpp
+        src/view/SdlTtfRuntime.cpp
         src/view/TextView.cpp
         src/view/View.cpp
     )
@@ -3962,6 +3964,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/rendering/common.cpp
         src/rendering/UniformCache.cpp
         src/view/Button.cpp
+        src/view/SdlTtfRuntime.cpp
         src/view/TextView.cpp
         src/view/View.cpp
         src/scene/play/GameplayGaugeRules.cpp
@@ -3985,6 +3988,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/rendering/common.cpp
         src/rendering/UniformCache.cpp
         src/view/Button.cpp
+        src/view/SdlTtfRuntime.cpp
         src/view/TextView.cpp
         src/view/View.cpp
         src/scene/play/GameplayGaugeRules.cpp
@@ -5091,6 +5095,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/play/Judge.cpp
         src/skin/DefaultSkin.cpp
         src/view/Button.cpp
+        src/view/SdlTtfRuntime.cpp
         src/view/TextView.cpp
         src/view/View.cpp
     )
@@ -5147,6 +5152,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ResultImageExporterPresentation.cpp
         src/skin/DefaultSkin.cpp
         src/view/Button.cpp
+        src/view/SdlTtfRuntime.cpp
         src/view/TextView.cpp
         src/view/View.cpp
     )

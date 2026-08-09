@@ -646,15 +646,17 @@ int main() { return 0; }
         self.assertIn("URLByResolvingSymlinksInPath", implementation)
         self.assertIn("resolvedDirectory.fileSystemRepresentation", implementation)
 
-    def test_ios_skin_storage_keeps_all_state_in_files_visible_documents(self):
+    def test_ios_skin_storage_keeps_payloads_live_in_files_documents(self):
         source = SKIN_STORAGE_PATHS_SOURCE.read_text(encoding="utf-8")
         start = source.index("SkinStorageRoots defaultSkinStorageRoots()")
         end = source.index("#endif", start)
         implementation = source[start:end]
         self.assertIn('Utils::GetDocumentsPath("Skins")', implementation)
-        self.assertIn('Utils::GetDocumentsPath("_runtime")', implementation)
-        self.assertIn("return deriveSkinStorageRoots(visible, workspace);", implementation)
-        self.assertNotIn("GetIOSApplicationSupportPath", implementation)
+        self.assertIn("GetIOSApplicationSupportPath", implementation)
+        self.assertIn("support / \"Skins\"", implementation)
+        self.assertIn("roots.liveSources = true;", implementation)
+        self.assertIn("return roots;", implementation)
+        self.assertNotIn('Utils::GetDocumentsPath("_runtime")', implementation)
 
     def test_ios_skin_storage_bootstrap_uses_normal_directory_creation(self):
         source = SKIN_PACKAGE_STORE_SOURCE.read_text(encoding="utf-8")
