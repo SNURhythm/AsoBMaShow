@@ -214,7 +214,7 @@ struct FakeTextureDevice final : skin::SkinTextureDevice {
 void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   namespace fs = std::filesystem;
   TemporaryDirectory temporary;
-  const fs::path source = temporary.root / "source";
+  const fs::path source = temporary.root / "visible" / "Task13Fixture";
   fs::create_directories(source / "entry/resources");
   std::ofstream(source / "entry/play.luaskin") << "return {}\n";
   fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
@@ -263,11 +263,12 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   skin::SkinStorageRoots roots{.visiblePackages=temporary.root/"visible",
                                .privateRevisions=temporary.root/"revisions",
                                .privateCatalog=temporary.root/"catalog",
-                               .profileOverlays=temporary.root/"overlays"};
+                               .profileOverlays=temporary.root/"overlays",
+                               .liveSources=true};
   auto aliases = skin::createPlatformSkinAliasDetector();
   skin::SkinTreeSnapshotter snapshotter(roots, *aliases);
   auto snapshot = snapshotter.snapshot(source, package, {}, {});
-  expect(snapshot.prepared.has_value(), "resource fixture creates a staged revision");
+  expect(snapshot.prepared.has_value(), "resource fixture creates a live revision");
   if (!snapshot.prepared) return;
   auto stagedFs = skin::LuaSkinFileSystem::create({.revision=snapshot.prepared->readView(), .entry=entry, .storageRoots=roots});
   expect(stagedFs.fileSystem != nullptr, "staged resource filesystem is entry-aware");
@@ -298,15 +299,15 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   std::ofstream(source / "entry/play.luaskin", std::ios::app) << "-- different revision\n";
   auto mismatchSnapshot = snapshotter.snapshot(source, package, {}, {});
   expect(mismatchSnapshot.prepared.has_value(),
-         "second staged revision is available for provenance testing");
+         "second live source revision is available for provenance testing");
   if (mismatchSnapshot.prepared) {
     auto mismatchFs = skin::LuaSkinFileSystem::create({.revision=mismatchSnapshot.prepared->readView(), .entry=entry, .storageRoots=roots});
-    expect(mismatchFs.fileSystem != nullptr, "second staged revision creates an independent filesystem");
+    expect(mismatchFs.fileSystem != nullptr, "second live revision creates an independent filesystem");
     if (!mismatchFs.fileSystem) return;
     const auto mismatch = service.validateResources({.revision=snapshot.prepared->readView(), .entry=entry, .fileSystem=*mismatchFs.fileSystem, .model=model, .configuration=configuration});
     expect(!mismatch.valid && !mismatch.diagnostics.empty() &&
                mismatch.diagnostics.front().code == "skin.resource.path_invalid",
-           "preparation rejects a filesystem from another immutable revision before reading bytes");
+           "preparation rejects a filesystem from another live source revision before reading bytes");
   }
   const auto hasDiagnostic = [](const std::vector<skin::SkinDiagnostic> &diagnostics,
                                 std::string_view code) {
@@ -317,7 +318,7 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   criticalMissingModel.model.objects[3].critical = true;
   const auto criticalMissing = service.validateResources({.revision=snapshot.prepared->readView(), .entry=entry, .fileSystem=*stagedFs.fileSystem, .model=criticalMissingModel, .configuration=configuration});
   expect(!criticalMissing.valid && hasDiagnostic(criticalMissing.diagnostics, "skin.resource.missing_critical"),
-         "a live critical resource missing from the immutable revision is a blocking error");
+         "a live critical resource missing from the selected source revision is a blocking error");
   auto invalidCropModel = model;
   auto &badFrames = std::get<skin::SkinImageObject>(invalidCropModel.model.objects[0].payload).orderedStates.front().frames;
   badFrames.front().x = 39;
@@ -347,7 +348,7 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   stagedFs.fileSystem.reset();
   std::string publishError;
   auto lease = std::move(*snapshot.prepared).publish(publishError);
-  expect(lease && publishError.empty(), "staged revision publishes after non-retaining validation");
+  expect(lease && publishError.empty(), "live revision publishes after non-retaining validation");
   if (!lease) return;
   const auto weak = lease->weakPin();
   auto leasedFs = skin::LuaSkinFileSystem::create({.revision=lease->readView(), .entry=entry, .storageRoots=roots});

@@ -5,9 +5,10 @@ end
 assert(type(io) == "table" and type(io.open) == "function")
 local io_exports = 0
 for _ in pairs(io) do io_exports = io_exports + 1 end
-assert(io_exports == 1)
+assert(io_exports == 2)
 assert(io.stdin == nil and io.stdout == nil and io.stderr == nil)
-assert(io.lines == nil and io.popen == nil and io.tmpfile == nil)
+assert(type(io.open) == "function" and type(io.lines) == "function")
+assert(io.popen == nil and io.tmpfile == nil)
 
 local first, number = dofile("returns.lua")
 assert(first == "alpha" and number == 7)
@@ -26,6 +27,11 @@ assert(lines() == "second-line")
 assert(lines() == nil)
 assert(reader:close() == true)
 assert(reader:close() == true)
+
+local named_lines = io.lines("input.txt")
+assert(named_lines() == "first-line")
+assert(named_lines() == "second-line")
+assert(named_lines() == nil)
 
 local raw = assert(io.open("input.txt", "rb"))
 assert(raw:read(5) == "first")

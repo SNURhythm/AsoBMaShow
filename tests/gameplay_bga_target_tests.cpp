@@ -931,12 +931,9 @@ void testOnlyScheduledLayerImageIdsReceiveCompanionTextures() {
   const auto layerPreflight =
       jukebox.preflight(baseAndLayerFrame, std::span(&layerTarget, 1));
   require(baseAndLayerFrame.base.has_value() &&
-              baseAndLayerFrame.layer.has_value() && !basePreflight.ready &&
-              basePreflight.failure &&
-              basePreflight.failure->code == "gameplay_bga.image.preflight" &&
-              !layerPreflight.ready && layerPreflight.failure &&
-              layerPreflight.failure->code == "gameplay_bga.image.preflight",
-          "one image ID reused as base and layer retains both textures and reaches the known embedded-program readiness boundary");
+              baseAndLayerFrame.layer.has_value() && basePreflight.ready &&
+              layerPreflight.ready,
+          "one image ID reused as base and layer retains both textures and preflights both roles");
   jukebox.finalizePrepared(baseAndLayerFrame);
 
   const GameplayBgaMissState missState{
@@ -945,10 +942,8 @@ void testOnlyScheduledLayerImageIdsReceiveCompanionTextures() {
   const auto missTarget = makeLoadedImageTarget(GameplayBgaRole::Miss, 3);
   const auto missPreflight =
       jukebox.preflight(missFrame, std::span(&missTarget, 1));
-  require(missFrame.miss.has_value() && !missPreflight.ready &&
-              missPreflight.failure &&
-              missPreflight.failure->code == "gameplay_bga.image.preflight",
-          "a poor-only image uses its single linear texture and reaches the embedded-program readiness boundary");
+  require(missFrame.miss.has_value() && missPreflight.ready,
+          "a poor-only image uses its single linear texture and preflights");
   jukebox.finalizePrepared(missFrame);
 
   const auto fullscreenFrame = jukebox.prepareVisualFrameAt(803, 0, {});
