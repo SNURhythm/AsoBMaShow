@@ -389,20 +389,32 @@ RealtimeTouchInputRouter::laneIndexAt(float x, float y,
     return std::nullopt;
   }
   const RealtimeTouchPoint point{x, y};
-  std::optional<std::size_t> selected;
-  float selectedDistanceSq = 0.0F;
+  std::optional<std::size_t> firstAuthoredSkin;
+  std::optional<std::size_t> nearestVirtualControl;
+  float nearestVirtualControlDistanceSq = 0.0F;
   for (std::size_t index = 0; index < layout_.laneRegions.size(); ++index) {
-    if (contains(layout_.laneRegions[index], point)) {
-      const float distanceSq =
-          centerDistanceSq(layout_.laneRegions[index], point);
-      if (!selected.has_value() || distanceSq < selectedDistanceSq) {
-        selected = index;
-        selectedDistanceSq = distanceSq;
+    const auto &region = layout_.laneRegions[index];
+    if (!contains(region, point)) {
+      continue;
+    }
+    if (!region.requiresInside) {
+      if (!firstAuthoredSkin.has_value()) {
+        firstAuthoredSkin = index;
       }
+      continue;
+    }
+    const float distanceSq = centerDistanceSq(region, point);
+    if (!nearestVirtualControl.has_value() ||
+        distanceSq < nearestVirtualControlDistanceSq) {
+      nearestVirtualControl = index;
+      nearestVirtualControlDistanceSq = distanceSq;
     }
   }
-  if (selected.has_value()) {
-    return selected;
+  if (nearestVirtualControl.has_value()) {
+    return nearestVirtualControl;
+  }
+  if (firstAuthoredSkin.has_value()) {
+    return firstAuthoredSkin;
   }
   if (requireInside) {
     return std::nullopt;
@@ -433,22 +445,16 @@ RealtimeTouchInputRouter::laneIndexAt(float x, float y,
         layout_.laneCount - 1);
     return layout_.laneCount - 1 - originalIndex;
   }
-  selected.reset();
-  selectedDistanceSq = 0.0F;
   for (std::size_t index = 0; index < layout_.laneRegions.size(); ++index) {
     if (layout_.laneRegions[index].requiresInside) {
       continue;
     }
     const auto clamped = clampedVertically(layout_.laneRegions[index], point);
     if (contains(layout_.laneRegions[index], clamped)) {
-      const float distanceSq = centerDistanceSq(layout_.laneRegions[index], clamped);
-      if (!selected.has_value() || distanceSq < selectedDistanceSq) {
-        selected = index;
-        selectedDistanceSq = distanceSq;
-      }
+      return index;
     }
   }
-  return selected;
+  return std::nullopt;
 }
 
 bool RealtimeTouchInputRouter::normalizeLayout(
