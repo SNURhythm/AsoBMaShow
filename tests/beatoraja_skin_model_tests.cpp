@@ -1,4 +1,5 @@
 #include "skin/beatoraja/LuaSkinTableDecoder.h"
+#include "skin/beatoraja/GameplaySkinBuiltinCatalog.h"
 #include "skin/beatoraja/SkinModelValidator.h"
 #include "skin/beatoraja/SkinCoverNormalization.h"
 #include "lua_skin_binding_test_support.h"
@@ -82,14 +83,6 @@ void writeText(const fs::path &path, std::string_view value) {
 BeatorajaSkinModelDecodeResult
 decodeInlineModel(std::string_view sourceText,
                   BeatorajaSkinHeader *decodedHeader = nullptr) {
-  static const std::array judgeBindingBuiltins{
-      SkinBuiltinBindingCatalogEntry{
-          .type = {.kind = SkinBindingKind::BooleanProperty},
-          .selector = SkinBuiltinPropertySelector{std::string("judge-condition")}},
-      SkinBuiltinBindingCatalogEntry{
-          .type = {.kind = SkinBindingKind::BooleanProperty},
-          .selector = SkinBuiltinPropertySelector{std::string("judge-draw")}},
-  };
   TempDirectory temp;
   const SkinStorageRoots roots{
       .visiblePackages = temp.root() / "visible",
@@ -163,8 +156,7 @@ decodeInlineModel(std::string_view sourceText,
   }
   return decoder.decodeGameplay(*configured.value,
                                 {.runtime = *created.runtime,
-                                 .builtins = SkinBuiltinBindingCatalogView(
-                                     judgeBindingBuiltins)});
+                                 .builtins = gameplaySkinBuiltinCatalog()});
 }
 
 const Json &expectedContract() {
@@ -247,8 +239,38 @@ public:
     if (!configured.value) {
       return {};
     }
+    static const std::array modelFixtureBuiltins{
+        SkinBuiltinBindingCatalogEntry{
+            .type = {.kind = SkinBindingKind::IntegerProperty,
+                     .integerDomain = SkinIntegerPropertyDomain::ImageIndex},
+            .selector = SkinBuiltinPropertySelector{700}},
+        SkinBuiltinBindingCatalogEntry{
+            .type = {.kind = SkinBindingKind::IntegerProperty,
+                     .integerDomain = SkinIntegerPropertyDomain::ImageIndex},
+            .selector = SkinBuiltinPropertySelector{701}},
+        SkinBuiltinBindingCatalogEntry{
+            .type = {.kind = SkinBindingKind::IntegerProperty,
+                     .integerDomain = SkinIntegerPropertyDomain::IntegerValue},
+            .selector = SkinBuiltinPropertySelector{700}},
+        SkinBuiltinBindingCatalogEntry{
+            .type = {.kind = SkinBindingKind::FloatProperty,
+                     .floatDomain = SkinFloatPropertyDomain::FloatValue},
+            .selector = SkinBuiltinPropertySelector{800}},
+        SkinBuiltinBindingCatalogEntry{
+            .type = {.kind = SkinBindingKind::FloatProperty,
+                     .floatDomain = SkinFloatPropertyDomain::Rate},
+            .selector = SkinBuiltinPropertySelector{800}},
+        SkinBuiltinBindingCatalogEntry{
+            .type = {.kind = SkinBindingKind::TimerProperty},
+            .selector = SkinBuiltinPropertySelector{42}},
+        SkinBuiltinBindingCatalogEntry{
+            .type = {.kind = SkinBindingKind::TimerProperty},
+            .selector = SkinBuiltinPropertySelector{43}},
+    };
     return decoder.decodeGameplay(*configured.value,
-                                  {.runtime = *created.runtime});
+                                  {.runtime = *created.runtime,
+                                   .builtins = SkinBuiltinBindingCatalogView(
+                                       modelFixtureBuiltins)});
   }
 
 private:
@@ -372,8 +394,13 @@ void testPropertyInterningIncludesIntegerAndFloatDomains() {
   const auto &model = *decoded.model;
   const auto &expected = expectedContract();
   const auto &integerJson = expected.at("integerBindings");
-  expect(model.integerProperties.size() == integerJson.size(),
+  const bool integerBindingCountMatches =
+      model.integerProperties.size() == integerJson.size();
+  expect(integerBindingCountMatches,
          "integer bindings are interned once per selector domain");
+  if (!integerBindingCountMatches) {
+    return;
+  }
   for (std::size_t index = 0;
        index < model.integerProperties.size() && index < integerJson.size();
        ++index) {
@@ -391,8 +418,13 @@ void testPropertyInterningIncludesIntegerAndFloatDomains() {
   }
 
   const auto &floatJson = expected.at("floatBindings");
-  expect(model.floatProperties.size() == floatJson.size(),
+  const bool floatBindingCountMatches =
+      model.floatProperties.size() == floatJson.size();
+  expect(floatBindingCountMatches,
          "float bindings are interned once per selector domain");
+  if (!floatBindingCountMatches) {
+    return;
+  }
   for (std::size_t index = 0;
        index < model.floatProperties.size() && index < floatJson.size();
        ++index) {
@@ -441,8 +473,12 @@ void testStableIdsAndPerUseFrameExpansionAreSourceNeutral() {
   const auto &model = *decoded.model;
   const auto &expected = expectedContract();
   const auto &resourceJson = expected.at("resources");
-  expect(model.resources.size() == resourceJson.size(),
+  const bool resourceCountMatches = model.resources.size() == resourceJson.size();
+  expect(resourceCountMatches,
          "only authored Source records become image resources");
+  if (!resourceCountMatches) {
+    return;
+  }
   for (std::size_t index = 0;
        index < model.resources.size() && index < resourceJson.size(); ++index) {
     const auto *resource =
@@ -456,9 +492,13 @@ void testStableIdsAndPerUseFrameExpansionAreSourceNeutral() {
   }
 
   const auto &objectJson = expected.at("objects");
-  expect(model.objects.size() == objectJson.size() &&
-             model.destinations.size() == objectJson.size(),
+  const bool objectCountMatches = model.objects.size() == objectJson.size() &&
+                                  model.destinations.size() == objectJson.size();
+  expect(objectCountMatches,
          "effective object and destination vectors retain authored order");
+  if (!objectCountMatches) {
+    return;
+  }
   for (std::size_t index = 0;
        index < model.objects.size() && index < objectJson.size(); ++index) {
     const auto &object = model.objects[index];
@@ -478,15 +518,25 @@ void testStableIdsAndPerUseFrameExpansionAreSourceNeutral() {
   }
   const auto &strip = std::get<SkinImageObject>(stripDefinition->payload);
   const auto &stateJson = expected.at("stripStates");
-  expect(strip.orderedStates.size() == 2,
+  const bool stripStateCountMatches =
+      strip.orderedStates.size() == stateJson.size();
+  expect(stripStateCountMatches,
          "Image len partitions one per-use row-major grid into states");
+  if (!stripStateCountMatches) {
+    return;
+  }
   for (std::size_t state = 0;
        state < strip.orderedStates.size() && state < stateJson.size();
        ++state) {
     expect(strip.orderedStates[state].resource == 1,
            "shared atlas resource ID remains division-neutral");
-    expect(strip.orderedStates[state].frames.size() == stateJson[state].size(),
+    const bool frameCountMatches =
+        strip.orderedStates[state].frames.size() == stateJson[state].size();
+    expect(frameCountMatches,
            "partitioned state preserves its frame count");
+    if (!frameCountMatches) {
+      return;
+    }
     for (std::size_t frame = 0;
          frame < strip.orderedStates[state].frames.size() &&
          frame < stateJson[state].size();
@@ -512,21 +562,30 @@ void testImageSetPreservesIndependentStateResourcesCropsAndTimers() {
   }
   const auto &imageSet = std::get<SkinImageObject>(definition->payload);
   const auto &expected = expectedContract().at("imageSetStates");
-  expect(imageSet.orderedStates.size() == expected.size(),
+  const bool imageSetStateCountMatches =
+      imageSet.orderedStates.size() == expected.size();
+  expect(imageSetStateCountMatches,
          "ImageSet retains one complete state per authored image ID");
+  if (!imageSetStateCountMatches) {
+    return;
+  }
   for (std::size_t state = 0;
        state < imageSet.orderedStates.size() && state < expected.size();
        ++state) {
     const auto &actual = imageSet.orderedStates[state];
     const auto &entry = expected[state];
-    expect(
+    const bool stateMatches =
         actual.resource == entry.at("resource") &&
             actual.cycleMillis == entry.at("cycleMillis") &&
             actual.timer.has_value() &&
             timerSelector(model, *actual.timer) ==
                 entry.at("timerSelector").get<int>() &&
-            actual.frames.size() == entry.at("frames").size(),
+            actual.frames.size() == entry.at("frames").size();
+    expect(stateMatches,
         "ImageSet state retains resource, cycle, timer, and crop cardinality");
+    if (!stateMatches) {
+      return;
+    }
     for (std::size_t frame = 0;
          frame < actual.frames.size() && frame < entry.at("frames").size();
          ++frame) {
@@ -552,8 +611,13 @@ void testDestinationDefaultsInheritanceAndStableTimeOrder() {
 
   const auto &expectedFrames = expectedContract().at("stripDestinationFrames");
   const auto &frames = destinations[0].presentation.frames;
-  expect(frames.size() == expectedFrames.size(),
+  const bool destinationFrameCountMatches =
+      frames.size() == expectedFrames.size();
+  expect(destinationFrameCountMatches,
          "all inherited destination frames survive normalization");
+  if (!destinationFrameCountMatches) {
+    return;
+  }
   for (std::size_t index = 0;
        index < frames.size() && index < expectedFrames.size(); ++index) {
     expectFrame(
@@ -938,6 +1002,11 @@ void testValidatorRejectsCriticalNoteDependencyAndDisablesOptionalObject() {
          "missing Note presentation remains object-local like Skin.prepare");
 
   BeatorajaSkinModel duplicateBindings = *decoded.model;
+  expect(!duplicateBindings.integerProperties.empty(),
+         "duplicate-binding mutation requires a decoded integer binding");
+  if (duplicateBindings.integerProperties.empty()) {
+    return;
+  }
   duplicateBindings.integerProperties.push_back(
       duplicateBindings.integerProperties.front());
   const auto duplicateResult =
@@ -1034,9 +1103,9 @@ return {
              {id='lift-default',src='atlas',x=0,y=50,w=20,h=10}},
   bga={id='bga'},
   judge={{id='judge',index=2,shift=true,
-          images={{id='judge-image',timer=81,op={'judge-condition'},draw='judge-draw',
+          images={{id='judge-image',timer=81,op={32},draw=33,
                    dst={{time=20,x=100,y=200,w=30,h=40}}},{id='missing-image',dst={{}}}},
-          numbers={{id='judge-number',timer=82,draw='judge-draw',
+          numbers={{id='judge-number',timer=82,draw=33,
                     dst={{time=10,x=80,y=210,w=20,h=8}}},{id='missing-number',dst={{}}}}}},
   destination={
     {id='hidden',offsets={99},offset=98,dst={{x=1,y=2,w=3,h=4}}},
