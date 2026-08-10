@@ -179,6 +179,33 @@ int main() { return 0; }
             self.assertIn("IPHONEOS_DEPLOYMENT_TARGET = 14.0;", configuration)
             self.assertIn("MARKETING_VERSION = 0.0.1;", configuration)
 
+    def test_ios_target_enables_lua_gameplay_skins_in_effective_build_settings(self):
+        for configuration in ("Debug", "Release"):
+            with self.subTest(configuration=configuration):
+                result = subprocess.run(
+                    [
+                        "xcodebuild",
+                        "-project",
+                        str(PROJECT.parent),
+                        "-scheme",
+                        "AsoBMaShow",
+                        "-configuration",
+                        configuration,
+                        "-showBuildSettings",
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                definitions = next(
+                    line
+                    for line in result.stdout.splitlines()
+                    if line.strip().startswith("GCC_PREPROCESSOR_DEFINITIONS =")
+                )
+                self.assertIn(
+                    "ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1", definitions
+                )
+
     def test_skin_acceptance_build_identity_is_compiled_and_mirrored_to_plist(self):
         with INFO_PLIST.open("rb") as handle:
             info = plistlib.load(handle)
