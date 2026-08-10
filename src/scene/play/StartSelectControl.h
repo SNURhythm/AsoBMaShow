@@ -131,6 +131,8 @@ public:
     selectHeld_ = false;
     conjunctionHeld_ = false;
     exitIssued_ = false;
+    lastStartPressedMicros_ = 0;
+    conjunctionHeldSinceMicros_ = 0;
     for (auto &scratch : scratch_) {
       scratch = {};
     }

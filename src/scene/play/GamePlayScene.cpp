@@ -2013,6 +2013,11 @@ void GamePlayScene::drainRealtimeStartSelectInputs() {
                                                 std::memory_order_acq_rel)) {
     SDL_LogWarn(SDL_LOG_CATEGORY_INPUT,
                 "Start/Select input queue overflowed; a control edge was dropped");
+    if (startSelectControl.has_value()) {
+      startSelectControl->reset();
+    }
+    startButtonPressed = false;
+    selectButtonPressed = false;
   }
 }
 

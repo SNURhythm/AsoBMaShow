@@ -147,6 +147,22 @@ void testAnalogScratchUsesTurntableTicksInsteadOfFrameRepeat() {
           "counter-clockwise angular ticks preserve Beatoraja's opposite adjustment direction");
 }
 
+void testResetDiscardsHeldAndTimedGestureState() {
+  gameplay::StartSelectControl control({.keyMode = 7});
+  require(control.apply(start(), true, 1'000).empty(),
+          "an initial Start press arms the control before reset");
+  require(control.apply(start(), false, 1'100).empty(),
+          "the pre-reset Start release preserves the old double-press timer");
+  control.reset();
+  require(control.apply(start(), true, 400'000).empty(),
+          "reset discards a stale Start double-press edge");
+  require(control.apply(select(), true, 400'001) ==
+              std::vector<Action>{{.kind = ActionKind::ToggleLiftHiddenTarget}},
+          "fresh Start+Select state still begins a new conjunction after reset");
+  require(control.tick(400'002).empty(),
+          "reset prevents stale held scratch or exit actions");
+}
+
 } // namespace
 
 int main() {
@@ -155,5 +171,6 @@ int main() {
   testStartAndSelectAtNoteEndExitImmediately();
   testHeldSpecialKeysRepeatLikeBeatorajaScratchBindings();
   testAnalogScratchUsesTurntableTicksInsteadOfFrameRepeat();
+  testResetDiscardsHeldAndTimedGestureState();
   return 0;
 }
