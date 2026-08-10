@@ -54,6 +54,7 @@ struct ReplayTouchSample {
 struct ReplayLaneCoverEvent {
   long long songTimeMicros = 0;
   int noteStartPositionPercent = 0;
+  bool laneCoverEnabled = false;
   bool resetVisibleTimeReference = false;
 };
 

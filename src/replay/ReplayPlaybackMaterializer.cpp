@@ -351,6 +351,7 @@ ReplayPlaybackMaterializer::materializeForConsumers(
     replay.laneCoverEvents.push_back(
         {.songTimeMicros = event.songTimeMicros,
          .noteStartPositionPercent = event.noteStartPositionPercent,
+         .laneCoverEnabled = event.laneCoverEnabled,
          .resetVisibleTimeReference = event.resetVisibleTimeReference});
   }
   outcome.replayData = std::make_shared<ReplayData>(std::move(replay));

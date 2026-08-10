@@ -115,6 +115,7 @@ struct ReplayTouchSample {
 struct ReplayLaneCoverEvent {
   std::int64_t songTimeMicros = 0;
   int noteStartPositionPercent = 0;
+  bool laneCoverEnabled = false;
   bool resetVisibleTimeReference = false;
 
   bool operator==(const ReplayLaneCoverEvent &) const = default;

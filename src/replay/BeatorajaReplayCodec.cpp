@@ -601,6 +601,7 @@ Json encodeLaneCover(std::span<const ReplayLaneCoverEvent> events) {
     output.push_back({
         {"songTimeMicros", event.songTimeMicros},
         {"noteStartPositionPercent", event.noteStartPositionPercent},
+        {"laneCoverEnabled", event.laneCoverEnabled},
         {"resetVisibleTimeReference", event.resetVisibleTimeReference},
     });
   }
@@ -670,6 +671,7 @@ bool decodeTouch(const Json &source, std::vector<ReplayTouchSample> &output,
 
 bool decodeLaneCover(const Json &source,
                      std::vector<ReplayLaneCoverEvent> &output,
+                     bool legacyLaneCoverEnabled,
                      const ReplayLimits &limits, std::string &diagnostic) {
   if (!source.is_array() ||
       !withinReplayCountLimit(source.size(), limits.maxLaneCoverEvents)) {
@@ -686,6 +688,15 @@ bool decodeLaneCover(const Json &source,
                       event.noteStartPositionPercent, diagnostic) ||
         !readRequired(item, "resetVisibleTimeReference",
                       event.resetVisibleTimeReference, diagnostic)) {
+      return false;
+    }
+    const auto enabled = item.find("laneCoverEnabled");
+    if (enabled == item.end()) {
+      // Extension files written before lane-cover toggles were recorded still
+      // carry the authoritative initial state in their setup object.
+      event.laneCoverEnabled = legacyLaneCoverEnabled;
+    } else if (!readRequired(item, "laneCoverEnabled", event.laneCoverEnabled,
+                             diagnostic)) {
       return false;
     }
     output.push_back(event);
@@ -1024,7 +1035,8 @@ bool decodeStage(const Json &stage, bool course, std::size_t expectedIndex,
       touch == extension->end() ||
       !decodeTouch(*touch, output.playback.touchSamples, limits, diagnostic) ||
       cover == extension->end() ||
-      !decodeLaneCover(*cover, output.playback.laneCoverEvents, limits,
+      !decodeLaneCover(*cover, output.playback.laneCoverEvents,
+                       output.playback.setup.laneCoverEnabled, limits,
                        diagnostic)) {
     return false;
   }

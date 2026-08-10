@@ -546,16 +546,18 @@ void testReplayLaneCoverResetIsOneFramePulseForNormalAndCoursePlayback() {
   const std::vector<ReplayLaneCoverEvent> events = {
       {.songTimeMicros = 1'000,
        .noteStartPositionPercent = 35,
+       .laneCoverEnabled = false,
        .resetVisibleTimeReference = true}};
   for (int path = 0; path < 2; ++path) {
-    replay_video_export::ReplayLaneCoverPlayback playback(20);
+    replay_video_export::ReplayLaneCoverPlayback playback(20, true);
     const auto before = playback.advance(events, 999);
     const auto eventFrame = playback.advance(events, 1'000);
     const auto nextFrame = playback.advance(events, 1'001);
-    expect(before.percent == 20 && !before.resetVisibleTimeReference &&
-               eventFrame.percent == 35 &&
+    expect(before.percent == 20 && before.enabled &&
+               !before.resetVisibleTimeReference && eventFrame.percent == 35 &&
+               !eventFrame.enabled &&
                eventFrame.resetVisibleTimeReference && nextFrame.percent == 35 &&
-               !nextFrame.resetVisibleTimeReference,
+               !nextFrame.enabled && !nextFrame.resetVisibleTimeReference,
            path == 0 ? "normal lane-cover reset is a one-frame pulse"
                      : "course lane-cover reset is a one-frame pulse");
   }

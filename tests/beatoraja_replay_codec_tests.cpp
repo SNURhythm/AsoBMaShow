@@ -554,6 +554,44 @@ void testSupportedAsoExtensionIsAuthoritative() {
          "future extension remains an explicit stock-only replay surface");
 }
 
+void testLaneCoverStateRoundTripsAndLegacyEventsUseSetupState() {
+  replay::BeatorajaReplayCodec codec;
+  auto source = chartDocument();
+  source.playback.setup.laneCoverEnabled = true;
+  source.playback.laneCoverEvents = {
+      {.songTimeMicros = -1'000,
+       .noteStartPositionPercent = 37,
+       .laneCoverEnabled = false},
+      {.songTimeMicros = 2'000,
+       .noteStartPositionPercent = 41,
+       .laneCoverEnabled = true,
+       .resetVisibleTimeReference = true},
+  };
+
+  std::string diagnostic;
+  const auto encoded = codec.encodeChart(source, 1, diagnostic);
+  expect(encoded.has_value(), "lane-cover state fixture encodes");
+  if (!encoded) {
+    return;
+  }
+
+  const auto decoded = codec.decode(*encoded, context(source));
+  expect(decoded.chart == std::optional(source),
+         "lane-cover events preserve enabled-state transitions");
+
+  Json legacy = outerJson(*encoded);
+  for (auto &event : legacy["asobmashow"]["laneCoverEvents"]) {
+    event.erase("laneCoverEnabled");
+  }
+  auto expectedLegacy = source;
+  for (auto &event : expectedLegacy.playback.laneCoverEvents) {
+    event.laneCoverEnabled = expectedLegacy.playback.setup.laneCoverEnabled;
+  }
+  const auto decodedLegacy = codec.decode(encodeJson(legacy), context(source));
+  expect(decodedLegacy.chart == std::optional(expectedLegacy),
+         "legacy lane-cover events inherit their recorded setup state");
+}
+
 void testContextAndUntrustedStructureFailClosed() {
   replay::BeatorajaReplayCodec codec;
   const auto source = chartDocument();
@@ -606,6 +644,7 @@ int main() {
   testDoublePlayAndKeyMapping();
   testNonStockChartProjectsBeatorajaKeyInput();
   testSupportedAsoExtensionIsAuthoritative();
+  testLaneCoverStateRoundTripsAndLegacyEventsUseSetupState();
   testContextAndUntrustedStructureFailClosed();
   if (failures != 0) {
     std::cerr << failures << " Beatoraja replay codec test(s) failed\n";

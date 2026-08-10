@@ -3333,6 +3333,13 @@ void GamePlayScene::applyStartSelectControlActions(
       if (!courseNoSpeed()) {
         playfieldLaneCoverEnabled = !playfieldLaneCoverEnabled;
         context.settings.laneCoverEnabled = playfieldLaneCoverEnabled;
+        refreshLaneCoverHispeedFactor();
+        playfieldLaneCoverResetPending = context.settings.hispeedAutoAdjust;
+        refreshRuntimePresentationConfiguration();
+        appendReplayLaneCoverEvent(
+            playfieldLaneCoverPercent,
+            getGameplayTimeMicros(context.jukebox.getTimeMicros()),
+            context.settings.hispeedAutoAdjust);
         (void)context.saveSettings();
       }
       break;
@@ -3988,6 +3995,7 @@ GamePlayScene::completeModernReplayCapture() {
     capture.laneCoverEvents.push_back({
         .songTimeMicros = event.songTimeMicros,
         .noteStartPositionPercent = event.noteStartPositionPercent,
+        .laneCoverEnabled = event.laneCoverEnabled,
         .resetVisibleTimeReference = event.resetVisibleTimeReference,
     });
   }
@@ -4077,7 +4085,10 @@ void GamePlayScene::recordModernCourseStage(
               .value_or(-1),
       .hasUndefinedLongNotes = chartContainsUndefinedLongNote(*chart),
       .initialLaneCoverPercent = initialLaneCover,
-      .laneCoverEnabled = initialLaneCover > 0,
+      .laneCoverEnabled = recordedReplay.laneCoverEvents.empty()
+                              ? playfieldLaneCoverEnabled
+                              : recordedReplay.laneCoverEvents.front()
+                                    .laneCoverEnabled,
   };
   auto setup = replay::captureLocalReplaySetup(
       setupFacts, result->score.provenance, diagnostic);
@@ -4647,7 +4658,10 @@ void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
                .hasUndefinedLongNotes =
                    chartContainsUndefinedLongNote(*chart),
                .initialLaneCoverPercent = initialLaneCover,
-               .laneCoverEnabled = initialLaneCover > 0},
+               .laneCoverEnabled = recordedReplay.laneCoverEvents.empty()
+                                       ? playfieldLaneCoverEnabled
+                                       : recordedReplay.laneCoverEvents.front()
+                                             .laneCoverEnabled},
           .acceptedInput = modernCapture->acceptedInput,
           .touchSamples = modernCapture->touchSamples,
           .laneCoverEvents = modernCapture->laneCoverEvents,
@@ -5733,6 +5747,7 @@ void GamePlayScene::applyReplayLaneCoverEvent(
   playfieldLaneCoverPercent = event.noteStartPositionPercent;
   playfieldLaneCoverPercentExact =
       static_cast<float>(event.noteStartPositionPercent);
+  playfieldLaneCoverEnabled = event.laneCoverEnabled;
   refreshLaneCoverHispeedFactor();
   playfieldLaneCoverResetPending = event.resetVisibleTimeReference;
   refreshRuntimePresentationConfiguration();
@@ -6076,6 +6091,7 @@ void GamePlayScene::appendReplayLaneCoverEvent(int noteStartPositionPercent,
   event.noteStartPositionPercent = std::clamp(
       noteStartPositionPercent, AppSettings::kMinNoteStartPositionPercent,
       AppSettings::kMaxNoteStartPositionPercent);
+  event.laneCoverEnabled = playfieldLaneCoverEnabled;
   event.resetVisibleTimeReference = resetVisibleTimeReference;
   recordedReplay.laneCoverEvents.push_back(event);
 }

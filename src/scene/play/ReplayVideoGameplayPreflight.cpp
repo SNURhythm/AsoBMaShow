@@ -152,10 +152,12 @@ ReplayLaneCoverFrameState ReplayLaneCoverPlayback::advance(
   while (cursor_ < events.size() &&
          events[cursor_].songTimeMicros <= songTimeMicros) {
     percent_ = events[cursor_].noteStartPositionPercent;
+    enabled_ = events[cursor_].laneCoverEnabled;
     resetVisibleTimeReference = events[cursor_].resetVisibleTimeReference;
     ++cursor_;
   }
   return {.percent = percent_,
+          .enabled = enabled_,
           .resetVisibleTimeReference = resetVisibleTimeReference};
 }
 

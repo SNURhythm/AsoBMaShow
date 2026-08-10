@@ -47,13 +47,14 @@ struct ReplayGameplayFrameState {
 
 struct ReplayLaneCoverFrameState {
   int percent = 0;
+  bool enabled = false;
   bool resetVisibleTimeReference = false;
 };
 
 class ReplayLaneCoverPlayback final {
 public:
-  explicit ReplayLaneCoverPlayback(int initialPercent) noexcept
-      : percent_(initialPercent) {}
+  explicit ReplayLaneCoverPlayback(int initialPercent, bool initialEnabled) noexcept
+      : percent_(initialPercent), enabled_(initialEnabled) {}
 
   [[nodiscard]] ReplayLaneCoverFrameState
   advance(std::span<const ReplayLaneCoverEvent>, long long songTimeMicros);
@@ -61,6 +62,7 @@ public:
 private:
   std::size_t cursor_ = 0;
   int percent_ = 0;
+  bool enabled_ = false;
 };
 
 // Course stages own separate presentation adapters, but their already-earned

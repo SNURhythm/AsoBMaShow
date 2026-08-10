@@ -2635,7 +2635,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     }
   };
   replay_video_export::ReplayLaneCoverPlayback laneCoverPlayback(
-      settings.noteStartPositionPercent);
+      settings.noteStartPositionPercent, settings.laneCoverEnabled);
   const GaugeProfile gaugeProfile =
       resolveGaugeProfile(GaugeProfile::Standard, chart.Meta.KeyMode);
   const RhythmState initialGaugeState =
@@ -2985,7 +2985,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
         .startLaneIndicatorsVisible =
             preparationPlan.indicatorVisibleAt(rawSongTimeMicros),
         .laneCoverPercent = laneCover.percent,
-        .laneCoverEnabled = true,
+        .laneCoverEnabled = laneCover.enabled,
         .resetLaneCoverVisibleTimeReference =
             laneCover.resetVisibleTimeReference,
     });
@@ -3547,7 +3547,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
       }
     };
     replay_video_export::ReplayLaneCoverPlayback laneCoverPlayback(
-        settings.noteStartPositionPercent);
+        settings.noteStartPositionPercent, settings.laneCoverEnabled);
     const long long visualOffsetMicros =
         static_cast<long long>(settings.visualOffsetMs) * 1000LL;
     const size_t gameplayFrameCount =
@@ -3648,7 +3648,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
           .startLaneIndicatorsVisible =
               stage.preparationPlan.indicatorVisibleAt(rawSongTimeMicros),
           .laneCoverPercent = laneCover.percent,
-          .laneCoverEnabled = true,
+          .laneCoverEnabled = laneCover.enabled,
           .resetLaneCoverVisibleTimeReference =
               laneCover.resetVisibleTimeReference,
       });
