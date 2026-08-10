@@ -108,15 +108,17 @@ void appendGhostStrip(SkinCommandBuffer &buffer, const PlaySkinViewport &viewpor
 void appendStartLaneIndicator(
     SkinCommandBuffer &buffer, const PlaySkinViewport &viewport,
     const SyntheticStartLaneIndicatorLaneGeometry &lane,
+    double visibleLaneHeightRatio,
     std::uint32_t ordinal) {
   if (!validRect(lane.laneRegion)) {
     return;
   }
+  const float coverEdgeY = static_cast<float>(
+      lane.laneRegion.y + lane.laneRegion.height * visibleLaneHeightRatio);
   const auto triangle = start_lane_indicator::placeTriangle(
       static_cast<float>(lane.laneRegion.x),
       static_cast<float>(lane.laneRegion.width),
-      static_cast<float>(lane.laneRegion.y),
-      static_cast<float>(lane.laneRegion.y + lane.laneRegion.height));
+      static_cast<float>(lane.laneRegion.y), coverEdgeY);
   const AuthoredDestinationGeometry geometry{
       .rect = lane.laneRegion,
       .clip = lane.laneRegion,
@@ -283,13 +285,17 @@ SkinCommandBuffer buildSyntheticStartLaneIndicatorOverlay(
       geometry.empty()) {
     return result;
   }
+  const double visibleLaneHeightRatio =
+      std::isfinite(input.visibleLaneHeightRatio)
+          ? std::clamp(input.visibleLaneHeightRatio, 0.0, 1.0)
+          : 1.0;
   for (const int requestedLane : input.lanes) {
     const auto lane = std::ranges::find(geometry, requestedLane,
                                         &SyntheticStartLaneIndicatorLaneGeometry::lane);
     if (lane == geometry.end()) {
       continue;
     }
-    appendStartLaneIndicator(result, viewport, *lane,
+    appendStartLaneIndicator(result, viewport, *lane, visibleLaneHeightRatio,
                              static_cast<std::uint32_t>(result.commands.size()));
   }
   return result;

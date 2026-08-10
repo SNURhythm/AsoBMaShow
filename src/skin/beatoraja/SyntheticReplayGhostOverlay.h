@@ -63,6 +63,9 @@ struct SyntheticStartLaneIndicatorLaneGeometry {
 struct SyntheticStartLaneIndicatorFrameInput {
   std::uint64_t frameSerial = 0;
   std::span<const int> lanes;
+  // Same captured visible-height fraction that produces the built-in
+  // noteVisibleUpperBound. It places the cue directly below lane cover.
+  double visibleLaneHeightRatio = 1.0;
 };
 
 [[nodiscard]] SkinCommandBuffer buildSyntheticStartLaneIndicatorOverlay(

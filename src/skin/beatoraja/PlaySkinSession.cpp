@@ -945,10 +945,10 @@ void PlaySkinSession::submitSyntheticReplayGhosts(
 }
 
 void PlaySkinSession::submitSyntheticStartLaneIndicators(
-    RenderContext &renderContext, std::uint64_t frameSerial,
-    std::span<const int> requestedLanes) {
-  if (!publishedLayout_ || publishedLayout_->frameSerial != frameSerial ||
-      requestedLanes.empty()) {
+    RenderContext &renderContext,
+    const SyntheticStartLaneIndicatorFrameInput &input) {
+  if (!publishedLayout_ || publishedLayout_->frameSerial != input.frameSerial ||
+      input.lanes.empty()) {
     return;
   }
 
@@ -997,8 +997,7 @@ void PlaySkinSession::submitSyntheticStartLaneIndicators(
     }
 
     const SkinCommandBuffer overlay = buildSyntheticStartLaneIndicatorOverlay(
-        context_.viewport, geometry,
-        {.frameSerial = frameSerial, .lanes = requestedLanes});
+        context_.viewport, geometry, input);
     if (overlay.commands.empty()) {
       return;
     }

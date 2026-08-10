@@ -1494,7 +1494,9 @@ void testSyntheticStartLaneIndicatorsUseSelectedSkinLaneGeometry() {
   const std::array requestedLanes{1, 99};
   const auto overlay = buildSyntheticStartLaneIndicatorOverlay(
       viewport, geometry,
-      {.frameSerial = 12, .lanes = requestedLanes});
+      {.frameSerial = 12,
+       .lanes = requestedLanes,
+       .visibleLaneHeightRatio = 0.5});
   expect(overlay.frameSerial == 12 && overlay.commands.size() == 1,
          "start-lane overlay emits only selected skin lanes that exist");
   if (overlay.commands.size() != 1) {
@@ -1506,12 +1508,13 @@ void testSyntheticStartLaneIndicatorsUseSelectedSkinLaneGeometry() {
              triangle->kind == SkinPrimitiveKind::TriangleStrip &&
              triangle->vertices.size() == 3 &&
              std::abs(triangle->vertices[0].x - 104.04F) < 0.001F &&
-             std::abs(triangle->vertices[0].y - 749.92F) < 0.001F &&
+             std::abs(triangle->vertices[0].y - 499.92F) < 0.001F &&
              std::abs(triangle->vertices[1].x - 116.0F) < 0.001F &&
-             std::abs(triangle->vertices[1].y - 729.12F) < 0.001F &&
+             std::abs(triangle->vertices[1].y - 479.12F) < 0.001F &&
              triangle->vertices[0].rgba == 0xff0000ffU &&
              triangle->state.scissor.has_value(),
-         "start-lane triangle follows the skin lane width, origin, color, and clip");
+         "start-lane triangle uses the selected skin lane width, origin, "
+         "color, and live lane-cover edge");
 }
 
 void testSyntheticReplayGhostRespectsDisabledOption() {
@@ -1724,13 +1727,13 @@ void testSubmittedSkinRendersPreparationIndicatorsFromItsLaneLayout() {
          "skin frame publishes its static SkinNote lane layout before the cue");
   const std::array requestedLanes{0, 7};
   const auto submitsBeforeCue = fixture.quadBackend().submitCalls;
-  fixture.session().submitSyntheticStartLaneIndicators(context, 1,
-                                                       requestedLanes);
+  fixture.session().submitSyntheticStartLaneIndicators(
+      context, {.frameSerial = 1, .lanes = requestedLanes});
   expect(fixture.quadBackend().submitCalls > submitsBeforeCue,
          "selected skin submits preparation indicators through its own renderer");
   const auto submitsAfterCue = fixture.quadBackend().submitCalls;
-  fixture.session().submitSyntheticStartLaneIndicators(context, 2,
-                                                       requestedLanes);
+  fixture.session().submitSyntheticStartLaneIndicators(
+      context, {.frameSerial = 2, .lanes = requestedLanes});
   expect(fixture.quadBackend().submitCalls == submitsAfterCue,
          "a preparation cue cannot use a stale selected-skin frame geometry");
 }

@@ -97,6 +97,7 @@ struct PresentationStats {
   std::size_t syntheticReplayGhostEventCount = 0;
   int syntheticStartLaneIndicatorCalls = 0;
   std::uint64_t syntheticStartLaneIndicatorFrameSerial = 0;
+  double syntheticStartLaneIndicatorVisibleLaneHeightRatio = 0.0;
   std::vector<int> syntheticStartLaneIndicatorLanes;
 };
 
@@ -262,11 +263,14 @@ public:
     recordEvent(stats_, "skin.replay_ghost");
   }
   void submitSyntheticStartLaneIndicators(
-      RenderContext &, std::uint64_t frameSerial,
-      std::span<const int> lanes) override {
+      RenderContext &,
+      const skin::SyntheticStartLaneIndicatorFrameInput &input) override {
     ++stats_->syntheticStartLaneIndicatorCalls;
-    stats_->syntheticStartLaneIndicatorFrameSerial = frameSerial;
-    stats_->syntheticStartLaneIndicatorLanes.assign(lanes.begin(), lanes.end());
+    stats_->syntheticStartLaneIndicatorFrameSerial = input.frameSerial;
+    stats_->syntheticStartLaneIndicatorVisibleLaneHeightRatio =
+        input.visibleLaneHeightRatio;
+    stats_->syntheticStartLaneIndicatorLanes.assign(input.lanes.begin(),
+                                                     input.lanes.end());
     recordEvent(stats_, "skin.start_lane_indicators");
   }
   void setViewport(skin::ViewportSettings viewport) override {
@@ -548,6 +552,10 @@ void testSelectedSkinReceivesPreparationLaneIndicatorsWithoutFallback() {
   state.authority.startLaneIndicators = {7, 2};
   state.authority.startLaneIndicatorsVisible = true;
   PlayfieldProjectionResult projection;
+  projection.builtInTraversal = BuiltInRendererTraversal{
+      .judgeY = 2.0F,
+      .upperBound = 10.0F,
+      .noteVisibleUpperBound = 6.0F};
   expect(coordinator.prepareFrame(state, projection) ==
              PresentationFrameOutcome::Ready,
          "selected-skin preparation indicator frame is ready");
@@ -558,6 +566,8 @@ void testSelectedSkinReceivesPreparationLaneIndicatorsWithoutFallback() {
          "preparation indicators preserve the selected skin as the frame owner");
   expect(skinStats->syntheticStartLaneIndicatorCalls == 1 &&
              skinStats->syntheticStartLaneIndicatorFrameSerial == 63 &&
+             skinStats->syntheticStartLaneIndicatorVisibleLaneHeightRatio ==
+                 0.5 &&
              skinStats->syntheticStartLaneIndicatorLanes ==
                  std::vector<int>({7, 2}) &&
              eventIndex(skinStats->events, "skin.render") <

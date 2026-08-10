@@ -195,6 +195,7 @@ PresentationFrameOutcome PlayfieldPresentationCoordinator::prepareFrame(
       .events = replayGhostEvents_,
   };
   pending.startLaneIndicatorLanes = state.authority.startLaneIndicators;
+  pending.startLaneIndicatorVisibleLaneHeightRatio = visibleLaneHeightRatio;
   pending.startLaneIndicatorsVisible =
       state.authority.startLaneIndicatorsVisible;
   lastFrameSerial_ = state.clock.serial;
@@ -396,7 +397,11 @@ PlayfieldPresentationCoordinator::render(RenderContext &context) {
       // ghosts, and cannot resurrect the built-in presentation.
       try {
         skin_->submitSyntheticStartLaneIndicators(
-            context, pending.frameSerial, pending.startLaneIndicatorLanes);
+            context,
+            {.frameSerial = pending.frameSerial,
+             .lanes = pending.startLaneIndicatorLanes,
+             .visibleLaneHeightRatio =
+                 pending.startLaneIndicatorVisibleLaneHeightRatio});
       } catch (...) {
       }
     }

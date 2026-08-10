@@ -120,8 +120,8 @@ public:
          IGameplayBgaSubmitter &) override;
   void submitSyntheticReplayGhosts(
       RenderContext &, const SyntheticReplayGhostFrameInput &) override;
-  void submitSyntheticStartLaneIndicators(RenderContext &, std::uint64_t,
-                                          std::span<const int>) override;
+  void submitSyntheticStartLaneIndicators(
+      RenderContext &, const SyntheticStartLaneIndicatorFrameInput &) override;
   void setViewport(ViewportSettings) override;
   // Geometry-only chart-lifetime refresh for safe-area/rotation changes. This
   // preserves the selected viewport settings and immutable activation identity
