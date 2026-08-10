@@ -1070,6 +1070,7 @@ struct CourseReplayVideoStage {
   GaugeStateSnapshot initialGaugeState;
   RhythmState resultState;
   std::optional<PreparedReplayGameplayPresentation> gameplayPresentation;
+  std::optional<skin::SkinGameplayTiming> selectedSkinTiming;
   std::optional<long long> failureMicros;
   long long gameplayDurationMicros = 0;
   long long resultDurationMicros = 0;
@@ -1120,7 +1121,8 @@ preflightCourseReplayGameplayPresentations(
          .exportWidth = resolvedOptions.width,
          .exportHeight = resolvedOptions.height,
          .skinServices = replayGameplaySkinSessionServices(context),
-         .presentation = stage.gameplayPresentation->presentation});
+         .presentation = stage.gameplayPresentation->presentation,
+         .selectedSkinTiming = stage.selectedSkinTiming});
   }
   const auto result =
       replay_video_export::preflightCourseReplayGameplayPresentations(
@@ -3517,6 +3519,18 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     bms_parser::Chart &chart = *stage.chart;
     const ReplayData &stageReplay = stage.replay;
 
+    if (!stage.gameplayPresentation.has_value()) {
+      stage.gameplayPresentation.emplace();
+    }
+    if (const auto failure = preflightReplayGameplayPresentation(
+            context, chart, stageReplay, settings, stage.preparationPlan,
+            resolvedOptions, *stage.gameplayPresentation, log)) {
+      bgfxCleanup.runNow();
+      return *failure;
+    }
+    ReplayPlayfieldPresentation &presentation =
+        *stage.gameplayPresentation->presentation;
+
     context.jukebox.setBgaDisplayMode(settings.bgaDisplayMode);
     context.jukebox.setVisualsEnabled(settings.bgaEnabled);
     context.jukebox.setEmbeddedBgaBrightnessPercent(
@@ -3530,15 +3544,6 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
               .message = "Replay export visual loading was cancelled"};
     }
 
-    if (!stage.gameplayPresentation.has_value() ||
-        stage.gameplayPresentation->presentation == nullptr) {
-      bgfxCleanup.runNow();
-      return {.success = false,
-              .outputPath = outputPath,
-              .message = "Course replay gameplay presentation was not prepared"};
-    }
-    ReplayPlayfieldPresentation &presentation =
-        *stage.gameplayPresentation->presentation;
     const auto bpmChangeTimelines = collectBpmChangeTimelines(chart);
     size_t bpmChangeCursor = 0;
     double currentExportBpm = chart.Meta.Bpm;
@@ -3779,6 +3784,9 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
       context.jukebox.stop();
       context.jukebox.unloadVisuals();
     }
+    replay_video_export::destroyReplayGameplayPresentation(
+        context.rendererAccess, stage.gameplayPresentation->presentation);
+    stage.gameplayPresentation.reset();
   }
 
   for (size_t frame = 0; frame < courseResultFrameCount; ++frame) {
@@ -4267,14 +4275,12 @@ ReplayVideoExportResult exportCourseReplayImpl(
                                                 *rawFailureMicros) +
                                                 failureFrameMicros)
                                       : normalGameplayDurationMicros;
-    if (stage.gameplayPresentation.has_value()) {
-      stage.gameplayDurationMicros =
-          replay_video_export::replayGameplayDurationWithSelectedSkinAnimation(
-              *stage.chart, stage.replay, stage.preparationPlan,
-              audioOffsetMicros, resolvedOptions.fps,
-              stage.gameplayDurationMicros, stage.failureMicros.has_value(),
-              stage.gameplayPresentation->presentation.get());
-    }
+    stage.gameplayDurationMicros =
+        replay_video_export::replayGameplayDurationWithSkinTiming(
+            *stage.chart, stage.replay, stage.preparationPlan,
+            audioOffsetMicros, resolvedOptions.fps,
+            stage.gameplayDurationMicros, stage.failureMicros.has_value(),
+            stage.selectedSkinTiming);
     const long long audioContentDurationMicros =
         stage.failureMicros.has_value()
             ? std::min(audioResult.durationMicros,

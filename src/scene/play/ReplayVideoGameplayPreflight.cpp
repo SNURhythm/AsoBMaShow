@@ -131,11 +131,22 @@ long long replayGameplayDurationWithSelectedSkinAnimation(
     const preparation::Plan &plan, long long audioOffsetMicros, int fps,
     long long requestedDurationMicros, bool stoppedOnGaugeFailure,
     const ReplayPlayfieldPresentation *presentation) {
+  return replayGameplayDurationWithSkinTiming(
+      chart, replay, plan, audioOffsetMicros, fps, requestedDurationMicros,
+      stoppedOnGaugeFailure,
+      presentation ? presentation->selectedSkinGameplayTiming()
+                   : std::optional<skin::SkinGameplayTiming>{});
+}
+
+long long replayGameplayDurationWithSkinTiming(
+    const bms_parser::Chart &chart, const ReplayData &replay,
+    const preparation::Plan &plan, long long audioOffsetMicros, int fps,
+    long long requestedDurationMicros, bool stoppedOnGaugeFailure,
+    std::optional<skin::SkinGameplayTiming> timing) noexcept {
   (void)replay;
-  if (stoppedOnGaugeFailure || presentation == nullptr || fps <= 0) {
+  if (stoppedOnGaugeFailure || fps <= 0) {
     return std::max(0LL, requestedDurationMicros);
   }
-  const auto timing = presentation->selectedSkinGameplayTiming();
   if (!timing.has_value()) {
     return std::max(0LL, requestedDurationMicros);
   }
@@ -250,6 +261,7 @@ preflightCourseReplayGameplayPresentations(
     IGameplayBgaSubmitter &bga, const AppSettings &settings,
     display::RendererAccessCoordinator &rendererAccess) {
   for (auto &stage : stages) {
+    stage.selectedSkinTiming.reset();
     if (const auto failure = preflightReplayGameplayPresentation(
             stage.chart, stage.replay, settings, stage.preparationPlan,
             stage.configuration, stage.exportWidth, stage.exportHeight, bga,
@@ -261,6 +273,10 @@ preflightCourseReplayGameplayPresentations(
       }
       return failure;
     }
+    stage.selectedSkinTiming =
+        stage.presentation ? stage.presentation->selectedSkinGameplayTiming()
+                           : std::optional<skin::SkinGameplayTiming>{};
+    destroyReplayGameplayPresentation(rendererAccess, stage.presentation);
   }
   return std::nullopt;
 }

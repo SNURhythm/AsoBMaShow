@@ -503,8 +503,10 @@ void testCourseReplayExportUsesPreparedPresentations() {
                        "preflightCourseReplayGameplayPresentations(",
                        "writeCourseReplayAudioTrack(",
                        "every course skin is preflighted before mux audio");
-  requireToken(exporter, "stage.gameplayPresentation",
-               "course stages retain preflighted presentation ownership");
+  requireToken(exporter, "stage.selectedSkinTiming",
+               "course preflight retains only immutable skin timing");
+  requireToken(exporter, "stage.gameplayPresentation.reset()",
+               "course exporter releases each stage presentation");
 }
 
 void requireToken(const std::filesystem::path &path, std::string_view token,

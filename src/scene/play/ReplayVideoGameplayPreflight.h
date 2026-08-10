@@ -51,6 +51,12 @@ struct ReplayGameplayFrameState {
     long long audioOffsetMicros, int fps, long long requestedDurationMicros,
     bool stoppedOnGaugeFailure, const ReplayPlayfieldPresentation *);
 
+[[nodiscard]] long long replayGameplayDurationWithSkinTiming(
+    const bms_parser::Chart &, const ReplayData &, const preparation::Plan &,
+    long long audioOffsetMicros, int fps, long long requestedDurationMicros,
+    bool stoppedOnGaugeFailure,
+    std::optional<skin::SkinGameplayTiming>) noexcept;
+
 struct ReplayLaneCoverFrameState {
   int percent = 0;
   bool enabled = false;
@@ -104,7 +110,8 @@ void destroyReplayGameplayPresentation(
 
 // A minimal course-stage boundary shared by the exporter and focused tests.
 // Its input owns no chart or replay data; the caller retains those lifetimes
-// while this loop constructs one presentation per encoded stage.
+// while this loop validates one presentation per encoded stage and releases it
+// before progressing to the next stage.
 struct CourseReplayGameplayPreflightStage {
   bms_parser::Chart &chart;
   const ReplayData &replay;
@@ -114,6 +121,7 @@ struct CourseReplayGameplayPreflightStage {
   int exportHeight = 0;
   GameplaySkinSessionServices skinServices;
   std::unique_ptr<ReplayPlayfieldPresentation> &presentation;
+  std::optional<skin::SkinGameplayTiming> &selectedSkinTiming;
 };
 
 [[nodiscard]] std::optional<ReplayVideoExportResult>

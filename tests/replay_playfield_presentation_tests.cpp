@@ -501,7 +501,7 @@ void testReplayGameplayFrameStateMirrorsLiveTimerAndStartClocks() {
              initial.clock.playTimer.startMicros == 0 &&
              initial.clock.playTimer.elapsedMillisExact &&
              initial.clock.playTimer.playtimeMillis == 125'000 &&
-             initial.sceneStartMicros == -990'000 &&
+             initial.sceneStartMicros == -1'990'000 &&
              initial.playStartMicros == 0,
          "initial export frame mirrors live scene/play/timer authority");
 
@@ -609,7 +609,7 @@ void testSelectedNormalPreflightAndDestructionUseRendererOwnership() {
   expect(!failure && presentation != nullptr && creationBlockedDisplay &&
              fixture.receivedInitialState->has_value() &&
              (*fixture.receivedInitialState)->clock.serial == 1 &&
-             (*fixture.receivedInitialState)->sceneStartMicros == -1'000'000 &&
+             (*fixture.receivedInitialState)->sceneStartMicros == -2'000'000 &&
              (*fixture.receivedInitialState)->playStartMicros == 0 &&
              fixture.receivedInitialProjection->has_value() &&
              (*fixture.receivedInitialProjection)->frameSerial == 1 &&
@@ -802,6 +802,8 @@ preflightCourseFor(CoursePreflightStage ready, CoursePreflightStage unavailable)
   std::atomic<bool> exportActive{false};
   display::RendererAccessCoordinator rendererAccess(rendererMutex,
                                                     exportActive);
+  std::optional<skin::SkinGameplayTiming> readyTiming;
+  std::optional<skin::SkinGameplayTiming> unavailableTiming;
   std::vector<replay_video_export::CourseReplayGameplayPreflightStage> stages;
   stages.reserve(2);
   stages.push_back({.chart = ready.chart,
@@ -811,7 +813,8 @@ preflightCourseFor(CoursePreflightStage ready, CoursePreflightStage unavailable)
                     .exportWidth = 1280,
                     .exportHeight = 720,
                     .skinServices = std::move(ready.skinServices),
-                    .presentation = ready.presentation});
+                    .presentation = ready.presentation,
+                    .selectedSkinTiming = readyTiming});
   stages.push_back({.chart = unavailable.chart,
                     .replay = unavailable.replay,
                     .preparationPlan = plan,
@@ -819,7 +822,8 @@ preflightCourseFor(CoursePreflightStage ready, CoursePreflightStage unavailable)
                     .exportWidth = 1280,
                     .exportHeight = 720,
                     .skinServices = std::move(unavailable.skinServices),
-                    .presentation = unavailable.presentation});
+                    .presentation = unavailable.presentation,
+                    .selectedSkinTiming = unavailableTiming});
   return replay_video_export::preflightCourseReplayGameplayPresentations(
       stages, bga, settings, rendererAccess);
 }
@@ -858,6 +862,7 @@ void testSelectedCoursePreflightUsesNonWidescreenLogicalBounds() {
   display::RendererAccessCoordinator rendererAccess(rendererMutex,
                                                     exportActive);
   std::unique_ptr<ReplayPlayfieldPresentation> presentation;
+  std::optional<skin::SkinGameplayTiming> selectedSkinTiming;
   std::vector<replay_video_export::CourseReplayGameplayPreflightStage> stages;
   stages.push_back({.chart = chart,
                     .replay = replay,
@@ -866,17 +871,19 @@ void testSelectedCoursePreflightUsesNonWidescreenLogicalBounds() {
                     .exportWidth = 3840,
                     .exportHeight = 1600,
                     .skinServices = fixture.services(),
-                    .presentation = presentation});
+                    .presentation = presentation,
+                    .selectedSkinTiming = selectedSkinTiming});
   const auto failure =
       replay_video_export::preflightCourseReplayGameplayPresentations(
           stages, bga, settings, rendererAccess);
-  expect(!failure && presentation != nullptr &&
+  expect(!failure && presentation == nullptr &&
+             selectedSkinTiming.has_value() &&
              fixture.receivedSafeUiBounds->has_value() &&
              (*fixture.receivedSafeUiBounds)->width == 1920.0 &&
              (*fixture.receivedSafeUiBounds)->height == 800.0 &&
              fixture.receivedInitialState->has_value() &&
              (*fixture.receivedInitialState)->clock.serial == 1,
-         "course selected-skin preflight maps non-widescreen pixels to logical bounds");
+         "course selected-skin preflight validates logical bounds without retaining a session");
   replay_video_export::destroyReplayGameplayPresentation(rendererAccess,
                                                          presentation);
 }
