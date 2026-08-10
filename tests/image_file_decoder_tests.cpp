@@ -100,6 +100,22 @@ int main() {
              resizedByHelper->height == 5,
          "shared resize helper applies the same target-size fit");
 
+  const std::vector<std::byte> twoByTwoCim = {
+      std::byte{0x78}, std::byte{0x9c}, std::byte{0x63}, std::byte{0x60},
+      std::byte{0x60}, std::byte{0x60}, std::byte{0x62}, std::byte{0x80},
+      std::byte{0x60}, std::byte{0xe6}, std::byte{0xff}, std::byte{0x40},
+      std::byte{0x02}, std::byte{0x8c}, std::byte{0x81}, std::byte{0x00},
+      std::byte{0x00}, std::byte{0x1e}, std::byte{0x6d}, std::byte{0x06},
+      std::byte{0x02}};
+  const auto resizedCim = image_decode::decodeImageMemory(
+      twoByTwoCim, {.maximumDimension = 40,
+                    .maximumEncodedBytes = 1024,
+                    .maximumDecodedBytes = 3200,
+                    .targetWidth = 1,
+                    .targetHeight = 1});
+  expect(resizedCim && resizedCim->width == 1 && resizedCim->height == 1,
+         "LibGDX CIM decoding applies the requested target-size fit");
+
   expect(!image_decode::decodeImageMemory(
              pngBytes, {.maximumDimension = 19, .maximumEncodedBytes = 1024U * 1024U,
                         .maximumDecodedBytes = 3200}),

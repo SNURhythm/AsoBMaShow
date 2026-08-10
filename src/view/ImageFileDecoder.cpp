@@ -270,7 +270,8 @@ decodeImageMemory(std::span<const std::byte> encoded,
   if (stbi_info_from_memory(
           reinterpret_cast<const stbi_uc *>(encoded.data()),
           static_cast<int>(encoded.size()), &width, &height, &channels) == 0) {
-    return decodeLibGdxCim(encoded, options);
+    const auto decoded = decodeLibGdxCim(encoded, options);
+    return decoded ? resize(*decoded, options) : std::nullopt;
   }
   std::size_t bytes = 0;
   if (stopped(options) ||
