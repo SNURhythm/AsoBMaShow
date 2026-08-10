@@ -72,6 +72,14 @@ ReplayPlayfieldPresentation::ReplayPlayfieldPresentation(
                                                                  *coordinator_);
 }
 
+ReplayPlayfieldPresentation::~ReplayPlayfieldPresentation() {
+#if defined(ASOBMASHOW_REPLAY_PLAYFIELD_PRESENTATION_TESTING)
+  if (destructionObserverForTesting_) {
+    destructionObserverForTesting_();
+  }
+#endif
+}
+
 ReplayPlayfieldPresentationCreateResult ReplayPlayfieldPresentation::create(
     ReplayPlayfieldPresentationCreateInfo creation) {
   // The exporter supplies the chart after applying its replay-compatible long
@@ -81,6 +89,10 @@ ReplayPlayfieldPresentationCreateResult ReplayPlayfieldPresentation::create(
   auto state = std::make_unique<PlayfieldVisualStateStore>(*model);
   state->setConfiguration(creation.configuration);
   state->setReplayTouchSamples(creation.replayTouchSamples);
+  if (creation.skinInput.initialState != nullptr) {
+    state->setSceneStartMicros(creation.skinInput.initialState->sceneStartMicros);
+    state->setPlayStartMicros(creation.skinInput.initialState->playStartMicros);
+  }
 
   auto builtIn = createBuiltInPlayfieldPresentation({
       .chart = creation.chart,
@@ -169,8 +181,12 @@ ReplayPlayfieldPresentation::replayNote(const ReplayEvent &event) const {
   }
   const auto note = std::ranges::find_if(
       chartModel_->notes, [&event, timeline](const ChartVisualNote &value) {
+        const ChartVisualNoteSource expectedSource =
+            event.action == ReplayEventAction::Mine
+                ? ChartVisualNoteSource::Mine
+                : ChartVisualNoteSource::Playable;
         return value.timelineId == timeline->id && value.lane == event.lane &&
-               value.source == ChartVisualNoteSource::Playable;
+               value.source == expectedSource;
       });
   return note == chartModel_->notes.end() ? nullptr : &*note;
 }
@@ -251,6 +267,8 @@ bool ReplayPlayfieldPresentation::applyReplayEvent(
     if (event.judgement == None) {
       return false;
     }
+    progressiveMaximumCombo_ =
+        std::max(progressiveMaximumCombo_, event.combo);
     events_->onJudge(recordedJudge, event.combo, event.score, clock,
                      event.action != ReplayEventAction::Miss);
     setReplayGauge(event);
@@ -320,7 +338,10 @@ bool ReplayPlayfieldPresentation::applyReplayEvent(
         current->playedTimeMicros = event.judgeTimeMicros;
         current->longActive = false;
         publishNoteState(note->id);
-        updateLongVisualState(*note);
+        if (auto *paired = noteState(note->pairId); paired != nullptr) {
+          paired->longActive = false;
+          publishNoteState(note->pairId);
+        }
       }
     }
     const bool appliedHud = applyHud();

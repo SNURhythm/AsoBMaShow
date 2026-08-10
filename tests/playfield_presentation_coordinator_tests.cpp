@@ -196,7 +196,7 @@ private:
   std::shared_ptr<PresentationStats> stats_;
 };
 
-class FakeSkin final : public PlaySkinSessionForCoordinatorTesting {
+class FakeSkin final : public CoordinatedPlaySkinSession {
 public:
   FakeSkin(std::shared_ptr<PresentationStats> stats,
            skin::PlaySkinSessionIdentity identity)
@@ -504,6 +504,38 @@ void testCriticalSkinFailureCancelsBeforeOneWarmFallback() {
       std::make_unique<FakeSkin>(retryStats, identity()));
   expect(coordinator.activeMode() == PresentationMode::Skin,
          "a later validated session can explicitly retry on the next chart");
+}
+
+void testCriticalSelectedSkinPrepareFailureReturnsTransactionDiagnostic() {
+  auto builtIn = std::make_shared<PresentationStats>();
+  auto skinStats = std::make_shared<PresentationStats>();
+  skinStats->prepareOutcome = PresentationFrameOutcome::CriticalFailure;
+  const auto id = identity();
+  skinStats->renderResult = {
+      .outcome = PresentationFrameOutcome::CriticalFailure,
+      .submittedMode = PresentationMode::BuiltIn,
+      .bgaCompositeMode = GameplayBgaCompositeMode::FullscreenBuiltIn,
+      .failure = skinFailure(430, id, "skin.test.transaction_authority")};
+  FakeBga bga;
+  PlayfieldPresentationCoordinator coordinator({
+      .builtIn = std::make_unique<FakeBuiltIn>(builtIn),
+      .skin = std::make_unique<FakeSkin>(skinStats, id),
+      .bga = bga,
+      .allowBuiltInFallback = false,
+  });
+  PlayfieldProjectionResult projection;
+  auto state = frame(430);
+  expect(coordinator.prepareFrame(state, projection) ==
+             PresentationFrameOutcome::CriticalFailure,
+         "selected skin prepare failure is surfaced");
+  RenderContext render;
+  const auto result = coordinator.render(render);
+  expect(skinStats->renderCalls == 1 && builtIn->renderCalls == 0,
+         "selected path asks the failed skin transaction for its diagnostic");
+  expect(result.failure.has_value() &&
+             result.failure->diagnostic.code ==
+                 "skin.test.transaction_authority",
+         "selected path returns the authoritative transaction diagnostic");
 }
 
 void testPostDrawRecoverableFailureNeverCreatesHybrid() {
@@ -915,6 +947,7 @@ int main() {
   testBuiltInDefaultWarmsAndReusesOneBgaFrame();
   testSkinSuccessSubmitsNoBuiltInWork();
   testCriticalSkinFailureCancelsBeforeOneWarmFallback();
+  testCriticalSelectedSkinPrepareFailureReturnsTransactionDiagnostic();
   testPostDrawRecoverableFailureNeverCreatesHybrid();
   testEventFanoutAndTouchRoutingHaveOneAuthorityTarget();
   testSkinReplacementDoesNotTransferPointerOwnership();

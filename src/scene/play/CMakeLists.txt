@@ -17,11 +17,11 @@ target_sources(main PRIVATE GamePlayScene.cpp BMSRenderer.cpp
                             RealtimeGameplayWorker.cpp
                             RealtimeTouchInputRouter.cpp
                             VirtualControllerLayout.cpp
-                            ReplayKeysoundSchedule.cpp)
+                            ReplayKeysoundSchedule.cpp
+                            PlayfieldPresentationCoordinator.cpp
+                            ReplayPlayfieldPresentation.cpp)
 if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
-    target_sources(main PRIVATE GameplaySkinSessionFactory.cpp
-                                PlayfieldPresentationCoordinator.cpp
-                                ReplayPlayfieldPresentation.cpp)
+    target_sources(main PRIVATE GameplaySkinSessionFactory.cpp)
 endif()
 if(WIN32)
     target_link_libraries(main PRIVATE avrt)

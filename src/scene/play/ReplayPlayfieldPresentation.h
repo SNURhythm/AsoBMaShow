@@ -48,6 +48,8 @@ struct ReplayPlayfieldPresentationCreateResult {
 // submits its one captured state/projection pair through the coordinator.
 class ReplayPlayfieldPresentation final {
 public:
+  ~ReplayPlayfieldPresentation();
+
   static ReplayPlayfieldPresentationCreateResult
   create(ReplayPlayfieldPresentationCreateInfo);
 
@@ -61,6 +63,9 @@ public:
   // adapter owns visual endpoint state, so callers never mutate parser notes.
   void releaseDueClassicLongNoteTails(long long gameplayTimeMicros);
   void applyAuthorityUpdate(const PlayfieldAuthorityUpdate &);
+  [[nodiscard]] int progressiveMaximumCombo() const noexcept {
+    return progressiveMaximumCombo_;
+  }
   [[nodiscard]] PresentationFrameResult
   renderFrame(RenderContext &, PlayfieldFrameClock,
               const PlayfieldProjectionRequest &);
@@ -69,6 +74,9 @@ public:
 #if defined(ASOBMASHOW_REPLAY_PLAYFIELD_PRESENTATION_TESTING)
   [[nodiscard]] PlayfieldVisualState
   captureVisualStateForTesting(PlayfieldFrameClock) const;
+  void setDestructionObserverForTesting(std::function<void()> observer) {
+    destructionObserverForTesting_ = std::move(observer);
+  }
 #endif
 
 private:
@@ -95,4 +103,8 @@ private:
   std::unordered_map<ChartVisualId, NotePresentationState> noteStates_;
   std::vector<ChartVisualId> classicLongTailIds_;
   std::size_t classicLongTailCursor_ = 0;
+  int progressiveMaximumCombo_ = 0;
+#if defined(ASOBMASHOW_REPLAY_PLAYFIELD_PRESENTATION_TESTING)
+  std::function<void()> destructionObserverForTesting_;
+#endif
 };

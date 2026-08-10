@@ -1,8 +1,10 @@
 #include "scene/play/ReplayPlayfieldPresentation.h"
 #include "scene/play/ReplayVideoGameplayPreflight.h"
+#include "PreparationPlan.h"
 #include "skin/beatoraja/GameplaySkinValidator.h"
 #include "skin/package/SkinPackageCatalog.h"
 #include "skin/package/SkinPathPolicy.h"
+#include "video/RendererAccessCoordinator.h"
 #include "view/View.h"
 
 #include <atomic>
@@ -166,6 +168,15 @@ struct SelectedSkinFixture final {
   std::shared_ptr<int> receivedInitialProjectionCount =
       std::make_shared<int>(0);
   std::shared_ptr<int> receivedTouchCount = std::make_shared<int>(0);
+  std::shared_ptr<std::optional<PlayfieldVisualState>> receivedInitialState =
+      std::make_shared<std::optional<PlayfieldVisualState>>();
+  std::shared_ptr<std::optional<PlayfieldProjectionResult>>
+      receivedInitialProjection =
+          std::make_shared<std::optional<PlayfieldProjectionResult>>();
+  std::shared_ptr<std::optional<skin::UiLogicalRect>> receivedSafeUiBounds =
+      std::make_shared<std::optional<skin::UiLogicalRect>>();
+  std::shared_ptr<std::function<void()>> createObserver =
+      std::make_shared<std::function<void()>>();
 
   SelectedSkinFixture() {
     fs::create_directories(roots.visiblePackages);
@@ -223,16 +234,26 @@ struct SelectedSkinFixture final {
                 [textureDevice = textureDevice,
                  initialStateCount = receivedInitialStateCount,
                  initialProjectionCount = receivedInitialProjectionCount,
-                 touchCount = receivedTouchCount](
+                 touchCount = receivedTouchCount,
+                 initialState = receivedInitialState,
+                 initialProjection = receivedInitialProjection,
+                 safeUiBounds = receivedSafeUiBounds,
+                 createObserver = createObserver](
                     skin::ValidatedSkinActivation activation,
                     skin::PlaySkinSessionContext context) {
+                  if (*createObserver) {
+                    (*createObserver)();
+                  }
                   if (context.initialState != nullptr) {
                     ++*initialStateCount;
                     *touchCount = static_cast<int>(context.initialState->touches.size());
+                    *initialState = *context.initialState;
                   }
                   if (context.initialProjection != nullptr) {
                     ++*initialProjectionCount;
+                    *initialProjection = *context.initialProjection;
                   }
+                  *safeUiBounds = context.safeUiBounds;
                   context.textureDevice = textureDevice;
                   return skin::PlaySkinSession::create(std::move(activation),
                                                        std::move(context));
@@ -255,6 +276,136 @@ createInfo(bms_parser::Chart &chart, const AppSettings &settings,
           }},
           .skinInput = {},
           .recordFailure = {}};
+}
+
+void testExportPixelSizesMapToLogicalGameplayBounds() {
+  const auto default4k =
+      replay_video_export::replayGameplayLogicalUiBounds(3840, 2160);
+  expect(default4k.x == 0.0 && default4k.y == 0.0 &&
+             default4k.width == 1920.0 && default4k.height == 1080.0,
+         "default 4K export uses the 1920x1080 logical gameplay viewport");
+  const auto wide4k =
+      replay_video_export::replayGameplayLogicalUiBounds(3840, 1600);
+  expect(wide4k.x == 0.0 && wide4k.y == 0.0 && wide4k.width == 1920.0 &&
+             wide4k.height == 800.0,
+         "non-16:9 export preserves logical aspect ratio at design width");
+}
+
+void testReplayGameplayFrameStateMirrorsLiveTimerAndStartClocks() {
+  bms_parser::Chart chart;
+  chart.Meta.PlayLength = 120'000'000;
+  chart.Meta.TotalLength = 130'000'000;
+  ReplayData replay;
+  AppSettings settings;
+  settings.audioOffsetMs = 20;
+  settings.visualOffsetMs = 10;
+  preparation::Plan plan;
+  plan.playback = {.percent = 100};
+  plan.playbackStartTimeMicros = -2'000'000;
+  plan.metronome.enabled = true;
+  plan.metronome.startTimeMicros = -1'000'000;
+
+  const auto initial = replay_video_export::replayGameplayFrameState(
+      plan, chart, replay, settings, 1, 0);
+  expect(initial.clock.serial == 1 &&
+             initial.clock.visualTimeMicros == -1'990'000 &&
+             initial.clock.gameplayTimeMicros == -1'980'000 &&
+             !initial.clock.playTimer.active &&
+             initial.clock.playTimer.startMicros == 0 &&
+             initial.clock.playTimer.elapsedMillisExact &&
+             initial.clock.playTimer.playtimeMillis == 125'000 &&
+             initial.sceneStartMicros == -990'000 &&
+             initial.playStartMicros == 0,
+         "initial export frame mirrors live scene/play/timer authority");
+
+  const auto gameplay = replay_video_export::replayGameplayFrameState(
+      plan, chart, replay, settings, 2, 2'000'000);
+  expect(gameplay.clock.serial == 2 &&
+             gameplay.clock.visualTimeMicros == 10'000 &&
+             gameplay.clock.gameplayTimeMicros == 20'000 &&
+             gameplay.clock.replayTouchTimeMicros == 20'000 &&
+             gameplay.clock.bgaTimeMicros == 20'000 &&
+             gameplay.clock.playTimer.active &&
+             gameplay.clock.playTimer.startMicros == 0 &&
+             gameplay.clock.playTimer.elapsedMillisExact &&
+             gameplay.clock.playTimer.playtimeMillis == 125'000,
+         "gameplay export frame keeps Timer 41 and progress authority live");
+}
+
+void testReplayLaneCoverResetIsOneFramePulseForNormalAndCoursePlayback() {
+  const std::vector<ReplayLaneCoverEvent> events = {
+      {.songTimeMicros = 1'000,
+       .noteStartPositionPercent = 35,
+       .resetVisibleTimeReference = true}};
+  for (int path = 0; path < 2; ++path) {
+    replay_video_export::ReplayLaneCoverPlayback playback(20);
+    const auto before = playback.advance(events, 999);
+    const auto eventFrame = playback.advance(events, 1'000);
+    const auto nextFrame = playback.advance(events, 1'001);
+    expect(before.percent == 20 && !before.resetVisibleTimeReference &&
+               eventFrame.percent == 35 &&
+               eventFrame.resetVisibleTimeReference && nextFrame.percent == 35 &&
+               !nextFrame.resetVisibleTimeReference,
+           path == 0 ? "normal lane-cover reset is a one-frame pulse"
+                     : "course lane-cover reset is a one-frame pulse");
+  }
+}
+
+void testSelectedNormalPreflightAndDestructionUseRendererOwnership() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.PlayLength = 120'000'000;
+  ReplayData replay;
+  AppSettings settings;
+  preparation::Plan plan;
+  plan.playbackStartTimeMicros = -2'000'000;
+  plan.metronome.enabled = true;
+  plan.metronome.startTimeMicros = -1'000'000;
+  PlayfieldPresentationConfig configuration;
+  TestBga bga;
+  SelectedSkinFixture fixture;
+  std::mutex rendererMutex;
+  std::atomic<bool> exportActive{false};
+  display::RendererAccessCoordinator rendererAccess(rendererMutex,
+                                                    exportActive);
+  bool creationBlockedDisplay = false;
+  *fixture.createObserver = [&]() {
+    std::string error;
+    creationBlockedDisplay =
+        !rendererAccess.tryAcquireDisplay(error).has_value();
+  };
+
+  std::unique_ptr<ReplayPlayfieldPresentation> presentation;
+  const auto failure = replay_video_export::preflightReplayGameplayPresentation(
+      chart, replay, settings, plan, configuration, 3840, 2160, bga,
+      fixture.services(), rendererAccess, presentation);
+  expect(!failure && presentation != nullptr && creationBlockedDisplay &&
+             fixture.receivedInitialState->has_value() &&
+             (*fixture.receivedInitialState)->clock.serial == 1 &&
+             (*fixture.receivedInitialState)->sceneStartMicros == -1'000'000 &&
+             (*fixture.receivedInitialState)->playStartMicros == 0 &&
+             fixture.receivedInitialProjection->has_value() &&
+             (*fixture.receivedInitialProjection)->frameSerial == 1 &&
+             fixture.receivedSafeUiBounds->has_value() &&
+             (*fixture.receivedSafeUiBounds)->width == 1920.0 &&
+             (*fixture.receivedSafeUiBounds)->height == 1080.0,
+         "selected production preflight has valid state/projection/logical bounds under renderer ownership");
+  if (!presentation) {
+    return;
+  }
+
+  bool destructionBlockedDisplay = false;
+  presentation->setDestructionObserverForTesting([&]() {
+    std::string error;
+    destructionBlockedDisplay =
+        !rendererAccess.tryAcquireDisplay(error).has_value();
+  });
+  replay_video_export::destroyReplayGameplayPresentation(rendererAccess,
+                                                         presentation);
+  std::string error;
+  expect(destructionBlockedDisplay && presentation == nullptr &&
+             rendererAccess.tryAcquireDisplay(error).has_value(),
+         "presentation destruction stays inside renderer ownership and releases it afterward");
 }
 
 void testNoSelectionKeepsOneAdapter() {
@@ -336,11 +487,15 @@ void testRealNormalExportPreflightStopsAudioAndMp4Work() {
                     .message = "The selected gameplay skin is unavailable.",
                     .severity = skin::DiagnosticSeverity::Error}}};
       }};
+  preparation::Plan plan;
+  std::mutex rendererMutex;
+  std::atomic<bool> exportActive{false};
+  display::RendererAccessCoordinator rendererAccess(rendererMutex,
+                                                    exportActive);
   std::unique_ptr<ReplayPlayfieldPresentation> presentation;
   const auto preflight = replay_video_export::preflightReplayGameplayPresentation(
-      chart, replay, settings, configuration, {},
-      {.x = 0.0, .y = 0.0, .width = 1280.0, .height = 720.0}, bga,
-      std::move(skinServices), presentation);
+      chart, replay, settings, plan, configuration, 1280, 720, bga,
+      std::move(skinServices), rendererAccess, presentation);
   int fakeAudioWork = 0;
   int fakeMp4Work = 0;
   const auto result = replay_video_export::runPreflightGatedNormalExport(
@@ -396,26 +551,31 @@ std::optional<ReplayVideoExportResult>
 preflightCourseFor(CoursePreflightStage ready, CoursePreflightStage unavailable) {
   AppSettings settings;
   TestBga bga;
+  preparation::Plan plan;
+  std::mutex rendererMutex;
+  std::atomic<bool> exportActive{false};
+  display::RendererAccessCoordinator rendererAccess(rendererMutex,
+                                                    exportActive);
   std::vector<replay_video_export::CourseReplayGameplayPreflightStage> stages;
   stages.reserve(2);
   stages.push_back({.chart = ready.chart,
                     .replay = ready.replay,
+                    .preparationPlan = plan,
                     .configuration = {},
-                    .playback = {},
-                    .safeUiBounds =
-                        {.x = 0.0, .y = 0.0, .width = 1280.0, .height = 720.0},
+                    .exportWidth = 1280,
+                    .exportHeight = 720,
                     .skinServices = std::move(ready.skinServices),
                     .presentation = ready.presentation});
   stages.push_back({.chart = unavailable.chart,
                     .replay = unavailable.replay,
+                    .preparationPlan = plan,
                     .configuration = {},
-                    .playback = {},
-                    .safeUiBounds =
-                        {.x = 0.0, .y = 0.0, .width = 1280.0, .height = 720.0},
+                    .exportWidth = 1280,
+                    .exportHeight = 720,
                     .skinServices = std::move(unavailable.skinServices),
                     .presentation = unavailable.presentation});
   return replay_video_export::preflightCourseReplayGameplayPresentations(
-      stages, bga, settings);
+      stages, bga, settings, rendererAccess);
 }
 
 void testRealCoursePreflightStopsAllMediaWorkForLaterSkinFailure() {
@@ -437,6 +597,44 @@ void testRealCoursePreflightStopsAllMediaWorkForLaterSkinFailure() {
          "course failure has no partial media output");
 }
 
+void testSelectedCoursePreflightUsesNonWidescreenLogicalBounds() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.PlayLength = 90'000'000;
+  ReplayData replay;
+  AppSettings settings;
+  preparation::Plan plan;
+  PlayfieldPresentationConfig configuration;
+  TestBga bga;
+  SelectedSkinFixture fixture;
+  std::mutex rendererMutex;
+  std::atomic<bool> exportActive{false};
+  display::RendererAccessCoordinator rendererAccess(rendererMutex,
+                                                    exportActive);
+  std::unique_ptr<ReplayPlayfieldPresentation> presentation;
+  std::vector<replay_video_export::CourseReplayGameplayPreflightStage> stages;
+  stages.push_back({.chart = chart,
+                    .replay = replay,
+                    .preparationPlan = plan,
+                    .configuration = configuration,
+                    .exportWidth = 3840,
+                    .exportHeight = 1600,
+                    .skinServices = fixture.services(),
+                    .presentation = presentation});
+  const auto failure =
+      replay_video_export::preflightCourseReplayGameplayPresentations(
+          stages, bga, settings, rendererAccess);
+  expect(!failure && presentation != nullptr &&
+             fixture.receivedSafeUiBounds->has_value() &&
+             (*fixture.receivedSafeUiBounds)->width == 1920.0 &&
+             (*fixture.receivedSafeUiBounds)->height == 800.0 &&
+             fixture.receivedInitialState->has_value() &&
+             (*fixture.receivedInitialState)->clock.serial == 1,
+         "course selected-skin preflight maps non-widescreen pixels to logical bounds");
+  replay_video_export::destroyReplayGameplayPresentation(rendererAccess,
+                                                         presentation);
+}
+
 void testSelectedReadySkinReceivesOneInitialSnapshotAndSubmitsSkinFrame() {
   bms_parser::Chart chart;
   chart.Meta.KeyMode = 7;
@@ -445,7 +643,18 @@ void testSelectedReadySkinReceivesOneInitialSnapshotAndSubmitsSkinFrame() {
   TestBga bga;
   SelectedSkinFixture fixture;
   PlayfieldVisualState requestedInitial;
-  requestedInitial.clock = {.serial = 7, .replayTouchTimeMicros = 120};
+  requestedInitial.clock = {
+      .serial = 7,
+      .visualTimeMicros = 55'000,
+      .gameplayTimeMicros = 44'000,
+      .replayTouchTimeMicros = 120,
+      .bgaTimeMicros = 33'000,
+      .playTimer = {.active = true,
+                    .startMicros = 0,
+                    .elapsedMillisExact = true,
+                    .playtimeMillis = 125'000}};
+  requestedInitial.sceneStartMicros = -500'000;
+  requestedInitial.playStartMicros = 0;
   auto info = createInfo(chart, settings, configuration, bga);
   info.skinServices = fixture.services();
   info.skinInput.initialState = &requestedInitial;
@@ -460,8 +669,14 @@ void testSelectedReadySkinReceivesOneInitialSnapshotAndSubmitsSkinFrame() {
   expect(created.presentation != nullptr && !created.failure &&
              *fixture.receivedInitialStateCount == 1 &&
              *fixture.receivedInitialProjectionCount == 1 &&
-             *fixture.receivedTouchCount == 1,
-         "selected ready skin receives one initial state/projection with replay touches");
+             *fixture.receivedTouchCount == 1 &&
+             fixture.receivedInitialState->has_value() &&
+             (*fixture.receivedInitialState)->clock == requestedInitial.clock &&
+             (*fixture.receivedInitialState)->sceneStartMicros == -500'000 &&
+             (*fixture.receivedInitialState)->playStartMicros == 0 &&
+             fixture.receivedInitialProjection->has_value() &&
+             (*fixture.receivedInitialProjection)->frameSerial == 7,
+         "selected ready skin receives one complete initial state/projection with replay touches");
   if (!created.presentation) {
     return;
   }
@@ -685,6 +900,150 @@ void testLongTailMissPreservesExporterEndpointSemantics() {
          "tail miss before its timing clears both holds without marking the tail dead");
 }
 
+void testChargeLongReleaseClearsBothEndpointsWithoutReactivation() {
+  for (const auto type : {bms_parser::LongNoteType::ChargeNote,
+                          bms_parser::LongNoteType::HellChargeNote}) {
+    bms_parser::Chart chart;
+    chart.Meta.KeyMode = 7;
+    auto *measure = new bms_parser::Measure;
+    chart.Measures.push_back(measure);
+    auto *headTimeline = new bms_parser::TimeLine(8, false);
+    headTimeline->Timing = 1'000;
+    auto *tailTimeline = new bms_parser::TimeLine(8, false);
+    tailTimeline->Timing = 2'000;
+    measure->TimeLines.push_back(headTimeline);
+    measure->TimeLines.push_back(tailTimeline);
+    auto *head = new bms_parser::LongNote(bms_parser::Parser::NoWav, type);
+    auto *tail = new bms_parser::LongNote(bms_parser::Parser::NoWav, type);
+    head->Tail = tail;
+    tail->Head = head;
+    headTimeline->SetNote(1, head);
+    tailTimeline->SetNote(1, tail);
+
+    AppSettings settings;
+    PlayfieldPresentationConfig configuration;
+    TestBga bga;
+    const auto created = ReplayPlayfieldPresentation::create(
+        createInfo(chart, settings, configuration, bga));
+    if (!created.presentation) {
+      expect(false, "charge long-note adapter is created");
+      continue;
+    }
+    (void)created.presentation->applyReplayEvent(
+        {.action = ReplayEventAction::Press,
+         .lane = 1,
+         .noteTimeMicros = 1'000,
+         .judgeTimeMicros = 1'000,
+         .judgement = PGreat},
+        {}, true);
+    (void)created.presentation->applyReplayEvent(
+        {.action = ReplayEventAction::Release,
+         .lane = 1,
+         .noteTimeMicros = 2'000,
+         .judgeTimeMicros = 2'010,
+         .judgement = PGreat},
+        {}, true);
+    const auto released =
+        created.presentation->captureVisualStateForTesting({});
+    expect(released.notes.size() == 2 && !released.notes[0].longActive &&
+               !released.notes[1].longActive && released.notes[1].judged,
+           "CN/HCN release clears both endpoints without reactivation");
+  }
+}
+
+void testMineReplayEventFindsLandmineSource() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  auto *measure = new bms_parser::Measure;
+  chart.Measures.push_back(measure);
+  auto *timeline = new bms_parser::TimeLine(8, false);
+  timeline->Timing = 3'000;
+  timeline->SetLandmineNote(2, new bms_parser::LandmineNote(5.0F));
+  measure->TimeLines.push_back(timeline);
+
+  AppSettings settings;
+  PlayfieldPresentationConfig configuration;
+  TestBga bga;
+  const auto created = ReplayPlayfieldPresentation::create(
+      createInfo(chart, settings, configuration, bga));
+  if (!created.presentation) {
+    expect(false, "mine replay adapter is created");
+    return;
+  }
+  (void)created.presentation->applyReplayEvent(
+      {.action = ReplayEventAction::Mine,
+       .lane = 2,
+       .noteTimeMicros = 3'000,
+       .judgeTimeMicros = 3'010,
+       .judgement = Bad},
+      {}, true);
+  const auto state = created.presentation->captureVisualStateForTesting({});
+  expect(state.notes.size() == 1 && state.notes[0].judged &&
+             state.notes[0].dead && state.notes[0].playedTimeMicros == 3'010,
+         "mine replay event resolves the authored landmine visual source");
+}
+
+void testMaximumComboAdvancesOnlyWithAppliedReplayEvents() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  AppSettings settings;
+  PlayfieldPresentationConfig configuration;
+  TestBga bga;
+  const auto created = ReplayPlayfieldPresentation::create(
+      createInfo(chart, settings, configuration, bga));
+  if (!created.presentation) {
+    expect(false, "maximum-combo replay adapter is created");
+    return;
+  }
+  replay_video_export::ReplayCourseMaximumComboPlayback courseMaximumCombo;
+  expect(created.presentation->progressiveMaximumCombo() == 0 &&
+             courseMaximumCombo.observe(*created.presentation) == 0,
+         "course maximum combo starts at zero rather than the final result");
+  (void)created.presentation->applyReplayEvent(
+      {.action = ReplayEventAction::Press,
+       .lane = 1,
+       .judgement = PGreat,
+       .combo = 2},
+      {}, true);
+  expect(created.presentation->progressiveMaximumCombo() == 2 &&
+             courseMaximumCombo.observe(*created.presentation) == 2,
+         "maximum combo advances after the first applied judgement");
+  (void)created.presentation->applyReplayEvent(
+      {.action = ReplayEventAction::Press,
+       .lane = 1,
+       .judgement = Great,
+       .combo = 5},
+      {}, true);
+  expect(created.presentation->progressiveMaximumCombo() == 5 &&
+             courseMaximumCombo.observe(*created.presentation) == 5,
+         "maximum combo grows progressively per replay event");
+
+  const auto nextStage = ReplayPlayfieldPresentation::create(
+      createInfo(chart, settings, configuration, bga));
+  if (!nextStage.presentation) {
+    expect(false, "next course-stage replay adapter is created");
+    return;
+  }
+  expect(courseMaximumCombo.observe(*nextStage.presentation) == 5,
+         "course maximum combo carries into a new stage before its first event");
+  (void)nextStage.presentation->applyReplayEvent(
+      {.action = ReplayEventAction::Press,
+       .lane = 1,
+       .judgement = Great,
+       .combo = 3},
+      {}, true);
+  expect(courseMaximumCombo.observe(*nextStage.presentation) == 5,
+         "a lower next-stage combo cannot reduce the progressive course maximum");
+  (void)nextStage.presentation->applyReplayEvent(
+      {.action = ReplayEventAction::Press,
+       .lane = 1,
+       .judgement = Great,
+       .combo = 8},
+      {}, true);
+  expect(courseMaximumCombo.observe(*nextStage.presentation) == 8,
+         "the progressive course maximum advances in the next stage");
+}
+
 } // namespace
 
 int main() {
@@ -706,17 +1065,25 @@ int main() {
   rendering::PosColorVertex::init();
   rendering::PosTexVertex::init();
   rendering::PosTexCoord0Vertex::init();
+  testExportPixelSizesMapToLogicalGameplayBounds();
+  testReplayGameplayFrameStateMirrorsLiveTimerAndStartClocks();
+  testReplayLaneCoverResetIsOneFramePulseForNormalAndCoursePlayback();
+  testSelectedNormalPreflightAndDestructionUseRendererOwnership();
   testNoSelectionKeepsOneAdapter();
   testSelectedFailureRetainsFactoryDiagnostic();
   testUnavailableSelectedSkinStopsBeforeAnyFrameWork();
   testRealNormalExportPreflightStopsAudioAndMp4Work();
   testRealCoursePreflightStopsAllMediaWorkForLaterSkinFailure();
+  testSelectedCoursePreflightUsesNonWidescreenLogicalBounds();
   testSelectedReadySkinReceivesOneInitialSnapshotAndSubmitsSkinFrame();
   testSelectedSkinRuntimeFailureDoesNotSubmitBuiltIn();
   testClassicLongHeadSuppressesJudgeHudAndBgaMissClock();
   testBuiltInReplayPresentationPreprocessesGhostsAndMisses();
   testAppliedJudgeCarriesTheProvidedBgaClockIntoSnapshot();
   testLongTailMissPreservesExporterEndpointSemantics();
+  testChargeLongReleaseClearsBothEndpointsWithoutReactivation();
+  testMineReplayEventFindsLandmineSource();
+  testMaximumComboAdvancesOnlyWithAppliedReplayEvents();
   bgfx::shutdown();
   SDL_Quit();
   if (failures != 0) {

@@ -5,10 +5,20 @@
 #include "PlayfieldProjection.h"
 #include "PlayfieldVisualState.h"
 #include "../../skin/GameplaySkinActivationRequest.h"
-#include "../../skin/SkinConfigurationWriteQueue.h"
 #include "../../skin/SkinStoragePaths.h"
-#include "../../skin/beatoraja/PlaySkinSession.h"
 #include "../../skin/beatoraja/SkinDiagnosticHistory.h"
+
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS ||                              \
+    defined(ASOBMASHOW_GAMEPLAY_SKIN_SESSION_FACTORY_TESTING)
+#include "../../skin/beatoraja/PlaySkinSession.h"
+#else
+namespace skin {
+class PlaySkinSession;
+class SkinConfigurationWriteQueue;
+class SkinLiveResourceCounters;
+class SkinResourcePreparationService;
+} // namespace skin
+#endif
 
 #include <cstdint>
 #include <functional>

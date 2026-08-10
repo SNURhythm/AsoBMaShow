@@ -1,6 +1,7 @@
 #include "GameplaySkinSessionFactory.h"
 
 #include "../../skin/beatoraja/BgfxSkinTextureDevice.h"
+#include "../../skin/beatoraja/PlaySkinSession.h"
 
 #include <optional>
 #include <string>

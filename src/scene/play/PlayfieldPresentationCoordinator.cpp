@@ -304,12 +304,6 @@ PlayfieldPresentationCoordinator::render(RenderContext &context) {
     return result;
   }
 
-  if (!allowBuiltInFallback_ &&
-      pending.skinPrepare == PresentationFrameOutcome::CriticalFailure) {
-    return abortSelectedSkinFrame(std::move(pending.skinNoSubmissionFailure),
-                                  PresentationFrameOutcome::CriticalFailure);
-  }
-
   PresentationFrameResult skinResult;
   bool skinRenderThrew = false;
   try {

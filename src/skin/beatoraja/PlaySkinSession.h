@@ -1,9 +1,11 @@
 #pragma once
 
 #include "PlaySkinStateBridge.h"
+#include "PlaySkinSessionIdentity.h"
 #include "Skin2DRenderer.h"
 #include "SkinResourceCatalog.h"
 #include "../../scene/play/PlayfieldPresentation.h"
+#include "../../scene/play/CoordinatedPlaySkinSession.h"
 #include "../SkinConfigurationWriteQueue.h"
 #include "../SkinStoragePaths.h"
 #include "../package/SkinActivationCommitStore.h"
@@ -38,14 +40,6 @@ struct PlaySkinSessionContext {
   std::shared_ptr<SkinLiveResourceCounters> liveResourceCounters;
   SkinConfigurationWriteQueue &configurationWrites;
   std::stop_token stop;
-};
-
-struct PlaySkinSessionIdentity {
-  std::uint64_t sessionSerial = 0;
-  SkinProfileId profileId;
-  SkinEntryId entry;
-  std::string revisionDigest;
-  std::string configurationDigest;
 };
 
 class PlaySkinSession;
@@ -100,7 +94,7 @@ struct PlaySkinFrameTransactionResult {
 
 // Frame-transaction core with activation/resource ownership. Coordinator
 // submission is deliberately added by later Task 21 slices.
-class PlaySkinSession final {
+class PlaySkinSession final : public CoordinatedPlaySkinSession {
 public:
 #if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
   // Transaction-core seam retained only by the focused unit target. Runtime
@@ -111,7 +105,7 @@ public:
 
   static PlaySkinSessionCreateResult create(ValidatedSkinActivation,
                                             PlaySkinSessionContext);
-  ~PlaySkinSession();
+  ~PlaySkinSession() override;
 
   PlaySkinSession(const PlaySkinSession &) = delete;
   PlaySkinSession &operator=(const PlaySkinSession &) = delete;
@@ -119,39 +113,47 @@ public:
   PlaySkinSession &operator=(PlaySkinSession &&) = delete;
 
   [[nodiscard]] PresentationFrameOutcome prepareFrame(
-      const PlayfieldVisualState &, const PlayfieldProjectionResult &);
+      const PlayfieldVisualState &,
+      const PlayfieldProjectionResult &) override;
   [[nodiscard]] PresentationFrameResult
   render(RenderContext &, const PreparedGameplayBgaFrame &,
-         IGameplayBgaSubmitter &);
-  void setViewport(ViewportSettings);
+         IGameplayBgaSubmitter &) override;
+  void setViewport(ViewportSettings) override;
   // Geometry-only chart-lifetime refresh for safe-area/rotation changes. This
   // preserves the selected viewport settings and immutable activation identity
   // while invalidating every input capture and pending old-geometry frame.
-  void updateViewportGeometry(UiLogicalRect safeUiBounds);
-  [[nodiscard]] const PlaySkinSessionIdentity &identity() const noexcept;
-  [[nodiscard]] gameplay::RealtimeTouchLayout touchLayout() const;
-  [[nodiscard]] std::uint64_t touchLayoutRevision() const noexcept;
-  [[nodiscard]] std::uint64_t touchHitRegionsRevision() const noexcept;
-  [[nodiscard]] std::vector<PresentationUiHitRegion> touchHitRegions() const;
+  void updateViewportGeometry(UiLogicalRect safeUiBounds) override;
+  [[nodiscard]] const PlaySkinSessionIdentity &
+  identity() const noexcept override;
+  [[nodiscard]] gameplay::RealtimeTouchLayout touchLayout() const override;
+  [[nodiscard]] std::uint64_t
+  touchLayoutRevision() const noexcept override;
+  [[nodiscard]] std::uint64_t
+  touchHitRegionsRevision() const noexcept override;
+  [[nodiscard]] std::vector<PresentationUiHitRegion>
+  touchHitRegions() const override;
   [[nodiscard]] PresentationUiHit
-  hitTestUiControl(UiLogicalPoint point) const;
+  hitTestUiControl(UiLogicalPoint point) const override;
   PresentationTouchResult
-  beginPresentationTouch(const PresentationTouchEvent &event);
+  beginPresentationTouch(const PresentationTouchEvent &event) override;
   PresentationTouchResult
-  updatePresentationTouch(const PresentationTouchEvent &event);
+  updatePresentationTouch(const PresentationTouchEvent &event) override;
   PresentationTouchResult
-  endPresentationTouch(const PresentationTouchEvent &event, bool cancelled);
-  void cancelPresentationTouches(long long eventMicros);
+  endPresentationTouch(const PresentationTouchEvent &event,
+                       bool cancelled) override;
+  void cancelPresentationTouches(long long eventMicros) override;
   // Task 20's bounded Down queue and next-frame transactional drain supersede
   // the earlier immediate invokeWriter/SkinWriterResult plan surface. Touch
   // callbacks never mutate gameplay authority in the input callback itself.
   // Gameplay authority is captured once in PlayfieldVisualState; these event
   // hooks intentionally retain no parallel mutable state, but keep the
   // coordinator fan-out surface concrete and exact-once callable.
-  void onLanePressed(int lane, JudgeResult judge, long long eventMicros);
-  void onLaneReleased(int lane, long long eventMicros);
+  void onLanePressed(int lane, JudgeResult judge,
+                     long long eventMicros) override;
+  void onLaneReleased(int lane, long long eventMicros) override;
   void onJudge(JudgeResult judge, int combo, int score,
-               PlayfieldJudgeEventClock clock, bool recordTimingSample);
+               PlayfieldJudgeEventClock clock,
+               bool recordTimingSample) override;
 
 #if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
   // Focused transaction-core seam. Application code cannot supply an

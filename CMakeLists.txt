@@ -4821,6 +4821,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/view/SdlTtfRuntime.cpp
             src/view/TextView.cpp
             src/view/View.cpp
+            src/video/RendererAccessCoordinator.cpp
             bgfx/bimg/3rdparty/lodepng/lodepng.cpp
         )
         target_include_directories(replay_playfield_presentation_tests PRIVATE
