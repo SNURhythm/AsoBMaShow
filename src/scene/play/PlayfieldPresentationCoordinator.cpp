@@ -163,6 +163,20 @@ PresentationFrameOutcome PlayfieldPresentationCoordinator::prepareFrame(
   PendingFrame pending;
   pending.frameSerial = state.clock.serial;
   pending.hadSkin = static_cast<bool>(skin_);
+  double visibleLaneHeightRatio = 1.0;
+  if (projection.builtInTraversal) {
+    const auto &traversal = *projection.builtInTraversal;
+    const double laneHeight = static_cast<double>(traversal.upperBound) -
+                              static_cast<double>(traversal.judgeY);
+    const double visibleLaneHeight =
+        static_cast<double>(traversal.noteVisibleUpperBound) -
+        static_cast<double>(traversal.judgeY);
+    if (std::isfinite(laneHeight) && laneHeight > 0.0 &&
+        std::isfinite(visibleLaneHeight)) {
+      visibleLaneHeightRatio =
+          std::clamp(visibleLaneHeight / laneHeight, 0.0, 1.0);
+    }
+  }
   pending.replayGhostFrame = {
       .frameSerial = state.clock.serial,
       .visualTimeMicros = state.clock.visualTimeMicros,
@@ -170,6 +184,7 @@ PresentationFrameOutcome PlayfieldPresentationCoordinator::prepareFrame(
       .hispeed = projection.builtInTraversal
                       ? static_cast<double>(projection.builtInTraversal->hispeed)
                       : 0.0,
+      .visibleLaneHeightRatio = visibleLaneHeightRatio,
       .enabled = configuration_.replayGhostRenderingEnabled &&
                  !replayGhostEvents_.empty(),
       .events = replayGhostEvents_,

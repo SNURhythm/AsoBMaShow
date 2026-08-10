@@ -23,6 +23,9 @@ struct SyntheticReplayGhostLaneGeometry {
 struct SyntheticReplayGhostGeometry {
   std::uint64_t frameSerial = 0;
   PlaySkinViewport viewport;
+  // Lower authored edge of the primary lane region. The live lane-cover
+  // traversal turns its visible height into this coordinate space.
+  double sharedLaneOriginY = 0.0;
   double sharedLaneHeight = 0.0;
   std::vector<SyntheticReplayGhostLaneGeometry> lanes;
 };
@@ -34,6 +37,10 @@ struct SyntheticReplayGhostFrameInput {
   // Captured LaneRenderer::getHispeed()-equivalent value from the same
   // projection snapshot that supplied currentScrollPosition.
   double hispeed = 0.0;
+  // Portion of the primary lane height remaining below the live lane cover.
+  // This is derived from the captured BMSRenderer traversal rather than from
+  // a second interpretation of cover configuration.
+  double visibleLaneHeightRatio = 1.0;
   bool enabled = false;
   std::span<const ReplayGhostEvent> events;
 };

@@ -92,6 +92,7 @@ struct PresentationStats {
   std::uint64_t syntheticReplayGhostFrameSerial = 0;
   double syntheticReplayGhostScrollPosition = 0.0;
   double syntheticReplayGhostHispeed = 0.0;
+  double syntheticReplayGhostVisibleLaneHeightRatio = 0.0;
   bool syntheticReplayGhostEnabled = false;
   std::size_t syntheticReplayGhostEventCount = 0;
 };
@@ -251,6 +252,8 @@ public:
     stats_->syntheticReplayGhostFrameSerial = input.frameSerial;
     stats_->syntheticReplayGhostScrollPosition = input.currentScrollPosition;
     stats_->syntheticReplayGhostHispeed = input.hispeed;
+    stats_->syntheticReplayGhostVisibleLaneHeightRatio =
+        input.visibleLaneHeightRatio;
     stats_->syntheticReplayGhostEnabled = input.enabled;
     stats_->syntheticReplayGhostEventCount = input.events.size();
     recordEvent(stats_, "skin.replay_ghost");
@@ -492,7 +495,11 @@ void testSelectedSkinReceivesOptionGatedReplayGhostFrame() {
     state.clock.visualTimeMicros = 900;
     PlayfieldProjectionResult projection;
     projection.currentScrollPosition = 1.5;
-    projection.builtInTraversal = BuiltInRendererTraversal{.hispeed = 1.25F};
+    projection.builtInTraversal = BuiltInRendererTraversal{
+        .judgeY = 2.0F,
+        .upperBound = 10.0F,
+        .noteVisibleUpperBound = 6.0F,
+        .hispeed = 1.25F};
     (void)coordinator.prepareFrame(state, projection);
     RenderContext context;
     (void)coordinator.render(context);
@@ -505,7 +512,8 @@ void testSelectedSkinReceivesOptionGatedReplayGhostFrame() {
              enabled->syntheticReplayGhostEnabled &&
              enabled->syntheticReplayGhostEventCount == 1 &&
              enabled->syntheticReplayGhostScrollPosition == 1.5 &&
-             enabled->syntheticReplayGhostHispeed == 1.25,
+             enabled->syntheticReplayGhostHispeed == 1.25 &&
+             enabled->syntheticReplayGhostVisibleLaneHeightRatio == 0.5,
          "selected skin receives the exact replay-ghost projection only when enabled");
   const auto disabled = configureAndRender(false);
   expect(disabled->syntheticReplayGhostCalls == 0,

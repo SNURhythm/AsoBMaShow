@@ -1571,6 +1571,41 @@ void testSyntheticReplayGhostUsesSharedPlayAreaClip() {
          "synthetic replay ghosts obey the shared skin play-area clip");
 }
 
+void testSyntheticReplayGhostRespectsLaneCoverVisibleHeight() {
+  SyntheticReplayGhostGeometry geometry{
+      .frameSerial = 1,
+      .viewport = {.authoredToUi = {},
+                   .uiToAuthored = {},
+                   .drawableAuthoredBounds =
+                       {.x = 0.0, .y = 0.0, .width = 1280.0, .height = 720.0},
+                   .safeUiBounds =
+                       {.x = 0.0, .y = 0.0, .width = 1280.0, .height = 720.0},
+                   .valid = true},
+      .sharedLaneOriginY = 100.0,
+      .sharedLaneHeight = 200.0,
+      .lanes = {{.lane = 0,
+                 .normalNote =
+                     {.x = 10.0, .y = 100.0, .width = 30.0, .height = 8.0},
+                 .clip =
+                     {.x = 10.0, .y = 100.0, .width = 30.0, .height = 200.0}}}};
+  const std::array events{ReplayGhostEvent{.lane = 0,
+                                            .noteTimeMicros = 1'000,
+                                            .judgeTimeMicros = 1'100,
+                                            .judgeScrollPosition = 0.75,
+                                            .judgement = Great}};
+
+  const auto overlay = buildSyntheticReplayGhostOverlay(
+      geometry, {.frameSerial = 1,
+                 .visualTimeMicros = 1'000,
+                 .currentScrollPosition = 0.0,
+                 .hispeed = 1.0,
+                 .visibleLaneHeightRatio = 0.5,
+                 .enabled = true,
+                 .events = events});
+  expect(overlay.commands.empty(),
+         "synthetic replay ghosts remain below the active lane-cover cutoff");
+}
+
 void testEvaluatedSkinPublishesPerLaneReplayGhostGeometry() {
   SessionFixture fixture;
   if (!fixture.ready()) {
@@ -1580,6 +1615,7 @@ void testEvaluatedSkinPublishesPerLaneReplayGhostGeometry() {
   const auto frame = fixture.session().prepareFrame(stateAt(1), projectionAt(1), {});
   const auto &geometry = frame.evaluation.syntheticReplayGhostGeometry;
   expect(frame.ready() && geometry && geometry->frameSerial == 1 &&
+             geometry->sharedLaneOriginY == 40.0 &&
              geometry->sharedLaneHeight == 200.0 &&
              geometry->lanes.size() == 2 && geometry->lanes[0].lane == 7 &&
              geometry->lanes[0].normalNote.width == 30.0 &&
@@ -2589,6 +2625,7 @@ int main() {
   testSyntheticReplayGhostRespectsDisabledOption();
   testSyntheticReplayGhostSkipsEventsOutsideLaneClip();
   testSyntheticReplayGhostUsesSharedPlayAreaClip();
+  testSyntheticReplayGhostRespectsLaneCoverVisibleHeight();
   testEvaluatedSkinPublishesPerLaneReplayGhostGeometry();
   testSubmittedSkinRendersOptionGatedSyntheticReplayGhosts();
   testInvalidSessionSerialDoesNotConsumeFrameOwners();

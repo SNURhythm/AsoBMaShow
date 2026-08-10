@@ -123,6 +123,25 @@ SkinCommandBuffer buildSyntheticReplayGhostOverlay(
   // lanes. Keep each lane's own horizontal region, but never submit a ghost
   // beyond that shared top/bottom range.
   const auto &sharedPlayArea = geometry.lanes.front().clip;
+  const double visibleLaneHeightRatio =
+      std::isfinite(input.visibleLaneHeightRatio)
+          ? std::clamp(input.visibleLaneHeightRatio, 0.0, 1.0)
+          : 1.0;
+  const double sharedPlayAreaBottom =
+      sharedPlayArea.y + sharedPlayArea.height;
+  // BMSRenderer's noteVisibleUpperBound is measured from the judgement line.
+  // Map that same retained fraction onto the selected skin's primary lane.
+  // With no cover the full authored/shared play area remains authoritative.
+  const double laneCoverBottom =
+      visibleLaneHeightRatio < 1.0
+          ? std::min(sharedPlayAreaBottom,
+                     geometry.sharedLaneOriginY +
+                         geometry.sharedLaneHeight * visibleLaneHeightRatio)
+          : sharedPlayAreaBottom;
+  if (!std::isfinite(laneCoverBottom) ||
+      laneCoverBottom <= sharedPlayArea.y) {
+    return result;
+  }
 
   for (const ReplayGhostEvent &event : input.events) {
     if (event.judgeTimeMicros < input.visualTimeMicros ||
@@ -138,7 +157,7 @@ SkinCommandBuffer buildSyntheticReplayGhostOverlay(
     const double clipTop = std::max(lane->clip.y, sharedPlayArea.y);
     const double clipBottom =
         std::min(lane->clip.y + lane->clip.height,
-                 sharedPlayArea.y + sharedPlayArea.height);
+                 laneCoverBottom);
     if (!std::isfinite(clipTop) || !std::isfinite(clipBottom) ||
         clipBottom <= clipTop) {
       continue;

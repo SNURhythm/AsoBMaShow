@@ -4061,6 +4061,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
         SyntheticReplayGhostGeometry replayGhostGeometry{
             .frameSerial = inputs.frameSerial,
             .viewport = inputs.viewport,
+            .sharedLaneOriginY =
+                layout->note->lanes.front().laneDestination.y,
             .sharedLaneHeight =
                 layout->note->lanes.front().laneDestination.height};
         for (const auto &lane : layout->note->lanes) {
