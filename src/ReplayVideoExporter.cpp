@@ -24,6 +24,7 @@
 #include "scene/play/BMSRenderer.h"
 #include "scene/play/GamePlayTiming.h"
 #include "scene/play/Judge.h"
+#include "scene/play/ReplayPlayfieldPresentation.h"
 #include "skin/DefaultSkin.h"
 #include "view/UiTheme.h"
 #include "view/View.h"
@@ -111,6 +112,115 @@ PracticeAnalyticsView *addReplayResultAnalytics(
 
 class ReplayVideoExportLog;
 void replayExportLog(ReplayVideoExportLog *log, const char *format, ...);
+ReplayVideoExportOptions
+resolveReplayVideoExportOptions(const ReplayVideoExportOptions &options);
+
+struct PreparedReplayGameplayPresentation {
+  std::unique_ptr<ReplayPlayfieldPresentation> presentation;
+};
+
+std::string replaySkinExportFailureMessage(const PresentationFailure &failure) {
+  std::string message = failure.diagnostic.message;
+  if (!failure.diagnostic.code.empty()) {
+    if (!message.empty()) {
+      message.append("\n\n");
+    }
+    message.push_back('[');
+    message.append(failure.diagnostic.code);
+    message.push_back(']');
+  }
+  return message.empty() ? "The selected gameplay skin could not be used."
+                         : message;
+}
+
+GameplaySkinSessionServices
+replayGameplaySkinSessionServices(ApplicationContext &context) {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  return {.acquire = context.acquireGameplaySkinForNextChart,
+          .storageRoots = context.skinStorageRoots
+                              ? &*context.skinStorageRoots
+                              : nullptr,
+          .resourcePreparation = context.skinResourcePreparationService.get(),
+          .liveResourceCounters = context.skinLiveResourceCounters,
+          .configurationWrites = context.skinConfigurationWriteQueue.get(),
+          .diagnosticHistory = context.skinDiagnosticHistory.get()};
+#else
+  (void)context;
+  return {};
+#endif
+}
+
+PlayfieldPresentationConfig replayGameplayPresentationConfig(
+    const bms_parser::Chart &chart, const AppSettings &settings,
+    const ReplayVideoExportOptions &options) {
+  const auto resolvedOptions = resolveReplayVideoExportOptions(options);
+  return {
+      .visibleTimeGreenNumber = settings.visibleTimeGreenNumber,
+      .visibleTimeUseMilliseconds = settings.visibleTimeUseMilliseconds,
+      .visibleTimeBpmStrategy = settings.visibleTimeBpmStrategy,
+      .playAreaWidth = settings.playAreaWidthForKeyMode(chart.Meta.KeyMode),
+      .laneBeamLengthPercent = settings.laneBeamLengthPercent,
+      .noteStartPositionPercent = settings.noteStartPositionPercent,
+      .laneBeamClockUsesRenderTime = true,
+      .showInvisibleNotes = settings.showInvisibleNotes,
+      .judgementIndicatorEnabled = settings.judgementIndicatorEnabled,
+      .judgementIndicatorY = settings.judgementIndicatorY,
+      .judgementIndicatorWidthScale = settings.judgementIndicatorWidthScale,
+      .judgementIndicatorHudMode =
+          settings.judgementIndicatorRenderMode ==
+          AppSettings::JudgementIndicatorRenderMode::Hud2D,
+      .judgementIndicatorRangeMilliseconds =
+          settings.judgementIndicatorRangeMilliseconds,
+      .judgementTextY = settings.judgementTextY,
+      .judgementCounterEnabled = settings.judgementCounterEnabled,
+      .judgementCounterPosition = settings.judgementCounterPosition,
+      .gaugeBarPosition = settings.gaugeBarPosition,
+      .touchVisualizationEnabled = resolvedOptions.renderTouchPoints,
+      .replayGhostRenderingEnabled = resolvedOptions.renderReplayGhosts,
+  };
+}
+
+[[nodiscard]] std::optional<ReplayVideoExportResult>
+preflightReplayGameplayPresentation(
+    ApplicationContext &context, bms_parser::Chart &chart,
+    const ReplayData &replay, const AppSettings &settings,
+    const preparation::Plan &preparationPlan,
+    const ReplayVideoExportOptions &options,
+    PreparedReplayGameplayPresentation &prepared, ReplayVideoExportLog *log) {
+  const auto resolvedOptions = resolveReplayVideoExportOptions(options);
+  Judge judge(chart.Meta.Rank);
+  auto created = ReplayPlayfieldPresentation::create({
+      .chart = chart,
+      .timingWindows = judge.timingWindows,
+      .configuration = replayGameplayPresentationConfig(chart, settings, options),
+      .settings = settings,
+      .playback = preparationPlan.playback,
+      .bga = context.jukebox,
+      .skinServices = replayGameplaySkinSessionServices(context),
+      .skinInput = {.safeUiBounds = {
+                        .x = 0.0,
+                        .y = 0.0,
+                        .width = static_cast<double>(resolvedOptions.width),
+                        .height = static_cast<double>(resolvedOptions.height),
+                    }},
+      .replayTouchSamples = replay.touchSamples,
+      .recordFailure = {},
+  });
+  if (created.presentation != nullptr) {
+    prepared.presentation = std::move(created.presentation);
+    return std::nullopt;
+  }
+
+  const PresentationFailure failure = created.failure.value_or(
+      PresentationFailure{.diagnostic =
+                              {.code = "skin.lifecycle.activation_unavailable",
+                               .message =
+                                   "The selected gameplay skin is unavailable."}});
+  const std::string message = replaySkinExportFailureMessage(failure);
+  replayExportLog(log, "Replay export skin preflight failed: %s",
+                  message.c_str());
+  return ReplayVideoExportResult{.success = false, .message = message};
+}
 
 std::optional<std::string>
 ensureReplayExportDirectoryError(const std::filesystem::path &path,
@@ -2616,6 +2726,7 @@ ReplayVideoExportResult
 renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
                        const ReplayData &replay, const AppSettings &settings,
                        const preparation::Plan &preparationPlan,
+                       PreparedReplayGameplayPresentation &preparedGameplay,
                        const ReplayVideoExportOptions &options,
                        const std::filesystem::path &wavPath,
                        const std::filesystem::path &outputPath,
@@ -2629,7 +2740,6 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   const int fps = resolvedOptions.fps;
   const long long audioOffsetMicros =
       static_cast<long long>(settings.audioOffsetMs) * 1000LL;
-  const audio::PlaybackRate playback = preparationPlan.playback;
   const long long gameplayDurationMicros =
       std::max(0LL, requestedGameplayDurationMicros);
 
@@ -2761,69 +2871,44 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     }
   };
 
-  ScopedChartNoteReset chartReset(chart);
-  Judge judge(chart.Meta.Rank);
-  BMSRenderer renderer(&chart, judge.timingWindows,
-                       settings.visibleTimeGreenNumber, true, playback);
-  renderer.setVisibleTimeBpmStrategy(settings.visibleTimeBpmStrategy);
-  renderer.setVisibleTimeUseMilliseconds(settings.visibleTimeUseMilliseconds);
-  renderer.setPlayAreaWidth(
-      settings.playAreaWidthForKeyMode(chart.Meta.KeyMode));
-  renderer.setLaneBeamLengthPercent(settings.laneBeamLengthPercent);
-  renderer.setNoteStartPositionPercent(settings.noteStartPositionPercent);
-  renderer.setLaneBeamClockUsesRenderTime(true);
-  renderer.setShowInvisibleNotes(settings.showInvisibleNotes);
+  if (preparedGameplay.presentation == nullptr) {
+    return {.success = false,
+            .outputPath = outputPath,
+            .message = "Replay gameplay presentation was not prepared"};
+  }
+
   const auto bpmChangeTimelines = collectBpmChangeTimelines(chart);
   size_t bpmChangeCursor = 0;
   double currentExportBpm = chart.Meta.Bpm;
-  renderer.setCurrentBpm(currentExportBpm);
   auto applyExportBpm = [&](long long songTimeMicros) {
     while (bpmChangeCursor < bpmChangeTimelines.size() &&
            bpmChangeTimelines[bpmChangeCursor]->Timing <= songTimeMicros) {
       const double bpm = bpmChangeTimelines[bpmChangeCursor]->Bpm;
       if (std::abs(currentExportBpm - bpm) > 0.0001) {
         currentExportBpm = bpm;
-        renderer.setCurrentBpm(currentExportBpm);
       }
       ++bpmChangeCursor;
     }
   };
   size_t laneCoverEventCursor = 0;
+  int laneCoverPercent = settings.noteStartPositionPercent;
+  bool resetLaneCoverVisibleTimeReference = false;
   auto applyReplayLaneCoverEvents = [&](long long songTimeMicros) {
     while (laneCoverEventCursor < replay.laneCoverEvents.size() &&
            replay.laneCoverEvents[laneCoverEventCursor].songTimeMicros <=
                songTimeMicros) {
       const auto &event = replay.laneCoverEvents[laneCoverEventCursor];
-      renderer.applyLaneCoverState(event.noteStartPositionPercent,
-                                   event.resetVisibleTimeReference);
+      laneCoverPercent = event.noteStartPositionPercent;
+      resetLaneCoverVisibleTimeReference = event.resetVisibleTimeReference;
       ++laneCoverEventCursor;
     }
   };
-  const bool judgementIndicatorHudMode =
-      settings.judgementIndicatorRenderMode ==
-      AppSettings::JudgementIndicatorRenderMode::Hud2D;
-  renderer.setJudgementIndicatorConfig(
-      settings.judgementIndicatorEnabled, settings.judgementIndicatorY,
-      settings.judgementIndicatorWidthScale, judgementIndicatorHudMode,
-      settings.judgementIndicatorRangeMilliseconds);
-  renderer.setJudgementTextY(settings.judgementTextY);
-  renderer.setJudgementCounterEnabled(settings.judgementCounterEnabled);
-  renderer.setJudgementCounterPosition(settings.judgementCounterPosition);
-  renderer.setGaugeBarPosition(settings.gaugeBarPosition);
   const GaugeProfile gaugeProfile =
       resolveGaugeProfile(GaugeProfile::Standard, chart.Meta.KeyMode);
   const RhythmState initialGaugeState =
       replay_result::BuildInitialGaugeState(chart, replay, gaugeProfile);
-  renderer.setGaugeStatus(initialGaugeState.gaugeType,
-                          initialGaugeState.gaugeAutoShift,
-                          initialGaugeState.currentGauge,
-                          initialGaugeState.gaugeRules());
-  renderer.setPlayOptionStatus(replayExportPlayOptionLabel(replay));
-  renderer.setReplayData(&replay);
-  renderer.setStartLaneIndicators(preparationPlan.laneIndicator.lanes);
-  renderer.setAutoPlayMarkVisible(replay.autoPlay);
-  renderer.setTouchVisualizationEnabled(resolvedOptions.renderTouchPoints);
-  renderer.setReplayGhostRenderingEnabled(resolvedOptions.renderReplayGhosts);
+  GaugeType replayGaugeType = initialGaugeState.gaugeType;
+  float replayGauge = initialGaugeState.currentGauge;
   const std::optional<ResultPreviousBestData> previousBest =
       result_presentation::previousBestForReplayChart(
           context.scoreRepository, chart.Meta, replay);
@@ -2843,13 +2928,6 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
                                 replay.gaugeAutoShift,
                                 GaugeProfile::Standard,
                                 replay.gaugeAutoShiftLowerBound);
-  renderer.setPacemakerTarget(activePacemakerTarget);
-  renderer.setPacemakerStatus(
-      pacemaker::snapshotForState(activePacemakerTarget, pacemakerState));
-
-  const auto replayNotes = buildReplayNoteLookup(chart);
-  const auto replayAutoReleaseTails = collectReplayAutoReleaseTails(chart);
-  size_t replayAutoReleaseTailCursor = 0;
   const long long scheduledVisualEndMicros =
       preparationPlan.realTimeAtGameplayTime(
           context.jukebox.getScheduledVisualEndMicros(), audioOffsetMicros);
@@ -2975,7 +3053,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   RenderContext renderContext;
   size_t replayCursor = 0;
   GameplayBgaMissStateTracker bgaMissTracker;
-  std::uint64_t bgaFrameSerial = 1;
+  std::uint64_t presentationSerial = 0;
   std::map<Judgement, int> replayJudgeCounts;
   for (int i = 0; i < JudgementCount; i++) {
     replayJudgeCounts[static_cast<Judgement>(i)] = 0;
@@ -3120,46 +3198,93 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
                frameTiming.gameplayTimeMicros) {
       const auto &event = replay.events[replayCursor];
       const bool appliedHud =
-          applyReplayEventForVideo(renderer, chart, replayNotes, event,
-                                   visualOffsetMicros,
-                                   replay.gaugeAutoShift,
-                                   initialGaugeState.gaugeRules(),
-                                   bgaMissTracker);
+          preparedGameplay.presentation->applyReplayEvent(
+              event,
+              makePlayfieldJudgeEventClock(event.songTimeMicros,
+                                           visualOffsetMicros),
+              true);
+      if (event.judgement != None || event.action == ReplayEventAction::Mine ||
+          event.action == ReplayEventAction::Gauge) {
+        replayGaugeType = event.gaugeType;
+        replayGauge = event.gauge;
+      }
       if (appliedHud && event.judgement != None) {
         applyReplayEventToPacemakerState(pacemakerState, event);
-        renderer.setPacemakerStatus(pacemaker::snapshotForState(
-            activePacemakerTarget, pacemakerState));
+        bgaMissTracker.onJudge(JudgeResult(event.judgement, event.diffMicros),
+                               event.combo,
+                               makePlayfieldJudgeEventClock(
+                                   event.songTimeMicros, visualOffsetMicros));
         replayJudgeCounts[event.judgement]++;
         if (JudgeResult(event.judgement, event.diffMicros).isComboBreak()) {
           replayComboBreak++;
         }
-        renderer.setJudgementCounters(replayJudgeCounts, replayComboBreak);
       }
       ++replayCursor;
     }
-    releaseDueReplayLongNoteTails(chart, replayAutoReleaseTails,
-                                  replayAutoReleaseTailCursor,
-                                  frameTiming.gameplayTimeMicros);
     applyExportBpm(frameTiming.gameplayTimeMicros);
     applyReplayLaneCoverEvents(frameTiming.gameplayTimeMicros);
-    renderer.setStartLaneIndicatorsVisible(
-        preparationPlan.indicatorVisibleAt(rawSongTimeMicros));
 
+    preparedGameplay.presentation->applyAuthorityUpdate({
+        .currentBpm = currentExportBpm,
+        .judgementCounters = replayJudgeCounts,
+        .comboBreak = replayComboBreak,
+        .maximumCombo = pacemakerState.maxCombo,
+        .gaugeType = replayGaugeType,
+        .gaugeAutoShift = replay.gaugeAutoShift,
+        .currentGauge = replayGauge,
+        .gaugeRules = initialGaugeState.gaugeRules(),
+        .pacemakerTarget = activePacemakerTarget,
+        .pacemakerStatus =
+            pacemaker::snapshotForState(activePacemakerTarget, pacemakerState),
+        .playOptionLabel = replayExportPlayOptionLabel(replay),
+        .autoPlayMarkVisible = replay.autoPlay,
+        .gameplayMode = PlayfieldGameplayMode::Replay,
+        .loadingState = PlayfieldLoadingState::Loaded,
+        .startLaneIndicators = preparationPlan.laneIndicator.lanes,
+        .startLaneIndicatorsVisible =
+            preparationPlan.indicatorVisibleAt(rawSongTimeMicros),
+        .laneCoverPercent = laneCoverPercent,
+        .laneCoverEnabled = true,
+        .resetLaneCoverVisibleTimeReference =
+            resetLaneCoverVisibleTimeReference,
+    });
+
+    bool presentationFailed = false;
     if (!renderAndQueueFrame(frameIndex, videoTimeMicros, [&]() {
           bgfx::touch(rendering::clear_view);
           bgfx::touch(rendering::bga_view);
           bgfx::touch(rendering::bga_layer_view);
-          const auto bgaFrame = context.jukebox.prepareVisualFrameAt(
-              bgaFrameSerial++, frameTiming.bgaTimeMicros,
-              bgaMissTracker.snapshot());
-          context.jukebox.submitFullscreen(bgaFrame);
-          bgaBlurPass->execute();
-          rendering::renderFullscreenTextureTint(
-              bgaBlurPass->outputTexture(), rendering::final_view,
-              static_cast<float>(settings.bgaBrightnessPercent) / 100.0f);
-          renderer.render(renderContext, frameTiming.visualTimeMicros,
-                          frameTiming.gameplayTimeMicros);
+          const auto presentationFrame = preparedGameplay.presentation->renderFrame(
+              renderContext,
+              {.serial = ++presentationSerial,
+               .visualTimeMicros = frameTiming.visualTimeMicros,
+               .gameplayTimeMicros = frameTiming.gameplayTimeMicros,
+               .replayTouchTimeMicros = frameTiming.gameplayTimeMicros,
+               .bgaTimeMicros = frameTiming.bgaTimeMicros},
+              {.includeInvisibleNotes = settings.showInvisibleNotes});
+          if (presentationFrame.outcome ==
+                  PresentationFrameOutcome::CriticalFailure ||
+              presentationFrame.failure) {
+            errorMessage = replaySkinExportFailureMessage(
+                *presentationFrame.failure);
+            presentationFailed = true;
+            return;
+          }
+          if (presentationFrame.bgaCompositeMode ==
+                  GameplayBgaCompositeMode::FullscreenBuiltIn &&
+              presentationFrame.preparedBga) {
+            context.jukebox.submitFullscreen(*presentationFrame.preparedBga);
+            bgaBlurPass->execute();
+            rendering::renderFullscreenTextureTint(
+                bgaBlurPass->outputTexture(), rendering::final_view,
+                static_cast<float>(settings.bgaBrightnessPercent) / 100.0f);
+          }
         })) {
+      bgfxCleanup.runNow();
+      return {
+          .success = false, .outputPath = outputPath, .message = errorMessage};
+    }
+    if (presentationFailed) {
       bgfxCleanup.runNow();
       return {
           .success = false, .outputPath = outputPath, .message = errorMessage};
@@ -3197,7 +3322,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
           bgfx::touch(rendering::bga_view);
           bgfx::touch(rendering::bga_layer_view);
           const auto bgaFrame = context.jukebox.prepareVisualFrameAt(
-              bgaFrameSerial++, bgaTimeMicros, bgaMissTracker.snapshot());
+              ++presentationSerial, bgaTimeMicros, bgaMissTracker.snapshot());
           context.jukebox.submitFullscreen(bgaFrame);
           bgaBlurPass->execute();
           rendering::renderFullscreenTextureTint(
@@ -4023,6 +4148,18 @@ ReplayVideoExporter::Export(ApplicationContext &context,
   }
   reportReplayExportProgress(options, 0.0, "Preparing export");
 
+  const auto resolvedOptions = resolveReplayVideoExportOptions(options);
+  const preparation::Plan preparationPlan = preparation::buildNormalPlan(
+      *chart, context.settings.startLaneIndicatorsEnabled,
+      context.settings.prepMetronomeEnabled, 0, 0, std::nullopt,
+      replay.provenance.playback);
+  PreparedReplayGameplayPresentation preparedGameplay;
+  if (const auto preflight = preflightReplayGameplayPresentation(
+          context, *chart, replay, context.settings, preparationPlan,
+          resolvedOptions, preparedGameplay, nullptr)) {
+    return *preflight;
+  }
+
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   reportReplayExportProgress(options, 0.01, "Requesting Photos permission");
   std::string photosErrorMessage;
@@ -4083,14 +4220,8 @@ ReplayVideoExporter::Export(ApplicationContext &context,
     return {.success = false, .message = *error};
   }
 
-  const auto resolvedOptions = resolveReplayVideoExportOptions(options);
-
   const auto wavPath = tempDir / "audio.wav";
   const auto outputPath = outputDir / (baseName + ".mp4");
-  const preparation::Plan preparationPlan = preparation::buildNormalPlan(
-      *chart, context.settings.startLaneIndicatorsEnabled,
-      context.settings.prepMetronomeEnabled, 0, 0, std::nullopt,
-      replay.provenance.playback);
   const long long audioOffsetMicros =
       static_cast<long long>(context.settings.audioOffsetMs) * 1000LL;
 
@@ -4141,7 +4272,8 @@ ReplayVideoExporter::Export(ApplicationContext &context,
           : audioResult.durationMicros;
   auto muxResult = renderReplayVideoToMp4(
       context, *chart, replay, context.settings, preparationPlan,
-      resolvedOptions, wavPath, outputPath, gameplayDurationMicros,
+      preparedGameplay, resolvedOptions, wavPath, outputPath,
+      gameplayDurationMicros,
       requestedAudioDurationMicros, failureMicros.has_value(), exportLog);
   if (!muxResult.success) {
     replayExportLog(exportLog, "Replay export MP4 failed: %s",

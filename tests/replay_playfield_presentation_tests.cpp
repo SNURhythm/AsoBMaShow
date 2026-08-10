@@ -293,6 +293,30 @@ void testSelectedFailureRetainsFactoryDiagnostic() {
          "selected-skin factory failure has no replay adapter and retains its diagnostic");
 }
 
+void testUnavailableSelectedSkinStopsBeforeAnyFrameWork() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  AppSettings settings;
+  PlayfieldPresentationConfig configuration;
+  TestBga bga;
+  auto info = createInfo(chart, settings, configuration, bga);
+  info.skinServices.acquire = [](int) {
+    return skin::GameplaySkinAcquisition{
+        .disposition = skin::GameplaySkinAcquisitionDisposition::Failed,
+        .failure = skin::GameplaySkinAcquisitionFailure{
+            .diagnostic = {.code = "skin.lifecycle.activation_unavailable",
+                           .message = "The selected gameplay skin is unavailable.",
+                           .severity = skin::DiagnosticSeverity::Error}}};
+  };
+  const auto created = ReplayPlayfieldPresentation::create(std::move(info));
+  expect(created.presentation == nullptr && created.failure &&
+             created.failure->diagnostic.code ==
+                 "skin.lifecycle.activation_unavailable" &&
+             bga.prepareCalls == 0 && bga.submitCalls == 0 &&
+             bga.fullscreenCalls == 0,
+         "unavailable selected skin retains its diagnostic before any BGA frame work");
+}
+
 void testSelectedReadySkinReceivesOneInitialSnapshotAndSubmitsSkinFrame() {
   bms_parser::Chart chart;
   chart.Meta.KeyMode = 7;
@@ -515,6 +539,7 @@ int main() {
   rendering::PosTexCoord0Vertex::init();
   testNoSelectionKeepsOneAdapter();
   testSelectedFailureRetainsFactoryDiagnostic();
+  testUnavailableSelectedSkinStopsBeforeAnyFrameWork();
   testSelectedReadySkinReceivesOneInitialSnapshotAndSubmitsSkinFrame();
   testSelectedSkinRuntimeFailureDoesNotSubmitBuiltIn();
   testClassicLongHeadSuppressesJudgeHudAndBgaMissClock();

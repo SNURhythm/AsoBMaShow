@@ -83,6 +83,32 @@ void rejectTokens(const std::filesystem::path &path,
 void requireToken(const std::filesystem::path &path, std::string_view token,
                   std::string_view authority);
 
+void requireOrdered(const std::filesystem::path &path, std::string_view first,
+                    std::string_view second, std::string_view authority) {
+  const auto text = readText(path);
+  const auto firstAt = text.find(first);
+  const auto secondAt = text.find(second);
+  if (firstAt == std::string::npos || secondAt == std::string::npos ||
+      firstAt >= secondAt) {
+    std::cerr << "FAIL: " << authority << '\n';
+    ++failures;
+  }
+}
+
+void requireAbsentBetween(const std::filesystem::path &path,
+                          std::string_view first, std::string_view last,
+                          std::string_view forbidden,
+                          std::string_view authority) {
+  const auto text = readText(path);
+  const auto firstAt = text.find(first);
+  const auto lastAt = text.find(last, firstAt);
+  if (firstAt == std::string::npos || lastAt == std::string::npos ||
+      text.find(forbidden, firstAt) < lastAt) {
+    std::cerr << "FAIL: " << authority << '\n';
+    ++failures;
+  }
+}
+
 void testModernResultAndSnapshotBoundary() {
   const std::filesystem::path root = ASOBMASHOW_SOURCE_DIR;
   constexpr std::array<std::string_view, 12> forbidden{
@@ -395,6 +421,25 @@ void testReplayExportUsesPreparedGameplayBgaFrames() {
   rejectTokens(exporter, legacyRenderer);
 }
 
+void testNormalReplayExportUsesPreparedPresentation() {
+  const std::filesystem::path exporter =
+      std::filesystem::path(ASOBMASHOW_SOURCE_DIR) /
+      "src/ReplayVideoExporter.cpp";
+  requireOrdered(exporter, "preflightReplayGameplayPresentation(",
+                 "writeReplayAudioTrack(",
+                 "skin preflight occurs before normal replay audio work");
+  requireOrdered(exporter, "preflightReplayGameplayPresentation(",
+                 "renderReplayVideoToMp4(",
+                 "skin preflight occurs before normal MP4 rendering");
+  requireToken(exporter, "ReplayPlayfieldPresentation",
+               "normal replay uses the coordinator-backed presentation adapter");
+  requireAbsentBetween(
+      exporter, "renderReplayVideoToMp4(",
+      "ReplayVideoExportResult renderCourseReplayVideoToMp4(",
+      "renderer.render(renderContext, frameTiming.visualTimeMicros",
+      "normal replay no longer directly renders gameplay");
+}
+
 void requireToken(const std::filesystem::path &path, std::string_view token,
                   std::string_view authority) {
   if (!readText(path).contains(token)) {
@@ -619,6 +664,7 @@ int main() {
   testActivatedChartConsumersUseTheSharedPipeline();
   testCourseContinuationAndConsumerBoundaries();
   testReplayExportUsesPreparedGameplayBgaFrames();
+  testNormalReplayExportUsesPreparedPresentation();
   if (failures != 0) {
     std::cerr << failures << " replay contract boundary test(s) failed\n";
     return 1;
