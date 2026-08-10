@@ -1,8 +1,11 @@
 #pragma once
 
+#include "GameplayScrollGeometry.h"
+
 #include <cstdint>
 #include <limits>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -131,6 +134,10 @@ struct PlayfieldChartVisualModel {
   std::vector<ChartVisualTimeline> timelines;
   std::vector<ChartVisualNote> notes;
   std::vector<double> scrollPrefix;
+  // The parser has no object for the end of a measure. This is a geometry-only
+  // anchor, never a skin-visible chart timeline.
+  std::optional<gameplay_scroll_geometry::ScrollPositionTimeline>
+      terminalScrollAnchor;
   std::vector<ChartVisualBgaPoorSequence> bgaPoorSequences;
 
   [[nodiscard]] std::vector<std::string> runtimeStrings() const;

@@ -41,6 +41,8 @@ struct ScrollPositionTimeline {
   long long stopMicros = 0;
   double bpm = 0.0;
   double scrollRate = 1.0;
+
+  bool operator==(const ScrollPositionTimeline &) const = default;
 };
 
 inline double

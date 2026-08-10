@@ -1141,6 +1141,48 @@ void verifyTerminalZeroNoteRowsAdvanceLegacyScroll(const RenderTarget &target) {
   bgfx::frame();
 }
 
+void verifyFinalMeasureTailAdvancesLegacyScroll(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  bgfx::touch(rendering::clear_view);
+
+  bms_parser::Chart chart;
+  chart.Meta.Bpm = 120.0;
+  chart.Meta.MinBpm = 120.0;
+  chart.Meta.MaxBpm = 120.0;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.TotalLength = 2'000'000;
+  auto *measure = new bms_parser::Measure();
+  measure->Scale = 1.0;
+  chart.Measures.push_back(measure);
+  const auto addTimeline = [measure](long long timeMicros, double beat) {
+    auto *timeline = new bms_parser::TimeLine(8, false);
+    timeline->Timing = timeMicros;
+    timeline->BeatPosition = beat;
+    timeline->Bpm = 120.0;
+    measure->TimeLines.push_back(timeline);
+    return timeline;
+  };
+  auto *measureStart = addTimeline(0, 0.0);
+  measureStart->IsFirstInMeasure = true;
+  auto *lastPlayable = addTimeline(1'000'000, 0.5);
+  lastPlayable->SetNote(0, new bms_parser::Note(bms_parser::Parser::NoWav));
+  addTimeline(1'750'000, 0.875);
+
+  Judge judge(chart.Meta.Rank);
+  BMSRenderer renderer(&chart, judge.timingWindows, 1'500, true);
+  Recorder recorder;
+  renderer.setCharacterizationRecorder(&recorder);
+  RenderContext context;
+  renderer.render(context, 1'900'000, 1'900'000);
+
+  expect(!recorder.frames.empty() &&
+             std::abs(recorder.frames.back().currentScrollPosition - 0.95) <
+                 0.0001,
+         "final measure tail keeps legacy built-in scroll moving after the "
+         "last parser timeline");
+  bgfx::frame();
+}
+
 Json configurationJson(const PlayfieldPresentationConfig &config) {
   return {
       {"visibleTimeGreenNumber", config.visibleTimeGreenNumber},
@@ -1632,6 +1674,7 @@ int main() {
       verifySubmissionFailurePropagatesAfterConsumption();
       verifyFactoryUsesBorrowedNonNullChart();
       verifyTerminalZeroNoteRowsAdvanceLegacyScroll(target);
+      verifyFinalMeasureTailAdvancesLegacyScroll(target);
 
       const auto before =
           renderScenario(target, kBeforeCoverPercent, false);

@@ -119,13 +119,18 @@ double scrollPositionAtTime(const PlayfieldChartVisualModel &model,
                std::tie(rightOrdinal, right->authoredOrdinal, right->id);
       });
   std::vector<gameplay_scroll_geometry::ScrollPositionTimeline> values;
-  values.reserve(retained.size());
+  values.reserve(retained.size() + 1);
   for (const auto *timeline : retained) {
     values.push_back({.timeMicros = timeline->timeMicros,
                       .scrollPosition = timeline->scrollPosition,
                       .stopMicros = timeline->stopMicros,
                       .bpm = timeline->bpm,
                       .scrollRate = timeline->scrollRate});
+  }
+  if (model.terminalScrollAnchor.has_value() &&
+      (values.empty() || values.back().timeMicros <
+                             model.terminalScrollAnchor->timeMicros)) {
+    values.push_back(*model.terminalScrollAnchor);
   }
   return gameplay_scroll_geometry::scrollPositionAtTime(values, timeMicros);
 }

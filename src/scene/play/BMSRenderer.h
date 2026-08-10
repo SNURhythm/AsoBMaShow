@@ -306,6 +306,8 @@ private:
   std::vector<TouchPointVisual> liveReleasedTouchSamples;
   JudgementIndicatorRenderer judgementIndicator;
   std::vector<double> timelineScrollPositions;
+  std::optional<gameplay_scroll_geometry::ScrollPositionTimeline>
+      terminalScrollAnchor;
   struct LongNoteLookahead {
     float headY = 0.0F;
     gameplay_note_submission_order::LongNoteOrder order;

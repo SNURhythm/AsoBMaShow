@@ -1,6 +1,7 @@
 #include "PlayfieldChartVisualModel.h"
 #include "GameplayScrollGeometry.h"
 
+#include "../../ChartPlaybackDuration.h"
 #include "../../bms_parser.hpp"
 
 #include <algorithm>
@@ -545,6 +546,23 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
       result.scrollPrefix.push_back(value.scrollPosition);
       result.timelines.push_back(value);
       previous = timeline;
+    }
+  }
+
+  if (previous != nullptr) {
+    if (const auto endpoint = chart_playback_duration::terminalScrollEndpointAfter(
+            chart, previous->Timing, previous->BeatPosition);
+        endpoint.has_value()) {
+      result.terminalScrollAnchor = {
+          .timeMicros = endpoint->timeMicros,
+          .scrollPosition =
+              scrollPosition +
+              (endpoint->beatPosition - previous->BeatPosition) *
+                  previous->Scroll,
+          .stopMicros = 0,
+          .bpm = previous->Bpm,
+          .scrollRate = previous->Scroll,
+      };
     }
   }
 

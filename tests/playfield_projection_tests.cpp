@@ -1,4 +1,5 @@
 #include "scene/play/PlayfieldProjection.h"
+#include "bms_parser.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -17,9 +18,43 @@ bool containsNote(const std::vector<ProjectedPlayfieldNote> &notes,
       notes, [id](const auto &note) { return note.noteId == id; });
 }
 
+bool testFinalMeasureTailContinuesScrollWithoutParserRows() {
+  bms_parser::Chart chart;
+  chart.Meta.TotalLength = 2'000'000;
+  auto *measure = new bms_parser::Measure();
+  measure->Scale = 1.0;
+  chart.Measures.push_back(measure);
+  const auto appendTimeline = [measure](long long timeMicros, double beat) {
+    auto *timeline = new bms_parser::TimeLine(8, false);
+    timeline->Timing = timeMicros;
+    timeline->BeatPosition = beat;
+    timeline->Bpm = 120.0;
+    measure->TimeLines.push_back(timeline);
+    return timeline;
+  };
+  auto *measureStart = appendTimeline(0, 0.0);
+  measureStart->IsFirstInMeasure = true;
+  auto *lastPlayable = appendTimeline(1'000'000, 0.5);
+  lastPlayable->SetNote(0, new bms_parser::Note(1));
+  // This mirrors a final #mmm01 BGM object. The remaining end-of-measure
+  // region has no parser timeline, but still has chart time and beat distance.
+  appendTimeline(1'750'000, 0.875);
+
+  const auto model = buildPlayfieldChartVisualModel(chart, 0);
+  if (!closeTo(scrollPositionAtTime(model, 1'900'000), 0.95)) {
+    std::cerr << "final measure tail must keep skin scroll moving after the "
+                 "last parser timeline\n";
+    return false;
+  }
+  return true;
+}
+
 } // namespace
 
 int main() {
+  if (!testFinalMeasureTailContinuesScrollWithoutParserRows()) {
+    return EXIT_FAILURE;
+  }
   PlayfieldChartVisualModel model;
   model.laneOrder = {1, 2};
   model.timelines = {

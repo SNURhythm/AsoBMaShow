@@ -12,6 +12,7 @@
 #include "StartLaneIndicatorGeometry.h"
 #include "TouchVisualizationTiming.h"
 
+#include "../../ChartPlaybackDuration.h"
 #include "../../CoursePlaySession.h"
 #include "GameplayGeometry.h"
 #include "Judge.h"
@@ -2224,6 +2225,7 @@ void BMSRenderer::drawLandmineNote(float y,
 
 void BMSRenderer::buildTimelineScrollPositions() {
   timelineScrollPositions.clear();
+  terminalScrollAnchor.reset();
   timelineScrollPositions.reserve(timelines.size());
   if (timelines.empty()) {
     return;
@@ -2237,6 +2239,23 @@ void BMSRenderer::buildTimelineScrollPositions() {
     position += (timeline->BeatPosition - prevTimeline->BeatPosition) *
                 prevTimeline->Scroll;
     timelineScrollPositions.push_back(position);
+  }
+  const auto *lastTimeline = timelines.back();
+  if (chart == nullptr || lastTimeline == nullptr) {
+    return;
+  }
+  if (const auto endpoint = chart_playback_duration::terminalScrollEndpointAfter(
+          *chart, lastTimeline->Timing, lastTimeline->BeatPosition);
+      endpoint.has_value()) {
+    terminalScrollAnchor = {
+        .timeMicros = endpoint->timeMicros,
+        .scrollPosition =
+            position + (endpoint->beatPosition - lastTimeline->BeatPosition) *
+                           lastTimeline->Scroll,
+        .stopMicros = 0,
+        .bpm = lastTimeline->Bpm,
+        .scrollRate = lastTimeline->Scroll,
+    };
   }
 }
 
@@ -2406,6 +2425,32 @@ double BMSRenderer::scrollPositionAtTime(long long timeMicros) const {
   }
 
   if (timelineIt == timelines.end()) {
+    if (terminalScrollAnchor.has_value() &&
+        timeMicros < terminalScrollAnchor->timeMicros) {
+      const auto *previous = timelines.back();
+      const long long stopEnd =
+          previous->Timing + static_cast<long long>(previous->GetStopDuration());
+      if (timeMicros <= stopEnd) {
+        return timelineScrollPositions.back();
+      }
+      const long long scrollDuration =
+          terminalScrollAnchor->timeMicros - previous->Timing -
+          static_cast<long long>(previous->GetStopDuration());
+      if (scrollDuration > 0) {
+        const double progress = std::clamp(
+            static_cast<double>(timeMicros - stopEnd) /
+                static_cast<double>(scrollDuration),
+            0.0, 1.0);
+        return timelineScrollPositions.back() +
+               (terminalScrollAnchor->scrollPosition -
+                timelineScrollPositions.back()) *
+                   progress;
+      }
+    }
+    if (terminalScrollAnchor.has_value() &&
+        timeMicros >= terminalScrollAnchor->timeMicros) {
+      return terminalScrollAnchor->scrollPosition;
+    }
     return timelineScrollPositions.back();
   }
 
