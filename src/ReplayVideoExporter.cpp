@@ -1371,20 +1371,38 @@ preflightCourseReplayGameplayPresentations(
     ApplicationContext &context, std::vector<CourseReplayVideoStage> &stages,
     const AppSettings &settings, const ReplayVideoExportOptions &options,
     ReplayVideoExportLog *log) {
+  const auto resolvedOptions = resolveReplayVideoExportOptions(options);
+  std::vector<replay_video_export::CourseReplayGameplayPreflightStage>
+      preflightStages;
+  preflightStages.reserve(stages.size());
   for (auto &stage : stages) {
     if (stage.chart == nullptr) {
       return ReplayVideoExportResult{.success = false,
                                      .message = "No course replay stage"};
     }
-    PreparedReplayGameplayPresentation prepared;
-    if (const auto failure = preflightReplayGameplayPresentation(
-            context, *stage.chart, stage.replay, settings,
-            stage.preparationPlan, options, prepared, log)) {
-      return failure;
-    }
-    stage.gameplayPresentation = std::move(prepared);
+    stage.gameplayPresentation.emplace();
+    preflightStages.push_back(
+        {.chart = *stage.chart,
+         .replay = stage.replay,
+         .configuration = replayGameplayPresentationConfig(*stage.chart,
+                                                            settings, options),
+         .playback = stage.preparationPlan.playback,
+         .safeUiBounds =
+             {.x = 0.0,
+              .y = 0.0,
+              .width = static_cast<double>(resolvedOptions.width),
+              .height = static_cast<double>(resolvedOptions.height)},
+         .skinServices = replayGameplaySkinSessionServices(context),
+         .presentation = stage.gameplayPresentation->presentation});
   }
-  return std::nullopt;
+  const auto result =
+      replay_video_export::preflightCourseReplayGameplayPresentations(
+          preflightStages, context.jukebox, settings);
+  if (result) {
+    replayExportLog(log, "Replay export skin preflight failed: %s",
+                    result->message.c_str());
+  }
+  return result;
 }
 
 long long courseResultDurationMicrosForReplayVideo(

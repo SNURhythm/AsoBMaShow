@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace replay_video_export {
 
@@ -23,5 +24,23 @@ preflightReplayGameplayPresentation(
     const PlayfieldPresentationConfig &, audio::PlaybackRate,
     skin::UiLogicalRect, IGameplayBgaSubmitter &, GameplaySkinSessionServices,
     std::unique_ptr<ReplayPlayfieldPresentation> &);
+
+// A minimal course-stage boundary shared by the exporter and focused tests.
+// Its input owns no chart or replay data; the caller retains those lifetimes
+// while this loop constructs one presentation per encoded stage.
+struct CourseReplayGameplayPreflightStage {
+  bms_parser::Chart &chart;
+  const ReplayData &replay;
+  PlayfieldPresentationConfig configuration;
+  audio::PlaybackRate playback;
+  skin::UiLogicalRect safeUiBounds;
+  GameplaySkinSessionServices skinServices;
+  std::unique_ptr<ReplayPlayfieldPresentation> &presentation;
+};
+
+[[nodiscard]] std::optional<ReplayVideoExportResult>
+preflightCourseReplayGameplayPresentations(
+    std::vector<CourseReplayGameplayPreflightStage> &, IGameplayBgaSubmitter &,
+    const AppSettings &);
 
 } // namespace replay_video_export

@@ -357,8 +357,10 @@ void testRealNormalExportPreflightStopsAudioAndMp4Work() {
 }
 
 struct CoursePreflightStage {
-  int keyMode = 7;
+  bms_parser::Chart chart;
+  ReplayData replay;
   GameplaySkinSessionServices skinServices;
+  std::unique_ptr<ReplayPlayfieldPresentation> presentation;
 };
 
 struct FakeMediaWork {
@@ -366,15 +368,17 @@ struct FakeMediaWork {
 };
 
 CoursePreflightStage readyStage(int keyMode) {
-  return {.keyMode = keyMode,
+  CoursePreflightStage stage{
           .skinServices = {.acquire = [](int) {
             return skin::GameplaySkinAcquisition{
                 .disposition = skin::GameplaySkinAcquisitionDisposition::BuiltIn};
           }}};
+  stage.chart.Meta.KeyMode = keyMode;
+  return stage;
 }
 
 CoursePreflightStage unavailableStage(int keyMode) {
-  return {.keyMode = keyMode,
+  CoursePreflightStage stage{
           .skinServices = {.acquire = [](int) {
             return skin::GameplaySkinAcquisition{
                 .disposition = skin::GameplaySkinAcquisitionDisposition::Failed,
@@ -384,43 +388,51 @@ CoursePreflightStage unavailableStage(int keyMode) {
                         .message = "The selected gameplay skin is unavailable.",
                         .severity = skin::DiagnosticSeverity::Error}}};
           }}};
+  stage.chart.Meta.KeyMode = keyMode;
+  return stage;
 }
 
-ReplayVideoExportResult
-preflightCourseFor(std::vector<CoursePreflightStage> stages) {
+std::optional<ReplayVideoExportResult>
+preflightCourseFor(CoursePreflightStage ready, CoursePreflightStage unavailable) {
   AppSettings settings;
-  ReplayData replay;
   TestBga bga;
-  std::vector<std::unique_ptr<ReplayPlayfieldPresentation>> presentations;
-  presentations.reserve(stages.size());
-  for (auto &stage : stages) {
-    bms_parser::Chart chart;
-    chart.Meta.KeyMode = stage.keyMode;
-    std::unique_ptr<ReplayPlayfieldPresentation> presentation;
-    const auto failure = replay_video_export::preflightReplayGameplayPresentation(
-        chart, replay, settings, {}, {},
-        {.x = 0.0, .y = 0.0, .width = 1280.0, .height = 720.0}, bga,
-        std::move(stage.skinServices), presentation);
-    if (failure) {
-      return *failure;
-    }
-    presentations.push_back(std::move(presentation));
-  }
-  return {.success = true};
+  std::vector<replay_video_export::CourseReplayGameplayPreflightStage> stages;
+  stages.reserve(2);
+  stages.push_back({.chart = ready.chart,
+                    .replay = ready.replay,
+                    .configuration = {},
+                    .playback = {},
+                    .safeUiBounds =
+                        {.x = 0.0, .y = 0.0, .width = 1280.0, .height = 720.0},
+                    .skinServices = std::move(ready.skinServices),
+                    .presentation = ready.presentation});
+  stages.push_back({.chart = unavailable.chart,
+                    .replay = unavailable.replay,
+                    .configuration = {},
+                    .playback = {},
+                    .safeUiBounds =
+                        {.x = 0.0, .y = 0.0, .width = 1280.0, .height = 720.0},
+                    .skinServices = std::move(unavailable.skinServices),
+                    .presentation = unavailable.presentation});
+  return replay_video_export::preflightCourseReplayGameplayPresentations(
+      stages, bga, settings);
 }
 
 void testRealCoursePreflightStopsAllMediaWorkForLaterSkinFailure() {
   FakeMediaWork fakeAudioWork;
   FakeMediaWork fakeEncoderWork;
-  const auto failure =
-      preflightCourseFor({readyStage(7), unavailableStage(14)});
-  if (failure.success) {
-    ++fakeAudioWork.calls;
-    ++fakeEncoderWork.calls;
-  }
-  expect(!failure.success &&
-             failure.message.contains("skin.lifecycle.activation_unavailable"),
-         "a later course stage fails before output work");
+  const auto result = replay_video_export::runPreflightGatedNormalExport(
+      [&]() { return preflightCourseFor(readyStage(7), unavailableStage(14)); },
+      [&]() -> ReplayVideoExportResult {
+        ++fakeAudioWork.calls;
+        ++fakeEncoderWork.calls;
+        return {.success = true};
+      });
+  expect(!result.success &&
+             result.message ==
+                 "The selected gameplay skin is unavailable.\n\n"
+                 "[skin.lifecycle.activation_unavailable]",
+         "a later course stage preserves the complete selected-skin diagnostic");
   expect(fakeAudioWork.calls == 0 && fakeEncoderWork.calls == 0,
          "course failure has no partial media output");
 }

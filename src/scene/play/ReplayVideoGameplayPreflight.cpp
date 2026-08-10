@@ -52,4 +52,19 @@ std::optional<ReplayVideoExportResult> preflightReplayGameplayPresentation(
       .success = false, .message = skinExportFailureMessage(failure)};
 }
 
+std::optional<ReplayVideoExportResult>
+preflightCourseReplayGameplayPresentations(
+    std::vector<CourseReplayGameplayPreflightStage> &stages,
+    IGameplayBgaSubmitter &bga, const AppSettings &settings) {
+  for (auto &stage : stages) {
+    if (const auto failure = preflightReplayGameplayPresentation(
+            stage.chart, stage.replay, settings, stage.configuration,
+            stage.playback, stage.safeUiBounds, bga,
+            std::move(stage.skinServices), stage.presentation)) {
+      return failure;
+    }
+  }
+  return std::nullopt;
+}
+
 } // namespace replay_video_export
