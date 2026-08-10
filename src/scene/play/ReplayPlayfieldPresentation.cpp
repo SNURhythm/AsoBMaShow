@@ -45,7 +45,29 @@ ReplayPlayfieldPresentation::ReplayPlayfieldPresentation(
   }
   for (const auto &note : chartModel_->notes) {
     noteStates_.emplace(note.id, NotePresentationState{.id = note.id});
+    if (note.kind == ChartVisualNoteKind::LongTail &&
+        note.source == ChartVisualNoteSource::Playable &&
+        isClassicLongNote(note)) {
+      classicLongTailIds_.push_back(note.id);
+    }
   }
+  std::sort(classicLongTailIds_.begin(), classicLongTailIds_.end(),
+            [this](ChartVisualId leftId, ChartVisualId rightId) {
+              const auto left = std::ranges::find(
+                  chartModel_->notes, leftId, &ChartVisualNote::id);
+              const auto right = std::ranges::find(
+                  chartModel_->notes, rightId, &ChartVisualNote::id);
+              const auto timelineTime = [this](const ChartVisualNote &note) {
+                return std::ranges::find(chartModel_->timelines,
+                                         note.timelineId,
+                                         &ChartVisualTimeline::id)
+                    ->timeMicros;
+              };
+              const long long leftTime = timelineTime(*left);
+              const long long rightTime = timelineTime(*right);
+              return leftTime == rightTime ? left->lane < right->lane
+                                           : leftTime < rightTime;
+            });
   events_ = std::make_unique<PlayfieldPresentationEventFanout>(*state_,
                                                                  *coordinator_);
 }
@@ -66,6 +88,7 @@ ReplayPlayfieldPresentationCreateResult ReplayPlayfieldPresentation::create(
       .visibleTimeGreenNumber = creation.configuration.visibleTimeGreenNumber,
       .renderHud = true,
       .playbackRate = creation.playback,
+      .replayData = creation.replayData,
   });
   auto *renderer = dynamic_cast<BMSRenderer *>(builtIn.get());
   if (renderer == nullptr) {
@@ -325,6 +348,36 @@ bool ReplayPlayfieldPresentation::applyReplayEvent(
     return false;
   }
   return false;
+}
+
+void ReplayPlayfieldPresentation::releaseDueClassicLongNoteTails(
+    long long gameplayTimeMicros) {
+  while (classicLongTailCursor_ < classicLongTailIds_.size()) {
+    const ChartVisualId tailId = classicLongTailIds_[classicLongTailCursor_];
+    const auto note = std::ranges::find(chartModel_->notes, tailId,
+                                        &ChartVisualNote::id);
+    const auto timeline = std::ranges::find(chartModel_->timelines,
+                                            note->timelineId,
+                                            &ChartVisualTimeline::id);
+    if (timeline->timeMicros > gameplayTimeMicros) {
+      break;
+    }
+    if (auto *tail = noteState(tailId);
+        tail != nullptr && !tail->judged && tail->longActive) {
+      // This is the visual-state equivalent of LongNote::Release() in the
+      // legacy exporter: the tail is played at its authored time and both
+      // endpoints stop holding without an extra replay judgement.
+      tail->judged = true;
+      tail->playedTimeMicros = timeline->timeMicros;
+      tail->longActive = false;
+      publishNoteState(tailId);
+      if (auto *head = noteState(note->pairId); head != nullptr) {
+        head->longActive = false;
+        publishNoteState(note->pairId);
+      }
+    }
+    ++classicLongTailCursor_;
+  }
 }
 
 PresentationFrameResult ReplayPlayfieldPresentation::renderFrame(

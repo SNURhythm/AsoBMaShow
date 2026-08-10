@@ -4764,6 +4764,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/rendering/SkinQuadBatchRenderer.cpp
             src/rendering/TexBatchRenderer.cpp
             src/rendering/UniformCache.cpp
+            src/ScoreProvenance.cpp
             src/scene/play/BMSRenderer.cpp
             src/scene/play/BuiltInPlayfieldPresentation.cpp
             src/scene/play/GameplayGaugeRules.cpp

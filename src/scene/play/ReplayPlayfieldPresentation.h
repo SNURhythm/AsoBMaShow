@@ -25,6 +25,10 @@ struct ReplayPlayfieldPresentationCreateInfo {
   IGameplayBgaSubmitter &bga;
   GameplaySkinSessionServices skinServices;
   GameplaySkinSessionInput skinInput;
+  // The built-in renderer preprocesses ghost and miss-marker primitives from
+  // this immutable replay input. Touches remain state-owned below so selected
+  // skins and built-in projection share the same timeline.
+  const ReplayData *replayData = nullptr;
   // Replay input is copied into the visual store before the initial state is
   // captured, so both selected skins and built-in projection observe one
   // authoritative touch timeline.
@@ -53,6 +57,9 @@ public:
   [[nodiscard]] bool applyReplayEvent(const ReplayEvent &,
                                       const PlayfieldJudgeEventClock &,
                                       bool recordTimingSample);
+  // Mirrors the legacy export loop's per-frame classic-LN tail release. The
+  // adapter owns visual endpoint state, so callers never mutate parser notes.
+  void releaseDueClassicLongNoteTails(long long gameplayTimeMicros);
   void applyAuthorityUpdate(const PlayfieldAuthorityUpdate &);
   [[nodiscard]] PresentationFrameResult
   renderFrame(RenderContext &, PlayfieldFrameClock,
@@ -86,4 +93,6 @@ private:
   BMSRenderer *builtIn_ = nullptr;
   PlayfieldAuthorityUpdate authority_;
   std::unordered_map<ChartVisualId, NotePresentationState> noteStates_;
+  std::vector<ChartVisualId> classicLongTailIds_;
+  std::size_t classicLongTailCursor_ = 0;
 };

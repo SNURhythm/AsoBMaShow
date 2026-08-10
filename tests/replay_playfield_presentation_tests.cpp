@@ -428,6 +428,18 @@ void testClassicLongHeadSuppressesJudgeHudAndBgaMissClock() {
                                        .bgaTimeMicros = 1'025};
   expect(!created.presentation->applyReplayEvent(event, clock, true),
          "classic long-note head returns the exporter-equivalent suppressed HUD result");
+  created.presentation->releaseDueClassicLongNoteTails(1'999);
+  const auto beforeTail =
+      created.presentation->captureVisualStateForTesting({});
+  expect(beforeTail.notes.size() == 2 && beforeTail.notes[0].longActive &&
+             beforeTail.notes[1].longActive && !beforeTail.notes[1].judged,
+         "classic long-note tail stays held before its authored release time");
+  created.presentation->releaseDueClassicLongNoteTails(2'000);
+  const auto afterTail = created.presentation->captureVisualStateForTesting({});
+  expect(afterTail.notes.size() == 2 && !afterTail.notes[0].longActive &&
+             !afterTail.notes[1].longActive && afterTail.notes[1].judged &&
+             afterTail.notes[1].playedTimeMicros == 2'000,
+         "adapter releases a due classic long-note tail at its authored time");
   RenderContext context;
   const auto frame = created.presentation->renderFrame(
       context, {.serial = 1, .visualTimeMicros = 1'050}, {});
@@ -435,6 +447,43 @@ void testClassicLongHeadSuppressesJudgeHudAndBgaMissClock() {
              frame.submittedMode == PresentationMode::BuiltIn &&
              !bga.lastMissState.active,
          "classic long-note head remains lane-only and does not fan out a BGA miss");
+}
+
+void testBuiltInReplayPresentationPreprocessesGhostsAndMisses() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  auto *measure = new bms_parser::Measure;
+  chart.Measures.push_back(measure);
+  auto *timeline = new bms_parser::TimeLine(8, false);
+  timeline->Timing = 1'000;
+  measure->TimeLines.push_back(timeline);
+  timeline->SetNote(1, new bms_parser::Note(bms_parser::Parser::NoWav));
+
+  ReplayData replay;
+  replay.events = {
+      {.action = ReplayEventAction::Press,
+       .lane = 1,
+       .noteTimeMicros = 1'000,
+       .judgeTimeMicros = 1'010,
+       .judgement = PGreat},
+      {.action = ReplayEventAction::Miss,
+       .lane = 1,
+       .noteTimeMicros = 1'000,
+       .judgeTimeMicros = 1'020,
+       .judgement = Bad},
+  };
+  AppSettings settings;
+  PlayfieldPresentationConfig configuration;
+  TestBga bga;
+  auto info = createInfo(chart, settings, configuration, bga);
+  info.replayData = &replay;
+  const auto created = ReplayPlayfieldPresentation::create(std::move(info));
+  expect(created.presentation != nullptr &&
+             created.presentation->builtInRenderer()
+                     .replayGhostEventCountForTesting() == 1 &&
+             created.presentation->builtInRenderer()
+                     .replayMissMarkerCountForTesting() == 1,
+         "built-in replay presentation receives ghost and miss-marker replay data");
 }
 
 void testAppliedJudgeCarriesTheProvidedBgaClockIntoSnapshot() {
@@ -543,6 +592,7 @@ int main() {
   testSelectedReadySkinReceivesOneInitialSnapshotAndSubmitsSkinFrame();
   testSelectedSkinRuntimeFailureDoesNotSubmitBuiltIn();
   testClassicLongHeadSuppressesJudgeHudAndBgaMissClock();
+  testBuiltInReplayPresentationPreprocessesGhostsAndMisses();
   testAppliedJudgeCarriesTheProvidedBgaClockIntoSnapshot();
   testLongTailMissPreservesExporterEndpointSemantics();
   bgfx::shutdown();

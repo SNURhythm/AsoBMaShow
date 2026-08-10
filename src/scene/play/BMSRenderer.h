@@ -622,6 +622,14 @@ public:
   void setPacemakerStatus(const pacemaker::Snapshot &snapshot);
   void setPlayOptionStatus(const std::string &label);
   void setReplayData(const ReplayData *replayData);
+#if defined(ASOBMASHOW_REPLAY_PLAYFIELD_PRESENTATION_TESTING)
+  [[nodiscard]] std::size_t replayGhostEventCountForTesting() const noexcept {
+    return replayGhostEvents.size();
+  }
+  [[nodiscard]] std::size_t replayMissMarkerCountForTesting() const noexcept {
+    return replayMissMarkers.size();
+  }
+#endif
   void setAutoPlayMarkVisible(bool visible);
   void setTouchVisualizationEnabled(bool enabled);
   void setReplayGhostRenderingEnabled(bool enabled);

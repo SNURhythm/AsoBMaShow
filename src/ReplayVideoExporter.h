@@ -6,7 +6,9 @@
 #include <cstddef>
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <string>
+#include <utility>
 
 namespace replay {
 struct CourseReplayConsumerOutcome;
@@ -38,6 +40,20 @@ struct ReplayVideoExportResult {
   std::filesystem::path outputPath;
   std::string message;
 };
+
+// Keeps the normal export's selected-skin preflight ahead of every output
+// action. It is deliberately a tiny seam: the caller still owns all real
+// audio, rendering, file, and platform work in `continueExport`.
+namespace replay_video_export {
+template <typename Preflight, typename Continue>
+ReplayVideoExportResult
+runPreflightGatedNormalExport(Preflight &&preflight, Continue &&continueExport) {
+  if (const auto failure = std::forward<Preflight>(preflight)()) {
+    return *failure;
+  }
+  return std::forward<Continue>(continueExport)();
+}
+} // namespace replay_video_export
 
 class ReplayVideoExporter {
 public:

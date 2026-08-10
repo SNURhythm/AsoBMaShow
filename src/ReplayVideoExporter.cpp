@@ -203,6 +203,7 @@ preflightReplayGameplayPresentation(
                         .width = static_cast<double>(resolvedOptions.width),
                         .height = static_cast<double>(resolvedOptions.height),
                     }},
+      .replayData = &replay,
       .replayTouchSamples = replay.touchSamples,
       .recordFailure = {},
   });
@@ -3223,6 +3224,8 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     }
     applyExportBpm(frameTiming.gameplayTimeMicros);
     applyReplayLaneCoverEvents(frameTiming.gameplayTimeMicros);
+    preparedGameplay.presentation->releaseDueClassicLongNoteTails(
+        frameTiming.gameplayTimeMicros);
 
     preparedGameplay.presentation->applyAuthorityUpdate({
         .currentBpm = currentExportBpm,
@@ -3265,8 +3268,12 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
           if (presentationFrame.outcome ==
                   PresentationFrameOutcome::CriticalFailure ||
               presentationFrame.failure) {
-            errorMessage = replaySkinExportFailureMessage(
-                *presentationFrame.failure);
+            errorMessage = presentationFrame.failure
+                               ? replaySkinExportFailureMessage(
+                                     *presentationFrame.failure)
+                               : "Replay gameplay presentation failed "
+                                 "without a diagnostic "
+                                 "[presentation.frame_failure_missing]";
             presentationFailed = true;
             return;
           }
@@ -4154,11 +4161,13 @@ ReplayVideoExporter::Export(ApplicationContext &context,
       context.settings.prepMetronomeEnabled, 0, 0, std::nullopt,
       replay.provenance.playback);
   PreparedReplayGameplayPresentation preparedGameplay;
-  if (const auto preflight = preflightReplayGameplayPresentation(
-          context, *chart, replay, context.settings, preparationPlan,
-          resolvedOptions, preparedGameplay, nullptr)) {
-    return *preflight;
-  }
+  return replay_video_export::runPreflightGatedNormalExport(
+      [&]() -> std::optional<ReplayVideoExportResult> {
+        return preflightReplayGameplayPresentation(
+            context, *chart, replay, context.settings, preparationPlan,
+            resolvedOptions, preparedGameplay, nullptr);
+      },
+      [&]() -> ReplayVideoExportResult {
 
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   reportReplayExportProgress(options, 0.01, "Requesting Photos permission");
@@ -4299,6 +4308,7 @@ ReplayVideoExporter::Export(ApplicationContext &context,
                   static_cast<double>(elapsedMicros(totalStart)) / 1000000.0,
                   platformSaveResult.message.c_str());
   return platformSaveResult;
+      });
 }
 
 namespace {

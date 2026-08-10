@@ -1,5 +1,6 @@
 #include "ModernResult.h"
 #include "ModernResultRecallBuilder.h"
+#include "ReplayVideoExporter.h"
 #include "ir/IrSubmissionSnapshot.h"
 #include "replay/ReplayCapabilities.h"
 #include "replay/BeatorajaReplayCodec.h"
@@ -104,6 +105,24 @@ void requireAbsentBetween(const std::filesystem::path &path,
   const auto lastAt = text.find(last, firstAt);
   if (firstAt == std::string::npos || lastAt == std::string::npos ||
       text.find(forbidden, firstAt) < lastAt) {
+    std::cerr << "FAIL: " << authority << '\n';
+    ++failures;
+  }
+}
+
+void requireOrderedWithin(const std::filesystem::path &path,
+                          std::string_view scopeFirst,
+                          std::string_view scopeLast, std::string_view first,
+                          std::string_view second,
+                          std::string_view authority) {
+  const auto text = readText(path);
+  const auto scopeFirstAt = text.find(scopeFirst);
+  const auto scopeLastAt = text.find(scopeLast, scopeFirstAt);
+  const auto firstAt = text.find(first, scopeFirstAt);
+  const auto secondAt = text.find(second, scopeFirstAt);
+  if (scopeFirstAt == std::string::npos || scopeLastAt == std::string::npos ||
+      firstAt == std::string::npos || secondAt == std::string::npos ||
+      firstAt >= secondAt || firstAt >= scopeLastAt || secondAt >= scopeLastAt) {
     std::cerr << "FAIL: " << authority << '\n';
     ++failures;
   }
@@ -425,12 +444,30 @@ void testNormalReplayExportUsesPreparedPresentation() {
   const std::filesystem::path exporter =
       std::filesystem::path(ASOBMASHOW_SOURCE_DIR) /
       "src/ReplayVideoExporter.cpp";
-  requireOrdered(exporter, "preflightReplayGameplayPresentation(",
-                 "writeReplayAudioTrack(",
-                 "skin preflight occurs before normal replay audio work");
-  requireOrdered(exporter, "preflightReplayGameplayPresentation(",
-                 "renderReplayVideoToMp4(",
-                 "skin preflight occurs before normal MP4 rendering");
+  constexpr std::string_view normalExportStart =
+      "ReplayVideoExporter::Export(ApplicationContext &context,";
+  constexpr std::string_view normalExportEnd =
+      "ReplayVideoExporter::ExportCourseReplay(";
+  requireOrderedWithin(exporter, normalExportStart, normalExportEnd,
+                       "preflightReplayGameplayPresentation(",
+                       "writeReplayAudioTrack(",
+                       "normal Export preflights skins before audio work");
+  requireOrderedWithin(exporter, normalExportStart, normalExportEnd,
+                       "preflightReplayGameplayPresentation(",
+                       "renderReplayVideoToMp4(",
+                       "normal Export preflights skins before MP4 work");
+  requireOrderedWithin(exporter, normalExportStart, normalExportEnd,
+                       "preflightReplayGameplayPresentation(",
+                       "ensureReplayExportDirectoryError(",
+                       "normal Export preflights skins before output work");
+  requireOrderedWithin(exporter, normalExportStart, normalExportEnd,
+                       "preflightReplayGameplayPresentation(",
+                       "RequestIOSPhotoAddAuthorization(",
+                       "normal Export preflights skins before Photos work");
+  requireOrderedWithin(exporter, normalExportStart, normalExportEnd,
+                       "runPreflightGatedNormalExport(",
+                       "writeReplayAudioTrack(",
+                       "normal Export gates audio work on its preflight result");
   requireToken(exporter, "ReplayPlayfieldPresentation",
                "normal replay uses the coordinator-backed presentation adapter");
   requireAbsentBetween(
@@ -438,6 +475,38 @@ void testNormalReplayExportUsesPreparedPresentation() {
       "ReplayVideoExportResult renderCourseReplayVideoToMp4(",
       "renderer.render(renderContext, frameTiming.visualTimeMicros",
       "normal replay no longer directly renders gameplay");
+  requireToken(exporter, "releaseDueClassicLongNoteTails",
+               "normal replay delegates classic LN auto-release to its adapter");
+  requireToken(exporter, ".replayData = &replay",
+               "normal replay preserves built-in ghost and miss-marker input");
+  requireToken(exporter, "replaySkinExportFailureMessage(",
+               "normal replay safely reports presentation frame failures");
+  requireToken(exporter, "presentation.frame_failure_missing",
+               "normal replay reports a diagnostic-free frame failure safely");
+}
+
+void testNormalExportPreflightGateStopsAllOutputWork() {
+  int fakeAudioWork = 0;
+  int fakeMp4Work = 0;
+  const auto result = replay_video_export::runPreflightGatedNormalExport(
+      []() -> std::optional<ReplayVideoExportResult> {
+        return ReplayVideoExportResult{
+            .success = false,
+            .message = "The selected gameplay skin is unavailable. "
+                       "[skin.lifecycle.activation_unavailable]"};
+      },
+      [&]() -> ReplayVideoExportResult {
+        ++fakeAudioWork;
+        ++fakeMp4Work;
+        return {.success = true};
+      });
+  if (result.success ||
+      !result.message.contains("skin.lifecycle.activation_unavailable") ||
+      fakeAudioWork != 0 || fakeMp4Work != 0) {
+    std::cerr << "FAIL: normal Export preflight failure stops fake audio and "
+                 "MP4 work\n";
+    ++failures;
+  }
 }
 
 void requireToken(const std::filesystem::path &path, std::string_view token,
@@ -665,6 +734,7 @@ int main() {
   testCourseContinuationAndConsumerBoundaries();
   testReplayExportUsesPreparedGameplayBgaFrames();
   testNormalReplayExportUsesPreparedPresentation();
+  testNormalExportPreflightGateStopsAllOutputWork();
   if (failures != 0) {
     std::cerr << failures << " replay contract boundary test(s) failed\n";
     return 1;
