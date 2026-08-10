@@ -52,12 +52,11 @@ struct Plan {
     return realTimeAtChartTime(gameplayTimeMicros - audioOffsetMicros);
   }
 
-  // Beatoraja's skin-state clock starts when its READY state begins. In this
-  // app, a prep metronome is the equivalent audible state boundary; do not
-  // consume a skin's READY animation during an earlier lane-indicator cue.
+  // Beatoraja renders the selected skin throughout STATE_READY, before
+  // TIMER_PLAY begins. The lane-indicator cue is this app's earliest READY
+  // presentation boundary, so skin objects must be live behind the cue.
   [[nodiscard]] long long skinAnimationStartTimeMicros() const noexcept {
-    return metronome.enabled ? metronome.startTimeMicros
-                             : playbackStartTimeMicros;
+    return playbackStartTimeMicros;
   }
 };
 

@@ -149,9 +149,9 @@ int main() {
             "indicator ends when metronome starts");
   ASSERT_EQ(-2000000LL, plan.metronome.startTimeMicros,
             "metronome still ends at chart start");
-  ASSERT_EQ(-2000000LL, plan.skinAnimationStartTimeMicros(),
-            "skin animation begins with the first prep-metronome click, not "
-            "the earlier lane-indicator cue");
+  ASSERT_EQ(-4000000LL, plan.skinAnimationStartTimeMicros(),
+            "skin READY state begins with the lane-indicator cue so the "
+            "selected skin renders behind it");
   ASSERT_EQ(-4000000LL, plan.chartTimeAtRealTime(0),
             "export frame zero starts at the cue origin");
   ASSERT_EQ(-2000000LL, plan.chartTimeAtRealTime(2000000),
