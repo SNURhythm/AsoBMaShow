@@ -368,3 +368,129 @@ git diff --check
   production preflight/order/lifetime, logical bounds, timers, CN/HCN, Mine,
   lane-cover, and maximum-combo regressions.
 - This report.
+
+## Round-2 corrective integration
+
+This round starts from clean base
+`c2d75efa8e1c0e6e4e9ff259b810fb119e032c77` and addresses only the two
+Important final-review findings: replay HCN intermediate state and prepared
+renderer geometry at the export boundary. Result screens, selected-skin
+replay overlays, and preflight ownership/order were not changed.
+
+### HCN compatibility re-check
+
+The Beatoraja reference was re-read at the pinned, clean revision
+`c2ed5db1a46145ed10790c3872f717e95b59db9d`. In particular,
+`play/LaneRenderer.java:701-720` selects HCN body state from processing,
+passing, and hell-charge judgment state. AsoBMaShow's live equivalent was
+re-checked in `src/scene/play/GamePlayScene.cpp:4474-4487`: once the head has
+reached judgment, lane-down creates the reactive state, holding or reactive
+creates the active state, and a reached but inactive HCN is damaged.
+`src/skin/beatoraja/Skin2DRenderer.cpp:2208-2222` consumes those flags for the
+selected-skin HCN slots.
+
+### Round-2 TDD
+
+#### Replay HCN release, re-press, and missed-head recovery
+
+The focused behavior tests were added first for an accepted HCN head followed
+by a judgment-less body release and re-press, and for a missed HCN head
+followed by a recorded no-note press. The RED run reported:
+
+```text
+FAIL: accepted HCN head projects active reactive state to both endpoints
+FAIL: judgement-less HCN body release projects damage to both endpoints
+FAIL: HCN body re-press projects reactive recovery to both endpoints
+FAIL: missed HCN head projects damage to both endpoints
+FAIL: recorded lane press recovers both endpoints after a missed HCN head
+5 replay playfield presentation test(s) failed
+```
+
+The adapter now records replay lane-down state, tracks the held state of each
+HCN pair, and recomputes the live-equivalent reactive/active/damaged flags for
+both endpoints at capture/render time. A release without a judgment therefore
+shows damage, a later lane press restores the reactive body, and the same
+recovery works after a missed head. Existing classic LN/CN tail, judged HCN
+tail, Mine, and HUD behavior remains on the existing paths. The focused GREEN
+run reported `Replay playfield presentation tests passed`.
+
+#### First-frame prepared renderer geometry
+
+A real-camera behavior test prepares the actual replay presentation at the
+primary 1920x1080 camera, switches to a non-primary 3840x1600 export camera,
+and calls the public `renderFrame` boundary. The final expectation observes
+both the prepared `BMSRenderer` traversal upper bound and its touch-layout
+revision. With production unchanged, the RED run reported:
+
+```text
+FAIL: first non-primary-aspect export frame refreshes prepared BMSRenderer geometry (primary=8.544023, export=8.544023)
+1 replay playfield presentation test(s) failed
+```
+
+An earlier probe used an arbitrary minimum numeric delta; the real camera
+difference is smaller, so that probe was discarded. The production fix was
+reverted before the final observable-state expectation above was established
+and RED was recaptured.
+
+`ReplayPlayfieldPresentation::renderFrame` now refreshes its prepared built-in
+renderer after the exporter has installed export geometry/camera state and
+before either the built-in or selected presentation renders. The same public
+render boundary is used by normal and course exports, including selected-skin
+fallback, so the correction requires no exporter ordering or presentation
+ownership change. The focused GREEN run reported
+`Replay playfield presentation tests passed`; the export traversal value and
+geometry revision both changed on that first frame.
+
+### Round-2 verification
+
+Focused behavior and shared wiring:
+
+```sh
+cmake --build cmake-build-debug --target replay_playfield_presentation_tests -j 12
+./cmake-build-debug/replay_playfield_presentation_tests
+cmake --build cmake-build-debug --target playfield_presentation_coordinator_tests -j 12
+./cmake-build-debug/playfield_presentation_coordinator_tests
+```
+
+- Replay presentation tests: passed.
+- Coordinator tests: passed.
+- The geometry assertion exercises the public shared replay render boundary;
+  the real desktop and iOS builds compile both normal and course exporter
+  call sites through that boundary.
+
+Desktop and Lua-off:
+
+```sh
+cmake --build cmake-build-debug --target main -j 12
+ctest --test-dir cmake-build-debug --output-on-failure -j 12
+cmake --build cmake-build-lua-off-vcpkg --target main -j 12
+```
+
+- Desktop `main`: compiled and linked.
+- Full desktop CTest: 259/259 passed (42.51 seconds).
+- Lua-off real `main`: compiled and linked.
+
+iOS unsigned release verification:
+
+```sh
+scripts/ios_release_verify.sh
+```
+
+- Release-critical CTest: 61/61 passed.
+- Python contract suites: 48/48, 13/13, 15/15, and 3/3 passed.
+- The unsigned arm64 device build reported `BUILD SUCCEEDED`; signature
+  checking was correctly skipped and the artifact audit passed.
+- No deployment or upload occurred.
+
+Static hygiene:
+
+```sh
+git diff --check
+```
+
+- Passed.
+
+Round-2 changed files are limited to
+`src/scene/play/ReplayPlayfieldPresentation.cpp`,
+`src/scene/play/ReplayPlayfieldPresentation.h`,
+`tests/replay_playfield_presentation_tests.cpp`, and this report.

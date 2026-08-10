@@ -73,13 +73,21 @@ public:
 
 #if defined(ASOBMASHOW_REPLAY_PLAYFIELD_PRESENTATION_TESTING)
   [[nodiscard]] PlayfieldVisualState
-  captureVisualStateForTesting(PlayfieldFrameClock) const;
+  captureVisualStateForTesting(PlayfieldFrameClock);
   void setDestructionObserverForTesting(std::function<void()> observer) {
     destructionObserverForTesting_ = std::move(observer);
   }
 #endif
 
 private:
+  struct HcnPairPlaybackState {
+    ChartVisualId headId = 0;
+    ChartVisualId tailId = 0;
+    int lane = -1;
+    long long headTimeMicros = 0;
+    bool holding = false;
+  };
+
   ReplayPlayfieldPresentation(std::unique_ptr<PlayfieldChartVisualModel>,
                               std::unique_ptr<PlayfieldVisualStateStore>,
                               std::unique_ptr<PlayfieldProjection>,
@@ -92,6 +100,9 @@ private:
   void setReplayGauge(const ReplayEvent &);
   void markReplayMissedNote(const ChartVisualNote &, long long);
   void updateLongVisualState(const ChartVisualNote &);
+  void setHcnHolding(const ChartVisualNote &, bool);
+  void clearHcnHoldingOnLane(int lane);
+  void updateHcnVisualStates(long long visualTimeMicros);
 
   std::unique_ptr<PlayfieldChartVisualModel> chartModel_;
   std::unique_ptr<PlayfieldVisualStateStore> state_;
@@ -101,6 +112,8 @@ private:
   BMSRenderer *builtIn_ = nullptr;
   PlayfieldAuthorityUpdate authority_;
   std::unordered_map<ChartVisualId, NotePresentationState> noteStates_;
+  std::unordered_map<int, bool> lanePressed_;
+  std::vector<HcnPairPlaybackState> hcnPairs_;
   std::vector<ChartVisualId> classicLongTailIds_;
   std::size_t classicLongTailCursor_ = 0;
   int progressiveMaximumCombo_ = 0;

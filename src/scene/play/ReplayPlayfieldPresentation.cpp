@@ -43,8 +43,24 @@ ReplayPlayfieldPresentation::ReplayPlayfieldPresentation(
     throw std::invalid_argument(
         "ReplayPlayfieldPresentation requires a coordinator and BMSRenderer");
   }
+  std::unordered_map<ChartVisualId, long long> timelineTimeById;
+  timelineTimeById.reserve(chartModel_->timelines.size());
+  for (const auto &timeline : chartModel_->timelines) {
+    timelineTimeById.emplace(timeline.id, timeline.timeMicros);
+  }
   for (const auto &note : chartModel_->notes) {
     noteStates_.emplace(note.id, NotePresentationState{.id = note.id});
+    lanePressed_.try_emplace(note.lane, false);
+    if (note.kind == ChartVisualNoteKind::LongHead &&
+        note.longNoteMode == ChartLongNoteMode::HCN) {
+      if (const auto timeline = timelineTimeById.find(note.timelineId);
+          timeline != timelineTimeById.end()) {
+        hcnPairs_.push_back({.headId = note.id,
+                             .tailId = note.pairId,
+                             .lane = note.lane,
+                             .headTimeMicros = timeline->second});
+      }
+    }
     if (note.kind == ChartVisualNoteKind::LongTail &&
         note.source == ChartVisualNoteSource::Playable &&
         isClassicLongNote(note)) {
@@ -228,6 +244,52 @@ void ReplayPlayfieldPresentation::updateLongVisualState(
   }
 }
 
+void ReplayPlayfieldPresentation::setHcnHolding(const ChartVisualNote &note,
+                                                bool holding) {
+  if (note.longNoteMode != ChartLongNoteMode::HCN || !isLongNote(note)) {
+    return;
+  }
+  const ChartVisualId headId =
+      note.kind == ChartVisualNoteKind::LongHead ? note.id : note.pairId;
+  if (auto pair = std::ranges::find(hcnPairs_, headId,
+                                    &HcnPairPlaybackState::headId);
+      pair != hcnPairs_.end()) {
+    pair->holding = holding;
+  }
+}
+
+void ReplayPlayfieldPresentation::clearHcnHoldingOnLane(int lane) {
+  for (auto &pair : hcnPairs_) {
+    if (pair.lane == lane) {
+      pair.holding = false;
+    }
+  }
+}
+
+void ReplayPlayfieldPresentation::updateHcnVisualStates(
+    long long visualTimeMicros) {
+  for (const auto &pair : hcnPairs_) {
+    auto *headState = noteState(pair.headId);
+    auto *tailState = noteState(pair.tailId);
+    if (headState == nullptr || tailState == nullptr) {
+      continue;
+    }
+    const bool headReachedJudge = headState->judged || headState->dead ||
+                                  pair.headTimeMicros <= visualTimeMicros;
+    const auto lane = lanePressed_.find(pair.lane);
+    const bool laneDown = lane != lanePressed_.end() && lane->second;
+    const bool reactive = headReachedJudge && laneDown;
+    const bool active = pair.holding || reactive;
+    const bool damaged = headReachedJudge && !active;
+    for (auto *endpoint : {headState, tailState}) {
+      endpoint->longReactive = reactive;
+      endpoint->longActive = active;
+      endpoint->longDamaged = damaged;
+      publishNoteState(endpoint->id);
+    }
+  }
+}
+
 void ReplayPlayfieldPresentation::markReplayMissedNote(
     const ChartVisualNote &note, long long judgedTimeMicros) {
   auto *current = noteState(note.id);
@@ -252,6 +314,7 @@ void ReplayPlayfieldPresentation::markReplayMissedNote(
                              ->timeMicros;
   current->dead = !tailJudgedBeforeTiming;
   current->longActive = false;
+  setHcnHolding(note, false);
   publishNoteState(note.id);
   if (auto *paired = noteState(note.pairId); paired != nullptr) {
     paired->longActive = false;
@@ -295,6 +358,7 @@ bool ReplayPlayfieldPresentation::applyReplayEvent(
     return applyHud();
   }
   case ReplayEventAction::Press: {
+    lanePressed_[event.lane] = true;
     bool suppressHudForLongNoteHead = false;
     if (const auto *note = replayNote(event); note != nullptr) {
       if (isLongNote(*note)) {
@@ -307,6 +371,7 @@ bool ReplayPlayfieldPresentation::applyReplayEvent(
             current->judged = true;
             current->playedTimeMicros = event.judgeTimeMicros;
             current->longActive = true;
+            setHcnHolding(*note, true);
             publishNoteState(note->id);
             updateLongVisualState(*note);
           }
@@ -329,6 +394,8 @@ bool ReplayPlayfieldPresentation::applyReplayEvent(
     return false;
   }
   case ReplayEventAction::Release: {
+    lanePressed_[event.lane] = false;
+    clearHcnHoldingOnLane(event.lane);
     if (const auto *note = replayNote(event);
         note != nullptr && isLongNote(*note) && event.judgement != None &&
         note->kind == ChartVisualNoteKind::LongTail) {
@@ -404,7 +471,9 @@ void ReplayPlayfieldPresentation::releaseDueClassicLongNoteTails(
 PresentationFrameResult ReplayPlayfieldPresentation::renderFrame(
     RenderContext &context, PlayfieldFrameClock clock,
     const PlayfieldProjectionRequest &request) {
+  builtIn_->refreshGeometry();
   state_->applyAuthorityUpdate(authority_);
+  updateHcnVisualStates(clock.visualTimeMicros);
   PlayfieldVisualState state = state_->capture(clock);
   PlayfieldProjectionRequest effectiveRequest = request;
   if (!effectiveRequest.builtInTraversal) {
@@ -426,7 +495,8 @@ BMSRenderer &ReplayPlayfieldPresentation::builtInRenderer() noexcept {
 
 #if defined(ASOBMASHOW_REPLAY_PLAYFIELD_PRESENTATION_TESTING)
 PlayfieldVisualState ReplayPlayfieldPresentation::captureVisualStateForTesting(
-    PlayfieldFrameClock clock) const {
+    PlayfieldFrameClock clock) {
+  updateHcnVisualStates(clock.visualTimeMicros);
   return state_->capture(clock);
 }
 #endif

@@ -278,6 +278,50 @@ createInfo(bms_parser::Chart &chart, const AppSettings &settings,
           .recordFailure = {}};
 }
 
+void addLongNotePair(bms_parser::Chart &chart,
+                     bms_parser::LongNoteType type, int lane,
+                     long long headTimeMicros, long long tailTimeMicros) {
+  auto *measure = new bms_parser::Measure;
+  chart.Measures.push_back(measure);
+  auto *headTimeline = new bms_parser::TimeLine(8, false);
+  headTimeline->Timing = headTimeMicros;
+  auto *tailTimeline = new bms_parser::TimeLine(8, false);
+  tailTimeline->Timing = tailTimeMicros;
+  measure->TimeLines.push_back(headTimeline);
+  measure->TimeLines.push_back(tailTimeline);
+  auto *head = new bms_parser::LongNote(bms_parser::Parser::NoWav, type);
+  auto *tail = new bms_parser::LongNote(bms_parser::Parser::NoWav, type);
+  head->Tail = tail;
+  tail->Head = head;
+  headTimeline->SetNote(lane, head);
+  tailTimeline->SetNote(lane, tail);
+}
+
+void configureTestGameplayCamera(int renderWidth, int renderHeight) {
+  constexpr float cameraDepth = 2.1F;
+  constexpr float laneLookAtY = AppSettings::kDefaultLaneLength * 0.25F;
+  const float laneAngle = bx::toRad(AppSettings::kDefaultLaneAngleDegrees);
+  const float uiScale = static_cast<float>(renderWidth) /
+                        static_cast<float>(rendering::design_width);
+  rendering::window_width = rendering::design_width;
+  rendering::window_height = static_cast<int>(renderHeight / uiScale);
+  rendering::render_width = renderWidth;
+  rendering::render_height = renderHeight;
+  rendering::ui_view_width = renderWidth;
+  rendering::ui_view_height = renderHeight;
+  rendering::game_camera.edit()
+      .setPosition({4.0F, laneLookAtY - std::tan(laneAngle) * cameraDepth,
+                    -cameraDepth})
+      .setLookAt({4.0F, laneLookAtY, 0.0F})
+      .setAspectRatio(static_cast<float>(rendering::window_width) /
+                      static_cast<float>(rendering::window_height))
+      .setNearClip(rendering::near_clip)
+      .setFarClip(rendering::far_clip)
+      .setViewRect(0, 0, static_cast<std::uint16_t>(renderWidth),
+                   static_cast<std::uint16_t>(renderHeight))
+      .commit();
+}
+
 void testExportPixelSizesMapToLogicalGameplayBounds() {
   const auto default4k =
       replay_video_export::replayGameplayLogicalUiBounds(3840, 2160);
@@ -289,6 +333,41 @@ void testExportPixelSizesMapToLogicalGameplayBounds() {
   expect(wide4k.x == 0.0 && wide4k.y == 0.0 && wide4k.width == 1920.0 &&
              wide4k.height == 800.0,
          "non-16:9 export preserves logical aspect ratio at design width");
+}
+
+void testFirstExportFrameRefreshesPreparedRendererGeometry() {
+  configureTestGameplayCamera(1920, 1080);
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  AppSettings settings;
+  PlayfieldPresentationConfig configuration;
+  TestBga bga;
+  const auto created = ReplayPlayfieldPresentation::create(
+      createInfo(chart, settings, configuration, bga));
+  if (!created.presentation) {
+    expect(false, "export-geometry replay adapter is created");
+    return;
+  }
+  const float primaryUpperBound =
+      created.presentation->builtInRenderer().projectionTraversal().upperBound;
+  const std::uint64_t primaryGeometryRevision =
+      created.presentation->builtInRenderer().touchLayoutRevision();
+
+  configureTestGameplayCamera(3840, 1600);
+  RenderContext context;
+  (void)created.presentation->renderFrame(context, {.serial = 1}, {});
+  const float exportUpperBound =
+      created.presentation->builtInRenderer().projectionTraversal().upperBound;
+  const std::uint64_t exportGeometryRevision =
+      created.presentation->builtInRenderer().touchLayoutRevision();
+  expect(exportUpperBound != primaryUpperBound &&
+             exportGeometryRevision != primaryGeometryRevision,
+         std::string("first non-primary-aspect export frame refreshes prepared "
+                     "BMSRenderer geometry (primary=") +
+             std::to_string(primaryUpperBound) +
+             ", export=" + std::to_string(exportUpperBound) + ")");
+
+  configureTestGameplayCamera(1920, 1080);
 }
 
 void testReplayGameplayFrameStateMirrorsLiveTimerAndStartClocks() {
@@ -951,6 +1030,120 @@ void testChargeLongReleaseClearsBothEndpointsWithoutReactivation() {
   }
 }
 
+void testHcnBodyInputReprojectsBothEndpointStates() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  addLongNotePair(chart, bms_parser::LongNoteType::HellChargeNote, 1, 1'000,
+                  3'000);
+
+  AppSettings settings;
+  PlayfieldPresentationConfig configuration;
+  TestBga bga;
+  const auto created = ReplayPlayfieldPresentation::create(
+      createInfo(chart, settings, configuration, bga));
+  if (!created.presentation) {
+    expect(false, "HCN body-input replay adapter is created");
+    return;
+  }
+
+  (void)created.presentation->applyReplayEvent(
+      {.action = ReplayEventAction::Press,
+       .lane = 1,
+       .noteTimeMicros = 1'000,
+       .songTimeMicros = 1'000,
+       .judgeTimeMicros = 1'000,
+       .judgement = PGreat},
+      {}, true);
+  const auto held = created.presentation->captureVisualStateForTesting(
+      {.visualTimeMicros = 1'500});
+  expect(held.notes.size() == 2 && held.notes[0].longReactive &&
+             held.notes[1].longReactive && held.notes[0].longActive &&
+             held.notes[1].longActive && !held.notes[0].longDamaged &&
+             !held.notes[1].longDamaged,
+         "accepted HCN head projects active reactive state to both endpoints");
+
+  (void)created.presentation->applyReplayEvent(
+      {.action = ReplayEventAction::Release,
+       .lane = 1,
+       .noteTimeMicros = 3'000,
+       .songTimeMicros = 1'500,
+       .judgeTimeMicros = 1'500,
+       .judgement = None},
+      {}, true);
+  const auto released = created.presentation->captureVisualStateForTesting(
+      {.visualTimeMicros = 1'500});
+  expect(released.notes.size() == 2 && !released.notes[0].longReactive &&
+             !released.notes[1].longReactive && !released.notes[0].longActive &&
+             !released.notes[1].longActive && released.notes[0].longDamaged &&
+             released.notes[1].longDamaged,
+         "judgement-less HCN body release projects damage to both endpoints");
+
+  (void)created.presentation->applyReplayEvent(
+      {.action = ReplayEventAction::Press,
+       .lane = 1,
+       .noteTimeMicros = -1,
+       .songTimeMicros = 2'000,
+       .judgeTimeMicros = 2'000,
+       .judgement = None},
+      {}, true);
+  const auto recovered = created.presentation->captureVisualStateForTesting(
+      {.visualTimeMicros = 2'000});
+  expect(recovered.notes.size() == 2 && recovered.notes[0].longReactive &&
+             recovered.notes[1].longReactive && recovered.notes[0].longActive &&
+             recovered.notes[1].longActive && !recovered.notes[0].longDamaged &&
+             !recovered.notes[1].longDamaged,
+         "HCN body re-press projects reactive recovery to both endpoints");
+}
+
+void testMissedHcnHeadRecoversFromRecordedLanePress() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  addLongNotePair(chart, bms_parser::LongNoteType::HellChargeNote, 1, 1'000,
+                  3'000);
+
+  AppSettings settings;
+  PlayfieldPresentationConfig configuration;
+  TestBga bga;
+  const auto created = ReplayPlayfieldPresentation::create(
+      createInfo(chart, settings, configuration, bga));
+  if (!created.presentation) {
+    expect(false, "missed-head HCN replay adapter is created");
+    return;
+  }
+
+  (void)created.presentation->applyReplayEvent(
+      {.action = ReplayEventAction::Miss,
+       .lane = 1,
+       .noteTimeMicros = 1'000,
+       .songTimeMicros = 1'100,
+       .judgeTimeMicros = 1'100,
+       .judgement = Poor},
+      {}, true);
+  const auto missed = created.presentation->captureVisualStateForTesting(
+      {.visualTimeMicros = 1'100});
+  expect(missed.notes.size() == 2 && !missed.notes[0].longReactive &&
+             !missed.notes[1].longReactive && !missed.notes[0].longActive &&
+             !missed.notes[1].longActive && missed.notes[0].longDamaged &&
+             missed.notes[1].longDamaged,
+         "missed HCN head projects damage to both endpoints");
+
+  (void)created.presentation->applyReplayEvent(
+      {.action = ReplayEventAction::Press,
+       .lane = 1,
+       .noteTimeMicros = -1,
+       .songTimeMicros = 1'500,
+       .judgeTimeMicros = 1'500,
+       .judgement = None},
+      {}, true);
+  const auto recovered = created.presentation->captureVisualStateForTesting(
+      {.visualTimeMicros = 1'500});
+  expect(recovered.notes.size() == 2 && recovered.notes[0].longReactive &&
+             recovered.notes[1].longReactive && recovered.notes[0].longActive &&
+             recovered.notes[1].longActive && !recovered.notes[0].longDamaged &&
+             !recovered.notes[1].longDamaged,
+         "recorded lane press recovers both endpoints after a missed HCN head");
+}
+
 void testMineReplayEventFindsLandmineSource() {
   bms_parser::Chart chart;
   chart.Meta.KeyMode = 7;
@@ -1066,6 +1259,7 @@ int main() {
   rendering::PosTexVertex::init();
   rendering::PosTexCoord0Vertex::init();
   testExportPixelSizesMapToLogicalGameplayBounds();
+  testFirstExportFrameRefreshesPreparedRendererGeometry();
   testReplayGameplayFrameStateMirrorsLiveTimerAndStartClocks();
   testReplayLaneCoverResetIsOneFramePulseForNormalAndCoursePlayback();
   testSelectedNormalPreflightAndDestructionUseRendererOwnership();
@@ -1082,6 +1276,8 @@ int main() {
   testAppliedJudgeCarriesTheProvidedBgaClockIntoSnapshot();
   testLongTailMissPreservesExporterEndpointSemantics();
   testChargeLongReleaseClearsBothEndpointsWithoutReactivation();
+  testHcnBodyInputReprojectsBothEndpointStates();
+  testMissedHcnHeadRecoversFromRecordedLanePress();
   testMineReplayEventFindsLandmineSource();
   testMaximumComboAdvancesOnlyWithAppliedReplayEvents();
   bgfx::shutdown();
