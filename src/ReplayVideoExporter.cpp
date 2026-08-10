@@ -3004,6 +3004,8 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
           if (presentationFrame.outcome ==
                   PresentationFrameOutcome::CriticalFailure ||
               presentationFrame.failure) {
+            replay_video_export::releaseUnsubmittedReplayGameplayBga(
+                context.jukebox, presentationFrame);
             errorMessage = presentationFrame.failure
                                ? replay_video_export::skinExportFailureMessage(
                                      *presentationFrame.failure)
@@ -3672,6 +3674,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                                  if (presentationFrame.outcome ==
                                          PresentationFrameOutcome::CriticalFailure ||
                                      presentationFrame.failure) {
+                                   replay_video_export::releaseUnsubmittedReplayGameplayBga(
+                                       context.jukebox, presentationFrame);
                                    errorMessage = presentationFrame.failure
                                                       ? replay_video_export::
                                                             skinExportFailureMessage(

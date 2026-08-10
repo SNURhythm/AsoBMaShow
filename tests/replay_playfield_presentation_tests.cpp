@@ -563,6 +563,21 @@ void testReplayLaneCoverResetIsOneFramePulseForNormalAndCoursePlayback() {
   }
 }
 
+void testUnsubmittedReplayFrameReleasesItsPreparedBga() {
+  TestBga bga;
+  PresentationFrameResult frame{
+      .frameSerial = 17,
+      .outcome = PresentationFrameOutcome::CriticalFailure,
+      .submittedMode = PresentationMode::Skin,
+      .bgaCompositeMode = GameplayBgaCompositeMode::EmbeddedSkin,
+      .preparedBga = PreparedGameplayBgaFrame{.sequence = 71},
+  };
+
+  replay_video_export::releaseUnsubmittedReplayGameplayBga(bga, frame);
+  expect(bga.finalizeCalls == 1,
+         "an export-aborted presentation frame releases its BGA lease");
+}
+
 void testSelectedNormalPreflightAndDestructionUseRendererOwnership() {
   bms_parser::Chart chart;
   chart.Meta.KeyMode = 7;
@@ -1469,6 +1484,7 @@ int main() {
   testReplayGameplayFrameStateMirrorsLiveTimerAndStartClocks();
   testReplayGameplayStatePlayDeadlineMatchesPinnedBmsPlayer();
   testReplayLaneCoverResetIsOneFramePulseForNormalAndCoursePlayback();
+  testUnsubmittedReplayFrameReleasesItsPreparedBga();
   testSelectedNormalPreflightAndDestructionUseRendererOwnership();
   testNoSelectionKeepsOneAdapter();
   testSelectedFailureRetainsFactoryDiagnostic();

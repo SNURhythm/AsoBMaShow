@@ -22,6 +22,12 @@ replayGameplayPresentationConfig(const AppSettings &, float playAreaWidth,
                                  bool touchVisualizationEnabled,
                                  bool replayGhostRenderingEnabled) noexcept;
 
+// Export failures occur after BGA preparation but before either selected-skin
+// submission or fullscreen fallback. Release the exact frame lease before the
+// exporter tears down visual resources.
+void releaseUnsubmittedReplayGameplayBga(
+    IGameplayBgaSubmitter &, const PresentationFrameResult &) noexcept;
+
 struct ReplayGameplayFrameState {
   PlayfieldFrameClock clock;
   long long sceneStartMicros = kPlayfieldTimestampOff;

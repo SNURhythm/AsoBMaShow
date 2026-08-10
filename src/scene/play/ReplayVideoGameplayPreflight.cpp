@@ -67,6 +67,13 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
   };
 }
 
+void releaseUnsubmittedReplayGameplayBga(
+    IGameplayBgaSubmitter &bga, const PresentationFrameResult &frame) noexcept {
+  if (frame.preparedBga.has_value()) {
+    bga.finalizePrepared(*frame.preparedBga);
+  }
+}
+
 namespace {
 constexpr std::int32_t kReplayPlaytimeMarginMillis = 5'000;
 
