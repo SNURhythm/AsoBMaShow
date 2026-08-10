@@ -125,6 +125,7 @@ std::optional<std::vector<std::byte>> readBoundedDescriptorBytes(
     bool waitForInitialFifoWriter = false) {
   std::vector<std::byte> bytes;
   std::array<std::byte, 64U * 1024U> chunk{};
+  bool fifoWriterObserved = false;
   for (;;) {
     if (stop.stop_requested()) return std::nullopt;
     const ssize_t count = read(descriptor, chunk.data(), chunk.size());
@@ -132,6 +133,7 @@ std::optional<std::vector<std::byte>> readBoundedDescriptorBytes(
       if (stop.stop_requested()) return std::nullopt;
       if (!bytes.empty()) return bytes;
       if (!waitForInitialFifoWriter) return std::nullopt;
+      if (fifoWriterObserved) return std::nullopt;
 
       // A nonblocking FIFO has no writer yet. Keep the read end alive so a
       // producer can attach, while poll bounds cancellation latency.
@@ -146,6 +148,7 @@ std::optional<std::vector<std::byte>> readBoundedDescriptorBytes(
     if (count < 0) {
       if (errno == EINTR) continue;
       if (errno != EAGAIN && errno != EWOULDBLOCK) return std::nullopt;
+      fifoWriterObserved = fifoWriterObserved || waitForInitialFifoWriter;
     }
 
     pollfd descriptorPoll{.fd = descriptor, .events = POLLIN, .revents = 0};
@@ -157,6 +160,9 @@ std::optional<std::vector<std::byte>> readBoundedDescriptorBytes(
     if (ready == 0) continue;
     if (descriptorPoll.revents & (POLLERR | POLLNVAL)) return std::nullopt;
     if ((descriptorPoll.revents & POLLHUP) && !bytes.empty()) return bytes;
+    if ((descriptorPoll.revents & POLLHUP) && fifoWriterObserved) {
+      return std::nullopt;
+    }
     if ((descriptorPoll.revents & POLLHUP) && waitForInitialFifoWriter) {
       std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
