@@ -17,6 +17,9 @@ def main() -> int:
     renderer_header = (root / "src/scene/play/BMSRenderer.h").read_text()
     gameplay = (root / "src/scene/play/GamePlayScene.cpp").read_text()
     exporter = (root / "src/ReplayVideoExporter.cpp").read_text()
+    replay_preflight = (
+        root / "src/scene/play/ReplayVideoGameplayPreflight.cpp"
+    ).read_text()
 
     require(controls, "syncJudgementIndicatorRangeInputText",
             "range input synchronization")
@@ -32,14 +35,15 @@ def main() -> int:
             "settings preview propagation")
     require(gameplay, "judgementIndicatorRangeMilliseconds",
             "live gameplay propagation")
-    require(exporter, "PlayfieldPresentationConfig replayGameplayPresentationConfig",
+    require(replay_preflight,
+            "PlayfieldPresentationConfig replayGameplayPresentationConfig",
             "shared replay presentation configuration")
-    require(exporter, "settings.judgementIndicatorRangeMilliseconds",
+    require(replay_preflight, "settings.judgementIndicatorRangeMilliseconds",
             "shared replay range propagation")
-    require(exporter, "replayGameplayPresentationConfig(chart, settings, options)",
+    require(exporter, "replay_video_export::replayGameplayPresentationConfig(",
             "single-stage replay range configuration")
     require(exporter,
-            "configuration = replayGameplayPresentationConfig(*stage.chart,",
+            "configuration = replay_video_export::replayGameplayPresentationConfig(",
             "course replay range configuration")
 
     print("judgement indicator range flow audit passed")
