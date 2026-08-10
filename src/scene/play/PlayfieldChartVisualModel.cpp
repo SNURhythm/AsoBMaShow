@@ -457,6 +457,29 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
   std::unordered_map<const bms_parser::TimeLine *, ChartVisualId> timelineIds;
   timelineIds.reserve(timelineCount);
 
+  // Normal notes remain projected through their active late-POOR judgement
+  // window.  Every real parser timeline after the last visual note must
+  // therefore remain in the scroll lookup: otherwise a note in the final
+  // measure is left at the last retained scroll position even when later
+  // zero-note rows exist.
+  std::optional<std::uint32_t> lastVisualNoteTimelineOrdinal;
+  std::uint32_t authoredTimelineOrdinal = 0;
+  for (const auto *measure : chart.Measures) {
+    if (measure == nullptr) {
+      continue;
+    }
+    for (const auto *timeline : measure->TimeLines) {
+      if (timeline == nullptr) {
+        continue;
+      }
+      if (hasAny(timeline->Notes) || hasAny(timeline->InvisibleNotes) ||
+          hasAny(timeline->LandmineNotes)) {
+        lastVisualNoteTimelineOrdinal = authoredTimelineOrdinal;
+      }
+      ++authoredTimelineOrdinal;
+    }
+  }
+
   ChartVisualId nextId = 1;
   std::uint32_t timelineOrdinal = 0;
   std::uint32_t retainedTimelineOrdinal = 0;
@@ -485,7 +508,11 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
           previous != nullptr ? previous->Bpm : timeline->Bpm;
       const double previousScroll =
           previous != nullptr ? previous->Scroll : timeline->Scroll;
+      const bool terminalScrollContinuation =
+          lastVisualNoteTimelineOrdinal.has_value() &&
+          timelineOrdinal > *lastVisualNoteTimelineOrdinal;
       const bool retainedForProjection =
+          terminalScrollContinuation ||
           gameplay_scroll_geometry::shouldKeepRenderTimeline(
               previousBpm, timeline->Bpm, stopMicros(*timeline), previousScroll,
               timeline->Scroll, timeline->IsFirstInMeasure,

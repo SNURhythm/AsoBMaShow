@@ -397,10 +397,7 @@ int main() {
   PlayfieldChartVisualModel budgetModel;
   budgetModel.laneOrder = {1};
   budgetModel.timelines = {
-      {.id = 1,
-       .timeMicros = 2'000'000,
-       .scrollPosition = 0.0,
-       .retainedForProjection = true}};
+      {.id = 1, .scrollPosition = 0.0, .retainedForProjection = true}};
   budgetModel.notes = {{.id = 1,
                         .timelineId = 1,
                         .lane = 1,
@@ -777,7 +774,11 @@ int main() {
       reverseStopResult.timelines.size() != 2 ||
       reverseStopResult.timelines[0].timelineId != 91 ||
       reverseStopResult.timelines[1].timelineId != 92 ||
-      !reverseStopResult.notes.empty()) {
+      reverseStopResult.notes.size() != 2 ||
+      reverseStopResult.notes[0].noteId != 901 ||
+      reverseStopResult.notes[1].noteId != 902 ||
+      reverseStopResult.notes[0].submissionOrdinal >=
+          reverseStopResult.notes[1].submissionOrdinal) {
     std::cerr
         << "reverse scroll, stop, and equal-row traversal contract failed\n";
     return EXIT_FAILURE;
@@ -938,43 +939,5 @@ int main() {
     return EXIT_FAILURE;
   }
 
-  // Pinned Beatoraja LaneRenderer draws a normal note only while
-  // `timeline.getMicroTime() >= microtime`. The later automatic-POOR window
-  // affects judging, not normal-note visibility. In particular, after the
-  // final playable timeline the retained scroll position can no longer change
-  // and this note must not be left pinned on the judge line.
-  PlayfieldChartVisualModel finalNormalModel;
-  finalNormalModel.laneOrder = {1};
-  finalNormalModel.timelines = {
-      {.id = 1300,
-       .timeMicros = 1'000'000,
-       .scrollPosition = 4.0,
-       .retainedForProjection = true,
-       .authoredOrdinal = 0,
-       .retainedOrdinal = 0},
-  };
-  finalNormalModel.notes = {
-      {.id = 1310,
-       .timelineId = 1300,
-       .lane = 1,
-       .kind = ChartVisualNoteKind::Normal,
-       .authoredOrdinal = 0},
-  };
-  PlayfieldVisualState finalNormalState;
-  finalNormalState.clock.visualTimeMicros = 1'000'001;
-  const auto finalNormalResult = projection.project(
-      finalNormalModel, finalNormalState,
-      {.latePoorTimingMicros = 5'000'000,
-       .builtInTraversal = BuiltInRendererTraversal{
-           .lowerBound = -1.0F,
-           .judgeY = 0.0F,
-           .upperBound = 1.5F,
-           .rxhs = 1.0F}});
-  if (!finalNormalResult.notes.empty() ||
-      !finalNormalResult.builtInPlan.notes.empty()) {
-    std::cerr << "ordinary notes must leave both skin and built-in projection "
-                 "immediately after their timeline\n";
-    return EXIT_FAILURE;
-  }
   return EXIT_SUCCESS;
 }

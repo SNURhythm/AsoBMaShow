@@ -712,11 +712,38 @@ BMSRenderer::BMSRenderer(
   }
   timelines.reserve(timelineCount);
   groupedTimelineNotes.reserve(timelineCount);
-  // Beatoraja traverses only timing, section, and note-bearing rows. Omitting
-  // BGA-only rows is part of its scroll-gimmick geometry because each retained
-  // row participates in the incremental future-Y calculation below.
+  // Normal notes remain rendered through their active late-POOR window. Keep
+  // every real chart row after the final visual note as a terminal scroll
+  // anchor, otherwise an active final note in the final measure is clamped at
+  // its own row while zero-note timelines still lie ahead of it.
+  std::optional<size_t> lastVisualNoteTimelineOrdinal;
+  size_t authoredTimelineOrdinal = 0;
+  for (const auto &measure : chart->Measures) {
+    for (const auto &timeLine : measure->TimeLines) {
+      const bool hasPlayableNote =
+          std::any_of(timeLine->Notes.begin(), timeLine->Notes.end(),
+                      [](const auto *note) { return note != nullptr; });
+      const bool hasInvisibleNote =
+          std::any_of(timeLine->InvisibleNotes.begin(),
+                      timeLine->InvisibleNotes.end(),
+                      [](const auto *note) { return note != nullptr; });
+      const bool hasLandmine =
+          std::any_of(timeLine->LandmineNotes.begin(),
+                      timeLine->LandmineNotes.end(),
+                      [](const auto *note) { return note != nullptr; });
+      if (hasPlayableNote || hasInvisibleNote || hasLandmine) {
+        lastVisualNoteTimelineOrdinal = authoredTimelineOrdinal;
+      }
+      ++authoredTimelineOrdinal;
+    }
+  }
+
+  // Beatoraja traverses timing, section, and note-bearing rows. The terminal
+  // continuation above is the additional anchor needed by this renderer's
+  // late-POOR processed-note lifecycle.
   double previousBpm = chart->Meta.Bpm;
   double previousScroll = 1.0;
+  authoredTimelineOrdinal = 0;
   for (const auto &measure : chart->Measures) {
     for (const auto &timeLine : measure->TimeLines) {
       std::vector<bms_parser::Note *> timelineNotes;
@@ -746,12 +773,18 @@ BMSRenderer::BMSRenderer(
           std::any_of(timeLine->LandmineNotes.begin(),
                       timeLine->LandmineNotes.end(),
                       [](const auto *note) { return note != nullptr; });
-      const bool keep = gameplay_scroll_geometry::shouldKeepRenderTimeline(
-          previousBpm, timeLine->Bpm, timeLine->GetStopDuration(),
-          previousScroll, timeLine->Scroll, timeLine->IsFirstInMeasure,
-          hasPlayableNote, hasInvisibleNote, hasLandmine);
+      const bool terminalScrollContinuation =
+          lastVisualNoteTimelineOrdinal.has_value() &&
+          authoredTimelineOrdinal > *lastVisualNoteTimelineOrdinal;
+      const bool keep =
+          terminalScrollContinuation ||
+          gameplay_scroll_geometry::shouldKeepRenderTimeline(
+              previousBpm, timeLine->Bpm, timeLine->GetStopDuration(),
+              previousScroll, timeLine->Scroll, timeLine->IsFirstInMeasure,
+              hasPlayableNote, hasInvisibleNote, hasLandmine);
       previousBpm = timeLine->Bpm;
       previousScroll = timeLine->Scroll;
+      ++authoredTimelineOrdinal;
       if (!keep) {
         continue;
       }

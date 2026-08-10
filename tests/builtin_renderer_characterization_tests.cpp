@@ -1099,6 +1099,48 @@ void verifyFactoryUsesBorrowedNonNullChart() {
          "presentation is destroyed first");
 }
 
+void verifyTerminalZeroNoteRowsAdvanceLegacyScroll(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  bgfx::touch(rendering::clear_view);
+
+  bms_parser::Chart chart;
+  chart.Meta.Bpm = 120.0;
+  chart.Meta.MinBpm = 120.0;
+  chart.Meta.MaxBpm = 120.0;
+  chart.Meta.KeyMode = 7;
+  auto *measure = new bms_parser::Measure();
+  chart.Measures.push_back(measure);
+  const auto addTimeline = [measure](long long timeMicros, double beat) {
+    auto *timeline = new bms_parser::TimeLine(8, false);
+    timeline->Timing = timeMicros;
+    timeline->BeatPosition = beat;
+    timeline->Bpm = 120.0;
+    measure->TimeLines.push_back(timeline);
+    return timeline;
+  };
+  auto *measureStart = addTimeline(0, 0.0);
+  measureStart->IsFirstInMeasure = true;
+  auto *lastNote = addTimeline(1'000'000, 1.0);
+  lastNote->SetNote(0, new bms_parser::Note(bms_parser::Parser::NoWav));
+  // These real parser rows deliberately carry no note or scroll change.
+  addTimeline(1'500'000, 1.5);
+  addTimeline(2'000'000, 2.0);
+
+  Judge judge(chart.Meta.Rank);
+  BMSRenderer renderer(&chart, judge.timingWindows, 1'500, true);
+  Recorder recorder;
+  renderer.setCharacterizationRecorder(&recorder);
+  RenderContext context;
+  renderer.render(context, 1'250'000, 1'250'000);
+
+  expect(!recorder.frames.empty() &&
+             std::abs(recorder.frames.back().currentScrollPosition - 1.25) <
+                 0.0001,
+         "terminal zero-note rows keep legacy built-in scroll moving after "
+         "the final note");
+  bgfx::frame();
+}
+
 Json configurationJson(const PlayfieldPresentationConfig &config) {
   return {
       {"visibleTimeGreenNumber", config.visibleTimeGreenNumber},
@@ -1589,6 +1631,7 @@ int main() {
       verifyPrepareFailurePrecedesSubmission();
       verifySubmissionFailurePropagatesAfterConsumption();
       verifyFactoryUsesBorrowedNonNullChart();
+      verifyTerminalZeroNoteRowsAdvanceLegacyScroll(target);
 
       const auto before =
           renderScenario(target, kBeforeCoverPercent, false);

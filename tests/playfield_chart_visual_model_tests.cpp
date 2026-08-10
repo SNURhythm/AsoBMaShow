@@ -215,6 +215,40 @@ bool testExactBeatorajaChartPropertyMetadata() {
   return true;
 }
 
+bool testTerminalZeroNoteTimelinesRemainProjectionAnchors() {
+  bms_parser::Chart chart;
+  auto *measure = new bms_parser::Measure();
+  const auto appendTimeline = [&measure](long long timing, double beat) {
+    auto *timeline = new bms_parser::TimeLine(8, false);
+    timeline->Timing = timing;
+    timeline->BeatPosition = beat;
+    timeline->Bpm = 120.0;
+    measure->TimeLines.push_back(timeline);
+    return timeline;
+  };
+
+  auto *measureStart = appendTimeline(0, 0.0);
+  measureStart->IsFirstInMeasure = true;
+  auto *lastNote = appendTimeline(1'000'000, 1.0);
+  lastNote->SetNote(0, new bms_parser::Note(1));
+  // These rows are real chart timelines but carry no note or scroll event.
+  // They must still advance a processed final note after it passes the judge
+  // line, including when the note falls in the chart's final measure.
+  appendTimeline(1'500'000, 1.5);
+  appendTimeline(2'000'000, 2.0);
+  chart.Measures.push_back(measure);
+
+  const auto model = buildPlayfieldChartVisualModel(chart, 0);
+  if (model.timelines.size() != 4 || !model.timelines[2].retainedForProjection ||
+      !model.timelines[3].retainedForProjection ||
+      model.timelines[2].retainedOrdinal == kNoRetainedTimelineOrdinal ||
+      model.timelines[3].retainedOrdinal == kNoRetainedTimelineOrdinal) {
+    std::cerr << "terminal zero-note timelines must remain scroll anchors\n";
+    return false;
+  }
+  return true;
+}
+
 } // namespace
 
 int main() {
@@ -222,6 +256,9 @@ int main() {
     return EXIT_FAILURE;
   }
   if (!testExactBeatorajaChartPropertyMetadata()) {
+    return EXIT_FAILURE;
+  }
+  if (!testTerminalZeroNoteTimelinesRemainProjectionAnchors()) {
     return EXIT_FAILURE;
   }
 

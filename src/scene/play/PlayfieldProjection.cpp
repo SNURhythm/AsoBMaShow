@@ -323,7 +323,7 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
       }
       needsPrimaryDepth =
           needsPrimaryDepth ||
-          (!dead && timeline->timeMicros >= timeMicros &&
+          (!dead && rowIsWithinLatePoorWindow &&
            isVisible(rowScrollDelta, request));
     }
 
@@ -366,17 +366,6 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
     const auto source = effectiveSource(*note);
     if (source == ChartVisualNoteSource::Invisible &&
         (!request.includeInvisibleNotes || timeline->timeMicros < timeMicros)) {
-      continue;
-    }
-
-    // LaneRenderer's normal/mine draw branch is gated directly by
-    // `timeline.getMicroTime() >= microtime`. Automatic-POOR remains a
-    // judgement deadline only; retaining a normal note through that window
-    // pins the final note on a clamped terminal scroll position.
-    if (source != ChartVisualNoteSource::Invisible &&
-        note->kind != ChartVisualNoteKind::LongHead &&
-        note->kind != ChartVisualNoteKind::LongTail &&
-        timeline->timeMicros < timeMicros) {
       continue;
     }
 
@@ -674,7 +663,8 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
                   timeline->timeMicros >= timeMicros
             : source == ChartVisualNoteSource::Mine
                   ? !dead && timeline->timeMicros >= timeMicros
-                  : !dead && timeline->timeMicros >= timeMicros;
+                  : !dead && isWithinLatePoorWindow(timeline->timeMicros,
+                                                    timeMicros, request);
     if (!eligible) {
       continue;
     }
