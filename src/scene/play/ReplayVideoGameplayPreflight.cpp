@@ -37,10 +37,17 @@ std::int32_t javaIntAdd(std::int32_t left, std::int32_t right) noexcept {
 }
 } // namespace
 
+long long replayGameplayStatePlayDeadlineMicros(
+    const bms_parser::Chart &chart, const ReplayData &replay) noexcept {
+  (void)replay;
+  return skin::beatorajaGameplayStatePlayDeadlineMicros(chart.Meta.PlayLength);
+}
+
 ReplayGameplayFrameState replayGameplayFrameState(
     const preparation::Plan &plan, const bms_parser::Chart &chart,
     const ReplayData &replay, const AppSettings &settings,
     std::uint64_t serial, long long realTimeMicros) noexcept {
+  (void)replay;
   const long long audioOffsetMicros =
       static_cast<long long>(settings.audioOffsetMs) * 1'000LL;
   const long long visualOffsetMicros =
@@ -51,8 +58,7 @@ ReplayGameplayFrameState replayGameplayFrameState(
   const auto sceneStart = gameplay_timing::frameTiming(
       plan.skinAnimationStartTimeMicros(), audioOffsetMicros,
       visualOffsetMicros);
-  const long long terminalMicros =
-      replay.autoPlay ? chart.Meta.TotalLength : chart.Meta.PlayLength;
+  const long long terminalMicros = chart.Meta.PlayLength;
   const std::int32_t playtimeMillis = javaIntAdd(
       javaLongToInt(terminalMicros / 1'000), kReplayPlaytimeMarginMillis);
   return {
@@ -75,6 +81,7 @@ long long replayGameplayDurationWithSelectedSkinAnimation(
     const preparation::Plan &plan, long long audioOffsetMicros, int fps,
     long long requestedDurationMicros, bool stoppedOnGaugeFailure,
     const ReplayPlayfieldPresentation *presentation) {
+  (void)replay;
   if (stoppedOnGaugeFailure || presentation == nullptr || fps <= 0) {
     return std::max(0LL, requestedDurationMicros);
   }
@@ -82,8 +89,7 @@ long long replayGameplayDurationWithSelectedSkinAnimation(
   if (!timing.has_value()) {
     return std::max(0LL, requestedDurationMicros);
   }
-  const long long terminalMicros =
-      replay.autoPlay ? chart.Meta.TotalLength : chart.Meta.PlayLength;
+  const long long terminalMicros = chart.Meta.PlayLength;
   const long long deadlineMicros =
       skin::gameplaySkinAnimationCompletionDeadlineMicros(terminalMicros,
                                                             *timing);

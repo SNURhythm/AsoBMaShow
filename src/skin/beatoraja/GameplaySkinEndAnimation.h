@@ -28,6 +28,13 @@ saturatingAnimationAdd(std::int64_t left, std::int64_t right) noexcept {
              : left + right;
 }
 
+[[nodiscard]] constexpr std::int64_t
+beatorajaGameplayStatePlayDeadlineMicros(std::int64_t terminalMicros) noexcept {
+  return saturatingAnimationAdd(
+      std::max<std::int64_t>(0, terminalMicros),
+      static_cast<std::int64_t>(kBeatorajaEndOfNotesMarginMillis) * 1'000);
+}
+
 // The deadline is the source BMSPlayer lifecycle: last-note time, its fixed
 // end-of-notes phase, then the selected PlaySkin's finish margin and fadeout.
 // Negative authored margins have no positive wait because BMSPlayer's strict
@@ -36,10 +43,8 @@ saturatingAnimationAdd(std::int64_t left, std::int64_t right) noexcept {
 gameplaySkinAnimationCompletionDeadlineMicros(
     std::int64_t terminalMicros,
     const SkinGameplayTiming &timing) noexcept {
-  std::int64_t deadline = std::max<std::int64_t>(0, terminalMicros);
-  deadline = saturatingAnimationAdd(
-      deadline,
-      static_cast<std::int64_t>(kBeatorajaEndOfNotesMarginMillis) * 1'000);
+  std::int64_t deadline =
+      beatorajaGameplayStatePlayDeadlineMicros(terminalMicros);
   deadline = saturatingAnimationAdd(
       deadline, nonnegativeAnimationMicros(timing.finishMarginMillis));
   return saturatingAnimationAdd(deadline,
@@ -48,10 +53,10 @@ gameplaySkinAnimationCompletionDeadlineMicros(
 
 // AudioWrapper intentionally clamps its presentation clock when its scheduled
 // audio ends. BMSPlayer's TIMER_PLAY instead continues from the main timer at
-// the current frequency, so selected skins must retain that clock for their
-// post-song state machine. The real audio clock wins whenever it is still
-// ahead of this continuation.
-[[nodiscard]] inline std::int64_t gameplaySkinAnimationFrameClockMicros(
+// the current frequency. This is the gameplay clock for every presentation;
+// selected skins consume it for their post-song state machine. The real audio
+// clock wins whenever it is still ahead of this continuation.
+[[nodiscard]] inline std::int64_t beatorajaGameplayFrameClockMicros(
     std::int64_t observedGameplayMicros,
     std::int64_t endingGameplayStartMicros,
     std::int64_t endingSteadyStartMicros, std::int64_t currentSteadyMicros,
@@ -62,6 +67,16 @@ gameplaySkinAnimationCompletionDeadlineMicros(
       endingGameplayStartMicros,
       playbackRate.chartMicrosFromReal(steadyElapsedMicros));
   return std::max(observedGameplayMicros, continuedGameplayMicros);
+}
+
+// Kept separate from selected-skin timing because BMSPlayer's STATE_PLAY
+// transition applies to ordinary gameplay as well. Its source condition is
+// `playtime < ptime`, where ptime is the integer-millisecond TIMER_PLAY.
+[[nodiscard]] constexpr bool
+beatorajaGameplayStateFinished(std::int64_t gameplayTimeMicros,
+                               std::int32_t playtimeMillis) noexcept {
+  return gameplayTimeMicros / 1'000 >
+         static_cast<std::int64_t>(playtimeMillis);
 }
 
 } // namespace skin

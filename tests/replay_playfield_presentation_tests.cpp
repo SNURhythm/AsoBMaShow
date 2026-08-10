@@ -461,6 +461,29 @@ void testReplayGameplayFrameStateMirrorsLiveTimerAndStartClocks() {
          "gameplay export frame keeps Timer 41 and progress authority live");
 }
 
+void testReplayGameplayStatePlayDeadlineMatchesPinnedBmsPlayer() {
+  bms_parser::Chart chart;
+  chart.Meta.PlayLength = 10'000'000;
+  chart.Meta.TotalLength = 25'000'000;
+  ReplayData replay;
+
+  expect(replay_video_export::replayGameplayStatePlayDeadlineMicros(
+             chart, replay) == 15'000'000,
+         "manual replay export retains BMSPlayer's final five-second state-play margin");
+  // A recorded autoplay is still BMSPlayerMode.REPLAY. Only its separately
+  // launched AUTOPLAY mode selects model.getLastTime().
+  replay.autoPlay = true;
+  expect(replay_video_export::replayGameplayStatePlayDeadlineMicros(
+             chart, replay) == 15'000'000,
+         "recorded autoplay replay retains BMSPlayer REPLAY mode's last-note deadline");
+  AppSettings settings;
+  preparation::Plan plan;
+  const auto autoplayReplayFrame = replay_video_export::replayGameplayFrameState(
+      plan, chart, replay, settings, 1, 0);
+  expect(autoplayReplayFrame.clock.playTimer.playtimeMillis == 15'000,
+         "recorded autoplay replay exposes the same last-note TIMER_PLAY deadline");
+}
+
 void testReplayLaneCoverResetIsOneFramePulseForNormalAndCoursePlayback() {
   const std::vector<ReplayLaneCoverEvent> events = {
       {.songTimeMicros = 1'000,
@@ -1383,6 +1406,7 @@ int main() {
   testExportPixelSizesMapToLogicalGameplayBounds();
   testFirstExportFrameRefreshesPreparedRendererGeometry();
   testReplayGameplayFrameStateMirrorsLiveTimerAndStartClocks();
+  testReplayGameplayStatePlayDeadlineMatchesPinnedBmsPlayer();
   testReplayLaneCoverResetIsOneFramePulseForNormalAndCoursePlayback();
   testSelectedNormalPreflightAndDestructionUseRendererOwnership();
   testNoSelectionKeepsOneAdapter();

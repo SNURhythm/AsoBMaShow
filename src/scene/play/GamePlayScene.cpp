@@ -2837,7 +2837,7 @@ bool GamePlayScene::reset() {
   stopRealtimeGameplayAuthority(false);
   realtimeGameplayAuthorityWaitingForSkinGeometry = false;
   playbackInitializationFailed = false;
-  selectedSkinEndAnimationClock.reset();
+  beatorajaGameplayClock.reset();
   context.inputDeviceRegistry.resetGyroscopeTurntableSession();
   ownedState.reset();
   state = nullptr;
@@ -3016,6 +3016,10 @@ bool GamePlayScene::reset() {
   updateSkinResetLayoutVisibility();
 #endif
   context.jukebox.play(preparationPlan.playbackStartTimeMicros);
+  if (options.practiceSession == nullptr && !options.practiceMode) {
+    beginBeatorajaGameplayClock(
+        getGameplayTimeMicros(context.jukebox.getTimeMicros()));
+  }
   replayEventCursor = 0;
   replayLaneCoverCursor = 0;
   touchVisualizerLoaded = false;
@@ -3173,6 +3177,10 @@ void GamePlayScene::showPauseMenu(bool pausePlayback) {
 void GamePlayScene::closePauseMenu() {
   if (!isCoursePlayback() && context.jukebox.isPaused()) {
     context.jukebox.resume();
+    if (beatorajaGameplayClock.has_value()) {
+      beginBeatorajaGameplayClock(
+          getGameplayTimeMicros(context.jukebox.getTimeMicros()));
+    }
   }
   if (realtimeGameplayAuthorityActive() &&
       !realtimeGameplaySession->worker->resume()) {
@@ -4551,29 +4559,24 @@ std::uint64_t GamePlayScene::selectedSkinResultTransitionDelayMillis(
   return static_cast<std::uint64_t>((remainingRealMicros + 1'000) / 1'000);
 }
 
-void GamePlayScene::beginSelectedSkinEndAnimation(
+void GamePlayScene::beginBeatorajaGameplayClock(
     long long gameplayTimeMicros) {
-  selectedSkinEndAnimationClock.reset();
-  if (presentation == nullptr ||
-      !presentation->selectedSkinGameplayTiming().has_value()) {
-    return;
-  }
-  selectedSkinEndAnimationClock = {
+  beatorajaGameplayClock = {
       .gameplayStartMicros = gameplayTimeMicros,
       .steadyStartMicros = nowMicros(),
       .playbackRate = context.jukebox.playbackRate(),
   };
 }
 
-long long GamePlayScene::selectedSkinAnimationFrameGameplayMicros(
+long long GamePlayScene::beatorajaGameplayFrameMicros(
     long long gameplayTimeMicros) const {
-  if (!selectedSkinEndAnimationClock.has_value()) {
+  if (!beatorajaGameplayClock.has_value() || context.jukebox.isPaused()) {
     return gameplayTimeMicros;
   }
-  const auto &ending = *selectedSkinEndAnimationClock;
-  return skin::gameplaySkinAnimationFrameClockMicros(
-      gameplayTimeMicros, ending.gameplayStartMicros, ending.steadyStartMicros,
-      nowMicros(), ending.playbackRate);
+  const auto &clock = *beatorajaGameplayClock;
+  return skin::beatorajaGameplayFrameClockMicros(
+      gameplayTimeMicros, clock.gameplayStartMicros, clock.steadyStartMicros,
+      nowMicros(), clock.playbackRate);
 }
 
 void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
@@ -4872,6 +4875,9 @@ void GamePlayScene::update(float dt) {
 
   const long long rawSongTimeMicros = context.jukebox.getTimeMicros();
   long long gameplayTimeMicros = getGameplayTimeMicros(rawSongTimeMicros);
+  if (options.practiceSession == nullptr && !options.practiceMode) {
+    gameplayTimeMicros = beatorajaGameplayFrameMicros(gameplayTimeMicros);
+  }
   bool practiceSectionComplete = false;
   if (options.practiceSession != nullptr) {
     const auto practiceFrame = gameplay_timing::practiceFrameTiming(
@@ -4961,17 +4967,23 @@ void GamePlayScene::update(float dt) {
     completePracticeSection(false);
     return;
   }
-  if (state->passedMeasureCount != chart->Measures.size()) {
-    return;
-  }
-
   if (options.practiceSession != nullptr) {
     completePracticeSection(false);
     return;
   }
 
-  SDL_Log("All measures passed");
-  beginSelectedSkinEndAnimation(gameplayTimeMicros);
+  const auto playtimeMillis = beatorajaPlaytimeMillis(chart, options);
+  const bool legacyPracticeTimelineComplete =
+      !playtimeMillis.has_value() &&
+      state->passedMeasureCount == chart->Measures.size();
+  if (!legacyPracticeTimelineComplete &&
+      (!playtimeMillis.has_value() ||
+       !skin::beatorajaGameplayStateFinished(gameplayTimeMicros,
+                                              *playtimeMillis))) {
+    return;
+  }
+
+  SDL_Log("Pinned Beatoraja gameplay playtime elapsed");
   state->isEnding = true;
   finishReplayRecording();
   recordedAttemptCompleted = options.practiceMode;
@@ -5022,8 +5034,9 @@ void GamePlayScene::renderScene() {
   const bool startLaneIndicatorsVisible =
       preparationIndicatorActive(rawSongTimeMicros);
   long long gameplayTimeMicros = getGameplayTimeMicros(rawSongTimeMicros);
-  gameplayTimeMicros =
-      selectedSkinAnimationFrameGameplayMicros(gameplayTimeMicros);
+  if (options.practiceSession == nullptr && !options.practiceMode) {
+    gameplayTimeMicros = beatorajaGameplayFrameMicros(gameplayTimeMicros);
+  }
   if (const auto range = practiceNoteRange();
       range.has_value() && gameplayTimeMicros >= range->endMicros) {
     gameplayTimeMicros = range->endMicros - 1;

@@ -28,6 +28,11 @@ struct ReplayGameplayFrameState {
     const AppSettings &, std::uint64_t serial,
     long long realTimeMicros) noexcept;
 
+// Export replays map to BMSPlayerMode.REPLAY, which always ends after
+// lastNoteTime + TIME_MARGIN. Its separate AUTOPLAY mode uses lastTime.
+[[nodiscard]] long long replayGameplayStatePlayDeadlineMicros(
+    const bms_parser::Chart &, const ReplayData &) noexcept;
+
 // Extends only a selected-skin replay path through the same BMSPlayer
 // end-of-notes, finishmargin, and fadeout lifecycle as interactive gameplay.
 [[nodiscard]] long long replayGameplayDurationWithSelectedSkinAnimation(

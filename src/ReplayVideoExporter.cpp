@@ -23,7 +23,6 @@
 #include "scene/PracticeAnalyticsView.h"
 #include "scene/play/BMSRenderer.h"
 #include "scene/play/GamePlayTiming.h"
-#include "scene/play/Judge.h"
 #include "scene/play/ReplayPlayfieldPresentation.h"
 #include "scene/play/ReplayVideoGameplayPreflight.h"
 #include "skin/DefaultSkin.h"
@@ -377,12 +376,10 @@ long long elapsedMicros(std::chrono::steady_clock::time_point start) {
       .count();
 }
 
-long long gameplayEndMicrosForReplay(const bms_parser::Chart &chart) {
-  Judge judge(chart.Meta.Rank);
-  const auto badWindow = judge.timingWindows.find(Bad);
-  const long long latePoorTiming =
-      badWindow == judge.timingWindows.end() ? 0LL : badWindow->second.second;
-  return chart_playback_duration::GameplayEndMicros(chart, latePoorTiming);
+long long gameplayEndMicrosForReplay(const bms_parser::Chart &chart,
+                                     const ReplayData &replay) {
+  return replay_video_export::replayGameplayStatePlayDeadlineMicros(chart,
+                                                                       replay);
 }
 
 ReplayData replayThroughFailure(const ReplayData &replay,
@@ -407,12 +404,13 @@ ReplayData replayThroughFailure(const ReplayData &replay,
 }
 
 long long courseStageGameplayDurationMicrosForReplay(
-    const bms_parser::Chart &chart, long long audioDurationMicros,
+    const bms_parser::Chart &chart, const ReplayData &replay,
+    long long audioDurationMicros,
     bool includeResultScreen, const preparation::Plan &preparationPlan,
     long long audioOffsetMicros) {
   const long long transitionDurationMicros =
       preparationPlan.realTimeAtGameplayTime(
-          gameplayEndMicrosForReplay(chart), audioOffsetMicros) +
+          gameplayEndMicrosForReplay(chart, replay), audioOffsetMicros) +
       chart_playback_duration::kGameplayResultTransitionDelayMicros;
   if (includeResultScreen) {
     return transitionDurationMicros;
@@ -4040,7 +4038,7 @@ ReplayVideoExporter::Export(ApplicationContext &context,
       failureMicros, audioOffsetMicros);
   const long long normalGameplayDurationMicros =
       preparationPlan.realTimeAtGameplayTime(
-          gameplayEndMicrosForReplay(*chart), audioOffsetMicros) +
+          gameplayEndMicrosForReplay(*chart, replay), audioOffsetMicros) +
       chart_playback_duration::kGameplayResultTransitionDelayMicros;
   const long long failureAudioMicros =
       rawFailureMicros.has_value()
@@ -4271,7 +4269,7 @@ ReplayVideoExportResult exportCourseReplayImpl(
     }
     const long long normalGameplayDurationMicros =
         courseStageGameplayDurationMicrosForReplay(
-            *stage.chart, audioResult.durationMicros,
+            *stage.chart, stage.replay, audioResult.durationMicros,
             resolvedOptions.includeResultScreen, stage.preparationPlan,
             audioOffsetMicros);
     const long long failureFrameMicros =
