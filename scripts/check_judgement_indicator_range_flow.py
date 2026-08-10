@@ -32,10 +32,15 @@ def main() -> int:
             "settings preview propagation")
     require(gameplay, "judgementIndicatorRangeMilliseconds",
             "live gameplay propagation")
-    if exporter.count("settings.judgementIndicatorRangeMilliseconds") < 2:
-        raise AssertionError(
-            "single-stage and course replay exports must both propagate range"
-        )
+    require(exporter, "PlayfieldPresentationConfig replayGameplayPresentationConfig",
+            "shared replay presentation configuration")
+    require(exporter, "settings.judgementIndicatorRangeMilliseconds",
+            "shared replay range propagation")
+    require(exporter, "replayGameplayPresentationConfig(chart, settings, options)",
+            "single-stage replay range configuration")
+    require(exporter,
+            "configuration = replayGameplayPresentationConfig(*stage.chart,",
+            "course replay range configuration")
 
     print("judgement indicator range flow audit passed")
     return 0
