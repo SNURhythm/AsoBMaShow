@@ -323,7 +323,7 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
       }
       needsPrimaryDepth =
           needsPrimaryDepth ||
-          (!dead && rowIsWithinLatePoorWindow &&
+          (!dead && timeline->timeMicros >= timeMicros &&
            isVisible(rowScrollDelta, request));
     }
 
@@ -363,8 +363,20 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
       continue;
     }
     const auto *noteState = stateFor(note->id);
-    if (effectiveSource(*note) == ChartVisualNoteSource::Invisible &&
+    const auto source = effectiveSource(*note);
+    if (source == ChartVisualNoteSource::Invisible &&
         (!request.includeInvisibleNotes || timeline->timeMicros < timeMicros)) {
+      continue;
+    }
+
+    // LaneRenderer's normal/mine draw branch is gated directly by
+    // `timeline.getMicroTime() >= microtime`. Automatic-POOR remains a
+    // judgement deadline only; retaining a normal note through that window
+    // pins the final note on a clamped terminal scroll position.
+    if (source != ChartVisualNoteSource::Invisible &&
+        note->kind != ChartVisualNoteKind::LongHead &&
+        note->kind != ChartVisualNoteKind::LongTail &&
+        timeline->timeMicros < timeMicros) {
       continue;
     }
 
@@ -492,7 +504,7 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
          // See the direct BMS-lane contract above for long notes too.
          .lane = note->lane,
          .kind = note->kind,
-         .source = effectiveSource(*note),
+         .source = source,
          .longNoteMode = note->longNoteMode,
          .mineDamage = note->mineDamage,
          .scrollDelta = scrollDelta,
@@ -506,7 +518,7 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
            if (found == builtInDepths.end()) {
              return std::uint32_t{0};
            }
-           return effectiveSource(*note) == ChartVisualNoteSource::Invisible
+           return source == ChartVisualNoteSource::Invisible
                       ? found->second.invisibleDepth.value_or(0)
                       : found->second.primaryDepth.value_or(0);
          }()});
@@ -662,8 +674,7 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
                   timeline->timeMicros >= timeMicros
             : source == ChartVisualNoteSource::Mine
                   ? !dead && timeline->timeMicros >= timeMicros
-                  : !dead && isWithinLatePoorWindow(timeline->timeMicros,
-                                                    timeMicros, request);
+                  : !dead && timeline->timeMicros >= timeMicros;
     if (!eligible) {
       continue;
     }
