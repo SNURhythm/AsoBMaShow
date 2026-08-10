@@ -13,6 +13,7 @@
 #include <memory>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 namespace rendering {
 bgfx::VertexLayout PosColorVertex::ms_decl;
@@ -355,6 +356,75 @@ void testRealNormalExportPreflightStopsAudioAndMp4Work() {
          "real selected-skin preflight stops normal audio and MP4 work");
 }
 
+struct CoursePreflightStage {
+  int keyMode = 7;
+  GameplaySkinSessionServices skinServices;
+};
+
+struct FakeMediaWork {
+  int calls = 0;
+};
+
+CoursePreflightStage readyStage(int keyMode) {
+  return {.keyMode = keyMode,
+          .skinServices = {.acquire = [](int) {
+            return skin::GameplaySkinAcquisition{
+                .disposition = skin::GameplaySkinAcquisitionDisposition::BuiltIn};
+          }}};
+}
+
+CoursePreflightStage unavailableStage(int keyMode) {
+  return {.keyMode = keyMode,
+          .skinServices = {.acquire = [](int) {
+            return skin::GameplaySkinAcquisition{
+                .disposition = skin::GameplaySkinAcquisitionDisposition::Failed,
+                .failure = skin::GameplaySkinAcquisitionFailure{
+                    .diagnostic = {
+                        .code = "skin.lifecycle.activation_unavailable",
+                        .message = "The selected gameplay skin is unavailable.",
+                        .severity = skin::DiagnosticSeverity::Error}}};
+          }}};
+}
+
+ReplayVideoExportResult
+preflightCourseFor(std::vector<CoursePreflightStage> stages) {
+  AppSettings settings;
+  ReplayData replay;
+  TestBga bga;
+  std::vector<std::unique_ptr<ReplayPlayfieldPresentation>> presentations;
+  presentations.reserve(stages.size());
+  for (auto &stage : stages) {
+    bms_parser::Chart chart;
+    chart.Meta.KeyMode = stage.keyMode;
+    std::unique_ptr<ReplayPlayfieldPresentation> presentation;
+    const auto failure = replay_video_export::preflightReplayGameplayPresentation(
+        chart, replay, settings, {}, {},
+        {.x = 0.0, .y = 0.0, .width = 1280.0, .height = 720.0}, bga,
+        std::move(stage.skinServices), presentation);
+    if (failure) {
+      return *failure;
+    }
+    presentations.push_back(std::move(presentation));
+  }
+  return {.success = true};
+}
+
+void testRealCoursePreflightStopsAllMediaWorkForLaterSkinFailure() {
+  FakeMediaWork fakeAudioWork;
+  FakeMediaWork fakeEncoderWork;
+  const auto failure =
+      preflightCourseFor({readyStage(7), unavailableStage(14)});
+  if (failure.success) {
+    ++fakeAudioWork.calls;
+    ++fakeEncoderWork.calls;
+  }
+  expect(!failure.success &&
+             failure.message.contains("skin.lifecycle.activation_unavailable"),
+         "a later course stage fails before output work");
+  expect(fakeAudioWork.calls == 0 && fakeEncoderWork.calls == 0,
+         "course failure has no partial media output");
+}
+
 void testSelectedReadySkinReceivesOneInitialSnapshotAndSubmitsSkinFrame() {
   bms_parser::Chart chart;
   chart.Meta.KeyMode = 7;
@@ -628,6 +698,7 @@ int main() {
   testSelectedFailureRetainsFactoryDiagnostic();
   testUnavailableSelectedSkinStopsBeforeAnyFrameWork();
   testRealNormalExportPreflightStopsAudioAndMp4Work();
+  testRealCoursePreflightStopsAllMediaWorkForLaterSkinFailure();
   testSelectedReadySkinReceivesOneInitialSnapshotAndSubmitsSkinFrame();
   testSelectedSkinRuntimeFailureDoesNotSubmitBuiltIn();
   testClassicLongHeadSuppressesJudgeHudAndBgaMissClock();

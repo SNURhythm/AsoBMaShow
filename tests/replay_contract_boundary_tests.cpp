@@ -487,6 +487,26 @@ void testNormalReplayExportUsesPreparedPresentation() {
                "normal replay reports a diagnostic-free frame failure safely");
 }
 
+void testCourseReplayExportUsesPreparedPresentations() {
+  const std::filesystem::path exporter =
+      std::filesystem::path(ASOBMASHOW_SOURCE_DIR) /
+      "src/ReplayVideoExporter.cpp";
+  constexpr std::string_view courseExportStart =
+      "ReplayVideoExportResult exportCourseReplayImpl(";
+  constexpr std::string_view courseExportEnd =
+      "ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,";
+  requireOrderedWithin(exporter, courseExportStart, courseExportEnd,
+                       "preflightCourseReplayGameplayPresentations(",
+                       "writeReplayAudioTrack(",
+                       "every course skin is preflighted before stage audio");
+  requireOrderedWithin(exporter, courseExportStart, courseExportEnd,
+                       "preflightCourseReplayGameplayPresentations(",
+                       "writeCourseReplayAudioTrack(",
+                       "every course skin is preflighted before mux audio");
+  requireToken(exporter, "stage.gameplayPresentation",
+               "course stages retain preflighted presentation ownership");
+}
+
 void requireToken(const std::filesystem::path &path, std::string_view token,
                   std::string_view authority) {
   if (!readText(path).contains(token)) {
@@ -712,6 +732,7 @@ int main() {
   testCourseContinuationAndConsumerBoundaries();
   testReplayExportUsesPreparedGameplayBgaFrames();
   testNormalReplayExportUsesPreparedPresentation();
+  testCourseReplayExportUsesPreparedPresentations();
   if (failures != 0) {
     std::cerr << failures << " replay contract boundary test(s) failed\n";
     return 1;
