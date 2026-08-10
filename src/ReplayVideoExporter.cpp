@@ -2500,6 +2500,8 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
 
   context.jukebox.setBgaDisplayMode(settings.bgaDisplayMode);
   context.jukebox.setVisualsEnabled(settings.bgaEnabled);
+  context.jukebox.setEmbeddedBgaBrightnessPercent(
+      settings.bgaBrightnessPercent);
   std::atomic_bool visualLoadCancelled = false;
   context.jukebox.loadVisuals(chart, visualLoadCancelled);
   if (visualLoadCancelled) {
@@ -3515,6 +3517,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
 
     context.jukebox.setBgaDisplayMode(settings.bgaDisplayMode);
     context.jukebox.setVisualsEnabled(settings.bgaEnabled);
+    context.jukebox.setEmbeddedBgaBrightnessPercent(
+        settings.bgaBrightnessPercent);
     std::atomic_bool visualLoadCancelled = false;
     context.jukebox.loadVisuals(chart, visualLoadCancelled);
     if (visualLoadCancelled) {

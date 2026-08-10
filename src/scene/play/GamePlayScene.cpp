@@ -2422,6 +2422,8 @@ GamePlayScene::~GamePlayScene() {
 void GamePlayScene::init() {
   context.profileGameplayActive.store(true, std::memory_order_release);
   profileGameplayBlockerActive = true;
+  context.jukebox.setEmbeddedBgaBrightnessPercent(
+      context.settings.bgaBrightnessPercent);
   if (!rulesetPolicyBuild.built()) {
     showPlaybackInitializationFailure(
         rulesetPolicyBuild.diagnostic.empty()
