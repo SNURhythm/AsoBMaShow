@@ -4,6 +4,7 @@
 #include "LuaSkinFileSystem.h"
 #include "LuaSkinTableDecoder.h"
 #include "SkinModelValidator.h"
+#include "../../scene/play/StartLaneIndicatorGeometry.h"
 #include "../../rendering/SkinQuadBatchRenderer.h"
 #include "../../rendering/common.h"
 #include "../../replay/ReplayKeyMode.h"
@@ -176,6 +177,19 @@ bool finiteRect(const AuthoredRect &rect) noexcept {
   return std::isfinite(rect.x) && std::isfinite(rect.y) &&
          std::isfinite(rect.width) && std::isfinite(rect.height) &&
          rect.width > 0.0 && rect.height > 0.0;
+}
+
+std::array<float, 4>
+startLaneIndicatorColor(start_lane_indicator::ColorRole role) noexcept {
+  switch (role) {
+  case start_lane_indicator::ColorRole::Blue:
+    return {40.0F / 255.0F, 130.0F / 255.0F, 1.0F, 1.0F};
+  case start_lane_indicator::ColorRole::Red:
+    return {1.0F, 55.0F / 255.0F, 65.0F / 255.0F, 1.0F};
+  case start_lane_indicator::ColorRole::White:
+  default:
+    return {1.0F, 1.0F, 1.0F, 1.0F};
+  }
 }
 
 } // namespace
@@ -928,6 +942,72 @@ void PlaySkinSession::submitSyntheticReplayGhosts(
   }
   (void)context_.renderer.submitOverlay(overlay, context_.resources,
                                         renderContext, context_.quadRenderer);
+}
+
+void PlaySkinSession::submitSyntheticStartLaneIndicators(
+    RenderContext &renderContext, std::uint64_t frameSerial,
+    std::span<const int> requestedLanes) {
+  if (!publishedLayout_ || publishedLayout_->frameSerial != frameSerial ||
+      requestedLanes.empty()) {
+    return;
+  }
+
+  try {
+    const auto keyLayout =
+        replay::replayKeyModeLayout(context_.chartModel.keyCount);
+    const auto isScratch = [&keyLayout](int lane) noexcept {
+      return keyLayout && keyLayout->hasDirectionalScratch &&
+             (lane == 7 || lane == 15);
+    };
+    std::vector<int> keyLanes;
+    keyLanes.reserve(context_.chartModel.laneOrder.size());
+    for (const int lane : context_.chartModel.laneOrder) {
+      if (lane >= 0 && !isScratch(lane)) {
+        keyLanes.push_back(lane);
+      }
+    }
+
+    std::vector<SyntheticStartLaneIndicatorLaneGeometry> geometry;
+    geometry.reserve(context_.chartModel.laneOrder.size());
+    for (const int lane : context_.chartModel.laneOrder) {
+      if (lane < 0) {
+        continue;
+      }
+      const auto region = std::ranges::find_if(
+          publishedLayout_->laneRegions,
+          [lane](const SkinLaneInteractionRegion &candidate) {
+            return candidate.authoredLane == lane;
+          });
+      if (region == publishedLayout_->laneRegions.end() ||
+          !finiteRect(region->authoredRegion)) {
+        continue;
+      }
+      const auto role = [&] {
+        if (isScratch(lane)) {
+          return start_lane_indicator::colorRoleForScratch();
+        }
+        const auto position =
+            std::ranges::find(keyLanes, lane) - keyLanes.begin();
+        return start_lane_indicator::colorRoleForKey(
+            static_cast<std::size_t>(position), keyLanes.size());
+      }();
+      geometry.push_back({.lane = lane,
+                          .laneRegion = region->authoredRegion,
+                          .rgba = startLaneIndicatorColor(role)});
+    }
+
+    const SkinCommandBuffer overlay = buildSyntheticStartLaneIndicatorOverlay(
+        context_.viewport, geometry,
+        {.frameSerial = frameSerial, .lanes = requestedLanes});
+    if (overlay.commands.empty()) {
+      return;
+    }
+    (void)context_.renderer.submitOverlay(overlay, context_.resources,
+                                          renderContext, context_.quadRenderer);
+  } catch (...) {
+    // The cue is optional feedback. A post-commit overlay failure must never
+    // invalidate the selected skin frame that has already been submitted.
+  }
 }
 
 void PlaySkinSession::clearPublishedGeometry(bool advanceTopology) noexcept {

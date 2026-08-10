@@ -1472,6 +1472,48 @@ void testSyntheticReplayGhostUsesMatchingLaneGeometry() {
          "synthetic replay ghost uses lane one width, height, and scroll");
 }
 
+void testSyntheticStartLaneIndicatorsUseSelectedSkinLaneGeometry() {
+  const PlaySkinViewport viewport{
+      .authoredToUi = {},
+      .uiToAuthored = {},
+      .drawableAuthoredBounds =
+          {.x = 0.0, .y = 0.0, .width = 1280.0, .height = 720.0},
+      .safeUiBounds =
+          {.x = 0.0, .y = 0.0, .width = 1280.0, .height = 720.0},
+      .valid = true};
+  const std::array geometry{
+      SyntheticStartLaneIndicatorLaneGeometry{
+          .lane = 0,
+          .laneRegion = {.x = 10.0, .y = 100.0, .width = 30.0, .height = 500.0},
+          .rgba = {1.0F, 1.0F, 1.0F, 1.0F}},
+      SyntheticStartLaneIndicatorLaneGeometry{
+          .lane = 1,
+          .laneRegion = {.x = 90.0, .y = 250.0, .width = 52.0, .height = 500.0},
+          .rgba = {1.0F, 0.0F, 0.0F, 1.0F}},
+  };
+  const std::array requestedLanes{1, 99};
+  const auto overlay = buildSyntheticStartLaneIndicatorOverlay(
+      viewport, geometry,
+      {.frameSerial = 12, .lanes = requestedLanes});
+  expect(overlay.frameSerial == 12 && overlay.commands.size() == 1,
+         "start-lane overlay emits only selected skin lanes that exist");
+  if (overlay.commands.size() != 1) {
+    return;
+  }
+  const auto *triangle =
+      std::get_if<SkinPrimitiveCommand>(&overlay.commands.front().payload);
+  expect(triangle != nullptr &&
+             triangle->kind == SkinPrimitiveKind::TriangleStrip &&
+             triangle->vertices.size() == 3 &&
+             std::abs(triangle->vertices[0].x - 104.04F) < 0.001F &&
+             std::abs(triangle->vertices[0].y - 749.92F) < 0.001F &&
+             std::abs(triangle->vertices[1].x - 116.0F) < 0.001F &&
+             std::abs(triangle->vertices[1].y - 729.12F) < 0.001F &&
+             triangle->vertices[0].rgba == 0xff0000ffU &&
+             triangle->state.scissor.has_value(),
+         "start-lane triangle follows the skin lane width, origin, color, and clip");
+}
+
 void testSyntheticReplayGhostRespectsDisabledOption() {
   SyntheticReplayGhostGeometry geometry{
       .frameSerial = 1,
@@ -1664,6 +1706,33 @@ void testSubmittedSkinRendersOptionGatedSyntheticReplayGhosts() {
                 .events = events});
   expect(fixture.quadBackend().submitCalls == submitsAfterEnabled,
          "submitted selected skin suppresses synthetic ghosts when disabled");
+}
+
+void testSubmittedSkinRendersPreparationIndicatorsFromItsLaneLayout() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addBgaMarker();
+  fixture.addTouchGeometry();
+  SessionBgaSubmitter bga;
+  RenderContext context;
+  expect(fixture.session().prepareFrame(stateAt(1), projectionAt(1)) ==
+                 PresentationFrameOutcome::Ready &&
+             fixture.session().render(context, bgaFrame(302), bga).outcome ==
+                 PresentationFrameOutcome::Ready,
+         "skin frame publishes its static SkinNote lane layout before the cue");
+  const std::array requestedLanes{0, 7};
+  const auto submitsBeforeCue = fixture.quadBackend().submitCalls;
+  fixture.session().submitSyntheticStartLaneIndicators(context, 1,
+                                                       requestedLanes);
+  expect(fixture.quadBackend().submitCalls > submitsBeforeCue,
+         "selected skin submits preparation indicators through its own renderer");
+  const auto submitsAfterCue = fixture.quadBackend().submitCalls;
+  fixture.session().submitSyntheticStartLaneIndicators(context, 2,
+                                                       requestedLanes);
+  expect(fixture.quadBackend().submitCalls == submitsAfterCue,
+         "a preparation cue cannot use a stale selected-skin frame geometry");
 }
 
 void testInvalidSessionSerialDoesNotConsumeFrameOwners() {
@@ -2622,12 +2691,14 @@ int main() {
   testEvaluatorFailureDiscardsWriterTransaction();
   testSerialMismatchDoesNotConsumeRuntimeFrame();
   testSyntheticReplayGhostUsesMatchingLaneGeometry();
+  testSyntheticStartLaneIndicatorsUseSelectedSkinLaneGeometry();
   testSyntheticReplayGhostRespectsDisabledOption();
   testSyntheticReplayGhostSkipsEventsOutsideLaneClip();
   testSyntheticReplayGhostUsesSharedPlayAreaClip();
   testSyntheticReplayGhostRespectsLaneCoverVisibleHeight();
   testEvaluatedSkinPublishesPerLaneReplayGhostGeometry();
   testSubmittedSkinRendersOptionGatedSyntheticReplayGhosts();
+  testSubmittedSkinRendersPreparationIndicatorsFromItsLaneLayout();
   testInvalidSessionSerialDoesNotConsumeFrameOwners();
   testPassiveCustomTimerUsesTheSharedSessionFrame();
   testProductionPrepareIsExternallySideEffectFreeAndRejectsDoublePrepare();

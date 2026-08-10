@@ -95,6 +95,9 @@ struct PresentationStats {
   double syntheticReplayGhostVisibleLaneHeightRatio = 0.0;
   bool syntheticReplayGhostEnabled = false;
   std::size_t syntheticReplayGhostEventCount = 0;
+  int syntheticStartLaneIndicatorCalls = 0;
+  std::uint64_t syntheticStartLaneIndicatorFrameSerial = 0;
+  std::vector<int> syntheticStartLaneIndicatorLanes;
 };
 
 void recordEvent(const std::shared_ptr<PresentationStats> &stats,
@@ -257,6 +260,14 @@ public:
     stats_->syntheticReplayGhostEnabled = input.enabled;
     stats_->syntheticReplayGhostEventCount = input.events.size();
     recordEvent(stats_, "skin.replay_ghost");
+  }
+  void submitSyntheticStartLaneIndicators(
+      RenderContext &, std::uint64_t frameSerial,
+      std::span<const int> lanes) override {
+    ++stats_->syntheticStartLaneIndicatorCalls;
+    stats_->syntheticStartLaneIndicatorFrameSerial = frameSerial;
+    stats_->syntheticStartLaneIndicatorLanes.assign(lanes.begin(), lanes.end());
+    recordEvent(stats_, "skin.start_lane_indicators");
   }
   void setViewport(skin::ViewportSettings viewport) override {
     ++stats_->viewportCalls;
@@ -518,6 +529,48 @@ void testSelectedSkinReceivesOptionGatedReplayGhostFrame() {
   const auto disabled = configureAndRender(false);
   expect(disabled->syntheticReplayGhostCalls == 0,
          "disabled replay ghost option never reaches a selected skin");
+}
+
+void testSelectedSkinReceivesPreparationLaneIndicatorsWithoutFallback() {
+  auto builtIn = std::make_shared<PresentationStats>();
+  auto skinStats = std::make_shared<PresentationStats>();
+  skinStats->renderResult = {
+      .outcome = PresentationFrameOutcome::Ready,
+      .submittedMode = PresentationMode::Skin,
+      .bgaCompositeMode = GameplayBgaCompositeMode::EmbeddedSkin};
+  FakeBga bga;
+  PlayfieldPresentationCoordinator coordinator({
+      .builtIn = std::make_unique<FakeBuiltIn>(builtIn),
+      .skin = std::make_unique<FakeSkin>(skinStats, identity()),
+      .bga = bga,
+  });
+  auto state = frame(63);
+  state.authority.startLaneIndicators = {7, 2};
+  state.authority.startLaneIndicatorsVisible = true;
+  PlayfieldProjectionResult projection;
+  expect(coordinator.prepareFrame(state, projection) ==
+             PresentationFrameOutcome::Ready,
+         "selected-skin preparation indicator frame is ready");
+  RenderContext context;
+  const auto result = coordinator.render(context);
+  expect(result.submittedMode == PresentationMode::Skin &&
+             builtIn->renderCalls == 0,
+         "preparation indicators preserve the selected skin as the frame owner");
+  expect(skinStats->syntheticStartLaneIndicatorCalls == 1 &&
+             skinStats->syntheticStartLaneIndicatorFrameSerial == 63 &&
+             skinStats->syntheticStartLaneIndicatorLanes ==
+                 std::vector<int>({7, 2}) &&
+             eventIndex(skinStats->events, "skin.render") <
+                 eventIndex(skinStats->events, "skin.start_lane_indicators"),
+         "selected skin receives its exact post-skin preparation lane overlay");
+
+  auto hiddenState = frame(64);
+  hiddenState.authority.startLaneIndicators = {7, 2};
+  hiddenState.authority.startLaneIndicatorsVisible = false;
+  (void)coordinator.prepareFrame(hiddenState, projection);
+  (void)coordinator.render(context);
+  expect(skinStats->syntheticStartLaneIndicatorCalls == 1,
+         "hidden preparation indicators are not submitted to the selected skin");
 }
 
 void testCriticalSkinFailureCancelsBeforeOneWarmFallback() {
@@ -1020,6 +1073,7 @@ int main() {
   testBuiltInDefaultWarmsAndReusesOneBgaFrame();
   testSkinSuccessSubmitsNoBuiltInWork();
   testSelectedSkinReceivesOptionGatedReplayGhostFrame();
+  testSelectedSkinReceivesPreparationLaneIndicatorsWithoutFallback();
   testCriticalSkinFailureCancelsBeforeOneWarmFallback();
   testCriticalSelectedSkinPrepareFailureReturnsTransactionDiagnostic();
   testPostDrawRecoverableFailureNeverCreatesHybrid();

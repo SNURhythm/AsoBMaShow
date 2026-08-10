@@ -7,6 +7,7 @@
 #include "../../skin/beatoraja/SyntheticReplayGhostOverlay.h"
 
 #include <cstdint>
+#include <span>
 #include <vector>
 
 // Renderer-independent chart-lifetime boundary used by the coordinator.
@@ -32,6 +33,12 @@ public:
   // emits it only after its authored frame is successfully submitted.
   virtual void submitSyntheticReplayGhosts(
       RenderContext &, const skin::SyntheticReplayGhostFrameInput &) {}
+  // Start-lane indicators are application-owned preparation feedback. They
+  // are submitted through the selected skin only after its authored frame,
+  // never by re-enabling the built-in playfield.
+  virtual void submitSyntheticStartLaneIndicators(RenderContext &,
+                                                  std::uint64_t,
+                                                  std::span<const int>) {}
   virtual void setViewport(skin::ViewportSettings) = 0;
   virtual void updateViewportGeometry(skin::UiLogicalRect) = 0;
   [[nodiscard]] virtual gameplay::RealtimeTouchLayout touchLayout() const = 0;

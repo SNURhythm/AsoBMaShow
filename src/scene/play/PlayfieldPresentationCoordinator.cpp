@@ -194,6 +194,9 @@ PresentationFrameOutcome PlayfieldPresentationCoordinator::prepareFrame(
                  !replayGhostEvents_.empty(),
       .events = replayGhostEvents_,
   };
+  pending.startLaneIndicatorLanes = state.authority.startLaneIndicators;
+  pending.startLaneIndicatorsVisible =
+      state.authority.startLaneIndicatorsVisible;
   lastFrameSerial_ = state.clock.serial;
 
   try {
@@ -383,6 +386,17 @@ PlayfieldPresentationCoordinator::render(RenderContext &context) {
       // cannot change the already-submitted selected frame into a fallback.
       try {
         skin_->submitSyntheticReplayGhosts(context, pending.replayGhostFrame);
+      } catch (...) {
+      }
+    }
+    if (pending.startLaneIndicatorsVisible &&
+        !pending.startLaneIndicatorLanes.empty()) {
+      // The pre-start feedback belongs to the selected skin composition. It
+      // is intentionally emitted after the authored frame, just like replay
+      // ghosts, and cannot resurrect the built-in presentation.
+      try {
+        skin_->submitSyntheticStartLaneIndicators(
+            context, pending.frameSerial, pending.startLaneIndicatorLanes);
       } catch (...) {
       }
     }

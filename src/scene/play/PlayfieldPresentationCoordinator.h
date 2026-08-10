@@ -120,6 +120,8 @@ private:
     PresentationFailure skinRenderExceptionFailure;
     PresentationFailure skinNoSubmissionFailure;
     skin::SyntheticReplayGhostFrameInput replayGhostFrame;
+    std::vector<int> startLaneIndicatorLanes;
+    bool startLaneIndicatorsVisible = false;
   };
   struct TouchCapture {
     long long pointerId = 0;

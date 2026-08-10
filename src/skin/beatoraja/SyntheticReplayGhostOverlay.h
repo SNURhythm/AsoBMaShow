@@ -3,6 +3,7 @@
 #include "../../ReplayGhostUtils.h"
 #include "SkinDrawCommand.h"
 
+#include <array>
 #include <cstdint>
 #include <span>
 #include <vector>
@@ -48,5 +49,25 @@ struct SyntheticReplayGhostFrameInput {
 [[nodiscard]] SkinCommandBuffer buildSyntheticReplayGhostOverlay(
     const SyntheticReplayGhostGeometry &,
     const SyntheticReplayGhostFrameInput &);
+
+// The start-lane cue is application-owned, but a selected skin must remain
+// the only presentation owner.  Its triangles therefore use the selected
+// SkinNote lane rectangles and the same post-skin overlay submission path as
+// replay ghosts.
+struct SyntheticStartLaneIndicatorLaneGeometry {
+  int lane = -1;
+  AuthoredRect laneRegion;
+  std::array<float, 4> rgba{1.0F, 1.0F, 1.0F, 1.0F};
+};
+
+struct SyntheticStartLaneIndicatorFrameInput {
+  std::uint64_t frameSerial = 0;
+  std::span<const int> lanes;
+};
+
+[[nodiscard]] SkinCommandBuffer buildSyntheticStartLaneIndicatorOverlay(
+    const PlaySkinViewport &,
+    std::span<const SyntheticStartLaneIndicatorLaneGeometry>,
+    const SyntheticStartLaneIndicatorFrameInput &);
 
 } // namespace skin

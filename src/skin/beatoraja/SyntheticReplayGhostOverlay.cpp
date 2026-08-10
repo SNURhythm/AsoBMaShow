@@ -1,5 +1,7 @@
 #include "SyntheticReplayGhostOverlay.h"
 
+#include "../../scene/play/StartLaneIndicatorGeometry.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -98,6 +100,60 @@ void appendGhostStrip(SkinCommandBuffer &buffer, const PlaySkinViewport &viewpor
                                   .y = static_cast<float>(vertex[1]),
                                   .rgba = color});
   }
+  buffer.commands.push_back({.authoredOrdinal = ordinal,
+                             .sourceObject = 0,
+                             .payload = std::move(primitive)});
+}
+
+void appendStartLaneIndicator(
+    SkinCommandBuffer &buffer, const PlaySkinViewport &viewport,
+    const SyntheticStartLaneIndicatorLaneGeometry &lane,
+    std::uint32_t ordinal) {
+  if (!validRect(lane.laneRegion)) {
+    return;
+  }
+  const auto triangle = start_lane_indicator::placeTriangle(
+      static_cast<float>(lane.laneRegion.x),
+      static_cast<float>(lane.laneRegion.width),
+      static_cast<float>(lane.laneRegion.y),
+      static_cast<float>(lane.laneRegion.y + lane.laneRegion.height));
+  const AuthoredDestinationGeometry geometry{
+      .rect = lane.laneRegion,
+      .clip = lane.laneRegion,
+      .rgba = lane.rgba,
+      .blend = SkinBlendMode::Normal,
+      .filter = SkinFilterMode::Nearest,
+      .stretch = SkinStretchMode::Stretch};
+  const auto projected = projectSkinDestinationToUi(
+      geometry,
+      {.textureWidth = 1, .textureHeight = 1, .region = {.x = 0, .y = 0, .w = 1, .h = 1}},
+      viewport);
+  bool emptyClip = false;
+  const auto scissor =
+      intersectClip(projected.clip, viewport.safeUiBounds, emptyClip);
+  if (emptyClip) {
+    return;
+  }
+  const std::uint32_t color = packAbgr(lane.rgba);
+  const auto projectPoint = [&viewport, color](float x, float y) {
+    return SkinVertex{
+        .x = static_cast<float>(viewport.authoredToUi.m00 * x +
+                                viewport.authoredToUi.m01 * y +
+                                viewport.authoredToUi.tx),
+        .y = static_cast<float>(viewport.authoredToUi.m10 * x +
+                                viewport.authoredToUi.m11 * y +
+                                viewport.authoredToUi.ty),
+        .rgba = color};
+  };
+  SkinPrimitiveCommand primitive;
+  primitive.kind = SkinPrimitiveKind::TriangleStrip;
+  primitive.state = {.blend = SkinBlendMode::Normal,
+                     .filter = SkinFilterMode::Nearest,
+                     .scissor = scissor};
+  primitive.vertices.reserve(3);
+  primitive.vertices.push_back(projectPoint(triangle.leftX, triangle.baseY));
+  primitive.vertices.push_back(projectPoint(triangle.tipX, triangle.tipY));
+  primitive.vertices.push_back(projectPoint(triangle.rightX, triangle.baseY));
   buffer.commands.push_back({.authoredOrdinal = ordinal,
                              .sourceObject = 0,
                              .payload = std::move(primitive)});
@@ -214,6 +270,27 @@ SkinCommandBuffer buildSyntheticReplayGhostOverlay(
                       .width = thickness,
                       .height = outline.height},
                      playAreaClip, rgba, ordinal + 3U);
+  }
+  return result;
+}
+
+SkinCommandBuffer buildSyntheticStartLaneIndicatorOverlay(
+    const PlaySkinViewport &viewport,
+    std::span<const SyntheticStartLaneIndicatorLaneGeometry> geometry,
+    const SyntheticStartLaneIndicatorFrameInput &input) {
+  SkinCommandBuffer result{.frameSerial = input.frameSerial};
+  if (input.frameSerial == 0 || !viewport.valid || input.lanes.empty() ||
+      geometry.empty()) {
+    return result;
+  }
+  for (const int requestedLane : input.lanes) {
+    const auto lane = std::ranges::find(geometry, requestedLane,
+                                        &SyntheticStartLaneIndicatorLaneGeometry::lane);
+    if (lane == geometry.end()) {
+      continue;
+    }
+    appendStartLaneIndicator(result, viewport, *lane,
+                             static_cast<std::uint32_t>(result.commands.size()));
   }
   return result;
 }
