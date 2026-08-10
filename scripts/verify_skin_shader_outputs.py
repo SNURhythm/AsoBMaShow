@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the exact portable shader artifacts for one gameplay skin shader."""
+"""Verify exact portable artifacts for one or more gameplay skin shaders."""
 
 from __future__ import annotations
 
@@ -73,13 +73,13 @@ def changed_shader_paths(root: Path) -> set[str]:
 
 
 def manifest_data(
-    shader: str,
+    shaders: tuple[str, ...],
     sources: dict[str, dict[str, object]],
     outputs: dict[str, dict[str, object]],
 ) -> dict[str, object]:
     return {
-        "format": 1,
-        "shader": shader,
+        "format": 2,
+        "shaders": list(shaders),
         "beatoraja_reference": {
             "commit": PINNED_BEATORAJA_COMMIT,
             "paths": [
@@ -102,7 +102,7 @@ def manifest_data(
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=Path.cwd())
-    parser.add_argument("--shader", required=True)
+    parser.add_argument("--shader", action="append", required=True)
     parser.add_argument(
         "--require-backends",
         default=",".join(KNOWN_BACKENDS),
@@ -118,7 +118,7 @@ def parse_arguments() -> argparse.Namespace:
 def main() -> int:
     arguments = parse_arguments()
     root = arguments.root.resolve()
-    shader = arguments.shader
+    shaders = tuple(dict.fromkeys(arguments.shader))
     backends = tuple(
         backend.strip()
         for backend in arguments.require_backends.split(",")
@@ -130,13 +130,15 @@ def main() -> int:
     if unknown:
         fail(f"unknown backend(s): {', '.join(unknown)}")
 
-    source_paths = (
-        f"shader_src/vs_{shader}.sc",
-        f"shader_src/fs_{shader}.sc",
+    source_paths = tuple(
+        relative
+        for shader in shaders
+        for relative in (f"shader_src/vs_{shader}.sc", f"shader_src/fs_{shader}.sc")
     )
     output_paths = tuple(
         f"shaders/{backend}/{stage}_{shader}.bin"
         for backend in backends
+        for shader in shaders
         for stage in ("vs", "fs")
     )
     sources = {relative: digest(require_file(root, relative)) for relative in source_paths}
@@ -146,6 +148,7 @@ def main() -> int:
     allowed_changes.update(
         f"shaders/{backend}/{stage}_{shader}.bin"
         for backend in KNOWN_BACKENDS
+        for shader in shaders
         for stage in ("vs", "fs")
     )
     # Explicit paths are additive evidence for fixtures/CI; they must never
@@ -156,7 +159,7 @@ def main() -> int:
     if unexpected:
         fail("unexpected shader-tree change: " + ", ".join(unexpected))
 
-    current = manifest_data(shader, sources, outputs)
+    current = manifest_data(shaders, sources, outputs)
     if arguments.write_manifest is not None:
         path = arguments.write_manifest
         if not path.is_absolute():

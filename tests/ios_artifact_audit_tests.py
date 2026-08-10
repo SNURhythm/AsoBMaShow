@@ -20,21 +20,22 @@ BUILD_SOURCE_CLEAN = "1"
 class SkinShaderOutputVerifierTests(unittest.TestCase):
     def make_shader_tree(self, root: Path) -> Path:
         (root / "shader_src").mkdir(parents=True)
-        (root / "shader_src/vs_skin_quad.sc").write_text(
-            "void main() { /* synthetic vertex */ }\n", encoding="utf-8"
-        )
-        (root / "shader_src/fs_skin_quad.sc").write_text(
-            "void main() { /* synthetic fragment */ }\n", encoding="utf-8"
-        )
-        for backend in ("metal", "spirv", "essl", "dx11"):
-            output = root / "shaders" / backend
-            output.mkdir(parents=True)
-            (output / "vs_skin_quad.bin").write_bytes(
-                f"{backend}-vertex".encode("ascii")
+        for shader in ("skin_quad", "skin_yuvrgb"):
+            (root / f"shader_src/vs_{shader}.sc").write_text(
+                "void main() { /* synthetic vertex */ }\n", encoding="utf-8"
             )
-            (output / "fs_skin_quad.bin").write_bytes(
-                f"{backend}-fragment".encode("ascii")
+            (root / f"shader_src/fs_{shader}.sc").write_text(
+                "void main() { /* synthetic fragment */ }\n", encoding="utf-8"
             )
+            for backend in ("metal", "spirv", "essl", "dx11"):
+                output = root / "shaders" / backend
+                output.mkdir(parents=True, exist_ok=True)
+                (output / f"vs_{shader}.bin").write_bytes(
+                    f"{backend}-{shader}-vertex".encode("ascii")
+                )
+                (output / f"fs_{shader}.bin").write_bytes(
+                    f"{backend}-{shader}-fragment".encode("ascii")
+                )
         return root / "tests/fixtures/beatoraja_skin/shaders/skin_shader_manifest.json"
 
     def run_shader_audit(self, root: Path, *arguments: str):
@@ -136,6 +137,23 @@ class SkinShaderOutputVerifierTests(unittest.TestCase):
             )
             self.assertNotEqual(0, result.returncode)
             self.assertIn("unexpected shader-tree change", result.stderr.lower())
+
+    def test_multiple_shader_families_accept_each_others_generated_paths(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_shader_tree(root)
+            result = self.run_shader_audit(
+                root,
+                "--shader",
+                "skin_yuvrgb",
+                "--require-backends",
+                "metal,spirv,essl,dx11",
+                "--changed-path",
+                "shader_src/vs_skin_quad.sc",
+                "--changed-path",
+                "shaders/metal/fs_skin_yuvrgb.bin",
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
 
     def test_explicit_changed_path_cannot_hide_dirty_git_shader_tree(self):
         with tempfile.TemporaryDirectory() as temp:
