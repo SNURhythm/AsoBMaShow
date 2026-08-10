@@ -24,6 +24,49 @@ skin::UiLogicalRect replayGameplayLogicalUiBounds(int exportWidth,
           .height = static_cast<double>(exportHeight) / scale};
 }
 
+PlayfieldPresentationConfig replayGameplayPresentationConfig(
+    const AppSettings &settings, float playAreaWidth,
+    bool touchVisualizationEnabled,
+    bool replayGhostRenderingEnabled) noexcept {
+  const float laneCoverHispeedFactor =
+      settings.laneCoverEnabled
+          ? std::clamp(1.0F -
+                           static_cast<float>(settings.noteStartPositionPercent) /
+                               100.0F,
+                       0.0F, 1.0F)
+          : 1.0F;
+  return {
+      .visibleTimeGreenNumber = settings.visibleTimeGreenNumber,
+      .hispeedMultiplier = settings.gameplayHispeedMultiplier,
+      .visibleTimeUseMilliseconds = settings.visibleTimeUseMilliseconds,
+      .visibleTimeBpmStrategy = settings.visibleTimeBpmStrategy,
+      .playAreaWidth = playAreaWidth,
+      .laneBeamsEnabled = true,
+      .laneCoverHispeedFactor = laneCoverHispeedFactor,
+      .laneBeamLengthPercent = settings.laneBeamLengthPercent,
+      .noteStartPositionPercent = settings.noteStartPositionPercent,
+      .laneBeamClockUsesRenderTime = true,
+      .showInvisibleNotes = settings.showInvisibleNotes,
+      .markProcessedNotes = settings.markProcessedNotes,
+      .judgementIndicatorEnabled = settings.judgementIndicatorEnabled,
+      .judgementIndicatorY = settings.judgementIndicatorY,
+      .judgementIndicatorWidthScale = settings.judgementIndicatorWidthScale,
+      .judgementIndicatorHudMode =
+          settings.judgementIndicatorRenderMode ==
+          AppSettings::JudgementIndicatorRenderMode::Hud2D,
+      .judgementIndicatorRangeMilliseconds =
+          settings.judgementIndicatorRangeMilliseconds,
+      .judgementTextY = settings.judgementTextY,
+      .judgementCounterEnabled = settings.judgementCounterEnabled,
+      .judgementCounterPosition = settings.judgementCounterPosition,
+      .fastSlowCriteria = settings.judgementTimingFastSlowCriteria,
+      .millisecondsCriteria = settings.judgementTimingMillisecondsCriteria,
+      .gaugeBarPosition = settings.gaugeBarPosition,
+      .touchVisualizationEnabled = touchVisualizationEnabled,
+      .replayGhostRenderingEnabled = replayGhostRenderingEnabled,
+  };
+}
+
 namespace {
 constexpr std::int32_t kReplayPlaytimeMarginMillis = 5'000;
 

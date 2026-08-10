@@ -17,6 +17,11 @@ namespace replay_video_export {
 [[nodiscard]] skin::UiLogicalRect
 replayGameplayLogicalUiBounds(int exportWidth, int exportHeight) noexcept;
 
+[[nodiscard]] PlayfieldPresentationConfig
+replayGameplayPresentationConfig(const AppSettings &, float playAreaWidth,
+                                 bool touchVisualizationEnabled,
+                                 bool replayGhostRenderingEnabled) noexcept;
+
 struct ReplayGameplayFrameState {
   PlayfieldFrameClock clock;
   long long sceneStartMicros = kPlayfieldTimestampOff;

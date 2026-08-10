@@ -385,6 +385,64 @@ void testExportPixelSizesMapToLogicalGameplayBounds() {
          "non-16:9 export preserves logical aspect ratio at design width");
 }
 
+void testReplayExportConfigPreservesGameplayPresentationSettings() {
+  AppSettings settings;
+  settings.visibleTimeGreenNumber = 777;
+  settings.gameplayHispeedMultiplier = 1.75F;
+  settings.visibleTimeUseMilliseconds = true;
+  settings.visibleTimeBpmStrategy =
+      AppSettings::VisibleTimeBpmStrategy::MostPrevalent;
+  settings.laneBeamLengthPercent = 71;
+  settings.noteStartPositionPercent = 40;
+  settings.showInvisibleNotes = true;
+  settings.markProcessedNotes = true;
+  settings.judgementIndicatorEnabled = false;
+  settings.judgementIndicatorY = 0.25F;
+  settings.judgementIndicatorWidthScale = 0.75F;
+  settings.judgementIndicatorRenderMode =
+      AppSettings::JudgementIndicatorRenderMode::Hud2D;
+  settings.judgementIndicatorRangeMilliseconds = 123;
+  settings.judgementTextY = 0.6F;
+  settings.judgementCounterEnabled = false;
+  settings.judgementCounterPosition = AppSettings::JudgementCounterPosition::Top;
+  settings.judgementTimingFastSlowCriteria =
+      AppSettings::JudgementTimingDisplayCriteria::Off;
+  settings.judgementTimingMillisecondsCriteria =
+      AppSettings::JudgementTimingDisplayCriteria::PGreatOrBelow;
+  settings.gaugeBarPosition = AppSettings::GaugeBarPosition::Left;
+
+  const auto configuration =
+      replay_video_export::replayGameplayPresentationConfig(
+          settings, 9.5F, false, false);
+  expect(configuration.visibleTimeGreenNumber == 777 &&
+             configuration.hispeedMultiplier == 1.75F &&
+             configuration.visibleTimeUseMilliseconds &&
+             configuration.visibleTimeBpmStrategy ==
+                 AppSettings::VisibleTimeBpmStrategy::MostPrevalent &&
+             configuration.playAreaWidth == 9.5F &&
+             configuration.laneBeamLengthPercent == 71 &&
+             configuration.noteStartPositionPercent == 40 &&
+             configuration.showInvisibleNotes &&
+             configuration.markProcessedNotes &&
+             !configuration.judgementIndicatorEnabled &&
+             configuration.judgementIndicatorY == 0.25F &&
+             configuration.judgementIndicatorWidthScale == 0.75F &&
+             configuration.judgementIndicatorHudMode &&
+             configuration.judgementIndicatorRangeMilliseconds == 123 &&
+             configuration.judgementTextY == 0.6F &&
+             !configuration.judgementCounterEnabled &&
+             configuration.judgementCounterPosition ==
+                 AppSettings::JudgementCounterPosition::Top &&
+             configuration.fastSlowCriteria ==
+                 AppSettings::JudgementTimingDisplayCriteria::Off &&
+             configuration.millisecondsCriteria ==
+                 AppSettings::JudgementTimingDisplayCriteria::PGreatOrBelow &&
+             configuration.gaugeBarPosition == AppSettings::GaugeBarPosition::Left &&
+             !configuration.touchVisualizationEnabled &&
+             !configuration.replayGhostRenderingEnabled,
+         "replay export configuration retains all gameplay presentation settings");
+}
+
 void testFirstExportFrameRefreshesPreparedRendererGeometry() {
   configureTestGameplayCamera(1920, 1080);
   bms_parser::Chart chart;
@@ -1404,6 +1462,7 @@ int main() {
   rendering::PosTexCoord0Vertex::init();
   testModelReplayGhostsRetainRawLanesAndTimelinePositions();
   testExportPixelSizesMapToLogicalGameplayBounds();
+  testReplayExportConfigPreservesGameplayPresentationSettings();
   testFirstExportFrameRefreshesPreparedRendererGeometry();
   testReplayGameplayFrameStateMirrorsLiveTimerAndStartClocks();
   testReplayGameplayStatePlayDeadlineMatchesPinnedBmsPlayer();

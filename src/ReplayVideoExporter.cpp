@@ -135,36 +135,6 @@ replayGameplaySkinSessionServices(ApplicationContext &context) {
 #endif
 }
 
-PlayfieldPresentationConfig replayGameplayPresentationConfig(
-    const bms_parser::Chart &chart, const AppSettings &settings,
-    const ReplayVideoExportOptions &options) {
-  const auto resolvedOptions = resolveReplayVideoExportOptions(options);
-  return {
-      .visibleTimeGreenNumber = settings.visibleTimeGreenNumber,
-      .visibleTimeUseMilliseconds = settings.visibleTimeUseMilliseconds,
-      .visibleTimeBpmStrategy = settings.visibleTimeBpmStrategy,
-      .playAreaWidth = settings.playAreaWidthForKeyMode(chart.Meta.KeyMode),
-      .laneBeamLengthPercent = settings.laneBeamLengthPercent,
-      .noteStartPositionPercent = settings.noteStartPositionPercent,
-      .laneBeamClockUsesRenderTime = true,
-      .showInvisibleNotes = settings.showInvisibleNotes,
-      .judgementIndicatorEnabled = settings.judgementIndicatorEnabled,
-      .judgementIndicatorY = settings.judgementIndicatorY,
-      .judgementIndicatorWidthScale = settings.judgementIndicatorWidthScale,
-      .judgementIndicatorHudMode =
-          settings.judgementIndicatorRenderMode ==
-          AppSettings::JudgementIndicatorRenderMode::Hud2D,
-      .judgementIndicatorRangeMilliseconds =
-          settings.judgementIndicatorRangeMilliseconds,
-      .judgementTextY = settings.judgementTextY,
-      .judgementCounterEnabled = settings.judgementCounterEnabled,
-      .judgementCounterPosition = settings.judgementCounterPosition,
-      .gaugeBarPosition = settings.gaugeBarPosition,
-      .touchVisualizationEnabled = resolvedOptions.renderTouchPoints,
-      .replayGhostRenderingEnabled = resolvedOptions.renderReplayGhosts,
-  };
-}
-
 [[nodiscard]] std::optional<ReplayVideoExportResult>
 preflightReplayGameplayPresentation(
     ApplicationContext &context, bms_parser::Chart &chart,
@@ -175,7 +145,10 @@ preflightReplayGameplayPresentation(
   const auto resolvedOptions = resolveReplayVideoExportOptions(options);
   const auto result = replay_video_export::preflightReplayGameplayPresentation(
       chart, replay, settings, preparationPlan,
-      replayGameplayPresentationConfig(chart, settings, options),
+      replay_video_export::replayGameplayPresentationConfig(
+          settings, settings.playAreaWidthForKeyMode(chart.Meta.KeyMode),
+          resolvedOptions.renderTouchPoints,
+          resolvedOptions.renderReplayGhosts),
       resolvedOptions.width, resolvedOptions.height,
       context.jukebox, replayGameplaySkinSessionServices(context),
       context.rendererAccess,
@@ -1139,8 +1112,11 @@ preflightCourseReplayGameplayPresentations(
         {.chart = *stage.chart,
          .replay = stage.replay,
          .preparationPlan = stage.preparationPlan,
-         .configuration = replayGameplayPresentationConfig(*stage.chart,
-                                                            settings, options),
+         .configuration = replay_video_export::replayGameplayPresentationConfig(
+             settings,
+             settings.playAreaWidthForKeyMode(stage.chart->Meta.KeyMode),
+             resolvedOptions.renderTouchPoints,
+             resolvedOptions.renderReplayGhosts),
          .exportWidth = resolvedOptions.width,
          .exportHeight = resolvedOptions.height,
          .skinServices = replayGameplaySkinSessionServices(context),
