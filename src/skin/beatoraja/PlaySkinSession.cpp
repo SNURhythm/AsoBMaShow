@@ -553,6 +553,11 @@ const PlaySkinSessionIdentity &PlaySkinSession::identity() const noexcept {
   return context_.identity;
 }
 
+std::optional<SkinGameplayTiming>
+PlaySkinSession::selectedSkinGameplayTiming() const {
+  return context_.model.model.timing;
+}
+
 PlaySkinFrameTransactionResult PlaySkinSession::runFrameTransaction(
     const PlayfieldVisualState &state,
     const PlayfieldProjectionResult &projection,

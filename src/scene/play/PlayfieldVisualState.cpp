@@ -39,7 +39,10 @@ bool PlayfieldAuthorityUpdate::operator==(
          judgementCounters == other.judgementCounters &&
          judgementFastSlowCounters == other.judgementFastSlowCounters &&
          comboBreak == other.comboBreak && gaugeType == other.gaugeType &&
-         maximumCombo == other.maximumCombo && bestScore == other.bestScore &&
+         maximumCombo == other.maximumCombo &&
+         stageCombo == other.stageCombo &&
+         stagePassedNotes == other.stagePassedNotes &&
+         bestScore == other.bestScore &&
          sameTarget(bestScoreTarget, other.bestScoreTarget) &&
          gaugeAutoShift == other.gaugeAutoShift &&
          currentGauge == other.currentGauge && gaugeRules == other.gaugeRules &&

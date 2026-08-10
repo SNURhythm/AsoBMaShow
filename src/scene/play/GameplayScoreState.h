@@ -509,6 +509,10 @@ public:
   int combo = 0;
   int maxCombo = 0;
   int comboBreak = 0;
+  // JudgeManager retains a chart-local combo for the full-combo timer even
+  // when the displayed course combo carries across stage boundaries.
+  int stageCombo = 0;
+  int stagePassedNotes = 0;
   // judge count. default 0
   std::map<Judgement, int> judgeCount;
   std::map<Judgement, JudgementFastSlowCount> judgementFastSlowCount;
@@ -545,11 +549,14 @@ public:
 
   void commitJudge(const JudgeResult &judgeResult) {
     ++judgeCount[judgeResult.judgement];
+    ++stagePassedNotes;
     if (judgeResult.isComboBreak()) {
       combo = 0;
+      stageCombo = 0;
       ++comboBreak;
     } else if (judgeResult.judgement != Kpoor) {
       ++combo;
+      ++stageCombo;
       maxCombo = std::max(maxCombo, combo);
     }
     recordFastSlow(judgeResult);

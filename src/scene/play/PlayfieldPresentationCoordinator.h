@@ -93,6 +93,8 @@ public:
   [[nodiscard]] PresentationMode activeMode() const noexcept override;
   [[nodiscard]] std::optional<PresentationFailure>
   lastFailure() const override;
+  [[nodiscard]] std::optional<skin::SkinGameplayTiming>
+  selectedSkinGameplayTiming() const override;
 
 private:
   struct PendingFrame {

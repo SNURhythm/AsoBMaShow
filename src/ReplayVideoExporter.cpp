@@ -2505,7 +2505,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   const int fps = resolvedOptions.fps;
   const long long audioOffsetMicros =
       static_cast<long long>(settings.audioOffsetMs) * 1000LL;
-  const long long gameplayDurationMicros =
+  long long gameplayDurationMicros =
       std::max(0LL, requestedGameplayDurationMicros);
 
   if (width > UINT16_MAX || height > UINT16_MAX) {
@@ -2641,6 +2641,11 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
             .outputPath = outputPath,
             .message = "Replay gameplay presentation was not prepared"};
   }
+  gameplayDurationMicros =
+      replay_video_export::replayGameplayDurationWithSelectedSkinAnimation(
+          chart, replay, preparationPlan, audioOffsetMicros, fps,
+          gameplayDurationMicros, stoppedOnGaugeFailure,
+          preparedGameplay.presentation.get());
 
   const auto bpmChangeTimelines = collectBpmChangeTimelines(chart);
   size_t bpmChangeCursor = 0;
@@ -4280,6 +4285,14 @@ ReplayVideoExportResult exportCourseReplayImpl(
                                                 *rawFailureMicros) +
                                                 failureFrameMicros)
                                       : normalGameplayDurationMicros;
+    if (stage.gameplayPresentation.has_value()) {
+      stage.gameplayDurationMicros =
+          replay_video_export::replayGameplayDurationWithSelectedSkinAnimation(
+              *stage.chart, stage.replay, stage.preparationPlan,
+              audioOffsetMicros, resolvedOptions.fps,
+              stage.gameplayDurationMicros, stage.failureMicros.has_value(),
+              stage.gameplayPresentation->presentation.get());
+    }
     const long long audioContentDurationMicros =
         stage.failureMicros.has_value()
             ? std::min(audioResult.durationMicros,

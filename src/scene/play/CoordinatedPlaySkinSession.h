@@ -19,6 +19,10 @@ public:
 
   [[nodiscard]] virtual const skin::PlaySkinSessionIdentity &
   identity() const noexcept = 0;
+  [[nodiscard]] virtual std::optional<skin::SkinGameplayTiming>
+  selectedSkinGameplayTiming() const {
+    return std::nullopt;
+  }
   [[nodiscard]] virtual PresentationFrameOutcome prepareFrame(
       const PlayfieldVisualState &, const PlayfieldProjectionResult &) = 0;
   [[nodiscard]] virtual PresentationFrameResult

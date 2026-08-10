@@ -1,5 +1,6 @@
 #include "PlaySkinStateBridge.h"
 
+#include "GameplaySkinEndAnimation.h"
 #include "GameplaySkinBuiltinCatalog.h"
 #include "LuaSkinHostModules.h"
 
@@ -379,6 +380,61 @@ PlaySkinStateBridge::PlaySkinStateBridge(PlaySkinStateBridgeContext context)
 
 PlaySkinStateBridge::~PlaySkinStateBridge() { closeFrame(); }
 
+void PlaySkinStateBridge::updatePinnedPlayTimers() {
+  const auto *snapshot = state();
+  if (snapshot == nullptr) {
+    return;
+  }
+
+  const auto &playTimer = snapshot->clock.playTimer;
+  if (playTimer.active && playTimer.elapsedMillisExact &&
+      playTimer.playtimeMillis.has_value()) {
+    const std::int64_t elapsedMillis = playTimerElapsedMillis(*snapshot);
+    const bool musicEndWasActive =
+        musicEndTimerStartMicros_ != kPlayfieldTimestampOff;
+    if (elapsedMillis > *playTimer.playtimeMillis) {
+      if (!musicEndWasActive) {
+        musicEndTimerStartMicros_ = skinStateClockMicros(*snapshot);
+      }
+    } else if (elapsedMillis >
+               static_cast<std::int64_t>(*playTimer.playtimeMillis) -
+                   skin::kBeatorajaEndOfNotesMarginMillis) {
+      if (endOfNoteTimerStartMicros_ == kPlayfieldTimestampOff) {
+        endOfNoteTimerStartMicros_ = skinStateClockMicros(*snapshot);
+      }
+    }
+    // STATE_PLAY starts TIMER_MUSIC_END, and only the following BMSPlayer
+    // update executes STATE_FINISHED. Keep that one-frame ordering so an
+    // authored zero finishmargin still observes the music-end timer first.
+    if (musicEndWasActive) {
+      const std::int64_t musicEndElapsedMillis =
+          saturatingSubtract(skinStateClockMicros(*snapshot),
+                             musicEndTimerStartMicros_) /
+          1'000;
+      if (musicEndElapsedMillis > context_.model->model.timing.finishMarginMillis &&
+          fadeoutTimerStartMicros_ == kPlayfieldTimestampOff) {
+        fadeoutTimerStartMicros_ = skinStateClockMicros(*snapshot);
+      }
+    }
+  }
+
+  const int totalNotes = context_.chartModel.staticMetadata.totalNotes;
+  const bool fullCombo = totalNotes > 0 &&
+                         snapshot->authority.stagePassedNotes == totalNotes &&
+                         snapshot->authority.stageCombo == totalNotes;
+  if (!fullCombo) {
+    fullComboTimerStartMicros_ = kPlayfieldTimestampOff;
+    return;
+  }
+  if (fullComboTimerStartMicros_ == kPlayfieldTimestampOff) {
+    const long long source =
+        snapshot->lastJudgeVisualMicros == kPlayfieldTimestampOff
+            ? snapshot->clock.visualTimeMicros
+            : snapshot->lastJudgeVisualMicros;
+    fullComboTimerStartMicros_ = skinStateTimestampMicros(*snapshot, source);
+  }
+}
+
 void PlaySkinStateBridge::beginFrame(
     const PlayfieldVisualState &state,
     const PlayfieldProjectionResult &projection) {
@@ -405,6 +461,7 @@ void PlaySkinStateBridge::beginFrame(
   phase_ = FramePhase::Active;
   customObjectsUpdated_ = false;
   customTimerValues_.clear();
+  updatePinnedPlayTimers();
 
   context_.runtime.setFrameState(this);
   context_.runtime.setEventExecutor(
@@ -1812,6 +1869,14 @@ std::int64_t PlaySkinStateBridge::timerProperty(
   case 46:
     return skinStateTimestampMicros(*snapshot,
                                     snapshot->lastJudgeVisualMicros);
+  case 48:
+    return fullComboTimerStartMicros_;
+  case 143:
+    return endOfNoteTimerStartMicros_;
+  case 2:
+    return fadeoutTimerStartMicros_;
+  case 908:
+    return musicEndTimerStartMicros_;
   default:
     // MainStatePropertyLuaApiExporter reads arbitrary nonnegative timer IDs
     // directly, and TimerPropertyFactory recognizes every nonnegative ID.

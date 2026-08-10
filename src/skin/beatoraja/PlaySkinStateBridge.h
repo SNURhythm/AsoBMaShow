@@ -181,6 +181,7 @@ private:
   static LuaSkinEventExecutionResult executeHostEvent(
       void *, int, std::span<const int>) noexcept;
   [[nodiscard]] const PlayfieldVisualState *state() const noexcept;
+  void updatePinnedPlayTimers();
   [[nodiscard]] std::optional<int>
   numericSelector(const SkinBuiltinPropertySelector &) const noexcept;
 
@@ -197,6 +198,10 @@ private:
   PlaySkinFrameCommit staged_;
   std::unordered_map<int, std::int64_t> customTimerValues_;
   std::unordered_map<int, std::int64_t> customEventLastExecutionMicros_;
+  std::int64_t endOfNoteTimerStartMicros_ = kPlayfieldTimestampOff;
+  std::int64_t musicEndTimerStartMicros_ = kPlayfieldTimestampOff;
+  std::int64_t fadeoutTimerStartMicros_ = kPlayfieldTimestampOff;
+  std::int64_t fullComboTimerStartMicros_ = kPlayfieldTimestampOff;
   std::vector<SkinDiagnostic> diagnostics_;
 };
 

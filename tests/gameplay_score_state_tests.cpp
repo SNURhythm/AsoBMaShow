@@ -32,7 +32,9 @@ void requireSame(const GameplayScoreState &left,
   require(left.judgementFastSlowCount == right.judgementFastSlowCount,
           "fast/slow counts match");
   require(left.combo == right.combo && left.maxCombo == right.maxCombo &&
-              left.comboBreak == right.comboBreak,
+              left.comboBreak == right.comboBreak &&
+              left.stageCombo == right.stageCombo &&
+              left.stagePassedNotes == right.stagePassedNotes,
           "combo state matches");
   require(left.gaugeType == right.gaugeType &&
               left.gaugeValues == right.gaugeValues &&
@@ -125,6 +127,21 @@ void testNonGasRecordsOnlyActiveGaugeHistory() {
             "non-GAS records only the active gauge series");
   }
 }
+
+void testStageComboRemainsLocalWhenCourseComboCarriesAcrossCharts() {
+  GameplayScoreState state(beatorajaScoreConfig(100, 7, 200.0));
+  // Gameplay's visible combo intentionally carries across course charts.  A
+  // Beatoraja play skin's full-combo timer instead reads JudgeManager's
+  // per-chart combo, which starts fresh for the next chart.
+  state.combo = 37;
+  state.commitJudge(JudgeResult(PGreat, 0));
+  require(state.combo == 38 && state.stageCombo == 1,
+          "stage combo stays independent from the carried course combo");
+
+  state.commitJudge(JudgeResult(Poor, 0));
+  require(state.combo == 0 && state.stageCombo == 0,
+          "a combo break resets both the displayed and stage-local combos");
+}
 } // namespace
 
 int main() {
@@ -133,6 +150,7 @@ int main() {
   testGasRecordsEveryTrackedGaugeHistory();
   testBoundedGasHistoriesShareLogicalLimit();
   testNonGasRecordsOnlyActiveGaugeHistory();
+  testStageComboRemainsLocalWhenCourseComboCarriesAcrossCharts();
 
   bms_parser::Chart chart;
   chart.Meta.TotalNotes = 432;

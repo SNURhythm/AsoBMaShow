@@ -127,6 +127,8 @@ public:
   void updateViewportGeometry(UiLogicalRect safeUiBounds) override;
   [[nodiscard]] const PlaySkinSessionIdentity &
   identity() const noexcept override;
+  [[nodiscard]] std::optional<SkinGameplayTiming>
+  selectedSkinGameplayTiming() const override;
   [[nodiscard]] gameplay::RealtimeTouchLayout touchLayout() const override;
   [[nodiscard]] std::uint64_t
   touchLayoutRevision() const noexcept override;

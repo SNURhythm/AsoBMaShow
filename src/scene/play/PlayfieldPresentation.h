@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../../audio/GameplayBgaFrame.h"
+#include "../../skin/beatoraja/BeatorajaSkinModel.h"
 #include "../../skin/package/SkinPackageTypes.h"
 #include "PlayfieldPresentationEvents.h"
 #include "PlayfieldVisualState.h"
@@ -75,4 +76,11 @@ public:
   [[nodiscard]] virtual PresentationMode activeMode() const noexcept = 0;
   [[nodiscard]] virtual std::optional<PresentationFailure>
   lastFailure() const = 0;
+  // Built-in presentation has no Beatoraja-authored post-play timeline.
+  // A selected skin returns its immutable validated timing so every caller
+  // can retain the same end-of-notes/finish/fade lifecycle.
+  [[nodiscard]] virtual std::optional<skin::SkinGameplayTiming>
+  selectedSkinGameplayTiming() const {
+    return std::nullopt;
+  }
 };

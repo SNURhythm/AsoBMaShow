@@ -2,6 +2,7 @@
 
 #include "Judge.h"
 #include "GamePlayTiming.h"
+#include "../../skin/beatoraja/GameplaySkinEndAnimation.h"
 #include "../../rendering/common.h"
 
 #include <algorithm>
@@ -67,6 +68,33 @@ ReplayGameplayFrameState replayGameplayFrameState(
       .sceneStartMicros = sceneStart.visualTimeMicros,
       .playStartMicros = 0,
   };
+}
+
+long long replayGameplayDurationWithSelectedSkinAnimation(
+    const bms_parser::Chart &chart, const ReplayData &replay,
+    const preparation::Plan &plan, long long audioOffsetMicros, int fps,
+    long long requestedDurationMicros, bool stoppedOnGaugeFailure,
+    const ReplayPlayfieldPresentation *presentation) {
+  if (stoppedOnGaugeFailure || presentation == nullptr || fps <= 0) {
+    return std::max(0LL, requestedDurationMicros);
+  }
+  const auto timing = presentation->selectedSkinGameplayTiming();
+  if (!timing.has_value()) {
+    return std::max(0LL, requestedDurationMicros);
+  }
+  const long long terminalMicros =
+      replay.autoPlay ? chart.Meta.TotalLength : chart.Meta.PlayLength;
+  const long long deadlineMicros =
+      skin::gameplaySkinAnimationCompletionDeadlineMicros(terminalMicros,
+                                                            *timing);
+  const long long frameMicros = (1'000'000LL + fps - 1) / fps;
+  // BMSPlayer changes STATE_PLAY -> STATE_FINISHED, starts fadeout, then
+  // consumes fadeout on successive updates. Retain three sampled frames so
+  // zero-valued authored margins still expose all three timer phases.
+  const long long sampledDeadline =
+      plan.realTimeAtGameplayTime(deadlineMicros, audioOffsetMicros) +
+      3 * frameMicros;
+  return std::max({0LL, requestedDurationMicros, sampledDeadline});
 }
 
 ReplayLaneCoverFrameState ReplayLaneCoverPlayback::advance(

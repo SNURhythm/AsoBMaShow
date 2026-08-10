@@ -184,7 +184,8 @@ struct SelectedSkinFixture final {
     const fs::path packageRoot = roots.visiblePackages / entry.package.directoryName;
     fs::create_directories(packageRoot / "skin");
     std::ofstream(packageRoot / "skin/main.luaskin")
-        << "return { type = 0, w = 1280, h = 720 }\n";
+        << "return { type = 0, w = 1280, h = 720, finishmargin = 701, "
+           "fadeout = 702 }\n";
     lease = skin::SkinRevisionLease::fromLiveSource(
         {.package = entry.package, .lowercaseSha256 = std::string(64, 'c')},
         packageRoot);
@@ -518,6 +519,25 @@ void testSelectedNormalPreflightAndDestructionUseRendererOwnership() {
              (*fixture.receivedSafeUiBounds)->width == 1920.0 &&
              (*fixture.receivedSafeUiBounds)->height == 1080.0,
          "selected production preflight has valid state/projection/logical bounds under renderer ownership");
+  const auto timing = presentation == nullptr
+                          ? std::optional<skin::SkinGameplayTiming>{}
+                          : presentation->selectedSkinGameplayTiming();
+  expect(timing.has_value() && timing->finishMarginMillis == 701 &&
+             timing->fadeoutMillis == 702,
+         "selected replay presentation retains its authored end-animation timing");
+  constexpr int exportFps = 60;
+  const long long selectedGameplayDuration =
+      replay_video_export::replayGameplayDurationWithSelectedSkinAnimation(
+          chart, replay, plan, 0, exportFps, chart.Meta.PlayLength, false,
+          presentation.get());
+  const long long expectedSkinDeadlineMicros =
+      chart.Meta.PlayLength + 5'000'000 + 701'000 + 702'000;
+  const long long exportFrameMicros =
+      (1'000'000LL + exportFps - 1) / exportFps;
+  expect(selectedGameplayDuration ==
+             plan.realTimeAtGameplayTime(expectedSkinDeadlineMicros, 0) +
+                 3 * exportFrameMicros,
+         "selected replay export retains the end-of-notes, finish-margin, and fadeout frames");
   if (!presentation) {
     return;
   }
@@ -1286,6 +1306,58 @@ void testMaximumComboAdvancesOnlyWithAppliedReplayEvents() {
          "the progressive course maximum advances in the next stage");
 }
 
+void testReplayAdapterCarriesStageFullComboAuthority() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  auto *measure = new bms_parser::Measure;
+  chart.Measures.push_back(measure);
+  auto *first = new bms_parser::TimeLine(8, false);
+  first->Timing = 1'000;
+  first->SetNote(1, new bms_parser::Note(bms_parser::Parser::NoWav));
+  measure->TimeLines.push_back(first);
+  auto *second = new bms_parser::TimeLine(8, false);
+  second->Timing = 2'000;
+  second->SetNote(2, new bms_parser::Note(bms_parser::Parser::NoWav));
+  measure->TimeLines.push_back(second);
+
+  AppSettings settings;
+  PlayfieldPresentationConfig configuration;
+  TestBga bga;
+  const auto created = ReplayPlayfieldPresentation::create(
+      createInfo(chart, settings, configuration, bga));
+  if (!created.presentation) {
+    expect(false, "full-combo replay adapter is created");
+    return;
+  }
+  (void)created.presentation->applyReplayEvent(
+      {.action = ReplayEventAction::Press,
+       .lane = 1,
+       .noteTimeMicros = 1'000,
+       .judgeTimeMicros = 1'000,
+       .judgement = PGreat,
+       .combo = 38},
+      {.songTimeMicros = 1'000,
+       .visualTimeMicros = 1'000,
+       .bgaTimeMicros = 1'000},
+      true);
+  (void)created.presentation->applyReplayEvent(
+      {.action = ReplayEventAction::Press,
+       .lane = 2,
+       .noteTimeMicros = 2'000,
+       .judgeTimeMicros = 2'000,
+       .judgement = PGreat,
+       .combo = 39},
+      {.songTimeMicros = 2'000,
+       .visualTimeMicros = 2'000,
+       .bgaTimeMicros = 2'000},
+      true);
+  created.presentation->applyAuthorityUpdate({.comboBreak = 0});
+  const auto state = created.presentation->captureVisualStateForTesting({});
+  expect(state.authority.stagePassedNotes == 2 &&
+             state.authority.stageCombo == 2,
+         "replay reducer retains stage-local full-combo authority instead of course combo");
+}
+
 } // namespace
 
 int main() {
@@ -1330,6 +1402,7 @@ int main() {
   testMissedHcnHeadRecoversFromRecordedLanePress();
   testMineReplayEventFindsLandmineSource();
   testMaximumComboAdvancesOnlyWithAppliedReplayEvents();
+  testReplayAdapterCarriesStageFullComboAuthority();
   bgfx::shutdown();
   SDL_Quit();
   if (failures != 0) {

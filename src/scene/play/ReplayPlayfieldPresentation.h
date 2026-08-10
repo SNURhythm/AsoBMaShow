@@ -66,6 +66,8 @@ public:
   [[nodiscard]] int progressiveMaximumCombo() const noexcept {
     return progressiveMaximumCombo_;
   }
+  [[nodiscard]] std::optional<skin::SkinGameplayTiming>
+  selectedSkinGameplayTiming() const;
   [[nodiscard]] PresentationFrameResult
   renderFrame(RenderContext &, PlayfieldFrameClock,
               const PlayfieldProjectionRequest &);
@@ -117,6 +119,8 @@ private:
   std::vector<ChartVisualId> classicLongTailIds_;
   std::size_t classicLongTailCursor_ = 0;
   int progressiveMaximumCombo_ = 0;
+  int stageCombo_ = 0;
+  int stagePassedNotes_ = 0;
 #if defined(ASOBMASHOW_REPLAY_PLAYFIELD_PRESENTATION_TESTING)
   std::function<void()> destructionObserverForTesting_;
 #endif

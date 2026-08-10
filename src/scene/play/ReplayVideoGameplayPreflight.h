@@ -28,6 +28,13 @@ struct ReplayGameplayFrameState {
     const AppSettings &, std::uint64_t serial,
     long long realTimeMicros) noexcept;
 
+// Extends only a selected-skin replay path through the same BMSPlayer
+// end-of-notes, finishmargin, and fadeout lifecycle as interactive gameplay.
+[[nodiscard]] long long replayGameplayDurationWithSelectedSkinAnimation(
+    const bms_parser::Chart &, const ReplayData &, const preparation::Plan &,
+    long long audioOffsetMicros, int fps, long long requestedDurationMicros,
+    bool stoppedOnGaugeFailure, const ReplayPlayfieldPresentation *);
+
 struct ReplayLaneCoverFrameState {
   int percent = 0;
   bool resetVisibleTimeReference = false;

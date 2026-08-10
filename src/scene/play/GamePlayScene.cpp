@@ -6,6 +6,7 @@
 #include "GamePlayStartup.h"
 #include "GamePlayTiming.h"
 #include "PracticeNoteFinalizer.h"
+#include "../../ChartPlaybackDuration.h"
 #include "../../ReplayGhostUtils.h"
 #include "../../GBattleMode.h"
 #include "../../CourseConstraintUtils.h"
@@ -18,6 +19,7 @@
 #include "../../Uuid.h"
 #include "../../practice/PracticeResultFlow.h"
 #include "../../rendering/SimpleBatchRenderer.h"
+#include "../../skin/beatoraja/GameplaySkinEndAnimation.h"
 #include "../../view/TextView.h"
 #include "../../view/IconText.h"
 #include "BuiltInPlayfieldPresentation.h"
@@ -2835,6 +2837,7 @@ bool GamePlayScene::reset() {
   stopRealtimeGameplayAuthority(false);
   realtimeGameplayAuthorityWaitingForSkinGeometry = false;
   playbackInitializationFailed = false;
+  selectedSkinEndAnimationClock.reset();
   context.inputDeviceRegistry.resetGyroscopeTurntableSession();
   ownedState.reset();
   state = nullptr;
@@ -4423,6 +4426,8 @@ void GamePlayScene::capturePlayfieldVisualState(
       }(),
       .comboBreak = state->comboBreak,
       .maximumCombo = state->maxCombo,
+      .stageCombo = state->stageCombo,
+      .stagePassedNotes = state->stagePassedNotes,
       .bestScore = activePacemakerBest ? activePacemakerBest->score : 0,
       .bestScoreTarget = activeBestScoreTarget,
       .gaugeType = state->gaugeType,
@@ -4520,7 +4525,58 @@ void GamePlayScene::capturePlayfieldVisualState(
   playfieldLaneCoverResetPending = false;
 }
 
-void GamePlayScene::scheduleResultTransition(int delayMillis) {
+std::uint64_t GamePlayScene::selectedSkinResultTransitionDelayMillis(
+    long long gameplayTimeMicros) const {
+  if (presentation == nullptr) {
+    return chart_playback_duration::kGameplayResultTransitionDelayMicros /
+           1'000;
+  }
+  const auto timing = presentation->selectedSkinGameplayTiming();
+  if (!timing.has_value()) {
+    return chart_playback_duration::kGameplayResultTransitionDelayMicros /
+           1'000;
+  }
+  const long long terminalMicros =
+      chart == nullptr ? gameplayTimeMicros
+                       : (options.autoPlay ? chart->Meta.TotalLength
+                                           : chart->Meta.PlayLength);
+  const long long deadline = skin::gameplaySkinAnimationCompletionDeadlineMicros(
+      terminalMicros, *timing);
+  const long long remainingChartMicros =
+      std::max(0LL, deadline - gameplayTimeMicros);
+  const long long remainingRealMicros =
+      context.jukebox.playbackRate().realMicrosFromChart(remainingChartMicros);
+  // BMSPlayer transitions on strict greater-than checks. Retain one real
+  // microsecond past the authored deadline before the deferred scene change.
+  return static_cast<std::uint64_t>((remainingRealMicros + 1'000) / 1'000);
+}
+
+void GamePlayScene::beginSelectedSkinEndAnimation(
+    long long gameplayTimeMicros) {
+  selectedSkinEndAnimationClock.reset();
+  if (presentation == nullptr ||
+      !presentation->selectedSkinGameplayTiming().has_value()) {
+    return;
+  }
+  selectedSkinEndAnimationClock = {
+      .gameplayStartMicros = gameplayTimeMicros,
+      .steadyStartMicros = nowMicros(),
+      .playbackRate = context.jukebox.playbackRate(),
+  };
+}
+
+long long GamePlayScene::selectedSkinAnimationFrameGameplayMicros(
+    long long gameplayTimeMicros) const {
+  if (!selectedSkinEndAnimationClock.has_value()) {
+    return gameplayTimeMicros;
+  }
+  const auto &ending = *selectedSkinEndAnimationClock;
+  return skin::gameplaySkinAnimationFrameClockMicros(
+      gameplayTimeMicros, ending.gameplayStartMicros, ending.steadyStartMicros,
+      nowMicros(), ending.playbackRate);
+}
+
+void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
   if (resultTransitionScheduled) {
     return;
   }
@@ -4915,6 +4971,7 @@ void GamePlayScene::update(float dt) {
   }
 
   SDL_Log("All measures passed");
+  beginSelectedSkinEndAnimation(gameplayTimeMicros);
   state->isEnding = true;
   finishReplayRecording();
   recordedAttemptCompleted = options.practiceMode;
@@ -4935,7 +4992,8 @@ void GamePlayScene::update(float dt) {
       options.courseSession->recordReplayStage(recordedReplay);
     }
   }
-  scheduleResultTransition(2000);
+  scheduleResultTransition(
+      selectedSkinResultTransitionDelayMillis(gameplayTimeMicros));
 }
 
 void GamePlayScene::renderScene() {
@@ -4964,6 +5022,8 @@ void GamePlayScene::renderScene() {
   const bool startLaneIndicatorsVisible =
       preparationIndicatorActive(rawSongTimeMicros);
   long long gameplayTimeMicros = getGameplayTimeMicros(rawSongTimeMicros);
+  gameplayTimeMicros =
+      selectedSkinAnimationFrameGameplayMicros(gameplayTimeMicros);
   if (const auto range = practiceNoteRange();
       range.has_value() && gameplayTimeMicros >= range->endMicros) {
     gameplayTimeMicros = range->endMicros - 1;

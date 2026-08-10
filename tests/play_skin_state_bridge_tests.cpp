@@ -1,6 +1,7 @@
 #include "skin/beatoraja/PlaySkinStateBridge.h"
 
 #include "skin/SkinStoragePaths.h"
+#include "skin/beatoraja/GameplaySkinEndAnimation.h"
 #include "skin/beatoraja/GameplaySkinBuiltinCatalog.h"
 #include "skin/beatoraja/LuaSkinFileSystem.h"
 #include "skin/package/SkinAliasDetector.h"
@@ -994,6 +995,112 @@ void testReadyAndLiveTimersUseTheSharedSkinStateClock() {
   bridge.discardFrame();
 }
 
+void testClearAndFullComboTimersFollowPinnedBmsPlayerState() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+  PlayfieldChartVisualModel chart;
+  chart.staticMetadata.totalNotes = 3;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = runtime.runtime(),
+                              .mutationTable = mutations});
+
+  // BMSPlayer switches TIMER_ENDOFNOTE_1P only after its integer play clock
+  // moves past (playtime - TIME_MARGIN).  At this frame the terminal chart
+  // time is exactly 5,000 ms, so the clear phase is still off.
+  auto beforeClear = stateAt(224);
+  beforeClear.sceneStartMicros = 1'000'000;
+  beforeClear.clock.visualTimeMicros = 6'000'000;
+  beforeClear.clock.gameplayTimeMicros = 5'000'000;
+  beforeClear.clock.playTimer = {.active = true,
+                                 .startMicros = 0,
+                                 .elapsedMillisExact = true,
+                                 .playtimeMillis = 10'000};
+  bridge.beginFrame(beforeClear, projectionAt(224));
+  expect(bridge.timerProperty({143}) == kPlayfieldTimestampOff &&
+             bridge.timerProperty({48}) == kPlayfieldTimestampOff,
+         "clear and full-combo timers are off before their pinned conditions");
+  bridge.discardFrame();
+
+  auto clearedFullCombo = stateAt(225);
+  clearedFullCombo.sceneStartMicros = 1'000'000;
+  clearedFullCombo.clock.visualTimeMicros = 6'001'000;
+  clearedFullCombo.clock.gameplayTimeMicros = 5'001'000;
+  clearedFullCombo.clock.playTimer = {.active = true,
+                                      .startMicros = 0,
+                                      .elapsedMillisExact = true,
+                                      .playtimeMillis = 10'000};
+  clearedFullCombo.lastJudgeVisualMicros = 5'000'700;
+  clearedFullCombo.authority.judgementCounters = {{PGreat, 3}};
+  clearedFullCombo.authority.stagePassedNotes = 3;
+  clearedFullCombo.authority.stageCombo = 3;
+  bridge.beginFrame(clearedFullCombo, projectionAt(225));
+  expect(bridge.timerProperty({143}) == 5'001'000,
+         "end-of-notes clear timer starts on the first post-margin play frame");
+  expect(bridge.timerProperty({48}) == 4'000'700,
+         "full-combo timer starts at the final stage judgement on the skin clock");
+  bridge.discardFrame();
+
+  auto broken = clearedFullCombo;
+  broken.clock.serial = 226;
+  broken.authority.stageCombo = 0;
+  bridge.beginFrame(broken, projectionAt(226));
+  expect(bridge.timerProperty({143}) == 5'001'000 &&
+             bridge.timerProperty({48}) == kPlayfieldTimestampOff,
+         "clear remains latched while full-combo turns off when stage combo breaks");
+  bridge.discardFrame();
+
+  // Once the exact play clock moves past BMSPlayer's complete playtime, it
+  // enters STATE_FINISHED and starts TIMER_MUSIC_END. The following frame
+  // starts TIMER_FADEOUT because this fixture's authored finish margin is
+  // the default zero milliseconds.
+  auto musicEnded = broken;
+  musicEnded.clock.serial = 227;
+  musicEnded.clock.visualTimeMicros = 11'001'000;
+  musicEnded.clock.gameplayTimeMicros = 10'001'000;
+  bridge.beginFrame(musicEnded, projectionAt(227));
+  expect(bridge.timerProperty({908}) == 10'001'000 &&
+             bridge.timerProperty({2}) == kPlayfieldTimestampOff,
+         "music-end starts after the exact complete playtime before fadeout");
+  bridge.discardFrame();
+
+  auto fadingOut = musicEnded;
+  fadingOut.clock.serial = 228;
+  fadingOut.clock.visualTimeMicros = 12'001'000;
+  fadingOut.clock.gameplayTimeMicros = 11'001'000;
+  bridge.beginFrame(fadingOut, projectionAt(228));
+  expect(bridge.timerProperty({908}) == 10'001'000 &&
+             bridge.timerProperty({2}) == 11'001'000,
+         "authored zero finish margin starts the fadeout on the next frame");
+  bridge.discardFrame();
+}
+
+void testEndAnimationClockContinuesAfterAudioClockStops() {
+  // AudioWrapper clamps its audio clock at the scheduled sound end. The
+  // BMSPlayer timer still advances at the active playback rate through the
+  // end-of-notes, finish-margin, and fadeout phases.
+  const audio::PlaybackRate normalRate{.percent = 100};
+  expect(gameplaySkinAnimationFrameClockMicros(10'000'000, 10'000'000,
+                                               5'000'000, 5'750'000,
+                                               normalRate) == 10'750'000,
+         "end animation advances after the capped audio clock at normal rate");
+  expect(gameplaySkinAnimationFrameClockMicros(11'500'000, 10'000'000,
+                                               5'000'000, 5'750'000,
+                                               normalRate) == 11'500'000,
+         "the advancing audio clock remains authoritative when it is ahead");
+  const audio::PlaybackRate doubleRate{.percent = 200};
+  expect(gameplaySkinAnimationFrameClockMicros(10'000'000, 10'000'000,
+                                               5'000'000, 5'750'000,
+                                               doubleRate) == 11'500'000,
+         "end animation uses the active chart playback rate");
+}
+
 void testPlayTimerVisualRebaseSaturatesWithoutLosingCancellation() {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
@@ -1793,6 +1900,8 @@ int main() {
   testGameplayModeAndLoadingBooleanProperties();
   testPlayTimerPropertiesMatchPinnedJavaConversions();
   testReadyAndLiveTimersUseTheSharedSkinStateClock();
+  testClearAndFullComboTimersFollowPinnedBmsPlayerState();
+  testEndAnimationClockContinuesAfterAudioClockStops();
   testPlayTimerVisualRebaseSaturatesWithoutLosingCancellation();
   testSelectedScuroMappingsUseOnlyAuthoritativeState();
   testEmptyCustomObjectsStayZeroCost();

@@ -110,6 +110,11 @@ struct PlayfieldAuthorityUpdate {
       judgementFastSlowCounters;
   int comboBreak = 0;
   int maximumCombo = 0;
+  // These are JudgeManager's per-chart values.  They intentionally remain
+  // separate from the displayed course combo so TIMER_FULLCOMBO_1P has the
+  // same source as Beatoraja.
+  int stageCombo = 0;
+  int stagePassedNotes = 0;
   // ScoreDataProperty's persisted best score.  It is zero when the chart has
   // no local best record, matching its gameplay-side initialization.
   int bestScore = 0;

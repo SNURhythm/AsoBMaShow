@@ -65,6 +65,11 @@ void PlayfieldPresentationCoordinator::clearSkinSession() noexcept {
   markTouchTargetChanged();
 }
 
+std::optional<skin::SkinGameplayTiming>
+PlayfieldPresentationCoordinator::selectedSkinGameplayTiming() const {
+  return skin_ ? skin_->selectedSkinGameplayTiming() : std::nullopt;
+}
+
 bool PlayfieldPresentationCoordinator::resetLayoutToFit() {
   if (!skin_) {
     return false;

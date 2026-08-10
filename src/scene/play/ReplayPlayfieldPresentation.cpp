@@ -97,6 +97,11 @@ ReplayPlayfieldPresentation::~ReplayPlayfieldPresentation() {
 #endif
 }
 
+std::optional<skin::SkinGameplayTiming>
+ReplayPlayfieldPresentation::selectedSkinGameplayTiming() const {
+  return coordinator_->selectedSkinGameplayTiming();
+}
+
 ReplayPlayfieldPresentationCreateResult ReplayPlayfieldPresentation::create(
     ReplayPlayfieldPresentationCreateInfo creation) {
   // The exporter supplies the chart after applying its replay-compatible long
@@ -186,6 +191,8 @@ ReplayPlayfieldPresentationCreateResult ReplayPlayfieldPresentation::create(
 void ReplayPlayfieldPresentation::applyAuthorityUpdate(
     const PlayfieldAuthorityUpdate &authority) {
   authority_ = authority;
+  authority_.stageCombo = stageCombo_;
+  authority_.stagePassedNotes = stagePassedNotes_;
   state_->applyAuthorityUpdate(authority_);
 }
 
@@ -335,6 +342,12 @@ bool ReplayPlayfieldPresentation::applyReplayEvent(
   const auto applyHud = [&]() -> bool {
     if (event.judgement == None) {
       return false;
+    }
+    ++stagePassedNotes_;
+    if (recordedJudge.isComboBreak()) {
+      stageCombo_ = 0;
+    } else if (event.judgement != Kpoor) {
+      ++stageCombo_;
     }
     progressiveMaximumCombo_ =
         std::max(progressiveMaximumCombo_, event.combo);
