@@ -508,6 +508,8 @@ void testSelectedSkinReceivesOptionGatedReplayGhostFrame() {
     coordinator.configure({.replayGhostRenderingEnabled = enabled});
     auto state = frame(enabled ? 61 : 62);
     state.clock.visualTimeMicros = 900;
+    state.authority.laneCoverEnabled = true;
+    state.authority.laneCoverPercent = 50;
     PlayfieldProjectionResult projection;
     projection.currentScrollPosition = 1.5;
     projection.builtInTraversal = BuiltInRendererTraversal{
@@ -551,11 +553,16 @@ void testSelectedSkinReceivesPreparationLaneIndicatorsWithoutFallback() {
   auto state = frame(63);
   state.authority.startLaneIndicators = {7, 2};
   state.authority.startLaneIndicatorsVisible = true;
+  state.authority.laneCoverEnabled = true;
+  state.authority.laneCoverPercent = 50;
   PlayfieldProjectionResult projection;
+  // The renderer traversal is still from before this frame's Start+scratch
+  // cover adjustment. The selected-skin cue must use captured authority,
+  // rather than visibly lagging one cover step behind it.
   projection.builtInTraversal = BuiltInRendererTraversal{
       .judgeY = 2.0F,
       .upperBound = 10.0F,
-      .noteVisibleUpperBound = 6.0F};
+      .noteVisibleUpperBound = 10.0F};
   expect(coordinator.prepareFrame(state, projection) ==
              PresentationFrameOutcome::Ready,
          "selected-skin preparation indicator frame is ready");

@@ -168,20 +168,17 @@ PresentationFrameOutcome PlayfieldPresentationCoordinator::prepareFrame(
   PendingFrame pending;
   pending.frameSerial = state.clock.serial;
   pending.hadSkin = static_cast<bool>(skin_);
-  double visibleLaneHeightRatio = 1.0;
-  if (projection.builtInTraversal) {
-    const auto &traversal = *projection.builtInTraversal;
-    const double laneHeight = static_cast<double>(traversal.upperBound) -
-                              static_cast<double>(traversal.judgeY);
-    const double visibleLaneHeight =
-        static_cast<double>(traversal.noteVisibleUpperBound) -
-        static_cast<double>(traversal.judgeY);
-    if (std::isfinite(laneHeight) && laneHeight > 0.0 &&
-        std::isfinite(visibleLaneHeight)) {
-      visibleLaneHeightRatio =
-          std::clamp(visibleLaneHeight / laneHeight, 0.0, 1.0);
-    }
-  }
+  // Projection is captured before the warmed built-in presentation applies
+  // this frame's authority. Start+scratch cover changes would consequently
+  // make optional skin overlays use the preceding frame's cover edge. The
+  // immutable authority is the same source BMSRenderer applies in prepare.
+  const double visibleLaneHeightRatio =
+      state.authority.laneCoverEnabled
+          ? std::clamp(1.0 -
+                           static_cast<double>(state.authority.laneCoverPercent) /
+                               100.0,
+                       0.0, 1.0)
+          : 1.0;
   pending.replayGhostFrame = {
       .frameSerial = state.clock.serial,
       .visualTimeMicros = state.clock.visualTimeMicros,
