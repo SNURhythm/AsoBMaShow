@@ -118,6 +118,8 @@ public:
   [[nodiscard]] PresentationFrameResult
   render(RenderContext &, const PreparedGameplayBgaFrame &,
          IGameplayBgaSubmitter &) override;
+  void submitSyntheticReplayGhosts(
+      RenderContext &, const SyntheticReplayGhostFrameInput &) override;
   void setViewport(ViewportSettings) override;
   // Geometry-only chart-lifetime refresh for safe-area/rotation changes. This
   // preserves the selected viewport settings and immutable activation identity
@@ -203,6 +205,7 @@ private:
   std::optional<PendingFrame> pendingFrame_;
   std::array<TouchCapture, gameplay::kRealtimeTouchFingerCapacity> captures_;
   std::optional<SkinInteractionLayout> publishedLayout_;
+  std::optional<SyntheticReplayGhostGeometry> publishedReplayGhostGeometry_;
   static constexpr std::size_t maximumQueuedInteractions = 256;
   std::array<SkinWriterInvocation, maximumQueuedInteractions> queuedWriters_{};
   std::size_t queuedWriterCount_ = 0;

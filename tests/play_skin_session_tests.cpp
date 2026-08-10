@@ -7,6 +7,7 @@
 #include "skin/beatoraja/GameplaySkinValidator.h"
 #include "skin/beatoraja/LuaSkinFileSystem.h"
 #include "skin/beatoraja/PlaySkinViewport.h"
+#include "skin/beatoraja/SyntheticReplayGhostOverlay.h"
 #include "skin/beatoraja/SkinResourceCatalog.h"
 #include "skin/package/SkinAliasDetector.h"
 #include "skin/package/SkinPathPolicy.h"
@@ -1198,6 +1199,55 @@ return {
               .authoredOrdinal = 800}});
   }
 
+  void addReplayGhostNoteGeometry() {
+    const auto addVisuals = [](SkinLaneNotePresentation &lane) {
+      constexpr std::array kinds{
+          SkinNoteVisualKind::Normal,
+          SkinNoteVisualKind::LnEnd,
+          SkinNoteVisualKind::LnStart,
+          SkinNoteVisualKind::LnBodyActive,
+          SkinNoteVisualKind::LnBodyInactive,
+          SkinNoteVisualKind::HcnEnd,
+          SkinNoteVisualKind::HcnStart,
+          SkinNoteVisualKind::HcnBodyActive,
+          SkinNoteVisualKind::HcnBodyInactive,
+          SkinNoteVisualKind::HcnDamage,
+          SkinNoteVisualKind::HcnReactive,
+          SkinNoteVisualKind::Mine,
+          SkinNoteVisualKind::Hidden,
+          SkinNoteVisualKind::Processed,
+      };
+      for (const auto kind : kinds) {
+        lane.visuals.emplace(kind, SkinSynthesizedNoteVisual{.kind = kind});
+      }
+    };
+    SkinNoteObject notes;
+    notes.lanes = {
+        {.authoredLane = 7,
+         .laneDestination = {.x = 10.0,
+                             .y = 40.0,
+                             .width = 30.0,
+                             .height = 200.0},
+         .authoredNoteHeight = 8.0},
+        {.authoredLane = 0,
+         .laneDestination = {.x = 80.0,
+                             .y = 160.0,
+                             .width = 54.0,
+                             .height = 400.0},
+         .authoredNoteHeight = 17.0},
+    };
+    addVisuals(notes.lanes[0]);
+    addVisuals(notes.lanes[1]);
+    model_.model.objects.push_back(
+        {.id = 83,
+         .authoredName = "session-replay-ghost-notes",
+         .payload = std::move(notes),
+         .authoredOrdinal = 83,
+         .critical = true});
+    model_.model.destinations.push_back(
+        {.object = 83, .presentation = {.authoredOrdinal = 830}});
+  }
+
   void addClickableImage() {
     resources_.addImage(82);
     model_.model.events.push_back(
@@ -1373,6 +1423,174 @@ void testSerialMismatchDoesNotConsumeRuntimeFrame() {
       stateAt(10), projectionAt(10), {});
   expect(corrected.ready() && corrected.committed.frameSerial == 10,
          "corrected matched serial can still begin exactly once");
+}
+
+void testSyntheticReplayGhostUsesMatchingLaneGeometry() {
+  SyntheticReplayGhostGeometry geometry{
+      .frameSerial = 9,
+      .viewport = {.authoredToUi = {},
+                   .uiToAuthored = {},
+                   .drawableAuthoredBounds =
+                       {.x = 0.0, .y = 0.0, .width = 1280.0, .height = 720.0},
+                   .safeUiBounds =
+                       {.x = 0.0, .y = 0.0, .width = 1280.0, .height = 720.0},
+                   .valid = true},
+      .sharedLaneHeight = 200.0,
+      .lanes = {
+          {.lane = 0,
+           .normalNote = {.x = 10.0, .y = 100.0, .width = 30.0, .height = 8.0},
+           .clip = {.x = 10.0, .y = 100.0, .width = 30.0, .height = 500.0}},
+          {.lane = 1,
+           .normalNote = {.x = 90.0, .y = 250.0, .width = 52.0, .height = 16.0},
+           .clip = {.x = 90.0, .y = 250.0, .width = 52.0, .height = 500.0}},
+      }};
+  const std::array events{ReplayGhostEvent{.lane = 1,
+                                            .noteTimeMicros = 1'000,
+                                            .judgeTimeMicros = 1'100,
+                                            .judgeScrollPosition = 2.2,
+                                            .judgement = Great}};
+
+  const auto overlay = buildSyntheticReplayGhostOverlay(
+      geometry, {.frameSerial = 9,
+                 .visualTimeMicros = 1'000,
+                 .currentScrollPosition = 2.0,
+                 .hispeed = 1.0,
+                 .enabled = true,
+                 .events = events});
+  expect(overlay.frameSerial == 9 && overlay.commands.size() == 4,
+         "enabled synthetic replay ghost emits one outline");
+  if (overlay.commands.size() != 4) {
+    return;
+  }
+  const auto *top =
+      std::get_if<SkinPrimitiveCommand>(&overlay.commands.front().payload);
+  expect(top != nullptr && top->vertices.size() == 4 &&
+             std::abs(top->vertices[0].x - 90.0F) < 0.0001F &&
+             std::abs(top->vertices[0].y - 290.0F) < 0.0001F &&
+             std::abs(top->vertices[1].x - 142.0F) < 0.0001F &&
+             std::abs(top->vertices[2].y - 291.92F) < 0.0001F,
+         "synthetic replay ghost uses lane one width, height, and scroll");
+}
+
+void testSyntheticReplayGhostRespectsDisabledOption() {
+  SyntheticReplayGhostGeometry geometry{
+      .frameSerial = 1,
+      .viewport = {.authoredToUi = {},
+                   .uiToAuthored = {},
+                   .drawableAuthoredBounds =
+                       {.x = 0.0, .y = 0.0, .width = 1280.0, .height = 720.0},
+                   .safeUiBounds =
+                       {.x = 0.0, .y = 0.0, .width = 1280.0, .height = 720.0},
+                   .valid = true},
+      .sharedLaneHeight = 200.0,
+      .lanes = {{.lane = 0,
+                 .normalNote =
+                     {.x = 10.0, .y = 100.0, .width = 30.0, .height = 8.0},
+                 .clip = {.x = 10.0, .y = 100.0, .width = 30.0, .height = 500.0}}}};
+  const std::array events{ReplayGhostEvent{.lane = 0,
+                                            .noteTimeMicros = 1'000,
+                                            .judgeTimeMicros = 1'100,
+                                            .judgeScrollPosition = 2.2,
+                                            .judgement = Great}};
+  const auto overlay = buildSyntheticReplayGhostOverlay(
+      geometry, {.frameSerial = 1,
+                 .visualTimeMicros = 1'000,
+                 .currentScrollPosition = 2.0,
+                 .hispeed = 1.0,
+                 .enabled = false,
+                 .events = events});
+  expect(overlay.commands.empty(),
+         "disabled replay ghost option suppresses synthetic skin ghosts");
+}
+
+void testSyntheticReplayGhostSkipsEventsOutsideLaneClip() {
+  SyntheticReplayGhostGeometry geometry{
+      .frameSerial = 1,
+      .viewport = {.authoredToUi = {},
+                   .uiToAuthored = {},
+                   .drawableAuthoredBounds =
+                       {.x = 0.0, .y = 0.0, .width = 1280.0, .height = 720.0},
+                   .safeUiBounds =
+                       {.x = 0.0, .y = 0.0, .width = 1280.0, .height = 720.0},
+                   .valid = true},
+      .sharedLaneHeight = 200.0,
+      .lanes = {{.lane = 0,
+                 .normalNote =
+                     {.x = 10.0, .y = 100.0, .width = 30.0, .height = 8.0},
+                 .clip = {.x = 10.0, .y = 100.0, .width = 30.0, .height = 500.0}}}};
+  const std::array events{ReplayGhostEvent{.lane = 0,
+                                            .noteTimeMicros = 1'000,
+                                            .judgeTimeMicros = 1'100,
+                                            .judgeScrollPosition = 10.0,
+                                            .judgement = Great}};
+  const auto overlay = buildSyntheticReplayGhostOverlay(
+      geometry, {.frameSerial = 1,
+                 .visualTimeMicros = 1'000,
+                 .currentScrollPosition = 2.0,
+                 .hispeed = 1.0,
+                 .enabled = true,
+                 .events = events});
+  expect(overlay.commands.empty(),
+         "synthetic replay ghost skips events outside the active lane clip");
+}
+
+void testEvaluatedSkinPublishesPerLaneReplayGhostGeometry() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addReplayGhostNoteGeometry();
+  const auto frame = fixture.session().prepareFrame(stateAt(1), projectionAt(1), {});
+  const auto &geometry = frame.evaluation.syntheticReplayGhostGeometry;
+  expect(frame.ready() && geometry && geometry->frameSerial == 1 &&
+             geometry->sharedLaneHeight == 200.0 &&
+             geometry->lanes.size() == 2 && geometry->lanes[0].lane == 7 &&
+             geometry->lanes[0].normalNote.width == 30.0 &&
+             geometry->lanes[1].lane == 0 &&
+             geometry->lanes[1].normalNote.x == 80.0 &&
+             geometry->lanes[1].normalNote.height == 17.0,
+         "evaluated skin publishes the active note source's per-lane ghost geometry");
+}
+
+void testSubmittedSkinRendersOptionGatedSyntheticReplayGhosts() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addBgaMarker();
+  fixture.addReplayGhostNoteGeometry();
+  SessionBgaSubmitter bga;
+  RenderContext context;
+  expect(fixture.session().prepareFrame(stateAt(1), projectionAt(1)) ==
+                 PresentationFrameOutcome::Ready &&
+             fixture.session().render(context, bgaFrame(301), bga).outcome ==
+                 PresentationFrameOutcome::Ready,
+         "skin frame is submitted before its optional replay overlay");
+  const std::array events{ReplayGhostEvent{.lane = 0,
+                                            .noteTimeMicros = 100,
+                                            .judgeTimeMicros = 200,
+                                            .judgeScrollPosition = 1.2,
+                                            .judgement = Great}};
+  const auto submitsBeforeGhost = fixture.quadBackend().submitCalls;
+  fixture.session().submitSyntheticReplayGhosts(
+      context, {.frameSerial = 1,
+                .visualTimeMicros = 100,
+                .currentScrollPosition = 1.0,
+                .hispeed = 1.0,
+                .enabled = true,
+                .events = events});
+  expect(fixture.quadBackend().submitCalls > submitsBeforeGhost,
+         "submitted selected skin draws the enabled synthetic replay ghost");
+  const auto submitsAfterEnabled = fixture.quadBackend().submitCalls;
+  fixture.session().submitSyntheticReplayGhosts(
+      context, {.frameSerial = 1,
+                .visualTimeMicros = 100,
+                .currentScrollPosition = 1.0,
+                .hispeed = 1.0,
+                .enabled = false,
+                .events = events});
+  expect(fixture.quadBackend().submitCalls == submitsAfterEnabled,
+         "submitted selected skin suppresses synthetic ghosts when disabled");
 }
 
 void testInvalidSessionSerialDoesNotConsumeFrameOwners() {
@@ -2330,6 +2548,11 @@ int main() {
   testWriterFailureDiscardsEarlierAndFailedCallbackMutations();
   testEvaluatorFailureDiscardsWriterTransaction();
   testSerialMismatchDoesNotConsumeRuntimeFrame();
+  testSyntheticReplayGhostUsesMatchingLaneGeometry();
+  testSyntheticReplayGhostRespectsDisabledOption();
+  testSyntheticReplayGhostSkipsEventsOutsideLaneClip();
+  testEvaluatedSkinPublishesPerLaneReplayGhostGeometry();
+  testSubmittedSkinRendersOptionGatedSyntheticReplayGhosts();
   testInvalidSessionSerialDoesNotConsumeFrameOwners();
   testPassiveCustomTimerUsesTheSharedSessionFrame();
   testProductionPrepareIsExternallySideEffectFreeAndRejectsDoublePrepare();

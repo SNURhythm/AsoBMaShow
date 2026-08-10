@@ -4037,6 +4037,69 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
                              std::make_move_iterator(lowered.commands.end()));
     }
 
+    // The final loaded SkinNote owns Beatoraja's lane geometry. Publish only
+    // when that exact object participated in this evaluated frame, so the
+    // synthetic replay overlay cannot outlive a hidden/disabled note object.
+    if (noteLayoutSource != nullptr) {
+      const auto layout = std::ranges::find_if(
+          deferredNotes,
+          [noteLayoutSource](const DeferredNoteLowering &deferred) {
+            return deferred.object == noteLayoutSource;
+          });
+      if (layout != deferredNotes.end() && layout->note != nullptr &&
+          !layout->note->lanes.empty()) {
+        double offsetX = 0.0;
+        double offsetY = 0.0;
+        double offsetWidth = 0.0;
+        double offsetHeight = 0.0;
+        for (const auto &offset : layout->offsets) {
+          offsetX += offset.x;
+          offsetY += offset.y;
+          offsetWidth += offset.w;
+          offsetHeight += offset.h;
+        }
+        SyntheticReplayGhostGeometry replayGhostGeometry{
+            .frameSerial = inputs.frameSerial,
+            .viewport = inputs.viewport,
+            .sharedLaneHeight =
+                layout->note->lanes.front().laneDestination.height};
+        for (const auto &lane : layout->note->lanes) {
+          if (lane.authoredLane < 0) {
+            continue;
+          }
+          bool emptyClip = false;
+          const auto clip = intersectAuthoredRects(
+              layout->geometry ? layout->geometry->clip : std::nullopt,
+              AuthoredRect{.x = lane.laneDestination.x,
+                           .y = lane.laneDestination.y,
+                           .width = lane.laneDestination.width,
+                           .height = lane.laneDestination.height},
+              emptyClip);
+          const double noteHeight = lane.authoredNoteHeight.value_or(8.0);
+          const AuthoredRect normalNote{
+              .x = lane.laneDestination.x + offsetX,
+              .y = lane.laneDestination.y + offsetY,
+              .width = lane.laneDestination.width + offsetWidth,
+              .height = noteHeight + offsetHeight};
+          if (emptyClip || !clip || !std::isfinite(normalNote.x) ||
+              !std::isfinite(normalNote.y) || !std::isfinite(normalNote.width) ||
+              !std::isfinite(normalNote.height) || normalNote.width <= 0.0 ||
+              normalNote.height <= 0.0) {
+            continue;
+          }
+          replayGhostGeometry.lanes.push_back(
+              {.lane = lane.authoredLane,
+               .normalNote = normalNote,
+               .clip = *clip});
+        }
+        if (!replayGhostGeometry.lanes.empty() &&
+            std::isfinite(replayGhostGeometry.sharedLaneHeight) &&
+            replayGhostGeometry.sharedLaneHeight > 0.0) {
+          result.syntheticReplayGhostGeometry = std::move(replayGhostGeometry);
+        }
+      }
+    }
+
     buildAdjacentBatches(buffer);
     std::ranges::reverse(interactionLayout.slidersTopmostFirst);
     std::ranges::reverse(interactionLayout.imagesTopmostFirst);

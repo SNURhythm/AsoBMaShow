@@ -1,6 +1,7 @@
 #include "ReplayPlayfieldPresentation.h"
 
 #include "BuiltInPlayfieldPresentation.h"
+#include "../../ReplayGhostUtils.h"
 
 #include <algorithm>
 #include <stdexcept>
@@ -159,6 +160,11 @@ ReplayPlayfieldPresentationCreateResult ReplayPlayfieldPresentation::create(
           .bga = creation.bga,
           .persistViewport = {},
           .recordFailure = std::move(creation.recordFailure),
+          .replayGhostEvents =
+              creation.replayData
+                  ? replay_ghost::buildReplayGhostEvents(*creation.replayData,
+                                                         *model)
+                  : std::vector<ReplayGhostEvent>{},
           .allowBuiltInFallback = false,
       });
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS

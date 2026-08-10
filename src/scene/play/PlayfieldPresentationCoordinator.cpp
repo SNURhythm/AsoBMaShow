@@ -30,7 +30,8 @@ PlayfieldPresentationCoordinator::PlayfieldPresentationCoordinator(
       skin_(std::move(dependencies.skin)), bga_(dependencies.bga),
       persistViewport_(std::move(dependencies.persistViewport)),
       recordFailure_(std::move(dependencies.recordFailure)),
-      allowBuiltInFallback_(dependencies.allowBuiltInFallback) {
+      allowBuiltInFallback_(dependencies.allowBuiltInFallback),
+      replayGhostEvents_(std::move(dependencies.replayGhostEvents)) {
   if (!builtIn_) {
     throw std::invalid_argument(
         "PlayfieldPresentationCoordinator requires a built-in presentation");
@@ -141,6 +142,7 @@ void PlayfieldPresentationCoordinator::updateSkinViewportGeometry(
 
 void PlayfieldPresentationCoordinator::configure(
     const PlayfieldPresentationConfig &configuration) {
+  configuration_ = configuration;
   builtIn_->configure(configuration);
 }
 
@@ -161,6 +163,17 @@ PresentationFrameOutcome PlayfieldPresentationCoordinator::prepareFrame(
   PendingFrame pending;
   pending.frameSerial = state.clock.serial;
   pending.hadSkin = static_cast<bool>(skin_);
+  pending.replayGhostFrame = {
+      .frameSerial = state.clock.serial,
+      .visualTimeMicros = state.clock.visualTimeMicros,
+      .currentScrollPosition = projection.currentScrollPosition,
+      .hispeed = projection.builtInTraversal
+                      ? static_cast<double>(projection.builtInTraversal->hispeed)
+                      : 0.0,
+      .enabled = configuration_.replayGhostRenderingEnabled &&
+                 !replayGhostEvents_.empty(),
+      .events = replayGhostEvents_,
+  };
   lastFrameSerial_ = state.clock.serial;
 
   try {
@@ -345,6 +358,14 @@ PlayfieldPresentationCoordinator::render(RenderContext &context) {
     // the same frame would create a hybrid.  A post-draw recoverable result is
     // therefore reported while the embedded composition remains authoritative.
     skinResult.bgaCompositeMode = GameplayBgaCompositeMode::EmbeddedSkin;
+    if (pending.replayGhostFrame.enabled) {
+      // This optional application overlay is intentionally post-skin and
+      // cannot change the already-submitted selected frame into a fallback.
+      try {
+        skin_->submitSyntheticReplayGhosts(context, pending.replayGhostFrame);
+      } catch (...) {
+      }
+    }
     if (skinResult.failure) {
       publishFailure(*skinResult.failure);
     }

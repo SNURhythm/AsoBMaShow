@@ -1,5 +1,7 @@
 #include "PlayfieldProjection.h"
 
+#include "../../ReplayGhostUtils.h"
+
 #include "GameplayChartEntityRenderBudget.h"
 #include "GameplayNoteSubmissionOrder.h"
 #include "GameplayScrollGeometry.h"
@@ -1031,3 +1033,36 @@ adaptPlayfieldProjectionForSkin(const PlayfieldProjectionResult &projection) {
   }
   return result;
 }
+
+namespace replay_ghost {
+
+std::vector<ReplayGhostEvent>
+buildReplayGhostEvents(const ReplayData &replayData,
+                       const PlayfieldChartVisualModel &model) {
+  std::unordered_set<int> playableLanes(model.laneOrder.begin(),
+                                        model.laneOrder.end());
+  std::vector<long long> timelineTimes;
+  timelineTimes.reserve(model.timelines.size());
+  for (const auto &timeline : model.timelines) {
+    // Match BMSRenderer's ordered timeline input: discarded chart rows do not
+    // participate in either note projection or replay-ghost lookup.
+    if (timeline.retainedForProjection) {
+      timelineTimes.push_back(timeline.timeMicros);
+    }
+  }
+  std::ranges::sort(timelineTimes);
+  timelineTimes.erase(std::unique(timelineTimes.begin(), timelineTimes.end()),
+                      timelineTimes.end());
+  return detail::buildReplayGhostEvents(
+      replayData,
+      [&playableLanes](int lane) {
+        return playableLanes.find(lane) != playableLanes.end();
+      },
+      [&timelineTimes](long long time) {
+        return std::binary_search(timelineTimes.begin(), timelineTimes.end(),
+                                  time);
+      },
+      [&model](long long time) { return scrollPositionAtTime(model, time); });
+}
+
+} // namespace replay_ghost

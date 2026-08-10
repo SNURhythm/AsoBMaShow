@@ -881,6 +881,9 @@ PresentationFrameResult PlaySkinSession::render(
     return result;
   }
 
+  publishedReplayGhostGeometry_ =
+      std::move(transaction.evaluation.syntheticReplayGhostGeometry);
+
   advanceRevision(touchHitRegionsRevision_);
 
   result.outcome = PresentationFrameOutcome::Ready;
@@ -907,9 +910,25 @@ PresentationFrameResult PlaySkinSession::render(
              : std::move(*queueClosedResult);
 }
 
+void PlaySkinSession::submitSyntheticReplayGhosts(
+    RenderContext &renderContext, const SyntheticReplayGhostFrameInput &input) {
+  if (!publishedReplayGhostGeometry_ ||
+      publishedReplayGhostGeometry_->frameSerial != input.frameSerial) {
+    return;
+  }
+  const SkinCommandBuffer overlay =
+      buildSyntheticReplayGhostOverlay(*publishedReplayGhostGeometry_, input);
+  if (overlay.commands.empty()) {
+    return;
+  }
+  (void)context_.renderer.submitOverlay(overlay, context_.resources,
+                                        renderContext, context_.quadRenderer);
+}
+
 void PlaySkinSession::clearPublishedGeometry(bool advanceTopology) noexcept {
   captures_.fill({});
   publishedLayout_.reset();
+  publishedReplayGhostGeometry_.reset();
   queuedWriterCount_ = 0;
   queuedEventCount_ = 0;
   if (advanceTopology) {

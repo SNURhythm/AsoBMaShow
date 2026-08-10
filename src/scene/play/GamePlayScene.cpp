@@ -6,6 +6,7 @@
 #include "GamePlayStartup.h"
 #include "GamePlayTiming.h"
 #include "PracticeNoteFinalizer.h"
+#include "../../ReplayGhostUtils.h"
 #include "../../GBattleMode.h"
 #include "../../CourseConstraintUtils.h"
 #include "../../PlayOptionUtils.h"
@@ -2488,6 +2489,11 @@ void GamePlayScene::init() {
                         ? std::nullopt
                         : std::optional<std::uint64_t>(failure.frameSerial));
               },
+          .replayGhostEvents =
+              options.replayData
+                  ? replay_ghost::buildReplayGhostEvents(
+                        *options.replayData, playfieldChartVisualModel)
+                  : std::vector<ReplayGhostEvent>{},
       });
   ownedPresentation = std::move(coordinator);
 #else

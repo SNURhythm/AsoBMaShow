@@ -4,11 +4,14 @@
 #include "PlayfieldPresentation.h"
 #include "PlayfieldProjection.h"
 
+#include "../../ReplayGhostUtils.h"
+
 #include <array>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
+#include <vector>
 
 enum class GameplayViewportPersistenceDisposition : std::uint8_t {
   Queued,
@@ -31,6 +34,7 @@ struct PlayfieldPresentationCoordinatorDependencies {
   IGameplayBgaSubmitter &bga;
   PersistGameplayViewport persistViewport;
   std::function<void(const PresentationFailure &)> recordFailure;
+  std::vector<ReplayGhostEvent> replayGhostEvents;
   // Interactive gameplay keeps the prepared built-in fallback. Replay export
   // instead aborts on a selected-skin failure so its encoded frame is never a
   // mixed or substituted presentation.
@@ -113,6 +117,7 @@ private:
     PresentationFailure bgaPrepareExceptionFailure;
     PresentationFailure skinRenderExceptionFailure;
     PresentationFailure skinNoSubmissionFailure;
+    skin::SyntheticReplayGhostFrameInput replayGhostFrame;
   };
   struct TouchCapture {
     long long pointerId = 0;
@@ -143,6 +148,8 @@ private:
   PersistGameplayViewport persistViewport_;
   std::function<void(const PresentationFailure &)> recordFailure_;
   bool allowBuiltInFallback_ = true;
+  PlayfieldPresentationConfig configuration_;
+  std::vector<ReplayGhostEvent> replayGhostEvents_;
   std::optional<PendingFrame> pending_;
   std::optional<PresentationFailure> lastFailure_;
   long long lastEventMicros_ = 0;

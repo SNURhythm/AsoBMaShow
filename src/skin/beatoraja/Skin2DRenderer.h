@@ -4,6 +4,7 @@
 #include "BeatorajaSkinModel.h"
 #include "LuaSkinRuntime.h"
 #include "SkinDrawCommand.h"
+#include "SyntheticReplayGhostOverlay.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -268,6 +269,9 @@ struct SkinInteractionLayout {
 struct SkinFrameEvaluationResult {
   std::optional<SkinCommandBuffer> submitReady;
   std::optional<SkinInteractionLayout> interactionLayout;
+  // Published only from the selected, evaluated SkinNote source. The session
+  // uses this immutable frame geometry for the optional replay ghost overlay.
+  std::optional<SyntheticReplayGhostGeometry> syntheticReplayGhostGeometry;
   std::vector<SkinDiagnostic> diagnostics;
 };
 
@@ -283,6 +287,11 @@ public:
   [[nodiscard]] bool submit(const SkinCommandBuffer &,
                             const SkinResourceCatalog &, RenderContext &,
                             rendering::SkinQuadBatchRenderer &) const;
+  // Optional application overlays use the same UI batch path as authored
+  // skin commands, but are submitted after the skin's atomic BGA commit.
+  [[nodiscard]] bool submitOverlay(
+      const SkinCommandBuffer &, const SkinPreparedResourceView &,
+      RenderContext &, rendering::SkinQuadBatchRenderer &) const noexcept;
   // False is a pre-commit fallback decision. Once the BGA/quad commit point
   // is crossed, this boundary cannot unwind into coordinator fallback.
   [[nodiscard]] bool submit(

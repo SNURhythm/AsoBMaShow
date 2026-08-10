@@ -1,6 +1,7 @@
 #include "scene/play/ReplayPlayfieldPresentation.h"
 #include "scene/play/ReplayVideoGameplayPreflight.h"
 #include "PreparationPlan.h"
+#include "ReplayGhostUtils.h"
 #include "skin/beatoraja/GameplaySkinValidator.h"
 #include "skin/package/SkinPackageCatalog.h"
 #include "skin/package/SkinPathPolicy.h"
@@ -320,6 +321,54 @@ void configureTestGameplayCamera(int renderWidth, int renderHeight) {
       .setViewRect(0, 0, static_cast<std::uint16_t>(renderWidth),
                    static_cast<std::uint16_t>(renderHeight))
       .commit();
+}
+
+void testModelReplayGhostsRetainRawLanesAndTimelinePositions() {
+  PlayfieldChartVisualModel model;
+  model.laneOrder = {4, 1};
+  model.timelines = {
+      {.id = 1,
+       .timeMicros = 1'000,
+       .scrollPosition = 1.0,
+       .retainedForProjection = true},
+      {.id = 2,
+       .timeMicros = 2'000,
+       .scrollPosition = 2.5,
+       .retainedForProjection = true},
+      {.id = 3,
+       .timeMicros = 3'000,
+       .scrollPosition = 4.0,
+       .retainedForProjection = false},
+  };
+  ReplayData replay;
+  replay.events = {
+      {.action = ReplayEventAction::Press,
+       .lane = 4,
+       .noteTimeMicros = 1'000,
+       .judgeTimeMicros = 2'000,
+       .judgement = Great},
+      {.action = ReplayEventAction::Press,
+       .lane = 9,
+       .noteTimeMicros = 1'000,
+       .judgeTimeMicros = 2'000,
+       .judgement = Great},
+      {.action = ReplayEventAction::Press,
+       .lane = 1,
+       .noteTimeMicros = 1'500,
+       .judgeTimeMicros = 2'000,
+       .judgement = Great},
+      {.action = ReplayEventAction::Press,
+       .lane = 1,
+       .noteTimeMicros = 3'000,
+       .judgeTimeMicros = 3'000,
+       .judgement = Great},
+  };
+
+  const auto ghosts = replay_ghost::buildReplayGhostEvents(replay, model);
+  expect(ghosts.size() == 1 && ghosts.front().lane == 4 &&
+             ghosts.front().noteTimeMicros == 1'000 &&
+             ghosts.front().judgeScrollPosition == 2.5,
+         "model-backed replay ghosts retain raw lanes and timeline positions");
 }
 
 void testExportPixelSizesMapToLogicalGameplayBounds() {
@@ -1258,6 +1307,7 @@ int main() {
   rendering::PosColorVertex::init();
   rendering::PosTexVertex::init();
   rendering::PosTexCoord0Vertex::init();
+  testModelReplayGhostsRetainRawLanesAndTimelinePositions();
   testExportPixelSizesMapToLogicalGameplayBounds();
   testFirstExportFrameRefreshesPreparedRendererGeometry();
   testReplayGameplayFrameStateMirrorsLiveTimerAndStartClocks();

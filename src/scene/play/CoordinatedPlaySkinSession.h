@@ -4,6 +4,7 @@
 #include "../../skin/SkinProfileSettings.h"
 #include "../../skin/beatoraja/PlaySkinSessionIdentity.h"
 #include "../../skin/beatoraja/PlaySkinViewport.h"
+#include "../../skin/beatoraja/SyntheticReplayGhostOverlay.h"
 
 #include <cstdint>
 #include <vector>
@@ -23,6 +24,10 @@ public:
   [[nodiscard]] virtual PresentationFrameResult
   render(RenderContext &, const PreparedGameplayBgaFrame &,
          IGameplayBgaSubmitter &) = 0;
+  // Optional application-owned replay decoration. A concrete skin session
+  // emits it only after its authored frame is successfully submitted.
+  virtual void submitSyntheticReplayGhosts(
+      RenderContext &, const skin::SyntheticReplayGhostFrameInput &) {}
   virtual void setViewport(skin::ViewportSettings) = 0;
   virtual void updateViewportGeometry(skin::UiLogicalRect) = 0;
   [[nodiscard]] virtual gameplay::RealtimeTouchLayout touchLayout() const = 0;

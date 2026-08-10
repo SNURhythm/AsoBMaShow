@@ -125,6 +125,23 @@ bool Skin2DRenderer::submit(
   return true;
 }
 
+bool Skin2DRenderer::submitOverlay(
+    const SkinCommandBuffer &buffer, const SkinPreparedResourceView &resources,
+    RenderContext &context,
+    rendering::SkinQuadBatchRenderer &renderer) const noexcept {
+  try {
+    renderer.begin(context, resources);
+    if (!renderer.submit(buffer.commands)) {
+      renderer.flush();
+      return false;
+    }
+    renderer.flush();
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
 bool Skin2DRenderer::submit(
     const SkinCommandBuffer &buffer,
     const SkinPreparedResourceView &resources, RenderContext &context,

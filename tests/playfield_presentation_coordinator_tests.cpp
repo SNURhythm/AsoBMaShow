@@ -88,6 +88,12 @@ struct PresentationStats {
   bool throwAllocationFailureOnPrepare = false;
   bool denyAllocationsAfterNoSubmission = false;
   bool clearAllocationFailureOnRender = false;
+  int syntheticReplayGhostCalls = 0;
+  std::uint64_t syntheticReplayGhostFrameSerial = 0;
+  double syntheticReplayGhostScrollPosition = 0.0;
+  double syntheticReplayGhostHispeed = 0.0;
+  bool syntheticReplayGhostEnabled = false;
+  std::size_t syntheticReplayGhostEventCount = 0;
 };
 
 void recordEvent(const std::shared_ptr<PresentationStats> &stats,
@@ -238,6 +244,16 @@ public:
       coordinator_test_allocation_fault::failUntilBuiltInFallback = true;
     }
     return result;
+  }
+  void submitSyntheticReplayGhosts(
+      RenderContext &, const skin::SyntheticReplayGhostFrameInput &input) override {
+    ++stats_->syntheticReplayGhostCalls;
+    stats_->syntheticReplayGhostFrameSerial = input.frameSerial;
+    stats_->syntheticReplayGhostScrollPosition = input.currentScrollPosition;
+    stats_->syntheticReplayGhostHispeed = input.hispeed;
+    stats_->syntheticReplayGhostEnabled = input.enabled;
+    stats_->syntheticReplayGhostEventCount = input.events.size();
+    recordEvent(stats_, "skin.replay_ghost");
   }
   void setViewport(skin::ViewportSettings viewport) override {
     ++stats_->viewportCalls;
@@ -445,6 +461,55 @@ void testSkinSuccessSubmitsNoBuiltInWork() {
   expect(result.submittedMode == PresentationMode::Skin &&
              result.bgaCompositeMode == GameplayBgaCompositeMode::EmbeddedSkin,
          "successful skin owns the presentation and embedded BGA");
+}
+
+void testSelectedSkinReceivesOptionGatedReplayGhostFrame() {
+  const auto makeCoordinator = [](std::shared_ptr<PresentationStats> builtIn,
+                                  std::shared_ptr<PresentationStats> skinStats,
+                                  FakeBga &bga) {
+    return PlayfieldPresentationCoordinator({
+        .builtIn = std::make_unique<FakeBuiltIn>(std::move(builtIn)),
+        .skin = std::make_unique<FakeSkin>(std::move(skinStats), identity()),
+        .bga = bga,
+        .replayGhostEvents = {{.lane = 3,
+                               .noteTimeMicros = 1'000,
+                               .judgeTimeMicros = 1'100,
+                               .judgeScrollPosition = 2.5,
+                               .judgement = Great}},
+    });
+  };
+  const auto configureAndRender = [&makeCoordinator](bool enabled) {
+    auto builtIn = std::make_shared<PresentationStats>();
+    auto skinStats = std::make_shared<PresentationStats>();
+    skinStats->renderResult = {
+        .outcome = PresentationFrameOutcome::Ready,
+        .submittedMode = PresentationMode::Skin,
+        .bgaCompositeMode = GameplayBgaCompositeMode::EmbeddedSkin};
+    FakeBga bga;
+    auto coordinator = makeCoordinator(builtIn, skinStats, bga);
+    coordinator.configure({.replayGhostRenderingEnabled = enabled});
+    auto state = frame(enabled ? 61 : 62);
+    state.clock.visualTimeMicros = 900;
+    PlayfieldProjectionResult projection;
+    projection.currentScrollPosition = 1.5;
+    projection.builtInTraversal = BuiltInRendererTraversal{.hispeed = 1.25F};
+    (void)coordinator.prepareFrame(state, projection);
+    RenderContext context;
+    (void)coordinator.render(context);
+    return skinStats;
+  };
+
+  const auto enabled = configureAndRender(true);
+  expect(enabled->syntheticReplayGhostCalls == 1 &&
+             enabled->syntheticReplayGhostFrameSerial == 61 &&
+             enabled->syntheticReplayGhostEnabled &&
+             enabled->syntheticReplayGhostEventCount == 1 &&
+             enabled->syntheticReplayGhostScrollPosition == 1.5 &&
+             enabled->syntheticReplayGhostHispeed == 1.25,
+         "selected skin receives the exact replay-ghost projection only when enabled");
+  const auto disabled = configureAndRender(false);
+  expect(disabled->syntheticReplayGhostCalls == 0,
+         "disabled replay ghost option never reaches a selected skin");
 }
 
 void testCriticalSkinFailureCancelsBeforeOneWarmFallback() {
@@ -946,6 +1011,7 @@ void testResetAndDestructorCancelBeforeDestroyingSkin() {
 int main() {
   testBuiltInDefaultWarmsAndReusesOneBgaFrame();
   testSkinSuccessSubmitsNoBuiltInWork();
+  testSelectedSkinReceivesOptionGatedReplayGhostFrame();
   testCriticalSkinFailureCancelsBeforeOneWarmFallback();
   testCriticalSelectedSkinPrepareFailureReturnsTransactionDiagnostic();
   testPostDrawRecoverableFailureNeverCreatesHybrid();
