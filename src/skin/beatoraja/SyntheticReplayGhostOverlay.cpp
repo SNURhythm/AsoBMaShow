@@ -114,9 +114,15 @@ SkinCommandBuffer buildSyntheticReplayGhostOverlay(
       !std::isfinite(input.currentScrollPosition) ||
       !std::isfinite(input.hispeed) || input.hispeed <= 0.0 ||
       !std::isfinite(geometry.sharedLaneHeight) ||
-      geometry.sharedLaneHeight <= 0.0) {
+      geometry.sharedLaneHeight <= 0.0 || geometry.lanes.empty() ||
+      !validRect(geometry.lanes.front().clip)) {
     return result;
   }
+
+  // Pinned LaneRenderer derives the vertical play area from lanes[0] for all
+  // lanes. Keep each lane's own horizontal region, but never submit a ghost
+  // beyond that shared top/bottom range.
+  const auto &sharedPlayArea = geometry.lanes.front().clip;
 
   for (const ReplayGhostEvent &event : input.events) {
     if (event.judgeTimeMicros < input.visualTimeMicros ||
@@ -129,6 +135,18 @@ SkinCommandBuffer buildSyntheticReplayGhostOverlay(
         !validRect(lane->clip)) {
       continue;
     }
+    const double clipTop = std::max(lane->clip.y, sharedPlayArea.y);
+    const double clipBottom =
+        std::min(lane->clip.y + lane->clip.height,
+                 sharedPlayArea.y + sharedPlayArea.height);
+    if (!std::isfinite(clipTop) || !std::isfinite(clipBottom) ||
+        clipBottom <= clipTop) {
+      continue;
+    }
+    const AuthoredRect playAreaClip{.x = lane->clip.x,
+                                    .y = clipTop,
+                                    .width = lane->clip.width,
+                                    .height = clipBottom - clipTop};
     const double y = lane->normalNote.y +
                      (event.judgeScrollPosition - input.currentScrollPosition) *
                          geometry.sharedLaneHeight * input.hispeed;
@@ -147,7 +165,7 @@ SkinCommandBuffer buildSyntheticReplayGhostOverlay(
         .width = lane->normalNote.width,
         .height = lane->normalNote.height,
     };
-    if (!intersects(outline, lane->clip)) {
+    if (!intersects(outline, playAreaClip)) {
       continue;
     }
     const auto rgba = ghostColor(event);
@@ -158,25 +176,25 @@ SkinCommandBuffer buildSyntheticReplayGhostOverlay(
                       .y = outline.y,
                       .width = outline.width,
                       .height = thickness},
-                     lane->clip, rgba, ordinal);
+                     playAreaClip, rgba, ordinal);
     appendGhostStrip(result, geometry.viewport,
                      {.x = outline.x,
                       .y = outline.y + outline.height - thickness,
                       .width = outline.width,
                       .height = thickness},
-                     lane->clip, rgba, ordinal + 1U);
+                     playAreaClip, rgba, ordinal + 1U);
     appendGhostStrip(result, geometry.viewport,
                      {.x = outline.x,
                       .y = outline.y,
                       .width = thickness,
                       .height = outline.height},
-                     lane->clip, rgba, ordinal + 2U);
+                     playAreaClip, rgba, ordinal + 2U);
     appendGhostStrip(result, geometry.viewport,
                      {.x = outline.x + outline.width - thickness,
                       .y = outline.y,
                       .width = thickness,
                       .height = outline.height},
-                     lane->clip, rgba, ordinal + 3U);
+                     playAreaClip, rgba, ordinal + 3U);
   }
   return result;
 }

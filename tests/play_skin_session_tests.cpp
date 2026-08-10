@@ -1534,6 +1534,43 @@ void testSyntheticReplayGhostSkipsEventsOutsideLaneClip() {
          "synthetic replay ghost skips events outside the active lane clip");
 }
 
+void testSyntheticReplayGhostUsesSharedPlayAreaClip() {
+  SyntheticReplayGhostGeometry geometry{
+      .frameSerial = 1,
+      .viewport = {.authoredToUi = {},
+                   .uiToAuthored = {},
+                   .drawableAuthoredBounds =
+                       {.x = 0.0, .y = 0.0, .width = 1280.0, .height = 720.0},
+                   .safeUiBounds =
+                       {.x = 0.0, .y = 0.0, .width = 1280.0, .height = 720.0},
+                   .valid = true},
+      .sharedLaneHeight = 200.0,
+      .lanes = {
+          // Beatoraja's LaneRenderer uses lane zero for the common vertical
+          // play-area bounds, even when the next lane has a taller region.
+          {.lane = 0,
+           .normalNote = {.x = 10.0, .y = 100.0, .width = 30.0, .height = 8.0},
+           .clip = {.x = 10.0, .y = 100.0, .width = 30.0, .height = 100.0}},
+          {.lane = 1,
+           .normalNote = {.x = 80.0, .y = 100.0, .width = 52.0, .height = 16.0},
+           .clip = {.x = 80.0, .y = 100.0, .width = 52.0, .height = 500.0}},
+      }};
+  const std::array events{ReplayGhostEvent{.lane = 1,
+                                            .noteTimeMicros = 1'000,
+                                            .judgeTimeMicros = 1'100,
+                                            .judgeScrollPosition = 1.0,
+                                            .judgement = Great}};
+  const auto overlay = buildSyntheticReplayGhostOverlay(
+      geometry, {.frameSerial = 1,
+                 .visualTimeMicros = 1'000,
+                 .currentScrollPosition = 0.0,
+                 .hispeed = 1.0,
+                 .enabled = true,
+                 .events = events});
+  expect(overlay.commands.empty(),
+         "synthetic replay ghosts obey the shared skin play-area clip");
+}
+
 void testEvaluatedSkinPublishesPerLaneReplayGhostGeometry() {
   SessionFixture fixture;
   if (!fixture.ready()) {
@@ -2551,6 +2588,7 @@ int main() {
   testSyntheticReplayGhostUsesMatchingLaneGeometry();
   testSyntheticReplayGhostRespectsDisabledOption();
   testSyntheticReplayGhostSkipsEventsOutsideLaneClip();
+  testSyntheticReplayGhostUsesSharedPlayAreaClip();
   testEvaluatedSkinPublishesPerLaneReplayGhostGeometry();
   testSubmittedSkinRendersOptionGatedSyntheticReplayGhosts();
   testInvalidSessionSerialDoesNotConsumeFrameOwners();
