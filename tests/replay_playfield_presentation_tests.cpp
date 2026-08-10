@@ -1,4 +1,5 @@
 #include "scene/play/ReplayPlayfieldPresentation.h"
+#include "scene/play/ReplayVideoGameplayPreflight.h"
 #include "skin/beatoraja/GameplaySkinValidator.h"
 #include "skin/package/SkinPackageCatalog.h"
 #include "skin/package/SkinPathPolicy.h"
@@ -317,6 +318,43 @@ void testUnavailableSelectedSkinStopsBeforeAnyFrameWork() {
          "unavailable selected skin retains its diagnostic before any BGA frame work");
 }
 
+void testRealNormalExportPreflightStopsAudioAndMp4Work() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  ReplayData replay;
+  AppSettings settings;
+  PlayfieldPresentationConfig configuration;
+  TestBga bga;
+  GameplaySkinSessionServices skinServices{
+      .acquire = [](int) {
+        return skin::GameplaySkinAcquisition{
+            .disposition = skin::GameplaySkinAcquisitionDisposition::Failed,
+            .failure = skin::GameplaySkinAcquisitionFailure{
+                .diagnostic = {
+                    .code = "skin.lifecycle.activation_unavailable",
+                    .message = "The selected gameplay skin is unavailable.",
+                    .severity = skin::DiagnosticSeverity::Error}}};
+      }};
+  std::unique_ptr<ReplayPlayfieldPresentation> presentation;
+  const auto preflight = replay_video_export::preflightReplayGameplayPresentation(
+      chart, replay, settings, configuration, {},
+      {.x = 0.0, .y = 0.0, .width = 1280.0, .height = 720.0}, bga,
+      std::move(skinServices), presentation);
+  int fakeAudioWork = 0;
+  int fakeMp4Work = 0;
+  const auto result = replay_video_export::runPreflightGatedNormalExport(
+      [&]() { return preflight; }, [&]() -> ReplayVideoExportResult {
+        ++fakeAudioWork;
+        ++fakeMp4Work;
+        return {.success = true};
+      });
+  expect(!result.success &&
+             result.message.contains("skin.lifecycle.activation_unavailable") &&
+             presentation == nullptr && fakeAudioWork == 0 &&
+             fakeMp4Work == 0,
+         "real selected-skin preflight stops normal audio and MP4 work");
+}
+
 void testSelectedReadySkinReceivesOneInitialSnapshotAndSubmitsSkinFrame() {
   bms_parser::Chart chart;
   chart.Meta.KeyMode = 7;
@@ -589,6 +627,7 @@ int main() {
   testNoSelectionKeepsOneAdapter();
   testSelectedFailureRetainsFactoryDiagnostic();
   testUnavailableSelectedSkinStopsBeforeAnyFrameWork();
+  testRealNormalExportPreflightStopsAudioAndMp4Work();
   testSelectedReadySkinReceivesOneInitialSnapshotAndSubmitsSkinFrame();
   testSelectedSkinRuntimeFailureDoesNotSubmitBuiltIn();
   testClassicLongHeadSuppressesJudgeHudAndBgaMissClock();

@@ -25,6 +25,7 @@
 #include "scene/play/GamePlayTiming.h"
 #include "scene/play/Judge.h"
 #include "scene/play/ReplayPlayfieldPresentation.h"
+#include "scene/play/ReplayVideoGameplayPreflight.h"
 #include "skin/DefaultSkin.h"
 #include "view/UiTheme.h"
 #include "view/View.h"
@@ -119,20 +120,6 @@ struct PreparedReplayGameplayPresentation {
   std::unique_ptr<ReplayPlayfieldPresentation> presentation;
 };
 
-std::string replaySkinExportFailureMessage(const PresentationFailure &failure) {
-  std::string message = failure.diagnostic.message;
-  if (!failure.diagnostic.code.empty()) {
-    if (!message.empty()) {
-      message.append("\n\n");
-    }
-    message.push_back('[');
-    message.append(failure.diagnostic.code);
-    message.push_back(']');
-  }
-  return message.empty() ? "The selected gameplay skin could not be used."
-                         : message;
-}
-
 GameplaySkinSessionServices
 replayGameplaySkinSessionServices(ApplicationContext &context) {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
@@ -188,39 +175,21 @@ preflightReplayGameplayPresentation(
     const ReplayVideoExportOptions &options,
     PreparedReplayGameplayPresentation &prepared, ReplayVideoExportLog *log) {
   const auto resolvedOptions = resolveReplayVideoExportOptions(options);
-  Judge judge(chart.Meta.Rank);
-  auto created = ReplayPlayfieldPresentation::create({
-      .chart = chart,
-      .timingWindows = judge.timingWindows,
-      .configuration = replayGameplayPresentationConfig(chart, settings, options),
-      .settings = settings,
-      .playback = preparationPlan.playback,
-      .bga = context.jukebox,
-      .skinServices = replayGameplaySkinSessionServices(context),
-      .skinInput = {.safeUiBounds = {
-                        .x = 0.0,
-                        .y = 0.0,
-                        .width = static_cast<double>(resolvedOptions.width),
-                        .height = static_cast<double>(resolvedOptions.height),
-                    }},
-      .replayData = &replay,
-      .replayTouchSamples = replay.touchSamples,
-      .recordFailure = {},
-  });
-  if (created.presentation != nullptr) {
-    prepared.presentation = std::move(created.presentation);
-    return std::nullopt;
+  const auto result = replay_video_export::preflightReplayGameplayPresentation(
+      chart, replay, settings,
+      replayGameplayPresentationConfig(chart, settings, options),
+      preparationPlan.playback,
+      {.x = 0.0,
+       .y = 0.0,
+       .width = static_cast<double>(resolvedOptions.width),
+       .height = static_cast<double>(resolvedOptions.height)},
+      context.jukebox, replayGameplaySkinSessionServices(context),
+      prepared.presentation);
+  if (result) {
+    replayExportLog(log, "Replay export skin preflight failed: %s",
+                    result->message.c_str());
   }
-
-  const PresentationFailure failure = created.failure.value_or(
-      PresentationFailure{.diagnostic =
-                              {.code = "skin.lifecycle.activation_unavailable",
-                               .message =
-                                   "The selected gameplay skin is unavailable."}});
-  const std::string message = replaySkinExportFailureMessage(failure);
-  replayExportLog(log, "Replay export skin preflight failed: %s",
-                  message.c_str());
-  return ReplayVideoExportResult{.success = false, .message = message};
+  return result;
 }
 
 std::optional<std::string>
@@ -3269,7 +3238,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
                   PresentationFrameOutcome::CriticalFailure ||
               presentationFrame.failure) {
             errorMessage = presentationFrame.failure
-                               ? replaySkinExportFailureMessage(
+                               ? replay_video_export::skinExportFailureMessage(
                                      *presentationFrame.failure)
                                : "Replay gameplay presentation failed "
                                  "without a diagnostic "

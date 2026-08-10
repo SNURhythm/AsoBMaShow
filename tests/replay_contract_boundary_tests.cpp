@@ -1,6 +1,5 @@
 #include "ModernResult.h"
 #include "ModernResultRecallBuilder.h"
-#include "ReplayVideoExporter.h"
 #include "ir/IrSubmissionSnapshot.h"
 #include "replay/ReplayCapabilities.h"
 #include "replay/BeatorajaReplayCodec.h"
@@ -444,6 +443,9 @@ void testNormalReplayExportUsesPreparedPresentation() {
   const std::filesystem::path exporter =
       std::filesystem::path(ASOBMASHOW_SOURCE_DIR) /
       "src/ReplayVideoExporter.cpp";
+  const std::filesystem::path preflight =
+      std::filesystem::path(ASOBMASHOW_SOURCE_DIR) /
+      "src/scene/play/ReplayVideoGameplayPreflight.cpp";
   constexpr std::string_view normalExportStart =
       "ReplayVideoExporter::Export(ApplicationContext &context,";
   constexpr std::string_view normalExportEnd =
@@ -477,36 +479,12 @@ void testNormalReplayExportUsesPreparedPresentation() {
       "normal replay no longer directly renders gameplay");
   requireToken(exporter, "releaseDueClassicLongNoteTails",
                "normal replay delegates classic LN auto-release to its adapter");
-  requireToken(exporter, ".replayData = &replay",
+  requireToken(preflight, ".replayData = &replay",
                "normal replay preserves built-in ghost and miss-marker input");
-  requireToken(exporter, "replaySkinExportFailureMessage(",
+  requireToken(exporter, "replay_video_export::skinExportFailureMessage(",
                "normal replay safely reports presentation frame failures");
   requireToken(exporter, "presentation.frame_failure_missing",
                "normal replay reports a diagnostic-free frame failure safely");
-}
-
-void testNormalExportPreflightGateStopsAllOutputWork() {
-  int fakeAudioWork = 0;
-  int fakeMp4Work = 0;
-  const auto result = replay_video_export::runPreflightGatedNormalExport(
-      []() -> std::optional<ReplayVideoExportResult> {
-        return ReplayVideoExportResult{
-            .success = false,
-            .message = "The selected gameplay skin is unavailable. "
-                       "[skin.lifecycle.activation_unavailable]"};
-      },
-      [&]() -> ReplayVideoExportResult {
-        ++fakeAudioWork;
-        ++fakeMp4Work;
-        return {.success = true};
-      });
-  if (result.success ||
-      !result.message.contains("skin.lifecycle.activation_unavailable") ||
-      fakeAudioWork != 0 || fakeMp4Work != 0) {
-    std::cerr << "FAIL: normal Export preflight failure stops fake audio and "
-                 "MP4 work\n";
-    ++failures;
-  }
 }
 
 void requireToken(const std::filesystem::path &path, std::string_view token,
@@ -734,7 +712,6 @@ int main() {
   testCourseContinuationAndConsumerBoundaries();
   testReplayExportUsesPreparedGameplayBgaFrames();
   testNormalReplayExportUsesPreparedPresentation();
-  testNormalExportPreflightGateStopsAllOutputWork();
   if (failures != 0) {
     std::cerr << failures << " replay contract boundary test(s) failed\n";
     return 1;

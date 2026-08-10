@@ -4776,6 +4776,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/scene/play/PlayfieldProjection.cpp
             src/scene/play/PlayfieldVisualState.cpp
             src/scene/play/ReplayPlayfieldPresentation.cpp
+            src/scene/play/ReplayVideoGameplayPreflight.cpp
             src/skin/SkinConfigurationWriteQueue.cpp
             src/skin/SkinProfileSettings.cpp
             src/skin/SkinStoragePaths.cpp
