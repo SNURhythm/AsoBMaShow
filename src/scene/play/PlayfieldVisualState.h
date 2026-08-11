@@ -45,10 +45,10 @@ struct PlayfieldFrameClock {
 struct PlayfieldPresentationConfig {
   // Beatoraja PlayConfig.duration, retained without a green-number round trip.
   int visibleTimeDurationMilliseconds = 667;
-  // Live LaneRenderer.getHispeed() state. A positive value is authoritative
-  // for note traversal and skin properties; zero retains only the legacy
-  // preview fallback while callers are migrated.
-  float configuredHispeed = 0.0F;
+  // Live LaneRenderer.getHispeed() state. An engaged value, including zero,
+  // is authoritative for note traversal and skin properties; disengaged keeps
+  // the legacy preview fallback for callers that do not own lane state.
+  std::optional<float> configuredHispeed;
   float hispeedMultiplier = 1.0F;
   bool visibleTimeUseMilliseconds = false;
   AppSettings::HiSpeedFixMode hispeedFixMode =

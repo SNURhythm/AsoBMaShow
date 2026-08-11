@@ -317,6 +317,39 @@ void testDurationBindingsUsePinnedLaneRendererFormula() {
          "state errors");
 }
 
+void testZeroHispeedDurationBindingsFollowJavaCurrentDuration() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = runtime.runtime(),
+                              .mutationTable = mutations});
+
+  auto state = stateAt(202);
+  state.authority.currentBpm = 120.0;
+  state.authority.laneCoverPercent = 100;
+  state.authority.laneCoverEnabled = true;
+  state.configuration.configuredHispeed = 0.0F;
+  auto projection = projectionAt(202);
+  projection.builtInTraversal->configuredHispeed = 0.0F;
+  bridge.beginFrame(state, projection);
+
+  const auto raw = bridge.integerProperty({10});
+  const auto duration = bridge.integerProperty({312});
+  const auto green = bridge.integerProperty({313});
+  expect(raw.supported && raw.value == 0 && duration.supported &&
+             duration.value == 0 && green.supported && green.value == 0,
+         "zero Hi-Speed retains Java currentduration rather than a duration "
+         "fallback or unsupported property");
+}
+
 void testHispeedBindingsUsePinnedIntegerAndFloatProperties() {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
@@ -1910,6 +1943,7 @@ void testFloatWritersResolveLocallyAndRollbackCallbackMutations() {
 int main() {
   testPinnedMutationTableMatchesFrozenFixtureExhaustively();
   testDurationBindingsUsePinnedLaneRendererFormula();
+  testZeroHispeedDurationBindingsFollowJavaCurrentDuration();
   testHispeedBindingsUsePinnedIntegerAndFloatProperties();
   testIntegerPropertyFactoryDomainNeverRejectsGameplaySkins();
   testMarkProcessedNoteImageIndexTracksPlayerConfiguration();

@@ -39,11 +39,15 @@ ReplayPlayfieldPresentation::ReplayPlayfieldPresentation(
     std::unique_ptr<PlayfieldProjection> projection,
     std::unique_ptr<PlayfieldPresentationCoordinator> coordinator,
     BMSRenderer *builtIn, PlayfieldAuthorityUpdate authority,
-    PlayfieldPresentationConfig configuration, gameplay_hispeed::State hispeed)
+    PlayfieldPresentationConfig configuration, gameplay_hispeed::State hispeed,
+    std::optional<skin::RuntimeSkinConfigurationSelection>
+        runtimeSkinConfigurationSelection)
     : chartModel_(std::move(chartModel)), state_(std::move(state)),
       projection_(std::move(projection)), coordinator_(std::move(coordinator)),
       builtIn_(builtIn), authority_(std::move(authority)),
-      configuration_(std::move(configuration)), hispeed_(std::move(hispeed)) {
+      configuration_(std::move(configuration)), hispeed_(std::move(hispeed)),
+      runtimeSkinConfigurationSelection_(
+          std::move(runtimeSkinConfigurationSelection)) {
   if (coordinator_ == nullptr || builtIn_ == nullptr) {
     throw std::invalid_argument(
         "ReplayPlayfieldPresentation requires a coordinator and BMSRenderer");
@@ -106,6 +110,11 @@ ReplayPlayfieldPresentation::selectedSkinGameplayTiming() const {
   return coordinator_->selectedSkinGameplayTiming();
 }
 
+std::optional<skin::RuntimeSkinConfigurationSelection>
+ReplayPlayfieldPresentation::runtimeSkinConfigurationSelection() const {
+  return runtimeSkinConfigurationSelection_;
+}
+
 ReplayPlayfieldPresentationCreateResult ReplayPlayfieldPresentation::create(
     ReplayPlayfieldPresentationCreateInfo creation) {
   // The exporter supplies the chart after applying its replay-compatible long
@@ -163,6 +172,12 @@ ReplayPlayfieldPresentationCreateResult ReplayPlayfieldPresentation::create(
   (void)creation.skinServices;
 #endif
 
+  std::optional<skin::RuntimeSkinConfigurationSelection>
+      runtimeSkinConfigurationSelection;
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  runtimeSkinConfigurationSelection = std::move(session.runtimeSelection);
+#endif
+
   auto coordinator = std::make_unique<PlayfieldPresentationCoordinator>(
       PlayfieldPresentationCoordinatorDependencies{
           .builtIn = std::move(builtIn),
@@ -198,25 +213,37 @@ ReplayPlayfieldPresentationCreateResult ReplayPlayfieldPresentation::create(
                        .laneCoverPercent =
                            creation.settings.noteStartPositionPercent,
                        .laneCoverEnabled = creation.settings.laneCoverEnabled},
-                      gameplay_hispeed::summarizeChartBpm(creation.chart)))),
+                      gameplay_hispeed::summarizeChartBpm(creation.chart)),
+                  std::move(runtimeSkinConfigurationSelection))),
           .failure = std::nullopt};
+}
+
+void ReplayPlayfieldPresentation::applyLaneCoverTransition(
+    const ReplayLaneCoverTransition &transition, double bpm) {
+  if (transition.changeKind == ReplayLaneCoverChangeKind::Enabled) {
+    hispeed_.setLaneCoverEnabled(transition.enabled);
+  } else {
+    hispeed_.setLaneCover(transition.percent, bpm,
+                          transition.resetVisibleTimeReference);
+  }
+  configuration_.configuredHispeed = hispeed_.hispeed();
+  configuration_.noteStartPositionPercent = transition.percent;
+  configuration_.laneCoverEnabled = transition.enabled;
+  state_->setConfiguration(configuration_);
+  coordinator_->configure(configuration_);
 }
 
 void ReplayPlayfieldPresentation::applyAuthorityUpdate(
     const PlayfieldAuthorityUpdate &authority) {
   authority_ = authority;
   if (authority_.laneCoverChanged) {
-    if (authority_.laneCoverChangeKind == ReplayLaneCoverChangeKind::Enabled) {
-      hispeed_.setLaneCoverEnabled(authority_.laneCoverEnabled);
-    } else {
-      hispeed_.setLaneCover(authority_.laneCoverPercent, authority_.currentBpm,
-                             authority_.resetLaneCoverVisibleTimeReference);
-    }
-    configuration_.configuredHispeed = hispeed_.hispeed();
-    configuration_.noteStartPositionPercent = authority_.laneCoverPercent;
-    configuration_.laneCoverEnabled = authority_.laneCoverEnabled;
-    state_->setConfiguration(configuration_);
-    coordinator_->configure(configuration_);
+    applyLaneCoverTransition(
+        {.percent = authority_.laneCoverPercent,
+         .enabled = authority_.laneCoverEnabled,
+         .changeKind = authority_.laneCoverChangeKind,
+         .resetVisibleTimeReference =
+             authority_.resetLaneCoverVisibleTimeReference},
+        authority_.currentBpm);
   }
   authority_.stageCombo = stageCombo_;
   authority_.stagePassedNotes = stagePassedNotes_;

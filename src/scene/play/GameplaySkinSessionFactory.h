@@ -6,6 +6,7 @@
 #include "PlayfieldVisualState.h"
 #include "../../skin/GameplaySkinActivationRequest.h"
 #include "../../skin/SkinStoragePaths.h"
+#include "../../skin/beatoraja/BeatorajaSkinConfiguration.h"
 #include "../../skin/beatoraja/SkinDiagnosticHistory.h"
 
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS ||                              \
@@ -46,6 +47,8 @@ struct GameplaySkinSessionInput {
   const PlayfieldVisualState *initialState = nullptr;
   const PlayfieldProjectionResult *initialProjection = nullptr;
   skin::UiLogicalRect safeUiBounds;
+  std::optional<skin::RuntimeSkinConfigurationSelection>
+      pinnedRuntimeSelection;
 };
 
 enum class GameplaySkinSessionDisposition : std::uint8_t {
@@ -59,6 +62,7 @@ struct GameplaySkinSessionResult {
       GameplaySkinSessionDisposition::BuiltIn;
   std::unique_ptr<skin::PlaySkinSession> session;
   std::optional<PresentationFailure> failure;
+  std::optional<skin::RuntimeSkinConfigurationSelection> runtimeSelection;
 };
 
 [[nodiscard]] GameplaySkinSessionResult

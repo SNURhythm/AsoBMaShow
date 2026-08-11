@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -83,7 +84,7 @@ struct Settings {
 liveDurationValue(double bpm, float hispeed, int laneCoverPercent,
                   bool laneCoverEnabled, double scrollRate = 1.0) {
   if (!std::isfinite(bpm) || bpm <= 0.0 ||
-      !std::isfinite(static_cast<double>(hispeed)) || hispeed <= 0.0F ||
+      !std::isfinite(static_cast<double>(hispeed)) || hispeed < 0.0F ||
       !std::isfinite(scrollRate)) {
     return std::nullopt;
   }
@@ -98,10 +99,29 @@ liveDurationValue(double bpm, float hispeed, int laneCoverPercent,
   const double duration =
       240000.0 / bpm / static_cast<double>(hispeed) / scrollRate *
       (1.0 - cover);
-  if (!std::isfinite(duration) || duration < 0.0) {
+  if (duration < 0.0) {
     return std::nullopt;
   }
   return duration;
+}
+
+// Java's `(int) Math.round(double)` is a narrowing conversion from the long
+// result of Math.round. Keep that exact behavior defined in C++ for the
+// zero-Hi-Speed infinities and large finite values LaneRenderer permits.
+[[nodiscard]] inline int javaRoundToInt(double value) noexcept {
+  if (std::isnan(value)) {
+    return 0;
+  }
+  if (value >= static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
+    return std::bit_cast<std::int32_t>(
+        static_cast<std::uint32_t>(std::numeric_limits<std::int64_t>::max()));
+  }
+  if (value <= static_cast<double>(std::numeric_limits<std::int64_t>::min())) {
+    return std::bit_cast<std::int32_t>(
+        static_cast<std::uint32_t>(std::numeric_limits<std::int64_t>::min()));
+  }
+  return std::bit_cast<std::int32_t>(static_cast<std::uint32_t>(
+      static_cast<std::int64_t>(std::floor(value + 0.5))));
 }
 
 [[nodiscard]] inline std::optional<int>
@@ -109,16 +129,18 @@ liveDurationMilliseconds(double bpm, float hispeed, int laneCoverPercent,
                          bool laneCoverEnabled, double scrollRate = 1.0) {
   const auto duration = liveDurationValue(bpm, hispeed, laneCoverPercent,
                                           laneCoverEnabled, scrollRate);
-  if (!duration || *duration >
-                       static_cast<double>(std::numeric_limits<int>::max())) {
+  if (!duration) {
     return std::nullopt;
   }
-  // Java Math.round for a non-negative finite double.
-  return static_cast<int>(std::floor(*duration + 0.5));
+  return javaRoundToInt(*duration);
 }
 
-[[nodiscard]] constexpr int durationToGreenNumber(int duration) noexcept {
-  return duration * 3 / 5;
+[[nodiscard]] inline int durationToGreenNumber(int duration) noexcept {
+  // IntegerPropertyFactory computes `currentduration * 3 / 5` in Java int
+  // arithmetic. Use unsigned multiplication to make that deliberate wrap
+  // defined instead of relying on signed-overflow behavior in C++.
+  const auto product = static_cast<std::uint32_t>(duration) * UINT32_C(3);
+  return std::bit_cast<std::int32_t>(product) / 5;
 }
 
 class State final {

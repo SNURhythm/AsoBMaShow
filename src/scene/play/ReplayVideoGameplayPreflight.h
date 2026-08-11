@@ -65,6 +65,7 @@ struct ReplayLaneCoverFrameState {
   bool changed = false;
   ReplayLaneCoverChangeKind changeKind = ReplayLaneCoverChangeKind::Value;
   bool resetVisibleTimeReference = false;
+  std::vector<ReplayLaneCoverTransition> transitions;
 };
 
 class ReplayLaneCoverPlayback final {
@@ -131,7 +132,8 @@ preflightReplayGameplayPresentation(
     const preparation::Plan &, const PlayfieldPresentationConfig &, int, int,
     IGameplayBgaSubmitter &, GameplaySkinSessionServices,
     display::RendererAccessCoordinator &,
-    std::unique_ptr<ReplayPlayfieldPresentation> &);
+    std::unique_ptr<ReplayPlayfieldPresentation> &,
+    const skin::RuntimeSkinConfigurationSelection * = nullptr);
 
 void destroyReplayGameplayPresentation(
     display::RendererAccessCoordinator &,
@@ -151,6 +153,7 @@ struct CourseReplayGameplayPreflightStage {
   GameplaySkinSessionServices skinServices;
   std::unique_ptr<ReplayPlayfieldPresentation> &presentation;
   std::optional<skin::SkinGameplayTiming> &selectedSkinTiming;
+  std::optional<skin::RuntimeSkinConfigurationSelection> &runtimeSelection;
 };
 
 [[nodiscard]] std::optional<ReplayVideoExportResult>

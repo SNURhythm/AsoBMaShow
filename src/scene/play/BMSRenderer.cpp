@@ -4138,8 +4138,9 @@ void BMSRenderer::configure(
     const PlayfieldPresentationConfig &configuration) {
   setVisibleTimeDurationMilliseconds(
       configuration.visibleTimeDurationMilliseconds);
-  if (std::isfinite(configuration.configuredHispeed) &&
-      configuration.configuredHispeed > 0.0F) {
+  if (configuration.configuredHispeed &&
+      std::isfinite(*configuration.configuredHispeed) &&
+      *configuration.configuredHispeed >= 0.0F) {
     configuredHispeedOverride = configuration.configuredHispeed;
   } else {
     configuredHispeedOverride.reset();

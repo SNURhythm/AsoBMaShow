@@ -22,6 +22,22 @@ struct ConfiguredFile {
   std::vector<std::string> choices;
 };
 
+// Materialized values behind Beatoraja's persisted Random sentinels. Profile
+// state and its digest retain `-1`/`Random`; replay export carries this value
+// only between its course preflight and the later stage session.
+struct RuntimeConfiguredFileSelection {
+  std::string name;
+  std::string pattern;
+  std::string selectedValue;
+
+  bool operator==(const RuntimeConfiguredFileSelection &) const = default;
+};
+
+struct RuntimeSkinConfigurationSelection {
+  std::vector<ConfiguredOption> orderedOptions;
+  std::vector<RuntimeConfiguredFileSelection> orderedFiles;
+};
+
 using OffsetPermissionMask = std::uint8_t;
 inline constexpr OffsetPermissionMask kOffsetPermissionX = 1U << 0U;
 inline constexpr OffsetPermissionMask kOffsetPermissionY = 1U << 1U;
@@ -41,6 +57,20 @@ struct BeatorajaSkinConfiguration {
   std::map<int, ConfigOffset> offsetsById;
   std::string lowercaseSha256;
 };
+
+[[nodiscard]] inline RuntimeSkinConfigurationSelection
+runtimeSkinConfigurationSelection(const BeatorajaSkinConfiguration &configuration) {
+  RuntimeSkinConfigurationSelection selection;
+  selection.orderedOptions = configuration.orderedOptions;
+  selection.orderedFiles.reserve(configuration.orderedFiles.size());
+  for (const auto &file : configuration.orderedFiles) {
+    selection.orderedFiles.push_back(
+        {.name = file.name,
+         .pattern = file.pattern,
+         .selectedValue = file.selectedValue});
+  }
+  return selection;
+}
 
 [[nodiscard]] std::string
 skinConfigurationDigest(const BeatorajaSkinConfiguration &configuration);

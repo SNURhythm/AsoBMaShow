@@ -1230,7 +1230,7 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
     if (!builtInTraversal_ ||
         !std::isfinite(
             static_cast<double>(builtInTraversal_->configuredHispeed)) ||
-        builtInTraversal_->configuredHispeed <= 0.0F) {
+        builtInTraversal_->configuredHispeed < 0.0F) {
       return std::nullopt;
     }
     const auto durationFor = [&](double bpm, bool cover, bool green)
@@ -1258,7 +1258,8 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
       if (!current) {
         return std::nullopt;
       }
-      return *id == 312 ? *current : (*current * 3) / 5;
+      return *id == 312 ? *current
+                         : gameplay_hispeed::durationToGreenNumber(*current);
     }
     const int relative = *id - 1312;
     const int bpmMode = relative / 4;

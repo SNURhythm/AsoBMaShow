@@ -39,6 +39,7 @@ struct PlaySkinSessionContext {
   std::shared_ptr<SkinTextureDevice> textureDevice;
   std::shared_ptr<SkinLiveResourceCounters> liveResourceCounters;
   SkinConfigurationWriteQueue &configurationWrites;
+  std::optional<RuntimeSkinConfigurationSelection> pinnedRuntimeSelection;
   std::stop_token stop;
 };
 
@@ -106,6 +107,9 @@ public:
   static PlaySkinSessionCreateResult create(ValidatedSkinActivation,
                                             PlaySkinSessionContext);
   ~PlaySkinSession() override;
+
+  [[nodiscard]] RuntimeSkinConfigurationSelection
+  runtimeConfigurationSelection() const;
 
   PlaySkinSession(const PlaySkinSession &) = delete;
   PlaySkinSession &operator=(const PlaySkinSession &) = delete;

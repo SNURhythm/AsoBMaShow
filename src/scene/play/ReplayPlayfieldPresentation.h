@@ -63,12 +63,17 @@ public:
   // Mirrors the legacy export loop's per-frame classic-LN tail release. The
   // adapter owns visual endpoint state, so callers never mutate parser notes.
   void releaseDueClassicLongNoteTails(long long gameplayTimeMicros);
+  // Apply one recorded lane-cover mutation. Export uses this before its final
+  // frame authority snapshot so coalesced events retain their source order.
+  void applyLaneCoverTransition(const ReplayLaneCoverTransition &, double bpm);
   void applyAuthorityUpdate(const PlayfieldAuthorityUpdate &);
   [[nodiscard]] int progressiveMaximumCombo() const noexcept {
     return progressiveMaximumCombo_;
   }
   [[nodiscard]] std::optional<skin::SkinGameplayTiming>
   selectedSkinGameplayTiming() const;
+  [[nodiscard]] std::optional<skin::RuntimeSkinConfigurationSelection>
+  runtimeSkinConfigurationSelection() const;
   [[nodiscard]] PresentationFrameResult
   renderFrame(RenderContext &, PlayfieldFrameClock,
               const PlayfieldProjectionRequest &);
@@ -97,7 +102,8 @@ private:
                               std::unique_ptr<PlayfieldPresentationCoordinator>,
                               BMSRenderer *, PlayfieldAuthorityUpdate,
                               PlayfieldPresentationConfig,
-                              gameplay_hispeed::State);
+                              gameplay_hispeed::State,
+                              std::optional<skin::RuntimeSkinConfigurationSelection>);
 
   [[nodiscard]] const ChartVisualNote *replayNote(const ReplayEvent &) const;
   [[nodiscard]] NotePresentationState *noteState(ChartVisualId) noexcept;
@@ -118,6 +124,8 @@ private:
   PlayfieldAuthorityUpdate authority_;
   PlayfieldPresentationConfig configuration_;
   gameplay_hispeed::State hispeed_;
+  std::optional<skin::RuntimeSkinConfigurationSelection>
+      runtimeSkinConfigurationSelection_;
   std::unordered_map<ChartVisualId, NotePresentationState> noteStates_;
   std::unordered_map<int, bool> lanePressed_;
   std::vector<HcnPairPlaybackState> hcnPairs_;

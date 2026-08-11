@@ -102,6 +102,22 @@ void verifyLiveDurationAndGreenNumber() {
       120.0, 6.06F, 0, true, 0.5);
   expect(scrolledDuration.has_value() && *scrolledDuration == 660,
          "live duration divides by the current static #SCROLL rate");
+
+  const auto zeroHispeedCovered = gameplay_hispeed::liveDurationMilliseconds(
+      120.0, 0.0F, 100, true, 1.0);
+  const auto zeroHispeedUncovered =
+      gameplay_hispeed::liveDurationMilliseconds(120.0, 0.0F, 100, false,
+                                                  1.0);
+  expect(zeroHispeedCovered.has_value() && *zeroHispeedCovered == 0,
+         "Java currentduration keeps zero when infinity is multiplied by a "
+         "fully enabled lane cover");
+  expect(zeroHispeedUncovered.has_value() && *zeroHispeedUncovered == -1,
+         "Java currentduration narrows an uncovered infinite speed duration "
+         "to int minus one");
+  expect(gameplay_hispeed::durationToGreenNumber(2'000'000'000) ==
+             341'006'540,
+         "green number uses Java signed-int multiplication semantics without "
+         "C++ overflow");
 }
 
 } // namespace

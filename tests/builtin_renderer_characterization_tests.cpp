@@ -1663,6 +1663,24 @@ void verifyGreenNumberUsesLiveConfiguredHispeed() {
          "controls note travel");
 }
 
+void verifyExplicitZeroConfiguredHispeedDoesNotFallBack() {
+  SyntheticChartFixture fixture;
+  Judge judge(fixture.chart->Meta.Rank);
+  BMSRenderer renderer(fixture.chart.get(), judge.timingWindows, 500, false);
+  renderer.configure({.visibleTimeDurationMilliseconds = 500,
+                      .configuredHispeed = 0.0F,
+                      .hispeedMultiplier = 1.0F,
+                      .noteStartPositionPercent = 100,
+                      .laneCoverEnabled = true});
+
+  const auto traversal = renderer.projectionTraversal();
+  expect(traversal.configuredHispeed == 0.0F,
+         "an explicit zero live Hi-Speed is not replaced by legacy duration "
+         "fallback");
+  expect(renderer.effectiveVisibleTimeGreenNumber() == 0,
+         "a fully covered zero Hi-Speed follows Java currentduration");
+}
+
 } // namespace
 
 int main() {
@@ -1741,7 +1759,8 @@ int main() {
       verifyCapturedOverloadEquivalence(legacyCursorAdvanced,
                                         capturedCursorAdvanced);
       verifyVisibleTimeDurationUsesMilliseconds();
-  verifyGreenNumberUsesLiveConfiguredHispeed();
+      verifyGreenNumberUsesLiveConfiguredHispeed();
+      verifyExplicitZeroConfiguredHispeedDoesNotFallBack();
     } catch (const std::exception &error) {
       std::cerr << "FAIL: characterization threw: " << error.what() << '\n';
       ++failures;

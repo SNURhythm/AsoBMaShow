@@ -141,7 +141,9 @@ preflightReplayGameplayPresentation(
     const ReplayData &replay, const AppSettings &settings,
     const preparation::Plan &preparationPlan,
     const ReplayVideoExportOptions &options,
-    PreparedReplayGameplayPresentation &prepared, ReplayVideoExportLog *log) {
+    PreparedReplayGameplayPresentation &prepared, ReplayVideoExportLog *log,
+    const skin::RuntimeSkinConfigurationSelection *pinnedRuntimeSelection =
+        nullptr) {
   const auto resolvedOptions = resolveReplayVideoExportOptions(options);
   const auto result = replay_video_export::preflightReplayGameplayPresentation(
       chart, replay, settings, preparationPlan,
@@ -153,7 +155,7 @@ preflightReplayGameplayPresentation(
       resolvedOptions.width, resolvedOptions.height,
       context.jukebox, replayGameplaySkinSessionServices(context),
       context.rendererAccess,
-      prepared.presentation);
+      prepared.presentation, pinnedRuntimeSelection);
   if (result) {
     replayExportLog(log, "Replay export skin preflight failed: %s",
                     result->message.c_str());
@@ -1078,6 +1080,7 @@ struct CourseReplayVideoStage {
   RhythmState resultState;
   std::optional<PreparedReplayGameplayPresentation> gameplayPresentation;
   std::optional<skin::SkinGameplayTiming> selectedSkinTiming;
+  std::optional<skin::RuntimeSkinConfigurationSelection> runtimeSkinSelection;
   std::optional<long long> failureMicros;
   long long gameplayDurationMicros = 0;
   long long resultDurationMicros = 0;
@@ -1130,7 +1133,8 @@ preflightCourseReplayGameplayPresentations(
          .exportHeight = resolvedOptions.height,
          .skinServices = replayGameplaySkinSessionServices(context),
          .presentation = stage.gameplayPresentation->presentation,
-         .selectedSkinTiming = stage.selectedSkinTiming});
+         .selectedSkinTiming = stage.selectedSkinTiming,
+         .runtimeSelection = stage.runtimeSkinSelection});
   }
   const auto result =
       replay_video_export::preflightCourseReplayGameplayPresentations(
@@ -2974,6 +2978,10 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     applyExportPlaybackRate(frameTiming.gameplayTimeMicros);
     const auto laneCover = laneCoverPlayback.advance(
         replay.laneCoverEvents, frameTiming.gameplayTimeMicros);
+    for (const auto &transition : laneCover.transitions) {
+      preparedGameplay.presentation->applyLaneCoverTransition(
+          transition, currentExportBpm);
+    }
     preparedGameplay.presentation->releaseDueClassicLongNoteTails(
         frameTiming.gameplayTimeMicros);
 
@@ -3004,10 +3012,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
             preparationPlan.indicatorVisibleAt(rawSongTimeMicros),
         .laneCoverPercent = laneCover.percent,
         .laneCoverEnabled = laneCover.enabled,
-        .laneCoverChanged = laneCover.changed,
-        .laneCoverChangeKind = laneCover.changeKind,
-        .resetLaneCoverVisibleTimeReference =
-            laneCover.resetVisibleTimeReference,
+        .laneCoverChanged = false,
     });
 
     bool presentationFailed = false;
@@ -3540,7 +3545,9 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     }
     if (const auto failure = preflightReplayGameplayPresentation(
             context, chart, stageReplay, settings, stage.preparationPlan,
-            resolvedOptions, *stage.gameplayPresentation, log)) {
+            resolvedOptions, *stage.gameplayPresentation, log,
+            stage.runtimeSkinSelection ? &*stage.runtimeSkinSelection
+                                       : nullptr)) {
       bgfxCleanup.runNow();
       return *failure;
     }
@@ -3653,6 +3660,9 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
       applyExportPlaybackRate(frameTiming.gameplayTimeMicros);
       const auto laneCover = laneCoverPlayback.advance(
           stageReplay.laneCoverEvents, frameTiming.gameplayTimeMicros);
+      for (const auto &transition : laneCover.transitions) {
+        presentation.applyLaneCoverTransition(transition, currentExportBpm);
+      }
       presentation.releaseDueClassicLongNoteTails(
           frameTiming.gameplayTimeMicros);
       presentation.applyAuthorityUpdate({
@@ -3676,10 +3686,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
               stage.preparationPlan.indicatorVisibleAt(rawSongTimeMicros),
           .laneCoverPercent = laneCover.percent,
           .laneCoverEnabled = laneCover.enabled,
-          .laneCoverChanged = laneCover.changed,
-          .laneCoverChangeKind = laneCover.changeKind,
-          .resetLaneCoverVisibleTimeReference =
-              laneCover.resetVisibleTimeReference,
+          .laneCoverChanged = false,
       });
 
       bool presentationFailed = false;

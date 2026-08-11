@@ -4049,7 +4049,8 @@ skinConfigurationDigest(const BeatorajaSkinConfiguration &configuration) {
 ConfigurationReconcileResult
 reconcileSkinConfiguration(const BeatorajaSkinHeader &header,
                            const EntryProfileSettings *saved,
-                           LuaSkinFileSystem &fileSystem) {
+                           LuaSkinFileSystem &fileSystem,
+                           const RuntimeSkinConfigurationSelection *pinned) {
   ConfigurationReconcileResult result;
   BeatorajaSkinConfiguration configuration;
   EntryProfileSettings settings;
@@ -4057,7 +4058,9 @@ reconcileSkinConfiguration(const BeatorajaSkinHeader &header,
     settings.viewport = saved->viewport;
   }
 
-  for (const auto &option : header.options) {
+  for (std::size_t optionIndex = 0; optionIndex < header.options.size();
+       ++optionIndex) {
+    const auto &option = header.options[optionIndex];
     if (option.name.empty()) {
       result.diagnostics.push_back(
           diagnostic("skin_lua_configuration_invalid",
@@ -4092,7 +4095,20 @@ reconcileSkinConfiguration(const BeatorajaSkinHeader &header,
         // Preserve -1 in profile/digest state while exporting that actual
         // selection through orderedOptions below.
         if (desired->second == -1) {
-          selected = &option.choices[chooseRandomIndex(option.choices.size())];
+          const auto pinnedOption =
+              pinned != nullptr && optionIndex < pinned->orderedOptions.size() &&
+                      pinned->orderedOptions[optionIndex].name == option.name
+                  ? std::find_if(
+                        option.choices.begin(), option.choices.end(),
+                        [&](const SkinHeaderOptionChoice &choice) {
+                          return choice.value ==
+                                 pinned->orderedOptions[optionIndex].value;
+                        })
+                  : option.choices.end();
+          selected = pinnedOption != option.choices.end()
+                         ? &*pinnedOption
+                         : &option.choices[chooseRandomIndex(
+                               option.choices.size())];
           persistedValue = -1;
         } else {
           for (const auto &choice : option.choices) {
@@ -4112,7 +4128,8 @@ reconcileSkinConfiguration(const BeatorajaSkinHeader &header,
     configuration.enabledOptionIds.insert(selected->value);
   }
 
-  for (const auto &file : header.files) {
+  for (std::size_t fileIndex = 0; fileIndex < header.files.size(); ++fileIndex) {
+    const auto &file = header.files[fileIndex];
     if (file.name.empty()) {
       result.diagnostics.push_back(
           diagnostic("skin_lua_configuration_invalid",
@@ -4179,8 +4196,20 @@ reconcileSkinConfiguration(const BeatorajaSkinHeader &header,
 
     std::string runtimeSelection;
     if (selected) {
-      runtimeSelection =
-          *selected == "Random" ? chooseRandomFile(choices) : *selected;
+      if (*selected == "Random") {
+        const auto pinnedFile =
+            pinned != nullptr && fileIndex < pinned->orderedFiles.size() &&
+                    pinned->orderedFiles[fileIndex].name == file.name &&
+                    pinned->orderedFiles[fileIndex].pattern == file.pattern
+                ? std::find(choices.begin(), choices.end(),
+                            pinned->orderedFiles[fileIndex].selectedValue)
+                : choices.end();
+        runtimeSelection = pinnedFile != choices.end()
+                               ? *pinnedFile
+                               : chooseRandomFile(choices);
+      } else {
+        runtimeSelection = *selected;
+      }
       settings.filePaths.insert_or_assign(file.name, *selected);
       configuration.filePaths.insert_or_assign(file.name, *selected);
     }

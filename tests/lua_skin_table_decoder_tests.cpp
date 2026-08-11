@@ -923,6 +923,56 @@ void testRandomOptionKeepsPersistedSentinelAndExportsAnAuthoredChoice() {
          "the persistent random sentinel owns the configuration digest");
 }
 
+void testPinnedRandomRuntimeSelectionReusesMaterializedChoices() {
+  const auto decoded = fixture().decode("valid.luaskin");
+  auto fileSystem = fixture().fileSystem();
+  expect(decoded.header && fileSystem,
+         "pinned random reconciliation fixture is available");
+  if (!decoded.header || !fileSystem) {
+    return;
+  }
+
+  EntryProfileSettings saved;
+  saved.options = {{"Lane type", -1}, {"Gauge", 11}};
+  saved.filePaths = {{"Background", "Random"}};
+  const auto first =
+      reconcileSkinConfiguration(*decoded.header, &saved, *fileSystem);
+  if (!first.configuration) {
+    expect(false, "initial random reconciliation succeeds");
+    return;
+  }
+  const auto pinned = runtimeSkinConfigurationSelection(*first.configuration);
+  const auto second = reconcileSkinConfiguration(*decoded.header, &saved,
+                                                  *fileSystem, &pinned);
+  const auto selectedOption = [](const auto &options, std::string_view name) {
+    return std::find_if(options.begin(), options.end(),
+                        [name](const auto &option) {
+                          return option.name == name;
+                        });
+  };
+  const auto firstLane = selectedOption(pinned.orderedOptions, "Lane type");
+  const auto secondLane = second.configuration
+                              ? selectedOption(second.configuration->orderedOptions,
+                                               "Lane type")
+                              : std::vector<ConfiguredOption>::const_iterator{};
+  const auto firstBackground =
+      selectedOption(pinned.orderedFiles, "Background");
+  const auto secondBackground =
+      second.configuration
+          ? selectedOption(second.configuration->orderedFiles, "Background")
+          : std::vector<ConfiguredFile>::const_iterator{};
+  expect(second.configuration && second.diagnostics.empty() &&
+             second.reconciledSettings.options == saved.options &&
+             second.reconciledSettings.filePaths == saved.filePaths &&
+             firstLane != pinned.orderedOptions.end() &&
+             secondLane != second.configuration->orderedOptions.end() &&
+             secondLane->value == firstLane->value &&
+             firstBackground != pinned.orderedFiles.end() &&
+             secondBackground != second.configuration->orderedFiles.end() &&
+             secondBackground->selectedValue == firstBackground->selectedValue,
+         "a course render reuses the preflight materialization behind persisted Random sentinels");
+}
+
 void testReconciliationRejectsEmptyConfigurationKeys() {
   auto fileSystem = fixture().fileSystem("optional-text.luaskin");
   expect(fileSystem != nullptr, "empty-key reconciliation filesystem exists");
@@ -1300,6 +1350,7 @@ int main() {
   testResourcePathsFollowBeatorajaResolution();
   testReconciliationDefaultsSanitizesAndIndexesConfiguration();
   testRandomOptionKeepsPersistedSentinelAndExportsAnAuthoredChoice();
+  testPinnedRandomRuntimeSelectionReusesMaterializedChoices();
   testReconciliationRejectsEmptyConfigurationKeys();
   testPinnedFilePatternChoicesAreDeterministicAndCaseInsensitive();
   testEntryRelativeFilePatternsStayWithinThePackage();

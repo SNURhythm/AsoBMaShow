@@ -37,6 +37,7 @@ public:
 
 ConfigurationReconcileResult
 reconcileSkinConfiguration(const BeatorajaSkinHeader &,
-                           const EntryProfileSettings *, LuaSkinFileSystem &);
+                           const EntryProfileSettings *, LuaSkinFileSystem &,
+                           const RuntimeSkinConfigurationSelection * = nullptr);
 
 } // namespace skin

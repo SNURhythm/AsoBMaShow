@@ -177,6 +177,7 @@ ReplayLaneCoverFrameState ReplayLaneCoverPlayback::advance(
   bool resetVisibleTimeReference = false;
   bool changed = false;
   ReplayLaneCoverChangeKind changeKind = ReplayLaneCoverChangeKind::Value;
+  std::vector<ReplayLaneCoverTransition> transitions;
   while (cursor_ < events.size() &&
          events[cursor_].songTimeMicros <= songTimeMicros) {
     percent_ = events[cursor_].noteStartPositionPercent;
@@ -184,13 +185,19 @@ ReplayLaneCoverFrameState ReplayLaneCoverPlayback::advance(
     changed = true;
     changeKind = events[cursor_].changeKind;
     resetVisibleTimeReference = events[cursor_].resetVisibleTimeReference;
+    transitions.push_back({.percent = percent_,
+                           .enabled = enabled_,
+                           .changeKind = changeKind,
+                           .resetVisibleTimeReference =
+                               resetVisibleTimeReference});
     ++cursor_;
   }
   return {.percent = percent_,
           .enabled = enabled_,
           .changed = changed,
           .changeKind = changeKind,
-          .resetVisibleTimeReference = resetVisibleTimeReference};
+          .resetVisibleTimeReference = resetVisibleTimeReference,
+          .transitions = std::move(transitions)};
 }
 
 ReplayJudgementAuthorityPlayback::ReplayJudgementAuthorityPlayback() {
@@ -249,7 +256,8 @@ std::optional<ReplayVideoExportResult> preflightReplayGameplayPresentation(
     int exportHeight, IGameplayBgaSubmitter &bga,
     GameplaySkinSessionServices skinServices,
     display::RendererAccessCoordinator &rendererAccess,
-    std::unique_ptr<ReplayPlayfieldPresentation> &presentation) {
+    std::unique_ptr<ReplayPlayfieldPresentation> &presentation,
+    const skin::RuntimeSkinConfigurationSelection *pinnedRuntimeSelection) {
   auto rendererReservation = rendererAccess.acquireExport();
   const ReplayGameplayFrameState frame =
       replayGameplayFrameState(plan, chart, replay, settings, 1, 0);
@@ -276,7 +284,12 @@ std::optional<ReplayVideoExportResult> preflightReplayGameplayPresentation(
       .skinServices = std::move(skinServices),
       .skinInput = {.initialState = &initialState,
                     .safeUiBounds = replayGameplayLogicalUiBounds(
-                        exportWidth, exportHeight)},
+                        exportWidth, exportHeight),
+                    .pinnedRuntimeSelection =
+                        pinnedRuntimeSelection
+                            ? std::optional<skin::RuntimeSkinConfigurationSelection>(
+                                  *pinnedRuntimeSelection)
+                            : std::nullopt},
       .replayData = &replay,
       .replayTouchSamples = replay.touchSamples,
       .recordFailure = {},
@@ -312,6 +325,7 @@ preflightCourseReplayGameplayPresentations(
     display::RendererAccessCoordinator &rendererAccess) {
   for (auto &stage : stages) {
     stage.selectedSkinTiming.reset();
+    stage.runtimeSelection.reset();
     if (const auto failure = preflightReplayGameplayPresentation(
             stage.chart, stage.replay, settings, stage.preparationPlan,
             stage.configuration, stage.exportWidth, stage.exportHeight, bga,
@@ -326,6 +340,10 @@ preflightCourseReplayGameplayPresentations(
     stage.selectedSkinTiming =
         stage.presentation ? stage.presentation->selectedSkinGameplayTiming()
                            : std::optional<skin::SkinGameplayTiming>{};
+    stage.runtimeSelection =
+        stage.presentation
+            ? stage.presentation->runtimeSkinConfigurationSelection()
+            : std::optional<skin::RuntimeSkinConfigurationSelection>{};
     destroyReplayGameplayPresentation(rendererAccess, stage.presentation);
   }
   return std::nullopt;

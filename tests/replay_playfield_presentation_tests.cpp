@@ -426,7 +426,8 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
       replay_video_export::replayGameplayPresentationConfig(
           settings, 9.5F, chart, false, false);
   expect(configuration.visibleTimeDurationMilliseconds == 1'001 &&
-             configuration.configuredHispeed == 1.75F &&
+             configuration.configuredHispeed &&
+             *configuration.configuredHispeed == 1.75F &&
              configuration.visibleTimeUseMilliseconds &&
              configuration.hispeedFixMode == AppSettings::HiSpeedFixMode::Off &&
              configuration.playAreaWidth == 9.5F &&
@@ -477,7 +478,9 @@ void testReplayExportConfigUsesLaneRendererMainBpmTieRule() {
   const auto configuration =
       replay_video_export::replayGameplayPresentationConfig(
           settings, 8.0F, chart, false, false);
-  expect(std::abs(configuration.configuredHispeed - 2.6666667F) < 0.0001F,
+  expect(configuration.configuredHispeed &&
+             std::abs(*configuration.configuredHispeed - 2.6666667F) <
+                 0.0001F,
          "fixed MAIN Hi-Speed uses LaneRenderer's HashMap tie winner");
 }
 
@@ -664,6 +667,33 @@ void testReplayLaneCoverResetIsOneFramePulseForNormalAndCoursePlayback() {
   }
 }
 
+void testReplayLaneCoverPlaybackRetainsEveryCoalescedTransition() {
+  const std::vector<ReplayLaneCoverEvent> events = {
+      {.songTimeMicros = 1'000,
+       .noteStartPositionPercent = 35,
+       .laneCoverEnabled = true,
+       .changeKind = ReplayLaneCoverChangeKind::Value,
+       .resetVisibleTimeReference = true},
+      {.songTimeMicros = 1'000,
+       .noteStartPositionPercent = 35,
+       .laneCoverEnabled = false,
+       .changeKind = ReplayLaneCoverChangeKind::Enabled},
+  };
+  replay_video_export::ReplayLaneCoverPlayback playback(20, true);
+  const auto frame = playback.advance(events, 1'000);
+  expect(frame.transitions.size() == 2 &&
+             frame.transitions[0].changeKind ==
+                 ReplayLaneCoverChangeKind::Value &&
+             frame.transitions[0].percent == 35 &&
+             frame.transitions[0].enabled &&
+             frame.transitions[0].resetVisibleTimeReference &&
+             frame.transitions[1].changeKind ==
+                 ReplayLaneCoverChangeKind::Enabled &&
+             frame.transitions[1].percent == 35 &&
+             !frame.transitions[1].enabled,
+         "coalesced replay lane-cover changes retain their recorded order");
+}
+
 void testReplayLaneCoverChangesUseBeatorajaHiSpeedTransitions() {
   bms_parser::Chart chart;
   chart.Meta.KeyMode = 7;
@@ -695,7 +725,8 @@ void testReplayLaneCoverChangesUseBeatorajaHiSpeedTransitions() {
        .resetLaneCoverVisibleTimeReference = true});
   const auto afterCover =
       created.presentation->captureVisualStateForTesting({});
-  expect(std::abs(afterCover.configuration.configuredHispeed - 1.0F) <
+  expect(afterCover.configuration.configuredHispeed &&
+             std::abs(*afterCover.configuration.configuredHispeed - 1.0F) <
              0.0001F,
          "replay cover auto-adjust resets fixed Hi-Speed against current BPM");
 
@@ -707,7 +738,8 @@ void testReplayLaneCoverChangesUseBeatorajaHiSpeedTransitions() {
        .laneCoverChangeKind = ReplayLaneCoverChangeKind::Enabled});
   const auto afterToggle =
       created.presentation->captureVisualStateForTesting({});
-  expect(std::abs(afterToggle.configuration.configuredHispeed - 1.0F) <
+  expect(afterToggle.configuration.configuredHispeed &&
+             std::abs(*afterToggle.configuration.configuredHispeed - 1.0F) <
              0.0001F && !afterToggle.configuration.laneCoverEnabled,
          "replay cover toggle changes no fixed Hi-Speed state");
 }
@@ -953,6 +985,9 @@ preflightCourseFor(CoursePreflightStage ready, CoursePreflightStage unavailable)
                                                     exportActive);
   std::optional<skin::SkinGameplayTiming> readyTiming;
   std::optional<skin::SkinGameplayTiming> unavailableTiming;
+  std::optional<skin::RuntimeSkinConfigurationSelection> readyRuntimeSelection;
+  std::optional<skin::RuntimeSkinConfigurationSelection>
+      unavailableRuntimeSelection;
   std::vector<replay_video_export::CourseReplayGameplayPreflightStage> stages;
   stages.reserve(2);
   stages.push_back({.chart = ready.chart,
@@ -963,7 +998,8 @@ preflightCourseFor(CoursePreflightStage ready, CoursePreflightStage unavailable)
                     .exportHeight = 720,
                     .skinServices = std::move(ready.skinServices),
                     .presentation = ready.presentation,
-                    .selectedSkinTiming = readyTiming});
+                    .selectedSkinTiming = readyTiming,
+                    .runtimeSelection = readyRuntimeSelection});
   stages.push_back({.chart = unavailable.chart,
                     .replay = unavailable.replay,
                     .preparationPlan = plan,
@@ -972,7 +1008,8 @@ preflightCourseFor(CoursePreflightStage ready, CoursePreflightStage unavailable)
                     .exportHeight = 720,
                     .skinServices = std::move(unavailable.skinServices),
                     .presentation = unavailable.presentation,
-                    .selectedSkinTiming = unavailableTiming});
+                    .selectedSkinTiming = unavailableTiming,
+                    .runtimeSelection = unavailableRuntimeSelection});
   return replay_video_export::preflightCourseReplayGameplayPresentations(
       stages, bga, settings, rendererAccess);
 }
@@ -1012,6 +1049,7 @@ void testSelectedCoursePreflightUsesNonWidescreenLogicalBounds() {
                                                     exportActive);
   std::unique_ptr<ReplayPlayfieldPresentation> presentation;
   std::optional<skin::SkinGameplayTiming> selectedSkinTiming;
+  std::optional<skin::RuntimeSkinConfigurationSelection> runtimeSelection;
   std::vector<replay_video_export::CourseReplayGameplayPreflightStage> stages;
   stages.push_back({.chart = chart,
                     .replay = replay,
@@ -1021,12 +1059,14 @@ void testSelectedCoursePreflightUsesNonWidescreenLogicalBounds() {
                     .exportHeight = 1600,
                     .skinServices = fixture.services(),
                     .presentation = presentation,
-                    .selectedSkinTiming = selectedSkinTiming});
+                    .selectedSkinTiming = selectedSkinTiming,
+                    .runtimeSelection = runtimeSelection});
   const auto failure =
       replay_video_export::preflightCourseReplayGameplayPresentations(
           stages, bga, settings, rendererAccess);
   expect(!failure && presentation == nullptr &&
              selectedSkinTiming.has_value() &&
+             runtimeSelection.has_value() &&
              fixture.receivedSafeUiBounds->has_value() &&
              (*fixture.receivedSafeUiBounds)->width == 1920.0 &&
              (*fixture.receivedSafeUiBounds)->height == 800.0 &&
@@ -1643,6 +1683,7 @@ int main() {
   testReplayGameplayFrameStateMirrorsLiveTimerAndStartClocks();
   testReplayGameplayStatePlayDeadlineMatchesPinnedBmsPlayer();
   testReplayLaneCoverResetIsOneFramePulseForNormalAndCoursePlayback();
+  testReplayLaneCoverPlaybackRetainsEveryCoalescedTransition();
   testReplayLaneCoverChangesUseBeatorajaHiSpeedTransitions();
   testUnsubmittedReplayFrameReleasesItsPreparedBga();
   testSelectedNormalPreflightAndDestructionUseRendererOwnership();

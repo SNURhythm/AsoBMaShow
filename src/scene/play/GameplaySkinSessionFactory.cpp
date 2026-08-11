@@ -148,6 +148,7 @@ createGameplaySkinSession(GameplaySkinSessionServices services,
         .textureDevice = std::make_shared<skin::BgfxSkinTextureDevice>(),
         .liveResourceCounters = std::move(services.liveResourceCounters),
         .configurationWrites = *services.configurationWrites,
+        .pinnedRuntimeSelection = std::move(input.pinnedRuntimeSelection),
         .stop = {}};
 #if defined(ASOBMASHOW_GAMEPLAY_SKIN_SESSION_FACTORY_TESTING)
     auto created = services.createSessionForTesting
@@ -177,9 +178,12 @@ createGameplaySkinSession(GameplaySkinSessionServices services,
                           configurationDigest, diagnostic,
                           firstError.has_value());
     }
+    const auto runtimeSelection =
+        created.session->runtimeConfigurationSelection();
     return {.disposition = GameplaySkinSessionDisposition::Ready,
             .session = std::move(created.session),
-            .failure = std::nullopt};
+            .failure = std::nullopt,
+            .runtimeSelection = std::move(runtimeSelection)};
   } catch (...) {
     return failedResult(
         services.diagnosticHistory, entry, revisionDigest, configurationDigest,

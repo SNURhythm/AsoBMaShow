@@ -287,6 +287,11 @@ PlaySkinSession::PlaySkinSession(
 
 PlaySkinSession::~PlaySkinSession() = default;
 
+RuntimeSkinConfigurationSelection
+PlaySkinSession::runtimeConfigurationSelection() const {
+  return runtimeSkinConfigurationSelection(context_.configuration);
+}
+
 PlaySkinSessionCreateResult
 PlaySkinSession::create(ValidatedSkinActivation activation,
                         PlaySkinSessionContext context) {
@@ -400,7 +405,10 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
 
     auto reconciliation = reconcileSkinConfiguration(
         *decodedHeader.header, &activation.reconciledSettings,
-        *resourceFiles.fileSystem);
+        *resourceFiles.fileSystem,
+        context.pinnedRuntimeSelection
+            ? &*context.pinnedRuntimeSelection
+            : nullptr);
     appendMovedDiagnostics(result.diagnostics, reconciliation.diagnostics);
     if (!reconciliation.configuration || hasErrors(result.diagnostics) ||
         cancelled(context.stop, result)) {
