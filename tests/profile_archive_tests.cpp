@@ -599,7 +599,7 @@ struct Fixture {
 
     AppSettings settings;
     settings.audioOffsetMs = -37;
-    settings.visibleTimeGreenNumber = 765;
+    settings.setVisibleTimeGreenNumber(765);
     settings.selectedGameplayRuleset = "beatoraja";
     settings.selectedPlayOption = "R-RANDOM";
     const auto skinPackage = skin::normalizePackageId("PortableSkin").package;

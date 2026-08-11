@@ -419,9 +419,9 @@ void AppSettings::sanitize() {
       std::clamp(audioOffsetMs, kMinAudioOffsetMs, kMaxAudioOffsetMs);
   visualOffsetMs =
       std::clamp(visualOffsetMs, kMinVisualOffsetMs, kMaxVisualOffsetMs);
-  visibleTimeGreenNumber =
-      std::clamp(visibleTimeGreenNumber, kMinVisibleTimeGreenNumber,
-                 kMaxVisibleTimeGreenNumber);
+  visibleTimeDurationMilliseconds =
+      std::clamp(visibleTimeDurationMilliseconds, kMinVisibleTimeMs,
+                 kMaxVisibleTimeMs);
   gameplayHispeedMultiplier =
       sanitizeFloat(gameplayHispeedMultiplier, 1.0F,
                     kMinGameplayHispeedMultiplier,
@@ -659,8 +659,10 @@ bool AppSettings::parseLegacyCfg(std::istream &file, AppSettings &settings,
         settings.audioOffsetMs = std::stoi(value);
       } else if (key == "visual_offset_ms") {
         settings.visualOffsetMs = std::stoi(value);
+      } else if (key == "visible_time_duration_milliseconds") {
+        settings.visibleTimeDurationMilliseconds = std::stoi(value);
       } else if (key == "visible_time_green_number") {
-        settings.visibleTimeGreenNumber = std::stoi(value);
+        settings.setVisibleTimeGreenNumber(std::stoi(value));
       } else if (key == "gameplay_hispeed_multiplier") {
         settings.gameplayHispeedMultiplier = std::stof(value);
       } else if (key == "visible_time_use_milliseconds") {

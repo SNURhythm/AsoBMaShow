@@ -421,7 +421,7 @@ void testBuiltInDefaultWarmsAndReusesOneBgaFrame() {
       .skin = {},
       .bga = bga,
   });
-  coordinator.configure({.visibleTimeGreenNumber = 321});
+  coordinator.configure({.visibleTimeDurationMilliseconds = 535});
   PlayfieldProjectionResult projection;
   auto state = frame(41);
   expect(coordinator.prepareFrame(state, projection) ==

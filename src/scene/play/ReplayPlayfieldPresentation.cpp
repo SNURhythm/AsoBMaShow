@@ -119,7 +119,8 @@ ReplayPlayfieldPresentationCreateResult ReplayPlayfieldPresentation::create(
   auto builtIn = createBuiltInPlayfieldPresentation({
       .chart = creation.chart,
       .timingWindows = std::move(creation.timingWindows),
-      .visibleTimeGreenNumber = creation.configuration.visibleTimeGreenNumber,
+      .visibleTimeDurationMilliseconds =
+          creation.configuration.visibleTimeDurationMilliseconds,
       .renderHud = true,
       .playbackRate = creation.playback,
       .replayData = creation.replayData,

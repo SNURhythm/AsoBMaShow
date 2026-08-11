@@ -650,11 +650,11 @@ AtomicLaneState::operator=(AtomicLaneState &&other) noexcept {
 BMSRenderer::BMSRenderer(
     bms_parser::Chart *chart,
     const std::map<Judgement, std::pair<long long, long long>> &timingWindows,
-    int visibleTimeGreenNumber, bool renderHud,
+    int visibleTimeDurationMilliseconds, bool renderHud,
     audio::PlaybackRate playbackRate)
     : judgementIndicator(timingWindows),
       latePoorTiming(latePoorTimingFromWindows(timingWindows)),
-      visibleTimeGreenNumber(visibleTimeGreenNumber),
+      visibleTimeDurationMilliseconds(visibleTimeDurationMilliseconds),
       playbackRate(playbackRate), renderHud(renderHud), chart(chart) {
   setCurrentBpm(chart != nullptr ? chart->Meta.Bpm : 0.0);
   auto textureGuard = makeScopeExit([this] { destroyNoteSheetTextures(); });
@@ -2326,7 +2326,7 @@ BuiltInRendererTraversal BMSRenderer::builtInProjectionTraversal() const {
   // geometry and render-time forward walk.  GamePlayScene can freeze it in
   // PlayfieldProjectionRequest without reimplementing green-number math.
   const float visibleTimeMs = std::max(
-      1.0F, static_cast<float>(visibleTimeGreenNumber) * (1000.0F / 600.0F));
+      1.0F, static_cast<float>(visibleTimeDurationMilliseconds));
   const float configuredHispeed =
       240000.0F / static_cast<float>(visibleTimeReferenceBpm()) /
       visibleTimeMs * hispeedMultiplier * laneCoverHispeedFactor;
@@ -2376,23 +2376,37 @@ int BMSRenderer::effectiveVisibleTimeGreenNumber() const {
       currentBpm > 0.0 && std::isfinite(currentBpm) ? currentBpm : referenceBpm;
   if (!std::isfinite(referenceBpm) || referenceBpm <= 0.0 ||
       !std::isfinite(bpm) || bpm <= 0.0) {
-    return std::max(1, visibleTimeGreenNumber);
+    return AppSettings::durationMillisecondsToGreenNumber(
+        visibleTimeDurationMilliseconds);
   }
 
-  const double scaled =
-      static_cast<double>(visibleTimeGreenNumber) * referenceBpm / bpm;
-  if (!std::isfinite(scaled)) {
-    return std::max(1, visibleTimeGreenNumber);
+  const double scaledDuration =
+      static_cast<double>(visibleTimeDurationMilliseconds) * referenceBpm / bpm;
+  if (!std::isfinite(scaledDuration)) {
+    return AppSettings::durationMillisecondsToGreenNumber(
+        visibleTimeDurationMilliseconds);
   }
-  return std::max(1, static_cast<int>(std::lround(scaled)));
+  const int currentDurationMilliseconds = std::max(
+      1, static_cast<int>(std::lround(scaledDuration)));
+  return AppSettings::durationMillisecondsToGreenNumber(
+      currentDurationMilliseconds);
 }
 
 std::string BMSRenderer::laneCoverVisibleTimeLabel() const {
   const int greenNumber = effectiveVisibleTimeGreenNumber();
   if (visibleTimeUseMilliseconds) {
-    const int milliseconds = std::max(
-        1, static_cast<int>(std::lround(static_cast<double>(greenNumber) *
-                                        1000.0 / 600.0)));
+    const double referenceBpm = visibleTimeReferenceBpm();
+    const double bpm = currentBpm > 0.0 && std::isfinite(currentBpm)
+                           ? currentBpm
+                           : referenceBpm;
+    const double scaledDuration =
+        static_cast<double>(visibleTimeDurationMilliseconds) * referenceBpm /
+        bpm;
+    const int milliseconds = std::isfinite(scaledDuration) &&
+                                     referenceBpm > 0.0 && bpm > 0.0
+                                 ? std::max(1, static_cast<int>(
+                                                   std::lround(scaledDuration)))
+                                 : std::max(1, visibleTimeDurationMilliseconds);
     return std::to_string(milliseconds) + " ms";
   }
   return std::to_string(greenNumber);
@@ -4158,7 +4172,8 @@ void BMSRenderer::updateJudgementCounterText() {
 
 void BMSRenderer::configure(
     const PlayfieldPresentationConfig &configuration) {
-  setVisibleTimeGreenNumber(configuration.visibleTimeGreenNumber);
+  setVisibleTimeDurationMilliseconds(
+      configuration.visibleTimeDurationMilliseconds);
   setHispeedMultiplier(configuration.hispeedMultiplier);
   setVisibleTimeUseMilliseconds(configuration.visibleTimeUseMilliseconds);
   setVisibleTimeBpmStrategy(configuration.visibleTimeBpmStrategy);
@@ -4347,8 +4362,10 @@ void BMSRenderer::refreshGeometry() {
   noteVisibleUpperBound = nextVisibleUpperBound;
 }
 
-void BMSRenderer::setVisibleTimeGreenNumber(int greenNumber) {
-  visibleTimeGreenNumber = greenNumber;
+void BMSRenderer::setVisibleTimeDurationMilliseconds(int milliseconds) {
+  visibleTimeDurationMilliseconds =
+      std::clamp(milliseconds, AppSettings::kMinVisibleTimeMs,
+                 AppSettings::kMaxVisibleTimeMs);
 }
 
 void BMSRenderer::setHispeedMultiplier(float multiplier) {

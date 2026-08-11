@@ -150,11 +150,13 @@ void applySemanticButtonStyle(Button *button, TextView *text,
 void SettingsScene::refreshSettingsText() {
   const int offsetMs = context.settings.audioOffsetMs;
   const int visualOffsetMs = context.settings.visualOffsetMs;
-  const int visibleTimeGreenNumber = context.settings.visibleTimeGreenNumber;
+  const int visibleTimeDurationMilliseconds =
+      context.settings.visibleTimeDurationMilliseconds;
   const std::string offsetLabel = formatOffsetLabel(offsetMs);
   const std::string visualOffsetLabel = formatOffsetLabel(visualOffsetMs);
   const std::string visibleTimeLabel = formatVisibleTimeLabel(
-      visibleTimeGreenNumber, context.settings.visibleTimeUseMilliseconds);
+      visibleTimeDurationMilliseconds,
+      context.settings.visibleTimeUseMilliseconds);
   const std::string visibleTimeBpmStrategyLabel =
       formatVisibleTimeBpmStrategyLabel(
           context.settings.visibleTimeBpmStrategy);
@@ -594,7 +596,8 @@ void SettingsScene::syncVisibleTimeInputText(bool force) {
     return;
   }
   visibleTimeInput->setEditingText(
-      formatVisibleTimeInputValue(context.settings.visibleTimeGreenNumber,
+      formatVisibleTimeInputValue(
+                                  context.settings.visibleTimeDurationMilliseconds,
                                   context.settings.visibleTimeUseMilliseconds));
 }
 
@@ -752,14 +755,11 @@ void SettingsScene::commitVisibleTimeInput() {
   try {
     const int parsedValue = std::stoi(rawText);
     if (context.settings.visibleTimeUseMilliseconds) {
-      const int milliseconds =
-          std::clamp(parsedValue, AppSettings::kMinVisibleTimeMs,
-                     AppSettings::kMaxVisibleTimeMs);
-      context.settings.visibleTimeGreenNumber =
-          clampVisibleTimeGreenNumber(millisecondsToGreenNumber(milliseconds));
+      context.settings.visibleTimeDurationMilliseconds = std::clamp(
+          parsedValue, AppSettings::kMinVisibleTimeMs,
+          AppSettings::kMaxVisibleTimeMs);
     } else {
-      context.settings.visibleTimeGreenNumber =
-          clampVisibleTimeGreenNumber(parsedValue);
+      context.settings.setVisibleTimeGreenNumber(parsedValue);
     }
     persistSettings();
     syncVisibleTimeInputText(true);

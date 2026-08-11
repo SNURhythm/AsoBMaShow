@@ -388,7 +388,7 @@ void testExportPixelSizesMapToLogicalGameplayBounds() {
 
 void testReplayExportConfigPreservesGameplayPresentationSettings() {
   AppSettings settings;
-  settings.visibleTimeGreenNumber = 777;
+  settings.visibleTimeDurationMilliseconds = 1'001;
   settings.gameplayHispeedMultiplier = 1.75F;
   settings.visibleTimeUseMilliseconds = true;
   settings.visibleTimeBpmStrategy =
@@ -415,7 +415,7 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
   const auto configuration =
       replay_video_export::replayGameplayPresentationConfig(
           settings, 9.5F, false, false);
-  expect(configuration.visibleTimeGreenNumber == 777 &&
+  expect(configuration.visibleTimeDurationMilliseconds == 1'001 &&
              configuration.hispeedMultiplier == 1.75F &&
              configuration.visibleTimeUseMilliseconds &&
              configuration.visibleTimeBpmStrategy ==

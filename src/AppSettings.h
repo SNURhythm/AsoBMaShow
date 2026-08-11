@@ -6,6 +6,7 @@
 #include "settings/AudioVideoSettings.h"
 #include "skin/SkinProfileSettings.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <iosfwd>
 #include <map>
@@ -68,13 +69,12 @@ public:
   static constexpr int kMaxAudioOffsetMs = 300;
   static constexpr int kMinVisualOffsetMs = -500;
   static constexpr int kMaxVisualOffsetMs = 500;
-  // Beatoraja PlayConfig.DURATION_MIN/MAX.  START/SELECT changes this same
-  // persisted duration, so clamping it to the source range keeps physical and
-  // virtual controller adjustment semantics identical.
-  static constexpr int kMinVisibleTimeGreenNumber = 1;
-  static constexpr int kMaxVisibleTimeGreenNumber = 10000;
-  static constexpr int kMinVisibleTimeMs = 100;
-  static constexpr int kMaxVisibleTimeMs = 2000;
+  // Beatoraja PlayConfig.DURATION_MIN/MAX.  Duration is canonical in
+  // milliseconds; green number is the derived IntegerProperty 313 value.
+  static constexpr int kMinVisibleTimeMs = 1;
+  static constexpr int kMaxVisibleTimeMs = 10000;
+  static constexpr int kMinVisibleTimeGreenNumber = 0;
+  static constexpr int kMaxVisibleTimeGreenNumber = 6000;
   static constexpr float kMinGameplayHispeedMultiplier = 0.01F;
   static constexpr float kMaxGameplayHispeedMultiplier = 19.99F;
   static constexpr int kMinBgaBrightnessPercent = 0;
@@ -123,7 +123,9 @@ public:
       player_settings::defaultAudioVideoSettingsForPlatform();
   int audioOffsetMs = 0;
   int visualOffsetMs = 0;
-  int visibleTimeGreenNumber = 400;
+  // Matches Beatoraja PlayConfig.duration.  667 ms is the smallest integral
+  // duration that derives the legacy default green number 400.
+  int visibleTimeDurationMilliseconds = 667;
   float gameplayHispeedMultiplier = 1.0F;
   bool visibleTimeUseMilliseconds = false;
   VisibleTimeBpmStrategy visibleTimeBpmStrategy = VisibleTimeBpmStrategy::Chart;
@@ -201,6 +203,29 @@ public:
   void sanitize();
   float playAreaWidthForKeyMode(int keyMode) const;
   void setPlayAreaWidthForKeyMode(int keyMode, float width);
+  [[nodiscard]] static constexpr int
+  durationMillisecondsToGreenNumber(int milliseconds) noexcept {
+    return (std::clamp(milliseconds, kMinVisibleTimeMs,
+                       kMaxVisibleTimeMs) *
+            3) /
+           5;
+  }
+  [[nodiscard]] static constexpr int
+  greenNumberToDurationMilliseconds(int greenNumber) noexcept {
+    const int bounded = std::clamp(greenNumber, kMinVisibleTimeGreenNumber,
+                                   kMaxVisibleTimeGreenNumber);
+    // IntegerPropertyFactory evaluates `duration * 3 / 5`. Choose the
+    // smallest integral duration that derives the requested green value.
+    return std::clamp((bounded * 5 + 2) / 3, kMinVisibleTimeMs,
+                      kMaxVisibleTimeMs);
+  }
+  [[nodiscard]] constexpr int visibleTimeGreenNumber() const noexcept {
+    return durationMillisecondsToGreenNumber(visibleTimeDurationMilliseconds);
+  }
+  constexpr void setVisibleTimeGreenNumber(int greenNumber) noexcept {
+    visibleTimeDurationMilliseconds =
+        greenNumberToDurationMilliseconds(greenNumber);
+  }
   bool operator==(const AppSettings &) const = default;
 
 private:

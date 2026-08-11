@@ -432,7 +432,8 @@ json settingsToJson(const AppSettings &settings) {
       {"schemaVersion", AppSettingsStore::kCurrentSchemaVersion},
       {"audioOffsetMs", settings.audioOffsetMs},
       {"visualOffsetMs", settings.visualOffsetMs},
-      {"visibleTimeGreenNumber", settings.visibleTimeGreenNumber},
+      {"visibleTimeDurationMilliseconds",
+       settings.visibleTimeDurationMilliseconds},
       {"gameplayHispeedMultiplier", settings.gameplayHispeedMultiplier},
       {"visibleTimeUseMilliseconds", settings.visibleTimeUseMilliseconds},
       {"visibleTimeBpmStrategy",
@@ -540,8 +541,16 @@ AppSettings settingsFromJson(const json &document,
   }
   readValue(document, "audioOffsetMs", settings.audioOffsetMs, diagnostics);
   readValue(document, "visualOffsetMs", settings.visualOffsetMs, diagnostics);
-  readValue(document, "visibleTimeGreenNumber", settings.visibleTimeGreenNumber,
-            diagnostics);
+  if (document.contains("visibleTimeDurationMilliseconds")) {
+    readValue(document, "visibleTimeDurationMilliseconds",
+              settings.visibleTimeDurationMilliseconds, diagnostics);
+  } else {
+    int legacyGreenNumber = settings.visibleTimeGreenNumber();
+    if (readValue(document, "visibleTimeGreenNumber", legacyGreenNumber,
+                  diagnostics)) {
+      settings.setVisibleTimeGreenNumber(legacyGreenNumber);
+    }
+  }
   readValue(document, "gameplayHispeedMultiplier",
             settings.gameplayHispeedMultiplier, diagnostics);
   readValue(document, "visibleTimeUseMilliseconds",
@@ -752,7 +761,7 @@ AppSettingsLoadStatus mapFailure(versioned_json::LoadStatus status) {
 
 AppSettingsLoadResult
 AppSettingsStore::Load(const std::filesystem::path &settingsJson) {
-  const std::array<versioned_json::Migration, 4> migrations = {
+  const std::array<versioned_json::Migration, 5> migrations = {
       [](json &document, std::string &) {
         document["schemaVersion"] = 1;
         return true;
@@ -789,6 +798,34 @@ AppSettingsStore::Load(const std::filesystem::path &settingsJson) {
               {"selected7KeyEntry", nullptr},
               {"entries", json::array()},
           };
+        }
+        return true;
+      },
+      [](json &document, std::string &) {
+        if (!document.contains("visibleTimeDurationMilliseconds") &&
+            document.contains("visibleTimeGreenNumber")) {
+          const auto &legacy = document["visibleTimeGreenNumber"];
+          if (legacy.is_number_integer()) {
+            if (legacy.is_number_unsigned()) {
+              const auto value = legacy.get<std::uint64_t>();
+              if (value <= static_cast<std::uint64_t>(
+                               std::numeric_limits<int>::max())) {
+                document["visibleTimeDurationMilliseconds"] =
+                    AppSettings::greenNumberToDurationMilliseconds(
+                        static_cast<int>(value));
+              }
+            } else {
+              const auto value = legacy.get<std::int64_t>();
+              if (value >= static_cast<std::int64_t>(
+                               std::numeric_limits<int>::lowest()) &&
+                  value <= static_cast<std::int64_t>(
+                               std::numeric_limits<int>::max())) {
+                document["visibleTimeDurationMilliseconds"] =
+                    AppSettings::greenNumberToDurationMilliseconds(
+                        static_cast<int>(value));
+              }
+            }
+          }
         }
         return true;
       }};

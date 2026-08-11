@@ -43,7 +43,8 @@ struct PlayfieldFrameClock {
 };
 
 struct PlayfieldPresentationConfig {
-  int visibleTimeGreenNumber = 0;
+  // Beatoraja PlayConfig.duration, retained without a green-number round trip.
+  int visibleTimeDurationMilliseconds = 667;
   float hispeedMultiplier = 1.0F;
   bool visibleTimeUseMilliseconds = false;
   AppSettings::VisibleTimeBpmStrategy visibleTimeBpmStrategy =

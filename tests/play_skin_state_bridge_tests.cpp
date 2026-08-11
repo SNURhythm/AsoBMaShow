@@ -1234,7 +1234,7 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
       {Good, {.fast = 6, .slow = 5}},   {Bad, {.fast = 8, .slow = 7}},
       {Kpoor, {.fast = 10, .slow = 9}}, {Poor, {.fast = 12, .slow = 11}}};
   state.authority.loadingState = PlayfieldLoadingState::Loaded;
-  state.configuration.visibleTimeGreenNumber = 400;
+  state.configuration.visibleTimeDurationMilliseconds = 667;
   state.lanes.resize(8);
   for (std::size_t index = 0; index < state.lanes.size(); ++index) {
     state.lanes[index].pressed = true;

@@ -91,7 +91,7 @@ AppSettings makeDistinctSettings() {
   value.audioVideo.video.frameCap = 240;
   value.audioOffsetMs = -23;
   value.visualOffsetMs = 41;
-  value.visibleTimeGreenNumber = 777;
+  value.setVisibleTimeGreenNumber(777);
   value.visibleTimeUseMilliseconds = true;
   value.visibleTimeBpmStrategy =
       AppSettings::VisibleTimeBpmStrategy::MostPrevalent;
@@ -216,10 +216,16 @@ void testJsonRoundTripIncludesAudioAndVideo() {
              *entry.entry)) == expectedConfigurationDigest,
          "restart reconstructs the exact configuration digest from persisted "
          "entry maps");
-  expect(readFile(path).find("\"schemaVersion\": 4") != std::string::npos,
-         "saved JSON declares schema version 4");
+  expect(readFile(path).find("\"schemaVersion\": 5") != std::string::npos,
+         "saved JSON declares schema version 5");
+  expect(readFile(path).find("\"visibleTimeDurationMilliseconds\": 1295") !=
+             std::string::npos,
+         "saved JSON persists exact canonical visible duration milliseconds");
+  expect(readFile(path).find("\"visibleTimeGreenNumber\"") ==
+             std::string::npos,
+         "saved JSON does not persist a competing green-number source value");
   expect(readFile(path).find("configurationDigest") == std::string::npos,
-         "schema 4 does not persist a competing configuration digest map");
+         "schema 5 does not persist a competing configuration digest map");
   expect(readFile(path).find("\"selectedGameplayEntries\"") !=
              std::string::npos,
          "new settings persist gameplay selection by skin trait");
@@ -288,7 +294,7 @@ void testSchemaThreeMigrationDisablesCompatibility() {
   writeFile(path, R"({"schemaVersion":3,"audioOffsetMs":11})");
   const auto loaded = AppSettingsStore::Load(path);
   expect(loaded.status == AppSettingsLoadStatus::Loaded,
-         "schema 3 settings migrate to schema 4");
+         "schema 3 settings migrate to the current schema");
   expect(!loaded.settings.skin.gameplayCompatibilityEnabled,
          "schema 3 migration disables compatibility");
   expect(!loaded.settings.skin.selected7KeyEntry.has_value(),
@@ -351,7 +357,7 @@ void testSkinSettingsRejectUntrustedIdentityAndSanitizeBounds() {
   })JSON");
   const auto loaded = AppSettingsStore::Load(path);
   expect(loaded.status == AppSettingsLoadStatus::Loaded,
-         "schema 4 skin settings load");
+         "schema 4 skin settings migrate and load");
   expect(loaded.settings.skin.selected7KeyEntry.has_value() &&
              loaded.settings.skin.entries.size() == 1,
          "valid typed selection and matching entry survive");
@@ -697,16 +703,36 @@ void testJudgementIndicatorRangeDefaultsAndSanitization() {
 
 void testBeatorajaStartSelectDurationRange() {
   AppSettings lower;
-  lower.visibleTimeGreenNumber = 0;
+  lower.visibleTimeDurationMilliseconds = 0;
   lower.sanitize();
-  expect(lower.visibleTimeGreenNumber == 1,
+  expect(lower.visibleTimeDurationMilliseconds == 1,
          "Start/Select duration preserves Beatoraja's minimum of one");
 
   AppSettings upper;
-  upper.visibleTimeGreenNumber = 20'000;
+  upper.visibleTimeDurationMilliseconds = 20'000;
   upper.sanitize();
-  expect(upper.visibleTimeGreenNumber == 10'000,
+  expect(upper.visibleTimeDurationMilliseconds == 10'000,
          "Start/Select duration preserves Beatoraja's maximum of 10000");
+}
+
+void testVisibleTimeDurationKeepsBeatorajaMillisecondsCanonical() {
+  AppSettings settings;
+  settings.visibleTimeDurationMilliseconds = 1'000;
+  settings.sanitize();
+  expect(settings.visibleTimeGreenNumber() == 600,
+         "1000 ms derives the Beatoraja green number 600");
+
+  settings.visibleTimeDurationMilliseconds = 1'001;
+  settings.sanitize();
+  expect(settings.visibleTimeDurationMilliseconds == 1'001,
+         "an exact millisecond duration is not rounded through green number");
+  expect(settings.visibleTimeGreenNumber() == 600,
+         "green number uses IntegerPropertyFactory's integer duration * 3 / 5");
+
+  settings.setVisibleTimeGreenNumber(2);
+  expect(settings.visibleTimeDurationMilliseconds == 4 &&
+             settings.visibleTimeGreenNumber() == 2,
+         "green input selects the smallest millisecond duration with that green value");
 }
 
 void testGameplayRulesetDefaultsMigrationAndValidation() {
@@ -1226,6 +1252,7 @@ int main() {
   testFindBmsArchivePreferenceDefaultsAndRoundTrips();
   testJudgementIndicatorRangeDefaultsAndSanitization();
   testBeatorajaStartSelectDurationRange();
+  testVisibleTimeDurationKeepsBeatorajaMillisecondsCanonical();
   testGameplayRulesetDefaultsMigrationAndValidation();
   testIrDefaultsMigrationAndOriginSanitization();
   testPlaybackSelectionSanitizationAndLegacyDefaults();

@@ -307,8 +307,9 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
   }
 
   auto updateVisibleTime = [this](int delta) {
-    context.settings.visibleTimeGreenNumber = adjustVisibleTimeGreenNumber(
-        context.settings.visibleTimeGreenNumber,
+    context.settings.visibleTimeDurationMilliseconds =
+        adjustVisibleTimeDurationMilliseconds(
+        context.settings.visibleTimeDurationMilliseconds,
         context.settings.visibleTimeUseMilliseconds, delta);
     persistSettings();
     syncVisibleTimeInputText(true);
@@ -364,7 +365,7 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
 
     auto *resetVisibleTime = makeResetButton(metrics);
     resetVisibleTime->setOnClickListener([this]() {
-      context.settings.visibleTimeGreenNumber = 400;
+      context.settings.setVisibleTimeGreenNumber(400);
       persistSettings();
       syncVisibleTimeInputText(true);
     });

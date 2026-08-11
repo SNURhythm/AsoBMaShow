@@ -331,7 +331,7 @@ private:
   float noteVisibleUpperBound = 10.0f;
   float judgeY = 0.0f;
   long long latePoorTiming;
-  int visibleTimeGreenNumber = 400;
+  int visibleTimeDurationMilliseconds = 667;
   float hispeedMultiplier = 1.0F;
   audio::PlaybackRate playbackRate;
   bool visibleTimeUseMilliseconds = false;
@@ -557,7 +557,7 @@ public:
   explicit BMSRenderer(
       bms_parser::Chart *chart,
       const std::map<Judgement, std::pair<long long, long long>> &timingWindows,
-      int visibleTimeGreenNumber, bool renderHud = true,
+      int visibleTimeDurationMilliseconds, bool renderHud = true,
       audio::PlaybackRate playbackRate = {});
 
   void render(RenderContext &context, long long micro);
@@ -580,7 +580,7 @@ public:
   [[nodiscard]] PresentationMode activeMode() const noexcept override;
   [[nodiscard]] std::optional<PresentationFailure>
   lastFailure() const override;
-  void setVisibleTimeGreenNumber(int greenNumber);
+  void setVisibleTimeDurationMilliseconds(int milliseconds);
   void setHispeedMultiplier(float multiplier);
   void setVisibleTimeUseMilliseconds(bool enabled);
   void setCurrentBpm(double bpm);

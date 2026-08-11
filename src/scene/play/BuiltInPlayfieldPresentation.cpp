@@ -9,8 +9,9 @@ std::unique_ptr<BuiltInPlayfieldPresentation>
 createBuiltInPlayfieldPresentation(
     BuiltInPlayfieldPresentationCreateInfo creation) {
   auto presentation = std::make_unique<BMSRenderer>(
-      &creation.chart, creation.timingWindows, creation.visibleTimeGreenNumber,
-      creation.renderHud, creation.playbackRate);
+      &creation.chart, creation.timingWindows,
+      creation.visibleTimeDurationMilliseconds, creation.renderHud,
+      creation.playbackRate);
   presentation->setReplayData(creation.replayData);
   return presentation;
 }

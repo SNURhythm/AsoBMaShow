@@ -319,7 +319,7 @@
     ]
   },
   "configuration": {
-    "visibleTimeGreenNumber": 1500,
+    "visibleTimeDurationMilliseconds": 2500,
     "visibleTimeUseMilliseconds": true,
     "visibleTimeBpmStrategy": 0,
     "playAreaWidth": 8.0,

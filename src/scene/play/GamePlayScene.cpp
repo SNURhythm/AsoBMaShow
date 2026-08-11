@@ -732,10 +732,10 @@ bool gameplayHasSamePatternRandomization(const bms_parser::Chart &chart,
   return play_options::hasSamePatternRandomization(chart.Meta, option, option2);
 }
 
-int noSpeedGreenNumberForChart(const bms_parser::Chart *chart) {
+int noSpeedDurationMillisecondsForChart(const bms_parser::Chart *chart) {
   const double bpm = chart != nullptr ? chart->Meta.Bpm : 0.0;
   const double referenceBpm = std::isfinite(bpm) && bpm > 0.0 ? bpm : 120.0;
-  return std::max(1, static_cast<int>(std::lround(144000.0 / referenceBpm)));
+  return std::max(1, static_cast<int>(std::lround(240000.0 / referenceBpm)));
 }
 
 bool prepareRetryChart(const bms_parser::ChartMeta &meta,
@@ -2461,7 +2461,8 @@ void GamePlayScene::init() {
   auto builtIn = createBuiltInPlayfieldPresentation({
       .chart = *chart,
       .timingWindows = judge.timingWindows,
-      .visibleTimeGreenNumber = effectiveVisibleTimeGreenNumber(),
+      .visibleTimeDurationMilliseconds =
+          effectiveVisibleTimeDurationMilliseconds(),
       .renderHud = true,
       .playbackRate = options.playback,
       .replayData = options.replayData.get(),
@@ -2510,7 +2511,8 @@ void GamePlayScene::init() {
 #endif
   presentation = ownedPresentation.get();
   playfieldPresentationConfiguration = {
-      .visibleTimeGreenNumber = effectiveVisibleTimeGreenNumber(),
+      .visibleTimeDurationMilliseconds =
+          effectiveVisibleTimeDurationMilliseconds(),
       .hispeedMultiplier = playfieldHispeedMultiplier,
       .visibleTimeUseMilliseconds =
           !courseNoSpeed() && context.settings.visibleTimeUseMilliseconds,
@@ -3301,10 +3303,9 @@ void GamePlayScene::applyStartSelectControlActions(
       break;
     case gameplay::StartSelectControlActionKind::AdjustDuration:
       if (!courseNoSpeed() && action.delta != 0) {
-        context.settings.visibleTimeGreenNumber = std::clamp(
-            context.settings.visibleTimeGreenNumber + action.delta,
-            AppSettings::kMinVisibleTimeGreenNumber,
-            AppSettings::kMaxVisibleTimeGreenNumber);
+        context.settings.visibleTimeDurationMilliseconds = std::clamp(
+            context.settings.visibleTimeDurationMilliseconds + action.delta,
+            AppSettings::kMinVisibleTimeMs, AppSettings::kMaxVisibleTimeMs);
         refreshRuntimePresentationConfiguration();
         (void)context.saveSettings();
       }
@@ -3361,8 +3362,8 @@ void GamePlayScene::refreshRuntimePresentationConfiguration() {
   if (playfieldVisualStateStore == nullptr || presentation == nullptr) {
     return;
   }
-  playfieldPresentationConfiguration.visibleTimeGreenNumber =
-      effectiveVisibleTimeGreenNumber();
+  playfieldPresentationConfiguration.visibleTimeDurationMilliseconds =
+      effectiveVisibleTimeDurationMilliseconds();
   playfieldPresentationConfiguration.hispeedMultiplier =
       playfieldHispeedMultiplier;
   playfieldPresentationConfiguration.laneCoverHispeedFactor =
@@ -3588,9 +3589,9 @@ bool GamePlayScene::courseNoSpeed() const {
   return isCoursePlayback() && options.courseConstraints.noSpeed;
 }
 
-int GamePlayScene::effectiveVisibleTimeGreenNumber() const {
-  return courseNoSpeed() ? noSpeedGreenNumberForChart(chart)
-                         : context.settings.visibleTimeGreenNumber;
+int GamePlayScene::effectiveVisibleTimeDurationMilliseconds() const {
+  return courseNoSpeed() ? noSpeedDurationMillisecondsForChart(chart)
+                         : context.settings.visibleTimeDurationMilliseconds;
 }
 
 int GamePlayScene::effectiveNoteStartPositionPercent() const {

@@ -430,7 +430,7 @@ void configureGeometryAndViews(bgfx::FrameBufferHandle framebuffer) {
 
 PlayfieldPresentationConfig presentationConfig(int coverPercent) {
   return {
-      .visibleTimeGreenNumber = 1500,
+      .visibleTimeDurationMilliseconds = 2500,
       .visibleTimeUseMilliseconds = true,
       .visibleTimeBpmStrategy = AppSettings::VisibleTimeBpmStrategy::Chart,
       .playAreaWidth = AppSettings::kDefaultPlayAreaWidth,
@@ -713,7 +713,7 @@ ScenarioResult renderScenario(
   Judge judge(fixture.chart->Meta.Rank);
   {
     BMSRenderer renderer(fixture.chart.get(), judge.timingWindows,
-                         configuration.visibleTimeGreenNumber, true);
+                         configuration.visibleTimeDurationMilliseconds, true);
     renderer.setCharacterizationRecorder(&result.recorder);
     const PlayfieldJudgeEventClock judgeClock{
         .songTimeMicros = kGameplayMicros,
@@ -862,7 +862,8 @@ public:
       : model(buildPlayfieldChartVisualModel(*chartFixture.chart, 0)),
         store(model), judge(chartFixture.chart->Meta.Rank),
         renderer(chartFixture.chart.get(), judge.timingWindows,
-                 presentationConfig(kAfterCoverPercent).visibleTimeGreenNumber,
+                 presentationConfig(kAfterCoverPercent)
+                     .visibleTimeDurationMilliseconds,
                  true) {
     const auto configuration = presentationConfig(kAfterCoverPercent);
     store.setConfiguration(configuration);
@@ -1082,8 +1083,9 @@ void verifyFactoryUsesBorrowedNonNullChart() {
       createBuiltInPlayfieldPresentation({
           .chart = *fixture.chart,
           .timingWindows = judge.timingWindows,
-          .visibleTimeGreenNumber =
-              presentationConfig(kAfterCoverPercent).visibleTimeGreenNumber,
+          .visibleTimeDurationMilliseconds =
+              presentationConfig(kAfterCoverPercent)
+                  .visibleTimeDurationMilliseconds,
           .renderHud = false,
           .playbackRate = {},
       });
@@ -1185,7 +1187,8 @@ void verifyFinalMeasureTailAdvancesLegacyScroll(const RenderTarget &target) {
 
 Json configurationJson(const PlayfieldPresentationConfig &config) {
   return {
-      {"visibleTimeGreenNumber", config.visibleTimeGreenNumber},
+      {"visibleTimeDurationMilliseconds",
+       config.visibleTimeDurationMilliseconds},
       {"visibleTimeUseMilliseconds", config.visibleTimeUseMilliseconds},
       {"visibleTimeBpmStrategy", static_cast<int>(config.visibleTimeBpmStrategy)},
       {"playAreaWidth", canonical(config.playAreaWidth)},
@@ -1633,6 +1636,19 @@ void destroyRenderTarget(RenderTarget &target) {
   target = {};
 }
 
+void verifyVisibleTimeDurationUsesMilliseconds() {
+  SyntheticChartFixture fixture;
+  Judge judge(fixture.chart->Meta.Rank);
+  BMSRenderer renderer(fixture.chart.get(), judge.timingWindows, 1'001, false);
+  renderer.configure({.visibleTimeDurationMilliseconds = 1'001});
+
+  const auto traversal = renderer.projectionTraversal();
+  constexpr float expectedHispeed = 240000.0F / 120.0F / 1001.0F;
+  expect(std::abs(traversal.configuredHispeed - expectedHispeed) < 0.00001F,
+         "1001 ms visible duration is not rounded through a green number before "
+         "calculating note speed");
+}
+
 } // namespace
 
 int main() {
@@ -1710,6 +1726,7 @@ int main() {
              "start cursor");
       verifyCapturedOverloadEquivalence(legacyCursorAdvanced,
                                         capturedCursorAdvanced);
+      verifyVisibleTimeDurationUsesMilliseconds();
     } catch (const std::exception &error) {
       std::cerr << "FAIL: characterization threw: " << error.what() << '\n';
       ++failures;

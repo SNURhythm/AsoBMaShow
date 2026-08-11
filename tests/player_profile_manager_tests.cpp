@@ -675,7 +675,7 @@ void testFirstRunMigrationIsLosslessAndIdempotent() {
   expect(settings.status == AppSettingsLoadStatus::Loaded,
          "migrated settings JSON loads");
   expect(settings.settings.audioOffsetMs == -23 &&
-             settings.settings.visibleTimeGreenNumber == 777 &&
+             settings.settings.visibleTimeDurationMilliseconds == 1295 &&
              settings.settings.selectedPlayOption == "R-RANDOM" &&
              settings.settings.selectedPacemakerTarget == "AAA",
          "legacy settings convert exactly into versioned settings");

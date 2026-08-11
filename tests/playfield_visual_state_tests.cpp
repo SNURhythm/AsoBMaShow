@@ -229,7 +229,7 @@ void testVisualStateCaptureAndFanoutAreCoherentValueSnapshots() {
   PlayfieldVisualStateStore store(model);
 
   PlayfieldPresentationConfig configuration{
-      .visibleTimeGreenNumber = 525,
+      .visibleTimeDurationMilliseconds = 875,
       .visibleTimeUseMilliseconds = true,
       .visibleTimeBpmStrategy =
           AppSettings::VisibleTimeBpmStrategy::MostPrevalent,

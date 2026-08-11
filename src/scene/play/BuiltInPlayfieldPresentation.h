@@ -42,7 +42,7 @@ struct BuiltInPlayfieldPresentationCreateInfo {
   // until the returned presentation has been destroyed.
   bms_parser::Chart &chart;
   std::map<Judgement, std::pair<long long, long long>> timingWindows;
-  int visibleTimeGreenNumber = 0;
+  int visibleTimeDurationMilliseconds = 667;
   bool renderHud = true;
   audio::PlaybackRate playbackRate;
   // Borrowed for construction only. The concrete presentation preprocesses

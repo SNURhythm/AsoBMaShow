@@ -36,7 +36,8 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
                        0.0F, 1.0F)
           : 1.0F;
   return {
-      .visibleTimeGreenNumber = settings.visibleTimeGreenNumber,
+      .visibleTimeDurationMilliseconds =
+          settings.visibleTimeDurationMilliseconds,
       .hispeedMultiplier = settings.gameplayHispeedMultiplier,
       .visibleTimeUseMilliseconds = settings.visibleTimeUseMilliseconds,
       .visibleTimeBpmStrategy = settings.visibleTimeBpmStrategy,

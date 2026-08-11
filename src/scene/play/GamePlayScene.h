@@ -134,7 +134,7 @@ private:
   [[nodiscard]] bool isReplayPlayback() const;
   [[nodiscard]] bool isCoursePlayback() const;
   [[nodiscard]] bool courseNoSpeed() const;
-  [[nodiscard]] int effectiveVisibleTimeGreenNumber() const;
+  [[nodiscard]] int effectiveVisibleTimeDurationMilliseconds() const;
   [[nodiscard]] int effectiveNoteStartPositionPercent() const;
   [[nodiscard]] bool shouldRecordReplay() const;
   [[nodiscard]] bool shouldPersistRecordedReplay() const;

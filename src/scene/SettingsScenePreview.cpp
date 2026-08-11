@@ -92,7 +92,8 @@ PlayfieldPresentationConfig
 previewPresentationConfiguration(const AppSettings &settings,
                                  const bms_parser::Chart &chart) {
   return {
-      .visibleTimeGreenNumber = settings.visibleTimeGreenNumber,
+      .visibleTimeDurationMilliseconds =
+          settings.visibleTimeDurationMilliseconds,
       .visibleTimeUseMilliseconds = settings.visibleTimeUseMilliseconds,
       .visibleTimeBpmStrategy = settings.visibleTimeBpmStrategy,
       .playAreaWidth = settings.playAreaWidthForKeyMode(chart.Meta.KeyMode),
@@ -200,7 +201,7 @@ void SettingsScene::ensurePreviewRenderer() {
     Judge previewJudge(previewChart->Meta.Rank);
     previewRenderer = std::make_unique<BMSRenderer>(
         previewChart.get(), previewJudge.timingWindows,
-        context.settings.visibleTimeGreenNumber, true);
+        context.settings.visibleTimeDurationMilliseconds, true);
     syncPreviewPresentationConfiguration();
     previewPresentationEvents =
         std::make_unique<PlayfieldPresentationEventFanout>(
