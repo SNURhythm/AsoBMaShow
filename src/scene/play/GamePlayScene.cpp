@@ -23,6 +23,7 @@
 #include "../../view/TextView.h"
 #include "../../view/IconText.h"
 #include "BuiltInPlayfieldPresentation.h"
+#include "BeatorajaHiSpeedChart.h"
 #include "GameplayNoteJudgeRole.h"
 #include "RealtimeGameplayAuthorityPolicy.h"
 #include "RhythmLaneInputController.h"
@@ -2446,12 +2447,23 @@ void GamePlayScene::init() {
       gameplay::StartSelectControl::Configuration{.keyMode = chart->Meta.KeyMode});
   startButtonPressed = false;
   selectButtonPressed = false;
-  playfieldHispeedMultiplier = context.settings.gameplayHispeedMultiplier;
   playfieldLaneCoverEnabled = context.settings.laneCoverEnabled;
   playfieldLaneCoverPercent = effectiveNoteStartPositionPercent();
   playfieldLaneCoverPercentExact =
       static_cast<float>(playfieldLaneCoverPercent);
-  refreshLaneCoverHispeedFactor();
+  playfieldHispeedState.emplace(
+      gameplay_hispeed::Settings{
+          .mode = courseNoSpeed()
+                      ? gameplay_hispeed::FixMode::Off
+                      : gameplay_hispeed::fixModeFromEncoded(
+                            static_cast<int>(context.settings.hispeedFixMode)),
+          .durationMilliseconds = effectiveVisibleTimeDurationMilliseconds(),
+          .hispeed = courseNoSpeed() ? 1.0F : context.settings.gameplayHispeed,
+          .margin = context.settings.hispeedMargin,
+          .laneCoverPercent = courseNoSpeed() ? 0 : playfieldLaneCoverPercent,
+          .laneCoverEnabled = courseNoSpeed() ? false : playfieldLaneCoverEnabled,
+      },
+      gameplay_hispeed::summarizeChartBpm(*chart));
   playfieldChartVisualModel =
       buildPlayfieldChartVisualModel(*chart, options.longNoteMode);
   initializePlayfieldVisualNoteSources();
@@ -2513,16 +2525,16 @@ void GamePlayScene::init() {
   playfieldPresentationConfiguration = {
       .visibleTimeDurationMilliseconds =
           effectiveVisibleTimeDurationMilliseconds(),
-      .hispeedMultiplier = playfieldHispeedMultiplier,
+      .configuredHispeed = playfieldHispeedState->hispeed(),
+      .hispeedMultiplier = 1.0F,
       .visibleTimeUseMilliseconds =
           !courseNoSpeed() && context.settings.visibleTimeUseMilliseconds,
-      .visibleTimeBpmStrategy =
-          courseNoSpeed() ? AppSettings::VisibleTimeBpmStrategy::Chart
-                          : context.settings.visibleTimeBpmStrategy,
+      .hispeedFixMode = context.settings.hispeedFixMode,
       .playAreaWidth =
           context.settings.playAreaWidthForKeyMode(chart->Meta.KeyMode),
       .laneBeamsEnabled = true,
-      .laneCoverHispeedFactor = playfieldLaneCoverHispeedFactor,
+      .laneCoverHispeedFactor = 1.0F,
+      .laneCoverEnabled = playfieldLaneCoverEnabled,
       .laneBeamLengthPercent = context.settings.laneBeamLengthPercent,
       .noteStartPositionPercent = effectiveNoteStartPositionPercent(),
       .laneBeamClockUsesRenderTime = true,
@@ -2961,6 +2973,7 @@ bool GamePlayScene::reset() {
     playfieldVisualStateStore->clearLiveTouchPoints();
   }
   currentGameplayBpm = chart != nullptr ? chart->Meta.Bpm : 0.0;
+  currentGameplayScrollRate = 1.0;
   ownedState = std::make_unique<RhythmState>(chart, false,
                                              rulesetPolicyBuild.policy->gauge);
   state = ownedState.get();
@@ -3293,10 +3306,10 @@ void GamePlayScene::applyStartSelectControlActions(
     switch (action.kind) {
     case gameplay::StartSelectControlActionKind::AdjustHispeed:
       if (!courseNoSpeed() && action.delta != 0) {
-        playfieldHispeedMultiplier = std::clamp(
-            playfieldHispeedMultiplier + 0.25F * static_cast<float>(action.delta),
-            0.01F, 19.99F);
-        context.settings.gameplayHispeedMultiplier = playfieldHispeedMultiplier;
+        playfieldHispeedState->changeHispeed(action.delta > 0);
+        if (context.settings.hispeedFixMode == AppSettings::HiSpeedFixMode::Off) {
+          context.settings.gameplayHispeed = playfieldHispeedState->hispeed();
+        }
         refreshRuntimePresentationConfiguration();
         (void)context.saveSettings();
       }
@@ -3306,6 +3319,8 @@ void GamePlayScene::applyStartSelectControlActions(
         context.settings.visibleTimeDurationMilliseconds = std::clamp(
             context.settings.visibleTimeDurationMilliseconds + action.delta,
             AppSettings::kMinVisibleTimeMs, AppSettings::kMaxVisibleTimeMs);
+        playfieldHispeedState->setDurationMilliseconds(
+            context.settings.visibleTimeDurationMilliseconds);
         refreshRuntimePresentationConfiguration();
         (void)context.saveSettings();
       }
@@ -3322,12 +3337,14 @@ void GamePlayScene::applyStartSelectControlActions(
           playfieldLaneCoverPercentExact = next;
           context.settings.noteStartPositionPercent = nextPercent;
           playfieldLaneCoverPercent = nextPercent;
-          refreshLaneCoverHispeedFactor();
-          playfieldLaneCoverResetPending = context.settings.hispeedAutoAdjust;
+          playfieldHispeedState->setLaneCover(
+              nextPercent, currentGameplayBpm, context.settings.hispeedAutoAdjust);
+          playfieldLaneCoverResetPending = false;
           refreshRuntimePresentationConfiguration();
           appendReplayLaneCoverEvent(
               nextPercent, getGameplayTimeMicros(context.jukebox.getTimeMicros()),
-              context.settings.hispeedAutoAdjust);
+              context.settings.hispeedAutoAdjust,
+              ReplayLaneCoverChangeKind::Value);
           (void)context.saveSettings();
         }
       }
@@ -3336,13 +3353,13 @@ void GamePlayScene::applyStartSelectControlActions(
       if (!courseNoSpeed()) {
         playfieldLaneCoverEnabled = !playfieldLaneCoverEnabled;
         context.settings.laneCoverEnabled = playfieldLaneCoverEnabled;
-        refreshLaneCoverHispeedFactor();
-        playfieldLaneCoverResetPending = context.settings.hispeedAutoAdjust;
+        playfieldHispeedState->setLaneCoverEnabled(playfieldLaneCoverEnabled);
+        playfieldLaneCoverResetPending = false;
         refreshRuntimePresentationConfiguration();
         appendReplayLaneCoverEvent(
             playfieldLaneCoverPercent,
             getGameplayTimeMicros(context.jukebox.getTimeMicros()),
-            context.settings.hispeedAutoAdjust);
+            false, ReplayLaneCoverChangeKind::Enabled);
         (void)context.saveSettings();
       }
       break;
@@ -3364,10 +3381,12 @@ void GamePlayScene::refreshRuntimePresentationConfiguration() {
   }
   playfieldPresentationConfiguration.visibleTimeDurationMilliseconds =
       effectiveVisibleTimeDurationMilliseconds();
-  playfieldPresentationConfiguration.hispeedMultiplier =
-      playfieldHispeedMultiplier;
-  playfieldPresentationConfiguration.laneCoverHispeedFactor =
-      playfieldLaneCoverHispeedFactor;
+  playfieldPresentationConfiguration.configuredHispeed =
+      playfieldHispeedState ? playfieldHispeedState->hispeed() : 0.0F;
+  playfieldPresentationConfiguration.hispeedMultiplier = 1.0F;
+  playfieldPresentationConfiguration.laneCoverHispeedFactor = 1.0F;
+  playfieldPresentationConfiguration.laneCoverEnabled =
+      playfieldLaneCoverEnabled;
   playfieldVisualStateStore->setConfiguration(
       playfieldPresentationConfiguration);
   presentation->configure(playfieldPresentationConfiguration);
@@ -3425,12 +3444,14 @@ void GamePlayScene::adjustLaneCoverFromInput(int deltaPercent) {
   context.settings.noteStartPositionPercent = next;
   playfieldLaneCoverPercent = next;
   playfieldLaneCoverPercentExact = static_cast<float>(next);
-  refreshLaneCoverHispeedFactor();
-  playfieldLaneCoverResetPending = context.settings.hispeedAutoAdjust;
+  playfieldHispeedState->setLaneCover(next, currentGameplayBpm,
+                                      context.settings.hispeedAutoAdjust);
+  playfieldLaneCoverResetPending = false;
   refreshRuntimePresentationConfiguration();
   floatingLaneCoverSettingsDirty = true;
   appendReplayLaneCoverEvent(next, chartTimeMicros,
-                              context.settings.hispeedAutoAdjust);
+                              context.settings.hispeedAutoAdjust,
+                              ReplayLaneCoverChangeKind::Value);
   persistFloatingLaneCoverSettings();
 }
 
@@ -3939,7 +3960,8 @@ void GamePlayScene::beginReplayRecording() {
   recordedReplay.laneCoverEvents.reserve(128);
   appendReplayLaneCoverEvent(
       effectiveNoteStartPositionPercent(),
-      getGameplayTimeMicros(preparationPlan.playbackStartTimeMicros), false);
+      getGameplayTimeMicros(preparationPlan.playbackStartTimeMicros), false,
+      ReplayLaneCoverChangeKind::Value);
 }
 
 void GamePlayScene::captureModernReplayInput(
@@ -3999,6 +4021,7 @@ GamePlayScene::completeModernReplayCapture() {
         .songTimeMicros = event.songTimeMicros,
         .noteStartPositionPercent = event.noteStartPositionPercent,
         .laneCoverEnabled = event.laneCoverEnabled,
+        .changeKind = event.changeKind,
         .resetVisibleTimeReference = event.resetVisibleTimeReference,
     });
   }
@@ -4353,14 +4376,15 @@ void GamePlayScene::initializeStartPositionState() {
 }
 
 void GamePlayScene::applyTimelineBpm(const bms_parser::TimeLine *timeline) {
-  if (timeline == nullptr || !timeline->BpmChange ||
-      !std::isfinite(timeline->Bpm) || timeline->Bpm <= 0.0) {
+  if (timeline == nullptr) {
     return;
   }
-  if (std::abs(currentGameplayBpm - timeline->Bpm) <= 0.0001) {
-    return;
+  if (std::isfinite(timeline->Bpm) && timeline->Bpm > 0.0) {
+    currentGameplayBpm = timeline->Bpm;
   }
-  currentGameplayBpm = timeline->Bpm;
+  if (std::isfinite(timeline->Scroll)) {
+    currentGameplayScrollRate = timeline->Scroll;
+  }
 }
 
 long long
@@ -4442,6 +4466,7 @@ void GamePlayScene::capturePlayfieldVisualState(
       playfieldLaneCoverPercent, playfieldLaneCoverEnabled);
   PlayfieldAuthorityUpdate authority{
       .currentBpm = currentGameplayBpm,
+      .currentScrollRate = currentGameplayScrollRate,
       .judgementCounters = state->judgeCount,
       .judgementFastSlowCounters = [&] {
         std::map<Judgement, PlayfieldJudgementFastSlowCount> counters;
@@ -5751,8 +5776,14 @@ void GamePlayScene::applyReplayLaneCoverEvent(
   playfieldLaneCoverPercentExact =
       static_cast<float>(event.noteStartPositionPercent);
   playfieldLaneCoverEnabled = event.laneCoverEnabled;
-  refreshLaneCoverHispeedFactor();
-  playfieldLaneCoverResetPending = event.resetVisibleTimeReference;
+  if (event.changeKind == ReplayLaneCoverChangeKind::Enabled) {
+    playfieldHispeedState->setLaneCoverEnabled(event.laneCoverEnabled);
+  } else {
+    playfieldHispeedState->setLaneCover(event.noteStartPositionPercent,
+                                        currentGameplayBpm,
+                                        event.resetVisibleTimeReference);
+  }
+  playfieldLaneCoverResetPending = false;
   refreshRuntimePresentationConfiguration();
 }
 
@@ -6081,7 +6112,9 @@ void GamePlayScene::recordPreparationLaneEvent(ReplayEventAction action,
 
 void GamePlayScene::appendReplayLaneCoverEvent(int noteStartPositionPercent,
                                                long long songTimeMicros,
-                                               bool resetVisibleTimeReference) {
+                                               bool resetVisibleTimeReference,
+                                               ReplayLaneCoverChangeKind
+                                                   changeKind) {
   if (!shouldRecordReplay() || state == nullptr) {
     return;
   }
@@ -6095,6 +6128,7 @@ void GamePlayScene::appendReplayLaneCoverEvent(int noteStartPositionPercent,
       noteStartPositionPercent, AppSettings::kMinNoteStartPositionPercent,
       AppSettings::kMaxNoteStartPositionPercent);
   event.laneCoverEnabled = playfieldLaneCoverEnabled;
+  event.changeKind = changeKind;
   event.resetVisibleTimeReference = resetVisibleTimeReference;
   recordedReplay.laneCoverEvents.push_back(event);
 }
@@ -6176,13 +6210,15 @@ bool GamePlayScene::handleFloatingLaneCoverInput(SDL_FingerID fingerIndex,
     if (next == previous) {
       return false;
     }
-    refreshLaneCoverHispeedFactor();
-    playfieldLaneCoverResetPending = context.settings.hispeedAutoAdjust;
+    playfieldHispeedState->setLaneCover(next, currentGameplayBpm,
+                                        context.settings.hispeedAutoAdjust);
+    playfieldLaneCoverResetPending = false;
     refreshRuntimePresentationConfiguration();
     floatingLaneCoverDragChanged = true;
     floatingLaneCoverSettingsDirty = true;
     appendReplayLaneCoverEvent(next, songTimeMicros,
-                                context.settings.hispeedAutoAdjust);
+                                context.settings.hispeedAutoAdjust,
+                                ReplayLaneCoverChangeKind::Value);
     return true;
   };
 
@@ -6247,16 +6283,6 @@ void GamePlayScene::persistFloatingLaneCoverSettings() {
   if (!context.saveSettings()) {
     SDL_Log("Failed to save lane cover drag settings");
   }
-}
-
-void GamePlayScene::refreshLaneCoverHispeedFactor() {
-  // LaneRenderer.setLanecover() calls resetHispeed(basebpm), whose formula
-  // includes cover only while it is enabled. `setEnableLanecover()` itself
-  // deliberately leaves the live Hi-Speed untouched.
-  playfieldLaneCoverHispeedFactor =
-      playfieldLaneCoverEnabled
-          ? 1.0F - static_cast<float>(playfieldLaneCoverPercent) / 100.0F
-          : 1.0F;
 }
 
 void GamePlayScene::appendReplayTouchSample(SDL_FingerID fingerIndex,

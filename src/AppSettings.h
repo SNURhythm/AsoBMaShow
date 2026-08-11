@@ -35,9 +35,14 @@ public:
     Hud2D = 1,
   };
 
-  enum class VisibleTimeBpmStrategy {
-    Chart = 0,
-    MostPrevalent = 1,
+  // Exact PlayConfig.fixhispeed values from pinned Beatoraja.  Fixed modes
+  // store duration; OFF stores a raw Hi-Speed value instead.
+  enum class HiSpeedFixMode {
+    Off = 0,
+    Start = 1,
+    Max = 2,
+    Main = 3,
+    Min = 4,
   };
 
   enum class JudgementCounterPosition {
@@ -73,10 +78,13 @@ public:
   // milliseconds; green number is the derived IntegerProperty 313 value.
   static constexpr int kMinVisibleTimeMs = 1;
   static constexpr int kMaxVisibleTimeMs = 10000;
+  static constexpr int kDefaultVisibleTimeDurationMilliseconds = 500;
   static constexpr int kMinVisibleTimeGreenNumber = 0;
   static constexpr int kMaxVisibleTimeGreenNumber = 6000;
-  static constexpr float kMinGameplayHispeedMultiplier = 0.01F;
-  static constexpr float kMaxGameplayHispeedMultiplier = 19.99F;
+  static constexpr float kMinGameplayHispeed = 0.01F;
+  static constexpr float kMaxGameplayHispeed = 20.0F;
+  static constexpr float kDefaultHispeedMargin = 0.25F;
+  static constexpr float kMaxHispeedMargin = 10.0F;
   static constexpr int kMinBgaBrightnessPercent = 0;
   static constexpr int kMaxBgaBrightnessPercent = 100;
   static constexpr int kDefaultBgaBrightnessPercent = 100;
@@ -123,12 +131,16 @@ public:
       player_settings::defaultAudioVideoSettingsForPlatform();
   int audioOffsetMs = 0;
   int visualOffsetMs = 0;
-  // Matches Beatoraja PlayConfig.duration.  667 ms is the smallest integral
-  // duration that derives the legacy default green number 400.
-  int visibleTimeDurationMilliseconds = 667;
-  float gameplayHispeedMultiplier = 1.0F;
+  // Matches Beatoraja PlayConfig.duration. Green number is the derived live
+  // LaneRenderer duration, not a separate stored setting.
+  int visibleTimeDurationMilliseconds =
+      kDefaultVisibleTimeDurationMilliseconds;
+  // Matches PlayConfig.hispeed; it is persisted and used only in OFF mode.
+  float gameplayHispeed = 1.0F;
+  // Matches PlayConfig.hispeedmargin.
+  float hispeedMargin = kDefaultHispeedMargin;
   bool visibleTimeUseMilliseconds = false;
-  VisibleTimeBpmStrategy visibleTimeBpmStrategy = VisibleTimeBpmStrategy::Chart;
+  HiSpeedFixMode hispeedFixMode = HiSpeedFixMode::Main;
   bool inputKeysoundEnabled = true;
   bool prepMetronomeEnabled = false;
   bool startLaneIndicatorsEnabled = true;

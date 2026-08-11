@@ -332,14 +332,17 @@ private:
   float judgeY = 0.0f;
   long long latePoorTiming;
   int visibleTimeDurationMilliseconds = 667;
+  std::optional<float> configuredHispeedOverride;
   float hispeedMultiplier = 1.0F;
   audio::PlaybackRate playbackRate;
   bool visibleTimeUseMilliseconds = false;
   double currentBpm = 0.0;
+  double currentScrollRate = 1.0;
+  bool laneCoverEnabled = true;
   std::optional<double> floatingVisibleTimeReferenceBpm;
-  AppSettings::VisibleTimeBpmStrategy visibleTimeBpmStrategy =
-      AppSettings::VisibleTimeBpmStrategy::Chart;
-  double mostPrevalentBpm = 0.0;
+  AppSettings::HiSpeedFixMode hispeedFixMode =
+      AppSettings::HiSpeedFixMode::Main;
+  double mainBpm = 0.0;
   bool renderHud = true;
   float judgementTextY = AppSettings::kDefaultJudgementTextY;
   bool judgementCounterEnabled = true;
@@ -456,7 +459,6 @@ private:
   void drawTouchSample(const TouchPointVisual &sample,
                        long long currentTimeMicros);
   void buildTimelineScrollPositions();
-  double calculateMostPrevalentBpm() const;
   double visibleTimeReferenceBpm() const;
   double scrollPositionAtTime(long long timeMicros) const;
   void applyPendingHudText(long long currentMicros);
@@ -488,7 +490,6 @@ private:
                                                          float renderY) const;
   std::optional<std::pair<float, float>> projectLanePointToUi(
       float worldX, float worldY) const;
-  int effectiveVisibleTimeGreenNumber() const;
   std::string laneCoverVisibleTimeLabel() const;
   float computeLaneX(int lane) const;
   void rebuildPlayAreaGeometry();
@@ -575,6 +576,9 @@ public:
   projectionTraversal() const override;
   [[nodiscard]] BuiltInRendererTraversal
   builtInProjectionTraversal() const;
+  // The live Beatoraja `duration_green` value, based on the configured
+  // Hi-Speed currently driving note travel rather than the saved duration.
+  [[nodiscard]] int effectiveVisibleTimeGreenNumber() const;
   void reset() override;
   void refreshGeometry() override;
   [[nodiscard]] PresentationMode activeMode() const noexcept override;
@@ -584,8 +588,7 @@ public:
   void setHispeedMultiplier(float multiplier);
   void setVisibleTimeUseMilliseconds(bool enabled);
   void setCurrentBpm(double bpm);
-  void setVisibleTimeBpmStrategy(
-      AppSettings::VisibleTimeBpmStrategy strategy);
+  void setHiSpeedFixMode(AppSettings::HiSpeedFixMode mode);
   void setPlayAreaWidth(float width);
   void setLaneBeamsEnabled(bool enabled);
   void setLaneCoverHispeedFactor(float factor);

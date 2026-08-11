@@ -434,10 +434,10 @@ json settingsToJson(const AppSettings &settings) {
       {"visualOffsetMs", settings.visualOffsetMs},
       {"visibleTimeDurationMilliseconds",
        settings.visibleTimeDurationMilliseconds},
-      {"gameplayHispeedMultiplier", settings.gameplayHispeedMultiplier},
+      {"gameplayHispeed", settings.gameplayHispeed},
+      {"hispeedMargin", settings.hispeedMargin},
       {"visibleTimeUseMilliseconds", settings.visibleTimeUseMilliseconds},
-      {"visibleTimeBpmStrategy",
-       static_cast<int>(settings.visibleTimeBpmStrategy)},
+      {"hispeedFixMode", static_cast<int>(settings.hispeedFixMode)},
       {"inputKeysoundEnabled", settings.inputKeysoundEnabled},
       {"prepMetronomeEnabled", settings.prepMetronomeEnabled},
       {"startLaneIndicatorsEnabled", settings.startLaneIndicatorsEnabled},
@@ -551,12 +551,12 @@ AppSettings settingsFromJson(const json &document,
       settings.setVisibleTimeGreenNumber(legacyGreenNumber);
     }
   }
-  readValue(document, "gameplayHispeedMultiplier",
-            settings.gameplayHispeedMultiplier, diagnostics);
+  readValue(document, "gameplayHispeed", settings.gameplayHispeed,
+            diagnostics);
+  readValue(document, "hispeedMargin", settings.hispeedMargin, diagnostics);
   readValue(document, "visibleTimeUseMilliseconds",
             settings.visibleTimeUseMilliseconds, diagnostics);
-  readEnum(document, "visibleTimeBpmStrategy", settings.visibleTimeBpmStrategy,
-           diagnostics);
+  readEnum(document, "hispeedFixMode", settings.hispeedFixMode, diagnostics);
   readValue(document, "inputKeysoundEnabled", settings.inputKeysoundEnabled,
             diagnostics);
   readValue(document, "prepMetronomeEnabled", settings.prepMetronomeEnabled,
@@ -761,7 +761,7 @@ AppSettingsLoadStatus mapFailure(versioned_json::LoadStatus status) {
 
 AppSettingsLoadResult
 AppSettingsStore::Load(const std::filesystem::path &settingsJson) {
-  const std::array<versioned_json::Migration, 5> migrations = {
+  const std::array<versioned_json::Migration, 6> migrations = {
       [](json &document, std::string &) {
         document["schemaVersion"] = 1;
         return true;
@@ -826,6 +826,24 @@ AppSettingsStore::Load(const std::filesystem::path &settingsJson) {
               }
             }
           }
+        }
+        return true;
+      },
+      [](json &document, std::string &) {
+        // Versions through schema 5 represented fixed Hi-Speed as a second
+        // multiplier layered over duration and either chart/time-weighted BPM.
+        // That state has no Beatoraja-equivalent persisted value. Migrate to
+        // the upstream default fixed MAIN mode and discard the transient
+        // multiplier rather than silently retaining a different note speed.
+        if (!document.contains("hispeedFixMode")) {
+          document["hispeedFixMode"] =
+              static_cast<int>(AppSettings::HiSpeedFixMode::Main);
+        }
+        if (!document.contains("gameplayHispeed")) {
+          document["gameplayHispeed"] = 1.0F;
+        }
+        if (!document.contains("hispeedMargin")) {
+          document["hispeedMargin"] = AppSettings::kDefaultHispeedMargin;
         }
         return true;
       }};

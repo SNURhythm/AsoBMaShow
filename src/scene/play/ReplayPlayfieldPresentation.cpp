@@ -1,5 +1,7 @@
 #include "ReplayPlayfieldPresentation.h"
 
+#include "BeatorajaHiSpeedChart.h"
+
 #include "BuiltInPlayfieldPresentation.h"
 #include "../../ReplayGhostUtils.h"
 
@@ -36,10 +38,12 @@ ReplayPlayfieldPresentation::ReplayPlayfieldPresentation(
     std::unique_ptr<PlayfieldVisualStateStore> state,
     std::unique_ptr<PlayfieldProjection> projection,
     std::unique_ptr<PlayfieldPresentationCoordinator> coordinator,
-    BMSRenderer *builtIn, PlayfieldAuthorityUpdate authority)
+    BMSRenderer *builtIn, PlayfieldAuthorityUpdate authority,
+    PlayfieldPresentationConfig configuration, gameplay_hispeed::State hispeed)
     : chartModel_(std::move(chartModel)), state_(std::move(state)),
       projection_(std::move(projection)), coordinator_(std::move(coordinator)),
-      builtIn_(builtIn), authority_(std::move(authority)) {
+      builtIn_(builtIn), authority_(std::move(authority)),
+      configuration_(std::move(configuration)), hispeed_(std::move(hispeed)) {
   if (coordinator_ == nullptr || builtIn_ == nullptr) {
     throw std::invalid_argument(
         "ReplayPlayfieldPresentation requires a coordinator and BMSRenderer");
@@ -181,17 +185,39 @@ ReplayPlayfieldPresentationCreateResult ReplayPlayfieldPresentation::create(
   coordinator->configure(creation.configuration);
 
   return {.presentation = std::unique_ptr<ReplayPlayfieldPresentation>(
-              new ReplayPlayfieldPresentation(std::move(model),
-                                              std::move(state),
-                                              std::move(projection),
-                                              std::move(coordinator), renderer,
-                                              {})),
+              new ReplayPlayfieldPresentation(
+                  std::move(model), std::move(state), std::move(projection),
+                  std::move(coordinator), renderer, {}, creation.configuration,
+                  gameplay_hispeed::State(
+                      {.mode = gameplay_hispeed::fixModeFromEncoded(
+                           static_cast<int>(creation.settings.hispeedFixMode)),
+                       .durationMilliseconds =
+                           creation.settings.visibleTimeDurationMilliseconds,
+                       .hispeed = creation.settings.gameplayHispeed,
+                       .margin = creation.settings.hispeedMargin,
+                       .laneCoverPercent =
+                           creation.settings.noteStartPositionPercent,
+                       .laneCoverEnabled = creation.settings.laneCoverEnabled},
+                      gameplay_hispeed::summarizeChartBpm(creation.chart)))),
           .failure = std::nullopt};
 }
 
 void ReplayPlayfieldPresentation::applyAuthorityUpdate(
     const PlayfieldAuthorityUpdate &authority) {
   authority_ = authority;
+  if (authority_.laneCoverChanged) {
+    if (authority_.laneCoverChangeKind == ReplayLaneCoverChangeKind::Enabled) {
+      hispeed_.setLaneCoverEnabled(authority_.laneCoverEnabled);
+    } else {
+      hispeed_.setLaneCover(authority_.laneCoverPercent, authority_.currentBpm,
+                             authority_.resetLaneCoverVisibleTimeReference);
+    }
+    configuration_.configuredHispeed = hispeed_.hispeed();
+    configuration_.noteStartPositionPercent = authority_.laneCoverPercent;
+    configuration_.laneCoverEnabled = authority_.laneCoverEnabled;
+    state_->setConfiguration(configuration_);
+    coordinator_->configure(configuration_);
+  }
   authority_.stageCombo = stageCombo_;
   authority_.stagePassedNotes = stagePassedNotes_;
   state_->applyAuthorityUpdate(authority_);

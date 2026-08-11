@@ -336,7 +336,7 @@ void testHispeedBindingsUsePinnedIntegerAndFloatProperties() {
   // Pinned from IntegerPropertyFactory.createHispeedProperty and
   // FloatPropertyFactory.FloatType.hispeed: each selector reads the raw
   // PlayConfig/LaneRenderer hispeed, not the skin's note traversal speed.
-  state.configuration.hispeedMultiplier = 1.75F;
+  state.configuration.configuredHispeed = 1.3125F;
   auto projection = projectionAt(203);
   // LaneRenderer::getHispeed() is the live cover-compensated PlayConfig
   // value, not the preference and not the playback-scaled skin traversal.

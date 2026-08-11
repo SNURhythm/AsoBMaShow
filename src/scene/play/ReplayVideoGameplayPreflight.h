@@ -20,6 +20,7 @@ replayGameplayLogicalUiBounds(int exportWidth, int exportHeight) noexcept;
 
 [[nodiscard]] PlayfieldPresentationConfig
 replayGameplayPresentationConfig(const AppSettings &, float playAreaWidth,
+                                 const bms_parser::Chart &,
                                  bool touchVisualizationEnabled,
                                  bool replayGhostRenderingEnabled) noexcept;
 
@@ -61,6 +62,8 @@ struct ReplayGameplayFrameState {
 struct ReplayLaneCoverFrameState {
   int percent = 0;
   bool enabled = false;
+  bool changed = false;
+  ReplayLaneCoverChangeKind changeKind = ReplayLaneCoverChangeKind::Value;
   bool resetVisibleTimeReference = false;
 };
 

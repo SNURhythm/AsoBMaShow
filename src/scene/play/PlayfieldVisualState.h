@@ -45,16 +45,21 @@ struct PlayfieldFrameClock {
 struct PlayfieldPresentationConfig {
   // Beatoraja PlayConfig.duration, retained without a green-number round trip.
   int visibleTimeDurationMilliseconds = 667;
+  // Live LaneRenderer.getHispeed() state. A positive value is authoritative
+  // for note traversal and skin properties; zero retains only the legacy
+  // preview fallback while callers are migrated.
+  float configuredHispeed = 0.0F;
   float hispeedMultiplier = 1.0F;
   bool visibleTimeUseMilliseconds = false;
-  AppSettings::VisibleTimeBpmStrategy visibleTimeBpmStrategy =
-      AppSettings::VisibleTimeBpmStrategy::Chart;
+  AppSettings::HiSpeedFixMode hispeedFixMode =
+      AppSettings::HiSpeedFixMode::Main;
   float playAreaWidth = 0.0F;
   bool laneBeamsEnabled = true;
   // Live LaneRenderer::getHispeed() cover factor.  It is intentionally kept
   // separate from noteStartPositionPercent because toggling lane cover in
   // Beatoraja does not reset Hi-Speed.
   float laneCoverHispeedFactor = 1.0F;
+  bool laneCoverEnabled = true;
   int laneBeamLengthPercent = 100;
   int noteStartPositionPercent = 0;
   bool laneBeamClockUsesRenderTime = false;
@@ -106,6 +111,9 @@ enum class PlayfieldLoadingState : std::uint8_t {
 
 struct PlayfieldAuthorityUpdate {
   double currentBpm = 0.0;
+  // TimeLine.getScroll() currently active at the authoritative gameplay
+  // cursor. LaneRenderer's duration_green divides by this value.
+  double currentScrollRate = 1.0;
   std::map<Judgement, int> judgementCounters;
   std::map<Judgement, PlayfieldJudgementFastSlowCount>
       judgementFastSlowCounters;
@@ -141,6 +149,9 @@ struct PlayfieldAuthorityUpdate {
   float liftRatio = 0.0F;
   bool hiddenEnabled = false;
   float hiddenRatio = 0.0F;
+  bool laneCoverChanged = false;
+  ReplayLaneCoverChangeKind laneCoverChangeKind =
+      ReplayLaneCoverChangeKind::Value;
   bool resetLaneCoverVisibleTimeReference = false;
 
   bool operator==(const PlayfieldAuthorityUpdate &other) const;

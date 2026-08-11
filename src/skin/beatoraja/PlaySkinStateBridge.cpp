@@ -1235,28 +1235,26 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
     }
     const auto durationFor = [&](double bpm, bool cover, bool green)
         -> std::optional<std::int64_t> {
-      if (!std::isfinite(bpm) || bpm <= 0.0) {
+      const auto value = gameplay_hispeed::liveDurationValue(
+          bpm, builtInTraversal_->configuredHispeed,
+          snapshot->authority.laneCoverPercent, cover,
+          // createDurationLanecoverProperty is independent of scroll; 312/313
+          // below use LaneRenderer.currentduration, which is not.
+          1.0);
+      if (!value) {
         return std::nullopt;
       }
-      double value = 240000.0 / bpm /
-                     static_cast<double>(builtInTraversal_->configuredHispeed);
-      if (cover) {
-        value *= 1.0 -
-                 static_cast<double>(snapshot->authority.laneCoverPercent) /
-                     100.0;
-      }
-      if (green) {
-        value *= 0.6;
-      }
-      return javaMathRoundToInt(value);
+      return javaMathRoundToInt(*value * (green ? 0.6 : 1.0));
     };
     if (*id == 312 || *id == 313) {
       // LaneRenderer.currentduration rounds its current speed/cover product.
       // ValueType.duration_green then applies its integer `* 3 / 5`
       // conversion afterwards.
-      const auto current = durationFor(
-          snapshot->authority.currentBpm, snapshot->authority.laneCoverEnabled,
-          false);
+      const auto current = gameplay_hispeed::liveDurationMilliseconds(
+          snapshot->authority.currentBpm, builtInTraversal_->configuredHispeed,
+          snapshot->authority.laneCoverPercent,
+          snapshot->authority.laneCoverEnabled,
+          snapshot->authority.currentScrollRate);
       if (!current) {
         return std::nullopt;
       }

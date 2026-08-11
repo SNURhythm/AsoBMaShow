@@ -1,13 +1,33 @@
 #pragma once
 
+#include "BeatorajaHiSpeed.h"
 #include "PlayfieldVisualState.h"
 #include "../../skin/beatoraja/Skin2DRenderer.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <optional>
 #include <vector>
+
+namespace gameplay_visible_time {
+
+// Mirrors LaneRenderer.currentduration: the live, cover-adjusted duration is
+// derived from the same configured Hi-Speed that determines note travel.
+[[nodiscard]] inline std::optional<int> currentDurationMilliseconds(
+    double bpm, float configuredHispeed, int laneCoverPercent,
+    bool laneCoverEnabled, double scrollRate = 1.0) {
+  return gameplay_hispeed::liveDurationMilliseconds(
+      bpm, configuredHispeed, laneCoverPercent, laneCoverEnabled, scrollRate);
+}
+
+[[nodiscard]] constexpr int durationToGreenNumber(int duration) noexcept {
+  return gameplay_hispeed::durationToGreenNumber(duration);
+}
+
+} // namespace gameplay_visible_time
 
 enum class ProjectedLineKind : std::uint8_t {
   Section,

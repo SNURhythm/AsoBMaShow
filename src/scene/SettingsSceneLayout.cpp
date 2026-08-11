@@ -283,8 +283,8 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
       makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
                         visibleTimeBpmStrategyText);
   visibleTimeBpmStrategyButton->setOnClickListener([this]() {
-    context.settings.visibleTimeBpmStrategy =
-        nextVisibleTimeBpmStrategy(context.settings.visibleTimeBpmStrategy);
+    context.settings.hispeedFixMode =
+        nextVisibleTimeBpmStrategy(context.settings.hispeedFixMode);
     persistSettings();
     syncPreviewPresentationConfiguration();
   });

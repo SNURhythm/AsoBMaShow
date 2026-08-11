@@ -3,6 +3,7 @@
 #include "../input/RhythmInputHandler.h"
 #include "../rendering/common.h"
 #include "play/BMSRenderer.h"
+#include "play/BeatorajaHiSpeedChart.h"
 #include "play/PlayfieldChartVisualModel.h"
 #include "play/PlayfieldVisualState.h"
 #include "play/RhythmLaneInputController.h"
@@ -14,6 +15,7 @@ constexpr int kPreviewTimelineLanes = 16;
 constexpr double kPreviewBpm = 120.0;
 constexpr int kPreviewSampleCombo = 24;
 constexpr int kPreviewSampleScore = 123456;
+
 std::unique_ptr<bms_parser::TimeLine>
 makePreviewTimeline(long long timingMicros, bool firstInMeasure = false) {
   auto timeline =
@@ -91,18 +93,25 @@ std::unique_ptr<bms_parser::Chart> makePreviewChart() {
 PlayfieldPresentationConfig
 previewPresentationConfiguration(const AppSettings &settings,
                                  const bms_parser::Chart &chart) {
+  const gameplay_hispeed::State hispeed(
+      {.mode = gameplay_hispeed::fixModeFromEncoded(
+           static_cast<int>(settings.hispeedFixMode)),
+       .durationMilliseconds = settings.visibleTimeDurationMilliseconds,
+       .hispeed = settings.gameplayHispeed,
+       .margin = settings.hispeedMargin,
+       .laneCoverPercent = settings.noteStartPositionPercent,
+       .laneCoverEnabled = settings.laneCoverEnabled},
+      gameplay_hispeed::summarizeChartBpm(chart));
   return {
       .visibleTimeDurationMilliseconds =
           settings.visibleTimeDurationMilliseconds,
+      .configuredHispeed = hispeed.hispeed(),
       .visibleTimeUseMilliseconds = settings.visibleTimeUseMilliseconds,
-      .visibleTimeBpmStrategy = settings.visibleTimeBpmStrategy,
+      .hispeedFixMode = settings.hispeedFixMode,
       .playAreaWidth = settings.playAreaWidthForKeyMode(chart.Meta.KeyMode),
       .laneBeamsEnabled = true,
-      .laneCoverHispeedFactor = settings.laneCoverEnabled
-                                    ? 1.0F - static_cast<float>(
-                                                 settings.noteStartPositionPercent) /
-                                                 100.0F
-                                    : 1.0F,
+      .laneCoverHispeedFactor = 1.0F,
+      .laneCoverEnabled = settings.laneCoverEnabled,
       .laneBeamLengthPercent = settings.laneBeamLengthPercent,
       .noteStartPositionPercent = settings.noteStartPositionPercent,
       .laneBeamClockUsesRenderTime = true,

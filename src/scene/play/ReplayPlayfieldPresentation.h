@@ -1,6 +1,7 @@
 #pragma once
 
 #include "BMSRenderer.h"
+#include "BeatorajaHiSpeed.h"
 #include "GameplaySkinSessionFactory.h"
 #include "PlayfieldPresentationCoordinator.h"
 
@@ -94,7 +95,9 @@ private:
                               std::unique_ptr<PlayfieldVisualStateStore>,
                               std::unique_ptr<PlayfieldProjection>,
                               std::unique_ptr<PlayfieldPresentationCoordinator>,
-                              BMSRenderer *, PlayfieldAuthorityUpdate);
+                              BMSRenderer *, PlayfieldAuthorityUpdate,
+                              PlayfieldPresentationConfig,
+                              gameplay_hispeed::State);
 
   [[nodiscard]] const ChartVisualNote *replayNote(const ReplayEvent &) const;
   [[nodiscard]] NotePresentationState *noteState(ChartVisualId) noexcept;
@@ -113,6 +116,8 @@ private:
   std::unique_ptr<PlayfieldPresentationEventFanout> events_;
   BMSRenderer *builtIn_ = nullptr;
   PlayfieldAuthorityUpdate authority_;
+  PlayfieldPresentationConfig configuration_;
+  gameplay_hispeed::State hispeed_;
   std::unordered_map<ChartVisualId, NotePresentationState> noteStates_;
   std::unordered_map<int, bool> lanePressed_;
   std::vector<HcnPairPlaybackState> hcnPairs_;

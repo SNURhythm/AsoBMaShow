@@ -620,14 +620,20 @@ static std::string formatVisibleTimeInputValue(int milliseconds,
 }
 
 static std::string formatVisibleTimeBpmStrategyLabel(
-    AppSettings::VisibleTimeBpmStrategy strategy) {
-  switch (strategy) {
-  case AppSettings::VisibleTimeBpmStrategy::Chart:
-    return "Chart BPM";
-  case AppSettings::VisibleTimeBpmStrategy::MostPrevalent:
-    return "Most prevalent";
+    AppSettings::HiSpeedFixMode mode) {
+  switch (mode) {
+  case AppSettings::HiSpeedFixMode::Off:
+    return "Off";
+  case AppSettings::HiSpeedFixMode::Start:
+    return "Start BPM";
+  case AppSettings::HiSpeedFixMode::Max:
+    return "Max BPM";
+  case AppSettings::HiSpeedFixMode::Main:
+    return "Main BPM";
+  case AppSettings::HiSpeedFixMode::Min:
+    return "Min BPM";
   }
-  return "Chart BPM";
+  return "Main BPM";
 }
 
 static std::string formatFloatValue(float value, int precision = 1) {
@@ -838,15 +844,21 @@ nextNotePriorityMode(AppSettings::NotePriorityMode mode) {
   return AppSettings::NotePriorityMode::Lowest;
 }
 
-static AppSettings::VisibleTimeBpmStrategy
-nextVisibleTimeBpmStrategy(AppSettings::VisibleTimeBpmStrategy strategy) {
-  switch (strategy) {
-  case AppSettings::VisibleTimeBpmStrategy::Chart:
-    return AppSettings::VisibleTimeBpmStrategy::MostPrevalent;
-  case AppSettings::VisibleTimeBpmStrategy::MostPrevalent:
-    return AppSettings::VisibleTimeBpmStrategy::Chart;
+static AppSettings::HiSpeedFixMode
+nextVisibleTimeBpmStrategy(AppSettings::HiSpeedFixMode mode) {
+  switch (mode) {
+  case AppSettings::HiSpeedFixMode::Off:
+    return AppSettings::HiSpeedFixMode::Start;
+  case AppSettings::HiSpeedFixMode::Start:
+    return AppSettings::HiSpeedFixMode::Max;
+  case AppSettings::HiSpeedFixMode::Max:
+    return AppSettings::HiSpeedFixMode::Main;
+  case AppSettings::HiSpeedFixMode::Main:
+    return AppSettings::HiSpeedFixMode::Min;
+  case AppSettings::HiSpeedFixMode::Min:
+    return AppSettings::HiSpeedFixMode::Off;
   }
-  return AppSettings::VisibleTimeBpmStrategy::Chart;
+  return AppSettings::HiSpeedFixMode::Main;
 }
 
 static AppSettings::JudgementIndicatorRenderMode

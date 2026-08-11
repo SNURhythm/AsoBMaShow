@@ -561,10 +561,12 @@ void testLaneCoverStateRoundTripsAndLegacyEventsUseSetupState() {
   source.playback.laneCoverEvents = {
       {.songTimeMicros = -1'000,
        .noteStartPositionPercent = 37,
-       .laneCoverEnabled = false},
+       .laneCoverEnabled = false,
+       .changeKind = ReplayLaneCoverChangeKind::Value},
       {.songTimeMicros = 2'000,
        .noteStartPositionPercent = 41,
        .laneCoverEnabled = true,
+       .changeKind = ReplayLaneCoverChangeKind::Enabled,
        .resetVisibleTimeReference = true},
   };
 
@@ -582,10 +584,12 @@ void testLaneCoverStateRoundTripsAndLegacyEventsUseSetupState() {
   Json legacy = outerJson(*encoded);
   for (auto &event : legacy["asobmashow"]["laneCoverEvents"]) {
     event.erase("laneCoverEnabled");
+    event.erase("changeKind");
   }
   auto expectedLegacy = source;
   for (auto &event : expectedLegacy.playback.laneCoverEvents) {
     event.laneCoverEnabled = expectedLegacy.playback.setup.laneCoverEnabled;
+    event.changeKind = ReplayLaneCoverChangeKind::Value;
   }
   const auto decodedLegacy = codec.decode(encodeJson(legacy), context(source));
   expect(decodedLegacy.chart == std::optional(expectedLegacy),

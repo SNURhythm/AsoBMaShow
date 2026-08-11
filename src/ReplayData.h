@@ -4,6 +4,7 @@
 #include "CourseIdentity.h"
 #include "ScoreProvenance.h"
 #include "bms_parser.hpp"
+#include "replay/ReplayLaneCoverChange.h"
 #include "scene/play/Judge.h"
 #include "scene/play/RhythmState.h"
 
@@ -55,6 +56,7 @@ struct ReplayLaneCoverEvent {
   long long songTimeMicros = 0;
   int noteStartPositionPercent = 0;
   bool laneCoverEnabled = false;
+  ReplayLaneCoverChangeKind changeKind = ReplayLaneCoverChangeKind::Value;
   bool resetVisibleTimeReference = false;
 };
 

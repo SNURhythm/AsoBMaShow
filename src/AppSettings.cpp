@@ -254,30 +254,27 @@ const char *gaugeBarPositionToString(AppSettings::GaugeBarPosition position) {
   return "world";
 }
 
-AppSettings::VisibleTimeBpmStrategy
-parseVisibleTimeBpmStrategy(const std::string &value,
-                            AppSettings::VisibleTimeBpmStrategy fallback) {
+AppSettings::HiSpeedFixMode
+parseHiSpeedFixMode(const std::string &value,
+                    AppSettings::HiSpeedFixMode fallback) {
   const std::string normalized = normalizeSettingToken(value);
-  if (normalized == "chart" || normalized == "chart-bpm" ||
-      normalized == "main" || normalized == "metadata") {
-    return AppSettings::VisibleTimeBpmStrategy::Chart;
+  if (normalized == "off" || normalized == "0") {
+    return AppSettings::HiSpeedFixMode::Off;
   }
-  if (normalized == "most-prevalent" || normalized == "prevalent" ||
-      normalized == "duration") {
-    return AppSettings::VisibleTimeBpmStrategy::MostPrevalent;
+  if (normalized == "start" || normalized == "start-bpm" ||
+      normalized == "1") {
+    return AppSettings::HiSpeedFixMode::Start;
+  }
+  if (normalized == "max" || normalized == "max-bpm" || normalized == "2") {
+    return AppSettings::HiSpeedFixMode::Max;
+  }
+  if (normalized == "main" || normalized == "main-bpm" || normalized == "3") {
+    return AppSettings::HiSpeedFixMode::Main;
+  }
+  if (normalized == "min" || normalized == "min-bpm" || normalized == "4") {
+    return AppSettings::HiSpeedFixMode::Min;
   }
   return fallback;
-}
-
-const char *
-visibleTimeBpmStrategyToString(AppSettings::VisibleTimeBpmStrategy strategy) {
-  switch (strategy) {
-  case AppSettings::VisibleTimeBpmStrategy::Chart:
-    return "chart";
-  case AppSettings::VisibleTimeBpmStrategy::MostPrevalent:
-    return "most_prevalent";
-  }
-  return "chart";
 }
 
 AppSettings::UiThemeMode parseUiThemeMode(const std::string &value,
@@ -422,10 +419,11 @@ void AppSettings::sanitize() {
   visibleTimeDurationMilliseconds =
       std::clamp(visibleTimeDurationMilliseconds, kMinVisibleTimeMs,
                  kMaxVisibleTimeMs);
-  gameplayHispeedMultiplier =
-      sanitizeFloat(gameplayHispeedMultiplier, 1.0F,
-                    kMinGameplayHispeedMultiplier,
-                    kMaxGameplayHispeedMultiplier);
+  gameplayHispeed = sanitizeFloat(gameplayHispeed, 1.0F,
+                                  kMinGameplayHispeed,
+                                  kMaxGameplayHispeed);
+  hispeedMargin = sanitizeFloat(hispeedMargin, kDefaultHispeedMargin, 0.0F,
+                                kMaxHispeedMargin);
   bgaBrightnessPercent = std::clamp(
       bgaBrightnessPercent, kMinBgaBrightnessPercent, kMaxBgaBrightnessPercent);
   bgaBlurStrength = sanitizeFloat(bgaBlurStrength, kDefaultBgaBlurStrength,
@@ -519,12 +517,15 @@ void AppSettings::sanitize() {
     gaugeBarPosition = GaugeBarPosition::World;
     break;
   }
-  switch (visibleTimeBpmStrategy) {
-  case VisibleTimeBpmStrategy::Chart:
-  case VisibleTimeBpmStrategy::MostPrevalent:
+  switch (hispeedFixMode) {
+  case HiSpeedFixMode::Off:
+  case HiSpeedFixMode::Start:
+  case HiSpeedFixMode::Max:
+  case HiSpeedFixMode::Main:
+  case HiSpeedFixMode::Min:
     break;
   default:
-    visibleTimeBpmStrategy = VisibleTimeBpmStrategy::Chart;
+    hispeedFixMode = HiSpeedFixMode::Main;
     break;
   }
   switch (uiThemeMode) {
@@ -663,16 +664,18 @@ bool AppSettings::parseLegacyCfg(std::istream &file, AppSettings &settings,
         settings.visibleTimeDurationMilliseconds = std::stoi(value);
       } else if (key == "visible_time_green_number") {
         settings.setVisibleTimeGreenNumber(std::stoi(value));
-      } else if (key == "gameplay_hispeed_multiplier") {
-        settings.gameplayHispeedMultiplier = std::stof(value);
+      } else if (key == "gameplay_hispeed") {
+        settings.gameplayHispeed = std::stof(value);
+      } else if (key == "hispeed_margin") {
+        settings.hispeedMargin = std::stof(value);
       } else if (key == "visible_time_use_milliseconds") {
         bool parsed = settings.visibleTimeUseMilliseconds;
         if (parseBool(value, parsed)) {
           settings.visibleTimeUseMilliseconds = parsed;
         }
-      } else if (key == "visible_time_bpm_strategy") {
-        settings.visibleTimeBpmStrategy =
-            parseVisibleTimeBpmStrategy(value, settings.visibleTimeBpmStrategy);
+      } else if (key == "hispeed_fix_mode") {
+        settings.hispeedFixMode =
+            parseHiSpeedFixMode(value, settings.hispeedFixMode);
       } else if (key == "input_keysound_enabled") {
         bool parsed = settings.inputKeysoundEnabled;
         if (parseBool(value, parsed)) {

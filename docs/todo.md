@@ -8,6 +8,13 @@
   Beatoraja's `Integer.MIN_VALUE` sentinel for these properties when chart
   information is unavailable.
 
+- Preserve Beatoraja `TimeLine` speed-object state in `bms-parser-cpp` and
+  carry the frame-local interpolated speed into the shared gameplay authority.
+  Pinned `LaneRenderer.getCurrentSpeed` combines that value with `#SCROLL` in
+  its live duration formula. AsoBMaShow already propagates parsed static
+  `#SCROLL` changes exactly, but the parser exposes no speed-object model, so
+  synthesizing one here would not be source-faithful.
+
 ## Gameplay-skin play configuration
 
 - If AsoBMaShow adds a selectable constant-speed play configuration, carry its

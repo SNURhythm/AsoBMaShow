@@ -389,10 +389,9 @@ void testExportPixelSizesMapToLogicalGameplayBounds() {
 void testReplayExportConfigPreservesGameplayPresentationSettings() {
   AppSettings settings;
   settings.visibleTimeDurationMilliseconds = 1'001;
-  settings.gameplayHispeedMultiplier = 1.75F;
+  settings.gameplayHispeed = 1.75F;
+  settings.hispeedFixMode = AppSettings::HiSpeedFixMode::Off;
   settings.visibleTimeUseMilliseconds = true;
-  settings.visibleTimeBpmStrategy =
-      AppSettings::VisibleTimeBpmStrategy::MostPrevalent;
   settings.laneBeamLengthPercent = 71;
   settings.noteStartPositionPercent = 40;
   settings.showInvisibleNotes = true;
@@ -412,14 +411,24 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
       AppSettings::JudgementTimingDisplayCriteria::PGreatOrBelow;
   settings.gaugeBarPosition = AppSettings::GaugeBarPosition::Left;
 
+  bms_parser::Chart chart;
+  chart.Meta.Bpm = 120.0;
+  chart.Meta.MinBpm = 120.0;
+  chart.Meta.MaxBpm = 120.0;
+  auto *measure = new bms_parser::Measure;
+  auto *timeline = new bms_parser::TimeLine(8, false);
+  timeline->Bpm = 120.0;
+  timeline->SetNote(0, new bms_parser::Note(bms_parser::Parser::NoWav));
+  measure->TimeLines.push_back(timeline);
+  chart.Measures.push_back(measure);
+
   const auto configuration =
       replay_video_export::replayGameplayPresentationConfig(
-          settings, 9.5F, false, false);
+          settings, 9.5F, chart, false, false);
   expect(configuration.visibleTimeDurationMilliseconds == 1'001 &&
-             configuration.hispeedMultiplier == 1.75F &&
+             configuration.configuredHispeed == 1.75F &&
              configuration.visibleTimeUseMilliseconds &&
-             configuration.visibleTimeBpmStrategy ==
-                 AppSettings::VisibleTimeBpmStrategy::MostPrevalent &&
+             configuration.hispeedFixMode == AppSettings::HiSpeedFixMode::Off &&
              configuration.playAreaWidth == 9.5F &&
              configuration.laneBeamLengthPercent == 71 &&
              configuration.noteStartPositionPercent == 40 &&
@@ -442,6 +451,34 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
              !configuration.touchVisualizationEnabled &&
              !configuration.replayGhostRenderingEnabled,
          "replay export configuration retains all gameplay presentation settings");
+}
+
+void testReplayExportConfigUsesLaneRendererMainBpmTieRule() {
+  AppSettings settings;
+  settings.hispeedFixMode = AppSettings::HiSpeedFixMode::Main;
+  settings.visibleTimeDurationMilliseconds = 500;
+  settings.noteStartPositionPercent = 0;
+
+  bms_parser::Chart chart;
+  chart.Meta.Bpm = 120.0;
+  chart.Meta.MinBpm = 120.0;
+  chart.Meta.MaxBpm = 180.0;
+  auto *measure = new bms_parser::Measure;
+  chart.Measures.push_back(measure);
+  auto *first = new bms_parser::TimeLine(8, false);
+  first->Bpm = 120.0;
+  first->SetNote(0, new bms_parser::Note(bms_parser::Parser::NoWav));
+  measure->TimeLines.push_back(first);
+  auto *second = new bms_parser::TimeLine(8, false);
+  second->Bpm = 180.0;
+  second->SetNote(1, new bms_parser::Note(bms_parser::Parser::NoWav));
+  measure->TimeLines.push_back(second);
+
+  const auto configuration =
+      replay_video_export::replayGameplayPresentationConfig(
+          settings, 8.0F, chart, false, false);
+  expect(std::abs(configuration.configuredHispeed - 2.6666667F) < 0.0001F,
+         "fixed MAIN Hi-Speed uses LaneRenderer's HashMap tie winner");
 }
 
 void testReplayExportPersonalBestAuthorityUsesSavedBestReplay() {
@@ -625,6 +662,54 @@ void testReplayLaneCoverResetIsOneFramePulseForNormalAndCoursePlayback() {
            path == 0 ? "normal lane-cover reset is a one-frame pulse"
                      : "course lane-cover reset is a one-frame pulse");
   }
+}
+
+void testReplayLaneCoverChangesUseBeatorajaHiSpeedTransitions() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.Bpm = 120.0;
+  chart.Meta.MinBpm = 120.0;
+  chart.Meta.MaxBpm = 120.0;
+  AppSettings settings;
+  settings.hispeedFixMode = AppSettings::HiSpeedFixMode::Start;
+  settings.visibleTimeDurationMilliseconds = 500;
+  settings.noteStartPositionPercent = 0;
+  settings.laneCoverEnabled = true;
+  PlayfieldPresentationConfig configuration =
+      replay_video_export::replayGameplayPresentationConfig(
+          settings, 8.0F, chart, false, false);
+  TestBga bga;
+  const auto created = ReplayPlayfieldPresentation::create(
+      createInfo(chart, settings, configuration, bga));
+  if (!created.presentation) {
+    expect(false, "replay Hi-Speed transition adapter is created");
+    return;
+  }
+
+  created.presentation->applyAuthorityUpdate(
+      {.currentBpm = 240.0,
+       .laneCoverPercent = 50,
+       .laneCoverEnabled = true,
+       .laneCoverChanged = true,
+       .laneCoverChangeKind = ReplayLaneCoverChangeKind::Value,
+       .resetLaneCoverVisibleTimeReference = true});
+  const auto afterCover =
+      created.presentation->captureVisualStateForTesting({});
+  expect(std::abs(afterCover.configuration.configuredHispeed - 1.0F) <
+             0.0001F,
+         "replay cover auto-adjust resets fixed Hi-Speed against current BPM");
+
+  created.presentation->applyAuthorityUpdate(
+      {.currentBpm = 240.0,
+       .laneCoverPercent = 50,
+       .laneCoverEnabled = false,
+       .laneCoverChanged = true,
+       .laneCoverChangeKind = ReplayLaneCoverChangeKind::Enabled});
+  const auto afterToggle =
+      created.presentation->captureVisualStateForTesting({});
+  expect(std::abs(afterToggle.configuration.configuredHispeed - 1.0F) <
+             0.0001F && !afterToggle.configuration.laneCoverEnabled,
+         "replay cover toggle changes no fixed Hi-Speed state");
 }
 
 void testUnsubmittedReplayFrameReleasesItsPreparedBga() {
@@ -1551,12 +1636,14 @@ int main() {
   testModelReplayGhostsRetainRawLanesAndTimelinePositions();
   testExportPixelSizesMapToLogicalGameplayBounds();
   testReplayExportConfigPreservesGameplayPresentationSettings();
+  testReplayExportConfigUsesLaneRendererMainBpmTieRule();
   testReplayExportPersonalBestAuthorityUsesSavedBestReplay();
   testReplayExportJudgementAuthorityRetainsFastSlowCounters();
   testFirstExportFrameRefreshesPreparedRendererGeometry();
   testReplayGameplayFrameStateMirrorsLiveTimerAndStartClocks();
   testReplayGameplayStatePlayDeadlineMatchesPinnedBmsPlayer();
   testReplayLaneCoverResetIsOneFramePulseForNormalAndCoursePlayback();
+  testReplayLaneCoverChangesUseBeatorajaHiSpeedTransitions();
   testUnsubmittedReplayFrameReleasesItsPreparedBga();
   testSelectedNormalPreflightAndDestructionUseRendererOwnership();
   testNoSelectionKeepsOneAdapter();

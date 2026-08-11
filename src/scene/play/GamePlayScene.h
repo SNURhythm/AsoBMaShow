@@ -10,6 +10,7 @@
 #include "../../audio/PlaybackRate.h"
 #include "../../math/Vector3.h"
 #include "GamePlayStartOptions.h"
+#include "BeatorajaHiSpeed.h"
 #include "NoteTimeRange.h"
 #include "Pacemaker.h"
 #include "PlayfieldChartVisualModel.h"
@@ -223,7 +224,8 @@ private:
                                   long long songTimeMicros);
   void appendReplayLaneCoverEvent(int noteStartPositionPercent,
                                   long long songTimeMicros,
-                                  bool resetVisibleTimeReference);
+                                  bool resetVisibleTimeReference,
+                                  ReplayLaneCoverChangeKind changeKind);
   bool handleTouchInput(SDL_FingerID fingerIndex, ReplayTouchAction action,
                         Vector3 normalizedLocation);
   bool handleTouchInputAtGameplayTime(
@@ -237,7 +239,6 @@ private:
                                     long long songTimeMicros);
   void cancelLegacyFloatingLaneCoverTouch();
   void persistFloatingLaneCoverSettings();
-  void refreshLaneCoverHispeedFactor();
   void appendReplayTouchSample(SDL_FingerID fingerIndex,
                                ReplayTouchAction action,
                                Vector3 normalizedLocation,
@@ -304,7 +305,7 @@ private:
   bool resultTransitionScheduled = false;
   bool resultPersistenceAttemptCreationTried = false;
   std::optional<gameplay::StartSelectControl> startSelectControl;
-  float playfieldHispeedMultiplier = 1.0F;
+  std::optional<gameplay_hispeed::State> playfieldHispeedState;
   bool playfieldLaneCoverEnabled = true;
   bool floatingLaneCoverDragActive = false;
   bool floatingLaneCoverDragChanged = false;
@@ -317,7 +318,6 @@ private:
   std::vector<const bms_parser::Note *> playfieldVisualNoteSources;
   int playfieldLaneCoverPercent = 0;
   float playfieldLaneCoverPercentExact = 0.0F;
-  float playfieldLaneCoverHispeedFactor = 1.0F;
   bool playfieldLaneCoverResetPending = false;
   bool gameplaySkinSafeBoundsInitialized = false;
   double gameplaySkinSafeBoundsX = 0.0;
@@ -325,6 +325,7 @@ private:
   double gameplaySkinSafeBoundsWidth = 0.0;
   double gameplaySkinSafeBoundsHeight = 0.0;
   double currentGameplayBpm = 0.0;
+  double currentGameplayScrollRate = 1.0;
   preparation::Plan preparationPlan;
   std::unique_ptr<TextView> ownedLaneStateText;
   TextView *laneStateText = nullptr;

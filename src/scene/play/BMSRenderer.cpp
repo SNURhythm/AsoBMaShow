@@ -4,6 +4,8 @@
 
 #include "BMSRenderer.h"
 
+#include "BeatorajaHiSpeedChart.h"
+
 #include "PlayfieldProjection.h"
 #include "GamePlayTiming.h"
 #include "GameplayScrollGeometry.h"
@@ -795,7 +797,7 @@ BMSRenderer::BMSRenderer(
     }
   }
   buildTimelineScrollPositions();
-  mostPrevalentBpm = calculateMostPrevalentBpm();
+  mainBpm = gameplay_hispeed::summarizeChartBpm(*chart).main;
   SpriteLoader spriteLoader(PATH("assets/img/simple_gray.png"));
   if (!spriteLoader.load()) {
     throw std::runtime_error("Failed to load simple_gray.png");
@@ -2259,49 +2261,6 @@ void BMSRenderer::buildTimelineScrollPositions() {
   }
 }
 
-double BMSRenderer::calculateMostPrevalentBpm() const {
-  const double chartBpm = chart != nullptr ? chart->Meta.Bpm : 0.0;
-  if (timelines.empty()) {
-    return chartBpm;
-  }
-
-  std::map<double, long long> bpmDurations;
-  std::vector<double> bpmOrder;
-  auto addDuration = [&](double bpm, long long durationMicros) {
-    if (!std::isfinite(bpm) || bpm <= 0.0 || durationMicros <= 0) {
-      return;
-    }
-    if (bpmDurations.find(bpm) == bpmDurations.end()) {
-      bpmOrder.push_back(bpm);
-    }
-    bpmDurations[bpm] += durationMicros;
-  };
-
-  addDuration(chartBpm, timelines.front()->Timing);
-  const long long chartEnd =
-      chart != nullptr
-          ? std::max({chart->Meta.TotalLength, chart->Meta.PlayLength,
-                      timelines.back()->Timing})
-          : timelines.back()->Timing;
-  for (size_t i = 0; i < timelines.size(); ++i) {
-    const auto *timeline = timelines[i];
-    const long long segmentEnd =
-        i + 1 < timelines.size() ? timelines[i + 1]->Timing : chartEnd;
-    addDuration(timeline->Bpm, segmentEnd - timeline->Timing);
-  }
-
-  double bestBpm = chartBpm;
-  long long bestDuration = 0;
-  for (double bpm : bpmOrder) {
-    const long long duration = bpmDurations[bpm];
-    if (duration > bestDuration) {
-      bestBpm = bpm;
-      bestDuration = duration;
-    }
-  }
-  return bestDuration > 0 ? bestBpm : chartBpm;
-}
-
 double BMSRenderer::visibleTimeReferenceBpm() const {
   if (floatingVisibleTimeReferenceBpm.has_value() &&
       std::isfinite(*floatingVisibleTimeReferenceBpm) &&
@@ -2309,11 +2268,24 @@ double BMSRenderer::visibleTimeReferenceBpm() const {
     return *floatingVisibleTimeReferenceBpm;
   }
 
-  double referenceBpm = chart != nullptr ? chart->Meta.Bpm : 0.0;
-  if (visibleTimeBpmStrategy ==
-          AppSettings::VisibleTimeBpmStrategy::MostPrevalent &&
-      std::isfinite(mostPrevalentBpm) && mostPrevalentBpm > 0.0) {
-    referenceBpm = mostPrevalentBpm;
+  const auto summary =
+      chart != nullptr ? gameplay_hispeed::summarizeChartBpm(*chart)
+                       : gameplay_hispeed::ChartBpmSummary{};
+  double referenceBpm = summary.start;
+  switch (hispeedFixMode) {
+  case AppSettings::HiSpeedFixMode::Off:
+  case AppSettings::HiSpeedFixMode::Start:
+    referenceBpm = summary.start;
+    break;
+  case AppSettings::HiSpeedFixMode::Max:
+    referenceBpm = summary.maximum;
+    break;
+  case AppSettings::HiSpeedFixMode::Main:
+    referenceBpm = mainBpm;
+    break;
+  case AppSettings::HiSpeedFixMode::Min:
+    referenceBpm = summary.minimum;
+    break;
   }
   if (!std::isfinite(referenceBpm) || referenceBpm <= 0.0) {
     return 1.0;
@@ -2328,8 +2300,10 @@ BuiltInRendererTraversal BMSRenderer::builtInProjectionTraversal() const {
   const float visibleTimeMs = std::max(
       1.0F, static_cast<float>(visibleTimeDurationMilliseconds));
   const float configuredHispeed =
-      240000.0F / static_cast<float>(visibleTimeReferenceBpm()) /
-      visibleTimeMs * hispeedMultiplier * laneCoverHispeedFactor;
+      configuredHispeedOverride.has_value()
+          ? *configuredHispeedOverride
+          : 240000.0F / static_cast<float>(visibleTimeReferenceBpm()) /
+                visibleTimeMs * hispeedMultiplier * laneCoverHispeedFactor;
   const float hispeed =
       configuredHispeed *
       static_cast<float>(gameplay_timing::playbackTravelScale(playbackRate));
@@ -2371,42 +2345,29 @@ BuiltInRendererTraversal BMSRenderer::projectionTraversal() const {
 }
 
 int BMSRenderer::effectiveVisibleTimeGreenNumber() const {
-  const double referenceBpm = visibleTimeReferenceBpm();
   const double bpm =
-      currentBpm > 0.0 && std::isfinite(currentBpm) ? currentBpm : referenceBpm;
-  if (!std::isfinite(referenceBpm) || referenceBpm <= 0.0 ||
-      !std::isfinite(bpm) || bpm <= 0.0) {
-    return AppSettings::durationMillisecondsToGreenNumber(
-        visibleTimeDurationMilliseconds);
-  }
-
-  const double scaledDuration =
-      static_cast<double>(visibleTimeDurationMilliseconds) * referenceBpm / bpm;
-  if (!std::isfinite(scaledDuration)) {
-    return AppSettings::durationMillisecondsToGreenNumber(
-        visibleTimeDurationMilliseconds);
-  }
-  const int currentDurationMilliseconds = std::max(
-      1, static_cast<int>(std::lround(scaledDuration)));
-  return AppSettings::durationMillisecondsToGreenNumber(
-      currentDurationMilliseconds);
+      currentBpm > 0.0 && std::isfinite(currentBpm)
+          ? currentBpm
+          : visibleTimeReferenceBpm();
+  const auto duration = gameplay_visible_time::currentDurationMilliseconds(
+      bpm, builtInProjectionTraversal().configuredHispeed,
+      noteStartPositionPercent, laneCoverEnabled, currentScrollRate);
+  return duration ? gameplay_visible_time::durationToGreenNumber(*duration)
+                  : AppSettings::durationMillisecondsToGreenNumber(
+                        visibleTimeDurationMilliseconds);
 }
 
 std::string BMSRenderer::laneCoverVisibleTimeLabel() const {
   const int greenNumber = effectiveVisibleTimeGreenNumber();
   if (visibleTimeUseMilliseconds) {
-    const double referenceBpm = visibleTimeReferenceBpm();
     const double bpm = currentBpm > 0.0 && std::isfinite(currentBpm)
                            ? currentBpm
-                           : referenceBpm;
-    const double scaledDuration =
-        static_cast<double>(visibleTimeDurationMilliseconds) * referenceBpm /
-        bpm;
-    const int milliseconds = std::isfinite(scaledDuration) &&
-                                     referenceBpm > 0.0 && bpm > 0.0
-                                 ? std::max(1, static_cast<int>(
-                                                   std::lround(scaledDuration)))
-                                 : std::max(1, visibleTimeDurationMilliseconds);
+                           : visibleTimeReferenceBpm();
+    const auto duration = gameplay_visible_time::currentDurationMilliseconds(
+        bpm, builtInProjectionTraversal().configuredHispeed,
+        noteStartPositionPercent, laneCoverEnabled, currentScrollRate);
+    const int milliseconds = duration.value_or(
+        std::max(1, visibleTimeDurationMilliseconds));
     return std::to_string(milliseconds) + " ms";
   }
   return std::to_string(greenNumber);
@@ -2846,6 +2807,9 @@ PresentationFrameOutcome BMSRenderer::prepareFrame(
     configure(capturedState.configuration);
     const auto &authority = capturedState.authority;
     setCurrentBpm(authority.currentBpm);
+    currentScrollRate = std::isfinite(authority.currentScrollRate)
+                            ? authority.currentScrollRate
+                            : 1.0;
     setJudgementCounters(authority.judgementCounters, authority.comboBreak);
     setGaugeStatus(authority.gaugeType, authority.gaugeAutoShift,
                    authority.currentGauge, authority.gaugeRules);
@@ -4174,12 +4138,19 @@ void BMSRenderer::configure(
     const PlayfieldPresentationConfig &configuration) {
   setVisibleTimeDurationMilliseconds(
       configuration.visibleTimeDurationMilliseconds);
+  if (std::isfinite(configuration.configuredHispeed) &&
+      configuration.configuredHispeed > 0.0F) {
+    configuredHispeedOverride = configuration.configuredHispeed;
+  } else {
+    configuredHispeedOverride.reset();
+  }
   setHispeedMultiplier(configuration.hispeedMultiplier);
   setVisibleTimeUseMilliseconds(configuration.visibleTimeUseMilliseconds);
-  setVisibleTimeBpmStrategy(configuration.visibleTimeBpmStrategy);
+  setHiSpeedFixMode(configuration.hispeedFixMode);
   setPlayAreaWidth(configuration.playAreaWidth);
   setLaneBeamsEnabled(configuration.laneBeamsEnabled);
   setLaneCoverHispeedFactor(configuration.laneCoverHispeedFactor);
+  laneCoverEnabled = configuration.laneCoverEnabled;
   setLaneBeamLengthPercent(configuration.laneBeamLengthPercent);
   setNoteStartPositionPercent(configuration.noteStartPositionPercent);
   setLaneBeamClockUsesRenderTime(
@@ -4384,9 +4355,8 @@ void BMSRenderer::setCurrentBpm(double bpm) {
   }
 }
 
-void BMSRenderer::setVisibleTimeBpmStrategy(
-    AppSettings::VisibleTimeBpmStrategy strategy) {
-  visibleTimeBpmStrategy = strategy;
+void BMSRenderer::setHiSpeedFixMode(AppSettings::HiSpeedFixMode mode) {
+  hispeedFixMode = mode;
 }
 
 void BMSRenderer::setPlayAreaWidth(float width) {

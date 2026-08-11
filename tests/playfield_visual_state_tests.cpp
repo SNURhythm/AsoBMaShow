@@ -231,8 +231,7 @@ void testVisualStateCaptureAndFanoutAreCoherentValueSnapshots() {
   PlayfieldPresentationConfig configuration{
       .visibleTimeDurationMilliseconds = 875,
       .visibleTimeUseMilliseconds = true,
-      .visibleTimeBpmStrategy =
-          AppSettings::VisibleTimeBpmStrategy::MostPrevalent,
+      .hispeedFixMode = AppSettings::HiSpeedFixMode::Main,
       .playAreaWidth = 6.5F,
       .laneBeamsEnabled = false,
       .laneCoverHispeedFactor = 0.78F,

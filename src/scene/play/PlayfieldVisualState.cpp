@@ -36,6 +36,7 @@ bool sameSnapshot(const pacemaker::Snapshot &left,
 bool PlayfieldAuthorityUpdate::operator==(
     const PlayfieldAuthorityUpdate &other) const {
   return currentBpm == other.currentBpm &&
+         currentScrollRate == other.currentScrollRate &&
          judgementCounters == other.judgementCounters &&
          judgementFastSlowCounters == other.judgementFastSlowCounters &&
          comboBreak == other.comboBreak && gaugeType == other.gaugeType &&
@@ -59,6 +60,8 @@ bool PlayfieldAuthorityUpdate::operator==(
          liftEnabled == other.liftEnabled && liftRatio == other.liftRatio &&
          hiddenEnabled == other.hiddenEnabled &&
          hiddenRatio == other.hiddenRatio &&
+         laneCoverChanged == other.laneCoverChanged &&
+         laneCoverChangeKind == other.laneCoverChangeKind &&
          resetLaneCoverVisibleTimeReference ==
              other.resetLaneCoverVisibleTimeReference;
 }

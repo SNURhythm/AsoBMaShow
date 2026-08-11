@@ -1,5 +1,7 @@
 #include "ReplayVideoGameplayPreflight.h"
 
+#include "BeatorajaHiSpeedChart.h"
+
 #include "Judge.h"
 #include "GamePlayTiming.h"
 #include "../../skin/beatoraja/GameplaySkinEndAnimation.h"
@@ -26,24 +28,29 @@ skin::UiLogicalRect replayGameplayLogicalUiBounds(int exportWidth,
 
 PlayfieldPresentationConfig replayGameplayPresentationConfig(
     const AppSettings &settings, float playAreaWidth,
+    const bms_parser::Chart &chart,
     bool touchVisualizationEnabled,
     bool replayGhostRenderingEnabled) noexcept {
-  const float laneCoverHispeedFactor =
-      settings.laneCoverEnabled
-          ? std::clamp(1.0F -
-                           static_cast<float>(settings.noteStartPositionPercent) /
-                               100.0F,
-                       0.0F, 1.0F)
-          : 1.0F;
+  const gameplay_hispeed::State hispeed(
+      {.mode = gameplay_hispeed::fixModeFromEncoded(
+           static_cast<int>(settings.hispeedFixMode)),
+       .durationMilliseconds = settings.visibleTimeDurationMilliseconds,
+       .hispeed = settings.gameplayHispeed,
+       .margin = settings.hispeedMargin,
+       .laneCoverPercent = settings.noteStartPositionPercent,
+       .laneCoverEnabled = settings.laneCoverEnabled},
+      gameplay_hispeed::summarizeChartBpm(chart));
   return {
       .visibleTimeDurationMilliseconds =
           settings.visibleTimeDurationMilliseconds,
-      .hispeedMultiplier = settings.gameplayHispeedMultiplier,
+      .configuredHispeed = hispeed.hispeed(),
+      .hispeedMultiplier = 1.0F,
       .visibleTimeUseMilliseconds = settings.visibleTimeUseMilliseconds,
-      .visibleTimeBpmStrategy = settings.visibleTimeBpmStrategy,
+      .hispeedFixMode = settings.hispeedFixMode,
       .playAreaWidth = playAreaWidth,
       .laneBeamsEnabled = true,
-      .laneCoverHispeedFactor = laneCoverHispeedFactor,
+      .laneCoverHispeedFactor = 1.0F,
+      .laneCoverEnabled = settings.laneCoverEnabled,
       .laneBeamLengthPercent = settings.laneBeamLengthPercent,
       .noteStartPositionPercent = settings.noteStartPositionPercent,
       .laneBeamClockUsesRenderTime = true,
@@ -168,15 +175,21 @@ long long replayGameplayDurationWithSkinTiming(
 ReplayLaneCoverFrameState ReplayLaneCoverPlayback::advance(
     std::span<const ReplayLaneCoverEvent> events, long long songTimeMicros) {
   bool resetVisibleTimeReference = false;
+  bool changed = false;
+  ReplayLaneCoverChangeKind changeKind = ReplayLaneCoverChangeKind::Value;
   while (cursor_ < events.size() &&
          events[cursor_].songTimeMicros <= songTimeMicros) {
     percent_ = events[cursor_].noteStartPositionPercent;
     enabled_ = events[cursor_].laneCoverEnabled;
+    changed = true;
+    changeKind = events[cursor_].changeKind;
     resetVisibleTimeReference = events[cursor_].resetVisibleTimeReference;
     ++cursor_;
   }
   return {.percent = percent_,
           .enabled = enabled_,
+          .changed = changed,
+          .changeKind = changeKind,
           .resetVisibleTimeReference = resetVisibleTimeReference};
 }
 
@@ -244,6 +257,14 @@ std::optional<ReplayVideoExportResult> preflightReplayGameplayPresentation(
   initialState.clock = frame.clock;
   initialState.sceneStartMicros = frame.sceneStartMicros;
   initialState.playStartMicros = frame.playStartMicros;
+  // This is the same initially-selected timeline state that LaneRenderer
+  // presents before its first frame.  It lets a skin's initial properties
+  // (notably 312/313) agree with the configured live Hi-Speed immediately.
+  initialState.authority.currentBpm = chart.Meta.Bpm;
+  initialState.authority.currentScrollRate = 1.0;
+  initialState.authority.laneCoverPercent =
+      settings.noteStartPositionPercent;
+  initialState.authority.laneCoverEnabled = settings.laneCoverEnabled;
   Judge judge(chart.Meta.Rank);
   auto created = ReplayPlayfieldPresentation::create({
       .chart = chart,

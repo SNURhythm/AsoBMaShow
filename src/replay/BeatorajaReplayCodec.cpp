@@ -602,6 +602,7 @@ Json encodeLaneCover(std::span<const ReplayLaneCoverEvent> events) {
         {"songTimeMicros", event.songTimeMicros},
         {"noteStartPositionPercent", event.noteStartPositionPercent},
         {"laneCoverEnabled", event.laneCoverEnabled},
+        {"changeKind", static_cast<int>(event.changeKind)},
         {"resetVisibleTimeReference", event.resetVisibleTimeReference},
     });
   }
@@ -698,6 +699,15 @@ bool decodeLaneCover(const Json &source,
     } else if (!readRequired(item, "laneCoverEnabled", event.laneCoverEnabled,
                              diagnostic)) {
       return false;
+    }
+    if (const auto kind = item.find("changeKind"); kind != item.end()) {
+      int encoded = 0;
+      if (!readRequired(item, "changeKind", encoded, diagnostic) ||
+          encoded < static_cast<int>(ReplayLaneCoverChangeKind::Value) ||
+          encoded > static_cast<int>(ReplayLaneCoverChangeKind::Enabled)) {
+        return fail(diagnostic, "Replay lane-cover change kind is invalid");
+      }
+      event.changeKind = static_cast<ReplayLaneCoverChangeKind>(encoded);
     }
     output.push_back(event);
   }

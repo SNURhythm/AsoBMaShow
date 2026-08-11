@@ -321,7 +321,7 @@
   "configuration": {
     "visibleTimeDurationMilliseconds": 2500,
     "visibleTimeUseMilliseconds": true,
-    "visibleTimeBpmStrategy": 0,
+    "hispeedFixMode": 1,
     "playAreaWidth": 8.0,
     "laneBeamsEnabled": true,
     "laneCoverHispeedFactor": 0.76,

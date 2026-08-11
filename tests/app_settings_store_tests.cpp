@@ -93,8 +93,7 @@ AppSettings makeDistinctSettings() {
   value.visualOffsetMs = 41;
   value.setVisibleTimeGreenNumber(777);
   value.visibleTimeUseMilliseconds = true;
-  value.visibleTimeBpmStrategy =
-      AppSettings::VisibleTimeBpmStrategy::MostPrevalent;
+  value.hispeedFixMode = AppSettings::HiSpeedFixMode::Main;
   value.inputKeysoundEnabled = false;
   value.prepMetronomeEnabled = true;
   value.startLaneIndicatorsEnabled = false;
@@ -178,7 +177,8 @@ void testJsonRoundTripIncludesAudioAndVideo() {
   expected.musicPlayerClubModeEnabled = true;
   expected.judgementIndicatorRangeMilliseconds = 333;
   expected.selectedGameplayRuleset = "beatoraja";
-  expected.gameplayHispeedMultiplier = 1.75F;
+  expected.gameplayHispeed = 1.75F;
+  expected.hispeedMargin = 0.5F;
   expected.laneCoverEnabled = false;
   expected.irProviders["tachi"] = {
       .enabled = true,
@@ -216,8 +216,8 @@ void testJsonRoundTripIncludesAudioAndVideo() {
              *entry.entry)) == expectedConfigurationDigest,
          "restart reconstructs the exact configuration digest from persisted "
          "entry maps");
-  expect(readFile(path).find("\"schemaVersion\": 5") != std::string::npos,
-         "saved JSON declares schema version 5");
+  expect(readFile(path).find("\"schemaVersion\": 6") != std::string::npos,
+         "saved JSON declares schema version 6");
   expect(readFile(path).find("\"visibleTimeDurationMilliseconds\": 1295") !=
              std::string::npos,
          "saved JSON persists exact canonical visible duration milliseconds");
@@ -249,11 +249,13 @@ void testJsonRoundTripIncludesAudioAndVideo() {
   expect(readFile(path).find("\"markProcessedNotes\": true") !=
              std::string::npos,
          "saved JSON includes the Beatoraja processed-note marker setting");
-  expect(readFile(path).find("\"gameplayHispeedMultiplier\": 1.75") !=
+  expect(readFile(path).find("\"gameplayHispeed\": 1.75") !=
+                 std::string::npos &&
+             readFile(path).find("\"hispeedMargin\": 0.5") !=
                  std::string::npos &&
              readFile(path).find("\"laneCoverEnabled\": false") !=
                  std::string::npos,
-         "saved JSON includes Start/Select hi-speed and lane-cover state");
+         "saved JSON includes source-faithful Hi-Speed and lane-cover state");
   const std::string saved = readFile(path);
   expect(saved.find("\"hispeedAutoAdjust\": true") != std::string::npos,
          "saved JSON persists the Beatoraja Hi-Speed Auto Adjust setting");

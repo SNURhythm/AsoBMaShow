@@ -432,7 +432,7 @@ PlayfieldPresentationConfig presentationConfig(int coverPercent) {
   return {
       .visibleTimeDurationMilliseconds = 2500,
       .visibleTimeUseMilliseconds = true,
-      .visibleTimeBpmStrategy = AppSettings::VisibleTimeBpmStrategy::Chart,
+      .hispeedFixMode = AppSettings::HiSpeedFixMode::Start,
       .playAreaWidth = AppSettings::kDefaultPlayAreaWidth,
       .laneBeamsEnabled = true,
       .laneCoverHispeedFactor =
@@ -1190,7 +1190,7 @@ Json configurationJson(const PlayfieldPresentationConfig &config) {
       {"visibleTimeDurationMilliseconds",
        config.visibleTimeDurationMilliseconds},
       {"visibleTimeUseMilliseconds", config.visibleTimeUseMilliseconds},
-      {"visibleTimeBpmStrategy", static_cast<int>(config.visibleTimeBpmStrategy)},
+      {"hispeedFixMode", static_cast<int>(config.hispeedFixMode)},
       {"playAreaWidth", canonical(config.playAreaWidth)},
       {"laneBeamsEnabled", config.laneBeamsEnabled},
       {"laneCoverHispeedFactor", canonical(config.laneCoverHispeedFactor)},
@@ -1649,6 +1649,20 @@ void verifyVisibleTimeDurationUsesMilliseconds() {
          "calculating note speed");
 }
 
+void verifyGreenNumberUsesLiveConfiguredHispeed() {
+  SyntheticChartFixture fixture;
+  Judge judge(fixture.chart->Meta.Rank);
+  BMSRenderer renderer(fixture.chart.get(), judge.timingWindows, 500, false);
+  renderer.configure({.visibleTimeDurationMilliseconds = 500,
+                      .configuredHispeed = 6.06F,
+                      .hispeedMultiplier = 1.0F});
+  renderer.setCurrentBpm(120.0);
+
+  expect(renderer.effectiveVisibleTimeGreenNumber() == 198,
+         "the live green number uses the exact configured Hi-Speed that "
+         "controls note travel");
+}
+
 } // namespace
 
 int main() {
@@ -1727,6 +1741,7 @@ int main() {
       verifyCapturedOverloadEquivalence(legacyCursorAdvanced,
                                         capturedCursorAdvanced);
       verifyVisibleTimeDurationUsesMilliseconds();
+  verifyGreenNumberUsesLiveConfiguredHispeed();
     } catch (const std::exception &error) {
       std::cerr << "FAIL: characterization threw: " << error.what() << '\n';
       ++failures;

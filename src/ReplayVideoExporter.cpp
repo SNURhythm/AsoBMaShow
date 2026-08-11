@@ -147,6 +147,7 @@ preflightReplayGameplayPresentation(
       chart, replay, settings, preparationPlan,
       replay_video_export::replayGameplayPresentationConfig(
           settings, settings.playAreaWidthForKeyMode(chart.Meta.KeyMode),
+          chart,
           resolvedOptions.renderTouchPoints,
           resolvedOptions.renderReplayGhosts),
       resolvedOptions.width, resolvedOptions.height,
@@ -697,16 +698,22 @@ std::string replayExportPlayOptionLabel(const ReplayData &replay) {
   return label.empty() ? "" : "Option: " + label;
 }
 
+// LaneRenderer advances both BPM and #SCROLL from its timeline cursor before
+// computing the live green number and note travel.  Export must carry the
+// same pair into the shared presentation instead of treating BPM changes as
+// the only visual-rate state.
 std::vector<const bms_parser::TimeLine *>
-collectBpmChangeTimelines(const bms_parser::Chart &chart) {
+collectPlaybackRateChangeTimelines(const bms_parser::Chart &chart) {
   std::vector<const bms_parser::TimeLine *> timelines;
   for (const auto &measure : chart.Measures) {
     if (measure == nullptr) {
       continue;
     }
     for (const auto *timeline : measure->TimeLines) {
-      if (timeline == nullptr || !timeline->BpmChange ||
-          !std::isfinite(timeline->Bpm) || timeline->Bpm <= 0.0) {
+      if (timeline == nullptr ||
+          (!timeline->BpmChange && !timeline->ScrollChange) ||
+          !std::isfinite(timeline->Bpm) || timeline->Bpm <= 0.0 ||
+          !std::isfinite(timeline->Scroll)) {
         continue;
       }
       timelines.push_back(timeline);
@@ -1116,6 +1123,7 @@ preflightCourseReplayGameplayPresentations(
          .configuration = replay_video_export::replayGameplayPresentationConfig(
              settings,
              settings.playAreaWidthForKeyMode(stage.chart->Meta.KeyMode),
+             *stage.chart,
              resolvedOptions.renderTouchPoints,
              resolvedOptions.renderReplayGhosts),
          .exportWidth = resolvedOptions.width,
@@ -2625,17 +2633,20 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
           gameplayDurationMicros, stoppedOnGaugeFailure,
           preparedGameplay.presentation.get());
 
-  const auto bpmChangeTimelines = collectBpmChangeTimelines(chart);
-  size_t bpmChangeCursor = 0;
+  const auto playbackRateChangeTimelines =
+      collectPlaybackRateChangeTimelines(chart);
+  size_t playbackRateChangeCursor = 0;
   double currentExportBpm = chart.Meta.Bpm;
-  auto applyExportBpm = [&](long long songTimeMicros) {
-    while (bpmChangeCursor < bpmChangeTimelines.size() &&
-           bpmChangeTimelines[bpmChangeCursor]->Timing <= songTimeMicros) {
-      const double bpm = bpmChangeTimelines[bpmChangeCursor]->Bpm;
-      if (std::abs(currentExportBpm - bpm) > 0.0001) {
-        currentExportBpm = bpm;
-      }
-      ++bpmChangeCursor;
+  double currentExportScrollRate = 1.0;
+  auto applyExportPlaybackRate = [&](long long songTimeMicros) {
+    while (playbackRateChangeCursor < playbackRateChangeTimelines.size() &&
+           playbackRateChangeTimelines[playbackRateChangeCursor]->Timing <=
+               songTimeMicros) {
+      const auto *timeline =
+          playbackRateChangeTimelines[playbackRateChangeCursor];
+      currentExportBpm = timeline->Bpm;
+      currentExportScrollRate = timeline->Scroll;
+      ++playbackRateChangeCursor;
     }
   };
   replay_video_export::ReplayLaneCoverPlayback laneCoverPlayback(
@@ -2960,7 +2971,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
       }
       ++replayCursor;
     }
-    applyExportBpm(frameTiming.gameplayTimeMicros);
+    applyExportPlaybackRate(frameTiming.gameplayTimeMicros);
     const auto laneCover = laneCoverPlayback.advance(
         replay.laneCoverEvents, frameTiming.gameplayTimeMicros);
     preparedGameplay.presentation->releaseDueClassicLongNoteTails(
@@ -2968,6 +2979,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
 
     preparedGameplay.presentation->applyAuthorityUpdate({
         .currentBpm = currentExportBpm,
+        .currentScrollRate = currentExportScrollRate,
         .judgementCounters = replayJudgementAuthority.judgementCounters(),
         .judgementFastSlowCounters =
             replayJudgementAuthority.judgementFastSlowCounters(),
@@ -2992,6 +3004,8 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
             preparationPlan.indicatorVisibleAt(rawSongTimeMicros),
         .laneCoverPercent = laneCover.percent,
         .laneCoverEnabled = laneCover.enabled,
+        .laneCoverChanged = laneCover.changed,
+        .laneCoverChangeKind = laneCover.changeKind,
         .resetLaneCoverVisibleTimeReference =
             laneCover.resetVisibleTimeReference,
     });
@@ -3546,17 +3560,20 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
               .message = "Replay export visual loading was cancelled"};
     }
 
-    const auto bpmChangeTimelines = collectBpmChangeTimelines(chart);
-    size_t bpmChangeCursor = 0;
+    const auto playbackRateChangeTimelines =
+        collectPlaybackRateChangeTimelines(chart);
+    size_t playbackRateChangeCursor = 0;
     double currentExportBpm = chart.Meta.Bpm;
-    auto applyExportBpm = [&](long long songTimeMicros) {
-      while (bpmChangeCursor < bpmChangeTimelines.size() &&
-             bpmChangeTimelines[bpmChangeCursor]->Timing <= songTimeMicros) {
-        const double bpm = bpmChangeTimelines[bpmChangeCursor]->Bpm;
-        if (std::abs(currentExportBpm - bpm) > 0.0001) {
-          currentExportBpm = bpm;
-        }
-        ++bpmChangeCursor;
+    double currentExportScrollRate = 1.0;
+    auto applyExportPlaybackRate = [&](long long songTimeMicros) {
+      while (playbackRateChangeCursor < playbackRateChangeTimelines.size() &&
+             playbackRateChangeTimelines[playbackRateChangeCursor]->Timing <=
+                 songTimeMicros) {
+        const auto *timeline =
+            playbackRateChangeTimelines[playbackRateChangeCursor];
+        currentExportBpm = timeline->Bpm;
+        currentExportScrollRate = timeline->Scroll;
+        ++playbackRateChangeCursor;
       }
     };
     replay_video_export::ReplayLaneCoverPlayback laneCoverPlayback(
@@ -3633,13 +3650,14 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
         }
         ++replayCursor;
       }
-      applyExportBpm(frameTiming.gameplayTimeMicros);
+      applyExportPlaybackRate(frameTiming.gameplayTimeMicros);
       const auto laneCover = laneCoverPlayback.advance(
           stageReplay.laneCoverEvents, frameTiming.gameplayTimeMicros);
       presentation.releaseDueClassicLongNoteTails(
           frameTiming.gameplayTimeMicros);
       presentation.applyAuthorityUpdate({
           .currentBpm = currentExportBpm,
+          .currentScrollRate = currentExportScrollRate,
           .judgementCounters = replayJudgementAuthority.judgementCounters(),
           .judgementFastSlowCounters =
               replayJudgementAuthority.judgementFastSlowCounters(),
@@ -3658,6 +3676,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
               stage.preparationPlan.indicatorVisibleAt(rawSongTimeMicros),
           .laneCoverPercent = laneCover.percent,
           .laneCoverEnabled = laneCover.enabled,
+          .laneCoverChanged = laneCover.changed,
+          .laneCoverChangeKind = laneCover.changeKind,
           .resetLaneCoverVisibleTimeReference =
               laneCover.resetVisibleTimeReference,
       });
