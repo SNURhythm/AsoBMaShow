@@ -179,6 +179,34 @@ ReplayLaneCoverFrameState ReplayLaneCoverPlayback::advance(
           .resetVisibleTimeReference = resetVisibleTimeReference};
 }
 
+ReplayJudgementAuthorityPlayback::ReplayJudgementAuthorityPlayback() {
+  for (int value = 0; value < JudgementCount; ++value) {
+    const auto judgement = static_cast<Judgement>(value);
+    judgementCounters_.emplace(judgement, 0);
+    judgementFastSlowCounters_.emplace(judgement,
+                                       PlayfieldJudgementFastSlowCount{});
+  }
+}
+
+void ReplayJudgementAuthorityPlayback::recordApplied(const ReplayEvent &event) {
+  if (event.judgement == None) {
+    return;
+  }
+  ++judgementCounters_[event.judgement];
+  const JudgeResult judge(event.judgement, event.diffMicros);
+  if (judge.isComboBreak()) {
+    ++comboBreak_;
+  }
+  if (event.judgement == Kpoor) {
+    return;
+  }
+  if (event.diffMicros < 0) {
+    ++judgementFastSlowCounters_[event.judgement].fast;
+  } else if (event.diffMicros > 0) {
+    ++judgementFastSlowCounters_[event.judgement].slow;
+  }
+}
+
 int ReplayCourseMaximumComboPlayback::observe(
     const ReplayPlayfieldPresentation &presentation) noexcept {
   maximumCombo_ =

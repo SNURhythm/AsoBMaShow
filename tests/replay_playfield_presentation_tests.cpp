@@ -2,6 +2,7 @@
 #include "scene/play/ReplayVideoGameplayPreflight.h"
 #include "PreparationPlan.h"
 #include "ReplayGhostUtils.h"
+#include "ResultPresentationUtils.h"
 #include "skin/beatoraja/GameplaySkinValidator.h"
 #include "skin/package/SkinPackageCatalog.h"
 #include "skin/package/SkinPathPolicy.h"
@@ -441,6 +442,69 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
              !configuration.touchVisualizationEnabled &&
              !configuration.replayGhostRenderingEnabled,
          "replay export configuration retains all gameplay presentation settings");
+}
+
+void testReplayExportPersonalBestAuthorityUsesSavedBestReplay() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 2;
+  auto *measure = new bms_parser::Measure;
+  chart.Measures.push_back(measure);
+  auto *firstTimeline = new bms_parser::TimeLine(8, false);
+  firstTimeline->Timing = 1'000;
+  auto *secondTimeline = new bms_parser::TimeLine(8, false);
+  secondTimeline->Timing = 2'000;
+  measure->TimeLines.push_back(firstTimeline);
+  measure->TimeLines.push_back(secondTimeline);
+  firstTimeline->SetNote(1, new bms_parser::Note(bms_parser::Parser::NoWav));
+  secondTimeline->SetNote(2, new bms_parser::Note(bms_parser::Parser::NoWav));
+
+  const ResultPreviousBestData previousBest{
+      .score = 4, .maxScore = 4, .maxCombo = 2, .comboBreak = 0};
+  const ReplayData savedBestReplay{
+      .finalScore = 4,
+      .events = {{.action = ReplayEventAction::Press,
+                  .lane = 1,
+                  .noteTimeMicros = 1'000,
+                  .judgeTimeMicros = 1'000,
+                  .judgement = PGreat,
+                  .score = 2},
+                 {.action = ReplayEventAction::Press,
+                  .lane = 2,
+                  .noteTimeMicros = 2'000,
+                  .judgeTimeMicros = 2'000,
+                  .judgement = PGreat,
+                  .score = 4}}};
+  const ReplayData exportedReplay{};
+
+  const auto target = result_presentation::bestScoreTargetForReplay(
+      chart, exportedReplay, previousBest, &savedBestReplay);
+  expect(target.enabled && target.finalScore == 4 &&
+             target.usesReplayProgression &&
+             pacemaker::targetScoreAtPlayedNotes(target, 1) == 2,
+         "replay export restores the personal-best graph independently of the selected pacemaker");
+}
+
+void testReplayExportJudgementAuthorityRetainsFastSlowCounters() {
+  replay_video_export::ReplayJudgementAuthorityPlayback authority;
+  authority.recordApplied({.action = ReplayEventAction::Press,
+                            .judgement = PGreat,
+                            .diffMicros = -12});
+  authority.recordApplied({.action = ReplayEventAction::Press,
+                            .judgement = Great,
+                            .diffMicros = 34});
+  authority.recordApplied({.action = ReplayEventAction::Miss,
+                            .judgement = Kpoor,
+                            .diffMicros = -56});
+
+  const auto &counters = authority.judgementCounters();
+  const auto &fastSlow = authority.judgementFastSlowCounters();
+  expect(counters.at(PGreat) == 1 && counters.at(Great) == 1 &&
+             counters.at(Kpoor) == 1 && fastSlow.at(PGreat).fast == 1 &&
+             fastSlow.at(PGreat).slow == 0 && fastSlow.at(Great).fast == 0 &&
+             fastSlow.at(Great).slow == 1 && fastSlow.at(Kpoor).fast == 0 &&
+             fastSlow.at(Kpoor).slow == 0,
+         "replay export retains per-judgement FAST/SLOW authority like replay watch");
 }
 
 void testFirstExportFrameRefreshesPreparedRendererGeometry() {
@@ -1487,6 +1551,8 @@ int main() {
   testModelReplayGhostsRetainRawLanesAndTimelinePositions();
   testExportPixelSizesMapToLogicalGameplayBounds();
   testReplayExportConfigPreservesGameplayPresentationSettings();
+  testReplayExportPersonalBestAuthorityUsesSavedBestReplay();
+  testReplayExportJudgementAuthorityRetainsFastSlowCounters();
   testFirstExportFrameRefreshesPreparedRendererGeometry();
   testReplayGameplayFrameStateMirrorsLiveTimerAndStartClocks();
   testReplayGameplayStatePlayDeadlineMatchesPinnedBmsPlayer();

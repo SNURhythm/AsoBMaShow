@@ -7,6 +7,7 @@
 #include "../../video/RendererAccessCoordinator.h"
 
 #include <memory>
+#include <map>
 #include <optional>
 #include <span>
 #include <string>
@@ -75,6 +76,31 @@ private:
   std::size_t cursor_ = 0;
   int percent_ = 0;
   bool enabled_ = false;
+};
+
+// Replay watch feeds each applied judgement through GameplayScoreState, which
+// owns both aggregate counters and the per-judgement FAST/SLOW split. Export
+// has no worker score state, so this reducer is its equivalent authority.
+class ReplayJudgementAuthorityPlayback final {
+public:
+  ReplayJudgementAuthorityPlayback();
+
+  void recordApplied(const ReplayEvent &);
+  [[nodiscard]] const std::map<Judgement, int> &judgementCounters() const
+      noexcept {
+    return judgementCounters_;
+  }
+  [[nodiscard]] const std::map<Judgement, PlayfieldJudgementFastSlowCount> &
+  judgementFastSlowCounters() const noexcept {
+    return judgementFastSlowCounters_;
+  }
+  [[nodiscard]] int comboBreak() const noexcept { return comboBreak_; }
+
+private:
+  std::map<Judgement, int> judgementCounters_;
+  std::map<Judgement, PlayfieldJudgementFastSlowCount>
+      judgementFastSlowCounters_;
+  int comboBreak_ = 0;
 };
 
 // Course stages own separate presentation adapters, but their already-earned

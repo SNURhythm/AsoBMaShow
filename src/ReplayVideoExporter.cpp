@@ -2653,13 +2653,18 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
       resolvedOptions.pacemakerTarget.empty()
           ? settings.selectedPacemakerTarget
           : resolvedOptions.pacemakerTarget;
-  const auto bestReplay = result_presentation::replayForPreviousBestChart(
-      context, chart.Meta, previousBest, selectedPacemakerTarget,
+  const auto bestScoreReplay = result_presentation::replayForPreviousBestChart(
+      context, chart.Meta, previousBest, pacemaker::kTargetBest,
       visualLoadCancelled);
+  const pacemaker::Target activeBestScoreTarget =
+      previousBest.has_value()
+          ? result_presentation::bestScoreTargetForReplay(
+                chart, replay, *previousBest, bestScoreReplay.get())
+          : pacemaker::Target{};
   const pacemaker::Target activePacemakerTarget =
       result_presentation::pacemakerTargetForReplay(
           chart, replay, selectedPacemakerTarget, previousBest,
-          bestReplay.get());
+          bestScoreReplay.get());
   RhythmState pacemakerState(&chart, false);
   pacemakerState.configureGauge(replay.initialGaugeType,
                                 replay.gaugeAutoShift,
@@ -2721,7 +2726,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     resultSkinData.pacemaker =
         result_presentation::pacemakerDataForReplayResult(
             chart, replayResultState, replay, selectedPacemakerTarget,
-            previousBest, bestReplay.get());
+            previousBest, bestScoreReplay.get());
     DefaultSkin resultSkin;
     resultSkin.buildLayout("Result", resultRoot.get(), &resultSkinData);
     resultAnalytics =
@@ -2791,11 +2796,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   size_t replayCursor = 0;
   GameplayBgaMissStateTracker bgaMissTracker;
   std::uint64_t presentationSerial = 1;
-  std::map<Judgement, int> replayJudgeCounts;
-  for (int i = 0; i < JudgementCount; i++) {
-    replayJudgeCounts[static_cast<Judgement>(i)] = 0;
-  }
-  int replayComboBreak = 0;
+  replay_video_export::ReplayJudgementAuthorityPlayback replayJudgementAuthority;
   uint32_t currentFrame = bgfx::frame();
   const auto exportStart = std::chrono::steady_clock::now();
   auto lastUiProgress =
@@ -2955,10 +2956,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
                                event.combo,
                                makePlayfieldJudgeEventClock(
                                    event.songTimeMicros, visualOffsetMicros));
-        replayJudgeCounts[event.judgement]++;
-        if (JudgeResult(event.judgement, event.diffMicros).isComboBreak()) {
-          replayComboBreak++;
-        }
+        replayJudgementAuthority.recordApplied(event);
       }
       ++replayCursor;
     }
@@ -2970,10 +2968,14 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
 
     preparedGameplay.presentation->applyAuthorityUpdate({
         .currentBpm = currentExportBpm,
-        .judgementCounters = replayJudgeCounts,
-        .comboBreak = replayComboBreak,
+        .judgementCounters = replayJudgementAuthority.judgementCounters(),
+        .judgementFastSlowCounters =
+            replayJudgementAuthority.judgementFastSlowCounters(),
+        .comboBreak = replayJudgementAuthority.comboBreak(),
         .maximumCombo =
             preparedGameplay.presentation->progressiveMaximumCombo(),
+        .bestScore = previousBest ? previousBest->score : 0,
+        .bestScoreTarget = activeBestScoreTarget,
         .gaugeType = replayGaugeType,
         .gaugeAutoShift = replay.gaugeAutoShift,
         .currentGauge = replayGauge,
@@ -3566,11 +3568,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     const size_t resultFrameCount =
         framesForMicros(stage.resultDurationMicros);
     size_t replayCursor = 0;
-    std::map<Judgement, int> replayJudgeCounts;
-    for (int i = 0; i < JudgementCount; i++) {
-      replayJudgeCounts[static_cast<Judgement>(i)] = 0;
-    }
-    int replayComboBreak = 0;
+    replay_video_export::ReplayJudgementAuthorityPlayback
+        replayJudgementAuthority;
     GaugeType replayGaugeType = stage.initialGaugeState.gaugeType;
     float replayGauge = stage.initialGaugeState.currentGauge;
 
@@ -3630,10 +3629,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
               JudgeResult(event.judgement, event.diffMicros), event.combo,
               makePlayfieldJudgeEventClock(event.songTimeMicros,
                                            visualOffsetMicros));
-          replayJudgeCounts[event.judgement]++;
-          if (JudgeResult(event.judgement, event.diffMicros).isComboBreak()) {
-            replayComboBreak++;
-          }
+          replayJudgementAuthority.recordApplied(event);
         }
         ++replayCursor;
       }
@@ -3644,8 +3640,10 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
           frameTiming.gameplayTimeMicros);
       presentation.applyAuthorityUpdate({
           .currentBpm = currentExportBpm,
-          .judgementCounters = replayJudgeCounts,
-          .comboBreak = replayComboBreak,
+          .judgementCounters = replayJudgementAuthority.judgementCounters(),
+          .judgementFastSlowCounters =
+              replayJudgementAuthority.judgementFastSlowCounters(),
+          .comboBreak = replayJudgementAuthority.comboBreak(),
           .maximumCombo = courseMaximumComboPlayback.observe(presentation),
           .gaugeType = replayGaugeType,
           .gaugeAutoShift = replay.gaugeAutoShift,

@@ -657,9 +657,11 @@ void testBestPacemakerUsesTheRetainedReplayConsumer() {
     const auto path = root / consumer;
     requireToken(path, "replayForPreviousBestChart",
                  "retained BEST replay resolution");
-    requireToken(path, "bestReplay.get()",
-                 "retained BEST replay progression");
   }
+  requireToken(root / "src/ReplayVideoExporter.cpp", "bestScoreReplay.get()",
+               "replay-export personal-best progression");
+  requireToken(root / "src/ResultImageExporter.cpp", "bestReplay.get()",
+               "result-image BEST replay progression");
 
   const auto gameplay = root / "src/scene/play/GamePlayScene.cpp";
   requireToken(gameplay, "makeRuntimeBestReplayResolver",
