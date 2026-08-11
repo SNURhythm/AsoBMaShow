@@ -149,7 +149,8 @@ private:
       }
       touchMomentum.stop();
       revealScrollbar();
-      scrollBy(-event.wheel.y * 15.0f);
+      scrollBy(sdl_pointer_event::verticalWheelScrollDelta(event.wheel,
+                                                           15.0F));
       break;
     }
     case SDL_MOUSEBUTTONUP:

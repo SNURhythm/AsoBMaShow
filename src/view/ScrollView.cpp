@@ -1,5 +1,6 @@
 #include "ScrollView.h"
 
+#include "../input/SDLPointerEvent.h"
 #include "../rendering/SimpleBatchRenderer.h"
 #include "UiTheme.h"
 
@@ -108,7 +109,8 @@ bool ScrollView::handleEventsImpl(SDL_Event &event) {
       return true;
     }
     touchMomentum.stop();
-    scrollBy(-event.wheel.y * kWheelStepUi);
+    scrollBy(sdl_pointer_event::verticalWheelScrollDelta(event.wheel,
+                                                         kWheelStepUi));
     return false;
   }
   case SDL_MOUSEBUTTONDOWN: {
