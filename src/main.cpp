@@ -556,6 +556,10 @@ int main(int argv, char **args) {
   SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1");
   SDL_SetHint(SDL_HINT_IME_SUPPORT_EXTENDED_TEXT, "1");
 #if TARGET_OS_IPHONE
+  // UIKit exposes a physical trackpad as a mouse. SDL otherwise mirrors every
+  // mouse press as a synthetic finger press, which would activate UI controls
+  // twice when the application accepts native touch input too.
+  SDL_SetHint(SDL_HINT_MOUSE_TOUCH_EVENTS, "0");
   SDL_SetHint(SDL_HINT_AUDIO_CATEGORY, "ambient");
 #endif
 #if TARGET_OS_ANDROID
@@ -1157,7 +1161,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       }
 #endif
 
-      if (scene_event_routing::shouldDispatchToScene(event.type)) {
+      if (scene_event_routing::shouldDispatchToScene(event)) {
         auto result = sceneManager.handleEvents(event);
         if (result.quit) {
           context.quitFlag = true;

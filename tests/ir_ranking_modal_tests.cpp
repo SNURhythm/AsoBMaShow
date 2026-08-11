@@ -424,6 +424,34 @@ void testRecyclerBindingSeesAppliedRowWidth() {
   REQUIRE(recycler.getViewByIndex(0)->getWidth() == 800);
 }
 
+void testRecyclerIgnoresMouseSynthesizedTouchSelection() {
+  RecyclerView<int> recycler(
+      [](const int left, const int right) { return left == right; });
+  recycler.setWidth(800)->setHeight(200)->applyYogaLayout();
+  recycler.itemHeight = 64;
+  recycler.onCreateView = [](const int &) { return new View(); };
+  recycler.onBind = [](View *, const int &, int, bool) {};
+  recycler.setItems(std::vector<int>{1, 2});
+  int selectionCount = 0;
+  recycler.onSelected = [&](const int &, int) { ++selectionCount; };
+
+  SDL_Event down{};
+  down.type = SDL_FINGERDOWN;
+  down.tfinger.type = SDL_FINGERDOWN;
+  down.tfinger.touchId = SDL_MOUSE_TOUCHID;
+  down.tfinger.fingerId = 0;
+  down.tfinger.x = 0.005F;
+  down.tfinger.y = 0.01F;
+  SDL_Event up = down;
+  up.type = SDL_FINGERUP;
+  up.tfinger.type = SDL_FINGERUP;
+  recycler.handleEvents(down);
+  recycler.handleEvents(up);
+
+  REQUIRE(selectionCount == 0);
+  REQUIRE(recycler.selectedIndex == -1);
+}
+
 void testBokutachiEligibilityRequiresSupportedModeNotesAndSha256() {
   bms_parser::ChartMeta meta;
   meta.KeyMode = 7;
@@ -457,6 +485,7 @@ int main() {
   testTwentyThousandEntriesCreateOnlyVisibleRows();
   testVirtualizedPaginationThresholdAndScrollRetention();
   testRecyclerBindingSeesAppliedRowWidth();
+  testRecyclerIgnoresMouseSynthesizedTouchSelection();
   testBokutachiEligibilityRequiresSupportedModeNotesAndSha256();
   return 0;
 }

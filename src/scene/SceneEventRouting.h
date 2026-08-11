@@ -2,6 +2,8 @@
 
 #include <SDL2/SDL.h>
 
+#include "../input/SDLPointerEvent.h"
+
 namespace scene_event_routing {
 [[nodiscard]] inline constexpr bool shouldDispatchToScene(Uint32 eventType) {
   switch (eventType) {
@@ -25,5 +27,11 @@ namespace scene_event_routing {
   default:
     return false;
   }
+}
+
+[[nodiscard]] inline constexpr bool
+shouldDispatchToScene(const SDL_Event &event) {
+  return shouldDispatchToScene(event.type) &&
+         !sdl_pointer_event::isMouseSynthesizedTouch(event);
 }
 } // namespace scene_event_routing

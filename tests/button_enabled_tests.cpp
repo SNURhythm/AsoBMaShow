@@ -44,6 +44,17 @@ SDL_Event mouseEvent(Uint32 type, int x, int y) {
   return event;
 }
 
+SDL_Event mouseSynthesizedFingerEvent(Uint32 type, float x, float y) {
+  SDL_Event event{};
+  event.type = type;
+  event.tfinger.type = type;
+  event.tfinger.touchId = SDL_MOUSE_TOUCHID;
+  event.tfinger.fingerId = 0;
+  event.tfinger.x = x;
+  event.tfinger.y = y;
+  return event;
+}
+
 void click(Button &button) {
   auto down = mouseEvent(SDL_MOUSEBUTTONDOWN, 10, 10);
   auto up = mouseEvent(SDL_MOUSEBUTTONUP, 10, 10);
@@ -73,5 +84,20 @@ int main() {
   button.setEnabled(false);
   button.handleEvents(up);
   REQUIRE(clicks == 1);
+
+  Button trackpadButton(0, 0, 100, 50);
+  int trackpadClicks = 0;
+  trackpadButton.setOnClickListener([&]() { ++trackpadClicks; });
+  auto syntheticDown =
+      mouseSynthesizedFingerEvent(SDL_FINGERDOWN, 0.005F, 0.01F);
+  auto mouseDown = mouseEvent(SDL_MOUSEBUTTONDOWN, 10, 10);
+  auto syntheticUp =
+      mouseSynthesizedFingerEvent(SDL_FINGERUP, 0.005F, 0.01F);
+  auto mouseUp = mouseEvent(SDL_MOUSEBUTTONUP, 10, 10);
+  trackpadButton.handleEvents(syntheticDown);
+  trackpadButton.handleEvents(mouseDown);
+  trackpadButton.handleEvents(syntheticUp);
+  trackpadButton.handleEvents(mouseUp);
+  REQUIRE(trackpadClicks == 1);
   return 0;
 }
