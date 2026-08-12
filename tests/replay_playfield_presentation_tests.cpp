@@ -523,6 +523,15 @@ void testReplayExportPersonalBestAuthorityUsesSavedBestReplay() {
              target.usesReplayProgression &&
              pacemaker::targetScoreAtPlayedNotes(target, 1) == 2,
          "replay export restores the personal-best graph independently of the selected pacemaker");
+
+  const auto authority = result_presentation::gameplayBestScoreAuthorityForReplay(
+      chart, exportedReplay, previousBest, &savedBestReplay);
+  expect(authority.bestScore == 4 && authority.bestScoreTarget.enabled &&
+             authority.bestScoreTarget.finalScore == 4 &&
+             authority.bestScoreTarget.usesReplayProgression &&
+             pacemaker::targetScoreAtPlayedNotes(authority.bestScoreTarget, 1) ==
+                 2,
+         "course replay gameplay authority retains the saved best score and its BEST ghost progression");
 }
 
 void testReplayExportJudgementAuthorityRetainsFastSlowCounters() {

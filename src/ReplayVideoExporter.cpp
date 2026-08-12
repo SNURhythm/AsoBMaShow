@@ -2671,11 +2671,9 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   const auto bestScoreReplay = result_presentation::replayForPreviousBestChart(
       context, chart.Meta, previousBest, pacemaker::kTargetBest,
       visualLoadCancelled);
-  const pacemaker::Target activeBestScoreTarget =
-      previousBest.has_value()
-          ? result_presentation::bestScoreTargetForReplay(
-                chart, replay, *previousBest, bestScoreReplay.get())
-          : pacemaker::Target{};
+  const auto bestScoreAuthority =
+      result_presentation::gameplayBestScoreAuthorityForReplay(
+          chart, replay, previousBest, bestScoreReplay.get());
   const pacemaker::Target activePacemakerTarget =
       result_presentation::pacemakerTargetForReplay(
           chart, replay, selectedPacemakerTarget, previousBest,
@@ -2994,8 +2992,8 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
         .comboBreak = replayJudgementAuthority.comboBreak(),
         .maximumCombo =
             preparedGameplay.presentation->progressiveMaximumCombo(),
-        .bestScore = previousBest ? previousBest->score : 0,
-        .bestScoreTarget = activeBestScoreTarget,
+        .bestScore = bestScoreAuthority.bestScore,
+        .bestScoreTarget = bestScoreAuthority.bestScoreTarget,
         .gaugeType = replayGaugeType,
         .gaugeAutoShift = replay.gaugeAutoShift,
         .currentGauge = replayGauge,
@@ -3567,6 +3565,17 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
               .message = "Replay export visual loading was cancelled"};
     }
 
+    const std::optional<ResultPreviousBestData> previousBest =
+        result_presentation::previousBestForReplayChart(
+            context.scoreRepository, chart.Meta, stageReplay);
+    const auto bestScoreReplay =
+        result_presentation::replayForPreviousBestChart(
+            context, chart.Meta, previousBest, pacemaker::kTargetBest,
+            visualLoadCancelled);
+    const auto bestScoreAuthority =
+        result_presentation::gameplayBestScoreAuthorityForReplay(
+            chart, stageReplay, previousBest, bestScoreReplay.get());
+
     const auto playbackRateChangeTimelines =
         collectPlaybackRateChangeTimelines(chart);
     size_t playbackRateChangeCursor = 0;
@@ -3614,8 +3623,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
               context.chartRepository, chart.Meta);
       data.currentClearLabelOverride = "NO PLAY";
       data.currentClearRankOverride = kNoClearTypeRank;
-      data.previousBest = result_presentation::previousBestForReplayChart(
-          context.scoreRepository, chart.Meta, stageReplay);
+      data.previousBest = previousBest;
       DefaultSkin resultSkin;
       resultSkin.buildLayout("Result", stageResultRoot.get(), &data);
       stageResultAnalytics =
@@ -3673,6 +3681,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
               replayJudgementAuthority.judgementFastSlowCounters(),
           .comboBreak = replayJudgementAuthority.comboBreak(),
           .maximumCombo = courseMaximumComboPlayback.observe(presentation),
+          .bestScore = bestScoreAuthority.bestScore,
+          .bestScoreTarget = bestScoreAuthority.bestScoreTarget,
           .gaugeType = replayGaugeType,
           .gaugeAutoShift = replay.gaugeAutoShift,
           .currentGauge = replayGauge,

@@ -132,6 +132,23 @@ inline pacemaker::Target bestScoreTargetForReplay(
       chart, scoreBestSnapshotFromPreviousBest(previousBest), bestReplay);
 }
 
+struct GameplayBestScoreAuthority {
+  int bestScore = 0;
+  pacemaker::Target bestScoreTarget;
+};
+
+inline GameplayBestScoreAuthority gameplayBestScoreAuthorityForReplay(
+    bms_parser::Chart &chart, const ReplayData &replay,
+    const std::optional<ResultPreviousBestData> &previousBest,
+    const ReplayData *bestReplay = nullptr) {
+  if (!previousBest.has_value()) {
+    return {};
+  }
+  return {.bestScore = previousBest->score,
+          .bestScoreTarget = bestScoreTargetForReplay(
+              chart, replay, *previousBest, bestReplay)};
+}
+
 inline std::optional<ResultPacemakerData> pacemakerDataForReplayResult(
     bms_parser::Chart &chart, const RhythmState &state,
     const ReplayData &replay, const std::string &targetId,
