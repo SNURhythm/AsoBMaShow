@@ -44,6 +44,7 @@ constexpr int kImageMaximumDimension =
 constexpr std::size_t kImageMaximumEncodedBytes = 32U * 1024U * 1024U;
 constexpr std::size_t kImageMaximumDecodedBytes =
     static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max());
+constexpr auto kInitialFifoWriterWait = std::chrono::milliseconds(200);
 #if TARGET_OS_IOS || TARGET_OS_IPHONE || TARGET_OS_SIMULATOR
 constexpr std::size_t kDecodedImageCacheBudget = 64U * 1024U * 1024U;
 #else
@@ -125,6 +126,8 @@ std::optional<std::vector<std::byte>> readBoundedDescriptorBytes(
     bool waitForInitialFifoWriter = false) {
   std::vector<std::byte> bytes;
   std::array<std::byte, 64U * 1024U> chunk{};
+  const auto initialFifoWriterDeadline =
+      std::chrono::steady_clock::now() + kInitialFifoWriterWait;
   bool fifoWriterObserved = false;
   for (;;) {
     if (stop.stop_requested()) return std::nullopt;
@@ -133,10 +136,14 @@ std::optional<std::vector<std::byte>> readBoundedDescriptorBytes(
       if (stop.stop_requested()) return std::nullopt;
       if (!bytes.empty()) return bytes;
       if (!waitForInitialFifoWriter) return std::nullopt;
-      if (fifoWriterObserved) return std::nullopt;
+      if (fifoWriterObserved ||
+          std::chrono::steady_clock::now() >= initialFifoWriterDeadline) {
+        return std::nullopt;
+      }
 
       // A nonblocking FIFO has no writer yet. Keep the read end alive so a
-      // producer can attach, while poll bounds cancellation latency.
+      // producer can attach, while poll bounds cancellation latency and the
+      // initial wait prevents a dead producer from occupying a decode worker.
     }
     if (count > 0) {
       const auto readCount = static_cast<std::size_t>(count);
@@ -160,11 +167,8 @@ std::optional<std::vector<std::byte>> readBoundedDescriptorBytes(
     if (ready == 0) continue;
     if (descriptorPoll.revents & (POLLERR | POLLNVAL)) return std::nullopt;
     if ((descriptorPoll.revents & POLLHUP) && !bytes.empty()) return bytes;
-    if ((descriptorPoll.revents & POLLHUP) && fifoWriterObserved) {
-      return std::nullopt;
-    }
     if ((descriptorPoll.revents & POLLHUP) && waitForInitialFifoWriter) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+      return std::nullopt;
     }
   }
 }

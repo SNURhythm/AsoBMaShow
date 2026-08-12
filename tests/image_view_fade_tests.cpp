@@ -742,7 +742,6 @@ int main() {
     }
     require(writers[0] >= 0 && writers[1] >= 0,
             "empty FIFO writers attach to both decode workers");
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
     for (int &writer : writers) {
       if (writer >= 0) {
         close(writer);
@@ -763,7 +762,7 @@ int main() {
         ready.imageWidth() == 1 && ready.imageHeight() == 1;
     std::filesystem::remove_all(fixtureRoot);
     require(workersReturnedAfterEmptyWriterDisconnect,
-            "an empty FIFO writer disconnect releases both image workers");
+            "an immediately disconnected empty FIFO writer releases both image workers");
   }
 #endif
 
