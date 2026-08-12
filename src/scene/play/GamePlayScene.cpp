@@ -733,12 +733,6 @@ bool gameplayHasSamePatternRandomization(const bms_parser::Chart &chart,
   return play_options::hasSamePatternRandomization(chart.Meta, option, option2);
 }
 
-int noSpeedDurationMillisecondsForChart(const bms_parser::Chart *chart) {
-  const double bpm = chart != nullptr ? chart->Meta.Bpm : 0.0;
-  const double referenceBpm = std::isfinite(bpm) && bpm > 0.0 ? bpm : 120.0;
-  return std::max(1, static_cast<int>(std::lround(240000.0 / referenceBpm)));
-}
-
 bool prepareRetryChart(const bms_parser::ChartMeta &meta,
                        const StartOptions &sourceOptions,
                        std::unique_ptr<bms_parser::Chart> &retryChart,
@@ -2453,17 +2447,18 @@ void GamePlayScene::init() {
       static_cast<float>(playfieldLaneCoverPercent);
   playfieldHispeedState.emplace(
       gameplay_hispeed::Settings{
-          .mode = courseNoSpeed()
-                      ? gameplay_hispeed::FixMode::Off
-                      : gameplay_hispeed::fixModeFromEncoded(
-                            static_cast<int>(context.settings.hispeedFixMode)),
+          .mode = gameplay_hispeed::fixModeFromEncoded(
+              static_cast<int>(context.settings.hispeedFixMode)),
           .durationMilliseconds = effectiveVisibleTimeDurationMilliseconds(),
-          .hispeed = courseNoSpeed() ? 1.0F : context.settings.gameplayHispeed,
+          .hispeed = context.settings.gameplayHispeed,
           .margin = context.settings.hispeedMargin,
-          .laneCoverPercent = courseNoSpeed() ? 0 : playfieldLaneCoverPercent,
-          .laneCoverEnabled = courseNoSpeed() ? false : playfieldLaneCoverEnabled,
+          .laneCoverPercent = playfieldLaneCoverPercent,
+          .laneCoverEnabled = playfieldLaneCoverEnabled,
       },
       gameplay_hispeed::summarizeChartBpm(*chart));
+  if (courseNoSpeed()) {
+    playfieldHispeedState->setHispeed(1.0F);
+  }
   playfieldChartVisualModel =
       buildPlayfieldChartVisualModel(*chart, options.longNoteMode);
   initializePlayfieldVisualNoteSources();
@@ -3611,8 +3606,7 @@ bool GamePlayScene::courseNoSpeed() const {
 }
 
 int GamePlayScene::effectiveVisibleTimeDurationMilliseconds() const {
-  return courseNoSpeed() ? noSpeedDurationMillisecondsForChart(chart)
-                         : context.settings.visibleTimeDurationMilliseconds;
+  return context.settings.visibleTimeDurationMilliseconds;
 }
 
 int GamePlayScene::effectiveNoteStartPositionPercent() const {
@@ -5772,6 +5766,9 @@ void GamePlayScene::processReplayLaneCoverEvents(long long gameplayTimeMicros) {
 
 void GamePlayScene::applyReplayLaneCoverEvent(
     const ReplayLaneCoverEvent &event) {
+  if (courseNoSpeed()) {
+    return;
+  }
   playfieldLaneCoverPercent = event.noteStartPositionPercent;
   playfieldLaneCoverPercentExact =
       static_cast<float>(event.noteStartPositionPercent);

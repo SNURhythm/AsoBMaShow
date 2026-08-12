@@ -2,6 +2,7 @@
 
 #include "ReplayPlayfieldPresentation.h"
 
+#include "../../CoursePlaySession.h"
 #include "../../PreparationPlan.h"
 #include "../../ReplayVideoExporter.h"
 #include "../../video/RendererAccessCoordinator.h"
@@ -22,7 +23,9 @@ replayGameplayLogicalUiBounds(int exportWidth, int exportHeight) noexcept;
 replayGameplayPresentationConfig(const AppSettings &, float playAreaWidth,
                                  const bms_parser::Chart &,
                                  bool touchVisualizationEnabled,
-                                 bool replayGhostRenderingEnabled) noexcept;
+                                 bool replayGhostRenderingEnabled,
+                                 const CourseConstraintRules &constraints = {})
+    noexcept;
 
 // Export failures occur after BGA preparation but before either selected-skin
 // submission or fullscreen fallback. Release the exact frame lease before the

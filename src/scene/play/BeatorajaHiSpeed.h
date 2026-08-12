@@ -160,6 +160,15 @@ public:
   [[nodiscard]] float baseHispeed() const noexcept { return baseHispeed_; }
   [[nodiscard]] double baseBpm() const noexcept { return baseBpm_; }
 
+  // LaneRenderer's NO_SPEED course branch assigns the cloned PlayConfig's
+  // live Hi-Speed after LaneRenderer initialization. It intentionally leaves
+  // the fixed-speed configuration and cached base value unchanged.
+  void setHispeed(float hispeed) noexcept {
+    if (std::isfinite(hispeed)) {
+      settings_.hispeed = hispeed;
+    }
+  }
+
   void setDurationMilliseconds(int milliseconds) {
     // LaneRenderer.setDuration: bound only at one millisecond, then invoke
     // setLanecover() which resets against the selected fixed BPM.

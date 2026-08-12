@@ -43,6 +43,14 @@ void verifyFixedModeTransitions() {
   expectNear(state.baseHispeed(), 2.56F,
              "fixed mode captures the initialized speed as basehispeed");
 
+  state.setHispeed(1.0F);
+  expectNear(state.hispeed(), 1.0F,
+             "NO SPEED assigns the live Hi-Speed after initialization");
+  expectNear(state.baseHispeed(), 2.56F,
+             "NO SPEED preserves the fixed-mode base captured at initialization");
+
+  state.setHispeed(2.56F);
+
   state.changeHispeed(true);
   expectNear(state.hispeed(), 3.20F,
              "fixed manual change uses basehispeed * margin");

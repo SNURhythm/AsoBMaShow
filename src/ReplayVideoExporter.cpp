@@ -2,6 +2,7 @@
 #include "replay/CourseReplayConsumer.h"
 
 #include "ChartPlaybackDuration.h"
+#include "CourseConstraintUtils.h"
 #include "CoursePlaySession.h"
 #include "PlayOptionUtils.h"
 #include "PreparationPlan.h"
@@ -143,7 +144,8 @@ preflightReplayGameplayPresentation(
     const ReplayVideoExportOptions &options,
     PreparedReplayGameplayPresentation &prepared, ReplayVideoExportLog *log,
     const skin::RuntimeSkinConfigurationSelection *pinnedRuntimeSelection =
-        nullptr) {
+        nullptr,
+    const CourseConstraintRules &constraints = {}) {
   const auto resolvedOptions = resolveReplayVideoExportOptions(options);
   const auto result = replay_video_export::preflightReplayGameplayPresentation(
       chart, replay, settings, preparationPlan,
@@ -151,7 +153,7 @@ preflightReplayGameplayPresentation(
           settings, settings.playAreaWidthForKeyMode(chart.Meta.KeyMode),
           chart,
           resolvedOptions.renderTouchPoints,
-          resolvedOptions.renderReplayGhosts),
+          resolvedOptions.renderReplayGhosts, constraints),
       resolvedOptions.width, resolvedOptions.height,
       context.jukebox, replayGameplaySkinSessionServices(context),
       context.rendererAccess,
@@ -1075,6 +1077,7 @@ void drawReplayResultGaugeGraph(rendering::SimpleBatchRenderer &batch,
 struct CourseReplayVideoStage {
   std::unique_ptr<bms_parser::Chart> chart;
   ReplayData replay;
+  CourseConstraintRules constraints;
   preparation::Plan preparationPlan;
   GaugeStateSnapshot initialGaugeState;
   RhythmState resultState;
@@ -1088,6 +1091,7 @@ struct CourseReplayVideoStage {
 
   CourseReplayVideoStage(std::unique_ptr<bms_parser::Chart> chart,
                          ReplayData replay,
+                         CourseConstraintRules constraints,
                          preparation::Plan preparationPlan,
                          GaugeStateSnapshot initialGaugeState,
                          RhythmState resultState,
@@ -1096,6 +1100,7 @@ struct CourseReplayVideoStage {
                          long long resultDurationMicros,
                          long long audioDurationMicros)
       : chart(std::move(chart)), replay(std::move(replay)),
+        constraints(std::move(constraints)),
         preparationPlan(std::move(preparationPlan)),
         initialGaugeState(std::move(initialGaugeState)),
         resultState(std::move(resultState)), failureMicros(failureMicros),
@@ -1128,7 +1133,7 @@ preflightCourseReplayGameplayPresentations(
              settings.playAreaWidthForKeyMode(stage.chart->Meta.KeyMode),
              *stage.chart,
              resolvedOptions.renderTouchPoints,
-             resolvedOptions.renderReplayGhosts),
+             resolvedOptions.renderReplayGhosts, stage.constraints),
          .exportWidth = resolvedOptions.width,
          .exportHeight = resolvedOptions.height,
          .skinServices = replayGameplaySkinSessionServices(context),
@@ -3545,7 +3550,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
             context, chart, stageReplay, settings, stage.preparationPlan,
             resolvedOptions, *stage.gameplayPresentation, log,
             stage.runtimeSkinSelection ? &*stage.runtimeSkinSelection
-                                       : nullptr)) {
+                                       : nullptr,
+            stage.constraints)) {
       bgfxCleanup.runNow();
       return *failure;
     }
@@ -3593,7 +3599,9 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
       }
     };
     replay_video_export::ReplayLaneCoverPlayback laneCoverPlayback(
-        settings.noteStartPositionPercent, settings.laneCoverEnabled);
+        stage.constraints.noSpeed ? AppSettings::kDefaultNoteStartPositionPercent
+                                  : settings.noteStartPositionPercent,
+        settings.laneCoverEnabled);
     const long long visualOffsetMicros =
         static_cast<long long>(settings.visualOffsetMs) * 1000LL;
     const size_t gameplayFrameCount =
@@ -3666,8 +3674,14 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
         ++replayCursor;
       }
       applyExportPlaybackRate(frameTiming.gameplayTimeMicros);
-      const auto laneCover = laneCoverPlayback.advance(
-          stageReplay.laneCoverEvents, frameTiming.gameplayTimeMicros);
+      const auto laneCover = stage.constraints.noSpeed
+                                 ? replay_video_export::ReplayLaneCoverFrameState{
+                                       .percent =
+                                           AppSettings::kDefaultNoteStartPositionPercent,
+                                       .enabled = settings.laneCoverEnabled}
+                                 : laneCoverPlayback.advance(
+                                       stageReplay.laneCoverEvents,
+                                       frameTiming.gameplayTimeMicros);
       for (const auto &transition : laneCover.transitions) {
         presentation.applyLaneCoverTransition(transition, currentExportBpm);
       }
@@ -4145,6 +4159,8 @@ ReplayVideoExportResult exportCourseReplayImpl(
   }
   reportReplayExportProgress(options, 0.0, "Preparing course export");
   const auto resolvedOptions = resolveReplayVideoExportOptions(options);
+  const CourseConstraintSettings courseConstraintSettings =
+      courseConstraintSettingsFromJson(replay.constraintJson);
   std::vector<CourseReplayVideoStage> stages;
   stages.reserve(replay.stages.size());
   std::optional<GaugeStateSnapshot> carriedGauge;
@@ -4169,6 +4185,7 @@ ReplayVideoExportResult exportCourseReplayImpl(
     if (chart == nullptr || parseCancelled) {
       return {.success = false, .message = "Failed to load course replay stage"};
     }
+    applyCourseConstraintsToChart(*chart, courseConstraintSettings.rules);
 
     preparation::Plan stagePreparationPlan = preparation::buildNormalPlan(
         *chart, context.settings.startLaneIndicatorsEnabled,
@@ -4220,6 +4237,7 @@ ReplayVideoExportResult exportCourseReplayImpl(
                        : renderedFinal;
     stages.emplace_back(
         std::move(chart), std::move(exportStageReplay),
+        courseConstraintSettings.rules,
         std::move(stagePreparationPlan),
         initialGaugeState.gaugeSnapshot(), std::move(resultState),
         failureMicros, 0, resultDurationMicros, 0);

@@ -1,5 +1,6 @@
 #include "scene/play/ReplayPlayfieldPresentation.h"
 #include "scene/play/ReplayVideoGameplayPreflight.h"
+#include "CourseConstraintUtils.h"
 #include "PreparationPlan.h"
 #include "ReplayGhostUtils.h"
 #include "ResultPresentationUtils.h"
@@ -452,6 +453,36 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
              !configuration.touchVisualizationEnabled &&
              !configuration.replayGhostRenderingEnabled,
          "replay export configuration retains all gameplay presentation settings");
+}
+
+void testCourseNoSpeedReplayExportConfigOverridesProfileSettings() {
+  AppSettings settings;
+  settings.visibleTimeDurationMilliseconds = 1'001;
+  settings.gameplayHispeed = 1.75F;
+  settings.hispeedFixMode = AppSettings::HiSpeedFixMode::Main;
+  settings.visibleTimeUseMilliseconds = true;
+  settings.noteStartPositionPercent = 40;
+  settings.laneCoverEnabled = true;
+
+  bms_parser::Chart chart;
+  chart.Meta.Bpm = 120.0;
+  chart.Meta.MinBpm = 120.0;
+  chart.Meta.MaxBpm = 120.0;
+
+  const CourseConstraintRules constraints =
+      courseConstraintSettingsFromJson(R"(["NO_SPEED"])").rules;
+  const auto configuration =
+      replay_video_export::replayGameplayPresentationConfig(
+          settings, 9.5F, chart, false, false, constraints);
+  expect(configuration.visibleTimeDurationMilliseconds == 1'001 &&
+             configuration.configuredHispeed &&
+             *configuration.configuredHispeed == 1.0F &&
+             !configuration.visibleTimeUseMilliseconds &&
+             configuration.hispeedFixMode == AppSettings::HiSpeedFixMode::Main &&
+             configuration.laneCoverEnabled &&
+             configuration.noteStartPositionPercent ==
+                 AppSettings::kDefaultNoteStartPositionPercent,
+         "course NO SPEED export applies the upstream Hi-Speed and cover overrides");
 }
 
 void testReplayExportConfigUsesLaneRendererMainBpmTieRule() {
@@ -1685,6 +1716,7 @@ int main() {
   testModelReplayGhostsRetainRawLanesAndTimelinePositions();
   testExportPixelSizesMapToLogicalGameplayBounds();
   testReplayExportConfigPreservesGameplayPresentationSettings();
+  testCourseNoSpeedReplayExportConfigOverridesProfileSettings();
   testReplayExportConfigUsesLaneRendererMainBpmTieRule();
   testReplayExportPersonalBestAuthorityUsesSavedBestReplay();
   testReplayExportJudgementAuthorityRetainsFastSlowCounters();

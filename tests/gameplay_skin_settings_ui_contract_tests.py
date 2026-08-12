@@ -76,12 +76,21 @@ class GameplaySkinSettingsUiContracts(unittest.TestCase):
             "Select",
             "Remove",
             "Reset Layout",
-            "On My iPad/AsoBMaShow/Skins",
             "Fit",
             "Stretch",
             "Custom",
         ):
             self.assertIn(label, enabled)
+
+    def test_files_location_uses_the_active_storage_root_and_copy_is_accurate(
+        self,
+    ) -> None:
+        enabled = self.read("src/scene/SettingsSceneSkins.cpp")
+
+        self.assertIn("GetStoragePathUtf8RelativeToDocuments", enabled)
+        self.assertIn("Documents/Skins", enabled)
+        self.assertNotIn("On My iPad/AsoBMaShow/Skins", enabled)
+        self.assertNotIn("Lua is never executed in this settings screen", enabled)
 
     def test_enabled_controller_source_is_gated_into_main(self) -> None:
         cmake = self.read("src/scene/CMakeLists.txt")

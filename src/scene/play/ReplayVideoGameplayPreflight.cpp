@@ -30,29 +30,38 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
     const AppSettings &settings, float playAreaWidth,
     const bms_parser::Chart &chart,
     bool touchVisualizationEnabled,
-    bool replayGhostRenderingEnabled) noexcept {
+    bool replayGhostRenderingEnabled,
+    const CourseConstraintRules &constraints) noexcept {
+  const bool noSpeed = constraints.noSpeed;
+  const int visibleTimeDurationMilliseconds =
+      settings.visibleTimeDurationMilliseconds;
+  const int noteStartPositionPercent =
+      noSpeed ? AppSettings::kDefaultNoteStartPositionPercent
+              : settings.noteStartPositionPercent;
+  const bool laneCoverEnabled = settings.laneCoverEnabled;
   const gameplay_hispeed::State hispeed(
-      {.mode = gameplay_hispeed::fixModeFromEncoded(
-           static_cast<int>(settings.hispeedFixMode)),
-       .durationMilliseconds = settings.visibleTimeDurationMilliseconds,
-       .hispeed = settings.gameplayHispeed,
+      {.mode = noSpeed ? gameplay_hispeed::FixMode::Off
+                       : gameplay_hispeed::fixModeFromEncoded(
+                             static_cast<int>(settings.hispeedFixMode)),
+       .durationMilliseconds = visibleTimeDurationMilliseconds,
+       .hispeed = noSpeed ? 1.0F : settings.gameplayHispeed,
        .margin = settings.hispeedMargin,
-       .laneCoverPercent = settings.noteStartPositionPercent,
-       .laneCoverEnabled = settings.laneCoverEnabled},
+       .laneCoverPercent = noteStartPositionPercent,
+       .laneCoverEnabled = laneCoverEnabled},
       gameplay_hispeed::summarizeChartBpm(chart));
   return {
-      .visibleTimeDurationMilliseconds =
-          settings.visibleTimeDurationMilliseconds,
+      .visibleTimeDurationMilliseconds = visibleTimeDurationMilliseconds,
       .configuredHispeed = hispeed.hispeed(),
       .hispeedMultiplier = 1.0F,
-      .visibleTimeUseMilliseconds = settings.visibleTimeUseMilliseconds,
+      .visibleTimeUseMilliseconds =
+          !noSpeed && settings.visibleTimeUseMilliseconds,
       .hispeedFixMode = settings.hispeedFixMode,
       .playAreaWidth = playAreaWidth,
       .laneBeamsEnabled = true,
       .laneCoverHispeedFactor = 1.0F,
-      .laneCoverEnabled = settings.laneCoverEnabled,
+      .laneCoverEnabled = laneCoverEnabled,
       .laneBeamLengthPercent = settings.laneBeamLengthPercent,
-      .noteStartPositionPercent = settings.noteStartPositionPercent,
+      .noteStartPositionPercent = noteStartPositionPercent,
       .laneBeamClockUsesRenderTime = true,
       .showInvisibleNotes = settings.showInvisibleNotes,
       .markProcessedNotes = settings.markProcessedNotes,
@@ -271,8 +280,8 @@ std::optional<ReplayVideoExportResult> preflightReplayGameplayPresentation(
   initialState.authority.currentBpm = chart.Meta.Bpm;
   initialState.authority.currentScrollRate = 1.0;
   initialState.authority.laneCoverPercent =
-      settings.noteStartPositionPercent;
-  initialState.authority.laneCoverEnabled = settings.laneCoverEnabled;
+      configuration.noteStartPositionPercent;
+  initialState.authority.laneCoverEnabled = configuration.laneCoverEnabled;
   Judge judge(chart.Meta.Rank);
   auto created = ReplayPlayfieldPresentation::create({
       .chart = chart,

@@ -330,12 +330,20 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   overview->setFlexDirection(FlexDirection::Column);
   overview->setGap(static_cast<float>(metrics.cardGap));
   overview->addView(makeWrappedText(
-      "Install and configure trusted Beatoraja gameplay skins. Lua is never "
-      "executed in this settings screen.",
+      "Install and configure Beatoraja gameplay skins. Installing, scanning, "
+      "and revalidation evaluate Lua declarations in the compatibility runtime.",
       metrics.bodyTextSize, ui_theme::textSecondary()));
-  overview->addView(
-      makeWrappedText("Files location: On My iPad/AsoBMaShow/Skins",
-                      metrics.smallTextSize, ui_theme::textMuted()));
+  const std::filesystem::path visibleSkinRoot =
+      context.skinStorageRoots ? context.skinStorageRoots->visiblePackages
+                               : Utils::GetDocumentsPath("Skins");
+  std::string visibleSkinFolder = Utils::GetStoragePathUtf8RelativeToDocuments(
+      visibleSkinRoot, "Skins");
+  if (visibleSkinFolder.empty()) {
+    visibleSkinFolder = "Documents/Skins";
+  }
+  overview->addView(makeWrappedText("Files location: " + visibleSkinFolder,
+                                    metrics.smallTextSize,
+                                    ui_theme::textMuted()));
   if (!snapshot.statusMessage.empty()) {
     overview->addView(makeWrappedText(snapshot.statusMessage,
                                       metrics.smallTextSize,
