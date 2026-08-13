@@ -1,3 +1,4 @@
+#include "skin/beatoraja/LuaSkinFileIo.h"
 #include "skin/beatoraja/LuaSkinRuntime.h"
 #include "skin/beatoraja/Skin2DRenderer.h"
 
@@ -227,6 +228,16 @@ assert(io.lines()() == nil)
 assert(io.lines(nil)() == nil)
 return {}
 )lua");
+    writeText(source / "skin/io_large_read.luaskin", R"lua(
+if not skin_config then return {type = 0} end
+
+local file = assert(io.open("io_large_read.txt", "rb"))
+assert(file:read(2147483647) == "abc")
+assert(file:seek("set", 0) == 0)
+assert(file:read("*a") == "abc")
+assert(file:close())
+return {}
+)lua");
     writeText(source / "skin/parts/frame/red/panel.png", "selected");
     writeText(source / "skin/parts/frame/blue/panel.png",
               "random-fallback-must-not-win");
@@ -239,6 +250,7 @@ return {}
     writeText(source / "skin/customize/settings/7keys/default.lua",
               "return {marker = 'parent-selected'}\n");
     writeText(source / "skin/io_lines.txt", "one\ntwo\r\nthree\n");
+    writeText(source / "skin/io_large_read.txt", "abc");
 
     SkinTreeSnapshotter snapshotter(roots, aliases);
     auto snapshot = snapshotter.snapshot(source, package, {}, {});
@@ -580,6 +592,36 @@ void testIoLinesUsesTheVirtualSkinFileSystem() {
          "io.lines opens and iterates a virtual skin file");
 }
 
+void testIoReadClampsHugeRequestedCountToAvailableBytes() {
+  auto harness =
+      fixture().create("io_large_read.luaskin", LuaRuntimePurpose::Validation);
+  if (!harness) {
+    expect(false, "large io.read fixture creates a Lua runtime");
+    return;
+  }
+  expect(harness->runtime->loadHeader().value.has_value(),
+         "large io.read fixture loads its header");
+  const auto configured =
+      harness->runtime->loadConfigured(happyConfiguration());
+  expect(configured.value.has_value() && !configured.failure,
+         "io.read returns a file tail for a huge requested count");
+}
+
+void testLuaSeekArithmeticClampsOrRejectsWithoutOverflow() {
+  const auto clamped = skin::lua_file_io::checkedSeekPosition(
+      0, std::numeric_limits<std::int64_t>::min());
+  const auto ordinary = skin::lua_file_io::checkedSeekPosition(12, -4);
+  const auto overflow = skin::lua_file_io::checkedSeekPosition(
+      std::numeric_limits<std::streamoff>::max(), 1);
+
+  expect(clamped.has_value() && *clamped == 0,
+         "Lua seek clamps its minimum signed offset at file position zero");
+  expect(ordinary.has_value() && *ordinary == 8,
+         "Lua seek retains ordinary negative offsets");
+  expect(!overflow.has_value(),
+         "Lua seek rejects an unrepresentable positive stream position");
+}
+
 } // namespace
 
 int main() {
@@ -591,6 +633,8 @@ int main() {
   testUnsupportedDirectMainStateLookupsRaise();
   testSelectedMainStateSurfaceUsesBoundConfiguredState();
   testIoLinesUsesTheVirtualSkinFileSystem();
+  testIoReadClampsHugeRequestedCountToAvailableBytes();
+  testLuaSeekArithmeticClampsOrRejectsWithoutOverflow();
   if (failures != 0) {
     std::cerr << failures << " assertion(s) failed\n";
     return 1;
