@@ -565,6 +565,33 @@ void testReplayExportPersonalBestAuthorityUsesSavedBestReplay() {
          "course replay gameplay authority retains the saved best score and its BEST ghost progression");
 }
 
+void testCourseReplayPacemakerTracksAppliedStageJudgements() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 2;
+  const ReplayData replay{};
+  const auto target = result_presentation::pacemakerTargetForReplay(
+      chart, replay, pacemaker::kTargetMax, std::nullopt, nullptr);
+  RhythmState state(&chart, false);
+  state.configureGauge(GaugeType::Normal, GaugeAutoShiftMode::None);
+
+  pacemaker::applyReplayEventToState(
+      state, {.action = ReplayEventAction::Press,
+              .lane = 1,
+              .judgement = PGreat,
+              .diffMicros = -12,
+              .gauge = 72.5F,
+              .gaugeType = GaugeType::Normal,
+              .combo = 1,
+              .score = 2});
+  const auto snapshot = pacemaker::snapshotForState(target, state);
+
+  expect(target.enabled && snapshot.enabled && snapshot.playedNotes == 1 &&
+             snapshot.currentScore == 2 && snapshot.targetScore == 2 &&
+             snapshot.delta == 0,
+         "course replay pacemaker advances from each applied stage judgement");
+}
+
 void testReplayExportJudgementAuthorityRetainsFastSlowCounters() {
   replay_video_export::ReplayJudgementAuthorityPlayback authority;
   authority.recordApplied({.action = ReplayEventAction::Press,
@@ -1719,6 +1746,7 @@ int main() {
   testCourseNoSpeedReplayExportConfigOverridesProfileSettings();
   testReplayExportConfigUsesLaneRendererMainBpmTieRule();
   testReplayExportPersonalBestAuthorityUsesSavedBestReplay();
+  testCourseReplayPacemakerTracksAppliedStageJudgements();
   testReplayExportJudgementAuthorityRetainsFastSlowCounters();
   testFirstExportFrameRefreshesPreparedRendererGeometry();
   testReplayGameplayFrameStateMirrorsLiveTimerAndStartClocks();

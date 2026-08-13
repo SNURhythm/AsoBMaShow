@@ -958,33 +958,6 @@ ReplayAudioTrackResult writeCourseReplayAudioTrack(
           .durationMicros = replayAudioMicrosForFrames(writtenFrames)};
 }
 
-void applyReplayEventToPacemakerState(RhythmState &state,
-                                      const ReplayEvent &event) {
-  if (!pacemaker::replayEventCountsAsPlayedNote(event)) {
-    return;
-  }
-
-  const JudgeResult judgeResult(event.judgement, event.diffMicros);
-  state.judgeCount[event.judgement]++;
-  if (judgeResult.isComboBreak()) {
-    state.combo = 0;
-    state.comboBreak++;
-  } else if (event.judgement != Kpoor) {
-    state.combo++;
-    state.maxCombo = std::max(state.maxCombo, state.combo);
-  }
-  state.recordFastSlow(judgeResult);
-  state.combo = event.combo;
-  state.maxCombo = std::max(state.maxCombo, event.combo);
-  state.gaugeType = event.gaugeType;
-  state.currentGauge = event.gauge;
-  const int gaugeIndex = gaugeTypeIndex(event.gaugeType);
-  if (gaugeIndex >= 0 &&
-      gaugeIndex < static_cast<int>(state.gaugeValues.size())) {
-    state.gaugeValues[gaugeIndex] = event.gauge;
-  }
-}
-
 Color resultGaugeLineColor(float value) {
   if (value > 80.0f) {
     return ui_theme::withAlpha(ui_theme::cyan(), 210);
@@ -2969,7 +2942,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
         replayGauge = event.gauge;
       }
       if (appliedHud && event.judgement != None) {
-        applyReplayEventToPacemakerState(pacemakerState, event);
+        pacemaker::applyReplayEventToState(pacemakerState, event);
         bgaMissTracker.onJudge(JudgeResult(event.judgement, event.diffMicros),
                                event.combo,
                                makePlayfieldJudgeEventClock(
@@ -3581,6 +3554,19 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     const auto bestScoreAuthority =
         result_presentation::gameplayBestScoreAuthorityForReplay(
             chart, stageReplay, previousBest, bestScoreReplay.get());
+    const std::string selectedPacemakerTarget =
+        resolvedOptions.pacemakerTarget.empty()
+            ? settings.selectedPacemakerTarget
+            : resolvedOptions.pacemakerTarget;
+    const pacemaker::Target activePacemakerTarget =
+        result_presentation::pacemakerTargetForReplay(
+            chart, stageReplay, selectedPacemakerTarget, previousBest,
+            bestScoreReplay.get());
+    RhythmState pacemakerState(&chart, false);
+    pacemakerState.configureGauge(
+        stageReplay.initialGaugeType, stageReplay.gaugeAutoShift,
+        stage.initialGaugeState.gaugeProfile,
+        stageReplay.gaugeAutoShiftLowerBound);
 
     const auto playbackRateChangeTimelines =
         collectPlaybackRateChangeTimelines(chart);
@@ -3665,6 +3651,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
           replayGauge = event.gauge;
         }
         if (appliedHud && event.judgement != None) {
+          pacemaker::applyReplayEventToState(pacemakerState, event);
           bgaMissTracker.onJudge(
               JudgeResult(event.judgement, event.diffMicros), event.combo,
               makePlayfieldJudgeEventClock(event.songTimeMicros,
@@ -3697,6 +3684,10 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
           .maximumCombo = courseMaximumComboPlayback.observe(presentation),
           .bestScore = bestScoreAuthority.bestScore,
           .bestScoreTarget = bestScoreAuthority.bestScoreTarget,
+          .pacemakerTarget = activePacemakerTarget,
+          .pacemakerStatus =
+              pacemaker::snapshotForState(activePacemakerTarget,
+                                          pacemakerState),
           .gaugeType = replayGaugeType,
           .gaugeAutoShift = replay.gaugeAutoShift,
           .currentGauge = replayGauge,

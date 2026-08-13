@@ -67,6 +67,36 @@ inline bool replayEventCountsAsPlayedNote(const ReplayEvent &event) {
          event.action == ReplayEventAction::Miss;
 }
 
+// Replay export has no gameplay simulation to own its score state.  Reduce
+// each accepted replay judgement exactly once so normal and course export
+// expose the same pacemaker snapshot to gameplay skins.
+inline void applyReplayEventToState(RhythmState &state,
+                                    const ReplayEvent &event) {
+  if (!replayEventCountsAsPlayedNote(event)) {
+    return;
+  }
+
+  const JudgeResult judgeResult(event.judgement, event.diffMicros);
+  state.judgeCount[event.judgement]++;
+  if (judgeResult.isComboBreak()) {
+    state.combo = 0;
+    state.comboBreak++;
+  } else if (event.judgement != Kpoor) {
+    state.combo++;
+    state.maxCombo = std::max(state.maxCombo, state.combo);
+  }
+  state.recordFastSlow(judgeResult);
+  state.combo = event.combo;
+  state.maxCombo = std::max(state.maxCombo, event.combo);
+  state.gaugeType = event.gaugeType;
+  state.currentGauge = event.gauge;
+  const int gaugeIndex = gaugeTypeIndex(event.gaugeType);
+  if (gaugeIndex >= 0 &&
+      gaugeIndex < static_cast<int>(state.gaugeValues.size())) {
+    state.gaugeValues[gaugeIndex] = event.gauge;
+  }
+}
+
 inline std::string replayNoteKey(int lane, long long noteTimeMicros) {
   return std::to_string(lane) + ":" + std::to_string(noteTimeMicros);
 }
