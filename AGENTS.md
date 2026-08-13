@@ -89,15 +89,3 @@
 
 - For desktop local compile checks, use the existing `cmake-build-debug` folder:
   `cmake --build cmake-build-debug --target main -j 6`
-
-## Skin and Replay Review
-
-- Before committing a skin, replay-watch, or replay-export change, follow
-  `docs/skin-compat/exhaustive-review-path.md`.
-- Compatibility behavior is determined only by the pinned local Beatoraja
-  checkout at `/Users/xf/workspace/SNURhythm/beatoraja`; record its SHA and
-  the exact source methods compared for each slice.
-- Do not introduce a safety restriction that Beatoraja does not have. In
-  particular, live selected-skin file reads/writes and mid-session Files edits
-  are supported behavior. Project-owned replay/export state must instead be
-  checked across live play, replay watch, normal export, and course export.
