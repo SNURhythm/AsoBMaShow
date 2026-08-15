@@ -188,9 +188,6 @@ struct PlayfieldAuthorityUpdate {
   int courseStageIndex = -1;
   int courseStageCount = 0;
   std::vector<std::string> courseStageTitles;
-  // CourseData.constraints uses these 1-based IDs. They are intentionally
-  // retained as source identities rather than re-derived from display text.
-  std::vector<int> courseConstraintIds;
   std::vector<int> startLaneIndicators;
   bool startLaneIndicatorsVisible = false;
   int laneCoverPercent = 0;

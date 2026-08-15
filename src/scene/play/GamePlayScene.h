@@ -326,7 +326,6 @@ private:
   double gameplaySkinSafeBoundsHeight = 0.0;
   double currentGameplayBpm = 0.0;
   double currentGameplayScrollRate = 1.0;
-  std::vector<int> playfieldCourseConstraintIds;
   preparation::Plan preparationPlan;
   std::unique_ptr<TextView> ownedLaneStateText;
   TextView *laneStateText = nullptr;

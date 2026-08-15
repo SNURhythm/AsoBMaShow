@@ -2392,10 +2392,6 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
           this->options, this->chart->Meta, context.settings.notePriorityMode)),
       judge(presentationJudgeForPolicy(rulesetPolicyBuild,
                                        this->chart->Meta.Rank)) {
-  if (isCoursePlayback()) {
-    playfieldCourseConstraintIds =
-        beatorajaCourseConstraintIdsFromJson(options.courseSession->constraintJson);
-  }
   judge.setAllowedNoteRange(practiceAllowedNoteRange(this->options));
   latePoorTiming =
       rulesetPolicyBuild.policy.has_value()
@@ -2419,10 +2415,6 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
       judge(presentationJudgeForPolicy(rulesetPolicyBuild,
                                        this->chart->Meta.Rank)) {
   this->options.ownsChart = true;
-  if (isCoursePlayback()) {
-    playfieldCourseConstraintIds =
-        beatorajaCourseConstraintIdsFromJson(options.courseSession->constraintJson);
-  }
   judge.setAllowedNoteRange(practiceAllowedNoteRange(this->options));
   latePoorTiming =
       rulesetPolicyBuild.policy.has_value()
@@ -4551,7 +4543,6 @@ void GamePlayScene::capturePlayfieldVisualState(
         }
         return options.courseSession->beatorajaSkinStageTitles();
       }(),
-      .courseConstraintIds = playfieldCourseConstraintIds,
       .startLaneIndicators = preparationPlan.laneIndicator.lanes,
       .startLaneIndicatorsVisible = startLaneIndicatorsVisible,
       .laneCoverPercent = laneCover.percent,

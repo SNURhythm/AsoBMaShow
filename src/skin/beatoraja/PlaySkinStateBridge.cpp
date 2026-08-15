@@ -1278,10 +1278,6 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
   case 1005:
   case 1006:
   case 1007:
-    return {.value = std::ranges::find(snapshot->authority.courseConstraintIds,
-                                       *id - 1001) !=
-                         snapshot->authority.courseConstraintIds.end(),
-            .supported = true};
   case 1010:
   case 1011:
   case 1012:
@@ -1290,10 +1286,9 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
   case 1015:
   case 1016:
   case 1017:
-    return {.value = std::ranges::find(snapshot->authority.courseConstraintIds,
-                                       *id - 1003) !=
-                         snapshot->authority.courseConstraintIds.end(),
-            .supported = true};
+    // BooleanPropertyFactory exposes these only to MusicSelector. During a
+    // BMSPlayer gameplay skin they are recognized but always false.
+    return {.value = false, .supported = true};
   case 200:
   case 201:
   case 202:

@@ -1015,21 +1015,14 @@ void testRemainingDirectGameplayStatePropertyWiring() {
 
   state.clock.serial = 209;
   state.authority.courseStageIndex = 3;
-  state.authority.courseConstraintIds = {1, 4, 6, 9, 14};
   bridge.beginFrame(state, projectionAt(209));
   expect(bridge.booleanProperty({289}).value,
          "course final-stage selector follows the final captured stage");
-  for (const auto [id, expected] : std::array{
-           std::pair{1002, true}, std::pair{1003, false},
-           std::pair{1004, false}, std::pair{1005, true},
-           std::pair{1006, false}, std::pair{1007, true},
-           std::pair{1010, false}, std::pair{1011, false},
-           std::pair{1012, true}, std::pair{1013, false},
-           std::pair{1014, false}, std::pair{1015, false},
-           std::pair{1016, false}, std::pair{1017, true}}) {
+  for (const int id : {1002, 1003, 1004, 1005, 1006, 1007, 1010, 1011,
+                       1012, 1013, 1014, 1015, 1016, 1017}) {
     const auto value = bridge.booleanProperty({id});
-    expect(value.supported && value.value == expected,
-           "course constraint option uses its captured Beatoraja ID: " +
+    expect(value.supported && !value.value,
+           "course constraint option is inactive during Beatoraja gameplay: " +
                std::to_string(id));
   }
   bridge.discardFrame();

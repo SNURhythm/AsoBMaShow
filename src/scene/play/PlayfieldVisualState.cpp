@@ -61,7 +61,6 @@ bool PlayfieldAuthorityUpdate::operator==(
          courseStageIndex == other.courseStageIndex &&
          courseStageCount == other.courseStageCount &&
          courseStageTitles == other.courseStageTitles &&
-         courseConstraintIds == other.courseConstraintIds &&
          startLaneIndicators == other.startLaneIndicators &&
          startLaneIndicatorsVisible == other.startLaneIndicatorsVisible &&
          laneCoverPercent == other.laneCoverPercent &&

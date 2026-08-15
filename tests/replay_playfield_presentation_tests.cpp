@@ -1230,8 +1230,7 @@ void testSelectedCoursePreflightUsesNonWidescreenLogicalBounds() {
                                          .courseMode = true,
                                          .courseStageIndex = 0,
                                          .courseStageCount = 1,
-                                         .courseStageTitles = {"course-stage"},
-                                         .courseConstraintIds = {4}},
+                                         .courseStageTitles = {"course-stage"}},
                     .skinServices = fixture.services(),
                     .presentation = presentation,
                     .selectedSkinTiming = selectedSkinTiming,
@@ -1254,9 +1253,7 @@ void testSelectedCoursePreflightUsesNonWidescreenLogicalBounds() {
              (*fixture.receivedInitialState)->authority.courseStageIndex == 0 &&
              (*fixture.receivedInitialState)->authority.courseStageCount == 1 &&
              (*fixture.receivedInitialState)->authority.courseStageTitles ==
-                 std::vector<std::string>{"course-stage"} &&
-             (*fixture.receivedInitialState)->authority.courseConstraintIds ==
-                 std::vector<int>{4},
+                 std::vector<std::string>{"course-stage"},
          "course selected-skin preflight receives the same authoritative state as rendering");
   replay_video_export::destroyReplayGameplayPresentation(rendererAccess,
                                                          presentation);

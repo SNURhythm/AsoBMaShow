@@ -1043,7 +1043,6 @@ struct CourseReplayVideoStage {
   std::unique_ptr<bms_parser::Chart> chart;
   ReplayData replay;
   CourseConstraintRules constraints;
-  std::vector<int> courseConstraintIds;
   preparation::Plan preparationPlan;
   GaugeStateSnapshot initialGaugeState;
   RhythmState resultState;
@@ -1058,7 +1057,6 @@ struct CourseReplayVideoStage {
   CourseReplayVideoStage(std::unique_ptr<bms_parser::Chart> chart,
                          ReplayData replay,
                          CourseConstraintRules constraints,
-                         std::vector<int> courseConstraintIds,
                          preparation::Plan preparationPlan,
                          GaugeStateSnapshot initialGaugeState,
                          RhythmState resultState,
@@ -1068,7 +1066,6 @@ struct CourseReplayVideoStage {
                          long long audioDurationMicros)
       : chart(std::move(chart)), replay(std::move(replay)),
         constraints(std::move(constraints)),
-        courseConstraintIds(std::move(courseConstraintIds)),
         preparationPlan(std::move(preparationPlan)),
         initialGaugeState(std::move(initialGaugeState)),
         resultState(std::move(resultState)), failureMicros(failureMicros),
@@ -1126,7 +1123,6 @@ preflightCourseReplayGameplayPresentations(
              .courseStageIndex = static_cast<int>(stageIndex),
              .courseStageCount = static_cast<int>(stages.size()),
              .courseStageTitles = courseStageTitles,
-             .courseConstraintIds = stage.courseConstraintIds,
          },
          .skinServices = replayGameplaySkinSessionServices(context),
          .presentation = stage.gameplayPresentation->presentation,
@@ -3173,8 +3169,6 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
   const int fps = resolvedOptions.fps;
   const long long audioOffsetMicros =
       static_cast<long long>(settings.audioOffsetMs) * 1000LL;
-  const std::vector<int> courseConstraintIds =
-      beatorajaCourseConstraintIdsFromJson(replay.constraintJson);
   const std::vector<std::string> courseStageTitles =
       courseReplayStageTitles(stages);
 
@@ -3539,7 +3533,6 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
         .courseStageIndex = static_cast<int>(stageIndex),
         .courseStageCount = static_cast<int>(stages.size()),
         .courseStageTitles = courseStageTitles,
-        .courseConstraintIds = stage.courseConstraintIds,
     };
     if (const auto failure = preflightReplayGameplayPresentation(
             context, chart, stageReplay, settings, stage.preparationPlan,
@@ -3730,7 +3723,6 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
           .courseStageIndex = static_cast<int>(stageIndex),
           .courseStageCount = static_cast<int>(stages.size()),
           .courseStageTitles = courseStageTitles,
-          .courseConstraintIds = courseConstraintIds,
           .startLaneIndicators = stage.preparationPlan.laneIndicator.lanes,
           .startLaneIndicatorsVisible =
               stage.preparationPlan.indicatorVisibleAt(rawSongTimeMicros),
@@ -4191,8 +4183,6 @@ ReplayVideoExportResult exportCourseReplayImpl(
   const auto resolvedOptions = resolveReplayVideoExportOptions(options);
   const CourseConstraintSettings courseConstraintSettings =
       courseConstraintSettingsFromJson(replay.constraintJson);
-  const std::vector<int> courseConstraintIds =
-      beatorajaCourseConstraintIdsFromJson(replay.constraintJson);
   std::vector<CourseReplayVideoStage> stages;
   stages.reserve(replay.stages.size());
   std::optional<GaugeStateSnapshot> carriedGauge;
@@ -4269,7 +4259,7 @@ ReplayVideoExportResult exportCourseReplayImpl(
                        : renderedFinal;
     stages.emplace_back(
         std::move(chart), std::move(exportStageReplay),
-        courseConstraintSettings.rules, courseConstraintIds,
+        courseConstraintSettings.rules,
         std::move(stagePreparationPlan),
         initialGaugeState.gaugeSnapshot(), std::move(resultState),
         failureMicros, 0, resultDurationMicros, 0);
