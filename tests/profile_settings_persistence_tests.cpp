@@ -109,6 +109,55 @@ struct BlockingStore {
   }
 };
 
+struct QueuedSaveStore {
+  std::mutex mutex;
+  std::condition_variable cv;
+  std::size_t calls = 0;
+  bool firstEntered = false;
+  bool releaseFirst = false;
+  bool thirdEntered = false;
+  bool releaseThird = false;
+
+  bool save(const std::filesystem::path &path, const AppSettings &candidate,
+            std::string &error) {
+    std::unique_lock lock(mutex);
+    const std::size_t call = ++calls;
+    if (call == 1) {
+      firstEntered = true;
+      cv.notify_all();
+      cv.wait(lock, [&] { return releaseFirst; });
+    } else if (call == 3) {
+      thirdEntered = true;
+      cv.notify_all();
+      cv.wait(lock, [&] { return releaseThird; });
+    }
+    lock.unlock();
+    return AppSettingsStore::Save(path, candidate, error);
+  }
+
+  void waitUntilFirstEntered() {
+    std::unique_lock lock(mutex);
+    cv.wait(lock, [&] { return firstEntered; });
+  }
+
+  void releaseFirstSave() {
+    std::lock_guard lock(mutex);
+    releaseFirst = true;
+    cv.notify_all();
+  }
+
+  void waitUntilThirdEntered() {
+    std::unique_lock lock(mutex);
+    cv.wait(lock, [&] { return thirdEntered; });
+  }
+
+  void releaseThirdSave() {
+    std::lock_guard lock(mutex);
+    releaseThird = true;
+    cv.notify_all();
+  }
+};
+
 class TestSignal {
 public:
   void arrive() {
@@ -243,6 +292,71 @@ void testOrdinarySaveBeforeFailedSkinCommitKeepsLatestFullDocumentDurable() {
                      .options.at("variant") == 1 &&
              store.candidates.back().irProviders.at("tachi").enabled,
          "FIFO writes merge at their own execution sequence point");
+}
+
+void testFullSaveKeepsOptimisticSkinWhileSuccessorIsPersisting() {
+  TempDirectory temp;
+  PlayerProfileManager manager(temp.path(), managerDependencies());
+  expect(manager.Initialize().ok(),
+         "profile manager initializes for full-save skin coherence");
+  const auto inactive = manager.createProfile("Queue Blocker");
+  expect(inactive.ok() && inactive.profile,
+         "full-save skin coherence creates an inactive blocker");
+  AppSettings active;
+  active.skin = selectedSettings(1);
+  QueuedSaveStore store;
+  TestSignal ordinarySaveAdmitted;
+  ProfileSettingsPersistenceCoordinator coordinator(
+      manager, active,
+      {.saveAtomic = [&](const auto &path, const auto &settings,
+                         std::string &error) {
+         return store.save(path, settings, error);
+       },
+       .afterFullSaveAdmitted = [&] { ordinarySaveAdmitted.arrive(); }});
+  const auto profile = *skin::makeSkinProfileId(manager.activeProfile().id);
+  const auto inventoryTicket = coordinator.beginSnapshotAllProfiles();
+  std::optional<skin::AllSkinProfileSnapshotsResult> inventory;
+  for (int attempt = 0; attempt < 500 && !inventory; ++attempt) {
+    inventory = coordinator.pollSnapshotAllProfiles(inventoryTicket);
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  expect(inventory && inventory->complete,
+         "full-save skin coherence discovers the inactive blocker");
+  const auto inactiveProfile =
+      *skin::makeSkinProfileId(inactive.profile ? inactive.profile->id : "");
+  const auto blocker = coordinator.beginCommit(
+      inactiveProfile, coordinator.snapshot(inactiveProfile).generation,
+      selectedSettings(99));
+  store.waitUntilFirstEntered();
+
+  AppSettings ordinary = active;
+  ordinary.irProviders["tachi"].enabled = true;
+  std::string error;
+  std::thread fullSave([&] {
+    expect(coordinator.saveActiveSettingsAndWait(profile, ordinary, error),
+           "full settings save succeeds: " + error);
+  });
+  ordinarySaveAdmitted.wait();
+  const auto successor = coordinator.beginCommit(
+      profile, coordinator.snapshot(profile).generation, selectedSettings(2));
+  expect(successor.status == skin::SkinProfileCommitResult::Status::Pending,
+         "successor skin commit is admitted while full save is queued");
+
+  store.releaseFirstSave();
+  store.waitUntilThirdEntered();
+  fullSave.join();
+  expect(active.skin.entries.at(sampleEntry()).options.at("variant") == 2 &&
+             ordinary.skin.entries.at(sampleEntry()).options.at("variant") ==
+                 2,
+         "completed full save keeps the newer optimistic skin until its save completes");
+
+  store.releaseThirdSave();
+  const auto blockerResult = waitForCommit(coordinator, blocker.ticket);
+  const auto successorResult = waitForCommit(coordinator, successor.ticket);
+  expect(blockerResult.status == skin::SkinProfileCommitResult::Status::Persisted &&
+             successorResult.status ==
+                 skin::SkinProfileCommitResult::Status::Persisted,
+         "queued fixture commits persist after releasing their saves");
 }
 
 void testCommitIsAsyncCasAndTerminalResultIsAcknowledgedExplicitly() {
@@ -496,6 +610,33 @@ void testSnapshotAdmissionAfterShutdownIsTerminallyCancelled() {
   expect(ticket != 0 && result && result->cancelled && !result->complete,
          "snapshot admission losing the shutdown race returns a terminal "
          "cancellation");
+}
+
+void testSnapshotAdmissionRejectsInventoryChangedDuringCapture() {
+  TempDirectory temp;
+  PlayerProfileManager manager(temp.path(), managerDependencies());
+  expect(manager.Initialize().ok(),
+         "profile manager initializes for stale snapshot admission");
+  AppSettings active;
+  TestBlockingPoint inputsCaptured;
+  ProfileSettingsPersistenceCoordinator coordinator(
+      manager, active, {.afterSnapshotInputsCaptured = [&] {
+        inputsCaptured.arriveAndWait();
+      }});
+
+  std::uint64_t ticket = 0;
+  std::thread capture(
+      [&] { ticket = coordinator.beginSnapshotAllProfiles(); });
+  inputsCaptured.waitUntilArrived();
+  auto mutation = coordinator.beginInventoryMutation();
+  coordinator.finishInventoryMutation(std::move(mutation));
+  inputsCaptured.release();
+  capture.join();
+
+  const auto result = coordinator.pollSnapshotAllProfiles(ticket);
+  expect(ticket != 0 && result && result->cancelled && !result->complete &&
+             !result->inventory,
+         "snapshot captured across an inventory generation is cancelled before enqueue");
 }
 
 void testNonStandardSkinWorkerFailureRollsBackAndTerminatesTicket() {
@@ -795,8 +936,10 @@ int main() {
   testFailureRollsBackWithoutReusingGenerationAndPathIsCaptured();
   testOrdinarySaveMergesPendingSkinAndLatestIrCandidate();
   testOrdinarySaveBeforeFailedSkinCommitKeepsLatestFullDocumentDurable();
+  testFullSaveKeepsOptimisticSkinWhileSuccessorIsPersisting();
   testSnapshotTicketsAndInventoryFenceRejectAba();
   testSnapshotAdmissionAfterShutdownIsTerminallyCancelled();
+  testSnapshotAdmissionRejectsInventoryChangedDuringCapture();
   testNonStandardSkinWorkerFailureRollsBackAndTerminatesTicket();
   testNonStandardSnapshotWorkerFailureTerminatesTicket();
   testInventoryRaiiTokensCanOutliveCoordinatorShutdown();

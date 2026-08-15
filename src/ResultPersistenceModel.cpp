@@ -260,6 +260,7 @@ void appendReplay(CanonicalEncoder &encoder, const ReplayData &replay) {
         encoder.integer(
             static_cast<std::int32_t>(event.noteStartPositionPercent));
         encoder.boolean(event.laneCoverEnabled);
+        encoder.enumeration(event.changeKind);
         encoder.boolean(event.resetVisibleTimeReference);
       });
   appendProvenance(encoder, replay.provenance);

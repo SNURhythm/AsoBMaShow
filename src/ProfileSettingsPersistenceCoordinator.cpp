@@ -630,7 +630,7 @@ ProfileSettingsPersistenceCoordinator::beginSnapshotAllProfiles() {
   }
   gateLock.lock();
   lock.lock();
-  if (gate->stopping || impl_->stopping) {
+  if (gate->stopping || impl_->stopping || generation != gate->generation) {
     impl_->snapshots[ticket] = {.cancelled = true};
     return ticket;
   }
@@ -759,7 +759,15 @@ bool ProfileSettingsPersistenceCoordinator::saveActiveSettingsAndWait(
     return false;
   }
   settings = waiter->settings;
-  impl_->activeSettings = settings;
+  {
+    std::lock_guard lock(impl_->mutex);
+    const auto state = impl_->profiles.find(profileId.opaque);
+    if (profileId.opaque == impl_->activeProfileId &&
+        state != impl_->profiles.end()) {
+      settings.skin = state->second.settings;
+      impl_->activeSettings = settings;
+    }
+  }
   return true;
 }
 

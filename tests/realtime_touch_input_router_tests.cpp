@@ -1654,6 +1654,118 @@ void testCancelledDragPointerCannotReenterOnMoveAfterResume() {
           "the physical lift clears the tombstone and a later Down may claim a lane");
 }
 
+void testResumeReclaimsDetachedTouchSlots() {
+  gameplay::RealtimeTouchLayout layout;
+  layout.revision = 85;
+  layout.keyMode = 7;
+  layout.dragMode = true;
+  layout.laneRegions.reserve(gameplay::kRealtimeTouchFingerCapacity + 1U);
+  for (std::size_t index = 0;
+       index < gameplay::kRealtimeTouchFingerCapacity + 1U; ++index) {
+    const float left = static_cast<float>(index) /
+                       static_cast<float>(gameplay::kRealtimeTouchFingerCapacity +
+                                          1U);
+    const float right = static_cast<float>(index + 1U) /
+                        static_cast<float>(gameplay::kRealtimeTouchFingerCapacity +
+                                           1U);
+    layout.laneRegions.push_back(
+        {.bottomLeft = {left, 1.0F},
+         .bottomRight = {right, 1.0F},
+         .topLeft = {left, 0.0F},
+         .topRight = {right, 0.0F},
+         .lane = static_cast<int>(index),
+         .requiresInside = true});
+  }
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      85, std::move(layout), {.context = &capture, .emit = &InputCapture::emit});
+  for (std::size_t index = 0; index < gameplay::kRealtimeTouchFingerCapacity;
+       ++index) {
+    const float x = (static_cast<float>(index) + 0.5F) /
+                    static_cast<float>(gameplay::kRealtimeTouchFingerCapacity +
+                                       1U);
+    require(router.consume({.fingerId = static_cast<std::int64_t>(index + 1U),
+                            .phase = gameplay::RealtimeTouchPhase::Down,
+                            .normalizedX = x,
+                            .normalizedY = 0.5F,
+                            .steadyTimestampMicros =
+                                static_cast<std::int64_t>(index * 3U + 1U)}) &&
+                router.setGameplayEnabled(
+                    false, static_cast<std::int64_t>(index * 3U + 2U)) &&
+                router.setGameplayEnabled(
+                    true, static_cast<std::int64_t>(index * 3U + 3U)),
+            "each detached touch can be cancelled and input reopened");
+  }
+  const auto firstFreshContact = router.consumeForPublication(
+      {.fingerId = 99,
+       .phase = gameplay::RealtimeTouchPhase::Down,
+       .normalizedX = 0.985F,
+       .normalizedY = 0.5F,
+       .steadyTimestampMicros = 200});
+  require(firstFreshContact == gameplay::RealtimeTouchRoutingDisposition::Accepted,
+          "unobserved lifts while ingress is detached do not exhaust touch slots");
+}
+
+void testVirtualSystemControlHasOneTouchOwner() {
+  gameplay::RealtimeTouchLayout layout;
+  layout.revision = 86;
+  layout.keyMode = 7;
+  layout.laneRegions = {
+      {.bottomLeft = {0.0F, 1.0F},
+       .bottomRight = {0.45F, 1.0F},
+       .topLeft = {0.0F, 0.0F},
+       .topRight = {0.45F, 0.0F},
+       .lane = -1,
+       .replayControl = replay::LogicalControl{
+           .kind = replay::LogicalControlKind::Start, .player = 1, .lane = -1},
+       .requiresInside = true},
+      {.bottomLeft = {0.55F, 1.0F},
+       .bottomRight = {1.0F, 1.0F},
+       .topLeft = {0.55F, 0.0F},
+       .topRight = {1.0F, 0.0F},
+       .lane = -1,
+       .replayControl = replay::LogicalControl{
+           .kind = replay::LogicalControlKind::Select, .player = 1, .lane = -1},
+       .requiresInside = true}};
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      86, std::move(layout), {.context = &capture, .emit = &InputCapture::emit});
+  const auto first = router.consumeForPublication(
+      {.fingerId = 401,
+       .phase = gameplay::RealtimeTouchPhase::Down,
+       .normalizedX = 0.2F,
+       .normalizedY = 0.5F,
+       .steadyTimestampMicros = 1});
+  const auto duplicate = router.consumeForPublication(
+      {.fingerId = 402,
+       .phase = gameplay::RealtimeTouchPhase::Down,
+       .normalizedX = 0.2F,
+       .normalizedY = 0.5F,
+       .steadyTimestampMicros = 2});
+  require(first == gameplay::RealtimeTouchRoutingDisposition::Accepted &&
+              duplicate == gameplay::RealtimeTouchRoutingDisposition::Inert &&
+              router.consume({.fingerId = 402,
+                              .phase = gameplay::RealtimeTouchPhase::Up,
+                              .normalizedX = 0.2F,
+                              .normalizedY = 0.5F,
+                              .steadyTimestampMicros = 3}) &&
+              router.consume({.fingerId = 401,
+                              .phase = gameplay::RealtimeTouchPhase::Up,
+                              .normalizedX = 0.2F,
+                              .normalizedY = 0.5F,
+                              .steadyTimestampMicros = 4}) &&
+              capture.events.size() == 2 &&
+              capture.events.front().type ==
+                  gameplay::RealtimeGameplayInputType::Press &&
+              capture.events.back().type ==
+                  gameplay::RealtimeGameplayInputType::Release &&
+              capture.events.front().replayControl.kind ==
+                  replay::LogicalControlKind::Start &&
+              capture.events.back().replayControl.kind ==
+                  replay::LogicalControlKind::Start,
+          "a second Start contact cannot release the first held virtual control");
+}
+
 void testCancelledTouchUsesGraceAndContinuationCancelsExpiry() {
   InputCapture capture;
   gameplay::RealtimeTouchInputRouter router(
@@ -2285,6 +2397,8 @@ int main() {
   testFailedMoveToPresentationOwnershipKeepsLaneUntilReleaseRetry();
   testPauseReleasesHeldFingerBeforeDisablingGameplay();
   testCancelledDragPointerCannotReenterOnMoveAfterResume();
+  testResumeReclaimsDetachedTouchSlots();
+  testVirtualSystemControlHasOneTouchOwner();
   testCancelledTouchUsesGraceAndContinuationCancelsExpiry();
   testCancelledTouchDownReleasesOldLaneBeforeStartingNewContact();
   testCancelledTouchDownRetainsOldLaneWhenRestartReleaseFails();

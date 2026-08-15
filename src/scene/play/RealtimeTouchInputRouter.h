@@ -312,7 +312,10 @@ private:
   normalizeLayout(RealtimeTouchLayout &layout) noexcept;
   [[nodiscard]] FingerState *findFinger(std::int64_t fingerId) noexcept;
   [[nodiscard]] FingerState *allocateFinger(std::int64_t fingerId) noexcept;
-  [[nodiscard]] bool laneOccupied(int lane,
+  [[nodiscard]] std::optional<replay::LogicalControl>
+  replayControlFor(const RealtimeTouchLaneRegion &region) const noexcept;
+  [[nodiscard]] bool laneOccupied(
+      int lane, std::optional<replay::LogicalControl> replayControl,
                                   std::int64_t exceptFinger) const noexcept;
   bool consumeImpl(const RealtimeTouchSample &sample,
                    bool &publishAuxiliary) noexcept;

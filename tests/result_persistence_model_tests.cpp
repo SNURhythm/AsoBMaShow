@@ -715,6 +715,13 @@ void testReplayFingerprintCoverage() {
   expectReplayFingerprintChange(
       fixture,
       [](auto &v) {
+        v.laneCoverEvents.front().changeKind =
+            ReplayLaneCoverChangeKind::Enabled;
+      },
+      "laneCoverEvents.changeKind");
+  expectReplayFingerprintChange(
+      fixture,
+      [](auto &v) {
         auto &event = v.laneCoverEvents.front();
         event.resetVisibleTimeReference = !event.resetVisibleTimeReference;
       },

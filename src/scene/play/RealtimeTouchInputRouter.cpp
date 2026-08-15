@@ -537,14 +537,28 @@ RealtimeTouchInputRouter::allocateFinger(std::int64_t fingerId) noexcept {
   return nullptr;
 }
 
-bool RealtimeTouchInputRouter::laneOccupied(
-    int lane, std::int64_t exceptFinger) const noexcept {
-  if (lane < 0) {
-    return false;
+std::optional<replay::LogicalControl>
+RealtimeTouchInputRouter::replayControlFor(
+    const RealtimeTouchLaneRegion &region) const noexcept {
+  if (region.replayControl.has_value()) {
+    return region.replayControl;
   }
+  return replay::logicalControlForChartLane(layout_.keyMode, region.lane,
+                                             region.scratch);
+}
+
+bool RealtimeTouchInputRouter::laneOccupied(
+    int lane, std::optional<replay::LogicalControl> replayControl,
+    std::int64_t exceptFinger) const noexcept {
   return std::ranges::any_of(fingers_, [&](const FingerState &finger) {
-    return finger.active && finger.fingerId != exceptFinger &&
-           finger.lane == lane;
+    if (!finger.active || finger.excluded || finger.fingerId == exceptFinger) {
+      return false;
+    }
+    if (lane >= 0) {
+      return finger.lane == lane;
+    }
+    return replayControl.has_value() && finger.lane < 0 &&
+           finger.replayControl == replayControl;
   });
 }
 
@@ -586,7 +600,8 @@ bool RealtimeTouchInputRouter::beginLane(
   }
   const auto &region = layout_.laneRegions[laneIndex];
   const int lane = region.lane;
-  if (laneOccupied(lane, finger.fingerId)) {
+  const auto replayControl = replayControlFor(region);
+  if (laneOccupied(lane, replayControl, finger.fingerId)) {
     return false;
   }
   finger.lane = lane;
@@ -595,10 +610,6 @@ bool RealtimeTouchInputRouter::beginLane(
                        region.circle.has_value();
   finger.invertFlickScratchDirection = region.scratch && !finger.spinScratch &&
                                        region.invertFlickScratchDirection;
-  const auto replayControl = region.replayControl.has_value()
-                                 ? region.replayControl
-                                 : replay::logicalControlForChartLane(
-                                       layout_.keyMode, lane, finger.scratch);
   finger.replayControl = replayControl;
   finger.pressed = false;
   finger.scratchDirection = 0;
@@ -846,7 +857,9 @@ bool RealtimeTouchInputRouter::consumeImpl(
       return true;
     }
     if (*lane < layout_.laneRegions.size() &&
-        laneOccupied(layout_.laneRegions[*lane].lane, finger->fingerId)) {
+        laneOccupied(layout_.laneRegions[*lane].lane,
+                     replayControlFor(layout_.laneRegions[*lane]),
+                     finger->fingerId)) {
       finger->active = false;
       publishAuxiliary = false;
       return true;
@@ -867,13 +880,7 @@ bool RealtimeTouchInputRouter::consumeImpl(
   case RealtimeTouchPhase::Move: {
     auto *finger = findFinger(sample.fingerId);
     if (finger == nullptr) {
-      if (!layout_.dragMode) {
-        return true;
-      }
-      finger = allocateFinger(sample.fingerId);
-      if (finger == nullptr) {
-        return false;
-      }
+      return true;
     }
     if (finger->suppressedUntilLift) {
       finger->lastX = sample.normalizedX;
@@ -1053,6 +1060,11 @@ bool RealtimeTouchInputRouter::setGameplayEnabled(
   if (!cancelAll(steadyTimestampMicros)) {
     gameplayEnabled_ = false;
     return false;
+  }
+  for (auto &finger : fingers_) {
+    if (finger.suppressedUntilLift) {
+      finger = {};
+    }
   }
   gameplayEnabled_ = true;
   return true;
