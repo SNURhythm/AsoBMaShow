@@ -1,5 +1,6 @@
 #include "LuaSkinFileSystem.h"
 
+#include "../package/SkinAliasDetector.h"
 #include "../package/SkinPathPolicy.h"
 
 #include <algorithm>
@@ -251,7 +252,70 @@ struct LuaSkinFileSystem::Impl {
   fs::path skinDirectory;
   fs::path entryPath;
   fs::path beatorajaSkinRoot;
+  std::unique_ptr<SkinAliasDetector> aliases;
   mutable std::mutex operationMutex;
+
+  std::optional<SkinFileFailure>
+  rejectAliasedPath(const fs::path &root, const fs::path &resolved,
+                    std::string_view authored) const {
+    if (!isWithinDirectory(resolved, root)) {
+      return failure(SkinFileError::EscapesPackage, authored,
+                     "skin file access is outside the skin directory");
+    }
+
+    fs::path candidate = root.lexically_normal();
+    const fs::path relative = resolved.lexically_relative(candidate);
+    const auto inspect = [&](const fs::path &path)
+        -> std::optional<SkinFileFailure> {
+      std::error_code error;
+      const fs::file_status status = fs::symlink_status(path, error);
+      if (error == std::errc::no_such_file_or_directory ||
+          status.type() == fs::file_type::not_found) {
+        // A missing suffix is valid for the Beatoraja Lua write helpers.
+        return std::nullopt;
+      }
+      if (error) {
+        return failure(SkinFileError::IoError, authored,
+                       "skin file path could not be inspected");
+      }
+      if (!aliases || aliases->inspectNoFollow(path) !=
+                          SkinRejectedLinkKind::None) {
+        return failure(SkinFileError::EscapesPackage, authored,
+                       "skin file path contains a linked entry");
+      }
+      return std::nullopt;
+    };
+
+    if (const auto rejected = inspect(candidate)) {
+      return rejected;
+    }
+    for (const fs::path &component : relative) {
+      // A trailing slash creates an empty final component.  It does not name
+      // a filesystem entry and is already accepted by the Beatoraja path
+      // helpers for directory operations.
+      if (component.empty()) {
+        continue;
+      }
+      if (component == "." || component == "..") {
+        return failure(SkinFileError::EscapesPackage, authored,
+                       "skin file path is outside the skin directory");
+      }
+      candidate /= component;
+      if (const auto rejected = inspect(candidate)) {
+        return rejected;
+      }
+    }
+    return std::nullopt;
+  }
+
+  NormalizedReference checkedReference(const fs::path &root,
+                                       const fs::path &resolved,
+                                       std::string_view authored) const {
+    if (const auto rejected = rejectAliasedPath(root, resolved, authored)) {
+      return {.failure = rejected};
+    }
+    return {.path = utf8Path(resolved)};
+  }
 
   NormalizedReference normalize(std::string_view authored,
                                 bool allowPackageRoot = false) const {
@@ -285,10 +349,16 @@ struct LuaSkinFileSystem::Impl {
                     SkinFileError::EscapesPackage, authored,
                     "skin file access is outside Beatoraja's skin directory")};
       }
-      return {.path = utf8Path(resolved)};
+      return checkedReference(currentPackage ? packageRoot : beatorajaSkinRoot,
+                              resolved, authored);
     }
-    return normalizeAtSkinDirectory(skinDirectory, authored,
-                                    allowPackageRoot);
+    const auto normalized =
+        normalizeAtSkinDirectory(skinDirectory, authored, allowPackageRoot);
+    if (!normalized.path) {
+      return normalized;
+    }
+    return checkedReference(packageRoot, pathFromUtf8(*normalized.path),
+                            authored);
   }
 
   SkinFileReadResult readNormalized(std::string_view normalized,
@@ -391,7 +461,13 @@ LuaSkinFileSystem::create(LuaSkinFileSystemOptions options) {
       .skinDirectory = skinDirectory,
       .entryPath = entryPath,
       .beatorajaSkinRoot = beatorajaSkinRoot,
+      .aliases = createPlatformSkinAliasDetector(),
   });
+  if (!impl->aliases) {
+    return {.failure = failure(SkinFileError::IoError,
+                               impl->entry.packageRelativePath,
+                               "skin link inspector is unavailable")};
+  }
   return {.fileSystem = std::unique_ptr<LuaSkinFileSystem>(
               new LuaSkinFileSystem(std::move(impl)))};
 }
@@ -525,6 +601,11 @@ LuaSkinFileSystem::resolveModule(std::string_view moduleName) const {
 SkinFileReadResult
 LuaSkinFileSystem::readEntry(std::uint64_t maximumBytes) const {
   const std::scoped_lock lock(impl_->operationMutex);
+  if (const auto rejected = impl_->rejectAliasedPath(
+          impl_->packageRoot, impl_->entryPath,
+          impl_->entry.packageRelativePath)) {
+    return {.failure = rejected};
+  }
   return impl_->readNormalized(utf8Path(impl_->entryPath),
                                SkinFileUse::LuaEntry, maximumBytes);
 }

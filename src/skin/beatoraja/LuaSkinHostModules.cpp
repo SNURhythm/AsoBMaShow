@@ -1241,9 +1241,14 @@ int ioOpen(lua_State *state) {
     return expectedFailure(state, "Lua skin file mode is not allowed");
   }
 
+  // Beatoraja's RestrictedIoLib treats r+ as a writable RandomAccessFile.
+  // Keep the same behavior while routing every writable Lua mode through the
+  // filesystem's write access path.
+  const bool requiresWriteAccess =
+      !selectedMode->readMode || selectedMode->updateMode;
   const auto resolved = impl->fileSystem->resolve(
-      virtualPath, selectedMode->readMode ? SkinFileUse::DataRead
-                                           : SkinFileUse::DataWrite);
+      virtualPath, requiresWriteAccess ? SkinFileUse::DataWrite
+                                       : SkinFileUse::DataRead);
   if (resolved.failure) {
     return expectedFailure(state, resolved.failure->message);
   }
@@ -1269,9 +1274,7 @@ int ioOpen(lua_State *state) {
     auto handle = std::make_shared<LuaFileHandle>();
     handle->owner = impl;
     handle->virtualPath.assign(virtualPath);
-    handle->writable = selectedMode->readMode
-                            ? selectedMode->updateMode
-                            : true;
+    handle->writable = requiresWriteAccess;
     std::ios::openmode openMode = std::ios::binary | std::ios::in;
     if (handle->writable) {
       openMode |= std::ios::out;

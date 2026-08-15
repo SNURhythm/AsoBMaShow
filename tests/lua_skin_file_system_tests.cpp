@@ -260,10 +260,53 @@ void testBeatorajaDirectSkinDirectorySemantics() {
          "Lua data writes directly modify the visible skin directory");
 }
 
+void testLinkedVisibleSkinChildCannotEscapeLuaIoBoundary() {
+  PackageFixture fixture;
+  if (!fixture.prepared) {
+    return;
+  }
+
+  const fs::path visiblePackage =
+      fixture.roots.visiblePackages / fixture.package.directoryName;
+  fs::create_directories(visiblePackage.parent_path());
+  fs::copy(fixture.temp.root() / "source", visiblePackage,
+           fs::copy_options::recursive);
+
+  const fs::path outside = fixture.temp.root() / "outside";
+  writeText(outside / "secret.lua", "return 'outside'\n");
+  std::error_code linkError;
+  fs::create_directory_symlink(outside, visiblePackage / "entry/escape",
+                               linkError);
+  expect(!linkError, "visible skin symlink fixture creates");
+  if (linkError) {
+    return;
+  }
+
+  auto created = fixture.create(fixture.entry, true);
+  expect(created.fileSystem != nullptr,
+         "filesystem creates before linked child access");
+  if (!created.fileSystem) {
+    return;
+  }
+
+  const auto read =
+      created.fileSystem->readLuaPath("escape/secret.lua", 4096);
+  expect(read.failure && read.failure->code == SkinFileError::EscapesPackage,
+         "Lua reads reject linked children that escape the skin directory");
+
+  const auto write = created.fileSystem->writeData(
+      "escape/secret.lua", bytesOf("mutated\n"), false);
+  expect(write.failure &&
+             write.failure->code == SkinFileError::EscapesPackage &&
+             readText(outside / "secret.lua") == "return 'outside'\n",
+         "Lua writes cannot follow a linked child outside the skin directory");
+}
+
 } // namespace
 
 int main() {
   testBeatorajaDirectSkinDirectorySemantics();
+  testLinkedVisibleSkinChildCannotEscapeLuaIoBoundary();
   testCompatibilityDiagnosticsDeduplicateAndRetainCriticality();
   if (failures != 0) {
     std::cerr << failures << " lua skin filesystem test(s) failed\n";
