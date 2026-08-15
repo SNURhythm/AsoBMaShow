@@ -145,23 +145,30 @@ preflightReplayGameplayPresentation(
     const skin::RuntimeSkinConfigurationSelection *pinnedRuntimeSelection =
         nullptr,
     const CourseConstraintRules &constraints = {},
-    const PlayfieldAuthorityUpdate *initialAuthority = nullptr) {
+    const PlayfieldAuthorityUpdate *initialAuthority = nullptr,
+    bool rendererReservationAlreadyHeld = false) {
   const auto resolvedOptions = resolveReplayVideoExportOptions(options);
   const PlayfieldAuthorityUpdate fallbackInitialAuthority{
       .playerName = context.profileManager.activeProfile().displayName};
-  const auto result = replay_video_export::preflightReplayGameplayPresentation(
-      chart, replay, settings, preparationPlan,
-      replay_video_export::replayGameplayPresentationConfig(
-          settings, settings.playAreaWidthForKeyMode(chart.Meta.KeyMode),
-          chart,
-          resolvedOptions.renderTouchPoints,
-          resolvedOptions.renderReplayGhosts, constraints, replay.assistOption),
-      resolvedOptions.width, resolvedOptions.height,
-      initialAuthority != nullptr ? *initialAuthority
-                                  : fallbackInitialAuthority,
-      context.jukebox, replayGameplaySkinSessionServices(context),
-      context.rendererAccess,
-      prepared.presentation, pinnedRuntimeSelection);
+  const auto configuration = replay_video_export::replayGameplayPresentationConfig(
+      settings, settings.playAreaWidthForKeyMode(chart.Meta.KeyMode), chart,
+      resolvedOptions.renderTouchPoints, resolvedOptions.renderReplayGhosts,
+      constraints, replay.assistOption);
+  const PlayfieldAuthorityUpdate &authority =
+      initialAuthority != nullptr ? *initialAuthority : fallbackInitialAuthority;
+  const auto result =
+      rendererReservationAlreadyHeld
+          ? replay_video_export::preflightReplayGameplayPresentationWithReservedRenderer(
+                chart, replay, settings, preparationPlan, configuration,
+                resolvedOptions.width, resolvedOptions.height, authority,
+                context.jukebox, replayGameplaySkinSessionServices(context),
+                prepared.presentation, pinnedRuntimeSelection)
+          : replay_video_export::preflightReplayGameplayPresentation(
+                chart, replay, settings, preparationPlan, configuration,
+                resolvedOptions.width, resolvedOptions.height, authority,
+                context.jukebox, replayGameplaySkinSessionServices(context),
+                context.rendererAccess, prepared.presentation,
+                pinnedRuntimeSelection);
   if (result) {
     replayExportLog(log, "Replay export skin preflight failed: %s",
                     result->message.c_str());
@@ -3539,7 +3546,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
             resolvedOptions, *stage.gameplayPresentation, log,
             stage.runtimeSkinSelection ? &*stage.runtimeSkinSelection
                                        : nullptr,
-            stage.constraints, &initialAuthority)) {
+            stage.constraints, &initialAuthority, true)) {
       bgfxCleanup.runNow();
       return *failure;
     }

@@ -158,6 +158,18 @@ preflightReplayGameplayPresentation(
     std::unique_ptr<ReplayPlayfieldPresentation> &,
     const skin::RuntimeSkinConfigurationSelection * = nullptr);
 
+// Course rendering already owns the export reservation while it creates each
+// stage presentation. Re-acquiring the same non-recursive renderer lock would
+// deadlock before its first frame.
+[[nodiscard]] std::optional<ReplayVideoExportResult>
+preflightReplayGameplayPresentationWithReservedRenderer(
+    bms_parser::Chart &, const ReplayData &, const AppSettings &,
+    const preparation::Plan &, const PlayfieldPresentationConfig &, int, int,
+    const PlayfieldAuthorityUpdate &initialAuthority,
+    IGameplayBgaSubmitter &, GameplaySkinSessionServices,
+    std::unique_ptr<ReplayPlayfieldPresentation> &,
+    const skin::RuntimeSkinConfigurationSelection * = nullptr);
+
 void destroyReplayGameplayPresentation(
     display::RendererAccessCoordinator &,
     std::unique_ptr<ReplayPlayfieldPresentation> &);

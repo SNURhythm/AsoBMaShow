@@ -961,6 +961,40 @@ void testSelectedNormalPreflightAndDestructionUseRendererOwnership() {
          "presentation destruction stays inside renderer ownership and releases it afterward");
 }
 
+void testSelectedCourseStageCreationUsesExistingExportReservation() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.PlayLength = 120'000'000;
+  ReplayData replay;
+  AppSettings settings;
+  preparation::Plan plan;
+  PlayfieldPresentationConfig configuration;
+  TestBga bga;
+  SelectedSkinFixture fixture;
+  std::mutex rendererMutex;
+  std::atomic<bool> exportActive{false};
+  display::RendererAccessCoordinator rendererAccess(rendererMutex,
+                                                    exportActive);
+  bool creationBlockedDisplay = false;
+  *fixture.createObserver = [&]() {
+    std::string error;
+    creationBlockedDisplay =
+        !rendererAccess.tryAcquireDisplay(error).has_value();
+  };
+
+  auto exportReservation = rendererAccess.acquireExport();
+  std::unique_ptr<ReplayPlayfieldPresentation> presentation;
+  const auto failure =
+      replay_video_export::preflightReplayGameplayPresentationWithReservedRenderer(
+          chart, replay, settings, plan, configuration, 1568, 1080,
+          {.playerName = "course-export-player", .courseMode = true,
+           .courseStageIndex = 0, .courseStageCount = 4},
+          bga, fixture.services(), presentation);
+  expect(!failure && presentation != nullptr && creationBlockedDisplay,
+         "course rendering creates a selected skin under its existing export reservation");
+  presentation.reset();
+}
+
 void testNoSelectionKeepsOneAdapter() {
   bms_parser::Chart chart;
   chart.Meta.KeyMode = 7;
@@ -1834,6 +1868,7 @@ int main() {
   testReplayLaneCoverChangesUseBeatorajaHiSpeedTransitions();
   testUnsubmittedReplayFrameReleasesItsPreparedBga();
   testSelectedNormalPreflightAndDestructionUseRendererOwnership();
+  testSelectedCourseStageCreationUsesExistingExportReservation();
   testNoSelectionKeepsOneAdapter();
   testSelectedFailureRetainsFactoryDiagnostic();
   testUnavailableSelectedSkinStopsBeforeAnyFrameWork();

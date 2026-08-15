@@ -299,6 +299,21 @@ std::optional<ReplayVideoExportResult> preflightReplayGameplayPresentation(
     std::unique_ptr<ReplayPlayfieldPresentation> &presentation,
     const skin::RuntimeSkinConfigurationSelection *pinnedRuntimeSelection) {
   auto rendererReservation = rendererAccess.acquireExport();
+  return preflightReplayGameplayPresentationWithReservedRenderer(
+      chart, replay, settings, plan, configuration, exportWidth, exportHeight,
+      initialAuthority, bga, std::move(skinServices), presentation,
+      pinnedRuntimeSelection);
+}
+
+std::optional<ReplayVideoExportResult>
+preflightReplayGameplayPresentationWithReservedRenderer(
+    bms_parser::Chart &chart, const ReplayData &replay,
+    const AppSettings &settings, const preparation::Plan &plan,
+    const PlayfieldPresentationConfig &configuration, int exportWidth,
+    int exportHeight, const PlayfieldAuthorityUpdate &initialAuthority,
+    IGameplayBgaSubmitter &bga, GameplaySkinSessionServices skinServices,
+    std::unique_ptr<ReplayPlayfieldPresentation> &presentation,
+    const skin::RuntimeSkinConfigurationSelection *pinnedRuntimeSelection) {
   const ReplayGameplayFrameState frame =
       replayGameplayFrameState(plan, chart, replay, settings, 1, 0);
   PlayfieldVisualState initialState;
