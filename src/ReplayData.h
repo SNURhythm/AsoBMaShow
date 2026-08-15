@@ -44,6 +44,14 @@ struct ReplayEvent {
   int score = 0;
 };
 
+namespace replay_note {
+
+inline std::string key(int lane, long long noteTimeMicros) {
+  return std::to_string(lane) + ":" + std::to_string(noteTimeMicros);
+}
+
+} // namespace replay_note
+
 struct ReplayTouchSample {
   ReplayTouchAction action = ReplayTouchAction::Move;
   long long fingerId = 0;

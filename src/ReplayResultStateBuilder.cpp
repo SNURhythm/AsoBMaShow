@@ -8,10 +8,6 @@
 #include <unordered_set>
 
 namespace {
-std::string replayNoteKey(int lane, long long noteTimeMicros) {
-  return std::to_string(lane) + ":" + std::to_string(noteTimeMicros);
-}
-
 std::unordered_map<std::string, bms_parser::Note *>
 buildReplayNoteLookup(bms_parser::Chart &chart) {
   std::unordered_map<std::string, bms_parser::Note *> lookup;
@@ -21,13 +17,13 @@ buildReplayNoteLookup(bms_parser::Chart &chart) {
         if (note == nullptr) {
           continue;
         }
-        lookup[replayNoteKey(note->Lane, timeline->Timing)] = note;
+        lookup[replay_note::key(note->Lane, timeline->Timing)] = note;
       }
       for (auto *note : timeline->LandmineNotes) {
         if (note == nullptr) {
           continue;
         }
-        lookup[replayNoteKey(note->Lane, timeline->Timing)] = note;
+        lookup[replay_note::key(note->Lane, timeline->Timing)] = note;
       }
     }
   }
@@ -40,7 +36,8 @@ bms_parser::Note *findReplayNote(
   if (event.noteTimeMicros < 0) {
     return nullptr;
   }
-  const auto it = lookup.find(replayNoteKey(event.lane, event.noteTimeMicros));
+  const auto it =
+      lookup.find(replay_note::key(event.lane, event.noteTimeMicros));
   return it == lookup.end() ? nullptr : it->second;
 }
 

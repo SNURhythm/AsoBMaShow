@@ -321,10 +321,6 @@ std::string formatPracticeTime(long long micros) {
   return stream.str();
 }
 
-std::string replayNoteKey(int lane, long long noteTimeMicros) {
-  return std::to_string(lane) + ":" + std::to_string(noteTimeMicros);
-}
-
 void markPracticeSkippedNote(bms_parser::Note *note, long long startTime) {
   if (note == nullptr) {
     return;
@@ -5708,13 +5704,15 @@ void GamePlayScene::buildReplayNoteLookup() {
         if (note == nullptr) {
           continue;
         }
-        replayNoteLookup[replayNoteKey(note->Lane, timeline->Timing)] = note;
+        replayNoteLookup[replay_note::key(note->Lane, timeline->Timing)] =
+            note;
       }
       for (const auto &note : timeline->LandmineNotes) {
         if (note == nullptr) {
           continue;
         }
-        replayNoteLookup[replayNoteKey(note->Lane, timeline->Timing)] = note;
+        replayNoteLookup[replay_note::key(note->Lane, timeline->Timing)] =
+            note;
       }
     }
   }
@@ -5728,7 +5726,7 @@ GamePlayScene::findReplayNote(const ReplayEvent &event) const {
     return nullptr;
   }
   const auto it =
-      replayNoteLookup.find(replayNoteKey(event.lane, event.noteTimeMicros));
+      replayNoteLookup.find(replay_note::key(event.lane, event.noteTimeMicros));
   return it == replayNoteLookup.end() ? nullptr : it->second;
 }
 
