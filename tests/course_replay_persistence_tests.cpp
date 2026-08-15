@@ -509,11 +509,16 @@ void testRealRepositoryPersistsPartialCourseBrdWithoutLegacyRows() {
   expect(repository.EnsureSchema(),
          "course integration repository initializes");
   CourseReplayPersistence persistence(repository);
-  const auto value = attempt();
+  auto value = attempt();
+  value.result.longNoteMode = 2;
+  value.result.resultFingerprint =
+      result_persistence::modernResultFingerprint(value.result);
+  value.pathInput.longNoteMode = 2;
   const auto saved = persistence.persist(value);
   expect(saved.state == CourseReplayPersistenceState::SavedWithReplay &&
              saved.receipt && saved.replayAttached,
-         "real course persistence saves a partial result and BRD");
+         "real course persistence saves a partial result and BRD when the "
+         "course mode differs from a chart's effective mode");
 
   const auto loaded =
       repository.LoadModernCourseResultByAttempt(value.result.attemptId);

@@ -340,6 +340,22 @@ void testParsedDurationEstimatesDoNotOverrideEmbeddedBounds() {
          "course decoder uses completion bounds embedded by its producer");
 }
 
+void testForcedCourseModeRetainsEffectiveStageReplayMode() {
+  Harness harness;
+  harness.result.longNoteMode = 2;
+  harness.result.resultFingerprint =
+      result_persistence::modernResultFingerprint(harness.result);
+  harness.fileReference = reference(harness.result);
+  auto context = harness.makeContext();
+  const auto loaded = context.load(kAttemptId, parsedFacts(harness.result));
+  expect(loaded.state == CourseReplayContextState::Ready &&
+             loaded.resultAvailable() && loaded.replayAvailable() &&
+             harness.calls ==
+                 std::vector<std::string>({"result", "file", "decode"}),
+         "course replay keeps each chart's effective LN mode when the course "
+         "mode is forced");
+}
+
 void testMissingCorruptUnsafeAndDetachedFilesPreserveResult() {
   struct Case {
     ReplayFileState file;
@@ -497,6 +513,7 @@ int main() {
 #if ASOBMASHOW_HAS_COURSE_REPLAY_CONTEXT
   testCompletePartialRepeatedAndMixedSetupsUseStrictLoadOrder();
   testParsedDurationEstimatesDoNotOverrideEmbeddedBounds();
+  testForcedCourseModeRetainsEffectiveStageReplayMode();
   testUserDeletedCourseReferenceNeverTouchesFilesystem();
   testMissingCorruptUnsafeAndDetachedFilesPreserveResult();
   testParsedPrefixIdentityOrderAndSetupRejectBeforeFileAccess();
