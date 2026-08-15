@@ -460,6 +460,23 @@ void testReplayFailuresAndDatabaseAmbiguity() {
                  std::vector<std::string>({"load-result", "stage-summary"}),
          "course constraint path mismatch cannot attach bytes or hide history");
 
+  Harness forcedLongNoteMode;
+  forcedLongNoteMode.value.result.longNoteMode = 2;
+  forcedLongNoteMode.value.result.resultFingerprint =
+      result_persistence::modernResultFingerprint(forcedLongNoteMode.value.result);
+  forcedLongNoteMode.value.pathInput.longNoteMode = 2;
+  CourseReplayPersistence forcedModePersistence(
+      forcedLongNoteMode.dependencies());
+  const auto savedWithForcedMode =
+      forcedModePersistence.persist(forcedLongNoteMode.value);
+  expect(savedWithForcedMode.state == CourseReplayPersistenceState::SavedWithReplay &&
+             forcedLongNoteMode.events ==
+                 std::vector<std::string>({"load-result", "reserve-path", "encode",
+                                           "reserve-file", "record-ownership",
+                                           "install", "stage-file"}),
+         "course replay retains each chart's effective long-note mode when "
+         "the course mode is forced");
+
   Harness ambiguous;
   ambiguous.staged = {.status = ModernCourseStageStatus::StorageFailure,
                       .diagnostic = "commit acknowledgement lost"};
