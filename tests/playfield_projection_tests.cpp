@@ -102,6 +102,210 @@ bool testBpmGuideControlsAuxiliarySkinLines() {
   return true;
 }
 
+bool testLaneTraversalCullsSkinDtosOutsideTheVisibleLane() {
+  // LaneRenderer starts at the judgement line and stops its forward walk at
+  // the lane's upper edge.  With Hi-Speed 4, that is exactly 0.25 abstract
+  // scroll units; the note just beyond it must never reach SkinNote lowering.
+  PlayfieldChartVisualModel model;
+  model.laneOrder = {0};
+  model.timelines = {
+      {.id = 1,
+       .timeMicros = -1,
+       .scrollPosition = -0.01,
+       .retainedForProjection = true,
+       .authoredOrdinal = 0,
+       .retainedOrdinal = 0},
+      {.id = 2,
+       .timeMicros = 0,
+       .scrollPosition = 0.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 1,
+       .retainedOrdinal = 1},
+      {.id = 3,
+       .timeMicros = 100,
+       .scrollPosition = 0.24,
+       .retainedForProjection = true,
+       .authoredOrdinal = 2,
+       .retainedOrdinal = 2},
+      {.id = 4,
+       .timeMicros = 200,
+       .scrollPosition = 0.25,
+       .retainedForProjection = true,
+       .authoredOrdinal = 3,
+       .retainedOrdinal = 3},
+      {.id = 5,
+       .timeMicros = 300,
+       .scrollPosition = 0.251,
+       .retainedForProjection = true,
+       .authoredOrdinal = 4,
+       .retainedOrdinal = 4},
+  };
+  model.notes = {
+      {.id = 11, .timelineId = 1, .lane = 0, .authoredOrdinal = 0},
+      {.id = 12, .timelineId = 2, .lane = 0, .authoredOrdinal = 1},
+      {.id = 13, .timelineId = 3, .lane = 0, .authoredOrdinal = 2},
+      {.id = 14, .timelineId = 4, .lane = 0, .authoredOrdinal = 3},
+      {.id = 15, .timelineId = 5, .lane = 0, .authoredOrdinal = 4},
+  };
+  PlayfieldVisualState state;
+  state.clock.visualTimeMicros = 0;
+  PlayfieldProjection projection;
+  const auto result = projection.project(
+      model, state,
+      {.builtInTraversal = BuiltInRendererTraversal{.hispeed = 4.0F}});
+  const std::vector<ChartVisualId> ids = [&result] {
+    std::vector<ChartVisualId> values;
+    values.reserve(result.notes.size());
+    for (const auto &note : result.notes) {
+      values.push_back(note.noteId);
+    }
+    return values;
+  }();
+  if (ids != std::vector<ChartVisualId>({12, 13, 14})) {
+    std::cerr << "lane traversal must not project past or off-lane skin "
+                 "notes\n";
+    return false;
+  }
+  return true;
+}
+
+bool testLaneTraversalCullsEverySkinPlayareaDto() {
+  // Keep all per-timeline skin DTO categories at the same LaneRenderer
+  // boundary: measure/BPM/STOP lines, normal, mine, hidden, and long notes.
+  PlayfieldChartVisualModel model;
+  model.laneOrder = {0};
+  model.timelines = {
+      {.id = 1,
+       .timeMicros = -100,
+       .scrollPosition = -0.2,
+       .bpm = 120.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 0,
+       .retainedOrdinal = 0},
+      {.id = 2,
+       .timeMicros = 0,
+       .scrollPosition = 0.0,
+       .bpm = 120.0,
+       .sectionLine = true,
+       .retainedForProjection = true,
+       .authoredOrdinal = 1,
+       .retainedOrdinal = 1},
+      {.id = 3,
+       .timeMicros = 100,
+       .scrollPosition = 0.25,
+       .bpm = 150.0,
+       .stopMicros = 50,
+       .sectionLine = true,
+       .retainedForProjection = true,
+       .authoredOrdinal = 2,
+       .retainedOrdinal = 2},
+      {.id = 4,
+       .timeMicros = 200,
+       .scrollPosition = 0.251,
+       .bpm = 180.0,
+       .stopMicros = 50,
+       .sectionLine = true,
+       .retainedForProjection = true,
+       .authoredOrdinal = 3,
+       .retainedOrdinal = 3},
+      {.id = 5,
+       .timeMicros = 300,
+       .scrollPosition = 0.4,
+       .bpm = 180.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 4,
+       .retainedOrdinal = 4},
+  };
+  model.notes = {
+      {.id = 11,
+       .timelineId = 1,
+       .pairId = 12,
+       .lane = 0,
+       .kind = ChartVisualNoteKind::LongHead,
+       .longNoteMode = ChartLongNoteMode::LN,
+       .authoredOrdinal = 0},
+      {.id = 12,
+       .timelineId = 3,
+       .pairId = 11,
+       .lane = 0,
+       .kind = ChartVisualNoteKind::LongTail,
+       .longNoteMode = ChartLongNoteMode::LN,
+       .authoredOrdinal = 1},
+      {.id = 13, .timelineId = 3, .lane = 0, .authoredOrdinal = 2},
+      {.id = 14,
+       .timelineId = 3,
+       .lane = 0,
+       .kind = ChartVisualNoteKind::Mine,
+       .source = ChartVisualNoteSource::Mine,
+       .authoredOrdinal = 3},
+      {.id = 15,
+       .timelineId = 3,
+       .lane = 0,
+       .kind = ChartVisualNoteKind::Invisible,
+       .source = ChartVisualNoteSource::Invisible,
+       .authoredOrdinal = 4},
+      {.id = 16, .timelineId = 4, .lane = 0, .authoredOrdinal = 5},
+      {.id = 17,
+       .timelineId = 4,
+       .lane = 0,
+       .kind = ChartVisualNoteKind::Mine,
+       .source = ChartVisualNoteSource::Mine,
+       .authoredOrdinal = 6},
+      {.id = 18,
+       .timelineId = 4,
+       .lane = 0,
+       .kind = ChartVisualNoteKind::Invisible,
+       .source = ChartVisualNoteSource::Invisible,
+       .authoredOrdinal = 7},
+      {.id = 19,
+       .timelineId = 4,
+       .pairId = 20,
+       .lane = 0,
+       .kind = ChartVisualNoteKind::LongHead,
+       .longNoteMode = ChartLongNoteMode::LN,
+       .authoredOrdinal = 8},
+      {.id = 20,
+       .timelineId = 5,
+       .pairId = 19,
+       .lane = 0,
+       .kind = ChartVisualNoteKind::LongTail,
+       .longNoteMode = ChartLongNoteMode::LN,
+       .authoredOrdinal = 9},
+  };
+  PlayfieldVisualState state;
+  state.clock.visualTimeMicros = 0;
+  PlayfieldProjection projection;
+  const auto result = projection.project(
+      model, state,
+      {.includeInvisibleNotes = true,
+       .bpmGuideEnabled = true,
+       .builtInTraversal = BuiltInRendererTraversal{.hispeed = 4.0F}});
+  const std::vector<ChartVisualId> noteIds = [&result] {
+    std::vector<ChartVisualId> values;
+    values.reserve(result.notes.size());
+    for (const auto &note : result.notes) {
+      values.push_back(note.noteId);
+    }
+    return values;
+  }();
+  const std::vector<ChartVisualId> lineIds = [&result] {
+    std::vector<ChartVisualId> values;
+    values.reserve(result.lines.size());
+    for (const auto &line : result.lines) {
+      values.push_back(line.timelineId);
+    }
+    return values;
+  }();
+  if (noteIds != std::vector<ChartVisualId>({13, 14, 15}) ||
+      result.longNotes.size() != 1U || result.longNotes.front().headId != 11 ||
+      lineIds != std::vector<ChartVisualId>({2, 3, 3, 3})) {
+    std::cerr << "lane traversal must cull every off-lane skin playarea "
+                 "DTO\n";
+    return false;
+  }
+  return true;
+}
+
 } // namespace
 
 int main() {
@@ -109,6 +313,12 @@ int main() {
     return EXIT_FAILURE;
   }
   if (!testBpmGuideControlsAuxiliarySkinLines()) {
+    return EXIT_FAILURE;
+  }
+  if (!testLaneTraversalCullsSkinDtosOutsideTheVisibleLane()) {
+    return EXIT_FAILURE;
+  }
+  if (!testLaneTraversalCullsEverySkinPlayareaDto()) {
     return EXIT_FAILURE;
   }
   PlayfieldChartVisualModel model;

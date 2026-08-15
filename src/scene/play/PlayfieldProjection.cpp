@@ -28,23 +28,47 @@ ChartVisualNoteSource effectiveSource(const ChartVisualNote &note) {
   return note.source;
 }
 
-bool isVisible(double scrollDelta, const PlayfieldProjectionRequest &request) {
-  if (request.visibleScrollBefore == 0.0 && request.visibleScrollAfter == 0.0) {
-    return true;
+struct ProjectionScrollInterval {
+  double minimum = 0.0;
+  double maximum = 0.0;
+};
+
+std::optional<ProjectionScrollInterval>
+visibleScrollInterval(const PlayfieldProjectionRequest &request) {
+  if (request.visibleScrollBefore != 0.0 || request.visibleScrollAfter != 0.0) {
+    return ProjectionScrollInterval{.minimum = -request.visibleScrollBefore,
+                                    .maximum = request.visibleScrollAfter};
   }
-  return scrollDelta >= -request.visibleScrollBefore &&
-         scrollDelta <= request.visibleScrollAfter;
+  // LaneRenderer starts at the judgement line and walks forward only while
+  // `y <= hu`. Its `rxhs` is `(hu - hl) * hispeed`, leaving exactly
+  // `1 / hispeed` abstract scroll units in the visible lane. The generic DTO
+  // feeds SkinNote, so use the captured traversal whenever the caller did not
+  // provide an explicit projection window.
+  if (request.builtInTraversal &&
+      std::isfinite(request.builtInTraversal->hispeed) &&
+      request.builtInTraversal->hispeed > 0.0F) {
+    return ProjectionScrollInterval{
+        .minimum = 0.0,
+        .maximum = 1.0 / static_cast<double>(request.builtInTraversal->hispeed)};
+  }
+  return std::nullopt;
+}
+
+bool isVisible(
+    double scrollDelta,
+    const std::optional<ProjectionScrollInterval> &interval) {
+  return !interval || (scrollDelta >= interval->minimum &&
+                       scrollDelta <= interval->maximum);
 }
 
 bool isLongIntervalVisible(double headScrollDelta, double tailScrollDelta,
-                           const PlayfieldProjectionRequest &request) {
-  if (request.visibleScrollBefore == 0.0 && request.visibleScrollAfter == 0.0) {
+                           const std::optional<ProjectionScrollInterval>
+                               &interval) {
+  if (!interval) {
     return true;
   }
-  const double minimum = -request.visibleScrollBefore;
-  const double maximum = request.visibleScrollAfter;
-  return std::max(headScrollDelta, tailScrollDelta) >= minimum &&
-         std::min(headScrollDelta, tailScrollDelta) <= maximum;
+  return std::max(headScrollDelta, tailScrollDelta) >= interval->minimum &&
+         std::min(headScrollDelta, tailScrollDelta) <= interval->maximum;
 }
 
 bool isWithinLatePoorWindow(
@@ -144,6 +168,7 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
   result.builtInTraversal = request.builtInTraversal;
   const long long timeMicros = state.clock.visualTimeMicros;
   result.currentScrollPosition = scrollPositionAtTime(model, timeMicros);
+  const auto visibleInterval = visibleScrollInterval(request);
 
   std::unordered_map<ChartVisualId, const ChartVisualTimeline *> timelines;
   timelines.reserve(model.timelines.size());
@@ -207,7 +232,8 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
   for (const auto *timeline : orderedTimelines) {
     const double scrollDelta =
         timeline->scrollPosition - result.currentScrollPosition;
-    if (timeline->retainedForProjection && isVisible(scrollDelta, request)) {
+    if (timeline->retainedForProjection &&
+        isVisible(scrollDelta, visibleInterval)) {
       if (request.maxTimelines != 0 &&
           result.timelines.size() >= request.maxTimelines) {
         result.budgetExceeded = true;
@@ -286,13 +312,13 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
         needsInvisibleDepth =
             needsInvisibleDepth || (request.includeInvisibleNotes && !dead &&
                                     timeline->timeMicros >= timeMicros &&
-                                    isVisible(rowScrollDelta, request));
+                                    isVisible(rowScrollDelta, visibleInterval));
         continue;
       }
       if (effectiveSource(*note) == ChartVisualNoteSource::Mine) {
         needsPrimaryDepth =
             needsPrimaryDepth || (!dead && timeline->timeMicros >= timeMicros &&
-                                  isVisible(rowScrollDelta, request));
+                                  isVisible(rowScrollDelta, visibleInterval));
         continue;
       }
       if (effectiveSource(*note) == ChartVisualNoteSource::Playable &&
@@ -322,14 +348,15 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
           needsPrimaryDepth =
               needsPrimaryDepth ||
               (rowIsWithinLatePoorWindow &&
-               isLongIntervalVisible(rowScrollDelta, tailScrollDelta, request));
+               isLongIntervalVisible(rowScrollDelta, tailScrollDelta,
+                                     visibleInterval));
           continue;
         }
       }
       needsPrimaryDepth =
           needsPrimaryDepth ||
           (!dead && rowIsWithinLatePoorWindow &&
-           isVisible(rowScrollDelta, request));
+           isVisible(rowScrollDelta, visibleInterval));
     }
 
     auto &depths = builtInDepths[timeline->id];
@@ -393,7 +420,8 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
         const auto *tailTimeline = tailTimelineIt->second;
         const double tailScrollDelta =
             tailTimeline->scrollPosition - result.currentScrollPosition;
-        if (!isLongIntervalVisible(scrollDelta, tailScrollDelta, request)) {
+        if (!isLongIntervalVisible(scrollDelta, tailScrollDelta,
+                                   visibleInterval)) {
           continue;
         }
         if (atNoteLimit()) {
@@ -476,7 +504,7 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
       }
     }
 
-    if (!isVisible(scrollDelta, request)) {
+    if (!isVisible(scrollDelta, visibleInterval)) {
       continue;
     }
 
