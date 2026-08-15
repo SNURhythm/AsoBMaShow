@@ -1,39 +1,116 @@
 # TODO
 
-## Gameplay-skin chart information
+## Gameplay-skin compatibility gaps
 
-- Preserve Beatoraja-equivalent `SongInformation` density analysis in Aso's
-  immutable chart state, then wire Lua integer properties 360–365 and 368 to
-  that data. Until this exists, `PlaySkinStateBridge` correctly returns
-  Beatoraja's `Integer.MIN_VALUE` sentinel for these properties when chart
-  information is unavailable.
+This is the source-audited inventory for the pinned Beatoraja checkout
+`c2ed5db1a46145ed10790c3872f717e95b59db9d`. It lists a property only when
+Beatoraja's `BMSPlayer` path can provide non-default data and the gameplay-skin
+bridge currently returns a hard-coded default, a sentinel, or no value.
+
+Do not add behavior for arbitrary legal numeric cache IDs: Beatoraja exposes a
+wide integer/timer lookup domain, but those are not all defined properties.
+Likewise, selector/result/IR properties whose own `BMSPlayer` path returns the
+source default are not compatibility work for gameplay skins.
+
+### Boolean properties
+
+- BGA enabled (`40`, `41`) and replay-off (`82`).
+- Chart metadata: key-mode flags (`160`–`164`, `1160`–`1161`), text
+  availability (`174`–`175`), random sequence (`178`–`179`), BPM stop
+  (`1177`), and banner availability (`192`–`193`).
+- Lane-cover adjustment held state (`270`).
+- Course state: stages (`280`–`283`), final stage (`289`), and course mode
+  (`290`).
+- Score-rank families (`200`–`207`, `220`–`227`, `300`–`307`, `320`–`327`,
+  `340`–`347`).
+- EX-gauge classification (`1046`).
+- Constant scroll (`400`).
+- Practice item availability and selection (`3000`–`3015`, `3020`–`3035`).
+
+### Integer-value properties
+
+- Profile, wall-clock, FPS, and audio settings: `17`–`37`, `45`–`49`,
+  `57`–`59`, `333`.
+- Score data: max EX score (`72`), stored judgement counts/rates (`80`–`89`),
+  current combo (`104`), rate fragments (`115`–`116`, `122`–`123`,
+  `135`–`136`, `154`–`158`), high-score/best-rate values (`170`, `172`,
+  `174`, `183`–`184`), last-play date/time (`243`–`249`), and rival score
+  details (`271`, `280`–`289`).
+- `SongInformation` analysis: density/peak/end-density/total (`360`–`365`,
+  `368`). Until the analysis object exists in immutable chart state, retain
+  the upstream `Integer.MIN_VALUE` sentinel.
+- Judge rank (`400`), total early/late (`423`–`424`), and poor-plus-miss
+  (`426`).
+- Player 2/3 judge-duration values (`526`–`527`) are currently hard-coded to
+  zero instead of reading the equivalent player slot.
+
+### Image-index properties
+
+- Gauge/random/Hi-Speed/target/BGA configuration: `40`, `42`–`43`, `54`–`55`,
+  `61`–`63`, `72`, `75`, `78`.
+- Favourite song/chart state: `89`–`90`.
+- Custom judge, judge-area, and BPM-guide configuration: `301`, `303`, `306`.
+- Replay-save and gameplay configuration: `321`–`324`, `330`–`332`,
+  `340`–`343`, `350`–`353`, `360`–`361`, `400`.
+- Replay lane-assignment map: `450`–`469`.
+
+Some of these already have an authoritative Aso state and should be simple
+bridge work: gauge type/auto-shift, lane cover/lift/hidden, BPM guide, and
+Hi-Speed fix/auto-adjust.
+
+### Float and rate properties
+
+- Music-progress alias (`101`).
+- Master/key/BGM volume and practice-item position (`17`–`20`).
+- Float loading progress (`165`); integer loading progress exists but only
+  models an unloaded/loaded coarse state.
+- Rival judgement rates (`285`–`289`).
+- Chart analysis float values (`360`, `362`, `367`, `368`).
+
+### String properties
+
+- Rival, player, and selected target: `1`–`3`.
+- Active skin name/author: `50`–`51`.
+- Global profile filters/configuration: `60`–`62`, `86`.
+- Table, version, IR, and chart hashes: `1001`–`1003`, `1010`,
+  `1020`–`1021`, `1030`–`1031`.
+- Course titles (`150`–`159`) and configured target-name neighbours
+  (`200`–`219`).
+- Practice item text, labels, and values (`1040`–`1095`).
+
+### Timers
+
+- Start-input/failure/gauge animation: `1`, `3`, `42`, `44`.
+- Combo and score-rank animations: `446`, `348`–`352`.
+- 1P holds and HCN state: `70`–`79`, `250`–`259`, `270`–`279`.
+- Rhythm (`140`), including Beatoraja's `RhythmTimerProcessor` accumulator,
+  section-line reset, BPM, and play-speed inputs. Keep it off until this exact
+  state is captured; do not invent a measure pulse.
+- Pomy character timers: `900`–`907`, `909`.
+- Extended 1P key timers: bomb `1010`–`1099`, hold `1210`–`1299`, key-down
+  `1410`–`1499`, key-up `1610`–`1699`, HCN active `1810`–`1899`, and HCN
+  damage `2010`–`2099`.
+
+### Native writers and 2P/3P scope
+
+- Native property writers are not implemented. Beatoraja writers exist for
+  lane cover (`4`, `5`), audio volumes (`17`–`19`), and practice position
+  (`20`); the bridge currently accepts Lua callback writers only.
+- The application has no two-player/three-player gameplay authority. The
+  corresponding judge and timer families remain unavailable rather than being
+  fabricated from 1P state.
+
+### Existing parser and renderer work
 
 - Preserve Beatoraja `TimeLine` speed-object state in `bms-parser-cpp` and
-  carry the frame-local interpolated speed into the shared gameplay authority.
-  Pinned `LaneRenderer.getCurrentSpeed` combines that value with `#SCROLL` in
-  its live duration formula. AsoBMaShow already propagates parsed static
-  `#SCROLL` changes exactly, but the parser exposes no speed-object model, so
-  synthesizing one here would not be source-faithful.
+  carry the frame-local interpolated speed into shared gameplay authority.
+  Pinned `LaneRenderer.getCurrentSpeed` combines it with `#SCROLL`; the parser
+  currently exposes no speed-object model, so synthesis here would not be
+  source-faithful.
 
-## Gameplay-skin play configuration
+- If AsoBMaShow adds selectable constant-speed play, carry its state through
+  gameplay authority and map Boolean property `400` (`OPTION_CONSTANT`).
 
-- If AsoBMaShow adds a selectable constant-speed play configuration, carry its
-  enabled state through the gameplay frame authority and use it for Beatoraja
-  boolean property 400 (`OPTION_CONSTANT`). The current app has no such
-  configuration, so the bridge reports the upstream false state (and `-400`
-  consequently reports true).
-
-- Implement Beatoraja's configurable Lift and Hidden planes, then apply the
-  `isChangeLift` selector toggled by a short Start+Select conjunction. Pinned
-  source `ControlInputProcessor.java` at
-  `c2ed5db1a46145ed10790c3872f717e95b59db9d` uses that selector only when
-  lane cover is disabled and both Lift and Hidden are enabled. AsoBMaShow
-  currently has neither configuration nor renderer plane, so the input edge
-  is preserved by `StartSelectControl` but intentionally has no visual effect.
-
-## Gameplay-skin rhythm timer
-
-- Capture Beatoraja `TIMER_RHYTHM` (140) exactly from
-  `play/RhythmTimerProcessor.update`, including its `rhythmtimer` accumulator,
-  section-line reset, current BPM, and play-speed inputs. The current bridge
-  leaves timer 140 off rather than inventing an approximate measure pulse.
+- Implement configurable Lift and Hidden planes and the source
+  `isChangeLift` input path. The current Start+Select edge is retained, but
+  neither source configuration nor renderer plane exists.
