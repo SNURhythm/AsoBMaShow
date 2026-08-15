@@ -417,7 +417,8 @@ void testVerticesStatesScissorsAndSequentialFlushes() {
   expect(renderer.submit(commands), "valid state sequence passes preflight");
   renderer.flush();
   expect(backend.reserveCalls == 1 && backend.reservedVertices == 24 &&
-             backend.reservedIndices == 36,
+             backend.reservedIndices == 36 &&
+             backend.reservedSkinAllocations == 5,
          "whole-frame transient capacity is reserved before the first draw");
   expect(backend.batches.size() == 5,
          "only adjacent commands with identical resource and state batch");

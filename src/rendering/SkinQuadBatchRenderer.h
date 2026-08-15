@@ -251,7 +251,7 @@ private:
       std::span<const skin::SkinDrawCommand> commands,
       std::vector<SkinQuadSubmissionPlan::ResolvedCommand> &resolved,
       std::vector<skin::SkinFilterMode> &samplers, std::size_t &vertexCount,
-      std::size_t &indexCount) const;
+      std::size_t &indexCount, std::size_t &skinAllocationCount) const;
   void appendQuad(const std::array<skin::SkinVertex, 4> &, const BatchKey &);
   void appendPrimitive(const skin::SkinPrimitiveCommand &, const BatchKey &);
   void requireBatch(const BatchKey &);

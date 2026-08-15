@@ -92,13 +92,29 @@ class IOSReleaseWorkflowTests(unittest.TestCase):
             "\n  end\nend", 1
         )[0]
         post_build = lane.index("temporary_fix_ios_post_build")
-        artifact_audit = lane.index("ios_artifact_audit.sh")
+        artifact_audit = lane.index("audit_distribution_artifact")
         upload = lane.index("upload_to_testflight")
 
         self.assertLess(post_build, artifact_audit)
         self.assertLess(artifact_audit, upload)
         self.assertIn("SharedValues::IPA_OUTPUT_PATH", lane)
-        self.assertIn("--require-signature", lane)
+        self.assertIn("--require-signature", self.fastfile)
+
+    def test_distribution_builds_embed_and_audit_the_checkout_identity(self):
+        self.assertIn("def release_build_identity", self.fastfile)
+        self.assertIn('"rev-parse", "HEAD"', self.fastfile)
+        self.assertIn('"status", "--porcelain"', self.fastfile)
+        self.assertIn("def build_identity_xcargs", self.fastfile)
+        self.assertIn("def audit_distribution_artifact", self.fastfile)
+
+        for lane_name in ("firebase", "testflight_release"):
+            with self.subTest(lane=lane_name):
+                lane = self.fastfile.split(f"lane :{lane_name} do", 1)[1].split(
+                    "\n  end\nend", 1
+                )[0]
+                self.assertIn("release_build_identity", lane)
+                self.assertIn("build_identity_xcargs", lane)
+                self.assertIn("audit_distribution_artifact", lane)
 
     def test_firebase_pr_bypasses_release_verification_but_testflight_does_not(self):
         verify = self.workflow.split("  ios-verify:", 1)[1].split(

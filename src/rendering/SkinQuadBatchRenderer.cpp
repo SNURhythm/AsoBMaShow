@@ -363,11 +363,12 @@ bool SkinQuadBatchRenderer::preflightSegment(
     std::span<const skin::SkinDrawCommand> commands,
     std::vector<SkinQuadSubmissionPlan::ResolvedCommand> &resolved,
     std::vector<skin::SkinFilterMode> &samplers, std::size_t &vertexCount,
-    std::size_t &indexCount) const {
+    std::size_t &indexCount, std::size_t &skinAllocationCount) const {
   resolved.clear();
   resolved.resize(commands.size());
   vertexCount = 0;
   indexCount = 0;
+  skinAllocationCount = 0;
   const auto addCounts = [&](std::size_t vertices, std::size_t indices) {
     if (vertices > std::numeric_limits<std::size_t>::max() - vertexCount ||
         indices > std::numeric_limits<std::size_t>::max() - indexCount) {
@@ -480,6 +481,93 @@ bool SkinQuadBatchRenderer::preflightSegment(
     // content, so the entire skin buffer falls back until that bridge exists.
     return false;
   }
+
+  std::optional<BatchKey> batch;
+  std::size_t batchVertices = 0;
+  std::size_t batchIndices = 0;
+  const auto sameBatch = [](const BatchKey &left, const BatchKey &right) {
+    return left.texture.idx == right.texture.idx &&
+           left.topology == right.topology && left.blend == right.blend &&
+           left.filter == right.filter && left.textured == right.textured &&
+           sameScissor(left.scissor, right.scissor);
+  };
+  const auto flush = [&] {
+    if (batch && batchVertices != 0 && batchIndices != 0) {
+      ++skinAllocationCount;
+    }
+    batch.reset();
+    batchVertices = 0;
+    batchIndices = 0;
+  };
+  const auto appendQuad = [&](const BatchKey &key) {
+    if (!batch || !sameBatch(*batch, key)) {
+      flush();
+      batch = key;
+    }
+    if (batchVertices + 4U > maximumBatchVertices ||
+        batchIndices + 6U > maximumBatchIndices) {
+      flush();
+      batch = key;
+    }
+    batchVertices += 4U;
+    batchIndices += 6U;
+  };
+  const auto appendStrip = [&](std::size_t vertices, std::size_t overlap) {
+    flush();
+    std::size_t consumed = 0;
+    while (consumed < vertices) {
+      const std::size_t first = consumed == 0 ? 0 : consumed - overlap;
+      const std::size_t count =
+          std::min(maximumBatchVertices, vertices - first);
+      ++skinAllocationCount;
+      consumed = first + count;
+    }
+  };
+  for (std::size_t commandIndex = 0; commandIndex < commands.size();
+       ++commandIndex) {
+    if (resolved[commandIndex].suppressed) {
+      continue;
+    }
+    const auto &command = commands[commandIndex];
+    if (const auto *quad =
+            std::get_if<skin::SkinTexturedQuadCommand>(&command.payload)) {
+      appendQuad({.texture = resolved[commandIndex].texture,
+                  .topology = SkinBatchTopology::Triangles,
+                  .blend = quad->state.blend,
+                  .filter = quad->state.filter,
+                  .scissor = resolved[commandIndex].scissor,
+                  .textured = true});
+      continue;
+    }
+    if (const auto *glyphs =
+            std::get_if<skin::SkinGlyphRunCommand>(&command.payload)) {
+      const BatchKey key{.texture = resolved[commandIndex].texture,
+                         .topology = SkinBatchTopology::Triangles,
+                         .blend = glyphs->state.blend,
+                         .filter = glyphs->state.filter,
+                         .scissor = resolved[commandIndex].scissor,
+                         .textured = true};
+      for (std::size_t glyphIndex = 0; glyphIndex < glyphs->glyphs.size();
+           ++glyphIndex) {
+        appendQuad(key);
+      }
+      continue;
+    }
+    const auto &primitive =
+        std::get<skin::SkinPrimitiveCommand>(command.payload);
+    if (primitive.kind == skin::SkinPrimitiveKind::SolidQuad) {
+      appendQuad({.topology = SkinBatchTopology::Triangles,
+                  .blend = primitive.state.blend,
+                  .filter = primitive.state.filter,
+                  .scissor = resolved[commandIndex].scissor,
+                  .textured = false});
+      continue;
+    }
+    appendStrip(primitive.vertices.size(),
+                primitive.kind == skin::SkinPrimitiveKind::LineStrip ? 1U
+                                                                      : 2U);
+  }
+  flush();
   return true;
 }
 
@@ -504,21 +592,22 @@ bool SkinQuadBatchRenderer::prepare(
       SkinQuadSubmissionPlan::Segment segment{.commands = commands};
       std::size_t vertexCount = 0;
       std::size_t indexCount = 0;
+      std::size_t segmentSkinAllocationCount = 0;
       if (!preflightSegment(commands, segment.resolved, samplers, vertexCount,
-                            indexCount) ||
+                            indexCount, segmentSkinAllocationCount) ||
           vertexCount >
               std::numeric_limits<std::size_t>::max() - totalVertexCount ||
-          indexCount >
-              std::numeric_limits<std::size_t>::max() - totalIndexCount) {
+          indexCount > std::numeric_limits<std::size_t>::max() -
+                            totalIndexCount ||
+          segmentSkinAllocationCount >
+              std::numeric_limits<std::size_t>::max() - skinAllocationCount) {
         ready_ = false;
         clearBatch();
         return false;
       }
       totalVertexCount += vertexCount;
       totalIndexCount += indexCount;
-      if (vertexCount != 0) {
-        ++skinAllocationCount;
-      }
+      skinAllocationCount += segmentSkinAllocationCount;
       maximumSegmentVertices =
           std::max(maximumSegmentVertices, vertexCount);
       maximumSegmentIndices = std::max(maximumSegmentIndices, indexCount);

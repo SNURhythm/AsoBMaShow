@@ -3290,6 +3290,9 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
                 static_cast<double>(positionNumerator) /
                 static_cast<double>(positionDenominator);
             bgaPoorTimingExtent = std::max(bgaPoorTimingExtent, position);
+          } else {
+            sequence.Frames.push_back(BgaSequenceBlank);
+            continue;
           }
           const int bmpId = ParseInt(value);
           if (CheckResourceIdRange(bmpId) &&
