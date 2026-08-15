@@ -891,6 +891,307 @@ void testExistingGameplayStatePropertyWiring() {
   bridge.discardFrame();
 }
 
+void testRemainingDirectGameplayStatePropertyWiring() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+
+  PlayfieldChartVisualModel chart;
+  chart.chartMd5 = "captured-md5";
+  chart.chartSha256 = "captured-sha256";
+  chart.staticMetadata = {.totalNotes = 100,
+                          .hasRandomSequence = true,
+                          .hasBpmStop = true};
+
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = runtime.runtime(),
+                              .mutationTable = mutations});
+
+  auto state = stateAt(207);
+  state.score = 120;
+  state.combo = 12;
+  state.authority.maximumCombo = 44;
+  state.authority.stagePassedNotes = 80;
+  // Intentionally leave the optional pacemaker playback snapshot empty: the
+  // source score-rate/current-rank family uses JudgeManager.pastNotes, not a
+  // selected pacemaker's progress.
+  state.authority.pacemakerStatus.playedNotes = 0;
+  state.authority.bestScore = 100;
+  state.authority.bestScoreTarget = {.enabled = true,
+                                     .finalScore = 100,
+                                     .maxScore = 200,
+                                     .totalNotes = 100};
+  state.authority.pacemakerTarget = {.enabled = true,
+                                     .finalScore = 150,
+                                     .maxScore = 200,
+                                     .totalNotes = 100};
+  state.authority.judgementCounters = {{PGreat, 40}, {Great, 40}};
+  state.configuration.masterVolume = 0.25F;
+  state.configuration.keysoundVolume = 0.5F;
+  state.configuration.bgmVolume = 0.75F;
+  bridge.beginFrame(state, projectionAt(207));
+
+  for (const auto [id, expected] : std::array{
+           std::pair{178, false}, std::pair{179, true},
+           std::pair{1177, true},
+           // score / (passed notes * 2) = 120 / 160 = 75% (A).
+           std::pair{200, false}, std::pair{201, false},
+           std::pair{202, true}, std::pair{300, false},
+           std::pair{302, true}, std::pair{340, false},
+           std::pair{342, true},
+           // Final score rate is 60%, so B and all lower inclusive rank
+           // options are active. The persisted 50% score is exclusively C.
+           std::pair{220, false}, std::pair{221, false},
+           std::pair{222, false}, std::pair{223, true},
+           std::pair{320, false}, std::pair{324, true}}) {
+    const auto value = bridge.booleanProperty({id});
+    expect(value.supported && value.value == expected,
+           "direct chart and score-rank boolean property uses the pinned "
+           "source: " +
+               std::to_string(id));
+  }
+
+  for (const auto [id, expected] : std::array{
+           std::pair{72, 200LL}, std::pair{102, 75LL},
+           std::pair{103, 0LL}, std::pair{104, 12LL},
+           std::pair{115, 60LL}, std::pair{116, 0LL},
+           std::pair{122, 75LL}, std::pair{123, 0LL},
+           std::pair{135, 75LL}, std::pair{136, 0LL},
+           std::pair{154, 11LL}, std::pair{155, 60LL},
+           std::pair{156, 0LL}, std::pair{157, 75LL},
+           std::pair{158, 0LL}, std::pair{170, 100LL},
+           std::pair{171, 120LL}, std::pair{172, 40LL},
+           std::pair{174, 44LL}, std::pair{183, 50LL},
+           std::pair{184, 0LL}, std::pair{57, 25LL},
+           std::pair{58, 50LL}, std::pair{59, 75LL}}) {
+    const auto value = bridge.integerProperty({id});
+    expect(value.supported && value.value == expected,
+           "direct score property uses the pinned source: " +
+               std::to_string(id));
+  }
+  for (const auto [id, expected] : std::array{
+           std::pair{17, 0.25}, std::pair{18, 0.5}, std::pair{19, 0.75}}) {
+    const auto value = bridge.floatProperty({id});
+    expect(value.supported && value.value == expected,
+           "direct audio float property uses the pinned source: " +
+               std::to_string(id));
+  }
+  expect(bridge.stringProperty({1030}).supported &&
+             bridge.stringProperty({1030}).value == "captured-md5" &&
+             bridge.stringProperty({1031}).supported &&
+             bridge.stringProperty({1031}).value == "captured-sha256",
+         "chart hash strings use immutable parser metadata");
+  bridge.discardFrame();
+
+  state.clock.serial = 208;
+  state.authority.courseMode = true;
+  state.authority.courseStageIndex = 1;
+  state.authority.courseStageCount = 4;
+  state.authority.courseStageTitles = {"first", "second", "third", "fourth"};
+  state.authority.playerName = "captured-player";
+  state.authority.laneCoverAdjustmentHeld = true;
+  bridge.beginFrame(state, projectionAt(208));
+  expect(!bridge.booleanProperty({280}).value &&
+             bridge.booleanProperty({281}).value &&
+             !bridge.booleanProperty({282}).value &&
+             !bridge.booleanProperty({283}).value &&
+             !bridge.booleanProperty({289}).value &&
+             bridge.booleanProperty({290}).value &&
+             bridge.booleanProperty({270}).value,
+         "course stage selectors use the captured course session position");
+  expect(bridge.stringProperty({150}).value == "first" &&
+             bridge.stringProperty({151}).value == "second" &&
+             bridge.stringProperty({159}).value.empty(),
+         "course title strings use the captured per-stage chart titles");
+  expect(bridge.stringProperty({2}).value == "captured-player",
+         "player string property uses the captured active player name");
+  bridge.discardFrame();
+
+  state.clock.serial = 209;
+  state.authority.courseStageIndex = 3;
+  state.authority.courseConstraintIds = {1, 4, 6, 9, 14};
+  bridge.beginFrame(state, projectionAt(209));
+  expect(bridge.booleanProperty({289}).value,
+         "course final-stage selector follows the final captured stage");
+  for (const auto [id, expected] : std::array{
+           std::pair{1002, true}, std::pair{1003, false},
+           std::pair{1004, false}, std::pair{1005, true},
+           std::pair{1006, false}, std::pair{1007, true},
+           std::pair{1010, false}, std::pair{1011, false},
+           std::pair{1012, true}, std::pair{1013, false},
+           std::pair{1014, false}, std::pair{1015, false},
+           std::pair{1016, false}, std::pair{1017, true}}) {
+    const auto value = bridge.booleanProperty({id});
+    expect(value.supported && value.value == expected,
+           "course constraint option uses its captured Beatoraja ID: " +
+               std::to_string(id));
+  }
+  bridge.discardFrame();
+
+  state.clock.serial = 210;
+  state.authority.player1RandomOption = 3;
+  state.authority.player2RandomOption = 6;
+  state.authority.doublePlayOption = 1;
+  state.configuration.judgeAlgorithmImageIndex = 1;
+  bridge.beginFrame(state, projectionAt(210));
+  expect(bridge.integerProperty({42}, SkinIntegerPropertyDomain::ImageIndex)
+                 .value == 3 &&
+             bridge.integerProperty({43}, SkinIntegerPropertyDomain::ImageIndex)
+                     .value == 6 &&
+             bridge.integerProperty({54}, SkinIntegerPropertyDomain::ImageIndex)
+                     .value == 1,
+         "random and double-play image indexes use captured play options");
+  expect(bridge.integerProperty({340}, SkinIntegerPropertyDomain::ImageIndex)
+                 .value == 1,
+         "judge-algorithm image index preserves the pinned duration mode");
+  bridge.discardFrame();
+
+  state.clock.serial = 211;
+  state.configuration.judgeAlgorithmImageIndex =
+      std::numeric_limits<std::int32_t>::min();
+  bridge.beginFrame(state, projectionAt(211));
+  const auto scorePriority =
+      bridge.integerProperty({340}, SkinIntegerPropertyDomain::ImageIndex);
+  expect(scorePriority.supported &&
+             scorePriority.value == std::numeric_limits<std::int32_t>::min(),
+         "judge-algorithm Score preserves Beatoraja's non-index sentinel");
+  bridge.discardFrame();
+}
+
+void testLongNoteHoldTimersUseCapturedLaneState() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+
+  PlayfieldChartVisualModel chart;
+  chart.keyCount = 7;
+  // Aso stores 7K in visible order (scratch, then keys); Beatoraja maps the
+  // key at raw BMS lane 0 to skin offset 1 and the scratch to offset 0.
+  chart.laneOrder = {7, 0};
+  chart.notes = {
+      {.id = 1,
+       .timelineId = 1,
+       .pairId = 2,
+       .lane = 0,
+       .kind = ChartVisualNoteKind::LongHead},
+      {.id = 2,
+       .timelineId = 2,
+       .pairId = 1,
+       .lane = 0,
+       .kind = ChartVisualNoteKind::LongTail},
+  };
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = runtime.runtime(),
+                              .mutationTable = mutations});
+
+  auto state = stateAt(212);
+  state.sceneStartMicros = 0;
+  state.clock.visualTimeMicros = 6'000'000;
+  state.lastJudgeVisualMicros = 1'000'000;
+  state.notes = {{.id = 1, .longActive = true},
+                 {.id = 2, .longActive = true}};
+  bridge.beginFrame(state, projectionAt(212));
+  expect(bridge.timerProperty({71}) == 6'000'000 &&
+             bridge.timerProperty({70}) == kPlayfieldTimestampOff,
+         "Beatoraja 1P hold timers use captured long-note state and the "
+         "source lane offset, not a stale judge timestamp");
+  bridge.discardFrame();
+
+  state.clock.serial = 213;
+  state.clock.visualTimeMicros = 7'000'000;
+  state.notes = {{.id = 1, .longActive = false},
+                 {.id = 2, .longActive = false}};
+  bridge.beginFrame(state, projectionAt(213));
+  expect(bridge.timerProperty({71}) == kPlayfieldTimestampOff,
+         "Beatoraja 1P hold timer turns off when its captured long note ends");
+  bridge.discardFrame();
+}
+
+void testScoreAndComboTimersUseCapturedGameplayState() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+  PlayfieldChartVisualModel chart;
+  chart.staticMetadata.totalNotes = 100;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = runtime.runtime(),
+                              .mutationTable = mutations});
+
+  auto state = stateAt(208);
+  state.sceneStartMicros = 0;
+  state.clock.visualTimeMicros = 5'000'000;
+  state.clock.gameplayTimeMicros = 5'000'000;
+  state.lastJudgeVisualMicros = 4'000'000;
+  state.score = 120;
+  state.authority.stagePassedNotes = 80;
+  state.authority.bestScore = 100;
+  state.authority.pacemakerTarget = {.enabled = true,
+                                     .finalScore = 110,
+                                     .maxScore = 200,
+                                     .totalNotes = 100};
+  bridge.beginFrame(state, projectionAt(208));
+  expect(bridge.timerProperty({446}) == 4'000'000 &&
+             bridge.timerProperty({44}) == kPlayfieldTimestampOff &&
+             bridge.timerProperty({348}) == kPlayfieldTimestampOff &&
+             bridge.timerProperty({349}) == kPlayfieldTimestampOff &&
+             bridge.timerProperty({350}) == kPlayfieldTimestampOff &&
+             bridge.timerProperty({351}) == 4'000'000 &&
+             bridge.timerProperty({352}) == 4'000'000,
+         "combo and score timers follow their first captured qualifying "
+         "judgement");
+  bridge.discardFrame();
+
+  state.clock.serial = 209;
+  state.clock.visualTimeMicros = 6'000'000;
+  state.clock.gameplayTimeMicros = 6'000'000;
+  state.lastJudgeVisualMicros = 6'000'000;
+  state.score = 140;
+  state.authority.currentGauge = 100.0F;
+  bridge.beginFrame(state, projectionAt(209));
+  expect(bridge.timerProperty({446}) == 6'000'000 &&
+             bridge.timerProperty({44}) == 6'000'000 &&
+             bridge.timerProperty({348}) == 6'000'000 &&
+             bridge.timerProperty({351}) == 4'000'000 &&
+             bridge.timerProperty({352}) == 4'000'000,
+         "rank timers start only on their qualifying transition while score "
+         "best and target timers retain their original start");
+  bridge.discardFrame();
+
+  state.clock.serial = 210;
+  state.clock.visualTimeMicros = 7'000'000;
+  state.clock.gameplayTimeMicros = 7'000'000;
+  state.lastJudgeVisualMicros = 7'000'000;
+  state.score = 120;
+  state.authority.currentGauge = 99.0F;
+  bridge.beginFrame(state, projectionAt(210));
+  expect(bridge.timerProperty({446}) == 7'000'000 &&
+             bridge.timerProperty({44}) == kPlayfieldTimestampOff &&
+             bridge.timerProperty({348}) == kPlayfieldTimestampOff &&
+             bridge.timerProperty({351}) == 4'000'000 &&
+             bridge.timerProperty({352}) == 4'000'000,
+         "rank timers turn off when BMSPlayer's score condition no longer "
+         "qualifies");
+  bridge.discardFrame();
+}
+
 void testPlayTimerPropertiesMatchPinnedJavaConversions() {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
@@ -1345,6 +1646,9 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   state.authority.hiddenRatio = 0.2867F;
   state.authority.currentGauge = 62.3F;
   state.authority.maximumCombo = 321;
+  // ScoreDataProperty.update receives JudgeManager.getPastNotes(); this
+  // captured stage value is independent from the optional pacemaker snapshot.
+  state.authority.stagePassedNotes = 200;
   state.authority.bestScore = 300;
   state.authority.bestScoreTarget = {.enabled = true,
                                      .label = "BEST",
@@ -1599,7 +1903,7 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   }
   const auto diagnosticCount = bridge.diagnostics().size();
   for (const int id : {2, 3, 11, 40, 42, 44, 48, 70, 71, 72, 73, 74,
-                       75, 76, 77, 140, 143, 172, 173, 351, 352}) {
+                       75, 76, 77, 140, 143, 172, 173}) {
     expect(bridge.timerProperty({id}) == INT64_MIN,
            "selected timer without an authoritative source is off");
   }
@@ -2050,6 +2354,9 @@ int main() {
   testFramePropertiesUseAuthoritativeGaugeAndTimerRules();
   testGameplayModeAndLoadingBooleanProperties();
   testExistingGameplayStatePropertyWiring();
+  testRemainingDirectGameplayStatePropertyWiring();
+  testLongNoteHoldTimersUseCapturedLaneState();
+  testScoreAndComboTimersUseCapturedGameplayState();
   testPlayTimerPropertiesMatchPinnedJavaConversions();
   testReadyAndLiveTimersUseTheSharedSkinStateClock();
   testClearAndFullComboTimersFollowPinnedBmsPlayerState();

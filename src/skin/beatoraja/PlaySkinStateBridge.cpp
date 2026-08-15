@@ -36,6 +36,50 @@ double scoreRate(int score, int notes) {
                                           static_cast<float>(notes * 2));
 }
 
+constexpr std::array<int, 9> kBeatorajaScoreRankBoundaries = {
+    0, 6, 9, 12, 15, 18, 21, 24, 28};
+
+std::int64_t javaDoubleToInt(double value);
+
+bool matchesBeatorajaScoreRank(double rate, int totalNotes, int rank) {
+  if (totalNotes == 0 || rank < 0 ||
+      static_cast<std::size_t>(rank + 1) >=
+          kBeatorajaScoreRankBoundaries.size()) {
+    return false;
+  }
+  const float pinnedRate = static_cast<float>(rate);
+  const int low = kBeatorajaScoreRankBoundaries[rank];
+  const int high = kBeatorajaScoreRankBoundaries[rank + 1];
+  return pinnedRate >= static_cast<float>(low) / 27.0F &&
+         (high > 27 || !(pinnedRate >= static_cast<float>(high) / 27.0F));
+}
+
+bool reachesBeatorajaScoreRank(double rate, int totalNotes, int threshold) {
+  if (totalNotes == 0) {
+    return false;
+  }
+  return static_cast<float>(rate) >= static_cast<float>(threshold) / 27.0F;
+}
+
+std::int64_t beatorajaNextRank(const PlayfieldVisualState &snapshot,
+                               int totalNotes) {
+  const int passedNotes = std::max(0, snapshot.authority.stagePassedNotes);
+  const float rate = static_cast<float>(scoreRate(snapshot.score, totalNotes));
+  if (totalNotes != 0) {
+    for (int rank = 0; rank < 27; ++rank) {
+      const bool qualified =
+          rate >= static_cast<float>(rank) / 27.0F;
+      if (rank % 3 == 0 && !qualified) {
+        const double needed =
+            static_cast<double>(rank * (passedNotes * 2)) / 27.0 -
+            static_cast<double>(rate) * static_cast<double>(passedNotes * 2);
+        return javaDoubleToInt(std::ceil(needed));
+      }
+    }
+  }
+  return static_cast<std::int64_t>(passedNotes) * 2 - snapshot.score;
+}
+
 int targetScore(const PlayfieldVisualState &snapshot) {
   return snapshot.authority.pacemakerTarget.enabled
              ? snapshot.authority.pacemakerTarget.finalScore
@@ -74,6 +118,47 @@ std::int64_t beatorajaKeyJudgeValue(const PlayfieldVisualState &snapshot,
     return -1;
   }
   return snapshot.lanes[static_cast<std::size_t>(key)].beatorajaJudgeValue;
+}
+
+std::optional<int>
+beatorajaPlayerOneSkinLaneOffset(const PlayfieldChartVisualModel &chart,
+                                 int lane) noexcept {
+  // Pinned LaneProperty.java maps BMS lane identities to a skin offset rather
+  // than using their physical chart order. Aso's parser retains the original
+  // BMS lane IDs, including scratch at 7 (and 15 for 2P), so preserve that
+  // distinction here. 2P has no gameplay authority yet and is intentionally
+  // not projected into 1P timer IDs.
+  switch (chart.keyCount) {
+  case 5:
+    if (lane == 7) {
+      return 0;
+    }
+    return lane >= 0 && lane < 5 ? std::optional<int>(lane + 1)
+                                 : std::nullopt;
+  case 7:
+    if (lane == 7) {
+      return 0;
+    }
+    return lane >= 0 && lane < 7 ? std::optional<int>(lane + 1)
+                                 : std::nullopt;
+  case 9:
+    return lane >= 0 && lane < 9 ? std::optional<int>(lane + 1)
+                                 : std::nullopt;
+  case 10:
+    if (lane == 7) {
+      return 0;
+    }
+    return lane >= 0 && lane < 5 ? std::optional<int>(lane + 1)
+                                 : std::nullopt;
+  case 14:
+    if (lane == 7) {
+      return 0;
+    }
+    return lane >= 0 && lane < 7 ? std::optional<int>(lane + 1)
+                                 : std::nullopt;
+  default:
+    return std::nullopt;
+  }
 }
 
 std::optional<int> decimalSuffix(std::string_view value, std::string_view prefix,
@@ -419,14 +504,76 @@ void PlaySkinStateBridge::updatePinnedPlayTimers() {
   }
 
   const int totalNotes = context_.chartModel.staticMetadata.totalNotes;
+  const auto pinnedTimerNow = [&]() {
+    const long long source =
+        snapshot->lastJudgeVisualMicros == kPlayfieldTimestampOff
+            ? snapshot->clock.visualTimeMicros
+            : snapshot->lastJudgeVisualMicros;
+    return skinStateTimestampMicros(*snapshot, source);
+  };
+  const auto switchPinnedTimer = [this, &pinnedTimerNow](int id, bool on) {
+    if (on) {
+      pinnedSwitchTimerStarts_.try_emplace(id, pinnedTimerNow());
+    } else {
+      pinnedSwitchTimerStarts_.erase(id);
+    }
+  };
+  const double finalRate = scoreRate(snapshot->score, totalNotes);
+  const int gaugeType = gaugeTypeIndex(snapshot->authority.gaugeType);
+  const bool gaugeAtMaximum =
+      snapshot->authority.gaugeRules.compiled && gaugeType >= 0 &&
+      static_cast<std::size_t>(gaugeType) <
+          snapshot->authority.gaugeRules.gauges.size() &&
+      snapshot->authority.currentGauge ==
+          snapshot->authority.gaugeRules
+              .gauges[static_cast<std::size_t>(gaugeType)]
+              .maximum;
+  switchPinnedTimer(44, gaugeAtMaximum);
+  switchPinnedTimer(348, reachesBeatorajaScoreRank(finalRate, totalNotes, 18));
+  switchPinnedTimer(349, reachesBeatorajaScoreRank(finalRate, totalNotes, 21));
+  switchPinnedTimer(350, reachesBeatorajaScoreRank(finalRate, totalNotes, 24));
+  switchPinnedTimer(351, snapshot->score >= snapshot->authority.bestScore);
+  switchPinnedTimer(352, snapshot->score >= targetScore(*snapshot));
+
+  // JudgeManager switches each LaneState.timerHold while a classic long note
+  // is processing or an HCN is actively increasing. NotePresentationState
+  // already carries that active truth for every gameplay surface. Aggregate
+  // it once per frame, then use LaneProperty's source offset table above.
+  std::array<bool, 10> playerOneLongHeld{};
+  if (snapshot->notes.size() == context_.chartModel.notes.size()) {
+    for (std::size_t index = 0; index < snapshot->notes.size(); ++index) {
+      const auto &note = context_.chartModel.notes[index];
+      if (note.kind != ChartVisualNoteKind::LongHead &&
+          note.kind != ChartVisualNoteKind::LongTail) {
+        continue;
+      }
+      const auto offset =
+          beatorajaPlayerOneSkinLaneOffset(context_.chartModel, note.lane);
+      if (offset && *offset >= 0 &&
+          static_cast<std::size_t>(*offset) < playerOneLongHeld.size() &&
+          snapshot->notes[index].longActive) {
+        playerOneLongHeld[static_cast<std::size_t>(*offset)] = true;
+      }
+    }
+  }
+  const auto switchLaneTimer = [this, snapshot](int id, bool on) {
+    if (on) {
+      pinnedSwitchTimerStarts_.try_emplace(id, skinStateClockMicros(*snapshot));
+    } else {
+      pinnedSwitchTimerStarts_.erase(id);
+    }
+  };
+  for (std::size_t offset = 0; offset < playerOneLongHeld.size(); ++offset) {
+    switchLaneTimer(70 + static_cast<int>(offset),
+                    playerOneLongHeld[offset]);
+  }
+
   const bool fullCombo = totalNotes > 0 &&
                          snapshot->authority.stagePassedNotes == totalNotes &&
                          snapshot->authority.stageCombo == totalNotes;
   if (!fullCombo) {
     fullComboTimerStartMicros_ = kPlayfieldTimestampOff;
-    return;
-  }
-  if (fullComboTimerStartMicros_ == kPlayfieldTimestampOff) {
+  } else if (fullComboTimerStartMicros_ == kPlayfieldTimestampOff) {
     const long long source =
         snapshot->lastJudgeVisualMicros == kPlayfieldTimestampOff
             ? snapshot->clock.visualTimeMicros
@@ -1094,6 +1241,121 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
                                  : metadata.minimumBpm < metadata.maximumBpm,
             .supported = true};
   }
+  case 178:
+  case 179:
+    return {.value = *id == 179
+                         ? context_.chartModel.staticMetadata.hasRandomSequence
+                         : !context_.chartModel.staticMetadata.hasRandomSequence,
+            .supported = true};
+  case 1177:
+    return {.value = context_.chartModel.staticMetadata.hasBpmStop,
+            .supported = true};
+  case 270:
+    return {.value = snapshot->authority.laneCoverAdjustmentHeld,
+            .supported = true};
+  case 280:
+  case 281:
+  case 282:
+  case 283: {
+    const int stage = *id - 280;
+    return {.value = snapshot->authority.courseMode &&
+                         snapshot->authority.courseStageCount > 0 &&
+                         snapshot->authority.courseStageIndex == stage &&
+                         stage != snapshot->authority.courseStageCount - 1,
+            .supported = true};
+  }
+  case 289:
+    return {.value = snapshot->authority.courseMode &&
+                         snapshot->authority.courseStageCount > 0 &&
+                         snapshot->authority.courseStageIndex ==
+                             snapshot->authority.courseStageCount - 1,
+            .supported = true};
+  case 290:
+    return {.value = snapshot->authority.courseMode, .supported = true};
+  case 1002:
+  case 1003:
+  case 1004:
+  case 1005:
+  case 1006:
+  case 1007:
+    return {.value = std::ranges::find(snapshot->authority.courseConstraintIds,
+                                       *id - 1001) !=
+                         snapshot->authority.courseConstraintIds.end(),
+            .supported = true};
+  case 1010:
+  case 1011:
+  case 1012:
+  case 1013:
+  case 1014:
+  case 1015:
+  case 1016:
+  case 1017:
+    return {.value = std::ranges::find(snapshot->authority.courseConstraintIds,
+                                       *id - 1003) !=
+                         snapshot->authority.courseConstraintIds.end(),
+            .supported = true};
+  case 200:
+  case 201:
+  case 202:
+  case 203:
+  case 204:
+  case 205:
+  case 206:
+  case 207:
+  case 300:
+  case 301:
+  case 302:
+  case 303:
+  case 304:
+  case 305:
+  case 306:
+  case 307:
+  case 340:
+  case 341:
+  case 342:
+  case 343:
+  case 344:
+  case 345:
+  case 346:
+  case 347: {
+    const int groupStart = *id >= 340 ? 340 : *id >= 300 ? 300 : 200;
+    const int rank = 7 - (*id - groupStart);
+    return {.value = matchesBeatorajaScoreRank(
+                scoreRate(snapshot->score, snapshot->authority.stagePassedNotes),
+                context_.chartModel.staticMetadata.totalNotes, rank),
+            .supported = true};
+  }
+  case 220:
+  case 221:
+  case 222:
+  case 223:
+  case 224:
+  case 225:
+  case 226:
+  case 227: {
+    const int rank = 7 - (*id - 220);
+    return {.value = reachesBeatorajaScoreRank(
+                scoreRate(snapshot->score,
+                          context_.chartModel.staticMetadata.totalNotes),
+                context_.chartModel.staticMetadata.totalNotes,
+                kBeatorajaScoreRankBoundaries[rank]),
+            .supported = true};
+  }
+  case 320:
+  case 321:
+  case 322:
+  case 323:
+  case 324:
+  case 325:
+  case 326:
+  case 327: {
+    const int rank = 7 - (*id - 320);
+    return {.value = matchesBeatorajaScoreRank(
+                scoreRate(snapshot->authority.bestScore,
+                          context_.chartModel.staticMetadata.totalNotes),
+                context_.chartModel.staticMetadata.totalNotes, rank),
+            .supported = true};
+  }
   case 180: {
     const int judgeRank = context_.chartModel.staticMetadata.judgeRank;
     return {.value = judgeRank == 0 || (judgeRank >= 10 && judgeRank < 35),
@@ -1234,6 +1496,15 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
     case 40:
       return {.value = gaugeTypeIndex(snapshot->authority.gaugeType),
               .supported = true};
+    case 42:
+      return {.value = snapshot->authority.player1RandomOption,
+              .supported = true};
+    case 43:
+      return {.value = snapshot->authority.player2RandomOption,
+              .supported = true};
+    case 54:
+      return {.value = snapshot->authority.doublePlayOption,
+              .supported = true};
     case 55:
       return {.value = static_cast<int>(snapshot->configuration.hispeedFixMode),
               .supported = true};
@@ -1260,6 +1531,9 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
               .supported = true};
     case 342:
       return {.value = snapshot->configuration.hispeedAutoAdjust ? 1 : 0,
+              .supported = true};
+    case 340:
+      return {.value = snapshot->configuration.judgeAlgorithmImageIndex,
               .supported = true};
     default:
       break;
@@ -1383,10 +1657,33 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
             .supported = true};
   }
   case 71:
+  // NUMBER_POINT has mode-specific score-point arithmetic in
+  // ScoreDataProperty. Keep the existing EX-score publication until the
+  // canonical upstream Mode identity is carried through this bridge.
   case 100:
   case 101:
   case 171:
     return {.value = snapshot->score, .supported = true};
+  case 57:
+    return {.value = javaDoubleToInt(
+                static_cast<double>(snapshot->configuration.masterVolume) *
+                100.0),
+            .supported = true};
+  case 58:
+    return {.value = javaDoubleToInt(
+                static_cast<double>(snapshot->configuration.keysoundVolume) *
+                100.0),
+            .supported = true};
+  case 59:
+    return {.value = javaDoubleToInt(
+                static_cast<double>(snapshot->configuration.bgmVolume) *
+                100.0),
+            .supported = true};
+  case 72:
+    return {.value = static_cast<std::int64_t>(
+                context_.chartModel.staticMetadata.totalNotes) *
+                    2,
+            .supported = true};
   case 107:
     return {.value = static_cast<std::int64_t>(
                 snapshot->authority.currentGauge),
@@ -1489,12 +1786,35 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
             .supported = true};
   case 75:
   case 105:
+  case 174:
     return {.value = snapshot->authority.maximumCombo, .supported = true};
   case 102:
   case 103: {
     const auto [integer, fractional] = scoreRateParts(scoreRate(
-        snapshot->score, snapshot->authority.pacemakerStatus.playedNotes));
+        snapshot->score, snapshot->authority.stagePassedNotes));
     return {.value = *id == 102 ? integer : fractional, .supported = true};
+  }
+  case 104:
+    return {.value = snapshot->combo, .supported = true};
+  case 115:
+  case 116:
+  case 155:
+  case 156: {
+    const auto [integer, fractional] = scoreRateParts(scoreRate(
+        snapshot->score, context_.chartModel.staticMetadata.totalNotes));
+    return {.value = (*id == 115 || *id == 155) ? integer : fractional,
+            .supported = true};
+  }
+  case 122:
+  case 123:
+  case 135:
+  case 136:
+  case 157:
+  case 158: {
+    const auto [integer, fractional] = scoreRateParts(scoreRate(
+        targetScore(*snapshot), context_.chartModel.staticMetadata.totalNotes));
+    const bool integerPart = *id == 122 || *id == 135 || *id == 157;
+    return {.value = integerPart ? integer : fractional, .supported = true};
   }
   case 108:
   case 128:
@@ -1511,13 +1831,28 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
     // ScoreDataProperty.getBestScore(): the persisted final EX score.
     return {.value = static_cast<std::int64_t>(snapshot->authority.bestScore),
             .supported = true};
+  case 170:
+    return {.value = static_cast<std::int64_t>(snapshot->authority.bestScore),
+            .supported = true};
   case 152:
+  case 172:
     // NUMBER_DIFF_HIGHSCORE delegates to createDiffHighScoreProperty(),
     // which compares against ScoreDataProperty.getNowBestScore(), including
     // its persisted-ghost progression when available.
     return {.value = static_cast<std::int64_t>(snapshot->score) -
                     bestScoreAtPassedNotes(*snapshot),
             .supported = true};
+  case 154:
+    return {.value = beatorajaNextRank(
+                *snapshot, context_.chartModel.staticMetadata.totalNotes),
+            .supported = true};
+  case 183:
+  case 184: {
+    const auto [integer, fractional] = scoreRateParts(scoreRate(
+        snapshot->authority.bestScore,
+        context_.chartModel.staticMetadata.totalNotes));
+    return {.value = *id == 183 ? integer : fractional, .supported = true};
+  }
   case 121:
   case 151:
     return {.value = targetScore(*snapshot), .supported = true};
@@ -1721,6 +2056,13 @@ SkinPropertyLookup<double> PlaySkinStateBridge::floatProperty(
     return {};
   }
   switch (*id) {
+  case 17:
+    return {.value = snapshot->configuration.masterVolume, .supported = true};
+  case 18:
+    return {.value = snapshot->configuration.keysoundVolume,
+            .supported = true};
+  case 19:
+    return {.value = snapshot->configuration.bgmVolume, .supported = true};
   case 102:
     return {.value = snapshot->authority.loadingState ==
                          PlayfieldLoadingState::Loaded
@@ -1813,6 +2155,8 @@ SkinPropertyLookup<std::string_view> PlaySkinStateBridge::stringProperty(
   }
   const auto &text = context_.chartModel.text;
   switch (*id) {
+  case 2:
+    return {.value = state()->authority.playerName, .supported = true};
   case 50:
     if (context_.model != nullptr) {
       return {.value = context_.model->model.header.name, .supported = true};
@@ -1846,6 +2190,10 @@ SkinPropertyLookup<std::string_view> PlaySkinStateBridge::stringProperty(
     static constexpr std::string_view empty;
     return {.value = empty, .supported = true};
   }
+  case 1030:
+    return {.value = context_.chartModel.chartMd5, .supported = true};
+  case 1031:
+    return {.value = context_.chartModel.chartSha256, .supported = true};
   case 13:
     return {.value = text.genre, .supported = true};
   case 14:
@@ -1855,16 +2203,25 @@ SkinPropertyLookup<std::string_view> PlaySkinStateBridge::stringProperty(
   default:
     break;
   }
+  if (*id >= 150 && *id <= 159) {
+    const std::size_t stage = static_cast<std::size_t>(*id - 150);
+    if (stage < state()->authority.courseStageTitles.size()) {
+      return {.value = state()->authority.courseStageTitles[stage],
+              .supported = true};
+    }
+    static constexpr std::string_view empty;
+    return {.value = empty, .supported = true};
+  }
   // These StringPropertyFactory families intentionally return an empty string
   // outside their owning scenes (selection, result, key config, or practice).
   // A gameplay skin may still declare them, so preserve the upstream empty
   // value instead of turning the destination into an app-specific failure.
-  if (*id == 1 || *id == 2 || *id == 3 || *id == 30 || *id == 50 ||
+  if (*id == 1 || *id == 3 || *id == 30 || *id == 50 ||
       *id == 51 || *id == 60 || *id == 61 || *id == 62 || *id == 86 ||
       *id == 1000 || *id == 1001 || *id == 1002 || *id == 1010 ||
       *id == 1020 || *id == 1021 || *id == 1030 || *id == 1031 ||
       (*id >= 40 && *id <= 49) || (*id >= 100 && *id <= 129) ||
-      (*id >= 150 && *id <= 159) || (*id >= 200 && *id <= 219) ||
+      (*id >= 200 && *id <= 219) ||
       (*id >= 240 && *id <= 283) || (*id >= 1040 && *id <= 1055) ||
       (*id >= 1060 && *id <= 1075) || (*id >= 1080 && *id <= 1095)) {
     static constexpr std::string_view empty;
@@ -1965,6 +2322,7 @@ std::int64_t PlaySkinStateBridge::timerProperty(
                                 snapshot->clock.playTimer.startMicros)))
                : INT64_MIN;
   case 46:
+  case 446:
     return skinStateTimestampMicros(*snapshot,
                                     snapshot->lastJudgeVisualMicros);
   case 48:
@@ -1975,6 +2333,26 @@ std::int64_t PlaySkinStateBridge::timerProperty(
     return fadeoutTimerStartMicros_;
   case 908:
     return musicEndTimerStartMicros_;
+  case 44:
+  case 70:
+  case 71:
+  case 72:
+  case 73:
+  case 74:
+  case 75:
+  case 76:
+  case 77:
+  case 78:
+  case 79:
+  case 348:
+  case 349:
+  case 350:
+  case 351:
+  case 352: {
+    const auto found = pinnedSwitchTimerStarts_.find(*id);
+    return found == pinnedSwitchTimerStarts_.end() ? INT64_MIN
+                                                    : found->second;
+  }
   default:
     // MainStatePropertyLuaApiExporter reads arbitrary nonnegative timer IDs
     // directly, and TimerPropertyFactory recognizes every nonnegative ID.

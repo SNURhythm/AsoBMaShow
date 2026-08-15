@@ -14,6 +14,7 @@
 #include "../../PrepMetronome.h"
 #include "../../repositories/ReplayRepository.h"
 #include "../../replay/ChartReplayCapture.h"
+#include "../../replay/ReplayOption.h"
 #include "../../replay/ReplaySetupProvenance.h"
 #include "../../ResultPresentationUtils.h"
 #include "../../Uuid.h"
@@ -647,43 +648,64 @@ void markReplayMissedNote(bms_parser::Note *note, long long judgedTime) {
   }
 }
 
-std::string gameplayPlayOptionLabel(const StartOptions &options) {
-  std::optional<std::string> option = options.playOption;
-  std::optional<long long> seed = options.playOptionSeed;
-  std::optional<std::string> option2 = options.playOption2;
-  std::optional<long long> seed2 = options.playOption2Seed;
+struct GameplayPlayOptionSelection {
+  std::optional<std::string> option;
+  std::optional<long long> seed;
+  std::optional<std::string> option2;
+  std::optional<long long> seed2;
+};
+
+GameplayPlayOptionSelection
+gameplayPlayOptionSelection(const StartOptions &options) {
+  GameplayPlayOptionSelection selection{.option = options.playOption,
+                                        .seed = options.playOptionSeed,
+                                        .option2 = options.playOption2,
+                                        .seed2 = options.playOption2Seed};
 
   if (options.replayData != nullptr) {
-    if (!option.has_value()) {
-      option = options.replayData->playOption;
+    if (!selection.option.has_value()) {
+      selection.option = options.replayData->playOption;
     }
-    if (!seed.has_value()) {
-      seed = options.replayData->playOptionSeed;
+    if (!selection.seed.has_value()) {
+      selection.seed = options.replayData->playOptionSeed;
     }
-    if (!option2.has_value()) {
-      option2 = options.replayData->playOption2;
+    if (!selection.option2.has_value()) {
+      selection.option2 = options.replayData->playOption2;
     }
-    if (!seed2.has_value()) {
-      seed2 = options.replayData->playOption2Seed;
+    if (!selection.seed2.has_value()) {
+      selection.seed2 = options.replayData->playOption2Seed;
     }
   }
   if (options.gbattleRecordData != nullptr) {
-    if (!option.has_value()) {
-      option = options.gbattleRecordData->playOption;
+    if (!selection.option.has_value()) {
+      selection.option = options.gbattleRecordData->playOption;
     }
-    if (!seed.has_value()) {
-      seed = options.gbattleRecordData->playOptionSeed;
+    if (!selection.seed.has_value()) {
+      selection.seed = options.gbattleRecordData->playOptionSeed;
     }
-    if (!option2.has_value()) {
-      option2 = options.gbattleRecordData->playOption2;
+    if (!selection.option2.has_value()) {
+      selection.option2 = options.gbattleRecordData->playOption2;
     }
-    if (!seed2.has_value()) {
-      seed2 = options.gbattleRecordData->playOption2Seed;
+    if (!selection.seed2.has_value()) {
+      selection.seed2 = options.gbattleRecordData->playOption2Seed;
     }
   }
 
+  return selection;
+}
+
+int gameplayRandomOptionIndex(const std::optional<std::string> &option) {
+  return replay::projectedBeatorajaReplayOptionIndex(
+             option.value_or("NORMAL"))
+      .value_or(0);
+}
+
+std::string gameplayPlayOptionLabel(const StartOptions &options) {
+  const GameplayPlayOptionSelection selection =
+      gameplayPlayOptionSelection(options);
   const std::string label =
-      play_options::formatPlayOptionLabel(option, seed, option2, seed2);
+      play_options::formatPlayOptionLabel(selection.option, selection.seed,
+                                          selection.option2, selection.seed2);
   return label.empty() ? "" : "Option: " + label;
 }
 
@@ -2370,6 +2392,10 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
           this->options, this->chart->Meta, context.settings.notePriorityMode)),
       judge(presentationJudgeForPolicy(rulesetPolicyBuild,
                                        this->chart->Meta.Rank)) {
+  if (isCoursePlayback()) {
+    playfieldCourseConstraintIds =
+        beatorajaCourseConstraintIdsFromJson(options.courseSession->constraintJson);
+  }
   judge.setAllowedNoteRange(practiceAllowedNoteRange(this->options));
   latePoorTiming =
       rulesetPolicyBuild.policy.has_value()
@@ -2393,6 +2419,10 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
       judge(presentationJudgeForPolicy(rulesetPolicyBuild,
                                        this->chart->Meta.Rank)) {
   this->options.ownsChart = true;
+  if (isCoursePlayback()) {
+    playfieldCourseConstraintIds =
+        beatorajaCourseConstraintIdsFromJson(options.courseSession->constraintJson);
+  }
   judge.setAllowedNoteRange(practiceAllowedNoteRange(this->options));
   latePoorTiming =
       rulesetPolicyBuild.policy.has_value()
@@ -2532,6 +2562,9 @@ void GamePlayScene::init() {
       .noteStartPositionPercent = effectiveNoteStartPositionPercent(),
       .laneBeamClockUsesRenderTime = true,
       .showInvisibleNotes = context.settings.showInvisibleNotes,
+      .masterVolume = context.settings.audioVideo.audio.masterVolume,
+      .keysoundVolume = context.settings.audioVideo.audio.keysoundVolume,
+      .bgmVolume = context.settings.audioVideo.audio.bgmVolume,
       .bgaEnabled = context.settings.bgaEnabled,
       .bpmGuideEnabled = assist_options::isBpmGuide(
           options.replayData != nullptr ? options.replayData->assistOption
@@ -2563,6 +2596,8 @@ void GamePlayScene::init() {
               context.settings.touchVisualizationEnabled),
       .replayGhostRenderingEnabled =
           options.replayGhostRenderingEnabled.value_or(true),
+      .judgeAlgorithmImageIndex = beatorajaJudgeAlgorithmImageIndex(
+          context.settings.notePriorityMode),
   };
   playfieldVisualStateStore->setConfiguration(playfieldPresentationConfiguration);
   presentation->configure(playfieldPresentationConfiguration);
@@ -4461,6 +4496,8 @@ void GamePlayScene::capturePlayfieldVisualState(
 
   const auto laneCover = gameplayLaneCoverAuthority(
       playfieldLaneCoverPercent, playfieldLaneCoverEnabled);
+  const GameplayPlayOptionSelection playOptions =
+      gameplayPlayOptionSelection(options);
   PlayfieldAuthorityUpdate authority{
       .currentBpm = currentGameplayBpm,
       .currentScrollRate = currentGameplayScrollRate,
@@ -4486,6 +4523,10 @@ void GamePlayScene::capturePlayfieldVisualState(
       .pacemakerTarget = activePacemakerTarget,
       .pacemakerStatus =
           pacemaker::snapshotForState(activePacemakerTarget, *state),
+      .player1RandomOption = gameplayRandomOptionIndex(playOptions.option),
+      .player2RandomOption = gameplayRandomOptionIndex(playOptions.option2),
+      .doublePlayOption = options.doublePlayFlip ? 1 : 0,
+      .playerName = context.profileManager.activeProfile().displayName,
       .playOptionLabel = gameplayPlayOptionLabel(options),
       .autoPlayMarkVisible =
           options.autoPlay ||
@@ -4497,6 +4538,25 @@ void GamePlayScene::capturePlayfieldVisualState(
                      ? PlayfieldGameplayMode::Practice
                      : PlayfieldGameplayMode::Play),
       .loadingState = PlayfieldLoadingState::Loaded,
+      .courseMode = isCoursePlayback(),
+      .courseStageIndex = isCoursePlayback()
+                              ? static_cast<int>(options.courseSession->currentIndex)
+                              : -1,
+      .courseStageCount = isCoursePlayback()
+                              ? static_cast<int>(options.courseSession->entries.size())
+                              : 0,
+      .courseStageTitles = [&] {
+        std::vector<std::string> titles;
+        if (!isCoursePlayback()) {
+          return titles;
+        }
+        titles.reserve(options.courseSession->entries.size());
+        for (const auto &entry : options.courseSession->entries) {
+          titles.push_back(entry.meta.Title);
+        }
+        return titles;
+      }(),
+      .courseConstraintIds = playfieldCourseConstraintIds,
       .startLaneIndicators = preparationPlan.laneIndicator.lanes,
       .startLaneIndicatorsVisible = startLaneIndicatorsVisible,
       .laneCoverPercent = laneCover.percent,
@@ -4505,6 +4565,7 @@ void GamePlayScene::capturePlayfieldVisualState(
       .liftRatio = 0.0F,
       .hiddenEnabled = false,
       .hiddenRatio = 0.0F,
+      .laneCoverAdjustmentHeld = startButtonPressed || selectButtonPressed,
       .resetLaneCoverVisibleTimeReference =
           playfieldLaneCoverResetPending,
   };

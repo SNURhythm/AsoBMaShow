@@ -14,25 +14,17 @@ source default are not compatibility work for gameplay skins.
 
 ### Boolean properties
 
-- Chart metadata: text availability (`174`–`175`), random sequence
-  (`178`–`179`), BPM stop (`1177`), and banner availability (`192`–`193`).
-- Lane-cover adjustment held state (`270`).
-- Course state: stages (`280`–`283`), final stage (`289`), and course mode
-  (`290`).
-- Score-rank families (`200`–`207`, `220`–`227`, `300`–`307`, `320`–`327`,
-  `340`–`347`).
+- Chart metadata: text availability (`174`–`175`) and decoded banner
+  availability (`192`–`193`). A raw BMS banner path is not equivalent to
+  Beatoraja's successfully decoded `BMSResource` image.
 - Constant scroll (`400`).
 - Practice item availability and selection (`3000`–`3015`, `3020`–`3035`).
 
 ### Integer-value properties
 
-- Profile, wall-clock, FPS, and audio settings: `17`–`37`, `45`–`49`,
-  `57`–`59`, `333`.
-- Score data: max EX score (`72`), stored judgement counts/rates (`80`–`89`),
-  current combo (`104`), rate fragments (`115`–`116`, `122`–`123`,
-  `135`–`136`, `154`–`158`), high-score/best-rate values (`170`, `172`,
-  `174`, `183`–`184`), last-play date/time (`243`–`249`), and rival score
-  details (`271`, `280`–`289`).
+- Profile history, wall-clock, and FPS: `17`–`37`, `45`–`49`, `333`.
+- Stored score history: judgement counts/rates (`80`–`89`), last-play
+  date/time (`243`–`249`), and rival score details (`271`, `280`–`289`).
 - `SongInformation` analysis: density/peak/end-density/total (`360`–`365`,
   `368`). Until the analysis object exists in immutable chart state, retain
   the upstream `Integer.MIN_VALUE` sentinel.
@@ -41,17 +33,19 @@ source default are not compatibility work for gameplay skins.
 
 ### Image-index properties
 
-- Random/target and unrepresented configuration: `42`–`43`, `54`, `61`–`63`,
-  `75`.
+- Target and unrepresented configuration: `61`–`63`, `75`.
 - Favourite song/chart state: `89`–`90`.
 - Custom judge and judge-area configuration: `301`, `303`.
 - Replay-save and unrepresented gameplay configuration: `321`–`324`,
-  `340`–`341`, `343`, `350`–`353`, `360`–`361`, `400`.
-- Replay lane-assignment map: `450`–`469`.
+  `341`, `343`, `350`–`353`, `360`–`361`, `400`.
+
+`450`–`469` are deliberately absent: pinned Beatoraja only exposes replay
+lane assignments from `MusicResult`, and returns zero during `BMSPlayer`
+gameplay.
 
 ### Float and rate properties
 
-- Master/key/BGM volume and practice-item position (`17`–`20`).
+- Practice-item position (`20`).
 - Float loading progress (`165`); integer loading progress exists but only
   models an unloaded/loaded coarse state.
 - Rival judgement rates (`285`–`289`).
@@ -59,19 +53,18 @@ source default are not compatibility work for gameplay skins.
 
 ### String properties
 
-- Rival, player, and selected target: `1`–`3`.
+- Rival and selected target: `1`, `3`.
 - Global profile filters/configuration: `60`–`62`, `86`.
-- Table, version, IR, and chart hashes: `1001`–`1003`, `1010`,
-  `1020`–`1021`, `1030`–`1031`.
-- Course titles (`150`–`159`) and configured target-name neighbours
-  (`200`–`219`).
+- Table, version, and IR: `1001`–`1003`, `1010`, `1020`–`1021`.
+- Configured target-name neighbours (`200`–`219`).
 - Practice item text, labels, and values (`1040`–`1095`).
 
 ### Timers
 
-- Start-input/failure/gauge animation: `1`, `3`, `42`, `44`.
-- Combo and score-rank animations: `446`, `348`–`352`.
-- 1P holds and HCN state: `70`–`79`, `250`–`259`, `270`–`279`.
+- Start-input and failure animation: `1`, `3`.
+- 1P HCN state: `250`–`259`, `270`–`279`. These require JudgeManager's
+  passing/increase state, which is distinct from the already wired long-note
+  hold timers (`70`–`79`).
 - Rhythm (`140`), including Beatoraja's `RhythmTimerProcessor` accumulator,
   section-line reset, BPM, and play-speed inputs. Keep it off until this exact
   state is captured; do not invent a measure pulse.

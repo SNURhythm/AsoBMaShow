@@ -64,6 +64,12 @@ struct PlayfieldPresentationConfig {
   int noteStartPositionPercent = 0;
   bool laneBeamClockUsesRenderTime = false;
   bool showInvisibleNotes = false;
+  // Config.AudioConfig's system/key/background gains, captured when the
+  // presentation begins so gameplay skins read the same profile values in
+  // live play, replay watch, and replay export.
+  float masterVolume = 1.0F;
+  float keysoundVolume = 1.0F;
+  float bgmVolume = 1.0F;
   // Config.getBga's ON/OFF subset captured at play start. Aso has no AUTO
   // mode, so callers map true to BGA_ON (0) and false to BGA_OFF (2).
   bool bgaEnabled = true;
@@ -89,9 +95,29 @@ struct PlayfieldPresentationConfig {
       AppSettings::GaugeBarPosition::World;
   bool touchVisualizationEnabled = true;
   bool replayGhostRenderingEnabled = true;
+  // IntegerPropertyFactory.judgealgorithm (340) exposes only the three
+  // entries in JudgeAlgorithm.defaultAlgorithm. Score is intentionally not
+  // an image index and therefore uses Java's Integer.MIN_VALUE sentinel.
+  std::int32_t judgeAlgorithmImageIndex =
+      std::numeric_limits<std::int32_t>::min();
 
   bool operator==(const PlayfieldPresentationConfig &) const = default;
 };
+
+inline constexpr std::int32_t
+beatorajaJudgeAlgorithmImageIndex(AppSettings::NotePriorityMode mode) noexcept {
+  switch (mode) {
+  case AppSettings::NotePriorityMode::Combo:
+    return 0;
+  case AppSettings::NotePriorityMode::Duration:
+    return 1;
+  case AppSettings::NotePriorityMode::Lowest:
+    return 2;
+  case AppSettings::NotePriorityMode::Score:
+    return std::numeric_limits<std::int32_t>::min();
+  }
+  return std::numeric_limits<std::int32_t>::min();
+}
 
 // Immutable per-judgement timing counters carried from GameplayScoreState to
 // presentation consumers.  This intentionally mirrors only the read model
@@ -144,10 +170,27 @@ struct PlayfieldAuthorityUpdate {
   GameplayGaugeRules gaugeRules;
   pacemaker::Target pacemakerTarget;
   pacemaker::Snapshot pacemakerStatus;
+  // IndexType.option_1p/option_2p/option_dp values. These retain the raw
+  // canonical option identity; display text is deliberately separate.
+  int player1RandomOption = 0;
+  int player2RandomOption = 0;
+  int doublePlayOption = 0;
+  // StringPropertyFactory.player reads PlayerConfig.name. The application's
+  // active profile supplies the equivalent immutable name for a presentation.
+  std::string playerName;
   std::string playOptionLabel;
   bool autoPlayMarkVisible = false;
   PlayfieldGameplayMode gameplayMode = PlayfieldGameplayMode::Unknown;
   PlayfieldLoadingState loadingState = PlayfieldLoadingState::Unknown;
+  // Captured from the active CoursePlaySession or replay-export stage loop.
+  // A negative index and zero count denote ordinary single-chart gameplay.
+  bool courseMode = false;
+  int courseStageIndex = -1;
+  int courseStageCount = 0;
+  std::vector<std::string> courseStageTitles;
+  // CourseData.constraints uses these 1-based IDs. They are intentionally
+  // retained as source identities rather than re-derived from display text.
+  std::vector<int> courseConstraintIds;
   std::vector<int> startLaneIndicators;
   bool startLaneIndicatorsVisible = false;
   int laneCoverPercent = 0;
@@ -156,6 +199,9 @@ struct PlayfieldAuthorityUpdate {
   float liftRatio = 0.0F;
   bool hiddenEnabled = false;
   float hiddenRatio = 0.0F;
+  // BMSPlayer's lane-cover-changing option is true while either physical
+  // Start or Select is held, not only when an adjustment was emitted.
+  bool laneCoverAdjustmentHeld = false;
   bool laneCoverChanged = false;
   ReplayLaneCoverChangeKind laneCoverChangeKind =
       ReplayLaneCoverChangeKind::Value;

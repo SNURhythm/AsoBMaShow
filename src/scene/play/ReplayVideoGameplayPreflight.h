@@ -152,6 +152,7 @@ skinExportFailureMessage(const PresentationFailure &failure);
 preflightReplayGameplayPresentation(
     bms_parser::Chart &, const ReplayData &, const AppSettings &,
     const preparation::Plan &, const PlayfieldPresentationConfig &, int, int,
+    const PlayfieldAuthorityUpdate &initialAuthority,
     IGameplayBgaSubmitter &, GameplaySkinSessionServices,
     display::RendererAccessCoordinator &,
     std::unique_ptr<ReplayPlayfieldPresentation> &,
@@ -172,6 +173,7 @@ struct CourseReplayGameplayPreflightStage {
   PlayfieldPresentationConfig configuration;
   int exportWidth = 0;
   int exportHeight = 0;
+  PlayfieldAuthorityUpdate initialAuthority;
   GameplaySkinSessionServices skinServices;
   std::unique_ptr<ReplayPlayfieldPresentation> &presentation;
   std::optional<skin::SkinGameplayTiming> &selectedSkinTiming;

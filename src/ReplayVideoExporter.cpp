@@ -1,5 +1,6 @@
 #include "ReplayVideoExporter.h"
 #include "replay/CourseReplayConsumer.h"
+#include "replay/ReplayOption.h"
 
 #include "ChartPlaybackDuration.h"
 #include "CourseConstraintUtils.h"
@@ -143,8 +144,11 @@ preflightReplayGameplayPresentation(
     PreparedReplayGameplayPresentation &prepared, ReplayVideoExportLog *log,
     const skin::RuntimeSkinConfigurationSelection *pinnedRuntimeSelection =
         nullptr,
-    const CourseConstraintRules &constraints = {}) {
+    const CourseConstraintRules &constraints = {},
+    const PlayfieldAuthorityUpdate *initialAuthority = nullptr) {
   const auto resolvedOptions = resolveReplayVideoExportOptions(options);
+  const PlayfieldAuthorityUpdate fallbackInitialAuthority{
+      .playerName = context.profileManager.activeProfile().displayName};
   const auto result = replay_video_export::preflightReplayGameplayPresentation(
       chart, replay, settings, preparationPlan,
       replay_video_export::replayGameplayPresentationConfig(
@@ -153,6 +157,8 @@ preflightReplayGameplayPresentation(
           resolvedOptions.renderTouchPoints,
           resolvedOptions.renderReplayGhosts, constraints, replay.assistOption),
       resolvedOptions.width, resolvedOptions.height,
+      initialAuthority != nullptr ? *initialAuthority
+                                  : fallbackInitialAuthority,
       context.jukebox, replayGameplaySkinSessionServices(context),
       context.rendererAccess,
       prepared.presentation, pinnedRuntimeSelection);
@@ -1030,6 +1036,7 @@ struct CourseReplayVideoStage {
   std::unique_ptr<bms_parser::Chart> chart;
   ReplayData replay;
   CourseConstraintRules constraints;
+  std::vector<int> courseConstraintIds;
   preparation::Plan preparationPlan;
   GaugeStateSnapshot initialGaugeState;
   RhythmState resultState;
@@ -1044,6 +1051,7 @@ struct CourseReplayVideoStage {
   CourseReplayVideoStage(std::unique_ptr<bms_parser::Chart> chart,
                          ReplayData replay,
                          CourseConstraintRules constraints,
+                         std::vector<int> courseConstraintIds,
                          preparation::Plan preparationPlan,
                          GaugeStateSnapshot initialGaugeState,
                          RhythmState resultState,
@@ -1053,6 +1061,7 @@ struct CourseReplayVideoStage {
                          long long audioDurationMicros)
       : chart(std::move(chart)), replay(std::move(replay)),
         constraints(std::move(constraints)),
+        courseConstraintIds(std::move(courseConstraintIds)),
         preparationPlan(std::move(preparationPlan)),
         initialGaugeState(std::move(initialGaugeState)),
         resultState(std::move(resultState)), failureMicros(failureMicros),
@@ -1060,6 +1069,16 @@ struct CourseReplayVideoStage {
         resultDurationMicros(resultDurationMicros),
         audioDurationMicros(audioDurationMicros) {}
 };
+
+std::vector<std::string>
+courseReplayStageTitles(const std::vector<CourseReplayVideoStage> &stages) {
+  std::vector<std::string> titles;
+  titles.reserve(stages.size());
+  for (const auto &stage : stages) {
+    titles.push_back(stage.chart != nullptr ? stage.chart->Meta.Title : "");
+  }
+  return titles;
+}
 
 [[nodiscard]] std::optional<ReplayVideoExportResult>
 preflightCourseReplayGameplayPresentations(
@@ -1070,11 +1089,16 @@ preflightCourseReplayGameplayPresentations(
   std::vector<replay_video_export::CourseReplayGameplayPreflightStage>
       preflightStages;
   preflightStages.reserve(stages.size());
-  for (auto &stage : stages) {
+  for (const auto &stage : stages) {
     if (stage.chart == nullptr) {
       return ReplayVideoExportResult{.success = false,
                                      .message = "No course replay stage"};
     }
+  }
+  const std::vector<std::string> courseStageTitles =
+      courseReplayStageTitles(stages);
+  for (std::size_t stageIndex = 0; stageIndex < stages.size(); ++stageIndex) {
+    auto &stage = stages[stageIndex];
     stage.gameplayPresentation.emplace();
     preflightStages.push_back(
         {.chart = *stage.chart,
@@ -1089,6 +1113,14 @@ preflightCourseReplayGameplayPresentations(
              stage.replay.assistOption),
          .exportWidth = resolvedOptions.width,
          .exportHeight = resolvedOptions.height,
+         .initialAuthority = {
+             .playerName = context.profileManager.activeProfile().displayName,
+             .courseMode = true,
+             .courseStageIndex = static_cast<int>(stageIndex),
+             .courseStageCount = static_cast<int>(stages.size()),
+             .courseStageTitles = courseStageTitles,
+             .courseConstraintIds = stage.courseConstraintIds,
+         },
          .skinServices = replayGameplaySkinSessionServices(context),
          .presentation = stage.gameplayPresentation->presentation,
          .selectedSkinTiming = stage.selectedSkinTiming,
@@ -2941,10 +2973,19 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
         .pacemakerTarget = activePacemakerTarget,
         .pacemakerStatus =
             pacemaker::snapshotForState(activePacemakerTarget, pacemakerState),
+        .player1RandomOption = replay::projectedBeatorajaReplayOptionIndex(
+                                   replay.playOption.value_or("NORMAL"))
+                                   .value_or(0),
+        .player2RandomOption = replay::projectedBeatorajaReplayOptionIndex(
+                                   replay.playOption2.value_or("NORMAL"))
+                                   .value_or(0),
+        .doublePlayOption = replay.provenance.doublePlayFlip ? 1 : 0,
+        .playerName = context.profileManager.activeProfile().displayName,
         .playOptionLabel = replayExportPlayOptionLabel(replay),
         .autoPlayMarkVisible = replay.autoPlay,
         .gameplayMode = PlayfieldGameplayMode::Replay,
         .loadingState = PlayfieldLoadingState::Loaded,
+        .courseMode = false,
         .startLaneIndicators = preparationPlan.laneIndicator.lanes,
         .startLaneIndicatorsVisible =
             preparationPlan.indicatorVisibleAt(rawSongTimeMicros),
@@ -3125,6 +3166,10 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
   const int fps = resolvedOptions.fps;
   const long long audioOffsetMicros =
       static_cast<long long>(settings.audioOffsetMs) * 1000LL;
+  const std::vector<int> courseConstraintIds =
+      beatorajaCourseConstraintIdsFromJson(replay.constraintJson);
+  const std::vector<std::string> courseStageTitles =
+      courseReplayStageTitles(stages);
 
   if (width > UINT16_MAX || height > UINT16_MAX) {
     return {.success = false,
@@ -3481,12 +3526,20 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     if (!stage.gameplayPresentation.has_value()) {
       stage.gameplayPresentation.emplace();
     }
+    PlayfieldAuthorityUpdate initialAuthority{
+        .playerName = context.profileManager.activeProfile().displayName,
+        .courseMode = true,
+        .courseStageIndex = static_cast<int>(stageIndex),
+        .courseStageCount = static_cast<int>(stages.size()),
+        .courseStageTitles = courseStageTitles,
+        .courseConstraintIds = stage.courseConstraintIds,
+    };
     if (const auto failure = preflightReplayGameplayPresentation(
             context, chart, stageReplay, settings, stage.preparationPlan,
             resolvedOptions, *stage.gameplayPresentation, log,
             stage.runtimeSkinSelection ? &*stage.runtimeSkinSelection
                                        : nullptr,
-            stage.constraints)) {
+            stage.constraints, &initialAuthority)) {
       bgfxCleanup.runNow();
       return *failure;
     }
@@ -3650,6 +3703,14 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
           .pacemakerStatus =
               pacemaker::snapshotForState(activePacemakerTarget,
                                           pacemakerState),
+          .player1RandomOption = replay::projectedBeatorajaReplayOptionIndex(
+                                     stageReplay.playOption.value_or("NORMAL"))
+                                     .value_or(0),
+          .player2RandomOption = replay::projectedBeatorajaReplayOptionIndex(
+                                     stageReplay.playOption2.value_or("NORMAL"))
+                                     .value_or(0),
+          .doublePlayOption = stageReplay.provenance.doublePlayFlip ? 1 : 0,
+          .playerName = context.profileManager.activeProfile().displayName,
           .gaugeType = replayGaugeType,
           .gaugeAutoShift = replay.gaugeAutoShift,
           .currentGauge = replayGauge,
@@ -3658,6 +3719,11 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
           .autoPlayMarkVisible = stageReplay.autoPlay,
           .gameplayMode = PlayfieldGameplayMode::Replay,
           .loadingState = PlayfieldLoadingState::Loaded,
+          .courseMode = true,
+          .courseStageIndex = static_cast<int>(stageIndex),
+          .courseStageCount = static_cast<int>(stages.size()),
+          .courseStageTitles = courseStageTitles,
+          .courseConstraintIds = courseConstraintIds,
           .startLaneIndicators = stage.preparationPlan.laneIndicator.lanes,
           .startLaneIndicatorsVisible =
               stage.preparationPlan.indicatorVisibleAt(rawSongTimeMicros),
@@ -4118,6 +4184,8 @@ ReplayVideoExportResult exportCourseReplayImpl(
   const auto resolvedOptions = resolveReplayVideoExportOptions(options);
   const CourseConstraintSettings courseConstraintSettings =
       courseConstraintSettingsFromJson(replay.constraintJson);
+  const std::vector<int> courseConstraintIds =
+      beatorajaCourseConstraintIdsFromJson(replay.constraintJson);
   std::vector<CourseReplayVideoStage> stages;
   stages.reserve(replay.stages.size());
   std::optional<GaugeStateSnapshot> carriedGauge;
@@ -4194,7 +4262,7 @@ ReplayVideoExportResult exportCourseReplayImpl(
                        : renderedFinal;
     stages.emplace_back(
         std::move(chart), std::move(exportStageReplay),
-        courseConstraintSettings.rules,
+        courseConstraintSettings.rules, courseConstraintIds,
         std::move(stagePreparationPlan),
         initialGaugeState.gaugeSnapshot(), std::move(resultState),
         failureMicros, 0, resultDurationMicros, 0);

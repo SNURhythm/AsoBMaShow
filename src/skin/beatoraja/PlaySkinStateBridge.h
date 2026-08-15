@@ -202,6 +202,7 @@ private:
   std::int64_t musicEndTimerStartMicros_ = kPlayfieldTimestampOff;
   std::int64_t fadeoutTimerStartMicros_ = kPlayfieldTimestampOff;
   std::int64_t fullComboTimerStartMicros_ = kPlayfieldTimestampOff;
+  std::unordered_map<int, std::int64_t> pinnedSwitchTimerStarts_;
   std::vector<SkinDiagnostic> diagnostics_;
 };
 

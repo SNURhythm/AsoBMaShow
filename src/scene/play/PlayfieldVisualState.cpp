@@ -49,10 +49,19 @@ bool PlayfieldAuthorityUpdate::operator==(
          currentGauge == other.currentGauge && gaugeRules == other.gaugeRules &&
          sameTarget(pacemakerTarget, other.pacemakerTarget) &&
          sameSnapshot(pacemakerStatus, other.pacemakerStatus) &&
+         player1RandomOption == other.player1RandomOption &&
+         player2RandomOption == other.player2RandomOption &&
+         doublePlayOption == other.doublePlayOption &&
+         playerName == other.playerName &&
          playOptionLabel == other.playOptionLabel &&
          autoPlayMarkVisible == other.autoPlayMarkVisible &&
          gameplayMode == other.gameplayMode &&
          loadingState == other.loadingState &&
+         courseMode == other.courseMode &&
+         courseStageIndex == other.courseStageIndex &&
+         courseStageCount == other.courseStageCount &&
+         courseStageTitles == other.courseStageTitles &&
+         courseConstraintIds == other.courseConstraintIds &&
          startLaneIndicators == other.startLaneIndicators &&
          startLaneIndicatorsVisible == other.startLaneIndicatorsVisible &&
          laneCoverPercent == other.laneCoverPercent &&
@@ -60,6 +69,7 @@ bool PlayfieldAuthorityUpdate::operator==(
          liftEnabled == other.liftEnabled && liftRatio == other.liftRatio &&
          hiddenEnabled == other.hiddenEnabled &&
          hiddenRatio == other.hiddenRatio &&
+         laneCoverAdjustmentHeld == other.laneCoverAdjustmentHeld &&
          laneCoverChanged == other.laneCoverChanged &&
          laneCoverChangeKind == other.laneCoverChangeKind &&
          resetLaneCoverVisibleTimeReference ==

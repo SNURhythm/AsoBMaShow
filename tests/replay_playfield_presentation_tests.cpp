@@ -396,6 +396,9 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
   settings.laneBeamLengthPercent = 71;
   settings.noteStartPositionPercent = 40;
   settings.showInvisibleNotes = true;
+  settings.audioVideo.audio.masterVolume = 0.25F;
+  settings.audioVideo.audio.keysoundVolume = 0.5F;
+  settings.audioVideo.audio.bgmVolume = 0.75F;
   settings.bgaEnabled = false;
   settings.hispeedAutoAdjust = true;
   settings.markProcessedNotes = true;
@@ -413,6 +416,7 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
   settings.judgementTimingMillisecondsCriteria =
       AppSettings::JudgementTimingDisplayCriteria::PGreatOrBelow;
   settings.gaugeBarPosition = AppSettings::GaugeBarPosition::Left;
+  settings.notePriorityMode = AppSettings::NotePriorityMode::Duration;
 
   bms_parser::Chart chart;
   chart.Meta.Bpm = 120.0;
@@ -437,6 +441,9 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
              configuration.laneBeamLengthPercent == 71 &&
              configuration.noteStartPositionPercent == 40 &&
              configuration.showInvisibleNotes &&
+             configuration.masterVolume == 0.25F &&
+             configuration.keysoundVolume == 0.5F &&
+             configuration.bgmVolume == 0.75F &&
              !configuration.bgaEnabled &&
              configuration.hispeedAutoAdjust &&
              configuration.markProcessedNotes &&
@@ -454,6 +461,7 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
              configuration.millisecondsCriteria ==
                  AppSettings::JudgementTimingDisplayCriteria::PGreatOrBelow &&
              configuration.gaugeBarPosition == AppSettings::GaugeBarPosition::Left &&
+             configuration.judgeAlgorithmImageIndex == 1 &&
              !configuration.touchVisualizationEnabled &&
              !configuration.replayGhostRenderingEnabled,
          "replay export configuration retains all gameplay presentation settings");
@@ -900,13 +908,16 @@ void testSelectedNormalPreflightAndDestructionUseRendererOwnership() {
 
   std::unique_ptr<ReplayPlayfieldPresentation> presentation;
   const auto failure = replay_video_export::preflightReplayGameplayPresentation(
-      chart, replay, settings, plan, configuration, 3840, 2160, bga,
+      chart, replay, settings, plan, configuration, 3840, 2160,
+      {.playerName = "preflight-player"}, bga,
       fixture.services(), rendererAccess, presentation);
   expect(!failure && presentation != nullptr && creationBlockedDisplay &&
              fixture.receivedInitialState->has_value() &&
              (*fixture.receivedInitialState)->clock.serial == 1 &&
              (*fixture.receivedInitialState)->sceneStartMicros == -2'000'000 &&
              (*fixture.receivedInitialState)->playStartMicros == 0 &&
+             (*fixture.receivedInitialState)->authority.playerName ==
+                 "preflight-player" &&
              fixture.receivedInitialProjection->has_value() &&
              (*fixture.receivedInitialProjection)->frameSerial == 1 &&
              fixture.receivedSafeUiBounds->has_value() &&
@@ -1036,7 +1047,7 @@ void testRealNormalExportPreflightStopsAudioAndMp4Work() {
                                                     exportActive);
   std::unique_ptr<ReplayPlayfieldPresentation> presentation;
   const auto preflight = replay_video_export::preflightReplayGameplayPresentation(
-      chart, replay, settings, plan, configuration, 1280, 720, bga,
+      chart, replay, settings, plan, configuration, 1280, 720, {}, bga,
       std::move(skinServices), rendererAccess, presentation);
   int fakeAudioWork = 0;
   int fakeMp4Work = 0;
@@ -1172,6 +1183,12 @@ void testSelectedCoursePreflightUsesNonWidescreenLogicalBounds() {
                     .configuration = configuration,
                     .exportWidth = 3840,
                     .exportHeight = 1600,
+                    .initialAuthority = {.playerName = "course-player",
+                                         .courseMode = true,
+                                         .courseStageIndex = 0,
+                                         .courseStageCount = 1,
+                                         .courseStageTitles = {"course-stage"},
+                                         .courseConstraintIds = {4}},
                     .skinServices = fixture.services(),
                     .presentation = presentation,
                     .selectedSkinTiming = selectedSkinTiming,
@@ -1188,6 +1205,16 @@ void testSelectedCoursePreflightUsesNonWidescreenLogicalBounds() {
              fixture.receivedInitialState->has_value() &&
              (*fixture.receivedInitialState)->clock.serial == 1,
          "course selected-skin preflight validates logical bounds without retaining a session");
+  expect((*fixture.receivedInitialState)->authority.playerName ==
+                 "course-player" &&
+             (*fixture.receivedInitialState)->authority.courseMode &&
+             (*fixture.receivedInitialState)->authority.courseStageIndex == 0 &&
+             (*fixture.receivedInitialState)->authority.courseStageCount == 1 &&
+             (*fixture.receivedInitialState)->authority.courseStageTitles ==
+                 std::vector<std::string>{"course-stage"} &&
+             (*fixture.receivedInitialState)->authority.courseConstraintIds ==
+                 std::vector<int>{4},
+         "course selected-skin preflight receives the same authoritative state as rendering");
   replay_video_export::destroyReplayGameplayPresentation(rendererAccess,
                                                          presentation);
 }

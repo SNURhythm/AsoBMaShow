@@ -111,6 +111,8 @@ struct PlayfieldChartStaticMetadata {
   bool hasHellChargeNote = false;
   int selectedLongNoteMode = 1;
   bool hasBga = false;
+  bool hasRandomSequence = false;
+  bool hasBpmStop = false;
   std::string stageFilePath;
   std::string backBmpPath;
 
@@ -126,6 +128,7 @@ struct ChartVisualBgaPoorSequence {
 };
 
 struct PlayfieldChartVisualModel {
+  std::string chartMd5;
   std::string chartSha256;
   int keyCount = 0;
   PlayfieldChartTextMetadata text;

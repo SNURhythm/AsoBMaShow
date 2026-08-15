@@ -66,6 +66,9 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
       .noteStartPositionPercent = noteStartPositionPercent,
       .laneBeamClockUsesRenderTime = true,
       .showInvisibleNotes = settings.showInvisibleNotes,
+      .masterVolume = settings.audioVideo.audio.masterVolume,
+      .keysoundVolume = settings.audioVideo.audio.keysoundVolume,
+      .bgmVolume = settings.audioVideo.audio.bgmVolume,
       .bgaEnabled = settings.bgaEnabled,
       .bpmGuideEnabled = assist_options::isBpmGuide(assistOption),
       .hispeedAutoAdjust = settings.hispeedAutoAdjust,
@@ -86,6 +89,8 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
       .gaugeBarPosition = settings.gaugeBarPosition,
       .touchVisualizationEnabled = touchVisualizationEnabled,
       .replayGhostRenderingEnabled = replayGhostRenderingEnabled,
+      .judgeAlgorithmImageIndex =
+          beatorajaJudgeAlgorithmImageIndex(settings.notePriorityMode),
   };
 }
 
@@ -287,7 +292,8 @@ std::optional<ReplayVideoExportResult> preflightReplayGameplayPresentation(
     bms_parser::Chart &chart, const ReplayData &replay,
     const AppSettings &settings, const preparation::Plan &plan,
     const PlayfieldPresentationConfig &configuration, int exportWidth,
-    int exportHeight, IGameplayBgaSubmitter &bga,
+    int exportHeight, const PlayfieldAuthorityUpdate &initialAuthority,
+    IGameplayBgaSubmitter &bga,
     GameplaySkinSessionServices skinServices,
     display::RendererAccessCoordinator &rendererAccess,
     std::unique_ptr<ReplayPlayfieldPresentation> &presentation,
@@ -299,6 +305,7 @@ std::optional<ReplayVideoExportResult> preflightReplayGameplayPresentation(
   initialState.clock = frame.clock;
   initialState.sceneStartMicros = frame.sceneStartMicros;
   initialState.playStartMicros = frame.playStartMicros;
+  initialState.authority = initialAuthority;
   // This is the same initially-selected timeline state that LaneRenderer
   // presents before its first frame.  It lets a skin's initial properties
   // (notably 312/313) agree with the configured live Hi-Speed immediately.
@@ -362,7 +369,8 @@ preflightCourseReplayGameplayPresentations(
     stage.runtimeSelection.reset();
     if (const auto failure = preflightReplayGameplayPresentation(
             stage.chart, stage.replay, settings, stage.preparationPlan,
-            stage.configuration, stage.exportWidth, stage.exportHeight, bga,
+            stage.configuration, stage.exportWidth, stage.exportHeight,
+            stage.initialAuthority, bga,
             std::move(stage.skinServices), rendererAccess,
             stage.presentation)) {
       for (auto &prepared : stages) {

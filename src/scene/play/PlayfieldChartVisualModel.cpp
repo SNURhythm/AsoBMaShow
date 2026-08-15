@@ -389,6 +389,7 @@ PlayfieldChartVisualModel
 buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
                                int longNoteModeOverride) {
   PlayfieldChartVisualModel result;
+  result.chartMd5 = chart.Meta.MD5;
   result.chartSha256 = chart.Meta.SHA256;
   result.keyCount = chart.Meta.KeyMode;
   result.text.title = chart.Meta.Title;
@@ -416,6 +417,15 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
       beatorajaNoteCounts(chart, longNoteModeOverride);
   const BeatorajaLongNoteFeatures longNoteFeatures =
       beatorajaLongNoteFeatures(chart);
+  const bool hasBpmStop = std::ranges::any_of(
+      chart.Measures, [](const bms_parser::Measure *measure) {
+        return measure != nullptr && std::ranges::any_of(
+                   measure->TimeLines,
+                   [](const bms_parser::TimeLine *timeline) {
+                     return timeline != nullptr &&
+                            timeline->GetStopDuration() > 0.0;
+                   });
+      });
   result.staticMetadata = {
       .difficulty = chart.Meta.Difficulty,
       .judgeRank = chart.Meta.Rank,
@@ -442,6 +452,8 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
                                   ? longNoteModeOverride
                                   : 1,
       .hasBga = !chart.ReferencedBmpTable.empty(),
+      .hasRandomSequence = !chart.Meta.RandomValues.empty(),
+      .hasBpmStop = hasBpmStop,
       .stageFilePath = chart.Meta.StageFile.generic_string(),
       .backBmpPath = chart.Meta.BackBmp.generic_string(),
   };

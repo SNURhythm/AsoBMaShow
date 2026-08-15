@@ -128,6 +128,7 @@ ReplayPlayfieldPresentationCreateResult ReplayPlayfieldPresentation::create(
   if (creation.skinInput.initialState != nullptr) {
     state->setSceneStartMicros(creation.skinInput.initialState->sceneStartMicros);
     state->setPlayStartMicros(creation.skinInput.initialState->playStartMicros);
+    state->applyAuthorityUpdate(creation.skinInput.initialState->authority);
   }
 
   auto builtIn = createBuiltInPlayfieldPresentation({
