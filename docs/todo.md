@@ -14,16 +14,13 @@ source default are not compatibility work for gameplay skins.
 
 ### Boolean properties
 
-- BGA enabled (`40`, `41`) and replay-off (`82`).
-- Chart metadata: key-mode flags (`160`–`164`, `1160`–`1161`), text
-  availability (`174`–`175`), random sequence (`178`–`179`), BPM stop
-  (`1177`), and banner availability (`192`–`193`).
+- Chart metadata: text availability (`174`–`175`), random sequence
+  (`178`–`179`), BPM stop (`1177`), and banner availability (`192`–`193`).
 - Lane-cover adjustment held state (`270`).
 - Course state: stages (`280`–`283`), final stage (`289`), and course mode
   (`290`).
 - Score-rank families (`200`–`207`, `220`–`227`, `300`–`307`, `320`–`327`,
   `340`–`347`).
-- EX-gauge classification (`1046`).
 - Constant scroll (`400`).
 - Practice item availability and selection (`3000`–`3015`, `3020`–`3035`).
 
@@ -39,28 +36,21 @@ source default are not compatibility work for gameplay skins.
 - `SongInformation` analysis: density/peak/end-density/total (`360`–`365`,
   `368`). Until the analysis object exists in immutable chart state, retain
   the upstream `Integer.MIN_VALUE` sentinel.
-- Judge rank (`400`), total early/late (`423`–`424`), and poor-plus-miss
-  (`426`).
 - Player 2/3 judge-duration values (`526`–`527`) are currently hard-coded to
   zero instead of reading the equivalent player slot.
 
 ### Image-index properties
 
-- Gauge/random/Hi-Speed/target/BGA configuration: `40`, `42`–`43`, `54`–`55`,
-  `61`–`63`, `72`, `75`, `78`.
+- Random/target and unrepresented configuration: `42`–`43`, `54`, `61`–`63`,
+  `75`.
 - Favourite song/chart state: `89`–`90`.
-- Custom judge, judge-area, and BPM-guide configuration: `301`, `303`, `306`.
-- Replay-save and gameplay configuration: `321`–`324`, `330`–`332`,
-  `340`–`343`, `350`–`353`, `360`–`361`, `400`.
+- Custom judge and judge-area configuration: `301`, `303`.
+- Replay-save and unrepresented gameplay configuration: `321`–`324`,
+  `340`–`341`, `343`, `350`–`353`, `360`–`361`, `400`.
 - Replay lane-assignment map: `450`–`469`.
-
-Some of these already have an authoritative Aso state and should be simple
-bridge work: gauge type/auto-shift, lane cover/lift/hidden, BPM guide, and
-Hi-Speed fix/auto-adjust.
 
 ### Float and rate properties
 
-- Music-progress alias (`101`).
 - Master/key/BGM volume and practice-item position (`17`–`20`).
 - Float loading progress (`165`); integer loading progress exists but only
   models an unloaded/loaded coarse state.
@@ -70,7 +60,6 @@ Hi-Speed fix/auto-adjust.
 ### String properties
 
 - Rival, player, and selected target: `1`–`3`.
-- Active skin name/author: `50`–`51`.
 - Global profile filters/configuration: `60`–`62`, `86`.
 - Table, version, IR, and chart hashes: `1001`–`1003`, `1010`,
   `1020`–`1021`, `1030`–`1031`.

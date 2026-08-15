@@ -992,6 +992,11 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
     return {.value = true, .supported = true};
   case 33:
     return {.value = false, .supported = true};
+  case 40:
+  case 41:
+    return {.value = *id == 41 ? context_.chartModel.staticMetadata.hasBga
+                                : !context_.chartModel.staticMetadata.hasBga,
+            .supported = true};
   case 42:
     return {.value = gaugeTypeIndex(snapshot->authority.gaugeType) <= 2,
             .supported = true};
@@ -1010,6 +1015,12 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
     return {.value = snapshot->authority.gameplayMode ==
                          PlayfieldGameplayMode::Replay,
             .supported = true};
+  case 82:
+    return {.value = snapshot->authority.gameplayMode ==
+                         PlayfieldGameplayMode::Play ||
+                         snapshot->authority.gameplayMode ==
+                             PlayfieldGameplayMode::Practice,
+            .supported = true};
   case 400:
     // BooleanPropertyFactory's OPTION_CONSTANT returns false outside a
     // player/selector with an enabled constant play config. AsoBMaShow has no
@@ -1021,6 +1032,33 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
     return {.value = snapshot->authority.liftEnabled, .supported = true};
   case 273:
     return {.value = snapshot->authority.hiddenEnabled, .supported = true};
+  case 160:
+  case 161:
+  case 162:
+  case 163:
+  case 164:
+  case 1160:
+  case 1161: {
+    // BooleanPropertyFactory compares SongData's Mode id. Aso's immutable
+    // visual model retains that same canonical key-mode count.
+    const int keyMode = context_.chartModel.keyCount;
+    const int expected = *id == 160   ? 7
+                         : *id == 161 ? 5
+                         : *id == 162 ? 14
+                         : *id == 163 ? 10
+                         : *id == 164 ? 9
+                         : *id == 1160 ? 24
+                                       : 48;
+    return {.value = keyMode == expected, .supported = true};
+  }
+  case 1046: {
+    // BooleanPropertyFactory.gauge_ex accepts Beatoraja gauge indexes
+    // 0, 1, 4, 5, 7, and 8. Aso's authoritative gauge catalog contains the
+    // shared 0..5 entries; its indexes match those source entries exactly.
+    const int type = gaugeTypeIndex(snapshot->authority.gaugeType);
+    return {.value = type == 0 || type == 1 || type == 4 || type == 5,
+            .supported = true};
+  }
   case 172:
   case 173: {
     const bool hasLongNote = std::ranges::any_of(
@@ -1191,6 +1229,40 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
     if (*id == 305) {
       return {.value = snapshot->configuration.markProcessedNotes ? 1 : 0,
               .supported = true};
+    }
+    switch (*id) {
+    case 40:
+      return {.value = gaugeTypeIndex(snapshot->authority.gaugeType),
+              .supported = true};
+    case 55:
+      return {.value = static_cast<int>(snapshot->configuration.hispeedFixMode),
+              .supported = true};
+    case 72:
+      // Config.BGA_ON is 0 and Config.BGA_OFF is 2. Aso has no source-faithful
+      // equivalent of Config.BGA_AUTO (1), so do not synthesize that state.
+      return {.value = snapshot->configuration.bgaEnabled ? 0 : 2,
+              .supported = true};
+    case 78:
+      return {.value = gaugeAutoShiftModeValue(
+                  snapshot->authority.gaugeAutoShift),
+              .supported = true};
+    case 306:
+      return {.value = snapshot->configuration.bpmGuideEnabled ? 1 : 0,
+              .supported = true};
+    case 330:
+      return {.value = snapshot->authority.laneCoverEnabled ? 1 : 0,
+              .supported = true};
+    case 331:
+      return {.value = snapshot->authority.liftEnabled ? 1 : 0,
+              .supported = true};
+    case 332:
+      return {.value = snapshot->authority.hiddenEnabled ? 1 : 0,
+              .supported = true};
+    case 342:
+      return {.value = snapshot->configuration.hispeedAutoAdjust ? 1 : 0,
+              .supported = true};
+    default:
+      break;
     }
     // IntegerPropertyFactory accepts the complete unsigned cache domain.
     // An unavailable image-index source naturally selects frame zero, which
@@ -1500,8 +1572,25 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
   }
   case 420:
     return {.value = capturedJudgeCount(*snapshot, Kpoor), .supported = true};
+  case 423:
+  case 424: {
+    const bool fast = *id == 423;
+    return {.value = capturedJudgeFastSlowCount(*snapshot, Great, fast) +
+                         capturedJudgeFastSlowCount(*snapshot, Good, fast) +
+                         capturedJudgeFastSlowCount(*snapshot, Bad, fast) +
+                         capturedJudgeFastSlowCount(*snapshot, Poor, fast) +
+                         capturedJudgeFastSlowCount(*snapshot, Kpoor, fast),
+            .supported = true};
+  }
   case 425:
     return {.value = snapshot->authority.comboBreak, .supported = true};
+  case 426:
+    return {.value = capturedJudgeCount(*snapshot, Poor) +
+                         capturedJudgeCount(*snapshot, Kpoor),
+            .supported = true};
+  case 400:
+    return {.value = context_.chartModel.staticMetadata.judgeRank,
+            .supported = true};
   case 525:
     // IntegerPropertyFactory's judge_duration1 reads
     // JudgeManager.getRecentJudgeTiming().  Beatoraja stores an early input
@@ -1676,7 +1765,7 @@ SkinPropertyLookup<double> PlaySkinStateBridge::floatProperty(
   default:
     break;
   }
-  if (*id == 6) {
+  if (*id == 6 || *id == 101) {
     if (!snapshot->clock.playTimer.elapsedMillisExact) {
       return {};
     }
@@ -1724,6 +1813,16 @@ SkinPropertyLookup<std::string_view> PlaySkinStateBridge::stringProperty(
   }
   const auto &text = context_.chartModel.text;
   switch (*id) {
+  case 50:
+    if (context_.model != nullptr) {
+      return {.value = context_.model->model.header.name, .supported = true};
+    }
+    break;
+  case 51:
+    if (context_.model != nullptr) {
+      return {.value = context_.model->model.header.author, .supported = true};
+    }
+    break;
   case 10:
     return {.value = text.title, .supported = true};
   case 11:

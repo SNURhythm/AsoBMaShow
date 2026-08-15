@@ -64,8 +64,13 @@ struct PlayfieldPresentationConfig {
   int noteStartPositionPercent = 0;
   bool laneBeamClockUsesRenderTime = false;
   bool showInvisibleNotes = false;
+  // Config.getBga's ON/OFF subset captured at play start. Aso has no AUTO
+  // mode, so callers map true to BGA_ON (0) and false to BGA_OFF (2).
+  bool bgaEnabled = true;
   // BMSPlayerConfig.bpmguide controls the optional BPM/STOP guide lines.
   bool bpmGuideEnabled = false;
+  // PlayConfig.isEnableHispeedAutoAdjust.
+  bool hispeedAutoAdjust = false;
   bool markProcessedNotes = false;
   bool judgementIndicatorEnabled = true;
   float judgementIndicatorY = 0.0F;

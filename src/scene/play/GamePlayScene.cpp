@@ -2532,9 +2532,11 @@ void GamePlayScene::init() {
       .noteStartPositionPercent = effectiveNoteStartPositionPercent(),
       .laneBeamClockUsesRenderTime = true,
       .showInvisibleNotes = context.settings.showInvisibleNotes,
+      .bgaEnabled = context.settings.bgaEnabled,
       .bpmGuideEnabled = assist_options::isBpmGuide(
           options.replayData != nullptr ? options.replayData->assistOption
                                         : options.assistOption),
+      .hispeedAutoAdjust = context.settings.hispeedAutoAdjust,
       .markProcessedNotes = context.settings.markProcessedNotes,
       .judgementIndicatorEnabled =
           context.settings.judgementIndicatorEnabled,

@@ -396,6 +396,8 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
   settings.laneBeamLengthPercent = 71;
   settings.noteStartPositionPercent = 40;
   settings.showInvisibleNotes = true;
+  settings.bgaEnabled = false;
+  settings.hispeedAutoAdjust = true;
   settings.markProcessedNotes = true;
   settings.judgementIndicatorEnabled = false;
   settings.judgementIndicatorY = 0.25F;
@@ -435,6 +437,8 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
              configuration.laneBeamLengthPercent == 71 &&
              configuration.noteStartPositionPercent == 40 &&
              configuration.showInvisibleNotes &&
+             !configuration.bgaEnabled &&
+             configuration.hispeedAutoAdjust &&
              configuration.markProcessedNotes &&
              !configuration.judgementIndicatorEnabled &&
              configuration.judgementIndicatorY == 0.25F &&

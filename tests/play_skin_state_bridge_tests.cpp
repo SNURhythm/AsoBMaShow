@@ -792,6 +792,105 @@ void testGameplayModeAndLoadingBooleanProperties() {
   bridge.discardFrame();
 }
 
+void testExistingGameplayStatePropertyWiring() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+  PlayfieldChartVisualModel chart;
+  chart.keyCount = 14;
+  chart.staticMetadata = {.judgeRank = 42, .hasBga = true};
+  ValidatedBeatorajaSkinModel model;
+  model.model.header.name = "Pinned gameplay skin";
+  model.model.header.author = "Skin author";
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = runtime.runtime(),
+                              .mutationTable = mutations});
+
+  auto state = stateAt(205);
+  state.authority.gameplayMode = PlayfieldGameplayMode::Practice;
+  state.authority.gaugeType = GaugeType::ExHard;
+  state.authority.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
+  state.authority.laneCoverEnabled = true;
+  state.authority.liftEnabled = true;
+  state.authority.hiddenEnabled = false;
+  state.configuration.hispeedFixMode = AppSettings::HiSpeedFixMode::Max;
+  state.configuration.hispeedAutoAdjust = true;
+  state.configuration.bpmGuideEnabled = true;
+  state.clock.playTimer = {.active = true,
+                           .startMicros = 0,
+                           .elapsedMillisExact = true,
+                           .playtimeMillis = 5'000};
+  state.authority.judgementCounters = {
+      {PGreat, 99}, {Great, 3}, {Good, 4},
+      {Bad, 5},     {Poor, 6},  {Kpoor, 7}};
+  state.authority.judgementFastSlowCounters = {
+      {PGreat, {.fast = 11, .slow = 12}},
+      {Great, {.fast = 1, .slow = 2}},
+      {Good, {.fast = 3, .slow = 4}},
+      {Bad, {.fast = 5, .slow = 6}},
+      {Poor, {.fast = 7, .slow = 8}},
+      {Kpoor, {.fast = 9, .slow = 10}}};
+  bridge.beginFrame(state, projectionAt(205));
+
+  for (const auto [id, expected] : std::array{
+           std::pair{40, false}, std::pair{41, true}, std::pair{82, true},
+           std::pair{160, false}, std::pair{161, false},
+           std::pair{162, true}, std::pair{163, false},
+           std::pair{164, false}, std::pair{1160, false},
+           std::pair{1161, false}, std::pair{1046, true}}) {
+    const auto value = bridge.booleanProperty({id});
+    expect(value.supported && value.value == expected,
+           "existing gameplay boolean property uses the pinned source: " +
+               std::to_string(id));
+  }
+  for (const auto [id, expected] : std::array{
+           std::pair{40, 4LL}, std::pair{55, 2LL}, std::pair{78, 4LL},
+           std::pair{72, 0LL}, std::pair{306, 1LL}, std::pair{330, 1LL},
+           std::pair{331, 1LL}, std::pair{332, 0LL}, std::pair{342, 1LL}}) {
+    const auto value = bridge.integerProperty(
+        {id}, SkinIntegerPropertyDomain::ImageIndex);
+    expect(value.supported && value.value == expected,
+           "existing gameplay image index uses the pinned source: " +
+               std::to_string(id));
+  }
+  const auto progress = bridge.floatProperty({101});
+  expect(progress.supported && progress.value == bridge.floatProperty({6}).value,
+         "music progress bar is the same pinned source as music progress");
+  expect(bridge.integerProperty({400}).supported &&
+             bridge.integerProperty({400}).value == 42 &&
+             bridge.integerProperty({423}).supported &&
+             bridge.integerProperty({423}).value == 25 &&
+             bridge.integerProperty({424}).supported &&
+             bridge.integerProperty({424}).value == 30 &&
+             bridge.integerProperty({426}).supported &&
+             bridge.integerProperty({426}).value == 13,
+         "judge-rank and aggregate judge counters use captured gameplay state");
+  expect(bridge.stringProperty({50}).supported &&
+             bridge.stringProperty({50}).value == "Pinned gameplay skin" &&
+             bridge.stringProperty({51}).supported &&
+             bridge.stringProperty({51}).value == "Skin author",
+         "skin name and author use the decoded active skin header");
+  bridge.discardFrame();
+
+  state.clock.serial = 206;
+  state.configuration.bgaEnabled = false;
+  bridge.beginFrame(state, projectionAt(206));
+  const auto bgaOff = bridge.booleanProperty({40});
+  const auto bgaOn = bridge.booleanProperty({41});
+  const auto bgaIndex = bridge.integerProperty(
+      {72}, SkinIntegerPropertyDomain::ImageIndex);
+  expect(bgaOff.supported && !bgaOff.value && bgaOn.supported && bgaOn.value &&
+             bgaIndex.supported && bgaIndex.value == 2,
+         "BGA resource selectors and the global BGA mode use their separate "
+         "pinned sources");
+  bridge.discardFrame();
+}
+
 void testPlayTimerPropertiesMatchPinnedJavaConversions() {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
@@ -1950,6 +2049,7 @@ int main() {
   testBridgeOwnsSnapshotAndClosesEachFrameExactlyOnce();
   testFramePropertiesUseAuthoritativeGaugeAndTimerRules();
   testGameplayModeAndLoadingBooleanProperties();
+  testExistingGameplayStatePropertyWiring();
   testPlayTimerPropertiesMatchPinnedJavaConversions();
   testReadyAndLiveTimersUseTheSharedSkinStateClock();
   testClearAndFullComboTimersFollowPinnedBmsPlayerState();
