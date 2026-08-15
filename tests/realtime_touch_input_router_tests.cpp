@@ -1064,6 +1064,59 @@ void testSpinScratchWaitsForAnAngularStepBeforePressing() {
           "a completed clockwise angular step produces the canonical scratch press");
 }
 
+void testSpinScratchDefersAngularTrackingUntilFingerLeavesCenterDeadZone() {
+  gameplay::RealtimeTouchLayout layout;
+  layout.keyMode = 7;
+  layout.laneRegions = {{
+      .bottomLeft = {0.20F, 0.80F},
+      .bottomRight = {0.80F, 0.80F},
+      .topLeft = {0.20F, 0.20F},
+      .topRight = {0.80F, 0.20F},
+      .lane = 7,
+      .scratch = true,
+      .spinScratch = true,
+      .requiresInside = true,
+      .circle = gameplay::RealtimeTouchCircle{
+          .center = {0.50F, 0.50F}, .radiusX = 0.30F, .radiusY = 0.30F},
+  }};
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      97, std::move(layout), {.context = &capture, .emit = &InputCapture::emit});
+
+  require(router.consume({.fingerId = 304,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = 0.50F,
+                          .normalizedY = 0.50F,
+                          .steadyTimestampMicros = 1'000}) &&
+              router.consume({.fingerId = 304,
+                              .phase = gameplay::RealtimeTouchPhase::Move,
+                              .normalizedX = 0.50F,
+                              .normalizedY = 0.51F,
+                              .steadyTimestampMicros = 1'010}),
+          "spin scratch accepts a small radial center movement");
+  require(capture.events.empty(),
+          "spin scratch does not convert a center movement into turntable ticks");
+
+  require(router.consume({.fingerId = 304,
+                          .phase = gameplay::RealtimeTouchPhase::Move,
+                          .normalizedX = 0.80F,
+                          .normalizedY = 0.50F,
+                          .steadyTimestampMicros = 1'020}),
+          "spin scratch accepts a radial move that leaves the center dead zone");
+  require(capture.events.empty(),
+          "leaving the center dead zone initializes the turntable without a tick");
+
+  require(router.consume({.fingerId = 304,
+                          .phase = gameplay::RealtimeTouchPhase::Move,
+                          .normalizedX = 0.799F,
+                          .normalizedY = 0.521F,
+                          .steadyTimestampMicros = 1'030}) &&
+              capture.events.size() == 1 &&
+              capture.events.front().type ==
+                  gameplay::RealtimeGameplayInputType::Press,
+          "a subsequent rim rotation emits the first scratch press");
+}
+
 void testSpinScratchPublishesOnlyCompletedAngularTicksForControls() {
   gameplay::RealtimeTouchLayout layout;
   layout.keyMode = 7;
@@ -2218,6 +2271,7 @@ int main() {
   testScratchFlickEmitsAtomicBackspinAndPressPair();
   testScratchLongNoteIgnoresSmallDirectionJitter();
   testSpinScratchWaitsForAnAngularStepBeforePressing();
+  testSpinScratchDefersAngularTrackingUntilFingerLeavesCenterDeadZone();
   testSpinScratchPublishesOnlyCompletedAngularTicksForControls();
   testSpinScratchRefreshesAndExpiresItsHeldDirection();
   testNormalModeMapsTouchesBelowProjectedPlayfield();

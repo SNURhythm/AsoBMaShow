@@ -15,6 +15,9 @@ constexpr float kRadiansToDegrees = 180.0F / kPi;
 // while Start/Select controls consume these angle ticks directly.
 constexpr float kSpinScratchStepDegrees = 3.0F;
 constexpr std::int64_t kSpinScratchGraceMicros = 150'000;
+// Ignore angular movement in the platter's central ten percent. A touch
+// beginning there has no meaningful angle until it travels away from center.
+constexpr float kSpinScratchCenterDeadZoneRadiusFraction = 0.10F;
 
 float shortestAngleDeltaRadians(float current, float previous) noexcept {
   float delta = std::fmod(current - previous, 2.0F * kPi);
@@ -29,6 +32,20 @@ float shortestAngleDeltaRadians(float current, float previous) noexcept {
 bool sameNonzeroSign(float left, float right) noexcept {
   return left != 0.0F && right != 0.0F &&
          std::signbit(left) == std::signbit(right);
+}
+
+bool isWithinSpinScratchCenterDeadZone(RealtimeTouchPoint center,
+                                       float radiusX, float radiusY,
+                                       float x, float y) noexcept {
+  if (!std::isfinite(radiusX) || !std::isfinite(radiusY) || radiusX <= 0.0F ||
+      radiusY <= 0.0F) {
+    return false;
+  }
+  const float dx = (x - center.x) / radiusX;
+  const float dy = (y - center.y) / radiusY;
+  return dx * dx + dy * dy <=
+         kSpinScratchCenterDeadZoneRadiusFraction *
+             kSpinScratchCenterDeadZoneRadiusFraction;
 }
 
 bool isFinite(const RealtimeTouchPoint &point) noexcept {
@@ -589,9 +606,16 @@ bool RealtimeTouchInputRouter::beginLane(
   finger.lastY = sample.normalizedY;
   if (finger.spinScratch) {
     finger.spinCenter = region.circle->center;
-    finger.spinPreviousAngleRadians = std::atan2(
-        sample.normalizedY - finger.spinCenter.y,
-        sample.normalizedX - finger.spinCenter.x);
+    finger.spinRadiusX = region.circle->radiusX;
+    finger.spinRadiusY = region.circle->radiusY;
+    finger.spinAngleInitialized = !isWithinSpinScratchCenterDeadZone(
+        finger.spinCenter, finger.spinRadiusX, finger.spinRadiusY,
+        sample.normalizedX, sample.normalizedY);
+    if (finger.spinAngleInitialized) {
+      finger.spinPreviousAngleRadians = std::atan2(
+          sample.normalizedY - finger.spinCenter.y,
+          sample.normalizedX - finger.spinCenter.x);
+    }
   }
   finger.cancelDeadlineMicros = 0;
   if (finger.scratch) {
@@ -621,6 +645,9 @@ bool RealtimeTouchInputRouter::releaseLane(FingerState &finger,
   finger.pressed = false;
   finger.scratch = false;
   finger.spinScratch = false;
+  finger.spinAngleInitialized = false;
+  finger.spinRadiusX = 0.0F;
+  finger.spinRadiusY = 0.0F;
   finger.scratchDirection = 0;
   finger.spinAccumulatedDegrees = 0.0F;
   finger.spinLastStepMicros = 0;
@@ -676,9 +703,25 @@ bool RealtimeTouchInputRouter::handleScratchMove(
 
 bool RealtimeTouchInputRouter::handleSpinScratchMove(
     FingerState &finger, const RealtimeTouchSample &sample) noexcept {
+  if (isWithinSpinScratchCenterDeadZone(
+          finger.spinCenter, finger.spinRadiusX, finger.spinRadiusY,
+          sample.normalizedX, sample.normalizedY)) {
+    finger.spinAngleInitialized = false;
+    finger.spinAccumulatedDegrees = 0.0F;
+    finger.lastX = sample.normalizedX;
+    finger.lastY = sample.normalizedY;
+    return true;
+  }
   const float currentAngle = std::atan2(sample.normalizedY - finger.spinCenter.y,
                                         sample.normalizedX - finger.spinCenter.x);
   if (!std::isfinite(currentAngle)) {
+    return true;
+  }
+  if (!finger.spinAngleInitialized) {
+    finger.spinPreviousAngleRadians = currentAngle;
+    finger.spinAngleInitialized = true;
+    finger.lastX = sample.normalizedX;
+    finger.lastY = sample.normalizedY;
     return true;
   }
   const float deltaRadians = shortestAngleDeltaRadians(

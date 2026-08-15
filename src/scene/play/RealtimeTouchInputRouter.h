@@ -292,6 +292,9 @@ private:
     float lastX = 0.0F;
     float lastY = 0.0F;
     RealtimeTouchPoint spinCenter;
+    float spinRadiusX = 0.0F;
+    float spinRadiusY = 0.0F;
+    bool spinAngleInitialized = false;
     float spinPreviousAngleRadians = 0.0F;
     float spinAccumulatedDegrees = 0.0F;
     std::int64_t spinLastStepMicros = 0;
