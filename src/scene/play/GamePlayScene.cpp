@@ -292,9 +292,9 @@ beatorajaPlaytimeMillis(const bms_parser::Chart *chart,
     // A legacy practice launch lacks the upstream range/frequency authority.
     return std::nullopt;
   }
-  const long long terminalMicros = gameplay::terminalMicrosForBeatorajaPlayMode(
-      options.autoPlay, options.replayData != nullptr, chart->Meta.PlayLength,
-      chart->Meta.TotalLength);
+  const long long terminalMicros =
+      gameplay::terminalMicrosForGameplayMode(chart->Meta.PlayLength,
+                                              chart->Meta.TotalLength);
   return javaIntAdd(javaLongToInt(terminalMicros / 1'000),
                     kBeatorajaPlaytimeMarginMillis);
 }
@@ -4588,9 +4588,8 @@ std::uint64_t GamePlayScene::selectedSkinResultTransitionDelayMillis(
   const long long terminalMicros =
       chart == nullptr
           ? gameplayTimeMicros
-          : gameplay::terminalMicrosForBeatorajaPlayMode(
-                options.autoPlay, isReplayPlayback(), chart->Meta.PlayLength,
-                chart->Meta.TotalLength);
+          : gameplay::terminalMicrosForGameplayMode(chart->Meta.PlayLength,
+                                                    chart->Meta.TotalLength);
   const long long deadline = skin::gameplaySkinAnimationCompletionDeadlineMicros(
       terminalMicros, *timing);
   const long long remainingChartMicros =

@@ -92,15 +92,13 @@ classifyRealtimeGameplayTerminal(GameplayTerminalReason reason,
                                  bool sessionBackedPractice,
                                  bool sourcePlaytimeElapsed = false) noexcept;
 
-// Pinned Beatoraja's BMSPlayer distinguishes its AUTOPLAY mode from REPLAY.
-// Only AUTOPLAY keeps STATE_PLAY alive through the chart's final timeline;
-// a replay, including one recorded by autoplay, ends from its last playable
-// note.
-[[nodiscard]] constexpr std::int64_t terminalMicrosForBeatorajaPlayMode(
-    bool autoPlay, bool replayPlayback, std::int64_t lastPlayableNoteMicros,
-    std::int64_t lastTimelineMicros) noexcept {
-  return autoPlay && !replayPlayback ? lastTimelineMicros
-                                     : lastPlayableNoteMicros;
+// This app leaves normal play, autoplay, and replay at the final playable
+// note. Trailing BGA, background, and empty chart rows never hold gameplay
+// open; practice retains its separate range-timeline rule below.
+[[nodiscard]] constexpr std::int64_t terminalMicrosForGameplayMode(
+    std::int64_t lastPlayableNoteMicros,
+    std::int64_t /* lastTimelineMicros */) noexcept {
+  return lastPlayableNoteMicros;
 }
 
 // BMSPlayer's PLAY and REPLAY modes leave STATE_PLAY on their play timer;
