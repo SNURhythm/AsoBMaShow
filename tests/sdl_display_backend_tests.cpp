@@ -596,6 +596,49 @@ void testExportUiFrameUnlockStillExcludesDisplayTransactions() {
           "display reservation resumes after export release");
 }
 
+void testExportRequestPublishesBeforeWaitingForRendererAccess() {
+  std::mutex rendererMutex;
+  std::atomic<bool> exportActive{false};
+  display::RendererAccessCoordinator coordinator(rendererMutex, exportActive);
+  std::latch requestStarted{1};
+  std::latch releaseExport{1};
+  std::atomic<bool> exportEntered{false};
+
+  std::unique_lock<std::mutex> mainRender(rendererMutex);
+  std::thread exporter([&]() {
+    requestStarted.count_down();
+    auto exportReservation = coordinator.acquireExport();
+    exportEntered.store(true, std::memory_order_release);
+    releaseExport.wait();
+  });
+
+  requestStarted.wait();
+  for (int attempt = 0;
+       attempt < 100 && !coordinator.exportRequested(); ++attempt) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  require(coordinator.exportRequested() &&
+              !exportActive.load(std::memory_order_acquire) &&
+              !exportEntered.load(std::memory_order_acquire),
+          "an export request is visible before it can acquire the renderer");
+
+  mainRender.unlock();
+  for (int attempt = 0;
+       attempt < 100 && !exportEntered.load(std::memory_order_acquire);
+       ++attempt) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  require(exportEntered.load(std::memory_order_acquire) &&
+              exportActive.load(std::memory_order_acquire),
+          "yielding the renderer lets the requested export acquire it");
+
+  releaseExport.count_down();
+  exporter.join();
+  require(!coordinator.exportRequested() &&
+              !exportActive.load(std::memory_order_acquire),
+          "releasing the final export clears its pending handoff");
+}
+
 void testOverlappingExportUiFrameUnlocksRemainReferenceSafe() {
   std::mutex rendererMutex;
   std::atomic<bool> exportActive{false};
@@ -862,6 +905,7 @@ int main() {
   testFixedMobileDisplayOnlyAdvertisesFrameCap();
   testRendererReservationExcludesExportBeforeFirstSDLMutation();
   testExportUiFrameUnlockStillExcludesDisplayTransactions();
+  testExportRequestPublishesBeforeWaitingForRendererAccess();
   testOverlappingExportUiFrameUnlocksRemainReferenceSafe();
   testBorderlessPreviewConfirmsAtDesktopDimensions();
   testMaximizedRollbackPreservesNormalWindowGeometry();

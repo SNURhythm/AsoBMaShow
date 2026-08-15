@@ -1307,7 +1307,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
             0.001f ||
         std::abs(appliedLaneLength - context.settings.laneLength) > 0.001f;
     if (laneTransformChanged &&
-        !context.replayVideoExportActive.load(std::memory_order_acquire)) {
+        !context.replayVideoExportActive.load(std::memory_order_acquire) &&
+        !context.rendererAccess.exportRequested()) {
       std::unique_lock<std::mutex> bgfxLock(context.bgfxRenderMutex,
                                             std::try_to_lock);
       if (bgfxLock.owns_lock()) {
@@ -1325,10 +1326,12 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     bool renderedFrame = false;
     const bool replayExportActive =
         context.replayVideoExportActive.load(std::memory_order_acquire);
+    const bool replayExportRequested = context.rendererAccess.exportRequested();
     const bool replayExportUiFrameRequested =
         context.replayVideoExportUiFrameRequested.load(
             std::memory_order_acquire);
-    if (!replayExportActive || replayExportUiFrameRequested) {
+    if ((!replayExportActive && !replayExportRequested) ||
+        replayExportUiFrameRequested) {
       std::unique_lock<std::mutex> bgfxLock(context.bgfxRenderMutex,
                                             std::try_to_lock);
       if (bgfxLock.owns_lock() &&
@@ -1344,8 +1347,10 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         context.replayVideoExportUiFrameRequested.store(
             false, std::memory_order_release);
         renderedFrame = true;
-      } else if (bgfxLock.owns_lock() && !context.replayVideoExportActive.load(
-                                             std::memory_order_acquire)) {
+      } else if (bgfxLock.owns_lock() &&
+                 !context.replayVideoExportActive.load(
+                     std::memory_order_acquire) &&
+                 !context.rendererAccess.exportRequested()) {
         const bool hasActiveVisuals = context.jukebox.hasActiveVisuals();
 
         bgfx::touch(rendering::clear_view);

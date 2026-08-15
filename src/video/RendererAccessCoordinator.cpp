@@ -13,8 +13,10 @@ bool RendererAccessCoordinator::DisplayReservation::ownsLock() const {
 
 RendererAccessCoordinator::ExportReservation::ExportReservation(
     std::mutex &rendererMutex, std::atomic<bool> &exportActiveValue,
+    std::atomic_size_t &requestedExportsValue,
     std::size_t &activeExportsValue)
     : lock(rendererMutex), exportActive(&exportActiveValue),
+      requestedExports(&requestedExportsValue),
       activeExports(&activeExportsValue) {
   ++*activeExports;
   exportActive->store(true, std::memory_order_release);
@@ -24,6 +26,7 @@ RendererAccessCoordinator::ExportReservation::ExportReservation(
     ExportReservation &&other) noexcept
     : lock(std::move(other.lock)),
       exportActive(std::exchange(other.exportActive, nullptr)),
+      requestedExports(std::exchange(other.requestedExports, nullptr)),
       activeExports(std::exchange(other.activeExports, nullptr)),
       released(std::exchange(other.released, true)) {}
 
@@ -44,7 +47,8 @@ void RendererAccessCoordinator::ExportReservation::relockAfterUiFrame() {
 }
 
 void RendererAccessCoordinator::ExportReservation::release() {
-  if (released || exportActive == nullptr || activeExports == nullptr) {
+  if (released || exportActive == nullptr || requestedExports == nullptr ||
+      activeExports == nullptr) {
     return;
   }
   if (!lock.owns_lock()) {
@@ -54,6 +58,7 @@ void RendererAccessCoordinator::ExportReservation::release() {
     --*activeExports;
   }
   exportActive->store(*activeExports != 0, std::memory_order_release);
+  requestedExports->fetch_sub(1, std::memory_order_release);
   lock.unlock();
   released = true;
 }
@@ -82,6 +87,15 @@ RendererAccessCoordinator::tryAcquireDisplay(std::string &errorMessage) {
 
 RendererAccessCoordinator::ExportReservation
 RendererAccessCoordinator::acquireExport() {
-  return ExportReservation(rendererMutex, exportActive, activeExports);
+  // Publish the request before waiting for the renderer mutex. The main
+  // renderer observes this handoff and yields its next frame, preventing an
+  // export worker from being starved behind consecutive display frames.
+  requestedExports.fetch_add(1, std::memory_order_acq_rel);
+  return ExportReservation(rendererMutex, exportActive, requestedExports,
+                           activeExports);
+}
+
+bool RendererAccessCoordinator::exportRequested() const noexcept {
+  return requestedExports.load(std::memory_order_acquire) != 0;
 }
 } // namespace display

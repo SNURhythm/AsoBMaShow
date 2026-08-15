@@ -4330,6 +4330,8 @@ ReplayVideoExportResult exportCourseReplayImpl(
   }
   replayExportLog(exportLog, "Course replay export audio finished in %.2fs",
                   static_cast<double>(elapsedMicros(audioStart)) / 1000000.0);
+  reportReplayExportProgress(resolvedOptions, 0.05,
+                             "Starting course video renderer");
 
   replayExportLog(exportLog, "Course replay export MP4: %s (%dx%d @ %dfps)",
                   fspath_to_utf8(outputPath).c_str(), resolvedOptions.width,
