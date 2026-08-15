@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -30,6 +31,13 @@ inline long long outputTimeMicrosFromTimelineStart(
 inline long long replayEventRawTimeMicros(long long gameplayTimeMicros,
                                           long long audioOffsetMicros) {
   return gameplayTimeMicros - audioOffsetMicros;
+}
+
+[[nodiscard]] inline bool isScheduledBeforePlaybackEnd(
+    long long eventTimeMicros,
+    std::optional<long long> playbackEventDeadlineMicros) noexcept {
+  return !playbackEventDeadlineMicros.has_value() ||
+         eventTimeMicros <= *playbackEventDeadlineMicros;
 }
 
 inline long double
@@ -64,6 +72,10 @@ struct RenderOptions {
   bool clubMode = false;
   long long keySoundOffsetMicros = 0;
   long long timelineStartMicros = 0;
+  // BMSPlayer stops its background scheduler when its gameplay state ends.
+  // Events already scheduled before this raw-chart deadline are mixed through
+  // their decoded duration; later BGM/replay events are not started.
+  std::optional<long long> playbackEventDeadlineMicros;
   const prep_metronome::PrepMetronomePlan *prepMetronomePlan = nullptr;
   std::atomic_bool *isCancelled = nullptr;
   LogCallback log;

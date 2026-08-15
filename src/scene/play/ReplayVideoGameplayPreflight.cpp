@@ -123,17 +123,14 @@ long long replayGameplayTransitionDurationMicros(
 }
 
 long long replayPostGameplayTailDurationMicros(
-    long long gameplayDurationMicros, long long scheduledVisualEndMicros,
-    long long requestedAudioDurationMicros, bool includeResultScreen) noexcept {
+    long long gameplayDurationMicros, long long requestedAudioDurationMicros,
+    bool includeResultScreen) noexcept {
   const long long boundedGameplayDuration = std::max(0LL, gameplayDurationMicros);
-  const long long visualTailMicros =
-      std::max(0LL, scheduledVisualEndMicros - boundedGameplayDuration);
   const long long audioTailMicros =
       std::max(0LL, requestedAudioDurationMicros - boundedGameplayDuration);
   return includeResultScreen
-             ? std::max({kReplayResultScreenTailMicros,
-                         visualTailMicros, audioTailMicros})
-             : std::max(visualTailMicros, audioTailMicros);
+             ? std::max(kReplayResultScreenTailMicros, audioTailMicros)
+             : audioTailMicros;
 }
 
 ReplayGameplayFrameState replayGameplayFrameState(

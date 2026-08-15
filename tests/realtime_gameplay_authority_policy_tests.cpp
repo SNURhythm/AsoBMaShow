@@ -157,6 +157,25 @@ void testReplayStatePlayCompletesBeforeTrailingTimeline() {
           "timeline-bound completion");
 }
 
+void testReplayModeUsesLastPlayableNoteInsteadOfAutoplayTimeline() {
+  constexpr std::int64_t lastPlayableNoteMicros = 10'000'000;
+  constexpr std::int64_t lastTimelineMicros = 80'000'000;
+  require(gameplay::terminalMicrosForBeatorajaPlayMode(
+              false, false, lastPlayableNoteMicros, lastTimelineMicros) ==
+              lastPlayableNoteMicros &&
+              gameplay::terminalMicrosForBeatorajaPlayMode(
+                  true, false, lastPlayableNoteMicros, lastTimelineMicros) ==
+                  lastTimelineMicros &&
+              gameplay::terminalMicrosForBeatorajaPlayMode(
+                  false, true, lastPlayableNoteMicros, lastTimelineMicros) ==
+                  lastPlayableNoteMicros &&
+              gameplay::terminalMicrosForBeatorajaPlayMode(
+                  true, true, lastPlayableNoteMicros, lastTimelineMicros) ==
+                  lastPlayableNoteMicros,
+          "BMSPlayer REPLAY retains last-note timing even for a replay "
+          "recorded by autoplay");
+}
+
 } // namespace
 
 int main() {
@@ -164,5 +183,6 @@ int main() {
   testExistingExclusionsAndNormalActivationRemain();
   testSourcePlaytimeCompletesBeforeTrailingWorkerTimeline();
   testReplayStatePlayCompletesBeforeTrailingTimeline();
+  testReplayModeUsesLastPlayableNoteInsteadOfAutoplayTimeline();
   return 0;
 }

@@ -743,21 +743,18 @@ void testReplayGameplayTransitionIgnoresChartTailAfterLastLaneNote() {
 
 void testReplayAudioTailDoesNotExtendGameplayFrames() {
   constexpr long long gameplayEndMicros = 17'000'000;
-  constexpr long long trailingAudioEndMicros = 80'000'000;
+  constexpr long long trailingVisualEndMicros = 80'000'000;
   expect(replay_video_export::replayPostGameplayTailDurationMicros(
-             gameplayEndMicros, gameplayEndMicros, trailingAudioEndMicros,
-             true) == 63'000'000,
-         "the replay result/BGA tail retains trailing audio without extending "
-         "the gameplay frame range");
+             gameplayEndMicros, gameplayEndMicros, true) == 10'000'000,
+         "scheduled chart/BGA timelines after STATE_FINISHED do not extend "
+         "the result screen");
   expect(replay_video_export::replayPostGameplayTailDurationMicros(
-             gameplayEndMicros, gameplayEndMicros, trailingAudioEndMicros,
-             false) == 63'000'000,
-         "audio alignment remains mandatory when result UI is disabled");
+             gameplayEndMicros, gameplayEndMicros, false) == 0,
+         "scheduled chart/BGA timelines do not add a no-result export tail");
   expect(replay_video_export::replayPostGameplayTailDurationMicros(
-             gameplayEndMicros, gameplayEndMicros, gameplayEndMicros,
-             true) == 10'000'000,
-         "the existing result-screen minimum remains independent of gameplay "
-         "completion");
+             gameplayEndMicros, trailingVisualEndMicros, true) == 63'000'000,
+         "an already-rendered audio tail remains aligned with the result "
+         "screen without extending gameplay frames");
 }
 
 void testReplayLaneCoverResetIsOneFramePulseForNormalAndCoursePlayback() {

@@ -719,6 +719,7 @@ ReplayAudioTrackResult
 writeReplayAudioTrack(bms_parser::Chart &chart, const ReplayData &replay,
                       const preparation::Plan &preparationPlan,
                       long long audioOffsetMicros,
+                      long long playbackEventDeadlineMicros,
                       const std::filesystem::path &path,
                       ReplayVideoExportLog *log) {
   std::atomic_bool isCancelled = false;
@@ -729,6 +730,7 @@ writeReplayAudioTrack(bms_parser::Chart &chart, const ReplayData &replay,
       .clubMode = replay.provenance.clubMode,
       .keySoundOffsetMicros = audioOffsetMicros,
       .timelineStartMicros = preparationPlan.playbackStartTimeMicros,
+      .playbackEventDeadlineMicros = playbackEventDeadlineMicros,
       .prepMetronomePlan = preparationPlan.metronome.enabled
                                ? &preparationPlan.metronome
                                : nullptr,
@@ -2640,14 +2642,9 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
                                 replay.gaugeAutoShift,
                                 GaugeProfile::Standard,
                                 replay.gaugeAutoShiftLowerBound);
-  const long long scheduledVisualEndMicros =
-      preparationPlan.realTimeAtGameplayTime(
-          context.jukebox.getScheduledVisualEndMicros(), audioOffsetMicros);
   const long long resultTailMicros =
       replay_video_export::replayPostGameplayTailDurationMicros(
           gameplayDurationMicros,
-          stoppedOnGaugeFailure ? gameplayDurationMicros
-                                : scheduledVisualEndMicros,
           stoppedOnGaugeFailure ? gameplayDurationMicros
                                 : requestedAudioDurationMicros,
           resolvedOptions.includeResultScreen);
@@ -2743,13 +2740,6 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
                   static_cast<double>(resultTailMicros) / 1000000.0,
                   static_cast<double>(requestedAudioDurationMicros) /
                       1000000.0);
-  if (scheduledVisualEndMicros > gameplayDurationMicros) {
-    replayExportLog(log,
-                    "Replay video export BGA tail: visual end %.2fs, "
-                    "gameplay end %.2fs",
-                    static_cast<double>(scheduledVisualEndMicros) / 1000000.0,
-                    static_cast<double>(gameplayDurationMicros) / 1000000.0);
-  }
   replayExportLog(log,
                   "Replay video export frame buffers/readbacks: %zu, encoder "
                   "threads: %d, queued memory: %.1f MiB / %.1f MiB budget",
@@ -4013,13 +4003,22 @@ ReplayVideoExporter::Export(ApplicationContext &context,
   const auto outputPath = outputDir / (baseName + ".mp4");
   const long long audioOffsetMicros =
       static_cast<long long>(context.settings.audioOffsetMs) * 1000LL;
+  const auto failureMicros = replay_result::FindGaugeFailureMicros(
+      *chart, replay, GaugeProfile::Standard);
+  const auto rawFailureMicros = gameplay_timing::rawSongTimeFromGameplayTime(
+      failureMicros, audioOffsetMicros);
+  const long long playbackEventDeadlineMicros =
+      rawFailureMicros.value_or(
+          replay_video_export::replayGameplayStatePlayDeadlineMicros(*chart,
+                                                                       replay));
 
   replayExportLog(exportLog, "Replay export audio: %s",
                   fspath_to_utf8(wavPath).c_str());
   reportReplayExportProgress(resolvedOptions, 0.02, "Building audio track");
   const auto audioStart = std::chrono::steady_clock::now();
   auto audioResult = writeReplayAudioTrack(
-      *chart, replay, preparationPlan, audioOffsetMicros, wavPath, exportLog);
+      *chart, replay, preparationPlan, audioOffsetMicros,
+      playbackEventDeadlineMicros, wavPath, exportLog);
   if (!audioResult.success) {
     replayExportLog(exportLog, "Replay export audio failed: %s",
                     audioResult.message.c_str());
@@ -4036,10 +4035,6 @@ ReplayVideoExporter::Export(ApplicationContext &context,
                   fspath_to_utf8(outputPath).c_str(), resolvedOptions.width,
                   resolvedOptions.height, resolvedOptions.fps);
   const auto videoStart = std::chrono::steady_clock::now();
-  const auto failureMicros = replay_result::FindGaugeFailureMicros(
-      *chart, replay, GaugeProfile::Standard);
-  const auto rawFailureMicros = gameplay_timing::rawSongTimeFromGameplayTime(
-      failureMicros, audioOffsetMicros);
   const long long normalGameplayDurationMicros =
       replay_video_export::replayGameplayTransitionDurationMicros(
           *chart, replay, preparationPlan, audioOffsetMicros);
@@ -4265,9 +4260,16 @@ ReplayVideoExportResult exportCourseReplayImpl(
     auto &stage = stages[i];
     const auto stageWavPath =
         tempDir / ("stage_" + std::to_string(i + 1) + ".wav");
+    const auto rawFailureMicros =
+        gameplay_timing::rawSongTimeFromGameplayTime(stage.failureMicros,
+                                                      audioOffsetMicros);
+    const long long playbackEventDeadlineMicros =
+        rawFailureMicros.value_or(
+            replay_video_export::replayGameplayStatePlayDeadlineMicros(
+                *stage.chart, stage.replay));
     const auto audioResult = writeReplayAudioTrack(
         *stage.chart, stage.replay, stage.preparationPlan, audioOffsetMicros,
-        stageWavPath, exportLog);
+        playbackEventDeadlineMicros, stageWavPath, exportLog);
     if (!audioResult.success) {
       removeReplayExportWorkDirectory(tempDir);
       return {.success = false,
@@ -4280,8 +4282,6 @@ ReplayVideoExportResult exportCourseReplayImpl(
             audioOffsetMicros);
     const long long failureFrameMicros =
         (1000000LL + resolvedOptions.fps - 1) / resolvedOptions.fps;
-    const auto rawFailureMicros = gameplay_timing::rawSongTimeFromGameplayTime(
-        stage.failureMicros, audioOffsetMicros);
     stage.gameplayDurationMicros = stage.failureMicros.has_value()
                                       ? std::min(
                                             normalGameplayDurationMicros,

@@ -61,11 +61,12 @@ struct ReplayGameplayFrameState {
     const bms_parser::Chart &, const ReplayData &, const preparation::Plan &,
     long long audioOffsetMicros) noexcept;
 
-// The result/BGA phase, never the gameplay presentation, retains a scheduled
-// visual or audio tail after BMSPlayer leaves STATE_PLAY.
+// The result phase retains only audio already rendered from events scheduled
+// before BMSPlayer left STATE_PLAY. A future BGA/chart timeline is stopped by
+// BMSPlayer and cannot extend the result screen.
 [[nodiscard]] long long replayPostGameplayTailDurationMicros(
-    long long gameplayDurationMicros, long long scheduledVisualEndMicros,
-    long long requestedAudioDurationMicros, bool includeResultScreen) noexcept;
+    long long gameplayDurationMicros, long long requestedAudioDurationMicros,
+    bool includeResultScreen) noexcept;
 
 // Extends only a selected-skin replay path through the same BMSPlayer
 // end-of-notes, finishmargin, and fadeout lifecycle as interactive gameplay.
