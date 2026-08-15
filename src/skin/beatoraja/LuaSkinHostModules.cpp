@@ -1246,7 +1246,8 @@ int ioOpen(lua_State *state) {
   if (resolved.failure) {
     return expectedFailure(state, resolved.failure->message);
   }
-  const fs::path physicalPath(*resolved.normalizedVirtualPath);
+  const fs::path physicalPath = lua_file_io::physicalPathFromUtf8(
+      *resolved.normalizedVirtualPath);
   std::error_code error;
   if (!selectedMode->readMode && !physicalPath.parent_path().empty()) {
     fs::create_directories(physicalPath.parent_path(), error);

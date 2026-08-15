@@ -238,6 +238,14 @@ assert(file:read("*a") == "abc")
 assert(file:close())
 return {}
 )lua");
+    writeText(source / "skin/io_utf8_path.luaskin", R"lua(
+if not skin_config then return {type = 0} end
+
+local file = assert(io.open("\230\151\165\230\156\172\232\170\158/\232\170\173\227\129\191\232\190\188\227\129\191.txt", "rb"))
+assert(file:read("*a") == "utf8-host-path")
+assert(file:close())
+return {}
+)lua");
     writeText(source / "skin/parts/frame/red/panel.png", "selected");
     writeText(source / "skin/parts/frame/blue/panel.png",
               "random-fallback-must-not-win");
@@ -251,6 +259,10 @@ return {}
               "return {marker = 'parent-selected'}\n");
     writeText(source / "skin/io_lines.txt", "one\ntwo\r\nthree\n");
     writeText(source / "skin/io_large_read.txt", "abc");
+    writeText(
+        source / lua_file_io::physicalPathFromUtf8(
+                     "skin/\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E/\xE8\xAA\xAD\xE3\x81\xBF\xE8\xBE\xBC\xE3\x81\xBF.txt"),
+        "utf8-host-path");
 
     SkinTreeSnapshotter snapshotter(roots, aliases);
     auto snapshot = snapshotter.snapshot(source, package, {}, {});
@@ -607,6 +619,21 @@ void testIoReadClampsHugeRequestedCountToAvailableBytes() {
          "io.read returns a file tail for a huge requested count");
 }
 
+void testIoOpenReadsUtf8NamedSkinFiles() {
+  auto harness =
+      fixture().create("io_utf8_path.luaskin", LuaRuntimePurpose::Validation);
+  if (!harness) {
+    expect(false, "UTF-8 io.open fixture creates a Lua runtime");
+    return;
+  }
+  expect(harness->runtime->loadHeader().value.has_value(),
+         "UTF-8 io.open fixture loads its header");
+  const auto configured =
+      harness->runtime->loadConfigured(happyConfiguration());
+  expect(configured.value.has_value() && !configured.failure,
+         "io.open reads a UTF-8-named file from the selected skin package");
+}
+
 void testLuaSeekArithmeticClampsOrRejectsWithoutOverflow() {
   const auto clamped = skin::lua_file_io::checkedSeekPosition(
       0, std::numeric_limits<std::int64_t>::min());
@@ -622,6 +649,18 @@ void testLuaSeekArithmeticClampsOrRejectsWithoutOverflow() {
          "Lua seek rejects an unrepresentable positive stream position");
 }
 
+void testLuaHostPhysicalPathsPreserveUtf8Bytes() {
+  constexpr std::string_view authoredPath =
+      "skin/\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E/\xE8\xAA\xAD\xE3\x81\xBF\xE8\xBE\xBC\xE3\x81\xBF.txt";
+  const fs::path physicalPath =
+      skin::lua_file_io::physicalPathFromUtf8(authoredPath);
+  const std::u8string roundTripped = physicalPath.generic_u8string();
+  const std::string actual{reinterpret_cast<const char *>(roundTripped.data()),
+                           roundTripped.size()};
+  expect(actual == authoredPath,
+         "Lua host I/O preserves UTF-8 virtual path bytes when constructing a physical path");
+}
+
 } // namespace
 
 int main() {
@@ -634,7 +673,9 @@ int main() {
   testSelectedMainStateSurfaceUsesBoundConfiguredState();
   testIoLinesUsesTheVirtualSkinFileSystem();
   testIoReadClampsHugeRequestedCountToAvailableBytes();
+  testIoOpenReadsUtf8NamedSkinFiles();
   testLuaSeekArithmeticClampsOrRejectsWithoutOverflow();
+  testLuaHostPhysicalPathsPreserveUtf8Bytes();
   if (failures != 0) {
     std::cerr << failures << " assertion(s) failed\n";
     return 1;
