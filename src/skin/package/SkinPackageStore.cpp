@@ -117,15 +117,6 @@ std::string filenameUtf8(const fs::path &path) {
   return {reinterpret_cast<const char *>(value.data()), value.size()};
 }
 
-fs::path pathFromUtf8(std::string_view value) {
-  std::u8string utf8;
-  utf8.reserve(value.size());
-  for (const unsigned char byte : value) {
-    utf8.push_back(static_cast<char8_t>(byte));
-  }
-  return fs::path(utf8);
-}
-
 bool lowercaseSha256(std::string_view digest) {
   return digest.size() == 64 &&
          std::ranges::all_of(digest, [](unsigned char character) {

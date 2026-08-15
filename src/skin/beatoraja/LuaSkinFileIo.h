@@ -1,23 +1,11 @@
 #pragma once
 
 #include <cstdint>
-#include <filesystem>
 #include <ios>
 #include <limits>
 #include <optional>
-#include <string>
-#include <string_view>
 
 namespace skin::lua_file_io {
-
-inline std::filesystem::path physicalPathFromUtf8(std::string_view path) {
-  std::u8string utf8;
-  utf8.reserve(path.size());
-  for (const unsigned char byte : path) {
-    utf8.push_back(static_cast<char8_t>(byte));
-  }
-  return std::filesystem::path(utf8);
-}
 
 inline std::optional<std::streamoff>
 checkedSeekPosition(std::streamoff base, std::int64_t offset) noexcept {

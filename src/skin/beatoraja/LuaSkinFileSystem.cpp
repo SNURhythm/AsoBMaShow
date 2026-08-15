@@ -49,15 +49,6 @@ SkinFileFailure failure(SkinFileError code, std::string_view virtualPath,
           .message = std::string(message)};
 }
 
-fs::path pathFromUtf8(std::string_view path) {
-  std::u8string utf8;
-  utf8.reserve(path.size());
-  for (const unsigned char byte : path) {
-    utf8.push_back(static_cast<char8_t>(byte));
-  }
-  return fs::path(utf8);
-}
-
 std::string utf8Path(const fs::path &path) {
   const std::u8string value = path.generic_u8string();
   return {reinterpret_cast<const char *>(value.data()), value.size()};

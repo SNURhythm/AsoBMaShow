@@ -4,6 +4,7 @@
 
 #include "skin/SkinStoragePaths.h"
 #include "skin/beatoraja/LuaSkinFileSystem.h"
+#include "skin/package/SkinPathPolicy.h"
 #include "skin/package/SkinAliasDetector.h"
 #include "skin/package/SkinPathPolicy.h"
 #include "skin/package/SkinTreeSnapshotter.h"
@@ -260,7 +261,7 @@ return {}
     writeText(source / "skin/io_lines.txt", "one\ntwo\r\nthree\n");
     writeText(source / "skin/io_large_read.txt", "abc");
     writeText(
-        source / lua_file_io::physicalPathFromUtf8(
+        source / pathFromUtf8(
                      "skin/\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E/\xE8\xAA\xAD\xE3\x81\xBF\xE8\xBE\xBC\xE3\x81\xBF.txt"),
         "utf8-host-path");
 
@@ -652,8 +653,7 @@ void testLuaSeekArithmeticClampsOrRejectsWithoutOverflow() {
 void testLuaHostPhysicalPathsPreserveUtf8Bytes() {
   constexpr std::string_view authoredPath =
       "skin/\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E/\xE8\xAA\xAD\xE3\x81\xBF\xE8\xBE\xBC\xE3\x81\xBF.txt";
-  const fs::path physicalPath =
-      skin::lua_file_io::physicalPathFromUtf8(authoredPath);
+  const fs::path physicalPath = skin::pathFromUtf8(authoredPath);
   const std::u8string roundTripped = physicalPath.generic_u8string();
   const std::string actual{reinterpret_cast<const char *>(roundTripped.data()),
                            roundTripped.size()};

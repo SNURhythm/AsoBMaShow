@@ -83,15 +83,6 @@ std::string utf8Path(const fs::path &path) {
                      value.size());
 }
 
-fs::path pathFromUtf8(std::string_view value) {
-  std::u8string utf8;
-  utf8.reserve(value.size());
-  for (const unsigned char byte : value) {
-    utf8.push_back(static_cast<char8_t>(byte));
-  }
-  return fs::path(utf8);
-}
-
 bool report(const SkinProgressCallback &callback, SkinProgress progress,
             std::vector<SkinDiagnostic> &diagnostics) {
   if (!callback) {

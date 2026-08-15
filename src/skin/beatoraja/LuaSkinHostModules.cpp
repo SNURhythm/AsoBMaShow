@@ -1,6 +1,7 @@
 #include "LuaSkinHostModules.h"
 
 #include "../LuaGameplaySkinFeature.h"
+#include "../package/SkinPathPolicy.h"
 #include "LuaSkinFileIo.h"
 
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
@@ -1246,8 +1247,7 @@ int ioOpen(lua_State *state) {
   if (resolved.failure) {
     return expectedFailure(state, resolved.failure->message);
   }
-  const fs::path physicalPath = lua_file_io::physicalPathFromUtf8(
-      *resolved.normalizedVirtualPath);
+  const fs::path physicalPath = pathFromUtf8(*resolved.normalizedVirtualPath);
   std::error_code error;
   if (!selectedMode->readMode && !physicalPath.parent_path().empty()) {
     fs::create_directories(physicalPath.parent_path(), error);

@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #endif
 
+#include <filesystem>
 #include <string>
 #include <string_view>
 
@@ -21,6 +22,18 @@ constexpr int skinOpenNoFollowFlag() noexcept {
 #else
   return O_NOFOLLOW;
 #endif
+}
+
+// Filesystem paths originate from UTF-8 skin metadata and Lua strings. Build
+// them through a u8string so Windows does not reinterpret UTF-8 as its narrow
+// system code page.
+inline std::filesystem::path pathFromUtf8(std::string_view value) {
+  std::u8string utf8;
+  utf8.reserve(value.size());
+  for (const unsigned char byte : value) {
+    utf8.push_back(static_cast<char8_t>(byte));
+  }
+  return std::filesystem::path(utf8);
 }
 
 // Normalizes a single virtual filename component. It never accepts a host or
