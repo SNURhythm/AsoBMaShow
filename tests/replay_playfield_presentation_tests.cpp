@@ -992,7 +992,16 @@ void testSelectedCourseStageCreationUsesExistingExportReservation() {
           bga, fixture.services(), presentation);
   expect(!failure && presentation != nullptr && creationBlockedDisplay,
          "course rendering creates a selected skin under its existing export reservation");
-  presentation.reset();
+  bool destructionBlockedDisplay = false;
+  presentation->setDestructionObserverForTesting([&]() {
+    std::string error;
+    destructionBlockedDisplay =
+        !rendererAccess.tryAcquireDisplay(error).has_value();
+  });
+  replay_video_export::destroyReplayGameplayPresentationWithReservedRenderer(
+      presentation);
+  expect(destructionBlockedDisplay && presentation == nullptr,
+         "course rendering destroys a selected skin under its existing export reservation");
 }
 
 void testNoSelectionKeepsOneAdapter() {

@@ -3859,8 +3859,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
       context.jukebox.stop();
       context.jukebox.unloadVisuals();
     }
-    replay_video_export::destroyReplayGameplayPresentation(
-        context.rendererAccess, stage.gameplayPresentation->presentation);
+    replay_video_export::destroyReplayGameplayPresentationWithReservedRenderer(
+        stage.gameplayPresentation->presentation);
     stage.gameplayPresentation.reset();
   }
 

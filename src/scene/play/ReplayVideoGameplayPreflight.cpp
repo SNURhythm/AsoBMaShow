@@ -371,6 +371,11 @@ void destroyReplayGameplayPresentation(
     return;
   }
   auto rendererReservation = rendererAccess.acquireExport();
+  destroyReplayGameplayPresentationWithReservedRenderer(presentation);
+}
+
+void destroyReplayGameplayPresentationWithReservedRenderer(
+    std::unique_ptr<ReplayPlayfieldPresentation> &presentation) {
   presentation.reset();
 }
 

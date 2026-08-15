@@ -174,6 +174,11 @@ void destroyReplayGameplayPresentation(
     display::RendererAccessCoordinator &,
     std::unique_ptr<ReplayPlayfieldPresentation> &);
 
+// Course frame rendering already owns the export reservation.  Re-acquiring
+// the non-recursive renderer lock during stage teardown would deadlock.
+void destroyReplayGameplayPresentationWithReservedRenderer(
+    std::unique_ptr<ReplayPlayfieldPresentation> &);
+
 // A minimal course-stage boundary shared by the exporter and focused tests.
 // Its input owns no chart or replay data; the caller retains those lifetimes
 // while this loop validates one presentation per encoded stage and releases it
