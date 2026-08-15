@@ -1035,11 +1035,23 @@ void testRemainingDirectGameplayStatePropertyWiring() {
   bridge.discardFrame();
 
   state.clock.serial = 210;
+  state.authority.courseStageIndex = 6;
+  state.authority.courseStageCount = 10;
+  bridge.beginFrame(state, projectionAt(210));
+  expect(!bridge.booleanProperty({280}).value &&
+             bridge.booleanProperty({286}).value &&
+             !bridge.booleanProperty({287}).value &&
+             !bridge.booleanProperty({289}).value,
+         "course stage selectors cover every Beatoraja stage property before "
+         "the final stage");
+  bridge.discardFrame();
+
+  state.clock.serial = 211;
   state.authority.player1RandomOption = 3;
   state.authority.player2RandomOption = 6;
   state.authority.doublePlayOption = 1;
   state.configuration.judgeAlgorithmImageIndex = 1;
-  bridge.beginFrame(state, projectionAt(210));
+  bridge.beginFrame(state, projectionAt(211));
   expect(bridge.integerProperty({42}, SkinIntegerPropertyDomain::ImageIndex)
                  .value == 3 &&
              bridge.integerProperty({43}, SkinIntegerPropertyDomain::ImageIndex)
@@ -1052,10 +1064,10 @@ void testRemainingDirectGameplayStatePropertyWiring() {
          "judge-algorithm image index preserves the pinned duration mode");
   bridge.discardFrame();
 
-  state.clock.serial = 211;
+  state.clock.serial = 212;
   state.configuration.judgeAlgorithmImageIndex =
       std::numeric_limits<std::int32_t>::min();
-  bridge.beginFrame(state, projectionAt(211));
+  bridge.beginFrame(state, projectionAt(212));
   const auto scorePriority =
       bridge.integerProperty({340}, SkinIntegerPropertyDomain::ImageIndex);
   expect(scorePriority.supported &&

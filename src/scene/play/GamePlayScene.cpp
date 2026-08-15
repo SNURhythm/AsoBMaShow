@@ -4546,15 +4546,10 @@ void GamePlayScene::capturePlayfieldVisualState(
                               ? static_cast<int>(options.courseSession->entries.size())
                               : 0,
       .courseStageTitles = [&] {
-        std::vector<std::string> titles;
         if (!isCoursePlayback()) {
-          return titles;
+          return std::vector<std::string>{};
         }
-        titles.reserve(options.courseSession->entries.size());
-        for (const auto &entry : options.courseSession->entries) {
-          titles.push_back(entry.meta.Title);
-        }
-        return titles;
+        return options.courseSession->beatorajaSkinStageTitles();
       }(),
       .courseConstraintIds = playfieldCourseConstraintIds,
       .startLaneIndicators = preparationPlan.laneIndicator.lanes,
