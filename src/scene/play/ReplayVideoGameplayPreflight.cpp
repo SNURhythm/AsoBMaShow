@@ -2,6 +2,7 @@
 
 #include "BeatorajaHiSpeedChart.h"
 
+#include "../../ChartPlaybackDuration.h"
 #include "Judge.h"
 #include "GamePlayTiming.h"
 #include "../../skin/beatoraja/GameplaySkinEndAnimation.h"
@@ -110,6 +111,15 @@ long long replayGameplayStatePlayDeadlineMicros(
     const bms_parser::Chart &chart, const ReplayData &replay) noexcept {
   (void)replay;
   return skin::beatorajaGameplayStatePlayDeadlineMicros(chart.Meta.PlayLength);
+}
+
+long long replayGameplayTransitionDurationMicros(
+    const bms_parser::Chart &chart, const ReplayData &replay,
+    const preparation::Plan &plan, long long audioOffsetMicros) noexcept {
+  return plan.realTimeAtGameplayTime(
+             replayGameplayStatePlayDeadlineMicros(chart, replay),
+             audioOffsetMicros) +
+         chart_playback_duration::kGameplayResultTransitionDelayMicros;
 }
 
 ReplayGameplayFrameState replayGameplayFrameState(

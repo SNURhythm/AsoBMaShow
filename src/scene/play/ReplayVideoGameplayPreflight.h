@@ -52,6 +52,13 @@ struct ReplayGameplayFrameState {
 [[nodiscard]] long long replayGameplayStatePlayDeadlineMicros(
     const bms_parser::Chart &, const ReplayData &) noexcept;
 
+// Normal and course replay exports both leave gameplay after BMSPlayer's
+// last-note STATE_PLAY window and the app's result-transition window. Audio
+// or BGA-only chart rows never keep the gameplay presentation alive.
+[[nodiscard]] long long replayGameplayTransitionDurationMicros(
+    const bms_parser::Chart &, const ReplayData &, const preparation::Plan &,
+    long long audioOffsetMicros) noexcept;
+
 // Extends only a selected-skin replay path through the same BMSPlayer
 // end-of-notes, finishmargin, and fadeout lifecycle as interactive gameplay.
 [[nodiscard]] long long replayGameplayDurationWithSelectedSkinAnimation(

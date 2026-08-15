@@ -728,6 +728,19 @@ void testReplayGameplayStatePlayDeadlineMatchesPinnedBmsPlayer() {
          "recorded autoplay replay exposes the same last-note TIMER_PLAY deadline");
 }
 
+void testReplayGameplayTransitionIgnoresChartTailAfterLastLaneNote() {
+  bms_parser::Chart chart;
+  chart.Meta.PlayLength = 10'000'000;
+  chart.Meta.TotalLength = 80'000'000;
+  ReplayData replay;
+  preparation::Plan plan;
+
+  expect(replay_video_export::replayGameplayTransitionDurationMicros(
+             chart, replay, plan, 0) == 17'000'000,
+         "replay gameplay transition uses last-note state-play and transition "
+         "windows rather than the chart tail");
+}
+
 void testReplayLaneCoverResetIsOneFramePulseForNormalAndCoursePlayback() {
   const std::vector<ReplayLaneCoverEvent> events = {
       {.songTimeMicros = 1'000,
@@ -1767,6 +1780,7 @@ int main() {
   testFirstExportFrameRefreshesPreparedRendererGeometry();
   testReplayGameplayFrameStateMirrorsLiveTimerAndStartClocks();
   testReplayGameplayStatePlayDeadlineMatchesPinnedBmsPlayer();
+  testReplayGameplayTransitionIgnoresChartTailAfterLastLaneNote();
   testReplayLaneCoverResetIsOneFramePulseForNormalAndCoursePlayback();
   testReplayLaneCoverPlaybackRetainsEveryCoalescedTransition();
   testReplayLaneCoverChangesUseBeatorajaHiSpeedTransitions();

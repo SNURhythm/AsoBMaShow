@@ -354,12 +354,6 @@ long long elapsedMicros(std::chrono::steady_clock::time_point start) {
       .count();
 }
 
-long long gameplayEndMicrosForReplay(const bms_parser::Chart &chart,
-                                     const ReplayData &replay) {
-  return replay_video_export::replayGameplayStatePlayDeadlineMicros(chart,
-                                                                       replay);
-}
-
 ReplayData replayThroughFailure(const ReplayData &replay,
                                 std::optional<long long> failureMicros) {
   ReplayData result = replay;
@@ -379,21 +373,6 @@ ReplayData replayThroughFailure(const ReplayData &replay,
     result.maxCombo = std::max(result.maxCombo, event.combo);
   }
   return result;
-}
-
-long long courseStageGameplayDurationMicrosForReplay(
-    const bms_parser::Chart &chart, const ReplayData &replay,
-    long long audioDurationMicros,
-    bool includeResultScreen, const preparation::Plan &preparationPlan,
-    long long audioOffsetMicros) {
-  const long long transitionDurationMicros =
-      preparationPlan.realTimeAtGameplayTime(
-          gameplayEndMicrosForReplay(chart, replay), audioOffsetMicros) +
-      chart_playback_duration::kGameplayResultTransitionDelayMicros;
-  if (includeResultScreen) {
-    return transitionDurationMicros;
-  }
-  return std::max(transitionDurationMicros, std::max(0LL, audioDurationMicros));
 }
 
 std::string formatString(const char *format, va_list args) {
@@ -4070,9 +4049,8 @@ ReplayVideoExporter::Export(ApplicationContext &context,
   const auto rawFailureMicros = gameplay_timing::rawSongTimeFromGameplayTime(
       failureMicros, audioOffsetMicros);
   const long long normalGameplayDurationMicros =
-      preparationPlan.realTimeAtGameplayTime(
-          gameplayEndMicrosForReplay(*chart, replay), audioOffsetMicros) +
-      chart_playback_duration::kGameplayResultTransitionDelayMicros;
+      replay_video_export::replayGameplayTransitionDurationMicros(
+          *chart, replay, preparationPlan, audioOffsetMicros);
   const long long failureAudioMicros =
       rawFailureMicros.has_value()
           ? preparationPlan.realTimeAtChartTime(*rawFailureMicros)
@@ -4305,9 +4283,8 @@ ReplayVideoExportResult exportCourseReplayImpl(
               .message = audioResult.message};
     }
     const long long normalGameplayDurationMicros =
-        courseStageGameplayDurationMicrosForReplay(
-            *stage.chart, stage.replay, audioResult.durationMicros,
-            resolvedOptions.includeResultScreen, stage.preparationPlan,
+        replay_video_export::replayGameplayTransitionDurationMicros(
+            *stage.chart, stage.replay, stage.preparationPlan,
             audioOffsetMicros);
     const long long failureFrameMicros =
         (1000000LL + resolvedOptions.fps - 1) / resolvedOptions.fps;

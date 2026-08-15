@@ -677,7 +677,6 @@ private:
 
   bool UseBase62 = false;
   int Lnobj = -1;
-  int Lntype = 1;
   unsigned int Seed;
   std::string RandomPrng = RandomPrngId;
   std::vector<int> RandomValues;
