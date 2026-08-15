@@ -1,4 +1,5 @@
 #include "SettingsSceneShared.h"
+#include "SettingsScenePreviewAuthority.h"
 #include "../input/InputCaptureController.h"
 #include "../input/RhythmInputHandler.h"
 #include "../rendering/common.h"
@@ -240,6 +241,7 @@ void SettingsScene::syncPreviewAuthority() {
                                   previewChart->Meta,
                                   GaugeProfile::Standard));
   }
+  const auto laneCover = previewLaneCoverAuthority(context.settings);
   previewVisualStateStore->applyAuthorityUpdate({
       .currentBpm = kPreviewBpm,
       .judgementCounters = previewJudgeCount,
@@ -249,7 +251,8 @@ void SettingsScene::syncPreviewAuthority() {
       .currentGauge = 74.0F,
       .gaugeRules = *previewGaugeRules,
       .playOptionLabel = "PREVIEW",
-      .laneCoverPercent = context.settings.noteStartPositionPercent,
+      .laneCoverPercent = laneCover.percent,
+      .laneCoverEnabled = laneCover.enabled,
   });
 }
 
