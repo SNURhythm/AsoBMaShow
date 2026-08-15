@@ -92,6 +92,16 @@ classifyRealtimeGameplayTerminal(GameplayTerminalReason reason,
                                  bool sessionBackedPractice,
                                  bool sourcePlaytimeElapsed = false) noexcept;
 
+// BMSPlayer's PLAY and REPLAY modes leave STATE_PLAY on their play timer;
+// trailing BGA, background, and empty chart rows are not a completion source.
+// Legacy practice has no source playtime and therefore retains its range's
+// timeline completion rule.
+[[nodiscard]] constexpr bool shouldCompleteLegacyGameplayState(
+    bool hasSourcePlaytime, bool sourcePlaytimeElapsed,
+    bool passedAllTimelines) noexcept {
+  return hasSourcePlaytime ? sourcePlaytimeElapsed : passedAllTimelines;
+}
+
 [[nodiscard]] constexpr bool preparationInputUsesVisualOnlyPath(
     bool indicatorActive, bool sessionBackedPractice) noexcept {
   return indicatorActive && !sessionBackedPractice;

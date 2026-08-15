@@ -145,11 +145,24 @@ void testSourcePlaytimeCompletesBeforeTrailingWorkerTimeline() {
           "realtime worker advances trailing empty timelines");
 }
 
+void testReplayStatePlayCompletesBeforeTrailingTimeline() {
+  require(gameplay::shouldCompleteLegacyGameplayState(
+              true, true, false) &&
+              !gameplay::shouldCompleteLegacyGameplayState(
+                  true, false, true) &&
+              gameplay::shouldCompleteLegacyGameplayState(
+                  false, false, true),
+          "BMSPlayer REPLAY ends at its source playtime instead of waiting "
+          "for trailing chart timelines; legacy practice retains its "
+          "timeline-bound completion");
+}
+
 } // namespace
 
 int main() {
   testSessionBackedPracticeEligibility();
   testExistingExclusionsAndNormalActivationRemain();
   testSourcePlaytimeCompletesBeforeTrailingWorkerTimeline();
+  testReplayStatePlayCompletesBeforeTrailingTimeline();
   return 0;
 }

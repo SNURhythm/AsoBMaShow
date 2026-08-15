@@ -741,6 +741,25 @@ void testReplayGameplayTransitionIgnoresChartTailAfterLastLaneNote() {
          "windows rather than the chart tail");
 }
 
+void testReplayAudioTailDoesNotExtendGameplayFrames() {
+  constexpr long long gameplayEndMicros = 17'000'000;
+  constexpr long long trailingAudioEndMicros = 80'000'000;
+  expect(replay_video_export::replayPostGameplayTailDurationMicros(
+             gameplayEndMicros, gameplayEndMicros, trailingAudioEndMicros,
+             true) == 63'000'000,
+         "the replay result/BGA tail retains trailing audio without extending "
+         "the gameplay frame range");
+  expect(replay_video_export::replayPostGameplayTailDurationMicros(
+             gameplayEndMicros, gameplayEndMicros, trailingAudioEndMicros,
+             false) == 63'000'000,
+         "audio alignment remains mandatory when result UI is disabled");
+  expect(replay_video_export::replayPostGameplayTailDurationMicros(
+             gameplayEndMicros, gameplayEndMicros, gameplayEndMicros,
+             true) == 10'000'000,
+         "the existing result-screen minimum remains independent of gameplay "
+         "completion");
+}
+
 void testReplayLaneCoverResetIsOneFramePulseForNormalAndCoursePlayback() {
   const std::vector<ReplayLaneCoverEvent> events = {
       {.songTimeMicros = 1'000,
@@ -1781,6 +1800,7 @@ int main() {
   testReplayGameplayFrameStateMirrorsLiveTimerAndStartClocks();
   testReplayGameplayStatePlayDeadlineMatchesPinnedBmsPlayer();
   testReplayGameplayTransitionIgnoresChartTailAfterLastLaneNote();
+  testReplayAudioTailDoesNotExtendGameplayFrames();
   testReplayLaneCoverResetIsOneFramePulseForNormalAndCoursePlayback();
   testReplayLaneCoverPlaybackRetainsEveryCoalescedTransition();
   testReplayLaneCoverChangesUseBeatorajaHiSpeedTransitions();

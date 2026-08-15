@@ -17,6 +17,8 @@
 
 namespace replay_video_export {
 
+inline constexpr long long kReplayResultScreenTailMicros = 10'000'000;
+
 [[nodiscard]] skin::UiLogicalRect
 replayGameplayLogicalUiBounds(int exportWidth, int exportHeight) noexcept;
 
@@ -58,6 +60,12 @@ struct ReplayGameplayFrameState {
 [[nodiscard]] long long replayGameplayTransitionDurationMicros(
     const bms_parser::Chart &, const ReplayData &, const preparation::Plan &,
     long long audioOffsetMicros) noexcept;
+
+// The result/BGA phase, never the gameplay presentation, retains a scheduled
+// visual or audio tail after BMSPlayer leaves STATE_PLAY.
+[[nodiscard]] long long replayPostGameplayTailDurationMicros(
+    long long gameplayDurationMicros, long long scheduledVisualEndMicros,
+    long long requestedAudioDurationMicros, bool includeResultScreen) noexcept;
 
 // Extends only a selected-skin replay path through the same BMSPlayer
 // end-of-notes, finishmargin, and fadeout lifecycle as interactive gameplay.

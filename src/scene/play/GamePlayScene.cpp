@@ -5002,7 +5002,9 @@ void GamePlayScene::update(float dt) {
     stopRealtimeGameplayAuthority(true);
     state->passedMeasureCount = chart->Measures.size();
     state->passedTimelineCount = 0;
-  } else {
+  } else if (!gameplay::shouldCompleteLegacyGameplayState(
+                 playtimeMillis.has_value(), sourcePlaytimeElapsed,
+                 state->passedMeasureCount == chart->Measures.size())) {
     updateHellChargeGauge(gameplayTimeMicros);
     if (finishIfGaugeFailed()) {
       return;
@@ -5021,13 +5023,10 @@ void GamePlayScene::update(float dt) {
     return;
   }
 
-  const bool legacyPracticeTimelineComplete =
-      !playtimeMillis.has_value() &&
-      state->passedMeasureCount == chart->Measures.size();
-  if (!legacyPracticeTimelineComplete &&
-      (!playtimeMillis.has_value() ||
-       !skin::beatorajaGameplayStateFinished(gameplayTimeMicros,
-                                              *playtimeMillis))) {
+  if (!realtimeAtFrameStart &&
+      !gameplay::shouldCompleteLegacyGameplayState(
+          playtimeMillis.has_value(), sourcePlaytimeElapsed,
+          state->passedMeasureCount == chart->Measures.size())) {
     return;
   }
 

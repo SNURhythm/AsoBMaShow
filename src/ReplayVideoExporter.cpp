@@ -87,8 +87,6 @@ constexpr int kExportSampleRate = chart_audio::kOutputSampleRate;
 constexpr int kExportChannels = chart_audio::kOutputChannels;
 constexpr int kDefaultExportFps = 120;
 constexpr int kH264HighProfile = 100;
-constexpr long long kResultSceneTailMicros = 10000000;
-
 PracticeAnalyticsView *addReplayResultAnalytics(
     View &resultRoot, const bms_parser::Chart &chart,
     const ReplayData &replay) {
@@ -1115,7 +1113,8 @@ long long courseResultDurationMicrosForReplayVideo(
                           finalStage.resultDurationMicros);
   }
   return includeResultScreen
-             ? std::max(kResultSceneTailMicros, finalAudioTailMicros)
+             ? std::max(replay_video_export::kReplayResultScreenTailMicros,
+                        finalAudioTailMicros)
              : finalAudioTailMicros;
 }
 
@@ -2644,21 +2643,14 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   const long long scheduledVisualEndMicros =
       preparationPlan.realTimeAtGameplayTime(
           context.jukebox.getScheduledVisualEndMicros(), audioOffsetMicros);
-  const long long visualTailMicros =
-      stoppedOnGaugeFailure
-          ? 0LL
-          : std::max(0LL,
-                     scheduledVisualEndMicros - gameplayDurationMicros);
-  const long long audioTailMicros =
-      stoppedOnGaugeFailure
-          ? 0LL
-          : std::max(0LL,
-                     requestedAudioDurationMicros - gameplayDurationMicros);
   const long long resultTailMicros =
-      resolvedOptions.includeResultScreen
-          ? std::max({kResultSceneTailMicros, visualTailMicros,
-                      audioTailMicros})
-          : std::max(visualTailMicros, audioTailMicros);
+      replay_video_export::replayPostGameplayTailDurationMicros(
+          gameplayDurationMicros,
+          stoppedOnGaugeFailure ? gameplayDurationMicros
+                                : scheduledVisualEndMicros,
+          stoppedOnGaugeFailure ? gameplayDurationMicros
+                                : requestedAudioDurationMicros,
+          resolvedOptions.includeResultScreen);
   const long long totalDurationMicros =
       gameplayDurationMicros + resultTailMicros;
   const long long visualOffsetMicros =
