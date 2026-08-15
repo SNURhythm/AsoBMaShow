@@ -1038,12 +1038,12 @@ void testRemainingDirectGameplayStatePropertyWiring() {
   state.authority.courseStageIndex = 6;
   state.authority.courseStageCount = 10;
   bridge.beginFrame(state, projectionAt(210));
+  const auto unsupportedCourseStage = bridge.booleanProperty({286});
   expect(!bridge.booleanProperty({280}).value &&
-             bridge.booleanProperty({286}).value &&
-             !bridge.booleanProperty({287}).value &&
-             !bridge.booleanProperty({289}).value,
-         "course stage selectors cover every Beatoraja stage property before "
-         "the final stage");
+             !bridge.booleanProperty({289}).value &&
+             !unsupportedCourseStage.supported,
+         "only Beatoraja's four course stage selectors and final selector "
+         "are defined");
   bridge.discardFrame();
 
   state.clock.serial = 211;

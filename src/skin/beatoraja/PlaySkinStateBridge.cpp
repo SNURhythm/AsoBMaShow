@@ -1256,12 +1256,7 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
   case 280:
   case 281:
   case 282:
-  case 283:
-  case 284:
-  case 285:
-  case 286:
-  case 287:
-  case 288: {
+  case 283: {
     const int stage = *id - 280;
     return {.value = snapshot->authority.courseMode &&
                          snapshot->authority.courseStageCount > 0 &&
