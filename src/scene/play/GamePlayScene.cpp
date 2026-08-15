@@ -4942,6 +4942,11 @@ void GamePlayScene::update(float dt) {
   if (preparationIndicatorActive(rawSongTimeMicros)) {
     return;
   }
+  const auto playtimeMillis = beatorajaPlaytimeMillis(chart, options);
+  const bool sourcePlaytimeElapsed =
+      playtimeMillis.has_value() &&
+      skin::beatorajaGameplayStateFinished(gameplayTimeMicros,
+                                           *playtimeMillis);
   if (realtimeAtFrameStart) {
     const auto fault = realtimeGameplaySession->worker->fault();
     const auto terminalReason = [this] {
@@ -4963,7 +4968,8 @@ void GamePlayScene::update(float dt) {
       return;
     }
     const auto terminalAction = gameplay::classifyRealtimeGameplayTerminal(
-        terminalReason, options.practiceSession != nullptr);
+        terminalReason, options.practiceSession != nullptr,
+        sourcePlaytimeElapsed);
     if (terminalAction == gameplay::RealtimeGameplayTerminalAction::Wait) {
       return;
     }
@@ -5015,7 +5021,6 @@ void GamePlayScene::update(float dt) {
     return;
   }
 
-  const auto playtimeMillis = beatorajaPlaytimeMillis(chart, options);
   const bool legacyPracticeTimelineComplete =
       !playtimeMillis.has_value() &&
       state->passedMeasureCount == chart->Measures.size();

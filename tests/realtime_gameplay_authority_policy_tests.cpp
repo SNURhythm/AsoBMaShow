@@ -134,10 +134,22 @@ void testExistingExclusionsAndNormalActivationRemain() {
           "larger note-derived requirement");
 }
 
+void testSourcePlaytimeCompletesBeforeTrailingWorkerTimeline() {
+  require(gameplay::classifyRealtimeGameplayTerminal(
+              gameplay::GameplayTerminalReason::None, false, true) ==
+              gameplay::RealtimeGameplayTerminalAction::CompleteChart &&
+              gameplay::classifyRealtimeGameplayTerminal(
+                  gameplay::GameplayTerminalReason::None, true, true) ==
+                  gameplay::RealtimeGameplayTerminalAction::Wait,
+          "a normal attempt finishes at the source playtime even while the "
+          "realtime worker advances trailing empty timelines");
+}
+
 } // namespace
 
 int main() {
   testSessionBackedPracticeEligibility();
   testExistingExclusionsAndNormalActivationRemain();
+  testSourcePlaytimeCompletesBeforeTrailingWorkerTimeline();
   return 0;
 }

@@ -89,7 +89,8 @@ shouldRetryRealtimeGameplayAuthorityAfterSkinFrame(
 
 [[nodiscard]] RealtimeGameplayTerminalAction
 classifyRealtimeGameplayTerminal(GameplayTerminalReason reason,
-                                 bool sessionBackedPractice) noexcept;
+                                 bool sessionBackedPractice,
+                                 bool sourcePlaytimeElapsed = false) noexcept;
 
 [[nodiscard]] constexpr bool preparationInputUsesVisualOnlyPath(
     bool indicatorActive, bool sessionBackedPractice) noexcept {
