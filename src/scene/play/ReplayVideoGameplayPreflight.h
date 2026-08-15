@@ -2,6 +2,7 @@
 
 #include "ReplayPlayfieldPresentation.h"
 
+#include "../../AssistOptionUtils.h"
 #include "../../CoursePlaySession.h"
 #include "../../PreparationPlan.h"
 #include "../../ReplayVideoExporter.h"
@@ -24,7 +25,9 @@ replayGameplayPresentationConfig(const AppSettings &, float playAreaWidth,
                                  const bms_parser::Chart &,
                                  bool touchVisualizationEnabled,
                                  bool replayGhostRenderingEnabled,
-                                 const CourseConstraintRules &constraints = {})
+                                 const CourseConstraintRules &constraints = {},
+                                 const std::string &assistOption =
+                                     assist_options::kOff)
     noexcept;
 
 // Export failures occur after BGA preparation but before either selected-skin

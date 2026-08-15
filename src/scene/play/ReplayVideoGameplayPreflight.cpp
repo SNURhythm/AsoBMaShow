@@ -31,7 +31,8 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
     const bms_parser::Chart &chart,
     bool touchVisualizationEnabled,
     bool replayGhostRenderingEnabled,
-    const CourseConstraintRules &constraints) noexcept {
+    const CourseConstraintRules &constraints,
+    const std::string &assistOption) noexcept {
   const bool noSpeed = constraints.noSpeed;
   const int visibleTimeDurationMilliseconds =
       settings.visibleTimeDurationMilliseconds;
@@ -64,6 +65,7 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
       .noteStartPositionPercent = noteStartPositionPercent,
       .laneBeamClockUsesRenderTime = true,
       .showInvisibleNotes = settings.showInvisibleNotes,
+      .bpmGuideEnabled = assist_options::isBpmGuide(assistOption),
       .markProcessedNotes = settings.markProcessedNotes,
       .judgementIndicatorEnabled = settings.judgementIndicatorEnabled,
       .judgementIndicatorY = settings.judgementIndicatorY,

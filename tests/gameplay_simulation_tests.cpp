@@ -113,6 +113,7 @@ void requireSameScoreState(const GameplayScoreState &left,
               left.gaugeProfile == right.gaugeProfile &&
               left.gaugeAutoShift == right.gaugeAutoShift &&
               left.assistClearMark == right.assistClearMark &&
+              left.lightAssistClearMark == right.lightAssistClearMark &&
               left.gaugeValues == right.gaugeValues &&
               left.gaugeSurvivalFailed == right.gaugeSurvivalFailed &&
               left.getClearTypeRank() == right.getClearTypeRank() &&

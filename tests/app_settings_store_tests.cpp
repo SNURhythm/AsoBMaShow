@@ -290,6 +290,24 @@ void testJsonRoundTripIncludesAudioAndVideo() {
          "serialized settings contain no API key material");
 }
 
+void testBpmGuideAssistOptionPersists() {
+  TempDirectory temp;
+  const auto path = temp.path() / "settings.json";
+  AppSettings settings;
+  settings.selectedAssistOption = "bpm guide";
+  settings.sanitize();
+  expect(settings.selectedAssistOption == "BPM-GUIDE",
+         "BPM Guide normalizes to its canonical assist-option ID");
+
+  std::string error;
+  expect(AppSettingsStore::Save(path, settings, error),
+         "BPM Guide settings save succeeds: " + error);
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.status == AppSettingsLoadStatus::Loaded &&
+             loaded.settings.selectedAssistOption == "BPM-GUIDE",
+         "BPM Guide survives settings round trip");
+}
+
 void testSchemaThreeMigrationDisablesCompatibility() {
   TempDirectory temp;
   const auto path = temp.path() / "schema3.json";
@@ -1244,6 +1262,7 @@ void testAtomicFirstSaveCreatesRelativeNestedParents() {
 int main() {
   testLegacyFixtureLoadsEverySetting();
   testJsonRoundTripIncludesAudioAndVideo();
+  testBpmGuideAssistOptionPersists();
   testSchemaThreeMigrationDisablesCompatibility();
   testLegacy7KeySelectionMigratesToTraitSelection();
   testSkinSettingsRejectUntrustedIdentityAndSanitizeBounds();

@@ -43,6 +43,7 @@ struct GameplayAttemptOptions {
   int carriedCombo = 0;
   int carriedMaxCombo = 0;
   bool assistClearMark = false;
+  bool lightAssistClearMark = false;
   bool autoPlay = false;
   std::size_t replayCapacity = 4096;
   std::size_t automaticResultCapacity = 4096;

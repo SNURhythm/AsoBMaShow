@@ -196,7 +196,7 @@ void testConcreteMaterializerBuildsConsumerTrackDespiteResultDisagreement() {
   auto alteredRateSaved = saved;
   alteredRateSaved.score.provenance.playback =
       alteredRateReplay.playback.setup.playback;
-  alteredRateSaved.score.clearType = kClearTypeAssistedEasyClearRank;
+  alteredRateSaved.score.clearType = kClearTypeLightAssistedEasyClearRank;
   alteredRateSaved.resultFingerprint =
       result_persistence::modernResultFingerprint(alteredRateSaved);
   const auto alteredRate =

@@ -303,6 +303,8 @@ ChartScoreWrite captureChartScoreWrite(const bms_parser::ChartMeta &meta,
       result_contract::maximumScoreForNotes(meta.TotalNotes);
   const int maximumScore =
       meta.TotalNotes > 0 && derivedMaximum ? *derivedMaximum : -1;
+  const int clearType = clear_policy::capRankForPlayback(
+      state.getClearTypeRank(), provenance.playback);
   return {
       .chartPath =
           Utils::GetStoragePathUtf8RelativeToDocuments(meta.BmsPath, "BMS/"),
@@ -324,7 +326,7 @@ ChartScoreWrite captureChartScoreWrite(const bms_parser::ChartMeta &meta,
       .fast = state.fastCount,
       .slow = state.slowCount,
       .finalGauge = state.currentGauge,
-      .clearType = state.getClearTypeRank(),
+      .clearType = clearType,
       .provenance = provenance,
   };
 }

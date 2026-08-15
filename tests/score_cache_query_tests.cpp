@@ -308,10 +308,10 @@ int main() {
                      "SELECT " + score_cache_queries::scoreRankLookupExpr(
                                      "'rank-only'", "0")),
             "clear rank summary keeps highest clear lamp separately");
-  ASSERT_EQ(kClearTypeAssistedEasyClearRank,
+  ASSERT_EQ(kClearTypeLightAssistedEasyClearRank,
             queryInt(db, "SELECT " + score_cache_queries::scoreRankLookupExpr(
                                          "'assisted'", "0")),
-            "rate-assisted zero-break score cache remains capped");
+            "altered-playback zero-break score cache remains light-assisted");
   ASSERT_EQ(kClearTypeEasyClearRank,
             queryInt(db,
                      "SELECT clear_type FROM "
@@ -377,10 +377,10 @@ int main() {
                      "SELECT " + score_cache_queries::scoreRankLookupExpr(
                                      "'rank-only'", "0")),
             "rebuilt clear rank summary keeps best clear lamp");
-  ASSERT_EQ(kClearTypeAssistedEasyClearRank,
+  ASSERT_EQ(kClearTypeLightAssistedEasyClearRank,
             queryInt(db, "SELECT " + score_cache_queries::scoreRankLookupExpr(
                                          "'assisted'", "0")),
-            "rebuilt rate-assisted clear rank remains capped");
+            "rebuilt altered-playback clear rank remains light-assisted");
   ASSERT_EQ(kClearTypeEasyClearRank,
             queryInt(db,
                      "SELECT clear_type FROM "

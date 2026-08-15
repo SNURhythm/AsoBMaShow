@@ -377,8 +377,9 @@ void testModernChartProjectionUsesEffectiveLampAndBothPlayerOptions() {
   const auto assisted = makeModernChartResultRecord(
       ModernChartResultRecord{.result = result},
       replay::ReplayState::Missing, ir::IrRecordState::Hidden);
-  expect(assisted.clearRank == kClearTypeAssistedEasyClearRank,
-         "modern Records applies the captured playback-rate lamp cap");
+  expect(assisted.clearRank == kClearTypeLightAssistedEasyClearRank,
+         "modern Records applies the captured playback-rate light-assist "
+         "lamp cap");
 }
 
 void testModernCourseConversionKeepsResultWithoutReplay() {

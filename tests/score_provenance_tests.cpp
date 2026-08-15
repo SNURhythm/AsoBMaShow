@@ -59,6 +59,22 @@ sampleVerifiedProvenance(const std::string &hashSuffix = "one") {
   return makeScoreProvenance(sampleInput(hashSuffix));
 }
 
+void testBpmGuideOnlyModifiesVariableTempoAttempt() {
+  auto constantTempo = sampleInput("bpm-guide-constant");
+  constantTempo.chartMeta.MinBpm = 150.0;
+  constantTempo.chartMeta.MaxBpm = 150.0;
+  constantTempo.assistOption = assist_options::kBpmGuide;
+  const ScoreProvenance constantResult = makeScoreProvenance(constantTempo);
+  assert(constantResult.assistOption == assist_options::kOff);
+  assert(constantResult.eligibility == ScoreEligibility::Verified);
+
+  auto variableTempo = constantTempo;
+  variableTempo.chartMeta.MaxBpm = 180.0;
+  const ScoreProvenance variableResult = makeScoreProvenance(variableTempo);
+  assert(variableResult.assistOption == assist_options::kBpmGuide);
+  assert(variableResult.eligibility == ScoreEligibility::Modified);
+}
+
 void testRulesetContract() {
   const RulesetDescriptor rules = RulesetDescriptor::Current();
   assert(rules.id == "lr2");
@@ -972,6 +988,7 @@ void testCourseSessionAggregatesRecordedStagesByIndex() {
 
 int main() {
   testRulesetContract();
+  testBpmGuideOnlyModifiesVariableTempoAttempt();
   testSchemaAndInputDeviceVocabularyContract();
   testDeterministicRoundTrip();
   testPlaybackAndJudgeProvenanceRoundTripAndMigration();

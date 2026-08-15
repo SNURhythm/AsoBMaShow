@@ -113,7 +113,12 @@ GameplaySimulation::GameplaySimulation(const GameplayDefinition &definition,
   }
   scoreState_.combo = config_.attempt.carriedCombo;
   scoreState_.maxCombo = config_.attempt.carriedMaxCombo;
-  scoreState_.setAssistClearMark(config_.attempt.assistClearMark);
+  scoreState_.setAssistClearMark(
+      config_.attempt.assistClearMark
+          ? AssistClearMark::AssistedEasy
+          : config_.attempt.lightAssistClearMark
+                ? AssistClearMark::LightAssistedEasy
+                : AssistClearMark::None);
   laneStates_.reserve(definition.lanes().size());
   for (const auto &lane : definition.lanes()) {
     laneStates_.push_back({.lane = lane.lane});

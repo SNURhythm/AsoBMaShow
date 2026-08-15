@@ -222,11 +222,11 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
         if (timeline->sectionLine) {
           appendLine(*timeline, ProjectedLineKind::Section, scrollDelta);
         }
-        if (previousTimeline != nullptr &&
+        if (request.bpmGuideEnabled && previousTimeline != nullptr &&
             timeline->bpm != previousTimeline->bpm) {
           appendLine(*timeline, ProjectedLineKind::BpmChange, scrollDelta);
         }
-        if (timeline->stopMicros > 0) {
+        if (request.bpmGuideEnabled && timeline->stopMicros > 0) {
           appendLine(*timeline, ProjectedLineKind::Stop, scrollDelta);
         }
       }

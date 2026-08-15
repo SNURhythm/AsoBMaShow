@@ -126,16 +126,17 @@ int main() {
       makeSummary(6, kClearTypeNormalClearRank, 700, 1000, 500);
   assistedFullCombo.playback = {.percent = 75,
                                 .mode = audio::PlaybackMode::PitchShift};
-  ASSERT_EQ(kClearTypeAssistedEasyClearRank,
+  ASSERT_EQ(kClearTypeLightAssistedEasyClearRank,
             replay_clear_mark::effectiveClearRank(assistedFullCombo),
-            "rate-assisted effective full combo cap");
+            "altered-playback effective full combo cap");
   filters = {};
   filters.clearMarkRank = kClearTypeFullComboRank;
   filtered = replay_record_filters::apply({assistedFullCombo}, filters);
   ASSERT_EQ(0U, filtered.size(), "assisted replay excluded from full combo");
-  filters.clearMarkRank = kClearTypeAssistedEasyClearRank;
+  filters.clearMarkRank = kClearTypeLightAssistedEasyClearRank;
   filtered = replay_record_filters::apply({assistedFullCombo}, filters);
-  ASSERT_EQ(1U, filtered.size(), "assisted replay included in assisted clear");
+  ASSERT_EQ(1U, filtered.size(),
+            "altered-playback replay included in light assist clear");
 
   ReplaySummary legacyNeutral =
       makeSummary(7, kClearTypeNormalClearRank, 700, 1000, 500);

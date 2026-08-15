@@ -17,6 +17,7 @@ PlayfieldProjectionRequest initialProjectionRequest(
     const BMSRenderer &renderer) {
   return {
       .includeInvisibleNotes = configuration.showInvisibleNotes,
+      .bpmGuideEnabled = configuration.bpmGuideEnabled,
       .latePoorTimingMicros = renderer.projectionLatePoorTimingMicros(),
       .builtInTraversal = renderer.projectionTraversal(),
   };
@@ -549,6 +550,8 @@ PresentationFrameResult ReplayPlayfieldPresentation::renderFrame(
   updateHcnVisualStates(clock.visualTimeMicros);
   PlayfieldVisualState state = state_->capture(clock);
   PlayfieldProjectionRequest effectiveRequest = request;
+  effectiveRequest.bpmGuideEnabled =
+      effectiveRequest.bpmGuideEnabled || configuration_.bpmGuideEnabled;
   if (!effectiveRequest.builtInTraversal) {
     effectiveRequest.builtInTraversal = builtIn_->projectionTraversal();
   }

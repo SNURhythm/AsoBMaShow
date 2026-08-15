@@ -1078,7 +1078,8 @@ ScoreProvenance makeScoreProvenance(const ScoreProvenanceBuildInput &input) {
   result.player1 = input.player1;
   result.player2 = input.player2;
   result.doublePlayFlip = input.doublePlayFlip;
-  result.assistOption = assist_options::normalize(input.assistOption);
+  result.assistOption = assist_options::effectiveForChart(
+      input.assistOption, input.chartMeta.MinBpm, input.chartMeta.MaxBpm);
   result.inputDevices = input.inputDevices;
   canonicalizeDevices(result.inputDevices);
   result.autoPlay = input.autoPlay;

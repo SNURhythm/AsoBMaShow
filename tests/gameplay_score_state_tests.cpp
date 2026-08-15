@@ -1,3 +1,4 @@
+#include "AssistOptionUtils.h"
 #include "scene/play/GameplayScoreState.h"
 #include "scene/play/RhythmState.h"
 
@@ -142,6 +143,53 @@ void testStageComboRemainsLocalWhenCourseComboCarriesAcrossCharts() {
   require(state.combo == 0 && state.stageCombo == 0,
           "a combo break resets both the displayed and stage-local combos");
 }
+
+void testBpmGuideUsesLightAssistOnlyForVariableTempoCharts() {
+  GameplayScoreState state(beatorajaScoreConfig(100, 7, 200.0));
+  state.configureGauge(GaugeType::Normal, GaugeAutoShiftMode::None);
+  state.applyGaugeDelta(100.0F);
+
+  state.setAssistClearMark(clear_policy::assistClearMarkRequired(
+      assist_options::kBpmGuide, 120.0, 180.0, {}));
+  require(state.getClearType() == ClearType::LightAssistedEasyClear,
+          "BPM Guide on a variable-tempo chart produces Light Assist Easy");
+
+  state.setAssistClearMark(clear_policy::assistClearMarkRequired(
+      assist_options::kBpmGuide, 120.0, 120.0, {}));
+  require(state.getClearType() == ClearType::NormalClear,
+          "BPM Guide on a constant-tempo chart leaves the clear type intact");
+
+  state.setAssistClearMark(clear_policy::assistClearMarkRequired(
+      assist_options::kDrag, 120.0, 120.0, {}));
+  require(state.getClearType() == ClearType::LightAssistedEasyClear,
+          "Drag assist follows BPM Guide's Light Assist Easy result class");
+  require(clear_policy::fullComboRankForPlayback(
+              state.getClearTypeRank(), true, audio::PlaybackRate{}) ==
+              kClearTypeLightAssistedEasyClearRank,
+          "full combo does not replace a light-assist lamp");
+  require(clear_policy::fullComboRankForPlayback(
+              kClearTypeAssistedEasyClearRank, true, audio::PlaybackRate{}) ==
+              kClearTypeFullComboRank,
+          "an Assisted Easy gauge alone still permits a full-combo lamp");
+}
+
+void testAlteredPlaybackUsesLightAssistEasy() {
+  const audio::PlaybackRate alteredPlayback{
+      .percent = 75, .mode = audio::PlaybackMode::PitchShift};
+  GameplayScoreState state(beatorajaScoreConfig(100, 7, 200.0));
+  state.configureGauge(GaugeType::Normal, GaugeAutoShiftMode::None);
+  state.applyGaugeDelta(100.0F);
+  state.setAssistClearMark(clear_policy::assistClearMarkRequired(
+      assist_options::kOff, 120.0, 120.0, alteredPlayback));
+
+  require(state.getClearType() == ClearType::LightAssistedEasyClear,
+          "altered playback produces Light Assist Easy without a Beatoraja "
+          "Assist Easy equivalent");
+  require(clear_policy::capRankForPlayback(kClearTypeHardClearRank,
+                                           alteredPlayback) ==
+              kClearTypeLightAssistedEasyClearRank,
+          "altered playback caps persisted clears at Light Assist Easy");
+}
 } // namespace
 
 int main() {
@@ -151,6 +199,8 @@ int main() {
   testBoundedGasHistoriesShareLogicalLimit();
   testNonGasRecordsOnlyActiveGaugeHistory();
   testStageComboRemainsLocalWhenCourseComboCarriesAcrossCharts();
+  testBpmGuideUsesLightAssistOnlyForVariableTempoCharts();
+  testAlteredPlaybackUsesLightAssistEasy();
 
   bms_parser::Chart chart;
   chart.Meta.TotalNotes = 432;

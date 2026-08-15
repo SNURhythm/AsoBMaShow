@@ -64,6 +64,8 @@ struct PlayfieldPresentationConfig {
   int noteStartPositionPercent = 0;
   bool laneBeamClockUsesRenderTime = false;
   bool showInvisibleNotes = false;
+  // BMSPlayerConfig.bpmguide controls the optional BPM/STOP guide lines.
+  bool bpmGuideEnabled = false;
   bool markProcessedNotes = false;
   bool judgementIndicatorEnabled = true;
   float judgementIndicatorY = 0.0F;

@@ -1,4 +1,5 @@
 #include "AppSettings.h"
+#include "AssistOptionUtils.h"
 #include "LongNoteModeUtils.h"
 #include "replay/ReplayOption.h"
 #include "scene/play/GameplayRuleset.h"
@@ -356,17 +357,14 @@ std::string parsePlayOptionId(const std::string &value,
 }
 
 std::string normalizeAssistOptionId(std::string value) {
-  value = normalizeUpperOptionToken(std::move(value));
-  if (value == "DRAG" || value == "DRAG-MODE") {
-    return "DRAG";
-  }
-  return AppSettings::kDefaultAssistOption;
+  return assist_options::normalize(std::move(value));
 }
 
 std::string parseAssistOptionId(const std::string &value,
                                 const std::string &fallback) {
   const std::string normalized = normalizeAssistOptionId(value);
-  if (normalized == "OFF" || normalized == "DRAG") {
+  if (normalized == assist_options::kOff || normalized == assist_options::kDrag ||
+      normalized == assist_options::kBpmGuide) {
     return normalized;
   }
   return fallback;

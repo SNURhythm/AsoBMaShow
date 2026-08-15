@@ -141,7 +141,7 @@ RhythmState BuildInitialGaugeState(bms_parser::Chart &chart,
     state.restoreGaugeState(adjustedCarry);
   }
   state.setAssistClearMark(clear_policy::assistClearMarkRequired(
-      assist_options::isEnabled(replay.assistOption),
+      replay.assistOption, chart.Meta.MinBpm, chart.Meta.MaxBpm,
       replay.provenance.playback));
   return state;
 }

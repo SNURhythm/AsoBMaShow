@@ -49,10 +49,66 @@ bool testFinalMeasureTailContinuesScrollWithoutParserRows() {
   return true;
 }
 
+bool testBpmGuideControlsAuxiliarySkinLines() {
+  PlayfieldChartVisualModel model;
+  model.timelines = {
+      {.id = 1,
+       .timeMicros = 0,
+       .scrollPosition = 0.0,
+       .bpm = 120.0,
+       .sectionLine = true,
+       .retainedForProjection = true,
+       .authoredOrdinal = 0,
+       .retainedOrdinal = 0},
+      {.id = 2,
+       .timeMicros = 1'000'000,
+       .scrollPosition = 4.0,
+       .bpm = 120.0,
+       .stopMicros = 200'000,
+       .retainedForProjection = true,
+       .authoredOrdinal = 1,
+       .retainedOrdinal = 1},
+      {.id = 3,
+       .timeMicros = 2'000'000,
+       .scrollPosition = 8.0,
+       .bpm = 180.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 2,
+       .retainedOrdinal = 2},
+  };
+  PlayfieldVisualState state;
+  state.clock = {.serial = 1, .visualTimeMicros = 0};
+  PlayfieldProjection projection;
+
+  const auto withoutGuide = projection.project(
+      model, state, {.bpmGuideEnabled = false});
+  const auto withGuide = projection.project(model, state,
+                                             {.bpmGuideEnabled = true});
+  const auto countLines = [](const PlayfieldProjectionResult &result,
+                             ProjectedLineKind kind) {
+    return std::count_if(result.lines.begin(), result.lines.end(),
+                         [kind](const auto &line) { return line.kind == kind; });
+  };
+  if (countLines(withoutGuide, ProjectedLineKind::Section) != 1 ||
+      countLines(withoutGuide, ProjectedLineKind::BpmChange) != 0 ||
+      countLines(withoutGuide, ProjectedLineKind::Stop) != 0 ||
+      countLines(withGuide, ProjectedLineKind::Section) != 1 ||
+      countLines(withGuide, ProjectedLineKind::BpmChange) != 1 ||
+      countLines(withGuide, ProjectedLineKind::Stop) != 1) {
+    std::cerr << "BPM Guide must gate BPM and STOP skin lines without hiding "
+                 "measure lines\n";
+    return false;
+  }
+  return true;
+}
+
 } // namespace
 
 int main() {
   if (!testFinalMeasureTailContinuesScrollWithoutParserRows()) {
+    return EXIT_FAILURE;
+  }
+  if (!testBpmGuideControlsAuxiliarySkinLines()) {
     return EXIT_FAILURE;
   }
   PlayfieldChartVisualModel model;
@@ -188,7 +244,8 @@ int main() {
   const auto result = projection.project(model, state,
                                          {.visibleScrollBefore = 10.0,
                                           .visibleScrollAfter = 10.0,
-                                          .includeInvisibleNotes = true});
+                                          .includeInvisibleNotes = true,
+                                          .bpmGuideEnabled = true});
 
   if (result.frameSerial != 42 || !closeTo(result.currentScrollPosition, 4.0) ||
       !closeTo(scrollPositionAtTime(model, 1'100'000), 4.0) ||

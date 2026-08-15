@@ -455,6 +455,21 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
          "replay export configuration retains all gameplay presentation settings");
 }
 
+void testReplayExportConfigCarriesBpmGuide() {
+  AppSettings settings;
+  bms_parser::Chart chart;
+  chart.Meta.Bpm = 120.0;
+  chart.Meta.MinBpm = 120.0;
+  chart.Meta.MaxBpm = 180.0;
+
+  const auto configuration =
+      replay_video_export::replayGameplayPresentationConfig(
+          settings, 9.5F, chart, false, false, {},
+          assist_options::kBpmGuide);
+  expect(configuration.bpmGuideEnabled,
+         "replay export carries the recorded BPM Guide setting into skin projection");
+}
+
 void testCourseNoSpeedReplayExportConfigOverridesProfileSettings() {
   AppSettings settings;
   settings.visibleTimeDurationMilliseconds = 1'001;
@@ -1743,6 +1758,7 @@ int main() {
   testModelReplayGhostsRetainRawLanesAndTimelinePositions();
   testExportPixelSizesMapToLogicalGameplayBounds();
   testReplayExportConfigPreservesGameplayPresentationSettings();
+  testReplayExportConfigCarriesBpmGuide();
   testCourseNoSpeedReplayExportConfigOverridesProfileSettings();
   testReplayExportConfigUsesLaneRendererMainBpmTieRule();
   testReplayExportPersonalBestAuthorityUsesSavedBestReplay();

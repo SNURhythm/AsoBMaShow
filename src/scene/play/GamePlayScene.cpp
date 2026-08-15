@@ -1608,6 +1608,7 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
               .carriedCombo = state->combo,
               .carriedMaxCombo = state->maxCombo,
               .assistClearMark = state->assistClearMark,
+              .lightAssistClearMark = state->lightAssistClearMark,
               .autoPlay = options.autoPlay,
               .replayCapacity = replayCapacity,
               .automaticResultCapacity = automaticCapacity,
@@ -2530,6 +2531,9 @@ void GamePlayScene::init() {
       .noteStartPositionPercent = effectiveNoteStartPositionPercent(),
       .laneBeamClockUsesRenderTime = true,
       .showInvisibleNotes = context.settings.showInvisibleNotes,
+      .bpmGuideEnabled = assist_options::isBpmGuide(
+          options.replayData != nullptr ? options.replayData->assistOption
+                                        : options.assistOption),
       .markProcessedNotes = context.settings.markProcessedNotes,
       .judgementIndicatorEnabled =
           context.settings.judgementIndicatorEnabled,
@@ -3007,7 +3011,7 @@ bool GamePlayScene::reset() {
                                        ? options.replayData->assistOption
                                        : options.assistOption;
   state->setAssistClearMark(clear_policy::assistClearMarkRequired(
-      assist_options::isEnabled(assistOption), options.playback));
+      assistOption, chart->Meta.MinBpm, chart->Meta.MaxBpm, options.playback));
   initializeStartPositionState();
   configurePacemakerTarget();
   updatePacemakerStatus();
@@ -4561,6 +4565,8 @@ void GamePlayScene::capturePlayfieldVisualState(
       playfieldChartVisualModel, capturedPlayfieldVisualState,
       {.includeInvisibleNotes =
            capturedPlayfieldVisualState.configuration.showInvisibleNotes,
+       .bpmGuideEnabled =
+           capturedPlayfieldVisualState.configuration.bpmGuideEnabled,
        .latePoorTimingMicros =
            builtInPresentation->projectionLatePoorTimingMicros(),
        .builtInTraversal = builtInPresentation->projectionTraversal()});

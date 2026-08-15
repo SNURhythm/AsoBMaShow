@@ -577,6 +577,7 @@ public:
   GaugeProfile gaugeProfile = GaugeProfile::Standard;
   GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
   bool assistClearMark = false;
+  bool lightAssistClearMark = false;
   std::array<float, kGaugeTypeCount> gaugeValues{};
   std::array<bool, kGaugeTypeCount> gaugeSurvivalFailed{};
   int fastCount = 0;
@@ -709,7 +710,15 @@ public:
     };
   }
 
-  void setAssistClearMark(bool enabled) { assistClearMark = enabled; }
+  void setAssistClearMark(AssistClearMark mark) {
+    assistClearMark = mark == AssistClearMark::AssistedEasy;
+    lightAssistClearMark = mark == AssistClearMark::LightAssistedEasy;
+  }
+
+  void setAssistClearMark(bool enabled) {
+    setAssistClearMark(enabled ? AssistClearMark::AssistedEasy
+                               : AssistClearMark::None);
+  }
 
   void applyGaugeJudgement(Judgement judgement) {
     applyGaugeJudgementRate(judgement, 1.0f);
@@ -779,6 +788,11 @@ public:
       return gaugeClearType == ClearType::Failed
                  ? ClearType::Failed
                  : ClearType::AssistedEasyClear;
+    }
+    if (lightAssistClearMark) {
+      return gaugeClearType == ClearType::Failed
+                 ? ClearType::Failed
+                 : ClearType::LightAssistedEasyClear;
     }
     return gaugeClearType;
   }
