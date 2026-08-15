@@ -4,12 +4,14 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 STORE = ROOT / "src/skin/package/SkinPackageStore.cpp"
+PATH_POLICY = ROOT / "src/skin/package/SkinPathPolicy.h"
 
 
 class WindowsSkinPackageStoreContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.source = STORE.read_text(encoding="utf-8")
+        cls.path_policy = PATH_POLICY.read_text(encoding="utf-8")
         cls.tree = cls.source[
             cls.source.index("class RetainedTreeCapability") :
             cls.source.index("class RetainedEntryCapability")
@@ -158,7 +160,15 @@ class WindowsSkinPackageStoreContractTests(unittest.TestCase):
         self.assertIn("FILE_SHARE_DELETE", manifest)
 
     def test_utf8_package_names_become_native_paths_explicitly(self):
-        self.assertIn("fs::path pathFromUtf8(std::string_view value)", self.source)
+        self.assertIn('#include "SkinPathPolicy.h"', self.source)
+        self.assertIn(
+            "std::filesystem::path pathFromUtf8(std::string_view value)",
+            self.path_policy,
+        )
+        self.assertIn(
+            "pathFromUtf8(prepared.packageId().directoryName)", self.source
+        )
+        self.assertIn("pathFromUtf8(package.directoryName)", self.source)
         self.assertNotIn(
             "visiblePackages / prepared.packageId().directoryName", self.source
         )
