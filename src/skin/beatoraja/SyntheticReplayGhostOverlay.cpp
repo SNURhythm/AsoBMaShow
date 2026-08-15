@@ -83,7 +83,7 @@ void appendGhostStrip(SkinCommandBuffer &buffer, const PlaySkinViewport &viewpor
       viewport);
   bool emptyClip = false;
   const auto scissor =
-      intersectClip(projected.clip, viewport.safeUiBounds, emptyClip);
+      intersectClip(projected.clip, projectedSkinScissorBounds(viewport), emptyClip);
   if (emptyClip) {
     return;
   }
@@ -132,7 +132,7 @@ void appendStartLaneIndicator(
       viewport);
   bool emptyClip = false;
   const auto scissor =
-      intersectClip(projected.clip, viewport.safeUiBounds, emptyClip);
+      intersectClip(projected.clip, projectedSkinScissorBounds(viewport), emptyClip);
   if (emptyClip) {
     return;
   }

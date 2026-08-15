@@ -83,6 +83,11 @@ projectBgaTarget(const SkinBgaCommand &command, GameplayBgaRole role) {
         .x = static_cast<float>(projected[0]),
         .y = static_cast<float>(projected[1])};
   }
+  const auto &skinBounds = projectedSkinScissorBounds(command.viewport);
+  GameplayBgaClipRect clip{.x = skinBounds.x,
+                            .y = skinBounds.y,
+                            .width = skinBounds.width,
+                            .height = skinBounds.height};
   if (geometry.clip && geometry.clip->width > 0.0 &&
       geometry.clip->height > 0.0) {
     const std::array clipCorners{
@@ -101,12 +106,14 @@ projectBgaTarget(const SkinBgaCommand &command, GameplayBgaRole role) {
     const auto [minimumY, maximumY] = std::ranges::minmax(
         clipCorners | std::views::transform(
                           [](const auto &point) { return point[1]; }));
-    target.clip = GameplayBgaClipRect{
-        .x = minimumX,
-        .y = minimumY,
-        .width = maximumX - minimumX,
-        .height = maximumY - minimumY};
+    const double clipRight = std::min(clip.x + clip.width, maximumX);
+    const double clipBottom = std::min(clip.y + clip.height, maximumY);
+    clip.x = std::max(clip.x, minimumX);
+    clip.y = std::max(clip.y, minimumY);
+    clip.width = std::max(0.0, clipRight - clip.x);
+    clip.height = std::max(0.0, clipBottom - clip.y);
   }
+  target.clip = clip;
   return target;
 }
 

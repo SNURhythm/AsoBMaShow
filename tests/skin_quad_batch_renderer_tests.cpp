@@ -295,6 +295,7 @@ skin::SkinBgaCommand bga(std::uint32_t ordinal, double x = 10.0) {
                        .m10 = 0.25,
                        .m11 = -3.0,
                        .ty = 100.0},
+      .safeUiBounds = {.x = 0.0, .y = 0.0, .width = 1280.0, .height = 720.0},
       .valid = true};
   return result;
 }
@@ -727,6 +728,21 @@ void testBgaCompositionExpandsPlaceholdersAndMissingRolesExactly() {
       missRoles, "available miss expands to only its miss target");
 }
 
+void testUnclippedBgaUsesProjectedSkinResolutionScissor() {
+  auto command = bga(1);
+  command.authoredGeometry.clip.reset();
+  command.viewport.safeUiBounds =
+      {.x = 0.0, .y = 0.0, .width = 120.0, .height = 90.0};
+  command.viewport.projectedUiBounds =
+      skin::UiLogicalRect{.x = 0.0, .y = 11.25, .width = 120.0, .height = 67.5};
+
+  const auto target = skin::projectBgaTarget(command, GameplayBgaRole::Base);
+  expect(target && target->clip && target->clip->x == 0.0 &&
+             target->clip->y == 11.25 && target->clip->width == 120.0 &&
+             target->clip->height == 67.5,
+         "unclipped BGA targets are scissored to the fitted skin resolution");
+}
+
 void testTwoPhaseSubmissionFailuresAreZeroDrawAtomic() {
   const PreparedGameplayBgaFrame frame{
       .sequence = 8,
@@ -1003,6 +1019,7 @@ int main() {
   testPrimitiveTopologyAndBgaRequiresFallbackUntilIntegrated();
   testTwoPhaseSkinSubmissionPreservesMixedAuthoredOrder();
   testBgaCompositionExpandsPlaceholdersAndMissingRolesExactly();
+  testUnclippedBgaUsesProjectedSkinResolutionScissor();
   testTwoPhaseSubmissionFailuresAreZeroDrawAtomic();
   testCommittedSubmissionCannotReturnFallbackSignal();
   testLogicalScissorConversionAtOneAndTwoTimesScale();

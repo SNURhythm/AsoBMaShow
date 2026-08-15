@@ -3,6 +3,8 @@
 #include "../SkinProfileSettings.h"
 #include "BeatorajaSkinModel.h"
 
+#include <optional>
+
 namespace skin {
 
 struct AuthoredSize {
@@ -38,11 +40,18 @@ struct PlaySkinViewport {
   Affine2D uiToAuthored;
   AuthoredRect drawableAuthoredBounds;
   UiLogicalRect safeUiBounds;
+  std::optional<UiLogicalRect> projectedUiBounds;
   bool valid = false;
 };
 
 PlaySkinViewport evaluatePlaySkinViewport(AuthoredSize authoredSize,
                                           UiLogicalRect safeUiBounds,
                                           const ViewportSettings &settings);
+
+inline const UiLogicalRect &
+projectedSkinScissorBounds(const PlaySkinViewport &viewport) noexcept {
+  return viewport.projectedUiBounds ? *viewport.projectedUiBounds
+                                    : viewport.safeUiBounds;
+}
 
 } // namespace skin

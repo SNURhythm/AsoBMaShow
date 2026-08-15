@@ -1,6 +1,7 @@
 #include "PlaySkinViewport.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace skin {
@@ -56,6 +57,20 @@ AuthoredPoint transform(const Affine2D &affine, double x, double y) {
           .y = affine.m10 * x + affine.m11 * y + affine.ty};
 }
 
+UiLogicalRect intersectUiRects(const UiLogicalRect &left,
+                               const UiLogicalRect &right) {
+  const double minimumX = std::max(left.x, right.x);
+  const double minimumY = std::max(left.y, right.y);
+  const double maximumX =
+      std::min(left.x + left.width, right.x + right.width);
+  const double maximumY =
+      std::min(left.y + left.height, right.y + right.height);
+  return {.x = minimumX,
+          .y = minimumY,
+          .width = std::max(0.0, maximumX - minimumX),
+          .height = std::max(0.0, maximumY - minimumY)};
+}
+
 } // namespace
 
 PlaySkinViewport evaluatePlaySkinViewport(AuthoredSize authoredSize,
@@ -108,6 +123,27 @@ PlaySkinViewport evaluatePlaySkinViewport(AuthoredSize authoredSize,
       .width = std::abs(bottomRight.x - topLeft.x),
       .height = std::abs(bottomRight.y - topLeft.y),
   };
+  const std::array canvasCorners{
+      transform(result.authoredToUi, 0.0, 0.0),
+      transform(result.authoredToUi, authoredSize.width, 0.0),
+      transform(result.authoredToUi, authoredSize.width, authoredSize.height),
+      transform(result.authoredToUi, 0.0, authoredSize.height)};
+  const auto [minimumX, maximumX] = std::minmax_element(
+      canvasCorners.begin(), canvasCorners.end(),
+      [](const AuthoredPoint &left, const AuthoredPoint &right) {
+        return left.x < right.x;
+      });
+  const auto [minimumY, maximumY] = std::minmax_element(
+      canvasCorners.begin(), canvasCorners.end(),
+      [](const AuthoredPoint &left, const AuthoredPoint &right) {
+        return left.y < right.y;
+      });
+  result.projectedUiBounds = intersectUiRects(
+      {.x = minimumX->x,
+       .y = minimumY->y,
+       .width = maximumX->x - minimumX->x,
+       .height = maximumY->y - minimumY->y},
+      safeUiBounds);
   result.valid = true;
   return result;
 }

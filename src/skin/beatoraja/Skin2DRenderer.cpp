@@ -718,7 +718,11 @@ intersectClip(const std::optional<UiLogicalRect> &clip,
               const UiLogicalRect &bounds, bool &empty) noexcept {
   empty = false;
   if (!clip) {
-    return std::nullopt;
+    if (bounds.width <= 0.0 || bounds.height <= 0.0) {
+      empty = true;
+      return std::nullopt;
+    }
+    return bounds;
   }
   const double left = std::max(clip->x, bounds.x);
   const double top = std::max(clip->y, bounds.y);
@@ -1064,7 +1068,8 @@ NumericLoweringResult lowerNumeric(const SkinFrameInputs &inputs,
                                    inputs.viewport);
     bool emptyClip = false;
     const auto clip =
-        intersectClip(projected.clip, inputs.viewport.safeUiBounds, emptyClip);
+        intersectClip(projected.clip, projectedSkinScissorBounds(inputs.viewport),
+                      emptyClip);
     if (emptyClip) {
       continue;
     }
@@ -1421,7 +1426,8 @@ TextLoweringResult lowerText(const SkinFrameInputs &inputs,
        .region = {.x = 0, .y = 0, .w = atlas.width, .h = atlas.height}},
       inputs.viewport);
   const auto clip = intersectClip(projectedClip.clip,
-                                  inputs.viewport.safeUiBounds, emptyClip);
+                                  projectedSkinScissorBounds(inputs.viewport),
+                                  emptyClip);
   if (emptyClip) {
     return result;
   }
@@ -1646,7 +1652,8 @@ lowerPreparedQuad(const SkinFrameInputs &inputs, SkinObjectId sourceObject,
   }
   bool emptyClip = false;
   const auto clip =
-      intersectClip(projected.clip, inputs.viewport.safeUiBounds, emptyClip);
+      intersectClip(projected.clip, projectedSkinScissorBounds(inputs.viewport),
+                    emptyClip);
   if (emptyClip) {
     return result;
   }
@@ -1778,7 +1785,8 @@ GameplayVisualLoweringResult lowerSynthesizedNoteVisual(
     }
     bool emptyClip = false;
     const auto clip =
-        intersectClip(projected.clip, inputs.viewport.safeUiBounds, emptyClip);
+        intersectClip(projected.clip, projectedSkinScissorBounds(inputs.viewport),
+                      emptyClip);
     if (emptyClip) {
       return;
     }
@@ -1955,7 +1963,8 @@ bool noteOuterClipDrawable(const SkinFrameInputs &inputs,
                                   .region = {.x = 0, .y = 0, .w = 1, .h = 1}},
                                  inputs.viewport);
   bool emptyClip = false;
-  (void)intersectClip(projected.clip, inputs.viewport.safeUiBounds, emptyClip);
+  (void)intersectClip(projected.clip, projectedSkinScissorBounds(inputs.viewport),
+                      emptyClip);
   return !emptyClip;
 }
 
@@ -3958,8 +3967,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
                                       .region = region->resolved},
                                      inputs.viewport);
       bool emptyClip = false;
-      const auto clip = intersectClip(projected.clip,
-                                      inputs.viewport.safeUiBounds, emptyClip);
+      const auto clip = intersectClip(
+          projected.clip, projectedSkinScissorBounds(inputs.viewport), emptyClip);
       if (emptyClip) {
         continue;
       }

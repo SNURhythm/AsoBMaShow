@@ -416,10 +416,13 @@ evaluate(Skin2DRenderer &renderer, RuntimeHarness &runtime,
          std::optional<std::uint64_t> capturedSerial = std::nullopt,
          ISkinGaugeRandomSource *gaugeRandomSource = nullptr,
          std::uint64_t sessionSerial = 1,
-         bool markProcessedNotes = false) {
+         bool markProcessedNotes = false,
+         const PlaySkinViewport *requestedViewport = nullptr) {
   static const BeatorajaSkinConfiguration emptyConfiguration;
   const auto &configuration = configured ? *configured : emptyConfiguration;
-  const auto playViewport = viewport();
+  const auto defaultViewport = viewport();
+  const auto &playViewport =
+      requestedViewport != nullptr ? *requestedViewport : defaultViewport;
   state.capturedSerial = capturedSerial.value_or(serial);
   return renderer.evaluateFrame({.frameSerial = serial,
                                  .sessionSerial = sessionSerial,
@@ -3343,6 +3346,48 @@ void testHiddenAndLiftCoversApplyDisappearLineClipping() {
          "lift cover uses its fixed authored disappear line");
 }
 
+void testUnclippedCoverUsesProjectedSkinResolutionScissor() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  auto sprite = singleFrameSprite(303);
+  resources.addImage(303, sprite.frames.front());
+
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects = {
+      {.id = 1,
+       .authoredName = "unclipped-cover",
+       .payload = SkinCoverObject{.kind = SkinCoverKind::Hidden,
+                                  .sprite = std::move(sprite)},
+       .authoredOrdinal = 1,
+       .critical = true}};
+  auto coverDestination = destination(1, 1, 0.0);
+  coverDestination.presentation.frames.front().y = 0.0;
+  coverDestination.presentation.frames.front().width = 160.0;
+  coverDestination.presentation.frames.front().height = 90.0;
+  model.model.destinations = {std::move(coverDestination)};
+
+  const auto fittedViewport = evaluatePlaySkinViewport(
+      {.width = 160.0, .height = 90.0},
+      {.x = 0.0, .y = 0.0, .width = 120.0, .height = 90.0}, {});
+  const auto result = evaluate(renderer, runtime, model, resources, state, 1,
+                               0, nullptr, std::nullopt, nullptr, 1, false,
+                               &fittedViewport);
+  expect(result.submitReady && result.submitReady->commands.size() == 1,
+         "unclipped cover remains renderable in a fitted skin viewport");
+  if (!result.submitReady || result.submitReady->commands.size() != 1) {
+    return;
+  }
+  const auto &cover = std::get<SkinTexturedQuadCommand>(
+      result.submitReady->commands.front().payload);
+  expect(cover.state.scissor && cover.state.scissor->x == 0.0 &&
+             cover.state.scissor->y == 11.25 &&
+             cover.state.scissor->width == 120.0 &&
+             cover.state.scissor->height == 67.5,
+         "unclipped covers are scissored to the fitted skin resolution");
+}
+
 void testHiddenCoverStillSelectsSourceAfterRuntimeSuppression() {
   RuntimeHarness runtime;
   Skin2DRenderer renderer;
@@ -4259,6 +4304,7 @@ int main() {
   testProjectedLineEmitsEveryLaneGroupAndIgnoresNestedClip();
   testSynthesizedNoteFallbacksHonorMarkProcessedNote();
   testHiddenAndLiftCoversApplyDisappearLineClipping();
+  testUnclippedCoverUsesProjectedSkinResolutionScissor();
   testHiddenCoverStillSelectsSourceAfterRuntimeSuppression();
   testBgaEmitsOneRoleFreePreStretchCommand();
   testTimersProbeThenReadAndTruncateMillisecondsIndependently();
