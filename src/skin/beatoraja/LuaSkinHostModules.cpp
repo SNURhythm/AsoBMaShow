@@ -726,6 +726,19 @@ SharedLuaFileHandle &checkedHandle(lua_State *state, int index) {
       luaL_checkudata(state, index, kHandleMetatable));
 }
 
+enum class HandleReadStatus : std::uint8_t {
+  Success,
+  EndOfFile,
+  AllocationFailure,
+  LineLimitExceeded,
+  ReadLimitExceeded,
+  IoFailure,
+};
+
+HandleReadStatus readHandleLine(LuaFileHandle &handle, std::string &line);
+int reportHandleReadFailure(lua_State *state, LuaFileHandle &handle,
+                            HandleReadStatus status);
+
 bool guardHandle(LuaFileHandle &handle) {
   if (handle.invalidated || handle.closed) {
     handle.owner->storeError("skin_lua_file_handle_invalid",
@@ -752,8 +765,9 @@ int fileLineIterator(lua_State *state) {
   handle->file.clear();
   handle->file.seekg(handle->cursor);
   std::string line;
-  if (!std::getline(handle->file, line)) {
-    if (handle->file.eof()) {
+  const auto lineStatus = readHandleLine(*handle, line);
+  if (lineStatus != HandleReadStatus::Success) {
+    if (lineStatus == HandleReadStatus::EndOfFile) {
       handle->file.clear();
       if (handle->closeOnEndOfLines) {
         handle->file.close();
@@ -761,10 +775,7 @@ int fileLineIterator(lua_State *state) {
       }
       return 0;
     }
-    handle->owner->storeError("skin_lua_file_operation_failed",
-                              "Lua skin file could not be read",
-                              handle->virtualPath);
-    return raiseStoredError(state, handle->owner);
+    return reportHandleReadFailure(state, *handle, lineStatus);
   }
   const std::streampos next = handle->file.tellg();
   if (next == std::streampos(-1)) {
@@ -830,11 +841,30 @@ std::optional<std::size_t> unreadHandleBytes(LuaFileHandle &handle) {
   return static_cast<std::size_t>(remaining);
 }
 
-enum class HandleReadStatus : std::uint8_t {
-  Success,
-  AllocationFailure,
-  IoFailure,
-};
+HandleReadStatus readHandleLine(LuaFileHandle &handle, std::string &line) {
+  line.clear();
+  try {
+    while (true) {
+      const int character = handle.file.get();
+      if (character == std::char_traits<char>::eof()) {
+        return handle.file.bad() ? HandleReadStatus::IoFailure
+                                 : (line.empty() ? HandleReadStatus::EndOfFile
+                                                 : HandleReadStatus::Success);
+      }
+      if (character == '\n') {
+        return HandleReadStatus::Success;
+      }
+      if (line.size() >= handle.owner->maximumSourceBytes) {
+        return HandleReadStatus::LineLimitExceeded;
+      }
+      line.push_back(static_cast<char>(character));
+    }
+  } catch (const std::bad_alloc &) {
+    return HandleReadStatus::AllocationFailure;
+  } catch (const std::length_error &) {
+    return HandleReadStatus::AllocationFailure;
+  }
+}
 
 HandleReadStatus readHandleBytes(LuaFileHandle &handle,
                                  std::size_t requestedBytes,
@@ -863,7 +893,11 @@ int reportHandleReadFailure(lua_State *state, LuaFileHandle &handle,
       "skin_lua_file_operation_failed",
       status == HandleReadStatus::AllocationFailure
           ? "Lua skin file read buffer could not be allocated"
-          : "Lua skin file could not be read",
+          : status == HandleReadStatus::LineLimitExceeded
+                ? "Lua skin file line exceeds runtime storage budget"
+                : status == HandleReadStatus::ReadLimitExceeded
+                      ? "Lua skin file read exceeds runtime storage budget"
+                : "Lua skin file could not be read",
       handle.virtualPath);
   return raiseStoredError(state, handle.owner);
 }
@@ -905,6 +939,10 @@ int fileRead(lua_State *state) {
           requestedBytes > *remainingBytes
               ? *remainingBytes
               : static_cast<std::size_t>(requestedBytes);
+      if (bytesToRead > handle->owner->maximumSourceBytes) {
+        return reportHandleReadFailure(state, *handle,
+                                       HandleReadStatus::ReadLimitExceeded);
+      }
       std::string bytes;
       const HandleReadStatus readStatus =
           readHandleBytes(*handle, bytesToRead, bytes);
@@ -928,12 +966,10 @@ int fileRead(lua_State *state) {
         format, defaultLine ? std::size_t{2} : formatSize);
     if (requestedFormat == "*l") {
       std::string line;
-      if (!std::getline(handle->file, line)) {
-        if (handle->file.bad()) {
-          handle->owner->storeError("skin_lua_file_operation_failed",
-                                    "Lua skin file could not be read",
-                                    handle->virtualPath);
-          return raiseStoredError(state, handle->owner);
+      const auto lineStatus = readHandleLine(*handle, line);
+      if (lineStatus != HandleReadStatus::Success) {
+        if (lineStatus != HandleReadStatus::EndOfFile) {
+          return reportHandleReadFailure(state, *handle, lineStatus);
         }
         handle->file.clear();
         lua_pushnil(state);
@@ -954,6 +990,10 @@ int fileRead(lua_State *state) {
                                   "Lua skin file could not be inspected",
                                   handle->virtualPath);
         return raiseStoredError(state, handle->owner);
+      }
+      if (*remainingBytes > handle->owner->maximumSourceBytes) {
+        return reportHandleReadFailure(state, *handle,
+                                       HandleReadStatus::ReadLimitExceeded);
       }
       std::string bytes;
       const HandleReadStatus readStatus =
@@ -1363,6 +1403,22 @@ std::string modulePathSubstitution(std::string_view moduleName) {
   return substitution;
 }
 
+bool modulePathExpansionFitsBudget(std::string_view pattern,
+                                   std::string_view substitution,
+                                   std::size_t maximumBytes,
+                                   std::size_t &expandedSize) {
+  const std::size_t substitutions =
+      static_cast<std::size_t>(std::ranges::count(pattern, '?'));
+  const std::size_t fixedBytes = pattern.size() - substitutions;
+  if (fixedBytes > maximumBytes ||
+      (substitutions != 0 &&
+       substitution.size() > (maximumBytes - fixedBytes) / substitutions)) {
+    return false;
+  }
+  expandedSize = fixedBytes + substitutions * substitution.size();
+  return true;
+}
+
 int moduleLoader(lua_State *state) {
   LuaSkinHostModulesImpl *impl = host(state);
   std::size_t nameSize = 0;
@@ -1375,8 +1431,7 @@ int moduleLoader(lua_State *state) {
   const char *searchPath = luaL_checklstring(state, -1, &searchPathSize);
   const std::string substitution =
       modulePathSubstitution(std::string_view(name, nameSize));
-  const std::string searchTemplates(searchPath, searchPathSize);
-  const std::string_view templates(searchTemplates);
+  const std::string_view templates(searchPath, searchPathSize);
   lua_pop(state, 2);
 
   std::vector<std::string> searchedCandidates;
@@ -1387,8 +1442,16 @@ int moduleLoader(lua_State *state) {
         start,
         end == std::string_view::npos ? templates.size() - start : end - start);
     if (!pattern.empty() && pattern.find('?') != std::string_view::npos) {
+      std::size_t expandedSize = 0;
+      if (!modulePathExpansionFitsBudget(pattern, substitution,
+                                         impl->maximumSourceBytes,
+                                         expandedSize)) {
+        lua_pushliteral(
+            state, "\n\tLua module path expansion exceeds Lua runtime storage budget");
+        return 1;
+      }
       std::string candidate;
-      candidate.reserve(pattern.size() + substitution.size());
+      candidate.reserve(expandedSize);
       for (const char character : pattern) {
         if (character == '?') {
           candidate += substitution;

@@ -1,4 +1,5 @@
 #include "skin/beatoraja/LuaSkinFileIo.h"
+#include "skin/beatoraja/LuaSkinHostModules.h"
 #include "skin/beatoraja/LuaSkinRuntime.h"
 #include "skin/beatoraja/Skin2DRenderer.h"
 
@@ -8,6 +9,12 @@
 #include "skin/package/SkinAliasDetector.h"
 #include "skin/package/SkinPathPolicy.h"
 #include "skin/package/SkinTreeSnapshotter.h"
+
+extern "C" {
+#include <lauxlib.h>
+#include <lua.h>
+#include <lualib.h>
+}
 
 #include <atomic>
 #include <cstdint>
@@ -259,6 +266,7 @@ return {}
     writeText(source / "skin/customize/settings/7keys/default.lua",
               "return {marker = 'parent-selected'}\n");
     writeText(source / "skin/io_lines.txt", "one\ntwo\r\nthree\n");
+    writeText(source / "skin/long_line.txt", "four\n");
     writeText(source / "skin/io_large_read.txt", "abc");
     writeText(
         source / pathFromUtf8(
@@ -278,14 +286,31 @@ return {}
 
   std::optional<RuntimeHarness>
   create(std::string_view entryName, LuaRuntimePurpose purpose) {
-    if (!prepared) {
+    auto fileSystem = createFileSystem(entryName);
+    if (!fileSystem) {
       return std::nullopt;
+    }
+    LuaSkinFileSystem *borrowed = fileSystem.get();
+    auto runtime = LuaSkinRuntime::create(
+        {.purpose = purpose, .fileSystem = std::move(fileSystem)});
+    expect(runtime.runtime != nullptr, "host contract runtime creates");
+    if (!runtime.runtime) {
+      return std::nullopt;
+    }
+    return RuntimeHarness{.runtime = std::move(runtime.runtime),
+                          .fileSystem = borrowed};
+  }
+
+  std::unique_ptr<LuaSkinFileSystem>
+  createFileSystem(std::string_view entryName) {
+    if (!prepared) {
+      return {};
     }
     const auto entry = normalizeEntryPath(
         package, "skin/" + std::string(entryName));
     expect(entry.entry.has_value(), "host contract entry normalizes");
     if (!entry.entry) {
-      return std::nullopt;
+      return {};
     }
     auto fileSystem = LuaSkinFileSystem::create(
         {.revision = prepared->readView(),
@@ -294,18 +319,9 @@ return {}
     expect(fileSystem.fileSystem != nullptr,
            "host contract filesystem creates");
     if (!fileSystem.fileSystem) {
-      return std::nullopt;
+      return {};
     }
-    LuaSkinFileSystem *borrowed = fileSystem.fileSystem.get();
-    auto runtime = LuaSkinRuntime::create(
-        {.purpose = purpose,
-         .fileSystem = std::move(fileSystem.fileSystem)});
-    expect(runtime.runtime != nullptr, "host contract runtime creates");
-    if (!runtime.runtime) {
-      return std::nullopt;
-    }
-    return RuntimeHarness{.runtime = std::move(runtime.runtime),
-                          .fileSystem = borrowed};
+    return std::move(fileSystem.fileSystem);
   }
 
   const fs::path &hostRoot() const noexcept { return roots.privateRevisions; }
@@ -635,6 +651,78 @@ void testIoOpenReadsUtf8NamedSkinFiles() {
          "io.open reads a UTF-8-named file from the selected skin package");
 }
 
+void testLuaHostCapsModulePathExpansionBeforeAllocatingCandidate() {
+  auto fileSystem = fixture().createFileSystem("shape.luaskin");
+  if (!fileSystem) {
+    expect(false, "module path budget fixture creates a filesystem");
+    return;
+  }
+  lua_State *state = luaL_newstate();
+  if (state == nullptr) {
+    expect(false, "module path budget fixture creates a Lua state");
+    return;
+  }
+  luaL_openlibs(state);
+  {
+    auto modules = LuaSkinHostModules::create(
+        state, {.fileSystem = fileSystem.get(), .maximumSourceBytes = 64});
+    expect(modules.modules != nullptr,
+           "module path budget fixture installs the Lua host");
+    if (modules.modules) {
+      const int status = luaL_dostring(state, R"lua(
+package.path = string.rep("?", 32)
+local ok, message = pcall(require, "abcd")
+assert(not ok)
+assert(tostring(message):find("module path expansion exceeds Lua runtime storage budget", 1, true))
+)lua");
+      expect(status == 0,
+             "require rejects an oversized substituted module path before allocation");
+      if (status != 0) {
+        lua_pop(state, 1);
+      }
+    }
+  }
+  lua_close(state);
+}
+
+void testLuaHostCapsLineReadsBeforeGrowingHostStrings() {
+  auto fileSystem = fixture().createFileSystem("shape.luaskin");
+  if (!fileSystem) {
+    expect(false, "line read budget fixture creates a filesystem");
+    return;
+  }
+  lua_State *state = luaL_newstate();
+  if (state == nullptr) {
+    expect(false, "line read budget fixture creates a Lua state");
+    return;
+  }
+  luaL_openlibs(state);
+  {
+    auto modules = LuaSkinHostModules::create(
+        state, {.fileSystem = fileSystem.get(), .maximumSourceBytes = 3});
+    expect(modules.modules != nullptr,
+           "line read budget fixture installs the Lua host");
+    if (modules.modules) {
+      const int status = luaL_dostring(state, R"lua(
+local handle = assert(io.open("long_line.txt", "rb"))
+local ok, message = pcall(function() return handle:read("*l") end)
+assert(not ok)
+assert(tostring(message):find("Lua skin file line exceeds runtime storage budget", 1, true))
+local iterator = io.lines("long_line.txt")
+local iterated, iteratorMessage = pcall(iterator)
+assert(not iterated)
+assert(tostring(iteratorMessage):find("Lua skin file line exceeds runtime storage budget", 1, true))
+)lua");
+      expect(status == 0,
+             "file:read('*l') rejects an oversized line before host allocation");
+      if (status != 0) {
+        lua_pop(state, 1);
+      }
+    }
+  }
+  lua_close(state);
+}
+
 void testLuaSeekArithmeticClampsOrRejectsWithoutOverflow() {
   const auto clamped = skin::lua_file_io::checkedSeekPosition(
       0, std::numeric_limits<std::int64_t>::min());
@@ -674,6 +762,8 @@ int main() {
   testIoLinesUsesTheVirtualSkinFileSystem();
   testIoReadClampsHugeRequestedCountToAvailableBytes();
   testIoOpenReadsUtf8NamedSkinFiles();
+  testLuaHostCapsModulePathExpansionBeforeAllocatingCandidate();
+  testLuaHostCapsLineReadsBeforeGrowingHostStrings();
   testLuaSeekArithmeticClampsOrRejectsWithoutOverflow();
   testLuaHostPhysicalPathsPreserveUtf8Bytes();
   if (failures != 0) {
