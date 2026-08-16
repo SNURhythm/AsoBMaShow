@@ -25,7 +25,8 @@ class WindowsLuaSkinFileSystemContractTests(unittest.TestCase):
     def test_runtime_uses_ordinary_live_file_io(self):
         for token in (
             "std::ifstream input(path, std::ios::binary)",
-            "std::ofstream output(target, std::ios::binary",
+            "openDirectRegularFile",
+            "openVerifiedRegularFile",
             "fs::directory_iterator",
             "fs::create_directories(target.parent_path(), error)",
         ):

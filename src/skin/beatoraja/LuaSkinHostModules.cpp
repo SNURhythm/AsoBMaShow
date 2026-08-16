@@ -20,9 +20,8 @@ extern "C" {
 #include <bit>
 #include <cmath>
 #include <cctype>
+#include <cstdio>
 #include <cstring>
-#include <filesystem>
-#include <fstream>
 #include <limits>
 #include <new>
 #include <stdexcept>
@@ -36,8 +35,6 @@ namespace {
 
 constexpr const char *kHandleMetatable = "AsoBMaShow.LuaSkinFileHandle";
 constexpr const char *kErrorPrefix = "@ASOBMSKIN:";
-namespace fs = std::filesystem;
-
 struct LuaFileHandle;
 using SharedLuaFileHandle = std::shared_ptr<LuaFileHandle>;
 
@@ -297,12 +294,18 @@ namespace {
 struct LuaFileHandle {
   LuaSkinHostModulesImpl *owner = nullptr;
   std::string virtualPath;
-  std::fstream file;
-  std::streampos cursor = 0;
+  std::FILE *file = nullptr;
+  std::int64_t cursor = 0;
   bool writable = false;
   bool closeOnEndOfLines = false;
   bool closed = false;
   bool invalidated = false;
+
+  ~LuaFileHandle() {
+    if (file != nullptr) {
+      std::fclose(file);
+    }
+  }
 };
 
 } // namespace
@@ -739,6 +742,25 @@ HandleReadStatus readHandleLine(LuaFileHandle &handle, std::string &line);
 int reportHandleReadFailure(lua_State *state, LuaFileHandle &handle,
                             HandleReadStatus status);
 
+bool seekHandle(LuaFileHandle &handle, std::int64_t offset, int origin) {
+  if (handle.file == nullptr ||
+      offset > static_cast<std::int64_t>(std::numeric_limits<long>::max()) ||
+      offset < static_cast<std::int64_t>(std::numeric_limits<long>::min())) {
+    return false;
+  }
+  std::clearerr(handle.file);
+  return std::fseek(handle.file, static_cast<long>(offset), origin) == 0;
+}
+
+std::optional<std::int64_t> tellHandle(LuaFileHandle &handle) {
+  if (handle.file == nullptr) {
+    return std::nullopt;
+  }
+  const long position = std::ftell(handle.file);
+  return position < 0 ? std::nullopt
+                      : std::optional<std::int64_t>{position};
+}
+
 bool guardHandle(LuaFileHandle &handle) {
   if (handle.invalidated || handle.closed) {
     handle.owner->storeError("skin_lua_file_handle_invalid",
@@ -762,29 +784,30 @@ int fileLineIterator(lua_State *state) {
   if (!guardHandle(*handle)) {
     return raiseStoredError(state, handle->owner);
   }
-  handle->file.clear();
-  handle->file.seekg(handle->cursor);
+  if (!seekHandle(*handle, handle->cursor, SEEK_SET)) {
+    handle->owner->storeError("skin_lua_file_operation_failed",
+                              "Lua skin file could not be read",
+                              handle->virtualPath);
+    return raiseStoredError(state, handle->owner);
+  }
   std::string line;
   const auto lineStatus = readHandleLine(*handle, line);
   if (lineStatus != HandleReadStatus::Success) {
     if (lineStatus == HandleReadStatus::EndOfFile) {
-      handle->file.clear();
       if (handle->closeOnEndOfLines) {
-        handle->file.close();
+        std::fclose(handle->file);
+        handle->file = nullptr;
         handle->closed = true;
       }
       return 0;
     }
     return reportHandleReadFailure(state, *handle, lineStatus);
   }
-  const std::streampos next = handle->file.tellg();
-  if (next == std::streampos(-1)) {
-    handle->file.clear();
-    handle->file.seekg(0, std::ios::end);
-    handle->cursor = handle->file.tellg();
-  } else {
-    handle->cursor = next;
+  const auto next = tellHandle(*handle);
+  if (!next) {
+    return reportHandleReadFailure(state, *handle, HandleReadStatus::IoFailure);
   }
+  handle->cursor = *next;
   if (!line.empty() && line.back() == '\r') {
     line.pop_back();
   }
@@ -805,35 +828,25 @@ int fileLines(lua_State *state) {
 }
 
 bool beginHandleRead(LuaFileHandle &handle) {
-  handle.file.clear();
-  handle.file.seekg(handle.cursor);
-  return static_cast<bool>(handle.file);
+  return seekHandle(handle, handle.cursor, SEEK_SET);
 }
 
 void finishHandleRead(LuaFileHandle &handle) {
-  const std::streampos next = handle.file.tellg();
-  if (next != std::streampos(-1)) {
-    handle.cursor = next;
-    return;
+  if (const auto next = tellHandle(handle)) {
+    handle.cursor = *next;
   }
-  handle.file.clear();
-  handle.file.seekg(0, std::ios::end);
-  handle.cursor = handle.file.tellg();
 }
 
 std::optional<std::size_t> unreadHandleBytes(LuaFileHandle &handle) {
-  const std::streampos current = handle.file.tellg();
-  if (current == std::streampos(-1)) {
+  const auto current = tellHandle(handle);
+  if (!current || !seekHandle(handle, 0, SEEK_END)) {
     return std::nullopt;
   }
-  handle.file.seekg(0, std::ios::end);
-  const std::streampos end = handle.file.tellg();
-  handle.file.clear();
-  handle.file.seekg(current);
-  if (end == std::streampos(-1) || !handle.file) {
+  const auto end = tellHandle(handle);
+  if (!seekHandle(handle, *current, SEEK_SET) || !end) {
     return std::nullopt;
   }
-  const std::streamoff remaining = end - current;
+  const std::int64_t remaining = *end - *current;
   if (remaining < 0 || static_cast<std::uintmax_t>(remaining) >
                            std::numeric_limits<std::size_t>::max()) {
     return std::nullopt;
@@ -845,9 +858,9 @@ HandleReadStatus readHandleLine(LuaFileHandle &handle, std::string &line) {
   line.clear();
   try {
     while (true) {
-      const int character = handle.file.get();
-      if (character == std::char_traits<char>::eof()) {
-        return handle.file.bad() ? HandleReadStatus::IoFailure
+      const int character = std::fgetc(handle.file);
+      if (character == EOF) {
+        return std::ferror(handle.file) != 0 ? HandleReadStatus::IoFailure
                                  : (line.empty() ? HandleReadStatus::EndOfFile
                                                  : HandleReadStatus::Success);
       }
@@ -879,11 +892,12 @@ HandleReadStatus readHandleBytes(LuaFileHandle &handle,
   if (requestedBytes == 0) {
     return HandleReadStatus::Success;
   }
-  handle.file.read(bytes.data(), static_cast<std::streamsize>(requestedBytes));
-  if (handle.file.bad()) {
+  const std::size_t read =
+      std::fread(bytes.data(), 1, requestedBytes, handle.file);
+  if (std::ferror(handle.file) != 0) {
     return HandleReadStatus::IoFailure;
   }
-  bytes.resize(static_cast<std::size_t>(handle.file.gcount()));
+  bytes.resize(read);
   return HandleReadStatus::Success;
 }
 
@@ -971,7 +985,7 @@ int fileRead(lua_State *state) {
         if (lineStatus != HandleReadStatus::EndOfFile) {
           return reportHandleReadFailure(state, *handle, lineStatus);
         }
-        handle->file.clear();
+        std::clearerr(handle->file);
         lua_pushnil(state);
         return results + 1;
       }
@@ -1007,20 +1021,20 @@ int fileRead(lua_State *state) {
       continue;
     }
     if (requestedFormat == "*n") {
-      lua_Number number = 0;
-      if (!(handle->file >> number)) {
-        if (handle->file.bad()) {
+      double parsedNumber = 0;
+      if (std::fscanf(handle->file, "%lf", &parsedNumber) != 1) {
+        if (std::ferror(handle->file) != 0) {
           handle->owner->storeError("skin_lua_file_operation_failed",
                                     "Lua skin file could not be read",
                                     handle->virtualPath);
           return raiseStoredError(state, handle->owner);
         }
-        handle->file.clear();
+        std::clearerr(handle->file);
         lua_pushnil(state);
         return results + 1;
       }
       finishHandleRead(*handle);
-      lua_pushnumber(state, number);
+      lua_pushnumber(state, static_cast<lua_Number>(parsedNumber));
       ++results;
       continue;
     }
@@ -1042,30 +1056,39 @@ int fileWrite(lua_State *state) {
     return raiseStoredError(state, handle->owner);
   }
 
-  handle->file.clear();
-  handle->file.seekp(handle->cursor);
+  if (!seekHandle(*handle, handle->cursor, SEEK_SET)) {
+    handle->owner->storeError("skin_lua_file_operation_failed",
+                              "Lua skin file could not be written",
+                              handle->virtualPath);
+    return raiseStoredError(state, handle->owner);
+  }
   for (int index = 2; index <= lua_gettop(state); ++index) {
     std::size_t size = 0;
     const char *text = lua_tolstring(state, index, &size);
     if (text == nullptr) {
       return luaL_argerror(state, index, "string or number expected");
     }
-    handle->file.write(text, static_cast<std::streamsize>(size));
-    if (!handle->file) {
+    if (std::fwrite(text, 1, size, handle->file) != size) {
       handle->owner->storeError("skin_lua_file_operation_failed",
                                 "Lua skin file could not be written",
                                 handle->virtualPath);
       return raiseStoredError(state, handle->owner);
     }
   }
-  handle->file.flush();
-  if (!handle->file) {
+  if (std::fflush(handle->file) != 0) {
     handle->owner->storeError("skin_lua_file_operation_failed",
                               "Lua skin file could not be flushed",
                               handle->virtualPath);
     return raiseStoredError(state, handle->owner);
   }
-  handle->cursor = handle->file.tellp();
+  const auto next = tellHandle(*handle);
+  if (!next) {
+    handle->owner->storeError("skin_lua_file_operation_failed",
+                              "Lua skin file could not be written",
+                              handle->virtualPath);
+    return raiseStoredError(state, handle->owner);
+  }
+  handle->cursor = *next;
   lua_pushvalue(state, 1);
   return 1;
 }
@@ -1086,12 +1109,23 @@ int fileSeek(lua_State *state) {
   } else if (std::strcmp(whence, "cur") == 0) {
     base = static_cast<std::streamoff>(handle->cursor);
   } else if (std::strcmp(whence, "end") == 0) {
-    handle->file.clear();
     if (handle->writable) {
-      handle->file.flush();
+      std::fflush(handle->file);
     }
-    handle->file.seekg(0, std::ios::end);
-    base = static_cast<std::streamoff>(handle->file.tellg());
+    if (!seekHandle(*handle, 0, SEEK_END)) {
+      handle->owner->storeError("skin_lua_file_operation_failed",
+                                "Lua skin file could not seek",
+                                handle->virtualPath);
+      return raiseStoredError(state, handle->owner);
+    }
+    const auto end = tellHandle(*handle);
+    if (!end) {
+      handle->owner->storeError("skin_lua_file_operation_failed",
+                                "Lua skin file could not seek",
+                                handle->virtualPath);
+      return raiseStoredError(state, handle->owner);
+    }
+    base = *end;
   } else {
     return luaL_argerror(state, 2, "invalid seek option");
   }
@@ -1106,18 +1140,13 @@ int fileSeek(lua_State *state) {
                               handle->virtualPath);
     return raiseStoredError(state, handle->owner);
   }
-  handle->file.clear();
-  handle->file.seekg(*position);
-  if (handle->writable) {
-    handle->file.seekp(*position);
-  }
-  if (!handle->file) {
+  if (!seekHandle(*handle, *position, SEEK_SET)) {
     handle->owner->storeError("skin_lua_file_operation_failed",
                               "Lua skin file could not seek",
                               handle->virtualPath);
     return raiseStoredError(state, handle->owner);
   }
-  handle->cursor = std::streampos(*position);
+  handle->cursor = *position;
   lua_pushnumber(state, static_cast<lua_Number>(*position));
   return 1;
 }
@@ -1129,8 +1158,7 @@ int fileFlush(lua_State *state) {
   if (!guardHandle(*handle)) {
     return raiseStoredError(state, handle->owner);
   }
-  handle->file.flush();
-  if (!handle->file) {
+  if (std::fflush(handle->file) != 0) {
     handle->owner->storeError("skin_lua_file_operation_failed",
                               "Lua skin file could not be flushed",
                               handle->virtualPath);
@@ -1173,10 +1201,11 @@ int fileClose(lua_State *state) {
     return raiseStoredError(state, handle->owner);
   }
   if (handle->writable) {
-    handle->file.flush();
+    std::fflush(handle->file);
   }
-  handle->file.close();
-  if (handle->file.fail()) {
+  const int closeStatus = std::fclose(handle->file);
+  handle->file = nullptr;
+  if (closeStatus != 0) {
     handle->owner->storeError("skin_lua_file_operation_failed",
                               "Lua skin file could not be closed",
                               handle->virtualPath);
@@ -1239,54 +1268,38 @@ int ioOpen(lua_State *state) {
   }
 
   // Beatoraja's RestrictedIoLib treats r+ as a writable RandomAccessFile.
-  // Keep the same behavior while routing every writable Lua mode through the
-  // filesystem's write access path.
+  // Keep the same behavior while routing every mode through the filesystem's
+  // descriptor-bound Lua I/O path.
   const bool requiresWriteAccess =
       !selectedMode->readMode || selectedMode->updateMode;
-  const auto resolved = impl->fileSystem->resolve(
-      virtualPath, requiresWriteAccess ? SkinFileUse::DataWrite
-                                       : SkinFileUse::DataRead);
-  if (resolved.failure) {
-    return expectedFailure(state, resolved.failure->message);
-  }
-  const fs::path physicalPath = pathFromUtf8(*resolved.normalizedVirtualPath);
-  std::error_code error;
-  if (!selectedMode->readMode && !physicalPath.parent_path().empty()) {
-    fs::create_directories(physicalPath.parent_path(), error);
-    if (error) {
-      return expectedFailure(state,
-                             "Lua skin file parent directory could not be created");
-    }
-  }
-  if (selectedMode->appendMode && !fs::exists(physicalPath, error)) {
-    std::ofstream create(physicalPath, std::ios::binary);
-    if (!create) {
-      return expectedFailure(state, "Lua skin file could not be opened");
-    }
-  }
-  if (error) {
-    return expectedFailure(state, "Lua skin file could not be inspected");
-  }
+  const LuaSkinFileOpenMode fileMode =
+      selectedMode->readMode
+          ? (selectedMode->updateMode ? LuaSkinFileOpenMode::ReadUpdate
+                                      : LuaSkinFileOpenMode::Read)
+          : (selectedMode->appendMode
+                 ? (selectedMode->updateMode ? LuaSkinFileOpenMode::AppendUpdate
+                                             : LuaSkinFileOpenMode::Append)
+                 : (selectedMode->updateMode ? LuaSkinFileOpenMode::WriteUpdate
+                                             : LuaSkinFileOpenMode::Write));
   try {
     auto handle = std::make_shared<LuaFileHandle>();
     handle->owner = impl;
     handle->virtualPath.assign(virtualPath);
     handle->writable = requiresWriteAccess;
-    std::ios::openmode openMode = std::ios::binary | std::ios::in;
-    if (handle->writable) {
-      openMode |= std::ios::out;
+    const auto opened = impl->fileSystem->openLuaFile(virtualPath, fileMode);
+    if (opened.failure) {
+      return expectedFailure(state, opened.failure->message);
     }
-    if (!selectedMode->readMode && !selectedMode->appendMode) {
-      openMode |= std::ios::trunc;
-    }
-    handle->file.open(physicalPath, openMode);
-    if (!handle->file) {
-      return expectedFailure(state, "Lua skin file could not be opened");
-    }
+    handle->file = opened.file;
     if (selectedMode->appendMode) {
-      handle->file.seekg(0, std::ios::end);
-      handle->cursor = handle->file.tellg();
-      handle->file.seekp(handle->cursor);
+      if (!seekHandle(*handle, 0, SEEK_END)) {
+        return expectedFailure(state, "Lua skin file could not be opened");
+      }
+      const auto end = tellHandle(*handle);
+      if (!end) {
+        return expectedFailure(state, "Lua skin file could not be opened");
+      }
+      handle->cursor = *end;
     }
     void *storage = lua_newuserdata(state, sizeof(SharedLuaFileHandle));
     new (storage) SharedLuaFileHandle(handle);

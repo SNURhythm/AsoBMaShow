@@ -6,6 +6,7 @@
 #include "../package/SkinTreeSnapshotter.h"
 
 #include <cstddef>
+#include <cstdio>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -62,6 +63,20 @@ struct SkinFileListResult {
 struct SkinFileWriteResult {
   std::uint64_t resultingBytes = 0;
   std::uint64_t resultingFiles = 0;
+  std::optional<SkinFileFailure> failure;
+};
+
+enum class LuaSkinFileOpenMode : std::uint8_t {
+  Read,
+  ReadUpdate,
+  Write,
+  WriteUpdate,
+  Append,
+  AppendUpdate,
+};
+
+struct LuaSkinFileOpenResult {
+  std::FILE *file = nullptr;
   std::optional<SkinFileFailure> failure;
 };
 
@@ -151,6 +166,11 @@ public:
                                  std::uint64_t maximumBytes) const;
   SkinFileReadResult readModule(std::string_view moduleName,
                                 std::uint64_t maximumBytes) const;
+  // Opens the selected skin's Lua I/O path. In containment-enforcing modes
+  // the stream is bound to a verified native descriptor rather than reopened
+  // by its mutable Files-visible pathname.
+  LuaSkinFileOpenResult openLuaFile(std::string_view virtualPath,
+                                    LuaSkinFileOpenMode);
   SkinFileListResult list(std::string_view virtualDirectory,
                           std::string_view luaPattern,
                           std::size_t maximumEntries) const;

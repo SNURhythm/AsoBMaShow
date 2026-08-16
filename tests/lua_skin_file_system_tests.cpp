@@ -368,6 +368,13 @@ void testLinkedVisibleSkinChildCannotEscapeLuaIoBoundary() {
   fs::copy(fixture.temp.root() / "source", visiblePackage,
            fs::copy_options::recursive);
 
+  auto created = fixture.create(fixture.entry, true);
+  expect(created.fileSystem != nullptr,
+         "filesystem creates before linked child access");
+  if (!created.fileSystem) {
+    return;
+  }
+
   const fs::path outside = fixture.temp.root() / "outside";
   writeText(outside / "secret.lua", "return 'outside'\n");
   std::error_code linkError;
@@ -378,17 +385,15 @@ void testLinkedVisibleSkinChildCannotEscapeLuaIoBoundary() {
     return;
   }
 
-  auto created = fixture.create(fixture.entry, true);
-  expect(created.fileSystem != nullptr,
-         "filesystem creates before linked child access");
-  if (!created.fileSystem) {
-    return;
-  }
-
   const auto read =
       created.fileSystem->readLuaPath("escape/secret.lua", 4096);
   expect(read.failure && read.failure->code == SkinFileError::EscapesPackage,
          "Lua reads reject linked children that escape the skin directory");
+
+  const auto opened = created.fileSystem->openLuaFile(
+      "escape/secret.lua", LuaSkinFileOpenMode::Write);
+  expect(opened.failure && opened.failure->code == SkinFileError::EscapesPackage,
+         "Lua handle opens reject a linked child introduced after session creation");
 
   const auto write = created.fileSystem->writeData(
       "escape/secret.lua", bytesOf("mutated\n"), false);

@@ -4,6 +4,8 @@
 #include "../package/SkinPathPolicy.h"
 
 #include <algorithm>
+#include <cerrno>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -12,6 +14,12 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 namespace skin {
 namespace {
@@ -142,6 +150,251 @@ HostStatResult statDirectPath(const fs::path &path) {
   }
   return {.kind = HostEntryKind::Regular,
           .size = static_cast<std::uint64_t>(size)};
+}
+
+struct LuaFileOpenSpec {
+  bool writable = false;
+  bool create = false;
+  bool truncate = false;
+  bool append = false;
+  const char *stdioMode = "rb";
+};
+
+LuaFileOpenSpec luaFileOpenSpec(LuaSkinFileOpenMode mode) {
+  switch (mode) {
+  case LuaSkinFileOpenMode::Read:
+    return {.stdioMode = "rb"};
+  case LuaSkinFileOpenMode::ReadUpdate:
+    return {.writable = true, .stdioMode = "r+b"};
+  case LuaSkinFileOpenMode::Write:
+  case LuaSkinFileOpenMode::WriteUpdate:
+    return {.writable = true,
+            .create = true,
+            .truncate = true,
+            .stdioMode = "w+b"};
+  case LuaSkinFileOpenMode::Append:
+  case LuaSkinFileOpenMode::AppendUpdate:
+    return {.writable = true,
+            .create = true,
+            .append = true,
+            .stdioMode = "r+b"};
+  }
+  return {};
+}
+
+#if !defined(_WIN32)
+
+class UniqueFd {
+public:
+  explicit UniqueFd(int value = -1) noexcept : value_(value) {}
+  ~UniqueFd() {
+    if (value_ >= 0) {
+      ::close(value_);
+    }
+  }
+  UniqueFd(const UniqueFd &) = delete;
+  UniqueFd &operator=(const UniqueFd &) = delete;
+  UniqueFd(UniqueFd &&other) noexcept : value_(std::exchange(other.value_, -1)) {}
+  UniqueFd &operator=(UniqueFd &&other) noexcept {
+    if (this != &other) {
+      reset(other.release());
+    }
+    return *this;
+  }
+  [[nodiscard]] int get() const noexcept { return value_; }
+  [[nodiscard]] explicit operator bool() const noexcept { return value_ >= 0; }
+  [[nodiscard]] int release() noexcept { return std::exchange(value_, -1); }
+  void reset(int value = -1) noexcept {
+    if (value_ >= 0) {
+      ::close(value_);
+    }
+    value_ = value;
+  }
+
+private:
+  int value_ = -1;
+};
+
+bool sameFileIdentity(const struct stat &expected,
+                      const struct stat &opened) noexcept {
+  return expected.st_dev == opened.st_dev && expected.st_ino == opened.st_ino;
+}
+
+bool regularSingleLink(const struct stat &status) noexcept {
+  return S_ISREG(status.st_mode) && status.st_nlink == 1;
+}
+
+std::FILE *adoptDescriptorAsStream(int descriptor, const char *mode) {
+  std::FILE *stream = ::fdopen(descriptor, mode);
+  if (stream == nullptr) {
+    ::close(descriptor);
+  }
+  return stream;
+}
+
+std::optional<UniqueFd> openVerifiedDirectory(const fs::path &directory) {
+  struct stat expected {};
+  if (::lstat(directory.c_str(), &expected) != 0 || !S_ISDIR(expected.st_mode)) {
+    return std::nullopt;
+  }
+  UniqueFd opened(::open(directory.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC |
+                                              skinOpenNoFollowFlag()));
+  struct stat actual {};
+  if (!opened || ::fstat(opened.get(), &actual) != 0 ||
+      !S_ISDIR(actual.st_mode) || !sameFileIdentity(expected, actual)) {
+    return std::nullopt;
+  }
+  return opened;
+}
+
+std::optional<UniqueFd>
+openVerifiedChildDirectory(int parent, const fs::path &component,
+                           bool createMissing) {
+  const std::string name = component.string();
+  if (name.empty() || name == "." || name == "..") {
+    return std::nullopt;
+  }
+  struct stat expected {};
+  if (::fstatat(parent, name.c_str(), &expected, AT_SYMLINK_NOFOLLOW) != 0) {
+    if (!createMissing || errno != ENOENT ||
+        ::mkdirat(parent, name.c_str(), 0700) != 0 ||
+        ::fstatat(parent, name.c_str(), &expected, AT_SYMLINK_NOFOLLOW) != 0) {
+      return std::nullopt;
+    }
+  }
+  if (!S_ISDIR(expected.st_mode)) {
+    return std::nullopt;
+  }
+  UniqueFd opened(::openat(parent, name.c_str(),
+                           O_RDONLY | O_DIRECTORY | O_CLOEXEC |
+                               skinOpenNoFollowFlag()));
+  struct stat actual {};
+  if (!opened || ::fstat(opened.get(), &actual) != 0 || !S_ISDIR(actual.st_mode) ||
+      !sameFileIdentity(expected, actual)) {
+    return std::nullopt;
+  }
+  return opened;
+}
+
+std::optional<UniqueFd>
+openVerifiedParentDirectory(const fs::path &root, const fs::path &target,
+                            bool createMissing, fs::path &leaf) {
+  const fs::path relative = target.lexically_relative(root);
+  if (relative.empty() || relative == "." || relative.is_absolute()) {
+    return std::nullopt;
+  }
+  std::vector<fs::path> components;
+  for (const fs::path &component : relative) {
+    if (component.empty() || component == "." || component == "..") {
+      return std::nullopt;
+    }
+    components.push_back(component);
+  }
+  if (components.empty()) {
+    return std::nullopt;
+  }
+  leaf = components.back();
+  components.pop_back();
+
+  auto current = openVerifiedDirectory(root);
+  if (!current) {
+    return std::nullopt;
+  }
+  for (const fs::path &component : components) {
+    auto next = openVerifiedChildDirectory(current->get(), component,
+                                           createMissing);
+    if (!next) {
+      return std::nullopt;
+    }
+    current = std::move(next);
+  }
+  return current;
+}
+
+std::FILE *openVerifiedRegularFile(const fs::path &root, const fs::path &target,
+                                   const LuaFileOpenSpec &spec) {
+  fs::path leaf;
+  auto parent = openVerifiedParentDirectory(root, target, spec.create, leaf);
+  if (!parent) {
+    return nullptr;
+  }
+  const std::string name = leaf.string();
+  struct stat expected {};
+  if (::fstatat(parent->get(), name.c_str(), &expected, AT_SYMLINK_NOFOLLOW) !=
+      0) {
+    if (!spec.create || errno != ENOENT) {
+      return nullptr;
+    }
+    const int createdDescriptor =
+        ::openat(parent->get(), name.c_str(), O_RDWR | O_CREAT | O_EXCL |
+                                             O_CLOEXEC,
+                 0600);
+    if (createdDescriptor < 0 || ::fstat(createdDescriptor, &expected) != 0 ||
+        !regularSingleLink(expected)) {
+      if (createdDescriptor >= 0) {
+        ::close(createdDescriptor);
+      }
+      return nullptr;
+    }
+    if (spec.truncate && ::ftruncate(createdDescriptor, 0) != 0) {
+      ::close(createdDescriptor);
+      return nullptr;
+    }
+    if (spec.append && ::lseek(createdDescriptor, 0, SEEK_END) < 0) {
+      ::close(createdDescriptor);
+      return nullptr;
+    }
+    return adoptDescriptorAsStream(createdDescriptor, spec.stdioMode);
+  }
+  if (!regularSingleLink(expected)) {
+    return nullptr;
+  }
+  const int openFlags = (spec.writable ? O_RDWR : O_RDONLY) | O_CLOEXEC |
+                        skinOpenNoFollowFlag();
+  const int descriptor = ::openat(parent->get(), name.c_str(), openFlags);
+  struct stat actual {};
+  if (descriptor < 0 || ::fstat(descriptor, &actual) != 0 ||
+      !regularSingleLink(actual) || !sameFileIdentity(expected, actual)) {
+    if (descriptor >= 0) {
+      ::close(descriptor);
+    }
+    return nullptr;
+  }
+  if (spec.truncate && ::ftruncate(descriptor, 0) != 0) {
+    ::close(descriptor);
+    return nullptr;
+  }
+  if (spec.append && ::lseek(descriptor, 0, SEEK_END) < 0) {
+    ::close(descriptor);
+    return nullptr;
+  }
+  return adoptDescriptorAsStream(descriptor, spec.stdioMode);
+}
+
+#endif
+
+std::FILE *openDirectRegularFile(const fs::path &path,
+                                 const LuaFileOpenSpec &spec) {
+#if defined(_WIN32)
+  std::wstring mode;
+  for (const char *character = spec.stdioMode; *character != '\0'; ++character) {
+    mode.push_back(static_cast<wchar_t>(*character));
+  }
+  std::FILE *stream = _wfopen(path.c_str(), mode.c_str());
+  if (stream == nullptr && spec.append && spec.create) {
+    stream = _wfopen(path.c_str(), L"w+b");
+  }
+#else
+  std::FILE *stream = std::fopen(path.c_str(), spec.stdioMode);
+  if (stream == nullptr && spec.append && spec.create) {
+    stream = std::fopen(path.c_str(), "w+b");
+  }
+#endif
+  if (stream != nullptr && spec.append && std::fseek(stream, 0, SEEK_END) != 0) {
+    std::fclose(stream);
+    return nullptr;
+  }
+  return stream;
 }
 
 HostReadResult readDirectPath(const fs::path &path,
@@ -394,9 +647,73 @@ struct LuaSkinFileSystem::Impl {
     return normalized;
   }
 
+  std::FILE *openNormalized(std::string_view normalized,
+                            LuaSkinFileOpenMode mode) const {
+    const fs::path target = pathFromUtf8(normalized);
+    const LuaFileOpenSpec spec = luaFileOpenSpec(mode);
+    if (!safetyPolicy.enforces(SkinSafetyGuard::VirtualFileContainment)) {
+      return openDirectRegularFile(target, spec);
+    }
+#if defined(_WIN32)
+    return openDirectRegularFile(target, spec);
+#else
+    const fs::path &root = isWithinDirectory(target, packageRoot)
+                               ? packageRoot
+                               : beatorajaSkinRoot;
+    return openVerifiedRegularFile(root, target, spec);
+#endif
+  }
+
+  SkinFileReadResult readOpenedStream(std::FILE *stream,
+                                      std::string_view normalized,
+                                      std::uint64_t maximumBytes) const {
+    if (std::fseek(stream, 0, SEEK_END) != 0) {
+      return {.failure = failure(SkinFileError::IoError, normalized,
+                                 "skin virtual file operation failed")};
+    }
+    const long end = std::ftell(stream);
+    if (end < 0 || std::fseek(stream, 0, SEEK_SET) != 0) {
+      return {.failure = failure(SkinFileError::IoError, normalized,
+                                 "skin virtual file operation failed")};
+    }
+    const std::uint64_t byteCount = static_cast<std::uint64_t>(end);
+    if (byteCount > maximumBytes ||
+        byteCount > static_cast<std::uint64_t>(
+                        std::numeric_limits<std::size_t>::max())) {
+      return {.failure = failure(SkinFileError::LimitExceeded, normalized,
+                                 "skin virtual file could not fit in memory")};
+    }
+    std::vector<std::byte> bytes;
+    try {
+      bytes.resize(static_cast<std::size_t>(byteCount));
+    } catch (...) {
+      return {.failure = failure(SkinFileError::LimitExceeded, normalized,
+                                 "skin virtual file could not fit in memory")};
+    }
+    if (!bytes.empty() &&
+        std::fread(bytes.data(), 1, bytes.size(), stream) != bytes.size()) {
+      return {.failure = failure(SkinFileError::IoError, normalized,
+                                 "skin virtual file operation failed")};
+    }
+    return {.bytes = std::move(bytes)};
+  }
+
   SkinFileReadResult readNormalized(std::string_view normalized,
-                                    SkinFileUse,
+                                    SkinFileUse use,
                                     std::uint64_t maximumBytes) const {
+    if (safetyPolicy.enforces(SkinSafetyGuard::VirtualFileContainment) &&
+        use != SkinFileUse::Resource) {
+      std::FILE *stream = openNormalized(normalized, LuaSkinFileOpenMode::Read);
+      if (stream == nullptr) {
+        const HostStatResult status = statDirectPath(pathFromUtf8(normalized));
+        return {.failure = failure(errorForKind(status.kind), normalized,
+                                   messageForKind(status.kind))};
+      }
+      const SkinFileReadResult result =
+          readOpenedStream(stream, normalized, maximumBytes);
+      std::fclose(stream);
+      return result;
+    }
     HostReadResult host =
         readDirectPath(pathFromUtf8(normalized), maximumBytes);
     if (host.limitExceeded) {
@@ -726,6 +1043,47 @@ LuaSkinFileSystem::readModule(std::string_view moduleName,
                              "Lua module is missing")};
 }
 
+LuaSkinFileOpenResult
+LuaSkinFileSystem::openLuaFile(std::string_view virtualPath,
+                               LuaSkinFileOpenMode mode) {
+  const std::scoped_lock lock(impl_->operationMutex);
+  const bool writable = mode != LuaSkinFileOpenMode::Read;
+  if (writable && !impl_->allowDataWrites &&
+      impl_->safetyPolicy.enforces(SkinSafetyGuard::CatalogWriteAuthorization)) {
+    return {.failure = failure(SkinFileError::WrongUse, virtualPath,
+                               "Lua data writes are unavailable in this phase")};
+  }
+  const auto normalized = writable ? impl_->normalizeDataWrite(virtualPath)
+                                   : impl_->normalize(virtualPath);
+  if (!normalized.path) {
+    return {.failure = normalized.failure};
+  }
+  const fs::path target = pathFromUtf8(*normalized.path);
+#if defined(_WIN32)
+  if (writable) {
+#else
+  if (writable &&
+      !impl_->safetyPolicy.enforces(SkinSafetyGuard::VirtualFileContainment)) {
+#endif
+    std::error_code error;
+    if (!target.parent_path().empty()) {
+      fs::create_directories(target.parent_path(), error);
+    }
+    if (error) {
+      return {.failure = failure(
+          SkinFileError::IoError, *normalized.path,
+          "skin file parent directory could not be created")};
+    }
+  }
+  std::FILE *stream = impl_->openNormalized(*normalized.path, mode);
+  if (stream == nullptr) {
+    const HostStatResult status = statDirectPath(pathFromUtf8(*normalized.path));
+    return {.failure = failure(errorForKind(status.kind), *normalized.path,
+                               messageForKind(status.kind))};
+  }
+  return {.file = stream};
+}
+
 SkinFileListResult LuaSkinFileSystem::list(std::string_view virtualDirectory,
                                            std::string_view luaPattern,
                                            std::size_t maximumEntries) const {
@@ -783,35 +1141,44 @@ LuaSkinFileSystem::writeData(std::string_view virtualPath,
   }
 
   const fs::path target = pathFromUtf8(*normalized.path);
-  std::error_code error;
-  if (!target.parent_path().empty()) {
-    fs::create_directories(target.parent_path(), error);
+#if defined(_WIN32)
+  {
+#else
+  if (!impl_->safetyPolicy.enforces(SkinSafetyGuard::VirtualFileContainment)) {
+#endif
+    std::error_code error;
+    if (!target.parent_path().empty()) {
+      fs::create_directories(target.parent_path(), error);
+    }
+    if (error) {
+      return {.failure = failure(SkinFileError::IoError, *normalized.path,
+                                 "skin file parent directory could not be created")};
+    }
   }
-  if (error) {
-    return {.failure = failure(SkinFileError::IoError, *normalized.path,
-                               "skin file parent directory could not be created")};
-  }
-  std::ofstream output(target, std::ios::binary |
-                                    (append ? std::ios::app : std::ios::trunc));
-  if (!output) {
+  std::FILE *output = impl_->openNormalized(
+      *normalized.path,
+      append ? LuaSkinFileOpenMode::Append : LuaSkinFileOpenMode::Write);
+  if (output == nullptr) {
     return {.failure = failure(SkinFileError::IoError, *normalized.path,
                                "skin file could not be opened for writing")};
   }
-  if (!bytes.empty()) {
-    output.write(reinterpret_cast<const char *>(bytes.data()),
-                 static_cast<std::streamsize>(bytes.size()));
-  }
-  output.close();
-  if (!output) {
+  const bool wrote = bytes.empty() ||
+                     std::fwrite(bytes.data(), 1, bytes.size(), output) ==
+                         bytes.size();
+  const bool flushed = wrote && std::fflush(output) == 0;
+  const bool closed = std::fclose(output) == 0;
+  if (!flushed || !closed) {
     return {.failure = failure(SkinFileError::IoError, *normalized.path,
                                "skin file could not be written")};
   }
-  const HostStatResult written = statDirectPath(target);
-  if (written.kind != HostEntryKind::Regular) {
-    return {.failure = failure(errorForKind(written.kind), *normalized.path,
-                               messageForKind(written.kind))};
+  std::error_code error;
+  const std::uintmax_t size = fs::file_size(target, error);
+  if (error || size > std::numeric_limits<std::uint64_t>::max()) {
+    return {.failure = failure(SkinFileError::IoError, *normalized.path,
+                               "skin file could not be inspected after writing")};
   }
-  return {.resultingBytes = written.size, .resultingFiles = 1};
+  return {.resultingBytes = static_cast<std::uint64_t>(size),
+          .resultingFiles = 1};
 }
 
 SkinFileWriteResult
@@ -827,13 +1194,35 @@ LuaSkinFileSystem::mkdirData(std::string_view virtualDirectory) {
   if (!normalized.path) {
     return {.failure = normalized.failure};
   }
-  std::error_code error;
-  fs::create_directories(pathFromUtf8(*normalized.path), error);
-  if (error) {
+  const fs::path target = pathFromUtf8(*normalized.path);
+#if defined(_WIN32)
+  {
+#else
+  if (!impl_->safetyPolicy.enforces(SkinSafetyGuard::VirtualFileContainment)) {
+#endif
+    std::error_code error;
+    fs::create_directories(target, error);
+    if (!error) {
+      return {.resultingBytes = 0, .resultingFiles = 0};
+    }
+  }
+#if !defined(_WIN32)
+  else {
+    fs::path leaf;
+    auto parent = openVerifiedParentDirectory(impl_->packageRoot, target, true,
+                                              leaf);
+    if (parent) {
+      auto directory = openVerifiedChildDirectory(parent->get(), leaf, true);
+      if (directory) {
+        return {.resultingBytes = 0, .resultingFiles = 0};
+      }
+    }
+  }
+#endif
+  {
     return {.failure = failure(SkinFileError::IoError, *normalized.path,
                                "skin directory could not be created")};
   }
-  return {.resultingBytes = 0, .resultingFiles = 0};
 }
 
 SkinFileRenderTransitionResult LuaSkinFileSystem::enterRenderPhase() {
