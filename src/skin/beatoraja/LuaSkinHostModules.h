@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -39,6 +40,10 @@ struct LuaSkinEventExecutor {
 
 struct LuaSkinHostModulesOptions {
   LuaSkinFileSystem *fileSystem = nullptr;
+  // Lua source first enters host storage before luaL_loadbuffer can charge it
+  // to the Lua allocator. The runtime supplies its existing load budget here
+  // to prevent an arbitrarily large package file from bypassing that budget.
+  std::size_t maximumSourceBytes = std::numeric_limits<std::size_t>::max();
   void *coroutineContext = nullptr;
   LuaCoroutineCreatedCallback coroutineCreated = nullptr;
 };

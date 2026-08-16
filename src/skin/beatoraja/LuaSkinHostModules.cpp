@@ -232,6 +232,7 @@ int bitReplace(lua_State *state) {
 struct LuaSkinHostModulesImpl {
   lua_State *state = nullptr;
   LuaSkinFileSystem *fileSystem = nullptr;
+  std::size_t maximumSourceBytes = std::numeric_limits<std::size_t>::max();
   ISkinFrameState *frameState = nullptr;
   void *coroutineContext = nullptr;
   LuaCoroutineCreatedCallback coroutineCreated = nullptr;
@@ -1317,7 +1318,7 @@ int doFile(lua_State *state) {
   {
     const std::string_view virtualPath(path, pathSize);
     const auto read = impl->fileSystem->readLuaPath(
-        virtualPath, std::numeric_limits<std::uint64_t>::max());
+        virtualPath, impl->maximumSourceBytes);
     if (read.failure) {
       impl->storeFileError(*read.failure);
     } else {
@@ -1346,7 +1347,7 @@ int loadFile(lua_State *state) {
   const char *path = luaL_checklstring(state, 1, &pathSize);
   const std::string_view virtualPath(path, pathSize);
   const auto read = impl->fileSystem->readLuaPath(
-      virtualPath, std::numeric_limits<std::uint64_t>::max());
+      virtualPath, impl->maximumSourceBytes);
   if (read.failure) {
     return expectedFailure(state, read.failure->message);
   }
@@ -1407,7 +1408,7 @@ int moduleLoader(lua_State *state) {
         searchedCandidates.push_back(candidate);
       }
       const auto read = impl->fileSystem->readLuaPath(
-          candidate, std::numeric_limits<std::uint64_t>::max());
+          candidate, impl->maximumSourceBytes);
       if (!read.failure) {
         found = true;
         std::string chunkName = "@module:" + std::string(name, nameSize);
@@ -1948,6 +1949,7 @@ LuaSkinHostModules::create(lua_State *state,
   }
   impl->state = state;
   impl->fileSystem = options.fileSystem;
+  impl->maximumSourceBytes = options.maximumSourceBytes;
   impl->coroutineContext = options.coroutineContext;
   impl->coroutineCreated = options.coroutineCreated;
   try {

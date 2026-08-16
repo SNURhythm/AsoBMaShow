@@ -895,13 +895,13 @@ struct LuaSkinRuntime::Impl {
 
   LuaValueResult runEntry() {
     lua_settop(state, 0);
-    beginLoadBudget(*shared, LuaRuntimePolicy::loadBudget(purpose));
+    const LuaLoadBudget budget = LuaRuntimePolicy::loadBudget(purpose);
+    beginLoadBudget(*shared, budget);
 
     int loadStatus = LUA_ERRFILE;
     std::optional<SkinDiagnostic> readFailure;
     {
-      auto entry = fileSystem->readEntry(
-          std::numeric_limits<std::uint64_t>::max());
+      auto entry = fileSystem->readEntry(budget.maxAllocatorBytes);
       if (entry.failure) {
         readFailure =
             makeDiagnostic(runtimeFileFailureCode(entry.failure->code),
@@ -1143,6 +1143,7 @@ LuaRuntimeCreateResult LuaSkinRuntime::create(LuaSkinRuntimeOptions options) {
   }
   std::shared_ptr<LuaRuntimeShared> shared;
   std::unique_ptr<Impl> impl;
+  const LuaLoadBudget loadBudget = LuaRuntimePolicy::loadBudget(options.purpose);
   try {
     shared = std::make_shared<LuaRuntimeShared>();
     static std::atomic_uint32_t nextGeneration{0};
@@ -1150,8 +1151,7 @@ LuaRuntimeCreateResult LuaSkinRuntime::create(LuaSkinRuntimeOptions options) {
     if (shared->generation == 0) {
       shared->generation = ++nextGeneration;
     }
-    shared->maximumAllocatorBytes =
-        LuaRuntimePolicy::loadBudget(options.purpose).maxAllocatorBytes;
+    shared->maximumAllocatorBytes = loadBudget.maxAllocatorBytes;
     impl = std::make_unique<Impl>();
   } catch (...) {
     return {.failure = makeDiagnostic("skin_lua_runtime_create_failed",
@@ -1181,6 +1181,7 @@ LuaRuntimeCreateResult LuaSkinRuntime::create(LuaSkinRuntimeOptions options) {
   auto installed = LuaSkinHostModules::create(
       state,
       {.fileSystem = impl->fileSystem.get(),
+       .maximumSourceBytes = loadBudget.maxAllocatorBytes,
        .coroutineContext = shared.get(),
        .coroutineCreated = installHook});
   if (!installed.modules) {

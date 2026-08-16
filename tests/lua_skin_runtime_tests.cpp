@@ -317,6 +317,101 @@ void testFilesystemReadsTheSelectedEntryWithoutAHostPath() {
       "direct entry read uses the selected identity, not a caller host path");
 }
 
+void testCatalogEntrySourceIsBoundedBeforeHostAllocation() {
+  RuntimePackageFixture fixture;
+  if (!fixture.prepared) {
+    return;
+  }
+  const SkinEntryId entry = fixture.entry("two_phase.luaskin");
+  const fs::path visibleEntry =
+      fixture.roots.visiblePackages / fixture.package.directoryName /
+      "skin/two_phase.luaskin";
+  std::error_code resizeError;
+  fs::resize_file(visibleEntry,
+                  LuaRuntimePolicy::catalogLoad.maxAllocatorBytes + 1,
+                  resizeError);
+  expect(!resizeError, "oversized visible entry fixture is created sparsely");
+  if (resizeError) {
+    return;
+  }
+
+  auto fileSystem = LuaSkinFileSystem::create(
+      {.revision = fixture.prepared->readView(),
+       .entry = entry,
+       .storageRoots = fixture.roots,
+       .allowDataWrites = false});
+  expect(fileSystem.fileSystem != nullptr,
+         "catalog runtime filesystem is created for an oversized entry");
+  if (!fileSystem.fileSystem) {
+    return;
+  }
+  auto runtime = LuaSkinRuntime::create(
+      {.purpose = LuaRuntimePurpose::Catalog,
+       .fileSystem = std::move(fileSystem.fileSystem)});
+  expect(runtime.runtime != nullptr,
+         "catalog runtime is created before entry compilation");
+  if (!runtime.runtime) {
+    return;
+  }
+
+  const auto header = runtime.runtime->loadHeader();
+  expect(header.failure &&
+             header.failure->code == "skin_lua_host_limit_exceeded",
+         "catalog entry source is rejected before host allocation exceeds its "
+         "Lua budget");
+}
+
+void testCatalogLuaLoadersBoundSourceBeforeHostAllocation() {
+  RuntimePackageFixture fixture;
+  if (!fixture.prepared) {
+    return;
+  }
+  const fs::path skinRoot = fixture.roots.visiblePackages /
+                            fixture.package.directoryName / "skin";
+  writeText(skinRoot / "oversized_dofile.luaskin",
+            "return dofile('oversized.lua')\n");
+  writeText(skinRoot / "oversized_require.luaskin",
+            "return require('oversized')\n");
+  const fs::path oversized = skinRoot / "oversized.lua";
+  writeText(oversized, "return {}\n");
+  std::error_code resizeError;
+  fs::resize_file(oversized,
+                  LuaRuntimePolicy::catalogLoad.maxAllocatorBytes + 1,
+                  resizeError);
+  expect(!resizeError,
+         "oversized Lua loader fixture is created sparsely in the package");
+  if (resizeError) {
+    return;
+  }
+
+  for (const std::string_view entryName : {"oversized_dofile.luaskin",
+                                            "oversized_require.luaskin"}) {
+    auto fileSystem = LuaSkinFileSystem::create(
+        {.revision = fixture.prepared->readView(),
+         .entry = fixture.entry(entryName),
+         .storageRoots = fixture.roots,
+         .allowDataWrites = false});
+    expect(fileSystem.fileSystem != nullptr,
+           "catalog runtime filesystem is created for an oversized Lua load");
+    if (!fileSystem.fileSystem) {
+      continue;
+    }
+    auto runtime = LuaSkinRuntime::create(
+        {.purpose = LuaRuntimePurpose::Catalog,
+         .fileSystem = std::move(fileSystem.fileSystem)});
+    expect(runtime.runtime != nullptr,
+           "catalog runtime is created before dynamic Lua loading");
+    if (!runtime.runtime) {
+      continue;
+    }
+    const auto header = runtime.runtime->loadHeader();
+    expect(header.failure &&
+               header.failure->code == "skin_lua_host_limit_exceeded",
+           "catalog Lua file loaders reject source before host allocation "
+           "exceeds the Lua budget");
+  }
+}
+
 void testStrictTwoPhaseStateMachineUsesOneState() {
   auto harness = makeHarness(LuaRuntimePurpose::Gameplay, "two_phase.luaskin");
   if (!harness) {
@@ -1041,6 +1136,8 @@ void testDirtyTransitionInvalidatesAllHandlesWithoutOverlayMutation() {
 int main() {
   testRuntimeContractsUseSourceAuthoritiesAndProvenance();
   testFilesystemReadsTheSelectedEntryWithoutAHostPath();
+  testCatalogEntrySourceIsBoundedBeforeHostAllocation();
+  testCatalogLuaLoadersBoundSourceBeforeHostAllocation();
   testStrictTwoPhaseStateMachineUsesOneState();
   testMainStateAccessorsOpenOnlyAtRenderTransition();
   testRuntimeProvidesBeatorajaSafeOsLibrary();
