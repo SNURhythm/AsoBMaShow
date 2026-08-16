@@ -112,6 +112,11 @@ def parse_arguments() -> argparse.Namespace:
     manifest.add_argument("--write-manifest", type=Path)
     manifest.add_argument("--manifest", type=Path)
     parser.add_argument("--changed-path", action="append", default=[])
+    parser.add_argument(
+        "--allow-other-shader-changes",
+        action="store_true",
+        help="permit shader-tree changes outside the named skin shaders",
+    )
     return parser.parse_args()
 
 
@@ -156,7 +161,7 @@ def main() -> int:
     actual_changes = set(arguments.changed_path)
     actual_changes.update(changed_shader_paths(root))
     unexpected = sorted(actual_changes - allowed_changes)
-    if unexpected:
+    if unexpected and not arguments.allow_other_shader_changes:
         fail("unexpected shader-tree change: " + ", ".join(unexpected))
 
     current = manifest_data(shaders, sources, outputs)

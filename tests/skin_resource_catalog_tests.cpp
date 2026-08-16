@@ -13,6 +13,7 @@
 #include <condition_variable>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <iostream>
 #include <limits>
 #include <mutex>
@@ -71,6 +72,15 @@ void testSpriteBoundsAndNormalizedGridCells() {
   expect(skin::skinResourceResolveRect(authored, 40, 20, resolved) &&
              resolved.x == 20 && resolved.y == 10 && resolved.w == 20 && resolved.h == 10,
          "negative-one source dimensions resolve against decoded image bounds before UV preparation");
+  authored = {.x = std::numeric_limits<int>::max(),
+              .y = 0,
+              .w = 2,
+              .h = 1,
+              .gridColumn = 1,
+              .gridColumns = 2,
+              .gridRows = 1};
+  expect(!skin::skinResourceResolveRect(authored, 40, 20, resolved),
+         "sprite-grid resolution rejects signed coordinate overflow");
 }
 
 void testTextAtlasKeyRejectsNegativePaintExtents() {
@@ -407,6 +417,16 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
              defaultConfiguredPlan.plan->images.front().aliases ==
                  std::vector<skin::SkinResourceId>{2},
          "configured default image substitution deduplicates against an explicit resolved path");
+  writePpm(source / "entry/resources/image-default.ppm", 3);
+  const auto changedLiveResourcePlan = service.decodeAndPlan(
+      {.revision=lease->clone(), .entry=entry,
+       .fileSystem=*leasedFs.fileSystem,
+       .model=configuredImageModel("resources/image-default.ppm"),
+       .configuration=defaultFileConfiguration});
+  expect(changedLiveResourcePlan.plan &&
+             changedLiveResourcePlan.plan->images.size() == 1 &&
+             changedLiveResourcePlan.plan->images.front().pixels.width == 3,
+         "a Files-visible skin resource edit bypasses stale decoded pixels");
   skin::BeatorajaSkinConfiguration selectedFileConfiguration;
   selectedFileConfiguration.orderedFiles.push_back(
       {.name="Image", .pattern="resources/image-*",

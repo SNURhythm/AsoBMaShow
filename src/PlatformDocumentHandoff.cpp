@@ -1616,6 +1616,23 @@ Validate(const PlatformDirectoryImportRequest &request) {
   return success();
 }
 
+#if !defined(_WIN32)
+[[nodiscard]] bool sameOpenedRegularFileSnapshot(const struct stat &before,
+                                                 const struct stat &after) {
+  if (before.st_dev != after.st_dev || before.st_ino != after.st_ino ||
+      before.st_size != after.st_size) {
+    return false;
+  }
+#if defined(__APPLE__)
+  return before.st_mtimespec.tv_sec == after.st_mtimespec.tv_sec &&
+         before.st_mtimespec.tv_nsec == after.st_mtimespec.tv_nsec;
+#else
+  return before.st_mtim.tv_sec == after.st_mtim.tv_sec &&
+         before.st_mtim.tv_nsec == after.st_mtim.tv_nsec;
+#endif
+}
+#endif
+
 PlatformDocumentHandoffResult CopyDirectoryForImport(
     const std::filesystem::path &source,
     const PlatformDirectoryImportRequest &request,
@@ -1830,8 +1847,7 @@ PlatformDocumentHandoffResult CopyDirectoryForImport(
       }
       struct stat after {};
       const bool unchanged = ::fstat(descriptor, &after) == 0 &&
-                             before.st_dev == after.st_dev &&
-                             before.st_ino == after.st_ino;
+                             sameOpenedRegularFileSnapshot(before, after);
       ::close(descriptor);
       if (!unchanged) {
         output.abort();

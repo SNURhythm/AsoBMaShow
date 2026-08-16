@@ -42,8 +42,12 @@ constexpr int kArchivedThumbnailMaxDimension = 256;
 constexpr int kImageMaximumDimension =
     static_cast<int>(std::numeric_limits<std::uint16_t>::max());
 constexpr std::size_t kImageMaximumEncodedBytes = 32U * 1024U * 1024U;
+#if TARGET_OS_IOS || TARGET_OS_IPHONE || TARGET_OS_SIMULATOR
+constexpr std::size_t kImageMaximumDecodedBytes = 64U * 1024U * 1024U;
+#else
 constexpr std::size_t kImageMaximumDecodedBytes =
-    static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max());
+    128U * 1024U * 1024U;
+#endif
 constexpr auto kInitialFifoWriterWait = std::chrono::milliseconds(200);
 #if TARGET_OS_IOS || TARGET_OS_IPHONE || TARGET_OS_SIMULATOR
 constexpr std::size_t kDecodedImageCacheBudget = 64U * 1024U * 1024U;

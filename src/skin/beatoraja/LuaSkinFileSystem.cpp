@@ -361,6 +361,20 @@ struct LuaSkinFileSystem::Impl {
                             authored);
   }
 
+  NormalizedReference normalizeDataWrite(std::string_view authored,
+                                         bool allowPackageRoot = false) const {
+    auto normalized = normalize(authored, allowPackageRoot);
+    if (!normalized.path) {
+      return normalized;
+    }
+    if (!isWithinDirectory(pathFromUtf8(*normalized.path), packageRoot)) {
+      return {.failure = failure(
+          SkinFileError::EscapesPackage, authored,
+          "Lua data writes must remain inside the selected skin package")};
+    }
+    return normalized;
+  }
+
   SkinFileReadResult readNormalized(std::string_view normalized,
                                     SkinFileUse,
                                     std::uint64_t maximumBytes) const {
@@ -483,7 +497,9 @@ LuaSkinFileSystem::~LuaSkinFileSystem() = default;
 SkinFileResolveResult LuaSkinFileSystem::resolve(std::string_view virtualPath,
                                                  SkinFileUse use) const {
   const std::scoped_lock lock(impl_->operationMutex);
-  const auto normalized = impl_->normalize(virtualPath);
+  const auto normalized = use == SkinFileUse::DataWrite
+                              ? impl_->normalizeDataWrite(virtualPath)
+                              : impl_->normalize(virtualPath);
   if (!normalized.path) {
     return {.failure = normalized.failure};
   }
@@ -720,7 +736,7 @@ SkinFileWriteResult
 LuaSkinFileSystem::writeData(std::string_view virtualPath,
                              std::span<const std::byte> bytes, bool append) {
   const std::scoped_lock lock(impl_->operationMutex);
-  const auto normalized = impl_->normalize(virtualPath);
+  const auto normalized = impl_->normalizeDataWrite(virtualPath);
   if (!normalized.path) {
     return {.failure = normalized.failure};
   }
@@ -760,7 +776,7 @@ LuaSkinFileSystem::writeData(std::string_view virtualPath,
 SkinFileWriteResult
 LuaSkinFileSystem::mkdirData(std::string_view virtualDirectory) {
   const std::scoped_lock lock(impl_->operationMutex);
-  const auto normalized = impl_->normalize(virtualDirectory, true);
+  const auto normalized = impl_->normalizeDataWrite(virtualDirectory, true);
   if (!normalized.path) {
     return {.failure = normalized.failure};
   }

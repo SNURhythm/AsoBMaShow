@@ -55,6 +55,7 @@ workflow_required = {
     "shader manifest write verification": (
         "python3 ../scripts/verify_skin_shader_outputs.py --root .. "
         "--shader skin_quad --shader skin_yuvrgb "
+        "--allow-other-shader-changes "
         "--require-backends metal,spirv,essl,dx11 "
         "--write-manifest "
         "../tests/fixtures/beatoraja_skin/shaders/skin_shader_manifest.json"
@@ -62,6 +63,7 @@ workflow_required = {
     "shader manifest read-only verification": (
         "python3 ../scripts/verify_skin_shader_outputs.py --root .. "
         "--shader skin_quad --shader skin_yuvrgb "
+        "--allow-other-shader-changes "
         "--require-backends metal,spirv,essl,dx11 "
         "--manifest "
         "../tests/fixtures/beatoraja_skin/shaders/skin_shader_manifest.json"

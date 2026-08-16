@@ -2,6 +2,7 @@
 #include "SkinTextAtlas.h"
 #include "../LuaGameplaySkinFeature.h"
 #include "../package/SkinPackageTypes.h"
+#include "../../FileChecksum.h"
 #include "../../view/ImageFileDecoder.h"
 
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
@@ -538,7 +539,17 @@ bool skinResourceResolveRect(const SkinSourceRect &a, int iw, int ih, SkinSource
   const int cols = a.gridColumns <= 0 ? 1 : a.gridColumns, rows = a.gridRows <= 0 ? 1 : a.gridRows;
   if (a.gridColumn < 0 || a.gridRow < 0 || a.gridColumn >= cols || a.gridRow >= rows) return false;
   const int cw = w / cols, ch = h / rows;
-  r = a; r.x = a.x + cw*a.gridColumn; r.y = a.y + ch*a.gridRow; r.w = cw; r.h = ch; r.gridColumn=0; r.gridRow=0; r.gridColumns=1; r.gridRows=1; return true;
+  const auto resolvedX = static_cast<std::int64_t>(a.x) +
+                         static_cast<std::int64_t>(cw) * a.gridColumn;
+  const auto resolvedY = static_cast<std::int64_t>(a.y) +
+                         static_cast<std::int64_t>(ch) * a.gridRow;
+  if (resolvedX < std::numeric_limits<int>::min() ||
+      resolvedX > std::numeric_limits<int>::max() ||
+      resolvedY < std::numeric_limits<int>::min() ||
+      resolvedY > std::numeric_limits<int>::max()) {
+    return false;
+  }
+  r = a; r.x = static_cast<int>(resolvedX); r.y = static_cast<int>(resolvedY); r.w = cw; r.h = ch; r.gridColumn=0; r.gridRow=0; r.gridColumns=1; r.gridRows=1; return true;
 }
 SkinResourceCatalog::SkinResourceCatalog(
     SkinRevisionLease &&revision, std::shared_ptr<SkinTextureDevice> device,
@@ -1067,7 +1078,12 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
           "resource session aggregate exceeds policy", use->second.critical));
       continue;
     }
-    const std::string key = plan.revision.revision().lowercaseSha256 + ":" + *candidate.normalizedVirtualPath;
+    file_checksum::Sha256 digest;
+    digest.update(std::span<const std::byte>(read.bytes.data(),
+                                             read.bytes.size()));
+    const std::string key = plan.revision.revision().lowercaseSha256 + ":" +
+                            *candidate.normalizedVirtualPath + ":" +
+                            digest.finalHex();
     std::optional<image_decode::DecodedImageData> decoded;
     { std::lock_guard lock(serviceMutex_); decoded = cache_.get(key); }
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }

@@ -258,6 +258,16 @@ void testBeatorajaDirectSkinDirectorySemantics() {
   const fs::path history = visiblePackage / "entry/History/260805/history.txt";
   expect(!write.failure && readText(history) == "record\n",
          "Lua data writes directly modify the visible skin directory");
+
+  const fs::path otherPackage = fixture.roots.visiblePackages / "OtherSkin";
+  writeText(otherPackage / "state.txt", "other package state\n");
+  const auto foreignWrite = fileSystem.writeData(
+      "skin/OtherSkin/state.txt", bytesOf("must not cross package\n"),
+      false);
+  expect(foreignWrite.failure &&
+             foreignWrite.failure->code == SkinFileError::EscapesPackage &&
+             readText(otherPackage / "state.txt") == "other package state\n",
+         "skin-prefixed Lua writes remain confined to the selected package");
 }
 
 void testLinkedVisibleSkinChildCannotEscapeLuaIoBoundary() {

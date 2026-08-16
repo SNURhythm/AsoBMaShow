@@ -242,7 +242,6 @@ struct LuaSkinHostModulesImpl {
   int gdxTokenReference = LUA_NOREF;
   const BeatorajaSkinConfiguration *pendingConfiguration = nullptr;
   std::vector<ConfiguredFile> configuredFiles;
-  std::vector<std::pair<std::string, std::string>> configuredPathAliases;
   std::string configurationPathPrefix;
   std::string initialPackagePath;
   std::string resolvedConfigurationPath;
@@ -268,35 +267,6 @@ struct LuaSkinHostModulesImpl {
   void storeFileError(const SkinFileFailure &failure) noexcept {
     storeError(fileFailureCode(failure.code), failure.message,
                failure.virtualPath);
-  }
-
-  std::string_view configuredPathAlias(std::string_view path) const noexcept {
-    for (const auto &[returnedPath, entryRelativePath] :
-         configuredPathAliases) {
-      if (returnedPath == path) {
-        return entryRelativePath;
-      }
-    }
-    return path;
-  }
-
-  bool
-  rememberConfiguredPathAlias(std::string_view returnedPath,
-                              std::string_view entryRelativePath) noexcept {
-    try {
-      for (const auto &[knownReturnedPath, knownEntryRelativePath] :
-           configuredPathAliases) {
-        if (knownReturnedPath == returnedPath) {
-          return true;
-        }
-      }
-      configuredPathAliases.emplace_back(returnedPath, entryRelativePath);
-      return true;
-    } catch (...) {
-      storeError("skin_lua_file_operation_failed",
-                 "skin_config.get_path could not retain its virtual path");
-      return false;
-    }
   }
 
   void reportLegacyDenial(std::string_view authority) noexcept {
@@ -388,9 +358,6 @@ bool LuaSkinHostModulesImpl::resolveConfiguredPath(
              result.ends_with('/')) {
         result.pop_back();
       }
-      if (!rememberConfiguredPathAlias(result, result)) {
-        return false;
-      }
       resolvedConfigurationPath = std::move(result);
       return true;
     }
@@ -436,9 +403,6 @@ bool LuaSkinHostModulesImpl::resolveConfiguredPath(
     while (result.size() > configurationPathPrefix.size() + 1 &&
            result.ends_with('/')) {
       result.pop_back();
-    }
-    if (!rememberConfiguredPathAlias(result, result)) {
-      return false;
     }
     resolvedConfigurationPath = std::move(result);
     return true;
@@ -1231,8 +1195,7 @@ int ioOpen(lua_State *state) {
   const char *path = luaL_checklstring(state, 1, &pathSize);
   std::size_t modeSize = 0;
   const char *mode = luaL_optlstring(state, 2, "r", &modeSize);
-  const std::string_view virtualPath =
-      impl->configuredPathAlias(std::string_view(path, pathSize));
+  const std::string_view virtualPath(path, pathSize);
   if (lua_gettop(state) > 2) {
     return expectedFailure(state, "io.open accepts only path and mode");
   }
@@ -1352,8 +1315,7 @@ int doFile(lua_State *state) {
   const char *path = luaL_checklstring(state, 1, &pathSize);
   int loadStatus = LUA_ERRFILE;
   {
-    const std::string_view virtualPath =
-        impl->configuredPathAlias(std::string_view(path, pathSize));
+    const std::string_view virtualPath(path, pathSize);
     const auto read = impl->fileSystem->readLuaPath(
         virtualPath, std::numeric_limits<std::uint64_t>::max());
     if (read.failure) {
@@ -1382,8 +1344,7 @@ int loadFile(lua_State *state) {
                 "loadfile accepts exactly one path");
   std::size_t pathSize = 0;
   const char *path = luaL_checklstring(state, 1, &pathSize);
-  const std::string_view virtualPath =
-      impl->configuredPathAlias(std::string_view(path, pathSize));
+  const std::string_view virtualPath(path, pathSize);
   const auto read = impl->fileSystem->readLuaPath(
       virtualPath, std::numeric_limits<std::uint64_t>::max());
   if (read.failure) {
@@ -1508,9 +1469,8 @@ enum class LegacyListStatus : std::uint8_t {
 
 LegacyListStatus pushLegacyList(lua_State *state, LuaSkinHostModulesImpl &impl,
                                 std::string_view path) {
-  const std::string_view resolvedPath = impl.configuredPathAlias(path);
   const auto listed = impl.fileSystem->list(
-      resolvedPath, {}, std::numeric_limits<std::size_t>::max());
+      path, {}, std::numeric_limits<std::size_t>::max());
   if (listed.failure) {
     return LegacyListStatus::OrdinaryFailure;
   }
@@ -1547,8 +1507,7 @@ int legacyListFiles(lua_State *state) {
 
 bool performLegacyMkdir(LuaSkinHostModulesImpl &impl,
                         std::string_view path) {
-  const auto result =
-      impl.fileSystem->mkdirData(impl.configuredPathAlias(path));
+  const auto result = impl.fileSystem->mkdirData(path);
   if (!result.failure) {
     return true;
   }

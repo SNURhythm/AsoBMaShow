@@ -941,6 +941,31 @@ void testDirectoryImportUsesThePickedFolderAsItsPrivateRoot() {
   expect(cancelledImport.cancelled(),
          "directory import observes cancellation during copy before commit");
 
+#if !defined(_WIN32)
+  const auto mutableSourceRoot = sourceRoot.parent_path() / "Mutable Skin";
+  std::filesystem::create_directories(mutableSourceRoot, error);
+  const auto mutableSourceFile = mutableSourceRoot / "skin.lua";
+  std::ofstream(mutableSourceFile, std::ios::binary) << "before";
+  bool rewroteSource = false;
+  const auto changedDuringCopy =
+      platform_document_handoff::detail::CopyDirectoryForImport(
+          mutableSourceRoot, request, temporaryRoot, nullptr,
+          [&mutableSourceFile, &rewroteSource](std::uint64_t copied) {
+            if (copied == 0 || rewroteSource) {
+              return;
+            }
+            std::ofstream(mutableSourceFile,
+                          std::ios::binary | std::ios::trunc)
+                << "rewritten while the importer owns its descriptor";
+            rewroteSource = true;
+          });
+  expect(rewroteSource && !changedDuringCopy.ok() &&
+             changedDuringCopy.message.find("changed while being copied") !=
+                 std::string::npos,
+         "directory import rejects an in-place source edit during descriptor copy");
+  std::filesystem::remove_all(mutableSourceRoot, error);
+#endif
+
   const auto link = sourceRoot / "linked.txt";
   std::filesystem::create_symlink(sourceRoot / "skin.lua", link, error);
   if (!error) {
