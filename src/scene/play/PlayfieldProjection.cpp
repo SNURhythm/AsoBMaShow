@@ -117,6 +117,93 @@ skin::SkinProjectedLineKind toSkinLineKind(ProjectedLineKind kind) {
   return skin::SkinProjectedLineKind::Time;
 }
 
+// This is the value-only form of the gameplay timeline walk. The resulting
+// positions are shared by the built-in plan and skin DTO: a skin scales the
+// same position into its own lane geometry rather than recomputing a separate
+// scroll-position approximation.
+struct TimelinePositionWalk {
+  std::size_t startIndex = 0;
+  std::vector<float> renderYs;
+  std::unordered_map<ChartVisualId, std::size_t> renderIndexByTimelineId;
+  std::uint32_t nextStartRetainedOrdinal = 0;
+};
+
+TimelinePositionWalk walkTimelinePositions(
+    const std::vector<const ChartVisualTimeline *> &retainedTimelines,
+    const std::optional<BuiltInRendererTraversal> &traversal,
+    long long timeMicros, double currentScrollPosition,
+    std::int64_t latePoorTimingMicros) {
+  TimelinePositionWalk result;
+  if (retainedTimelines.empty()) {
+    return result;
+  }
+
+  if (traversal) {
+    const auto start = std::lower_bound(
+        retainedTimelines.begin(), retainedTimelines.end(),
+        traversal->startRetainedOrdinal,
+        [](const ChartVisualTimeline *timeline, std::uint32_t ordinal) {
+          return timeline->retainedOrdinal < ordinal;
+        });
+    result.startIndex = static_cast<std::size_t>(
+        std::distance(retainedTimelines.begin(), start));
+    result.nextStartRetainedOrdinal = traversal->startRetainedOrdinal;
+  }
+  if (!traversal) {
+    for (std::size_t index = result.startIndex; index < retainedTimelines.size();
+         ++index) {
+      const auto *timeline = retainedTimelines[index];
+      result.renderIndexByTimelineId.emplace(timeline->id,
+                                             result.renderYs.size());
+      result.renderYs.push_back(std::numeric_limits<float>::quiet_NaN());
+      if (timeline->timeMicros < timeMicros - latePoorTimingMicros) {
+        result.nextStartRetainedOrdinal = timeline->retainedOrdinal;
+      }
+    }
+    return result;
+  }
+
+  double futureY = traversal->judgeY;
+  bool futureTraversalStarted = false;
+  for (std::size_t index = result.startIndex; index < retainedTimelines.size();
+       ++index) {
+    const auto *timeline = retainedTimelines[index];
+    const bool future = timeline->timeMicros >= timeMicros;
+    if (future && futureTraversalStarted &&
+        !gameplay_scroll_geometry::futureTimelineTraversalContinues(
+            futureY, traversal->upperBound)) {
+      break;
+    }
+    float y = traversal->judgeY;
+    if (future) {
+      if (index == 0U) {
+        y = gameplay_scroll_geometry::initialFutureTimelineY(
+            timeline->scrollPosition, currentScrollPosition, traversal->rxhs,
+            traversal->judgeY);
+      } else {
+        const auto *previous = retainedTimelines[index - 1U];
+        futureY = gameplay_scroll_geometry::advanceFutureTimelineY(
+            futureY, timeline->beat - previous->beat, previous->scrollRate,
+            previous->timeMicros, previous->stopMicros, timeline->timeMicros,
+            timeMicros, traversal->rxhs);
+        y = static_cast<float>(futureY);
+      }
+      futureTraversalStarted = true;
+    } else {
+      y = gameplay_scroll_geometry::renderY(
+          timeline->scrollPosition, currentScrollPosition, traversal->rxhs,
+          traversal->judgeY);
+    }
+    result.renderIndexByTimelineId.emplace(timeline->id,
+                                           result.renderYs.size());
+    result.renderYs.push_back(y);
+    if (timeline->timeMicros < timeMicros - latePoorTimingMicros) {
+      result.nextStartRetainedOrdinal = timeline->retainedOrdinal;
+    }
+  }
+  return result;
+}
+
 } // namespace
 
 double scrollPositionAtTime(const PlayfieldChartVisualModel &model,
@@ -235,6 +322,11 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
   const long long timeMicros = state.clock.visualTimeMicros;
   result.currentScrollPosition = gameplay_scroll_geometry::scrollPositionAtTime(
       index_.scrollTimelines, timeMicros);
+  const auto &retainedTimelines = index_.retainedTimelines;
+  const TimelinePositionWalk timelinePositionWalk = walkTimelinePositions(
+      retainedTimelines, request.builtInTraversal, timeMicros,
+      result.currentScrollPosition,
+      std::max<std::int64_t>(0, request.latePoorTimingMicros));
   const auto visibleInterval = visibleScrollInterval(request);
 
   const auto &timelines = index_.timelinesById;
@@ -260,6 +352,34 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
   };
 
   const auto &orderedTimelines = index_.orderedTimelines;
+  const auto positionedScrollDelta =
+      [&timelinePositionWalk, &retainedTimelines, &request, &result](
+          const ChartVisualTimeline &timeline) -> std::optional<double> {
+    const double absoluteDelta =
+        timeline.scrollPosition - result.currentScrollPosition;
+    if (!request.builtInTraversal) {
+      return absoluteDelta;
+    }
+    const auto rendered =
+        timelinePositionWalk.renderIndexByTimelineId.find(timeline.id);
+    if (rendered == timelinePositionWalk.renderIndexByTimelineId.end()) {
+      return std::nullopt;
+    }
+    const auto &traversal = *request.builtInTraversal;
+    const float y = timelinePositionWalk.renderYs[rendered->second];
+    if (!std::isfinite(y)) {
+      return std::nullopt;
+    }
+    if (!std::isfinite(traversal.rxhs) ||
+        std::abs(traversal.rxhs) <= 0.0001F) {
+      // A caller with only a Hi-Speed has no captured lane geometry to
+      // normalize the shared y position. Preserve the existing abstract
+      // projection in that incomplete-capture case.
+      return absoluteDelta;
+    }
+    return (static_cast<double>(y) - static_cast<double>(traversal.judgeY)) /
+           static_cast<double>(traversal.rxhs);
+  };
 
   std::uint32_t lineOrdinal = 1;
   const auto appendLine = [&result, &reserve, &lineOrdinal](
@@ -280,30 +400,29 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
 
   const ChartVisualTimeline *previousTimeline = nullptr;
   for (const auto *timeline : orderedTimelines) {
-    const double scrollDelta =
-        timeline->scrollPosition - result.currentScrollPosition;
-    if (timeline->retainedForProjection &&
-        isVisible(scrollDelta, visibleInterval)) {
+    const auto scrollDelta = positionedScrollDelta(*timeline);
+    if (timeline->retainedForProjection && scrollDelta &&
+        isVisible(*scrollDelta, visibleInterval)) {
       if (request.maxTimelines != 0 &&
           result.timelines.size() >= request.maxTimelines) {
         result.budgetExceeded = true;
       } else {
         result.timelines.push_back(
             {.timelineId = timeline->id,
-             .scrollDelta = scrollDelta,
+             .scrollDelta = *scrollDelta,
              .timeMicros = timeline->timeMicros,
              .authoredOrdinal = timeline->authoredOrdinal,
              .retainedOrdinal = timeline->retainedOrdinal,
              .submissionOrdinal = timeline->authoredOrdinal});
         if (timeline->sectionLine) {
-          appendLine(*timeline, ProjectedLineKind::Section, scrollDelta);
+          appendLine(*timeline, ProjectedLineKind::Section, *scrollDelta);
         }
         if (request.bpmGuideEnabled && previousTimeline != nullptr &&
             timeline->bpm != previousTimeline->bpm) {
-          appendLine(*timeline, ProjectedLineKind::BpmChange, scrollDelta);
+          appendLine(*timeline, ProjectedLineKind::BpmChange, *scrollDelta);
         }
         if (request.bpmGuideEnabled && timeline->stopMicros > 0) {
-          appendLine(*timeline, ProjectedLineKind::Stop, scrollDelta);
+          appendLine(*timeline, ProjectedLineKind::Stop, *scrollDelta);
         }
       }
     }
@@ -331,8 +450,10 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
       if (rowIt == notesByTimeline.end()) {
         continue;
       }
-      const double rowScrollDelta =
-          timeline->scrollPosition - result.currentScrollPosition;
+      const auto rowScrollDelta = positionedScrollDelta(*timeline);
+      if (!rowScrollDelta) {
+        continue;
+      }
       const bool rowIsWithinLatePoorWindow =
           isWithinLatePoorWindow(timeline->timeMicros, timeMicros, request);
       const bool rowHasLongHead =
@@ -349,13 +470,13 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
           needsInvisibleDepth = needsInvisibleDepth ||
                                 (request.includeInvisibleNotes && !dead &&
                                  timeline->timeMicros >= timeMicros &&
-                                 isVisible(rowScrollDelta, visibleInterval));
+                                 isVisible(*rowScrollDelta, visibleInterval));
           continue;
         }
         if (effectiveSource(*note) == ChartVisualNoteSource::Mine) {
           needsPrimaryDepth = needsPrimaryDepth ||
                               (!dead && timeline->timeMicros >= timeMicros &&
-                               isVisible(rowScrollDelta, visibleInterval));
+                               isVisible(*rowScrollDelta, visibleInterval));
           continue;
         }
         if (effectiveSource(*note) == ChartVisualNoteSource::Playable &&
@@ -379,20 +500,22 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
               tailTimelineIt != timelines.end() &&
               timeline->timeMicros <= tailTimelineIt->second->timeMicros;
           if (validPair) {
-            const double tailScrollDelta =
-                tailTimelineIt->second->scrollPosition -
-                result.currentScrollPosition;
+            const auto tailScrollDelta =
+                positionedScrollDelta(*tailTimelineIt->second);
+            if (!tailScrollDelta) {
+              continue;
+            }
             needsPrimaryDepth =
                 needsPrimaryDepth ||
                 (rowIsWithinLatePoorWindow &&
-                 isLongIntervalVisible(rowScrollDelta, tailScrollDelta,
+                 isLongIntervalVisible(*rowScrollDelta, *tailScrollDelta,
                                        visibleInterval));
             continue;
           }
         }
         needsPrimaryDepth =
             needsPrimaryDepth || (!dead && rowIsWithinLatePoorWindow &&
-                                  isVisible(rowScrollDelta, visibleInterval));
+                                  isVisible(*rowScrollDelta, visibleInterval));
       }
 
       auto &depths = builtInDepths[timeline->id];
@@ -425,8 +548,10 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
       continue;
     }
     const auto *timeline = timelineIt->second;
-    const double scrollDelta =
-        timeline->scrollPosition - result.currentScrollPosition;
+    const auto scrollDelta = positionedScrollDelta(*timeline);
+    if (!scrollDelta) {
+      continue;
+    }
     if (std::ranges::find(model.laneOrder, note->lane) ==
         model.laneOrder.end()) {
       continue;
@@ -455,9 +580,9 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
           timeline->timeMicros <= tailTimelineIt->second->timeMicros;
       if (validPair) {
         const auto *tailTimeline = tailTimelineIt->second;
-        const double tailScrollDelta =
-            tailTimeline->scrollPosition - result.currentScrollPosition;
-        if (!isLongIntervalVisible(scrollDelta, tailScrollDelta,
+        const auto tailScrollDelta = positionedScrollDelta(*tailTimeline);
+        if (!tailScrollDelta ||
+            !isLongIntervalVisible(*scrollDelta, *tailScrollDelta,
                                    visibleInterval)) {
           continue;
         }
@@ -498,8 +623,8 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
              .mode = note->longNoteMode,
              .headSource = effectiveSource(*note),
              .tailSource = effectiveSource(*tail),
-             .headScrollDelta = scrollDelta,
-             .tailScrollDelta = tailScrollDelta,
+             .headScrollDelta = *scrollDelta,
+             .tailScrollDelta = *tailScrollDelta,
              .headTimeMicros = timeline->timeMicros,
              .tailTimeMicros = tailTimeline->timeMicros,
              .headAuthoredOrdinal = note->authoredOrdinal,
@@ -541,7 +666,7 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
       }
     }
 
-    if (!isVisible(scrollDelta, visibleInterval)) {
+    if (!isVisible(*scrollDelta, visibleInterval)) {
       continue;
     }
 
@@ -566,7 +691,7 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
          .source = source,
          .longNoteMode = note->longNoteMode,
          .mineDamage = note->mineDamage,
-         .scrollDelta = scrollDelta,
+         .scrollDelta = *scrollDelta,
          .timeMicros = timeline->timeMicros,
          .authoredOrdinal = note->authoredOrdinal,
          .retainedTimelineOrdinal = timeline->retainedOrdinal,
@@ -587,92 +712,25 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
     return result;
   }
 
-  // Build the built-in execution plan independently of the generic skin DTO
-  // caps.  It contains only immutable values, but its retained-row walk uses
-  // the same incremental future geometry as the legacy renderer.
+  // The built-in execution plan consumes the common position snapshot used to
+  // place skin DTOs above.
   auto &builtInPlan = result.builtInPlan;
-  const auto &retainedTimelines = index_.retainedTimelines;
   std::unordered_map<ChartVisualId, float> builtInTimelineY;
-  builtInTimelineY.reserve(retainedTimelines.size());
-  std::size_t builtInStartIndex = 0;
-  if (request.builtInTraversal.has_value()) {
-    const auto requestedStart = request.builtInTraversal->startRetainedOrdinal;
-    const auto start = std::lower_bound(
-        retainedTimelines.begin(), retainedTimelines.end(), requestedStart,
-        [](const ChartVisualTimeline *timeline, std::uint32_t ordinal) {
-          return timeline->retainedOrdinal < ordinal;
-        });
-    builtInStartIndex = static_cast<std::size_t>(
-        std::distance(retainedTimelines.begin(), start));
-  }
+  builtInTimelineY.reserve(timelinePositionWalk.renderYs.size());
   builtInPlan.nextStartRetainedOrdinal =
-      request.builtInTraversal.has_value()
-          ? request.builtInTraversal->startRetainedOrdinal
-          : 0U;
-  if (request.builtInTraversal.has_value()) {
-    const auto &traversal = *request.builtInTraversal;
-    double futureY = traversal.judgeY;
-    bool futureTraversalStarted = false;
-    for (std::size_t index = builtInStartIndex;
-         index < retainedTimelines.size(); ++index) {
-      const auto *timeline = retainedTimelines[index];
-      const bool future = timeline->timeMicros >= timeMicros;
-      if (future && futureTraversalStarted &&
-          !gameplay_scroll_geometry::futureTimelineTraversalContinues(
-              futureY, traversal.upperBound)) {
-        break;
-      }
-      float y = traversal.judgeY;
-      if (future) {
-        if (index == 0U) {
-          y = gameplay_scroll_geometry::initialFutureTimelineY(
-              timeline->scrollPosition, result.currentScrollPosition,
-              traversal.rxhs, traversal.judgeY);
-        } else {
-          const auto *previous = retainedTimelines[index - 1U];
-          futureY = gameplay_scroll_geometry::advanceFutureTimelineY(
-              futureY, timeline->beat - previous->beat, previous->scrollRate,
-              previous->timeMicros, previous->stopMicros, timeline->timeMicros,
-              timeMicros, traversal.rxhs);
-          y = static_cast<float>(futureY);
-        }
-        futureTraversalStarted = true;
-      } else {
-        y = gameplay_scroll_geometry::renderY(timeline->scrollPosition,
-                                              result.currentScrollPosition,
-                                              traversal.rxhs, traversal.judgeY);
-      }
-      builtInPlan.traversedTimelineOrdinals.push_back(
-          timeline->retainedOrdinal);
-      builtInPlan.timelines.push_back(
-          {.retainedOrdinal = timeline->retainedOrdinal,
-           .timeMicros = timeline->timeMicros,
-           .renderY = y,
-           .future = future});
-      if (timeline->timeMicros <
-          timeMicros -
-              std::max<std::int64_t>(0, request.latePoorTimingMicros)) {
-        builtInPlan.nextStartRetainedOrdinal = timeline->retainedOrdinal;
-      }
-      builtInTimelineY.emplace(timeline->id, y);
-    }
-  } else {
-    for (std::size_t index = builtInStartIndex;
-         index < retainedTimelines.size(); ++index) {
-      const auto *timeline = retainedTimelines[index];
-      builtInPlan.traversedTimelineOrdinals.push_back(
-          timeline->retainedOrdinal);
-      builtInPlan.timelines.push_back(
-          {.retainedOrdinal = timeline->retainedOrdinal,
-           .timeMicros = timeline->timeMicros,
-           .renderY = std::numeric_limits<float>::quiet_NaN(),
-           .future = timeline->timeMicros >= timeMicros});
-      if (timeline->timeMicros <
-          timeMicros -
-              std::max<std::int64_t>(0, request.latePoorTimingMicros)) {
-        builtInPlan.nextStartRetainedOrdinal = timeline->retainedOrdinal;
-      }
-    }
+      timelinePositionWalk.nextStartRetainedOrdinal;
+  for (std::size_t offset = 0;
+       offset < timelinePositionWalk.renderYs.size(); ++offset) {
+    const auto *timeline =
+        retainedTimelines[timelinePositionWalk.startIndex + offset];
+    const float y = timelinePositionWalk.renderYs[offset];
+    builtInPlan.traversedTimelineOrdinals.push_back(timeline->retainedOrdinal);
+    builtInPlan.timelines.push_back(
+        {.retainedOrdinal = timeline->retainedOrdinal,
+         .timeMicros = timeline->timeMicros,
+         .renderY = y,
+         .future = timeline->timeMicros >= timeMicros});
+    builtInTimelineY.emplace(timeline->id, y);
   }
   std::unordered_set<std::uint32_t> builtInTraversedOrdinals(
       builtInPlan.traversedTimelineOrdinals.begin(),

@@ -1241,6 +1241,24 @@ int main() {
     return EXIT_FAILURE;
   }
 
+  // A selected skin must use that exact forward traversal too.  Its note
+  // projection is scaled into the skin's lane geometry later, but an
+  // equal-time row that has no finite built-in position must not be drawn as
+  // an ordinary scroll-position delta.
+  const auto nonfiniteSkinResult = projection.project(
+      nonfinitePlanModel, nonfinitePlanState,
+      {.buildBuiltInPlan = false,
+       .builtInTraversal = BuiltInRendererTraversal{.judgeY = 0.0F,
+                                                     .upperBound = 10.0F,
+                                                     .rxhs = 1.0F,
+                                                     .hispeed = 1.0F}});
+  if (!nonfiniteSkinResult.notes.empty() ||
+      !adaptPlayfieldProjectionForSkin(nonfiniteSkinResult).notes.empty()) {
+    std::cerr << "skin projection must share the built-in forward traversal "
+                 "for equal-time gimmick rows\n";
+    return EXIT_FAILURE;
+  }
+
   // A selected skin consumes the generic skin DTOs, not BMSRenderer's
   // compatibility plan.  It must retain those DTOs while omitting the
   // otherwise duplicate built-in traversal work.
