@@ -134,10 +134,12 @@ LuaSkinBindingDecoder::decode(const LuaValueHandle &value,
                                   "Lua binding request is incomplete")};
   }
 
+  const std::size_t maximumSourceWorkBytes = static_cast<std::size_t>(
+      safetyPolicy_.limit(SkinSafetyGuard::LuaDecoderLimit,
+                          LuaSkinBindingDecoderPolicy::maxSourceWorkBytes));
   const std::size_t remainingWorkBytes =
-      LuaSkinBindingDecoderPolicy::maxSourceWorkBytes -
-      std::min(consumedSourceWorkBytes_,
-               LuaSkinBindingDecoderPolicy::maxSourceWorkBytes);
+      maximumSourceWorkBytes -
+      std::min(consumedSourceWorkBytes_, maximumSourceWorkBytes);
   LuaBindingSourceLookupResult lookedUp;
   if (request.numericFallbackOnly && !request.fallbackNumeric) {
     return {.failure = diagnostic("skin_lua_binding_invalid",
@@ -148,7 +150,9 @@ LuaSkinBindingDecoder::decode(const LuaValueHandle &value,
   } else {
     lookedUp = value.lookupBindingSource(
         request.path,
-        {.maxStringBytes = LuaSkinBindingDecoderPolicy::maxSourceTextBytes,
+        {.maxStringBytes = static_cast<std::size_t>(safetyPolicy_.limit(
+             SkinSafetyGuard::LuaDecoderLimit,
+             LuaSkinBindingDecoderPolicy::maxSourceTextBytes)),
          .remainingWorkBytes = remainingWorkBytes,
          .numericFactoryAvailable = supportsNumericFactory(request.type.kind)});
   }
@@ -234,8 +238,10 @@ LuaSkinBindingDecoder::decode(const LuaValueHandle &value,
     return {.id = repeated->second};
   }
 
-  const auto tooMany = [](std::size_t size) {
-    return size >= LuaSkinBindingDecoderPolicy::maxBindingsPerKind ||
+  const auto tooMany = [this](std::size_t size) {
+    return size >= static_cast<std::size_t>(safetyPolicy_.limit(
+                       SkinSafetyGuard::LuaDecoderLimit,
+                       LuaSkinBindingDecoderPolicy::maxBindingsPerKind)) ||
            size >= std::numeric_limits<std::uint32_t>::max();
   };
 
@@ -258,7 +264,9 @@ LuaSkinBindingDecoder::decode(const LuaValueHandle &value,
     case SkinBindingKind::Event:
       return events_.size();
     }
-    return LuaSkinBindingDecoderPolicy::maxBindingsPerKind;
+    return static_cast<std::size_t>(safetyPolicy_.limit(
+        SkinSafetyGuard::LuaDecoderLimit,
+        LuaSkinBindingDecoderPolicy::maxBindingsPerKind));
   };
   if (tooMany(bindingCount())) {
     return {.failure = diagnostic("skin_lua_binding_limit_exceeded",

@@ -2,6 +2,7 @@
 
 #include "BeatorajaSkinModel.h"
 #include "LuaSkinRuntime.h"
+#include "../SkinSafetyPolicy.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -142,8 +143,10 @@ struct LuaSkinBindingDecoderPolicy {
 class LuaSkinBindingDecoder final {
 public:
   LuaSkinBindingDecoder(LuaSkinRuntime &runtime,
-                        SkinBuiltinBindingCatalogView builtins) noexcept
-      : runtime_(&runtime), builtins_(builtins) {}
+                        SkinBuiltinBindingCatalogView builtins,
+                        SkinSafetyPolicy safetyPolicy = SkinSafetyPolicy{})
+      noexcept
+      : runtime_(&runtime), builtins_(builtins), safetyPolicy_(safetyPolicy) {}
 
   LuaSkinBindingDecodeResult decode(const LuaValueHandle &,
                                     const LuaSkinBindingRequest &);
@@ -164,6 +167,7 @@ private:
 
   LuaSkinRuntime *runtime_ = nullptr;
   SkinBuiltinBindingCatalogView builtins_;
+  SkinSafetyPolicy safetyPolicy_;
   std::size_t consumedSourceWorkBytes_ = 0;
   std::unordered_map<InternKey, SkinDecodedBindingId, InternKeyHash> interned_;
   std::vector<SkinBooleanPropertyBinding> booleanProperties_;

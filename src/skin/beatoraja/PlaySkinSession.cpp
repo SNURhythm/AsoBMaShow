@@ -371,7 +371,7 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
       return result;
     }
 
-    LuaSkinTableDecoder decoder;
+    LuaSkinTableDecoder decoder(context.safetyPolicy);
     auto headerValue = runtime.runtime->loadHeader();
     if (!headerValue.value) {
       appendFailure(result.diagnostics, std::move(headerValue.failure),
@@ -476,7 +476,9 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
         gameplaySkinBuiltinCatalog();
     auto decodedModel = decoder.decodeGameplay(
         *configuredValue.value,
-        {.runtime = *runtime.runtime, .builtins = builtins});
+        {.runtime = *runtime.runtime,
+         .builtins = builtins,
+         .safetyPolicy = context.safetyPolicy});
     appendMovedDiagnostics(result.diagnostics, decodedModel.diagnostics);
     configuredValue.value.reset();
     if (!decodedModel.model || hasErrors(result.diagnostics) ||

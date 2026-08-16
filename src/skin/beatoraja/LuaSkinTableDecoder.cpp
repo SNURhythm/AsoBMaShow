@@ -353,6 +353,9 @@ bool permissionField(lua_State *state, int index, std::string_view name,
 bool strictArrayLength(lua_State *state, int index,
                        std::optional<std::size_t> maximum, std::size_t &length,
                        DecodeRequest &request) {
+  if (!request.enforceGameplayLimits) {
+    maximum.reset();
+  }
   if (!lua_istable(state, index)) {
     return fail(request, "skin_lua_header_invalid",
                 "Lua skin header array field is not a table");
@@ -968,6 +971,7 @@ struct RawSkinNote {
 
 struct GameplayDecodeRequest {
   DecodeRequest decoding;
+  bool enforceGameplayLimits = true;
   BeatorajaSkinModelDecodeResult result;
   std::map<std::string, SkinResourceId, std::less<>> sourceIds;
   std::map<std::string, RawSkinImage, std::less<>> images;
@@ -1686,16 +1690,17 @@ bool expandImageFrames(GameplayDecodeRequest &request, RawSkinImage &image) {
   image.divisionsY = image.divisionsY > 0 ? image.divisionsY : 1;
   const auto divisionsX = static_cast<std::size_t>(image.divisionsX);
   const auto divisionsY = static_cast<std::size_t>(image.divisionsY);
-  if (divisionsX > LuaSkinTableDecoderPolicy::maxEntries /
+  if (request.enforceGameplayLimits &&
+      divisionsX > LuaSkinTableDecoderPolicy::maxEntries /
                        std::max<std::size_t>(divisionsY, 1)) {
     return fail(request.decoding, "skin_lua_model_limit_exceeded",
                 "Lua skin image divisions exceed the fixed model limit");
   }
   const std::size_t frameCount = divisionsX * divisionsY;
-  if (frameCount == 0 ||
+  if (frameCount == 0 || (request.enforceGameplayLimits &&
       request.decodedFrames >
           LuaSkinTableDecoderPolicy::maxEntries -
-              std::min(frameCount, LuaSkinTableDecoderPolicy::maxEntries)) {
+              std::min(frameCount, LuaSkinTableDecoderPolicy::maxEntries))) {
     return fail(request.decoding, "skin_lua_model_limit_exceeded",
                 "Lua skin image frames exceed the fixed model limit");
   }
@@ -1728,9 +1733,10 @@ bool expandImageFrames(GameplayDecodeRequest &request, RawSkinImage &image) {
 
 bool consumeMaterializedSpriteFrames(GameplayDecodeRequest &request,
                                      std::size_t count) {
-  if (count > LuaSkinTableDecoderPolicy::maxMaterializedSpriteFrames ||
+  if (request.enforceGameplayLimits &&
+      (count > LuaSkinTableDecoderPolicy::maxMaterializedSpriteFrames ||
       request.materializedSpriteFrames >
-          LuaSkinTableDecoderPolicy::maxMaterializedSpriteFrames - count) {
+          LuaSkinTableDecoderPolicy::maxMaterializedSpriteFrames - count)) {
     return fail(request.decoding, "skin_lua_model_limit_exceeded",
                 "Lua skin materialized sprite frames exceed the fixed model "
                 "limit");
@@ -1993,9 +1999,10 @@ bool materializeNumericGlyphAtlas(GameplayDecodeRequest &request,
                                   const SkinSpriteFrames &source,
                                   NumericGlyphFormatRequest format,
                                   NumericGlyphAtlas &output) {
-  const std::size_t remaining =
-      LuaSkinTableDecoderPolicy::maxMaterializedSpriteFrames -
-      request.materializedSpriteFrames;
+  const std::size_t remaining = request.enforceGameplayLimits
+                                    ? LuaSkinTableDecoderPolicy::maxMaterializedSpriteFrames -
+                                          request.materializedSpriteFrames
+                                    : std::numeric_limits<std::size_t>::max();
   auto normalized = partitionNumericGlyphAtlas(
       {.kind = kind,
        .source = source,
@@ -2782,7 +2789,7 @@ void decodeGameplayProtected(lua_State *state, int index,
       transferDecodeDiagnostics(*request);
       return;
     }
-    request->decoding.enforceGameplayLimits = true;
+    request->decoding.enforceGameplayLimits = request->enforceGameplayLimits;
 
     request->result.model.emplace();
     auto &model = *request->result.model;
@@ -3838,7 +3845,8 @@ void transferBindings(BeatorajaSkinModel &model,
 bool materializeGameplay(GameplayDecodeRequest &request,
                          const LuaValueHandle &value,
                          LuaSkinGameplayDecodeContext context) {
-  LuaSkinBindingDecoder decoder(context.runtime, context.builtins);
+  LuaSkinBindingDecoder decoder(context.runtime, context.builtins,
+                                context.safetyPolicy);
   if (!bindGameplayDefinitions(request, decoder, value, context.builtins)) {
     return false;
   }
@@ -4011,7 +4019,9 @@ LuaSkinTableDecoder::decodeHeader(const LuaValueHandle &value) const {
 
 BeatorajaSkinModelDecodeResult LuaSkinTableDecoder::decodeGameplay(
     const LuaValueHandle &value, LuaSkinGameplayDecodeContext context) const {
-  GameplayDecodeRequest request;
+  GameplayDecodeRequest request{
+      .enforceGameplayLimits =
+          safetyPolicy_.enforces(SkinSafetyGuard::LuaDecoderLimit)};
   if (auto failure =
           value.withValueProtected(&request, decodeGameplayProtected)) {
     request.result.model.reset();

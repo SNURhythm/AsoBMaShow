@@ -2,6 +2,7 @@
 
 #include "BeatorajaSkinModel.h"
 #include "LuaSkinBindingDecoder.h"
+#include "../SkinSafetyPolicy.h"
 
 #include <cstddef>
 
@@ -13,6 +14,7 @@ class LuaValueHandle;
 struct LuaSkinGameplayDecodeContext {
   LuaSkinRuntime &runtime;
   SkinBuiltinBindingCatalogView builtins;
+  SkinSafetyPolicy safetyPolicy{};
 };
 
 struct LuaSkinTableDecoderPolicy {
@@ -30,9 +32,15 @@ struct LuaSkinTableDecoderPolicy {
 
 class LuaSkinTableDecoder final {
 public:
+  explicit LuaSkinTableDecoder(
+      SkinSafetyPolicy safetyPolicy = SkinSafetyPolicy{}) noexcept
+      : safetyPolicy_(safetyPolicy) {}
   HeaderDecodeResult decodeHeader(const LuaValueHandle &) const;
   BeatorajaSkinModelDecodeResult
   decodeGameplay(const LuaValueHandle &, LuaSkinGameplayDecodeContext) const;
+
+private:
+  SkinSafetyPolicy safetyPolicy_;
 };
 
 ConfigurationReconcileResult

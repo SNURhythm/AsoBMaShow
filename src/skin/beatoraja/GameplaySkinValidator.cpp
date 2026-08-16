@@ -145,7 +145,7 @@ SkinValidationResult GameplaySkinValidator::validate(
       return result;
     }
 
-    LuaSkinTableDecoder decoder;
+    LuaSkinTableDecoder decoder(safetyPolicy);
     auto headerValue = runtime.runtime->loadHeader();
     if (!headerValue.value) {
       appendFailure(result.diagnostics, std::move(headerValue.failure),
