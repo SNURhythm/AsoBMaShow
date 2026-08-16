@@ -1077,8 +1077,11 @@ struct CourseReplayVideoStage {
 std::vector<std::string>
 courseReplayStageTitles(const std::vector<CourseReplayVideoStage> &stages) {
   std::vector<std::string> titles;
-  titles.reserve(stages.size());
-  for (const auto &stage : stages) {
+  const std::size_t count = std::min(
+      stages.size(), CoursePlaySession::kBeatorajaSkinCourseTitleCount);
+  titles.reserve(count);
+  for (std::size_t index = 0; index < count; ++index) {
+    const auto &stage = stages[index];
     titles.push_back(stage.chart != nullptr ? stage.chart->Meta.Title : "");
   }
   return titles;
@@ -2647,8 +2650,10 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
       ++playbackRateChangeCursor;
     }
   };
+  const auto initialLaneCover =
+      replay_video_export::replayLaneCoverInitialState(replay, settings, false);
   replay_video_export::ReplayLaneCoverPlayback laneCoverPlayback(
-      settings.noteStartPositionPercent, settings.laneCoverEnabled);
+      initialLaneCover.percent, initialLaneCover.enabled);
   const GaugeProfile gaugeProfile =
       resolveGaugeProfile(GaugeProfile::Standard, chart.Meta.KeyMode);
   const RhythmState initialGaugeState =
@@ -3599,10 +3604,11 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
         ++playbackRateChangeCursor;
       }
     };
+    const auto initialLaneCover =
+        replay_video_export::replayLaneCoverInitialState(
+            stageReplay, settings, stage.constraints.noSpeed);
     replay_video_export::ReplayLaneCoverPlayback laneCoverPlayback(
-        stage.constraints.noSpeed ? AppSettings::kDefaultNoteStartPositionPercent
-                                  : settings.noteStartPositionPercent,
-        settings.laneCoverEnabled);
+        initialLaneCover.percent, initialLaneCover.enabled);
     const long long visualOffsetMicros =
         static_cast<long long>(settings.visualOffsetMs) * 1000LL;
     const size_t gameplayFrameCount =

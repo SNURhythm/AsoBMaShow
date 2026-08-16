@@ -69,6 +69,7 @@ struct GameplaySkinLifecycleDependencies {
       submitActivation;
   std::function<std::vector<SkinActivationCompletion>()>
       takeActivationCompletions;
+  std::function<void()> pollCommitCoordinator;
   std::function<std::vector<VersionedSkinProfileSettings>()>
       takeRevalidationRequests;
   std::function<SkinProfileCommitSubmissionResult(

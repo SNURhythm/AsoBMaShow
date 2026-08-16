@@ -1530,9 +1530,37 @@ void testLifecycleCallbacksCustomViewportAndRemoval() {
                    }),
          "Custom viewport values persist with policy bounds applied");
 
+  auto profileB = fixture.owner.snapshot(fixture.profileB);
+  profileB.settings.selectedGameplayEntries.emplace(0, entry);
+  expect(fixture.owner
+                 .beginCommit(fixture.profileB, profileB.generation,
+                              profileB.settings)
+                 .status == SkinProfileCommitResult::Status::Pending,
+         "removal fixture records a selection owned by another profile");
+
   const auto removal = controller->requestRemoval(entry.package);
   expect(removal.accepted && removal.asynchronous,
-         "package removal is submitted through the operation service");
+         "package removal first checks every profile selection");
+  expect(pumpUntil(
+             fixture, *controller,
+             [&] {
+               return controller->snapshot().state !=
+                          GameplaySkinSettingsState::Busy;
+             }),
+         "package-removal selection check reaches a terminal result");
+  expect(controller->snapshot().state == GameplaySkinSettingsState::Error &&
+             !fixture.operations->catalogSnapshot()->packages.empty(),
+         "removal rejects a package selected by any profile and retains its "
+         "catalog entry");
+
+  profileB = fixture.owner.snapshot(fixture.profileB);
+  profileB.settings.selectedGameplayEntries.clear();
+  expect(fixture.owner
+                 .beginCommit(fixture.profileB, profileB.generation,
+                              profileB.settings)
+                 .status == SkinProfileCommitResult::Status::Pending &&
+             controller->requestRemoval(entry.package).accepted,
+         "removal retries after every profile has cleared the package");
   expect(pumpUntil(
              fixture, *controller,
              [&] {
@@ -1540,7 +1568,8 @@ void testLifecycleCallbacksCustomViewportAndRemoval() {
                           GameplaySkinSettingsState::Empty &&
                       fixture.operations->catalogSnapshot()->packages.empty();
              }),
-         "operation-service removal refreshes the immutable catalog snapshot");
+         "unreferenced package removal refreshes the immutable catalog "
+         "snapshot");
 }
 
 } // namespace

@@ -2461,8 +2461,16 @@ void GamePlayScene::init() {
       gameplay::StartSelectControl::Configuration{.keyMode = chart->Meta.KeyMode});
   startButtonPressed = false;
   selectButtonPressed = false;
-  playfieldLaneCoverEnabled = context.settings.laneCoverEnabled;
-  playfieldLaneCoverPercent = effectiveNoteStartPositionPercent();
+  const auto replayInitialLaneCover =
+      isReplayPlayback() && !courseNoSpeed()
+          ? replayInitialLaneCoverState(
+                *options.replayData, context.settings.noteStartPositionPercent,
+                context.settings.laneCoverEnabled)
+          : ReplayInitialLaneCoverState{
+                .percent = effectiveNoteStartPositionPercent(),
+                .enabled = context.settings.laneCoverEnabled};
+  playfieldLaneCoverEnabled = replayInitialLaneCover.enabled;
+  playfieldLaneCoverPercent = replayInitialLaneCover.percent;
   playfieldLaneCoverPercentExact =
       static_cast<float>(playfieldLaneCoverPercent);
   playfieldHispeedState.emplace(

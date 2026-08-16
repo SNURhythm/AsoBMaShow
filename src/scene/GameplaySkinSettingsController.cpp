@@ -115,6 +115,7 @@ struct GameplaySkinSettingsController::Impl {
     NameReady,
     PreparingPackage,
     LoadingInventory,
+    LoadingRemovalInventory,
     Publishing,
     PreparingActivation,
     WaitingActivationCommit,
@@ -141,6 +142,8 @@ struct GameplaySkinSettingsController::Impl {
   std::uint64_t operationTicket = 0;
   std::shared_ptr<const SkinPackageProgressMailbox> progress;
   std::uint64_t inventoryTicket = 0;
+  std::optional<SkinPackageId> removalPackage;
+  std::optional<ProfileInventoryCommitFence> removalFence;
   std::shared_ptr<const SkinPackageCatalogSnapshot> projectedCatalog;
   std::string projectedProfileId;
   std::uint64_t projectedProfileGeneration = 0;
@@ -205,7 +208,9 @@ struct GameplaySkinSettingsController::Impl {
   [[nodiscard]] bool phaseCanCancel() const noexcept {
     return phase == Phase::PickingArchive || phase == Phase::PickingFolder ||
            phase == Phase::NameReady || phase == Phase::PreparingPackage ||
-           phase == Phase::LoadingInventory || phase == Phase::Publishing ||
+           phase == Phase::LoadingInventory ||
+           phase == Phase::LoadingRemovalInventory ||
+           phase == Phase::Publishing ||
            phase == Phase::PreparingActivation || phase == Phase::Removing;
   }
 
@@ -407,6 +412,27 @@ struct GameplaySkinSettingsController::Impl {
     }
   }
 
+  bool beginRemovalInventory(SkinPackageId package, std::string &error) {
+    try {
+      inventoryTicket = dependencies.profileSnapshots.beginSnapshotAllProfiles();
+      if (inventoryTicket == 0) {
+        error = "Profile inventory could not be started.";
+        return false;
+      }
+      removalPackage.emplace(std::move(package));
+      phase = Phase::LoadingRemovalInventory;
+      projected.hasPackageProgress = false;
+      setBusy("Checking skin selections…");
+      return true;
+    } catch (const std::exception &exception) {
+      error = exception.what();
+      return false;
+    } catch (...) {
+      error = "Profile inventory could not be started.";
+      return false;
+    }
+  }
+
   void submitPublish(ProfileInventorySnapshot inventory) {
     auto handle = dependencies.operations.submitPublish(
         std::move(*preparedPackage), collisionPolicy, std::move(inventory));
@@ -530,6 +556,63 @@ struct GameplaySkinSettingsController::Impl {
     submitPublish(std::move(*result->inventory));
   }
 
+  void pollRemovalInventory() {
+    auto result =
+        dependencies.profileSnapshots.pollSnapshotAllProfiles(inventoryTicket);
+    if (!result) {
+      return;
+    }
+    dependencies.profileSnapshots.cancelSnapshotAllProfiles(inventoryTicket);
+    inventoryTicket = 0;
+    if (result->cancelled || !result->complete || !result->inventory ||
+        !removalPackage) {
+      removalPackage.reset();
+      setError(firstDiagnosticMessage(
+          result->diagnostics, "A complete profile inventory is required."));
+      return;
+    }
+
+    const auto selectedByAnyProfile = std::ranges::any_of(
+        result->inventory->profiles, [&](const auto &profile) {
+          return std::ranges::any_of(
+              profile.settings.selectedGameplayEntries,
+              [&](const auto &selection) {
+                return selection.second.package.collisionKey ==
+                       removalPackage->collisionKey;
+              });
+        });
+    if (selectedByAnyProfile) {
+      removalPackage.reset();
+      setError("Remove this skin from every profile before deleting it.");
+      return;
+    }
+
+    std::optional<ProfileInventoryCommitFence> fence;
+    try {
+      fence = dependencies.profileSnapshots.tryAcquireInventoryCommitFence(
+          *result->inventory);
+    } catch (...) {
+    }
+    if (!fence) {
+      removalPackage.reset();
+      setError("Skin profile selections changed before package removal.");
+      return;
+    }
+
+    auto handle = dependencies.operations.submitRemove(*removalPackage);
+    if (handle.ticket == 0) {
+      removalPackage.reset();
+      setError("Skin package removal could not be queued.");
+      return;
+    }
+    removalFence.emplace(std::move(*fence));
+    removalPackage.reset();
+    operationTicket = handle.ticket;
+    progress = std::move(handle.progress);
+    phase = Phase::Removing;
+    setBusy("Removing skin package…");
+  }
+
   void pollPreparePackage(SkinPackageOperationCompletion completion) {
     auto *result = std::get_if<PreparePackageResult>(&completion.payload);
     if (!result || !result->prepared) {
@@ -607,6 +690,8 @@ struct GameplaySkinSettingsController::Impl {
   }
 
   void pollRemove(SkinPackageOperationCompletion completion) {
+    removalFence.reset();
+    removalPackage.reset();
     auto *result = std::get_if<RemovePackageResult>(&completion.payload);
     if (result && result->removed) {
       setIdle("Skin package removed.");
@@ -706,6 +791,8 @@ struct GameplaySkinSettingsController::Impl {
       pollHandoff();
     } else if (phase == Phase::LoadingInventory) {
       pollInventory();
+    } else if (phase == Phase::LoadingRemovalInventory) {
+      pollRemovalInventory();
     } else if (phase == Phase::PreparingPackage || phase == Phase::Publishing ||
                phase == Phase::PreparingActivation ||
                phase == Phase::Removing) {
@@ -885,6 +972,8 @@ struct GameplaySkinSettingsController::Impl {
             inventoryTicket);
         inventoryTicket = 0;
       }
+      removalFence.reset();
+      removalPackage.reset();
       if (preparedPackage) {
         disposeLocalPrepared();
       } else {
@@ -921,6 +1010,8 @@ struct GameplaySkinSettingsController::Impl {
             inventoryTicket);
         inventoryTicket = 0;
       }
+      removalFence.reset();
+      removalPackage.reset();
       if (preparedPackage) {
         disposeLocalPrepared();
       } else {
@@ -1184,15 +1275,12 @@ GameplaySkinSettingsController::requestRemoval(const SkinPackageId &package) {
   if (impl_->closed || impl_->hasControllerOperation()) {
     return rejected("Another gameplay skin operation is active.");
   }
-  auto handle = impl_->dependencies.operations.submitRemove(package);
-  if (handle.ticket == 0) {
-    return rejected("Skin package removal could not be queued.");
+  std::string error;
+  if (!impl_->beginRemovalInventory(package, error)) {
+    impl_->setError(std::move(error));
+    return rejected(impl_->projected.statusMessage);
   }
-  impl_->operationTicket = handle.ticket;
-  impl_->progress = std::move(handle.progress);
-  impl_->phase = Impl::Phase::Removing;
-  impl_->setBusy("Removing skin package…");
-  return accepted("Skin package removal started.");
+  return accepted("Checking skin selections before removal.");
 }
 
 ControllerActionResult

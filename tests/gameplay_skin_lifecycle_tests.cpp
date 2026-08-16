@@ -215,6 +215,22 @@ public:
             },
         .takeActivationCompletions =
             [this] { return std::exchange(activationCompletions, {}); },
+        .pollCommitCoordinator =
+            [this] {
+              if (!prepares.empty()) {
+                completePrepare();
+                return;
+              }
+              std::vector<std::uint64_t> tickets;
+              tickets.reserve(pendingCommits.size());
+              for (const auto &[ticket, prepared] : pendingCommits) {
+                (void)prepared;
+                tickets.push_back(ticket);
+              }
+              for (const auto ticket : tickets) {
+                completeActivation(ticket);
+              }
+            },
         .takeRevalidationRequests =
             [] { return std::vector<VersionedSkinProfileSettings>{}; },
         .submitProfileSettings =
@@ -1072,6 +1088,23 @@ void testShutdownClosesBeforeDrainAndIsolatesCleanupFailures() {
           "attempts every cleanup phase");
 }
 
+void testShutdownPersistsAcceptedWriterRequests() {
+  LifecycleFake fake;
+  GameplaySkinLifecycle lifecycle(fake.dependencies());
+  lifecycle.startAfterProfileInitialization(fake.profile);
+  fake.completeReadiness(lifecycle);
+  const auto chart = lifecycle.acquireForNextChart();
+  require(chart.has_value(), "shutdown writer fixture acquires chart");
+  fake.writes.push_back(
+      fake.request(*chart, 1, {SetSkinOption{.key = "choice", .value = 9}}));
+
+  lifecycle.shutdown();
+
+  require(fake.owner.settings.entries.at(fake.entry).options.at("choice") == 9 &&
+              fake.prepares.empty() && fake.pendingCommits.empty(),
+          "shutdown drains accepted skin writer requests through activation");
+}
+
 } // namespace
 
 int main() {
@@ -1098,6 +1131,7 @@ int main() {
   testDeferredViewportWaitsForTheCompleteWriterChain();
   testShutdownCancelsOwnedWorkAndClosesProducersOnce();
   testShutdownClosesBeforeDrainAndIsolatesCleanupFailures();
+  testShutdownPersistsAcceptedWriterRequests();
   std::cout << "gameplay skin lifecycle tests passed\n";
   return 0;
 }

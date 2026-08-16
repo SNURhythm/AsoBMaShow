@@ -239,6 +239,18 @@ ReplayLaneCoverFrameState ReplayLaneCoverPlayback::advance(
           .transitions = std::move(transitions)};
 }
 
+ReplayLaneCoverInitialState replayLaneCoverInitialState(
+    const ReplayData &replay, const AppSettings &settings,
+    bool noSpeed) noexcept {
+  if (noSpeed) {
+    return {.percent = AppSettings::kDefaultNoteStartPositionPercent,
+            .enabled = settings.laneCoverEnabled};
+  }
+  const auto state = replayInitialLaneCoverState(
+      replay, settings.noteStartPositionPercent, settings.laneCoverEnabled);
+  return {.percent = state.percent, .enabled = state.enabled};
+}
+
 ReplayJudgementAuthorityPlayback::ReplayJudgementAuthorityPlayback() {
   for (int value = 0; value < JudgementCount; ++value) {
     const auto judgement = static_cast<Judgement>(value);

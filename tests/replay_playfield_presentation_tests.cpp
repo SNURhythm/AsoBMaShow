@@ -790,6 +790,27 @@ void testReplayLaneCoverResetIsOneFramePulseForNormalAndCoursePlayback() {
   }
 }
 
+void testReplayLaneCoverInitialStateUsesReplaySetup() {
+  ReplayData replay;
+  replay.initialLaneCoverPercent = 37;
+  replay.initialLaneCoverEnabled = true;
+  replay.hasInitialLaneCoverState = true;
+  AppSettings settings;
+  settings.noteStartPositionPercent = 12;
+  settings.laneCoverEnabled = false;
+
+  const auto replayInitial = replay_video_export::replayLaneCoverInitialState(
+      replay, settings, false);
+  const auto noSpeedInitial = replay_video_export::replayLaneCoverInitialState(
+      replay, settings, true);
+  expect(replayInitial.percent == 37 && replayInitial.enabled &&
+             noSpeedInitial.percent ==
+                 AppSettings::kDefaultNoteStartPositionPercent &&
+             !noSpeedInitial.enabled,
+         "replay exports start lane-cover playback from recorded setup while "
+         "no-speed courses retain their enforced default");
+}
+
 void testReplayLaneCoverPlaybackRetainsEveryCoalescedTransition() {
   const std::vector<ReplayLaneCoverEvent> events = {
       {.songTimeMicros = 1'000,
@@ -1870,6 +1891,7 @@ int main() {
   testReplayGameplayTransitionIgnoresChartTailAfterLastLaneNote();
   testReplayAudioTailDoesNotExtendGameplayFrames();
   testReplayLaneCoverResetIsOneFramePulseForNormalAndCoursePlayback();
+  testReplayLaneCoverInitialStateUsesReplaySetup();
   testReplayLaneCoverPlaybackRetainsEveryCoalescedTransition();
   testReplayLaneCoverChangesUseBeatorajaHiSpeedTransitions();
   testUnsubmittedReplayFrameReleasesItsPreparedBga();

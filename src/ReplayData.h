@@ -83,6 +83,9 @@ struct ReplayData {
   GaugeType initialGaugeType = GaugeType::Normal;
   GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
   GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
+  int initialLaneCoverPercent = 0;
+  bool initialLaneCoverEnabled = false;
+  bool hasInitialLaneCoverState = false;
   int finalScore = 0;
   int maxCombo = 0;
   float finalGauge = 0.0f;
@@ -93,6 +96,21 @@ struct ReplayData {
   std::vector<ReplayLaneCoverEvent> laneCoverEvents;
   ScoreProvenance provenance = ScoreProvenance::Legacy();
 };
+
+struct ReplayInitialLaneCoverState {
+  int percent = 0;
+  bool enabled = false;
+};
+
+[[nodiscard]] inline ReplayInitialLaneCoverState replayInitialLaneCoverState(
+    const ReplayData &replay, int fallbackPercent,
+    bool fallbackEnabled) noexcept {
+  if (replay.hasInitialLaneCoverState) {
+    return {.percent = replay.initialLaneCoverPercent,
+            .enabled = replay.initialLaneCoverEnabled};
+  }
+  return {.percent = fallbackPercent, .enabled = fallbackEnabled};
+}
 
 struct CourseReplayStageData {
   ReplayData replay;

@@ -90,6 +90,14 @@ struct ReplayLaneCoverFrameState {
   std::vector<ReplayLaneCoverTransition> transitions;
 };
 
+struct ReplayLaneCoverInitialState {
+  int percent = 0;
+  bool enabled = false;
+};
+
+[[nodiscard]] ReplayLaneCoverInitialState replayLaneCoverInitialState(
+    const ReplayData &, const AppSettings &, bool noSpeed) noexcept;
+
 class ReplayLaneCoverPlayback final {
 public:
   explicit ReplayLaneCoverPlayback(int initialPercent, bool initialEnabled) noexcept

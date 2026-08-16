@@ -4,11 +4,13 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <deque>
 #include <filesystem>
 #include <limits>
 #include <map>
 #include <string_view>
+#include <thread>
 #include <type_traits>
 #include <utility>
 
@@ -33,6 +35,16 @@ SkinDiagnostic lifecycleDiagnostic(std::string code, std::string message) {
   return {.code = std::move(code),
           .message = std::move(message),
           .severity = DiagnosticSeverity::Error};
+}
+
+void shutdownWriterBackoff(std::size_t &attempt) {
+  ++attempt;
+  if (attempt <= 16) {
+    std::this_thread::yield();
+    return;
+  }
+  const auto delay = std::min<std::size_t>((attempt - 16) * 50, 1'000);
+  std::this_thread::sleep_for(std::chrono::microseconds(delay));
 }
 
 bool sameIdentity(const PlaySkinSessionIdentity &left,
@@ -176,6 +188,7 @@ GameplaySkinLifecycleDependencies makeProductionDependencies(
           },
       .takeActivationCompletions =
           [&commits, client] { return commits.takeCompletions(client); },
+      .pollCommitCoordinator = [&commits] { commits.poll(); },
       .takeRevalidationRequests =
           [&commits] { return commits.takeRevalidationRequests(); },
       .submitProfileSettings =
@@ -449,6 +462,43 @@ struct GameplaySkinLifecycle::Impl {
         submission.ticket,
         PrepareOperation{.purpose = PreparePurpose::Writer,
                          .chainGeneration = writer->generation});
+  }
+
+  [[nodiscard]] bool writerShutdownPending() const noexcept {
+    return writer && (!writer->pending.empty() || writer->prepareTicket != 0 ||
+                      writer->commitTicket != 0);
+  }
+
+  void flushWriterForShutdown() noexcept {
+    if (!writerShutdownPending()) {
+      return;
+    }
+    if (!deps.pollCommitCoordinator) {
+      append(lifecycleDiagnostic(
+                 "skin.lifecycle.writer_shutdown_unavailable",
+                 "The gameplay skin writer could not be progressed during "
+                 "shutdown"),
+             SkinDiagnosticPhase::Session, writer->identity);
+      return;
+    }
+    std::size_t backoffAttempt = 0;
+    while (writerShutdownPending()) {
+      try {
+        consumeOperations();
+        deps.pollCommitCoordinator();
+        consumeActivationCompletions();
+        consumeProfileCompletions();
+        startWriterPrepare();
+      } catch (...) {
+        invalidateWriterChain(
+            "skin.lifecycle.writer_shutdown_failed",
+            "The gameplay skin writer could not finish during shutdown");
+        return;
+      }
+      if (writerShutdownPending()) {
+        shutdownWriterBackoff(backoffAttempt);
+      }
+    }
   }
 
   void startRevalidation() {
@@ -1299,31 +1349,34 @@ void GameplaySkinLifecycle::shutdown() noexcept {
     }
   }
   if (impl_->deps.cancelOperation) {
-    for (const auto &[ticket, operation] : impl_->prepareOperations) {
-      (void)operation;
+    for (auto iterator = impl_->prepareOperations.begin();
+         iterator != impl_->prepareOperations.end();) {
+      if (iterator->second.purpose == Impl::PreparePurpose::Writer) {
+        ++iterator;
+        continue;
+      }
       try {
-        impl_->deps.cancelOperation(ticket);
+        impl_->deps.cancelOperation(iterator->first);
       } catch (...) {
       }
+      iterator = impl_->prepareOperations.erase(iterator);
     }
   }
-  impl_->prepareOperations.clear();
   impl_->pendingRescanInventory.reset();
   impl_->pendingRevalidations.clear();
-  if (impl_->writer) {
-    impl_->writer->pending.clear();
-  }
   if (impl_->deps.closeConfigurationWrites) {
     try {
       impl_->deps.closeConfigurationWrites();
     } catch (...) {
     }
   }
-  if (impl_->deps.drainConfigurationWrites) {
-    try {
-      (void)impl_->deps.drainConfigurationWrites();
-    } catch (...) {
+  try {
+    impl_->drainWriterIngress();
+    impl_->flushWriterForShutdown();
+    if (!impl_->writerShutdownPending()) {
+      impl_->discardWriterChain();
     }
+  } catch (...) {
   }
   if (impl_->deps.detachCommitClient) {
     try {
