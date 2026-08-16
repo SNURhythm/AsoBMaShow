@@ -247,6 +247,13 @@ void factoryKeepsBuiltInPresentationForNoSelection() {
          "no selection keeps built-in presentation available");
 }
 
+void factoryKeepsBuiltInPresentationWhenAcquisitionIsUnavailable() {
+  expect(createGameplaySkinSession({}, validInput()).disposition ==
+             GameplaySkinSessionDisposition::BuiltIn,
+         "unavailable optional skin acquisition keeps built-in presentation "
+         "available");
+}
+
 void factoryPreservesLifecycleDiagnosticAndRecordsIt() {
   HistoryFixture fixture;
   const auto failed = createGameplaySkinSession(
@@ -290,6 +297,7 @@ void factoryTransfersTheOwningSessionExactlyOnce() {
 
 int main() {
   factoryKeepsBuiltInPresentationForNoSelection();
+  factoryKeepsBuiltInPresentationWhenAcquisitionIsUnavailable();
   factoryPreservesLifecycleDiagnosticAndRecordsIt();
   factoryTransfersTheOwningSessionExactlyOnce();
   return failures == 0 ? 0 : 1;

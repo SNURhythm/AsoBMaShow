@@ -65,11 +65,7 @@ GameplaySkinSessionResult
 createGameplaySkinSession(GameplaySkinSessionServices services,
                           GameplaySkinSessionInput input) {
   if (!services.acquire) {
-    return failedResult(
-        services.diagnosticHistory, {}, {}, {},
-        unavailableDiagnostic(
-            "skin.lifecycle.acquisition_unavailable",
-            "Gameplay skin lifecycle acquisition is unavailable."));
+    return {};
   }
 
   skin::GameplaySkinAcquisition acquisition;
