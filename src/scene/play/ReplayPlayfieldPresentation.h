@@ -92,8 +92,9 @@ public:
 #endif
 
 private:
-  // Replay events resolve to the first model timeline at a timestamp, then a
-  // lane/source in that timeline.  Cache that existing lookup at construction
+  // Replay events resolve to the final parser/model note with the matching
+  // timestamp, lane, and source, matching the live replay lookup's
+  // overwrite semantics. Cache that existing lookup at construction
   // so a dense autoplay replay does not rescan the immutable chart per event.
   struct ReplayNoteLookupKey {
     long long timeMicros = 0;

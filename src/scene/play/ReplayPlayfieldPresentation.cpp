@@ -54,11 +54,8 @@ ReplayPlayfieldPresentation::ReplayPlayfieldPresentation(
         "ReplayPlayfieldPresentation requires a coordinator and BMSRenderer");
   }
   timelineTimeById_.reserve(chartModel_->timelines.size());
-  std::unordered_map<long long, ChartVisualId> firstTimelineIdByTime;
-  firstTimelineIdByTime.reserve(chartModel_->timelines.size());
   for (const auto &timeline : chartModel_->timelines) {
     timelineTimeById_.emplace(timeline.id, timeline.timeMicros);
-    firstTimelineIdByTime.try_emplace(timeline.timeMicros, timeline.id);
   }
   notesById_.reserve(chartModel_->notes.size());
   replayNotesByTimeLaneAndSource_.reserve(chartModel_->notes.size());
@@ -67,9 +64,12 @@ ReplayPlayfieldPresentation::ReplayPlayfieldPresentation(
     noteStates_.emplace(note.id, NotePresentationState{.id = note.id});
     lanePressed_.try_emplace(note.lane, false);
     if (const auto timelineTime = timelineTimeById_.find(note.timelineId);
-        timelineTime != timelineTimeById_.end() &&
-        firstTimelineIdByTime.at(timelineTime->second) == note.timelineId) {
-      replayNotesByTimeLaneAndSource_.try_emplace(
+        timelineTime != timelineTimeById_.end()) {
+      // Match GamePlayScene::buildReplayNoteLookup(): the final parser note
+      // for an identical replay key replaces an earlier one. Keeping this
+      // per lane/source rather than per timeline preserves earlier lanes when
+      // a later same-time row has no corresponding note.
+      replayNotesByTimeLaneAndSource_.insert_or_assign(
           ReplayNoteLookupKey{.timeMicros = timelineTime->second,
                               .lane = note.lane,
                               .source = note.source},

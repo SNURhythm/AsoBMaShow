@@ -1445,6 +1445,70 @@ void testClassicLongHeadSuppressesJudgeHudAndBgaMissClock() {
          "classic long-note head remains lane-only and does not fan out a BGA miss");
 }
 
+void testReplayDuplicateTimestampUsesLiveLongNoteIdentityForJudgementCount() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.LnMode = 1;
+  chart.Meta.TotalNotes = 1;
+  auto *measure = new bms_parser::Measure;
+  chart.Measures.push_back(measure);
+
+  // The live replay lookup keeps the last parser timeline for a lane/time
+  // key. The preceding normal note is therefore not the replay's long head.
+  auto *earlierTimeline = new bms_parser::TimeLine(8, false);
+  earlierTimeline->Timing = 1'000;
+  earlierTimeline->SetNote(1, new bms_parser::Note(bms_parser::Parser::NoWav));
+  measure->TimeLines.push_back(earlierTimeline);
+
+  auto *headTimeline = new bms_parser::TimeLine(8, false);
+  headTimeline->Timing = 1'000;
+  auto *tailTimeline = new bms_parser::TimeLine(8, false);
+  tailTimeline->Timing = 2'000;
+  measure->TimeLines.push_back(headTimeline);
+  measure->TimeLines.push_back(tailTimeline);
+  auto *head = new bms_parser::LongNote(bms_parser::Parser::NoWav,
+                                         bms_parser::LongNoteType::LongNote);
+  auto *tail = new bms_parser::LongNote(bms_parser::Parser::NoWav,
+                                         bms_parser::LongNoteType::LongNote);
+  head->Tail = tail;
+  tail->Head = head;
+  headTimeline->SetNote(1, head);
+  tailTimeline->SetNote(1, tail);
+
+  AppSettings settings;
+  PlayfieldPresentationConfig configuration;
+  TestBga bga;
+  const auto created = ReplayPlayfieldPresentation::create(
+      createInfo(chart, settings, configuration, bga));
+  if (!created.presentation) {
+    expect(false, "duplicate-timestamp replay adapter is created");
+    return;
+  }
+
+  replay_video_export::ReplayJudgementAuthorityPlayback counters;
+  const PlayfieldJudgeEventClock clock{};
+  const ReplayEvent headEvent{.action = ReplayEventAction::Press,
+                              .lane = 1,
+                              .noteTimeMicros = 1'000,
+                              .judgeTimeMicros = 1'000,
+                              .judgement = PGreat};
+  const ReplayEvent tailEvent{.action = ReplayEventAction::Release,
+                              .lane = 1,
+                              .noteTimeMicros = 2'000,
+                              .judgeTimeMicros = 2'000,
+                              .judgement = PGreat};
+  if (created.presentation->applyReplayEvent(headEvent, clock, true)) {
+    counters.recordApplied(headEvent);
+  }
+  if (created.presentation->applyReplayEvent(tailEvent, clock, true)) {
+    counters.recordApplied(tailEvent);
+  }
+
+  expect(counters.judgementCounters().at(PGreat) == 1,
+         "duplicate-timestamp replay lookup keeps the live long-note identity "
+         "and does not double-count its press and release");
+}
+
 void testBuiltInReplayPresentationPreprocessesGhostsAndMisses() {
   bms_parser::Chart chart;
   chart.Meta.KeyMode = 7;
@@ -2008,6 +2072,7 @@ int main() {
   testSelectedReadySkinReceivesOneInitialSnapshotAndSubmitsSkinFrame();
   testSelectedSkinRuntimeFailureDoesNotSubmitBuiltIn();
   testClassicLongHeadSuppressesJudgeHudAndBgaMissClock();
+  testReplayDuplicateTimestampUsesLiveLongNoteIdentityForJudgementCount();
   testBuiltInReplayPresentationPreprocessesGhostsAndMisses();
   testAppliedJudgeCarriesTheProvidedBgaClockIntoSnapshot();
   testLongTailMissPreservesExporterEndpointSemantics();
