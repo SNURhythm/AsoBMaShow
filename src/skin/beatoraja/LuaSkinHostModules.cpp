@@ -1703,8 +1703,8 @@ void setNilGlobal(lua_State *state, const char *name) {
 void installSafeOsLibrary(lua_State *state) {
   openLibrary(state, LUA_OSLIBNAME, luaopen_os);
   lua_getglobal(state, LUA_OSLIBNAME);
-  for (const char *name :
-       {"execute", "exit", "getenv", "remove", "rename", "tmpname"}) {
+  for (const char *name : {"execute", "exit", "getenv", "remove", "rename",
+                           "setlocale", "tmpname"}) {
     lua_pushnil(state);
     lua_setfield(state, -2, name);
   }
