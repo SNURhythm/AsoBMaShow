@@ -1068,9 +1068,15 @@ adaptPlayfieldProjectionForSkin(const PlayfieldProjectionResult &projection) {
           ? std::optional<double>{projection.builtInTraversal->hispeed}
           : std::nullopt;
   for (const auto &note : projection.notes) {
+    // The projected descriptor carries both the canonical chart kind and the
+    // source family.  Preserve the chart's Mine/Invisible meaning when a
+    // caller leaves the optional source at its ordinary playable default.
+    // This is the same normalization used while projecting ChartVisualNote.
+    const auto source = effectiveSource(
+        ChartVisualNote{.kind = note.kind, .source = note.source});
     result.notes.push_back({.visualId = note.noteId,
                             .lane = note.lane,
-                            .kind = toSkinNoteKind(note.source),
+                            .kind = toSkinNoteKind(source),
                             .scrollSpeed = scrollSpeed,
                             .authoredYDisplacement = note.scrollDelta,
                             .judged = note.judged,

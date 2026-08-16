@@ -574,8 +574,10 @@ void testBridgeOwnsSnapshotAndClosesEachFrameExactlyOnce() {
          "bridge owns an immutable frame-state copy");
   expect(bridge.timerProperty({100}) == 1'000,
          "owned state protects lane timers from caller mutation");
-  expect(bridge.projectedNotes().size() == 1,
-         "bridge owns the adapted projection");
+  expect(bridge.projectedNotes().size() == 1 &&
+             bridge.projectedNotes().front().kind ==
+                 SkinProjectedNoteKind::Mine,
+         "bridge preserves Mine note kind when adapting the projection");
   expect(runtime.runtime().beginFrame(71).ok,
          "renderer-owned runtime frame begins after state binding");
   const auto probe = runtime.runtime().invoke(runtime.probeTimer(), {});
