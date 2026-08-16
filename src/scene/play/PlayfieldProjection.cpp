@@ -79,6 +79,21 @@ bool isWithinLatePoorWindow(
   return timelineMicros >= visualTimeMicros - latePoorTiming;
 }
 
+// LaneRenderer draws ordinary, mine, and hidden single notes only while their
+// timeline is at or ahead of the current visual time. Long-note heads have a
+// separate tail-span rule below. PlayerConfig.showpastnote is false by
+// default; Aso does not currently expose that optional Beatoraja setting.
+bool isVisibleSingleNote(ChartVisualNoteSource source,
+                         long long timelineMicros,
+                         long long visualTimeMicros,
+                         const PlayfieldProjectionRequest &request) noexcept {
+  if (timelineMicros < visualTimeMicros) {
+    return false;
+  }
+  return source != ChartVisualNoteSource::Invisible ||
+         request.includeInvisibleNotes;
+}
+
 skin::SkinProjectedNoteKind toSkinNoteKind(ChartVisualNoteSource source) {
   switch (source) {
   case ChartVisualNoteSource::Invisible:
@@ -464,26 +479,28 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
       bool needsPrimaryDepth = false;
       bool needsInvisibleDepth = false;
       for (const auto *note : rowIt->second) {
-        const auto *noteState = stateFor(note->id);
-        const bool dead = noteState != nullptr && noteState->dead;
-        if (effectiveSource(*note) == ChartVisualNoteSource::Invisible) {
+        const auto source = effectiveSource(*note);
+        if (source == ChartVisualNoteSource::Invisible) {
           needsInvisibleDepth = needsInvisibleDepth ||
-                                (request.includeInvisibleNotes && !dead &&
-                                 timeline->timeMicros >= timeMicros &&
+                                (isVisibleSingleNote(
+                                     source, timeline->timeMicros, timeMicros,
+                                     request) &&
                                  isVisible(*rowScrollDelta, visibleInterval));
           continue;
         }
-        if (effectiveSource(*note) == ChartVisualNoteSource::Mine) {
+        if (source == ChartVisualNoteSource::Mine) {
           needsPrimaryDepth = needsPrimaryDepth ||
-                              (!dead && timeline->timeMicros >= timeMicros &&
+                              (isVisibleSingleNote(
+                                   source, timeline->timeMicros, timeMicros,
+                                   request) &&
                                isVisible(*rowScrollDelta, visibleInterval));
           continue;
         }
-        if (effectiveSource(*note) == ChartVisualNoteSource::Playable &&
+        if (source == ChartVisualNoteSource::Playable &&
             note->kind == ChartVisualNoteKind::LongTail) {
           continue;
         }
-        if (effectiveSource(*note) == ChartVisualNoteSource::Playable &&
+        if (source == ChartVisualNoteSource::Playable &&
             note->kind == ChartVisualNoteKind::LongHead) {
           const auto pairIt = notes.find(note->pairId);
           const ChartVisualNote *tail =
@@ -514,8 +531,10 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
           }
         }
         needsPrimaryDepth =
-            needsPrimaryDepth || (!dead && rowIsWithinLatePoorWindow &&
-                                  isVisible(*rowScrollDelta, visibleInterval));
+            needsPrimaryDepth ||
+            (isVisibleSingleNote(source, timeline->timeMicros, timeMicros,
+                                 request) &&
+             isVisible(*rowScrollDelta, visibleInterval));
       }
 
       auto &depths = builtInDepths[timeline->id];
@@ -558,12 +577,8 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
     }
     const auto *noteState = stateFor(note->id);
     const auto source = effectiveSource(*note);
-    if (source == ChartVisualNoteSource::Invisible &&
-        (!request.includeInvisibleNotes || timeline->timeMicros < timeMicros)) {
-      continue;
-    }
 
-    if (effectiveSource(*note) == ChartVisualNoteSource::Playable &&
+    if (source == ChartVisualNoteSource::Playable &&
         note->kind == ChartVisualNoteKind::LongHead) {
       const auto pairIt = notes.find(note->pairId);
       const ChartVisualNote *tail =
@@ -670,7 +685,8 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
       continue;
     }
 
-    if (noteState != nullptr && noteState->dead) {
+    if (!isVisibleSingleNote(source, timeline->timeMicros, timeMicros,
+                             request)) {
       continue;
     }
     if (atNoteLimit()) {
@@ -747,16 +763,8 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
     }
     const auto source = effectiveSource(note);
     const auto *noteState = stateFor(note.id);
-    const bool dead = noteState != nullptr && noteState->dead;
-    const bool eligible =
-        source == ChartVisualNoteSource::Invisible
-            ? request.includeInvisibleNotes && !dead &&
-                  timeline.timeMicros >= timeMicros
-        : source == ChartVisualNoteSource::Mine
-            ? !dead && timeline.timeMicros >= timeMicros
-            : !dead && isWithinLatePoorWindow(timeline.timeMicros, timeMicros,
-                                              request);
-    if (!eligible) {
+    if (!isVisibleSingleNote(source, timeline.timeMicros, timeMicros,
+                             request)) {
       return;
     }
     const auto lane = std::ranges::find(model.laneOrder, note.lane);

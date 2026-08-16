@@ -18,6 +18,50 @@ bool containsNote(const std::vector<ProjectedPlayfieldNote> &notes,
       notes, [id](const auto &note) { return note.noteId == id; });
 }
 
+bool testPassedNormalNotesDoNotRemainInTheSkinProjection() {
+  // Pinned LaneRenderer only draws a normal note at or above the judgement
+  // line.  Its optional PlayerConfig.showpastnote is off by default, so an
+  // unhandled past normal must not be retained merely because it remains
+  // inside an explicitly wider projection window. Mines remain future-only
+  // and keep their dedicated SkinNote kind.
+  PlayfieldChartVisualModel model;
+  model.laneOrder = {0};
+  model.timelines = {
+      {.id = 1,
+       .timeMicros = 0,
+       .scrollPosition = 0.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 0,
+       .retainedOrdinal = 0},
+      {.id = 2,
+       .timeMicros = 100,
+       .scrollPosition = 1.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 1,
+       .retainedOrdinal = 1},
+  };
+  model.notes = {
+      {.id = 10, .timelineId = 1, .lane = 0, .authoredOrdinal = 0},
+      {.id = 11,
+       .timelineId = 2,
+       .lane = 0,
+       .kind = ChartVisualNoteKind::Mine,
+       .source = ChartVisualNoteSource::Mine,
+       .authoredOrdinal = 1},
+  };
+  PlayfieldVisualState state;
+  state.clock = {.serial = 1, .visualTimeMicros = 50};
+
+  PlayfieldProjection projection;
+  const auto result = projection.project(
+      model, state,
+      {.visibleScrollBefore = 1.0, .visibleScrollAfter = 1.0});
+  const auto skin = adaptPlayfieldProjectionForSkin(result);
+  return !containsNote(result.notes, 10) && containsNote(result.notes, 11) &&
+         skin.notes.size() == 1 &&
+         skin.notes.front().kind == skin::SkinProjectedNoteKind::Mine;
+}
+
 bool testFinalMeasureTailContinuesScrollWithoutParserRows() {
   bms_parser::Chart chart;
   chart.Meta.TotalLength = 2'000'000;
@@ -309,6 +353,11 @@ bool testLaneTraversalCullsEverySkinPlayareaDto() {
 } // namespace
 
 int main() {
+  if (!testPassedNormalNotesDoNotRemainInTheSkinProjection()) {
+    std::cerr << "passed normal notes must not remain in the default skin "
+                 "projection, while mines retain their Mine visual kind\n";
+    return EXIT_FAILURE;
+  }
   if (!testFinalMeasureTailContinuesScrollWithoutParserRows()) {
     return EXIT_FAILURE;
   }
@@ -699,7 +748,10 @@ int main() {
   PlayfieldChartVisualModel budgetModel;
   budgetModel.laneOrder = {1};
   budgetModel.timelines = {
-      {.id = 1, .scrollPosition = 0.0, .retainedForProjection = true}};
+      {.id = 1,
+       .timeMicros = 2'000'000,
+       .scrollPosition = 0.0,
+       .retainedForProjection = true}};
   budgetModel.notes = {{.id = 1,
                         .timelineId = 1,
                         .lane = 1,
@@ -1076,13 +1128,9 @@ int main() {
       reverseStopResult.timelines.size() != 2 ||
       reverseStopResult.timelines[0].timelineId != 91 ||
       reverseStopResult.timelines[1].timelineId != 92 ||
-      reverseStopResult.notes.size() != 2 ||
-      reverseStopResult.notes[0].noteId != 901 ||
-      reverseStopResult.notes[1].noteId != 902 ||
-      reverseStopResult.notes[0].submissionOrdinal >=
-          reverseStopResult.notes[1].submissionOrdinal) {
+      !reverseStopResult.notes.empty()) {
     std::cerr
-        << "reverse scroll, stop, and equal-row traversal contract failed\n";
+        << "reverse scroll, stop, and passed-note visibility contract failed\n";
     return EXIT_FAILURE;
   }
 

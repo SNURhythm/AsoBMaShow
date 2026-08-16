@@ -82,6 +82,19 @@ gameplay.
   corresponding judge and timer families remain unavailable rather than being
   fabricated from 1P state.
 
+### Note-display modes
+
+- `PlayerConfig.showpastnote` is not exposed. The default is `false`, which is
+  the behavior used by the shared projection: ordinary, mine, and hidden notes
+  stop rendering once their timeline has passed. Do not retain an unhandled
+  ordinary note behind the judgement line unless this exact option is added.
+- `skin.note.dst2` is decoded and its lane geometry is preserved, but the
+  source's PMS missed-POOR path is not implemented. In pinned `LaneRenderer`,
+  a configured `dstnote2` changes ordinary-note eligibility by judgement state
+  and then renders the missed-POOR descent separately. The current projection
+  has only judged/dead state, not the required source judgement-state and
+  descent timing.
+
 ### Existing parser and renderer work
 
 - Preserve Beatoraja `TimeLine` speed-object state in `bms-parser-cpp` and

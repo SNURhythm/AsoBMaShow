@@ -259,6 +259,31 @@ bool testTerminalZeroNoteTimelinesRemainProjectionAnchors() {
   return true;
 }
 
+bool testParserStoredLandminesRetainTheirMineSource() {
+  // bms-parser currently puts BMS mine-channel notes in TimeLine::Notes.
+  // BMSRenderer recognizes their runtime type; the shared skin model must
+  // retain that same source family instead of treating the slot as normal.
+  bms_parser::Chart chart;
+  auto *measure = new bms_parser::Measure();
+  auto *timeline = new bms_parser::TimeLine(8, false);
+  timeline->Timing = 1'000'000;
+  timeline->BeatPosition = 4.0;
+  timeline->Bpm = 150.0;
+  timeline->SetNote(3, new bms_parser::LandmineNote(25.0F));
+  measure->TimeLines.push_back(timeline);
+  chart.Measures.push_back(measure);
+
+  const auto model = buildPlayfieldChartVisualModel(chart, 0);
+  if (model.notes.size() != 1 ||
+      model.notes.front().kind != ChartVisualNoteKind::Mine ||
+      model.notes.front().source != ChartVisualNoteSource::Mine ||
+      model.notes.front().mineDamage != 25) {
+    std::cerr << "parser-stored landmine must retain the Mine source family\n";
+    return false;
+  }
+  return true;
+}
+
 } // namespace
 
 int main() {
@@ -269,6 +294,9 @@ int main() {
     return EXIT_FAILURE;
   }
   if (!testTerminalZeroNoteTimelinesRemainProjectionAnchors()) {
+    return EXIT_FAILURE;
+  }
+  if (!testParserStoredLandminesRetainTheirMineSource()) {
     return EXIT_FAILURE;
   }
 

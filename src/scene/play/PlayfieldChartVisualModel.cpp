@@ -597,16 +597,30 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
       if (note == nullptr) {
         continue;
       }
+      // bms-parser keeps BMS mine-channel entries in TimeLine::Notes. The
+      // built-in renderer recognizes that concrete type at draw time; retain
+      // the same source family before the selected-skin DTO erases parser
+      // objects.
+      const auto *mine = dynamic_cast<const bms_parser::LandmineNote *>(note);
+      const ChartVisualNoteSource noteSource =
+          source == ChartVisualNoteSource::Playable && mine != nullptr
+              ? ChartVisualNoteSource::Mine
+              : source;
       ChartVisualNote value{
           .id = nextId++,
           .timelineId = timelineIt->second,
           .lane = note->Lane,
-          .kind = source == ChartVisualNoteSource::Invisible
+          .kind = noteSource == ChartVisualNoteSource::Invisible
                       ? ChartVisualNoteKind::Invisible
-                      : ChartVisualNoteKind::Normal,
-          .source = source,
+                      : noteSource == ChartVisualNoteSource::Mine
+                            ? ChartVisualNoteKind::Mine
+                            : ChartVisualNoteKind::Normal,
+          .source = noteSource,
           .authoredOrdinal = noteOrdinal++,
       };
+      if (mine != nullptr) {
+        value.mineDamage = static_cast<int>(std::lround(mine->Damage));
+      }
       if (const auto *longNote =
               dynamic_cast<const bms_parser::LongNote *>(note);
           longNote != nullptr) {
