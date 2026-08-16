@@ -511,6 +511,41 @@ void hashText(file_checksum::Sha256 &hash, std::string_view text) {
   hash.update(std::as_bytes(std::span(text.data(), text.size())));
 }
 
+std::set<std::string> emptyDirectoryPaths(const Inventory &inventory) {
+  std::set<std::string> nonemptyDirectories;
+  for (const InventoryEntry &entry : inventory.entries) {
+    for (std::size_t slash = entry.normalizedPath.find('/');
+         slash != std::string::npos;
+         slash = entry.normalizedPath.find('/', slash + 1)) {
+      nonemptyDirectories.emplace(entry.normalizedPath.substr(0, slash));
+    }
+  }
+
+  std::set<std::string> emptyDirectories;
+  for (const InventoryEntry &entry : inventory.entries) {
+    if (entry.metadata.directory &&
+        !nonemptyDirectories.contains(entry.normalizedPath)) {
+      emptyDirectories.emplace(entry.normalizedPath);
+    }
+  }
+  return emptyDirectories;
+}
+
+void hashEmptyDirectoryPaths(file_checksum::Sha256 &hash,
+                             const std::set<std::string> &paths) {
+  if (paths.empty()) {
+    return;
+  }
+  hashText(hash, "ASOBMSKIN-EMPTY-DIRECTORIES-V1");
+  const std::array<std::byte, 1> terminator{std::byte{0}};
+  hash.update(terminator);
+  hashBigEndian(hash, static_cast<std::uint64_t>(paths.size()));
+  for (const std::string &path : paths) {
+    hashBigEndian(hash, static_cast<std::uint32_t>(path.size()));
+    hashText(hash, path);
+  }
+}
+
 bool metadataMatchesOpenFile(
 #if defined(_WIN32)
     HANDLE handle,
@@ -1014,7 +1049,7 @@ std::optional<std::string> digestAndMaybeCopy(
     const SkinProgressCallback &callback,
     std::vector<SkinDiagnostic> &diagnostics,
     const std::shared_ptr<const SkinSnapshotFailureInjector> &failures = {},
-    bool requireStable = true) {
+    bool requireStable = true, bool includeEmptyDirectories = true) {
   file_checksum::Sha256 hash;
   hashText(hash, "ASOBMSKIN-TREE-V1");
   const std::array<std::byte, 1> terminator{std::byte{0}};
@@ -1254,6 +1289,9 @@ std::optional<std::string> digestAndMaybeCopy(
       return std::nullopt;
     }
   }
+  if (includeEmptyDirectories) {
+    hashEmptyDirectoryPaths(hash, emptyDirectoryPaths(inventory));
+  }
   if (destination && !fsyncDirectoryTree(*destination)) {
     diagnostics.push_back(diagnostic("skin_snapshot_fsync_failed",
                                      "unable to synchronize staging root"));
@@ -1289,7 +1327,17 @@ bool verifyPrivateRevisionRoot(const fs::path &root,
   const auto digest =
       digestAndMaybeCopy(*inventory, std::nullopt,
                          SkinProgressPhase::Validating, {}, {}, diagnostics);
-  if (!digest || *digest != expected.lowercaseSha256) {
+  if (!digest) {
+    error = "private skin revision digest verification failed";
+    return false;
+  }
+  if (*digest != expected.lowercaseSha256) {
+    const auto legacyDigest = digestAndMaybeCopy(
+        *inventory, std::nullopt, SkinProgressPhase::Validating, {}, {},
+        diagnostics, {}, true, false);
+    if (legacyDigest && *legacyDigest == expected.lowercaseSha256) {
+      return true;
+    }
     error = "private skin revision digest verification failed";
     return false;
   }

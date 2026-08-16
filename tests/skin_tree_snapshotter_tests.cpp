@@ -694,6 +694,48 @@ void testPublishedRevisionIsImmutableAndLeaseClonesShareThePin() {
          "weak pin expires only after the final cloned lease is released");
 }
 
+void testEmptyDirectoriesProduceDistinctPublishedRevisions() {
+  TempDirectory temp;
+  const auto roots = rootsBelow(temp.root());
+  const fs::path withoutEmptyDirectory = temp.root() / "without-empty";
+  const fs::path withEmptyDirectory = temp.root() / "with-empty";
+  writeBytes(withoutEmptyDirectory / "play.luaskin", "return {}\n");
+  writeBytes(withEmptyDirectory / "play.luaskin", "return {}\n");
+  fs::create_directories(withEmptyDirectory / "empty");
+  FakeAliasDetector aliases;
+  SkinTreeSnapshotter snapshotter(roots, aliases);
+
+  auto first = snapshotter.snapshot(withoutEmptyDirectory, packageId(), {}, {});
+  expect(first.prepared.has_value(),
+         "revision without an empty directory prepares");
+  if (!first.prepared) {
+    return;
+  }
+  const std::string firstDigest = first.prepared->revision().lowercaseSha256;
+  std::string firstError;
+  const auto firstLease = std::move(*first.prepared).publish(firstError);
+  expect(firstLease.has_value(),
+         "revision without an empty directory publishes: " + firstError);
+  if (!firstLease) {
+    return;
+  }
+
+  auto second = snapshotter.snapshot(withEmptyDirectory, packageId(), {}, {});
+  expect(second.prepared.has_value(),
+         "revision with an empty directory prepares");
+  if (!second.prepared) {
+    return;
+  }
+  expect(second.prepared->revision().lowercaseSha256 != firstDigest,
+         "an empty directory changes the immutable revision identity");
+  std::string secondError;
+  const auto secondLease = std::move(*second.prepared).publish(secondError);
+  expect(secondLease.has_value(),
+         "revision with an empty directory publishes: " + secondError);
+  expect(secondLease && fs::is_directory(secondLease->root() / "empty"),
+         "deduplicated publication preserves the empty directory");
+}
+
 void testPreparedRevisionIsFrozenAndPublishRevalidatesItsDigest() {
   TempDirectory temp;
   const auto roots = rootsBelow(temp.root());
@@ -1063,6 +1105,7 @@ int main() {
   testTransientFifoReplacementCannotBlockOpen();
   testCancellationAndPreparedDestructionCleanStaging();
   testPublishedRevisionIsImmutableAndLeaseClonesShareThePin();
+  testEmptyDirectoriesProduceDistinctPublishedRevisions();
   testPreparedRevisionIsFrozenAndPublishRevalidatesItsDigest();
   testPublishRejectsPoisonedExistingDigestDestinations();
   testPublishRejectsMutableExistingRevisionAndSymlinkDestination();

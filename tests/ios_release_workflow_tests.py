@@ -281,6 +281,15 @@ class IOSReleaseWorkflowTests(unittest.TestCase):
             RELEASE_CRITICAL_PROFILE_INVALID_TESTS.isdisjoint(registered_names)
         )
 
+    def test_release_verifier_runs_native_checks_in_parallel(self):
+        self.assertIn(
+            'run ctest --test-dir "${BUILD_DIR}" \\\n'
+            '  -R "${NATIVE_CTEST_PATTERN}" \\\n'
+            '  --output-on-failure \\\n'
+            '  --parallel "${BUILD_JOBS}"',
+            self.verify_script,
+        )
+
     def test_release_verifier_builds_each_profile_test_once_in_native_targets(self):
         duplicate = self.verify_script.replace(
             "  profile_archive_tests\n",

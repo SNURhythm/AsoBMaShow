@@ -106,7 +106,8 @@ run cmake --build "${BUILD_DIR}" --target \
   "${NATIVE_TEST_TARGETS[@]}" -j "${BUILD_JOBS}"
 run ctest --test-dir "${BUILD_DIR}" \
   -R "${NATIVE_CTEST_PATTERN}" \
-  --output-on-failure
+  --output-on-failure \
+  --parallel "${BUILD_JOBS}"
 run python3 tests/ios_build_setup_tests.py
 run python3 tests/ios_release_workflow_tests.py
 run python3 tests/ios_artifact_audit_tests.py

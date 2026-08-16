@@ -42,6 +42,11 @@
 #ifdef _WIN32
 #include <Windows.h>
 #include <AclAPI.h>
+#else
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
 #endif
 
 namespace {
@@ -156,21 +161,47 @@ std::string generateWorkspaceToken() {
   return token;
 }
 
-class ScopedDirectoryLock {
+class ScopedFileLock {
 public:
-  explicit ScopedDirectoryLock(const std::filesystem::path &path)
+  explicit ScopedFileLock(const std::filesystem::path &path)
       : path_(path) {
+#if defined(_WIN32)
+    descriptor_ = CreateFileW(path_.c_str(), GENERIC_READ | GENERIC_WRITE,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                              OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (descriptor_ == INVALID_HANDLE_VALUE) {
+      expect(false, "global import-workspace test lock opens");
+      return;
+    }
+#else
+    descriptor_ = ::open(path_.c_str(), O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC,
+                         0600);
+    if (descriptor_ < 0) {
+      expect(false, "global import-workspace test lock opens");
+      return;
+    }
+#endif
     const auto deadline = std::chrono::steady_clock::now() +
                           std::chrono::seconds(30);
     while (std::chrono::steady_clock::now() < deadline) {
-      std::error_code error;
-      if (std::filesystem::create_directory(path_, error)) {
+#if defined(_WIN32)
+      OVERLAPPED range{};
+      if (LockFileEx(descriptor_,
+                     LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY, 0,
+                     1, 0, &range)) {
+#else
+      if (::flock(descriptor_, LOCK_EX | LOCK_NB) == 0) {
+#endif
         locked_ = true;
         return;
       }
-      if (error && error != std::errc::file_exists) {
-        expect(false, "global import-workspace test lock creates: " +
-                          error.message());
+#if defined(_WIN32)
+      if (GetLastError() != ERROR_LOCK_VIOLATION) {
+        expect(false, "global import-workspace test lock acquires");
+#else
+      if (errno != EWOULDBLOCK && errno != EAGAIN) {
+        expect(false, "global import-workspace test lock acquires");
+#endif
         return;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -179,17 +210,34 @@ public:
            "global import-workspace test lock is acquired within 30 seconds");
   }
 
-  ~ScopedDirectoryLock() {
+  ~ScopedFileLock() {
+#if defined(_WIN32)
     if (locked_) {
-      std::error_code ignored;
-      std::filesystem::remove(path_, ignored);
+      OVERLAPPED range{};
+      (void)UnlockFileEx(descriptor_, 0, 1, 0, &range);
     }
+    if (descriptor_ != INVALID_HANDLE_VALUE) {
+      CloseHandle(descriptor_);
+    }
+#else
+    if (locked_) {
+      (void)::flock(descriptor_, LOCK_UN);
+    }
+    if (descriptor_ >= 0) {
+      (void)::close(descriptor_);
+    }
+#endif
   }
 
   [[nodiscard]] bool locked() const { return locked_; }
 
 private:
   std::filesystem::path path_;
+#if defined(_WIN32)
+  HANDLE descriptor_ = INVALID_HANDLE_VALUE;
+#else
+  int descriptor_ = -1;
+#endif
   bool locked_ = false;
 };
 
@@ -2862,6 +2910,22 @@ void testExportTemporaryPathsArePrivateAndCleaned() {
 
 void testStaleArchiveWorkspacesAreSweptWithoutTouchingFreshOnes() {
   Fixture fixture;
+  const auto lockPath = std::filesystem::temp_directory_path() /
+                        "asobmashow-profile-import-sweep-test.lock";
+  {
+    ScopedFileLock lock(lockPath);
+    expect(lock.locked(), "global import-workspace test lock is acquired");
+    std::error_code lockTypeError;
+    expect(std::filesystem::is_regular_file(lockPath, lockTypeError) &&
+               !lockTypeError,
+           "global import-workspace test lock is a crash-released regular "
+           "file");
+  }
+  std::error_code persistedLockError;
+  expect(std::filesystem::is_regular_file(lockPath, persistedLockError) &&
+             !persistedLockError,
+         "global import-workspace test lock persists harmlessly after release");
+
   const std::string staleToken = generateWorkspaceToken();
   const std::string freshToken = generateWorkspaceToken();
   expect(staleToken != freshToken && isLowerHexToken(staleToken) &&
@@ -2909,8 +2973,7 @@ void testStaleArchiveWorkspacesAreSweptWithoutTouchingFreshOnes() {
          "export startup sweeps stale rollback copies only when a current "
          "destination exists and retains fresh copies");
 
-  ScopedDirectoryLock lock(std::filesystem::temp_directory_path() /
-                           "asobmashow-profile-import-sweep-test-lock");
+  ScopedFileLock lock(lockPath);
   if (!lock.locked()) {
     return;
   }
