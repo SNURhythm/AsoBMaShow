@@ -1,5 +1,8 @@
 #include "ReplayRepository.h"
 #include "ReplayRepositoryInternal.h"
+#ifdef ASOBMASHOW_ENABLE_REPLAY_MIGRATION_TEST_ACCESS
+#include "ReplayRepositoryMigrationTestAccess.h"
+#endif
 
 #include "../BmsMetadataText.h"
 #include "ChartSqlExpressions.h"
@@ -32,6 +35,20 @@
 
 namespace {
 
+#ifdef ASOBMASHOW_ENABLE_REPLAY_MIGRATION_TEST_ACCESS
+void *gSessionSchemaValidatedContext = nullptr;
+replay_repository_test::SessionSchemaValidatedHook
+    gSessionSchemaValidatedHook = nullptr;
+
+void runSessionSchemaValidatedHook() {
+  if (gSessionSchemaValidatedHook != nullptr) {
+    gSessionSchemaValidatedHook(gSessionSchemaValidatedContext);
+  }
+}
+#else
+void runSessionSchemaValidatedHook() {}
+#endif
+
 std::optional<int> readPragmaInt(sqlite3 *database, const char *pragma) {
   sqlite3_stmt *statement = nullptr;
   if (sqlite3_prepare_v2(database, pragma, -1, &statement, nullptr) !=
@@ -48,12 +65,18 @@ std::optional<int> readPragmaInt(sqlite3 *database, const char *pragma) {
   return result;
 }
 
-void rememberSessionSchemaMarker(sqlite3 *database, int &schemaVersion,
-                                 int &userVersion) {
-  schemaVersion =
-      readPragmaInt(database, "PRAGMA schema_version").value_or(-1);
-  userVersion =
-      readPragmaInt(database, "PRAGMA user_version").value_or(-1);
+bool readSessionSchemaMarker(sqlite3 *database, int &schemaVersion,
+                             int &userVersion) {
+  const auto observedSchemaVersion =
+      readPragmaInt(database, "PRAGMA schema_version");
+  const auto observedUserVersion =
+      readPragmaInt(database, "PRAGMA user_version");
+  if (!observedSchemaVersion || !observedUserVersion) {
+    return false;
+  }
+  schemaVersion = *observedSchemaVersion;
+  userVersion = *observedUserVersion;
+  return true;
 }
 
 bool sessionSchemaMarkerIsCurrent(sqlite3 *database, int schemaVersion,
@@ -63,6 +86,38 @@ bool sessionSchemaMarkerIsCurrent(sqlite3 *database, int schemaVersion,
   }
   return readPragmaInt(database, "PRAGMA schema_version") == schemaVersion &&
          readPragmaInt(database, "PRAGMA user_version") == userVersion;
+}
+
+bool validateAndRememberSessionSchemaMarker(sqlite3 *database,
+                                            int &schemaVersion,
+                                            int &userVersion) {
+  std::string transactionError;
+  SqliteTransactionHandle transaction(database, "BEGIN IMMEDIATE TRANSACTION",
+                                      transactionError);
+  if (!transaction.active()) {
+    SDL_Log("Could not lock replay database schema validation: %s",
+            transactionError.c_str());
+    return false;
+  }
+  if (!replay_repository_detail::MigrateSchema(database)) {
+    return false;
+  }
+  runSessionSchemaValidatedHook();
+
+  int observedSchemaVersion = -1;
+  int observedUserVersion = -1;
+  if (!readSessionSchemaMarker(database, observedSchemaVersion,
+                               observedUserVersion)) {
+    return false;
+  }
+  if (!transaction.commit(transactionError)) {
+    SDL_Log("Could not commit replay database schema validation: %s",
+            transactionError.c_str());
+    return false;
+  }
+  schemaVersion = observedSchemaVersion;
+  userVersion = observedUserVersion;
+  return true;
 }
 
 } // namespace
@@ -133,10 +188,9 @@ bool ReplayRepository::BindDatabasePath(std::filesystem::path databasePath,
       errorMessage.clear();
       return true;
     }
-    if (replay_repository_detail::MigrateSchema(impl_->sessionDatabase)) {
-      rememberSessionSchemaMarker(impl_->sessionDatabase,
-                                  impl_->sessionSchemaVersion,
-                                  impl_->sessionUserVersion);
+    if (validateAndRememberSessionSchemaMarker(
+            impl_->sessionDatabase, impl_->sessionSchemaVersion,
+            impl_->sessionUserVersion)) {
       errorMessage.clear();
       return true;
     }
@@ -161,13 +215,19 @@ bool ReplayRepository::BindDatabasePath(std::filesystem::path databasePath,
     return false;
   }
 
+  int schemaVersion = -1;
+  int userVersion = -1;
+  if (!validateAndRememberSessionSchemaMarker(candidate.get(), schemaVersion,
+                                              userVersion)) {
+    errorMessage = "replay database validation failed";
+    return false;
+  }
   sqlite3 *oldDatabase = impl_->sessionDatabase;
   impl_->sessionDatabase = candidate.release();
   impl_->databasePath = std::move(databasePath);
+  impl_->sessionSchemaVersion = schemaVersion;
+  impl_->sessionUserVersion = userVersion;
   closeSqliteDatabase(oldDatabase);
-  rememberSessionSchemaMarker(impl_->sessionDatabase,
-                              impl_->sessionSchemaVersion,
-                              impl_->sessionUserVersion);
   errorMessage.clear();
   return true;
 }
@@ -202,13 +262,9 @@ bool ReplayRepository::EnsureSessionDatabaseLocked() {
               impl_->sessionUserVersion)) {
         return true;
       }
-      if (!replay_repository_detail::MigrateSchema(impl_->sessionDatabase)) {
-        return false;
-      }
-      rememberSessionSchemaMarker(impl_->sessionDatabase,
-                                  impl_->sessionSchemaVersion,
-                                  impl_->sessionUserVersion);
-      return true;
+      return validateAndRememberSessionSchemaMarker(
+          impl_->sessionDatabase, impl_->sessionSchemaVersion,
+          impl_->sessionUserVersion);
     }
     SDL_Log("Discarding replay database with an unfinished transaction");
     ShutdownLocked();
@@ -227,10 +283,15 @@ bool ReplayRepository::EnsureSessionDatabaseLocked() {
           candidate.get(), path)) {
     return false;
   }
+  int schemaVersion = -1;
+  int userVersion = -1;
+  if (!validateAndRememberSessionSchemaMarker(candidate.get(), schemaVersion,
+                                              userVersion)) {
+    return false;
+  }
   impl_->sessionDatabase = candidate.release();
-  rememberSessionSchemaMarker(impl_->sessionDatabase,
-                              impl_->sessionSchemaVersion,
-                              impl_->sessionUserVersion);
+  impl_->sessionSchemaVersion = schemaVersion;
+  impl_->sessionUserVersion = userVersion;
   return true;
 }
 
@@ -239,3 +300,11 @@ bool ReplayRepository::EnsureSchema() {
   std::lock_guard lock(impl_->sessionMutex);
   return EnsureSessionDatabaseLocked();
 }
+
+#ifdef ASOBMASHOW_ENABLE_REPLAY_MIGRATION_TEST_ACCESS
+void replay_repository_test::SetSessionSchemaValidatedHook(
+    void *context, SessionSchemaValidatedHook hook) {
+  gSessionSchemaValidatedContext = context;
+  gSessionSchemaValidatedHook = hook;
+}
+#endif
