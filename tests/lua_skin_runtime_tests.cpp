@@ -174,7 +174,8 @@ struct RuntimeHarness {
 std::unique_ptr<RuntimeHarness>
 makeHarness(LuaRuntimePurpose purpose, std::string_view entryFixture,
             bool forceWriteCapableFileSystem = false,
-            bool entryAtPackageRoot = false) {
+            bool entryAtPackageRoot = false,
+            SkinSafetyLevel safetyLevel = SkinSafetyLevel::Standard) {
   static std::atomic_uint64_t profileSerial{0};
   RuntimePackageFixture &package = runtimePackage();
   if (!package.prepared) {
@@ -193,7 +194,9 @@ makeHarness(LuaRuntimePurpose purpose, std::string_view entryFixture,
                                  .entry = entry,
                                  .storageRoots = package.roots,
                                  .profileId = profile,
-                                 .allowDataWrites = writes});
+                                 .allowDataWrites = writes,
+                                 .safetyPolicy =
+                                     SkinSafetyPolicy(safetyLevel)});
   expect(fileSystem.fileSystem != nullptr,
          "runtime filesystem is created for the fixture");
   if (!fileSystem.fileSystem) {
@@ -210,7 +213,9 @@ makeHarness(LuaRuntimePurpose purpose, std::string_view entryFixture,
     }
   }
   auto created = LuaSkinRuntime::create(
-      {.purpose = purpose, .fileSystem = std::move(fileSystem.fileSystem)});
+      {.purpose = purpose,
+       .fileSystem = std::move(fileSystem.fileSystem),
+       .safetyPolicy = SkinSafetyPolicy(safetyLevel)});
   expect(created.runtime != nullptr && !created.failure,
          "bounded Lua runtime is created");
   if (!created.runtime) {
@@ -359,6 +364,88 @@ void testCatalogEntrySourceIsBoundedBeforeHostAllocation() {
              header.failure->code == "skin_lua_host_limit_exceeded",
          "catalog entry source is rejected before host allocation exceeds its "
          "Lua budget");
+}
+
+void testUnrestrictedRuntimeLiftsSourceBudgetAndProcessGlobalGuard() {
+  RuntimePackageFixture fixture;
+  if (!fixture.prepared) {
+    return;
+  }
+
+  const SkinEntryId oversizedEntry = fixture.entry("two_phase.luaskin");
+  const fs::path oversizedPath = fixture.roots.visiblePackages /
+                                 fixture.package.directoryName /
+                                 "skin/two_phase.luaskin";
+  std::ofstream oversized(oversizedPath, std::ios::binary | std::ios::trunc);
+  constexpr std::size_t mebibyte = 1024ULL * 1024ULL;
+  const std::string whitespace(mebibyte, ' ');
+  oversized << "-- unrestricted runtime source budget fixture\n";
+  for (std::size_t index = 0;
+       index <= LuaRuntimePolicy::catalogLoad.maxAllocatorBytes / mebibyte;
+       ++index) {
+    oversized.write(whitespace.data(),
+                    static_cast<std::streamsize>(whitespace.size()));
+  }
+  oversized << "\nreturn {}\n";
+  oversized.close();
+
+  auto files = LuaSkinFileSystem::create(
+      {.revision = fixture.prepared->readView(),
+       .entry = oversizedEntry,
+       .storageRoots = fixture.roots,
+       .safetyPolicy = SkinSafetyPolicy(SkinSafetyLevel::Unrestricted)});
+  expect(files.fileSystem != nullptr,
+         "unrestricted runtime filesystem creates for oversized source");
+  if (!files.fileSystem) {
+    return;
+  }
+  auto runtime = LuaSkinRuntime::create(
+      {.purpose = LuaRuntimePurpose::Catalog,
+       .fileSystem = std::move(files.fileSystem),
+       .safetyPolicy = SkinSafetyPolicy(SkinSafetyLevel::Unrestricted)});
+  expect(runtime.runtime != nullptr,
+         "unrestricted runtime creates for oversized source");
+  if (!runtime.runtime) {
+    return;
+  }
+  expect(runtime.runtime->loadHeader().value.has_value(),
+         "Unrestricted loads a valid source beyond the Standard host budget");
+
+  RuntimePackageFixture &package = runtimePackage();
+  const fs::path globalsPath = package.roots.visiblePackages /
+                               package.package.directoryName /
+                               "skin/unrestricted_globals.luaskin";
+  writeText(globalsPath,
+            "return { query = function() return type(os.setlocale) end }\n");
+  auto standard = makeHarness(LuaRuntimePurpose::Gameplay,
+                              "unrestricted_globals.luaskin");
+  auto unrestricted = makeHarness(
+      LuaRuntimePurpose::Gameplay, "unrestricted_globals.luaskin", false,
+      false, SkinSafetyLevel::Unrestricted);
+  if (!standard || !unrestricted) {
+    return;
+  }
+  for (const auto &[name, harness, expected] :
+       std::array<std::tuple<std::string_view, RuntimeHarness *, std::string_view>,
+                  2>{{{"Standard", standard.get(), "nil"},
+                       {"Unrestricted", unrestricted.get(), "function"}}}) {
+    auto header = harness->runtime->loadHeader();
+    expect(header.value.has_value(), "process-global fixture header loads");
+    if (!header.value) {
+      continue;
+    }
+    const auto callback = header.value->callbackNamed("query");
+    expect(callback && harness->runtime->loadConfigured({}).value.has_value() &&
+               harness->runtime->enterRenderPhase().ok &&
+               harness->runtime->beginFrame(1).ok,
+           "process-global fixture enters a callback frame");
+    if (!callback) {
+      continue;
+    }
+    const auto result = harness->runtime->invoke(*callback, {});
+    expect(result.value && std::get<std::string>(*result.value) == expected,
+           std::string(name) + " exposes the expected os.setlocale capability");
+  }
 }
 
 void testCatalogLuaLoadersBoundSourceBeforeHostAllocation() {
@@ -1137,6 +1224,7 @@ int main() {
   testRuntimeContractsUseSourceAuthoritiesAndProvenance();
   testFilesystemReadsTheSelectedEntryWithoutAHostPath();
   testCatalogEntrySourceIsBoundedBeforeHostAllocation();
+  testUnrestrictedRuntimeLiftsSourceBudgetAndProcessGlobalGuard();
   testCatalogLuaLoadersBoundSourceBeforeHostAllocation();
   testStrictTwoPhaseStateMachineUsesOneState();
   testMainStateAccessorsOpenOnlyAtRenderTransition();

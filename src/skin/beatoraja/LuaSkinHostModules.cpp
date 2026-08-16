@@ -233,6 +233,7 @@ struct LuaSkinHostModulesImpl {
   lua_State *state = nullptr;
   LuaSkinFileSystem *fileSystem = nullptr;
   std::size_t maximumSourceBytes = std::numeric_limits<std::size_t>::max();
+  bool allowProcessGlobalOperations = false;
   ISkinFrameState *frameState = nullptr;
   void *coroutineContext = nullptr;
   LuaCoroutineCreatedCallback coroutineCreated = nullptr;
@@ -1700,8 +1701,11 @@ void setNilGlobal(lua_State *state, const char *name) {
   lua_setglobal(state, name);
 }
 
-void installSafeOsLibrary(lua_State *state) {
+void installSafeOsLibrary(lua_State *state, bool allowProcessGlobalOperations) {
   openLibrary(state, LUA_OSLIBNAME, luaopen_os);
+  if (allowProcessGlobalOperations) {
+    return;
+  }
   lua_getglobal(state, LUA_OSLIBNAME);
   for (const char *name : {"execute", "exit", "getenv", "remove", "rename",
                            "setlocale", "tmpname"}) {
@@ -1771,7 +1775,7 @@ int installHost(lua_State *state) {
   openLibrary(state, LUA_TABLIBNAME, luaopen_table);
   openLibrary(state, LUA_STRLIBNAME, luaopen_string);
   openLibrary(state, LUA_MATHLIBNAME, luaopen_math);
-  installSafeOsLibrary(state);
+  installSafeOsLibrary(state, impl->allowProcessGlobalOperations);
 
   for (const char *name : {"ffi", "jit", "debug", "bit"}) {
     setNilGlobal(state, name);
@@ -1950,6 +1954,7 @@ LuaSkinHostModules::create(lua_State *state,
   impl->state = state;
   impl->fileSystem = options.fileSystem;
   impl->maximumSourceBytes = options.maximumSourceBytes;
+  impl->allowProcessGlobalOperations = options.allowProcessGlobalOperations;
   impl->coroutineContext = options.coroutineContext;
   impl->coroutineCreated = options.coroutineCreated;
   try {

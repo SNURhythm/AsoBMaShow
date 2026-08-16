@@ -88,6 +88,7 @@ struct LuaRuntimeShared {
   lua_State *state = nullptr;
   std::size_t allocatedBytes = 0;
   std::size_t maximumAllocatorBytes = 0;
+  bool enforceResourceBudget = true;
   std::uint32_t generation = 0;
   std::vector<int> callbackReferences;
   std::unordered_map<const void *, std::uint32_t> callbackSlotsByIdentity;
@@ -178,7 +179,8 @@ LuaRuntimeShared *runtimeShared(lua_State *state) noexcept {
 
 void budgetHook(lua_State *state, lua_Debug *) {
   LuaRuntimeShared *shared = runtimeShared(state);
-  if (shared == nullptr || !shared->executionActive) {
+  if (shared == nullptr || !shared->executionActive ||
+      !shared->enforceResourceBudget) {
     return;
   }
   shared->executionInstructions += kHookInstructionInterval;
@@ -235,7 +237,8 @@ struct ReturnValidation {
 
 bool validateReturnedValue(lua_State *state, int index, std::size_t depth,
                            ReturnValidation &validation) {
-  if (Clock::now() > validation.shared->executionDeadline) {
+  if (validation.shared->enforceResourceBudget &&
+      Clock::now() > validation.shared->executionDeadline) {
     validation.failure =
         makeDiagnostic("skin_lua_wall_time_limit_exceeded",
                        "Lua return-value validation exceeded its deadline");
@@ -245,7 +248,8 @@ bool validateReturnedValue(lua_State *state, int index, std::size_t depth,
   if (type == LUA_TSTRING) {
     std::size_t size = 0;
     lua_tolstring(state, index, &size);
-    if (size > kMaximumReturnedStringBytes) {
+    if (validation.shared->enforceResourceBudget &&
+        size > kMaximumReturnedStringBytes) {
       validation.failure =
           makeDiagnostic("skin_lua_return_limit_exceeded",
                          "Lua returned string exceeds the fixed limit");
@@ -256,7 +260,8 @@ bool validateReturnedValue(lua_State *state, int index, std::size_t depth,
   if (type != LUA_TTABLE) {
     return true;
   }
-  if (depth > kMaximumReturnedTableDepth) {
+  if (validation.shared->enforceResourceBudget &&
+      depth > kMaximumReturnedTableDepth) {
     validation.failure =
         makeDiagnostic("skin_lua_return_limit_exceeded",
                        "Lua returned table exceeds the fixed depth limit");
@@ -277,7 +282,8 @@ bool validateReturnedValue(lua_State *state, int index, std::size_t depth,
   lua_pushnil(state);
   while (lua_next(state, tableIndex) != 0) {
     ++validation.entries;
-    if (validation.entries > kMaximumReturnedTableEntries ||
+    if ((validation.shared->enforceResourceBudget &&
+         validation.entries > kMaximumReturnedTableEntries) ||
         !validateReturnedValue(state, -2, depth + 1, validation) ||
         !validateReturnedValue(state, -1, depth + 1, validation)) {
       lua_settop(state, savedTop);
@@ -339,7 +345,9 @@ void beginLoadBudget(LuaRuntimeShared &shared, LuaLoadBudget budget) {
   shared.budgetViolationCode = nullptr;
   shared.executionInstructions = 0;
   shared.executionInstructionLimit = budget.maxInstructions;
-  shared.executionDeadline = Clock::now() + budget.maxWallTime;
+  shared.executionDeadline = shared.enforceResourceBudget
+                                 ? Clock::now() + budget.maxWallTime
+                                 : Clock::time_point::max();
 }
 
 bool beginCallbackCompilationBudget(LuaRuntimeShared &shared,
@@ -347,6 +355,14 @@ bool beginCallbackCompilationBudget(LuaRuntimeShared &shared,
   shared.callbackActive = false;
   shared.budgetViolated = false;
   shared.budgetViolationCode = nullptr;
+  if (!shared.enforceResourceBudget) {
+    shared.executionActive = true;
+    shared.executionInstructions = 0;
+    shared.executionInstructionLimit = std::numeric_limits<std::uint64_t>::max();
+    shared.callbackCompilationStarted = Clock::now();
+    shared.executionDeadline = Clock::time_point::max();
+    return true;
+  }
   const auto wallLimit =
       std::chrono::duration_cast<std::chrono::nanoseconds>(budget.maxWallTime);
   if (shared.callbackCompilationWallUsed >= wallLimit) {
@@ -378,14 +394,18 @@ void beginCallbackBudget(LuaRuntimeShared &shared) {
   shared.budgetViolationCode = nullptr;
   shared.executionInstructions = 0;
   shared.executionInstructionLimit =
-      LuaRuntimePolicy::gameplayCallback.maxInstructions;
+      shared.enforceResourceBudget
+          ? LuaRuntimePolicy::gameplayCallback.maxInstructions
+          : std::numeric_limits<std::uint64_t>::max();
   shared.callbackStarted = Clock::now();
   shared.executionDeadline =
-      shared.callbackStarted + LuaRuntimePolicy::gameplayCallback.maxWallTime;
+      shared.enforceResourceBudget
+          ? shared.callbackStarted + LuaRuntimePolicy::gameplayCallback.maxWallTime
+          : Clock::time_point::max();
 }
 
 void endExecutionBudget(LuaRuntimeShared &shared) {
-  if (shared.callbackActive) {
+  if (shared.callbackActive && shared.enforceResourceBudget) {
     shared.frameWallUsed += Clock::now() - shared.callbackStarted;
     if (shared.frameWallUsed > LuaRuntimePolicy::gameplayFrame.maxWallTime) {
       shared.frameExhausted = true;
@@ -397,6 +417,10 @@ void endExecutionBudget(LuaRuntimeShared &shared) {
 
 void endCallbackCompilationBudget(LuaRuntimeShared &shared,
                                   LuaLoadBudget budget) {
+  if (!shared.enforceResourceBudget) {
+    endExecutionBudget(shared);
+    return;
+  }
   const auto wallLimit =
       std::chrono::duration_cast<std::chrono::nanoseconds>(budget.maxWallTime);
   const auto wallRemaining =
@@ -523,7 +547,8 @@ bool retainCallbackValue(lua_State *state, int index, LuaRuntimeShared &shared,
     callback = {.slot = existing->second, .generation = shared.generation};
     return true;
   }
-  if (shared.callbackReferences.size() >= kMaximumCallbacks) {
+  if (shared.enforceResourceBudget &&
+      shared.callbackReferences.size() >= kMaximumCallbacks) {
     failure = BindingLookupFailure::CallbackLimit;
     return false;
   }
@@ -878,6 +903,7 @@ int invokeArgument(lua_State *state) {
 
 struct LuaSkinRuntime::Impl {
   LuaRuntimePurpose purpose = LuaRuntimePurpose::Catalog;
+  SkinSafetyPolicy safetyPolicy{};
   LuaRuntimePhase phase = LuaRuntimePhase::Created;
   bool renderTransitionFailed = false;
   std::shared_ptr<LuaRuntimeShared> shared;
@@ -895,7 +921,7 @@ struct LuaSkinRuntime::Impl {
 
   LuaValueResult runEntry() {
     lua_settop(state, 0);
-    const LuaLoadBudget budget = LuaRuntimePolicy::loadBudget(purpose);
+    const LuaLoadBudget budget = LuaRuntimePolicy::loadBudget(purpose, safetyPolicy);
     beginLoadBudget(*shared, budget);
 
     int loadStatus = LUA_ERRFILE;
@@ -1063,7 +1089,8 @@ LuaValueHandle::lookupCallbackNamed(std::string_view name) const {
 LuaBindingSourceLookupResult
 LuaValueHandle::lookupBindingSource(const LuaValuePath &path,
                                     LuaBindingSourceLookupLimits limits) const {
-  if (path.size() > LuaRuntimePolicy::maxBindingPathDepth) {
+  if (impl_ && impl_->shared && impl_->shared->enforceResourceBudget &&
+      path.size() > LuaRuntimePolicy::maxBindingPathDepth) {
     return {.failure = makeDiagnostic(
                 "skin_lua_binding_path_too_deep",
                 "Lua binding path exceeds the maximum supported depth")};
@@ -1143,7 +1170,8 @@ LuaRuntimeCreateResult LuaSkinRuntime::create(LuaSkinRuntimeOptions options) {
   }
   std::shared_ptr<LuaRuntimeShared> shared;
   std::unique_ptr<Impl> impl;
-  const LuaLoadBudget loadBudget = LuaRuntimePolicy::loadBudget(options.purpose);
+  const LuaLoadBudget loadBudget =
+      LuaRuntimePolicy::loadBudget(options.purpose, options.safetyPolicy);
   try {
     shared = std::make_shared<LuaRuntimeShared>();
     static std::atomic_uint32_t nextGeneration{0};
@@ -1152,6 +1180,8 @@ LuaRuntimeCreateResult LuaSkinRuntime::create(LuaSkinRuntimeOptions options) {
       shared->generation = ++nextGeneration;
     }
     shared->maximumAllocatorBytes = loadBudget.maxAllocatorBytes;
+    shared->enforceResourceBudget =
+        options.safetyPolicy.enforces(SkinSafetyGuard::LuaResourceBudget);
     impl = std::make_unique<Impl>();
   } catch (...) {
     return {.failure = makeDiagnostic("skin_lua_runtime_create_failed",
@@ -1165,6 +1195,7 @@ LuaRuntimeCreateResult LuaSkinRuntime::create(LuaSkinRuntimeOptions options) {
   }
   shared->state = state;
   impl->purpose = options.purpose;
+  impl->safetyPolicy = options.safetyPolicy;
   impl->shared = shared;
   impl->state = state;
   impl->fileSystem = std::move(options.fileSystem);
@@ -1182,6 +1213,8 @@ LuaRuntimeCreateResult LuaSkinRuntime::create(LuaSkinRuntimeOptions options) {
       state,
       {.fileSystem = impl->fileSystem.get(),
        .maximumSourceBytes = loadBudget.maxAllocatorBytes,
+       .allowProcessGlobalOperations = !options.safetyPolicy.enforces(
+           SkinSafetyGuard::ProcessGlobalMutation),
        .coroutineContext = shared.get(),
        .coroutineCreated = installHook});
   if (!installed.modules) {
@@ -1357,13 +1390,15 @@ LuaCallbackCompileResult
 LuaSkinRuntime::compileCallbackScript(std::string_view script,
                                       LuaCallbackScriptKind kind) {
   if (!impl_ || impl_->phase != LuaRuntimePhase::Configured || script.empty() ||
-      script.size() > kMaximumCallbackScriptBytes) {
+      (impl_->shared->enforceResourceBudget &&
+       script.size() > kMaximumCallbackScriptBytes)) {
     return {.failure = makeDiagnostic("skin_lua_callback_script_invalid",
                                       "Lua callback script requires a "
                                       "configured runtime and bounded source")};
   }
 
-  const LuaLoadBudget budget = LuaRuntimePolicy::loadBudget(impl_->purpose);
+  const LuaLoadBudget budget =
+      LuaRuntimePolicy::loadBudget(impl_->purpose, impl_->safetyPolicy);
   if (!beginCallbackCompilationBudget(*impl_->shared, budget)) {
     return {.failure =
                 makeDiagnostic(impl_->shared->budgetViolationCode,

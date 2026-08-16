@@ -75,8 +75,19 @@ struct LuaRuntimePolicy {
       .maxWallTime = std::chrono::milliseconds{6},
   };
 
+  inline static constexpr LuaLoadBudget unrestrictedLoad{
+      .maxAllocatorBytes = std::numeric_limits<std::size_t>::max(),
+      .maxInstructions = std::numeric_limits<std::uint64_t>::max(),
+      // Zero is the internal unlimited-deadline sentinel.
+      .maxWallTime = std::chrono::milliseconds{0},
+  };
+
   [[nodiscard]] static constexpr LuaLoadBudget
-  loadBudget(LuaRuntimePurpose purpose) noexcept {
+  loadBudget(LuaRuntimePurpose purpose,
+             SkinSafetyPolicy safetyPolicy = SkinSafetyPolicy{}) noexcept {
+    if (!safetyPolicy.enforces(SkinSafetyGuard::LuaResourceBudget)) {
+      return unrestrictedLoad;
+    }
     return purpose == LuaRuntimePurpose::Catalog ? catalogLoad
                                                  : validationAndGameplayLoad;
   }

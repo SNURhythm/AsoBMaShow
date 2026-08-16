@@ -44,6 +44,7 @@ struct LuaSkinHostModulesOptions {
   // to the Lua allocator. The runtime supplies its existing load budget here
   // to prevent an arbitrarily large package file from bypassing that budget.
   std::size_t maximumSourceBytes = std::numeric_limits<std::size_t>::max();
+  bool allowProcessGlobalOperations = false;
   void *coroutineContext = nullptr;
   LuaCoroutineCreatedCallback coroutineCreated = nullptr;
 };
