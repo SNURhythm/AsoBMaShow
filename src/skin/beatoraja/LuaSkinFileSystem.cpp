@@ -253,6 +253,7 @@ struct LuaSkinFileSystem::Impl {
   fs::path entryPath;
   fs::path beatorajaSkinRoot;
   std::unique_ptr<SkinAliasDetector> aliases;
+  bool allowDataWrites = false;
   mutable std::mutex operationMutex;
 
   std::optional<SkinFileFailure>
@@ -476,6 +477,7 @@ LuaSkinFileSystem::create(LuaSkinFileSystemOptions options) {
       .entryPath = entryPath,
       .beatorajaSkinRoot = beatorajaSkinRoot,
       .aliases = createPlatformSkinAliasDetector(),
+      .allowDataWrites = options.allowDataWrites,
   });
   if (!impl->aliases) {
     return {.failure = failure(SkinFileError::IoError,
@@ -497,6 +499,10 @@ LuaSkinFileSystem::~LuaSkinFileSystem() = default;
 SkinFileResolveResult LuaSkinFileSystem::resolve(std::string_view virtualPath,
                                                  SkinFileUse use) const {
   const std::scoped_lock lock(impl_->operationMutex);
+  if (use == SkinFileUse::DataWrite && !impl_->allowDataWrites) {
+    return {.failure = failure(SkinFileError::WrongUse, virtualPath,
+                               "Lua data writes are unavailable in this phase")};
+  }
   const auto normalized = use == SkinFileUse::DataWrite
                               ? impl_->normalizeDataWrite(virtualPath)
                               : impl_->normalize(virtualPath);
@@ -736,6 +742,10 @@ SkinFileWriteResult
 LuaSkinFileSystem::writeData(std::string_view virtualPath,
                              std::span<const std::byte> bytes, bool append) {
   const std::scoped_lock lock(impl_->operationMutex);
+  if (!impl_->allowDataWrites) {
+    return {.failure = failure(SkinFileError::WrongUse, virtualPath,
+                               "Lua data writes are unavailable in this phase")};
+  }
   const auto normalized = impl_->normalizeDataWrite(virtualPath);
   if (!normalized.path) {
     return {.failure = normalized.failure};
@@ -776,6 +786,11 @@ LuaSkinFileSystem::writeData(std::string_view virtualPath,
 SkinFileWriteResult
 LuaSkinFileSystem::mkdirData(std::string_view virtualDirectory) {
   const std::scoped_lock lock(impl_->operationMutex);
+  if (!impl_->allowDataWrites) {
+    return {.failure =
+                failure(SkinFileError::WrongUse, virtualDirectory,
+                        "Lua data writes are unavailable in this phase")};
+  }
   const auto normalized = impl_->normalizeDataWrite(virtualDirectory, true);
   if (!normalized.path) {
     return {.failure = normalized.failure};

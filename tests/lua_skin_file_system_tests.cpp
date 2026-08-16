@@ -190,7 +190,7 @@ void testBeatorajaDirectSkinDirectorySemantics() {
   writeText(visiblePackage / "entry/choice.lua", "return 'choice'\n");
   writeText(visiblePackage / "entry/binary.lua", std::string("\x1bLua", 4));
 
-  auto created = fixture.create(fixture.entry, false);
+  auto created = fixture.create(fixture.entry, true);
   expect(created.fileSystem != nullptr,
          "a live visible-package filesystem is created");
   if (!created.fileSystem) {
@@ -270,6 +270,25 @@ void testBeatorajaDirectSkinDirectorySemantics() {
          "skin-prefixed Lua writes remain confined to the selected package");
 }
 
+void testReadOnlyFilesystemRejectsDataWrites() {
+  PackageFixture fixture;
+  if (!fixture.prepared) {
+    return;
+  }
+
+  auto created = fixture.create(fixture.entry, false);
+  expect(created.fileSystem != nullptr,
+         "a read-only filesystem is created for catalog work");
+  if (!created.fileSystem) {
+    return;
+  }
+
+  const auto write = created.fileSystem->writeData(
+      "History/260805/history.txt", bytesOf("must not be written\n"), false);
+  expect(write.failure && write.failure->code == SkinFileError::WrongUse,
+         "a catalog filesystem refuses a Lua data write");
+}
+
 void testLinkedVisibleSkinChildCannotEscapeLuaIoBoundary() {
   PackageFixture fixture;
   if (!fixture.prepared) {
@@ -316,6 +335,7 @@ void testLinkedVisibleSkinChildCannotEscapeLuaIoBoundary() {
 
 int main() {
   testBeatorajaDirectSkinDirectorySemantics();
+  testReadOnlyFilesystemRejectsDataWrites();
   testLinkedVisibleSkinChildCannotEscapeLuaIoBoundary();
   testCompatibilityDiagnosticsDeduplicateAndRetainCriticality();
   if (failures != 0) {
