@@ -2571,8 +2571,7 @@ void GamePlayScene::init() {
                                         : options.assistOption),
       .hispeedAutoAdjust = context.settings.hispeedAutoAdjust,
       .markProcessedNotes = context.settings.markProcessedNotes,
-      .judgementIndicatorEnabled =
-          context.settings.judgementIndicatorEnabled,
+      .judgementIndicatorEnabled = context.settings.judgementIndicatorEnabled,
       .judgementIndicatorY = context.settings.judgementIndicatorY,
       .judgementIndicatorWidthScale =
           context.settings.judgementIndicatorWidthScale,
@@ -2582,22 +2581,18 @@ void GamePlayScene::init() {
       .judgementIndicatorRangeMilliseconds =
           context.settings.judgementIndicatorRangeMilliseconds,
       .judgementTextY = context.settings.judgementTextY,
-      .judgementCounterEnabled =
-          context.settings.judgementCounterEnabled,
-      .judgementCounterPosition =
-          context.settings.judgementCounterPosition,
-      .fastSlowCriteria =
-          context.settings.judgementTimingFastSlowCriteria,
+      .judgementCounterEnabled = context.settings.judgementCounterEnabled,
+      .judgementCounterPosition = context.settings.judgementCounterPosition,
+      .fastSlowCriteria = context.settings.judgementTimingFastSlowCriteria,
       .millisecondsCriteria =
           context.settings.judgementTimingMillisecondsCriteria,
       .gaugeBarPosition = context.settings.gaugeBarPosition,
-      .touchVisualizationEnabled =
-          options.touchVisualizationEnabled.value_or(
-              context.settings.touchVisualizationEnabled),
+      .touchVisualizationEnabled = options.touchVisualizationEnabled.value_or(
+          context.settings.touchVisualizationEnabled),
       .replayGhostRenderingEnabled =
           options.replayGhostRenderingEnabled.value_or(true),
-      .judgeAlgorithmImageIndex = beatorajaJudgeAlgorithmImageIndex(
-          context.settings.notePriorityMode),
+      .judgeAlgorithmImageIndex =
+          beatorajaJudgeAlgorithmImageIndex(context.settings.notePriorityMode),
   };
   playfieldVisualStateStore->setConfiguration(playfieldPresentationConfiguration);
   presentation->configure(playfieldPresentationConfiguration);
@@ -3063,7 +3058,7 @@ bool GamePlayScene::reset() {
   capturePlayfieldVisualState(
       initialGameplayTimeMicros,
       getVisualTimeMicros(initialGameplayTimeMicros),
-      preparationIndicatorActive(initialRawSongTimeMicros));
+      preparationIndicatorActive(initialRawSongTimeMicros), true);
   acquireGameplaySkinForAttempt();
   if (playbackInitializationFailed) {
     return false;
@@ -4489,7 +4484,7 @@ void GamePlayScene::initializePlayfieldVisualNoteSources() {
 
 void GamePlayScene::capturePlayfieldVisualState(
     long long gameplayTimeMicros, long long visualTimeMicros,
-    bool startLaneIndicatorsVisible) {
+    bool startLaneIndicatorsVisible, bool selectedSkinActive) {
   if (playfieldVisualStateStore == nullptr || state == nullptr) {
     return;
   }
@@ -4565,69 +4560,82 @@ void GamePlayScene::capturePlayfieldVisualState(
   };
   playfieldVisualStateStore->applyAuthorityUpdate(authority);
 
-  const std::size_t noteCount =
-      std::min(playfieldVisualNoteSources.size(),
-               playfieldChartVisualModel.notes.size());
-  std::vector<NotePresentationState> noteStates;
-  noteStates.reserve(noteCount);
-  for (std::size_t index = 0; index < noteCount; ++index) {
-    const auto *source = playfieldVisualNoteSources[index];
-    const auto &model = playfieldChartVisualModel.notes[index];
-    NotePresentationState noteState{
-        .id = model.id,
-        .judged = source->IsPlayed,
-        .dead = source->IsDead,
-        .playedTimeMicros = source->IsPlayed ? source->PlayedTime
-                                             : kPlayfieldTimestampOff,
-    };
-    if (const auto *longNote =
-            dynamic_cast<const bms_parser::LongNote *>(source);
-        longNote != nullptr) {
-      const auto *head = longNote->IsTail() && longNote->Head != nullptr
-                             ? longNote->Head
-                             : longNote;
-      const bool headReachedJudge =
-          head->IsPlayed || head->IsDead ||
-          (head->Timeline != nullptr &&
-           head->Timeline->Timing <= visualTimeMicros);
-      const auto laneIt = lanePressed.find(head->Lane);
-      const bool laneDown =
-          laneIt != lanePressed.end() && laneIt->second;
-      noteState.longReactive =
-          model.longNoteMode == ChartLongNoteMode::HCN &&
-          headReachedJudge && laneDown;
-      noteState.longActive = head->IsHolding || noteState.longReactive;
-      noteState.longDamaged =
-          model.longNoteMode == ChartLongNoteMode::HCN &&
-          headReachedJudge && !noteState.longActive;
+  if (selectedSkinActive) {
+    const std::size_t noteCount =
+        std::min(playfieldVisualNoteSources.size(),
+                 playfieldChartVisualModel.notes.size());
+    std::vector<NotePresentationState> noteStates;
+    noteStates.reserve(noteCount);
+    for (std::size_t index = 0; index < noteCount; ++index) {
+      const auto *source = playfieldVisualNoteSources[index];
+      const auto &model = playfieldChartVisualModel.notes[index];
+      NotePresentationState noteState{
+          .id = model.id,
+          .judged = source->IsPlayed,
+          .dead = source->IsDead,
+          .playedTimeMicros = source->IsPlayed ? source->PlayedTime
+                                               : kPlayfieldTimestampOff,
+      };
+      if (const auto *longNote =
+              dynamic_cast<const bms_parser::LongNote *>(source);
+          longNote != nullptr) {
+        const auto *head = longNote->IsTail() && longNote->Head != nullptr
+                               ? longNote->Head
+                               : longNote;
+        const bool headReachedJudge =
+            head->IsPlayed || head->IsDead ||
+            (head->Timeline != nullptr &&
+             head->Timeline->Timing <= visualTimeMicros);
+        const auto laneIt = lanePressed.find(head->Lane);
+        const bool laneDown =
+            laneIt != lanePressed.end() && laneIt->second;
+        noteState.longReactive =
+            model.longNoteMode == ChartLongNoteMode::HCN &&
+            headReachedJudge && laneDown;
+        noteState.longActive = head->IsHolding || noteState.longReactive;
+        noteState.longDamaged =
+            model.longNoteMode == ChartLongNoteMode::HCN &&
+            headReachedJudge && !noteState.longActive;
+      }
+      noteStates.push_back(noteState);
     }
-    noteStates.push_back(noteState);
+    playfieldVisualStateStore->setNoteStates(std::move(noteStates));
   }
-  playfieldVisualStateStore->setNoteStates(std::move(noteStates));
 
-  capturedPlayfieldVisualState = playfieldVisualStateStore->capture({
-      .serial = ++playfieldFrameSerial,
-      .visualTimeMicros = visualTimeMicros,
-      .gameplayTimeMicros = gameplayTimeMicros,
-      .replayTouchTimeMicros = gameplayTimeMicros,
-      .bgaTimeMicros = gameplayTimeMicros,
-      .playTimer = {
-          .active = gameplayTimeMicros >= getStartPositionMicros(),
-          .startMicros = getStartPositionMicros(),
-          .elapsedMillisExact = options.practiceSession == nullptr &&
-                                !options.practiceMode,
-          .playtimeMillis = beatorajaPlaytimeMillis(chart, options),
+  capturedPlayfieldVisualState = playfieldVisualStateStore->capture(
+      {
+          .serial = ++playfieldFrameSerial,
+          .visualTimeMicros = visualTimeMicros,
+          .gameplayTimeMicros = gameplayTimeMicros,
+          .replayTouchTimeMicros = gameplayTimeMicros,
+          .bgaTimeMicros = gameplayTimeMicros,
+          .playTimer =
+              {
+                  .active = gameplayTimeMicros >= getStartPositionMicros(),
+                  .startMicros = getStartPositionMicros(),
+                  .elapsedMillisExact = options.practiceSession == nullptr &&
+                                        !options.practiceMode,
+                  .playtimeMillis = beatorajaPlaytimeMillis(chart, options),
+              },
       },
-  });
-  capturedPlayfieldProjection = playfieldProjection.project(
-      playfieldChartVisualModel, capturedPlayfieldVisualState,
-      {.includeInvisibleNotes =
-           capturedPlayfieldVisualState.configuration.showInvisibleNotes,
-       .bpmGuideEnabled =
-           capturedPlayfieldVisualState.configuration.bpmGuideEnabled,
-       .latePoorTimingMicros =
-           builtInPresentation->projectionLatePoorTimingMicros(),
-       .builtInTraversal = builtInPresentation->projectionTraversal()});
+      selectedSkinActive);
+  if (selectedSkinActive) {
+    capturedPlayfieldProjection = playfieldProjection.project(
+        playfieldChartVisualModel, capturedPlayfieldVisualState,
+        {.includeInvisibleNotes =
+             capturedPlayfieldVisualState.configuration.showInvisibleNotes,
+         .bpmGuideEnabled =
+             capturedPlayfieldVisualState.configuration.bpmGuideEnabled,
+         .latePoorTimingMicros =
+             builtInPresentation->projectionLatePoorTimingMicros(),
+         .buildBuiltInPlan = false,
+         .builtInTraversal = builtInPresentation->projectionTraversal()});
+  } else {
+    capturedPlayfieldProjection = {
+        .frameSerial = capturedPlayfieldVisualState.clock.serial,
+        .useParserBackedBuiltInTraversal = true,
+    };
+  }
   playfieldLaneCoverResetPending = false;
 }
 
@@ -5148,8 +5156,11 @@ void GamePlayScene::renderScene() {
     gameplayTimeMicros = range->endMicros - 1;
   }
   const long long visualTimeMicros = getVisualTimeMicros(gameplayTimeMicros);
+  const bool selectedSkinActive =
+      presentation != nullptr &&
+      presentation->activeMode() == PresentationMode::Skin;
   capturePlayfieldVisualState(gameplayTimeMicros, visualTimeMicros,
-                              startLaneIndicatorsVisible);
+                              startLaneIndicatorsVisible, selectedSkinActive);
   (void)presentation->prepareFrame(capturedPlayfieldVisualState,
                                    capturedPlayfieldProjection);
   const PresentationFrameResult presentationFrame =

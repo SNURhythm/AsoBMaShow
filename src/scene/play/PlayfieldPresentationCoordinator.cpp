@@ -8,15 +8,13 @@
 namespace {
 
 void advanceRevision(std::uint64_t &revision) noexcept {
-  revision = revision == std::numeric_limits<std::uint64_t>::max()
-                 ? 1
-                 : revision + 1;
+  revision =
+      revision == std::numeric_limits<std::uint64_t>::max() ? 1 : revision + 1;
 }
 
-skin::SkinDiagnostic coordinatorDiagnostic(std::string code,
-                                           std::string message,
-                                           skin::DiagnosticSeverity severity =
-                                               skin::DiagnosticSeverity::Error) {
+skin::SkinDiagnostic coordinatorDiagnostic(
+    std::string code, std::string message,
+    skin::DiagnosticSeverity severity = skin::DiagnosticSeverity::Error) {
   return {.code = std::move(code),
           .message = std::move(message),
           .severity = severity};
@@ -30,7 +28,6 @@ PlayfieldPresentationCoordinator::PlayfieldPresentationCoordinator(
       skin_(std::move(dependencies.skin)), bga_(dependencies.bga),
       persistViewport_(std::move(dependencies.persistViewport)),
       recordFailure_(std::move(dependencies.recordFailure)),
-      allowBuiltInFallback_(dependencies.allowBuiltInFallback),
       replayGhostEvents_(std::move(dependencies.replayGhostEvents)) {
   if (!builtIn_) {
     throw std::invalid_argument(
@@ -109,10 +106,9 @@ bool PlayfieldPresentationCoordinator::resetLayoutToFit() {
         "reported an exception.");
   }
 
-  if (persisted.disposition !=
-      GameplayViewportPersistenceDisposition::Queued) {
-    skin::SkinDiagnostic diagnostic = persisted.diagnostic.value_or(
-        coordinatorDiagnostic(
+  if (persisted.disposition != GameplayViewportPersistenceDisposition::Queued) {
+    skin::SkinDiagnostic diagnostic =
+        persisted.diagnostic.value_or(coordinatorDiagnostic(
             persisted.disposition ==
                     GameplayViewportPersistenceDisposition::Deferred
                 ? "skin.presentation.viewport_persistence_deferred"
@@ -127,8 +123,8 @@ bool PlayfieldPresentationCoordinator::resetLayoutToFit() {
                     GameplayViewportPersistenceDisposition::Deferred
                 ? skin::DiagnosticSeverity::Warning
                 : skin::DiagnosticSeverity::Error));
-    const PresentationFailure failure = makeSkinFailure(
-        lastFrameSerial_, std::move(diagnostic));
+    const PresentationFailure failure =
+        makeSkinFailure(lastFrameSerial_, std::move(diagnostic));
     publishFailure(failure);
   }
   return true;
@@ -168,24 +164,24 @@ PresentationFrameOutcome PlayfieldPresentationCoordinator::prepareFrame(
   PendingFrame pending;
   pending.frameSerial = state.clock.serial;
   pending.hadSkin = static_cast<bool>(skin_);
-  // Projection is captured before the warmed built-in presentation applies
-  // this frame's authority. Start+scratch cover changes would consequently
-  // make optional skin overlays use the preceding frame's cover edge. The
-  // immutable authority is the same source BMSRenderer applies in prepare.
+  // Projection is captured before presentation. Start+scratch cover changes
+  // would otherwise make optional skin overlays use the preceding frame's
+  // cover edge. The immutable authority is the same source BMSRenderer uses
+  // in built-in mode.
   const double visibleLaneHeightRatio =
       state.authority.laneCoverEnabled
-          ? std::clamp(1.0 -
-                           static_cast<double>(state.authority.laneCoverPercent) /
-                               100.0,
-                       0.0, 1.0)
+          ? std::clamp(
+                1.0 - static_cast<double>(state.authority.laneCoverPercent) /
+                          100.0,
+                0.0, 1.0)
           : 1.0;
   pending.replayGhostFrame = {
       .frameSerial = state.clock.serial,
       .visualTimeMicros = state.clock.visualTimeMicros,
       .currentScrollPosition = projection.currentScrollPosition,
       .hispeed = projection.builtInTraversal
-                      ? static_cast<double>(projection.builtInTraversal->hispeed)
-                      : 0.0,
+                     ? static_cast<double>(projection.builtInTraversal->hispeed)
+                     : 0.0,
       .visibleLaneHeightRatio = visibleLaneHeightRatio,
       .enabled = configuration_.replayGhostRenderingEnabled &&
                  !replayGhostEvents_.empty(),
@@ -197,10 +193,12 @@ PresentationFrameOutcome PlayfieldPresentationCoordinator::prepareFrame(
       state.authority.startLaneIndicatorsVisible;
   lastFrameSerial_ = state.clock.serial;
 
-  try {
-    pending.builtInPrepare = builtIn_->prepareFrame(state, projection);
-  } catch (...) {
-    pending.builtInPrepare = PresentationFrameOutcome::CriticalFailure;
+  if (!pending.hadSkin) {
+    try {
+      pending.builtInPrepare = builtIn_->prepareFrame(state, projection);
+    } catch (...) {
+      pending.builtInPrepare = PresentationFrameOutcome::CriticalFailure;
+    }
   }
 
   // BGA preparation happens after session preparation but is still part of
@@ -213,8 +211,8 @@ PresentationFrameOutcome PlayfieldPresentationCoordinator::prepareFrame(
 
   if (skin_) {
     // Own every diagnostic needed by a later no-submission path before
-    // entering session preparation/rendering. Moving these payloads through
-    // fallback is allocation-free and retains the exact session identity.
+    // entering session preparation/rendering. Returning these payloads is
+    // allocation-free and retains the exact session identity.
     pending.skinPrepareExceptionFailure = makeSkinFailure(
         state.clock.serial,
         coordinatorDiagnostic(
@@ -241,8 +239,8 @@ PresentationFrameOutcome PlayfieldPresentationCoordinator::prepareFrame(
     }
   }
 
-  // This is the sole video-update call for this captured frame.  Both the
-  // embedded skin path and fullscreen fallback reuse this exact value.
+  // This is the sole video-update call for this captured frame. Both the
+  // embedded skin and built-in presentation paths use this exact value.
   try {
     pending.bga = bga_.prepareVisualFrameAt(
         state.clock.serial, state.clock.bgaTimeMicros, state.bgaMiss);
@@ -254,7 +252,8 @@ PresentationFrameOutcome PlayfieldPresentationCoordinator::prepareFrame(
   const PresentationFrameOutcome outcome =
       pending.preparationFailure != PendingFrame::PreparationFailure::None
           ? PresentationFrameOutcome::CriticalFailure
-          : pending.hadSkin ? pending.skinPrepare : pending.builtInPrepare;
+      : pending.hadSkin ? pending.skinPrepare
+                        : pending.builtInPrepare;
   pending_ = std::move(pending);
   return outcome;
 }
@@ -270,8 +269,7 @@ PlayfieldPresentationCoordinator::render(RenderContext &context) {
     publishFailure(failure);
     return {.outcome = PresentationFrameOutcome::CriticalFailure,
             .submittedMode = PresentationMode::BuiltIn,
-            .bgaCompositeMode =
-                GameplayBgaCompositeMode::FullscreenBuiltIn,
+            .bgaCompositeMode = GameplayBgaCompositeMode::FullscreenBuiltIn,
             .failure = std::move(failure)};
   }
 
@@ -300,14 +298,13 @@ PlayfieldPresentationCoordinator::render(RenderContext &context) {
     std::optional<PresentationFailure> preparationFailure;
     if (pending.preparationFailure ==
         PendingFrame::PreparationFailure::BgaPrepareException) {
-      preparationFailure.emplace(
-          std::move(pending.bgaPrepareExceptionFailure));
+      preparationFailure.emplace(std::move(pending.bgaPrepareExceptionFailure));
     }
-    const PresentationFrameOutcome selectedOutcome =
-        preparationFailure ? PresentationFrameOutcome::CriticalFailure
-                           : pending.builtInPrepare;
-    auto result = renderBuiltIn(context, std::move(pending),
-                                std::move(preparationFailure), selectedOutcome);
+    auto result = renderBuiltIn(context, std::move(pending));
+    if (preparationFailure) {
+      result.failure = std::move(preparationFailure);
+      result.outcome = PresentationFrameOutcome::CriticalFailure;
+    }
     if (result.failure) {
       publishFailure(*result.failure);
     }
@@ -323,19 +320,8 @@ PlayfieldPresentationCoordinator::render(RenderContext &context) {
     } else {
       failure.emplace(std::move(pending.bgaPrepareExceptionFailure));
     }
-    if (!allowBuiltInFallback_) {
-      return abortSelectedSkinFrame(
-          std::move(*failure), PresentationFrameOutcome::CriticalFailure);
-    }
-    cancelAndClearActiveTouches();
-    skin_.reset();
-    markTouchTargetChanged();
-    auto result = renderBuiltIn(context, std::move(pending), std::move(failure),
-                                PresentationFrameOutcome::CriticalFailure);
-    if (result.failure) {
-      publishFailure(*result.failure);
-    }
-    return result;
+    return abortSelectedSkinFrame(std::move(*failure),
+                                  PresentationFrameOutcome::CriticalFailure);
   }
 
   PresentationFrameResult skinResult;
@@ -349,19 +335,8 @@ PlayfieldPresentationCoordinator::render(RenderContext &context) {
   if (skinRenderThrew) {
     std::optional<PresentationFailure> failure;
     failure.emplace(std::move(pending.skinRenderExceptionFailure));
-    if (!allowBuiltInFallback_) {
-      return abortSelectedSkinFrame(
-          std::move(*failure), PresentationFrameOutcome::CriticalFailure);
-    }
-    cancelAndClearActiveTouches();
-    skin_.reset();
-    markTouchTargetChanged();
-    auto result = renderBuiltIn(context, std::move(pending), std::move(failure),
-                                PresentationFrameOutcome::CriticalFailure);
-    if (result.failure) {
-      publishFailure(*result.failure);
-    }
-    return result;
+    return abortSelectedSkinFrame(std::move(*failure),
+                                  PresentationFrameOutcome::CriticalFailure);
   }
 
   skinResult.frameSerial = pending.frameSerial;
@@ -372,8 +347,7 @@ PlayfieldPresentationCoordinator::render(RenderContext &context) {
     skinResult.failure->frameSerial = pending.frameSerial;
   }
 
-  const bool skinSubmitted =
-      skinResult.submittedMode == PresentationMode::Skin;
+  const bool skinSubmitted = skinResult.submittedMode == PresentationMode::Skin;
   if (skinSubmitted) {
     // Once skin commands have been submitted, fullscreen or built-in work in
     // the same frame would create a hybrid.  A post-draw recoverable result is
@@ -381,7 +355,7 @@ PlayfieldPresentationCoordinator::render(RenderContext &context) {
     skinResult.bgaCompositeMode = GameplayBgaCompositeMode::EmbeddedSkin;
     if (pending.replayGhostFrame.enabled) {
       // This optional application overlay is intentionally post-skin and
-      // cannot change the already-submitted selected frame into a fallback.
+      // cannot replace the already-submitted selected composition.
       try {
         skin_->submitSyntheticReplayGhosts(context, pending.replayGhostFrame);
       } catch (...) {
@@ -394,11 +368,10 @@ PlayfieldPresentationCoordinator::render(RenderContext &context) {
       // ghosts, and cannot resurrect the built-in presentation.
       try {
         skin_->submitSyntheticStartLaneIndicators(
-            context,
-            {.frameSerial = pending.frameSerial,
-             .lanes = pending.startLaneIndicatorLanes,
-             .visibleLaneHeightRatio =
-                 pending.startLaneIndicatorVisibleLaneHeightRatio});
+            context, {.frameSerial = pending.frameSerial,
+                      .lanes = pending.startLaneIndicatorLanes,
+                      .visibleLaneHeightRatio =
+                          pending.startLaneIndicatorVisibleLaneHeightRatio});
       } catch (...) {
       }
     }
@@ -423,24 +396,12 @@ PlayfieldPresentationCoordinator::render(RenderContext &context) {
       skinResult.outcome == PresentationFrameOutcome::Ready
           ? PresentationFrameOutcome::CriticalFailure
           : skinResult.outcome;
-  if (!allowBuiltInFallback_) {
-    return abortSelectedSkinFrame(std::move(*failure), failureOutcome);
-  }
-  cancelAndClearActiveTouches();
-  skin_.reset();
-  markTouchTargetChanged();
-  auto result = renderBuiltIn(context, std::move(pending), std::move(failure),
-                              failureOutcome);
-  if (result.failure) {
-    publishFailure(*result.failure);
-  }
-  return result;
+  return abortSelectedSkinFrame(std::move(*failure), failureOutcome);
 }
 
-PresentationFrameResult PlayfieldPresentationCoordinator::renderBuiltIn(
-    RenderContext &context, PendingFrame pending,
-    std::optional<PresentationFailure> selectedFailure,
-    PresentationFrameOutcome selectedOutcome) {
+PresentationFrameResult
+PlayfieldPresentationCoordinator::renderBuiltIn(RenderContext &context,
+                                                PendingFrame pending) {
   PresentationFrameResult result;
   try {
     result = builtIn_->render(context);
@@ -451,10 +412,7 @@ PresentationFrameResult PlayfieldPresentationCoordinator::renderBuiltIn(
   result.submittedMode = PresentationMode::BuiltIn;
   result.bgaCompositeMode = GameplayBgaCompositeMode::FullscreenBuiltIn;
   result.preparedBga = std::move(pending.bga);
-  if (selectedFailure) {
-    result.failure = std::move(selectedFailure);
-    result.outcome = selectedOutcome;
-  } else if (result.failure) {
+  if (result.failure) {
     publishFailure(*result.failure);
   }
   return result;
@@ -463,9 +421,9 @@ PresentationFrameResult PlayfieldPresentationCoordinator::renderBuiltIn(
 gameplay::RealtimeTouchLayout
 PlayfieldPresentationCoordinator::touchLayout() const {
   synchronizeTouchRevisions();
-  gameplay::RealtimeTouchLayout layout =
-      activeMode() == PresentationMode::Skin ? skin_->touchLayout()
-                                              : builtIn_->touchLayout();
+  gameplay::RealtimeTouchLayout layout = activeMode() == PresentationMode::Skin
+                                             ? skin_->touchLayout()
+                                             : builtIn_->touchLayout();
   layout.revision = publishedLayoutRevision_;
   return layout;
 }
@@ -487,7 +445,7 @@ PlayfieldPresentationCoordinator::touchHitRegions() const {
   synchronizeTouchRevisions();
   std::vector<PresentationUiHitRegion> regions =
       activeMode() == PresentationMode::Skin ? skin_->touchHitRegions()
-                                              : builtIn_->touchHitRegions();
+                                             : builtIn_->touchHitRegions();
   for (auto &region : regions) {
     if (region.hit.kind != PresentationUiControlKind::None) {
       region.hit.layoutRevision = publishedLayoutRevision_;
@@ -496,8 +454,8 @@ PlayfieldPresentationCoordinator::touchHitRegions() const {
   return regions;
 }
 
-PresentationUiHit PlayfieldPresentationCoordinator::hitTestUiControl(
-    UiLogicalPoint point) const {
+PresentationUiHit
+PlayfieldPresentationCoordinator::hitTestUiControl(UiLogicalPoint point) const {
   synchronizeTouchRevisions();
   PresentationUiHit hit = activeMode() == PresentationMode::Skin
                               ? skin_->hitTestUiControl(point)
@@ -566,13 +524,11 @@ PlayfieldPresentationCoordinator::updatePresentationTouch(
   }
 }
 
-PresentationTouchResult
-PlayfieldPresentationCoordinator::endPresentationTouch(
+PresentationTouchResult PlayfieldPresentationCoordinator::endPresentationTouch(
     const PresentationTouchEvent &event, bool cancelled) {
   lastEventMicros_ = event.eventMicros;
   TouchCapture *stored = findTouchCapture(event.pointerId);
-  if (stored == nullptr ||
-      stored->targetGeneration != touchTargetGeneration_) {
+  if (stored == nullptr || stored->targetGeneration != touchTargetGeneration_) {
     return {};
   }
   const TouchCapture capture = *stored;
@@ -595,8 +551,9 @@ void PlayfieldPresentationCoordinator::cancelPresentationTouches(
   cancelAndClearActiveTouches();
 }
 
-void PlayfieldPresentationCoordinator::onLanePressed(
-    int lane, JudgeResult judge, long long eventMicros) {
+void PlayfieldPresentationCoordinator::onLanePressed(int lane,
+                                                     JudgeResult judge,
+                                                     long long eventMicros) {
   lastEventMicros_ = eventMicros;
   try {
     builtIn_->onLanePressed(lane, judge, eventMicros);
@@ -611,7 +568,7 @@ void PlayfieldPresentationCoordinator::onLanePressed(
 }
 
 void PlayfieldPresentationCoordinator::onLaneReleased(int lane,
-                                                       long long eventMicros) {
+                                                      long long eventMicros) {
   lastEventMicros_ = eventMicros;
   try {
     builtIn_->onLaneReleased(lane, eventMicros);
@@ -625,9 +582,10 @@ void PlayfieldPresentationCoordinator::onLaneReleased(int lane,
   }
 }
 
-void PlayfieldPresentationCoordinator::onJudge(
-    JudgeResult judge, int combo, int score, PlayfieldJudgeEventClock clock,
-    bool recordTimingSample) {
+void PlayfieldPresentationCoordinator::onJudge(JudgeResult judge, int combo,
+                                               int score,
+                                               PlayfieldJudgeEventClock clock,
+                                               bool recordTimingSample) {
   lastEventMicros_ = clock.visualTimeMicros;
   try {
     builtIn_->onJudge(judge, combo, score, clock, recordTimingSample);
@@ -656,8 +614,7 @@ void PlayfieldPresentationCoordinator::refreshGeometry() {
   synchronizeTouchRevisions();
 }
 
-PresentationMode
-PlayfieldPresentationCoordinator::activeMode() const noexcept {
+PresentationMode PlayfieldPresentationCoordinator::activeMode() const noexcept {
   return skin_ ? PresentationMode::Skin : PresentationMode::BuiltIn;
 }
 
@@ -718,24 +675,23 @@ void PlayfieldPresentationCoordinator::markTouchTargetChanged() noexcept {
   advanceRevision(publishedLayoutRevision_);
   advanceRevision(publishedHitRevision_);
   observedTouchMode_ = activeMode();
-  observedTargetLayoutRevision_ =
-      activeMode() == PresentationMode::Skin ? skin_->touchLayoutRevision()
-                                              : builtIn_->touchLayoutRevision();
-  observedTargetHitRevision_ =
-      activeMode() == PresentationMode::Skin
-          ? skin_->touchHitRegionsRevision()
-          : builtIn_->touchHitRegionsRevision();
+  observedTargetLayoutRevision_ = activeMode() == PresentationMode::Skin
+                                      ? skin_->touchLayoutRevision()
+                                      : builtIn_->touchLayoutRevision();
+  observedTargetHitRevision_ = activeMode() == PresentationMode::Skin
+                                   ? skin_->touchHitRegionsRevision()
+                                   : builtIn_->touchHitRegionsRevision();
 }
 
-void PlayfieldPresentationCoordinator::synchronizeTouchRevisions() const
-    noexcept {
+void PlayfieldPresentationCoordinator::synchronizeTouchRevisions()
+    const noexcept {
   const PresentationMode mode = activeMode();
-  const std::uint64_t layoutRevision =
-      mode == PresentationMode::Skin ? skin_->touchLayoutRevision()
-                                     : builtIn_->touchLayoutRevision();
-  const std::uint64_t hitRevision =
-      mode == PresentationMode::Skin ? skin_->touchHitRegionsRevision()
-                                     : builtIn_->touchHitRegionsRevision();
+  const std::uint64_t layoutRevision = mode == PresentationMode::Skin
+                                           ? skin_->touchLayoutRevision()
+                                           : builtIn_->touchLayoutRevision();
+  const std::uint64_t hitRevision = mode == PresentationMode::Skin
+                                        ? skin_->touchHitRegionsRevision()
+                                        : builtIn_->touchHitRegionsRevision();
   if (mode != observedTouchMode_) {
     advanceRevision(publishedLayoutRevision_);
     advanceRevision(publishedHitRevision_);
@@ -780,10 +736,9 @@ PlayfieldPresentationCoordinator::translateTouchEventForActiveTarget(
     const PresentationTouchEvent &event) const {
   PresentationTouchEvent translated = event;
   if (translated.hit.kind != PresentationUiControlKind::None) {
-    translated.hit.layoutRevision =
-        activeMode() == PresentationMode::Skin
-            ? skin_->touchLayoutRevision()
-            : builtIn_->touchLayoutRevision();
+    translated.hit.layoutRevision = activeMode() == PresentationMode::Skin
+                                        ? skin_->touchLayoutRevision()
+                                        : builtIn_->touchLayoutRevision();
   }
   return translated;
 }

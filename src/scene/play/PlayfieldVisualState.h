@@ -327,7 +327,8 @@ public:
   void setLiveTouchPoint(long long fingerId, ReplayTouchAction action, float x,
                          float y, long long songTimeMicros);
   void clearLiveTouchPoints();
-  [[nodiscard]] PlayfieldVisualState capture(PlayfieldFrameClock clock) const;
+  [[nodiscard]] PlayfieldVisualState
+  capture(PlayfieldFrameClock clock, bool includeNotes = true) const;
 
   void onLanePressed(int lane, JudgeResult judge,
                      long long eventMicros) override;

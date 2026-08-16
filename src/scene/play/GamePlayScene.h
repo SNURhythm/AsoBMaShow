@@ -105,7 +105,8 @@ private:
   void initializePlayfieldVisualNoteSources();
   void capturePlayfieldVisualState(long long gameplayTimeMicros,
                                    long long visualTimeMicros,
-                                   bool startLaneIndicatorsVisible);
+                                   bool startLaneIndicatorsVisible,
+                                   bool selectedSkinActive);
   void showPauseMenu(bool pausePlayback);
   void closePauseMenu();
   void togglePauseMenuFromInput();

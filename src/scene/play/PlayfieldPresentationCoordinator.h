@@ -35,15 +35,11 @@ struct PlayfieldPresentationCoordinatorDependencies {
   PersistGameplayViewport persistViewport;
   std::function<void(const PresentationFailure &)> recordFailure;
   std::vector<ReplayGhostEvent> replayGhostEvents;
-  // Interactive gameplay keeps the prepared built-in fallback. Replay export
-  // instead aborts on a selected-skin failure so its encoded frame is never a
-  // mixed or substituted presentation.
-  bool allowBuiltInFallback = true;
 };
 
-// Owns both presentation candidates for one chart.  The built-in adapter is
-// prepared first on every frame so a skin failure can select a complete,
-// already-warmed fallback without evaluating gameplay state a second time.
+// Owns the built-in presentation and the optional selected skin for one chart.
+// A selected skin frame either submits as skin or reports its error; it is
+// never silently replaced by built-in gameplay.
 class PlayfieldPresentationCoordinator final : public PlayfieldPresentation {
 public:
   explicit PlayfieldPresentationCoordinator(
@@ -60,39 +56,35 @@ public:
   [[nodiscard]] bool resetLayoutToFit();
   // Rotation/safe-area replacement is distinct from a user viewport choice.
   // The caller suppresses unchanged rectangles; this operation invalidates
-  // pending input/frame geometry for both warmed presentation candidates.
+  // pending input/frame geometry for both presentation targets.
   void updateSkinViewportGeometry(skin::UiLogicalRect safeUiBounds);
 
   void configure(const PlayfieldPresentationConfig &) override;
-  [[nodiscard]] PresentationFrameOutcome prepareFrame(
-      const PlayfieldVisualState &,
-      const PlayfieldProjectionResult &) override;
+  [[nodiscard]] PresentationFrameOutcome
+  prepareFrame(const PlayfieldVisualState &,
+               const PlayfieldProjectionResult &) override;
   [[nodiscard]] PresentationFrameResult render(RenderContext &) override;
   [[nodiscard]] gameplay::RealtimeTouchLayout touchLayout() const override;
-  [[nodiscard]] std::uint64_t
-  touchLayoutRevision() const noexcept override;
-  [[nodiscard]] std::uint64_t
-  touchHitRegionsRevision() const noexcept override;
+  [[nodiscard]] std::uint64_t touchLayoutRevision() const noexcept override;
+  [[nodiscard]] std::uint64_t touchHitRegionsRevision() const noexcept override;
   [[nodiscard]] std::vector<PresentationUiHitRegion>
   touchHitRegions() const override;
   [[nodiscard]] PresentationUiHit
-  hitTestUiControl(UiLogicalPoint) const override;
+      hitTestUiControl(UiLogicalPoint) const override;
   PresentationTouchResult
   beginPresentationTouch(const PresentationTouchEvent &) override;
   PresentationTouchResult
   updatePresentationTouch(const PresentationTouchEvent &) override;
-  PresentationTouchResult
-  endPresentationTouch(const PresentationTouchEvent &, bool cancelled) override;
+  PresentationTouchResult endPresentationTouch(const PresentationTouchEvent &,
+                                               bool cancelled) override;
   void cancelPresentationTouches(long long eventMicros) override;
   void onLanePressed(int, JudgeResult, long long) override;
   void onLaneReleased(int, long long) override;
-  void onJudge(JudgeResult, int, int, PlayfieldJudgeEventClock,
-               bool) override;
+  void onJudge(JudgeResult, int, int, PlayfieldJudgeEventClock, bool) override;
   void reset() override;
   void refreshGeometry() override;
   [[nodiscard]] PresentationMode activeMode() const noexcept override;
-  [[nodiscard]] std::optional<PresentationFailure>
-  lastFailure() const override;
+  [[nodiscard]] std::optional<PresentationFailure> lastFailure() const override;
   [[nodiscard]] std::optional<skin::SkinGameplayTiming>
   selectedSkinGameplayTiming() const override;
 
@@ -113,8 +105,8 @@ private:
     std::optional<PreparedGameplayBgaFrame> bga;
     PreparationFailure preparationFailure = PreparationFailure::None;
     // Constructed before any fallible skin work. Once evaluation begins,
-    // every no-submission decision can move one exact-identity payload into
-    // fallback without allocating.
+    // every no-submission decision can return one exact-identity payload
+    // without allocating.
     PresentationFailure skinPrepareExceptionFailure;
     PresentationFailure bgaPrepareExceptionFailure;
     PresentationFailure skinRenderExceptionFailure;
@@ -131,12 +123,10 @@ private:
     PresentationUiHit publicHit;
   };
 
-  [[nodiscard]] PresentationFrameResult
-  renderBuiltIn(RenderContext &, PendingFrame,
-                std::optional<PresentationFailure> selectedFailure,
-                PresentationFrameOutcome selectedOutcome);
-  [[nodiscard]] PresentationFailure
-  makeSkinFailure(std::uint64_t frameSerial, skin::SkinDiagnostic) const;
+  [[nodiscard]] PresentationFrameResult renderBuiltIn(RenderContext &,
+                                                      PendingFrame);
+  [[nodiscard]] PresentationFailure makeSkinFailure(std::uint64_t frameSerial,
+                                                    skin::SkinDiagnostic) const;
   void publishFailure(const PresentationFailure &) noexcept;
   void cancelAndClearActiveTouches() noexcept;
   void clearTouchCaptures() noexcept;
@@ -152,7 +142,6 @@ private:
   IGameplayBgaSubmitter &bga_;
   PersistGameplayViewport persistViewport_;
   std::function<void(const PresentationFailure &)> recordFailure_;
-  bool allowBuiltInFallback_ = true;
   PlayfieldPresentationConfig configuration_;
   std::vector<ReplayGhostEvent> replayGhostEvents_;
   std::optional<PendingFrame> pending_;

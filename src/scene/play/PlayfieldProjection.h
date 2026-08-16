@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <unordered_map>
 #include <vector>
 
 namespace gameplay_visible_time {
@@ -68,6 +69,9 @@ struct PlayfieldProjectionRequest {
   // that only has an immutable visual snapshot must opt in explicitly rather
   // than projection guessing a ruleset-dependent value.
   std::int64_t latePoorTimingMicros = 0;
+  // Selected skins consume generic DTOs only, so callers that do not submit
+  // BMSRenderer's frame can omit its separate compatibility plan.
+  bool buildBuiltInPlan = true;
   std::optional<BuiltInRendererTraversal> builtInTraversal;
 };
 
@@ -183,6 +187,10 @@ struct BuiltInRendererPlan {
 struct PlayfieldProjectionResult {
   std::uint64_t frameSerial = 0;
   double currentScrollPosition = 0.0;
+  // This snapshot intentionally omits a BuiltInRendererPlan. BMSRenderer must
+  // use its established parser-backed forward traversal instead of treating
+  // the absent plan as a frame with no visible notes.
+  bool useParserBackedBuiltInTraversal = false;
   // The built-in traversal is captured once by the gameplay renderer. Skin
   // property bridges consume its hispeed rather than reconstructing it from
   // settings or chart metadata.
@@ -209,6 +217,29 @@ public:
   project(const PlayfieldChartVisualModel &, const PlayfieldVisualState &,
           const PlayfieldProjectionRequest &);
   void reset() noexcept;
+
+private:
+  struct CachedModelIndex {
+    const PlayfieldChartVisualModel *model = nullptr;
+    std::unordered_map<ChartVisualId, const ChartVisualTimeline *>
+        timelinesById;
+    std::unordered_map<std::uint32_t, const ChartVisualTimeline *>
+        retainedTimelinesByOrdinal;
+    std::unordered_map<ChartVisualId, const ChartVisualNote *> notesById;
+    std::unordered_map<ChartVisualId,
+                       std::vector<const ChartVisualNote *>>
+        notesByTimeline;
+    std::vector<const ChartVisualTimeline *> orderedTimelines;
+    std::vector<const ChartVisualTimeline *> retainedTimelines;
+    std::vector<const ChartVisualNote *> orderedNotes;
+    std::vector<const ChartVisualNote *> playableLongHeads;
+    std::vector<gameplay_scroll_geometry::ScrollPositionTimeline>
+        scrollTimelines;
+  };
+
+  void rebuildIndex(const PlayfieldChartVisualModel &);
+
+  CachedModelIndex index_;
 };
 
 [[nodiscard]] double scrollPositionAtTime(const PlayfieldChartVisualModel &,

@@ -2919,7 +2919,9 @@ PresentationFrameResult BMSRenderer::render(RenderContext &context) {
   assert(prepared->state.has_value() && prepared->projection.has_value());
   renderFrame(context, prepared->state->clock.visualTimeMicros,
               prepared->state->clock.replayTouchTimeMicros,
-              &*prepared->projection);
+              prepared->projection->useParserBackedBuiltInTraversal
+                  ? nullptr
+                  : &*prepared->projection);
 
   presentationFailure.reset();
   return {.frameSerial = frameSerial,

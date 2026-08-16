@@ -192,7 +192,6 @@ ReplayPlayfieldPresentationCreateResult ReplayPlayfieldPresentation::create(
                   ? replay_ghost::buildReplayGhostEvents(*creation.replayData,
                                                          *model)
                   : std::vector<ReplayGhostEvent>{},
-          .allowBuiltInFallback = false,
       });
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (session.disposition == GameplaySkinSessionDisposition::Ready) {

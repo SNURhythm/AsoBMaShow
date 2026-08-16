@@ -1241,5 +1241,30 @@ int main() {
     return EXIT_FAILURE;
   }
 
+  // A selected skin consumes the generic skin DTOs, not BMSRenderer's
+  // compatibility plan.  It must retain those DTOs while omitting the
+  // otherwise duplicate built-in traversal work.
+  const auto skinOnlyResult = projection.project(
+      builtInPlanModel, builtInPlanState,
+      {.maxTimelines = 1,
+       .maxNotes = 1,
+       .buildBuiltInPlan = false,
+       .builtInTraversal = BuiltInRendererTraversal{.judgeY = 0.0F,
+                                                     .upperBound = 1.5F,
+                                                     .rxhs = 1.0F,
+                                                     .hispeed = 1.25F}});
+  if (skinOnlyResult.notes.size() != builtInPlanResult.notes.size() ||
+      skinOnlyResult.longNotes.size() != builtInPlanResult.longNotes.size() ||
+      skinOnlyResult.lines.size() != builtInPlanResult.lines.size() ||
+      (!skinOnlyResult.notes.empty() &&
+       skinOnlyResult.notes.front().noteId !=
+           builtInPlanResult.notes.front().noteId) ||
+      !skinOnlyResult.builtInPlan.traversedTimelineOrdinals.empty() ||
+      !skinOnlyResult.builtInPlan.entries.empty()) {
+    std::cerr << "skin-only projection must preserve visible DTOs without "
+                 "building the unused built-in plan\n";
+    return EXIT_FAILURE;
+  }
+
   return EXIT_SUCCESS;
 }

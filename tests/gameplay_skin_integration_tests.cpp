@@ -139,6 +139,15 @@ void gameplaySceneOwnsOnlyThePresentationBoundary() {
          "gameplay prepares the matched presentation exactly once per frame");
   expect(countOccurrences(source, "presentation->render(renderContext)") == 1,
          "gameplay renders the matched presentation exactly once per frame");
+  expectContains(source,
+                 "const bool selectedSkinActive =\n      presentation != nullptr &&\n      presentation->activeMode() == PresentationMode::Skin;",
+                 "only an active selected skin requires the full chart projection");
+  expectContains(source,
+                 "capturePlayfieldVisualState(gameplayTimeMicros, visualTimeMicros,\n                              startLaneIndicatorsVisible, selectedSkinActive);",
+                 "built-in gameplay captures authority without cloning every note state");
+  expectContains(source,
+                 ".useParserBackedBuiltInTraversal = true",
+                 "built-in gameplay keeps the renderer's retained forward walk");
   expectAbsent(source, "chart->Meta.KeyMode != 7",
                "gameplay does not hard-code 7K skin acquisition");
   expectContains(source, ".keyMode = chart->Meta.KeyMode",

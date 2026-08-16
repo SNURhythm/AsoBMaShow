@@ -261,14 +261,15 @@ void PlayfieldVisualStateStore::clearLiveTouchPoints() {
 }
 
 PlayfieldVisualState
-PlayfieldVisualStateStore::capture(PlayfieldFrameClock clock) const {
+PlayfieldVisualStateStore::capture(PlayfieldFrameClock clock,
+                                   bool includeNotes) const {
   captureTouches(clock.replayTouchTimeMicros);
   return {
       .clock = clock,
       .configuration = configuration_,
       .authority = authority_,
       .lanes = lanes_,
-      .notes = notes_,
+      .notes = includeNotes ? notes_ : std::vector<NotePresentationState>{},
       .touches = touches_,
       .lastJudge = lastJudge_,
       .lastJudgeVisualMicros = lastJudgeVisualMicros_,
