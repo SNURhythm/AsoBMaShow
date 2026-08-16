@@ -592,79 +592,83 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
       metrics, "Binding Scope", "Choose player, key mode, and device.",
       selectorBody, metrics.compact ? 280 : 220, metrics.cardsWidth));
 
-  auto *virtualControllerBody = new View();
-  virtualControllerBody->setFlexDirection(FlexDirection::Column);
-  virtualControllerBody->setGap(metrics.compact ? 10.0F : 14.0F);
-  const auto virtualControllerConfig = context.inputProfile.virtualController;
-  auto *virtualControllerToggle = makeAccentButton(
-      std::min(bodyWidth, metrics.actionButtonWidth), metrics.actionButtonHeight,
-      makeText(virtualControllerConfig.enabled ? "Virtual Controller: On"
-                                                : "Virtual Controller: Off",
-               metrics.bodyTextSize + 1, ui_theme::textPrimary(),
-               TextView::CENTER, TextView::MIDDLE),
-      virtualControllerConfig.enabled ? ui_theme::cyan() : ui_theme::coral());
-  virtualControllerToggle->setOnClickListener([this, virtualControllerConfig]() {
-    auto next = virtualControllerConfig;
-    next.enabled = !next.enabled;
-    commitVirtualControllerSetting(next);
-  });
-  virtualControllerBody->addView(virtualControllerToggle);
-  if (virtualControllerConfig.enabled) {
-    const bool spinScratch =
-        virtualControllerConfig.scratchMode ==
-        input::VirtualControllerScratchMode::Spin;
-    auto *scratchModeButton = makeControlButton(
+  if (gameplay::virtualControllerTouchInputSupported()) {
+    auto *virtualControllerBody = new View();
+    virtualControllerBody->setFlexDirection(FlexDirection::Column);
+    virtualControllerBody->setGap(metrics.compact ? 10.0F : 14.0F);
+    const auto virtualControllerConfig = context.inputProfile.virtualController;
+    auto *virtualControllerToggle = makeAccentButton(
         std::min(bodyWidth, metrics.actionButtonWidth),
         metrics.actionButtonHeight,
-        makeText(spinScratch ? "Scratch: Spin Mode" : "Scratch: Flick Mode",
+        makeText(virtualControllerConfig.enabled ? "Virtual Controller: On"
+                                                 : "Virtual Controller: Off",
                  metrics.bodyTextSize + 1, ui_theme::textPrimary(),
-                 TextView::CENTER, TextView::MIDDLE));
-    scratchModeButton->setOnClickListener(
-        [this, virtualControllerConfig, spinScratch]() {
+                 TextView::CENTER, TextView::MIDDLE),
+        virtualControllerConfig.enabled ? ui_theme::cyan() : ui_theme::coral());
+    virtualControllerToggle->setOnClickListener(
+        [this, virtualControllerConfig]() {
           auto next = virtualControllerConfig;
-          next.scratchMode = spinScratch
-                                 ? input::VirtualControllerScratchMode::Flick
-                                 : input::VirtualControllerScratchMode::Spin;
+          next.enabled = !next.enabled;
           commitVirtualControllerSetting(next);
         });
-    virtualControllerBody->addView(scratchModeButton);
-    const bool playerTwo = virtualControllerConfig.player ==
-                           input::VirtualControllerPlayer::Player2;
-    auto *playerButton = makeControlButton(
-        std::min(bodyWidth, metrics.actionButtonWidth),
-        metrics.actionButtonHeight,
-        makeText(playerTwo ? "Player: 2P" : "Player: 1P",
-                 metrics.bodyTextSize + 1, ui_theme::textPrimary(),
-                 TextView::CENTER, TextView::MIDDLE));
-    playerButton->setOnClickListener(
-        [this, virtualControllerConfig, playerTwo]() {
-          auto next = virtualControllerConfig;
-          next.player = playerTwo ? input::VirtualControllerPlayer::Player1
-                                  : input::VirtualControllerPlayer::Player2;
-          commitVirtualControllerSetting(next);
-        });
-    virtualControllerBody->addView(playerButton);
-    auto *editButton = makeControlButton(
-        std::min(bodyWidth, metrics.actionButtonWidth),
-        metrics.actionButtonHeight,
-        makeText("Edit Layout", metrics.bodyTextSize + 1,
-                 ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
-    editButton->setOnClickListener([this]() {
-      inputVirtualControllerEditorVisible = true;
-      requestInputViewRebuild();
-    });
-    virtualControllerBody->addView(editButton);
+    virtualControllerBody->addView(virtualControllerToggle);
+    if (virtualControllerConfig.enabled) {
+      const bool spinScratch = virtualControllerConfig.scratchMode ==
+                               input::VirtualControllerScratchMode::Spin;
+      auto *scratchModeButton = makeControlButton(
+          std::min(bodyWidth, metrics.actionButtonWidth),
+          metrics.actionButtonHeight,
+          makeText(spinScratch ? "Scratch: Spin Mode" : "Scratch: Flick Mode",
+                   metrics.bodyTextSize + 1, ui_theme::textPrimary(),
+                   TextView::CENTER, TextView::MIDDLE));
+      scratchModeButton->setOnClickListener(
+          [this, virtualControllerConfig, spinScratch]() {
+            auto next = virtualControllerConfig;
+            next.scratchMode = spinScratch
+                                   ? input::VirtualControllerScratchMode::Flick
+                                   : input::VirtualControllerScratchMode::Spin;
+            commitVirtualControllerSetting(next);
+          });
+      virtualControllerBody->addView(scratchModeButton);
+      const bool playerTwo = virtualControllerConfig.player ==
+                             input::VirtualControllerPlayer::Player2;
+      auto *playerButton = makeControlButton(
+          std::min(bodyWidth, metrics.actionButtonWidth),
+          metrics.actionButtonHeight,
+          makeText(playerTwo ? "Player: 2P" : "Player: 1P",
+                   metrics.bodyTextSize + 1, ui_theme::textPrimary(),
+                   TextView::CENTER, TextView::MIDDLE));
+      playerButton->setOnClickListener(
+          [this, virtualControllerConfig, playerTwo]() {
+            auto next = virtualControllerConfig;
+            next.player = playerTwo ? input::VirtualControllerPlayer::Player1
+                                    : input::VirtualControllerPlayer::Player2;
+            commitVirtualControllerSetting(next);
+          });
+      virtualControllerBody->addView(playerButton);
+      auto *editButton =
+          makeControlButton(std::min(bodyWidth, metrics.actionButtonWidth),
+                            metrics.actionButtonHeight,
+                            makeText("Edit Layout", metrics.bodyTextSize + 1,
+                                     ui_theme::textPrimary(), TextView::CENTER,
+                                     TextView::MIDDLE));
+      editButton->setOnClickListener([this]() {
+        inputVirtualControllerEditorVisible = true;
+        requestInputViewRebuild();
+      });
+      virtualControllerBody->addView(editButton);
+    }
+    virtualControllerBody->addView(makeWrappedText(
+        inputVirtualControllerSettingsError.empty()
+            ? ""
+            : "Not saved: " + inputVirtualControllerSettingsError,
+        metrics.smallTextSize, ui_theme::coral()));
+    cards->addView(makeCard(
+        metrics, "Virtual Controller", "", virtualControllerBody,
+        virtualControllerConfig.enabled ? (metrics.compact ? 340 : 300)
+                                        : (metrics.compact ? 220 : 200),
+        metrics.cardsWidth));
   }
-  virtualControllerBody->addView(
-      makeWrappedText(inputVirtualControllerSettingsError.empty()
-                          ? ""
-                          : "Not saved: " + inputVirtualControllerSettingsError,
-                      metrics.smallTextSize, ui_theme::coral()));
-  cards->addView(
-      makeCard(metrics, "Virtual Controller", "", virtualControllerBody,
-               virtualControllerConfig.enabled ? (metrics.compact ? 340 : 300)
-                                               : (metrics.compact ? 220 : 200),
-               metrics.cardsWidth));
 
   const bool showGyroscopeSettings =
       shouldShowGyroscopeSettingsCard(inputSelectedDeviceId);
@@ -1033,7 +1037,8 @@ void SettingsScene::buildInputConflictOverlay(const LayoutMetrics &metrics) {
 void SettingsScene::buildInputVirtualControllerEditorOverlay(
     const LayoutMetrics &metrics) {
   if (activeTab != SettingsTab::Input || !inputVirtualControllerEditorVisible ||
-      !context.inputProfile.virtualController.enabled) {
+      !context.inputProfile.virtualController.enabled ||
+      !gameplay::virtualControllerTouchInputSupported()) {
     return;
   }
 

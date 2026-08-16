@@ -5189,18 +5189,22 @@ void GamePlayScene::renderScene() {
       presentation->render(renderContext);
   if (!options.autoPlay && chart != nullptr) {
     float spinScratchRotationDegrees = 0.0F;
+    bool virtualControllerReady = false;
     if (realtimeGameplaySession != nullptr) {
       std::lock_guard lock(realtimeGameplaySession->touchRouterMutex);
       if (realtimeGameplaySession->touchRouter != nullptr) {
         spinScratchRotationDegrees =
             realtimeGameplaySession->touchRouter->spinScratchRotationDegrees();
+        virtualControllerReady = true;
       }
     }
-    renderVirtualControllerOverlay(currentVirtualControllerLayout(
-        context.inputProfile.virtualController, chart->Meta.KeyMode,
-        realtimeTouchUiTransform()),
-                                   spinScratchRotationDegrees, lanePressed,
-                                   startButtonPressed, selectButtonPressed);
+    if (virtualControllerReady) {
+      renderVirtualControllerOverlay(currentVirtualControllerLayout(
+          context.inputProfile.virtualController, chart->Meta.KeyMode,
+          realtimeTouchUiTransform()),
+                                     spinScratchRotationDegrees, lanePressed,
+                                     startButtonPressed, selectButtonPressed);
+    }
   }
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   if (!realtimeGameplayAuthorityActive() && !options.autoPlay &&

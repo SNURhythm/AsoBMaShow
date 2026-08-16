@@ -2,11 +2,20 @@
 
 #include "RealtimeTouchInputRouter.h"
 #include "../../input/VirtualControllerConfig.h"
+#include "../../targets.h"
 
 #include <optional>
 #include <vector>
 
 namespace gameplay {
+
+[[nodiscard]] constexpr bool virtualControllerTouchInputSupported() noexcept {
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  return true;
+#else
+  return false;
+#endif
+}
 
 struct VirtualControllerCanvas {
   float x = 0.0F;

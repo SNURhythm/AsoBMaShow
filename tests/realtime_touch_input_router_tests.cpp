@@ -2308,6 +2308,16 @@ void testVirtualControllerLayoutRoutesKeysAndSystemControls() {
           "drag mode changes between Start and Select instead of conflating their shared lane sentinel");
 }
 
+void testVirtualControllerAvailabilityMatchesTouchRouterPlatform() {
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  require(gameplay::virtualControllerTouchInputSupported(),
+          "the virtual controller is available where the realtime touch router is installed");
+#else
+  require(!gameplay::virtualControllerTouchInputSupported(),
+          "the virtual controller is unavailable where no realtime touch router is installed");
+#endif
+}
+
 void testVirtualControllerFlickOnePlayerUpwardIsCounterClockwise() {
   input::VirtualControllerConfig config;
   config.enabled = true;
@@ -2408,6 +2418,7 @@ int main() {
   testUnpublishedNativeCancelIsSynthesizedDuringRecovery();
   testFailedCancelExpiryRequestsRecovery();
   testVirtualControllerLayoutRoutesKeysAndSystemControls();
+  testVirtualControllerAvailabilityMatchesTouchRouterPlatform();
   testVirtualControllerFlickOnePlayerUpwardIsCounterClockwise();
   return 0;
 }
