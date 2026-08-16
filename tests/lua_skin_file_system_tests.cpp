@@ -7,6 +7,7 @@
 #include "skin/package/SkinTreeSnapshotter.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -15,6 +16,7 @@
 #include <iostream>
 #include <limits>
 #include <optional>
+#include <sstream>
 #include <span>
 #include <string>
 #include <string_view>
@@ -87,6 +89,13 @@ std::span<const std::byte> bytesOf(std::string_view value) {
 
 std::string bytesToString(std::span<const std::byte> value) {
   return {reinterpret_cast<const char *>(value.data()), value.size()};
+}
+
+void testShortStreamReadIsRejected() {
+  std::istringstream input("abc");
+  std::array<std::byte, 4> destination{};
+  expect(!lua_skin_file_system_detail::readExact(input, destination),
+         "a shorter stream read is rejected instead of preserving a fabricated tail");
 }
 
 SkinStorageRoots rootsBelow(const fs::path &root) {
@@ -406,6 +415,7 @@ void testLinkedVisibleSkinChildCannotEscapeLuaIoBoundary() {
 } // namespace
 
 int main() {
+  testShortStreamReadIsRejected();
   testBeatorajaDirectSkinDirectorySemantics();
   testReadOnlyFilesystemRejectsDataWrites();
   testCompatibilityFilesystemLiftsOnlyProtectiveWriteGuard();

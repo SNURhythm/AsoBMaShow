@@ -685,6 +685,42 @@ assert(tostring(message):find("module path expansion exceeds Lua runtime storage
   lua_close(state);
 }
 
+void testLuaHostBoundsModuleSearchTemplateIterations() {
+  auto fileSystem = fixture().createFileSystem("shape.luaskin");
+  if (!fileSystem) {
+    expect(false, "module path iteration fixture creates a filesystem");
+    return;
+  }
+  lua_State *state = luaL_newstate();
+  if (state == nullptr) {
+    expect(false, "module path iteration fixture creates a Lua state");
+    return;
+  }
+  luaL_openlibs(state);
+  {
+    auto modules = LuaSkinHostModules::create(
+        state, {.fileSystem = fileSystem.get(),
+                .maximumSourceBytes = 1024,
+                .maximumModuleSearchTemplates = 2});
+    expect(modules.modules != nullptr,
+           "module path iteration fixture installs the Lua host");
+    if (modules.modules) {
+      const int status = luaL_dostring(state, R"lua(
+package.path = "?.lua;?.lua;?.lua"
+local ok, message = pcall(require, "missing")
+assert(not ok)
+assert(tostring(message):find("module path search exceeds Lua runtime storage budget", 1, true))
+)lua");
+      expect(status == 0,
+             "require bounds repeated missing module templates before host I/O grows unbounded");
+      if (status != 0) {
+        lua_pop(state, 1);
+      }
+    }
+  }
+  lua_close(state);
+}
+
 void testLuaHostCapsLineReadsBeforeGrowingHostStrings() {
   auto fileSystem = fixture().createFileSystem("shape.luaskin");
   if (!fileSystem) {
@@ -763,6 +799,7 @@ int main() {
   testIoReadClampsHugeRequestedCountToAvailableBytes();
   testIoOpenReadsUtf8NamedSkinFiles();
   testLuaHostCapsModulePathExpansionBeforeAllocatingCandidate();
+  testLuaHostBoundsModuleSearchTemplateIterations();
   testLuaHostCapsLineReadsBeforeGrowingHostStrings();
   testLuaSeekArithmeticClampsOrRejectsWithoutOverflow();
   testLuaHostPhysicalPathsPreserveUtf8Bytes();

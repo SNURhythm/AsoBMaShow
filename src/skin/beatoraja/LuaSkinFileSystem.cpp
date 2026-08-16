@@ -22,6 +22,21 @@
 #endif
 
 namespace skin {
+
+namespace lua_skin_file_system_detail {
+
+bool readExact(std::istream &input, std::span<std::byte> destination) {
+  if (destination.empty()) {
+    return true;
+  }
+  input.read(reinterpret_cast<char *>(destination.data()),
+             static_cast<std::streamsize>(destination.size()));
+  return input.gcount() == static_cast<std::streamsize>(destination.size()) &&
+         !input.bad();
+}
+
+} // namespace lua_skin_file_system_detail
+
 namespace {
 
 namespace fs = std::filesystem;
@@ -424,11 +439,7 @@ HostReadResult readDirectPath(const fs::path &path,
   if (!input) {
     return {.kind = HostEntryKind::IoError};
   }
-  if (!result.bytes.empty()) {
-    input.read(reinterpret_cast<char *>(result.bytes.data()),
-               static_cast<std::streamsize>(result.bytes.size()));
-  }
-  if (!input && !input.eof()) {
+  if (!lua_skin_file_system_detail::readExact(input, result.bytes)) {
     return {.kind = HostEntryKind::IoError};
   }
   return result;

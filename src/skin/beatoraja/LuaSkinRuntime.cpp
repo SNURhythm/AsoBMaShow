@@ -1213,6 +1213,10 @@ LuaRuntimeCreateResult LuaSkinRuntime::create(LuaSkinRuntimeOptions options) {
       state,
       {.fileSystem = impl->fileSystem.get(),
        .maximumSourceBytes = loadBudget.maxAllocatorBytes,
+       .maximumModuleSearchTemplates =
+           options.safetyPolicy.enforces(SkinSafetyGuard::LuaResourceBudget)
+               ? LuaRuntimePolicy::maxModuleSearchTemplates
+               : std::numeric_limits<std::size_t>::max(),
        .allowProcessGlobalOperations = !options.safetyPolicy.enforces(
            SkinSafetyGuard::ProcessGlobalMutation),
        .coroutineContext = shared.get(),

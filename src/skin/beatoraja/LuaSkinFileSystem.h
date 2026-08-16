@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstdint>
+#include <iosfwd>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -17,6 +18,13 @@
 #include <vector>
 
 namespace skin {
+
+namespace lua_skin_file_system_detail {
+
+[[nodiscard]] bool readExact(std::istream &input,
+                             std::span<std::byte> destination);
+
+} // namespace lua_skin_file_system_detail
 
 enum class SkinFileUse : std::uint8_t {
   LuaEntry,

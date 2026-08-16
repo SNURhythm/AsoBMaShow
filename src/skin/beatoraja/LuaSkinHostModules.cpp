@@ -230,6 +230,8 @@ struct LuaSkinHostModulesImpl {
   lua_State *state = nullptr;
   LuaSkinFileSystem *fileSystem = nullptr;
   std::size_t maximumSourceBytes = std::numeric_limits<std::size_t>::max();
+  std::size_t maximumModuleSearchTemplates =
+      std::numeric_limits<std::size_t>::max();
   bool allowProcessGlobalOperations = false;
   ISkinFrameState *frameState = nullptr;
   void *coroutineContext = nullptr;
@@ -1449,7 +1451,14 @@ int moduleLoader(lua_State *state) {
 
   std::vector<std::string> searchedCandidates;
   std::size_t start = 0;
+  std::size_t searchedTemplates = 0;
   while (start <= templates.size()) {
+    if (searchedTemplates == impl->maximumModuleSearchTemplates) {
+      lua_pushliteral(
+          state, "\n\tLua module path search exceeds Lua runtime storage budget");
+      return 1;
+    }
+    ++searchedTemplates;
     const std::size_t end = templates.find(';', start);
     const std::string_view pattern = templates.substr(
         start,
@@ -2021,6 +2030,7 @@ LuaSkinHostModules::create(lua_State *state,
   impl->state = state;
   impl->fileSystem = options.fileSystem;
   impl->maximumSourceBytes = options.maximumSourceBytes;
+  impl->maximumModuleSearchTemplates = options.maximumModuleSearchTemplates;
   impl->allowProcessGlobalOperations = options.allowProcessGlobalOperations;
   impl->coroutineContext = options.coroutineContext;
   impl->coroutineCreated = options.coroutineCreated;

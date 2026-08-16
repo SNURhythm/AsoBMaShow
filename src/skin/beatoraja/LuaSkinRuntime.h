@@ -56,6 +56,7 @@ struct LuaCallbackBudget {
 
 struct LuaRuntimePolicy {
   inline static constexpr std::size_t maxBindingPathDepth = 64;
+  inline static constexpr std::size_t maxModuleSearchTemplates = 1024;
   inline static constexpr LuaLoadBudget catalogLoad{
       .maxAllocatorBytes = 32ULL * 1024ULL * 1024ULL,
       .maxInstructions = 2'000'000,
