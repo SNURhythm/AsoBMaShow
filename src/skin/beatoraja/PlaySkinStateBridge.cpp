@@ -540,8 +540,10 @@ void PlaySkinStateBridge::updatePinnedPlayTimers() {
   // already carries that active truth for every gameplay surface. Aggregate
   // it once per frame, then use LaneProperty's source offset table above.
   std::array<bool, 10> playerOneLongHeld{};
-  if (snapshot->notes.size() == context_.chartModel.notes.size()) {
-    for (std::size_t index = 0; index < snapshot->notes.size(); ++index) {
+  const std::span<const NotePresentationState> noteStates =
+      snapshot->noteStates();
+  if (noteStates.size() == context_.chartModel.notes.size()) {
+    for (std::size_t index = 0; index < noteStates.size(); ++index) {
       const auto &note = context_.chartModel.notes[index];
       if (note.kind != ChartVisualNoteKind::LongHead &&
           note.kind != ChartVisualNoteKind::LongTail) {
@@ -551,7 +553,7 @@ void PlaySkinStateBridge::updatePinnedPlayTimers() {
           beatorajaPlayerOneSkinLaneOffset(context_.chartModel, note.lane);
       if (offset && *offset >= 0 &&
           static_cast<std::size_t>(*offset) < playerOneLongHeld.size() &&
-          snapshot->notes[index].longActive) {
+          noteStates[index].longActive) {
         playerOneLongHeld[static_cast<std::size_t>(*offset)] = true;
       }
     }

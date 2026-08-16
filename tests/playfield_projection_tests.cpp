@@ -350,6 +350,77 @@ bool testLaneTraversalCullsEverySkinPlayareaDto() {
   return true;
 }
 
+bool testReplayProjectionDoesNotRescanOffscreenChartRowsEachFrame() {
+  // Replay watch and video export both call this same projection boundary.
+  // LaneRenderer advances a retained cursor and stops at the upper lane edge;
+  // an oversized gimmick chart must not turn that bounded walk back into a
+  // whole-chart pass for every encoded frame.
+  constexpr std::size_t kTimelineCount = 75'000;
+  constexpr int kFrames = 40;
+  PlayfieldChartVisualModel model;
+  model.laneOrder = {0};
+  model.timelines.reserve(kTimelineCount);
+  model.notes.reserve(kTimelineCount);
+  PlayfieldVisualState state;
+  state.notes.reserve(kTimelineCount);
+  for (std::size_t index = 0; index < kTimelineCount; ++index) {
+    const auto id = static_cast<ChartVisualId>(index + 1U);
+    model.timelines.push_back(
+        {.id = id,
+         .timeMicros = static_cast<long long>(index) * 1'000,
+         .beat = static_cast<double>(index) * 0.25,
+         .scrollPosition = static_cast<double>(index) * 0.25,
+         .retainedForProjection = true,
+         .authoredOrdinal = static_cast<std::uint32_t>(index),
+         .retainedOrdinal = static_cast<std::uint32_t>(index)});
+    model.notes.push_back(
+        {.id = id,
+         .timelineId = id,
+         .pairId = index % 2U == 0U ? id + 1U : id - 1U,
+         .lane = 0,
+         .kind = index % 2U == 0U ? ChartVisualNoteKind::LongHead
+                                  : ChartVisualNoteKind::LongTail,
+         .longNoteMode = ChartLongNoteMode::LN,
+         .authoredOrdinal = static_cast<std::uint32_t>(index)});
+    state.notes.push_back({.id = id});
+  }
+
+  const PlayfieldProjectionRequest request{
+      .builtInTraversal = BuiltInRendererTraversal{.lowerBound = -1.0F,
+                                                    .judgeY = 0.0F,
+                                                    .upperBound = 1.0F,
+                                                    .rxhs = 1.0F,
+                                                    .hispeed = 1.0F,
+                                                    .startRetainedOrdinal =
+                                                        70'500}};
+  PlayfieldProjection projection;
+  // Build immutable lookup tables before timing the frame loop.
+  (void)projection.project(model, state, request);
+
+  for (int frame = 0; frame < kFrames; ++frame) {
+    state.clock = {.serial = static_cast<std::uint64_t>(frame + 1),
+                   .visualTimeMicros = 70'500'000};
+    const auto result = projection.project(model, state, request);
+    if (result.builtInPlan.traversedTimelineOrdinals.size() > 6U) {
+      std::cerr << "oversized replay chart escaped the bounded lane walk\n";
+      return false;
+    }
+    if (result.builtInPlan.nextStartRetainedOrdinal < 70'500U) {
+      std::cerr << "skin-only projection must retain the shared traversal "
+                   "cursor for the next frame\n";
+      return false;
+    }
+  }
+  const auto &work = projection.lastWorkStatsForTesting();
+  if (work.timelineRowsExamined > 18U || work.noteDescriptorsExamined > 12U ||
+      work.longHeadsExamined > 3U) {
+    std::cerr << "replay projection rescanned offscreen chart rows for every "
+                 "frame\n";
+    return false;
+  }
+  return true;
+}
+
 } // namespace
 
 int main() {
@@ -368,6 +439,9 @@ int main() {
     return EXIT_FAILURE;
   }
   if (!testLaneTraversalCullsEverySkinPlayareaDto()) {
+    return EXIT_FAILURE;
+  }
+  if (!testReplayProjectionDoesNotRescanOffscreenChartRowsEachFrame()) {
     return EXIT_FAILURE;
   }
   PlayfieldChartVisualModel model;

@@ -211,6 +211,14 @@ struct PlayfieldSkinProjectionViews {
   std::vector<skin::SkinProjectedLineView> lines;
 };
 
+#if defined(ASOBMASHOW_PLAYFIELD_PROJECTION_TESTING)
+struct PlayfieldProjectionWorkStats {
+  std::size_t timelineRowsExamined = 0;
+  std::size_t noteDescriptorsExamined = 0;
+  std::size_t longHeadsExamined = 0;
+};
+#endif
+
 class PlayfieldProjection final {
 public:
   [[nodiscard]] PlayfieldProjectionResult
@@ -218,11 +226,20 @@ public:
           const PlayfieldProjectionRequest &);
   void reset() noexcept;
 
+#if defined(ASOBMASHOW_PLAYFIELD_PROJECTION_TESTING)
+  [[nodiscard]] const PlayfieldProjectionWorkStats &
+  lastWorkStatsForTesting() const noexcept {
+    return lastWorkStats_;
+  }
+#endif
+
 private:
   struct CachedModelIndex {
     const PlayfieldChartVisualModel *model = nullptr;
     std::unordered_map<ChartVisualId, const ChartVisualTimeline *>
         timelinesById;
+    std::unordered_map<ChartVisualId, const ChartVisualTimeline *>
+        previousTimelinesById;
     std::unordered_map<std::uint32_t, const ChartVisualTimeline *>
         retainedTimelinesByOrdinal;
     std::unordered_map<ChartVisualId, const ChartVisualNote *> notesById;
@@ -232,7 +249,6 @@ private:
     std::vector<const ChartVisualTimeline *> orderedTimelines;
     std::vector<const ChartVisualTimeline *> retainedTimelines;
     std::vector<const ChartVisualNote *> orderedNotes;
-    std::vector<const ChartVisualNote *> playableLongHeads;
     std::vector<gameplay_scroll_geometry::ScrollPositionTimeline>
         scrollTimelines;
   };
@@ -240,6 +256,9 @@ private:
   void rebuildIndex(const PlayfieldChartVisualModel &);
 
   CachedModelIndex index_;
+#if defined(ASOBMASHOW_PLAYFIELD_PROJECTION_TESTING)
+  PlayfieldProjectionWorkStats lastWorkStats_;
+#endif
 };
 
 [[nodiscard]] double scrollPositionAtTime(const PlayfieldChartVisualModel &,

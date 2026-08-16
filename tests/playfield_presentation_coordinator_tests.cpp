@@ -37,6 +37,7 @@ struct PresentationStats {
   int configureCalls = 0;
   int prepareCalls = 0;
   int renderCalls = 0;
+  int cursorAdvanceCalls = 0;
   int lanePressedCalls = 0;
   int laneReleasedCalls = 0;
   int judgeCalls = 0;
@@ -49,6 +50,7 @@ struct PresentationStats {
   int viewportCalls = 0;
   int viewportGeometryCalls = 0;
   std::uint64_t preparedFrameSerial = 0;
+  std::uint32_t nextRetainedTimelineOrdinal = 0;
   std::uint64_t receivedBgaSequence = 0;
   std::uint64_t layoutRevision = 7;
   std::uint64_t hitRevision = 11;
@@ -110,6 +112,11 @@ public:
     result.submittedMode = PresentationMode::BuiltIn;
     result.bgaCompositeMode = GameplayBgaCompositeMode::FullscreenBuiltIn;
     return result;
+  }
+  void advanceRetainedTimelineCursor(
+      std::uint32_t nextRetainedTimelineOrdinal) noexcept override {
+    ++stats_->cursorAdvanceCalls;
+    stats_->nextRetainedTimelineOrdinal = nextRetainedTimelineOrdinal;
   }
   gameplay::RealtimeTouchLayout touchLayout() const override {
     return {.revision = stats_->layoutRevision, .laneCount = 1, .keyMode = 7};
@@ -405,14 +412,19 @@ void testSkinSuccessSubmitsNoBuiltInWork() {
       .bga = bga,
   });
   PlayfieldProjectionResult projection;
+  projection.builtInTraversal = BuiltInRendererTraversal{};
+  projection.builtInPlan.nextStartRetainedOrdinal = 73;
   auto state = frame(42);
   expect(coordinator.prepareFrame(state, projection) ==
              PresentationFrameOutcome::Ready,
          "skin prepare is ready");
   RenderContext render;
   const auto result = coordinator.render(render);
-  expect(builtIn->prepareCalls == 0 && builtIn->renderCalls == 0,
-         "successful skin frame does not prepare unused built-in gameplay");
+  expect(builtIn->prepareCalls == 0 && builtIn->renderCalls == 0 &&
+             builtIn->cursorAdvanceCalls == 1 &&
+             builtIn->nextRetainedTimelineOrdinal == 73,
+         "successful skin frame advances the shared renderer cursor without "
+         "preparing or rendering built-in gameplay");
   expect(skinStats->preparedState == &state &&
              skinStats->preparedProjection == &projection,
          "selected skin consumes the captured state and projection snapshot");

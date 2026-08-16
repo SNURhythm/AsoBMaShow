@@ -91,14 +91,16 @@ void PlayfieldVisualStateStore::resetModel(
     laneIndices_.emplace(laneOrder_[index], index);
   }
 
-  notes_.clear();
-  notes_.reserve(model.notes.size());
-  noteIndices_.clear();
-  noteIndices_.reserve(model.notes.size());
+  notes_ = std::make_shared<std::vector<NotePresentationState>>();
+  notes_->reserve(model.notes.size());
+  auto noteIndices =
+      std::make_shared<std::unordered_map<ChartVisualId, std::size_t>>();
+  noteIndices->reserve(model.notes.size());
   for (const auto &note : model.notes) {
-    noteIndices_.emplace(note.id, notes_.size());
-    notes_.push_back({.id = note.id});
+    noteIndices->emplace(note.id, notes_->size());
+    notes_->push_back({.id = note.id});
   }
+  noteIndices_ = std::move(noteIndices);
   replayTouchSamples_.clear();
   replayTouchCursor_ = 0;
   lastReplayTouchTimeMicros_ = -1;
@@ -126,11 +128,15 @@ void PlayfieldVisualStateStore::applyAuthorityUpdate(
 }
 
 void PlayfieldVisualStateStore::setNoteState(NotePresentationState state) {
-  const auto it = noteIndices_.find(state.id);
-  if (it == noteIndices_.end()) {
+  if (!noteIndices_) {
     return;
   }
-  notes_[it->second] = state;
+  const auto it = noteIndices_->find(state.id);
+  if (it == noteIndices_->end()) {
+    return;
+  }
+  detachNoteSnapshot();
+  (*notes_)[it->second] = state;
 }
 
 void PlayfieldVisualStateStore::setNoteStates(
@@ -269,7 +275,8 @@ PlayfieldVisualStateStore::capture(PlayfieldFrameClock clock,
       .configuration = configuration_,
       .authority = authority_,
       .lanes = lanes_,
-      .notes = includeNotes ? notes_ : std::vector<NotePresentationState>{},
+      .notes = includeNotes && notes_ ? *notes_
+                                      : std::vector<NotePresentationState>{},
       .touches = touches_,
       .lastJudge = lastJudge_,
       .lastJudgeVisualMicros = lastJudgeVisualMicros_,
@@ -280,6 +287,24 @@ PlayfieldVisualStateStore::capture(PlayfieldFrameClock clock,
       .sceneStartMicros = sceneStartMicros_,
       .playStartMicros = playStartMicros_,
   };
+}
+
+PlayfieldVisualState PlayfieldVisualStateStore::captureForPresentation(
+    PlayfieldFrameClock clock) const {
+  PlayfieldVisualState result = capture(clock, false);
+  result.noteSnapshot = notes_;
+  result.noteSnapshotIndices = noteIndices_;
+  return result;
+}
+
+void PlayfieldVisualStateStore::detachNoteSnapshot() {
+  if (!notes_) {
+    notes_ = std::make_shared<std::vector<NotePresentationState>>();
+    return;
+  }
+  if (notes_.use_count() != 1) {
+    notes_ = std::make_shared<std::vector<NotePresentationState>>(*notes_);
+  }
 }
 
 void PlayfieldVisualStateStore::onLanePressed(int lane, JudgeResult judge,

@@ -11,7 +11,9 @@
 #include <cstdint>
 #include <limits>
 #include <map>
+#include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -271,6 +273,12 @@ struct PlayfieldVisualState {
   PlayfieldAuthorityUpdate authority;
   std::vector<LanePresentationState> lanes;
   std::vector<NotePresentationState> notes;
+  // Presentation frames normally retain the state-store snapshot by shared
+  // ownership. `notes` remains the owning value form for callers that need a
+  // standalone DTO (tests, diagnostics, and explicit capture()).
+  std::shared_ptr<const std::vector<NotePresentationState>> noteSnapshot;
+  std::shared_ptr<const std::unordered_map<ChartVisualId, std::size_t>>
+      noteSnapshotIndices;
   std::vector<PresentationTouchPoint> touches;
   JudgeResult lastJudge = JudgeResult(None, 0);
   long long lastJudgeVisualMicros = kPlayfieldTimestampOff;
@@ -280,6 +288,32 @@ struct PlayfieldVisualState {
   int fastSlowMicros = 0;
   long long sceneStartMicros = kPlayfieldTimestampOff;
   long long playStartMicros = kPlayfieldTimestampOff;
+
+  [[nodiscard]] std::span<const NotePresentationState>
+  noteStates() const noexcept {
+    if (noteSnapshot) {
+      return *noteSnapshot;
+    }
+    return notes;
+  }
+
+  [[nodiscard]] const NotePresentationState *
+  noteState(ChartVisualId id) const noexcept {
+    if (noteSnapshot && noteSnapshotIndices) {
+      const auto found = noteSnapshotIndices->find(id);
+      if (found == noteSnapshotIndices->end() ||
+          found->second >= noteSnapshot->size()) {
+        return nullptr;
+      }
+      return &(*noteSnapshot)[found->second];
+    }
+    for (const auto &state : notes) {
+      if (state.id == id) {
+        return &state;
+      }
+    }
+    return nullptr;
+  }
 };
 
 // Skin destinations and timers share TimerManager's MainState clock. The
@@ -329,6 +363,10 @@ public:
   void clearLiveTouchPoints();
   [[nodiscard]] PlayfieldVisualState
   capture(PlayfieldFrameClock clock, bool includeNotes = true) const;
+  // Rendering consumes this value before the next gameplay update. It keeps a
+  // stable copy-on-write note snapshot, avoiding a chart-sized copy per frame.
+  [[nodiscard]] PlayfieldVisualState
+  captureForPresentation(PlayfieldFrameClock clock) const;
 
   void onLanePressed(int lane, JudgeResult judge,
                      long long eventMicros) override;
@@ -349,14 +387,16 @@ private:
                                    long long currentTimeMicros);
   void advanceReplayTouches(long long replayTouchTimeMicros) const;
   void captureTouches(long long replayTouchTimeMicros) const;
+  void detachNoteSnapshot();
 
   std::vector<int> laneOrder_;
   std::unordered_map<int, std::size_t> laneIndices_;
   PlayfieldPresentationConfig configuration_;
   PlayfieldAuthorityUpdate authority_;
   std::vector<LanePresentationState> lanes_;
-  std::vector<NotePresentationState> notes_;
-  std::unordered_map<ChartVisualId, std::size_t> noteIndices_;
+  std::shared_ptr<std::vector<NotePresentationState>> notes_;
+  std::shared_ptr<const std::unordered_map<ChartVisualId, std::size_t>>
+      noteIndices_;
   std::vector<ReplayTouchSample> replayTouchSamples_;
   mutable std::size_t replayTouchCursor_ = 0;
   mutable long long lastReplayTouchTimeMicros_ = -1;

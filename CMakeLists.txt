@@ -4498,6 +4498,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_include_directories(playfield_projection_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(playfield_projection_tests PRIVATE cxx_std_23)
+    target_compile_definitions(playfield_projection_tests PRIVATE
+        ASOBMASHOW_PLAYFIELD_PROJECTION_TESTING=1
+    )
 
     if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS AND NOT IOS)
         add_executable(gameplay_skin_session_factory_tests

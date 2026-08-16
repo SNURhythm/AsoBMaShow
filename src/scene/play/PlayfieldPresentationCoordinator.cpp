@@ -164,6 +164,10 @@ PresentationFrameOutcome PlayfieldPresentationCoordinator::prepareFrame(
   PendingFrame pending;
   pending.frameSerial = state.clock.serial;
   pending.hadSkin = static_cast<bool>(skin_);
+  if (pending.hadSkin && projection.builtInTraversal) {
+    pending.nextRetainedTimelineOrdinal =
+        projection.builtInPlan.nextStartRetainedOrdinal;
+  }
   // Projection is captured before presentation. Start+scratch cover changes
   // would otherwise make optional skin overlays use the preceding frame's
   // cover edge. The immutable authority is the same source BMSRenderer uses
@@ -382,6 +386,10 @@ PlayfieldPresentationCoordinator::render(RenderContext &context) {
       cancelAndClearActiveTouches();
       skin_.reset();
       markTouchTargetChanged();
+    }
+    if (pending.nextRetainedTimelineOrdinal) {
+      builtIn_->advanceRetainedTimelineCursor(
+          *pending.nextRetainedTimelineOrdinal);
     }
     return skinResult;
   }

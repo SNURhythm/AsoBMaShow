@@ -47,6 +47,10 @@ public:
   [[nodiscard]] virtual PresentationFrameOutcome prepareFrame(
       const PlayfieldVisualState &state,
       const PlayfieldProjectionResult &projection) = 0;
+  // Selected skins use the same LaneRenderer timeline cursor as built-in
+  // gameplay, without preparing or drawing a duplicate built-in frame.
+  virtual void advanceRetainedTimelineCursor(
+      std::uint32_t nextRetainedTimelineOrdinal) noexcept {}
   [[nodiscard]] virtual PresentationFrameResult render(RenderContext &) = 0;
   [[nodiscard]] virtual gameplay::RealtimeTouchLayout touchLayout() const = 0;
   // Cheap stable identity for the currently published touch topology. Unlike

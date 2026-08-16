@@ -4602,7 +4602,7 @@ void GamePlayScene::capturePlayfieldVisualState(
     playfieldVisualStateStore->setNoteStates(std::move(noteStates));
   }
 
-  capturedPlayfieldVisualState = playfieldVisualStateStore->capture(
+  const PlayfieldFrameClock frameClock =
       {
           .serial = ++playfieldFrameSerial,
           .visualTimeMicros = visualTimeMicros,
@@ -4617,8 +4617,11 @@ void GamePlayScene::capturePlayfieldVisualState(
                                         !options.practiceMode,
                   .playtimeMillis = beatorajaPlaytimeMillis(chart, options),
               },
-      },
-      selectedSkinActive);
+      };
+  capturedPlayfieldVisualState =
+      selectedSkinActive
+          ? playfieldVisualStateStore->captureForPresentation(frameClock)
+          : playfieldVisualStateStore->capture(frameClock, false);
   if (selectedSkinActive) {
     capturedPlayfieldProjection = playfieldProjection.project(
         playfieldChartVisualModel, capturedPlayfieldVisualState,

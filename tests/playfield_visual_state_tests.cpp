@@ -754,6 +754,30 @@ void testTouchResetClearsLiveAndReplayState() {
           "model reset clears live and replay touch lifecycle state cleanly");
 }
 
+void testPresentationCaptureKeepsAnImmutableSharedNoteSnapshot() {
+  ChartFixture fixture;
+  const auto model = buildPlayfieldChartVisualModel(fixture.chart, 0);
+  PlayfieldVisualStateStore store(model);
+  const auto noteId = model.notes.front().id;
+  store.setNoteState({.id = noteId, .judged = true});
+
+  const auto before = store.captureForPresentation({.serial = 1});
+  require(before.notes.empty() && before.noteStates().size() == model.notes.size() &&
+              before.noteState(noteId) != nullptr &&
+              before.noteState(noteId)->judged,
+          "presentation capture exposes the complete note state without a "
+          "per-frame vector copy");
+
+  store.setNoteState({.id = noteId, .judged = false, .dead = true});
+  const auto after = store.captureForPresentation({.serial = 2});
+  require(before.noteState(noteId) != nullptr &&
+              before.noteState(noteId)->judged &&
+              after.noteState(noteId) != nullptr &&
+              !after.noteState(noteId)->judged && after.noteState(noteId)->dead,
+          "later note-state updates detach instead of mutating an already "
+          "prepared presentation frame");
+}
+
 } // namespace
 
 int main() {
@@ -773,5 +797,6 @@ int main() {
   testReplayTouchRewindRebuildsLifecycleState();
   testReleasedTouchesStayBoundedAcrossChangingFingerIds();
   testTouchResetClearsLiveAndReplayState();
+  testPresentationCaptureKeepsAnImmutableSharedNoteSnapshot();
   return 0;
 }

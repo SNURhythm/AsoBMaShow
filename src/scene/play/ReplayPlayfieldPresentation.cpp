@@ -150,7 +150,8 @@ ReplayPlayfieldPresentationCreateResult ReplayPlayfieldPresentation::create(
       creation.skinInput.initialState != nullptr
           ? creation.skinInput.initialState->clock
           : PlayfieldFrameClock{};
-  const PlayfieldVisualState initialState = state->capture(initialClock);
+  const PlayfieldVisualState initialState =
+      state->captureForPresentation(initialClock);
   auto projection = std::make_unique<PlayfieldProjection>();
   const PlayfieldProjectionResult initialProjection = projection->project(
       *model, initialState, initialProjectionRequest(creation.configuration,
@@ -548,7 +549,7 @@ PresentationFrameResult ReplayPlayfieldPresentation::renderFrame(
   builtIn_->refreshGeometry();
   state_->applyAuthorityUpdate(authority_);
   updateHcnVisualStates(clock.visualTimeMicros);
-  PlayfieldVisualState state = state_->capture(clock);
+  PlayfieldVisualState state = state_->captureForPresentation(clock);
   PlayfieldProjectionRequest effectiveRequest = request;
   effectiveRequest.bpmGuideEnabled =
       effectiveRequest.bpmGuideEnabled || configuration_.bpmGuideEnabled;

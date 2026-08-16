@@ -2344,6 +2344,13 @@ BuiltInRendererTraversal BMSRenderer::projectionTraversal() const {
   return builtInProjectionTraversal();
 }
 
+void BMSRenderer::advanceRetainedTimelineCursor(
+    std::uint32_t nextRetainedTimelineOrdinal) noexcept {
+  const std::size_t nextCursor = std::min<std::size_t>(
+      nextRetainedTimelineOrdinal, timelines.size());
+  state.currentTimelineIndex = std::max(state.currentTimelineIndex, nextCursor);
+}
+
 int BMSRenderer::effectiveVisibleTimeGreenNumber() const {
   const double bpm =
       currentBpm > 0.0 && std::isfinite(currentBpm)
@@ -2868,10 +2875,8 @@ PresentationFrameOutcome BMSRenderer::prepareFrame(
     // from the cursor captured before this call, so prepare warms the built-in
     // even if the coordinator subsequently chooses a skin for this frame.
     if (!projection.builtInPlan.traversedTimelineOrdinals.empty()) {
-      const std::size_t nextCursor = std::min<std::size_t>(
-          projection.builtInPlan.nextStartRetainedOrdinal, timelines.size());
-      state.currentTimelineIndex =
-          std::max(state.currentTimelineIndex, nextCursor);
+      advanceRetainedTimelineCursor(
+          projection.builtInPlan.nextStartRetainedOrdinal);
     }
 
     lastPreparedPresentationFrameSerial = frameSerial;

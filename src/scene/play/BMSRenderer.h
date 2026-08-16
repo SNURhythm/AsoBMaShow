@@ -531,6 +531,8 @@ public:
   [[nodiscard]] PresentationFrameOutcome prepareFrame(
       const PlayfieldVisualState &state,
       const PlayfieldProjectionResult &projection) override;
+  void advanceRetainedTimelineCursor(
+      std::uint32_t nextRetainedTimelineOrdinal) noexcept override;
   [[nodiscard]] PresentationFrameResult render(RenderContext &) override;
   [[nodiscard]] gameplay::RealtimeTouchLayout touchLayout() const override;
   [[nodiscard]] std::uint64_t

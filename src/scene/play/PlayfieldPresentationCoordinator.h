@@ -102,6 +102,7 @@ private:
     PresentationFrameOutcome skinPrepare =
         PresentationFrameOutcome::CriticalFailure;
     bool hadSkin = false;
+    std::optional<std::uint32_t> nextRetainedTimelineOrdinal;
     std::optional<PreparedGameplayBgaFrame> bga;
     PreparationFailure preparationFailure = PreparationFailure::None;
     // Constructed before any fallible skin work. Once evaluation begins,
