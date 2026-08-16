@@ -715,6 +715,7 @@
 				AndroidNatives.cpp,
 				CMakeLists.txt,
 				ChartScanWorkScheduler.md,
+				MsvcCliDiagnostics.cpp,
 				audio/CMakeLists.txt,
 				bms_search/CMakeLists.txt,
 				game/CMakeLists.txt,

@@ -147,7 +147,12 @@ int main() { return 0; }
         )
         self.assertEqual(
             sorted(
-                ["AndroidNatives.cpp", "ChartScanWorkScheduler.md", *cmake_files]
+                [
+                    "AndroidNatives.cpp",
+                    "ChartScanWorkScheduler.md",
+                    "MsvcCliDiagnostics.cpp",
+                    *cmake_files,
+                ]
             ),
             paths,
         )

@@ -69,8 +69,8 @@ jobs:
           test -x "$MINGW/bin/x86_64-w64-mingw32-g++.exe"
           python3 make.py clean
           python3 make.py
-          python3 ../scripts/verify_skin_shader_outputs.py --root .. --shader skin_quad --shader skin_yuvrgb --allow-other-shader-changes --require-backends metal,spirv,essl,dx11 --write-manifest ../tests/fixtures/beatoraja_skin/shaders/skin_shader_manifest.json
-          python3 ../scripts/verify_skin_shader_outputs.py --root .. --shader skin_quad --shader skin_yuvrgb --allow-other-shader-changes --require-backends metal,spirv,essl,dx11 --manifest ../tests/fixtures/beatoraja_skin/shaders/skin_shader_manifest.json
+          python3 ../scripts/verify_skin_shader_outputs.py --root .. --shader skin_quad --shader skin_yuvrgb --allow-other-shader-changes --require-backends metal,spirv,essl,dx11 --write-manifest tests/fixtures/beatoraja_skin/shaders/skin_shader_manifest.json
+          python3 ../scripts/verify_skin_shader_outputs.py --root .. --shader skin_quad --shader skin_yuvrgb --allow-other-shader-changes --require-backends metal,spirv,essl,dx11 --manifest tests/fixtures/beatoraja_skin/shaders/skin_shader_manifest.json
 
       - name: Commit generated shaders
         shell: bash

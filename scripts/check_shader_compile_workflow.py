@@ -58,7 +58,7 @@ workflow_required = {
         "--allow-other-shader-changes "
         "--require-backends metal,spirv,essl,dx11 "
         "--write-manifest "
-        "../tests/fixtures/beatoraja_skin/shaders/skin_shader_manifest.json"
+        "tests/fixtures/beatoraja_skin/shaders/skin_shader_manifest.json"
     ),
     "shader manifest read-only verification": (
         "python3 ../scripts/verify_skin_shader_outputs.py --root .. "
@@ -66,7 +66,7 @@ workflow_required = {
         "--allow-other-shader-changes "
         "--require-backends metal,spirv,essl,dx11 "
         "--manifest "
-        "../tests/fixtures/beatoraja_skin/shaders/skin_shader_manifest.json"
+        "tests/fixtures/beatoraja_skin/shaders/skin_shader_manifest.json"
     ),
     "unexpected shader-tree change rejection": "verify_skin_shader_outputs.py",
     "Git for Windows commit shell": "- name: Commit generated shaders\n        shell: bash",
