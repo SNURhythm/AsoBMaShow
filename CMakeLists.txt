@@ -3101,6 +3101,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(chart_library_scanner_tests PRIVATE cxx_std_23)
+    target_compile_definitions(chart_library_scanner_tests PRIVATE
+        ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS=1
+    )
     if(TARGET SDL2::SDL2)
         target_link_libraries(chart_library_scanner_tests PRIVATE SDL2::SDL2)
     elseif(TARGET SDL2::SDL2-static)
@@ -6110,22 +6113,33 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     function(asobmashow_register_test target_name)
         set(test_name ${target_name})
+        set(test_command_arguments)
         if(ARGC GREATER 1)
             set(test_name ${ARGV1})
         endif()
-        target_compile_definitions(${target_name} PRIVATE SDL_MAIN_HANDLED)
-        # Many legacy fixtures use assert() for setup as well as validation.
-        # Release's NDEBUG would otherwise remove database/resource setup calls
-        # and make the test binaries exercise a different program.
-        if(MSVC)
-            target_compile_options(${target_name} PRIVATE /UNDEBUG)
-            target_sources(${target_name} PRIVATE
-                tests/support/MsvcTestDiagnostics.cpp
-            )
-        else()
-            target_compile_options(${target_name} PRIVATE -UNDEBUG)
+        if(ARGC GREATER 2)
+            list(SUBLIST ARGV 2 -1 test_command_arguments)
         endif()
-        add_test(NAME ${test_name} COMMAND $<TARGET_FILE:${target_name}>)
+
+        get_property(test_target_prepared TARGET ${target_name}
+            PROPERTY ASOBMASHOW_TEST_TARGET_PREPARED)
+        if(NOT test_target_prepared)
+            target_compile_definitions(${target_name} PRIVATE SDL_MAIN_HANDLED)
+            # Many legacy fixtures use assert() for setup as well as validation.
+            # Release's NDEBUG would otherwise remove database/resource setup calls
+            # and make the test binaries exercise a different program.
+            if(MSVC)
+                target_compile_options(${target_name} PRIVATE /UNDEBUG)
+                target_sources(${target_name} PRIVATE
+                    tests/support/MsvcTestDiagnostics.cpp
+                )
+            else()
+                target_compile_options(${target_name} PRIVATE -UNDEBUG)
+            endif()
+            set_property(TARGET ${target_name}
+                PROPERTY ASOBMASHOW_TEST_TARGET_PREPARED TRUE)
+        endif()
+        add_test(NAME ${test_name} COMMAND $<TARGET_FILE:${target_name}> ${test_command_arguments})
         set_tests_properties(${test_name} PROPERTIES
             WORKING_DIRECTORY $<TARGET_FILE_DIR:${target_name}>
         )
@@ -6473,10 +6487,19 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(result_image_exporter_partial_tests)
     asobmashow_register_test(chart_practice_range_tests)
     asobmashow_register_test(practice_preset_store_tests)
-    asobmashow_register_test(player_profile_manager_tests foundation_profile_manager)
+    asobmashow_register_test(player_profile_manager_tests foundation_profile_manager_bootstrap --shard bootstrap)
+    asobmashow_register_test(player_profile_manager_tests foundation_profile_manager_deletion --shard deletion)
+    asobmashow_register_test(player_profile_manager_tests foundation_profile_manager_integrity --shard integrity)
+    asobmashow_register_test(player_profile_manager_tests profile_manager_invalid_shard --shard invalid)
+    set_tests_properties(profile_manager_invalid_shard PROPERTIES WILL_FAIL TRUE)
     asobmashow_register_test(profile_switch_tests foundation_profile_switch)
     set_tests_properties(foundation_profile_switch PROPERTIES TIMEOUT 30)
-    asobmashow_register_test(profile_archive_tests foundation_profile_archive)
+    asobmashow_register_test(profile_archive_tests foundation_profile_archive_portable --shard portable)
+    asobmashow_register_test(profile_archive_tests foundation_profile_archive_validation --shard validation)
+    asobmashow_register_test(profile_archive_tests foundation_profile_archive_transactions --shard transactions)
+    asobmashow_register_test(profile_archive_tests foundation_profile_archive_faults --shard faults)
+    asobmashow_register_test(profile_archive_tests profile_archive_invalid_shard --shard invalid)
+    set_tests_properties(profile_archive_invalid_shard PROPERTIES WILL_FAIL TRUE)
     asobmashow_register_test(profile_settings_controller_tests foundation_profile_controller)
     asobmashow_register_test(profile_runtime_reapply_tests foundation_profile_runtime)
     asobmashow_register_test(input_device_registry_tests foundation_input_registry)

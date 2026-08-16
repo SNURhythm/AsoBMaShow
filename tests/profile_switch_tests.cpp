@@ -418,6 +418,41 @@ void seedModernResult(ReplayRepository &repository, int score, int suffix) {
          "modern result seed stages");
 }
 
+struct SwitchFixtureTemplateCache {
+  TempDirectory root;
+  bool ready = false;
+};
+
+SwitchFixtureTemplateCache &switchFixtureTemplateCache() {
+  static SwitchFixtureTemplateCache cache;
+  return cache;
+}
+
+bool copyDirectoryContents(const std::filesystem::path &source,
+                           const std::filesystem::path &destination) {
+  std::error_code error;
+  std::filesystem::directory_iterator entries(source, error);
+  if (error) {
+    return false;
+  }
+  const std::filesystem::directory_iterator end;
+  while (entries != end) {
+    const auto entry = *entries;
+    error.clear();
+    std::filesystem::copy(entry.path(),
+                          destination / entry.path().filename(),
+                          std::filesystem::copy_options::recursive, error);
+    if (error) {
+      return false;
+    }
+    entries.increment(error);
+    if (error) {
+      return false;
+    }
+  }
+  return true;
+}
+
 std::string firstBindingId(const InputProfile &profile) {
   return profile.bindings.empty() ? std::string() : profile.bindings.front().id;
 }
@@ -491,6 +526,50 @@ struct SwitchFixture {
             },
             [this](const std::filesystem::path &path) { restoreInput(path); },
             [this]() { refreshCaches(); }, makeSwitchDependencies()) {
+    auto &templateCache = switchFixtureTemplateCache();
+    if (templateCache.ready) {
+      const bool copied =
+          copyDirectoryContents(templateCache.root.path(), temp.path());
+      expect(copied, "switch fixture clones its pristine template");
+      if (!copied) {
+        return;
+      }
+
+      const ProfileResult initialized = manager.Initialize();
+      expect(initialized.ok(),
+             "switch fixture initializes from template: " +
+                 initialized.message);
+      if (!initialized.ok()) {
+        return;
+      }
+
+      nextId = ids.size();
+      firstId = manager.activeProfile().id;
+      secondId = ids.at(1);
+      firstPaths = manager.pathsFor(firstId);
+      secondPaths = manager.pathsFor(secondId);
+
+      const auto firstSettings = AppSettingsStore::Load(firstPaths.settingsJson);
+      const auto firstInput = InputProfileStore::load(firstPaths.inputJson);
+      expect(firstSettings.status == AppSettingsLoadStatus::Loaded,
+             "switch fixture template loads first settings");
+      expect(firstInput.status == InputProfileLoadStatus::Loaded,
+             "switch fixture template loads first input");
+      if (firstSettings.status != AppSettingsLoadStatus::Loaded ||
+          firstInput.status != InputProfileLoadStatus::Loaded) {
+        return;
+      }
+
+      currentSettings = firstSettings.settings;
+      currentInput = firstInput.profile;
+      runtimeGyroscopeConfig = firstInput.profile.gyroscopeTurntable;
+      appliedInputPath = firstPaths.inputJson;
+      score.SetDatabasePath(firstPaths.scoresDb);
+      replay.SetDatabasePath(firstPaths.replaysDb);
+      switchEvents.clear();
+      return;
+    }
+
     const ProfileResult initialized = manager.Initialize();
     expect(initialized.ok(),
            "switch fixture initializes: " + initialized.message);
@@ -592,6 +671,10 @@ struct SwitchFixture {
     score.SetDatabasePath(firstPaths.scoresDb);
     replay.SetDatabasePath(firstPaths.replaysDb);
     switchEvents.clear();
+
+    expect(copyDirectoryContents(temp.path(), templateCache.root.path()),
+           "switch fixture builds a pristine template");
+    templateCache.ready = failures == 0;
   }
 
   PlayerProfileManagerDependencies makeManagerDependencies() {

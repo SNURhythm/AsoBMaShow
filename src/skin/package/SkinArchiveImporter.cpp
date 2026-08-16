@@ -2315,12 +2315,10 @@ bool extractArchive(OwnedArchiveFile &owned, ArchiveInventory &inventory,
       continue;
     }
     if (member.kind == MemberKind::Directory) {
-      if (!staging.createDirectory(member.installedPath, observer,
-                                   diagnostics) ||
-          archive_read_data_skip(reader.get()) != ARCHIVE_OK) {
+      if (archive_read_data_skip(reader.get()) != ARCHIVE_OK) {
         diagnostics.push_back(
             diagnostic("skin_archive_extract_failed",
-                       "unable to create explicit package directory",
+                       "unable to skip explicit package directory",
                        member.installedPath));
         return false;
       }

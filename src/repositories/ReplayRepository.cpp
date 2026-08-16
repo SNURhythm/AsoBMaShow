@@ -30,6 +30,43 @@
 #include <utility>
 #include <vector>
 
+namespace {
+
+std::optional<int> readPragmaInt(sqlite3 *database, const char *pragma) {
+  sqlite3_stmt *statement = nullptr;
+  if (sqlite3_prepare_v2(database, pragma, -1, &statement, nullptr) !=
+      SQLITE_OK) {
+    return std::nullopt;
+  }
+  const int stepResult = sqlite3_step(statement);
+  std::optional<int> result;
+  if (stepResult == SQLITE_ROW &&
+      sqlite3_column_type(statement, 0) == SQLITE_INTEGER) {
+    result = sqlite3_column_int(statement, 0);
+  }
+  sqlite3_finalize(statement);
+  return result;
+}
+
+void rememberSessionSchemaMarker(sqlite3 *database, int &schemaVersion,
+                                 int &userVersion) {
+  schemaVersion =
+      readPragmaInt(database, "PRAGMA schema_version").value_or(-1);
+  userVersion =
+      readPragmaInt(database, "PRAGMA user_version").value_or(-1);
+}
+
+bool sessionSchemaMarkerIsCurrent(sqlite3 *database, int schemaVersion,
+                                  int userVersion) {
+  if (schemaVersion < 0 || userVersion < 0) {
+    return false;
+  }
+  return readPragmaInt(database, "PRAGMA schema_version") == schemaVersion &&
+         readPragmaInt(database, "PRAGMA user_version") == userVersion;
+}
+
+} // namespace
+
 ReplayRepository::Impl::Impl(std::filesystem::path path)
     : databasePath(std::move(path)) {}
 
@@ -90,7 +127,16 @@ bool ReplayRepository::BindDatabasePath(std::filesystem::path databasePath,
       replay_repository_detail::EquivalentDatabasePaths(impl_->databasePath,
                                                         databasePath)) {
     impl_->databasePath = std::move(databasePath);
+    if (sessionSchemaMarkerIsCurrent(
+            impl_->sessionDatabase, impl_->sessionSchemaVersion,
+            impl_->sessionUserVersion)) {
+      errorMessage.clear();
+      return true;
+    }
     if (replay_repository_detail::MigrateSchema(impl_->sessionDatabase)) {
+      rememberSessionSchemaMarker(impl_->sessionDatabase,
+                                  impl_->sessionSchemaVersion,
+                                  impl_->sessionUserVersion);
       errorMessage.clear();
       return true;
     }
@@ -119,6 +165,9 @@ bool ReplayRepository::BindDatabasePath(std::filesystem::path databasePath,
   impl_->sessionDatabase = candidate.release();
   impl_->databasePath = std::move(databasePath);
   closeSqliteDatabase(oldDatabase);
+  rememberSessionSchemaMarker(impl_->sessionDatabase,
+                              impl_->sessionSchemaVersion,
+                              impl_->sessionUserVersion);
   errorMessage.clear();
   return true;
 }
@@ -140,13 +189,26 @@ void ReplayRepository::Shutdown() {
 void ReplayRepository::ShutdownLocked() {
   sqlite3 *database = impl_->sessionDatabase;
   impl_->sessionDatabase = nullptr;
+  impl_->sessionSchemaVersion = -1;
+  impl_->sessionUserVersion = -1;
   closeSqliteDatabase(database);
 }
 
 bool ReplayRepository::EnsureSessionDatabaseLocked() {
   if (impl_->sessionDatabase != nullptr) {
     if (sqlite3_get_autocommit(impl_->sessionDatabase) != 0) {
-      return replay_repository_detail::MigrateSchema(impl_->sessionDatabase);
+      if (sessionSchemaMarkerIsCurrent(
+              impl_->sessionDatabase, impl_->sessionSchemaVersion,
+              impl_->sessionUserVersion)) {
+        return true;
+      }
+      if (!replay_repository_detail::MigrateSchema(impl_->sessionDatabase)) {
+        return false;
+      }
+      rememberSessionSchemaMarker(impl_->sessionDatabase,
+                                  impl_->sessionSchemaVersion,
+                                  impl_->sessionUserVersion);
+      return true;
     }
     SDL_Log("Discarding replay database with an unfinished transaction");
     ShutdownLocked();
@@ -166,6 +228,9 @@ bool ReplayRepository::EnsureSessionDatabaseLocked() {
     return false;
   }
   impl_->sessionDatabase = candidate.release();
+  rememberSessionSchemaMarker(impl_->sessionDatabase,
+                              impl_->sessionSchemaVersion,
+                              impl_->sessionUserVersion);
   return true;
 }
 

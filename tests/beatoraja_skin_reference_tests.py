@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 import base64
+import contextlib
 import copy
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import stat
@@ -56,6 +58,45 @@ def run_python(script: Path, *arguments: object, env=None) -> subprocess.Complet
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         check=False,
+    )
+
+
+def run_python_main(
+    script: Path, *arguments: object, env=None
+) -> subprocess.CompletedProcess:
+    """Invoke a checked script's CLI entry point without interpreter startup."""
+    module_name = f"asobmashow_{script.stem}_inline_cli_test"
+    spec = importlib.util.spec_from_file_location(module_name, script)
+    module = importlib.util.module_from_spec(spec)
+    output = io.StringIO()
+    command = [str(script), *(str(argument) for argument in arguments)]
+    environment = dict(os.environ) if env is None else env
+    previous_module = sys.modules.get(module_name)
+    original_cwd = os.getcwd()
+    try:
+        with (
+            mock.patch.object(sys, "argv", command),
+            mock.patch.dict(os.environ, environment, clear=True),
+            contextlib.redirect_stdout(output),
+            contextlib.redirect_stderr(output),
+        ):
+            sys.modules[module_name] = module
+            os.chdir(ROOT)
+            spec.loader.exec_module(module)
+            try:
+                return_code = module.main()
+            except SystemExit as error:
+                return_code = error.code
+    finally:
+        os.chdir(original_cwd)
+        if previous_module is None:
+            sys.modules.pop(module_name, None)
+        else:
+            sys.modules[module_name] = previous_module
+    return subprocess.CompletedProcess(
+        [sys.executable, *command],
+        0 if return_code is None else return_code,
+        output.getvalue(),
     )
 
 
@@ -1942,16 +1983,20 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
     def test_checker_accepts_only_the_exact_commit_and_optional_clean_tree(self):
         self.assertTrue(CHECKER_PATH.is_file(), str(CHECKER_PATH))
         reference_root = self.make_reference_root()
-        result = run_python(CHECKER_PATH, "--root", reference_root, "--require-clean", env=self.tool_env)
+        result = run_python_main(
+            CHECKER_PATH, "--root", reference_root, "--require-clean", env=self.tool_env
+        )
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertIn(PINNED_COMMIT, result.stdout)
 
         (reference_root / ".dirty").touch()
-        dirty = run_python(CHECKER_PATH, "--root", reference_root, "--require-clean", env=self.tool_env)
+        dirty = run_python_main(
+            CHECKER_PATH, "--root", reference_root, "--require-clean", env=self.tool_env
+        )
         self.assertNotEqual(dirty.returncode, 0, dirty.stdout)
         (reference_root / ".dirty").unlink()
         (reference_root / ".head").write_text("0" * 40 + "\n", encoding="ascii")
-        wrong = run_python(CHECKER_PATH, "--root", reference_root, env=self.tool_env)
+        wrong = run_python_main(CHECKER_PATH, "--root", reference_root, env=self.tool_env)
         self.assertNotEqual(wrong.returncode, 0, wrong.stdout)
 
     def test_build_manifest_rejects_every_selected_closure_byte_and_identity_mutation(self):
@@ -1991,7 +2036,7 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
         reference_root = self.make_reference_root()
         archive, skin_root = self.make_skin_archive()
         manifest_path = self.temp_path / "unreviewed.json"
-        result = run_python(
+        result = run_python_main(
             AUDIT_PATH,
             *self.audit_arguments(reference_root, archive, skin_root, "--output", manifest_path),
             env=self.tool_env,
@@ -2004,7 +2049,7 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
         reference_root = self.make_reference_root()
         archive, skin_root = self.make_skin_archive()
         manifest_path = self.temp_path / "terms-unreviewed.json"
-        result = run_python(
+        result = run_python_main(
             AUDIT_PATH,
             *self.audit_arguments(reference_root, archive, skin_root, "--output", manifest_path),
             "--target-version", "fixture-4.6",
@@ -2021,7 +2066,7 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
         reference_root = self.make_reference_root()
         archive, skin_root = self.make_skin_archive()
         manifest_path = self.temp_path / "captured.json"
-        capture = run_python(
+        capture = run_python_main(
             AUDIT_PATH,
             *self.audit_arguments(reference_root, archive, skin_root, "--output", manifest_path),
             "--target-version", "fixture-4.6",
@@ -2047,7 +2092,7 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
             captured["usageTerms"]["source"],
             "fixture-packaged-readme",
         )
-        verify = run_python(
+        verify = run_python_main(
             AUDIT_PATH,
             *self.audit_arguments(reference_root, archive, skin_root, "--verify", manifest_path),
             env=self.tool_env,
@@ -2220,14 +2265,14 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
             "--skin-root", skin_root,
             "--output", manifest_path,
         ]
-        wrong_prefix = run_python(
+        wrong_prefix = run_python_main(
             AUDIT_PATH,
             *common,
             "--archive-package-prefix", "Wrong",
             env=self.tool_env,
         )
         self.assertNotEqual(wrong_prefix.returncode, 0, wrong_prefix.stdout)
-        wrong_digest = run_python(
+        wrong_digest = run_python_main(
             AUDIT_PATH,
             *common,
             "--archive-package-prefix", "Bundle",
@@ -2236,7 +2281,7 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
         )
         self.assertNotEqual(wrong_digest.returncode, 0, wrong_digest.stdout)
         (skin_root / "image.png").write_bytes(b"changed")
-        wrong_tree = run_python(
+        wrong_tree = run_python_main(
             AUDIT_PATH,
             *common,
             "--archive-package-prefix", "Bundle",
@@ -2319,7 +2364,7 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
 
         for label, (archive, expected_error) in cases.items():
             with self.subTest(label=label):
-                result = run_python(
+                result = run_python_main(
                     AUDIT_PATH,
                     "--beatoraja-root", reference_root,
                     "--archive-path", archive,

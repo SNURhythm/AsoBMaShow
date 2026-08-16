@@ -510,6 +510,24 @@ std::mutex gDebugLogMutex;
 std::deque<std::string> gDebugLogLines;
 std::uint64_t gDebugLogRevision = 0;
 
+#if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
+std::mutex gStreamingEntryObserverMutex;
+StreamingEntryObserverForTesting gStreamingEntryObserver;
+
+void notifyStreamingEntryObserverForTesting(
+    const std::filesystem::path &archivePath,
+    const std::filesystem::path &entryPath) {
+  StreamingEntryObserverForTesting observer;
+  {
+    std::lock_guard lock(gStreamingEntryObserverMutex);
+    observer = gStreamingEntryObserver;
+  }
+  if (observer) {
+    observer(archivePath, entryPath);
+  }
+}
+#endif
+
 std::string pathForLog(const std::filesystem::path &path) {
   return fspath_to_utf8(path);
 }
@@ -4591,6 +4609,9 @@ bool readZipEntriesByIndexStreaming(
                                       file.bytes.size(), 0)) {
       return fail("Could not extract ZIP entry by index.");
     }
+#if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
+    notifyStreamingEntryObserverForTesting(archivePath, target.entryPath);
+#endif
     if (!emitFileData(std::move(file), onFile, errorMessage)) {
       mz_zip_reader_end(&archive);
       return false;
@@ -6867,6 +6888,14 @@ bool hasSupportedArchiveExtension(const std::filesystem::path &path) {
 void appendDebugLogLine(const std::string &message) {
   appendDebugLogLineImpl(message);
 }
+
+#if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
+void setStreamingEntryObserverForTesting(
+    StreamingEntryObserverForTesting observer) {
+  std::lock_guard lock(gStreamingEntryObserverMutex);
+  gStreamingEntryObserver = std::move(observer);
+}
+#endif
 
 std::uint64_t debugLogRevision() {
   std::lock_guard<std::mutex> lock(gDebugLogMutex);

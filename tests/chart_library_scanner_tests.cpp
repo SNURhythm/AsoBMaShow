@@ -147,6 +147,68 @@ bool hasArchiveLog(const std::vector<std::string> &logLines,
   });
 }
 
+bool waitForArchiveLog(const std::filesystem::path &archive,
+                       std::string_view event) {
+  const auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::seconds(2);
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (hasArchiveLog(archive_file::debugLogLines(), archive, event)) {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  return hasArchiveLog(archive_file::debugLogLines(), archive, event);
+}
+
+class StreamingEntryGate {
+public:
+  StreamingEntryGate(std::filesystem::path archivePath,
+                     std::filesystem::path entryPath)
+      : archivePath_(std::move(archivePath)),
+        entryPath_(std::move(entryPath)) {
+    archive_file::setStreamingEntryObserverForTesting(
+        [this](const std::filesystem::path &archivePath,
+               const std::filesystem::path &entryPath) {
+          if (archivePath != archivePath_ || entryPath != entryPath_) {
+            return;
+          }
+          std::unique_lock<std::mutex> entryLock(mutex_);
+          held_ = true;
+          cv_.notify_all();
+          while (!released_) {
+            cv_.wait(entryLock);
+          }
+        });
+  }
+
+  ~StreamingEntryGate() {
+    release();
+    archive_file::setStreamingEntryObserverForTesting({});
+  }
+
+  bool waitUntilHeld() {
+    std::unique_lock lock(mutex_);
+    return cv_.wait_for(lock, std::chrono::seconds(2),
+                        [this] { return held_; });
+  }
+
+  void release() {
+    {
+      std::lock_guard lock(mutex_);
+      released_ = true;
+    }
+    cv_.notify_all();
+  }
+
+private:
+  std::filesystem::path archivePath_;
+  std::filesystem::path entryPath_;
+  std::mutex mutex_;
+  std::condition_variable cv_;
+  bool held_ = false;
+  bool released_ = false;
+};
+
 void testBasicNoOpAndDeleteScan() {
   TempDirectory temporary;
   const auto root = temporary.path() / "library";
@@ -994,7 +1056,7 @@ void testMultipleLargeArchivesPrefetchDuringPreparation() {
 
 void testArchiveResultApplicationOverlapsLaterArchiveStreaming() {
   constexpr int kFirstChartCount = 16;
-  constexpr int kSecondChartCount = 128;
+  constexpr int kSecondChartCount = 16;
   TempDirectory temporary;
   const auto root = temporary.path() / "library";
 
@@ -1010,11 +1072,10 @@ void testArchiveResultApplicationOverlapsLaterArchiveStreaming() {
 
   std::vector<std::pair<std::string, std::string>> secondFiles;
   secondFiles.reserve(kSecondChartCount);
-  const std::string padding = "#COMMENT " + std::string(128 * 1024, 'x') + "\n";
   for (int index = 0; index < kSecondChartCount; ++index) {
     secondFiles.emplace_back(
         "second/chart-" + std::to_string(index) + ".bms",
-        chartText("Second Archive " + std::to_string(index)) + padding);
+        chartText("Second Archive " + std::to_string(index)));
   }
   const auto secondArchive =
       writeZip(root / "ordered-drain-second.zip", secondFiles);
@@ -1025,7 +1086,23 @@ void testArchiveResultApplicationOverlapsLaterArchiveStreaming() {
   assert(session.has_value());
   ChartLibraryScanner scanner;
 
-  assert(scanner.Scan(*session, {firstArchive, secondArchive}) ==
+  StreamingEntryGate gate(secondArchive, "second/chart-0.bms");
+  std::atomic_int changed{-1};
+  std::thread scanThread([&] {
+    changed.store(scanner.Scan(*session, {firstArchive, secondArchive}),
+                  std::memory_order_release);
+  });
+  const bool secondReaderHeld = gate.waitUntilHeld();
+  const bool firstBatchApplied =
+      secondReaderHeld && waitForArchiveLog(
+                              firstArchive,
+                              "Inserting streamed DB chart batch:");
+  gate.release();
+  scanThread.join();
+
+  assert(secondReaderHeld);
+  assert(firstBatchApplied);
+  assert(changed.load(std::memory_order_acquire) ==
          kFirstChartCount + kSecondChartCount + 2);
   assert(session->CountAllChartMeta() ==
          kFirstChartCount + kSecondChartCount);
@@ -1051,7 +1128,7 @@ void testArchiveResultApplicationOverlapsLaterArchiveStreaming() {
 }
 
 void testArchiveResultApplicationOverlapsItsOwnStreaming() {
-  constexpr int kFirstChartCount = 128;
+  constexpr int kFirstChartCount = 16;
   constexpr int kSecondChartCount = 16;
   if (parallel_worker_count(kFirstChartCount + kSecondChartCount) <= 1) {
     return;
@@ -1061,11 +1138,10 @@ void testArchiveResultApplicationOverlapsItsOwnStreaming() {
 
   std::vector<std::pair<std::string, std::string>> firstFiles;
   firstFiles.reserve(kFirstChartCount);
-  const std::string padding = "#COMMENT " + std::string(128 * 1024, 'x') + "\n";
   for (int index = 0; index < kFirstChartCount; ++index) {
     firstFiles.emplace_back(
         "first/chart-" + std::to_string(index) + ".bms",
-        chartText("Same Archive Overlap " + std::to_string(index)) + padding);
+        chartText("Same Archive Overlap " + std::to_string(index)));
   }
   const auto firstArchive =
       writeZip(root / "same-archive-overlap-first.zip", firstFiles);
@@ -1086,7 +1162,22 @@ void testArchiveResultApplicationOverlapsItsOwnStreaming() {
   assert(session.has_value());
   ChartLibraryScanner scanner;
 
-  assert(scanner.Scan(*session, {firstArchive, secondArchive}) ==
+  StreamingEntryGate gate(firstArchive, "first/chart-12.bms");
+  std::atomic_int changed{-1};
+  std::thread scanThread([&] {
+    changed.store(scanner.Scan(*session, {firstArchive, secondArchive}),
+                  std::memory_order_release);
+  });
+  const bool firstReaderHeld = gate.waitUntilHeld();
+  const bool firstBatchApplied =
+      firstReaderHeld && waitForArchiveLog(firstArchive,
+                                            "Inserting streamed DB chart batch:");
+  gate.release();
+  scanThread.join();
+
+  assert(firstReaderHeld);
+  assert(firstBatchApplied);
+  assert(changed.load(std::memory_order_acquire) ==
          kFirstChartCount + kSecondChartCount + 2);
   assert(session->CountAllChartMeta() == kFirstChartCount + kSecondChartCount);
   const ChartScanSnapshot snapshot = session->LoadScanSnapshot();

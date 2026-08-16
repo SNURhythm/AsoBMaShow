@@ -5,6 +5,7 @@
 #include "../src/PlayerProfileManager.h"
 #include "../src/ProfileArchive.h"
 #include "../src/ProfileDatabaseTools.h"
+#include "../src/Uuid.h"
 #include "../src/ir/PendingIrCredentialCleanup.h"
 #include "../src/practice/PracticePresetStore.h"
 #include "../src/repositories/ReplayRepository.h"
@@ -34,6 +35,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -68,14 +70,35 @@ void expect(bool condition, const std::string &message) {
 
 class TempDirectory {
 public:
-  explicit TempDirectory(std::string_view label = "archive") {
+  explicit TempDirectory(
+      std::string_view label = "archive",
+      std::optional<std::filesystem::path> firstCandidate = std::nullopt) {
     static std::atomic<unsigned long long> sequence{0};
-    const auto nonce =
-        std::chrono::steady_clock::now().time_since_epoch().count();
-    path_ = std::filesystem::temp_directory_path() /
-            ("asobmashow-" + std::string(label) + "-" + std::to_string(nonce) +
-             "-" + std::to_string(sequence.fetch_add(1)));
-    std::filesystem::create_directories(path_);
+    constexpr unsigned int kMaxAttempts = 32;
+    for (unsigned int attempt = 0; attempt < kMaxAttempts; ++attempt) {
+      const auto candidate =
+          firstCandidate && attempt == 0
+              ? *firstCandidate
+              : std::filesystem::temp_directory_path() /
+                    ("asobmashow-" + std::string(label) + "-" +
+                     std::to_string(std::chrono::steady_clock::now()
+                                        .time_since_epoch()
+                                        .count()) +
+                     "-" + std::to_string(sequence.fetch_add(1)));
+      std::error_code error;
+      if (std::filesystem::create_directory(candidate, error)) {
+        path_ = candidate;
+        return;
+      }
+      if (error && error != std::errc::file_exists) {
+        throw std::filesystem::filesystem_error(
+            "create temporary directory", candidate, error);
+      }
+    }
+    throw std::filesystem::filesystem_error(
+        "create unique temporary directory",
+        std::filesystem::temp_directory_path(),
+        std::make_error_code(std::errc::file_exists));
   }
 
   ~TempDirectory() {
@@ -89,11 +112,86 @@ private:
   std::filesystem::path path_;
 };
 
+void testTempDirectoryRetriesOccupiedCandidate() {
+  TempDirectory parent("temp-directory-collision-parent");
+  const auto occupied =
+      parent.path() / "asobmashow-temp-directory-archive-collision-0-0";
+  std::error_code error;
+  std::filesystem::remove_all(occupied, error);
+  std::filesystem::create_directory(occupied, error);
+  expect(!error, "temporary directory collision fixture creates");
+  if (error) {
+    return;
+  }
+
+  {
+    TempDirectory temp("temp-directory-collision", occupied);
+    expect(temp.path() != occupied,
+           "temporary directory retries an occupied candidate");
+    expect(std::filesystem::is_directory(temp.path()),
+           "temporary directory claims a new private root");
+  }
+
+  std::filesystem::remove_all(occupied, error);
+  expect(!error, "temporary directory collision fixture cleans up");
+}
+
 void writeFile(const std::filesystem::path &path, std::string_view contents) {
   std::filesystem::create_directories(path.parent_path());
   std::ofstream output(path, std::ios::binary | std::ios::trunc);
   output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
 }
+
+bool isLowerHexToken(std::string_view token) {
+  return token.size() == 32 &&
+         std::ranges::all_of(token, [](const char character) {
+           return (character >= '0' && character <= '9') ||
+                  (character >= 'a' && character <= 'f');
+         });
+}
+
+std::string generateWorkspaceToken() {
+  std::string token = uuid::generateV4();
+  token.erase(std::remove(token.begin(), token.end(), '-'), token.end());
+  return token;
+}
+
+class ScopedDirectoryLock {
+public:
+  explicit ScopedDirectoryLock(const std::filesystem::path &path)
+      : path_(path) {
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::seconds(30);
+    while (std::chrono::steady_clock::now() < deadline) {
+      std::error_code error;
+      if (std::filesystem::create_directory(path_, error)) {
+        locked_ = true;
+        return;
+      }
+      if (error && error != std::errc::file_exists) {
+        expect(false, "global import-workspace test lock creates: " +
+                          error.message());
+        return;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    expect(false,
+           "global import-workspace test lock is acquired within 30 seconds");
+  }
+
+  ~ScopedDirectoryLock() {
+    if (locked_) {
+      std::error_code ignored;
+      std::filesystem::remove(path_, ignored);
+    }
+  }
+
+  [[nodiscard]] bool locked() const { return locked_; }
+
+private:
+  std::filesystem::path path_;
+  bool locked_ = false;
+};
 
 std::uint16_t readLittleEndian16(std::string_view bytes, std::size_t offset) {
   return static_cast<std::uint16_t>(
@@ -579,9 +677,13 @@ struct Fixture {
   PlayerProfileManager manager;
   std::string sourceId;
   std::string targetId;
+  std::filesystem::path baselineArchivePath;
 
-  explicit Fixture(PlayerProfileFilesystemOperations filesystem = {})
-      : manager(temp.path(), dependencies(std::move(filesystem))) {
+private:
+  struct SeedFixtureTag {};
+
+  Fixture(SeedFixtureTag) : manager(temp.path(), dependencies({})) {
+    ++fixtureSeedBuildCount();
     const auto initialized = manager.Initialize();
     expect(initialized.ok(),
            "archive fixture initializes: " + initialized.message);
@@ -645,6 +747,13 @@ struct Fixture {
            "archive source remains valid after seeding");
     expect(manager.validateProfile(targetId).ok(),
            "archive target remains valid after seeding");
+
+    baselineArchivePath = exchange.path() / "baseline.asobprofile";
+    ProfileArchiveService service(manager);
+    ++baselineArchiveExportCount();
+    const auto exported = service.Export(sourceId, baselineArchivePath);
+    expect(exported.ok(),
+           "archive fixture baseline export succeeds: " + exported.message);
   }
 
   PlayerProfileManagerDependencies
@@ -654,6 +763,94 @@ struct Fixture {
     result.utcNow = [] { return std::string("2026-07-11T01:23:45Z"); };
     result.filesystem = std::move(filesystem);
     return result;
+  }
+
+  static std::size_t &fixtureSeedBuildCount() {
+    static std::size_t count = 0;
+    return count;
+  }
+
+  static std::size_t &baselineArchiveExportCount() {
+    static std::size_t count = 0;
+    return count;
+  }
+
+  static const Fixture &fixtureSeed() {
+    static const Fixture seed(SeedFixtureTag{});
+    return seed;
+  }
+
+  static bool copyDirectoryContents(const std::filesystem::path &source,
+                                    const std::filesystem::path &destination) {
+    std::error_code error;
+    std::filesystem::directory_iterator iterator(source, error);
+    if (error) {
+      expect(false, "archive fixture seed directory opens: " +
+                        error.message());
+      return false;
+    }
+    const std::filesystem::directory_iterator end;
+    while (iterator != end) {
+      const auto entry = *iterator;
+      std::filesystem::copy(entry.path(),
+                            destination / entry.path().filename(),
+                            std::filesystem::copy_options::recursive, error);
+      if (error) {
+        expect(false, "archive fixture seed copy succeeds: " +
+                          error.message());
+        return false;
+      }
+      iterator.increment(error);
+      if (error) {
+        expect(false, "archive fixture seed directory iterates: " +
+                          error.message());
+        return false;
+      }
+    }
+    return true;
+  }
+
+public:
+  explicit Fixture(PlayerProfileFilesystemOperations filesystem = {})
+      : manager(temp.path(), dependencies(std::move(filesystem))) {
+    const Fixture &seed = fixtureSeed();
+    uuidIndex = seed.uuidIndex;
+    if (!copyDirectoryContents(seed.temp.path(), temp.path())) {
+      return;
+    }
+    const auto initialized = manager.Initialize();
+    expect(initialized.ok(),
+           "archive fixture clone initializes: " + initialized.message);
+    if (!initialized.ok()) {
+      return;
+    }
+    sourceId = seed.sourceId;
+    targetId = seed.targetId;
+  }
+
+  static std::size_t seedBuildCountForTesting() {
+    return fixtureSeedBuildCount();
+  }
+
+  static std::size_t baselineArchiveBuildCountForTesting() {
+    return baselineArchiveExportCount();
+  }
+
+  static bool copyProfileTree(const std::filesystem::path &source,
+                              const std::filesystem::path &destination) {
+    return copyDirectoryContents(source, destination);
+  }
+
+  static std::filesystem::path copyBaselineArchive(Fixture &fixture,
+                                                    std::string_view name) {
+    const Fixture &seed = fixtureSeed();
+    const auto archive = fixture.exchange.path() / name;
+    std::error_code error;
+    std::filesystem::copy_file(seed.baselineArchivePath, archive,
+                               std::filesystem::copy_options::none, error);
+    expect(!error, "archive fixture baseline archive copies: " +
+                       error.message());
+    return archive;
   }
 
   static void seedMarker(const std::filesystem::path &path,
@@ -724,6 +921,103 @@ struct Fixture {
            "legacy chart and partial course summaries insert");
   }
 };
+
+struct FaultArchiveFixtureSeed {
+  TempDirectory temp;
+  TempDirectory exchange;
+  std::filesystem::path archive;
+
+  FaultArchiveFixtureSeed(std::string_view label, std::string_view sourceName,
+                          std::string_view sourceMarker,
+                          std::optional<std::string_view> targetName = {},
+                          std::string_view targetMarker = {})
+      : temp(std::string(label) + "-seed"),
+        exchange(std::string(label) + "-seed-exchange") {
+    const std::string activeId = "11111111-1111-4111-8111-111111111111";
+    const std::string sourceId = "22222222-2222-4222-8222-222222222222";
+    const std::string targetId = "33333333-3333-4333-8333-333333333333";
+    std::vector<std::string> uuids{activeId, sourceId};
+    if (targetName) {
+      uuids.push_back(targetId);
+    }
+    std::size_t uuidIndex = 0;
+    PlayerProfileManagerDependencies dependencies;
+    dependencies.generateUuid = [&] { return uuids.at(uuidIndex++); };
+    dependencies.utcNow = [] { return std::string("2026-07-11T01:23:45Z"); };
+    PlayerProfileManager manager(temp.path(), std::move(dependencies));
+    expect(manager.Initialize().ok(),
+           std::string(label) + " fixture seed initializes");
+    const auto source = manager.createProfile(std::string(sourceName));
+    expect(source.ok() && source.profile && source.profile->id == sourceId,
+           std::string(label) + " fixture seed creates source profile");
+    if (!source.profile) {
+      return;
+    }
+    std::optional<ProfileResult> target;
+    if (targetName) {
+      target = manager.createProfile(std::string(*targetName));
+      expect(target->ok() && target->profile && target->profile->id == targetId,
+             std::string(label) + " fixture seed creates target profile");
+      if (!target->profile) {
+        return;
+      }
+    }
+    expect(uuidIndex == uuids.size(),
+           std::string(label) + " fixture seed consumes setup UUIDs");
+    Fixture::seedMarker(manager.pathsFor(sourceId).scoresDb, sourceMarker);
+    if (targetName) {
+      Fixture::seedMarker(manager.pathsFor(targetId).scoresDb, targetMarker);
+    }
+    archive = exchange.path() / "source.asobprofile";
+    ProfileArchiveService service(manager);
+    const auto exported = service.Export(sourceId, archive);
+    expect(exported.ok(), std::string(label) + " fixture seed exports source: " +
+                              exported.message);
+  }
+};
+
+const FaultArchiveFixtureSeed &rollbackFaultFixtureSeed() {
+  static const FaultArchiveFixtureSeed seed{
+      "profile-archive-rollback", "Rollback Source", "new-score",
+      "Rollback Target", "old-score"};
+  return seed;
+}
+
+const FaultArchiveFixtureSeed &overwriteFaultFixtureSeed() {
+  static const FaultArchiveFixtureSeed seed{
+      "profile-overwrite-fault", "Fault Source", "new-data", "Fault Target",
+      "old-data"};
+  return seed;
+}
+
+const FaultArchiveFixtureSeed &createFaultFixtureSeed() {
+  static const FaultArchiveFixtureSeed seed{
+      "profile-create-fault", "Create Fault Source", "imported-data"};
+  return seed;
+}
+
+const FaultArchiveFixtureSeed &cleanupFaultFixtureSeed() {
+  static const FaultArchiveFixtureSeed seed{
+      "profile-overwrite-cleanup", "Cleanup Source", "new-data",
+      "Cleanup Target", "old-data"};
+  return seed;
+}
+
+bool copyFaultArchiveFixture(const FaultArchiveFixtureSeed &seed,
+                             const std::filesystem::path &destination,
+                             const std::filesystem::path &archive) {
+  if (!Fixture::copyProfileTree(seed.temp.path(), destination)) {
+    return false;
+  }
+  std::error_code error;
+  std::filesystem::copy_file(seed.archive, archive,
+                             std::filesystem::copy_options::none, error);
+  if (error) {
+    expect(false, "fault fixture archive copies: " + error.message());
+    return false;
+  }
+  return true;
+}
 
 std::string repeated(char value, std::size_t count) {
   return std::string(count, value);
@@ -822,6 +1116,37 @@ void testStreamingSha256() {
   std::string error;
   expect(!file_checksum::sha256File(file, error, 2) && !error.empty(),
          "streaming file checksum enforces its byte bound");
+}
+
+void testFixtureSeedIsBuiltOnceAndClonesAreIsolated() {
+  Fixture first;
+  Fixture second;
+
+  expect(Fixture::seedBuildCountForTesting() == 1,
+         "profile archive fixture seed builds exactly once");
+  expect(first.uuidIndex == 3 && second.uuidIndex == 3,
+         "profile archive fixture clones preserve the setup UUID cursor");
+  const auto firstSettings =
+      first.manager.pathsFor(first.sourceId).settingsJson;
+  const auto secondSettings =
+      second.manager.pathsFor(second.sourceId).settingsJson;
+  writeFile(firstSettings, "{\"modified\":true}\n");
+  expect(readFile(firstSettings).find("\"modified\":true") !=
+             std::string::npos,
+         "profile archive fixture mutation writes to the first clone");
+  expect(readFile(secondSettings).find("\"modified\":true") ==
+             std::string::npos,
+         "profile archive fixture copies remain isolated");
+
+  const auto firstArchive =
+      Fixture::copyBaselineArchive(first, "baseline-first.asobprofile");
+  const auto secondArchive =
+      Fixture::copyBaselineArchive(second, "baseline-second.asobprofile");
+  expect(Fixture::baselineArchiveBuildCountForTesting() == 1,
+         "profile archive baseline export builds exactly once");
+  writeFile(firstArchive, "modified baseline archive");
+  expect(readFile(secondArchive) != "modified baseline archive",
+         "profile archive baseline copies remain isolated");
 }
 
 std::filesystem::path exportFixture(Fixture &fixture, std::string_view name) {
@@ -1366,7 +1691,8 @@ void testArchiveUsesNativeUnicodeFilesystemPaths() {
 
 void testCreateImportUsesNewIdAndRoundTripsExactly() {
   Fixture fixture;
-  const auto archive = exportFixture(fixture, "round-trip.asobprofile");
+  const auto archive =
+      Fixture::copyBaselineArchive(fixture, "round-trip.asobprofile");
   const auto sourcePaths = fixture.manager.pathsFor(fixture.sourceId);
   const std::string sourceSettings = readFile(sourcePaths.settingsJson);
   const std::string sourceInput = readFile(sourcePaths.inputJson);
@@ -1449,7 +1775,8 @@ void testCreateImportUsesNewIdAndRoundTripsExactly() {
 
 void testVersionOneArchiveImportsWithEmptyPracticeDirectory() {
   Fixture fixture;
-  const auto exported = exportFixture(fixture, "version-three.asobprofile");
+  const auto exported =
+      Fixture::copyBaselineArchive(fixture, "version-three.asobprofile");
   std::string error;
   auto members = readArchive(exported, error);
   expect(error.empty(), "v1 compatibility fixture reads: " + error);
@@ -1509,7 +1836,8 @@ void testVersionOneArchiveImportsWithEmptyPracticeDirectory() {
 
 void testCreateImportRetriesUnsafeAndOccupiedGeneratedIds() {
   Fixture fixture;
-  const auto archive = exportFixture(fixture, "uuid-retry.asobprofile");
+  const auto archive =
+      Fixture::copyBaselineArchive(fixture, "uuid-retry.asobprofile");
   const std::string stagingId = "44444444-4444-4444-8444-444444444444";
   const std::string backupId = "55555555-5555-4555-8555-555555555555";
   const std::string importedId = "66666666-6666-4666-8666-666666666666";
@@ -1544,7 +1872,8 @@ void testCreateImportRetriesUnsafeAndOccupiedGeneratedIds() {
 
 void testOverwriteIsRestrictedAndReplacesInactiveProfile() {
   Fixture fixture;
-  const auto archive = exportFixture(fixture, "overwrite.asobprofile");
+  const auto archive =
+      Fixture::copyBaselineArchive(fixture, "overwrite.asobprofile");
   ProfileArchiveService service(fixture.manager);
 
   ProfileImportOptions options;
@@ -1584,7 +1913,8 @@ void testOverwriteIsRestrictedAndReplacesInactiveProfile() {
 
   Fixture invalidFixture;
   const auto invalidArchive =
-      exportFixture(invalidFixture, "invalid-overwrite-target.zip");
+      Fixture::copyBaselineArchive(invalidFixture,
+                                   "invalid-overwrite-target.zip");
   writeFile(
       invalidFixture.manager.pathsFor(invalidFixture.targetId).settingsJson,
       "not json");
@@ -1600,7 +1930,8 @@ void testOverwriteIsRestrictedAndReplacesInactiveProfile() {
 void testOverwriteAcceptsSupportedOlderTargetAndInstallsCurrentProfile() {
   Fixture fixture;
   const auto archive =
-      exportFixture(fixture, "supported-older-overwrite.asobprofile");
+      Fixture::copyBaselineArchive(fixture,
+                                   "supported-older-overwrite.asobprofile");
   const PlayerProfilePaths target = fixture.manager.pathsFor(fixture.targetId);
   setDatabaseVersion(target.scoresDb, 5, "supported-older overwrite score");
   setDatabaseVersion(target.replaysDb, 3, "supported-older overwrite replay");
@@ -1651,7 +1982,7 @@ void testOverwriteAcceptsSupportedOlderTargetAndInstallsCurrentProfile() {
 void testOverwriteRejectsFutureTargetWithoutMutation() {
   for (const bool futureScoreDatabase : {true, false}) {
     Fixture fixture;
-    const auto archive = exportFixture(
+    const auto archive = Fixture::copyBaselineArchive(
         fixture, futureScoreDatabase ? "future-score-overwrite.asobprofile"
                                      : "future-replay-overwrite.asobprofile");
     const PlayerProfilePaths target =
@@ -1759,18 +2090,15 @@ void testOverwriteRollbackRestoresOriginalProfile() {
     }
     return atomic_file::renameDurably(from, to, error);
   };
+  const auto archive = exchange.path() / "rollback.asobprofile";
+  expect(copyFaultArchiveFixture(rollbackFaultFixtureSeed(), temp.path(),
+                                 archive),
+         "rollback fixture seed copies");
+  uuidIndex = 3;
   PlayerProfileManager manager(temp.path(), std::move(dependencies));
   expect(manager.Initialize().ok(), "rollback fixture initializes");
-  const auto source = manager.createProfile("Rollback Source");
-  const auto target = manager.createProfile("Rollback Target");
-  expect(source.ok() && target.ok(), "rollback fixture profiles create");
-  Fixture::seedMarker(manager.pathsFor(sourceId).scoresDb, "new-score");
-  Fixture::seedMarker(manager.pathsFor(targetId).scoresDb, "old-score");
 
   ProfileArchiveService service(manager);
-  const auto archive = exchange.path() / "rollback.asobprofile";
-  expect(service.Export(sourceId, archive).ok(),
-         "rollback fixture exports source");
   const auto targetPaths = manager.pathsFor(targetId);
   const std::string metadataBefore = readFile(targetPaths.profileJson);
   const std::string settingsBefore = readFile(targetPaths.settingsJson);
@@ -1836,7 +2164,8 @@ void expectRejectedWithoutMutation(Fixture &fixture,
 
 void testStrictMemberAllowlistAndTypes() {
   Fixture fixture;
-  const auto validPath = exportFixture(fixture, "strict-source.zip");
+  const auto validPath =
+      Fixture::copyBaselineArchive(fixture, "strict-source.zip");
   std::string error;
   const auto valid = readArchive(validPath, error);
   expect(error.empty() && valid.size() == kExpectedMembers.size(),
@@ -1900,7 +2229,8 @@ void testStrictMemberAllowlistAndTypes() {
 
 void testPracticeMembersAreValidatedBeforeInstall() {
   Fixture fixture;
-  const auto validPath = exportFixture(fixture, "practice-validation.zip");
+  const auto validPath =
+      Fixture::copyBaselineArchive(fixture, "practice-validation.zip");
   std::string error;
   auto valid = readArchive(validPath, error);
   expect(error.empty(), "practice validation source archive reads: " + error);
@@ -1975,7 +2305,8 @@ void testPracticeMembersAreValidatedBeforeInstall() {
 
 void testChecksumsVersionsValidatorsAndLimits() {
   Fixture fixture;
-  const auto validPath = exportFixture(fixture, "validation-source.zip");
+  const auto validPath =
+      Fixture::copyBaselineArchive(fixture, "validation-source.zip");
   std::string error;
   const auto valid = readArchive(validPath, error);
   expect(error.empty() && valid.size() == kExpectedMembers.size(),
@@ -2121,7 +2452,8 @@ void testSizePolicyBoundariesWithoutLargeAllocations() {
 
 void testZipParserEnforcesDeclaredAndStreamedSizeLimits() {
   Fixture fixture;
-  const auto source = exportFixture(fixture, "size-parser-source.zip");
+  const auto source =
+      Fixture::copyBaselineArchive(fixture, "size-parser-source.zip");
   std::string error;
   const auto valid = readArchive(source, error);
   expect(error.empty() && valid.size() == kExpectedMembers.size(),
@@ -2200,7 +2532,8 @@ void testZipParserEnforcesDeclaredAndStreamedSizeLimits() {
 
 void testSupportedOlderSchemasMigrateAndPreserveRows() {
   Fixture fixture;
-  const auto validPath = exportFixture(fixture, "migration-source.zip");
+  const auto validPath =
+      Fixture::copyBaselineArchive(fixture, "migration-source.zip");
   std::string error;
   auto members = readArchive(validPath, error);
   expect(error.empty() && members.size() == kExpectedMembers.size(),
@@ -2349,7 +2682,8 @@ void testSupportedOlderSchemasMigrateAndPreserveRows() {
 
 void testFutureDatabaseAndCorruptionAreRejected() {
   Fixture fixture;
-  const auto validPath = exportFixture(fixture, "database-source.zip");
+  const auto validPath =
+      Fixture::copyBaselineArchive(fixture, "database-source.zip");
   std::string error;
   const auto valid = readArchive(validPath, error);
   if (!error.empty() || valid.size() != kExpectedMembers.size()) {
@@ -2528,8 +2862,12 @@ void testExportTemporaryPathsArePrivateAndCleaned() {
 
 void testStaleArchiveWorkspacesAreSweptWithoutTouchingFreshOnes() {
   Fixture fixture;
-  constexpr std::string_view staleToken = "0123456789abcdef0123456789abcdef";
-  constexpr std::string_view freshToken = "fedcba9876543210fedcba9876543210";
+  const std::string staleToken = generateWorkspaceToken();
+  const std::string freshToken = generateWorkspaceToken();
+  expect(staleToken != freshToken && isLowerHexToken(staleToken) &&
+             isLowerHexToken(freshToken),
+         "stale and fresh import workspace tokens are distinct lowercase "
+         "32-hex UUID values");
   const auto destination = fixture.exchange.path() / "sweep.asobprofile";
   const auto staleExport =
       fixture.exchange.path() /
@@ -2571,6 +2909,11 @@ void testStaleArchiveWorkspacesAreSweptWithoutTouchingFreshOnes() {
          "export startup sweeps stale rollback copies only when a current "
          "destination exists and retains fresh copies");
 
+  ScopedDirectoryLock lock(std::filesystem::temp_directory_path() /
+                           "asobmashow-profile-import-sweep-test-lock");
+  if (!lock.locked()) {
+    return;
+  }
   const auto staleImport =
       std::filesystem::temp_directory_path() /
       ("asobmashow-profile-import-" + std::string(staleToken));
@@ -2886,21 +3229,17 @@ void testOverwriteFaultMatrixRecoversOneCompleteProfile() {
           return atomic_file::syncDirectory(path, syncError);
         };
 
+    const auto archive = exchange.path() / "fault-source.zip";
+    expect(copyFaultArchiveFixture(overwriteFaultFixtureSeed(), temp.path(),
+                                   archive),
+           "overwrite fault fixture seed copies at point " +
+               std::to_string(failurePoint));
+    uuidIndex = 3;
     PlayerProfileManager manager(temp.path(), std::move(dependencies));
     expect(manager.Initialize().ok(),
            "overwrite fault fixture initializes at point " +
                std::to_string(failurePoint));
-    expect(manager.createProfile("Fault Source").ok() &&
-               manager.createProfile("Fault Target").ok(),
-           "overwrite fault profiles create at point " +
-               std::to_string(failurePoint));
-    Fixture::seedMarker(manager.pathsFor(sourceId).scoresDb, "new-data");
-    Fixture::seedMarker(manager.pathsFor(targetId).scoresDb, "old-data");
     ProfileArchiveService service(manager);
-    const auto archive = exchange.path() / "fault-source.zip";
-    expect(service.Export(sourceId, archive).ok(),
-           "overwrite fault source exports at point " +
-               std::to_string(failurePoint));
 
     inject = true;
     const ProfileImportOptions options{.mode = ProfileImportMode::Overwrite,
@@ -3011,17 +3350,17 @@ void testCreateImportFaultMatrixHasUnambiguousOutcome() {
       return true;
     };
 
+    const auto archive = exchange.path() / "create-fault-source.zip";
+    expect(copyFaultArchiveFixture(createFaultFixtureSeed(), temp.path(),
+                                   archive),
+           "create fault fixture seed copies at point " +
+               std::to_string(failurePoint));
+    uuidIndex = 2;
     PlayerProfileManager manager(temp.path(), std::move(dependencies));
     expect(manager.Initialize().ok(),
            "create fault fixture initializes at point " +
                std::to_string(failurePoint));
-    expect(manager.createProfile("Create Fault Source").ok(),
-           "create fault source profile creates");
-    Fixture::seedMarker(manager.pathsFor(sourceId).scoresDb, "imported-data");
     ProfileArchiveService service(manager);
-    const auto archive = exchange.path() / "create-fault-source.zip";
-    expect(service.Export(sourceId, archive).ok(),
-           "create fault source exports");
 
     inject = true;
     const auto imported = service.Import(archive);
@@ -3100,17 +3439,15 @@ void testCommittedOverwriteSurvivesBackupCleanupFailures() {
           }
           return atomic_file::syncDirectory(path, syncError);
         };
+    const auto archive = exchange.path() / "cleanup.zip";
+    expect(copyFaultArchiveFixture(cleanupFaultFixtureSeed(), temp.path(),
+                                   archive),
+           "cleanup fixture seed copies at point " +
+               std::to_string(cleanupFailure));
+    uuidIndex = 3;
     PlayerProfileManager manager(temp.path(), std::move(dependencies));
     expect(manager.Initialize().ok(), "cleanup fixture initializes");
-    expect(manager.createProfile("Cleanup Source").ok() &&
-               manager.createProfile("Cleanup Target").ok(),
-           "cleanup fixture profiles create");
-    Fixture::seedMarker(manager.pathsFor(sourceId).scoresDb, "new-data");
-    Fixture::seedMarker(manager.pathsFor(targetId).scoresDb, "old-data");
     ProfileArchiveService service(manager);
-    const auto archive = exchange.path() / "cleanup.zip";
-    expect(service.Export(sourceId, archive).ok(),
-           "cleanup fixture archive exports");
 
     injectCleanup = true;
     ProfileImportOptions options{.mode = ProfileImportMode::Overwrite,
@@ -3133,9 +3470,9 @@ void testCommittedOverwriteSurvivesBackupCleanupFailures() {
            "startup keeps committed overwrite and removes backup artifact");
   }
 }
-} // namespace
-
-int main() {
+void runPortableShard() {
+  testTempDirectoryRetriesOccupiedCandidate();
+  testFixtureSeedIsBuiltOnceAndClonesAreIsolated();
   testStreamingSha256();
   testExportIsDeterministicAndStrict();
   testReplayFilesRoundTripByVerifiedOwnership();
@@ -3152,6 +3489,9 @@ int main() {
   testOverwriteRejectsFutureTargetWithoutMutation();
   testOverwriteRefusesTheLastProfile();
   testOverwriteRollbackRestoresOriginalProfile();
+}
+
+void runValidationShard() {
   testStrictMemberAllowlistAndTypes();
   testPracticeMembersAreValidatedBeforeInstall();
   testChecksumsVersionsValidatorsAndLimits();
@@ -3159,6 +3499,9 @@ int main() {
   testZipParserEnforcesDeclaredAndStreamedSizeLimits();
   testSupportedOlderSchemasMigrateAndPreserveRows();
   testFutureDatabaseAndCorruptionAreRejected();
+}
+
+void runTransactionsShard() {
   testExportFailurePreservesDestinationAndCleansTemps();
   testExportRejectsManagedApplicationDestinations();
   testExportBoundsExistingDestinationBackup();
@@ -3167,9 +3510,53 @@ int main() {
   testStaleArchiveWorkspacesAreSweptWithoutTouchingFreshOnes();
   testExportTransactionsPreserveExistingDestination();
   testStartupRecoversInterruptedProfileOverwrite();
+}
+
+void runFaultsShard() {
   testOverwriteFaultMatrixRecoversOneCompleteProfile();
   testCreateImportFaultMatrixHasUnambiguousOutcome();
   testCommittedOverwriteSurvivesBackupCleanupFailures();
+}
+
+bool runShard(std::string_view shard) {
+  if (shard == "portable") {
+    runPortableShard();
+    return true;
+  }
+  if (shard == "validation") {
+    runValidationShard();
+    return true;
+  }
+  if (shard == "transactions") {
+    runTransactionsShard();
+    return true;
+  }
+  if (shard == "faults") {
+    runFaultsShard();
+    return true;
+  }
+  return false;
+}
+
+void printShardUsage(const char *program) {
+  std::cerr << "Usage: " << program
+            << " [--shard portable|validation|transactions|faults]\n";
+}
+} // namespace
+
+int main(int argc, char *argv[]) {
+  if (argc == 1) {
+    runPortableShard();
+    runValidationShard();
+    runTransactionsShard();
+    runFaultsShard();
+  } else if (argc == 3 && std::string_view(argv[1]) == "--shard" &&
+             runShard(argv[2])) {
+  } else {
+    std::cerr << "Unsupported shard selector.\n";
+    printShardUsage(argv[0]);
+    return 2;
+  }
 
   if (failures != 0) {
     std::cerr << failures << " profile archive test(s) failed\n";

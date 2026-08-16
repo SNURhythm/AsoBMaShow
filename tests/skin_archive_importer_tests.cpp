@@ -569,6 +569,24 @@ void testCanonicalWrapperAndExplicitDirectoryRules() {
                          "a special entry cannot masquerade as wrapper root");
 }
 
+void testExplicitEmptyDirectoriesAreNotMaterialized() {
+  TempDirectory temp;
+  const auto roots = rootsBelow(temp.root());
+  auto result = prepareZip(
+      makeZip(temp.root() / "empty-directory.zip",
+              {{"Wrapper/", {}, AE_IFDIR},
+               {"Wrapper/empty/", {}, AE_IFDIR},
+               {"Wrapper/skin/play.luaskin", "return {type = 0}\n"}}),
+      roots);
+  expect(result.prepared.has_value(),
+         "archives with explicit empty directories still prepare");
+  if (result.prepared) {
+    expect(!fs::exists(result.prepared->visibleStagingRoot() / "empty") &&
+               !fs::exists(result.prepared->readView().root() / "empty"),
+           "explicit empty archive directories do not become package data");
+  }
+}
+
 void testUnsafeNamesAndCollisionsRejectWholePackage() {
   struct Case {
     const char *label;
@@ -1553,6 +1571,7 @@ int main() {
   testMoveOnlyPreparationContract();
   testZipFolderAndManualTreeHaveOneIdentity();
   testCanonicalWrapperAndExplicitDirectoryRules();
+  testExplicitEmptyDirectoriesAreNotMaterialized();
   testUnsafeNamesAndCollisionsRejectWholePackage();
   testInvalidUtf8AndNulNamesReject();
   testLinksAndNonregularEntriesRejectWholePackage();

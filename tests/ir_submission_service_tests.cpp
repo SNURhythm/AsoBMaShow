@@ -935,6 +935,41 @@ bool executeSql(const std::filesystem::path &databasePath,
   return succeeded;
 }
 
+std::optional<int>
+readUserVersion(const std::filesystem::path &databasePath) {
+  sqlite3 *database = nullptr;
+  if (sqlite3_open_v2(databasePath.string().c_str(), &database,
+                      SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK) {
+    if (database) {
+      sqlite3_close(database);
+    }
+    return std::nullopt;
+  }
+  sqlite3_stmt *statement = nullptr;
+  std::optional<int> result;
+  if (sqlite3_prepare_v2(database, "PRAGMA user_version", -1, &statement,
+                         nullptr) == SQLITE_OK &&
+      sqlite3_step(statement) == SQLITE_ROW &&
+      sqlite3_column_type(statement, 0) == SQLITE_INTEGER) {
+    result = sqlite3_column_int(statement, 0);
+  }
+  sqlite3_finalize(statement);
+  sqlite3_close(database);
+  return result;
+}
+
+void testSessionRevalidatesAfterExternalSchemaChange() {
+  Harness harness;
+  const auto databasePath = harness.temp.path() / "replays.db";
+  expect(executeSql(databasePath, "PRAGMA user_version=17"),
+         "schema-marker fixture lowers the stored schema version");
+  expect(harness.repository
+                 .ListIrRemoteScores("fake", "https://old.example.test")
+                 .status == ir::IrRemoteScoreReadOutcome::Status::Loaded &&
+             readUserVersion(databasePath) == ReplayRepository::kCurrentSchemaVersion,
+         "changed schema revalidates instead of using a stale session marker");
+}
+
 bool irIdentityStorageContains(const std::filesystem::path &databasePath,
                                std::string_view value) {
   sqlite3 *database = nullptr;
@@ -1639,7 +1674,8 @@ void testFutureWakeIgnoresBoundedSkippedProviderRows() {
     auto skipped = draft(suffix, harness.now.load());
     skipped.providerId = "skipped";
     skippedRowsInserted =
-        harness.enqueueReady(skipped, false).entry.has_value() &&
+        harness.repository.EnqueueReadyIrOutboxDraft(skipped, false)
+            .entry.has_value() &&
         skippedRowsInserted;
   }
   expect(skippedRowsInserted, "skipped-provider starvation fixtures insert");
@@ -3284,6 +3320,7 @@ void testReconciliationRequestRejectsUnavailableServiceAndConfiguration() {
 
 int main() {
   static_assert(ir::kMaximumAttemptStatusSnapshots > 0);
+  testSessionRevalidatesAfterExternalSchemaChange();
   testDueAttemptsSubmitAsOneAtomicGroup();
   testCompactedSuccessfulScoreIdentitiesRemainUnbound();
   testMixedRequestKindsUseTwoPlannedCalls();

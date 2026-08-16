@@ -39,14 +39,35 @@ void expect(bool condition, const std::string &message) {
 
 class TempDirectory {
 public:
-  explicit TempDirectory(std::string_view label = "profile") {
+  explicit TempDirectory(
+      std::string_view label = "profile",
+      std::optional<std::filesystem::path> firstCandidate = std::nullopt) {
     static std::atomic<unsigned long long> sequence{0};
-    const auto nonce =
-        std::chrono::steady_clock::now().time_since_epoch().count();
-    path_ = std::filesystem::temp_directory_path() /
-            ("asobmashow-" + std::string(label) + "-" + std::to_string(nonce) +
-             "-" + std::to_string(sequence.fetch_add(1)));
-    std::filesystem::create_directories(path_);
+    constexpr unsigned int kMaxAttempts = 32;
+    for (unsigned int attempt = 0; attempt < kMaxAttempts; ++attempt) {
+      const auto candidate =
+          firstCandidate && attempt == 0
+              ? *firstCandidate
+              : std::filesystem::temp_directory_path() /
+                    ("asobmashow-" + std::string(label) + "-" +
+                     std::to_string(std::chrono::steady_clock::now()
+                                        .time_since_epoch()
+                                        .count()) +
+                     "-" + std::to_string(sequence.fetch_add(1)));
+      std::error_code error;
+      if (std::filesystem::create_directory(candidate, error)) {
+        path_ = candidate;
+        return;
+      }
+      if (error && error != std::errc::file_exists) {
+        throw std::filesystem::filesystem_error(
+            "create temporary directory", candidate, error);
+      }
+    }
+    throw std::filesystem::filesystem_error(
+        "create unique temporary directory",
+        std::filesystem::temp_directory_path(),
+        std::make_error_code(std::errc::file_exists));
   }
 
   ~TempDirectory() {
@@ -59,6 +80,30 @@ public:
 private:
   std::filesystem::path path_;
 };
+
+void testTempDirectoryRetriesOccupiedCandidate() {
+  TempDirectory parent("temp-directory-collision-parent");
+  const auto occupied =
+      parent.path() / "asobmashow-temp-directory-profile-collision-0-0";
+  std::error_code error;
+  std::filesystem::remove_all(occupied, error);
+  std::filesystem::create_directory(occupied, error);
+  expect(!error, "temporary directory collision fixture creates");
+  if (error) {
+    return;
+  }
+
+  {
+    TempDirectory temp("temp-directory-collision", occupied);
+    expect(temp.path() != occupied,
+           "temporary directory retries an occupied candidate");
+    expect(std::filesystem::is_directory(temp.path()),
+           "temporary directory claims a new private root");
+  }
+
+  std::filesystem::remove_all(occupied, error);
+  expect(!error, "temporary directory collision fixture cleans up");
+}
 
 std::filesystem::path fixture(std::string_view name) {
   return std::filesystem::path(__FILE__).parent_path() / "fixtures" /
@@ -1133,6 +1178,167 @@ bool copyTreeForFault(const std::filesystem::path &source,
   return true;
 }
 
+bool copyDirectoryContents(const std::filesystem::path &source,
+                           const std::filesystem::path &destination,
+                           std::string &errorMessage) {
+  std::error_code error;
+  std::filesystem::directory_iterator iterator(source, error);
+  if (error) {
+    errorMessage = "unable to inspect fixture tree: " + error.message();
+    return false;
+  }
+  const std::filesystem::directory_iterator end;
+  while (iterator != end) {
+    const std::filesystem::directory_entry entry = *iterator;
+    std::filesystem::copy(entry.path(), destination / entry.path().filename(),
+                          std::filesystem::copy_options::recursive, error);
+    if (error) {
+      errorMessage = "unable to copy fixture tree: " + error.message();
+      return false;
+    }
+    iterator.increment(error);
+    if (error) {
+      errorMessage = "unable to iterate fixture tree: " + error.message();
+      return false;
+    }
+  }
+  return true;
+}
+
+std::size_t &newProfileFaultFixtureSeedBuildCount() {
+  static std::size_t count = 0;
+  return count;
+}
+
+struct NewProfileFaultFixtureSeed {
+  TempDirectory temp{"profile-new-fault-seed"};
+
+  NewProfileFaultFixtureSeed() {
+    ++newProfileFaultFixtureSeedBuildCount();
+    PlayerProfileManager manager(
+        temp.path(),
+        dependenciesFor("11111111-1111-4111-8111-111111111111"));
+    const ProfileResult initialized = manager.Initialize();
+    expect(initialized.ok(),
+           "new-profile fault fixture seed initializes: " +
+               initialized.message);
+    if (initialized.ok()) {
+      seedDuplicateFaultPayload(manager.activePaths());
+    }
+  }
+};
+
+const NewProfileFaultFixtureSeed &newProfileFaultFixtureSeed() {
+  static const NewProfileFaultFixtureSeed seed;
+  return seed;
+}
+
+bool cloneNewProfileFaultFixture(const std::filesystem::path &destination,
+                                 std::string &errorMessage) {
+  return copyDirectoryContents(newProfileFaultFixtureSeed().temp.path(),
+                               destination, errorMessage);
+}
+
+std::size_t newProfileFaultFixtureSeedBuildCountForTesting() {
+  return newProfileFaultFixtureSeedBuildCount();
+}
+
+std::size_t &profileDeletionFaultFixtureSeedBuildCount() {
+  static std::size_t count = 0;
+  return count;
+}
+
+struct ProfileDeletionFaultFixtureSeed {
+  TempDirectory temp{"profile-delete-fault-seed"};
+
+  ProfileDeletionFaultFixtureSeed() {
+    ++profileDeletionFaultFixtureSeedBuildCount();
+    const std::array ids{
+        std::string("11111111-1111-4111-8111-111111111111"),
+        std::string("22222222-2222-4222-8222-222222222222")};
+    std::size_t uuidIndex = 0;
+    auto dependencies = dependenciesFor();
+    dependencies.generateUuid = [&] { return ids.at(uuidIndex++); };
+    PlayerProfileManager manager(temp.path(), std::move(dependencies));
+    const ProfileResult initialized = manager.Initialize();
+    expect(initialized.ok(),
+           "deletion fault fixture seed initializes: " + initialized.message);
+    if (!initialized.ok()) {
+      return;
+    }
+    const ProfileResult created = manager.createProfile("Delete Fault Target");
+    expect(created.ok() && created.profile &&
+               created.profile->id == "22222222-2222-4222-8222-222222222222",
+           "deletion fault fixture seed creates inactive profile");
+    expect(uuidIndex == ids.size(),
+           "deletion fault fixture seed consumes its deterministic UUIDs");
+  }
+};
+
+const ProfileDeletionFaultFixtureSeed &profileDeletionFaultFixtureSeed() {
+  static const ProfileDeletionFaultFixtureSeed seed;
+  return seed;
+}
+
+bool cloneProfileDeletionFaultFixture(const std::filesystem::path &destination,
+                                      std::string &errorMessage) {
+  return copyDirectoryContents(profileDeletionFaultFixtureSeed().temp.path(),
+                               destination, errorMessage);
+}
+
+std::size_t profileDeletionFaultFixtureSeedBuildCountForTesting() {
+  return profileDeletionFaultFixtureSeedBuildCount();
+}
+
+void testNewProfileFaultFixturesReuseOneSeedAndRemainIsolated() {
+  TempDirectory first("profile-new-fault-cache-test");
+  TempDirectory second("profile-new-fault-cache-test");
+  std::string firstCopyError;
+  std::string secondCopyError;
+  expect(cloneNewProfileFaultFixture(first.path(), firstCopyError),
+         "new-profile fault fixture first clone succeeds: " + firstCopyError);
+  expect(cloneNewProfileFaultFixture(second.path(), secondCopyError),
+         "new-profile fault fixture second clone succeeds: " +
+             secondCopyError);
+  expect(newProfileFaultFixtureSeedBuildCountForTesting() == 1,
+         "new-profile fault fixture schema is built once");
+
+  const auto firstSettings = first.path() / "profiles" /
+                             "11111111-1111-4111-8111-111111111111" /
+                             "settings.json";
+  const auto secondSettings = second.path() / "profiles" /
+                              "11111111-1111-4111-8111-111111111111" /
+                              "settings.json";
+  writeFile(firstSettings, "{\"cacheCloneMutation\":true}\n");
+  expect(readFile(secondSettings).find("cacheCloneMutation") ==
+             std::string::npos,
+         "new-profile fault fixture clones remain isolated");
+}
+
+void testProfileDeletionFaultFixturesReuseOneSeedAndRemainIsolated() {
+  TempDirectory first("profile-delete-fault-cache-test");
+  TempDirectory second("profile-delete-fault-cache-test");
+  std::string firstCopyError;
+  std::string secondCopyError;
+  expect(cloneProfileDeletionFaultFixture(first.path(), firstCopyError),
+         "deletion fault fixture first clone succeeds: " + firstCopyError);
+  expect(cloneProfileDeletionFaultFixture(second.path(), secondCopyError),
+         "deletion fault fixture second clone succeeds: " + secondCopyError);
+  expect(profileDeletionFaultFixtureSeedBuildCountForTesting() == 1,
+         "deletion fault fixture schemas are built once");
+
+  const auto firstSettings = first.path() / "profiles" /
+                             "22222222-2222-4222-8222-222222222222" /
+                             "settings.json";
+  const auto secondSettings = second.path() / "profiles" /
+                              "22222222-2222-4222-8222-222222222222" /
+                              "settings.json";
+  writeFile(firstSettings, "{\"cacheCloneMutation\":true}\n");
+  expect(readFile(secondSettings).find("cacheCloneMutation") ==
+             std::string::npos,
+         "deletion fault fixture clones remain isolated");
+}
+
 void runNewProfileFaultCase(NewProfileOperation operation,
                             const NewProfileFaultCase &testCase) {
   const std::string label = faultCaseLabel(operation, testCase.name);
@@ -1143,7 +1349,7 @@ void runNewProfileFaultCase(NewProfileOperation operation,
   const std::string activeId = "11111111-1111-4111-8111-111111111111";
   const std::string generatedId = "22222222-2222-4222-8222-222222222222";
   std::vector<std::string> uuids{activeId, generatedId};
-  std::size_t uuidIndex = 0;
+  std::size_t uuidIndex = 1;
   bool inject = false;
   int finalRenameCalls = 0;
   int rollbackRenameCalls = 0;
@@ -1289,14 +1495,18 @@ void runNewProfileFaultCase(NewProfileOperation operation,
   };
 
   PlayerProfileManager manager(temp.path(), std::move(dependencies));
+  std::string fixtureCopyError;
+  expect(cloneNewProfileFaultFixture(temp.path(), fixtureCopyError),
+         label + " fixture cache clones: " + fixtureCopyError);
   const ProfileResult initialized = manager.Initialize();
   expect(initialized.ok(),
          label + " fixture initializes: " + initialized.message);
   if (!initialized.ok()) {
     return;
   }
+  expect(uuidIndex == 1,
+         label + " fixture preserves the bootstrap UUID cursor");
   const PlayerProfilePaths source = manager.pathsFor(activeId);
-  seedDuplicateFaultPayload(source);
   const std::string sourceSettingsBefore = readFile(source.settingsJson);
   const std::int64_t sourceMarkerRowsBefore =
       rowCount(source.scoresDb, "profile_fault_marker");
@@ -1308,6 +1518,9 @@ void runNewProfileFaultCase(NewProfileOperation operation,
           ? manager.createProfile("Fault Target")
           : manager.duplicateProfile(activeId, "Fault Target");
   inject = false;
+
+  expect(uuidIndex == 2,
+         label + " operation consumes exactly the generated profile UUID");
 
   expect(finalRenameCalls == 1, label + " reaches final rename exactly once");
   if (expectsRollbackAttempt(testCase.fault)) {
@@ -1552,7 +1765,7 @@ void runProfileDeletionFaultCase(const ProfileDeletionFaultCase &testCase) {
   const std::string activeId = "11111111-1111-4111-8111-111111111111";
   const std::string deletedId = "22222222-2222-4222-8222-222222222222";
   std::vector<std::string> uuids{activeId, deletedId};
-  std::size_t uuidIndex = 0;
+  std::size_t uuidIndex = 2;
   bool inject = false;
   int sourceRenameCalls = 0;
   int rollbackRenameCalls = 0;
@@ -1769,6 +1982,9 @@ void runProfileDeletionFaultCase(const ProfileDeletionFaultCase &testCase) {
     return removeTree(path, error);
   };
 
+  std::string fixtureCopyError;
+  expect(cloneProfileDeletionFaultFixture(temp.path(), fixtureCopyError),
+         label + " fixture cache clones: " + fixtureCopyError);
   PlayerProfileManager manager(temp.path(), std::move(dependencies));
   const ProfileResult initialized = manager.Initialize();
   expect(initialized.ok(),
@@ -1776,12 +1992,11 @@ void runProfileDeletionFaultCase(const ProfileDeletionFaultCase &testCase) {
   if (!initialized.ok()) {
     return;
   }
-  const ProfileResult created = manager.createProfile("Delete Fault Target");
-  expect(created.ok() && created.profile,
-         label + " fixture creates an inactive profile");
-  if (!created.profile) {
-    return;
-  }
+  expect(uuidIndex == 2,
+         label + " fixture preserves the bootstrap UUID cursor");
+  expect(manager.validateProfile(deletedId).ok() &&
+             hasProfile(manager, deletedId),
+         label + " fixture provides a valid inactive profile");
   const std::size_t countBefore = manager.listProfiles().size();
 
   if (testCase.fault == ProfileDeletionFault::StaleTombstoneRemovalFails ||
@@ -2927,9 +3142,8 @@ void testFutureVersionsFailClosed() {
   expect(!std::filesystem::exists(orphanTemp.path() / "active-profile.json"),
          "future orphan profile does not create a replacement bootstrap");
 }
-} // namespace
-
-int main() {
+void runBootstrapShard() {
+  testTempDirectoryRetriesOccupiedCandidate();
   testSqliteSnapshotIncludesWalAndValidatesIdentifiers();
   testFirstRunCreatesMissingApplicationDataRoot();
   testFirstRunMigrationIsLosslessAndIdempotent();
@@ -2938,7 +3152,12 @@ int main() {
   testDurableFinalizePrecedesBootstrapAndRecoversAfterSyncFailure();
   testFailedCreateCommitSyncLeavesNoVisibleProfile();
   testFailedDuplicateCommitSyncLeavesNoVisibleProfile();
+  testNewProfileFaultFixturesReuseOneSeedAndRemainIsolated();
   testCreateAndDuplicateFaultMatrixHasFilesystemDerivedOutcomes();
+}
+
+void runDeletionShard() {
+  testProfileDeletionFaultFixturesReuseOneSeedAndRemainIsolated();
   testProfileDeletionFaultMatrixHasFilesystemDerivedOutcomes();
   testProfilesRootSymlinkNeverEscapesApplicationRoot();
   testPartialTombstoneCleanupNeverRestoresOrExposesProfile();
@@ -2948,11 +3167,50 @@ int main() {
   testSupportedOlderDeleteRollbackRestoresManageableSource();
   testFutureDatabaseProfileIsNeverManageable();
   testSupportedOlderActiveProfileWaitsForSchemaOwners();
+}
+
+void runIntegrityShard() {
   testProfileCrudConstraintsAndDataIsolation();
   testOptionalOperationalFilesRejectLinksWithoutTouchingTargets();
   testPracticeDirectoryLifecycleAndValidation();
   testReplayDirectoryDuplicationUsesOwnedVerifiedInventory();
   testFutureVersionsFailClosed();
+}
+
+bool runShard(std::string_view shard) {
+  if (shard == "bootstrap") {
+    runBootstrapShard();
+    return true;
+  }
+  if (shard == "deletion") {
+    runDeletionShard();
+    return true;
+  }
+  if (shard == "integrity") {
+    runIntegrityShard();
+    return true;
+  }
+  return false;
+}
+
+void printShardUsage(const char *program) {
+  std::cerr << "Usage: " << program
+            << " [--shard bootstrap|deletion|integrity]\n";
+}
+} // namespace
+
+int main(int argc, char *argv[]) {
+  if (argc == 1) {
+    runBootstrapShard();
+    runDeletionShard();
+    runIntegrityShard();
+  } else if (argc == 3 && std::string_view(argv[1]) == "--shard" &&
+             runShard(argv[2])) {
+  } else {
+    std::cerr << "Unsupported shard selector.\n";
+    printShardUsage(argv[0]);
+    return 2;
+  }
 
   if (failures != 0) {
     std::cerr << failures << " player profile test(s) failed.\n";

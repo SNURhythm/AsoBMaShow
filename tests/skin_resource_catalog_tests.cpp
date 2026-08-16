@@ -221,6 +221,36 @@ struct FakeTextureDevice final : skin::SkinTextureDevice {
   int maximumDimension = skin::SkinResourcePolicy::maximumDimension;
 };
 
+skin::ValidatedBeatorajaSkinModel singleImageModel(std::string virtualPath) {
+  skin::ValidatedBeatorajaSkinModel model;
+  model.model.resources.emplace_back(skin::SkinImageResource{
+      .id = 1, .authoredName = "image", .virtualPath = std::move(virtualPath)});
+  model.model.objects.push_back(
+      {.id = 1,
+       .authoredName = "image-object",
+       .payload = skin::SkinImageObject{.orderedStates = {{
+           .resource = 1, .frames = {{.x = 0, .y = 0, .w = 40, .h = 20}}}}},
+       .critical = true});
+  return model;
+}
+
+skin::ValidatedBeatorajaSkinModel singleFontModel(std::string virtualPath,
+                                                   bool critical,
+                                                   std::string literal) {
+  skin::ValidatedBeatorajaSkinModel model;
+  model.model.resources.emplace_back(skin::SkinFontResource{
+      .id = 1, .authoredName = "font", .virtualPath = std::move(virtualPath),
+      .type = 0});
+  model.model.objects.push_back(
+      {.id = 1,
+       .authoredName = "font-object",
+       .payload = skin::SkinTextObject{.font = 1,
+                                       .literal = std::move(literal),
+                                       .pointSize = 16},
+       .critical = critical});
+  return model;
+}
+
 void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   namespace fs = std::filesystem;
   TemporaryDirectory temporary;
@@ -324,30 +354,30 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
     for (const auto &item : diagnostics) if (item.code == code) return true;
     return false;
   };
-  auto criticalMissingModel = model;
-  criticalMissingModel.model.objects[3].critical = true;
+  const auto criticalMissingModel =
+      singleImageModel("resources/does-not-exist.png");
   const auto criticalMissing = service.validateResources({.revision=snapshot.prepared->readView(), .entry=entry, .fileSystem=*stagedFs.fileSystem, .model=criticalMissingModel, .configuration=configuration});
   expect(!criticalMissing.valid && hasDiagnostic(criticalMissing.diagnostics, "skin.resource.missing_critical"),
          "a live critical resource missing from the selected source revision is a blocking error");
-  auto invalidCropModel = model;
+  auto invalidCropModel = singleImageModel("resources/fixture.png");
   auto &badFrames = std::get<skin::SkinImageObject>(invalidCropModel.model.objects[0].payload).orderedStates.front().frames;
   badFrames.front().x = 39;
   badFrames.front().w = 2;
   const auto invalidCrop = service.validateResources({.revision=snapshot.prepared->readView(), .entry=entry, .fileSystem=*stagedFs.fileSystem, .model=invalidCropModel, .configuration=configuration});
   expect(invalidCrop.valid && !hasDiagnostic(invalidCrop.diagnostics, "skin.resource.sprite_bounds"),
          "Beatoraja-compatible source crops outside an image remain selectable");
-  auto unsupportedFontModel = model;
-  std::get<skin::SkinFontResource>(unsupportedFontModel.model.resources[6]).virtualPath = "resources/unsupported.fnt";
+  const auto unsupportedFontModel =
+      singleFontModel("resources/unsupported.fnt", true, "A");
   const auto unsupportedFont = service.validateResources({.revision=snapshot.prepared->readView(), .entry=entry, .fileSystem=*stagedFs.fileSystem, .model=unsupportedFontModel, .configuration=configuration, .requiredRuntimeStrings=runtimeStrings});
   expect(!unsupportedFont.valid && hasDiagnostic(unsupportedFont.diagnostics, "skin.resource.font_format_unsupported"),
          "a critical bitmap font declaration is explicitly unsupported");
-  unsupportedFontModel.model.objects[5].critical = false;
-  unsupportedFontModel.model.objects[6].critical = false;
-  const auto optionalUnsupportedFont = service.validateResources({.revision=snapshot.prepared->readView(), .entry=entry, .fileSystem=*stagedFs.fileSystem, .model=unsupportedFontModel, .configuration=configuration, .requiredRuntimeStrings=runtimeStrings});
+  const auto optionalUnsupportedFontModel =
+      singleFontModel("resources/unsupported.fnt", false, "A");
+  const auto optionalUnsupportedFont = service.validateResources({.revision=snapshot.prepared->readView(), .entry=entry, .fileSystem=*stagedFs.fileSystem, .model=optionalUnsupportedFontModel, .configuration=configuration, .requiredRuntimeStrings=runtimeStrings});
   expect(optionalUnsupportedFont.valid && hasDiagnostic(optionalUnsupportedFont.diagnostics, "skin.resource.font_format_unsupported"),
          "an optional bitmap font declaration reports a non-blocking diagnostic");
-  auto unknownGlyphModel = model;
-  std::get<skin::SkinTextObject>(unknownGlyphModel.model.objects[5].payload).literal = "\xF4\x8F\xBF\xBF";
+  const auto unknownGlyphModel =
+      singleFontModel("resources/fixture.ttf", true, "\xF4\x8F\xBF\xBF");
   const auto unknownGlyph = service.validateResources({.revision=snapshot.prepared->readView(), .entry=entry, .fileSystem=*stagedFs.fileSystem, .model=unknownGlyphModel, .configuration=configuration, .requiredRuntimeStrings=runtimeStrings});
   expect(!unknownGlyph.valid && hasDiagnostic(unknownGlyph.diagnostics, "skin.resource.glyph_missing"),
          "unknown live text glyphs fail synchronously before resource publication");
