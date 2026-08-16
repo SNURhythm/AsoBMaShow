@@ -57,6 +57,7 @@ struct PlaySkinSessionCreateResult {
 struct PlaySkinSessionFrameContext {
   std::uint64_t sessionSerial = 0;
   PlaySkinSessionIdentity identity;
+  SkinSafetyPolicy safetyPolicy{};
   const PlayfieldChartVisualModel &chartModel;
   const ValidatedBeatorajaSkinModel &model;
   const BeatorajaSkinConfiguration &configuration;

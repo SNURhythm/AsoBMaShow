@@ -2082,9 +2082,9 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
       return;
     }
     if (lowered.commands.size() >
-            SkinCommandPolicy::maximumCommands - output.commands.size() ||
+            skinFrameMaximumCommands(inputs) - output.commands.size() ||
         lowered.primitiveVertices >
-            SkinCommandPolicy::maximumPrimitiveVertices -
+            skinFrameMaximumPrimitiveVertices(inputs) -
                 output.primitiveVertices) {
       output.failure =
           diagnostic("skin.renderer.command.limit",
@@ -2336,7 +2336,7 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
         return;
       }
       if (lowered.command) {
-        if (output.commands.size() >= SkinCommandPolicy::maximumCommands) {
+        if (output.commands.size() >= skinFrameMaximumCommands(inputs)) {
           output.failure =
               diagnostic("skin.renderer.command.limit",
                          "Projected line exceeds the fixed command limit.");
@@ -3001,7 +3001,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
     std::size_t glyphInstances = 0;
     std::size_t primitiveVertices = 0;
     buffer.commands.reserve(std::min(inputs.model.model.destinations.size(),
-                                     SkinCommandPolicy::maximumCommands));
+                                     skinFrameMaximumCommands(inputs)));
     struct DeferredNoteLowering {
       std::size_t insertionIndex = 0;
       const SkinObjectDefinition *object = nullptr;
@@ -3537,7 +3537,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           continue;
         }
         if (gaugeCommands.size() >
-            SkinCommandPolicy::maximumCommands - buffer.commands.size()) {
+            skinFrameMaximumCommands(inputs) - buffer.commands.size()) {
           if (reportObjectFailure(
                   result, *object,
                   diagnostic("skin.renderer.command.limit",
@@ -3674,7 +3674,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           continue;
         }
         if (lowered.command) {
-          if (buffer.commands.size() >= SkinCommandPolicy::maximumCommands) {
+          if (buffer.commands.size() >= skinFrameMaximumCommands(inputs)) {
             if (reportObjectFailure(result, *object,
                                     diagnostic("skin.renderer.command.limit",
                                                "Slider/graph command exceeds "
@@ -3715,7 +3715,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           continue;
         }
         if (lowered.commands.size() >
-            SkinCommandPolicy::maximumCommands - buffer.commands.size()) {
+            skinFrameMaximumCommands(inputs) - buffer.commands.size()) {
           if (reportObjectFailure(
                   result, *object,
                   diagnostic("skin.renderer.command.limit",
@@ -3814,7 +3814,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           continue;
         }
         if (lowered.command) {
-          if (buffer.commands.size() >= SkinCommandPolicy::maximumCommands) {
+          if (buffer.commands.size() >= skinFrameMaximumCommands(inputs)) {
             if (reportObjectFailure(
                     result, *object,
                     diagnostic(
@@ -3830,7 +3830,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       }
 
       if (bga) {
-        if (buffer.commands.size() >= SkinCommandPolicy::maximumCommands) {
+        if (buffer.commands.size() >= skinFrameMaximumCommands(inputs)) {
           if (reportObjectFailure(
                   result, *object,
                   diagnostic("skin.renderer.command.limit",
@@ -3873,7 +3873,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       } else {
         textLayout = prepareTextLayout(
             inputs, lookupIndex, *object, *text,
-            SkinCommandPolicy::maximumGlyphInstances - glyphInstances);
+            skinFrameMaximumGlyphInstances(inputs) - glyphInstances);
         if (textLayout->failure) {
           if (reportObjectFailure(result, *object, *textLayout->failure)) {
             return result;
@@ -3901,7 +3901,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           continue;
         }
         if (lowered.commands.size() >
-            SkinCommandPolicy::maximumCommands - buffer.commands.size()) {
+            skinFrameMaximumCommands(inputs) - buffer.commands.size()) {
           if (reportObjectFailure(
                   result, *object,
                   diagnostic(
@@ -3929,9 +3929,9 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
         if (!lowered.command) {
           continue;
         }
-        if (buffer.commands.size() >= SkinCommandPolicy::maximumCommands ||
+        if (buffer.commands.size() >= skinFrameMaximumCommands(inputs) ||
             lowered.glyphCount >
-                SkinCommandPolicy::maximumGlyphInstances - glyphInstances) {
+                skinFrameMaximumGlyphInstances(inputs) - glyphInstances) {
           if (reportObjectFailure(
                   result, *object,
                   diagnostic("skin.renderer.command.limit",
@@ -3972,7 +3972,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       if (emptyClip) {
         continue;
       }
-      if (buffer.commands.size() >= SkinCommandPolicy::maximumCommands) {
+      if (buffer.commands.size() >= skinFrameMaximumCommands(inputs)) {
         if (reportObjectFailure(
                 result, *object,
                 diagnostic("skin.renderer.command.limit",
@@ -4024,9 +4024,9 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
         continue;
       }
       if (lowered.commands.size() >
-              SkinCommandPolicy::maximumCommands - buffer.commands.size() ||
+              skinFrameMaximumCommands(inputs) - buffer.commands.size() ||
           lowered.primitiveVertices >
-              SkinCommandPolicy::maximumPrimitiveVertices - primitiveVertices) {
+              skinFrameMaximumPrimitiveVertices(inputs) - primitiveVertices) {
         if (reportObjectFailure(
                 result, *deferred.object,
                 diagnostic("skin.renderer.command.limit",

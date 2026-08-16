@@ -11,12 +11,14 @@ namespace skin {
 
 // TTF style fields are a bounded enhancement over Beatoraja's incremental
 // renderer: finite values are quantized before they become map keys.
-[[nodiscard]] bool canonicalizeSkinTextAtlasKey(SkinTextAtlasKey &) noexcept;
+[[nodiscard]] bool canonicalizeSkinTextAtlasKey(
+    SkinTextAtlasKey &, SkinSafetyPolicy safetyPolicy = SkinSafetyPolicy{}) noexcept;
 [[nodiscard]] std::string stableFallbackChainDigest(
     SkinResourceId primary, int primaryType,
     const std::vector<SkinFontFallbackResource> &fallbacks);
 [[nodiscard]] bool appendStableFallbackChainEntry(
-    std::string &digest, std::string_view normalizedVirtualPath, int type);
+    std::string &digest, std::string_view normalizedVirtualPath, int type,
+    SkinSafetyPolicy safetyPolicy = SkinSafetyPolicy{});
 
 struct SkinTextAtlasFontBytes {
   std::vector<std::byte> encoded;
@@ -34,6 +36,7 @@ struct SkinTextAtlasBuildResult {
     SkinTextAtlasId id, SkinTextAtlasKey key,
     const std::vector<SkinTextAtlasFontBytes> &faces,
     const std::set<char32_t> &codepoints,
-    const std::set<std::pair<char32_t, char32_t>> &pairs);
+    const std::set<std::pair<char32_t, char32_t>> &pairs,
+    SkinSafetyPolicy safetyPolicy = SkinSafetyPolicy{});
 
 } // namespace skin

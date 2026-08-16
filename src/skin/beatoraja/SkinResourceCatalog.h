@@ -3,6 +3,7 @@
 #include "BeatorajaSkinModel.h"
 #include "LuaSkinFileSystem.h"
 #include "SkinLiveResourceCounters.h"
+#include "../SkinSafetyPolicy.h"
 #include "../package/SkinTreeSnapshotter.h"
 #include "../../view/DecodedImageCache.h"
 #include "../../view/ImageDecodeCoordinator.h"
@@ -10,6 +11,7 @@
 #include <array>
 #include <condition_variable>
 #include <functional>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -48,12 +50,29 @@ struct SkinResourcePolicy {
   static constexpr std::size_t workerCount = 2;
 };
 
+[[nodiscard]] constexpr std::size_t skinResourceLimit(
+    const SkinSafetyPolicy &safetyPolicy,
+    std::size_t standardLimit) noexcept {
+  return static_cast<std::size_t>(safetyPolicy.limit(
+      SkinSafetyGuard::ResourceAllocationLimit, standardLimit));
+}
+
+[[nodiscard]] constexpr int skinResourceDimensionLimit(
+    const SkinSafetyPolicy &safetyPolicy) noexcept {
+  return safetyPolicy.enforces(SkinSafetyGuard::ResourceAllocationLimit)
+             ? SkinResourcePolicy::maximumDimension
+             : std::numeric_limits<int>::max();
+}
+
 // This is the one aggregate limit ledger shared by synchronous validation,
 // asynchronous planning, and render-thread upload preflight.  Each operation
 // is transactional: a rejected increment leaves the ledger unchanged, so an
 // optional failed resource cannot poison later accepted resources.
 class SkinResourceSessionAccounting {
 public:
+  explicit SkinResourceSessionAccounting(
+      SkinSafetyPolicy safetyPolicy = SkinSafetyPolicy{}) noexcept
+      : safetyPolicy_(safetyPolicy) {}
   [[nodiscard]] bool addImage(std::size_t physicalResources,
                               std::size_t logicalResources,
                               std::size_t encodedBytes,
@@ -66,6 +85,7 @@ public:
   }
 
 private:
+  SkinSafetyPolicy safetyPolicy_;
   std::size_t physicalResources_ = 0;
   std::size_t logicalResources_ = 0;
   std::size_t encodedBytes_ = 0;
@@ -78,7 +98,9 @@ private:
 };
 
 [[nodiscard]] bool skinResourceDimensionsAllowed(int width, int height,
-                                                 std::size_t byteCount) noexcept;
+                                                 std::size_t byteCount,
+                                                 SkinSafetyPolicy safetyPolicy =
+                                                     SkinSafetyPolicy{}) noexcept;
 [[nodiscard]] bool skinResourceResolveRect(const SkinSourceRect &authored,
                                            int imageWidth, int imageHeight,
                                            SkinSourceRect &resolved) noexcept;
@@ -146,6 +168,7 @@ struct SkinPreparedGlyphAtlas {
 };
 struct SkinResourceUploadPlan {
   SkinRevisionLease revision;
+  SkinSafetyPolicy safetyPolicy{};
   std::vector<SkinDecodedImage> images;
   std::vector<SkinPreparedGlyphAtlas> atlases;
   // Render-time text lookup must not reconstruct the configured and securely
@@ -161,6 +184,7 @@ struct SkinResourceValidationInputs {
   const ValidatedBeatorajaSkinModel &model;
   const BeatorajaSkinConfiguration &configuration;
   std::span<const std::string> requiredRuntimeStrings;
+  SkinSafetyPolicy safetyPolicy{};
   std::stop_token stop;
 };
 struct SkinResourceValidationResult { bool valid = false; bool cancelled = false; std::vector<SkinDiagnostic> diagnostics; };
@@ -171,6 +195,7 @@ struct SkinResourcePreparationInputs {
   const ValidatedBeatorajaSkinModel &model;
   const BeatorajaSkinConfiguration &configuration;
   std::span<const std::string> requiredRuntimeStrings;
+  SkinSafetyPolicy safetyPolicy{};
   std::stop_token stop;
 };
 struct SkinResourcePlanResult { std::optional<SkinResourceUploadPlan> plan; bool cancelled = false; std::vector<SkinDiagnostic> diagnostics; };
@@ -202,6 +227,7 @@ private:
   std::stop_source stop_;
   std::size_t activeCalls_ = 0;
   bool shutdownComplete_ = false;
+  bool builtInDecoder_ = false;
 };
 struct PreparedSkinResource {
   SkinResourceId id = 0;

@@ -14,20 +14,29 @@
 
 namespace skin {
 namespace {
-bool quantize(double &value) noexcept {
-  if (!std::isfinite(value) || std::abs(value) > 4096.0) return false;
+bool quantize(double &value, const SkinSafetyPolicy &safetyPolicy) noexcept {
+  if (!std::isfinite(value) ||
+      (safetyPolicy.enforces(SkinSafetyGuard::ResourceAllocationLimit) &&
+       std::abs(value) > 4096.0)) {
+    return false;
+  }
   value = std::round(value * 64.0) / 64.0;
   return true;
 }
 }
-bool canonicalizeSkinTextAtlasKey(SkinTextAtlasKey &key) noexcept {
-  return key.font != 0 && key.pointSize > 0 && key.pointSize <= 512 &&
+bool canonicalizeSkinTextAtlasKey(SkinTextAtlasKey &key,
+                                  SkinSafetyPolicy safetyPolicy) noexcept {
+  return key.font != 0 && key.pointSize > 0 &&
+         key.pointSize <= skinResourceDimensionLimit(safetyPolicy) &&
          !key.fallbackChainDigest.empty() &&
          key.fallbackChainDigest.size() <=
-             SkinResourcePolicy::maximumFallbackChainDigestBytes &&
+             skinResourceLimit(safetyPolicy,
+                               SkinResourcePolicy::maximumFallbackChainDigestBytes) &&
          key.outlineWidth >= 0.0 && key.shadowSmoothness >= 0.0 &&
-         quantize(key.outlineWidth) && quantize(key.shadowOffsetX) &&
-         quantize(key.shadowOffsetY) && quantize(key.shadowSmoothness);
+         quantize(key.outlineWidth, safetyPolicy) &&
+         quantize(key.shadowOffsetX, safetyPolicy) &&
+         quantize(key.shadowOffsetY, safetyPolicy) &&
+         quantize(key.shadowSmoothness, safetyPolicy);
 }
 std::string stableFallbackChainDigest(SkinResourceId primary, int primaryType,
                                       const std::vector<SkinFontFallbackResource> &fallbacks) {
@@ -44,13 +53,14 @@ std::string stableFallbackChainDigest(SkinResourceId primary, int primaryType,
 }
 
 bool appendStableFallbackChainEntry(
-    std::string &digest, std::string_view normalizedVirtualPath, int type) {
+    std::string &digest, std::string_view normalizedVirtualPath, int type,
+    SkinSafetyPolicy safetyPolicy) {
   const std::string pathSize = std::to_string(normalizedVirtualPath.size());
   const std::string typeText = std::to_string(type);
   const auto append = [&](std::string_view value) {
-    if (digest.size() > SkinResourcePolicy::maximumFallbackChainDigestBytes ||
-        value.size() > SkinResourcePolicy::maximumFallbackChainDigestBytes -
-                           digest.size()) {
+    const std::size_t limit = skinResourceLimit(
+        safetyPolicy, SkinResourcePolicy::maximumFallbackChainDigestBytes);
+    if (digest.size() > limit || value.size() > limit - digest.size()) {
       return false;
     }
     digest.append(value);
@@ -109,11 +119,16 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     SkinTextAtlasId id, SkinTextAtlasKey key,
     const std::vector<SkinTextAtlasFontBytes> &faces,
     const std::set<char32_t> &codepoints,
-    const std::set<std::pair<char32_t, char32_t>> &pairs) {
+    const std::set<std::pair<char32_t, char32_t>> &pairs,
+    SkinSafetyPolicy safetyPolicy) {
   SkinTextAtlasBuildResult result;
-  if (id == 0 || !canonicalizeSkinTextAtlasKey(key) || faces.empty() ||
-      codepoints.size() > SkinResourcePolicy::maximumGlyphs ||
-      pairs.size() > SkinResourcePolicy::maximumKerningPairs) {
+  if (id == 0 || !canonicalizeSkinTextAtlasKey(key, safetyPolicy) ||
+      faces.empty() ||
+      codepoints.size() >
+          skinResourceLimit(safetyPolicy, SkinResourcePolicy::maximumGlyphs) ||
+      pairs.size() > skinResourceLimit(
+                         safetyPolicy,
+                         SkinResourcePolicy::maximumKerningPairs)) {
     result.error = "font atlas key or limits are invalid";
     return result;
   }
@@ -158,7 +173,8 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
       break;
     }
   }
-  if (capHeight <= 0 || capHeight > SkinResourcePolicy::maximumDimension) {
+  if (capHeight <= 0 ||
+      capHeight > skinResourceDimensionLimit(safetyPolicy)) {
     result.error = "font cap height is unavailable";
     return result;
   }
@@ -185,9 +201,15 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     const int padding = std::max({2, outline + 1, std::abs(shadowX) + smoothRadius + 1, std::abs(shadowY) + smoothRadius + 1});
     const auto estimatedWidth = static_cast<std::int64_t>(maxX) - minX + 2LL * padding;
     const auto estimatedHeight = static_cast<std::int64_t>(maxY) - minY + 2LL * padding;
-    if (estimatedWidth <= 0 || estimatedHeight <= 0 || estimatedWidth > SkinResourcePolicy::maximumDimension ||
-        estimatedHeight > SkinResourcePolicy::maximumDimension ||
-        static_cast<std::uint64_t>(estimatedWidth) * static_cast<std::uint64_t>(estimatedHeight) * 4U > SkinResourcePolicy::maximumAtlasBytes - temporaryGlyphBytes) {
+    const std::size_t maximumAtlasBytes = skinResourceLimit(
+        safetyPolicy, SkinResourcePolicy::maximumAtlasBytes);
+    if (estimatedWidth <= 0 || estimatedHeight <= 0 ||
+        estimatedWidth > skinResourceDimensionLimit(safetyPolicy) ||
+        estimatedHeight > skinResourceDimensionLimit(safetyPolicy) ||
+        static_cast<std::uint64_t>(estimatedWidth) *
+                static_cast<std::uint64_t>(estimatedHeight) *
+                4U >
+            maximumAtlasBytes - temporaryGlyphBytes) {
       result.error = "font glyph metrics exceed atlas preparation limits"; return result;
     }
     SDL_Surface *raw = TTF_RenderGlyph32_Blended(opened[faceIndex].font, static_cast<Uint32>(codepoint), SDL_Color{255,255,255,255});
@@ -196,8 +218,8 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     SDL_FreeSurface(raw);
     if (!surface) { result.error = "font glyph conversion failed"; return result; }
     if (surface->w <= 0 || surface->h <= 0 ||
-        surface->w > SkinResourcePolicy::maximumDimension ||
-        surface->h > SkinResourcePolicy::maximumDimension) {
+        surface->w > skinResourceDimensionLimit(safetyPolicy) ||
+        surface->h > skinResourceDimensionLimit(safetyPolicy)) {
       SDL_FreeSurface(surface); result.error = "font glyph dimensions exceed limits"; return result;
     }
     if (SDL_LockSurface(surface) != 0) { SDL_FreeSurface(surface); result.error = "font glyph surface lock failed"; return result; }
@@ -228,8 +250,8 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     const int glyphWidth = contentWidth + 2 * glyphPadding;
     const int glyphHeight = contentHeight + 2 * glyphPadding;
     if (glyphWidth <= 0 || glyphHeight <= 0 ||
-        glyphWidth > SkinResourcePolicy::maximumDimension ||
-        glyphHeight > SkinResourcePolicy::maximumDimension) {
+        glyphWidth > skinResourceDimensionLimit(safetyPolicy) ||
+        glyphHeight > skinResourceDimensionLimit(safetyPolicy)) {
       SDL_UnlockSurface(surface);
       SDL_FreeSurface(surface);
       result.error = "font cropped glyph dimensions exceed limits";
@@ -237,7 +259,10 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     }
     const std::size_t glyphBytes = static_cast<std::size_t>(glyphWidth) *
                                    static_cast<std::size_t>(glyphHeight) * 4U;
-    if (glyphBytes > SkinResourcePolicy::maximumAtlasBytes - temporaryGlyphBytes) {
+    if (glyphBytes > skinResourceLimit(
+                         safetyPolicy,
+                         SkinResourcePolicy::maximumAtlasBytes) -
+                         temporaryGlyphBytes) {
       SDL_UnlockSurface(surface);
       SDL_FreeSurface(surface); result.error = "font temporary glyph bytes exceed atlas limit"; return result;
     }
@@ -289,7 +314,11 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
   for (const auto &glyph : glyphs) {
     if (glyph.width + 2 > atlasWidth) { result.error = "font glyph exceeds atlas width"; return result; }
     if (cursorX + glyph.width + 1 > atlasWidth) { cursorX = 1; cursorY += rowHeight + 1; rowHeight = 0; }
-    if (cursorY + glyph.height + 1 > SkinResourcePolicy::maximumDimension) { result.error = "font atlas exceeds one-page limit"; return result; }
+    if (cursorY + glyph.height + 1 >
+        skinResourceDimensionLimit(safetyPolicy)) {
+      result.error = "font atlas exceeds one-page limit";
+      return result;
+    }
     metrics.emplace(glyph.codepoint, SkinPreparedGlyphMetrics{
         .region = {.x = cursorX,
                    .y = cursorY,
@@ -304,7 +333,11 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
   }
   const int atlasHeight = std::max(1, cursorY + rowHeight + 1);
   const std::size_t byteCount = static_cast<std::size_t>(atlasWidth) * atlasHeight * 4U;
-  if (byteCount > SkinResourcePolicy::maximumAtlasBytes) { result.error = "font atlas exceeds byte limit"; return result; }
+  if (byteCount > skinResourceLimit(safetyPolicy,
+                                    SkinResourcePolicy::maximumAtlasBytes)) {
+    result.error = "font atlas exceeds byte limit";
+    return result;
+  }
   auto rgba = std::make_shared<std::vector<unsigned char>>(byteCount, 0);
   for (const auto &glyph : glyphs) {
     const auto &region = metrics.at(glyph.codepoint).region;

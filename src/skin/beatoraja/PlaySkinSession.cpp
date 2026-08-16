@@ -206,7 +206,8 @@ struct PlaySkinSession::OwnedActivation final {
                   SkinConfigurationWriteQueue &configurationWritesValue,
                   ViewportSettings viewportSettingsValue,
                   UiLogicalRect safeUiBoundsValue,
-                  PlaySkinViewport viewportValue)
+                  PlaySkinViewport viewportValue,
+                  SkinSafetyPolicy safetyPolicyValue)
       : revision(std::move(revisionValue)),
         identity(std::move(identityValue)), chartModel(&chartModelValue),
         reconciledSettings(std::move(reconciledSettingsValue)),
@@ -217,6 +218,7 @@ struct PlaySkinSession::OwnedActivation final {
         configurationWrites(&configurationWritesValue),
         viewportSettings(viewportSettingsValue),
         safeUiBounds(safeUiBoundsValue), viewport(viewportValue),
+        safetyPolicy(safetyPolicyValue),
         gaugeRandom(std::make_unique<DeterministicGaugeRandomSource>(
             identitySeed(identity))),
         bridge(std::make_unique<PlaySkinStateBridge>(PlaySkinStateBridgeContext{
@@ -244,6 +246,7 @@ struct PlaySkinSession::OwnedActivation final {
   ViewportSettings viewportSettings;
   UiLogicalRect safeUiBounds;
   PlaySkinViewport viewport;
+  SkinSafetyPolicy safetyPolicy{};
   Skin2DRenderer renderer;
   rendering::SkinQuadBatchRenderer quadRenderer;
   std::unique_ptr<ISkinGaugeRandomSource> gaugeRandom;
@@ -266,6 +269,7 @@ PlaySkinSession::PlaySkinSession(
     : owned_(std::move(owned)),
       context_{.sessionSerial = owned_->identity.sessionSerial,
                .identity = owned_->identity,
+               .safetyPolicy = owned_->safetyPolicy,
                .chartModel = *owned_->chartModel,
                .model = owned_->model,
                .configuration = owned_->configuration,
@@ -506,6 +510,7 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
          .model = *validatedModel.model,
          .configuration = configuration,
          .requiredRuntimeStrings = runtimeStrings,
+         .safetyPolicy = context.safetyPolicy,
          .stop = context.stop});
     appendMovedDiagnostics(result.diagnostics, planned.diagnostics);
     if (planned.cancelled || cancelled(context.stop, result)) {
@@ -564,7 +569,8 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
         std::move(*validatedModel.model), std::move(configuration),
         std::move(runtime.runtime), std::move(uploaded.catalog),
         context.configurationWrites,
-        context.viewport, context.safeUiBounds, viewport);
+        context.viewport, context.safeUiBounds, viewport,
+        context.safetyPolicy);
     result.session.reset(new PlaySkinSession(std::move(owned)));
     return result;
   } catch (...) {
@@ -658,6 +664,7 @@ PlaySkinFrameTransactionResult PlaySkinSession::runFrameTransaction(
        .runtime = context_.runtime,
        .state = context_.bridge,
        .markProcessedNotes = state.configuration.markProcessedNotes,
+       .safetyPolicy = context_.safetyPolicy,
        .gaugeRandomSource = context_.gaugeRandomSource},
       std::move(ownership));
   appendDiagnostics(result.diagnostics, context_.bridge.diagnostics());

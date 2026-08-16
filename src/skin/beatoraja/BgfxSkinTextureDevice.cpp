@@ -16,7 +16,7 @@ namespace {
   }
   const auto deviceMaximum = std::min<std::uint32_t>(
       caps->limits.maxTextureSize,
-      static_cast<std::uint32_t>(SkinResourcePolicy::maximumDimension));
+      std::numeric_limits<std::uint16_t>::max());
   return static_cast<int>(deviceMaximum);
 }
 

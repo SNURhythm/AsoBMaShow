@@ -2669,6 +2669,18 @@ void testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin() {
       .viewport = fixture.viewport(),
       .runtime = fixture.runtime(),
       .state = state};
+  auto unrestrictedInputs = inputs;
+  unrestrictedInputs.safetyPolicy = SkinSafetyPolicy(
+      SkinSafetyLevel::Unrestricted);
+  expect(skinFrameMaximumCommands(inputs) ==
+             SkinCommandPolicy::maximumCommands &&
+             skinFrameMaximumGlyphInstances(inputs) ==
+                 SkinCommandPolicy::maximumGlyphInstances &&
+             skinFrameMaximumCommands(unrestrictedInputs) ==
+                 std::numeric_limits<std::size_t>::max() &&
+             skinFrameMaximumGlyphInstances(unrestrictedInputs) ==
+                 std::numeric_limits<std::size_t>::max(),
+         "Unrestricted frame inputs lift the renderer command and glyph limits");
   const auto first = fixture.renderer().evaluateFrame(inputs);
   const auto second = fixture.renderer().evaluateFrame(inputs);
   expect(first.submitReady.has_value(),

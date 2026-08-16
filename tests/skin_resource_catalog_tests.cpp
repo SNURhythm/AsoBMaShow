@@ -534,6 +534,26 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
              hasDiagnostic(distributedPlan.diagnostics,
                            "skin.resource.session_limit"),
          "planning rejects the same distributed logical-resource overage before upload");
+  auto unrestrictedDistributedPlan = service.decodeAndPlan(
+      {.revision=lease->clone(), .entry=entry,
+       .fileSystem=*leasedFs.fileSystem, .model=distributedLogicalResources,
+       .configuration=configuration,
+       .safetyPolicy=skin::SkinSafetyPolicy(
+           skin::SkinSafetyLevel::Unrestricted)});
+  expect(unrestrictedDistributedPlan.plan &&
+             unrestrictedDistributedPlan.plan->images.size() == 1 &&
+             unrestrictedDistributedPlan.plan->images.front().aliases.size() ==
+                 skin::SkinResourcePolicy::maximumResources,
+         "Unrestricted retains otherwise-valid resources beyond the Standard session limit");
+  auto unrestrictedDevice = std::make_shared<FakeTextureDevice>();
+  auto unrestrictedUpload = skin::SkinResourceCatalog::upload(
+      std::move(*unrestrictedDistributedPlan.plan), unrestrictedDevice);
+  unrestrictedDistributedPlan.plan.reset();
+  expect(unrestrictedUpload.catalog && unrestrictedDevice->creates == 1 &&
+             unrestrictedUpload.catalog->find(
+                 skin::SkinResourcePolicy::maximumResources + 1),
+         "the prepared Unrestricted policy also bypasses upload-time session limits");
+  unrestrictedUpload.catalog.reset();
   skin::ValidatedBeatorajaSkinModel physicalResourceCapacity;
   for (skin::SkinResourceId id = 1;
        id <= skin::SkinResourcePolicy::maximumResources + 1;

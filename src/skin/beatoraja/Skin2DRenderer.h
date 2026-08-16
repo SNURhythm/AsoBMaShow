@@ -5,6 +5,7 @@
 #include "LuaSkinRuntime.h"
 #include "SkinDrawCommand.h"
 #include "SyntheticReplayGhostOverlay.h"
+#include "../SkinSafetyPolicy.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -191,8 +192,30 @@ struct SkinFrameInputs {
   ISkinFrameState &state;
   // Pinned PlayerConfig.markprocessednote; false by Beatoraja default.
   bool markProcessedNotes = false;
+  SkinSafetyPolicy safetyPolicy{};
   ISkinGaugeRandomSource *gaugeRandomSource = nullptr;
 };
+
+[[nodiscard]] constexpr std::size_t skinFrameMaximumCommands(
+    const SkinFrameInputs &inputs) noexcept {
+  return static_cast<std::size_t>(inputs.safetyPolicy.limit(
+      SkinSafetyGuard::ResourceAllocationLimit,
+      SkinCommandPolicy::maximumCommands));
+}
+
+[[nodiscard]] constexpr std::size_t skinFrameMaximumGlyphInstances(
+    const SkinFrameInputs &inputs) noexcept {
+  return static_cast<std::size_t>(inputs.safetyPolicy.limit(
+      SkinSafetyGuard::ResourceAllocationLimit,
+      SkinCommandPolicy::maximumGlyphInstances));
+}
+
+[[nodiscard]] constexpr std::size_t skinFrameMaximumPrimitiveVertices(
+    const SkinFrameInputs &inputs) noexcept {
+  return static_cast<std::size_t>(inputs.safetyPolicy.limit(
+      SkinSafetyGuard::ResourceAllocationLimit,
+      SkinCommandPolicy::maximumPrimitiveVertices));
+}
 
 struct SkinSliderInteractionGeometry {
   SkinObjectId sourceObject = 0;
