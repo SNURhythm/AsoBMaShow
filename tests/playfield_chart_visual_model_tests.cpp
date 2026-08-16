@@ -281,6 +281,14 @@ bool testParserStoredLandminesRetainTheirMineSource() {
     std::cerr << "parser-stored landmine must retain the Mine source family\n";
     return false;
   }
+  // JudgeManager's score note total excludes BMS mine-channel entries.
+  // The skin score, graph, and rank properties take this exact metadata
+  // total, so a parser-stored mine must not inflate their denominator.
+  if (model.staticMetadata.totalNotes != 0) {
+    std::cerr << "parser-stored landmine must not contribute to score or "
+                 "grade totals\n";
+    return false;
+  }
   return true;
 }
 

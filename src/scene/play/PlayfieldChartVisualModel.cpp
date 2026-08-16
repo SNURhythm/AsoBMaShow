@@ -340,7 +340,11 @@ BeatorajaNoteCounts beatorajaNoteCounts(const bms_parser::Chart &chart,
         continue;
       }
       for (const auto *note : timeline->Notes) {
-        if (note == nullptr) {
+        // bms-parser keeps mine-channel notes in the ordinary slot array,
+        // but Beatoraja's score note total excludes them. Invisible notes
+        // are in TimeLine::InvisibleNotes and therefore never enter here.
+        if (note == nullptr ||
+            dynamic_cast<const bms_parser::LandmineNote *>(note) != nullptr) {
           continue;
         }
         const bool scratch = isScratch(note->Lane);
