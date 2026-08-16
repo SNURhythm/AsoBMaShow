@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <span>
 #include <string>
@@ -223,6 +224,13 @@ void testBeatorajaDirectSkinDirectorySemantics() {
                  regexListed.entries.end(),
          "file listing keeps Beatoraja's unrestricted regex and ignores the "
          "former caller entry cap");
+
+  const auto missingDirectory =
+      fileSystem.list("missing-directory", {}, std::numeric_limits<std::size_t>::max());
+  expect(missingDirectory.failure &&
+             missingDirectory.failure->code == SkinFileError::IoError,
+         "file listing reports an inaccessible directory so the legacy Lua "
+         "facade returns nil like Beatoraja");
 
   writeText(fixture.roots.visiblePackages / "Hub/const.lua",
             "return { source = 'shared-skins-root' }\n");

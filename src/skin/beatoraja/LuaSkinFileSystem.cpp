@@ -732,10 +732,11 @@ SkinFileListResult LuaSkinFileSystem::list(std::string_view virtualDirectory,
   const std::scoped_lock lock(impl_->operationMutex);
   (void)maximumEntries;
   const auto normalized = impl_->normalize(virtualDirectory, true);
-  // SkinFileLuaApiExporter catches resolver/listing errors and returns an
-  // empty result.  It does not cap or sort the host directory stream.
+  // LegacySkinLuaApi#fileFacade returns nil when the path cannot be resolved
+  // or Files.newDirectoryStream fails.  It does not cap or sort the host
+  // directory stream.
   if (!normalized.path) {
-    return {.entries = {}};
+    return {.failure = normalized.failure};
   }
   std::optional<std::regex> pattern;
   if (!luaPattern.empty()) {
@@ -761,7 +762,8 @@ SkinFileListResult LuaSkinFileSystem::list(std::string_view virtualDirectory,
     }
   }
   if (error) {
-    return {.entries = {}};
+    return {.failure = failure(SkinFileError::IoError, *normalized.path,
+                               "skin directory could not be listed")};
   }
   return {.entries = std::move(entries)};
 }
