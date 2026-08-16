@@ -865,7 +865,7 @@ void testDirectoryImportUsesThePickedFolderAsItsPrivateRoot() {
 
   const PlatformDirectoryImportRequest request{
       .maxBytes = 1024,
-      .maxFiles = 2,
+      .maxFiles = 3,
       .maxDepth = 2,
       .maxPathBytes = 128};
   const auto imported =
@@ -899,11 +899,12 @@ void testDirectoryImportUsesThePickedFolderAsItsPrivateRoot() {
          "directory import requires a non-zero path limit");
 
   invalid = request;
-  invalid.maxFiles = 1;
+  invalid.maxFiles = 2;
   expect(!platform_document_handoff::detail::CopyDirectoryForImport(
               sourceRoot, invalid, temporaryRoot)
               .ok(),
-         "directory import enforces the selected folder file limit");
+         "directory import counts directories toward the selected folder entry "
+         "limit");
   invalid = request;
   invalid.maxBytes = 3;
   expect(!platform_document_handoff::detail::CopyDirectoryForImport(

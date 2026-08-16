@@ -3263,7 +3263,7 @@ bool CopyIOSDirectoryURLBounded(
   __block BOOL copyCancelled = NO;
   __block NSString *copyError = @"";
   __block std::uint64_t totalBytes = 0;
-  __block std::uint64_t fileCount = 0;
+  __block std::uint64_t entryCount = 0;
   NSFileCoordinator *coordinator =
       [[NSFileCoordinator alloc] initWithFilePresenter:nil];
   RegisterIOSDocumentCoordinator(operationToken, coordinator);
@@ -3313,6 +3313,10 @@ bool CopyIOSDirectoryURLBounded(
     for (NSURL *entryURL in enumerator) {
       if (IOSDocumentCancellationRequested(cancellationRequested)) {
         copyCancelled = YES;
+        break;
+      }
+      if (++entryCount > maxFiles) {
+        copyError = @"The selected folder contains too many entries.";
         break;
       }
       NSString *entryPath = entryURL.path.stringByStandardizingPath;
@@ -3378,10 +3382,6 @@ bool CopyIOSDirectoryURLBounded(
           break;
         }
         continue;
-      }
-      if (++fileCount > maxFiles) {
-        copyError = @"The selected folder contains too many files.";
-        break;
       }
       NSNumber *declaredSize = nil;
       if (![entryURL getResourceValue:&declaredSize

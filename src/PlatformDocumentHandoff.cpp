@@ -1683,13 +1683,16 @@ PlatformDocumentHandoffResult CopyDirectoryForImport(
   };
 
   std::uint64_t copiedBytes = 0;
-  std::uint64_t copiedFiles = 0;
+  std::uint64_t copiedEntries = 0;
   std::filesystem::recursive_directory_iterator iterator(
       source, std::filesystem::directory_options::none, error);
   const std::filesystem::recursive_directory_iterator end;
   while (!error && iterator != end) {
     if (cancelled()) {
       return cancelledCopy();
+    }
+    if (++copiedEntries > request.maxFiles) {
+      return failCopy("The selected folder exceeds its entry limit.");
     }
     const auto entryPath = iterator->path();
     const auto relative = entryPath.lexically_relative(source);
@@ -1732,9 +1735,6 @@ PlatformDocumentHandoffResult CopyDirectoryForImport(
                             : std::move(errorMessage));
       }
     } else if (std::filesystem::is_regular_file(status)) {
-      if (++copiedFiles > request.maxFiles) {
-        return failCopy("The selected folder exceeds its file limit.");
-      }
       ExclusiveOutputFile output;
       const auto outputOpen = output.open(destination, errorMessage);
       if (outputOpen != ExclusiveCreateResult::Opened) {
