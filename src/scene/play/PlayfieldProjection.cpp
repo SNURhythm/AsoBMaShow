@@ -717,7 +717,25 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
                   : std::min(*retainedCursorLongNoteBlocker,
                              timeline->retainedOrdinal);
         }
-        const auto tailScrollDelta = positionedScrollDelta(*tailTimeline);
+        auto tailScrollDelta = positionedScrollDelta(*tailTimeline);
+        if (!tailScrollDelta && request.builtInTraversal &&
+            tailTimeline->timeMicros >= timeMicros) {
+          const auto &traversal = *request.builtInTraversal;
+          if (std::isfinite(traversal.upperBound) &&
+              std::isfinite(traversal.judgeY) &&
+              std::isfinite(traversal.rxhs) &&
+              std::abs(traversal.rxhs) > 0.0001F) {
+            // LaneRenderer draws the long body immediately and its bounded
+            // forward walk clips the unresolved tail at the lane's upper
+            // edge. Mirror the built-in plan's tail-at-upper-bound fallback
+            // for the skin DTO, whose renderer scales this abstract delta
+            // into its own lane geometry.
+            tailScrollDelta =
+                (static_cast<double>(traversal.upperBound) -
+                 static_cast<double>(traversal.judgeY)) /
+                static_cast<double>(traversal.rxhs);
+          }
+        }
         if (!tailScrollDelta ||
             !isLongIntervalVisible(*scrollDelta, *tailScrollDelta,
                                    visibleInterval)) {

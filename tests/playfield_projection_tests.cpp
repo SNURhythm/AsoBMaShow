@@ -350,6 +350,77 @@ bool testLaneTraversalCullsEverySkinPlayareaDto() {
   return true;
 }
 
+bool testSkinLongNoteExtendsToViewportWhenTailIsOutsideBoundedWalk() {
+  // LaneRenderer draws an unresolved long-note body from its visible head to
+  // the lane's upper edge even when its actual tail lies beyond the bounded
+  // forward walk. The built-in plan already retains that upper-edge body;
+  // selected-skin DTOs must carry the same span rather than waiting for the
+  // tail timeline to enter the walk.
+  PlayfieldChartVisualModel model;
+  model.laneOrder = {0};
+  model.timelines = {
+      {.id = 1,
+       .timeMicros = 0,
+       .beat = 0.0,
+       .scrollPosition = 0.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 0,
+       .retainedOrdinal = 0},
+      {.id = 2,
+       .timeMicros = 100,
+       .beat = 1.0,
+       .scrollPosition = 1.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 1,
+       .retainedOrdinal = 1},
+      {.id = 3,
+       .timeMicros = 200,
+       .beat = 2.0,
+       .scrollPosition = 2.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 2,
+       .retainedOrdinal = 2},
+  };
+  model.notes = {
+      {.id = 11,
+       .timelineId = 1,
+       .pairId = 12,
+       .lane = 0,
+       .kind = ChartVisualNoteKind::LongHead,
+       .longNoteMode = ChartLongNoteMode::CN,
+       .authoredOrdinal = 0},
+      {.id = 12,
+       .timelineId = 3,
+       .pairId = 11,
+       .lane = 0,
+       .kind = ChartVisualNoteKind::LongTail,
+       .longNoteMode = ChartLongNoteMode::CN,
+       .authoredOrdinal = 1},
+  };
+  PlayfieldVisualState state;
+  state.clock.visualTimeMicros = 0;
+  PlayfieldProjection projection;
+  const auto result = projection.project(
+      model, state,
+      {.buildBuiltInPlan = false,
+       .builtInTraversal = BuiltInRendererTraversal{.lowerBound = -1.0F,
+                                                     .judgeY = 0.0F,
+                                                     .upperBound = 1.0F,
+                                                     .rxhs = 4.0F,
+                                                     .hispeed = 4.0F}});
+  const auto skin = adaptPlayfieldProjectionForSkin(result);
+  return result.longNotes.size() == 1U &&
+         result.longNotes.front().headId == 11U &&
+         result.longNotes.front().tailId == 12U &&
+         closeTo(result.longNotes.front().headScrollDelta, 0.0) &&
+         closeTo(result.longNotes.front().tailScrollDelta, 0.25) &&
+         skin.longNotes.size() == 1U &&
+         skin.longNotes.front().headVisualId == 11U &&
+         skin.longNotes.front().tailVisualId == 12U &&
+         closeTo(skin.longNotes.front().headAuthoredYDisplacement, 0.0) &&
+         closeTo(skin.longNotes.front().tailAuthoredYDisplacement, 0.25);
+}
+
 bool testReplayProjectionDoesNotRescanOffscreenChartRowsEachFrame() {
   // Replay watch and video export both call this same projection boundary.
   // LaneRenderer advances a retained cursor and stops at the upper lane edge;
@@ -439,6 +510,11 @@ int main() {
     return EXIT_FAILURE;
   }
   if (!testLaneTraversalCullsEverySkinPlayareaDto()) {
+    return EXIT_FAILURE;
+  }
+  if (!testSkinLongNoteExtendsToViewportWhenTailIsOutsideBoundedWalk()) {
+    std::cerr << "skin long notes must extend through the visible lane before "
+                 "their tail timeline enters the bounded traversal\n";
     return EXIT_FAILURE;
   }
   if (!testReplayProjectionDoesNotRescanOffscreenChartRowsEachFrame()) {
