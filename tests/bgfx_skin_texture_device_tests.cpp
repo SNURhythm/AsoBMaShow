@@ -2,8 +2,11 @@
 
 #include <bgfx/bgfx.h>
 
+#include <algorithm>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <thread>
 #include <vector>
@@ -53,6 +56,15 @@ void testMalformedAndOversizeImagesAreRejected() {
   const int maximum = device.maximumTextureDimension();
   require(maximum > 0 && maximum <= skin::SkinResourcePolicy::maximumDimension,
           "active bgfx texture limit is clamped to the skin resource policy");
+  const int unrestrictedMaximum = device.maximumTextureDimension(
+      skin::SkinSafetyPolicy{skin::SkinSafetyLevel::Unrestricted});
+  require(unrestrictedMaximum >= maximum,
+          "unrestricted texture limit never tightens the standard limit");
+  require(unrestrictedMaximum ==
+              static_cast<int>(std::min<std::uint32_t>(
+                  bgfx::getCaps()->limits.maxTextureSize,
+                  std::numeric_limits<std::uint16_t>::max())),
+          "unrestricted texture limit follows the actual bgfx device limit");
   image_decode::DecodedImageData oversize{
       .width = maximum + 1, .height = 1,
       .rgba = std::make_shared<std::vector<unsigned char>>(4U)};

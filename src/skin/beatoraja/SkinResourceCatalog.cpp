@@ -623,7 +623,8 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
   SkinResourceUploadResult result;
   const SkinSafetyPolicy safetyPolicy = plan.safetyPolicy;
   if (!device || !device->ownsCurrentThread()) { result.diagnostics.push_back(diagnostic("skin.resource.render_thread_violation", "resource upload requires the render owner thread")); return result; }
-  const int reportedDeviceMaximumDimension = device->maximumTextureDimension();
+  const int reportedDeviceMaximumDimension =
+      device->maximumTextureDimension(safetyPolicy);
   if (reportedDeviceMaximumDimension <= 0) {
     result.diagnostics.push_back(diagnostic("skin.resource.texture_create_failed", "texture device reports an invalid maximum dimension")); return result;
   }
@@ -842,7 +843,7 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
     return prepared;
   };
   for (const auto &image : plan.images) {
-    const auto handle = catalog->device_->create(image.pixels);
+    const auto handle = catalog->device_->create(image.pixels, safetyPolicy);
     if (!bgfx::isValid(handle)) {
       result.diagnostics.push_back(diagnostic(
           "skin.resource.texture_create_failed", "texture creation failed"));
@@ -869,7 +870,7 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
     if (catalog->liveCounters_) catalog->liveCounters_->textureCreated();
     pending.release();
   }
-  for (const auto &atlas : plan.atlases) { const auto handle=catalog->device_->create(atlas.pixels); if(!bgfx::isValid(handle)){result.diagnostics.push_back(diagnostic("skin.resource.texture_create_failed","texture creation failed")); rollback(); return result;} PendingHandle pending{*catalog->device_, handle}; catalog->atlases_.emplace(atlas.id,PreparedSkinTextAtlas{.id=atlas.id,.key=atlas.key,.texture=handle,.width=atlas.pixels.width,.height=atlas.pixels.height,.glyphs=atlas.glyphs,.kerning=atlas.kerning,.ascent=atlas.ascent,.capHeight=atlas.capHeight,.descent=atlas.descent,.lineHeight=atlas.lineHeight}); catalog->atlasKeys_.emplace(atlas.key,atlas.id); catalog->owned_.push_back({handle}); if(catalog->liveCounters_) catalog->liveCounters_->textureCreated(); pending.release(); }
+  for (const auto &atlas : plan.atlases) { const auto handle=catalog->device_->create(atlas.pixels, safetyPolicy); if(!bgfx::isValid(handle)){result.diagnostics.push_back(diagnostic("skin.resource.texture_create_failed","texture creation failed")); rollback(); return result;} PendingHandle pending{*catalog->device_, handle}; catalog->atlases_.emplace(atlas.id,PreparedSkinTextAtlas{.id=atlas.id,.key=atlas.key,.texture=handle,.width=atlas.pixels.width,.height=atlas.pixels.height,.glyphs=atlas.glyphs,.kerning=atlas.kerning,.ascent=atlas.ascent,.capHeight=atlas.capHeight,.descent=atlas.descent,.lineHeight=atlas.lineHeight}); catalog->atlasKeys_.emplace(atlas.key,atlas.id); catalog->owned_.push_back({handle}); if(catalog->liveCounters_) catalog->liveCounters_->textureCreated(); pending.release(); }
   catalog->textAtlasesByObject_ = std::move(plan.textAtlasesByObject);
   if (catalog->liveCounters_) {
     catalog->liveCounters_->resourceCreated();

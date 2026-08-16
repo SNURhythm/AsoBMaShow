@@ -13,9 +13,13 @@ public:
   BgfxSkinTextureDevice();
 
   bgfx::TextureHandle create(const image_decode::DecodedImageData &) override;
+  bgfx::TextureHandle create(const image_decode::DecodedImageData &,
+                             SkinSafetyPolicy) override;
   void destroy(bgfx::TextureHandle) noexcept override;
   [[nodiscard]] bool ownsCurrentThread() const noexcept override;
   [[nodiscard]] int maximumTextureDimension() const noexcept override;
+  [[nodiscard]] int maximumTextureDimension(
+      SkinSafetyPolicy) const noexcept override;
 
 private:
   std::thread::id owner_;

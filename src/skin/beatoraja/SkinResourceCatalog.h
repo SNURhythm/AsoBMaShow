@@ -259,10 +259,18 @@ class SkinTextureDevice {
 public:
   virtual ~SkinTextureDevice() = default;
   virtual bgfx::TextureHandle create(const image_decode::DecodedImageData &) = 0;
+  virtual bgfx::TextureHandle create(
+      const image_decode::DecodedImageData &image,
+      SkinSafetyPolicy) {
+    return create(image);
+  }
   virtual void destroy(bgfx::TextureHandle) noexcept = 0;
   virtual bool ownsCurrentThread() const noexcept = 0;
   virtual int maximumTextureDimension() const noexcept {
     return SkinResourcePolicy::maximumDimension;
+  }
+  virtual int maximumTextureDimension(SkinSafetyPolicy) const noexcept {
+    return maximumTextureDimension();
   }
 };
 

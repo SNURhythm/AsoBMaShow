@@ -9,14 +9,21 @@ namespace skin {
 
 namespace {
 
-[[nodiscard]] int activeMaximumTextureDimension() noexcept {
+[[nodiscard]] int activeMaximumTextureDimension(
+    SkinSafetyPolicy safetyPolicy = SkinSafetyPolicy{}) noexcept {
   const auto *caps = bgfx::getCaps();
   if (caps == nullptr || caps->limits.maxTextureSize == 0) {
     return 0;
   }
-  const auto deviceMaximum = std::min<std::uint32_t>(
+  const std::uint32_t representableMaximum = std::min<std::uint32_t>(
       caps->limits.maxTextureSize,
       std::numeric_limits<std::uint16_t>::max());
+  const auto deviceMaximum = safetyPolicy.enforces(
+      SkinSafetyGuard::ResourceAllocationLimit)
+      ? std::min<std::uint32_t>(
+            representableMaximum,
+            static_cast<std::uint32_t>(SkinResourcePolicy::maximumDimension))
+      : representableMaximum;
   return static_cast<int>(deviceMaximum);
 }
 
@@ -35,11 +42,22 @@ int BgfxSkinTextureDevice::maximumTextureDimension() const noexcept {
 
 bgfx::TextureHandle BgfxSkinTextureDevice::create(
     const image_decode::DecodedImageData &image) {
+  return create(image, SkinSafetyPolicy{});
+}
+
+int BgfxSkinTextureDevice::maximumTextureDimension(
+    SkinSafetyPolicy safetyPolicy) const noexcept {
+  return activeMaximumTextureDimension(safetyPolicy);
+}
+
+bgfx::TextureHandle BgfxSkinTextureDevice::create(
+    const image_decode::DecodedImageData &image,
+    SkinSafetyPolicy safetyPolicy) {
   if (!ownsCurrentThread()) {
     return BGFX_INVALID_HANDLE;
   }
 
-  const int maximumDimension = activeMaximumTextureDimension();
+  const int maximumDimension = activeMaximumTextureDimension(safetyPolicy);
   if (maximumDimension <= 0 || image.width <= 0 || image.height <= 0 ||
       image.width > maximumDimension || image.height > maximumDimension ||
       image.width > std::numeric_limits<std::uint16_t>::max() ||
