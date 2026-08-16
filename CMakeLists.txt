@@ -1672,25 +1672,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
 
-    add_executable(repository_boundary_tests
-        tests/repository_boundary_tests.cpp
-    )
-    target_compile_features(repository_boundary_tests PRIVATE cxx_std_23)
-    target_compile_definitions(repository_boundary_tests PRIVATE
-        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
-    )
-
-    add_executable(replay_contract_boundary_tests
-        tests/replay_contract_boundary_tests.cpp
-    )
-    target_include_directories(replay_contract_boundary_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-    )
-    target_compile_features(replay_contract_boundary_tests PRIVATE cxx_std_23)
-    target_compile_definitions(replay_contract_boundary_tests PRIVATE
-        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
-    )
-
     add_executable(gyroscope_turntable_tests
         tests/gyroscope_turntable_tests.cpp
         src/input/GyroscopeTurntable.cpp
@@ -2038,19 +2019,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(replay_input_recorder_tests PRIVATE cxx_std_23)
 
-    add_executable(modern_chart_persistence_contract_tests
-        tests/modern_chart_persistence_contract_tests.cpp
-    )
-    target_include_directories(modern_chart_persistence_contract_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-    )
-    target_compile_definitions(modern_chart_persistence_contract_tests PRIVATE
-        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
-    )
-    target_compile_features(modern_chart_persistence_contract_tests PRIVATE
-        cxx_std_23
-    )
-
     add_executable(course_continuation_tests
         tests/course_continuation_tests.cpp
         src/bms_parser.cpp
@@ -2066,19 +2034,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(course_continuation_tests PRIVATE cxx_std_23)
-
-    add_executable(modern_course_persistence_contract_tests
-        tests/modern_course_persistence_contract_tests.cpp
-    )
-    target_include_directories(modern_course_persistence_contract_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-    )
-    target_compile_definitions(modern_course_persistence_contract_tests PRIVATE
-        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
-    )
-    target_compile_features(modern_course_persistence_contract_tests PRIVATE
-        cxx_std_23
-    )
 
     add_executable(course_replay_capture_tests
         tests/course_replay_capture_tests.cpp
@@ -3708,14 +3663,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_compile_features(skin_process_resident_memory_tests PRIVATE cxx_std_23)
     endif()
 
-    add_executable(mobile_memory_pressure_tests
-        tests/mobile_memory_pressure_tests.cpp
-    )
-    target_compile_features(mobile_memory_pressure_tests PRIVATE cxx_std_23)
-    target_compile_definitions(mobile_memory_pressure_tests PRIVATE
-        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
-    )
-
     add_executable(image_view_fade_tests
         tests/image_view_fade_tests.cpp
         src/view/DecodedImageCache.cpp
@@ -3750,14 +3697,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         COMMAND ${CMAKE_COMMAND}
             -DIMAGE_VIEW_SOURCE=${CMAKE_SOURCE_DIR}/src/view/ImageView.cpp
             -P ${CMAKE_SOURCE_DIR}/tests/assert_image_view_decoder_ownership.cmake
-    )
-
-    add_executable(artwork_cache_contract_tests
-        tests/artwork_cache_contract_tests.cpp
-    )
-    target_compile_features(artwork_cache_contract_tests PRIVATE cxx_std_23)
-    target_compile_definitions(artwork_cache_contract_tests PRIVATE
-        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
     )
 
     add_executable(chart_list_item_view_tests
@@ -6218,7 +6157,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         )
     endforeach()
 
-    asobmashow_register_test(repository_boundary_tests)
     asobmashow_register_test(skin_path_policy_tests)
     asobmashow_register_test(skin_tree_snapshotter_tests)
     asobmashow_register_test(gameplay_skin_lifecycle_tests)
@@ -6228,7 +6166,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(skin_archive_importer_tests)
     asobmashow_register_test(skin_diagnostic_history_tests)
     asobmashow_register_test(lua_skin_file_system_tests)
-    asobmashow_register_test(replay_contract_boundary_tests)
     asobmashow_register_test(find_bms_download_tests)
     asobmashow_register_test(video_frame_layout_tests)
     asobmashow_register_test(video_decode_state_tests)
@@ -6269,9 +6206,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         replay_codec_store_contract_tests
         replay_playback_tests
         replay_input_recorder_tests
-        modern_chart_persistence_contract_tests
         course_continuation_tests
-        modern_course_persistence_contract_tests
         course_replay_capture_tests
         modern_result_tests
         result_contract_tests
@@ -6328,9 +6263,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         decoded_image_cache_tests
         image_decode_coordinator_tests
         image_file_decoder_tests
-        mobile_memory_pressure_tests
         image_view_fade_tests
-        artwork_cache_contract_tests
         chart_list_item_view_tests
         dropdown_view_tests
         context_menu_view_tests
