@@ -124,11 +124,15 @@ public:
   PreparePackageResult prepareArchive(const std::filesystem::path &zip,
                                       const SkinPackageId &package,
                                       std::stop_token stop,
-                                      SkinProgressCallback progress);
+                                      SkinProgressCallback progress,
+                                      SkinSafetyPolicy safetyPolicy =
+                                          SkinSafetyPolicy{});
   PreparePackageResult prepareFolder(const std::filesystem::path &folder,
                                      const SkinPackageId &package,
                                      std::stop_token stop,
-                                     SkinProgressCallback progress);
+                                     SkinProgressCallback progress,
+                                     SkinSafetyPolicy safetyPolicy =
+                                         SkinSafetyPolicy{});
   PublishPackageResult
   publish(PreparedPackage &&prepared, PackageCollisionPolicy collisionPolicy,
           ProfileInventorySnapshot inventory, SkinEntryValidator &validator,

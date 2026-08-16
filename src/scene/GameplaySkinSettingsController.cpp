@@ -519,13 +519,18 @@ struct GameplaySkinSettingsController::Impl {
       return rejected("No selected skin source is ready to import.");
     }
     SkinPackageOperationHandle handle;
+    const SkinSafetyPolicy safetyPolicy(
+        dependencies.profileOwner.snapshot(dependencies.profileId)
+            .settings.safetyLevel);
     if (pickedSource->temporaryPathKind == PlatformTemporaryPathKind::File) {
       handle = dependencies.operations.submitPrepareArchive(
-          pickedSource->localPath, package, sourceCleanup(pickedSource));
+          pickedSource->localPath, package, sourceCleanup(pickedSource),
+          safetyPolicy);
     } else if (pickedSource->temporaryPathKind ==
                PlatformTemporaryPathKind::Directory) {
       handle = dependencies.operations.submitPrepareFolder(
-          pickedSource->localPath, package, sourceCleanup(pickedSource));
+          pickedSource->localPath, package, sourceCleanup(pickedSource),
+          safetyPolicy);
     } else {
       return rejected("The selected source has no supported path kind.");
     }

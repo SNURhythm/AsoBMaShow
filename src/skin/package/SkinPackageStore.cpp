@@ -3038,15 +3038,17 @@ bool SkinPackageStore::operationServiceReady() const noexcept {
 
 PreparePackageResult SkinPackageStore::prepareArchive(
     const std::filesystem::path &zip, const SkinPackageId &package,
-    std::stop_token stop, SkinProgressCallback progress) {
-  return SkinArchiveImporter(roots_, aliases_)
+    std::stop_token stop, SkinProgressCallback progress,
+    SkinSafetyPolicy safetyPolicy) {
+  return SkinArchiveImporter(roots_, aliases_, {}, safetyPolicy)
       .prepareArchive(zip, package, stop, std::move(progress));
 }
 
 PreparePackageResult SkinPackageStore::prepareFolder(
     const std::filesystem::path &folder, const SkinPackageId &package,
-    std::stop_token stop, SkinProgressCallback progress) {
-  return SkinArchiveImporter(roots_, aliases_)
+    std::stop_token stop, SkinProgressCallback progress,
+    SkinSafetyPolicy safetyPolicy) {
+  return SkinArchiveImporter(roots_, aliases_, {}, safetyPolicy)
       .prepareFolder(folder, package, stop, std::move(progress));
 }
 

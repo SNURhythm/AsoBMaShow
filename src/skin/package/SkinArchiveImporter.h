@@ -1,6 +1,7 @@
 #pragma once
 
 #include "SkinTreeSnapshotter.h"
+#include "../SkinSafetyPolicy.h"
 
 #include <filesystem>
 #include <memory>
@@ -74,7 +75,8 @@ class SkinArchiveImporter {
 public:
   SkinArchiveImporter(
       SkinStorageRoots, const SkinAliasDetector &,
-      std::shared_ptr<const SkinImportIoObserver> observer = {});
+      std::shared_ptr<const SkinImportIoObserver> observer = {},
+      SkinSafetyPolicy safetyPolicy = SkinSafetyPolicy{});
 
   PreparePackageResult prepareArchive(const std::filesystem::path &,
                                       const SkinPackageId &, std::stop_token,
@@ -87,6 +89,7 @@ private:
   SkinStorageRoots roots_;
   const SkinAliasDetector &aliases_;
   std::shared_ptr<const SkinImportIoObserver> observer_;
+  SkinSafetyPolicy safetyPolicy_;
 };
 
 } // namespace skin

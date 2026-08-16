@@ -3,6 +3,7 @@
 #include "SkinProfileSettings.h"
 
 #include <cstdint>
+#include <limits>
 
 namespace skin {
 
@@ -60,6 +61,12 @@ public:
       return false;
     }
     return true;
+  }
+
+  [[nodiscard]] constexpr std::uint64_t
+  limit(SkinSafetyGuard guard, std::uint64_t standardLimit) const noexcept {
+    return enforces(guard) ? standardLimit
+                           : std::numeric_limits<std::uint64_t>::max();
   }
 
 private:

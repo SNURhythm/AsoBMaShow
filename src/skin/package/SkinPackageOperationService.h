@@ -154,10 +154,12 @@ public:
   // in the matching rejection field.
   [[nodiscard]] SkinPackageOperationHandle
   submitPrepareArchive(std::filesystem::path zip, SkinPackageId package,
-                       SkinDeferredCleanup cleanup);
+                       SkinDeferredCleanup cleanup,
+                       SkinSafetyPolicy safetyPolicy = SkinSafetyPolicy{});
   [[nodiscard]] SkinPackageOperationHandle
   submitPrepareFolder(std::filesystem::path folder, SkinPackageId package,
-                      SkinDeferredCleanup cleanup);
+                      SkinDeferredCleanup cleanup,
+                      SkinSafetyPolicy safetyPolicy = SkinSafetyPolicy{});
   [[nodiscard]] SkinPackageOperationHandle submitPublish(
       PreparedPackage prepared, PackageCollisionPolicy collisionPolicy,
       ProfileInventorySnapshot inventory, SkinDeferredCleanup cleanup = {});

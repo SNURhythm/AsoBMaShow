@@ -188,11 +188,13 @@ struct SkinPackageOperationService::Impl {
     std::filesystem::path zip;
     SkinPackageId package;
     SkinDeferredCleanup cleanup;
+    SkinSafetyPolicy safetyPolicy;
   };
   struct PrepareFolderRequest {
     std::filesystem::path folder;
     SkinPackageId package;
     SkinDeferredCleanup cleanup;
+    SkinSafetyPolicy safetyPolicy;
   };
   struct PublishRequest {
     PreparedPackage prepared;
@@ -644,7 +646,7 @@ struct SkinPackageOperationService::Impl {
                   operation.zip, operation.package, slot.stop->get_token(),
                   [mailbox = slot.mailbox](const SkinProgress &progress) {
                     mailbox->publish(progress);
-                  }));
+                  }, operation.safetyPolicy));
             } catch (...) {
               result.emplace(
                   failedPreparation("skin archive preparation failed"));
@@ -656,7 +658,7 @@ struct SkinPackageOperationService::Impl {
                   operation.folder, operation.package, slot.stop->get_token(),
                   [mailbox = slot.mailbox](const SkinProgress &progress) {
                     mailbox->publish(progress);
-                  }));
+                  }, operation.safetyPolicy));
             } catch (...) {
               result.emplace(
                   failedPreparation("skin folder preparation failed"));
@@ -1044,21 +1046,25 @@ SkinPackageOperationService::~SkinPackageOperationService() { shutdown(); }
 SkinPackageOperationHandle
 SkinPackageOperationService::submitPrepareArchive(std::filesystem::path zip,
                                                   SkinPackageId package,
-                                                  SkinDeferredCleanup cleanup) {
+                                                  SkinDeferredCleanup cleanup,
+                                                  SkinSafetyPolicy safetyPolicy) {
   return impl_->enqueue(Impl::RequestPayload(
       Impl::PrepareArchiveRequest{.zip = std::move(zip),
                                   .package = std::move(package),
-                                  .cleanup = std::move(cleanup)}));
+                                  .cleanup = std::move(cleanup),
+                                  .safetyPolicy = safetyPolicy}));
 }
 
 SkinPackageOperationHandle
 SkinPackageOperationService::submitPrepareFolder(std::filesystem::path folder,
                                                  SkinPackageId package,
-                                                 SkinDeferredCleanup cleanup) {
+                                                 SkinDeferredCleanup cleanup,
+                                                 SkinSafetyPolicy safetyPolicy) {
   return impl_->enqueue(Impl::RequestPayload(
       Impl::PrepareFolderRequest{.folder = std::move(folder),
                                  .package = std::move(package),
-                                 .cleanup = std::move(cleanup)}));
+                                 .cleanup = std::move(cleanup),
+                                 .safetyPolicy = safetyPolicy}));
 }
 
 SkinPackageOperationHandle SkinPackageOperationService::submitPublish(

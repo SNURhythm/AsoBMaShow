@@ -179,7 +179,8 @@ private:
 std::optional<OwnedArchiveFile>
 copyArchiveSource(const fs::path &path, std::stop_token stop, bool &cancelled,
                   const std::shared_ptr<const SkinImportIoObserver> &observer,
-                  std::vector<SkinDiagnostic> &diagnostics) {
+                  std::vector<SkinDiagnostic> &diagnostics,
+                  std::uint64_t maximumArchiveBytes) {
   OwnedArchiveFile owned;
   if (!owned.valid()) {
     diagnostics.push_back(
@@ -211,7 +212,7 @@ copyArchiveSource(const fs::path &path, std::stop_token stop, bool &cancelled,
       GetFileInformationByHandle(source, &before) &&
       GetFileSizeEx(source, &size) && size.QuadPart >= 0;
   if (!regular || static_cast<std::uint64_t>(size.QuadPart) >
-                      SkinPackagePolicy::maxArchiveBytes) {
+                      maximumArchiveBytes) {
     CloseHandle(source);
     diagnostics.push_back(diagnostic(
         "skin_archive_input_invalid",
@@ -235,7 +236,7 @@ copyArchiveSource(const fs::path &path, std::stop_token stop, bool &cancelled,
     if (read == 0) {
       break;
     }
-    if (total > SkinPackagePolicy::maxArchiveBytes - read ||
+    if (total > maximumArchiveBytes - read ||
         !owned.write(std::span(buffer.data(), read))) {
       CloseHandle(source);
       diagnostics.push_back(diagnostic("skin_archive_owned_copy_failed",
@@ -276,7 +277,7 @@ copyArchiveSource(const fs::path &path, std::stop_token stop, bool &cancelled,
   if (source < 0 || ::fstat(source, &before) != 0 || !S_ISREG(before.st_mode) ||
       before.st_size < 0 ||
       static_cast<std::uint64_t>(before.st_size) >
-          SkinPackagePolicy::maxArchiveBytes) {
+          maximumArchiveBytes) {
     if (source >= 0) {
       ::close(source);
     }
@@ -305,7 +306,7 @@ copyArchiveSource(const fs::path &path, std::stop_token stop, bool &cancelled,
       break;
     }
     const auto chunk = static_cast<std::uint64_t>(count);
-    if (total > SkinPackagePolicy::maxArchiveBytes - chunk ||
+    if (total > maximumArchiveBytes - chunk ||
         !owned.write(
             std::span(buffer.data(), static_cast<std::size_t>(count)))) {
       ::close(source);
@@ -489,7 +490,8 @@ bool validateRawZipEnvelope(
     OwnedArchiveFile &owned, std::uint64_t archiveBytes,
     const SkinPackageId &package, std::stop_token stop, bool &cancelled,
     const std::shared_ptr<const SkinImportIoObserver> &observer,
-    RawZipMembers &rawMembers, std::vector<SkinDiagnostic> &diagnostics) {
+    RawZipMembers &rawMembers, std::vector<SkinDiagnostic> &diagnostics,
+    std::uint64_t maximumArchiveMembers) {
   constexpr std::uint64_t maximumTail = 65'557;
   const std::uint64_t tailSize = std::min(archiveBytes, maximumTail);
   if (tailSize < 22) {
@@ -537,7 +539,7 @@ bool validateRawZipEnvelope(
   const std::uint64_t eocdOffset = archiveBytes - tailSize + *eocd;
   if (disk != 0 || directoryDisk != 0 || diskRecords != totalRecords ||
       directoryBytes == 0xffffffffU || directoryOffset == 0xffffffffU ||
-      totalRecords > SkinPackagePolicy::maxArchiveMembers ||
+      totalRecords > maximumArchiveMembers ||
       static_cast<std::uint64_t>(directoryOffset) + directoryBytes >
           archiveBytes ||
       static_cast<std::uint64_t>(directoryOffset) + directoryBytes !=
@@ -808,13 +810,25 @@ std::optional<ArchiveInventory>
 inventoryArchive(OwnedArchiveFile &owned, const SkinPackageId &package,
                  const RawZipMembers &rawMembers, std::stop_token stop,
                  const SkinProgressCallback &callback,
-                 std::vector<SkinDiagnostic> &diagnostics) {
+                 std::vector<SkinDiagnostic> &diagnostics,
+                 const SkinSafetyPolicy &safetyPolicy) {
   ArchiveHandle reader(archive_read_new());
   if (!reader || !configureArchiveReader(reader.get(), owned, diagnostics)) {
     return std::nullopt;
   }
 
   ArchiveInventory inventory;
+  const std::uint64_t maximumArchiveMembers = safetyPolicy.limit(
+      SkinSafetyGuard::PackageResourceLimit,
+      SkinPackagePolicy::maxArchiveMembers);
+  const std::uint64_t maximumRegularFileBytes = safetyPolicy.limit(
+      SkinSafetyGuard::PackageResourceLimit,
+      SkinPackagePolicy::maxRegularFileBytes);
+  const std::uint64_t maximumExpandedBytes = safetyPolicy.limit(
+      SkinSafetyGuard::PackageResourceLimit,
+      SkinPackagePolicy::maxExpandedBytes);
+  const std::uint64_t maximumFiles = safetyPolicy.limit(
+      SkinSafetyGuard::PackageResourceLimit, SkinPackagePolicy::maxFiles);
   std::uint64_t memberCount = 0;
   std::map<std::string, std::pair<std::string, MemberKind>, std::less<>> seen;
   while (true) {
@@ -835,7 +849,7 @@ inventoryArchive(OwnedArchiveFile &owned, const SkinPackageId &package,
       return std::nullopt;
     }
     ++memberCount;
-    if (memberCount > SkinPackagePolicy::maxArchiveMembers) {
+    if (memberCount > maximumArchiveMembers) {
       diagnostics.push_back(
           diagnostic("skin_archive_member_limit_exceeded",
                      "archive exceeds the package member-count limit"));
@@ -932,16 +946,16 @@ inventoryArchive(OwnedArchiveFile &owned, const SkinPackageId &package,
                        normalized.entry->packageRelativePath));
         return std::nullopt;
       }
-      if (declaredSize > SkinPackagePolicy::maxRegularFileBytes) {
+      if (declaredSize > maximumRegularFileBytes) {
         diagnostics.push_back(
             diagnostic("skin_archive_file_too_large",
                        "regular archive entry exceeds the package file limit",
                        normalized.entry->packageRelativePath));
         return std::nullopt;
       }
-      if (++inventory.fileCount > SkinPackagePolicy::maxFiles ||
+      if (++inventory.fileCount > maximumFiles ||
           !addWithoutOverflow(inventory.totalBytes, declaredSize,
-                              SkinPackagePolicy::maxExpandedBytes,
+                              maximumExpandedBytes,
                               inventory.totalBytes)) {
         diagnostics.push_back(diagnostic(
             "skin_archive_package_limit_exceeded",
@@ -2261,7 +2275,8 @@ bool extractArchive(OwnedArchiveFile &owned, ArchiveInventory &inventory,
                     SecureStagingTree &staging, std::stop_token stop,
                     const SkinProgressCallback &callback,
                     const std::shared_ptr<const SkinImportIoObserver> &observer,
-                    std::vector<SkinDiagnostic> &diagnostics, bool &cancelled) {
+                    std::vector<SkinDiagnostic> &diagnostics, bool &cancelled,
+                    std::uint64_t maximumExpandedBytes) {
   ArchiveHandle reader(archive_read_new());
   if (!reader || !configureArchiveReader(reader.get(), owned, diagnostics)) {
     return false;
@@ -2363,7 +2378,7 @@ bool extractArchive(OwnedArchiveFile &owned, ArchiveInventory &inventory,
       if (!addWithoutOverflow(fileBytes, chunk, member.declaredSize,
                               nextFile) ||
           !addWithoutOverflow(completedBytes, chunk,
-                              SkinPackagePolicy::maxExpandedBytes, nextTotal)) {
+                              maximumExpandedBytes, nextTotal)) {
 #if defined(_WIN32)
         CloseHandle(output);
 #else
@@ -2909,9 +2924,10 @@ void PreparedPackage::releaseVisibleOwnership() noexcept {
 
 SkinArchiveImporter::SkinArchiveImporter(
     SkinStorageRoots roots, const SkinAliasDetector &aliases,
-    std::shared_ptr<const SkinImportIoObserver> observer)
+    std::shared_ptr<const SkinImportIoObserver> observer,
+    SkinSafetyPolicy safetyPolicy)
     : roots_(std::move(roots)), aliases_(aliases),
-      observer_(std::move(observer)) {}
+      observer_(std::move(observer)), safetyPolicy_(safetyPolicy) {}
 
 PreparePackageResult SkinArchiveImporter::prepareArchive(
     const fs::path &archivePath, const SkinPackageId &package,
@@ -2928,15 +2944,25 @@ PreparePackageResult SkinArchiveImporter::prepareArchive(
     result.cancelled = true;
     return result;
   }
+  const std::uint64_t maximumArchiveBytes = safetyPolicy_.limit(
+      SkinSafetyGuard::PackageResourceLimit,
+      SkinPackagePolicy::maxArchiveBytes);
+  const std::uint64_t maximumArchiveMembers = safetyPolicy_.limit(
+      SkinSafetyGuard::PackageResourceLimit,
+      SkinPackagePolicy::maxArchiveMembers);
+  const std::uint64_t maximumExpandedBytes = safetyPolicy_.limit(
+      SkinSafetyGuard::PackageResourceLimit,
+      SkinPackagePolicy::maxExpandedBytes);
   auto owned = copyArchiveSource(archivePath, stop, result.cancelled, observer_,
-                                 result.diagnostics);
+                                 result.diagnostics, maximumArchiveBytes);
   if (!owned) {
     return result;
   }
   RawZipMembers rawMembers;
   if (!validateRawZipEnvelope(
           *owned, owned->bytes(), *normalizedPackage.package, stop,
-          result.cancelled, observer_, rawMembers, result.diagnostics)) {
+          result.cancelled, observer_, rawMembers, result.diagnostics,
+          maximumArchiveMembers)) {
     return result;
   }
   const auto beforeDigest =
@@ -2950,7 +2976,7 @@ PreparePackageResult SkinArchiveImporter::prepareArchive(
   }
   auto inventory =
       inventoryArchive(*owned, *normalizedPackage.package, rawMembers, stop,
-                       callback, result.diagnostics);
+                       callback, result.diagnostics, safetyPolicy_);
   if (!inventory) {
     result.cancelled = stop.stop_requested();
     return result;
@@ -2974,7 +3000,8 @@ PreparePackageResult SkinArchiveImporter::prepareArchive(
     return result;
   }
   if (!extractArchive(*owned, *inventory, *visibleStaging, stop, callback,
-                      observer_, result.diagnostics, result.cancelled)) {
+                      observer_, result.diagnostics, result.cancelled,
+                      maximumExpandedBytes)) {
     return result;
   }
   const auto afterDigest =
@@ -2998,7 +3025,7 @@ PreparePackageResult SkinArchiveImporter::prepareArchive(
   observe(observer_, SkinImportIoOperation::BeforeVisibleSnapshot,
           visibleStaging->path());
 
-  SkinTreeSnapshotter snapshotter(roots_, aliases_);
+  SkinTreeSnapshotter snapshotter(roots_, aliases_, {}, safetyPolicy_);
   auto snapshot =
       snapshotter.snapshot(visibleStaging->path(), *normalizedPackage.package,
                            stop, std::move(callback),
@@ -3064,7 +3091,7 @@ PreparePackageResult SkinArchiveImporter::prepareFolder(
         "direct-child package folder"));
     return result;
   }
-  SkinTreeSnapshotter snapshotter(roots_, aliases_);
+  SkinTreeSnapshotter snapshotter(roots_, aliases_, {}, safetyPolicy_);
   auto snapshot = snapshotter.snapshot(folder, *normalizedPackage.package, stop,
                                        std::move(callback));
   if (!snapshot.prepared) {

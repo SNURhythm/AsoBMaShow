@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../SkinStoragePaths.h"
+#include "../SkinSafetyPolicy.h"
 #include "SkinAliasDetector.h"
 
 #include <cstdint>
@@ -120,7 +121,8 @@ class SkinTreeSnapshotter {
 public:
   SkinTreeSnapshotter(
       SkinStorageRoots, const SkinAliasDetector &,
-      std::shared_ptr<const SkinSnapshotFailureInjector> failures = {});
+      std::shared_ptr<const SkinSnapshotFailureInjector> failures = {},
+      SkinSafetyPolicy safetyPolicy = SkinSafetyPolicy{});
   SnapshotTreeResult snapshot(const std::filesystem::path &sourceRoot,
                               const SkinPackageId &, std::stop_token,
                               SkinProgressCallback,
@@ -131,6 +133,7 @@ private:
   SkinStorageRoots roots_;
   const SkinAliasDetector &aliases_;
   std::shared_ptr<const SkinSnapshotFailureInjector> failures_;
+  SkinSafetyPolicy safetyPolicy_;
 };
 
 } // namespace skin

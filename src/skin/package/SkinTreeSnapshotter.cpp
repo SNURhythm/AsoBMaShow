@@ -346,7 +346,8 @@ bool inspectTree(const fs::path &directory, const fs::path &root,
                  Inventory &inventory, std::map<std::string, bool> &identities,
                  std::stop_token stop,
                  std::vector<SkinDiagnostic> &diagnostics,
-                 bool externallyPinnedRoot) {
+                 bool externallyPinnedRoot,
+                 const SkinSafetyPolicy &safetyPolicy) {
 #if defined(_WIN32)
   std::error_code directoryHandleError;
   auto directoryHandle = openWindowsPathNoFollow(
@@ -426,14 +427,22 @@ bool inspectTree(const fs::path &directory, const fs::path &root,
          .metadata = metadata});
     if (metadata.directory) {
       if (!inspectTree(path, root, package, aliases, inventory, identities,
-                       stop, diagnostics, externallyPinnedRoot)) {
+                       stop, diagnostics, externallyPinnedRoot, safetyPolicy)) {
         return false;
       }
       continue;
     }
-    if (metadata.size > SkinPackagePolicy::maxRegularFileBytes ||
+    const std::uint64_t maximumRegularFileBytes = safetyPolicy.limit(
+        SkinSafetyGuard::PackageResourceLimit,
+        SkinPackagePolicy::maxRegularFileBytes);
+    const std::uint64_t maximumExpandedBytes = safetyPolicy.limit(
+        SkinSafetyGuard::PackageResourceLimit,
+        SkinPackagePolicy::maxExpandedBytes);
+    const std::uint64_t maximumFiles = safetyPolicy.limit(
+        SkinSafetyGuard::PackageResourceLimit, SkinPackagePolicy::maxFiles);
+    if (metadata.size > maximumRegularFileBytes ||
         inventory.totalBytes >
-            SkinPackagePolicy::maxExpandedBytes - metadata.size) {
+            maximumExpandedBytes - metadata.size) {
       diagnostics.push_back(diagnostic(
           "skin_snapshot_size_limit",
           "skin source exceeds the regular-file or expanded-size limit",
@@ -442,7 +451,7 @@ bool inspectTree(const fs::path &directory, const fs::path &root,
     }
     ++inventory.fileCount;
     inventory.totalBytes += metadata.size;
-    if (inventory.fileCount > SkinPackagePolicy::maxFiles) {
+    if (inventory.fileCount > maximumFiles) {
       diagnostics.push_back(diagnostic("skin_snapshot_file_count_limit",
                                        "skin source exceeds the file limit"));
       return false;
@@ -455,7 +464,8 @@ std::optional<Inventory>
 inventoryTree(const fs::path &root, const SkinPackageId &package,
               const SkinAliasDetector &aliases, std::stop_token stop,
               std::vector<SkinDiagnostic> &diagnostics,
-              bool externallyPinnedRoot) {
+              bool externallyPinnedRoot,
+              const SkinSafetyPolicy &safetyPolicy = SkinSafetyPolicy{}) {
   if (aliases.inspectNoFollow(root) != SkinRejectedLinkKind::None) {
     diagnostics.push_back(diagnostic(
         "skin_snapshot_root_rejected",
@@ -477,7 +487,7 @@ inventoryTree(const fs::path &root, const SkinPackageId &package,
   inventory.externallyPinnedRoot = externallyPinnedRoot;
   std::map<std::string, bool> identities;
   if (!inspectTree(root, root, package, aliases, inventory, identities, stop,
-                   diagnostics, externallyPinnedRoot)) {
+                   diagnostics, externallyPinnedRoot, safetyPolicy)) {
     return std::nullopt;
   }
   std::sort(inventory.entries.begin(), inventory.entries.end(),
@@ -1542,9 +1552,10 @@ PreparedSkinRevision::publish(std::string &error) && {
 
 SkinTreeSnapshotter::SkinTreeSnapshotter(
     SkinStorageRoots roots, const SkinAliasDetector &aliases,
-    std::shared_ptr<const SkinSnapshotFailureInjector> failures)
+    std::shared_ptr<const SkinSnapshotFailureInjector> failures,
+    SkinSafetyPolicy safetyPolicy)
     : roots_(std::move(roots)), aliases_(aliases),
-      failures_(std::move(failures)) {}
+      failures_(std::move(failures)), safetyPolicy_(safetyPolicy) {}
 
 SnapshotTreeResult SkinTreeSnapshotter::snapshot(
     const fs::path &sourceRoot, const SkinPackageId &package,
@@ -1572,7 +1583,7 @@ SnapshotTreeResult SkinTreeSnapshotter::snapshot(
     }
     auto inventory = inventoryTree(sourceRoot, *normalizedPackage.package,
                                    aliases_, stop, result.diagnostics,
-                                   externallyPinnedRoot);
+                                   externallyPinnedRoot, safetyPolicy_);
     if (!inventory) {
       result.cancelled = stop.stop_requested();
       return result;
@@ -1627,7 +1638,8 @@ SnapshotTreeResult SkinTreeSnapshotter::snapshot(
 
   const SkinPackageId &canonicalPackage = *normalizedPackage.package;
   auto first = inventoryTree(sourceRoot, canonicalPackage, aliases_, stop,
-                             result.diagnostics, externallyPinnedRoot);
+                             result.diagnostics, externallyPinnedRoot,
+                             safetyPolicy_);
   if (!first) {
     result.cancelled = stop.stop_requested();
     return result;
@@ -1695,7 +1707,8 @@ SnapshotTreeResult SkinTreeSnapshotter::snapshot(
     return result;
   }
   auto second = inventoryTree(sourceRoot, canonicalPackage, aliases_, stop,
-                              result.diagnostics, externallyPinnedRoot);
+                              result.diagnostics, externallyPinnedRoot,
+                              safetyPolicy_);
   if (!second) {
     result.cancelled = stop.stop_requested();
     return result;
@@ -1736,7 +1749,8 @@ SnapshotTreeResult SkinTreeSnapshotter::snapshot(
     return result;
   }
   auto finalSource = inventoryTree(sourceRoot, canonicalPackage, aliases_, stop,
-                                   result.diagnostics, externallyPinnedRoot);
+                                   result.diagnostics, externallyPinnedRoot,
+                                   safetyPolicy_);
   if (!finalSource) {
     result.cancelled = stop.stop_requested();
     return result;
