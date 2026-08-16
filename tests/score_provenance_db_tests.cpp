@@ -2066,9 +2066,9 @@ void testModifiedPlaybackDoesNotUpdateBestScores(
 
   auto db = openDatabase(path);
   assert(queryInt(db.get(), "SELECT clear_type FROM scores") ==
-         kClearTypeAssistedEasyClearRank);
+         kClearTypeLightAssistedEasyClearRank);
   assert(queryInt(db.get(), "SELECT clear_type FROM course_scores") ==
-         kClearTypeAssistedEasyClearRank);
+         kClearTypeLightAssistedEasyClearRank);
   db.reset();
 
   const ScoreClearRankCache cache = helper.LoadBestClearRanks();

@@ -16,6 +16,15 @@ ImageDecodeCoordinator::ImageDecodeCoordinator(Loader loader,
   }
 }
 
+ImageDecodeCoordinator::ImageDecodeCoordinator(LegacyLoader loader,
+                                               std::size_t workerCount)
+    : ImageDecodeCoordinator(
+          [loader = std::move(loader)](const ImageDecodeRequest &request,
+                                       std::stop_token) {
+            return loader ? loader(request) : std::nullopt;
+          },
+          workerCount) {}
+
 ImageDecodeCoordinator::~ImageDecodeCoordinator() { shutdown(); }
 
 ImageDecodeCoordinator::Ticket
@@ -55,8 +64,11 @@ ImageDecodeCoordinator::request(ImageDecodeRequest request) {
 }
 
 void ImageDecodeCoordinator::cancel(Ticket ticket) {
-  std::lock_guard lock(mutex_);
-  removeTicketLocked(ticket);
+  {
+    std::lock_guard lock(mutex_);
+    removeTicketLocked(ticket);
+  }
+  cv_.notify_all();
 }
 
 std::optional<DecodedImageData>
@@ -80,6 +92,69 @@ ImageDecodeCoordinator::takeReady(Ticket ticket) {
   return result;
 }
 
+ImageDecodeWaitResult ImageDecodeCoordinator::waitTake(Ticket ticket,
+                                                        std::stop_token stop) {
+  if (ticket == 0) {
+    return {.state = ImageDecodeWaitState::Stopped};
+  }
+  {
+    std::lock_guard lock(mutex_);
+    waitingTickets_.insert(ticket);
+  }
+  std::stop_callback stopped(stop, [this, ticket] { cancel(ticket); });
+  std::unique_lock lock(mutex_);
+  cv_.wait(lock, [this, ticket] {
+    if (terminalTickets_.contains(ticket)) {
+      return true;
+    }
+    const auto ticketEntry = tickets_.find(ticket);
+    if (ticketEntry == tickets_.end()) {
+      return true;
+    }
+    const auto work = work_.find(ticketEntry->second);
+    return work == work_.end() || work->second.state == WorkState::Ready ||
+           work->second.state == WorkState::Failed;
+  });
+  if (const auto terminal = terminalTickets_.find(ticket);
+      terminal != terminalTickets_.end()) {
+    const ImageDecodeWaitState state = terminal->second;
+    terminalTickets_.erase(terminal);
+    waitingTickets_.erase(ticket);
+    return {.state = state};
+  }
+  const auto ticketEntry = tickets_.find(ticket);
+  if (ticketEntry == tickets_.end()) {
+    waitingTickets_.erase(ticket);
+    return {.state = stopping_ ? ImageDecodeWaitState::Stopped
+                               : ImageDecodeWaitState::Cancelled};
+  }
+  const auto work = work_.find(ticketEntry->second);
+  if (work == work_.end()) {
+    tickets_.erase(ticketEntry);
+    waitingTickets_.erase(ticket);
+    return {.state = stopping_ ? ImageDecodeWaitState::Stopped
+                               : ImageDecodeWaitState::Cancelled};
+  }
+  if (work->second.state == WorkState::Ready && work->second.image) {
+    ImageDecodeWaitResult result{.state = ImageDecodeWaitState::Ready,
+                                 .image = *work->second.image};
+    work->second.consumers.erase(ticket);
+    tickets_.erase(ticketEntry);
+    if (work->second.consumers.empty()) {
+      eraseWorkLocked(work);
+    }
+    waitingTickets_.erase(ticket);
+    return result;
+  }
+  work->second.consumers.erase(ticket);
+  tickets_.erase(ticketEntry);
+  if (work->second.consumers.empty()) {
+    eraseWorkLocked(work);
+  }
+  waitingTickets_.erase(ticket);
+  return {.state = ImageDecodeWaitState::Failed};
+}
+
 bool ImageDecodeCoordinator::hasFailed(Ticket ticket) const {
   std::lock_guard lock(mutex_);
   const auto ticketEntry = tickets_.find(ticket);
@@ -96,11 +171,14 @@ bool ImageDecodeCoordinator::isTracked(Ticket ticket) const {
 }
 
 void ImageDecodeCoordinator::drop(std::string_view key) {
-  std::lock_guard lock(mutex_);
-  const auto work = work_.find(key);
-  if (work != work_.end()) {
-    eraseWorkLocked(work);
+  {
+    std::lock_guard lock(mutex_);
+    const auto work = work_.find(key);
+    if (work != work_.end()) {
+      eraseWorkLocked(work);
+    }
   }
+  cv_.notify_all();
 }
 
 void ImageDecodeCoordinator::dropPrefix(std::string_view prefix) {
@@ -118,24 +196,35 @@ void ImageDecodeCoordinator::dropPrefix(std::string_view prefix) {
       eraseWorkLocked(work);
     }
   }
+  cv_.notify_all();
 }
 
 void ImageDecodeCoordinator::dropAll() {
   std::lock_guard lock(mutex_);
+  while (!work_.empty()) {
+    eraseWorkLocked(work_.begin());
+  }
   priorityQueue_.clear();
   queue_.clear();
-  work_.clear();
-  tickets_.clear();
   readyBytes_ = 0;
+  cv_.notify_all();
 }
 
 void ImageDecodeCoordinator::shutdown() {
+  std::lock_guard shutdownLock(shutdownMutex_);
   {
     std::lock_guard lock(mutex_);
     if (!stopping_) {
       stopping_ = true;
       priorityQueue_.clear();
       queue_.clear();
+      for (auto &[key, work] : work_) {
+        (void)key;
+        work.stop.request_stop();
+        for (const Ticket ticket : work.consumers)
+          if (waitingTickets_.contains(ticket))
+            terminalTickets_[ticket] = ImageDecodeWaitState::Stopped;
+      }
       work_.clear();
       tickets_.clear();
       readyBytes_ = 0;
@@ -180,6 +269,11 @@ std::size_t ImageDecodeCoordinator::readyBytes() const {
   return readyBytes_;
 }
 
+std::size_t ImageDecodeCoordinator::terminalTicketCount() const {
+  std::lock_guard lock(mutex_);
+  return terminalTickets_.size();
+}
+
 std::size_t ImageDecodeCoordinator::workerCount() const noexcept {
   return configuredWorkerCount_;
 }
@@ -188,6 +282,7 @@ void ImageDecodeCoordinator::run() {
   for (;;) {
     ImageDecodeRequest request;
     std::uint64_t workId = 0;
+    std::stop_token workStop;
     {
       std::unique_lock lock(mutex_);
       cv_.wait(lock, [this] {
@@ -209,6 +304,7 @@ void ImageDecodeCoordinator::run() {
         work->second.state = WorkState::InFlight;
         workId = work->second.id;
         request = work->second.request;
+        workStop = work->second.stop.get_token();
         found = true;
       }
       if (!found) {
@@ -219,7 +315,7 @@ void ImageDecodeCoordinator::run() {
     std::optional<DecodedImageData> decoded;
     try {
       if (loader_) {
-        decoded = loader_(request);
+        decoded = loader_(request, workStop);
       }
     } catch (...) {
       decoded.reset();
@@ -236,12 +332,17 @@ void ImageDecodeCoordinator::run() {
       continue;
     }
     if (decoded && decoded->valid()) {
+      // The result retains RGBA only. Drop source bytes before notifying
+      // consumers so a ready work item never keeps both allocations.
+      work->second.request.encoded.reset();
       work->second.image = std::move(decoded);
       work->second.state = WorkState::Ready;
       readyBytes_ += work->second.image->byteSize();
     } else {
+      work->second.request.encoded.reset();
       work->second.state = WorkState::Failed;
     }
+    cv_.notify_all();
   }
 }
 
@@ -253,10 +354,14 @@ void ImageDecodeCoordinator::removeTicketLocked(Ticket ticket) {
   const auto work = work_.find(ticketEntry->second);
   if (work == work_.end()) {
     tickets_.erase(ticketEntry);
+    if (waitingTickets_.contains(ticket))
+      terminalTickets_[ticket] = ImageDecodeWaitState::Cancelled;
     return;
   }
   work->second.consumers.erase(ticket);
   tickets_.erase(ticketEntry);
+  if (waitingTickets_.contains(ticket))
+    terminalTickets_[ticket] = ImageDecodeWaitState::Cancelled;
   if (work->second.consumers.empty()) {
     eraseWorkLocked(work);
   }
@@ -264,8 +369,12 @@ void ImageDecodeCoordinator::removeTicketLocked(Ticket ticket) {
 
 void ImageDecodeCoordinator::eraseWorkLocked(
     std::map<std::string, Work, std::less<>>::iterator work) {
+  work->second.stop.request_stop();
   for (const Ticket ticket : work->second.consumers) {
     tickets_.erase(ticket);
+    if (waitingTickets_.contains(ticket))
+      terminalTickets_[ticket] = stopping_ ? ImageDecodeWaitState::Stopped
+                                           : ImageDecodeWaitState::Cancelled;
   }
   if (work->second.state == WorkState::Ready && work->second.image) {
     readyBytes_ -= work->second.image->byteSize();

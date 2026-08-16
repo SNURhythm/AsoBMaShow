@@ -58,7 +58,7 @@ fullComboClearRankExpr(std::string_view alias,
   return "(CASE" + importedBranch + " WHEN " + prefix +
          ".clear_type >= " + std::to_string(kClearTypeAssistedEasyClearRank) +
          " AND " + playbackPercentExpression + " <> 100 THEN " +
-         std::to_string(kClearTypeAssistedEasyClearRank) + " WHEN " + prefix +
+         std::to_string(kClearTypeLightAssistedEasyClearRank) + " WHEN " + prefix +
          ".combo_break = 0 AND " + prefix +
          ".clear_type >= " + std::to_string(kClearTypeAssistedEasyClearRank) +
          " THEN " + std::to_string(kClearTypeFullComboRank) + " ELSE " +

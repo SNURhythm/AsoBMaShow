@@ -1,7 +1,7 @@
+#include "../../bms_parser.hpp"
 #include "GameplayGaugeRules.h"
 
 #include "GameplayScoreState.h"
-#include "../../bms_parser.hpp"
 
 #include <algorithm>
 #include <cmath>

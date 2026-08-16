@@ -1,0 +1,31 @@
+local captured_main_state = require("main_state")
+
+local selected_functions = {
+  "event_index", "exscore", "float_number", "gauge", "gauge_type",
+  "judge", "number", "option", "rate", "text", "time", "timer",
+  "volume_bg", "volume_key", "volume_sys",
+}
+
+local function render_main_state_ready()
+  if captured_main_state ~= require("main_state")
+      or type(captured_main_state.offset) ~= "function"
+      or type(captured_main_state.event_exec) ~= "function"
+      or captured_main_state.timer_off_value ~= -9223372036854775808 then
+    return false
+  end
+  for _, name in ipairs(selected_functions) do
+    if type(captured_main_state[name]) ~= "function" then return false end
+  end
+  return true
+end
+
+if skin_config then
+  assert(render_main_state_ready())
+else
+  assert(next(captured_main_state) == nil)
+end
+
+return {
+  phase = skin_config and "configured" or "header",
+  render_main_state_ready = render_main_state_ready
+}

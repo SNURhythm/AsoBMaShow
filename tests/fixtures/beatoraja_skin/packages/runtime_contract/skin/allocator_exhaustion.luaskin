@@ -1,0 +1,8 @@
+local retained = {}
+for index = 1, 40000 do
+  retained[index] = string.rep("x", 1024) .. index
+end
+
+return {
+  retained = retained
+}

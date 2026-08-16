@@ -56,4 +56,16 @@ int main() {
   assert(
       !scene_event_routing::shouldDispatchToScene(SDL_CONTROLLERSENSORUPDATE));
   assert(!scene_event_routing::shouldDispatchToScene(SDL_JOYBUTTONDOWN));
+
+  SDL_Event mouseSynthesizedTouch{};
+  mouseSynthesizedTouch.type = SDL_FINGERDOWN;
+  mouseSynthesizedTouch.tfinger.type = SDL_FINGERDOWN;
+  mouseSynthesizedTouch.tfinger.touchId = SDL_MOUSE_TOUCHID;
+  assert(!scene_event_routing::shouldDispatchToScene(mouseSynthesizedTouch));
+
+  SDL_Event directTouch{};
+  directTouch.type = SDL_FINGERDOWN;
+  directTouch.tfinger.type = SDL_FINGERDOWN;
+  directTouch.tfinger.touchId = 42;
+  assert(scene_event_routing::shouldDispatchToScene(directTouch));
 }

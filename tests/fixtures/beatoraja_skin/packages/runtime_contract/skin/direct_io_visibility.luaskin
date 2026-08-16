@@ -1,0 +1,12 @@
+if not skin_config then
+  return { phase = "header" }
+end
+
+local writer = assert(io.open("direct-visibility.txt", "w"))
+assert(writer:write("visible-before-close") == writer)
+local reader = assert(io.open("direct-visibility.txt", "r"))
+assert(reader:lines()() == "visible-before-close")
+assert(reader:close() == true)
+assert(writer:close() == true)
+
+return { phase = "configured" }

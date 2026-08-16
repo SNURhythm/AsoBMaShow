@@ -15,6 +15,7 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.cmake = read("CMakeLists.txt")
+        cls.src_cmake = read("src/CMakeLists.txt")
         cls.info_plist = read("Info.plist")
         cls.macos_init = read("scripts/macos_init.sh")
         cls.macos_workflow = read(".github/workflows/macos-build.yml")
@@ -26,6 +27,14 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
         cls.audio_decoder = read("src/audio/decoder.cpp")
         cls.replay_store = read("src/replay/ReplayFileStore.cpp")
         cls.macos_triplet = read("vcpkg-triplets/arm64-osx-asobmashow.cmake")
+        cls.play_skin_state_bridge = read(
+            "src/skin/beatoraja/PlaySkinStateBridge.cpp"
+        )
+        cls.skin_2d_renderer = read("src/skin/beatoraja/Skin2DRenderer.cpp")
+        cls.skin_destination_evaluator = read(
+            "src/skin/beatoraja/SkinDestinationEvaluator.cpp"
+        )
+        cls.msvc_test_diagnostics = read("tests/support/MsvcTestDiagnostics.cpp")
 
     def test_public_version_is_0_0_1_on_desktop_and_android(self):
         self.assertRegex(
@@ -93,6 +102,52 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
             1,
         )[0]
         self.assertNotRegex(common_non_msvc, r"add_compile_options\([^\)]*\s-g(?:\s|\))")
+
+    def test_msvc_parallel_builds_serialize_compiler_pdb_writes(self):
+        msvc = self.cmake.split("if (MSVC)", 1)[1].split("else ()", 1)[0]
+        self.assertRegex(msvc, r"add_compile_options\([^\)]*/MP")
+        self.assertRegex(msvc, r"add_compile_options\([^\)]*/FS")
+
+    def test_skin_runtime_integer_arithmetic_is_msvc_portable(self):
+        for source in (
+            self.play_skin_state_bridge,
+            self.skin_2d_renderer,
+            self.skin_destination_evaluator,
+        ):
+            self.assertNotIn("__int128", source)
+
+    def test_msvc_test_failures_stay_in_the_cli(self):
+        for token in (
+            "_CrtSetReportMode",
+            "_CRTDBG_FILE_STDERR",
+            "_set_abort_behavior",
+            "SEM_NOGPFAULTERRORBOX",
+        ):
+            self.assertIn(token, self.msvc_test_diagnostics)
+        register_function = self.cmake.split(
+            "function(asobmashow_register_test target_name)", 1
+        )[1].split("endfunction()", 1)[0]
+        self.assertIn("tests/support/MsvcTestDiagnostics.cpp", register_function)
+        self.assertIn(
+            "target_sources(skin_package_operation_service_tests PRIVATE",
+            self.cmake,
+        )
+        self.assertIn(
+            "target_sources(skin_commit_coordinator_tests PRIVATE", self.cmake
+        )
+
+    def test_msvc_app_failures_stay_in_the_cli(self):
+        diagnostics_path = ROOT / "src/MsvcCliDiagnostics.cpp"
+        self.assertTrue(diagnostics_path.is_file())
+        diagnostics = diagnostics_path.read_text(encoding="utf-8")
+        for token in (
+            "_CrtSetReportMode",
+            "_CRTDBG_FILE_STDERR",
+            "_set_abort_behavior",
+            "SEM_NOGPFAULTERRORBOX",
+        ):
+            self.assertIn(token, diagnostics)
+        self.assertIn("MsvcCliDiagnostics.cpp", self.src_cmake)
 
     def test_release_test_binaries_keep_assertion_based_fixture_setup(self):
         register_function = self.cmake.split(

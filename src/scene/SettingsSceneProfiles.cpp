@@ -280,7 +280,8 @@ void SettingsScene::startProfileImportDocumentPicker(
   try {
     profileDocumentHandoff = platform_document_handoff::ImportDocumentAsync(
         {.mimeType = std::string(kProfileArchiveMimeType),
-         .maxBytes = ProfileArchiveSizePolicy::kMaximumExistingArchiveBytes});
+         .maxBytes = ProfileArchiveSizePolicy::kMaximumExistingArchiveBytes},
+        context.temporaryPathCleanupService);
     if (!profileDocumentHandoff) {
       throw std::runtime_error("The document picker did not start.");
     }

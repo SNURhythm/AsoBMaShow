@@ -1,0 +1,2 @@
+local module = require("module")
+return module

@@ -1,4 +1,5 @@
 {
+    "cmake.parallelJobs": 12,
     "editor.formatOnSave": true,
     "editor.defaultFormatter": "xaver.clang-format",
     "files.associations": {

@@ -1,0 +1,150 @@
+{
+  "cases": [
+    {
+      "callCount": {
+        "close": 4,
+        "dofile": 1,
+        "ioOpen": 4,
+        "lines": 2,
+        "write": 3
+      },
+      "callOrder": [
+        "dofile",
+        "io.open:default",
+        "lines:default",
+        "close:default",
+        "io.open:w",
+        "write:zero",
+        "write:multiple",
+        "close:w",
+        "io.open:r",
+        "lines:r",
+        "close:r",
+        "io.open:a",
+        "write:a",
+        "close:a"
+      ],
+      "expected": {
+        "appendReturnsSameHandle": true,
+        "chainedWriteReturnsSameHandle": true,
+        "closeReturnsTrue": true,
+        "dofileReturn": [
+          "alpha",
+          7
+        ],
+        "explicitReadFirstLine": "first-line",
+        "firstLine": "first-line",
+        "handleMethods": [
+          "lines",
+          "write",
+          "close"
+        ],
+        "ioOpenModes": [
+          "default",
+          "r",
+          "w",
+          "a"
+        ],
+        "outputContent": "alpha:7:tail",
+        "zeroArgumentWriteReturnsSameHandle": true
+      },
+      "input": {
+        "dofileArguments": [
+          "relative-text-chunk"
+        ],
+        "ioOpenModes": [
+          "default",
+          "r",
+          "w",
+          "a"
+        ],
+        "returnFixture": [
+          "alpha",
+          7
+        ]
+      },
+      "name": "standard-file-call-shapes",
+      "precision": 0
+    },
+    {
+      "callCount": {
+        "bindClass": 2,
+        "gdxAppRead": 1,
+        "listFiles": 1,
+        "new": 1,
+        "require": 2
+      },
+      "callOrder": [
+        "install",
+        "require:first",
+        "require:second",
+        "bindClass:File",
+        "new:File",
+        "listFiles",
+        "bindClass:Gdx",
+        "read:Gdx.app"
+      ],
+      "expected": {
+        "bindClasses": [
+          "java.io.File",
+          "com.badlogic.gdx.Gdx"
+        ],
+        "fileConstructorArguments": [
+          "File-token",
+          "relative-path"
+        ],
+        "gdxAppPresent": false,
+        "gdxFacadeMembers": [
+          "graphics",
+          "input"
+        ],
+        "listShape": "normalized-relative-path-array-or-nil",
+        "normalizedList": [
+          "one.txt"
+        ],
+        "repeatedRequireSameTable": true,
+        "requireUsesInstalledTable": true,
+        "upstreamBroaderBranches": [
+          "newInstance",
+          "URL-and-HTTP",
+          "controllers-and-input",
+          "debug-getmetatable"
+        ]
+      },
+      "input": {
+        "classRequests": [
+          "java.io.File",
+          "com.badlogic.gdx.Gdx"
+        ],
+        "fileArguments": [
+          "File-token",
+          "relative-path"
+        ],
+        "requires": [
+          "luajava",
+          "luajava"
+        ],
+        "syntheticListEntryCount": 1
+      },
+      "name": "legacy-luajava-selected-facts",
+      "precision": 0
+    }
+  ],
+  "kind": "legacy-lua-upstream",
+  "provenance": [
+    {
+      "behavior": "actual pinned accessor supplies standard dofile and restricted io handle shapes",
+      "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+      "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
+      "symbol": "SkinLuaAccessor.RestrictedIoLib/execFile"
+    },
+    {
+      "behavior": "actual pinned legacy facade supplies repeated require identity, File construction/listing, and a Gdx table without app",
+      "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+      "path": "src/bms/player/beatoraja/skin/lua/LegacySkinLuaApi.java",
+      "symbol": "LegacySkinLuaApi.install/BindClassFunction/NewFunction/fileFacade/gdxFacade"
+    }
+  ],
+  "referenceCommit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+  "schemaVersion": 1
+}

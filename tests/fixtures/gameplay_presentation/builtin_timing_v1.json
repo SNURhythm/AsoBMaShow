@@ -1,0 +1,1721 @@
+{
+  "schemaVersion": 1,
+  "fixtureId": "builtin-7k-16x9-v1",
+  "provenance": {
+    "kind": "synthetic",
+    "redistributable": true,
+    "beatorajaCommit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+    "renderer": "legacy BMSRenderer::render(RenderContext&,long long,long long)",
+    "goldenPng": "builtin_7k_16x9.png"
+  },
+  "surface": {
+    "drawableWidth": 1280,
+    "drawableHeight": 720,
+    "logicalWidth": 1920,
+    "logicalHeight": 1080,
+    "backend": "Metal",
+    "pixelFormat": "RGBA8",
+    "channelTolerance": 2
+  },
+  "chart": {
+    "sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+    "keyMode": 7,
+    "laneOrder": [
+      7,
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "baseBpm": 120.0,
+    "timelines": [
+      {
+        "id": 1,
+        "timeMicros": 0,
+        "beat": 0.0,
+        "bpm": 120.0,
+        "stopMicros": 0,
+        "scroll": 1.0,
+        "section": true,
+        "bgaOnly": false
+      },
+      {
+        "id": 2,
+        "timeMicros": 350000,
+        "beat": 0.7,
+        "bpm": 120.0,
+        "stopMicros": 0,
+        "scroll": 1.0,
+        "section": false,
+        "bgaOnly": false
+      },
+      {
+        "id": 3,
+        "timeMicros": 650000,
+        "beat": 1.3,
+        "bpm": 120.0,
+        "stopMicros": 0,
+        "scroll": 1.0,
+        "section": false,
+        "bgaOnly": false
+      },
+      {
+        "id": 4,
+        "timeMicros": 1100000,
+        "beat": 2.2,
+        "bpm": 120.0,
+        "stopMicros": 0,
+        "scroll": 1.0,
+        "section": false,
+        "bgaOnly": false
+      },
+      {
+        "id": 5,
+        "timeMicros": 1350000,
+        "beat": 2.7,
+        "bpm": 120.0,
+        "stopMicros": 0,
+        "scroll": 1.0,
+        "section": false,
+        "bgaOnly": false
+      },
+      {
+        "id": 6,
+        "timeMicros": 1550000,
+        "beat": 3.1,
+        "bpm": 120.0,
+        "stopMicros": 0,
+        "scroll": 1.0,
+        "section": false,
+        "bgaOnly": false
+      },
+      {
+        "id": 7,
+        "timeMicros": 1700000,
+        "beat": 3.4,
+        "bpm": 120.0,
+        "stopMicros": 0,
+        "scroll": 1.0,
+        "section": false,
+        "bgaOnly": false
+      },
+      {
+        "id": 8,
+        "timeMicros": 2000000,
+        "beat": 4.0,
+        "bpm": 120.0,
+        "stopMicros": 0,
+        "scroll": 1.0,
+        "section": false,
+        "bgaOnly": false
+      },
+      {
+        "id": 9,
+        "timeMicros": 2250000,
+        "beat": 4.5,
+        "bpm": 120.0,
+        "stopMicros": 0,
+        "scroll": 1.0,
+        "section": true,
+        "bgaOnly": false
+      },
+      {
+        "id": 10,
+        "timeMicros": 2800000,
+        "beat": 5.6,
+        "bpm": 180.0,
+        "stopMicros": 0,
+        "scroll": 1.0,
+        "section": false,
+        "bgaOnly": false
+      },
+      {
+        "id": 11,
+        "timeMicros": 3050000,
+        "beat": 6.1,
+        "bpm": 180.0,
+        "stopMicros": 200000,
+        "scroll": 1.0,
+        "section": false,
+        "bgaOnly": false
+      },
+      {
+        "id": 12,
+        "timeMicros": 3300000,
+        "beat": 6.6,
+        "bpm": 180.0,
+        "stopMicros": 0,
+        "scroll": 0.5,
+        "section": false,
+        "bgaOnly": false
+      },
+      {
+        "id": 13,
+        "timeMicros": 3450000,
+        "beat": 6.9,
+        "bpm": 180.0,
+        "stopMicros": 0,
+        "scroll": 0.5,
+        "section": false,
+        "bgaOnly": true
+      },
+      {
+        "id": 14,
+        "timeMicros": 3600000,
+        "beat": 7.2,
+        "bpm": 180.0,
+        "stopMicros": 0,
+        "scroll": 0.5,
+        "section": false,
+        "bgaOnly": false
+      },
+      {
+        "id": 15,
+        "timeMicros": 3850000,
+        "beat": 7.7,
+        "bpm": 180.0,
+        "stopMicros": 0,
+        "scroll": 0.5,
+        "section": false,
+        "bgaOnly": false
+      },
+      {
+        "id": 16,
+        "timeMicros": 4100000,
+        "beat": 8.2,
+        "bpm": 180.0,
+        "stopMicros": 0,
+        "scroll": 0.5,
+        "section": false,
+        "bgaOnly": false
+      },
+      {
+        "id": 17,
+        "timeMicros": 4500000,
+        "beat": 9.0,
+        "bpm": 180.0,
+        "stopMicros": 0,
+        "scroll": 0.5,
+        "section": true,
+        "bgaOnly": false
+      }
+    ],
+    "notes": [
+      {
+        "id": 18,
+        "timelineId": 2,
+        "lane": 0,
+        "kind": "normal",
+        "longMode": "LN",
+        "pairId": 0
+      },
+      {
+        "id": 19,
+        "timelineId": 3,
+        "lane": 2,
+        "kind": "normal",
+        "longMode": "LN",
+        "pairId": 0
+      },
+      {
+        "id": 20,
+        "timelineId": 4,
+        "lane": 3,
+        "kind": "longHead",
+        "longMode": "LN",
+        "pairId": 28
+      },
+      {
+        "id": 21,
+        "timelineId": 5,
+        "lane": 4,
+        "kind": "longHead",
+        "longMode": "CN",
+        "pairId": 29
+      },
+      {
+        "id": 22,
+        "timelineId": 6,
+        "lane": 7,
+        "kind": "normal",
+        "longMode": "LN",
+        "pairId": 0
+      },
+      {
+        "id": 23,
+        "timelineId": 7,
+        "lane": 6,
+        "kind": "longHead",
+        "longMode": "HCN",
+        "pairId": 30
+      },
+      {
+        "id": 24,
+        "timelineId": 8,
+        "lane": 1,
+        "kind": "invisible",
+        "longMode": "LN",
+        "pairId": 0
+      },
+      {
+        "id": 25,
+        "timelineId": 9,
+        "lane": 0,
+        "kind": "normal",
+        "longMode": "LN",
+        "pairId": 0
+      },
+      {
+        "id": 26,
+        "timelineId": 9,
+        "lane": 5,
+        "kind": "mine",
+        "longMode": "LN",
+        "pairId": 0
+      },
+      {
+        "id": 27,
+        "timelineId": 10,
+        "lane": 1,
+        "kind": "normal",
+        "longMode": "LN",
+        "pairId": 0
+      },
+      {
+        "id": 28,
+        "timelineId": 14,
+        "lane": 3,
+        "kind": "longTail",
+        "longMode": "LN",
+        "pairId": 20
+      },
+      {
+        "id": 29,
+        "timelineId": 15,
+        "lane": 4,
+        "kind": "longTail",
+        "longMode": "CN",
+        "pairId": 21
+      },
+      {
+        "id": 30,
+        "timelineId": 16,
+        "lane": 6,
+        "kind": "longTail",
+        "longMode": "HCN",
+        "pairId": 23
+      },
+      {
+        "id": 31,
+        "timelineId": 17,
+        "lane": 6,
+        "kind": "normal",
+        "longMode": "LN",
+        "pairId": 0
+      }
+    ]
+  },
+  "configuration": {
+    "visibleTimeDurationMilliseconds": 2500,
+    "visibleTimeUseMilliseconds": true,
+    "hispeedFixMode": 1,
+    "playAreaWidth": 8.0,
+    "laneBeamsEnabled": true,
+    "laneCoverHispeedFactor": 0.76,
+    "laneBeamLengthPercent": 82,
+    "noteStartPositionPercent": 24,
+    "laneBeamClockUsesRenderTime": true,
+    "showInvisibleNotes": true,
+    "judgementIndicatorEnabled": true,
+    "judgementIndicatorY": 0.28,
+    "judgementIndicatorWidthScale": 1.1,
+    "judgementIndicatorHudMode": false,
+    "judgementIndicatorRangeMilliseconds": 180,
+    "judgementTextY": 0.34,
+    "judgementCounterEnabled": true,
+    "judgementCounterPosition": 2,
+    "fastSlowCriteria": 0,
+    "millisecondsCriteria": 0,
+    "gaugeBarPosition": 2,
+    "touchVisualizationEnabled": true,
+    "replayGhostRenderingEnabled": false
+  },
+  "events": [
+    {
+      "sequence": 0,
+      "kind": "lanePress",
+      "lane": 4,
+      "eventTimeMicros": 1575000,
+      "judge": "pgreat",
+      "diffMicros": -250
+    },
+    {
+      "sequence": 1,
+      "kind": "laneRelease",
+      "lane": 4,
+      "eventTimeMicros": 1600000
+    },
+    {
+      "sequence": 2,
+      "kind": "judge",
+      "judge": "great",
+      "diffMicros": 1500,
+      "combo": 24,
+      "score": 123456,
+      "recordTimingSample": true,
+      "clock": {
+        "songTimeMicros": 1750000,
+        "visualTimeMicros": 1625000,
+        "bgaTimeMicros": 1700000
+      }
+    },
+    {
+      "sequence": 3,
+      "kind": "touchDown",
+      "fingerId": 42,
+      "songTimeMicros": 1600000,
+      "normalized": [
+        0.33,
+        0.72
+      ]
+    }
+  ],
+  "frames": [
+    {
+      "name": "cover0",
+      "frameSerial": 1,
+      "clock": {
+        "visualTimeMicros": 1625000,
+        "gameplayTimeMicros": 1750000,
+        "replayTouchTimeMicros": 1625000,
+        "bgaTimeMicros": 1700000
+      },
+      "projectionBounds": {
+        "currentScrollPosition": 3.25,
+        "visibleScrollMin": 3.05798,
+        "visibleScrollMax": 4.5,
+        "visibleReferenceBpm": 120.0,
+        "hispeed": 0.8,
+        "rxhs": 6.835218,
+        "playAreaLeftX": 0.0,
+        "playAreaWidth": 8.0,
+        "noteWidth": 1.0,
+        "noteHeight": 0.3125,
+        "lowerY": -1.0,
+        "judgeY": 0.0,
+        "upperY": 8.544023,
+        "noteVisibleUpperY": 8.544023
+      },
+      "timelineProjection": [
+        {
+          "sequence": 0,
+          "timelineOrdinal": 0,
+          "timeMicros": 0,
+          "y": -22.214458,
+          "future": false,
+          "finite": true
+        },
+        {
+          "sequence": 1,
+          "timelineOrdinal": 1,
+          "timeMicros": 350000,
+          "y": -17.429806,
+          "future": false,
+          "finite": true
+        },
+        {
+          "sequence": 2,
+          "timelineOrdinal": 2,
+          "timeMicros": 650000,
+          "y": -13.328675,
+          "future": false,
+          "finite": true
+        },
+        {
+          "sequence": 3,
+          "timelineOrdinal": 3,
+          "timeMicros": 1100000,
+          "y": -7.176979,
+          "future": false,
+          "finite": true
+        },
+        {
+          "sequence": 4,
+          "timelineOrdinal": 4,
+          "timeMicros": 1350000,
+          "y": -3.75937,
+          "future": false,
+          "finite": true
+        },
+        {
+          "sequence": 5,
+          "timelineOrdinal": 5,
+          "timeMicros": 1550000,
+          "y": -1.025283,
+          "future": false,
+          "finite": true
+        },
+        {
+          "sequence": 6,
+          "timelineOrdinal": 6,
+          "timeMicros": 1700000,
+          "y": 1.025283,
+          "future": true,
+          "finite": true
+        },
+        {
+          "sequence": 7,
+          "timelineOrdinal": 7,
+          "timeMicros": 2000000,
+          "y": 5.126413,
+          "future": true,
+          "finite": true
+        },
+        {
+          "sequence": 8,
+          "timelineOrdinal": 8,
+          "timeMicros": 2250000,
+          "y": 8.544023,
+          "future": true,
+          "finite": true
+        },
+        {
+          "sequence": 9,
+          "timelineOrdinal": 9,
+          "timeMicros": 2800000,
+          "y": 16.062761,
+          "future": true,
+          "finite": true
+        }
+      ],
+      "submissions": [
+        {
+          "sequence": 0,
+          "kind": "background",
+          "view": "main",
+          "depth": 100,
+          "timelineOrdinal": 18446744073709551615,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 0,
+          "lane": -1,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            0.0,
+            0.0,
+            8.0,
+            8.544023
+          ]
+        },
+        {
+          "sequence": 1,
+          "kind": "judgeLine",
+          "view": "main",
+          "depth": 100,
+          "timelineOrdinal": 18446744073709551615,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 0,
+          "lane": -1,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            0.0,
+            0.0,
+            8.0,
+            0.3125
+          ]
+        },
+        {
+          "sequence": 2,
+          "kind": "normal",
+          "view": "main",
+          "depth": 187,
+          "timelineOrdinal": 5,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 1550000,
+          "lane": 7,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            0.0,
+            -1.025283,
+            1.0,
+            0.3125
+          ]
+        },
+        {
+          "sequence": 3,
+          "kind": "invisible",
+          "view": "main",
+          "depth": 190,
+          "timelineOrdinal": 7,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 2000000,
+          "lane": 1,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            2.0,
+            5.126413,
+            1.0,
+            0.046875
+          ]
+        },
+        {
+          "sequence": 4,
+          "kind": "invisible",
+          "view": "main",
+          "depth": 190,
+          "timelineOrdinal": 7,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 2000000,
+          "lane": 1,
+          "primitiveOrdinal": 1,
+          "longBodyState": "none",
+          "rect": [
+            2.0,
+            5.392038,
+            1.0,
+            0.046875
+          ]
+        },
+        {
+          "sequence": 5,
+          "kind": "invisible",
+          "view": "main",
+          "depth": 190,
+          "timelineOrdinal": 7,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 2000000,
+          "lane": 1,
+          "primitiveOrdinal": 2,
+          "longBodyState": "none",
+          "rect": [
+            2.0,
+            5.126413,
+            0.046875,
+            0.3125
+          ]
+        },
+        {
+          "sequence": 6,
+          "kind": "invisible",
+          "view": "main",
+          "depth": 190,
+          "timelineOrdinal": 7,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 2000000,
+          "lane": 1,
+          "primitiveOrdinal": 3,
+          "longBodyState": "none",
+          "rect": [
+            2.953125,
+            5.126413,
+            0.046875,
+            0.3125
+          ]
+        },
+        {
+          "sequence": 7,
+          "kind": "measureLine",
+          "view": "main",
+          "depth": 100,
+          "timelineOrdinal": 8,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 2250000,
+          "lane": -1,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            0.0,
+            8.544023,
+            8.0,
+            0.05
+          ]
+        },
+        {
+          "sequence": 8,
+          "kind": "normal",
+          "view": "main",
+          "depth": 191,
+          "timelineOrdinal": 8,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 2250000,
+          "lane": 0,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            1.0,
+            8.544023,
+            1.0,
+            0.3125
+          ]
+        },
+        {
+          "sequence": 9,
+          "kind": "mine",
+          "view": "main",
+          "depth": 191,
+          "timelineOrdinal": 8,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 2250000,
+          "lane": 5,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            6.0,
+            8.544023,
+            1.0,
+            0.3125
+          ]
+        },
+        {
+          "sequence": 10,
+          "kind": "longBody",
+          "view": "main",
+          "depth": 188,
+          "timelineOrdinal": 6,
+          "pairedTimelineOrdinal": 14,
+          "timeMicros": 1700000,
+          "lane": 6,
+          "primitiveOrdinal": 0,
+          "longBodyState": "off",
+          "rect": [
+            7.0,
+            1.025283,
+            1.0,
+            7.51874
+          ]
+        },
+        {
+          "sequence": 11,
+          "kind": "longTail",
+          "view": "main",
+          "depth": 189,
+          "timelineOrdinal": 14,
+          "pairedTimelineOrdinal": 6,
+          "timeMicros": 4100000,
+          "lane": 6,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            7.0,
+            8.544023,
+            1.0,
+            0.3125
+          ]
+        },
+        {
+          "sequence": 12,
+          "kind": "longHead",
+          "view": "main",
+          "depth": 189,
+          "timelineOrdinal": 6,
+          "pairedTimelineOrdinal": 14,
+          "timeMicros": 1700000,
+          "lane": 6,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            7.0,
+            1.025283,
+            1.0,
+            0.3125
+          ]
+        },
+        {
+          "sequence": 13,
+          "kind": "longBody",
+          "view": "main",
+          "depth": 185,
+          "timelineOrdinal": 4,
+          "pairedTimelineOrdinal": 13,
+          "timeMicros": 1350000,
+          "lane": 4,
+          "primitiveOrdinal": 0,
+          "longBodyState": "on",
+          "rect": [
+            5.0,
+            -3.75937,
+            1.0,
+            12.303392
+          ]
+        },
+        {
+          "sequence": 14,
+          "kind": "longTail",
+          "view": "main",
+          "depth": 186,
+          "timelineOrdinal": 13,
+          "pairedTimelineOrdinal": 4,
+          "timeMicros": 3850000,
+          "lane": 4,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            5.0,
+            8.544023,
+            1.0,
+            0.3125
+          ]
+        },
+        {
+          "sequence": 15,
+          "kind": "longHead",
+          "view": "main",
+          "depth": 186,
+          "timelineOrdinal": 4,
+          "pairedTimelineOrdinal": 13,
+          "timeMicros": 1350000,
+          "lane": 4,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            5.0,
+            -3.75937,
+            1.0,
+            0.3125
+          ]
+        },
+        {
+          "sequence": 16,
+          "kind": "longBody",
+          "view": "main",
+          "depth": 183,
+          "timelineOrdinal": 3,
+          "pairedTimelineOrdinal": 12,
+          "timeMicros": 1100000,
+          "lane": 3,
+          "primitiveOrdinal": 0,
+          "longBodyState": "off",
+          "rect": [
+            4.0,
+            -1.0,
+            1.0,
+            9.544023
+          ]
+        },
+        {
+          "sequence": 17,
+          "kind": "longHead",
+          "view": "main",
+          "depth": 184,
+          "timelineOrdinal": 3,
+          "pairedTimelineOrdinal": 12,
+          "timeMicros": 1100000,
+          "lane": 3,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            4.0,
+            -1.0,
+            1.0,
+            0.3125
+          ]
+        },
+        {
+          "sequence": 18,
+          "kind": "laneBeamPass",
+          "view": "main",
+          "depth": 180,
+          "timelineOrdinal": 18446744073709551615,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 0,
+          "lane": -1,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            0.0,
+            0.0,
+            8.0,
+            8.544023
+          ]
+        },
+        {
+          "sequence": 19,
+          "kind": "laneCoverPass",
+          "view": "main",
+          "depth": 2415919104,
+          "timelineOrdinal": 18446744073709551615,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 0,
+          "lane": -1,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            0.0,
+            8.544023,
+            8.0,
+            0.0
+          ]
+        },
+        {
+          "sequence": 20,
+          "kind": "startIndicatorPass",
+          "view": "main",
+          "depth": 2684354560,
+          "timelineOrdinal": 18446744073709551615,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 0,
+          "lane": -1,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            0.0,
+            0.0,
+            8.0,
+            8.544023
+          ]
+        },
+        {
+          "sequence": 21,
+          "kind": "judgementIndicatorPass",
+          "view": "main",
+          "depth": 2952790016,
+          "timelineOrdinal": 18446744073709551615,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 0,
+          "lane": -1,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            0.0,
+            0.0,
+            8.0,
+            8.544023
+          ]
+        },
+        {
+          "sequence": 22,
+          "kind": "gaugePass",
+          "view": "ui",
+          "depth": 0,
+          "timelineOrdinal": 18446744073709551615,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 0,
+          "lane": -1,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            1702.0,
+            291.599976,
+            30.0,
+            496.800018
+          ]
+        },
+        {
+          "sequence": 23,
+          "kind": "hudPass",
+          "view": "ui",
+          "depth": 0,
+          "timelineOrdinal": 18446744073709551615,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 0,
+          "lane": -1,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            0.0,
+            0.0,
+            1920.0,
+            1080.0
+          ]
+        },
+        {
+          "sequence": 24,
+          "kind": "touchPass",
+          "view": "ui",
+          "depth": 1,
+          "timelineOrdinal": 18446744073709551615,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 0,
+          "lane": -1,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            0.0,
+            0.0,
+            1920.0,
+            1080.0
+          ]
+        }
+      ],
+      "hud": {
+        "lastJudge": "great",
+        "lastJudgeVisualMicros": 1625000,
+        "combo": 24,
+        "score": 123456,
+        "fastSlowMicros": 1500,
+        "judgementCounters": {
+          "pgreat": 17,
+          "great": 5,
+          "good": 1,
+          "bad": 0,
+          "poor": 0,
+          "kpoor": 0
+        },
+        "comboBreak": 2,
+        "gauge": {
+          "type": 3,
+          "autoShift": 3,
+          "value": 64.5,
+          "maximum": 100.0
+        },
+        "pacemaker": {
+          "enabled": true,
+          "label": "AA",
+          "currentScore": 123456,
+          "targetScore": 123444,
+          "delta": 12,
+          "playedNotes": 24
+        },
+        "playOptionLabel": "MIRROR / HARD",
+        "autoPlayMarkVisible": true
+      },
+      "touchBounds": {
+        "order": [
+          "bottomLeft",
+          "bottomRight",
+          "topLeft",
+          "topRight"
+        ],
+        "uiQuad": [
+          [
+            224.380981,
+            897.796204
+          ],
+          [
+            1695.619141,
+            897.796204
+          ],
+          [
+            620.690369,
+            -6.4e-05
+          ],
+          [
+            1299.309692,
+            -6.4e-05
+          ]
+        ],
+        "normalizedQuad": [
+          [
+            0.116865,
+            0.831293
+          ],
+          [
+            0.883135,
+            0.831293
+          ],
+          [
+            0.323276,
+            -0.0
+          ],
+          [
+            0.676724,
+            -0.0
+          ]
+        ],
+        "lanes": [
+          7,
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ],
+        "scratch": [
+          true,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false
+        ]
+      }
+    },
+    {
+      "name": "cover24",
+      "frameSerial": 2,
+      "clock": {
+        "visualTimeMicros": 1625000,
+        "gameplayTimeMicros": 1750000,
+        "replayTouchTimeMicros": 1625000,
+        "bgaTimeMicros": 1700000
+      },
+      "projectionBounds": {
+        "currentScrollPosition": 3.25,
+        "visibleScrollMin": 2.997342,
+        "visibleScrollMax": 4.894737,
+        "visibleReferenceBpm": 120.0,
+        "hispeed": 0.608,
+        "rxhs": 5.194766,
+        "playAreaLeftX": 0.0,
+        "playAreaWidth": 8.0,
+        "noteWidth": 1.0,
+        "noteHeight": 0.3125,
+        "lowerY": -1.0,
+        "judgeY": 0.0,
+        "upperY": 8.544023,
+        "noteVisibleUpperY": 6.493457
+      },
+      "timelineProjection": [
+        {
+          "sequence": 0,
+          "timelineOrdinal": 0,
+          "timeMicros": 0,
+          "y": -16.882988,
+          "future": false,
+          "finite": true
+        },
+        {
+          "sequence": 1,
+          "timelineOrdinal": 1,
+          "timeMicros": 350000,
+          "y": -13.246652,
+          "future": false,
+          "finite": true
+        },
+        {
+          "sequence": 2,
+          "timelineOrdinal": 2,
+          "timeMicros": 650000,
+          "y": -10.129793,
+          "future": false,
+          "finite": true
+        },
+        {
+          "sequence": 3,
+          "timelineOrdinal": 3,
+          "timeMicros": 1100000,
+          "y": -5.454504,
+          "future": false,
+          "finite": true
+        },
+        {
+          "sequence": 4,
+          "timelineOrdinal": 4,
+          "timeMicros": 1350000,
+          "y": -2.857121,
+          "future": false,
+          "finite": true
+        },
+        {
+          "sequence": 5,
+          "timelineOrdinal": 5,
+          "timeMicros": 1550000,
+          "y": -0.779215,
+          "future": false,
+          "finite": true
+        },
+        {
+          "sequence": 6,
+          "timelineOrdinal": 6,
+          "timeMicros": 1700000,
+          "y": 0.779215,
+          "future": true,
+          "finite": true
+        },
+        {
+          "sequence": 7,
+          "timelineOrdinal": 7,
+          "timeMicros": 2000000,
+          "y": 3.896074,
+          "future": true,
+          "finite": true
+        },
+        {
+          "sequence": 8,
+          "timelineOrdinal": 8,
+          "timeMicros": 2250000,
+          "y": 6.493457,
+          "future": true,
+          "finite": true
+        },
+        {
+          "sequence": 9,
+          "timelineOrdinal": 9,
+          "timeMicros": 2800000,
+          "y": 12.207699,
+          "future": true,
+          "finite": true
+        }
+      ],
+      "submissions": [
+        {
+          "sequence": 0,
+          "kind": "background",
+          "view": "main",
+          "depth": 100,
+          "timelineOrdinal": 18446744073709551615,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 0,
+          "lane": -1,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            0.0,
+            0.0,
+            8.0,
+            8.544023
+          ]
+        },
+        {
+          "sequence": 1,
+          "kind": "judgeLine",
+          "view": "main",
+          "depth": 100,
+          "timelineOrdinal": 18446744073709551615,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 0,
+          "lane": -1,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            0.0,
+            0.0,
+            8.0,
+            0.3125
+          ]
+        },
+        {
+          "sequence": 2,
+          "kind": "normal",
+          "view": "main",
+          "depth": 187,
+          "timelineOrdinal": 5,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 1550000,
+          "lane": 7,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            0.0,
+            -0.779215,
+            1.0,
+            0.3125
+          ]
+        },
+        {
+          "sequence": 3,
+          "kind": "invisible",
+          "view": "main",
+          "depth": 190,
+          "timelineOrdinal": 7,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 2000000,
+          "lane": 1,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            2.0,
+            3.896074,
+            1.0,
+            0.046875
+          ]
+        },
+        {
+          "sequence": 4,
+          "kind": "invisible",
+          "view": "main",
+          "depth": 190,
+          "timelineOrdinal": 7,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 2000000,
+          "lane": 1,
+          "primitiveOrdinal": 1,
+          "longBodyState": "none",
+          "rect": [
+            2.0,
+            4.161699,
+            1.0,
+            0.046875
+          ]
+        },
+        {
+          "sequence": 5,
+          "kind": "invisible",
+          "view": "main",
+          "depth": 190,
+          "timelineOrdinal": 7,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 2000000,
+          "lane": 1,
+          "primitiveOrdinal": 2,
+          "longBodyState": "none",
+          "rect": [
+            2.0,
+            3.896074,
+            0.046875,
+            0.3125
+          ]
+        },
+        {
+          "sequence": 6,
+          "kind": "invisible",
+          "view": "main",
+          "depth": 190,
+          "timelineOrdinal": 7,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 2000000,
+          "lane": 1,
+          "primitiveOrdinal": 3,
+          "longBodyState": "none",
+          "rect": [
+            2.953125,
+            3.896074,
+            0.046875,
+            0.3125
+          ]
+        },
+        {
+          "sequence": 7,
+          "kind": "measureLine",
+          "view": "main",
+          "depth": 100,
+          "timelineOrdinal": 8,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 2250000,
+          "lane": -1,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            0.0,
+            6.493457,
+            8.0,
+            0.05
+          ]
+        },
+        {
+          "sequence": 8,
+          "kind": "normal",
+          "view": "main",
+          "depth": 191,
+          "timelineOrdinal": 8,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 2250000,
+          "lane": 0,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            1.0,
+            6.493457,
+            1.0,
+            0.3125
+          ]
+        },
+        {
+          "sequence": 9,
+          "kind": "mine",
+          "view": "main",
+          "depth": 191,
+          "timelineOrdinal": 8,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 2250000,
+          "lane": 5,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            6.0,
+            6.493457,
+            1.0,
+            0.3125
+          ]
+        },
+        {
+          "sequence": 10,
+          "kind": "longBody",
+          "view": "main",
+          "depth": 188,
+          "timelineOrdinal": 6,
+          "pairedTimelineOrdinal": 14,
+          "timeMicros": 1700000,
+          "lane": 6,
+          "primitiveOrdinal": 0,
+          "longBodyState": "off",
+          "rect": [
+            7.0,
+            0.779215,
+            1.0,
+            7.764808
+          ]
+        },
+        {
+          "sequence": 11,
+          "kind": "longTail",
+          "view": "main",
+          "depth": 189,
+          "timelineOrdinal": 14,
+          "pairedTimelineOrdinal": 6,
+          "timeMicros": 4100000,
+          "lane": 6,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            7.0,
+            8.544023,
+            1.0,
+            0.3125
+          ]
+        },
+        {
+          "sequence": 12,
+          "kind": "longHead",
+          "view": "main",
+          "depth": 189,
+          "timelineOrdinal": 6,
+          "pairedTimelineOrdinal": 14,
+          "timeMicros": 1700000,
+          "lane": 6,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            7.0,
+            0.779215,
+            1.0,
+            0.3125
+          ]
+        },
+        {
+          "sequence": 13,
+          "kind": "longBody",
+          "view": "main",
+          "depth": 185,
+          "timelineOrdinal": 4,
+          "pairedTimelineOrdinal": 13,
+          "timeMicros": 1350000,
+          "lane": 4,
+          "primitiveOrdinal": 0,
+          "longBodyState": "on",
+          "rect": [
+            5.0,
+            -2.857121,
+            1.0,
+            11.401144
+          ]
+        },
+        {
+          "sequence": 14,
+          "kind": "longTail",
+          "view": "main",
+          "depth": 186,
+          "timelineOrdinal": 13,
+          "pairedTimelineOrdinal": 4,
+          "timeMicros": 3850000,
+          "lane": 4,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            5.0,
+            8.544023,
+            1.0,
+            0.3125
+          ]
+        },
+        {
+          "sequence": 15,
+          "kind": "longHead",
+          "view": "main",
+          "depth": 186,
+          "timelineOrdinal": 4,
+          "pairedTimelineOrdinal": 13,
+          "timeMicros": 1350000,
+          "lane": 4,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            5.0,
+            -2.857121,
+            1.0,
+            0.3125
+          ]
+        },
+        {
+          "sequence": 16,
+          "kind": "longBody",
+          "view": "main",
+          "depth": 183,
+          "timelineOrdinal": 3,
+          "pairedTimelineOrdinal": 12,
+          "timeMicros": 1100000,
+          "lane": 3,
+          "primitiveOrdinal": 0,
+          "longBodyState": "off",
+          "rect": [
+            4.0,
+            -1.0,
+            1.0,
+            9.544023
+          ]
+        },
+        {
+          "sequence": 17,
+          "kind": "longHead",
+          "view": "main",
+          "depth": 184,
+          "timelineOrdinal": 3,
+          "pairedTimelineOrdinal": 12,
+          "timeMicros": 1100000,
+          "lane": 3,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            4.0,
+            -1.0,
+            1.0,
+            0.3125
+          ]
+        },
+        {
+          "sequence": 18,
+          "kind": "laneBeamPass",
+          "view": "main",
+          "depth": 180,
+          "timelineOrdinal": 18446744073709551615,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 0,
+          "lane": -1,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            0.0,
+            0.0,
+            8.0,
+            6.493457
+          ]
+        },
+        {
+          "sequence": 19,
+          "kind": "laneCoverPass",
+          "view": "main",
+          "depth": 2415919104,
+          "timelineOrdinal": 18446744073709551615,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 0,
+          "lane": -1,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            0.0,
+            6.493457,
+            8.0,
+            2.050566
+          ]
+        },
+        {
+          "sequence": 20,
+          "kind": "startIndicatorPass",
+          "view": "main",
+          "depth": 2684354560,
+          "timelineOrdinal": 18446744073709551615,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 0,
+          "lane": -1,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            0.0,
+            0.0,
+            8.0,
+            6.493457
+          ]
+        },
+        {
+          "sequence": 21,
+          "kind": "judgementIndicatorPass",
+          "view": "main",
+          "depth": 2952790016,
+          "timelineOrdinal": 18446744073709551615,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 0,
+          "lane": -1,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            0.0,
+            0.0,
+            8.0,
+            8.544023
+          ]
+        },
+        {
+          "sequence": 22,
+          "kind": "gaugePass",
+          "view": "ui",
+          "depth": 0,
+          "timelineOrdinal": 18446744073709551615,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 0,
+          "lane": -1,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            1702.0,
+            291.599976,
+            30.0,
+            496.800018
+          ]
+        },
+        {
+          "sequence": 23,
+          "kind": "hudPass",
+          "view": "ui",
+          "depth": 0,
+          "timelineOrdinal": 18446744073709551615,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 0,
+          "lane": -1,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            0.0,
+            0.0,
+            1920.0,
+            1080.0
+          ]
+        },
+        {
+          "sequence": 24,
+          "kind": "touchPass",
+          "view": "ui",
+          "depth": 1,
+          "timelineOrdinal": 18446744073709551615,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 0,
+          "lane": -1,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            0.0,
+            0.0,
+            1920.0,
+            1080.0
+          ]
+        }
+      ],
+      "hud": {
+        "lastJudge": "great",
+        "lastJudgeVisualMicros": 1625000,
+        "combo": 24,
+        "score": 123456,
+        "fastSlowMicros": 1500,
+        "judgementCounters": {
+          "pgreat": 17,
+          "great": 5,
+          "good": 1,
+          "bad": 0,
+          "poor": 0,
+          "kpoor": 0
+        },
+        "comboBreak": 2,
+        "gauge": {
+          "type": 3,
+          "autoShift": 3,
+          "value": 64.5,
+          "maximum": 100.0
+        },
+        "pacemaker": {
+          "enabled": true,
+          "label": "AA",
+          "currentScore": 123456,
+          "targetScore": 123444,
+          "delta": 12,
+          "playedNotes": 24
+        },
+        "playOptionLabel": "MIRROR / HARD",
+        "autoPlayMarkVisible": true
+      },
+      "touchBounds": {
+        "order": [
+          "bottomLeft",
+          "bottomRight",
+          "topLeft",
+          "topRight"
+        ],
+        "uiQuad": [
+          [
+            224.380981,
+            897.796204
+          ],
+          [
+            1695.619141,
+            897.796204
+          ],
+          [
+            620.690369,
+            -6.4e-05
+          ],
+          [
+            1299.309692,
+            -6.4e-05
+          ]
+        ],
+        "normalizedQuad": [
+          [
+            0.116865,
+            0.831293
+          ],
+          [
+            0.883135,
+            0.831293
+          ],
+          [
+            0.323276,
+            -0.0
+          ],
+          [
+            0.676724,
+            -0.0
+          ]
+        ],
+        "lanes": [
+          7,
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ],
+        "scratch": [
+          true,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false
+        ]
+      }
+    }
+  ],
+  "laneCoverResponse": {
+    "before": {
+      "percent": 0,
+      "noteVisibleUpperY": 8.544023,
+      "visibleReferenceBpm": 120.0,
+      "probeNoteY": 8.544023
+    },
+    "after": {
+      "percent": 24,
+      "noteVisibleUpperY": 6.493457,
+      "visibleReferenceBpm": 120.0,
+      "probeNoteY": 6.493457
+    },
+    "dragProbe": {
+      "requestedPercent": 40,
+      "renderX": 640.0,
+      "renderY": 140.765137,
+      "grabOffset": 0.182813,
+      "returnedPercent": 40
+    }
+  }
+}

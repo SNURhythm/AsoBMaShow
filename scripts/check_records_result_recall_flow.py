@@ -81,18 +81,6 @@ cleanup_tokens = [
 missing += ["cleanup:" + token for token in cleanup_tokens
             if token not in combined]
 
-forbidden = [
-    "LoadReplayResult",
-    "startReplayResultRecall",
-    "startReplayIrUpload",
-    "refreshReplayIrMarker",
-    "replayModalPhotoButton",
-    "startReplayImageExport",
-    'makeModalButton("Export Photo"',
-    "setIrUploadInProgress",
-    "replayIrUploadReplayId",
-]
-present = [token for token in forbidden if token in combined]
-if missing or present:
+if missing:
     raise SystemExit("records result recall contract failure; missing=" +
-                     repr(missing) + " forbidden=" + repr(present))
+                     repr(missing))

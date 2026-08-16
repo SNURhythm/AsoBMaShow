@@ -1,5 +1,4 @@
 #include "RhythmLaneInputController.h"
-#include "BMSRenderer.h"
 #include "GameplayNoteJudgeRole.h"
 #include "ManualKeysoundSelection.h"
 #include "../../CoursePlaySession.h"
@@ -173,21 +172,21 @@ void setReplayEvent(RhythmLaneInputController::Result &result,
 } // namespace
 
 RhythmLaneInputController::RhythmLaneInputController(
-    bms_parser::Chart *chart, BMSRenderer *renderer,
+    bms_parser::Chart *chart, IPlayfieldPresentationEvents *events,
     std::unordered_map<int, bool> &lanePressed, Judge effectiveJudge,
     int longNoteModeOverride,
     std::optional<NoteTimeRange> allowedNoteRange)
     : RhythmLaneInputController(
-          chart, renderer, lanePressed,
+          chart, events, lanePressed,
           gameplay::CompiledGameplayJudge::from(effectiveJudge),
           longNoteModeOverride, std::move(allowedNoteRange)) {}
 
 RhythmLaneInputController::RhythmLaneInputController(
-    bms_parser::Chart *chart, BMSRenderer *renderer,
+    bms_parser::Chart *chart, IPlayfieldPresentationEvents *events,
     std::unordered_map<int, bool> &lanePressed,
     gameplay::CompiledGameplayJudge effectiveJudge, int longNoteModeOverride,
     std::optional<NoteTimeRange> allowedNoteRange)
-    : chart(chart), renderer(renderer), lanePressed(lanePressed),
+    : chart(chart), events(events), lanePressed(lanePressed),
       longNoteModeOverride(longNoteModeOverride),
       judge(std::move(effectiveJudge)),
       allowedNoteRange(std::move(allowedNoteRange)) {
@@ -316,9 +315,9 @@ RhythmLaneInputController::pressLaneForPreparation(
   if (mainState != lanePressed.end()) {
     mainState->second = true;
   }
-  if (renderer != nullptr) {
-    renderer->onLanePressed(mainLane, JudgeResult(None, 0),
-                            context.laneBeamTimeMicros);
+  if (events != nullptr) {
+    events->onLanePressed(mainLane, JudgeResult(None, 0),
+                          context.laneBeamTimeMicros);
   }
   setReplayEvent(result, ReplayEventAction::Press, mainLane, nullptr,
                  eventTime, eventTime, JudgeResult(None, 0));
@@ -339,8 +338,8 @@ RhythmLaneInputController::releaseLaneForPreparation(
     return result;
   }
   laneState->second = false;
-  if (renderer != nullptr) {
-    renderer->onLaneReleased(lane, context.laneBeamTimeMicros);
+  if (events != nullptr) {
+    events->onLaneReleased(lane, context.laneBeamTimeMicros);
   }
   const long long eventTime = inputTimeMicros(context);
   setReplayEvent(result, ReplayEventAction::Release, lane, nullptr,
@@ -503,9 +502,9 @@ RhythmLaneInputController::ResultBatch RhythmLaneInputController::pressLane(
         pressedIt != lanePressed.end()) {
       pressedIt->second = true;
     }
-    if (renderer != nullptr) {
-      renderer->onLanePressed(selectedCandidate.lane, result.judge,
-                              context.laneBeamTimeMicros);
+    if (events != nullptr) {
+      events->onLanePressed(selectedCandidate.lane, result.judge,
+                            context.laneBeamTimeMicros);
     }
     inputTransactions.push_back(result);
     return resultBatch(result);
@@ -516,9 +515,9 @@ RhythmLaneInputController::ResultBatch RhythmLaneInputController::pressLane(
   if (mainLaneIt != lanePressed.end()) {
     mainLaneIt->second = true;
   }
-  if (renderer != nullptr) {
-    renderer->onLanePressed(mainLane, JudgeResult(None, 0),
-                            context.laneBeamTimeMicros);
+  if (events != nullptr) {
+    events->onLanePressed(mainLane, JudgeResult(None, 0),
+                          context.laneBeamTimeMicros);
   }
   setReplayEvent(result, ReplayEventAction::Press, mainLane, nullptr,
                  inputTime, inputTime, JudgeResult(None, 0));
@@ -542,8 +541,8 @@ RhythmLaneInputController::releaseLane(int lane,
     return resultBatch(result);
   }
   laneIt->second = false;
-  if (renderer != nullptr) {
-    renderer->onLaneReleased(lane, context.laneBeamTimeMicros);
+  if (events != nullptr) {
+    events->onLaneReleased(lane, context.laneBeamTimeMicros);
   }
 
   const long long inputTime = inputTimeMicros(context);

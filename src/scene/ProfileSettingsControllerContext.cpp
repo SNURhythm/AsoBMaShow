@@ -149,7 +149,19 @@ applicationDependencies(ApplicationContext &context) {
       .endArchivePipeline = [&context]() {
         context.profileArchiveOperationActive.store(false,
                                                     std::memory_order_release);
-      }};
+      },
+      .beginSkinProfileCatalogMutation =
+          [&context](std::optional<std::string_view> existingTargetId,
+                     std::string &error) {
+            return context.beginSkinProfileCatalogMutation(existingTargetId,
+                                                           error);
+          },
+      .finishSkinProfileCatalogMutation =
+          [&context](std::uint64_t token, bool succeeded,
+                     bool profileStillExists) {
+            context.finishSkinProfileCatalogMutation(
+                token, succeeded, profileStillExists);
+          }};
 }
 } // namespace
 

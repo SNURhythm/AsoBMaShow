@@ -1,6 +1,9 @@
 #include "../src/AppSettingsStore.h"
 #include "../src/AtomicFile.h"
 #include "../src/VersionedJson.h"
+#include "../src/skin/SkinProfileSettings.h"
+#include "../src/skin/package/SkinPathPolicy.h"
+#include "../yoga/lib/nlohmann/json.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -88,14 +91,14 @@ AppSettings makeDistinctSettings() {
   value.audioVideo.video.frameCap = 240;
   value.audioOffsetMs = -23;
   value.visualOffsetMs = 41;
-  value.visibleTimeGreenNumber = 777;
+  value.setVisibleTimeGreenNumber(777);
   value.visibleTimeUseMilliseconds = true;
-  value.visibleTimeBpmStrategy =
-      AppSettings::VisibleTimeBpmStrategy::MostPrevalent;
+  value.hispeedFixMode = AppSettings::HiSpeedFixMode::Main;
   value.inputKeysoundEnabled = false;
   value.prepMetronomeEnabled = true;
   value.startLaneIndicatorsEnabled = false;
   value.showInvisibleNotes = true;
+  value.markProcessedNotes = true;
   value.touchVisualizationEnabled = false;
   value.archiveChartPreviewEnabled = false;
   value.findBmsSkipUnarchivingForNonSolidArchives = true;
@@ -107,7 +110,7 @@ AppSettings makeDistinctSettings() {
   value.laneLength = 10.25f;
   value.laneBeamLengthPercent = 61;
   value.noteStartPositionPercent = 33;
-  value.floatingLaneCoverEnabled = false;
+  value.hispeedAutoAdjust = true;
   value.playAreaWidth4K = 5.1f;
   value.playAreaWidth5K = 5.2f;
   value.playAreaWidth6K = 6.3f;
@@ -140,6 +143,7 @@ AppSettings makeDistinctSettings() {
   value.selectedAssistOption = "DRAG";
   value.selectedPacemakerTarget = "AAA";
   value.defaultDifficultyTablesSeeded = true;
+  value.skin.safetyLevel = skin::SkinSafetyLevel::Unrestricted;
   value.sanitize();
   return value;
 }
@@ -150,6 +154,11 @@ void testLegacyFixtureLoadsEverySetting() {
   AppSettings expected = makeDistinctSettings();
   expected.audioVideo = player_settings::defaultAudioVideoSettingsForPlatform();
   expected.findBmsSkipUnarchivingForNonSolidArchives = false;
+  expected.markProcessedNotes = false;
+  expected.skin.safetyLevel = skin::SkinSafetyLevel::Standard;
+  // The retired floating-cover UI field must not silently opt legacy users
+  // into current-BPM Hi-Speed Auto Adjust.
+  expected.hispeedAutoAdjust = false;
   expect(result.status == AppSettingsLoadStatus::Loaded,
          "complete legacy fixture loads");
   expect(result.settings == expected,
@@ -170,11 +179,34 @@ void testJsonRoundTripIncludesAudioAndVideo() {
   expected.musicPlayerClubModeEnabled = true;
   expected.judgementIndicatorRangeMilliseconds = 333;
   expected.selectedGameplayRuleset = "beatoraja";
+  expected.gameplayHispeed = 1.75F;
+  expected.hispeedMargin = 0.5F;
+  expected.laneCoverEnabled = false;
   expected.irProviders["tachi"] = {
       .enabled = true,
       .autoSubmit = true,
       .serverOrigin = "https://scores.example.test:8443",
   };
+  const auto package = skin::normalizePackageId("ModernChic");
+  const auto entry =
+      skin::normalizeEntryPath(*package.package, "play/7key.luaskin");
+  expected.skin.gameplayCompatibilityEnabled = true;
+  expected.skin.selected7KeyEntry = *entry.entry;
+  expected.skin.selectedGameplayEntries.emplace(0, *entry.entry);
+  expected.skin.entries[*entry.entry] = {
+      .options = {{"Lane", 101}},
+      .filePaths = {{"Judge", "parts/judge.png"}},
+      .offsets = {{"Judge offset",
+                   {.x = 1, .y = -2, .w = 3, .h = 4, .r = 5, .a = -6}}},
+      .viewport = {.mode = skin::ViewportMode::Custom,
+                   .customBase = skin::CustomViewportBase::Stretch,
+                   .scaleX = 1.25F,
+                   .scaleY = 0.75F,
+                   .translateX = 123.0F,
+                   .translateY = -456.0F},
+  };
+  const std::string expectedConfigurationDigest =
+      skin::skinConfigurationDigest(expected.skin.entries.at(*entry.entry));
   std::string error;
   expect(AppSettingsStore::Save(path, expected, error),
          "versioned settings save succeeds: " + error);
@@ -182,16 +214,56 @@ void testJsonRoundTripIncludesAudioAndVideo() {
   expect(loaded.status == AppSettingsLoadStatus::Loaded, "saved settings load");
   expect(loaded.settings == expected,
          "JSON round trip preserves every setting including audio/video");
-  expect(readFile(path).find("\"schemaVersion\": 3") != std::string::npos,
-         "saved JSON declares schema version 3");
+  expect(skin::skinConfigurationDigest(loaded.settings.skin.entries.at(
+             *entry.entry)) == expectedConfigurationDigest,
+         "restart reconstructs the exact configuration digest from persisted "
+         "entry maps");
+  expect(readFile(path).find("\"schemaVersion\": 7") != std::string::npos,
+         "saved JSON declares schema version 7");
+  expect(readFile(path).find("\"visibleTimeDurationMilliseconds\": 1295") !=
+             std::string::npos,
+         "saved JSON persists exact canonical visible duration milliseconds");
+  expect(readFile(path).find("\"visibleTimeGreenNumber\"") ==
+             std::string::npos,
+         "saved JSON does not persist a competing green-number source value");
+  expect(readFile(path).find("configurationDigest") == std::string::npos,
+         "schema 5 does not persist a competing configuration digest map");
+  expect(readFile(path).find("\"selectedGameplayEntries\"") !=
+             std::string::npos,
+         "new settings persist gameplay selection by skin trait");
+  expect(readFile(path).find("\"selected7KeyEntry\"") ==
+             std::string::npos &&
+             readFile(path).find("\"gameplayCompatibilityEnabled\"") ==
+                 std::string::npos,
+         "new settings do not write legacy gameplay selection aliases");
+  expect(readFile(path).find("\"package\": \"ModernChic\"") !=
+                 std::string::npos &&
+             readFile(path).find("\"path\": \"play/7key.luaskin\"") !=
+                 std::string::npos &&
+             readFile(path).find("collisionKey") == std::string::npos,
+         "skin IDs serialize as package/path objects without collision keys");
   expect(readFile(path).find("\"selectedGameplayRuleset\": \"beatoraja\"") !=
              std::string::npos,
          "saved JSON includes the per-profile gameplay ruleset");
   expect(readFile(path).find("\"startLaneIndicatorsEnabled\": false") !=
              std::string::npos,
          "saved JSON includes the start lane indicator setting");
-  expect(readFile(path).find(
-             "\"judgementIndicatorRangeMilliseconds\": 333") !=
+  expect(readFile(path).find("\"markProcessedNotes\": true") !=
+             std::string::npos,
+         "saved JSON includes the Beatoraja processed-note marker setting");
+  expect(readFile(path).find("\"gameplayHispeed\": 1.75") !=
+                 std::string::npos &&
+             readFile(path).find("\"hispeedMargin\": 0.5") !=
+                 std::string::npos &&
+             readFile(path).find("\"laneCoverEnabled\": false") !=
+                 std::string::npos,
+         "saved JSON includes source-faithful Hi-Speed and lane-cover state");
+  const std::string saved = readFile(path);
+  expect(saved.find("\"hispeedAutoAdjust\": true") != std::string::npos,
+         "saved JSON persists the Beatoraja Hi-Speed Auto Adjust setting");
+  expect(saved.find("floatingLaneCoverEnabled") == std::string::npos,
+         "saved JSON no longer emits the retired floating lane-cover toggle");
+  expect(readFile(path).find("\"judgementIndicatorRangeMilliseconds\": 333") !=
              std::string::npos,
          "saved JSON includes the judgement indicator range");
   expect(readFile(path).find("\"selectedPlaybackRatePercent\": 75") !=
@@ -220,6 +292,368 @@ void testJsonRoundTripIncludesAudioAndVideo() {
          "serialized settings contain no API key material");
 }
 
+void testBpmGuideAssistOptionPersists() {
+  TempDirectory temp;
+  const auto path = temp.path() / "settings.json";
+  AppSettings settings;
+  settings.selectedAssistOption = "bpm guide";
+  settings.sanitize();
+  expect(settings.selectedAssistOption == "BPM-GUIDE",
+         "BPM Guide normalizes to its canonical assist-option ID");
+
+  std::string error;
+  expect(AppSettingsStore::Save(path, settings, error),
+         "BPM Guide settings save succeeds: " + error);
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.status == AppSettingsLoadStatus::Loaded &&
+             loaded.settings.selectedAssistOption == "BPM-GUIDE",
+         "BPM Guide survives settings round trip");
+}
+
+void testSchemaThreeMigrationDisablesCompatibility() {
+  TempDirectory temp;
+  const auto path = temp.path() / "schema3.json";
+  writeFile(path, R"({"schemaVersion":3,"audioOffsetMs":11})");
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.status == AppSettingsLoadStatus::Loaded,
+         "schema 3 settings migrate to the current schema");
+  expect(!loaded.settings.skin.gameplayCompatibilityEnabled,
+         "schema 3 migration disables compatibility");
+  expect(loaded.settings.skin.safetyLevel == skin::SkinSafetyLevel::Standard,
+         "schema 3 migration defaults skin safety to Standard");
+  expect(!loaded.settings.skin.selected7KeyEntry.has_value(),
+         "schema 3 migration has no selected gameplay skin");
+  expect(loaded.settings.skin.entries.empty(),
+         "schema 3 migration starts with no remembered skin entries");
+}
+
+void testLegacy7KeySelectionMigratesToTraitSelection() {
+  TempDirectory temp;
+  const auto path = temp.path() / "legacy-skin.json";
+  writeFile(path, R"JSON({
+    "schemaVersion": 4,
+    "skin": {
+      "gameplayCompatibilityEnabled": true,
+      "selected7KeyEntry": {"package":"Pack","path":"play/main.luaskin"},
+      "entries": [{
+        "entry":{"package":"Pack","path":"play/main.luaskin"},
+        "settings":{}
+      }]
+    }
+  })JSON");
+
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.status == AppSettingsLoadStatus::Loaded,
+         "legacy gameplay skin selection loads");
+  const auto selection = loaded.settings.skin.selectedGameplayEntries.find(0);
+  expect(selection != loaded.settings.skin.selectedGameplayEntries.end() &&
+             loaded.settings.skin.selected7KeyEntry == selection->second &&
+             loaded.settings.skin.gameplayCompatibilityEnabled,
+         "enabled legacy 7K selection migrates to the 7K trait");
+
+  std::string error;
+  expect(AppSettingsStore::Save(path, loaded.settings, error),
+         "migrated settings save: " + error);
+  const auto persisted = readFile(path);
+  expect(persisted.find("\"selectedGameplayEntries\"") != std::string::npos &&
+             persisted.find("\"selected7KeyEntry\"") == std::string::npos,
+         "migration rewrites the selection using the trait map only");
+}
+
+void testSkinSettingsRejectUntrustedIdentityAndSanitizeBounds() {
+  TempDirectory temp;
+  const auto path = temp.path() / "skin.json";
+  writeFile(path, R"JSON({
+    "schemaVersion": 4,
+    "skin": {
+      "gameplayCompatibilityEnabled": true,
+      "selected7KeyEntry": {"package":"Pack","path":"play/main.luaskin","collisionKey":"forged"},
+      "entries": [{
+        "entry":{"package":"Pack","path":"play/main.luaskin","collisionKey":"forged"},
+        "settings":{
+          "options":{"ok":7},
+          "filePaths":{"file":"parts/a.png"},
+          "offsets":{"offset":{"x":-99999,"y":99999,"w":1,"h":2,"r":3,"a":4}},
+          "viewport":{"mode":"bogus","customBase":"bogus","scaleX":1e100,"scaleY":-2,"translateX":1e100,"translateY":-1e100}
+        }
+      }]
+    }
+  })JSON");
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.status == AppSettingsLoadStatus::Loaded,
+         "schema 4 skin settings migrate and load");
+  expect(loaded.settings.skin.selected7KeyEntry.has_value() &&
+             loaded.settings.skin.entries.size() == 1,
+         "valid typed selection and matching entry survive");
+  if (loaded.settings.skin.selected7KeyEntry) {
+    const auto &id = *loaded.settings.skin.selected7KeyEntry;
+    expect(id.package.collisionKey == "pack" &&
+               id.collisionKey == "pack/play/main.luaskin",
+           "collision keys are rederived rather than trusted from JSON");
+    const auto &entry = loaded.settings.skin.entries.at(id);
+    expect(entry.offsets.at("offset").x == -99999 &&
+               entry.offsets.at("offset").y == 99999,
+           "offset components preserve their authored integer values");
+    expect(entry.viewport.mode == skin::ViewportMode::Fit &&
+               entry.viewport.customBase == skin::CustomViewportBase::Fit &&
+               entry.viewport.scaleX == 1.0F && entry.viewport.scaleY == 1.0F &&
+               entry.viewport.translateX == 0.0F &&
+               entry.viewport.translateY == 0.0F,
+           "invalid viewport enums and transforms reset deterministically");
+  }
+}
+
+void testSkinSettingsDeterministicallyEnforceFixedLimits() {
+  AppSettings settings;
+  settings.skin.gameplayCompatibilityEnabled = true;
+  for (int index = 99; index >= 0; --index) {
+    const auto package =
+        skin::normalizePackageId("package-" + std::to_string(index));
+    const auto entry =
+        skin::normalizeEntryPath(*package.package, "main.luaskin");
+    skin::EntryProfileSettings remembered;
+    for (int key = 299; key >= 0; --key) {
+      const std::string name = "key-" + std::to_string(key + 1000);
+      remembered.options[name] = key;
+      remembered.filePaths[name] = "parts/" + std::to_string(key) + ".png";
+      remembered.offsets[name] = {
+          .x = key, .y = key, .w = key, .h = key, .r = key, .a = key};
+    }
+    remembered.options[std::string(129, 'x')] = 1;
+    remembered.filePaths["absolute"] = "/Users/example/secret.png";
+    settings.skin.entries[*entry.entry] = std::move(remembered);
+  }
+  settings.skin.sanitize();
+  expect(settings.skin.entries.size() == 100,
+         "skin profile retains every valid entry without an app-defined limit");
+  expect(settings.skin.entries.begin()->first.package.directoryName ==
+             "package-0",
+         "entry truncation is deterministic map order");
+  for (const auto &[entry, remembered] : settings.skin.entries) {
+    (void)entry;
+    expect(remembered.options.size() == 301 &&
+               remembered.filePaths.size() == 300 &&
+               remembered.offsets.size() == 300,
+           "each configuration map retains every valid authored declaration");
+    expect(!remembered.filePaths.contains("absolute"),
+           "host filesystem paths are never retained in profile settings");
+  }
+}
+
+void testHostileSkinJsonIsBoundedDuringDecode() {
+  TempDirectory temp;
+  const auto path = temp.path() / "hostile-skin.json";
+  nlohmann::json entries = nlohmann::json::array();
+  for (int entryIndex = 0; entryIndex < 70; ++entryIndex) {
+    nlohmann::json options = nlohmann::json::object();
+    nlohmann::json files = nlohmann::json::object();
+    nlohmann::json offsets = nlohmann::json::object();
+    for (int keyIndex = 0; keyIndex < 270; ++keyIndex) {
+      const std::string key = "key-" + std::to_string(keyIndex + 1000);
+      options[key] = keyIndex;
+      files[key] = "parts/" + std::to_string(keyIndex) + ".png";
+      offsets[key] = {{"x", keyIndex}};
+    }
+    options[std::string(129, 'k')] = 1;
+    files["000-oversized-value"] = std::string(1025, 'v');
+    entries.push_back({{"entry",
+                        {{"package", "Package-" + std::to_string(entryIndex)},
+                         {"path", "play/main.luaskin"}}},
+                       {"settings",
+                        {{"options", std::move(options)},
+                         {"filePaths", std::move(files)},
+                         {"offsets", std::move(offsets)}}}});
+  }
+  entries.push_back(
+      {{"entry",
+        {{"package", std::string(129, 'p')}, {"path", "main.luaskin"}}},
+       {"settings", nlohmann::json::object()}});
+  nlohmann::json document = {
+      {"schemaVersion", 4},
+      {"skin",
+       {{"gameplayCompatibilityEnabled", false},
+        {"selected7KeyEntry", nullptr},
+        {"entries", std::move(entries)}}},
+  };
+  writeFile(path, document.dump());
+
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.status == AppSettingsLoadStatus::Loaded &&
+             loaded.settings.skin.entries.size() == 70,
+         "skin JSON retains every valid persisted entry without an app-defined "
+         "count limit");
+  if (!loaded.settings.skin.entries.empty()) {
+    const auto &settings = loaded.settings.skin.entries.begin()->second;
+    expect(settings.options.size() == 271 && settings.filePaths.size() == 271 &&
+               settings.offsets.size() == 270,
+           "skin JSON retains every valid persisted configuration declaration");
+    expect(settings.filePaths.contains("000-oversized-value") &&
+               settings.filePaths.at("000-oversized-value").size() == 1025,
+           "valid Beatoraja file selections are not rejected by an app-defined "
+           "text limit");
+  }
+  expect(!hasDiagnostic(loaded.diagnostics, "options", "limit") &&
+             !hasDiagnostic(loaded.diagnostics, "filePaths", "limit") &&
+             !hasDiagnostic(loaded.diagnostics, "offsets", "limit"),
+         "configuration persistence does not impose count limits absent from "
+         "Beatoraja");
+}
+
+void testSkinEntryCollisionKeysDeduplicateDeterministically() {
+  const auto upperPackage = skin::normalizePackageId("Pack");
+  const auto lowerPackage = skin::normalizePackageId("pack");
+  const auto upperEntry =
+      skin::normalizeEntryPath(*upperPackage.package, "play/main.luaskin");
+  const auto lowerEntry =
+      skin::normalizeEntryPath(*lowerPackage.package, "play/main.luaskin");
+  expect(upperEntry.entry->collisionKey == lowerEntry.entry->collisionKey,
+         "collision fixture has one derived case-fold identity");
+
+  skin::SkinProfileSettings direct;
+  direct.entries[*lowerEntry.entry].options["variant"] = 2;
+  direct.entries[*upperEntry.entry].options["variant"] = 1;
+  direct.selected7KeyEntry = *lowerEntry.entry;
+  direct.gameplayCompatibilityEnabled = true;
+  direct.sanitize();
+  expect(direct.entries.size() == 1 &&
+             direct.entries.begin()->first.package.directoryName == "Pack" &&
+             direct.entries.begin()->second.options.at("variant") == 1 &&
+             direct.selected7KeyEntry == direct.entries.begin()->first,
+         "sanitize keeps the lexically first derived collision and remaps "
+         "selection");
+
+  TempDirectory temp;
+  const auto path = temp.path() / "collision-skin.json";
+  writeFile(path, R"JSON({
+    "schemaVersion":4,
+    "skin":{
+      "gameplayCompatibilityEnabled":true,
+      "selected7KeyEntry":{"package":"pack","path":"play/main.luaskin"},
+      "entries":[
+        {"entry":{"package":"pack","path":"play/main.luaskin"},"settings":{"options":{"variant":2}}},
+        {"entry":{"package":"Pack","path":"play/main.luaskin"},"settings":{"options":{"variant":1}}}
+      ]
+    }
+  })JSON");
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(
+      loaded.status == AppSettingsLoadStatus::Loaded &&
+          loaded.settings.skin.entries.size() == 1 &&
+          loaded.settings.skin.entries.begin()->first.package.directoryName ==
+              "Pack" &&
+          loaded.settings.skin.entries.begin()->second.options.at("variant") ==
+              1 &&
+          loaded.settings.skin.selected7KeyEntry ==
+              loaded.settings.skin.entries.begin()->first,
+      "JSON load deduplicates derived collisions independent of array "
+      "order");
+}
+
+std::string nfcAliasKey(int variant) {
+  std::string key = "alias-";
+  for (int bit = 0; bit < 9; ++bit) {
+    key += (variant & (1 << bit)) != 0 ? "\xC3\xA9" : "e\xCC\x81";
+  }
+  return key;
+}
+
+std::string caseAliasPackage(int variant) {
+  std::string package = "ALIASPKG";
+  for (int bit = 0; bit < 8; ++bit) {
+    if ((variant & (1 << bit)) != 0) {
+      package[static_cast<std::size_t>(bit)] =
+          static_cast<char>(package[static_cast<std::size_t>(bit)] - 'A' + 'a');
+    }
+  }
+  return package;
+}
+
+void testDecodeBoundsDerivedUniqueIdentitiesBeforeAllocatingValues() {
+  TempDirectory temp;
+  const auto path = temp.path() / "unique-bounds-skin.json";
+  nlohmann::json entries = nlohmann::json::array();
+  nlohmann::json options = nlohmann::json::object();
+  nlohmann::json files = nlohmann::json::object();
+  nlohmann::json offsets = nlohmann::json::object();
+  for (int alias = 0; alias < 257; ++alias) {
+    const auto key = nfcAliasKey(alias);
+    options[key] = alias;
+    files[key] = alias == 0 ? "winner.png" : "other.png";
+    offsets[key] = {{"x", alias == 0 ? 123 : alias}};
+  }
+  options["zzzz-later-unique"] = 9001;
+  files["zzzz-later-unique"] = "later.png";
+  offsets["zzzz-later-unique"] = {{"x", 321}};
+  entries.push_back(
+      {{"entry", {{"package", "AAA-NESTED"}, {"path", "play/main.luaskin"}}},
+       {"settings",
+        {{"options", std::move(options)},
+         {"filePaths", std::move(files)},
+         {"offsets", std::move(offsets)}}}});
+  for (int alias = 0; alias < 65; ++alias) {
+    entries.push_back({{"entry",
+                        {{"package", caseAliasPackage(alias)},
+                         {"path", "play/main.luaskin"}}},
+                       {"settings", {{"options", {{"entryWinner", alias}}}}}});
+  }
+  entries.push_back(
+      {{"entry", {{"package", "zzzz-unique"}, {"path", "play/main.luaskin"}}},
+       {"settings", {{"options", {{"selected", 1}}}}}});
+  nlohmann::json document = {
+      {"schemaVersion", 4},
+      {"skin",
+       {{"gameplayCompatibilityEnabled", true},
+        {"selected7KeyEntry",
+         {{"package", "zzzz-unique"}, {"path", "play/main.luaskin"}}},
+        {"entries", std::move(entries)}}},
+  };
+  writeFile(path, document.dump());
+
+  const auto loaded = AppSettingsStore::Load(path);
+  const auto selectedPackage = skin::normalizePackageId("zzzz-unique");
+  const auto selectedEntry =
+      skin::normalizeEntryPath(*selectedPackage.package, "play/main.luaskin");
+  const auto aliasPackage = skin::normalizePackageId("ALIASPKG");
+  const auto aliasEntry =
+      skin::normalizeEntryPath(*aliasPackage.package, "play/main.luaskin");
+  const auto nestedPackage = skin::normalizePackageId("AAA-NESTED");
+  const auto nestedEntry =
+      skin::normalizeEntryPath(*nestedPackage.package, "play/main.luaskin");
+  const auto selected = loaded.settings.skin.entries.find(*selectedEntry.entry);
+  const auto winner = loaded.settings.skin.entries.find(*aliasEntry.entry);
+  const auto nested = loaded.settings.skin.entries.find(*nestedEntry.entry);
+  const std::string normalizedAlias = "alias-"
+                                      "\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9"
+                                      "\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9";
+  expect(loaded.status == AppSettingsLoadStatus::Loaded &&
+             loaded.settings.skin.entries.size() == 3 &&
+             loaded.settings.skin.selected7KeyEntry == selectedEntry.entry &&
+             selected != loaded.settings.skin.entries.end() &&
+             winner != loaded.settings.skin.entries.end() &&
+             nested != loaded.settings.skin.entries.end(),
+         "entry bounds count derived collision identities so a later unique "
+         "selected entry survives duplicate aliases");
+  if (nested != loaded.settings.skin.entries.end()) {
+    expect(nested->second.options.size() == 2 &&
+               nested->second.options.at(normalizedAlias) == 0 &&
+               nested->second.options.at("zzzz-later-unique") == 9001 &&
+               nested->second.filePaths.size() == 2 &&
+               nested->second.filePaths.at(normalizedAlias) == "winner.png" &&
+               nested->second.filePaths.at("zzzz-later-unique") ==
+                   "later.png" &&
+               nested->second.offsets.size() == 2 &&
+               nested->second.offsets.at(normalizedAlias).x == 123 &&
+               nested->second.offsets.at("zzzz-later-unique").x == 321,
+           "nested bounds count NFC identities, keep the lexical alias "
+           "winner, and retain later unique values");
+  }
+  if (winner != loaded.settings.skin.entries.end()) {
+    expect(winner->second.options.at("entryWinner") == 0,
+           "entry collision aliases deterministically keep the lexical "
+           "winner's settings");
+  }
+}
+
 void testFindBmsArchivePreferenceDefaultsAndRoundTrips() {
   AppSettings defaults;
   expect(!defaults.findBmsSkipUnarchivingForNonSolidArchives,
@@ -243,8 +677,8 @@ void testFindBmsArchivePreferenceDefaultsAndRoundTrips() {
   expect(loaded.status == AppSettingsLoadStatus::Loaded &&
              loaded.settings.findBmsSkipUnarchivingForNonSolidArchives,
          "Find BMS preference survives a JSON round trip");
-  expect(readFile(enabledPath).find(
-             "\"findBmsSkipUnarchivingForNonSolidArchives\": true") !=
+  expect(readFile(enabledPath)
+                 .find("\"findBmsSkipUnarchivingForNonSolidArchives\": true") !=
              std::string::npos,
          "saved JSON contains the Find BMS preference");
 }
@@ -277,8 +711,9 @@ void testJudgementIndicatorRangeDefaultsAndSanitization() {
          "settings without the range field use 180 ms");
 
   const auto malformedPath = temp.path() / "malformed-range-settings.json";
-  writeFile(malformedPath,
-            R"({"schemaVersion":3,"judgementIndicatorRangeMilliseconds":"wide"})");
+  writeFile(
+      malformedPath,
+      R"({"schemaVersion":3,"judgementIndicatorRangeMilliseconds":"wide"})");
   const auto malformed = AppSettingsStore::Load(malformedPath);
   expect(malformed.status == AppSettingsLoadStatus::Loaded,
          "malformed range does not invalidate the settings document");
@@ -288,6 +723,40 @@ void testJudgementIndicatorRangeDefaultsAndSanitization() {
                        "judgementIndicatorRangeMilliseconds",
                        "expected integer"),
          "malformed range emits a setting diagnostic");
+}
+
+void testBeatorajaStartSelectDurationRange() {
+  AppSettings lower;
+  lower.visibleTimeDurationMilliseconds = 0;
+  lower.sanitize();
+  expect(lower.visibleTimeDurationMilliseconds == 1,
+         "Start/Select duration preserves Beatoraja's minimum of one");
+
+  AppSettings upper;
+  upper.visibleTimeDurationMilliseconds = 20'000;
+  upper.sanitize();
+  expect(upper.visibleTimeDurationMilliseconds == 10'000,
+         "Start/Select duration preserves Beatoraja's maximum of 10000");
+}
+
+void testVisibleTimeDurationKeepsBeatorajaMillisecondsCanonical() {
+  AppSettings settings;
+  settings.visibleTimeDurationMilliseconds = 1'000;
+  settings.sanitize();
+  expect(settings.visibleTimeGreenNumber() == 600,
+         "1000 ms derives the Beatoraja green number 600");
+
+  settings.visibleTimeDurationMilliseconds = 1'001;
+  settings.sanitize();
+  expect(settings.visibleTimeDurationMilliseconds == 1'001,
+         "an exact millisecond duration is not rounded through green number");
+  expect(settings.visibleTimeGreenNumber() == 600,
+         "green number uses IntegerPropertyFactory's integer duration * 3 / 5");
+
+  settings.setVisibleTimeGreenNumber(2);
+  expect(settings.visibleTimeDurationMilliseconds == 4 &&
+             settings.visibleTimeGreenNumber() == 2,
+         "green input selects the smallest millisecond duration with that green value");
 }
 
 void testGameplayRulesetDefaultsMigrationAndValidation() {
@@ -362,27 +831,25 @@ void testIrDefaultsMigrationAndOriginSanitization() {
   if (defaultProvider != defaults.irProviders.end()) {
     expect(!defaultProvider->second.enabled &&
                !defaultProvider->second.autoSubmit &&
-               defaultProvider->second.serverOrigin ==
-                   "https://boku.tachi.ac",
+               defaultProvider->second.serverOrigin == "https://boku.tachi.ac",
            "Tachi defaults are disabled with the production origin");
   }
 
   TempDirectory temp;
   const auto migratedPath = temp.path() / "schema-1.json";
-  writeFile(migratedPath,
-            R"({"schemaVersion":1,"audioOffsetMs":17})");
+  writeFile(migratedPath, R"({"schemaVersion":1,"audioOffsetMs":17})");
   const auto migrated = AppSettingsStore::Load(migratedPath);
   expect(migrated.status == AppSettingsLoadStatus::Loaded,
          "schema-1 settings migrate to schema 2");
   expect(migrated.settings.audioOffsetMs == 17,
          "schema-1 migration preserves existing settings");
-  expect(migrated.settings.irProviders.at("tachi") ==
-             ir::IrProviderSettings{},
+  expect(migrated.settings.irProviders.at("tachi") == ir::IrProviderSettings{},
          "schema-1 migration inserts default Tachi settings");
 
   const auto normalizedPath = temp.path() / "normalized.json";
-  writeFile(normalizedPath,
-            R"({"schemaVersion":2,"ir":{"providers":{"tachi":{"enabled":true,"autoSubmit":true,"serverOrigin":"HTTPS://BOKU.TACHI.AC:443/"}}}})");
+  writeFile(
+      normalizedPath,
+      R"({"schemaVersion":2,"ir":{"providers":{"tachi":{"enabled":true,"autoSubmit":true,"serverOrigin":"HTTPS://BOKU.TACHI.AC:443/"}}}})");
   const auto normalized = AppSettingsStore::Load(normalizedPath);
   expect(normalized.status == AppSettingsLoadStatus::Loaded,
          "valid provider settings load");
@@ -391,8 +858,9 @@ void testIrDefaultsMigrationAndOriginSanitization() {
          "origin normalization lowercases and removes default syntax");
 
   const auto insecurePath = temp.path() / "insecure-origin.json";
-  writeFile(insecurePath,
-            R"({"schemaVersion":2,"ir":{"providers":{"tachi":{"enabled":true,"autoSubmit":true,"serverOrigin":"http://LOCALHOST:80/"}}}})");
+  writeFile(
+      insecurePath,
+      R"({"schemaVersion":2,"ir":{"providers":{"tachi":{"enabled":true,"autoSubmit":true,"serverOrigin":"http://LOCALHOST:80/"}}}})");
   const auto insecure = AppSettingsStore::Load(insecurePath);
   expect(insecure.status == AppSettingsLoadStatus::Loaded &&
              insecure.settings.irProviders.at("tachi").serverOrigin ==
@@ -402,8 +870,9 @@ void testIrDefaultsMigrationAndOriginSanitization() {
          "disabled");
 
   const auto invalidPath = temp.path() / "invalid-origin.json";
-  writeFile(invalidPath,
-            R"({"schemaVersion":2,"ir":{"providers":{"tachi":{"enabled":true,"autoSubmit":true,"serverOrigin":"https://secret@example.test/path?key=value#fragment"}}}})");
+  writeFile(
+      invalidPath,
+      R"({"schemaVersion":2,"ir":{"providers":{"tachi":{"enabled":true,"autoSubmit":true,"serverOrigin":"https://secret@example.test/path?key=value#fragment"}}}})");
   const auto invalid = AppSettingsStore::Load(invalidPath);
   expect(invalid.status == AppSettingsLoadStatus::Loaded,
          "invalid origin is an individual setting error");
@@ -412,16 +881,18 @@ void testIrDefaultsMigrationAndOriginSanitization() {
          "invalid stored origin falls back to production");
   expect(hasDiagnostic(invalid.diagnostics, "serverOrigin", "origin"),
          "invalid stored origin emits a non-secret diagnostic");
-  expect(std::ranges::none_of(
-             invalid.diagnostics, [](const std::string &diagnostic) {
-               return diagnostic.find("secret") != std::string::npos ||
-                      diagnostic.find("key=value") != std::string::npos;
-             }),
+  expect(std::ranges::none_of(invalid.diagnostics,
+                              [](const std::string &diagnostic) {
+                                return diagnostic.find("secret") !=
+                                           std::string::npos ||
+                                       diagnostic.find("key=value") !=
+                                           std::string::npos;
+                              }),
          "origin diagnostics do not echo rejected URL contents");
 
   for (const auto &[input, expected] :
-       {std::pair<std::string_view, std::string_view>{
-            "http://LOCALHOST:80/", "http://localhost"},
+       {std::pair<std::string_view, std::string_view>{"http://LOCALHOST:80/",
+                                                      "http://localhost"},
         {"https://Example.Test:444", "https://example.test:444"},
         {"https://[::1]:443/", "https://[::1]"}}) {
     const auto origin = ir::normalizeServerOrigin(input);
@@ -509,6 +980,9 @@ void testVersionFixturesAndNoRewrite() {
          "missing schema version migrates from v0");
   AppSettings expectedV0 = makeDistinctSettings();
   expectedV0.findBmsSkipUnarchivingForNonSolidArchives = false;
+  expectedV0.hispeedAutoAdjust = false;
+  expectedV0.markProcessedNotes = false;
+  expectedV0.skin.safetyLevel = skin::SkinSafetyLevel::Standard;
   expect(v0.settings == expectedV0, "v0 migration is lossless");
 
   const auto v1 = AppSettingsStore::Load(fixture("settings-v1.json"));
@@ -793,8 +1267,18 @@ void testAtomicFirstSaveCreatesRelativeNestedParents() {
 int main() {
   testLegacyFixtureLoadsEverySetting();
   testJsonRoundTripIncludesAudioAndVideo();
+  testBpmGuideAssistOptionPersists();
+  testSchemaThreeMigrationDisablesCompatibility();
+  testLegacy7KeySelectionMigratesToTraitSelection();
+  testSkinSettingsRejectUntrustedIdentityAndSanitizeBounds();
+  testSkinSettingsDeterministicallyEnforceFixedLimits();
+  testHostileSkinJsonIsBoundedDuringDecode();
+  testSkinEntryCollisionKeysDeduplicateDeterministically();
+  testDecodeBoundsDerivedUniqueIdentitiesBeforeAllocatingValues();
   testFindBmsArchivePreferenceDefaultsAndRoundTrips();
   testJudgementIndicatorRangeDefaultsAndSanitization();
+  testBeatorajaStartSelectDurationRange();
+  testVisibleTimeDurationKeepsBeatorajaMillisecondsCanonical();
   testGameplayRulesetDefaultsMigrationAndValidation();
   testIrDefaultsMigrationAndOriginSanitization();
   testPlaybackSelectionSanitizationAndLegacyDefaults();

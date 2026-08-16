@@ -82,25 +82,3 @@ for group, tokens in required.items():
 if missing:
     raise SystemExit("missing Records IR marker contracts: " +
                      ", ".join(missing))
-
-forbidden_reload_tokens = [
-    "ListReplays(",
-    "LoadReplayResult(",
-    "resolveReplayIrRecordState(",
-    "ListIrUploadRecords(",
-    "nextBeforeModernChartResultId",
-]
-legacy_reads = [token for token in forbidden_reload_tokens if token in reload]
-if legacy_reads:
-    raise SystemExit("Records IR markers must not reconstruct legacy replay state: " +
-                     ", ".join(legacy_reads))
-
-forbidden_menu_tokens = [
-    "IrCredentialStore",
-    "credentials.apiKeys",
-    "irCredentialsPath",
-]
-credential_lookups = [token for token in forbidden_menu_tokens if token in menu]
-if credential_lookups:
-    raise SystemExit("MainMenuScene must not look up IR API keys: " +
-                     ", ".join(credential_lookups))

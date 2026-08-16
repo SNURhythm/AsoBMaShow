@@ -1,4 +1,5 @@
 #include "AppSettings.h"
+#include "AssistOptionUtils.h"
 #include "LongNoteModeUtils.h"
 #include "replay/ReplayOption.h"
 #include "scene/play/GameplayRuleset.h"
@@ -254,30 +255,27 @@ const char *gaugeBarPositionToString(AppSettings::GaugeBarPosition position) {
   return "world";
 }
 
-AppSettings::VisibleTimeBpmStrategy
-parseVisibleTimeBpmStrategy(const std::string &value,
-                            AppSettings::VisibleTimeBpmStrategy fallback) {
+AppSettings::HiSpeedFixMode
+parseHiSpeedFixMode(const std::string &value,
+                    AppSettings::HiSpeedFixMode fallback) {
   const std::string normalized = normalizeSettingToken(value);
-  if (normalized == "chart" || normalized == "chart-bpm" ||
-      normalized == "main" || normalized == "metadata") {
-    return AppSettings::VisibleTimeBpmStrategy::Chart;
+  if (normalized == "off" || normalized == "0") {
+    return AppSettings::HiSpeedFixMode::Off;
   }
-  if (normalized == "most-prevalent" || normalized == "prevalent" ||
-      normalized == "duration") {
-    return AppSettings::VisibleTimeBpmStrategy::MostPrevalent;
+  if (normalized == "start" || normalized == "start-bpm" ||
+      normalized == "1") {
+    return AppSettings::HiSpeedFixMode::Start;
+  }
+  if (normalized == "max" || normalized == "max-bpm" || normalized == "2") {
+    return AppSettings::HiSpeedFixMode::Max;
+  }
+  if (normalized == "main" || normalized == "main-bpm" || normalized == "3") {
+    return AppSettings::HiSpeedFixMode::Main;
+  }
+  if (normalized == "min" || normalized == "min-bpm" || normalized == "4") {
+    return AppSettings::HiSpeedFixMode::Min;
   }
   return fallback;
-}
-
-const char *
-visibleTimeBpmStrategyToString(AppSettings::VisibleTimeBpmStrategy strategy) {
-  switch (strategy) {
-  case AppSettings::VisibleTimeBpmStrategy::Chart:
-    return "chart";
-  case AppSettings::VisibleTimeBpmStrategy::MostPrevalent:
-    return "most_prevalent";
-  }
-  return "chart";
 }
 
 AppSettings::UiThemeMode parseUiThemeMode(const std::string &value,
@@ -334,9 +332,8 @@ std::string parseGaugeTypeId(const std::string &value,
 
 std::string parseGaugeAutoShiftModeId(const std::string &value,
                                       const std::string &fallback) {
-  if (value == "none" || value == "continue" ||
-      value == "survival_to_groove" || value == "best_clear" ||
-      value == "select_to_under") {
+  if (value == "none" || value == "continue" || value == "survival_to_groove" ||
+      value == "best_clear" || value == "select_to_under") {
     return value;
   }
   return fallback;
@@ -360,17 +357,14 @@ std::string parsePlayOptionId(const std::string &value,
 }
 
 std::string normalizeAssistOptionId(std::string value) {
-  value = normalizeUpperOptionToken(std::move(value));
-  if (value == "DRAG" || value == "DRAG-MODE") {
-    return "DRAG";
-  }
-  return AppSettings::kDefaultAssistOption;
+  return assist_options::normalize(std::move(value));
 }
 
 std::string parseAssistOptionId(const std::string &value,
                                 const std::string &fallback) {
   const std::string normalized = normalizeAssistOptionId(value);
-  if (normalized == "OFF" || normalized == "DRAG") {
+  if (normalized == assist_options::kOff || normalized == assist_options::kDrag ||
+      normalized == assist_options::kBpmGuide) {
     return normalized;
   }
   return fallback;
@@ -408,6 +402,7 @@ float sanitizePlayAreaWidth(float width) {
 } // namespace
 
 void AppSettings::sanitize() {
+  skin.sanitize();
   irProviders.try_emplace(std::string(ir::kTachiProviderId),
                           ir::IrProviderSettings{});
   for (auto &[providerId, settings] : irProviders) {
@@ -419,9 +414,14 @@ void AppSettings::sanitize() {
       std::clamp(audioOffsetMs, kMinAudioOffsetMs, kMaxAudioOffsetMs);
   visualOffsetMs =
       std::clamp(visualOffsetMs, kMinVisualOffsetMs, kMaxVisualOffsetMs);
-  visibleTimeGreenNumber =
-      std::clamp(visibleTimeGreenNumber, kMinVisibleTimeGreenNumber,
-                 kMaxVisibleTimeGreenNumber);
+  visibleTimeDurationMilliseconds =
+      std::clamp(visibleTimeDurationMilliseconds, kMinVisibleTimeMs,
+                 kMaxVisibleTimeMs);
+  gameplayHispeed = sanitizeFloat(gameplayHispeed, 1.0F,
+                                  kMinGameplayHispeed,
+                                  kMaxGameplayHispeed);
+  hispeedMargin = sanitizeFloat(hispeedMargin, kDefaultHispeedMargin, 0.0F,
+                                kMaxHispeedMargin);
   bgaBrightnessPercent = std::clamp(
       bgaBrightnessPercent, kMinBgaBrightnessPercent, kMaxBgaBrightnessPercent);
   bgaBlurStrength = sanitizeFloat(bgaBlurStrength, kDefaultBgaBlurStrength,
@@ -515,12 +515,15 @@ void AppSettings::sanitize() {
     gaugeBarPosition = GaugeBarPosition::World;
     break;
   }
-  switch (visibleTimeBpmStrategy) {
-  case VisibleTimeBpmStrategy::Chart:
-  case VisibleTimeBpmStrategy::MostPrevalent:
+  switch (hispeedFixMode) {
+  case HiSpeedFixMode::Off:
+  case HiSpeedFixMode::Start:
+  case HiSpeedFixMode::Max:
+  case HiSpeedFixMode::Main:
+  case HiSpeedFixMode::Min:
     break;
   default:
-    visibleTimeBpmStrategy = VisibleTimeBpmStrategy::Chart;
+    hispeedFixMode = HiSpeedFixMode::Main;
     break;
   }
   switch (uiThemeMode) {
@@ -534,10 +537,10 @@ void AppSettings::sanitize() {
   selectedGameplayRuleset = std::string(gameplayRulesetId(
       gameplayRulesetSelectionOrDefault(selectedGameplayRuleset)));
   selectedGaugeType = parseGaugeTypeId(selectedGaugeType, kDefaultGaugeType);
-  selectedGaugeAutoShiftMode = parseGaugeAutoShiftModeId(
-      selectedGaugeAutoShiftMode, "none");
-  selectedGaugeAutoShiftLowerBound = parseGaugeTypeId(
-      selectedGaugeAutoShiftLowerBound, "assisted_easy");
+  selectedGaugeAutoShiftMode =
+      parseGaugeAutoShiftModeId(selectedGaugeAutoShiftMode, "none");
+  selectedGaugeAutoShiftLowerBound =
+      parseGaugeTypeId(selectedGaugeAutoShiftLowerBound, "assisted_easy");
   if (selectedGaugeAutoShiftLowerBound.rfind("gas", 0) == 0) {
     selectedGaugeAutoShiftLowerBound = "assisted_easy";
   }
@@ -655,16 +658,22 @@ bool AppSettings::parseLegacyCfg(std::istream &file, AppSettings &settings,
         settings.audioOffsetMs = std::stoi(value);
       } else if (key == "visual_offset_ms") {
         settings.visualOffsetMs = std::stoi(value);
+      } else if (key == "visible_time_duration_milliseconds") {
+        settings.visibleTimeDurationMilliseconds = std::stoi(value);
       } else if (key == "visible_time_green_number") {
-        settings.visibleTimeGreenNumber = std::stoi(value);
+        settings.setVisibleTimeGreenNumber(std::stoi(value));
+      } else if (key == "gameplay_hispeed") {
+        settings.gameplayHispeed = std::stof(value);
+      } else if (key == "hispeed_margin") {
+        settings.hispeedMargin = std::stof(value);
       } else if (key == "visible_time_use_milliseconds") {
         bool parsed = settings.visibleTimeUseMilliseconds;
         if (parseBool(value, parsed)) {
           settings.visibleTimeUseMilliseconds = parsed;
         }
-      } else if (key == "visible_time_bpm_strategy") {
-        settings.visibleTimeBpmStrategy =
-            parseVisibleTimeBpmStrategy(value, settings.visibleTimeBpmStrategy);
+      } else if (key == "hispeed_fix_mode") {
+        settings.hispeedFixMode =
+            parseHiSpeedFixMode(value, settings.hispeedFixMode);
       } else if (key == "input_keysound_enabled") {
         bool parsed = settings.inputKeysoundEnabled;
         if (parseBool(value, parsed)) {
@@ -684,6 +693,11 @@ bool AppSettings::parseLegacyCfg(std::istream &file, AppSettings &settings,
         bool parsed = settings.showInvisibleNotes;
         if (parseBool(value, parsed)) {
           settings.showInvisibleNotes = parsed;
+        }
+      } else if (key == "mark_processed_notes") {
+        bool parsed = settings.markProcessedNotes;
+        if (parseBool(value, parsed)) {
+          settings.markProcessedNotes = parsed;
         }
       } else if (key == "touch_visualization_enabled") {
         bool parsed = settings.touchVisualizationEnabled;
@@ -715,10 +729,15 @@ bool AppSettings::parseLegacyCfg(std::istream &file, AppSettings &settings,
         settings.laneBeamLengthPercent = std::stoi(value);
       } else if (key == "note_start_position_percent") {
         settings.noteStartPositionPercent = std::stoi(value);
-      } else if (key == "floating_lane_cover_enabled") {
-        bool parsed = settings.floatingLaneCoverEnabled;
+      } else if (key == "lane_cover_enabled") {
+        bool parsed = settings.laneCoverEnabled;
         if (parseBool(value, parsed)) {
-          settings.floatingLaneCoverEnabled = parsed;
+          settings.laneCoverEnabled = parsed;
+        }
+      } else if (key == "hispeed_auto_adjust") {
+        bool parsed = settings.hispeedAutoAdjust;
+        if (parseBool(value, parsed)) {
+          settings.hispeedAutoAdjust = parsed;
         }
       } else if (key == "play_area_width_4k") {
         settings.playAreaWidth4K = std::stof(value);
@@ -797,8 +816,8 @@ bool AppSettings::parseLegacyCfg(std::istream &file, AppSettings &settings,
         settings.selectedGaugeAutoShiftMode = parseGaugeAutoShiftModeId(
             value, settings.selectedGaugeAutoShiftMode);
       } else if (key == "selected_gauge_auto_shift_lower_bound") {
-        settings.selectedGaugeAutoShiftLowerBound = parseGaugeTypeId(
-            value, settings.selectedGaugeAutoShiftLowerBound);
+        settings.selectedGaugeAutoShiftLowerBound =
+            parseGaugeTypeId(value, settings.selectedGaugeAutoShiftLowerBound);
       } else if (key == "selected_play_option") {
         settings.selectedPlayOption =
             parsePlayOptionId(value, settings.selectedPlayOption);

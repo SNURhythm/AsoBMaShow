@@ -60,6 +60,12 @@
 #if __has_include(<7zip/CPP/7zip/Archive/IArchive.h>) &&                  \
     __has_include(<7zip/CPP/7zip/IStream.h>) &&                           \
     __has_include(<7zip/CPP/Common/MyCom.h>)
+#if defined(_WIN32)
+// The Windows 7-Zip package exposes the SDK interfaces from a DLL, so this
+// translation unit owns their GUID definitions instead of expecting them from
+// the DLL's deliberately small import library.
+#include <7zip/CPP/Common/MyInitGuid.h>
+#endif
 #include <7zip/CPP/7zip/Archive/IArchive.h>
 #include <7zip/CPP/7zip/IStream.h>
 #include <7zip/CPP/Common/MyCom.h>
@@ -1075,8 +1081,50 @@ std::string wideStringToUtf8(const wchar_t *input, std::size_t length) {
 
 #if ASOBMSHOW_ARCHIVEFILE_HAS_SEVENZIP
 
+#if defined(_WIN32)
+using SevenZipCreateObject = HRESULT(WINAPI *)(const GUID *, const GUID *,
+                                               void **);
+
+SevenZipCreateObject resolveSevenZipCreateObject() noexcept {
+  static const SevenZipCreateObject createObject = []() noexcept {
+    std::array<wchar_t, 32768> executablePath{};
+    const DWORD pathLength = GetModuleFileNameW(
+        nullptr, executablePath.data(),
+        static_cast<DWORD>(executablePath.size()));
+    if (pathLength == 0 || pathLength >= executablePath.size()) {
+      return static_cast<SevenZipCreateObject>(nullptr);
+    }
+
+    std::filesystem::path modulePath(
+        std::wstring_view(executablePath.data(), pathLength));
+    modulePath.replace_filename(L"7zip.dll");
+    HMODULE module = LoadLibraryW(modulePath.c_str());
+    if (module == nullptr) {
+      return static_cast<SevenZipCreateObject>(nullptr);
+    }
+    return reinterpret_cast<SevenZipCreateObject>(
+        GetProcAddress(module, "CreateObject"));
+  }();
+  return createObject;
+}
+
+HRESULT createSevenZipObject(const GUID *clsID, const GUID *interfaceID,
+                             void **out) noexcept {
+  const auto createObject = resolveSevenZipCreateObject();
+  if (createObject == nullptr) {
+    return HRESULT_FROM_WIN32(ERROR_PROC_NOT_FOUND);
+  }
+  return createObject(clsID, interfaceID, out);
+}
+#else
 extern "C" HRESULT WINAPI CreateObject(const GUID *clsID,
                                         const GUID *interfaceID, void **out);
+
+HRESULT createSevenZipObject(const GUID *clsID, const GUID *interfaceID,
+                             void **out) noexcept {
+  return CreateObject(clsID, interfaceID, out);
+}
+#endif
 
 std::string sevenZipResultMessage(HRESULT result) {
   return "7-Zip SDK error: " + std::to_string(static_cast<long long>(result));
@@ -1084,7 +1132,13 @@ std::string sevenZipResultMessage(HRESULT result) {
 
 struct SevenZipPropVariant : PROPVARIANT {
   SevenZipPropVariant() { std::memset(this, 0, sizeof(PROPVARIANT)); }
-  ~SevenZipPropVariant() { VariantClear(this); }
+  ~SevenZipPropVariant() {
+#if defined(_WIN32)
+    PropVariantClear(this);
+#else
+    VariantClear(this);
+#endif
+  }
 };
 
 std::optional<std::string> sevenZipStringProperty(IInArchive *archive,
@@ -2013,8 +2067,8 @@ bool openSevenZipArchiveWithFormat(const std::filesystem::path &archivePath,
   IInArchive *rawArchive = nullptr;
   const GUID formatId = sevenZipFormatGuid(format);
   HRESULT result =
-      CreateObject(&formatId, &IID_IInArchive,
-                   reinterpret_cast<void **>(&rawArchive));
+      createSevenZipObject(&formatId, &IID_IInArchive,
+                           reinterpret_cast<void **>(&rawArchive));
   if (result != S_OK || rawArchive == nullptr) {
     if (errorMessage != nullptr) {
       *errorMessage = sevenZipResultMessage(result);
@@ -2678,7 +2732,9 @@ bool readArchiveEntry(const std::filesystem::path &archivePath,
                       const std::filesystem::path &innerPath,
                       std::vector<unsigned char> &bytes,
                       std::string *errorMessage,
-                      const PauseCallback &pauseCallback = nullptr) {
+                      const PauseCallback &pauseCallback = nullptr,
+                      std::uintmax_t maximumBytes =
+                          std::numeric_limits<std::uintmax_t>::max()) {
   bytes.clear();
   const std::string target = normalizeEntryName(innerPath.generic_string());
   if (target.empty()) {
@@ -2729,6 +2785,13 @@ bool readArchiveEntry(const std::filesystem::path &archivePath,
     }
 
     const la_int64_t entrySize = archive_entry_size(entry);
+    if (archive_entry_size_is_set(entry) && entrySize > 0 &&
+        static_cast<std::uintmax_t>(entrySize) > maximumBytes) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "Archive entry exceeds bounded read limit: " + target;
+      }
+      return false;
+    }
     if (archive_entry_size_is_set(entry) && entrySize > 0) {
       reserveBufferedBytes(bytes, static_cast<std::uintmax_t>(entrySize));
     }
@@ -2747,6 +2810,13 @@ bool readArchiveEntry(const std::filesystem::path &archivePath,
           *errorMessage = "Could not read archive entry: " +
                           archiveErrorString(archiveHandle, "");
         }
+        return false;
+      }
+      if (static_cast<std::uintmax_t>(count) > maximumBytes - bytes.size()) {
+        if (errorMessage != nullptr) {
+          *errorMessage = "Archive entry exceeds bounded read limit: " + target;
+        }
+        bytes.clear();
         return false;
       }
       bytes.insert(bytes.end(), buffer.begin(), buffer.begin() + count);
@@ -7697,6 +7767,63 @@ bool readFile(const std::filesystem::path &path,
     *errorMessage = "Archive support is not compiled in.";
   }
   return false;
+#endif
+}
+
+bool readFileBounded(const std::filesystem::path &path,
+                     std::vector<unsigned char> &bytes,
+                     std::size_t maximumBytes, std::string *errorMessage,
+                     std::stop_token stop) {
+  bytes.clear();
+  if (stop.stop_requested()) return false;
+  std::filesystem::path archivePath;
+  std::filesystem::path innerPath;
+  if (!splitVirtualPath(path, archivePath, innerPath)) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Bounded archive reads require a virtual archive path.";
+    }
+    return false;
+  }
+  if (isSystemEntryPath(innerPath)) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Archive entry is system metadata: " +
+                      innerPath.generic_string();
+    }
+    return false;
+  }
+  const auto index = cachedIndexForArchive(
+      archivePath, errorMessage, [stop] { return !stop.stop_requested(); });
+  if (stop.stop_requested()) return false;
+  if (index == nullptr) return false;
+  const Entry *entry = findIndexedEntry(*index, innerPath);
+  if (entry == nullptr || entry->directory) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Archive entry not found: " + innerPath.generic_string();
+    }
+    return false;
+  }
+  if (entry->size > maximumBytes) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Archive entry exceeds bounded read limit: " +
+                      entry->path.generic_string();
+    }
+    return false;
+  }
+#if ASOBMSHOW_ARCHIVEFILE_HAS_LIBARCHIVE
+  return readArchiveEntry(archivePath, entry->path, bytes, errorMessage,
+                          [stop] { return !stop.stop_requested(); },
+                          maximumBytes);
+#else
+  // The indexed size remains a pre-extraction bound for backends unavailable
+  // to libarchive; the platform build used by ImageView includes libarchive.
+  if (!readFile(path, bytes, errorMessage) || bytes.size() > maximumBytes) {
+    bytes.clear();
+    if (errorMessage != nullptr && errorMessage->empty()) {
+      *errorMessage = "Archive entry exceeds bounded read limit.";
+    }
+    return false;
+  }
+  return true;
 #endif
 }
 

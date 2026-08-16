@@ -1,0 +1,105 @@
+local images = {}
+
+local function add_image(id, x, height, timer)
+  images[#images + 1] = {
+    id = id,
+    src = "atlas",
+    x = x,
+    y = 0,
+    w = 8,
+    h = height,
+    timer = timer,
+  }
+end
+
+local roles = {
+  "normal-a", "normal-b", "mine-a", "mine-b",
+  "ln-end-a", "ln-end-b", "ln-start-a", "ln-start-b",
+  "modern-ln-active-a", "modern-ln-active-b",
+  "modern-ln-inactive-a", "modern-ln-inactive-b",
+  "legacy-ln-unused",
+  "hcn-end-a", "hcn-end-b", "hcn-start-a", "hcn-start-b",
+  "modern-hcn-active-a", "modern-hcn-active-b",
+  "modern-hcn-inactive-a", "modern-hcn-inactive-b",
+  "legacy-hcn-unused",
+  "modern-hcn-reactive-a", "modern-hcn-reactive-b",
+  "modern-hcn-damage-a", "modern-hcn-damage-b",
+  "group-line-a", "group-line-b", "bpm-line-a",
+  "stop-line-a", "stop-line-b",
+}
+
+for index, id in ipairs(roles) do
+  add_image(id, index * 10, id == "normal-b" and -1 or 8,
+            id == "group-line-a" and 7 or nil)
+end
+
+local group_a = {
+  id = "group-line-a",
+  timer = 7,
+  loop = 3,
+  center = 4,
+  blend = 2,
+  filter = 1,
+  stretch = 10,
+  offsets = {6, 7},
+  offset = 8,
+  op = {9, "known_bool", function() return true end},
+  draw = "known_bool",
+  dst = {
+    {time = 10, x = 12, y = 22, w = 32, h = 42, a = 200},
+    {time = 0, x = 11},
+  },
+}
+
+return {
+  type = 0,
+  w = 1280,
+  h = 720,
+  source = {{id = "atlas", path = "atlas.png"}},
+  image = images,
+  note = {
+    id = "notes",
+    note = {"normal-a", "normal-b"},
+    mine = {"mine-a", "mine-b"},
+    lnend = {"ln-end-a", "ln-end-b"},
+    lnstart = {"ln-start-a", "ln-start-b"},
+    lnbodyActive = {"modern-ln-active-a", "modern-ln-active-b"},
+    lnbody = {"modern-ln-inactive-a", "modern-ln-inactive-b"},
+    lnactive = {"legacy-ln-unused"},
+    hcnend = {"hcn-end-a", "hcn-end-b"},
+    hcnstart = {"hcn-start-a", "hcn-start-b"},
+    hcnbodyActive = {"modern-hcn-active-a", "modern-hcn-active-b"},
+    hcnbody = {"modern-hcn-inactive-a", "modern-hcn-inactive-b"},
+    hcnactive = {"legacy-hcn-unused"},
+    hcnbodyReactive = {"modern-hcn-reactive-a", "modern-hcn-reactive-b"},
+    hcnbodyMiss = {"modern-hcn-damage-a", "modern-hcn-damage-b"},
+    hcndamage = {"legacy-hcn-unused"},
+    hcnreactive = {"legacy-hcn-unused"},
+    hidden = {"ignored-hidden-a", "ignored-hidden-b"},
+    processed = {"ignored-processed-a", "ignored-processed-b"},
+    dst = {
+      {x = 100, y = 200, w = 30, h = 400},
+      {x = 140, y = 210, w = 31, h = 401},
+    },
+    size = {12},
+    dst2 = -2147483648,
+    expansionrate = {125, 75},
+    group = {
+      group_a,
+      {id = "missing-group-line",
+       dst = {{x = 50, y = 60, w = 70, h = 80}}},
+    },
+    bpm = {
+      {id = "bpm-line-a", timer = 7,
+       dst = {{time = 5, x = 1, y = 2, w = 3, h = 4}}},
+    },
+    stop = {
+      {id = "stop-line-a", dst = {{x = 5, y = 6, w = 7, h = 8}}},
+      {id = "stop-line-b", dst = {{x = 9, y = 10, w = 11, h = 12}}},
+      -- Pinned JsonPlaySkinObjectLoader ignores suffixes beyond group count.
+      {id = "ignored-stop-suffix", timer = {}, dst = {{}}},
+    },
+    time = {},
+  },
+  destination = {{id = "notes", dst = {{}}}},
+}

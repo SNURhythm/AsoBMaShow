@@ -2,10 +2,13 @@
 
 #include <SDL2/SDL.h>
 #include <bgfx/bgfx.h>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <optional>
 #include <vector>
+#include "VideoFrameLayout.h"
 #include "../utils/Stopwatch.h"
 #include "../rendering/common.h"
 #include <thread>
@@ -22,6 +25,23 @@ class VideoPlayer {
 public:
   enum class MemoryPressureMode { PreserveActive, DiscardIdle };
 
+  struct PreparedEmbeddedSubmission {
+    video::EmbeddedYuvQuadLayout quad;
+    std::uint64_t state = 0;
+    std::optional<rendering::DrawableScissor> scissor;
+    bgfx::ProgramHandle program = BGFX_INVALID_HANDLE;
+    std::array<bgfx::TextureHandle, 3> textures{
+        bgfx::TextureHandle{bgfx::kInvalidHandle},
+        bgfx::TextureHandle{bgfx::kInvalidHandle},
+        bgfx::TextureHandle{bgfx::kInvalidHandle}};
+    std::array<bgfx::UniformHandle, 3> samplers{
+        bgfx::UniformHandle{bgfx::kInvalidHandle},
+        bgfx::UniformHandle{bgfx::kInvalidHandle},
+        bgfx::UniformHandle{bgfx::kInvalidHandle}};
+    bgfx::TransientVertexBuffer vertexBuffer{};
+    bgfx::TransientIndexBuffer indexBuffer{};
+  };
+
   VideoPlayer(Stopwatch *stopwatch);
   ~VideoPlayer();
   VideoPlayer(const VideoPlayer &) = delete;
@@ -31,7 +51,23 @@ public:
 
   bool loadVideo(const std::string &videoPath, std::atomic<bool> &isCancelled);
   void update();
-  void render();
+  void render(bgfx::ViewId viewId, float viewX, float viewY, float viewWidth,
+              float viewHeight) const;
+  void renderEmbedded(
+      bgfx::ViewId viewId, const video::EmbeddedYuvQuadLayout &quad,
+      std::uint64_t state,
+      std::optional<rendering::DrawableScissor> scissor = std::nullopt) const;
+  [[nodiscard]] std::optional<PreparedEmbeddedSubmission>
+  prepareEmbeddedSubmission(
+      const video::EmbeddedYuvQuadLayout &quad, std::uint64_t state,
+      std::optional<rendering::DrawableScissor> scissor = std::nullopt) const;
+  [[nodiscard]] static const bgfx::VertexLayout &
+  embeddedVertexLayout() noexcept;
+  void commitPreparedEmbedded(
+      PreparedEmbeddedSubmission &submission) const noexcept;
+  void submitPreparedEmbedded(
+      bgfx::ViewId viewId,
+      const PreparedEmbeddedSubmission &submission) const noexcept;
   void play();
   void playFrom(int64_t micro);
   void pause();
@@ -42,11 +78,6 @@ public:
   long long getDurationMicros() const;
   int getFrameWidth() const { return videoFrameWidth; }
   int getFrameHeight() const { return videoFrameHeight; }
-  float viewWidth = 1920.0f;
-  float viewHeight = 1080.0f;
-  int viewId = rendering::bga_view;
-  float viewX = 0.0f;
-  float viewY = 0.0f;
   // float fps = 60.0f;
 
 private:
@@ -86,7 +117,7 @@ private:
   void stopPredecoding();
 
   bool updateVideoTexture(int width, int height);
-  std::mutex videoFrameMutex;
+  mutable std::mutex videoFrameMutex;
 
   int videoFrameWidth;
   int videoFrameHeight;
@@ -95,6 +126,8 @@ private:
   bgfx::UniformHandle s_texY = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle s_texU = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle s_texV = BGFX_INVALID_HANDLE;
+  bgfx::ProgramHandle fullscreenProgram = BGFX_INVALID_HANDLE;
+  bgfx::ProgramHandle embeddedProgram = BGFX_INVALID_HANDLE;
 
   int64_t startPTS = 0;
   unsigned int getPrecisePosition();

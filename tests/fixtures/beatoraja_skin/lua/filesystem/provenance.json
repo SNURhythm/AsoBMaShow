@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "referenceCommit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+  "symbols": [
+    {
+      "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
+      "symbol": "SkinLuaAccessor.createSandboxGlobals",
+      "behavior": "loads the sandbox base, package, bit32, table, string, coroutine, math, and sandbox-I/O libraries"
+    },
+    {
+      "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
+      "symbol": "SkinLuaAccessor.restrictPackageLoaders",
+      "behavior": "removes os, luajava, debug, package.loadlib, cpath, and native package searchers"
+    },
+    {
+      "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
+      "symbol": "SkinLuaAccessor.setDirectory",
+      "behavior": "sets the selected entry parent and exact ?.lua then ?/init.lua module candidates"
+    },
+    {
+      "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
+      "symbol": "SkinLuaAccessor.execFile",
+      "behavior": "checks sandbox containment and regular-file status before executing in the retained Globals state"
+    },
+    {
+      "path": "src/bms/player/beatoraja/skin/lua/SkinFileLuaApiExporter.java",
+      "symbol": "SkinFileLuaApiExporter.export",
+      "behavior": "exports exists, mkdir, list, read-lines, write, append, clear, and count-lines call shapes"
+    },
+    {
+      "path": "src/bms/player/beatoraja/skin/lua/SkinLuaPathResolver.java",
+      "symbol": "SkinLuaPathResolver.resolve",
+      "behavior": "resolves relative file references from the selected skin directory and rejects normalized references outside it"
+    },
+    {
+      "path": "src/bms/player/beatoraja/skin/lua/LegacySkinLuaApi.java",
+      "symbol": "LegacySkinLuaApi.NewFunction.invoke",
+      "behavior": "constructs the legacy File facade only for the java.io.File class token and one path argument"
+    },
+    {
+      "path": "src/bms/player/beatoraja/skin/lua/LegacySkinLuaApi.java",
+      "symbol": "LegacySkinLuaApi.fileFacade",
+      "behavior": "provides mkdir boolean and direct-child listFiles array-or-nil result shapes"
+    }
+  ],
+  "asoBMaShowPolicy": {
+    "authority": "AsoBMaShow",
+    "packagePaths": "virtual-only",
+    "moduleCandidates": [
+      "?.lua",
+      "?/init.lua"
+    ],
+    "writes": "derived-private-overlay-only",
+    "renderPhase": "deny-before-io"
+  }
+}

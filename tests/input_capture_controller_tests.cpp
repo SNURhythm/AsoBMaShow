@@ -110,6 +110,7 @@ bool sameBinding(const input::InputBinding &left,
 bool sameProfile(const InputProfile &left, const InputProfile &right) {
   if (left.schemaVersion != right.schemaVersion ||
       left.gyroscopeTurntable != right.gyroscopeTurntable ||
+      left.virtualController != right.virtualController ||
       left.bindings.size() != right.bindings.size()) {
     return false;
   }
@@ -214,6 +215,55 @@ void testGyroscopeConfigUpdateIsSanitizedAndTransactional() {
               controller.lastError() == "injected gyroscope save failure",
           "a failed gyroscope configuration save leaves the live profile and "
           "runtime unchanged");
+}
+
+void testVirtualControllerConfigUpdateIsSanitizedAndTransactional() {
+  RegistryHarness harness;
+  InputProfile profile;
+  int saves = 0;
+  bool allowSave = true;
+  InputCaptureController controller(
+      harness.registry, profile,
+      [&](const InputProfile &, std::string &error) {
+        ++saves;
+        if (allowSave) {
+          return true;
+        }
+        error = "injected virtual controller save failure";
+        return false;
+      });
+
+  require(controller.updateVirtualControllerConfig(
+              {.enabled = true,
+               .centerX = -1.0F,
+               .centerY = 2.0F,
+               .buttonSize = 99.0F,
+               .keySpacingX = -0.75F,
+               .keySpacingY = -0.50F,
+               .scratchKeyplateSpacing = -1.0F}),
+          "a virtual controller configuration edit is committed");
+  require(saves == 1 && profile.virtualController.enabled &&
+              profile.virtualController.centerX == 0.0F &&
+              profile.virtualController.centerY == 1.0F &&
+              profile.virtualController.buttonSize == 0.30F &&
+              profile.virtualController.keySpacingX == -0.75F &&
+              profile.virtualController.keySpacingY == -0.50F &&
+              profile.virtualController.scratchKeyplateSpacing == -1.0F,
+          "virtual controller keeps intentional axis overlap before persistence");
+
+  const InputProfile beforeFailure = profile;
+  allowSave = false;
+  require(!controller.updateVirtualControllerConfig(
+              {.enabled = false,
+               .centerX = 0.4F,
+               .centerY = 0.6F,
+               .buttonSize = 0.12F,
+               .keySpacingX = 0.4F,
+               .keySpacingY = 0.2F,
+               .scratchKeyplateSpacing = 0.3F}) &&
+              saves == 2 && sameProfile(profile, beforeFailure) &&
+              controller.lastError() == "injected virtual controller save failure",
+          "a failed virtual controller save leaves the live profile unchanged");
 }
 
 void testRuntimeSaveAppliesOnlyChangedGyroscopeConfigAfterSuccess() {
@@ -827,6 +877,7 @@ int main() {
   try {
     testMonitoringNoiseActivationRepeatsAndDuplicateIgnore();
     testGyroscopeConfigUpdateIsSanitizedAndTransactional();
+    testVirtualControllerConfigUpdateIsSanitizedAndTransactional();
     testRuntimeSaveAppliesOnlyChangedGyroscopeConfigAfterSuccess();
     testAxisCaptureUsesSensitiveHysteresis();
     testConflictConfirmationIsTransactionalAndScopeLimited();

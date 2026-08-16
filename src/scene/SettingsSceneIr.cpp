@@ -1,6 +1,5 @@
 #include "SettingsSceneShared.h"
 
-#include "../AppSettingsStore.h"
 #include "../ir/IrRankingService.h"
 #include "../ir/IrSubmissionService.h"
 
@@ -92,10 +91,11 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
 
   bool hasCredential = false;
   if (context.profileReady()) {
-    hasCredential = !context.lookupActiveIrCredential(
-                                context.profileManager.activeProfile().id,
-                                kProviderId)
-                         .empty();
+    hasCredential =
+        !context
+             .lookupActiveIrCredential(
+                 context.profileManager.activeProfile().id, kProviderId)
+             .empty();
   }
 
   ir::IrOutboxCounts counts;
@@ -130,9 +130,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
             AppSettings next = context.settings;
             next.irProviders[std::string(kProviderId)] = candidate;
             next.sanitize();
-            return AppSettingsStore::Save(
-                context.profileManager.activePaths().settingsJson, next,
-                diagnostic);
+            return context.saveSettingsCandidate(std::move(next), diagnostic);
           },
       .settingsCommitted = std::move(committedSettings),
       .quiesceRemoteWork =
@@ -140,16 +138,15 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
             return context.pauseIrProfileServices(diagnostic);
           },
       .loadCredential =
-          [this](std::optional<std::string> &apiKey,
-                 std::string &diagnostic) {
+          [this](std::optional<std::string> &apiKey, std::string &diagnostic) {
             apiKey.reset();
             if (!context.profileReady()) {
               diagnostic = "The active profile is unavailable.";
               return false;
             }
             return context.loadIrCredential(
-                context.profileManager.activeProfile().id, kProviderId,
-                apiKey, diagnostic);
+                context.profileManager.activeProfile().id, kProviderId, apiKey,
+                diagnostic);
           },
       .invalidateProviderIdentity =
           [this](std::string_view providerId, std::string &diagnostic) {
@@ -159,8 +156,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
             }
             const auto imported =
                 context.scoreRepository.ClearImportedIrScores(providerId);
-            if (imported.status !=
-                    ImportedIrScoreProjectionStatus::Applied &&
+            if (imported.status != ImportedIrScoreProjectionStatus::Applied &&
                 imported.status !=
                     ImportedIrScoreProjectionStatus::AlreadyCurrent) {
               diagnostic = imported.diagnostic.empty()
@@ -202,8 +198,8 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
               return false;
             }
             return context.replaceIrCredential(
-                context.profileManager.activeProfile().id, kProviderId,
-                apiKey, diagnostic);
+                context.profileManager.activeProfile().id, kProviderId, apiKey,
+                diagnostic);
           },
       .removeCredential =
           [this](std::string &diagnostic) {

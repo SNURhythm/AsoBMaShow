@@ -1,0 +1,5 @@
+package.path = "?.lua;skin/Hub/?.lua"
+local const = require("root_const")
+assert(const.source == "package-root")
+
+return { phase = skin_config and "configured" or "header" }

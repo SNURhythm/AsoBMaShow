@@ -21,10 +21,12 @@
 #include "GameplayChartEntityRenderBudget.h"
 #include "GameplayGaugeRules.h"
 #include "GameplayNoteSubmissionOrder.h"
+#include "BuiltInPlayfieldPresentation.h"
 #include "StartLaneIndicatorGeometry.h"
 #include <bx/math.h>
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <map>
@@ -42,6 +44,8 @@ class TexBatchRenderer;
 } // namespace rendering
 
 class SpriteLoader;
+struct PlayfieldProjectionResult;
+struct BuiltInRendererTraversal;
 struct LaneState {
   long long lastStateTime = -1;
   long long lastPressedTime = -1;
@@ -111,11 +115,115 @@ struct JudgementCounterSnapshot {
   int comboBreak = 0;
 };
 
-class BMSRenderer {
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+namespace bms_renderer_characterization {
+
+inline constexpr std::size_t kNoTimelineOrdinal =
+    std::numeric_limits<std::size_t>::max();
+
+enum class Surface {
+  Main,
+  Ui,
+};
+
+enum class SubmissionKind {
+  Background,
+  JudgeLine,
+  MeasureLine,
+  NormalNote,
+  InvisiblePrimitive,
+  Mine,
+  LongBody,
+  LongTail,
+  LongHead,
+  ReplayGhostPrimitive,
+  ReplayMissPrimitive,
+  LaneBeamPass,
+  LaneCoverPass,
+  StartIndicatorPass,
+  JudgementIndicatorPass,
+  GaugePass,
+  HudPass,
+  TouchPass,
+};
+
+enum class LongBodyState {
+  None,
+  Off,
+  On,
+  Damage,
+};
+
+struct Rect {
+  float x = 0.0F;
+  float y = 0.0F;
+  float width = 0.0F;
+  float height = 0.0F;
+};
+
+struct FrameSnapshot {
+  long long renderTimeMicros = 0;
+  long long chartTimeMicros = 0;
+  long long replayTouchTimeMicros = 0;
+  double currentScrollPosition = 0.0;
+  double visibleScrollMinimum = 0.0;
+  double visibleScrollMaximum = 0.0;
+  double visibleReferenceBpm = 0.0;
+  float hispeed = 0.0F;
+  float rxhs = 0.0F;
+  float playAreaLeftX = 0.0F;
+  float playAreaWidth = 0.0F;
+  float noteRenderWidth = 0.0F;
+  float noteRenderHeight = 0.0F;
+  float lowerBound = 0.0F;
+  float judgeY = 0.0F;
+  float upperBound = 0.0F;
+  float noteVisibleUpperBound = 0.0F;
+  int laneCoverPercent = 0;
+  Rect laneCoverHandle;
+};
+
+struct TimelineProjection {
+  std::size_t timelineOrdinal = kNoTimelineOrdinal;
+  long long timelineMicros = 0;
+  float y = 0.0F;
+  bool future = false;
+  bool finite = false;
+};
+
+struct Submission {
+  SubmissionKind kind = SubmissionKind::Background;
+  Surface surface = Surface::Main;
+  std::uint32_t depth = 0;
+  std::size_t timelineOrdinal = kNoTimelineOrdinal;
+  std::size_t pairedTimelineOrdinal = kNoTimelineOrdinal;
+  long long timelineMicros = 0;
+  int lane = -1;
+  std::size_t primitiveOrdinal = 0;
+  LongBodyState longBodyState = LongBodyState::None;
+  Rect rect;
+};
+
+class Recorder {
+public:
+  virtual ~Recorder() = default;
+  virtual void beginFrame(const FrameSnapshot &frame) = 0;
+  virtual void project(const TimelineProjection &projection) = 0;
+  virtual void submit(const Submission &submission) = 0;
+};
+
+} // namespace bms_renderer_characterization
+#endif
+
+class BMSRenderer : public BuiltInPlayfieldPresentation {
 public:
   ~BMSRenderer();
 
 private:
+  struct PreparedPresentationFrame;
+  std::unique_ptr<PreparedPresentationFrame> preparedPresentationFrame;
+  std::uint64_t lastPreparedPresentationFrameSerial = 0;
+  std::optional<PresentationFailure> presentationFailure;
   std::unique_ptr<TextView> titleText;
   std::unique_ptr<TextView> judgeText;
   std::unique_ptr<TextView> pacemakerDeltaText;
@@ -198,6 +306,8 @@ private:
   std::vector<TouchPointVisual> liveReleasedTouchSamples;
   JudgementIndicatorRenderer judgementIndicator;
   std::vector<double> timelineScrollPositions;
+  std::optional<gameplay_scroll_geometry::ScrollPositionTimeline>
+      terminalScrollAnchor;
   struct LongNoteLookahead {
     float headY = 0.0F;
     gameplay_note_submission_order::LongNoteOrder order;
@@ -221,14 +331,18 @@ private:
   float noteVisibleUpperBound = 10.0f;
   float judgeY = 0.0f;
   long long latePoorTiming;
-  int visibleTimeGreenNumber = 400;
+  int visibleTimeDurationMilliseconds = 667;
+  std::optional<float> configuredHispeedOverride;
+  float hispeedMultiplier = 1.0F;
   audio::PlaybackRate playbackRate;
   bool visibleTimeUseMilliseconds = false;
   double currentBpm = 0.0;
+  double currentScrollRate = 1.0;
+  bool laneCoverEnabled = true;
   std::optional<double> floatingVisibleTimeReferenceBpm;
-  AppSettings::VisibleTimeBpmStrategy visibleTimeBpmStrategy =
-      AppSettings::VisibleTimeBpmStrategy::Chart;
-  double mostPrevalentBpm = 0.0;
+  AppSettings::HiSpeedFixMode hispeedFixMode =
+      AppSettings::HiSpeedFixMode::Main;
+  double mainBpm = 0.0;
   bool renderHud = true;
   float judgementTextY = AppSettings::kDefaultJudgementTextY;
   bool judgementCounterEnabled = true;
@@ -249,7 +363,9 @@ private:
   float currentGaugeBorder = 80.0f;
   float currentGaugeReducedDamageZone = 0.0f;
   bool renderLaneBeams = true;
-  bool laneCoverFloatingEnabled = true;
+  float laneCoverHispeedFactor = 1.0F;
+  std::uint64_t touchLayoutRevision_ = 1;
+  std::uint64_t touchHitRegionsRevision_ = 1;
   bool useRenderTimeForLaneBeams = false;
   bool showInvisibleNotes = false;
   int laneBeamLengthPercent = AppSettings::kDefaultLaneBeamLengthPercent;
@@ -320,6 +436,12 @@ private:
                          uint32_t submitDepth);
   void drawLandmineNote(float y, bms_parser::LandmineNote *const &note,
                         uint32_t submitDepth);
+  // The captured route deliberately receives no mutable parser state.  The
+  // legacy overload supplies nullptr and retains the historical traversal for
+  // preview/export callers.
+  void renderFrame(RenderContext &context, long long micro,
+                   long long replayTouchTimeMicros,
+                   const PlayfieldProjectionResult *projection);
   void drawReplayGhosts(float rxhs, long long currentTimeMicros,
                         double currentScrollPosition);
   void drawGhostNoteOutline(float y, const ReplayGhostEvent &event);
@@ -337,7 +459,6 @@ private:
   void drawTouchSample(const TouchPointVisual &sample,
                        long long currentTimeMicros);
   void buildTimelineScrollPositions();
-  double calculateMostPrevalentBpm() const;
   double visibleTimeReferenceBpm() const;
   double scrollPositionAtTime(long long timeMicros) const;
   void applyPendingHudText(long long currentMicros);
@@ -369,7 +490,6 @@ private:
                                                          float renderY) const;
   std::optional<std::pair<float, float>> projectLanePointToUi(
       float worldX, float worldY) const;
-  int effectiveVisibleTimeGreenNumber() const;
   std::string laneCoverVisibleTimeLabel() const;
   float computeLaneX(int lane) const;
   void rebuildPlayAreaGeometry();
@@ -387,6 +507,19 @@ private:
   NoteSheet scratchSheet;
   bms_parser::Chart *chart;
   bool laneIsCurrentlyPressed(int lane) const;
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+  bms_renderer_characterization::Recorder *characterizationRecorder = nullptr;
+  [[nodiscard]] std::size_t characterizationTimelineOrdinal(
+      const bms_parser::TimeLine *timeline) const;
+  void recordCharacterizationSubmission(
+      bms_renderer_characterization::SubmissionKind kind,
+      bms_renderer_characterization::Surface surface, std::uint32_t depth,
+      const bms_parser::TimeLine *timeline,
+      const bms_parser::TimeLine *pairedTimeline, int lane,
+      std::size_t primitiveOrdinal,
+      bms_renderer_characterization::LongBodyState longBodyState,
+      bms_renderer_characterization::Rect rect);
+#endif
 
 public:
   static std::unique_ptr<TextView> createAutoPlayMarkText();
@@ -394,39 +527,85 @@ public:
   static void layoutAutoPlayMark(TextView *text);
   static void renderAutoPlayMark(TextView *text, RenderContext &context);
 
-  void onLanePressed(int lane, const JudgeResult judge, long long time);
-  void onLaneReleased(int lane, long long time);
+  void configure(const PlayfieldPresentationConfig &configuration) override;
+  [[nodiscard]] PresentationFrameOutcome prepareFrame(
+      const PlayfieldVisualState &state,
+      const PlayfieldProjectionResult &projection) override;
+  void advanceRetainedTimelineCursor(
+      std::uint32_t nextRetainedTimelineOrdinal) noexcept override;
+  [[nodiscard]] PresentationFrameResult render(RenderContext &) override;
+  [[nodiscard]] gameplay::RealtimeTouchLayout touchLayout() const override;
+  [[nodiscard]] std::uint64_t
+  touchLayoutRevision() const noexcept override;
+  [[nodiscard]] std::uint64_t
+  touchHitRegionsRevision() const noexcept override;
+  [[nodiscard]] std::vector<PresentationUiHitRegion>
+  touchHitRegions() const override;
+  [[nodiscard]] PresentationUiHit
+  hitTestUiControl(UiLogicalPoint point) const override;
+  PresentationTouchResult
+  beginPresentationTouch(const PresentationTouchEvent &event) override;
+  PresentationTouchResult
+  updatePresentationTouch(const PresentationTouchEvent &event) override;
+  PresentationTouchResult
+  endPresentationTouch(const PresentationTouchEvent &event,
+                       bool cancelled) override;
+  void cancelPresentationTouches(long long eventMicros) override;
+  void onLanePressed(int lane, JudgeResult judge,
+                     long long time) override;
+  void onLaneReleased(int lane, long long time) override;
   void onJudge(JudgeResult judgeResult, int combo, int score,
-               long long displayTimeMicros, bool recordTimingSample = true);
+               PlayfieldJudgeEventClock clock,
+               bool recordTimingSample = true) override;
   explicit BMSRenderer(
       bms_parser::Chart *chart,
       const std::map<Judgement, std::pair<long long, long long>> &timingWindows,
-      int visibleTimeGreenNumber, bool renderHud = true,
+      int visibleTimeDurationMilliseconds, bool renderHud = true,
       audio::PlaybackRate playbackRate = {});
 
   void render(RenderContext &context, long long micro);
   void render(RenderContext &context, long long micro,
               long long replayTouchTimeMicros);
-  void reset();
-  void refreshGeometry();
-  void setVisibleTimeGreenNumber(int greenNumber);
+  void render(RenderContext &context, const PlayfieldVisualState &state,
+              const PlayfieldProjectionResult &projection);
+  // Projection capture must use the identical late-poor boundary as the
+  // legacy renderer so its immutable row/depth plan has the same eligibility.
+  [[nodiscard]] long long
+  projectionLatePoorTimingMicros() const noexcept override {
+    return latePoorTiming;
+  }
+  [[nodiscard]] BuiltInRendererTraversal
+  projectionTraversal() const override;
+  [[nodiscard]] BuiltInRendererTraversal
+  builtInProjectionTraversal() const;
+  // The live Beatoraja `duration_green` value, based on the configured
+  // Hi-Speed currently driving note travel rather than the saved duration.
+  [[nodiscard]] int effectiveVisibleTimeGreenNumber() const;
+  void reset() override;
+  void refreshGeometry() override;
+  [[nodiscard]] PresentationMode activeMode() const noexcept override;
+  [[nodiscard]] std::optional<PresentationFailure>
+  lastFailure() const override;
+  void setVisibleTimeDurationMilliseconds(int milliseconds);
+  void setHispeedMultiplier(float multiplier);
   void setVisibleTimeUseMilliseconds(bool enabled);
   void setCurrentBpm(double bpm);
-  void setVisibleTimeBpmStrategy(
-      AppSettings::VisibleTimeBpmStrategy strategy);
+  void setHiSpeedFixMode(AppSettings::HiSpeedFixMode mode);
   void setPlayAreaWidth(float width);
   void setLaneBeamsEnabled(bool enabled);
-  void setLaneCoverFloatingEnabled(bool enabled);
+  void setLaneCoverHispeedFactor(float factor);
   [[nodiscard]] std::optional<std::array<std::pair<float, float>, 4>>
   gameplayTouchBoundsUi() const;
   void setLaneBeamLengthPercent(int percent);
   void setNoteStartPositionPercent(int percent);
   void applyLaneCoverState(int percent, bool resetVisibleTimeReference);
+  void applyLaneCoverState(int percent, bool enabled,
+                           bool resetVisibleTimeReference);
   bool isLaneCoverHandleHit(float renderX, float renderY) const;
   std::optional<float> laneCoverHandleGrabOffset(float renderX,
-                                                float renderY) const;
+                                                 float renderY) const override;
   int dragLaneCoverHandleTo(float renderX, float renderY,
-                            float lanePointYOffset);
+                            float lanePointYOffset) override;
   void setLaneBeamClockUsesRenderTime(bool enabled);
   void setShowInvisibleNotes(bool enabled);
   void setJudgementIndicatorConfig(bool enabled, float y, float widthScale,
@@ -449,12 +628,30 @@ public:
   void setPacemakerTarget(const pacemaker::Target &target);
   void setPacemakerStatus(const pacemaker::Snapshot &snapshot);
   void setPlayOptionStatus(const std::string &label);
-  void setReplayData(const ReplayData *replayData);
+  void setReplayData(const ReplayData *replayData,
+                     bool preprocessGhosts = true);
+#if defined(ASOBMASHOW_REPLAY_PLAYFIELD_PRESENTATION_TESTING)
+  [[nodiscard]] std::size_t replayGhostEventCountForTesting() const noexcept {
+    return replayGhostEvents.size();
+  }
+  [[nodiscard]] std::size_t replayMissMarkerCountForTesting() const noexcept {
+    return replayMissMarkers.size();
+  }
+  [[nodiscard]] std::size_t replayTouchSampleCountForTesting() const noexcept {
+    return replayTouchSamples.size();
+  }
+#endif
   void setAutoPlayMarkVisible(bool visible);
   void setTouchVisualizationEnabled(bool enabled);
   void setReplayGhostRenderingEnabled(bool enabled);
   void setStartLaneIndicators(std::vector<int> lanes);
   void setStartLaneIndicatorsVisible(bool visible);
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+  void setCharacterizationRecorder(
+      bms_renderer_characterization::Recorder *recorder) {
+    characterizationRecorder = recorder;
+  }
+#endif
   void setLiveTouchPoint(long long fingerId, ReplayTouchAction action, float x,
                          float y, long long songTimeMicros);
   void clearLiveTouchPoints();

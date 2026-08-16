@@ -1,0 +1,110 @@
+{
+  "timingDefaults": {
+    "fadeoutMillis": 0,
+    "inputMillis": 0,
+    "sceneMillis": 0,
+    "closeMillis": 0,
+    "loadEndMillis": 0,
+    "playStartMillis": 0,
+    "judgeTimerMillis": 1,
+    "finishMarginMillis": 0
+  },
+  "timing": {
+    "fadeoutMillis": 901,
+    "inputMillis": 902,
+    "sceneMillis": 903,
+    "closeMillis": 904,
+    "loadEndMillis": 905,
+    "playStartMillis": 906,
+    "judgeTimerMillis": 907,
+    "finishMarginMillis": 908
+  },
+  "resources": [
+    {"id": 1, "virtualPath": "assets/atlas.png", "authoredOrdinal": 0},
+    {"id": 2, "virtualPath": "assets/alternate.png", "authoredOrdinal": 1}
+  ],
+  "integerBindings": [
+    {"id": 1, "domain": "ImageIndex", "selector": 700, "authoredOrdinal": 0},
+    {"id": 2, "domain": "ImageIndex", "selector": 701, "authoredOrdinal": 1},
+    {"id": 3, "domain": "IntegerValue", "selector": 700, "authoredOrdinal": 2}
+  ],
+  "floatBindings": [
+    {"id": 1, "domain": "FloatValue", "selector": 800, "authoredOrdinal": 0},
+    {"id": 2, "domain": "Rate", "selector": 800, "authoredOrdinal": 1}
+  ],
+  "objects": [
+    {"id": 1, "name": "strip", "authoredOrdinal": 0, "critical": false},
+    {"id": 2, "name": "state-set", "authoredOrdinal": 1, "critical": false},
+    {"id": 3, "name": "score", "authoredOrdinal": 2, "critical": false},
+    {"id": 4, "name": "ratio", "authoredOrdinal": 3, "critical": false},
+    {"id": 5, "name": "rate-slider", "authoredOrdinal": 4, "critical": false},
+    {"id": 6, "name": "notes", "authoredOrdinal": 5, "critical": true},
+    {"id": 7, "name": "optional-missing", "authoredOrdinal": 6, "critical": false}
+  ],
+  "stripStates": [
+    [
+      {"x": 0, "y": 0, "w": 40, "h": 20, "gridColumn": 0, "gridRow": 0, "gridColumns": 4, "gridRows": 2},
+      {"x": 0, "y": 0, "w": 40, "h": 20, "gridColumn": 1, "gridRow": 0, "gridColumns": 4, "gridRows": 2},
+      {"x": 0, "y": 0, "w": 40, "h": 20, "gridColumn": 2, "gridRow": 0, "gridColumns": 4, "gridRows": 2},
+      {"x": 0, "y": 0, "w": 40, "h": 20, "gridColumn": 3, "gridRow": 0, "gridColumns": 4, "gridRows": 2}
+    ],
+    [
+      {"x": 0, "y": 0, "w": 40, "h": 20, "gridColumn": 0, "gridRow": 1, "gridColumns": 4, "gridRows": 2},
+      {"x": 0, "y": 0, "w": 40, "h": 20, "gridColumn": 1, "gridRow": 1, "gridColumns": 4, "gridRows": 2},
+      {"x": 0, "y": 0, "w": 40, "h": 20, "gridColumn": 2, "gridRow": 1, "gridColumns": 4, "gridRows": 2},
+      {"x": 0, "y": 0, "w": 40, "h": 20, "gridColumn": 3, "gridRow": 1, "gridColumns": 4, "gridRows": 2}
+    ]
+  ],
+  "imageSetStates": [
+    {
+      "resource": 1,
+      "cycleMillis": 100,
+      "timerSelector": 42,
+      "frames": [
+        {"x": 2, "y": 3, "w": 20, "h": 10, "gridColumn": 0, "gridRow": 0, "gridColumns": 2, "gridRows": 1},
+        {"x": 2, "y": 3, "w": 20, "h": 10, "gridColumn": 1, "gridRow": 0, "gridColumns": 2, "gridRows": 1}
+      ]
+    },
+    {
+      "resource": 2,
+      "cycleMillis": 250,
+      "timerSelector": 43,
+      "frames": [
+        {"x": 9, "y": 8, "w": -12, "h": 6, "gridColumn": 0, "gridRow": 0, "gridColumns": 3, "gridRows": 1},
+        {"x": 9, "y": 8, "w": -12, "h": 6, "gridColumn": 1, "gridRow": 0, "gridColumns": 3, "gridRows": 1},
+        {"x": 9, "y": 8, "w": -12, "h": 6, "gridColumn": 2, "gridRow": 0, "gridColumns": 3, "gridRows": 1}
+      ]
+    }
+  ],
+  "stripDestinationFrames": [
+    {"timeMillis": 100, "x": 15, "y": 20, "width": 40, "height": 20,
+     "rgba": [10, 20, 30, 200]},
+    {"timeMillis": 200, "x": 10, "y": 20, "width": 40, "height": 20,
+     "rgba": [10, 20, 30, 200]},
+    {"timeMillis": 300, "x": 15, "y": 20, "width": 40, "height": 25,
+     "rgba": [10, 20, 30, 200]}
+  ],
+  "firstFrameDefaults": {
+    "timeMillis": 0,
+    "x": 0,
+    "y": 0,
+    "width": 0,
+    "height": 0,
+    "angleDegrees": 0,
+    "rgba": [255, 255, 255, 255],
+    "acceleration": 0,
+    "loop": 0
+  },
+  "note": {
+    "objectId": 6,
+    "authoredLane": 0,
+    "authoredNoteHeight": 10,
+    "hiddenPolicy": "Synthesized",
+    "processedPolicy": "Synthesized",
+    "ignoredAuthoredDiagnosticCode": "skin_lua_model_authored_note_visual_ignored"
+  },
+  "validation": {
+    "disabledOptionalObjectIds": [7],
+    "missingNormalNoteIsCritical": true
+  }
+}

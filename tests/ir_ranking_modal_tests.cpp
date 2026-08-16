@@ -1,6 +1,7 @@
 #include "ir/IrRankingModal.h"
 #include "view/RecyclerView.h"
 
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
@@ -424,6 +425,61 @@ void testRecyclerBindingSeesAppliedRowWidth() {
   REQUIRE(recycler.getViewByIndex(0)->getWidth() == 800);
 }
 
+void testRecyclerIgnoresMouseSynthesizedTouchSelection() {
+  RecyclerView<int> recycler(
+      [](const int left, const int right) { return left == right; });
+  recycler.setWidth(800)->setHeight(200)->applyYogaLayout();
+  recycler.itemHeight = 64;
+  recycler.onCreateView = [](const int &) { return new View(); };
+  recycler.onBind = [](View *, const int &, int, bool) {};
+  recycler.setItems(std::vector<int>{1, 2});
+  int selectionCount = 0;
+  recycler.onSelected = [&](const int &, int) { ++selectionCount; };
+
+  SDL_Event down{};
+  down.type = SDL_FINGERDOWN;
+  down.tfinger.type = SDL_FINGERDOWN;
+  down.tfinger.touchId = SDL_MOUSE_TOUCHID;
+  down.tfinger.fingerId = 0;
+  down.tfinger.x = 0.005F;
+  down.tfinger.y = 0.01F;
+  SDL_Event up = down;
+  up.type = SDL_FINGERUP;
+  up.tfinger.type = SDL_FINGERUP;
+  recycler.handleEvents(down);
+  recycler.handleEvents(up);
+
+  REQUIRE(selectionCount == 0);
+  REQUIRE(recycler.selectedIndex == -1);
+}
+
+void testRecyclerUsesPreciseWheelDeltaAndNaturalDirection() {
+  RecyclerView<int> recycler(
+      [](const int left, const int right) { return left == right; });
+  recycler.setWidth(800)->setHeight(200)->applyYogaLayout();
+  recycler.itemHeight = 64;
+  recycler.onCreateView = [](const int &) { return new View(); };
+  recycler.onBind = [](View *, const int &, int, bool) {};
+  recycler.setItems(std::vector<int>{1, 2, 3, 4, 5, 6, 7, 8, 9, 10});
+
+  SDL_Event normal{};
+  normal.type = SDL_MOUSEWHEEL;
+  normal.wheel.type = SDL_MOUSEWHEEL;
+  normal.wheel.y = 0;
+  normal.wheel.preciseY = 0.25F;
+  normal.wheel.direction = SDL_MOUSEWHEEL_NORMAL;
+  recycler.scrollOffset = 100.0F;
+  recycler.handleEvents(normal);
+  REQUIRE(std::abs(recycler.scrollOffset - 96.25F) < 0.001F);
+
+  SDL_Event natural = normal;
+  natural.wheel.preciseY = -0.25F;
+  natural.wheel.direction = SDL_MOUSEWHEEL_FLIPPED;
+  recycler.scrollOffset = 100.0F;
+  recycler.handleEvents(natural);
+  REQUIRE(std::abs(recycler.scrollOffset - 103.75F) < 0.001F);
+}
+
 void testBokutachiEligibilityRequiresSupportedModeNotesAndSha256() {
   bms_parser::ChartMeta meta;
   meta.KeyMode = 7;
@@ -457,6 +513,8 @@ int main() {
   testTwentyThousandEntriesCreateOnlyVisibleRows();
   testVirtualizedPaginationThresholdAndScrollRetention();
   testRecyclerBindingSeesAppliedRowWidth();
+  testRecyclerIgnoresMouseSynthesizedTouchSelection();
+  testRecyclerUsesPreciseWheelDeltaAndNaturalDirection();
   testBokutachiEligibilityRequiresSupportedModeNotesAndSha256();
   return 0;
 }

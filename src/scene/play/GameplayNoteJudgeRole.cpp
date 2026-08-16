@@ -1,7 +1,7 @@
+#include "../../bms_parser.hpp"
 #include "GameplayNoteJudgeRole.h"
 
 #include "../../CoursePlaySession.h"
-#include "../../bms_parser.hpp"
 
 namespace gameplay {
 

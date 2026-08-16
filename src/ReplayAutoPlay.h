@@ -82,8 +82,15 @@ inline ReplaySummary BuildSummary(
   summary.maxCombo = std::max(0, meta.TotalNotes);
   summary.finalGauge =
       perfectPlayGauge(meta, gaugeType, gaugeAutoShift, ruleset);
-  summary.clearType = clear_policy::fullComboRankForPlayback(
-      kClearTypeFullComboRank, true, playback);
+  const AssistClearMark assistClearMark = clear_policy::assistClearMarkRequired(
+      assistOption, meta.MinBpm, meta.MaxBpm, playback);
+  summary.clearType =
+      assistClearMark == AssistClearMark::AssistedEasy
+          ? kClearTypeAssistedEasyClearRank
+          : assistClearMark == AssistClearMark::LightAssistedEasy
+                ? kClearTypeLightAssistedEasyClearRank
+                : clear_policy::fullComboRankForPlayback(
+                      kClearTypeFullComboRank, true, playback);
   summary.createdAt = kLabel;
   summary.eventCount = std::max(0, meta.TotalNotes);
   summary.touchSampleCount = 0;
@@ -135,7 +142,7 @@ inline ReplayData BuildReplayData(
   state.configureGauge(gaugeType, gaugeAutoShift, GaugeProfile::Standard,
                        gaugeAutoShiftLowerBound);
   state.setAssistClearMark(clear_policy::assistClearMarkRequired(
-      assist_options::isEnabled(replay.assistOption),
+      replay.assistOption, chart.Meta.MinBpm, chart.Meta.MaxBpm,
       replay.provenance.playback));
   const JudgeResult perfect(PGreat, 0);
   const JudgeResult noJudge(None, 0);

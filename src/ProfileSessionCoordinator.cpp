@@ -50,7 +50,11 @@ ProfileSessionCoordinator::ProfileSessionCoordinator(
       refreshCaches_(std::move(refreshCaches)),
       dependencies_(std::move(dependencies)) {
   if (!dependencies_.saveSettings) {
-    dependencies_.saveSettings = AppSettingsStore::Save;
+    dependencies_.saveSettings = [](std::string_view, AppSettings &,
+                                    std::string &error) {
+      error = "profile-owned settings persistence is not configured";
+      return false;
+    };
   }
   if (!dependencies_.saveInput) {
     dependencies_.saveInput = [](const std::filesystem::path &,
@@ -86,6 +90,10 @@ ProfileSessionCoordinator::ProfileSessionCoordinator(
     dependencies_.restoreProfileServices = [](std::string_view,
                                               const AppSettings &,
                                               std::string &) { return true; };
+  }
+  if (!dependencies_.activeProfileCommitted) {
+    dependencies_.activeProfileCommitted = [](std::string_view, AppSettings &) {
+    };
   }
 }
 
@@ -240,7 +248,7 @@ ProfileSessionCoordinator::switchTo(std::string_view profileId,
   std::string errorMessage;
   try {
     errorMessage.clear();
-    if (!dependencies_.saveSettings(oldPaths.settingsJson, currentSettings,
+    if (!dependencies_.saveSettings(oldProfileId, currentSettings,
                                     errorMessage)) {
       return rollback(ProfileError::IoFailure,
                       "Unable to save current profile settings: " +
@@ -364,5 +372,6 @@ ProfileSessionCoordinator::switchTo(std::string_view profileId,
                     "Unable to activate target profile services: unknown "
                     "failure");
   }
+  dependencies_.activeProfileCommitted(profileId, currentSettings);
   return switchSuccess(std::move(recoveryWarning));
 }

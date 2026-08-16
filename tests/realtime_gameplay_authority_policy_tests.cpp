@@ -110,6 +110,15 @@ void testExistingExclusionsAndNormalActivationRemain() {
               !gameplay::shouldSuspendRealtimeGameplayForPause(false),
           "realtime scoring suspends only when playback also pauses");
 
+  require(gameplay::shouldRetryRealtimeGameplayAuthorityAfterSkinFrame(
+              true, true) &&
+              !gameplay::shouldRetryRealtimeGameplayAuthorityAfterSkinFrame(
+                  false, true) &&
+              !gameplay::shouldRetryRealtimeGameplayAuthorityAfterSkinFrame(
+                  true, false),
+          "a deferred iOS authority starts only after a skin publishes lane "
+          "geometry");
+
   const std::size_t longSparseReplayCapacity =
       gameplay::realtimeGameplayReplayCapacity(2, 600'000'000);
   require(longSparseReplayCapacity > 4096 &&
@@ -125,10 +134,46 @@ void testExistingExclusionsAndNormalActivationRemain() {
           "larger note-derived requirement");
 }
 
+void testSourcePlaytimeCompletesBeforeTrailingWorkerTimeline() {
+  require(gameplay::classifyRealtimeGameplayTerminal(
+              gameplay::GameplayTerminalReason::None, false, true) ==
+              gameplay::RealtimeGameplayTerminalAction::CompleteChart &&
+              gameplay::classifyRealtimeGameplayTerminal(
+                  gameplay::GameplayTerminalReason::None, true, true) ==
+                  gameplay::RealtimeGameplayTerminalAction::Wait,
+          "a normal attempt finishes at the source playtime even while the "
+          "realtime worker advances trailing empty timelines");
+}
+
+void testReplayStatePlayCompletesBeforeTrailingTimeline() {
+  require(gameplay::shouldCompleteLegacyGameplayState(
+              true, true, false) &&
+              !gameplay::shouldCompleteLegacyGameplayState(
+                  true, false, true) &&
+              gameplay::shouldCompleteLegacyGameplayState(
+                  false, false, true),
+          "BMSPlayer REPLAY ends at its source playtime instead of waiting "
+          "for trailing chart timelines; legacy practice retains its "
+          "timeline-bound completion");
+}
+
+void testAllNonPracticeModesUseLastPlayableNoteInsteadOfTrailingTimeline() {
+  constexpr std::int64_t lastPlayableNoteMicros = 10'000'000;
+  constexpr std::int64_t lastTimelineMicros = 80'000'000;
+  require(gameplay::terminalMicrosForGameplayMode(lastPlayableNoteMicros,
+                                                   lastTimelineMicros) ==
+              lastPlayableNoteMicros,
+          "normal play, autoplay, and replay must all leave gameplay from "
+          "the final playable note rather than a trailing empty timeline");
+}
+
 } // namespace
 
 int main() {
   testSessionBackedPracticeEligibility();
   testExistingExclusionsAndNormalActivationRemain();
+  testSourcePlaytimeCompletesBeforeTrailingWorkerTimeline();
+  testReplayStatePlayCompletesBeforeTrailingTimeline();
+  testAllNonPracticeModesUseLastPlayableNoteInsteadOfTrailingTimeline();
   return 0;
 }

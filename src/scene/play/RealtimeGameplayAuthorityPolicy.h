@@ -50,6 +50,15 @@ shouldSuspendRealtimeGameplayForPause(bool pausePlayback) noexcept {
   return pausePlayback;
 }
 
+// A skin session publishes authored lane and control geometry only after its
+// first submitted frame. iOS raw input authority retries at that boundary,
+// never against an empty startup layout.
+[[nodiscard]] constexpr bool
+shouldRetryRealtimeGameplayAuthorityAfterSkinFrame(
+    bool awaitingSkinGeometry, bool skinLaneGeometryPublished) noexcept {
+  return awaitingSkinGeometry && skinLaneGeometryPublished;
+}
+
 [[nodiscard]] constexpr std::size_t realtimeGameplayReplayCapacity(
     std::size_t noteCount,
     std::int64_t finalTimelineTimeMicros) noexcept {
@@ -80,7 +89,27 @@ shouldSuspendRealtimeGameplayForPause(bool pausePlayback) noexcept {
 
 [[nodiscard]] RealtimeGameplayTerminalAction
 classifyRealtimeGameplayTerminal(GameplayTerminalReason reason,
-                                 bool sessionBackedPractice) noexcept;
+                                 bool sessionBackedPractice,
+                                 bool sourcePlaytimeElapsed = false) noexcept;
+
+// This app leaves normal play, autoplay, and replay at the final playable
+// note. Trailing BGA, background, and empty chart rows never hold gameplay
+// open; practice retains its separate range-timeline rule below.
+[[nodiscard]] constexpr std::int64_t terminalMicrosForGameplayMode(
+    std::int64_t lastPlayableNoteMicros,
+    std::int64_t /* lastTimelineMicros */) noexcept {
+  return lastPlayableNoteMicros;
+}
+
+// BMSPlayer's PLAY and REPLAY modes leave STATE_PLAY on their play timer;
+// trailing BGA, background, and empty chart rows are not a completion source.
+// Legacy practice has no source playtime and therefore retains its range's
+// timeline completion rule.
+[[nodiscard]] constexpr bool shouldCompleteLegacyGameplayState(
+    bool hasSourcePlaytime, bool sourcePlaytimeElapsed,
+    bool passedAllTimelines) noexcept {
+  return hasSourcePlaytime ? sourcePlaytimeElapsed : passedAllTimelines;
+}
 
 [[nodiscard]] constexpr bool preparationInputUsesVisualOnlyPath(
     bool indicatorActive, bool sessionBackedPractice) noexcept {

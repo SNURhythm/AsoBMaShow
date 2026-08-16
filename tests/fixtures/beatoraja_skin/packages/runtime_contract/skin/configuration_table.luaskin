@@ -1,0 +1,17 @@
+if not skin_config then
+  return { phase = "header" }
+end
+
+assert(type(skin_config) == "table")
+assert(skin_config.option["Lane type"] == 927)
+assert(skin_config.option["Gauge"] == 11)
+assert(skin_config.enabled_options[1] == 927)
+assert(skin_config.enabled_options[2] == 11)
+assert(skin_config.file_path["Background"] == "images/bg.png")
+assert(skin_config.offset["Notes offset"].x == 1)
+assert(skin_config.offset["Notes offset"].y == 2)
+assert(skin_config.offset["Notes offset"].w == 3)
+assert(skin_config.offset["Notes offset"].h == 4)
+assert(skin_config.offset["Notes offset"].r == 5)
+assert(skin_config.offset["Notes offset"].a == 6)
+return { phase = "configured" }

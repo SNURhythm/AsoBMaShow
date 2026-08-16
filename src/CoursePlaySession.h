@@ -282,6 +282,8 @@ struct CoursePlayChartResult {
 };
 
 struct CoursePlaySession {
+  static constexpr std::size_t kBeatorajaSkinCourseTitleCount = 10;
+
   int courseId = 0;
   std::string courseKey;
   std::string courseName;
@@ -336,6 +338,20 @@ struct CoursePlaySession {
 
   [[nodiscard]] bool validCurrentIndex() const {
     return currentIndex < entries.size();
+  }
+
+  // SkinProperty exposes STRING_COURSE1_TITLE through
+  // STRING_COURSE10_TITLE only. Retain precisely that observable prefix in
+  // each gameplay-frame snapshot rather than copying an unbounded course.
+  [[nodiscard]] std::vector<std::string> beatorajaSkinStageTitles() const {
+    const std::size_t count =
+        std::min(entries.size(), kBeatorajaSkinCourseTitleCount);
+    std::vector<std::string> titles;
+    titles.reserve(count);
+    for (std::size_t index = 0; index < count; ++index) {
+      titles.push_back(entries[index].meta.Title);
+    }
+    return titles;
   }
 
   void snapshotRulesetFromReplay(const ReplayData &replay) {

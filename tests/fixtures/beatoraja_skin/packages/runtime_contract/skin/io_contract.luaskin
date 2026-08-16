@@ -1,0 +1,100 @@
+if skin_config then
+  return { phase = "configured" }
+end
+
+assert(type(io) == "table" and type(io.open) == "function")
+local io_exports = 0
+for _ in pairs(io) do io_exports = io_exports + 1 end
+assert(io_exports == 2)
+assert(io.stdin == nil and io.stdout == nil and io.stderr == nil)
+assert(type(io.open) == "function" and type(io.lines) == "function")
+assert(io.popen == nil and io.tmpfile == nil)
+
+local first, number = dofile("returns.lua")
+assert(first == "alpha" and number == 7)
+assert(not pcall(dofile, "returns.lua", "extra"))
+local loaded = assert(loadfile("returns.lua"))
+local loaded_first, loaded_number = loaded()
+assert(loaded_first == "alpha" and loaded_number == 7)
+
+local reader = assert(io.open("input.txt"))
+assert(type(reader.seek) == "function" and type(reader.read) == "function" and
+       type(reader.flush) == "function" and type(reader.setvbuf) == "function")
+assert(reader:setvbuf("full", 64) == true)
+assert(reader:read() == "first-line")
+local lines = reader:lines()
+assert(lines() == "second-line")
+assert(lines() == nil)
+assert(reader:close() == true)
+assert(reader:close() == true)
+
+local named_lines = io.lines("input.txt")
+assert(named_lines() == "first-line")
+assert(named_lines() == "second-line")
+assert(named_lines() == nil)
+
+local raw = assert(io.open("input.txt", "rb"))
+assert(raw:read(5) == "first")
+assert(raw:read("*l") == "-line")
+assert(raw:read("*a") == "second-line\n")
+assert(raw:close() == true)
+
+local writer = assert(io.open("fresh/deep/output.txt", "w"))
+assert(writer:write() == writer)
+assert(writer:write(first, ":", number) == writer)
+assert(writer:close() == true)
+assert(writer:close() == true)
+local append = assert(io.open("fresh/deep/output.txt", "a"))
+assert(append:write(":tail") == append)
+assert(append:close() == true)
+local verify = assert(io.open("fresh/deep/output.txt", "r"))
+assert(verify:lines()() == "alpha:7:tail")
+assert(verify:close() == true)
+
+local missing, missing_error = io.open("missing.txt", "r")
+assert(missing == nil and type(missing_error) == "string")
+for _, mode in ipairs({"x", ""}) do
+  local handle, mode_error = io.open("input.txt", mode)
+  assert(handle == nil and type(mode_error) == "string")
+end
+
+local binary = assert(io.open("input.txt", "rb"))
+assert(binary:lines()() == "first-line")
+assert(binary:close() == true)
+
+local seed = assert(io.open("fresh/update.txt", "w"))
+assert(seed:write("first\nsecond\n") == seed)
+assert(seed:close() == true)
+local update = assert(io.open("fresh/update.txt", "r+"))
+assert(update:lines()() == "first")
+assert(update:write("changed") == update)
+assert(update:close() == true)
+local update_verify = assert(io.open("fresh/update.txt", "r"))
+assert(update_verify:lines()() == "first")
+assert(update_verify:lines()() == "changed")
+assert(update_verify:close() == true)
+
+local write_update = assert(io.open("fresh/write-update.txt", "w+"))
+assert(write_update:write("write") == write_update)
+assert(write_update:seek("set", 0) == 0)
+assert(write_update:lines()() == "write")
+assert(write_update:flush() == true)
+assert(write_update:close() == true)
+local append_update = assert(io.open("fresh/write-update.txt", "a+"))
+assert(append_update:seek("set", 0) == 0)
+assert(append_update:lines()() == "write")
+assert(append_update:seek("set", 0) == 0)
+assert(append_update:write("read") == append_update)
+assert(append_update:close() == true)
+local append_verify = assert(io.open("fresh/write-update.txt", "r"))
+assert(append_verify:lines()() == "reade")
+assert(append_verify:close() == true)
+
+local handles = {}
+for index = 1, 65 do
+  handles[index] = assert(io.open("input.txt", "r"))
+end
+for _, handle in ipairs(handles) do assert(handle:close() == true) end
+assert(io.open("input.txt", "r"):close() == true)
+
+return { phase = "header" }

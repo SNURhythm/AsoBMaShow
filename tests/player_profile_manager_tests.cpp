@@ -1,4 +1,5 @@
 #include "../src/AppSettingsStore.h"
+#include "../src/skin/package/SkinPathPolicy.h"
 #include "../src/AtomicFile.h"
 #include "../src/PlayerProfileManager.h"
 #include "../src/ProfileDatabaseTools.h"
@@ -83,8 +84,8 @@ std::string repeated(char value, std::size_t count) {
 result_persistence::ModernChartResult modernReplayResult(int suffix,
                                                          char hash) {
   result_persistence::ModernChartResult value;
-  value.attemptId = "123e4567-e89b-42d3-a456-42661417400" +
-                    std::to_string(suffix);
+  value.attemptId =
+      "123e4567-e89b-42d3-a456-42661417400" + std::to_string(suffix);
   value.score.chartPath = "library/chart.bms";
   value.score.chartMd5 = repeated(hash, 32);
   value.score.chartSha256 = repeated(hash, 64);
@@ -109,9 +110,10 @@ result_persistence::ModernChartResult modernReplayResult(int suffix,
   return value;
 }
 
-ModernReplayFileReference installModernReplay(
-    const PlayerProfilePaths &paths, ReplayRepository &repository, int suffix,
-    char hash, bool userDeleted = false) {
+ModernReplayFileReference installModernReplay(const PlayerProfilePaths &paths,
+                                              ReplayRepository &repository,
+                                              int suffix, char hash,
+                                              bool userDeleted = false) {
   const auto result = modernReplayResult(suffix, hash);
   const auto reserved = repository.ReserveModernReplayPath(
       result.attemptId, result.score.chartSha256, result.playedAtUnixMillis);
@@ -122,15 +124,15 @@ ModernReplayFileReference installModernReplay(
   const auto raw = std::as_bytes(std::span(payload.data(), payload.size()));
   const std::vector<std::byte> bytes(raw.begin(), raw.end());
   replay::ReplayFileStore store(paths.root);
-  const auto fileReservation = store.reserve(
-      reserved.reservation->identity, bytes, result.attemptId);
+  const auto fileReservation =
+      store.reserve(reserved.reservation->identity, bytes, result.attemptId);
   const auto installed = store.install(*fileReservation.reservation, bytes);
   expect(installed.file.has_value(), "profile transfer replay installs");
   const ModernReplayFileAttachment attachment{
       .identity = reserved.reservation->identity,
       .metadata = installed.file->metadata};
   expect(repository.StageModernChartResult(result, std::nullopt, attachment, {})
-             .status == ModernChartStageStatus::Staged,
+                 .status == ModernChartStageStatus::Staged,
          "profile transfer modern result stages");
   auto loaded = repository.LoadModernChartResultByAttempt(result.attemptId);
   expect(loaded.record && loaded.record->replayFile,
@@ -138,10 +140,10 @@ ModernReplayFileReference installModernReplay(
   ModernReplayFileReference reference = *loaded.record->replayFile;
   if (userDeleted) {
     expect(repository
-               .MarkModernReplayFileUserDeleted(
-                   ModernReplayOwnerKind::ChartResult, result.attemptId,
-                   reference)
-               .status == ModernReplayFileMutationStatus::Changed,
+                   .MarkModernReplayFileUserDeleted(
+                       ModernReplayOwnerKind::ChartResult, result.attemptId,
+                       reference)
+                   .status == ModernReplayFileMutationStatus::Changed,
            "profile transfer deletion state persists");
     reference.userDeleted = true;
   }
@@ -207,10 +209,9 @@ void setReplayCodecVersion(const std::filesystem::path &path,
                            std::int64_t referenceId, int codecVersion) {
   auto database = openDatabase(path);
   expect(database != nullptr, "future-codec replay database opens");
-  const std::string sql =
-      "UPDATE modern_replay_files SET codec_version=" +
-      std::to_string(codecVersion) + " WHERE id=" +
-      std::to_string(referenceId);
+  const std::string sql = "UPDATE modern_replay_files SET codec_version=" +
+                          std::to_string(codecVersion) +
+                          " WHERE id=" + std::to_string(referenceId);
   expect(database && execute(database.get(), sql.c_str()) &&
              sqlite3_changes(database.get()) == 1,
          "future-codec replay metadata updates within the schema contract");
@@ -379,59 +380,59 @@ void seedIrOperationalState(const std::filesystem::path &path,
   expect(repository.EnsureSchema(),
          std::string(label) + " IR outbox schema initializes");
   const auto modern = modernReplayResult(9, 'd');
-  const auto staged = repository.StageModernChartResult(
-      modern, std::nullopt, std::nullopt, {});
+  const auto staged =
+      repository.StageModernChartResult(modern, std::nullopt, std::nullopt, {});
   expect(staged.status == ModernChartStageStatus::Staged && staged.receipt,
          std::string(label) + " modern IR receipt owner stages");
   const int modernResultId =
       staged.receipt.has_value() ? staged.receipt->resultId : 0;
   repository.Shutdown();
   Database database = openDatabase(path);
-  expect(database != nullptr,
-         std::string(label) + " IR outbox database opens");
+  expect(database != nullptr, std::string(label) + " IR outbox database opens");
   if (!database) {
     return;
   }
-  expect(execute(
-             database.get(),
-             "INSERT INTO ir_outbox(provider_id,attempt_id,chart_md5,"
-             "chart_sha256,payload_json,ruleset_id,ruleset_revision,"
-             "validation_fingerprint,state,local_result_ready,"
-             "next_attempt_at_ms,remote_job_id,remote_origin,created_at_ms,"
-             "updated_at_ms,completed_at_ms) VALUES"
-             "('tachi','10000000-0000-4000-8000-000000000001',NULL,"
-             "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
-             "'{\"score\":1}','test-rules',1,lower(hex(zeroblob(32))),"
-             "0,1,NULL,NULL,NULL,1000,1000,NULL),"
-             "('archive_readonly','10000000-0000-4000-8000-000000000002',NULL,"
-             "'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',"
-             "'{\"score\":2}','test-rules',1,lower(hex(zeroblob(32))),"
-             "2,1,3000,'job-2','https://example.invalid',"
-             "2000,2000,NULL),"
-             "('tachi_backup','10000000-0000-4000-8000-000000000003',NULL,"
-             "'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',"
-             "'{\"score\":3}','test-rules',1,lower(hex(zeroblob(32))),"
-             "5,1,NULL,NULL,NULL,3000,3000,3000)"),
-         std::string(label) + " pending, deferred, and succeeded IR rows seed");
-  const std::string receiptAndRemoteSql =
-          "INSERT INTO ir_submission_receipts(provider_id,server_origin,"
-          "modern_chart_result_id,attempt_id,chart_md5,chart_sha256,"
-          "confirmation_source,confirmed_at_ms) VALUES('tachi',"
-          "'https://boku.tachi.ac'," + std::to_string(modernResultId) + ", '" +
-          modern.attemptId + "','" + modern.score.chartMd5 + "','" +
-          modern.score.chartSha256 + "',"
-          "1,4000);"
-          "INSERT INTO ir_remote_scores(provider_id,server_origin,"
-          "remote_score_id,remote_user_id,game,remote_chart_id,chart_md5,"
-          "chart_sha256,title,artist,note_count,score,lamp_rank,service,"
-          "time_added_ms,sync_generation) VALUES('tachi',"
-          "'https://boku.tachi.ac','remote-score',42,'bms-7k','remote-chart',"
-          "'dddddddddddddddddddddddddddddddd',"
-          "'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',"
-          "'Remote Song','Remote Artist',1,1,0,'Bokutachi',4000,1)";
   expect(
-      execute(database.get(), receiptAndRemoteSql.c_str()),
-      std::string(label) + " account-scoped IR evidence and mirror seed");
+      execute(
+          database.get(),
+          "INSERT INTO ir_outbox(provider_id,attempt_id,chart_md5,"
+          "chart_sha256,payload_json,ruleset_id,ruleset_revision,"
+          "validation_fingerprint,state,local_result_ready,"
+          "next_attempt_at_ms,remote_job_id,remote_origin,created_at_ms,"
+          "updated_at_ms,completed_at_ms) VALUES"
+          "('tachi','10000000-0000-4000-8000-000000000001',NULL,"
+          "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
+          "'{\"score\":1}','test-rules',1,lower(hex(zeroblob(32))),"
+          "0,1,NULL,NULL,NULL,1000,1000,NULL),"
+          "('archive_readonly','10000000-0000-4000-8000-000000000002',NULL,"
+          "'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',"
+          "'{\"score\":2}','test-rules',1,lower(hex(zeroblob(32))),"
+          "2,1,3000,'job-2','https://example.invalid',"
+          "2000,2000,NULL),"
+          "('tachi_backup','10000000-0000-4000-8000-000000000003',NULL,"
+          "'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',"
+          "'{\"score\":3}','test-rules',1,lower(hex(zeroblob(32))),"
+          "5,1,NULL,NULL,NULL,3000,3000,3000)"),
+      std::string(label) + " pending, deferred, and succeeded IR rows seed");
+  const std::string receiptAndRemoteSql =
+      "INSERT INTO ir_submission_receipts(provider_id,server_origin,"
+      "modern_chart_result_id,attempt_id,chart_md5,chart_sha256,"
+      "confirmation_source,confirmed_at_ms) VALUES('tachi',"
+      "'https://boku.tachi.ac'," +
+      std::to_string(modernResultId) + ", '" + modern.attemptId + "','" +
+      modern.score.chartMd5 + "','" + modern.score.chartSha256 +
+      "',"
+      "1,4000);"
+      "INSERT INTO ir_remote_scores(provider_id,server_origin,"
+      "remote_score_id,remote_user_id,game,remote_chart_id,chart_md5,"
+      "chart_sha256,title,artist,note_count,score,lamp_rank,service,"
+      "time_added_ms,sync_generation) VALUES('tachi',"
+      "'https://boku.tachi.ac','remote-score',42,'bms-7k','remote-chart',"
+      "'dddddddddddddddddddddddddddddddd',"
+      "'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',"
+      "'Remote Song','Remote Artist',1,1,0,'Bokutachi',4000,1)";
+  expect(execute(database.get(), receiptAndRemoteSql.c_str()),
+         std::string(label) + " account-scoped IR evidence and mirror seed");
 }
 
 void seedImportedIrScore(const std::filesystem::path &path,
@@ -511,7 +512,8 @@ void setDatabaseVersion(const std::filesystem::path &path, int version,
 void seedSupportedOlderProfile(const PlayerProfilePaths &paths,
                                std::string_view label) {
   Database scores = openDatabase(paths.scoresDb);
-  expect(scores != nullptr, std::string(label) + " score marker database opens");
+  expect(scores != nullptr,
+         std::string(label) + " score marker database opens");
   if (!scores) {
     return;
   }
@@ -522,23 +524,24 @@ void seedSupportedOlderProfile(const PlayerProfilePaths &paths,
   scores.reset();
   setDatabaseVersion(paths.scoresDb, 5, std::string(label) + " score");
   std::string replayError;
-  expect(replay_legacy_fixture::replaceWithVersion2Database(
-             paths.replaysDb, 3,
-             "CREATE TABLE validation_policy_marker(value TEXT);"
-             "INSERT INTO validation_policy_marker VALUES('replay');"
-             "INSERT INTO replays(id,chart_path,chart_md5,chart_sha256,"
-             "chart_title,chart_artist,ln_mode,gauge_type,gauge_auto_shift,"
-             "final_score,max_combo,final_gauge,clear_type) VALUES(11,"
-             "'legacy.bms','0123456789abcdef0123456789abcdef',"
-             "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
-             "'Legacy','Artist',0,0,0,123,7,50.0,200);"
-             "INSERT INTO course_replays(id,course_id,course_name,"
-             "course_group_name,constraint_json,gauge_type,gauge_profile,"
-             "gauge_auto_shift,ln_mode,final_score,max_combo,final_gauge,"
-             "clear_type,completed_charts,total_charts) VALUES(21,7,'Course',"
-             "'Group','[]',0,0,0,0,456,8,60.0,200,1,2)",
-             replayError),
-         std::string(label) + " replay v3 fixture is written: " + replayError);
+  expect(
+      replay_legacy_fixture::replaceWithVersion2Database(
+          paths.replaysDb, 3,
+          "CREATE TABLE validation_policy_marker(value TEXT);"
+          "INSERT INTO validation_policy_marker VALUES('replay');"
+          "INSERT INTO replays(id,chart_path,chart_md5,chart_sha256,"
+          "chart_title,chart_artist,ln_mode,gauge_type,gauge_auto_shift,"
+          "final_score,max_combo,final_gauge,clear_type) VALUES(11,"
+          "'legacy.bms','0123456789abcdef0123456789abcdef',"
+          "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
+          "'Legacy','Artist',0,0,0,123,7,50.0,200);"
+          "INSERT INTO course_replays(id,course_id,course_name,"
+          "course_group_name,constraint_json,gauge_type,gauge_profile,"
+          "gauge_auto_shift,ln_mode,final_score,max_combo,final_gauge,"
+          "clear_type,completed_charts,total_charts) VALUES(21,7,'Course',"
+          "'Group','[]',0,0,0,0,456,8,60.0,200,1,2)",
+          replayError),
+      std::string(label) + " replay v3 fixture is written: " + replayError);
 }
 
 void expectSupportedOlderPayload(const PlayerProfilePaths &paths,
@@ -614,6 +617,24 @@ void testSqliteSnapshotIncludesWalAndValidatesIdentifiers() {
          "unsafe table identifiers are rejected");
 }
 
+void testFirstRunCreatesMissingApplicationDataRoot() {
+  TempDirectory temp("profile-missing-root");
+  const auto applicationRoot = temp.path() / "AsoBMaShow";
+  expect(!std::filesystem::exists(applicationRoot),
+         "missing-root fixture starts without the application directory");
+
+  PlayerProfileManager manager(applicationRoot, dependenciesFor());
+  const ProfileResult initialized = manager.Initialize();
+
+  expect(initialized.ok(),
+         "first-run initialization creates a missing application root: " +
+             initialized.message);
+  expect(std::filesystem::is_directory(applicationRoot),
+         "first-run initialization creates the application directory");
+  expect(std::filesystem::is_directory(applicationRoot / "profiles"),
+         "first-run initialization creates the profiles directory");
+}
+
 void testFirstRunMigrationIsLosslessAndIdempotent() {
   TempDirectory temp("profile-migration");
   LegacyData legacy = seedLegacyData(temp.path());
@@ -641,8 +662,7 @@ void testFirstRunMigrationIsLosslessAndIdempotent() {
              paths.settingsJson == paths.root / "settings.json" &&
              paths.inputJson == paths.root / "input.json" &&
              paths.irCredentialsJson == paths.root / "ir-credentials.json" &&
-             paths.bokutachiCacheJson ==
-                 paths.root / "bokutachi-cache.json" &&
+             paths.bokutachiCacheJson == paths.root / "bokutachi-cache.json" &&
              paths.scoresDb == paths.root / "scores.db" &&
              paths.replaysDb == paths.root / "replays.db",
          "all profile paths follow fixed layout");
@@ -655,7 +675,7 @@ void testFirstRunMigrationIsLosslessAndIdempotent() {
   expect(settings.status == AppSettingsLoadStatus::Loaded,
          "migrated settings JSON loads");
   expect(settings.settings.audioOffsetMs == -23 &&
-             settings.settings.visibleTimeGreenNumber == 777 &&
+             settings.settings.visibleTimeDurationMilliseconds == 1295 &&
              settings.settings.selectedPlayOption == "R-RANDOM" &&
              settings.settings.selectedPacemakerTarget == "AAA",
          "legacy settings convert exactly into versioned settings");
@@ -2166,7 +2186,8 @@ void testSupportedOlderInactiveProfileUsesManagePolicy() {
          "supported-older inactive profile remains cataloged");
   expect(manager.validateProfileForActivation(olderId).ok(),
          "activation preflight admits the supported-older profile");
-  expect(manager.validateProfile(olderId).error == ProfileError::IntegrityFailure,
+  expect(manager.validateProfile(olderId).error ==
+             ProfileError::IntegrityFailure,
          "strict public validation rejects the supported-older profile");
   expect(manager.commitActiveProfile(olderId).error ==
              ProfileError::IntegrityFailure,
@@ -2287,17 +2308,18 @@ void testSupportedOlderDeleteRollbackRestoresManageableSource() {
   inject = false;
   expect(deleted.error == ProfileError::IoFailure,
          "supported-older commit-sync failure reports deletion failure");
-  expect(sourceRenameReached && commitSyncFailed && rollbackRenameReached &&
-             rollbackSyncReached,
-         "supported-older deletion reaches commit failure and durable rollback");
-  expect(std::filesystem::exists(source) &&
-             !std::filesystem::exists(tombstone),
+  expect(
+      sourceRenameReached && commitSyncFailed && rollbackRenameReached &&
+          rollbackSyncReached,
+      "supported-older deletion reaches commit failure and durable rollback");
+  expect(std::filesystem::exists(source) && !std::filesystem::exists(tombstone),
          "supported-older deletion rollback restores only the source path");
   expect(manager.validateProfileForActivation(olderId).ok() &&
              hasProfile(manager, olderId) && manager.listProfiles().size() == 2,
          "restored supported-older source is manageable and cataloged");
-  expect(!manager.validateProfile(olderId).ok(),
-         "restored supported-older source remains intentionally runtime strict");
+  expect(
+      !manager.validateProfile(olderId).ok(),
+      "restored supported-older source remains intentionally runtime strict");
   expect(readFile(olderPaths.settingsJson) == settingsBefore &&
              readFile(olderPaths.inputJson) == inputBefore,
          "supported-older rollback preserves non-database profile data");
@@ -2307,8 +2329,8 @@ void testSupportedOlderDeleteRollbackRestoresManageableSource() {
   PlayerProfileManager recovered(
       temp.path(), dependenciesFor("33333333-3333-4333-8333-333333333333"));
   const ProfileResult initialized = recovered.Initialize();
-  expect(initialized.ok(),
-         "supported-older rollback state reinitializes: " + initialized.message);
+  expect(initialized.ok(), "supported-older rollback state reinitializes: " +
+                               initialized.message);
   expect(recovered.activeProfile().id == activeId &&
              recovered.validateProfileForActivation(olderId).ok() &&
              hasProfile(recovered, olderId) &&
@@ -2322,7 +2344,7 @@ void testSupportedOlderDeleteRollbackRestoresManageableSource() {
 void testFutureDatabaseProfileIsNeverManageable() {
   for (const bool futureScoreDatabase : {true, false}) {
     TempDirectory temp(futureScoreDatabase ? "profile-future-managed-score"
-                                            : "profile-future-managed-replay");
+                                           : "profile-future-managed-replay");
     const std::string activeId = "11111111-1111-4111-8111-111111111111";
     const std::string futureId = "22222222-2222-4222-8222-222222222222";
     const std::string duplicateId = "33333333-3333-4333-8333-333333333333";
@@ -2333,8 +2355,7 @@ void testFutureDatabaseProfileIsNeverManageable() {
     PlayerProfileManager manager(temp.path(), std::move(dependencies));
     expect(manager.Initialize().ok(), "future managed fixture initializes");
     const ProfileResult created = manager.createProfile("Future Inactive");
-    expect(created.ok() && created.profile,
-           "future managed target is created");
+    expect(created.ok() && created.profile, "future managed target is created");
     if (!created.profile) {
       continue;
     }
@@ -2342,12 +2363,11 @@ void testFutureDatabaseProfileIsNeverManageable() {
     const PlayerProfilePaths paths = manager.pathsFor(futureId);
     const auto futureDatabase =
         futureScoreDatabase ? paths.scoresDb : paths.replaysDb;
-    const int futureVersion =
-        futureScoreDatabase ? ScoreRepository::kCurrentSchemaVersion + 1
-                            : ReplayRepository::kCurrentSchemaVersion + 1;
+    const int futureVersion = futureScoreDatabase
+                                  ? ScoreRepository::kCurrentSchemaVersion + 1
+                                  : ReplayRepository::kCurrentSchemaVersion + 1;
     setDatabaseVersion(futureDatabase, futureVersion,
-                       futureScoreDatabase ? "future score"
-                                           : "future replay");
+                       futureScoreDatabase ? "future score" : "future replay");
     const std::string metadataBefore = readFile(paths.profileJson);
     const auto bootstrap = temp.path() / "active-profile.json";
     const std::string bootstrapBefore = readFile(bootstrap);
@@ -2400,24 +2420,24 @@ void testSupportedOlderActiveProfileWaitsForSchemaOwners() {
     if (!scores) {
       return;
     }
-    expect(execute(scores.get(),
-                   "CREATE TABLE migration_marker(value TEXT);"
-                   "INSERT INTO migration_marker VALUES('score');"
-                   "PRAGMA user_version=5"),
+    expect(execute(scores.get(), "CREATE TABLE migration_marker(value TEXT);"
+                                 "INSERT INTO migration_marker VALUES('score');"
+                                 "PRAGMA user_version=5"),
            "score v5 fixture and marker are written");
   }
   std::string replayFixtureError;
-  expect(replay_legacy_fixture::replaceWithVersion2Database(
-             paths.replaysDb, 3,
-             "CREATE TABLE migration_marker(value TEXT);"
-             "INSERT INTO migration_marker VALUES('replay');"
-             "INSERT INTO replays(id,chart_path,chart_sha256,chart_title,"
-             "chart_artist,ln_mode,gauge_type,gauge_auto_shift,final_score,"
-             "max_combo,final_gauge,clear_type) VALUES(1,'legacy.bms',"
-             "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
-             "'Legacy','Artist',0,0,0,10,3,50.0,200)",
-             replayFixtureError),
-         "replay v3 fixture and marker are written: " + replayFixtureError);
+  expect(
+      replay_legacy_fixture::replaceWithVersion2Database(
+          paths.replaysDb, 3,
+          "CREATE TABLE migration_marker(value TEXT);"
+          "INSERT INTO migration_marker VALUES('replay');"
+          "INSERT INTO replays(id,chart_path,chart_sha256,chart_title,"
+          "chart_artist,ln_mode,gauge_type,gauge_auto_shift,final_score,"
+          "max_combo,final_gauge,clear_type) VALUES(1,'legacy.bms',"
+          "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
+          "'Legacy','Artist',0,0,0,10,3,50.0,200)",
+          replayFixtureError),
+      "replay v3 fixture and marker are written: " + replayFixtureError);
 
   std::string versionError;
   expect(!creator.validateProfile(profileId).ok(),
@@ -2496,20 +2516,34 @@ void testProfileCrudConstraintsAndDataIsolation() {
              std::filesystem::exists(manager.pathsFor(secondId).scoresDb) &&
              std::filesystem::exists(manager.pathsFor(secondId).replaysDb),
          "created profile owns all isolated data files");
-  expect(!std::filesystem::exists(
-             manager.pathsFor(secondId).irCredentialsJson),
+  expect(!std::filesystem::exists(manager.pathsFor(secondId).irCredentialsJson),
          "created profile does not create a credential file");
 
   auto sourceSettings =
       AppSettingsStore::Load(manager.pathsFor(firstId).settingsJson).settings;
   sourceSettings.selectedGameplayRuleset = "beatoraja";
+  const auto skinPackage = skin::normalizePackageId("DuplicateSkin").package;
+  const auto skinEntry =
+      skinPackage
+          ? skin::normalizeEntryPath(*skinPackage, "play/main.luaskin").entry
+          : std::nullopt;
+  if (skinEntry) {
+    auto &entrySettings = sourceSettings.skin.entries[*skinEntry];
+    entrySettings.options["Judge"] = 3;
+    entrySettings.filePaths["Note"] = "notes/red.png";
+    sourceSettings.skin.selected7KeyEntry = *skinEntry;
+    sourceSettings.skin.gameplayCompatibilityEnabled = true;
+  }
   std::string settingsError;
   expect(AppSettingsStore::Save(manager.pathsFor(firstId).settingsJson,
                                 sourceSettings, settingsError),
          "duplicate source ruleset saves: " + settingsError);
+  const auto persistedSourceSettings =
+      AppSettingsStore::Load(manager.pathsFor(firstId).settingsJson);
 
-  writeFile(manager.pathsFor(firstId).irCredentialsJson,
-            R"({"schemaVersion":1,"providers":{"tachi":{"apiKey":"sentinel-api-key"}}})");
+  writeFile(
+      manager.pathsFor(firstId).irCredentialsJson,
+      R"({"schemaVersion":1,"providers":{"tachi":{"apiKey":"sentinel-api-key"}}})");
   seedIrOperationalState(manager.pathsFor(firstId).replaysDb,
                          "duplicate source");
   seedLegacySummaryHistory(manager.pathsFor(firstId).replaysDb,
@@ -2536,14 +2570,19 @@ void testProfileCrudConstraintsAndDataIsolation() {
   expect(AppSettingsStore::Load(manager.pathsFor(copyId).settingsJson)
                  .settings.selectedGameplayRuleset == "beatoraja",
          "duplicate preserves the per-profile ruleset selection");
+  const auto copiedSettings =
+      AppSettingsStore::Load(manager.pathsFor(copyId).settingsJson);
+  expect(persistedSourceSettings.status == AppSettingsLoadStatus::Loaded &&
+             copiedSettings.status == AppSettingsLoadStatus::Loaded &&
+             copiedSettings.settings.skin == persistedSourceSettings.settings.skin,
+         "duplicate preserves selected skin configuration and viewport");
   expect(matchingRowCount(manager.pathsFor(copyId).scoresDb,
                           "SELECT COUNT(*) FROM scores WHERE score_source=0") ==
              matchingRowCount(manager.pathsFor(firstId).scoresDb,
                               "SELECT COUNT(*) FROM scores WHERE "
                               "score_source=0"),
          "duplicate snapshots local score data");
-  expect(!std::filesystem::exists(
-             manager.pathsFor(copyId).irCredentialsJson),
+  expect(!std::filesystem::exists(manager.pathsFor(copyId).irCredentialsJson),
          "duplicate does not copy device-local IR credentials");
   expect(rowCount(manager.pathsFor(firstId).replaysDb, "ir_outbox") == 3,
          "duplication leaves source IR operational rows unchanged");
@@ -2590,8 +2629,7 @@ void testProfileCrudConstraintsAndDataIsolation() {
              "'replay_lane_cover_events','course_replays',"
              "'course_replay_stages')") == 0,
          "duplicated summary history has no legacy playback tables");
-  expect(!directoryContains(manager.pathsFor(copyId).root,
-                            "sentinel-api-key"),
+  expect(!directoryContains(manager.pathsFor(copyId).root, "sentinel-api-key"),
          "duplicate contains no credential bytes in any profile file");
 
   const auto renamed = manager.renameProfile(copyId, "Renamed Copy");
@@ -2802,15 +2840,15 @@ void testReplayDirectoryDuplicationUsesOwnedVerifiedInventory() {
                         future.metadata.codecVersion);
   writeFile(source.replayDirectory / "unreferenced.brd", "unreferenced");
 
-  const auto duplicate = manager.duplicateProfile(
-      manager.activeProfile().id, "Replay Transfer Copy");
+  const auto duplicate = manager.duplicateProfile(manager.activeProfile().id,
+                                                  "Replay Transfer Copy");
   expect(duplicate.ok() && duplicate.profile,
          "profile with replay inventory duplicates: " + duplicate.message);
   if (duplicate.profile) {
     const auto copied = manager.pathsFor(duplicate.profile->id);
     replay::ReplayFileStore copiedStore(copied.root);
     expect(copiedStore.inspect(active.metadata).state ==
-               replay::ReplayFileState::Available &&
+                   replay::ReplayFileState::Available &&
                !std::filesystem::exists(copied.root /
                                         missing.metadata.relativePath) &&
                !std::filesystem::exists(copied.root /
@@ -2833,8 +2871,8 @@ void testReplayDirectoryDuplicationUsesOwnedVerifiedInventory() {
          "duplication never mutates unreferenced source bytes");
 
   writeFile(source.root / active.metadata.relativePath, "corrupt");
-  const auto failed = manager.duplicateProfile(
-      manager.activeProfile().id, "Corrupt Replay Copy");
+  const auto failed = manager.duplicateProfile(manager.activeProfile().id,
+                                               "Corrupt Replay Copy");
   expect(failed.error == ProfileError::IntegrityFailure &&
              !std::filesystem::exists(manager.pathsFor(uuids.back()).root),
          "corrupt owned replay aborts duplicate without visible target");
@@ -2893,6 +2931,7 @@ void testFutureVersionsFailClosed() {
 
 int main() {
   testSqliteSnapshotIncludesWalAndValidatesIdentifiers();
+  testFirstRunCreatesMissingApplicationDataRoot();
   testFirstRunMigrationIsLosslessAndIdempotent();
   testEveryPreFinalizeFailureCleansStaging();
   testFinalizedOrphanRecoversAfterBootstrapFailure();

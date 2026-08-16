@@ -14,7 +14,12 @@
 #include "../path.h"
 #include "../rendering/common.h"
 #include "../rendering/ShaderManager.h"
+#include "../rendering/SkinQuadBatchRenderer.h"
 #include "../rendering/UniformCache.h"
+#include "../skin/LuaGameplaySkinFeature.h"
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+#include "../skin/beatoraja/SkinDestinationEvaluator.h"
+#endif
 #include "ChartAssetExtensions.h"
 #include "JukeboxLifecycle.h"
 #include "JukeboxSoundResources.h"
@@ -25,6 +30,7 @@
 #include <chrono>
 #include <cctype>
 #include <cmath>
+#include <cstring>
 #include <cstdio>
 #include <cstdint>
 #include <iterator>
@@ -54,6 +60,358 @@ const path_t kClubKickPath = PATH("@club_kick");
 const path_t kClubClapPath = PATH("@club_clap");
 constexpr int kPrepMetronomeSampleRate = 48000;
 constexpr int kPrepMetronomeChannels = 2;
+
+enum class PreparedBgaTargetKind : std::uint8_t {
+  Invalid,
+  Placeholder,
+  NoDraw,
+  Surface,
+};
+
+struct PreparedBgaTargetResolution {
+  PreparedBgaTargetKind kind = PreparedBgaTargetKind::Invalid;
+  const PreparedGameplayBgaSurface *surface = nullptr;
+};
+
+PreparedBgaTargetResolution
+resolvePreparedBgaTarget(const PreparedGameplayBgaFrame &frame,
+                         GameplayBgaRole role) noexcept {
+  switch (frame.composition) {
+  case GameplayBgaComposition::Blank:
+    return role == GameplayBgaRole::Base
+               ? PreparedBgaTargetResolution{
+                     .kind = PreparedBgaTargetKind::Placeholder}
+               : PreparedBgaTargetResolution{};
+  case GameplayBgaComposition::MissOnly:
+    if (role != GameplayBgaRole::Miss) {
+      return {};
+    }
+    return frame.miss
+               ? PreparedBgaTargetResolution{.kind = PreparedBgaTargetKind::Surface,
+                                             .surface = &*frame.miss}
+               : PreparedBgaTargetResolution{.kind = PreparedBgaTargetKind::NoDraw};
+  case GameplayBgaComposition::BaseThenLayer:
+    if (role == GameplayBgaRole::Base) {
+      return frame.base
+                 ? PreparedBgaTargetResolution{
+                       .kind = PreparedBgaTargetKind::Surface,
+                       .surface = &*frame.base}
+                 : PreparedBgaTargetResolution{
+                       .kind = PreparedBgaTargetKind::Placeholder};
+    }
+    if (role == GameplayBgaRole::Layer) {
+      return frame.layer
+                 ? PreparedBgaTargetResolution{
+                       .kind = PreparedBgaTargetKind::Surface,
+                       .surface = &*frame.layer}
+                 : PreparedBgaTargetResolution{
+                       .kind = PreparedBgaTargetKind::NoDraw};
+    }
+    return {};
+  }
+  return {};
+}
+
+std::uint32_t packBgaAbgr(const std::array<float, 4> &tint) noexcept {
+  const auto channel = [](float value) {
+    return static_cast<std::uint32_t>(std::clamp(value, 0.0F, 1.0F) * 255.0F);
+  };
+  return channel(tint[3]) << 24U | channel(tint[2]) << 16U |
+         channel(tint[1]) << 8U | channel(tint[0]);
+}
+
+std::uint64_t bgaTargetState(skin::SkinBlendMode blend) noexcept {
+  constexpr std::uint64_t base = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A;
+  switch (blend) {
+  case skin::SkinBlendMode::Normal:
+    return base | BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA,
+                                        BGFX_STATE_BLEND_INV_SRC_ALPHA);
+  case skin::SkinBlendMode::Additive:
+    return base | BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA,
+                                        BGFX_STATE_BLEND_ONE);
+  case skin::SkinBlendMode::Subtractive:
+    return base |
+           BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA,
+                                 BGFX_STATE_BLEND_ONE) |
+           BGFX_STATE_BLEND_EQUATION(BGFX_STATE_BLEND_EQUATION_SUB);
+  case skin::SkinBlendMode::Multiply:
+    return base | BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ZERO,
+                                        BGFX_STATE_BLEND_SRC_COLOR);
+  case skin::SkinBlendMode::Inverse:
+    return base | BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_INV_DST_COLOR,
+                                        BGFX_STATE_BLEND_ZERO);
+  }
+  return base;
+}
+
+struct GameplayBgaImageVertex {
+  float x = 0.0F;
+  float y = 0.0F;
+  float z = 0.0F;
+  float u = 0.0F;
+  float v = 0.0F;
+  std::uint32_t abgr = 0xffffffffU;
+};
+
+const bgfx::VertexLayout &gameplayBgaImageVertexLayout() {
+  static bgfx::VertexLayout layout;
+  static std::once_flag initialized;
+  std::call_once(initialized, [] {
+    layout.begin()
+        .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true)
+        .end();
+  });
+  return layout;
+}
+
+const bgfx::VertexLayout &gameplayBgaColorVertexLayout() {
+  static bgfx::VertexLayout layout;
+  static std::once_flag initialized;
+  std::call_once(initialized, [] {
+    layout.begin()
+        .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true)
+        .end();
+  });
+  return layout;
+}
+
+std::optional<rendering::DrawableScissor>
+bgaTargetScissor(const BgaDrawTarget &target) {
+  if (!target.clip) {
+    return std::nullopt;
+  }
+  return rendering::toDrawableScissor(target.clip->x, target.clip->y,
+                                      target.clip->width, target.clip->height);
+}
+
+bool sameBgaTarget(const BgaDrawTarget &left,
+                   const BgaDrawTarget &right) noexcept {
+  if (left.role != right.role || left.viewId != right.viewId ||
+      left.stretch != right.stretch || left.tint != right.tint ||
+      left.blend != right.blend || left.authoredOrdinal != right.authoredOrdinal ||
+      left.clip.has_value() != right.clip.has_value() ||
+      left.authoredProjection.has_value() !=
+          right.authoredProjection.has_value()) {
+    return false;
+  }
+  for (std::size_t index = 0; index < left.destination.size(); ++index) {
+    if (left.destination[index].x != right.destination[index].x ||
+        left.destination[index].y != right.destination[index].y) {
+      return false;
+    }
+  }
+  if (left.clip &&
+      (left.clip->x != right.clip->x || left.clip->y != right.clip->y ||
+       left.clip->width != right.clip->width ||
+       left.clip->height != right.clip->height)) {
+    return false;
+  }
+  if (!left.authoredProjection) {
+    return true;
+  }
+  const auto &a = *left.authoredProjection;
+  const auto &b = *right.authoredProjection;
+  return a.x == b.x && a.y == b.y && a.width == b.width &&
+         a.height == b.height && a.centerX == b.centerX &&
+         a.centerY == b.centerY && a.angleDegrees == b.angleDegrees &&
+         a.authoredToUi.m00 == b.authoredToUi.m00 &&
+         a.authoredToUi.m01 == b.authoredToUi.m01 &&
+         a.authoredToUi.tx == b.authoredToUi.tx &&
+         a.authoredToUi.m10 == b.authoredToUi.m10 &&
+         a.authoredToUi.m11 == b.authoredToUi.m11 &&
+         a.authoredToUi.ty == b.authoredToUi.ty;
+}
+
+std::optional<GameplayBgaResolvedQuad>
+resolveGameplayBgaTargetQuad(const BgaDrawTarget &target, int sourceWidth,
+                             int sourceHeight) noexcept {
+  if (sourceWidth <= 0 || sourceHeight <= 0) {
+    return std::nullopt;
+  }
+  if (target.authoredProjection) {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    const auto &authored = *target.authoredProjection;
+    const auto &matrix = authored.authoredToUi;
+    const std::array values{authored.x,
+                            authored.y,
+                            authored.width,
+                            authored.height,
+                            authored.centerX,
+                            authored.centerY,
+                            authored.angleDegrees,
+                            matrix.m00,
+                            matrix.m01,
+                            matrix.tx,
+                            matrix.m10,
+                            matrix.m11,
+                            matrix.ty};
+    if (authored.width <= 0.0 || authored.height <= 0.0 ||
+        !std::ranges::all_of(values,
+                            [](double value) { return std::isfinite(value); })) {
+      return std::nullopt;
+    }
+
+    const auto projected = skin::projectSkinDestinationToUi(
+        skin::AuthoredDestinationGeometry{
+            .rect = {.x = authored.x,
+                     .y = authored.y,
+                     .width = authored.width,
+                     .height = authored.height},
+            .centerX = authored.centerX,
+            .centerY = authored.centerY,
+            .angleDegrees = authored.angleDegrees,
+            .stretch = target.stretch},
+        skin::SkinSourceRegionGeometry{
+            .textureWidth = sourceWidth,
+            .textureHeight = sourceHeight,
+            .region = {.x = 0,
+                       .y = 0,
+                       .w = sourceWidth,
+                       .h = sourceHeight}},
+        skin::PlaySkinViewport{
+            .authoredToUi = {.m00 = matrix.m00,
+                             .m01 = matrix.m01,
+                             .tx = matrix.tx,
+                             .m10 = matrix.m10,
+                             .m11 = matrix.m11,
+                             .ty = matrix.ty},
+            .valid = true});
+    GameplayBgaResolvedQuad resolved;
+    for (std::size_t index = 0; index < projected.vertices.size(); ++index) {
+      const double projectedX = projected.vertices[index][0];
+      const double projectedY = projected.vertices[index][1];
+      const double u = projected.normalizedUvs[index][0];
+      // SkinDestinationEvaluator exposes regular skin-image UVs with the
+      // source's top row on the on-screen top row.  BGA submission uses its
+      // own long-standing bottom-v=1/top-v=0 contract, so its authored path
+      // now passes those coordinates through directly.  Applying another
+      // inversion here would make authored skin BGAs diverge from the raw
+      // BGA target path.
+      const double v = projected.normalizedUvs[index][1];
+      if (!std::isfinite(projectedX) || !std::isfinite(projectedY) ||
+          !std::isfinite(u) || !std::isfinite(v) ||
+          std::abs(projectedX) > std::numeric_limits<float>::max() ||
+          std::abs(projectedY) > std::numeric_limits<float>::max() ||
+          std::abs(u) > std::numeric_limits<float>::max() ||
+          std::abs(v) > std::numeric_limits<float>::max()) {
+        return std::nullopt;
+      }
+      resolved.destination[index] = {
+          .x = static_cast<float>(projectedX),
+          .y = static_cast<float>(projectedY)};
+      resolved.uvs[index] = {.x = static_cast<float>(u),
+                             .y = static_cast<float>(v)};
+    }
+    return resolved;
+#else
+    return std::nullopt;
+#endif
+  }
+  const auto &raw = target.destination;
+  const float widthVectorX = raw[1].x - raw[0].x;
+  const float widthVectorY = raw[1].y - raw[0].y;
+  const float heightVectorX = raw[3].x - raw[0].x;
+  const float heightVectorY = raw[3].y - raw[0].y;
+  const float rawWidth = std::hypot(widthVectorX, widthVectorY);
+  const float rawHeight = std::hypot(heightVectorX, heightVectorY);
+  if (!std::isfinite(rawWidth) || !std::isfinite(rawHeight) || rawWidth <= 0 ||
+      rawHeight <= 0) {
+    return std::nullopt;
+  }
+
+  const float sourceW = static_cast<float>(sourceWidth);
+  const float sourceH = static_cast<float>(sourceHeight);
+  float outputWidth = rawWidth;
+  float outputHeight = rawHeight;
+  float cropU = 1.0F;
+  float cropV = 1.0F;
+  const auto fitInner = std::min(rawWidth / sourceW, rawHeight / sourceH);
+  const auto fitOuter = std::max(rawWidth / sourceW, rawHeight / sourceH);
+  const auto fitWidth = rawWidth / sourceW;
+  const auto fitHeight = rawHeight / sourceH;
+  const auto applyTrim = [&](float scale) {
+    cropU = std::min(1.0F, rawWidth / (sourceW * scale));
+    cropV = std::min(1.0F, rawHeight / (sourceH * scale));
+    outputWidth = cropU < 1.0F ? rawWidth : sourceW * scale;
+    outputHeight = cropV < 1.0F ? rawHeight : sourceH * scale;
+  };
+  switch (target.stretch) {
+  case skin::SkinStretchMode::Stretch:
+    return GameplayBgaResolvedQuad{
+        .destination = target.destination,
+        .uvs = {{{0.0F, 1.0F}, {1.0F, 1.0F}, {1.0F, 0.0F}, {0.0F, 0.0F}}}};
+  case skin::SkinStretchMode::KeepAspectRatioFitInner:
+    outputWidth = sourceW * fitInner;
+    outputHeight = sourceH * fitInner;
+    break;
+  case skin::SkinStretchMode::KeepAspectRatioFitOuter:
+    outputWidth = sourceW * fitOuter;
+    outputHeight = sourceH * fitOuter;
+    break;
+  case skin::SkinStretchMode::KeepAspectRatioFitOuterTrimmed:
+    applyTrim(fitOuter);
+    break;
+  case skin::SkinStretchMode::KeepAspectRatioFitWidth:
+    outputWidth = rawWidth;
+    outputHeight = sourceH * fitWidth;
+    break;
+  case skin::SkinStretchMode::KeepAspectRatioFitWidthTrimmed:
+    applyTrim(fitWidth);
+    break;
+  case skin::SkinStretchMode::KeepAspectRatioFitHeight:
+    outputWidth = sourceW * fitHeight;
+    outputHeight = rawHeight;
+    break;
+  case skin::SkinStretchMode::KeepAspectRatioFitHeightTrimmed:
+    applyTrim(fitHeight);
+    break;
+  case skin::SkinStretchMode::KeepAspectRatioNoExpanding: {
+    const float scale = std::min(1.0F, fitInner);
+    outputWidth = sourceW * scale;
+    outputHeight = sourceH * scale;
+    break;
+  }
+  case skin::SkinStretchMode::NoResize:
+    outputWidth = sourceW;
+    outputHeight = sourceH;
+    break;
+  case skin::SkinStretchMode::NoResizeTrimmed:
+    applyTrim(1.0F);
+    break;
+  }
+  if (!std::isfinite(outputWidth) || !std::isfinite(outputHeight) ||
+      !std::isfinite(cropU) || !std::isfinite(cropV) || outputWidth <= 0 ||
+      outputHeight <= 0 || cropU <= 0 || cropV <= 0) {
+    return std::nullopt;
+  }
+
+  const float centerX = (raw[0].x + raw[1].x + raw[2].x + raw[3].x) * 0.25F;
+  const float centerY = (raw[0].y + raw[1].y + raw[2].y + raw[3].y) * 0.25F;
+  const float widthScale = outputWidth / rawWidth;
+  const float heightScale = outputHeight / rawHeight;
+  const float halfWidthX = widthVectorX * widthScale * 0.5F;
+  const float halfWidthY = widthVectorY * widthScale * 0.5F;
+  const float halfHeightX = heightVectorX * heightScale * 0.5F;
+  const float halfHeightY = heightVectorY * heightScale * 0.5F;
+  GameplayBgaResolvedQuad result{
+      .destination = {{{centerX - halfWidthX - halfHeightX,
+                        centerY - halfWidthY - halfHeightY},
+                       {centerX + halfWidthX - halfHeightX,
+                        centerY + halfWidthY - halfHeightY},
+                       {centerX + halfWidthX + halfHeightX,
+                        centerY + halfWidthY + halfHeightY},
+                       {centerX - halfWidthX + halfHeightX,
+                        centerY - halfWidthY + halfHeightY}}}};
+  const float uMin = (1.0F - cropU) * 0.5F;
+  const float uMax = 1.0F - uMin;
+  const float vMin = (1.0F - cropV) * 0.5F;
+  const float vMax = 1.0F - vMin;
+  result.uvs = {{{uMin, vMax}, {uMax, vMax}, {uMax, vMin}, {uMin, vMin}}};
+  return result;
+}
 
 bool scheduledAudioEventLess(const ScheduledAudioEvent &left,
                              const ScheduledAudioEvent &right) {
@@ -619,14 +977,15 @@ bool readArchiveBatchEntries(
 }
 
 void replaceVideoPlayerLocked(
-    std::unordered_map<int, std::unique_ptr<VideoPlayer>> &table, int id,
+    std::unordered_map<int, std::shared_ptr<VideoPlayer>> &table, int id,
     std::unique_ptr<VideoPlayer> videoPlayer) {
+  std::shared_ptr<VideoPlayer> replacement(std::move(videoPlayer));
   const auto existing = table.find(id);
   if (existing != table.end()) {
-    existing->second = std::move(videoPlayer);
+    existing->second = std::move(replacement);
     return;
   }
-  table.emplace(id, std::move(videoPlayer));
+  table.emplace(id, std::move(replacement));
 }
 
 void destroyImageTexture(ImageData &image) {
@@ -634,20 +993,113 @@ void destroyImageTexture(ImageData &image) {
     bgfx::destroy(image.texture);
     image.texture = BGFX_INVALID_HANDLE;
   }
+  if (bgfx::isValid(image.layerTexture)) {
+    bgfx::destroy(image.layerTexture);
+    image.layerTexture = BGFX_INVALID_HANDLE;
+  }
 }
 
-void replaceImageLocked(std::unordered_map<int, ImageData> &table, int id,
-                        ImageData image) {
+void replaceImageLocked(
+    std::unordered_map<int, std::shared_ptr<ImageData>> &table, int id,
+    ImageData &image) {
+  auto replacement = AdoptImageTextureToSharedOwner(image);
   const auto existing = table.find(id);
   if (existing != table.end()) {
-    destroyImageTexture(existing->second);
-    existing->second = image;
+    existing->second = std::move(replacement);
     return;
   }
-  table.emplace(id, image);
+  table.emplace(id, std::move(replacement));
 }
 
 } // namespace
+
+std::vector<std::uint8_t>
+MakeGameplayBgaLayerRgba(std::span<const std::uint8_t> rgba) {
+  if (rgba.size() % 4U != 0U) {
+    return {};
+  }
+  std::vector<std::uint8_t> layer(rgba.begin(), rgba.end());
+  for (std::size_t offset = 0; offset < layer.size(); offset += 4U) {
+    if (layer[offset] == 0U && layer[offset + 1U] == 0U &&
+        layer[offset + 2U] == 0U) {
+      layer[offset + 3U] = 0U;
+    }
+  }
+  return layer;
+}
+
+std::shared_ptr<ImageData>
+AdoptImageTextureToSharedOwner(ImageData &image) {
+  // Allocate the object while the loader guard still owns the texture. Once
+  // this succeeds, invalidate that guard before shared_ptr allocates its
+  // control block: the constructor invokes the deleter if that allocation
+  // throws, so ownership is singular on every edge.
+  auto *transferred = new ImageData(image);
+  image.texture = BGFX_INVALID_HANDLE;
+  image.layerTexture = BGFX_INVALID_HANDLE;
+  return std::shared_ptr<ImageData>(transferred, [](ImageData *owned) {
+    destroyImageTexture(*owned);
+    delete owned;
+  });
+}
+
+std::optional<GameplayBgaResolvedQuad>
+ResolveGameplayBgaTargetQuad(const BgaDrawTarget &target, int sourceWidth,
+                             int sourceHeight) noexcept {
+  return resolveGameplayBgaTargetQuad(target, sourceWidth, sourceHeight);
+}
+
+BgaPoorSequenceSchedule
+BuildBgaPoorSequenceSchedule(const bms_parser::Chart &chart) {
+  BgaPoorSequenceSchedule schedule;
+  for (const auto *measure : chart.Measures) {
+    if (measure == nullptr) {
+      continue;
+    }
+    for (const auto *timeline : measure->TimeLines) {
+      if (timeline == nullptr || !timeline->BgaPoor.has_value()) {
+        continue;
+      }
+      schedule.push_back(
+          {.startMicros = timeline->Timing, .frames = timeline->BgaPoor->Frames});
+    }
+  }
+  std::stable_sort(schedule.begin(), schedule.end(),
+                   [](const ScheduledBgaPoorSequence &left,
+                      const ScheduledBgaPoorSequence &right) {
+                     return left.startMicros < right.startMicros;
+                   });
+  return schedule;
+}
+
+std::optional<std::size_t>
+SelectBgaPoorSequenceIndexAt(const BgaPoorSequenceSchedule &schedule,
+                             long long timelineMicros) noexcept {
+  const auto firstAfter = std::upper_bound(
+      schedule.begin(), schedule.end(), timelineMicros,
+      [](long long time, const ScheduledBgaPoorSequence &entry) {
+        return time < entry.startMicros;
+      });
+  if (firstAfter == schedule.begin()) {
+    return std::nullopt;
+  }
+  return static_cast<std::size_t>(
+      std::distance(schedule.begin(), std::prev(firstAfter)));
+}
+
+std::optional<long long>
+NextBgaPoorSequenceStartAfter(const BgaPoorSequenceSchedule &schedule,
+                              long long timelineMicros) noexcept {
+  const auto firstAfter = std::upper_bound(
+      schedule.begin(), schedule.end(), timelineMicros,
+      [](long long time, const ScheduledBgaPoorSequence &entry) {
+        return time < entry.startMicros;
+      });
+  if (firstAfter == schedule.end()) {
+    return std::nullopt;
+  }
+  return firstAfter->startMicros;
+}
 
 Jukebox::Jukebox(Stopwatch *stopwatch)
     : Jukebox(stopwatch, audio::CreatePlatformBackendFactory()) {}
@@ -656,6 +1108,25 @@ Jukebox::Jukebox(Stopwatch *stopwatch,
                  std::unique_ptr<audio::IBackendFactory> backendFactory)
     : audio(stopwatch, std::move(backendFactory)), stopwatch(stopwatch) {
   s_texColor = rendering::UniformCache::getInstance().getSampler("s_texColor");
+  bgaPlaceholderProgram = prepareGameplayBgaProgram(SHADER_SIMPLE);
+  bgaEmbeddedImageProgram =
+      prepareGameplayBgaProgram("vs_skin_quad.bin", "fs_skin_quad.bin");
+  bgaFullscreenImageProgram =
+      prepareGameplayBgaProgram("vs_text.bin", "fs_text.bin");
+  bgaFullscreenLayerProgram =
+      prepareGameplayBgaProgram("vs_text.bin", "fs_bgalayer.bin");
+}
+
+bgfx::ProgramHandle
+Jukebox::prepareGameplayBgaProgram(const char *vertexShader,
+                                   const char *fragmentShader) noexcept {
+  ++bgaProgramLookupCount;
+  try {
+    return rendering::ShaderManager::getInstance().getProgram(vertexShader,
+                                                               fragmentShader);
+  } catch (...) {
+    return BGFX_INVALID_HANDLE;
+  }
 }
 
 Jukebox::~Jukebox() {
@@ -689,12 +1160,8 @@ void Jukebox::render() {
         videoPlayer->update();
         const auto rect = calculateBgaRect(videoPlayer->getFrameWidth(),
                                            videoPlayer->getFrameHeight());
-        videoPlayer->viewX = rect.x;
-        videoPlayer->viewY = rect.y;
-        videoPlayer->viewWidth = rect.width;
-        videoPlayer->viewHeight = rect.height;
-        videoPlayer->viewId = rendering::bga_view;
-        videoPlayer->render();
+        videoPlayer->render(rendering::bga_view, rect.x, rect.y, rect.width,
+                            rect.height);
         rendered = true;
       }
     }
@@ -702,7 +1169,7 @@ void Jukebox::render() {
       std::lock_guard<std::mutex> lock(imageTableMutex);
       auto imageIt = imageTable.find(bga);
       if (imageIt != imageTable.end()) {
-        renderImage(imageIt->second, rendering::bga_view);
+        renderImage(*imageIt->second, rendering::bga_view);
       }
     }
   }
@@ -717,12 +1184,8 @@ void Jukebox::render() {
         videoPlayer->update();
         const auto rect = calculateBgaRect(videoPlayer->getFrameWidth(),
                                            videoPlayer->getFrameHeight());
-        videoPlayer->viewX = rect.x;
-        videoPlayer->viewY = rect.y;
-        videoPlayer->viewWidth = rect.width;
-        videoPlayer->viewHeight = rect.height;
-        videoPlayer->viewId = rendering::bga_layer_view;
-        videoPlayer->render();
+        videoPlayer->render(rendering::bga_layer_view, rect.x, rect.y,
+                            rect.width, rect.height);
         rendered = true;
       }
     }
@@ -730,9 +1193,544 @@ void Jukebox::render() {
       std::lock_guard<std::mutex> lock(imageTableMutex);
       auto imageIt = imageTable.find(bmpLayer);
       if (imageIt != imageTable.end()) {
-        renderImage(imageIt->second, rendering::bga_layer_view);
+        renderImage(*imageIt->second, rendering::bga_layer_view);
       }
     }
+  }
+}
+
+PreparedGameplayBgaFrame Jukebox::prepareVisualFrameAt(
+    std::uint64_t frameSerial, std::int64_t bgaTimeMicros,
+    const GameplayBgaMissState &missState) {
+  const PreparedBgaFrameKey key{.frameSerial = frameSerial,
+                                .bgaTimeMicros = bgaTimeMicros,
+                                .missState = missState};
+  std::lock_guard<std::mutex> preparedLock(preparedBgaFrameMutex);
+  if (preparedBgaFrameKey && preparedBgaFrame &&
+      *preparedBgaFrameKey == key) {
+    return *preparedBgaFrame;
+  }
+  preparedBgaTargetPlans.clear();
+  preparedBgaVertexLayouts.reset();
+  preparedBgaTargetFrameSequence.reset();
+  preparedBgaTargetCursor = 0;
+  preparedBgaTargetsCommitted = false;
+
+  PreparedGameplayBgaFrame frame{.sequence = ++preparedBgaSequence};
+  PreparedBgaFrameLease lease{.frameSequence = frame.sequence};
+  preparedGameplayBgaFrames.fetch_add(1, std::memory_order_relaxed);
+  if (!visualsEnabled.load(std::memory_order_relaxed) ||
+      visualsSuspended.load(std::memory_order_acquire)) {
+    preparedBgaFrameKey = key;
+    preparedBgaFrame = frame;
+    return frame;
+  }
+
+  advanceVisualsAtTimelineMicros(bgaTimeMicros);
+  std::optional<std::span<const int>> poorFrames;
+  if (const auto poorIndex = SelectBgaPoorSequenceIndexAt(
+          poorBgaSequences, bgaTimeMicros);
+      poorIndex.has_value()) {
+    poorFrames = std::span<const int>(poorBgaSequences[*poorIndex].frames);
+  }
+  const auto missSelection =
+      SelectGameplayBgaMissComposition(poorFrames, missState, bgaTimeMicros);
+  std::unordered_set<int> updatedVideoIds;
+  if (missSelection.composition == GameplayBgaComposition::MissOnly) {
+    frame.composition = GameplayBgaComposition::MissOnly;
+    if (missSelection.resourceId.has_value()) {
+      lease.miss = prepareGameplayBgaSurface(GameplayBgaRole::Miss,
+                                             *missSelection.resourceId,
+                                             updatedVideoIds);
+      if (lease.miss) {
+        frame.miss = lease.miss->descriptor;
+      }
+    }
+  } else {
+    const int base = currentBga.load(std::memory_order_relaxed);
+    const int layer = currentBmpLayer.load(std::memory_order_relaxed);
+    if (base != -1 || layer != -1) {
+      frame.composition = GameplayBgaComposition::BaseThenLayer;
+      if (base != -1) {
+        lease.base = prepareGameplayBgaSurface(GameplayBgaRole::Base, base,
+                                               updatedVideoIds);
+        if (lease.base) {
+          frame.base = lease.base->descriptor;
+        }
+      }
+      if (layer != -1) {
+        lease.layer = prepareGameplayBgaSurface(GameplayBgaRole::Layer, layer,
+                                                updatedVideoIds);
+        if (lease.layer) {
+          frame.layer = lease.layer->descriptor;
+        }
+      }
+    }
+  }
+
+  preparedBgaFrameKey = key;
+  preparedBgaFrame = frame;
+  if (lease.base || lease.layer || lease.miss) {
+    preparedBgaFrameLeases.insert_or_assign(frame.sequence, std::move(lease));
+    pinnedGameplayBgaFrames.fetch_add(1, std::memory_order_relaxed);
+  }
+  return frame;
+}
+
+BgaPreflightResult
+Jukebox::preflight(const PreparedGameplayBgaFrame &frame,
+                   std::span<const BgaDrawTarget> targets) {
+  const auto failure = [](std::string code, std::string message) {
+    return BgaPreflightResult{
+        .ready = false,
+        .failure = skin::SkinDiagnostic{.code = std::move(code),
+                                        .message = std::move(message)}};
+  };
+  std::vector<PreparedBgaTargetPlan> plans;
+  GameplayBgaTransientRequirements requirements;
+  try {
+    auto vertexLayouts =
+        std::make_unique<rendering::BgfxVertexLayoutRegistration>();
+    bool placeholderLayoutRegistered = false;
+    bool imageLayoutRegistered = false;
+    bool videoLayoutRegistered = false;
+    plans.reserve(targets.size());
+    for (const auto &target : targets) {
+      const auto resolution = resolvePreparedBgaTarget(frame, target.role);
+      if (resolution.kind == PreparedBgaTargetKind::Invalid) {
+        return failure(
+            "gameplay_bga.target.role",
+            "BGA target role is incompatible with its frame composition.");
+      }
+      for (const auto &point : target.destination) {
+        if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
+          return failure("gameplay_bga.target.geometry",
+                         "BGA target geometry must be finite.");
+        }
+      }
+      for (const float tint : target.tint) {
+        if (!std::isfinite(tint)) {
+          return failure("gameplay_bga.target.tint",
+                         "BGA target tint must be finite.");
+        }
+      }
+      if (target.clip &&
+          (!std::isfinite(target.clip->x) || !std::isfinite(target.clip->y) ||
+           !std::isfinite(target.clip->width) ||
+           !std::isfinite(target.clip->height) || target.clip->width <= 0.0 ||
+           target.clip->height <= 0.0)) {
+        return failure("gameplay_bga.target.clip",
+                       "BGA target clip must be finite and nonempty.");
+      }
+      PreparedBgaTargetPlan plan{
+          .frameSequence = frame.sequence,
+          .target = target,
+          .embeddedTint = embeddedBgaTint(target.tint),
+          .scissor = bgaTargetScissor(target),
+          .placeholder =
+              resolution.kind == PreparedBgaTargetKind::Placeholder,
+          .noDraw = resolution.kind == PreparedBgaTargetKind::NoDraw};
+      if (resolution.kind != PreparedBgaTargetKind::Surface) {
+        plan.destination = target.destination;
+        plans.push_back(std::move(plan));
+        continue;
+      }
+
+      const auto &surface = *resolution.surface;
+      const auto stretched = ResolveGameplayBgaTargetQuad(
+          target, surface.sourceWidth, surface.sourceHeight);
+      if (!stretched) {
+        return failure("gameplay_bga.target.stretch",
+                       "BGA target cannot be stretched with this source size.");
+      }
+      plan.surface = surface;
+      plan.material =
+          SelectGameplayBgaMaterial(target.role, surface.mediaKind);
+      plan.destination = stretched->destination;
+      plan.uvs = stretched->uvs;
+
+      std::lock_guard<std::mutex> lock(preparedBgaFrameMutex);
+      const auto lease = preparedBgaFrameLeases.find(frame.sequence);
+      if (lease == preparedBgaFrameLeases.end()) {
+        return failure("gameplay_bga.surface.stale",
+                       "Prepared BGA surface has no live frame lease.");
+      }
+      const std::optional<PinnedGameplayBgaSurface> *pinned = nullptr;
+      switch (target.role) {
+      case GameplayBgaRole::Base:
+        pinned = &lease->second.base;
+        break;
+      case GameplayBgaRole::Layer:
+        pinned = &lease->second.layer;
+        break;
+      case GameplayBgaRole::Miss:
+        pinned = &lease->second.miss;
+        break;
+      }
+      if (pinned == nullptr || !pinned->has_value() ||
+          (*pinned)->descriptor.surfaceToken != surface.surfaceToken ||
+          (*pinned)->descriptor.mediaKind != surface.mediaKind ||
+          (*pinned)->descriptor.sourceWidth != surface.sourceWidth ||
+          (*pinned)->descriptor.sourceHeight != surface.sourceHeight) {
+        return failure("gameplay_bga.surface.stale",
+                       "Prepared BGA surface lease does not match the frame.");
+      }
+      plan.video = (*pinned)->video;
+      plan.image = (*pinned)->image;
+      plans.push_back(std::move(plan));
+    }
+
+    const auto addRequirement = [&](const bgfx::VertexLayout &layout) {
+      const auto stride = static_cast<std::uint64_t>(layout.getStride());
+      constexpr std::uint64_t vertexCount = 4;
+      constexpr std::uint64_t indexCount = 6;
+      if (stride == 0 ||
+          stride > std::numeric_limits<std::uint64_t>::max() / vertexCount) {
+        return false;
+      }
+      const auto bytes = stride * vertexCount;
+      if (bytes > std::numeric_limits<std::uint64_t>::max() -
+                      requirements.vertexBytes ||
+          stride - 1U > std::numeric_limits<std::uint64_t>::max() -
+                            requirements.vertexAlignmentPadding ||
+          indexCount > std::numeric_limits<std::uint64_t>::max() -
+                           requirements.indexCount) {
+        return false;
+      }
+      requirements.vertexBytes += bytes;
+      requirements.vertexAlignmentPadding += stride - 1U;
+      requirements.indexCount += indexCount;
+      return true;
+    };
+
+    for (auto &plan : plans) {
+      if (plan.noDraw) {
+        continue;
+      }
+      if (plan.placeholder) {
+        plan.program = bgaPlaceholderProgram;
+        if ((!placeholderLayoutRegistered &&
+             !vertexLayouts->registerLayout(gameplayBgaColorVertexLayout())) ||
+            !bgfx::isValid(plan.program) ||
+            !addRequirement(gameplayBgaColorVertexLayout())) {
+          return failure("gameplay_bga.placeholder.preflight",
+                         "BGA placeholder GPU resources are unavailable.");
+        }
+        placeholderLayoutRegistered = true;
+        continue;
+      }
+      if (!plan.surface) {
+        return failure("gameplay_bga.surface.stale",
+                       "Prepared BGA target lost its surface descriptor.");
+      }
+      if (plan.surface->mediaKind == GameplayBgaMediaKind::Video) {
+        // Unlike Beatoraja's RGB movie texture, our movie surface is three
+        // planar YUV textures. Both reference LINEAR (miss) and FFMPEG
+        // (base/layer) therefore require the same conversion program; their
+        // shared observable semantics here are linear sampling and uniform
+        // authored tint.
+        if (!plan.video) {
+          return failure("gameplay_bga.surface.stale",
+                         "Prepared BGA video lease is unavailable.");
+        }
+        std::array<video::VideoQuadPoint, 4> destination{};
+        std::array<video::VideoQuadPoint, 4> uvs{};
+        for (std::size_t index = 0; index < destination.size(); ++index) {
+          destination[index] = {.x = plan.destination[index].x,
+                                .y = plan.destination[index].y};
+          uvs[index] = {.x = plan.uvs[index].x, .y = plan.uvs[index].y};
+        }
+        const auto quad = video::makeEmbeddedYuvQuadLayout(
+            destination, uvs,
+            {.r = plan.embeddedTint[0], .g = plan.embeddedTint[1],
+             .b = plan.embeddedTint[2], .a = plan.embeddedTint[3]});
+        if (!quad) {
+          return failure("gameplay_bga.target.quad",
+                         "BGA target produced an invalid video quad.");
+        }
+        plan.videoSubmission = plan.video->prepareEmbeddedSubmission(
+            *quad, bgaTargetState(plan.target.blend), plan.scissor);
+        const auto &videoLayout = VideoPlayer::embeddedVertexLayout();
+        if ((!videoLayoutRegistered &&
+             !vertexLayouts->registerLayout(videoLayout)) ||
+            !plan.videoSubmission || !addRequirement(videoLayout)) {
+          return failure("gameplay_bga.video.preflight",
+                         "BGA video GPU resources are unavailable.");
+        }
+        videoLayoutRegistered = true;
+        continue;
+      }
+      if (!plan.image) {
+        return failure("gameplay_bga.image.preflight",
+                       "BGA image lease is unavailable.");
+      }
+      plan.program = bgaEmbeddedImageProgram;
+      plan.imageTexture = plan.material.blackTransparent
+                              ? plan.image->layerTexture
+                              : plan.image->texture;
+      if (!bgfx::isValid(plan.imageTexture)) {
+        return failure(plan.material.blackTransparent
+                           ? "gameplay_bga.image.layer_texture"
+                           : "gameplay_bga.image.texture",
+                       plan.material.blackTransparent
+                           ? "BGA layer image companion is unavailable."
+                           : "BGA image texture is unavailable.");
+      }
+      if (!bgfx::isValid(s_texColor)) {
+        return failure("gameplay_bga.image.preflight",
+                       "BGA image sampler is unavailable.");
+      }
+      plan.imageSamplerFlags =
+          BGFX_SAMPLER_UVW_CLAMP |
+          (plan.material.linearSampling
+               ? 0U
+               : BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT);
+      if ((!imageLayoutRegistered &&
+           !vertexLayouts->registerLayout(gameplayBgaImageVertexLayout())) ||
+          !bgfx::isValid(plan.program) || !bgfx::isValid(plan.imageTexture) ||
+          !addRequirement(gameplayBgaImageVertexLayout())) {
+        return failure("gameplay_bga.image.preflight",
+                       "BGA image GPU resources are unavailable.");
+      }
+      imageLayoutRegistered = true;
+    }
+    {
+      std::lock_guard<std::mutex> lock(preparedBgaFrameMutex);
+      preparedBgaTargetPlans = std::move(plans);
+      preparedBgaVertexLayouts = std::move(vertexLayouts);
+      preparedBgaTargetFrameSequence = frame.sequence;
+      preparedBgaTargetCursor = 0;
+      preparedBgaTargetsCommitted = false;
+    }
+  } catch (...) {
+    return failure("gameplay_bga.preflight",
+                   "BGA resources could not be prepared without drawing.");
+  }
+  return {.ready = true, .requirements = requirements};
+}
+
+void Jukebox::commitPrepared(
+    const PreparedGameplayBgaFrame &frame) noexcept {
+  std::lock_guard<std::mutex> lock(preparedBgaFrameMutex);
+  if (preparedBgaTargetsCommitted || !preparedBgaTargetFrameSequence ||
+      *preparedBgaTargetFrameSequence != frame.sequence) {
+    return;
+  }
+  constexpr std::array<std::uint16_t, 6> indices{0, 1, 2, 0, 2, 3};
+  for (auto &plan : preparedBgaTargetPlans) {
+    if (plan.noDraw) {
+      continue;
+    }
+    if (plan.videoSubmission) {
+      plan.video->commitPreparedEmbedded(*plan.videoSubmission);
+      continue;
+    }
+    const auto &layout = plan.placeholder ? gameplayBgaColorVertexLayout()
+                                          : gameplayBgaImageVertexLayout();
+    bgfx::allocTransientVertexBuffer(&plan.vertexBuffer, 4, layout);
+    bgfx::allocTransientIndexBuffer(&plan.indexBuffer, 6);
+    std::memcpy(plan.indexBuffer.data, indices.data(), sizeof(indices));
+    if (plan.placeholder) {
+      const std::array<float, 4> black{0.0F, 0.0F, 0.0F,
+                                       plan.embeddedTint[3]};
+      auto *vertices = reinterpret_cast<rendering::PosColorVertex *>(
+          plan.vertexBuffer.data);
+      for (std::size_t index = 0; index < 4; ++index) {
+        vertices[index] = {plan.destination[index].x,
+                           plan.destination[index].y, 0.0F,
+                           packBgaAbgr(black)};
+      }
+    } else {
+      auto *vertices = reinterpret_cast<GameplayBgaImageVertex *>(
+          plan.vertexBuffer.data);
+      for (std::size_t index = 0; index < 4; ++index) {
+        vertices[index] = {.x = plan.destination[index].x,
+                           .y = plan.destination[index].y,
+                           .z = 0.0F,
+                           .u = plan.uvs[index].x,
+                           .v = plan.uvs[index].y,
+                           .abgr = packBgaAbgr(plan.embeddedTint)};
+      }
+    }
+    plan.reserved = true;
+  }
+  preparedBgaTargetsCommitted = true;
+}
+
+void Jukebox::submitPrepared(const PreparedGameplayBgaFrame &frame,
+                             const BgaDrawTarget &submittedTarget) noexcept {
+  std::lock_guard<std::mutex> lock(preparedBgaFrameMutex);
+  if (!preparedBgaTargetsCommitted ||
+      preparedBgaTargetCursor >= preparedBgaTargetPlans.size()) {
+    return;
+  }
+  auto &plan = preparedBgaTargetPlans[preparedBgaTargetCursor];
+  if (plan.frameSequence != frame.sequence ||
+      !sameBgaTarget(plan.target, submittedTarget)) {
+    return;
+  }
+  ++preparedBgaTargetCursor;
+  embeddedGameplayBgaSubmissions.fetch_add(1, std::memory_order_relaxed);
+  if (plan.noDraw) {
+    return;
+  }
+  const auto &target = plan.target;
+  if (plan.videoSubmission) {
+    plan.video->submitPreparedEmbedded(target.viewId, *plan.videoSubmission);
+    return;
+  }
+  bgfx::setVertexBuffer(0, &plan.vertexBuffer);
+  bgfx::setIndexBuffer(&plan.indexBuffer);
+  bgfx::setState(bgaTargetState(target.blend));
+  if (plan.scissor && plan.scissor->enabled) {
+    bgfx::setScissor(static_cast<std::uint16_t>(plan.scissor->x),
+                     static_cast<std::uint16_t>(plan.scissor->y),
+                     static_cast<std::uint16_t>(plan.scissor->width),
+                     static_cast<std::uint16_t>(plan.scissor->height));
+  } else {
+    bgfx::setScissor();
+  }
+  if (!plan.placeholder) {
+    bgfx::setTexture(0, s_texColor, plan.imageTexture,
+                     plan.imageSamplerFlags);
+  }
+  bgfx::submit(target.viewId, plan.program);
+}
+
+void Jukebox::finalizePrepared(
+    const PreparedGameplayBgaFrame &frame) noexcept {
+  std::lock_guard<std::mutex> lock(preparedBgaFrameMutex);
+  if (preparedBgaFrame && preparedBgaFrame->sequence == frame.sequence) {
+    preparedBgaFrameKey.reset();
+    preparedBgaFrame.reset();
+  }
+  if (preparedBgaTargetFrameSequence &&
+      *preparedBgaTargetFrameSequence == frame.sequence) {
+    preparedBgaTargetPlans.clear();
+    preparedBgaVertexLayouts.reset();
+    preparedBgaTargetFrameSequence.reset();
+    preparedBgaTargetCursor = 0;
+    preparedBgaTargetsCommitted = false;
+  }
+  if (preparedBgaFrameLeases.erase(frame.sequence) != 0) {
+    pinnedGameplayBgaFrames.fetch_sub(1, std::memory_order_relaxed);
+  }
+}
+
+void Jukebox::submitFullscreen(const PreparedGameplayBgaFrame &frame) noexcept {
+  fullscreenGameplayBgaSubmissions.fetch_add(1, std::memory_order_relaxed);
+  std::optional<PreparedBgaFrameLease> lease;
+  {
+    std::lock_guard<std::mutex> lock(preparedBgaFrameMutex);
+    const auto found = preparedBgaFrameLeases.find(frame.sequence);
+    if (found != preparedBgaFrameLeases.end()) {
+      lease = found->second;
+    }
+  }
+  if (frame.composition == GameplayBgaComposition::MissOnly) {
+    if (lease && lease->miss) {
+      submitFullscreenSurface(*lease->miss, rendering::bga_view);
+    }
+  } else if (frame.composition == GameplayBgaComposition::BaseThenLayer &&
+             lease) {
+    if (lease->base) {
+      submitFullscreenSurface(*lease->base, rendering::bga_view);
+    }
+    if (lease->layer) {
+      submitFullscreenSurface(*lease->layer, rendering::bga_layer_view);
+    }
+  }
+  finalizePrepared(frame);
+}
+
+Jukebox::GameplayBgaSubmissionStats
+Jukebox::gameplayBgaSubmissionStats() const noexcept {
+  return {.preparedFrames =
+              preparedGameplayBgaFrames.load(std::memory_order_relaxed),
+          .videoUpdates =
+              preparedGameplayBgaVideoUpdates.load(std::memory_order_relaxed),
+          .embeddedSubmissions =
+              embeddedGameplayBgaSubmissions.load(std::memory_order_relaxed),
+          .fullscreenSubmissions =
+              fullscreenGameplayBgaSubmissions.load(std::memory_order_relaxed),
+          .pinnedFrames =
+              pinnedGameplayBgaFrames.load(std::memory_order_relaxed)};
+}
+
+void Jukebox::invalidatePreparedBgaPlans() noexcept {
+  std::lock_guard<std::mutex> lock(preparedBgaFrameMutex);
+  preparedBgaFrameKey.reset();
+  preparedBgaFrame.reset();
+}
+
+std::optional<Jukebox::PinnedGameplayBgaSurface>
+Jukebox::prepareGameplayBgaSurface(
+    GameplayBgaRole role, int visualId,
+    std::unordered_set<int> &updatedVideoIds) {
+  if (visualId < 0) {
+    return std::nullopt;
+  }
+  {
+    std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
+    const auto video = videoPlayerTable.find(visualId);
+    if (video != videoPlayerTable.end() && video->second != nullptr) {
+      if (updatedVideoIds.insert(visualId).second) {
+        video->second->update();
+        preparedGameplayBgaVideoUpdates.fetch_add(1,
+                                                   std::memory_order_relaxed);
+      }
+      const int width = video->second->getFrameWidth();
+      const int height = video->second->getFrameHeight();
+      if (width <= 0 || height <= 0) {
+        return std::nullopt;
+      }
+      return PinnedGameplayBgaSurface{
+          .descriptor = {.role = role,
+                         .mediaKind = GameplayBgaMediaKind::Video,
+                         .surfaceToken =
+                             static_cast<std::uint64_t>(visualId) + 1U,
+                         .sourceWidth = width,
+                         .sourceHeight = height},
+          .video = video->second};
+    }
+  }
+  {
+    std::lock_guard<std::mutex> lock(imageTableMutex);
+    const auto image = imageTable.find(visualId);
+    if (image == imageTable.end() || image->second == nullptr ||
+        !bgfx::isValid(image->second->texture) || image->second->width <= 0 ||
+        image->second->height <= 0) {
+      return std::nullopt;
+    }
+    return PinnedGameplayBgaSurface{
+        .descriptor = {.role = role,
+                       .mediaKind = GameplayBgaMediaKind::Image,
+                       .surfaceToken =
+                           static_cast<std::uint64_t>(visualId) + 1U,
+                       .sourceWidth = image->second->width,
+                       .sourceHeight = image->second->height},
+        .image = image->second};
+  }
+}
+
+void Jukebox::submitFullscreenSurface(
+    const PinnedGameplayBgaSurface &surface, bgfx::ViewId viewId) noexcept {
+  try {
+    if (surface.descriptor.mediaKind == GameplayBgaMediaKind::Video) {
+      if (!surface.video) {
+        return;
+      }
+      const auto rect = calculateBgaRect(surface.descriptor.sourceWidth,
+                                         surface.descriptor.sourceHeight);
+      surface.video->render(viewId, rect.x, rect.y, rect.width, rect.height);
+      return;
+    }
+    if (surface.image) {
+      renderImage(*surface.image, viewId);
+    }
+  } catch (...) {
+    // Submission is intentionally fail-closed: media loss after preflight
+    // produces no partial replacement or second decode attempt.
   }
 }
 
@@ -927,9 +1925,26 @@ void Jukebox::setBgaDisplayMode(AppSettings::BgaDisplayMode mode) {
   bgaDisplayMode.store(static_cast<int>(mode), std::memory_order_relaxed);
 }
 
+void Jukebox::setEmbeddedBgaBrightnessPercent(int percent) noexcept {
+  embeddedBgaBrightness.store(
+      static_cast<float>(std::clamp(percent, 0, 100)) / 100.0F,
+      std::memory_order_relaxed);
+}
+
+float Jukebox::embeddedBgaBrightnessMultiplier() const noexcept {
+  return embeddedBgaBrightness.load(std::memory_order_relaxed);
+}
+
+std::array<float, 4> Jukebox::embeddedBgaTint(
+    const std::array<float, 4> &authoredTint) const noexcept {
+  return ApplyGameplayBgaBrightness(authoredTint,
+                                    embeddedBgaBrightnessMultiplier());
+}
+
 bool Jukebox::loadMaterializedVideoPath(
     int id, const std::filesystem::path &materializedPath,
     const std::filesystem::path &displayPath, std::atomic_bool &isCancelled) {
+  invalidatePreparedBgaPlans();
   if (isCancelled) {
     return false;
   }
@@ -949,8 +1964,9 @@ bool Jukebox::loadMaterializedVideoPath(
     videoMaterializedPathTable[id] = materializedPath.lexically_normal();
     visualPathTable[id] = fspath_to_path_t(displayPath);
 
-    SDL_Log("video width: %f, video height: %f", loadedVideoPlayer->viewWidth,
-            loadedVideoPlayer->viewHeight);
+    SDL_Log("video width: %d, video height: %d",
+            loadedVideoPlayer->getFrameWidth(),
+            loadedVideoPlayer->getFrameHeight());
     SDL_Log("Loaded video to id: %d", id);
     return true;
   }
@@ -1002,6 +2018,7 @@ bool Jukebox::loadVideoPath(int id, const std::filesystem::path &path,
 bool Jukebox::loadImageBytes(int id, const std::filesystem::path &path,
                              const std::vector<unsigned char> &bytes,
                              std::atomic_bool &isCancelled) {
+  invalidatePreparedBgaPlans();
   if (isCancelled) {
     return false;
   }
@@ -1039,6 +2056,21 @@ bool Jukebox::loadImageBytes(int id, const std::filesystem::path &path,
       .channels = channels,
   };
   auto textureGuard = makeScopeExit([&image] { destroyImageTexture(image); });
+  if (gameplayBgaLayerImageIds.contains(id)) {
+    const auto layerPixels = MakeGameplayBgaLayerRgba(
+        std::span<const std::uint8_t>(
+            data.get(), static_cast<std::size_t>(width) *
+                            static_cast<std::size_t>(height) * 4U));
+    image.layerTexture = bgfx::createTexture2D(
+        width, height, false, 1, bgfx::TextureFormat::RGBA8,
+        BGFX_TEXTURE_NONE,
+        bgfx::copy(layerPixels.data(),
+                   static_cast<std::uint32_t>(layerPixels.size())));
+    if (!bgfx::isValid(image.layerTexture)) {
+      SDL_Log("Failed to create layer image texture: %s", utf8Path.c_str());
+      return false;
+    }
+  }
   if (isCancelled) {
     return false;
   }
@@ -1056,6 +2088,7 @@ bool Jukebox::loadImageBytes(int id, const std::filesystem::path &path,
 
 bool Jukebox::loadImagePath(int id, const std::filesystem::path &path,
                             std::atomic_bool &isCancelled) {
+  invalidatePreparedBgaPlans();
   if (isCancelled) {
     return false;
   }
@@ -1093,6 +2126,21 @@ bool Jukebox::loadImagePath(int id, const std::filesystem::path &path,
       .channels = channels,
   };
   auto textureGuard = makeScopeExit([&image] { destroyImageTexture(image); });
+  if (gameplayBgaLayerImageIds.contains(id)) {
+    const auto layerPixels = MakeGameplayBgaLayerRgba(
+        std::span<const std::uint8_t>(
+            data.get(), static_cast<std::size_t>(width) *
+                            static_cast<std::size_t>(height) * 4U));
+    image.layerTexture = bgfx::createTexture2D(
+        width, height, false, 1, bgfx::TextureFormat::RGBA8,
+        BGFX_TEXTURE_NONE,
+        bgfx::copy(layerPixels.data(),
+                   static_cast<std::uint32_t>(layerPixels.size())));
+    if (!bgfx::isValid(image.layerTexture)) {
+      SDL_Log("Failed to create layer image texture: %s", utf8Path.c_str());
+      return false;
+    }
+  }
   if (isCancelled) {
     return false;
   }
@@ -2299,7 +3347,8 @@ void Jukebox::reconcileVisualResources(
     bms_parser::Chart &chart, const std::vector<ResolvedVisualAsset> &assets,
     std::atomic_bool &isCancelled) {
   clearVisualResources();
-  if (isCancelled) {
+  if (isCancelled ||
+      !prepareGameplayBgaLayerImageIds(chart, assets, isCancelled)) {
     return;
   }
 
@@ -2470,6 +3519,7 @@ bool Jukebox::preloadVisual(int visualId, std::atomic_bool &isCancelled) {
 }
 
 void Jukebox::clearVisualResources() {
+  invalidatePreparedBgaPlans();
   std::lock_guard<std::mutex> materializationLock(
       visualMaterializationMutex);
   currentBga.store(-1, std::memory_order_relaxed);
@@ -2484,13 +3534,54 @@ void Jukebox::clearVisualResources() {
   }
   {
     std::lock_guard<std::mutex> lock(imageTableMutex);
-    for (auto &image : imageTable) {
-      destroyImageTexture(image.second);
-    }
     imageTable.clear();
   }
   visualPathTable.clear();
   visualDescriptors.clear();
+  gameplayBgaLayerImageIds.clear();
+}
+
+bool Jukebox::prepareGameplayBgaLayerImageIds(
+    const bms_parser::Chart &chart,
+    const std::vector<ResolvedVisualAsset> &assets,
+    std::atomic_bool &isCancelled) noexcept {
+  gameplayBgaLayerImageIds.clear();
+  try {
+    std::unordered_set<int> resolvedImageIds;
+    resolvedImageIds.reserve(assets.size());
+    for (const auto &asset : assets) {
+      if (isCancelled) {
+        return false;
+      }
+      if (!asset.video) {
+        resolvedImageIds.insert(asset.id);
+      }
+    }
+    gameplayBgaLayerImageIds.reserve(resolvedImageIds.size());
+    for (const auto *measure : chart.Measures) {
+      if (isCancelled) {
+        gameplayBgaLayerImageIds.clear();
+        return false;
+      }
+      if (measure == nullptr) {
+        continue;
+      }
+      for (const auto *timeline : measure->TimeLines) {
+        if (isCancelled) {
+          gameplayBgaLayerImageIds.clear();
+          return false;
+        }
+        if (timeline != nullptr && timeline->BgaLayer != -1 &&
+            resolvedImageIds.contains(timeline->BgaLayer)) {
+          gameplayBgaLayerImageIds.insert(timeline->BgaLayer);
+        }
+      }
+    }
+  } catch (...) {
+    gameplayBgaLayerImageIds.clear();
+    return false;
+  }
+  return true;
 }
 
 void Jukebox::scheduleVisuals(bms_parser::Chart &chart,
@@ -2500,6 +3591,7 @@ void Jukebox::scheduleVisuals(bms_parser::Chart &chart,
   lastVisualTimelineMicros = -1;
   bmpList.clear();
   bmpLayerList.clear();
+  poorBgaSequences = BuildBgaPoorSequenceSchedule(chart);
   for (auto &measure : chart.Measures) {
     if (isCancelled)
       return;
@@ -2529,6 +3621,9 @@ void Jukebox::loadVisuals(bms_parser::Chart &chart,
   if (isCancelled || !visualsEnabled.load(std::memory_order_relaxed)) {
     return;
   }
+  // The parser publishes every defined channel-06 frame into the canonical
+  // BMP table. Preserve the existing preload contract rather than deriving a
+  // second, potentially divergent resource registry from the schedule.
   const auto visualAssets =
       resolveVisualAssets(chart, chart.ReferencedBmpTable, isCancelled);
   if (!isCancelled) {
@@ -2536,7 +3631,10 @@ void Jukebox::loadVisuals(bms_parser::Chart &chart,
   }
 }
 
-void Jukebox::unloadVisuals() { clearVisualResources(); }
+void Jukebox::unloadVisuals() {
+  clearVisualResources();
+  poorBgaSequences.clear();
+}
 
 audio::playback::BackendOperationResult
 Jukebox::loadChart(bms_parser::Chart &chart, bool scheduleNotes,
@@ -2940,7 +4038,7 @@ bool Jukebox::activateVisual(int visualId, bgfx::ViewId viewId) {
   return activateVisualAt(visualId, viewId, 0);
 }
 
-bool Jukebox::activateVisualAt(int visualId, bgfx::ViewId viewId,
+bool Jukebox::activateVisualAt(int visualId, bgfx::ViewId,
                                long long elapsedMicros) {
   {
     std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
@@ -2956,9 +4054,6 @@ bool Jukebox::activateVisualAt(int visualId, bgfx::ViewId viewId,
         videoPlayer->seek(0);
         videoPlayer->play();
       }
-      videoPlayer->viewWidth = rendering::window_width;
-      videoPlayer->viewHeight = rendering::window_height;
-      videoPlayer->viewId = viewId;
       return true;
     }
   }
@@ -3324,14 +4419,12 @@ void Jukebox::renderImage(ImageData &image, int viewId) {
   bgfx::setTexture(0, s_texColor, image.texture);
   bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
                  BGFX_STATE_BLEND_ALPHA);
-  static const bgfx::ProgramHandle kBgaProgram =
-      rendering::ShaderManager::getInstance().getProgram("vs_text.bin",
-                                                         "fs_text.bin");
-  static const bgfx::ProgramHandle kBgaLayerProgram =
-      rendering::ShaderManager::getInstance().getProgram("vs_text.bin",
-                                                         "fs_bgalayer.bin");
-  bgfx::submit(viewId,
-               viewId == rendering::bga_view ? kBgaProgram : kBgaLayerProgram);
+  const auto program = viewId == rendering::bga_view
+                           ? bgaFullscreenImageProgram
+                           : bgaFullscreenLayerProgram;
+  if (bgfx::isValid(program)) {
+    bgfx::submit(viewId, program);
+  }
 }
 
 long long Jukebox::getTimeMicros() {

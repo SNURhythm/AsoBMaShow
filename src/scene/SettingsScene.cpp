@@ -220,6 +220,9 @@ void SettingsScene::measureTemporaryArchiveCache() {
 void SettingsScene::init() {
   lastLayoutWidth = -1;
   ensureProfileController();
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  ensureGameplaySkinSettingsController();
+#endif
   ensureAudioVideoSession();
   context.profileSwitchBlockers.scene = [this]() -> std::optional<std::string> {
     if (audioVideoSession != nullptr &&
@@ -252,6 +255,9 @@ void SettingsScene::init() {
 }
 
 void SettingsScene::update(float dt) {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  updateGameplaySkinSettingsController();
+#endif
   if (audioVideoSession != nullptr) {
     const bool hadPreview = audioVideoSession->hasDisplayPreview();
     const auto previewResult =
@@ -305,41 +311,19 @@ void SettingsScene::renderScene() {
     inputConflictOverlayRoot->setSize(rendering::window_width,
                                       rendering::window_height);
   }
+  if (inputVirtualControllerEditorOverlayRoot != nullptr) {
+    inputVirtualControllerEditorOverlayRoot->setSize(rendering::window_width,
+                                                      rendering::window_height);
+  }
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (gameplaySkinSafetyOverlayRoot != nullptr) {
+    gameplaySkinSafetyOverlayRoot->setSize(rendering::window_width,
+                                            rendering::window_height);
+  }
+#endif
   if (previewActive && previewRenderer != nullptr) {
-    previewRenderer->setVisibleTimeGreenNumber(
-        context.settings.visibleTimeGreenNumber);
-    previewRenderer->setVisibleTimeBpmStrategy(
-        context.settings.visibleTimeBpmStrategy);
-    previewRenderer->setVisibleTimeUseMilliseconds(
-        context.settings.visibleTimeUseMilliseconds);
-    if (previewChart != nullptr) {
-      previewRenderer->setPlayAreaWidth(
-          context.settings.playAreaWidthForKeyMode(previewChart->Meta.KeyMode));
-    }
-    previewRenderer->setLaneBeamLengthPercent(
-        context.settings.laneBeamLengthPercent);
-    previewRenderer->setNoteStartPositionPercent(
-        context.settings.noteStartPositionPercent);
-    previewRenderer->setLaneCoverFloatingEnabled(
-        context.settings.floatingLaneCoverEnabled);
-    previewRenderer->setShowInvisibleNotes(context.settings.showInvisibleNotes);
-    previewRenderer->setJudgementIndicatorConfig(
-        context.settings.judgementIndicatorEnabled,
-        context.settings.judgementIndicatorY,
-        context.settings.judgementIndicatorWidthScale,
-        context.settings.judgementIndicatorRenderMode ==
-            AppSettings::JudgementIndicatorRenderMode::Hud2D,
-        context.settings.judgementIndicatorRangeMilliseconds);
-    previewRenderer->setJudgementTextY(context.settings.judgementTextY);
-    previewRenderer->setJudgementTimingFastSlowCriteria(
-        context.settings.judgementTimingFastSlowCriteria);
-    previewRenderer->setJudgementTimingMillisecondsCriteria(
-        context.settings.judgementTimingMillisecondsCriteria);
-    previewRenderer->setJudgementCounterEnabled(
-        context.settings.judgementCounterEnabled);
-    previewRenderer->setJudgementCounterPosition(
-        context.settings.judgementCounterPosition);
-    previewRenderer->setGaugeBarPosition(context.settings.gaugeBarPosition);
+    syncPreviewPresentationConfiguration();
+    capturePreviewVisualState();
     previewRenderer->refreshGeometry();
     RenderContext renderContext;
     previewRenderer->render(renderContext, previewElapsedMicros);
@@ -378,6 +362,17 @@ EventHandleResult SettingsScene::handleEvents(SDL_Event &event) {
 
 void SettingsScene::cleanupScene() {
   context.profileSwitchBlockers.scene = nullptr;
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (gameplaySkinSettingsController != nullptr) {
+    gameplaySkinSettingsController->close();
+    gameplaySkinSettingsController.reset();
+  }
+  gameplaySkinSettingsProfileId.clear();
+  gameplaySkinSettingsPresentationKey.clear();
+  gameplaySkinUiMessage.clear();
+  gameplaySkinReplaceConfirmationArmed = false;
+  gameplaySkinRemovalConfirmationKey.clear();
+#endif
   stopProfileArchiveWork();
   if (audioVideoSession != nullptr) {
     const auto result = audioVideoSession->cleanup();
@@ -449,7 +444,7 @@ void SettingsScene::cleanupScene() {
   startLaneIndicatorsModeText = nullptr;
   showInvisibleNotesModeText = nullptr;
   touchVisualizationModeText = nullptr;
-  floatingLaneCoverModeText = nullptr;
+  hispeedAutoAdjustModeText = nullptr;
   notePriorityModeText = nullptr;
   judgementIndicatorModeText = nullptr;
   judgementIndicatorRenderModeText = nullptr;
@@ -468,7 +463,7 @@ void SettingsScene::cleanupScene() {
   startLaneIndicatorsModeButton = nullptr;
   showInvisibleNotesModeButton = nullptr;
   touchVisualizationModeButton = nullptr;
-  floatingLaneCoverModeButton = nullptr;
+  hispeedAutoAdjustModeButton = nullptr;
   notePriorityModeButton = nullptr;
   judgementIndicatorModeButton = nullptr;
   judgementIndicatorRenderModeButton = nullptr;
@@ -549,6 +544,10 @@ void SettingsScene::cleanupScene() {
   inputCaptureStateText = nullptr;
   inputErrorText = nullptr;
   inputConflictOverlayRoot = nullptr;
+  inputVirtualControllerEditorOverlayRoot = nullptr;
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  gameplaySkinSafetyOverlayRoot = nullptr;
+#endif
   lastLayoutWidth = -1;
   lastLayoutHeight = -1;
   lastSafeTop = -1;

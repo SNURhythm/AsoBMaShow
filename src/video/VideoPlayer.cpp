@@ -9,6 +9,49 @@
 #include <inttypes.h>
 
 #include <thread>
+
+namespace {
+
+struct EmbeddedYuvVertex {
+  float x;
+  float y;
+  float z;
+  float u;
+  float v;
+  std::uint32_t abgr;
+};
+
+const bgfx::VertexLayout &embeddedYuvVertexLayout() {
+  static const bgfx::VertexLayout layout = [] {
+    bgfx::VertexLayout value;
+    value.begin()
+        .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true)
+        .end();
+    return value;
+  }();
+  return layout;
+}
+
+std::uint8_t colorByte(float value) {
+  return static_cast<std::uint8_t>(std::clamp(value, 0.0F, 1.0F) * 255.0F);
+}
+
+std::uint32_t packAbgr(const video::EmbeddedYuvQuadVertex &vertex) {
+  const auto red = static_cast<std::uint32_t>(colorByte(vertex.r));
+  const auto green = static_cast<std::uint32_t>(colorByte(vertex.g));
+  const auto blue = static_cast<std::uint32_t>(colorByte(vertex.b));
+  const auto alpha = static_cast<std::uint32_t>(colorByte(vertex.a));
+  return (alpha << 24U) | (blue << 16U) | (green << 8U) | red;
+}
+
+} // namespace
+
+const bgfx::VertexLayout &VideoPlayer::embeddedVertexLayout() noexcept {
+  return embeddedYuvVertexLayout();
+}
+
 VideoPlayer::VideoPlayer(Stopwatch *stopwatch)
     : stopwatch(stopwatch), videoFrameWidth(0), videoFrameHeight(0),
       hasVideoFrame(false) {
@@ -18,6 +61,18 @@ VideoPlayer::VideoPlayer(Stopwatch *stopwatch)
   s_texY = uniforms.getSampler("s_texY");
   s_texU = uniforms.getSampler("s_texU");
   s_texV = uniforms.getSampler("s_texV");
+  try {
+    fullscreenProgram =
+        rendering::ShaderManager::getInstance().getProgram(SHADER_YUVRGB);
+  } catch (...) {
+    fullscreenProgram = BGFX_INVALID_HANDLE;
+  }
+  try {
+    embeddedProgram = rendering::ShaderManager::getInstance().getProgram(
+        "vs_skin_yuvrgb.bin", "fs_skin_yuvrgb.bin");
+  } catch (...) {
+    embeddedProgram = BGFX_INVALID_HANDLE;
+  }
 }
 
 VideoPlayer::~VideoPlayer() { unloadVideo(); }
@@ -308,10 +363,14 @@ unsigned int VideoPlayer::getPrecisePosition() {
   return static_cast<unsigned int>(lastFramePTS * 1000000);
 }
 
-void VideoPlayer::render() {
+void VideoPlayer::render(bgfx::ViewId viewId, float viewX, float viewY,
+                         float viewWidth, float viewHeight) const {
   if (!hasVideoFrame)
     return;
   if (!isPlaying) {
+    return;
+  }
+  if (!bgfx::isValid(fullscreenProgram)) {
     return;
   }
 
@@ -368,9 +427,97 @@ void VideoPlayer::render() {
   bgfx::setTexture(1, s_texU, videoTextureU);
   bgfx::setTexture(2, s_texV, videoTextureV);
 
-  static const bgfx::ProgramHandle kProgram =
-      rendering::ShaderManager::getInstance().getProgram(SHADER_YUVRGB);
-  bgfx::submit(viewId, kProgram);
+  bgfx::submit(viewId, fullscreenProgram);
+}
+
+void VideoPlayer::renderEmbedded(
+    bgfx::ViewId viewId, const video::EmbeddedYuvQuadLayout &quad,
+    std::uint64_t state,
+    std::optional<rendering::DrawableScissor> scissor) const {
+  const auto submission = prepareEmbeddedSubmission(quad, state, scissor);
+  if (submission) {
+    auto committed = *submission;
+    if (bgfx::getAvailTransientVertexBuffer(
+            static_cast<std::uint32_t>(committed.quad.vertices.size()),
+            embeddedYuvVertexLayout()) >= committed.quad.vertices.size() &&
+        bgfx::getAvailTransientIndexBuffer(
+            static_cast<std::uint32_t>(committed.quad.indices.size())) >=
+            committed.quad.indices.size()) {
+      commitPreparedEmbedded(committed);
+      submitPreparedEmbedded(viewId, committed);
+    }
+  }
+}
+
+std::optional<VideoPlayer::PreparedEmbeddedSubmission>
+VideoPlayer::prepareEmbeddedSubmission(
+    const video::EmbeddedYuvQuadLayout &quad, std::uint64_t state,
+    std::optional<rendering::DrawableScissor> scissor) const {
+  std::lock_guard<std::mutex> frameLock(videoFrameMutex);
+  if (!hasVideoFrame || !isPlaying || !bgfx::isValid(embeddedProgram) ||
+      !bgfx::isValid(videoTextureY) || !bgfx::isValid(videoTextureU) ||
+      !bgfx::isValid(videoTextureV) || !bgfx::isValid(s_texY) ||
+      !bgfx::isValid(s_texU) || !bgfx::isValid(s_texV)) {
+    return std::nullopt;
+  }
+  return PreparedEmbeddedSubmission{
+      .quad = quad,
+      .state = state,
+      .scissor = scissor,
+      .program = embeddedProgram,
+      .textures = {videoTextureY, videoTextureU, videoTextureV},
+      .samplers = {s_texY, s_texU, s_texV}};
+}
+
+void VideoPlayer::commitPreparedEmbedded(
+    PreparedEmbeddedSubmission &submission) const noexcept {
+  bgfx::allocTransientVertexBuffer(
+      &submission.vertexBuffer,
+      static_cast<std::uint32_t>(submission.quad.vertices.size()),
+      embeddedYuvVertexLayout());
+  bgfx::allocTransientIndexBuffer(
+      &submission.indexBuffer,
+      static_cast<std::uint32_t>(submission.quad.indices.size()));
+  auto *vertices =
+      reinterpret_cast<EmbeddedYuvVertex *>(submission.vertexBuffer.data);
+  for (std::size_t index = 0; index < submission.quad.vertices.size();
+       ++index) {
+    const auto &source = submission.quad.vertices[index];
+    vertices[index] = {.x = source.x,
+                       .y = source.y,
+                       .z = 0.0F,
+                       .u = source.u,
+                       .v = source.v,
+                       .abgr = packAbgr(source)};
+  }
+  std::memcpy(submission.indexBuffer.data, submission.quad.indices.data(),
+              submission.quad.indices.size() *
+                  sizeof(submission.quad.indices.front()));
+}
+
+void VideoPlayer::submitPreparedEmbedded(
+    bgfx::ViewId viewId,
+    const PreparedEmbeddedSubmission &submission) const noexcept {
+  bgfx::setState(submission.state);
+  if (submission.scissor && submission.scissor->enabled) {
+    bgfx::setScissor(static_cast<std::uint16_t>(submission.scissor->x),
+                     static_cast<std::uint16_t>(submission.scissor->y),
+                     static_cast<std::uint16_t>(submission.scissor->width),
+                     static_cast<std::uint16_t>(submission.scissor->height));
+  } else {
+    bgfx::setScissor();
+  }
+  bgfx::setVertexBuffer(0, &submission.vertexBuffer);
+  bgfx::setIndexBuffer(&submission.indexBuffer);
+  constexpr std::uint32_t samplerFlags =
+      BGFX_SAMPLER_UVW_CLAMP;
+  bgfx::setTexture(0, submission.samplers[0], submission.textures[0],
+                   samplerFlags);
+  bgfx::setTexture(1, submission.samplers[1], submission.textures[1],
+                   samplerFlags);
+  bgfx::setTexture(2, submission.samplers[2], submission.textures[2],
+                   samplerFlags);
+  bgfx::submit(viewId, submission.program);
 }
 
 void VideoPlayer::play() {

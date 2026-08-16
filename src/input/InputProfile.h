@@ -2,6 +2,7 @@
 
 #include "GyroscopeTurntable.h"
 #include "InputTypes.h"
+#include "VirtualControllerConfig.h"
 
 #include <functional>
 #include <string>
@@ -10,10 +11,11 @@
 #include <vector>
 
 struct InputProfile {
-  static constexpr int kSchemaVersion = 3;
+  static constexpr int kSchemaVersion = 7;
 
   int schemaVersion = kSchemaVersion;
   input::GyroscopeTurntableConfig gyroscopeTurntable;
+  input::VirtualControllerConfig virtualController;
   std::vector<input::InputBinding> bindings;
 
   void sanitize(std::vector<std::string> &diagnostics);

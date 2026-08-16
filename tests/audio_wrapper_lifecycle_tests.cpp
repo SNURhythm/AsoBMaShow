@@ -1579,21 +1579,32 @@ void testConfigurableWrapperReleasesOldStreamBeforeOpenAndRollback() {
           "rollback leaves exactly one restored working stream");
 }
 
-void testBufferCapabilityProbePublishesOnlyVerifiedCandidates() {
+void testBufferCapabilitySelectionUsesCachedNativeLimits() {
   constexpr std::array<std::uint32_t, 7> candidates{0,   64,   128, 256,
                                                     512, 1024, 2048};
-  std::vector<std::uint32_t> attempted;
-  const auto supported =
-      audio::ProbeSupportedBufferFrames(candidates, [&](std::uint32_t frames) {
-        attempted.push_back(frames);
-        return frames == 0 || frames == 128 || frames == 512;
-      });
 
-  require(attempted ==
+  require(audio::SelectPortAudioBufferFrameOptions(candidates, std::nullopt) ==
               std::vector<std::uint32_t>(candidates.begin(), candidates.end()),
-          "buffer probing checks every required candidate exactly once");
-  require(supported == std::vector<std::uint32_t>({0, 128, 512}),
-          "capabilities publish only buffer candidates verified by the probe");
+          "generic PortAudio devices expose request choices without opening "
+          "probe streams");
+  require(audio::SelectPortAudioBufferFrameOptions(
+              candidates,
+              audio::NativeBufferFrameLimits{.minimum = 256,
+                                             .maximum = 256,
+                                             .preferred = 256,
+                                             .granularity = 0}) ==
+              std::vector<std::uint32_t>({0, 64, 128, 256}),
+          "fixed-size ASIO metadata keeps only requests that divide the "
+          "native buffer");
+  require(audio::SelectPortAudioBufferFrameOptions(
+              candidates,
+              audio::NativeBufferFrameLimits{.minimum = 128,
+                                             .maximum = 512,
+                                             .preferred = 256,
+                                             .granularity = -1}) ==
+              std::vector<std::uint32_t>({0, 64, 128, 256, 512}),
+          "power-of-two ASIO metadata filters requests without creating a "
+          "device stream");
 }
 
 void testConfigurableWrapperRecoversFromAuthoritativeExternalStop() {
@@ -1772,7 +1783,7 @@ int main() {
     testNativeTimestampClampsToPublishedAudioBuffer();
     testConfigurableWrapperRestartsAndRestoresRetainedPcm();
     testConfigurableWrapperReleasesOldStreamBeforeOpenAndRollback();
-    testBufferCapabilityProbePublishesOnlyVerifiedCandidates();
+    testBufferCapabilitySelectionUsesCachedNativeLimits();
     testConfigurableWrapperRecoversFromAuthoritativeExternalStop();
     testSoundSubmissionsRecoverFromAuthoritativeExternalStop();
     testRealtimeKeysoundHandleCommitsWithoutLookupOrLifecycleWork();

@@ -4,6 +4,7 @@
 #include "../src/ProfileDatabaseActivity.h"
 #include "../src/ProfileDatabaseTools.h"
 #include "../src/ProfileSessionCoordinator.h"
+#include "../src/skin/package/SkinPathPolicy.h"
 #include "../src/repositories/ReplayRepository.h"
 #include "../src/ResultPersistenceCoordinator.h"
 #include "../src/repositories/ScoreRepository.h"
@@ -385,8 +386,8 @@ void seedChartScore(const std::filesystem::path &path,
 result_persistence::ModernChartResult sampleModernResult(int score,
                                                          int suffix) {
   result_persistence::ModernChartResult result;
-  result.attemptId = "123e4567-e89b-42d3-a456-42661417400" +
-                     std::to_string(suffix);
+  result.attemptId =
+      "123e4567-e89b-42d3-a456-42661417400" + std::to_string(suffix);
   result.score.chartPath = "chart.bms";
   result.score.chartMd5 = kChartMd5;
   result.score.chartSha256 = kChartSha;
@@ -437,6 +438,7 @@ struct SwitchFixture {
   bool failRefreshOnce = false;
   bool failServicePause = false;
   bool failServiceActivate = false;
+  bool throwActiveProfileCommitted = false;
   bool throwRecoveryStd = false;
   bool throwRecoveryNonStd = false;
   std::optional<std::string> blocker;
@@ -451,6 +453,8 @@ struct SwitchFixture {
   bool pauseObservedOldBindings = false;
   bool activationObservedTargetState = false;
   bool restoreObservedOldState = false;
+  int activeProfileCommittedCalls = 0;
+  bool activeProfileCommitObservedTargetState = false;
   replay::ChartReplayRecoverySummary recoverySummary;
   std::vector<std::string> switchEvents;
   std::vector<std::string> inputReplacementEvents;
@@ -512,6 +516,16 @@ struct SwitchFixture {
     firstSettings.selectedLnMode = "LN";
     firstSettings.selectedAssistOption = "DRAG";
     firstSettings.selectedPacemakerTarget = "A";
+    const auto skinPackage = skin::normalizePackageId("FixtureSkin").package;
+    const auto skinEntry =
+        skinPackage
+            ? skin::normalizeEntryPath(*skinPackage, "play/main.luaskin").entry
+            : std::nullopt;
+    if (skinEntry) {
+      firstSettings.skin.entries[*skinEntry].options["Lane cover"] = 1;
+      firstSettings.skin.selected7KeyEntry = *skinEntry;
+      firstSettings.skin.gameplayCompatibilityEnabled = true;
+    }
     firstSettings.sanitize();
     AppSettings secondSettings;
     secondSettings.audioOffsetMs = 42;
@@ -521,6 +535,20 @@ struct SwitchFixture {
     secondSettings.selectedLnMode = "HCN";
     secondSettings.selectedAssistOption = "OFF";
     secondSettings.selectedPacemakerTarget = "MAX-";
+    if (skinEntry) {
+      auto &entrySettings = secondSettings.skin.entries[*skinEntry];
+      entrySettings.options["Lane cover"] = 2;
+      entrySettings.viewport = {
+          .mode = skin::ViewportMode::Custom,
+          .customBase = skin::CustomViewportBase::Stretch,
+          .scaleX = 1.25F,
+          .scaleY = 0.75F,
+          .translateX = 12.0F,
+          .translateY = -8.0F,
+      };
+      secondSettings.skin.selected7KeyEntry = *skinEntry;
+      secondSettings.skin.gameplayCompatibilityEnabled = true;
+    }
     secondSettings.sanitize();
     std::string error;
     expect(
@@ -586,14 +614,15 @@ struct SwitchFixture {
 
   ProfileSessionDependencies makeSwitchDependencies() {
     ProfileSessionDependencies dependencies;
-    dependencies.saveSettings = [this](const std::filesystem::path &path,
-                                       const AppSettings &settings,
+    dependencies.saveSettings = [this](std::string_view profileId,
+                                       AppSettings &settings,
                                        std::string &error) {
       if (failSettingsSave) {
         error = "injected settings save failure";
         return false;
       }
-      return AppSettingsStore::Save(path, settings, error);
+      return AppSettingsStore::Save(manager.pathsFor(profileId).settingsJson,
+                                    settings, error);
     };
     dependencies.saveInput = [this](const std::filesystem::path &path,
                                     std::string &error) {
@@ -691,6 +720,17 @@ struct SwitchFixture {
                                     activeSettings.audioOffsetMs == -17;
           return true;
         };
+    dependencies.activeProfileCommitted = [this](std::string_view profileId,
+                                                 AppSettings &activeSettings) {
+      ++activeProfileCommittedCalls;
+      switchEvents.emplace_back("owner-bind");
+      if (throwActiveProfileCommitted) {
+        throw std::runtime_error("injected owner notification failure");
+      }
+      activeProfileCommitObservedTargetState =
+          profileId == secondId && manager.activeProfile().id == secondId &&
+          activeSettings.audioOffsetMs == 42;
+    };
     return dependencies;
   }
 
@@ -823,10 +863,15 @@ void testSuccessfulSwitchIsIsolatedAndPersistsOldState() {
   expect(fixture.score.GetDatabasePath() == fixture.secondPaths.scoresDb &&
              fixture.replay.GetDatabasePath() == fixture.secondPaths.replaysDb,
          "successful switch rebinds score and replay helpers");
-  expect(fixture.currentSettings.audioOffsetMs == 42 &&
-             fixture.currentSettings.selectedGameplayRuleset == "beatoraja" &&
-             fixture.currentSettings.selectedPlayOption == "R-RANDOM",
-         "successful switch installs target settings");
+  expect(
+      fixture.currentSettings.audioOffsetMs == 42 &&
+          fixture.currentSettings.selectedGameplayRuleset == "beatoraja" &&
+          fixture.currentSettings.selectedPlayOption == "R-RANDOM" &&
+          fixture.currentSettings.skin.gameplayCompatibilityEnabled &&
+          fixture.currentSettings.skin.selected7KeyEntry.has_value() &&
+          fixture.currentSettings.skin.entries.begin()->second.viewport.mode ==
+              skin::ViewportMode::Custom,
+      "successful switch installs target settings and skin layout");
   expect(firstBindingId(fixture.currentInput) == "second-profile-binding" &&
              fixture.appliedInputPath == fixture.secondPaths.inputJson &&
              fixture.runtimeGyroscopeConfig ==
@@ -852,8 +897,12 @@ void testSuccessfulSwitchIsIsolatedAndPersistsOldState() {
   const auto savedOldInput =
       InputProfileStore::load(fixture.firstPaths.inputJson);
   expect(savedOldSettings.status == AppSettingsLoadStatus::Loaded &&
-             savedOldSettings.settings.audioOffsetMs == -88,
-         "switch saves current settings into the old profile first");
+             savedOldSettings.settings.audioOffsetMs == -88 &&
+             savedOldSettings.settings.skin.gameplayCompatibilityEnabled &&
+             savedOldSettings.settings.skin.selected7KeyEntry.has_value() &&
+             savedOldSettings.settings.skin.entries.begin()->second.options.at(
+                 "Lane cover") == 1,
+         "switch saves current settings and skin into the old profile first");
   expect(savedOldInput.status == InputProfileLoadStatus::Loaded &&
              firstBindingId(savedOldInput.profile) == "unsaved-first-binding",
          "switch saves current input into the old profile first");
@@ -874,7 +923,7 @@ void testTargetRecoveryRunsAfterBothDatabaseBindsBeforeCacheRefresh() {
              std::vector<std::string>{"pause-services", "bind-score",
                                       "bind-replay", "recover-results",
                                       "apply-input", "refresh-caches", "commit",
-                                      "activate-services"},
+                                      "activate-services", "owner-bind"},
          "target recovery runs after both binds and before input, caches, and "
          "commit");
   expect(fixture.recoveryCalls == 1 && fixture.recoveryObservedTargetBindings,
@@ -882,9 +931,30 @@ void testTargetRecoveryRunsAfterBothDatabaseBindsBeforeCacheRefresh() {
   expect(fixture.servicePauseCalls == 1 && fixture.pauseObservedOldBindings &&
              fixture.serviceActivateCalls == 1 &&
              fixture.activationObservedTargetState &&
+             fixture.activeProfileCommittedCalls == 1 &&
+             fixture.activeProfileCommitObservedTargetState &&
              fixture.serviceRestoreCalls == 0,
          "profile services pause on the source before rebinding and activate "
          "only after the target is committed");
+}
+
+void testPostActivationOwnerNotificationCannotRollbackCommittedProfile() {
+  SwitchFixture fixture;
+  if (fixture.firstId.empty() || fixture.secondId.empty()) {
+    return;
+  }
+  fixture.throwActiveProfileCommitted = true;
+
+  const auto result =
+      fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
+
+  expect(result.ok() &&
+             fixture.manager.activeProfile().id == fixture.secondId &&
+             fixture.serviceActivateCalls == 1 &&
+             fixture.activeProfileCommittedCalls == 1 &&
+             fixture.serviceRestoreCalls == 0,
+         "post-activation owner notification is no-throw and cannot reopen "
+         "switch rollback");
 }
 
 void testTargetReplayFilesAreReconciledAfterProfileSwitch() {
@@ -1076,22 +1146,22 @@ void testSupportedOlderTargetMigratesAtSchemaOwnerBoundary() {
                              "supported-older score");
   setDatabaseVersion(fixture.secondPaths.scoresDb, 5, "supported-older score");
   std::string replayFixtureError;
-  expect(replay_legacy_fixture::replaceWithVersion2Database(
-             fixture.secondPaths.replaysDb, 3,
-             "CREATE TABLE profile_use_marker(value TEXT);"
-             "INSERT INTO profile_use_marker VALUES('replay-marker');"
-             "INSERT INTO replays(id,chart_path,chart_md5,chart_sha256,"
-             "chart_title,chart_artist,ln_mode,gauge_type,gauge_auto_shift,"
-             "final_score,max_combo,final_gauge,clear_type) VALUES"
-             "(11,'chart.bms','0123456789abcdef0123456789abcdef',"
-             "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
-             "'Chart','Artist',0,0,0,1500,50,75.0,300),"
-             "(12,'chart.bms','0123456789abcdef0123456789abcdef',"
-             "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
-             "'Chart','Artist',0,0,0,1600,60,80.0,300)",
-             replayFixtureError),
-         "supported-older replay fixture is authentic: " +
-             replayFixtureError);
+  expect(
+      replay_legacy_fixture::replaceWithVersion2Database(
+          fixture.secondPaths.replaysDb, 3,
+          "CREATE TABLE profile_use_marker(value TEXT);"
+          "INSERT INTO profile_use_marker VALUES('replay-marker');"
+          "INSERT INTO replays(id,chart_path,chart_md5,chart_sha256,"
+          "chart_title,chart_artist,ln_mode,gauge_type,gauge_auto_shift,"
+          "final_score,max_combo,final_gauge,clear_type) VALUES"
+          "(11,'chart.bms','0123456789abcdef0123456789abcdef',"
+          "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
+          "'Chart','Artist',0,0,0,1500,50,75.0,300),"
+          "(12,'chart.bms','0123456789abcdef0123456789abcdef',"
+          "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
+          "'Chart','Artist',0,0,0,1600,60,80.0,300)",
+          replayFixtureError),
+      "supported-older replay fixture is authentic: " + replayFixtureError);
 
   expect(fixture.manager.validateProfileForActivation(fixture.secondId).ok(),
          "activation preflight admits supported-older databases");
@@ -2468,6 +2538,7 @@ void testDifficultyCourseKeySchemaBackfillsWithoutDeletingRows() {
 int main() {
   testSuccessfulSwitchIsIsolatedAndPersistsOldState();
   testTargetRecoveryRunsAfterBothDatabaseBindsBeforeCacheRefresh();
+  testPostActivationOwnerNotificationCannotRollbackCommittedProfile();
   testTargetReplayFilesAreReconciledAfterProfileSwitch();
   testServicePauseFailureAndActivationRollback();
   testRecoveryWarningDoesNotRollbackSuccessfulSwitch();

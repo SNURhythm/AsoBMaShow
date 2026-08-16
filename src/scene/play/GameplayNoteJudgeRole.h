@@ -4,7 +4,7 @@
 #include "GameplayJudgeRules.h"
 
 namespace bms_parser {
-struct ChartMeta;
+class ChartMeta;
 class Note;
 } // namespace bms_parser
 

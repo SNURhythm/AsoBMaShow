@@ -118,6 +118,37 @@ inline pacemaker::Target pacemakerTargetForReplay(
   return pacemaker::targetFromSelection(chart, normalized, best, bestReplay);
 }
 
+// ScoreDataProperty's personal-best channel is independent from the selected
+// pacemaker target. BMSPlayer always initializes it from the saved score and
+// decoded best ghost, including when the selected target is OFF or a grade.
+inline pacemaker::Target bestScoreTargetForReplay(
+    bms_parser::Chart &chart, const ReplayData &replay,
+    const ResultPreviousBestData &previousBest,
+    const ReplayData *bestReplay = nullptr) {
+  if (replay.autoPlay) {
+    return {};
+  }
+  return pacemaker::targetFromBestSnapshot(
+      chart, scoreBestSnapshotFromPreviousBest(previousBest), bestReplay);
+}
+
+struct GameplayBestScoreAuthority {
+  int bestScore = 0;
+  pacemaker::Target bestScoreTarget;
+};
+
+inline GameplayBestScoreAuthority gameplayBestScoreAuthorityForReplay(
+    bms_parser::Chart &chart, const ReplayData &replay,
+    const std::optional<ResultPreviousBestData> &previousBest,
+    const ReplayData *bestReplay = nullptr) {
+  if (!previousBest.has_value()) {
+    return {};
+  }
+  return {.bestScore = previousBest->score,
+          .bestScoreTarget = bestScoreTargetForReplay(
+              chart, replay, *previousBest, bestReplay)};
+}
+
 inline std::optional<ResultPacemakerData> pacemakerDataForReplayResult(
     bms_parser::Chart &chart, const RhythmState &state,
     const ReplayData &replay, const std::string &targetId,

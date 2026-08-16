@@ -3,8 +3,8 @@
 #include "AudioMix.h"
 
 #include <cstdint>
-#include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -44,11 +44,18 @@ struct RuntimeState {
 };
 
 using RenderCallback = void (*)(void *, std::uint32_t, int, void *);
-using BufferFrameProbe = std::function<bool(std::uint32_t)>;
+struct NativeBufferFrameLimits {
+  std::uint32_t minimum = 0;
+  std::uint32_t maximum = 0;
+  std::uint32_t preferred = 0;
+  std::int32_t granularity = 0;
+  bool operator==(const NativeBufferFrameLimits &) const = default;
+};
 
 std::vector<std::uint32_t>
-ProbeSupportedBufferFrames(std::span<const std::uint32_t> candidates,
-                           const BufferFrameProbe &probe);
+SelectPortAudioBufferFrameOptions(
+    std::span<const std::uint32_t> candidates,
+    std::optional<NativeBufferFrameLimits> nativeLimits);
 
 class IBackend {
 public:

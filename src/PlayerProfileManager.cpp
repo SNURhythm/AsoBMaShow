@@ -182,14 +182,18 @@ bool hasUnsafeLink(const std::filesystem::path &path,
          isReparsePoint(path, errorMessage);
 }
 
+bool isMissingPathError(const std::error_code &error) {
+  return error.default_error_condition() ==
+         std::make_error_condition(std::errc::no_such_file_or_directory);
+}
+
 bool inspectDirectoryWithoutLinks(const std::filesystem::path &path,
                                   bool allowMissing,
                                   std::string &errorMessage) {
   std::error_code error;
   const auto status = std::filesystem::symlink_status(path, error);
   if (error) {
-    if (allowMissing &&
-        error == std::make_error_code(std::errc::no_such_file_or_directory)) {
+    if (allowMissing && isMissingPathError(error)) {
       return true;
     }
     errorMessage = "unable to inspect directory '" + path.string() +
@@ -340,7 +344,7 @@ bool ensureContainedPath(const std::filesystem::path &applicationRoot,
     current /= part;
     const auto status = std::filesystem::symlink_status(current, error);
     if (error) {
-      if (error == std::make_error_code(std::errc::no_such_file_or_directory)) {
+      if (isMissingPathError(error)) {
         error.clear();
         continue;
       }
@@ -372,7 +376,7 @@ bool validateOptionalOperationalFile(
   std::error_code error;
   const auto status = std::filesystem::symlink_status(path, error);
   if (error) {
-    if (error == std::make_error_code(std::errc::no_such_file_or_directory)) {
+    if (isMissingPathError(error)) {
       return true;
     }
     errorMessage = "unable to inspect optional profile component '" +
@@ -420,7 +424,7 @@ bool validatePracticeDirectory(const std::filesystem::path &applicationRoot,
   const auto status =
       std::filesystem::symlink_status(paths.practiceDirectory, error);
   if (error) {
-    if (error == std::errc::no_such_file_or_directory) {
+    if (isMissingPathError(error)) {
       return true;
     }
     errorMessage =

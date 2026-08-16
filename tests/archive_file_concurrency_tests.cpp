@@ -230,6 +230,20 @@ void testZipIndexUsesCommonSystemEntryFilter() {
   assert(entries.front().path.generic_string() == "music/chart.bms");
 }
 
+void testBoundedReadRejectsOversizedIndexedEntryBeforeExtraction() {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "bounded-entry.zip";
+  writeStoredZip(archivePath, {"artwork.png"});
+
+  std::vector<unsigned char> bytes;
+  std::string error;
+  assert(!archive_file::readFileBounded(
+      archive_file::makeVirtualPath(archivePath, "artwork.png"), bytes, 4,
+      &error));
+  assert(bytes.empty());
+  assert(error.find("exceeds bounded read limit") != std::string::npos);
+}
+
 void testIndependentSevenZipCacheMissesOpenConcurrently() {
   TempDirectory temporary;
   const auto firstPath = temporary.path() / "first.7z";
@@ -417,6 +431,7 @@ int main() {
   testZipIndexRejectsEmbeddedNulInShortFilename();
   testZipIndexPausePollingStillCancelsDuringLargeDirectory();
   testZipIndexUsesCommonSystemEntryFilter();
+  testBoundedReadRejectsOversizedIndexedEntryBeforeExtraction();
   testIndependentSevenZipCacheMissesOpenConcurrently();
   testSevenZipReadUsesCurrentOperationPauseCallback();
   testEncodedHeaderSevenZipUsesSdk();

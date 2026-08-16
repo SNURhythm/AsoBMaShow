@@ -481,8 +481,12 @@ void testFullComboNormalization() {
       std::string(kAttemptId), fixture.meta, fixture.state, fixture.provenance,
       fixture.storageLongNoteMode, fixture.replay, diagnostic);
   expect(assisted.has_value() &&
-             assisted->replay.clearType == kClearTypeAssistedEasyClearRank,
-         "playback policy caps the replay full-combo rank");
+             assisted->score.clearType ==
+                 kClearTypeLightAssistedEasyClearRank &&
+             assisted->replay.clearType ==
+                 kClearTypeLightAssistedEasyClearRank,
+         "altered playback persists Light Assist Easy for both score and "
+         "replay");
 }
 
 void testVersionOneFingerprintGolden() {
@@ -708,6 +712,13 @@ void testReplayFingerprintCoverage() {
       fixture,
       [](auto &v) { ++v.laneCoverEvents.front().noteStartPositionPercent; },
       "laneCoverEvents.noteStartPositionPercent");
+  expectReplayFingerprintChange(
+      fixture,
+      [](auto &v) {
+        v.laneCoverEvents.front().changeKind =
+            ReplayLaneCoverChangeKind::Enabled;
+      },
+      "laneCoverEvents.changeKind");
   expectReplayFingerprintChange(
       fixture,
       [](auto &v) {

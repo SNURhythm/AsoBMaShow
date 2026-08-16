@@ -1,8 +1,12 @@
 #include "SettingsSceneShared.h"
+#include "SettingsScenePreviewAuthority.h"
 #include "../input/InputCaptureController.h"
 #include "../input/RhythmInputHandler.h"
 #include "../rendering/common.h"
 #include "play/BMSRenderer.h"
+#include "play/BeatorajaHiSpeedChart.h"
+#include "play/PlayfieldChartVisualModel.h"
+#include "play/PlayfieldVisualState.h"
 #include "play/RhythmLaneInputController.h"
 
 using namespace settings_scene;
@@ -12,6 +16,7 @@ constexpr int kPreviewTimelineLanes = 16;
 constexpr double kPreviewBpm = 120.0;
 constexpr int kPreviewSampleCombo = 24;
 constexpr int kPreviewSampleScore = 123456;
+
 std::unique_ptr<bms_parser::TimeLine>
 makePreviewTimeline(long long timingMicros, bool firstInMeasure = false) {
   auto timeline =
@@ -85,6 +90,85 @@ std::unique_ptr<bms_parser::Chart> makePreviewChart() {
   chart->Measures.push_back(measure.release());
   return chart;
 }
+
+PlayfieldPresentationConfig
+previewPresentationConfiguration(const AppSettings &settings,
+                                 const bms_parser::Chart &chart) {
+  const gameplay_hispeed::State hispeed(
+      {.mode = gameplay_hispeed::fixModeFromEncoded(
+           static_cast<int>(settings.hispeedFixMode)),
+       .durationMilliseconds = settings.visibleTimeDurationMilliseconds,
+       .hispeed = settings.gameplayHispeed,
+       .margin = settings.hispeedMargin,
+       .laneCoverPercent = settings.noteStartPositionPercent,
+       .laneCoverEnabled = settings.laneCoverEnabled},
+      gameplay_hispeed::summarizeChartBpm(chart));
+  return {
+      .visibleTimeDurationMilliseconds =
+          settings.visibleTimeDurationMilliseconds,
+      .configuredHispeed = hispeed.hispeed(),
+      .visibleTimeUseMilliseconds = settings.visibleTimeUseMilliseconds,
+      .hispeedFixMode = settings.hispeedFixMode,
+      .playAreaWidth = settings.playAreaWidthForKeyMode(chart.Meta.KeyMode),
+      .laneBeamsEnabled = true,
+      .laneCoverHispeedFactor = 1.0F,
+      .laneCoverEnabled = settings.laneCoverEnabled,
+      .laneBeamLengthPercent = settings.laneBeamLengthPercent,
+      .noteStartPositionPercent = settings.noteStartPositionPercent,
+      .laneBeamClockUsesRenderTime = true,
+      .showInvisibleNotes = settings.showInvisibleNotes,
+      .markProcessedNotes = settings.markProcessedNotes,
+      .judgementIndicatorEnabled = settings.judgementIndicatorEnabled,
+      .judgementIndicatorY = settings.judgementIndicatorY,
+      .judgementIndicatorWidthScale =
+          settings.judgementIndicatorWidthScale,
+      .judgementIndicatorHudMode =
+          settings.judgementIndicatorRenderMode ==
+          AppSettings::JudgementIndicatorRenderMode::Hud2D,
+      .judgementIndicatorRangeMilliseconds =
+          settings.judgementIndicatorRangeMilliseconds,
+      .judgementTextY = settings.judgementTextY,
+      .judgementCounterEnabled = settings.judgementCounterEnabled,
+      .judgementCounterPosition = settings.judgementCounterPosition,
+      .fastSlowCriteria = settings.judgementTimingFastSlowCriteria,
+      .millisecondsCriteria =
+          settings.judgementTimingMillisecondsCriteria,
+      .gaugeBarPosition = settings.gaugeBarPosition,
+      .touchVisualizationEnabled = settings.touchVisualizationEnabled,
+      .replayGhostRenderingEnabled = false,
+  };
+}
+
+std::vector<const bms_parser::Note *>
+previewNoteSources(const bms_parser::Chart &chart) {
+  std::vector<const bms_parser::Note *> result;
+  for (const auto *measure : chart.Measures) {
+    if (measure == nullptr) {
+      continue;
+    }
+    for (const auto *timeline : measure->TimeLines) {
+      if (timeline == nullptr) {
+        continue;
+      }
+      for (const auto *note : timeline->Notes) {
+        if (note != nullptr) {
+          result.push_back(note);
+        }
+      }
+      for (const auto *note : timeline->InvisibleNotes) {
+        if (note != nullptr) {
+          result.push_back(note);
+        }
+      }
+      for (const auto *note : timeline->LandmineNotes) {
+        if (note != nullptr) {
+          result.push_back(note);
+        }
+      }
+    }
+  }
+  return result;
+}
 } // namespace
 
 SettingsScene::~SettingsScene() {
@@ -115,41 +199,117 @@ void SettingsScene::ensurePreviewRenderer() {
     previewChart = makePreviewChart();
   }
   if (previewRenderer == nullptr && previewChart != nullptr) {
+    previewChartVisualModel = std::make_unique<PlayfieldChartVisualModel>(
+        buildPlayfieldChartVisualModel(*previewChart, 0));
+    previewVisualStateStore = std::make_unique<PlayfieldVisualStateStore>(
+        *previewChartVisualModel);
+    previewVisualNoteSources = previewNoteSources(*previewChart);
+    if (previewVisualNoteSources.size() !=
+        previewChartVisualModel->notes.size()) {
+      previewVisualNoteSources.clear();
+    }
     Judge previewJudge(previewChart->Meta.Rank);
     previewRenderer = std::make_unique<BMSRenderer>(
         previewChart.get(), previewJudge.timingWindows,
-        context.settings.visibleTimeGreenNumber, true);
-    previewRenderer->setVisibleTimeBpmStrategy(
-        context.settings.visibleTimeBpmStrategy);
-    previewRenderer->setVisibleTimeUseMilliseconds(
-        context.settings.visibleTimeUseMilliseconds);
-    previewRenderer->setPlayAreaWidth(
-        context.settings.playAreaWidthForKeyMode(previewChart->Meta.KeyMode));
-    previewRenderer->setLaneBeamLengthPercent(
-        context.settings.laneBeamLengthPercent);
-    previewRenderer->setNoteStartPositionPercent(
-        context.settings.noteStartPositionPercent);
-    previewRenderer->setLaneCoverFloatingEnabled(
-        context.settings.floatingLaneCoverEnabled);
-    previewRenderer->setLaneBeamClockUsesRenderTime(true);
-    previewRenderer->setShowInvisibleNotes(context.settings.showInvisibleNotes);
-    previewRenderer->setJudgementCounterEnabled(
-        context.settings.judgementCounterEnabled);
-    previewRenderer->setJudgementCounterPosition(
-        context.settings.judgementCounterPosition);
-    previewRenderer->setGaugeBarPosition(context.settings.gaugeBarPosition);
-    previewRenderer->setJudgementTextY(context.settings.judgementTextY);
-    previewRenderer->setJudgementTimingFastSlowCriteria(
-        context.settings.judgementTimingFastSlowCriteria);
-    previewRenderer->setJudgementTimingMillisecondsCriteria(
-        context.settings.judgementTimingMillisecondsCriteria);
+        context.settings.visibleTimeDurationMilliseconds, true);
+    syncPreviewPresentationConfiguration();
+    previewPresentationEvents =
+        std::make_unique<PlayfieldPresentationEventFanout>(
+            *previewVisualStateStore, *previewRenderer);
     resetPreviewHudSample();
+  }
+}
+
+void SettingsScene::syncPreviewPresentationConfiguration() {
+  if (previewChart == nullptr || previewVisualStateStore == nullptr ||
+      previewRenderer == nullptr) {
+    return;
+  }
+  const auto configuration =
+      previewPresentationConfiguration(context.settings, *previewChart);
+  previewVisualStateStore->setConfiguration(configuration);
+  previewRenderer->configure(configuration);
+}
+
+void SettingsScene::syncPreviewAuthority() {
+  if (previewVisualStateStore == nullptr || previewChart == nullptr) {
+    return;
+  }
+  if (previewGaugeRules == nullptr) {
+    previewGaugeRules = std::make_unique<GameplayGaugeRules>(
+        compileGameplayGaugeRules(kDefaultGameplayRuleset,
+                                  previewChart->Meta,
+                                  GaugeProfile::Standard));
+  }
+  const auto laneCover = previewLaneCoverAuthority(context.settings);
+  previewVisualStateStore->applyAuthorityUpdate({
+      .currentBpm = kPreviewBpm,
+      .judgementCounters = previewJudgeCount,
+      .comboBreak = previewComboBreak,
+      .gaugeType = GaugeType::Normal,
+      .gaugeAutoShift = GaugeAutoShiftMode::None,
+      .currentGauge = 74.0F,
+      .gaugeRules = *previewGaugeRules,
+      .playOptionLabel = "PREVIEW",
+      .laneCoverPercent = laneCover.percent,
+      .laneCoverEnabled = laneCover.enabled,
+  });
+}
+
+void SettingsScene::capturePreviewVisualState() {
+  if (previewVisualStateStore == nullptr ||
+      previewChartVisualModel == nullptr) {
+    return;
+  }
+  syncPreviewAuthority();
+  const std::size_t noteCount =
+      std::min(previewVisualNoteSources.size(),
+               previewChartVisualModel->notes.size());
+  std::vector<NotePresentationState> noteStates;
+  noteStates.reserve(noteCount);
+  for (std::size_t index = 0; index < noteCount; ++index) {
+    const auto *source = previewVisualNoteSources[index];
+    NotePresentationState noteState{
+        .id = previewChartVisualModel->notes[index].id,
+        .judged = source->IsPlayed,
+        .dead = source->IsDead,
+    };
+    if (const auto *longNote =
+            dynamic_cast<const bms_parser::LongNote *>(source);
+        longNote != nullptr) {
+      const auto *head = longNote->IsTail() && longNote->Head != nullptr
+                             ? longNote->Head
+                             : longNote;
+      noteState.longActive = head->IsHolding;
+    }
+    noteStates.push_back(noteState);
+  }
+  previewVisualStateStore->setNoteStates(std::move(noteStates));
+  const PlayfieldFrameClock clock{
+      .serial = ++previewFrameSerial,
+      .visualTimeMicros = previewElapsedMicros,
+      .gameplayTimeMicros = previewElapsedMicros,
+      .replayTouchTimeMicros = previewElapsedMicros,
+      .bgaTimeMicros = previewElapsedMicros,
+  };
+  if (previewCapturedVisualState == nullptr) {
+    previewCapturedVisualState = std::make_unique<PlayfieldVisualState>(
+        previewVisualStateStore->capture(clock));
+  } else {
+    *previewCapturedVisualState = previewVisualStateStore->capture(clock);
   }
 }
 
 void SettingsScene::destroyPreviewRenderer() {
   destroyPreviewInputHandler();
+  previewPresentationEvents.reset();
   previewRenderer.reset();
+  previewCapturedVisualState.reset();
+  previewGaugeRules.reset();
+  previewVisualStateStore.reset();
+  previewChartVisualModel.reset();
+  previewVisualNoteSources.clear();
+  previewFrameSerial = 0;
   previewChart.reset();
   previewElapsedMicros = 0;
 }
@@ -159,12 +319,14 @@ void SettingsScene::ensurePreviewInputHandler() {
     return;
   }
   ensurePreviewRenderer();
-  if (previewChart == nullptr || previewRenderer == nullptr) {
+  if (previewChart == nullptr || previewRenderer == nullptr ||
+      previewPresentationEvents == nullptr) {
     return;
   }
   if (previewLaneController == nullptr) {
     previewLaneController = std::make_unique<RhythmLaneInputController>(
-        previewChart.get(), previewRenderer.get(), previewLanePressed,
+        previewChart.get(), previewPresentationEvents.get(),
+        previewLanePressed,
         Judge(previewChart->Meta.Rank));
   }
   if (previewInputHandler == nullptr) {
@@ -280,16 +442,25 @@ void SettingsScene::resetPreviewHudSample() {
     return;
   }
   previewRenderer->setJudgementCounters(previewJudgeCount, previewComboBreak);
-  const GameplayGaugeRules previewGaugeRules = compileGameplayGaugeRules(
-      kDefaultGameplayRuleset, previewChart->Meta, GaugeProfile::Standard);
+  previewGaugeRules = std::make_unique<GameplayGaugeRules>(
+      compileGameplayGaugeRules(kDefaultGameplayRuleset,
+                                previewChart->Meta,
+                                GaugeProfile::Standard));
   previewRenderer->setGaugeStatus(GaugeType::Normal,
                                   GaugeAutoShiftMode::None, 74.0f,
-                                  previewGaugeRules);
-  previewRenderer->onJudge(JudgeResult(Great, 50000), previewCombo,
-                           previewScore, previewElapsedMicros, false);
+                                  *previewGaugeRules);
+  syncPreviewAuthority();
+  if (previewPresentationEvents != nullptr) {
+    const PlayfieldJudgeEventClock clock =
+        makePlayfieldJudgeEventClock(0, 0, 0);
+    previewPresentationEvents->onJudge(JudgeResult(Great, 50000),
+                                       previewCombo, previewScore, clock,
+                                       false);
+  }
 }
 
-void SettingsScene::publishPreviewJudgement(const JudgeResult &judgeResult) {
+void SettingsScene::publishPreviewJudgement(
+    const JudgeResult &judgeResult, long long sourceSongTimeMicros) {
   if (previewRenderer == nullptr) {
     return;
   }
@@ -303,8 +474,13 @@ void SettingsScene::publishPreviewJudgement(const JudgeResult &judgeResult) {
     previewScore += 2;
   }
   previewJudgeCount[judgeResult.judgement]++;
-  previewRenderer->onJudge(judgeResult, previewCombo, previewScore,
-                           previewElapsedMicros, true);
+  syncPreviewAuthority();
+  if (previewPresentationEvents != nullptr) {
+    const PlayfieldJudgeEventClock clock =
+        makePlayfieldJudgeEventClock(sourceSongTimeMicros, 0, 0);
+    previewPresentationEvents->onJudge(judgeResult, previewCombo,
+                                       previewScore, clock, true);
+  }
   previewRenderer->setJudgementCounter(
       judgeResult.judgement, previewJudgeCount[judgeResult.judgement],
       previewComboBreak);
@@ -330,8 +506,13 @@ bms_parser::Note *SettingsScene::pressLane(int mainLane, int compensateLane,
   };
   auto result =
       previewLaneController->pressLane(mainLane, compensateLane, inputContext);
-  if (result.hasJudge && previewRenderer != nullptr) {
-    publishPreviewJudgement(result.judge);
+  for (const auto &transaction : result.transactions) {
+    if (transaction.hasJudge && previewRenderer != nullptr) {
+      publishPreviewJudgement(
+          transaction.judge,
+          transaction.hasReplayEvent ? transaction.replayEvent.songTimeMicros
+                                     : previewElapsedMicros);
+    }
   }
   return result.note;
 }
@@ -349,19 +530,31 @@ bms_parser::Note *SettingsScene::releaseLane(int lane, double inputDelay,
   };
   auto result =
       previewLaneController->releaseLane(lane, inputContext, isBackSpin);
-  if (result.hasJudge && previewRenderer != nullptr) {
-    publishPreviewJudgement(result.judge);
+  for (const auto &transaction : result.transactions) {
+    if (transaction.hasJudge && previewRenderer != nullptr) {
+      publishPreviewJudgement(
+          transaction.judge,
+          transaction.hasReplayEvent ? transaction.replayEvent.songTimeMicros
+                                     : previewElapsedMicros);
+    }
   }
   return result.note;
 }
 
 void SettingsScene::resetPreviewSimulation() {
   previewElapsedMicros = 0;
+  previewFrameSerial = 0;
   if (previewLaneController != nullptr) {
     previewLaneController->resetLaneStates();
   }
   if (previewRenderer != nullptr) {
     previewRenderer->reset();
+  }
+  if (previewVisualStateStore != nullptr &&
+      previewChartVisualModel != nullptr) {
+    previewVisualStateStore->resetModel(*previewChartVisualModel);
+    previewVisualStateStore->setSceneStartMicros(0);
+    previewVisualStateStore->setPlayStartMicros(0);
   }
   resetPreviewHudSample();
   if (previewChart == nullptr) {

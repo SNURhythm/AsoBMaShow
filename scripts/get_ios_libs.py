@@ -6,6 +6,7 @@
 import os
 import subprocess
 import shutil
+import sys
 
 # 0. detect vcpkg path (priority: env var VCPKG_ROOT, then default location)
 vcpkg_root = os.getenv("VCPKG_ROOT")
@@ -45,21 +46,24 @@ def install_package(package_name):
 
 
 # 2. generate xcframeworks with xcodebuild -create-xcframework to merge iOS Device and iOS Simulator triplets
-def generate_xcframework(package_name, is_fat):
+def generate_xcframework(package_name, is_fat, library_name=None, output_name=None):
+    library_name = package_name if library_name is None else library_name
+    output_name = package_name if output_name is None else output_name
     libs = []
     if is_fat:
         for triplet in triplets:
             libs += (["-library", f"{tmp_path}/{package_name}-{triplet}.a"])
     else:
         for triplet in triplets:
-            libs += (["-library", f"{vcpkg_root}/installed/{triplet}/lib/{package_name}.a"])
+            libs += (["-library", f"{vcpkg_root}/installed/{triplet}/lib/{library_name}.a"])
     print(libs)
-    subprocess.run(["xcodebuild", "-create-xcframework", *libs, "-output", f"{tmp_path}/{package_name}.xcframework"], check=True)
+    subprocess.run(["xcodebuild", "-create-xcframework", *libs, "-output", f"{tmp_path}/{output_name}.xcframework"], check=True)
 
 
 # 3. copy them to ios/Xcode/AsoBMaShow/lib
-def copy_xcframework(package_name):
-    subprocess.run(["cp", "-r", f"{tmp_path}/{package_name}.xcframework", f"{current_path}/ios/Xcode/AsoBMaShow/lib"], check=True)
+def copy_xcframework(package_name, output_name=None):
+    output_name = package_name if output_name is None else output_name
+    subprocess.run(["cp", "-r", f"{tmp_path}/{output_name}.xcframework", f"{current_path}/ios/Xcode/AsoBMaShow/lib"], check=True)
 
 def copy_includes(package_name, is_dir=False):
     subprocess.run(["cp", "-r" if is_dir else "-f", f"{vcpkg_root}/installed/arm64-ios/include/{package_name}", f"{current_path}/ios/Xcode/AsoBMaShow/include"], check=True)
@@ -105,5 +109,18 @@ generate_xcframework("lib7zip", True)
 copy_xcframework("lib7zip")
 copy_includes("7zip", True)
 copy_license("7zip", "7zip.txt")
+
+subprocess.run(
+    [
+        sys.executable,
+        f"{current_path}/scripts/ios_utf8proc.py",
+        "ensure",
+        "--repository-root",
+        current_path,
+        "--vcpkg-root",
+        vcpkg_root,
+    ],
+    check=True,
+)
 # remove tmp
 shutil.rmtree(tmp_path)

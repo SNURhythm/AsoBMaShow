@@ -556,6 +556,10 @@ int main(int argv, char **args) {
   SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1");
   SDL_SetHint(SDL_HINT_IME_SUPPORT_EXTENDED_TEXT, "1");
 #if TARGET_OS_IPHONE
+  // UIKit exposes a physical trackpad as a mouse. SDL otherwise mirrors every
+  // mouse press as a synthetic finger press, which would activate UI controls
+  // twice when the application accepts native touch input too.
+  SDL_SetHint(SDL_HINT_MOUSE_TOUCH_EVENTS, "0");
   SDL_SetHint(SDL_HINT_AUDIO_CATEGORY, "ambient");
 #endif
 #if TARGET_OS_ANDROID
@@ -945,6 +949,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   bool androidResumeResizePending = false;
 #endif
   while (!context.quitFlag) {
+    context.pollGameplaySkinCommits();
 
     auto currentFrameTime = std::chrono::steady_clock::now();
     const bool exportActiveForPacing =
@@ -1156,7 +1161,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       }
 #endif
 
-      if (scene_event_routing::shouldDispatchToScene(event.type)) {
+      if (scene_event_routing::shouldDispatchToScene(event)) {
         auto result = sceneManager.handleEvents(event);
         if (result.quit) {
           context.quitFlag = true;
@@ -1302,7 +1307,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
             0.001f ||
         std::abs(appliedLaneLength - context.settings.laneLength) > 0.001f;
     if (laneTransformChanged &&
-        !context.replayVideoExportActive.load(std::memory_order_acquire)) {
+        !context.replayVideoExportActive.load(std::memory_order_acquire) &&
+        !context.rendererAccess.exportRequested()) {
       std::unique_lock<std::mutex> bgfxLock(context.bgfxRenderMutex,
                                             std::try_to_lock);
       if (bgfxLock.owns_lock()) {
@@ -1320,10 +1326,12 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     bool renderedFrame = false;
     const bool replayExportActive =
         context.replayVideoExportActive.load(std::memory_order_acquire);
+    const bool replayExportRequested = context.rendererAccess.exportRequested();
     const bool replayExportUiFrameRequested =
         context.replayVideoExportUiFrameRequested.load(
             std::memory_order_acquire);
-    if (!replayExportActive || replayExportUiFrameRequested) {
+    if ((!replayExportActive && !replayExportRequested) ||
+        replayExportUiFrameRequested) {
       std::unique_lock<std::mutex> bgfxLock(context.bgfxRenderMutex,
                                             std::try_to_lock);
       if (bgfxLock.owns_lock() &&
@@ -1339,25 +1347,42 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         context.replayVideoExportUiFrameRequested.store(
             false, std::memory_order_release);
         renderedFrame = true;
-      } else if (bgfxLock.owns_lock() && !context.replayVideoExportActive.load(
-                                             std::memory_order_acquire)) {
+      } else if (bgfxLock.owns_lock() &&
+                 !context.replayVideoExportActive.load(
+                     std::memory_order_acquire) &&
+                 !context.rendererAccess.exportRequested()) {
         const bool hasActiveVisuals = context.jukebox.hasActiveVisuals();
 
         bgfx::touch(rendering::clear_view);
         bgfx::touch(rendering::ui_view);
-        if (hasActiveVisuals) {
+        sceneManager.render();
+
+        const GameplayBgaCompositeState &bgaCompositeState =
+            context.gameplayBgaCompositeState;
+        const bool submitPreparedFullscreen =
+            bgaCompositeState.mode ==
+                GameplayBgaCompositeMode::FullscreenBuiltIn &&
+            bgaCompositeState.prepared.has_value();
+        const bool submitLegacyFullscreen =
+            bgaCompositeState.mode ==
+                GameplayBgaCompositeMode::FullscreenBuiltIn &&
+            bgaCompositeState.frameSerial == 0 &&
+            !bgaCompositeState.prepared.has_value() && hasActiveVisuals;
+        const bool compositeFullscreenBga =
+            submitPreparedFullscreen || submitLegacyFullscreen;
+        if (compositeFullscreenBga) {
           bgfx::touch(rendering::bga_view);
           bgfx::touch(rendering::bga_layer_view);
           bgfx::touch(s_blurPass->finalView());
           bgfx::touch(s_blurPass->blurViewH());
           bgfx::touch(s_blurPass->blurViewV());
-        }
-
-        sceneManager.render();
-        if (hasActiveVisuals) {
           const bool ignoreBgaPostOptions =
               context.ignoreBgaPostOptions.load(std::memory_order_acquire);
-          context.jukebox.render();
+          if (submitPreparedFullscreen) {
+            context.jukebox.submitFullscreen(*bgaCompositeState.prepared);
+          } else {
+            context.jukebox.render();
+          }
           s_blurPass->setBlurStrength(
               ignoreBgaPostOptions ? 0.0f : context.settings.bgaBlurStrength);
           s_postProcess.apply();

@@ -155,6 +155,125 @@ void parseGyroscopeConfig(const Json &document, InputProfile &profile,
       profile.gyroscopeTurntable.releaseDelayMs, diagnostics);
 }
 
+void parseVirtualControllerConfigMember(const Json &config, const char *name,
+                                        float defaultValue, float &destination,
+                                        std::vector<std::string> &diagnostics) {
+  const auto member = config.find(name);
+  if (member == config.end() || !member->is_number()) {
+    destination = defaultValue;
+    diagnostics.emplace_back("Reset missing or invalid virtual controller " +
+                             std::string(name) + ".");
+    return;
+  }
+  try {
+    destination = member->get<float>();
+  } catch (const std::exception &) {
+    destination = defaultValue;
+    diagnostics.emplace_back("Reset invalid virtual controller " +
+                             std::string(name) + ".");
+  }
+}
+
+void parseVirtualControllerConfig(const Json &document, InputProfile &profile,
+                                  bool hasAxisSpacing,
+                                  bool hasScratchMode,
+                                  bool hasPlayer,
+                                  std::vector<std::string> &diagnostics) {
+  const auto config = document.find("virtualController");
+  if (config == document.end() || !config->is_object()) {
+    profile.virtualController = {};
+    diagnostics.emplace_back(
+        "Reset missing or invalid virtual controller settings.");
+    return;
+  }
+  const auto enabled = config->find("enabled");
+  if (enabled == config->end() || !enabled->is_boolean()) {
+    profile.virtualController.enabled = false;
+    diagnostics.emplace_back(
+        "Reset missing or invalid virtual controller enabled setting.");
+  } else {
+    profile.virtualController.enabled = enabled->get<bool>();
+  }
+  if (hasScratchMode) {
+    const auto scratchMode = config->find("scratchMode");
+    if (scratchMode == config->end() || !scratchMode->is_string()) {
+      profile.virtualController.scratchMode =
+          input::VirtualControllerScratchMode::Flick;
+      diagnostics.emplace_back(
+          "Reset missing or invalid virtual controller scratch mode.");
+    } else if (*scratchMode == "flick") {
+      profile.virtualController.scratchMode =
+          input::VirtualControllerScratchMode::Flick;
+    } else if (*scratchMode == "spin") {
+      profile.virtualController.scratchMode =
+          input::VirtualControllerScratchMode::Spin;
+    } else {
+      profile.virtualController.scratchMode =
+          input::VirtualControllerScratchMode::Flick;
+      diagnostics.emplace_back("Reset invalid virtual controller scratch mode.");
+    }
+  } else {
+    profile.virtualController.scratchMode =
+        input::VirtualControllerScratchMode::Flick;
+  }
+  if (hasPlayer) {
+    const auto player = config->find("player");
+    if (player == config->end() || !player->is_number_integer()) {
+      profile.virtualController.player =
+          input::VirtualControllerPlayer::Player1;
+      diagnostics.emplace_back(
+          "Reset missing or invalid virtual controller player.");
+    } else if (*player == 1) {
+      profile.virtualController.player =
+          input::VirtualControllerPlayer::Player1;
+    } else if (*player == 2) {
+      profile.virtualController.player =
+          input::VirtualControllerPlayer::Player2;
+    } else {
+      profile.virtualController.player =
+          input::VirtualControllerPlayer::Player1;
+      diagnostics.emplace_back("Reset invalid virtual controller player.");
+    }
+  } else {
+    profile.virtualController.player = input::VirtualControllerPlayer::Player1;
+  }
+  parseVirtualControllerConfigMember(
+      *config, "centerX", input::VirtualControllerConfig::kDefaultCenterX,
+      profile.virtualController.centerX, diagnostics);
+  parseVirtualControllerConfigMember(
+      *config, "centerY", input::VirtualControllerConfig::kDefaultCenterY,
+      profile.virtualController.centerY, diagnostics);
+  parseVirtualControllerConfigMember(
+      *config, "buttonSize",
+      input::VirtualControllerConfig::kDefaultButtonSize,
+      profile.virtualController.buttonSize, diagnostics);
+  if (hasAxisSpacing) {
+    parseVirtualControllerConfigMember(
+        *config, "keySpacingX",
+        input::VirtualControllerConfig::kDefaultKeySpacingX,
+        profile.virtualController.keySpacingX, diagnostics);
+    parseVirtualControllerConfigMember(
+        *config, "keySpacingY",
+        input::VirtualControllerConfig::kDefaultKeySpacingY,
+        profile.virtualController.keySpacingY, diagnostics);
+    parseVirtualControllerConfigMember(
+        *config, "scratchKeyplateSpacing",
+        input::VirtualControllerConfig::kDefaultScratchKeyplateSpacing,
+        profile.virtualController.scratchKeyplateSpacing, diagnostics);
+    return;
+  }
+
+  // Schema four used one non-negative gap for every relation. Preserve that
+  // user's deliberate geometry during migration, then write the explicit
+  // axis-based values at schema five on the next save.
+  float legacyKeyGap = input::VirtualControllerConfig::kDefaultKeySpacingY;
+  parseVirtualControllerConfigMember(
+      *config, "keyGap", legacyKeyGap, legacyKeyGap, diagnostics);
+  profile.virtualController.keySpacingX = legacyKeyGap;
+  profile.virtualController.keySpacingY = legacyKeyGap;
+  profile.virtualController.scratchKeyplateSpacing = legacyKeyGap;
+}
+
 input::ControlKind parseControlKind(std::string_view value) {
   if (value == "key")
     return input::ControlKind::Key;
@@ -345,6 +464,11 @@ InputProfileStore::load(const std::filesystem::path &path) {
     if (schemaVersion >= 2) {
       parseGyroscopeConfig(document, result.profile, result.diagnostics);
     }
+    if (schemaVersion >= 4) {
+      parseVirtualControllerConfig(document, result.profile, schemaVersion >= 5,
+                                   schemaVersion >= 6, schemaVersion >= 7,
+                                   result.diagnostics);
+    }
     result.profile.bindings.reserve(bindings.size());
     for (const auto &binding : bindings) {
       result.profile.bindings.push_back(parseBinding(binding));
@@ -410,6 +534,20 @@ bool InputProfileStore::saveAtomic(const std::filesystem::path &path,
          {{"stepAngleDegrees",
            sanitized.gyroscopeTurntable.stepAngleDegrees},
           {"releaseDelayMs", sanitized.gyroscopeTurntable.releaseDelayMs}}},
+        {"virtualController",
+         {{"enabled", sanitized.virtualController.enabled},
+          {"scratchMode", sanitized.virtualController.scratchMode ==
+                                  input::VirtualControllerScratchMode::Spin
+                              ? "spin"
+                              : "flick"},
+          {"player", static_cast<int>(sanitized.virtualController.player)},
+          {"centerX", sanitized.virtualController.centerX},
+          {"centerY", sanitized.virtualController.centerY},
+          {"buttonSize", sanitized.virtualController.buttonSize},
+          {"keySpacingX", sanitized.virtualController.keySpacingX},
+          {"keySpacingY", sanitized.virtualController.keySpacingY},
+          {"scratchKeyplateSpacing",
+           sanitized.virtualController.scratchKeyplateSpacing}}},
         {"bindings", Json::array()}};
     for (const auto &binding : sanitized.bindings) {
       document["bindings"].push_back(serializeBinding(binding));

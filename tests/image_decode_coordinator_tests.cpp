@@ -11,6 +11,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <stop_token>
 #include <utility>
 #include <vector>
 
@@ -229,6 +230,66 @@ void testDropPreventsStaleCompletionFromReplacingNewWork() {
          "late stale completion cannot overwrite or resurrect a ticket");
 }
 
+void testTerminalWaitIsNotifiedAndTakesReadyImage() {
+  ControlledLoader loader;
+  image_decode::ImageDecodeCoordinator coordinator(
+      [&](const auto &item) { return loader.load(item); });
+  const auto ticket = coordinator.request(request("terminal"));
+  expect(ticket != 0 && waitUntil([&] { return loader.hasStarted("terminal"); }),
+         "terminal wait test starts its controlled decode");
+
+  std::optional<image_decode::ImageDecodeWaitResult> result;
+  std::jthread waiter([&] { result = coordinator.waitTake(ticket, {}); });
+  loader.release("terminal");
+  waiter.join();
+  expect(result && result->state == image_decode::ImageDecodeWaitState::Ready &&
+             result->image && result->image->valid(),
+         "terminal wait wakes and transfers the ready image");
+  expect(!coordinator.isTracked(ticket),
+         "taking a terminal ready result removes its consumer ticket");
+}
+
+void testTerminalWaitCancellationDoesNotCancelAnotherConsumer() {
+  ControlledLoader loader;
+  image_decode::ImageDecodeCoordinator coordinator(
+      [&](const auto &item) { return loader.load(item); });
+  const auto cancelled = coordinator.request(request("shared-terminal"));
+  const auto live = coordinator.request(request("shared-terminal"));
+  expect(cancelled != 0 && live != 0 &&
+             waitUntil([&] { return loader.hasStarted("shared-terminal"); }),
+         "duplicate terminal waiters share the same decoder work");
+
+  std::stop_source stop;
+  std::optional<image_decode::ImageDecodeWaitResult> cancelledResult;
+  std::jthread waiter([&] {
+    cancelledResult = coordinator.waitTake(cancelled, stop.get_token());
+  });
+  stop.request_stop();
+  waiter.join();
+  expect(cancelledResult &&
+             cancelledResult->state == image_decode::ImageDecodeWaitState::Cancelled,
+         "stopping one terminal waiter cancels only its ticket");
+  loader.release("shared-terminal");
+  const auto liveResult = coordinator.waitTake(live, {});
+  expect(liveResult.state == image_decode::ImageDecodeWaitState::Ready &&
+             liveResult.image,
+         "a second consumer still receives the shared decoded image");
+}
+
+void testLegacyCancellationDoesNotAccumulateTerminalTickets() {
+  image_decode::ImageDecodeCoordinator coordinator(
+      [](const auto &) -> std::optional<image_decode::DecodedImageData> {
+        return image_decode::DecodedImageData{.width=1, .height=1,
+          .rgba=std::make_shared<std::vector<unsigned char>>(4, 0)};
+      });
+  for (int index = 0; index != 32; ++index) {
+    const auto ticket = coordinator.request(request("legacy-" + std::to_string(index)));
+    coordinator.cancel(ticket);
+  }
+  expect(coordinator.terminalTicketCount() == 0,
+         "fire-and-forget cancellation leaves no terminal ticket records behind");
+}
+
 } // namespace
 
 int main() {
@@ -236,6 +297,9 @@ int main() {
   testDuplicateConsumersShareOneDecode();
   testQueuedAndInFlightOrphansAreDiscarded();
   testDropPreventsStaleCompletionFromReplacingNewWork();
+  testTerminalWaitIsNotifiedAndTakesReadyImage();
+  testTerminalWaitCancellationDoesNotCancelAnotherConsumer();
+  testLegacyCancellationDoesNotAccumulateTerminalTickets();
   if (failures != 0) {
     std::cerr << failures << " image decode coordinator test(s) failed\n";
     return 1;

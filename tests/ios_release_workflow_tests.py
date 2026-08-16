@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -11,6 +12,57 @@ FASTFILE = ROOT / "ios/Xcode/AsoBMaShow/fastlane/Fastfile"
 WORKFLOW = ROOT / ".github/workflows/mobile-beta-deploy.yml"
 VERIFY_SCRIPT = ROOT / "scripts/ios_release_verify.sh"
 DEPLOY_SCRIPT = ROOT / "scripts/ios_firebase_deploy.sh"
+
+RELEASE_CRITICAL_SKIN_TESTS = {
+    "skin_path_policy_tests": "skin_path_policy_tests",
+    "skin_tree_snapshotter_tests": "skin_tree_snapshotter_tests",
+    "skin_archive_importer_tests": "skin_archive_importer_tests",
+    "skin_package_store_tests": "skin_package_store_tests",
+    "skin_package_operation_service_tests": "skin_package_operation_service_tests",
+    "skin_commit_coordinator_tests": "skin_commit_coordinator_tests",
+    "skin_diagnostic_history_tests": "skin_diagnostic_history_tests",
+    "lua_skin_file_system_tests": "lua_skin_file_system_tests",
+    "lua_skin_runtime_tests": "lua_skin_runtime_tests",
+    "lua_skin_binding_decoder_tests": "lua_skin_binding_decoder_tests",
+    "lua_skin_table_decoder_tests": "lua_skin_table_decoder_tests",
+    "lua_skin_host_modules_tests": "lua_skin_host_modules_tests",
+    "skin_resource_catalog_tests": "skin_resource_catalog_tests",
+    "skin_live_resource_counters_tests": "skin_live_resource_counters_tests",
+    "skin_process_resident_memory_tests": "skin_process_resident_memory_tests",
+    "gameplay_skin_validator_tests": "gameplay_skin_validator_tests",
+    "play_skin_viewport_tests": "play_skin_viewport_tests",
+    "skin_destination_evaluator_tests": "skin_destination_evaluator_tests",
+    "beatoraja_skin_model_tests": "beatoraja_skin_model_tests",
+    "skin_draw_command_tests": "skin_draw_command_tests",
+    "skin_quad_batch_renderer_tests": "skin_quad_batch_renderer_tests",
+    "skin_renderer_golden_tests": "skin_renderer_golden_tests",
+    "playfield_visual_state_tests": "playfield_visual_state_tests",
+    "playfield_projection_tests": "playfield_projection_tests",
+    "play_skin_state_bridge_tests": "play_skin_state_bridge_tests",
+    "play_skin_session_tests": "play_skin_session_tests",
+    "playfield_presentation_coordinator_tests": "playfield_presentation_coordinator_tests",
+    "builtin_playfield_presentation_tests": "builtin_playfield_presentation_tests",
+    "gameplay_skin_integration_tests": "gameplay_skin_integration_tests",
+    "skin_configuration_write_queue_tests": "skin_configuration_write_queue_tests",
+    "realtime_touch_input_router_tests": "realtime_touch_input_router_tests",
+    "play_skin_touch_geometry_tests": "play_skin_touch_geometry_tests",
+    "gameplay_bga_target_tests": "gameplay_bga_target_tests",
+    "bgfx_skin_texture_device_tests": "bgfx_skin_texture_device_tests",
+    "app_settings_store_tests": "foundation_profile_settings",
+    "profile_settings_persistence_tests": "foundation_profile_settings_persistence",
+    "gameplay_skin_lifecycle_tests": "gameplay_skin_lifecycle_tests",
+    "gameplay_skin_settings_tests": "gameplay_skin_settings_tests",
+    "gameplay_skin_settings_presentation_tests": "gameplay_skin_settings_presentation_tests",
+    "skin_performance_telemetry_tests": "skin_performance_telemetry_tests",
+    "skin_overlay_digest_provider_tests": "skin_overlay_digest_provider_tests",
+    "skin_acceptance_recorder_tests": "skin_acceptance_recorder_tests",
+    "gameplay_skin_acceptance_controller_tests": "gameplay_skin_acceptance_controller_tests",
+    "player_profile_manager_tests": "foundation_profile_manager",
+    "profile_switch_tests": "foundation_profile_switch",
+    "profile_archive_tests": "foundation_profile_archive",
+    "profile_settings_controller_tests": "foundation_profile_controller",
+    "profile_runtime_reapply_tests": "foundation_profile_runtime",
+}
 
 
 class IOSReleaseWorkflowTests(unittest.TestCase):
@@ -40,13 +92,29 @@ class IOSReleaseWorkflowTests(unittest.TestCase):
             "\n  end\nend", 1
         )[0]
         post_build = lane.index("temporary_fix_ios_post_build")
-        artifact_audit = lane.index("ios_artifact_audit.sh")
+        artifact_audit = lane.index("audit_distribution_artifact")
         upload = lane.index("upload_to_testflight")
 
         self.assertLess(post_build, artifact_audit)
         self.assertLess(artifact_audit, upload)
         self.assertIn("SharedValues::IPA_OUTPUT_PATH", lane)
-        self.assertIn("--require-signature", lane)
+        self.assertIn("--require-signature", self.fastfile)
+
+    def test_distribution_builds_embed_and_audit_the_checkout_identity(self):
+        self.assertIn("def release_build_identity", self.fastfile)
+        self.assertIn('"rev-parse", "HEAD"', self.fastfile)
+        self.assertIn('"status", "--porcelain"', self.fastfile)
+        self.assertIn("def build_identity_xcargs", self.fastfile)
+        self.assertIn("def audit_distribution_artifact", self.fastfile)
+
+        for lane_name in ("firebase", "testflight_release"):
+            with self.subTest(lane=lane_name):
+                lane = self.fastfile.split(f"lane :{lane_name} do", 1)[1].split(
+                    "\n  end\nend", 1
+                )[0]
+                self.assertIn("release_build_identity", lane)
+                self.assertIn("build_identity_xcargs", lane)
+                self.assertIn("audit_distribution_artifact", lane)
 
     def test_firebase_pr_bypasses_release_verification_but_testflight_does_not(self):
         verify = self.workflow.split("  ios-verify:", 1)[1].split(
@@ -125,6 +193,23 @@ class IOSReleaseWorkflowTests(unittest.TestCase):
         self.assertIn(f"-B {build_dir}", configure)
         self.assertIn(f"cmake --build {build_dir}", result.stdout)
 
+    @unittest.skipUnless(shutil.which("zsh"), "zsh is required")
+    def test_verification_dry_run_is_identical_under_bash_and_direct_zsh(self):
+        outputs = []
+        for shell in ("bash", "zsh"):
+            result = subprocess.run(
+                [shell, str(VERIFY_SCRIPT), "--dry-run"],
+                cwd=ROOT,
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+            outputs.append(result.stdout)
+            self.assertEqual(result.stderr, "")
+
+        self.assertEqual(outputs[0], outputs[1])
+        self.assertIn(f"cmake --build {ROOT / 'cmake-build-debug'}", outputs[1])
+
     def test_release_verifier_includes_math_regressions(self):
         self.assertIn("quaternion_math_tests", self.verify_script)
         self.assertIn("foundation_math_quaternion", self.verify_script)
@@ -135,6 +220,18 @@ class IOSReleaseWorkflowTests(unittest.TestCase):
             2,
             "the cleanup regression must be built and selected by CTest",
         )
+
+    def test_release_verifier_builds_and_runs_release_critical_skin_surface(self):
+        for target, registered_test in RELEASE_CRITICAL_SKIN_TESTS.items():
+            with self.subTest(target=target):
+                self.assertIn(target, self.verify_script)
+                self.assertIn(registered_test, self.verify_script)
+        for registered_audit in (
+            "image_fade_shader_audit",
+            "shader_compile_workflow_audit",
+        ):
+            with self.subTest(registered_audit=registered_audit):
+                self.assertIn(registered_audit, self.verify_script)
 
     def test_local_firebase_wrapper_calls_only_the_firebase_lane(self):
         script = DEPLOY_SCRIPT.read_text(encoding="utf-8")

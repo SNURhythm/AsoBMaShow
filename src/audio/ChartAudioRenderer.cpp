@@ -498,23 +498,38 @@ bool writeWavFile(const std::filesystem::path &path,
 std::vector<AudioEvent>
 resolveAudioEvents(const bms_parser::Chart &chart,
                    const RenderOptions &options) {
+  std::vector<AudioEvent> events;
   switch (options.keySoundMode) {
   case KeySoundMode::BackgroundOnly:
-    return CollectBackgroundAudioEvents(chart);
+    events = CollectBackgroundAudioEvents(chart);
+    break;
   case KeySoundMode::ChartTiming:
-    return CollectChartTimedAudioEvents(chart);
+    events = CollectChartTimedAudioEvents(chart);
+    break;
   case KeySoundMode::ReplayTiming:
     if (options.replay == nullptr) {
       return {};
     }
-    return CollectReplayTimedAudioEvents(chart, *options.replay,
-                                         options.keySoundOffsetMicros);
+    events = CollectReplayTimedAudioEvents(chart, *options.replay,
+                                            options.keySoundOffsetMicros);
+    break;
   }
-  return {};
+  if (options.playbackEventDeadlineMicros.has_value()) {
+    std::erase_if(events, [&](const AudioEvent &event) {
+      return !isScheduledBeforePlaybackEnd(
+          event.timeMicros, options.playbackEventDeadlineMicros);
+    });
+  }
+  return events;
 }
 
 long long baseDurationMicros(const bms_parser::Chart &chart,
                              const RenderOptions &options) {
+  if (options.playbackEventDeadlineMicros.has_value()) {
+    return outputTimeMicrosFromTimelineStart(
+        *options.playbackEventDeadlineMicros, options.timelineStartMicros,
+        options.playback);
+  }
   if (options.keySoundMode == KeySoundMode::ReplayTiming &&
       options.replay != nullptr) {
     return outputTimeMicrosFromTimelineStart(

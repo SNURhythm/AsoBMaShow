@@ -52,10 +52,30 @@ workflow_required = {
     "MinGW compiler preflight": 'test -x "$MINGW/bin/x86_64-w64-mingw32-g++.exe"',
     "forced shader regeneration": "python3 make.py clean\n          python3 make.py",
     "current shader script": "python3 make.py",
+    "shader manifest write verification": (
+        "python3 ../scripts/verify_skin_shader_outputs.py --root .. "
+        "--shader skin_quad --shader skin_yuvrgb "
+        "--allow-other-shader-changes "
+        "--require-backends metal,spirv,essl,dx11 "
+        "--write-manifest "
+        "tests/fixtures/beatoraja_skin/shaders/skin_shader_manifest.json"
+    ),
+    "shader manifest read-only verification": (
+        "python3 ../scripts/verify_skin_shader_outputs.py --root .. "
+        "--shader skin_quad --shader skin_yuvrgb "
+        "--allow-other-shader-changes "
+        "--require-backends metal,spirv,essl,dx11 "
+        "--manifest "
+        "tests/fixtures/beatoraja_skin/shaders/skin_shader_manifest.json"
+    ),
+    "unexpected shader-tree change rejection": "verify_skin_shader_outputs.py",
     "Git for Windows commit shell": "- name: Commit generated shaders\n        shell: bash",
     "bot name": 'git config user.name "github-actions[bot]"',
     "bot email": 'git config user.email "41898282+github-actions[bot]@users.noreply.github.com"',
-    "shader-only staging": "git add -- shaders",
+    "shader and manifest staging": (
+        "git add -- shaders "
+        "tests/fixtures/beatoraja_skin/shaders/skin_shader_manifest.json"
+    ),
     "empty-diff guard": "git diff --cached --quiet",
     "fixed commit message": 'git commit -m "chore: compile shaders"',
     "same-branch push": 'git push origin "HEAD:${{ github.ref_name }}"',
@@ -72,6 +92,23 @@ failures = [
 failures.extend(
     label for label, fragment in cmake_required.items() if fragment not in cmake
 )
+
+workflow_sequence = (
+    ("shader compilation", "          python3 make.py\n"),
+    ("shader manifest write verification",
+     workflow_required["shader manifest write verification"]),
+    ("shader manifest read-only verification",
+     workflow_required["shader manifest read-only verification"]),
+    ("shader and manifest staging", workflow_required["shader and manifest staging"]),
+)
+sequence_end = -1
+for label, fragment in workflow_sequence:
+    position = workflow.find(fragment)
+    if position < 0:
+        continue
+    if position <= sequence_end:
+        failures.append(f"workflow runs {label} before shader compilation")
+    sequence_end = position
 
 with tempfile.TemporaryDirectory() as temp_dir:
     sandbox = Path(temp_dir)

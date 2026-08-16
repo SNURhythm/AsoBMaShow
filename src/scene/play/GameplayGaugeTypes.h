@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../../audio/PlaybackRate.h"
+#include "../../AssistOptionUtils.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -94,6 +95,14 @@ enum class ClearType {
   FullCombo,
 };
 
+// Kept distinct from the selected gauge: Beatoraja's BPM Guide changes the
+// result lamp, but does not substitute the Assisted Easy gauge rules.
+enum class AssistClearMark {
+  None,
+  LightAssistedEasy,
+  AssistedEasy,
+};
+
 inline constexpr int kNoClearTypeRank = -1;
 inline constexpr int kClearTypeFailedRank = 0;
 inline constexpr int kClearTypeAssistedEasyClearRank = 100;
@@ -111,10 +120,21 @@ assistClearRequired(const audio::PlaybackRate &playback) noexcept {
   return !playback.neutral();
 }
 
-[[nodiscard]] inline bool
-assistClearMarkRequired(bool assistOptionEnabled,
-                        const audio::PlaybackRate &playback) noexcept {
-  return assistOptionEnabled || assistClearRequired(playback);
+[[nodiscard]] inline AssistClearMark assistClearMarkRequired(
+    const std::string &assistOption, double minimumBpm, double maximumBpm,
+    const audio::PlaybackRate &playback) noexcept {
+  // Local assist options use BMSPlayer's `assist = max(assist, 1)` result
+  // class. Altered playback has no upstream counterpart; we deliberately
+  // assign it that same Light Assist Easy class.
+  if (assistClearRequired(playback)) {
+    return AssistClearMark::LightAssistedEasy;
+  }
+  if (assist_options::isDragMode(assistOption) ||
+      assist_options::bpmGuideAffectsClear(assistOption, minimumBpm,
+                                            maximumBpm)) {
+    return AssistClearMark::LightAssistedEasy;
+  }
+  return AssistClearMark::None;
 }
 
 [[nodiscard]] inline int
@@ -123,13 +143,16 @@ capRankForPlayback(int rank, const audio::PlaybackRate &playback) noexcept {
       rank < kClearTypeAssistedEasyClearRank) {
     return rank;
   }
-  return kClearTypeAssistedEasyClearRank;
+  return kClearTypeLightAssistedEasyClearRank;
 }
 
 [[nodiscard]] inline int
 fullComboRankForPlayback(int rank, bool fullComboAchieved,
                          const audio::PlaybackRate &playback) noexcept {
-  if (fullComboAchieved && rank >= kClearTypeAssistedEasyClearRank) {
+  // Light Assist Easy is a final BMSPlayer result class. Its rank is distinct
+  // from a player-selected Assisted Easy gauge, which may still earn FC.
+  if (fullComboAchieved && rank >= kClearTypeAssistedEasyClearRank &&
+      rank != kClearTypeLightAssistedEasyClearRank) {
     rank = std::max(rank, kClearTypeFullComboRank);
   }
   return capRankForPlayback(rank, playback);

@@ -4,6 +4,8 @@
 
 #include "Button.h"
 
+#include "../input/SDLPointerEvent.h"
+
 #include <cmath>
 #include <utility>
 
@@ -290,6 +292,9 @@ bool Button::handleEventsImpl(SDL_Event &event) {
     mousePressedInside = false;
     isHovered = false;
     activeTouchId = -1;
+    return true;
+  }
+  if (sdl_pointer_event::isMouseSynthesizedTouch(event)) {
     return true;
   }
   if (contentView) {

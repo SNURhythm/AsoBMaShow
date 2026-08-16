@@ -1,4 +1,5 @@
 #include "TextView.h"
+#include "SdlTtfRuntime.h"
 #include "../RAII.h"
 #include <bgfx/bgfx.h>
 #include <bgfx/platform.h>
@@ -21,8 +22,6 @@
 #include <utility>
 
 namespace {
-std::mutex g_ttfMutex;
-int g_ttfRefCount = 0;
 std::mutex g_fontCacheMutex;
 constexpr float kMarqueePixelsPerSecond = 48.0f;
 constexpr Uint64 kMarqueeStartDelayMs = 700;
@@ -49,27 +48,6 @@ struct TextLineMetrics {
 };
 
 using SurfacePtr = UniqueResource<SDL_Surface, SDL_FreeSurface>;
-
-bool acquireTtf() {
-  std::lock_guard<std::mutex> lock(g_ttfMutex);
-  if (g_ttfRefCount == 0 && TTF_Init() != 0) {
-    SDL_Log("Failed to initialize SDL_ttf: %s", TTF_GetError());
-    return false;
-  }
-  ++g_ttfRefCount;
-  return true;
-}
-
-void releaseTtf() {
-  std::lock_guard<std::mutex> lock(g_ttfMutex);
-  if (g_ttfRefCount <= 0) {
-    return;
-  }
-  --g_ttfRefCount;
-  if (g_ttfRefCount == 0) {
-    TTF_Quit();
-  }
-}
 
 void addUniquePath(std::vector<std::string> &paths, std::string path) {
   if (path.empty()) {
@@ -149,6 +127,7 @@ std::string fontCacheKey(const std::string &path, int fontSize,
 
 TTF_Font *acquireFontCandidate(const std::string &path, int fontSize,
                                int fontStyle, bool required) {
+  text_runtime::OperationGuard operation;
   if (!required && !canReadFile(path)) {
     return nullptr;
   }
@@ -182,6 +161,7 @@ TTF_Font *acquireFontCandidate(const std::string &path, int fontSize,
 
 void releaseFontCandidate(const std::string &path, int fontSize, int fontStyle,
                           TTF_Font *font) {
+  text_runtime::OperationGuard operation;
   if (font == nullptr) {
     return;
   }
@@ -281,6 +261,7 @@ bool isIgnorableUnsupportedCodepoint(Uint32 codepoint) {
 }
 
 int sizeUtf8Width(TTF_Font *font, const std::string &utf8) {
+  text_runtime::OperationGuard operation;
   if (font == nullptr || utf8.empty()) {
     return 0;
   }
@@ -316,7 +297,7 @@ TextView::TextView(const std::string &fontPath, int fontSize,
   this->fontRasterSize = rasterFontSizeFor(fontSize);
   primaryFontPath_ = fontPath;
   fallbackFontPaths = fontFallbackPaths(fontPath);
-  ttfInitialized = acquireTtf();
+  ttfInitialized = text_runtime::acquire();
   if (ttfInitialized) {
     while (nextFallbackFontPath < fallbackFontPaths.size()) {
       const bool required = nextFallbackFontPath == 0;
@@ -352,7 +333,7 @@ TextView::~TextView() {
   }
   font = nullptr;
   if (ttfInitialized) {
-    releaseTtf();
+    text_runtime::release();
   }
 }
 
@@ -397,6 +378,11 @@ void TextView::renderImpl(RenderContext &context) {
     const uint16_t indices[] = {0, 1, 2, 0, 2, 3};
     bgfx::TransientVertexBuffer tvb;
     bgfx::TransientIndexBuffer tib;
+    if (bgfx::getAvailTransientVertexBuffer(
+            4, rendering::PosTexVertex::ms_decl) < 4 ||
+        bgfx::getAvailTransientIndexBuffer(6) < 6) {
+      return;
+    }
     bgfx::allocTransientVertexBuffer(&tvb, 4, rendering::PosTexVertex::ms_decl);
     bgfx::allocTransientIndexBuffer(&tib, 6);
     bx::memCopy(tvb.data, vertices, sizeof(vertices));
@@ -455,6 +441,14 @@ SDL_Rect TextView::resolvedTextRect() const {
   return drawRect;
 }
 
+View::RenderBounds TextView::renderingBounds() const {
+  const SDL_Rect drawRect = resolvedTextRect();
+  return {.x = static_cast<float>(drawRect.x),
+          .y = static_cast<float>(drawRect.y),
+          .width = static_cast<float>(drawRect.w),
+          .height = static_cast<float>(drawRect.h)};
+}
+
 int TextView::textLineHeight() const {
   return logicalLengthFor(rasterTextLineHeight());
 }
@@ -464,6 +458,7 @@ int TextView::rasterTextLineHeight() const {
 }
 
 void TextView::includeFontMetrics(TTF_Font *loadedFont) {
+  text_runtime::OperationGuard operation;
   if (loadedFont == nullptr) {
     return;
   }
@@ -536,6 +531,7 @@ int TextView::measureFontSourceTextWidth(const SelectedFont &source,
 }
 
 int TextView::fontSourceAscent(const SelectedFont &source) {
+  text_runtime::OperationGuard operation;
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   if (source.iosSystemFont) {
     includeIOSSystemFontMetrics();
@@ -548,6 +544,7 @@ int TextView::fontSourceAscent(const SelectedFont &source) {
 
 SDL_Surface *TextView::renderFontSourceTextSurface(const SelectedFont &source,
                                                    const std::string &utf8) {
+  text_runtime::OperationGuard operation;
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   if (source.iosSystemFont) {
     includeIOSSystemFontMetrics();
@@ -562,6 +559,7 @@ SDL_Surface *TextView::renderFontSourceTextSurface(const SelectedFont &source,
 }
 
 TextView::SelectedFont TextView::selectFont(Uint32 codepoint) {
+  text_runtime::OperationGuard operation;
   if (fontFaces.empty()) {
     return {};
   }
@@ -608,6 +606,7 @@ TextView::SelectedFont TextView::selectFont(Uint32 codepoint) {
 }
 
 bool TextView::primaryFontSupportsText(const std::string &utf8) const {
+  text_runtime::OperationGuard operation;
   if (font == nullptr) {
     return false;
   }
@@ -922,6 +921,7 @@ void TextView::onThemeChanged() {
 
 void TextView::createTexture(bool markDirty, bool force,
                              int requestedWrapWidth) {
+  text_runtime::OperationGuard operation;
   const int previousWidth = rect.w;
   const int previousHeight = rect.h;
   const int effectiveWrapWidth =

@@ -208,6 +208,20 @@ bool InputCaptureController::updateGyroscopeTurntableConfig(
   return persist(std::move(next));
 }
 
+bool InputCaptureController::updateVirtualControllerConfig(
+    input::VirtualControllerConfig config) {
+  lastError_.clear();
+  std::vector<std::string> ignoredDiagnostics;
+  config.sanitize(ignoredDiagnostics);
+  if (config == profile_.virtualController) {
+    return true;
+  }
+
+  InputProfile next = profile_;
+  next.virtualController = config;
+  return persist(std::move(next));
+}
+
 InputCaptureController::State InputCaptureController::state() const {
   return state_;
 }

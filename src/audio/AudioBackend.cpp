@@ -20,16 +20,67 @@
 #if TARGET_OS_DESKTOP || TARGET_OS_LINUX
 #include <portaudio.h>
 #endif
+#if TARGET_OS_WINDOWS
+#include <pa_asio.h>
+#endif
 
 namespace audio {
 
+namespace {
+
+bool nativeBufferCanUseFrames(const NativeBufferFrameLimits &limits,
+                              std::uint32_t frames) {
+  if (frames == 0) {
+    return true;
+  }
+  if (limits.minimum == 0 || limits.maximum < limits.minimum ||
+      limits.granularity < -1) {
+    return false;
+  }
+  if (limits.granularity == 0) {
+    return limits.preferred >= limits.minimum &&
+           limits.preferred <= limits.maximum &&
+           limits.preferred % frames == 0;
+  }
+  if (limits.granularity == -1) {
+    for (std::uint64_t nativeFrames = limits.minimum;
+         nativeFrames <= limits.maximum; nativeFrames *= 2) {
+      if (nativeFrames % frames == 0) {
+        return true;
+      }
+      if (nativeFrames == 0 || nativeFrames > limits.maximum / 2) {
+        break;
+      }
+    }
+    return false;
+  }
+
+  const std::uint64_t step =
+      static_cast<std::uint32_t>(limits.granularity);
+  for (std::uint64_t nativeFrames = limits.minimum;
+       nativeFrames <= limits.maximum; nativeFrames += step) {
+    if (nativeFrames % frames == 0) {
+      return true;
+    }
+    if (nativeFrames > limits.maximum -
+                           std::min<std::uint64_t>(step, limits.maximum)) {
+      break;
+    }
+  }
+  return false;
+}
+
+} // namespace
+
 std::vector<std::uint32_t>
-ProbeSupportedBufferFrames(std::span<const std::uint32_t> candidates,
-                           const BufferFrameProbe &probe) {
+SelectPortAudioBufferFrameOptions(
+    std::span<const std::uint32_t> candidates,
+    std::optional<NativeBufferFrameLimits> nativeLimits) {
   std::vector<std::uint32_t> supported;
   supported.reserve(candidates.size());
   for (const std::uint32_t frames : candidates) {
-    if (probe(frames)) {
+    if (!nativeLimits.has_value() ||
+        nativeBufferCanUseFrames(*nativeLimits, frames)) {
       supported.push_back(frames);
     }
   }
@@ -235,55 +286,6 @@ struct PortAudioDeviceRecord {
   double defaultLowOutputLatency = 0.0;
 };
 
-int portAudioProbeCallback(const void *, void *output, unsigned long frameCount,
-                           const PaStreamCallbackTimeInfo *,
-                           PaStreamCallbackFlags, void *) {
-  fillSilence(output,
-              static_cast<std::uint32_t>(std::min<unsigned long>(
-                  frameCount, std::numeric_limits<std::uint32_t>::max())),
-              kOutputChannels);
-  return paContinue;
-}
-
-bool probePortAudioBufferFrames(const PortAudioDeviceRecord &device,
-                                std::uint32_t bufferFrames) {
-  std::vector<double> rates;
-  rates.reserve(device.info.sampleRates.size() + 1);
-  if (device.defaultSampleRate > 0.0) {
-    rates.push_back(device.defaultSampleRate);
-  }
-  for (const std::uint32_t rate : device.info.sampleRates) {
-    const double candidate = static_cast<double>(rate);
-    if (std::find(rates.begin(), rates.end(), candidate) == rates.end()) {
-      rates.push_back(candidate);
-    }
-  }
-  if (rates.empty()) {
-    return false;
-  }
-
-  PaStreamParameters parameters{};
-  parameters.device = device.index;
-  parameters.channelCount = kOutputChannels;
-  parameters.sampleFormat = paInt16;
-  parameters.suggestedLatency = device.defaultLowOutputLatency;
-  const unsigned long frames =
-      bufferFrames == 0 ? paFramesPerBufferUnspecified : bufferFrames;
-  for (const double rate : rates) {
-    PaStream *stream = nullptr;
-    const PaError opened =
-        Pa_OpenStream(&stream, nullptr, &parameters, rate, frames, paNoFlag,
-                      portAudioProbeCallback, nullptr);
-    if (opened != paNoError || stream == nullptr) {
-      return false;
-    }
-    if (Pa_CloseStream(stream) != paNoError) {
-      return false;
-    }
-  }
-  return true;
-}
-
 std::vector<PortAudioDeviceRecord> enumeratePortAudioDevices() {
   constexpr std::array<std::uint32_t, 6> sampleRates{44100, 48000,  88200,
                                                      96000, 176400, 192000};
@@ -331,10 +333,31 @@ std::vector<PortAudioDeviceRecord> enumeratePortAudioDevices() {
     record.index = index;
     record.defaultSampleRate = device->defaultSampleRate;
     record.defaultLowOutputLatency = device->defaultLowOutputLatency;
+    std::optional<NativeBufferFrameLimits> nativeBufferLimits;
+#if TARGET_OS_WINDOWS
+    if (host != nullptr && host->type == paASIO) {
+      long minimum = 0;
+      long maximum = 0;
+      long preferred = 0;
+      long granularity = 0;
+      if (PaAsio_GetAvailableBufferSizes(index, &minimum, &maximum, &preferred,
+                                         &granularity) == paNoError &&
+          minimum > 0 && maximum >= minimum && preferred > 0 &&
+          maximum <= std::numeric_limits<std::uint32_t>::max() &&
+          preferred <= std::numeric_limits<std::uint32_t>::max() &&
+          granularity >= -1 &&
+          granularity <= std::numeric_limits<std::int32_t>::max()) {
+        nativeBufferLimits = {
+            .minimum = static_cast<std::uint32_t>(minimum),
+            .maximum = static_cast<std::uint32_t>(maximum),
+            .preferred = static_cast<std::uint32_t>(preferred),
+            .granularity = static_cast<std::int32_t>(granularity),
+        };
+      }
+    }
+#endif
     record.info.bufferFrames =
-        ProbeSupportedBufferFrames(bufferFrames, [&](std::uint32_t frames) {
-          return probePortAudioBufferFrames(record, frames);
-        });
+        SelectPortAudioBufferFrameOptions(bufferFrames, nativeBufferLimits);
     result.push_back(std::move(record));
   }
   return result;

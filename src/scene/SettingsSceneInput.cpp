@@ -5,6 +5,7 @@
 #include "../input/InputCaptureController.h"
 #include "../view/BlockingOverlayView.h"
 #include "../view/DropdownView.h"
+#include "VirtualControllerEditorView.h"
 
 #include <SDL2/SDL_mouse.h>
 #include <SDL2/SDL_scancode.h>
@@ -266,6 +267,19 @@ void SettingsScene::commitGyroscopeTurntableSetting(bool stepAngle,
   requestInputViewRebuild();
 }
 
+void SettingsScene::commitVirtualControllerSetting(
+    input::VirtualControllerConfig config) {
+  if (inputCaptureController->updateVirtualControllerConfig(config)) {
+    inputVirtualControllerSettingsError.clear();
+  } else {
+    inputVirtualControllerSettingsError =
+        inputCaptureController->lastError().empty()
+            ? "Failed to save input profile."
+            : std::string(inputCaptureController->lastError());
+  }
+  requestInputViewRebuild();
+}
+
 std::string SettingsScene::inputViewSignature() const {
   if (inputCaptureController == nullptr) {
     return {};
@@ -276,8 +290,21 @@ std::string SettingsScene::inputViewSignature() const {
          << static_cast<int>(inputCaptureController->state()) << ':'
          << inputCaptureController->lastError() << ':'
          << inputGyroscopeSettingsError << ':'
+         << inputVirtualControllerSettingsError << ':'
          << context.inputProfile.gyroscopeTurntable.stepAngleDegrees << ':'
-         << context.inputProfile.gyroscopeTurntable.releaseDelayMs << ':';
+         << context.inputProfile.gyroscopeTurntable.releaseDelayMs << ':'
+         << context.inputProfile.virtualController.enabled << ':'
+         << static_cast<int>(context.inputProfile.virtualController.scratchMode)
+         << ':'
+         << static_cast<int>(context.inputProfile.virtualController.player)
+         << ':'
+         << context.inputProfile.virtualController.centerX << ':'
+         << context.inputProfile.virtualController.centerY << ':'
+         << context.inputProfile.virtualController.buttonSize << ':'
+         << context.inputProfile.virtualController.keySpacingX << ':'
+         << context.inputProfile.virtualController.keySpacingY << ':'
+         << context.inputProfile.virtualController.scratchKeyplateSpacing
+         << ':' << inputVirtualControllerEditorVisible << ':';
   if (inputCaptureAction.has_value()) {
     output << static_cast<int>(inputCaptureAction->kind) << ':'
            << inputCaptureAction->lane;
@@ -564,6 +591,84 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
   cards->addView(makeCard(
       metrics, "Binding Scope", "Choose player, key mode, and device.",
       selectorBody, metrics.compact ? 280 : 220, metrics.cardsWidth));
+
+  if (gameplay::virtualControllerTouchInputSupported()) {
+    auto *virtualControllerBody = new View();
+    virtualControllerBody->setFlexDirection(FlexDirection::Column);
+    virtualControllerBody->setGap(metrics.compact ? 10.0F : 14.0F);
+    const auto virtualControllerConfig = context.inputProfile.virtualController;
+    auto *virtualControllerToggle = makeAccentButton(
+        std::min(bodyWidth, metrics.actionButtonWidth),
+        metrics.actionButtonHeight,
+        makeText(virtualControllerConfig.enabled ? "Virtual Controller: On"
+                                                 : "Virtual Controller: Off",
+                 metrics.bodyTextSize + 1, ui_theme::textPrimary(),
+                 TextView::CENTER, TextView::MIDDLE),
+        virtualControllerConfig.enabled ? ui_theme::cyan() : ui_theme::coral());
+    virtualControllerToggle->setOnClickListener(
+        [this, virtualControllerConfig]() {
+          auto next = virtualControllerConfig;
+          next.enabled = !next.enabled;
+          commitVirtualControllerSetting(next);
+        });
+    virtualControllerBody->addView(virtualControllerToggle);
+    if (virtualControllerConfig.enabled) {
+      const bool spinScratch = virtualControllerConfig.scratchMode ==
+                               input::VirtualControllerScratchMode::Spin;
+      auto *scratchModeButton = makeControlButton(
+          std::min(bodyWidth, metrics.actionButtonWidth),
+          metrics.actionButtonHeight,
+          makeText(spinScratch ? "Scratch: Spin Mode" : "Scratch: Flick Mode",
+                   metrics.bodyTextSize + 1, ui_theme::textPrimary(),
+                   TextView::CENTER, TextView::MIDDLE));
+      scratchModeButton->setOnClickListener(
+          [this, virtualControllerConfig, spinScratch]() {
+            auto next = virtualControllerConfig;
+            next.scratchMode = spinScratch
+                                   ? input::VirtualControllerScratchMode::Flick
+                                   : input::VirtualControllerScratchMode::Spin;
+            commitVirtualControllerSetting(next);
+          });
+      virtualControllerBody->addView(scratchModeButton);
+      const bool playerTwo = virtualControllerConfig.player ==
+                             input::VirtualControllerPlayer::Player2;
+      auto *playerButton = makeControlButton(
+          std::min(bodyWidth, metrics.actionButtonWidth),
+          metrics.actionButtonHeight,
+          makeText(playerTwo ? "Player: 2P" : "Player: 1P",
+                   metrics.bodyTextSize + 1, ui_theme::textPrimary(),
+                   TextView::CENTER, TextView::MIDDLE));
+      playerButton->setOnClickListener(
+          [this, virtualControllerConfig, playerTwo]() {
+            auto next = virtualControllerConfig;
+            next.player = playerTwo ? input::VirtualControllerPlayer::Player1
+                                    : input::VirtualControllerPlayer::Player2;
+            commitVirtualControllerSetting(next);
+          });
+      virtualControllerBody->addView(playerButton);
+      auto *editButton =
+          makeControlButton(std::min(bodyWidth, metrics.actionButtonWidth),
+                            metrics.actionButtonHeight,
+                            makeText("Edit Layout", metrics.bodyTextSize + 1,
+                                     ui_theme::textPrimary(), TextView::CENTER,
+                                     TextView::MIDDLE));
+      editButton->setOnClickListener([this]() {
+        inputVirtualControllerEditorVisible = true;
+        requestInputViewRebuild();
+      });
+      virtualControllerBody->addView(editButton);
+    }
+    virtualControllerBody->addView(makeWrappedText(
+        inputVirtualControllerSettingsError.empty()
+            ? ""
+            : "Not saved: " + inputVirtualControllerSettingsError,
+        metrics.smallTextSize, ui_theme::coral()));
+    cards->addView(makeCard(
+        metrics, "Virtual Controller", "", virtualControllerBody,
+        virtualControllerConfig.enabled ? (metrics.compact ? 340 : 300)
+                                        : (metrics.compact ? 220 : 200),
+        metrics.cardsWidth));
+  }
 
   const bool showGyroscopeSettings =
       shouldShowGyroscopeSettingsCard(inputSelectedDeviceId);
@@ -927,4 +1032,77 @@ void SettingsScene::buildInputConflictOverlay(const LayoutMetrics &metrics) {
 
   inputConflictOverlayRoot->addView(panel);
   rootLayout->addView(inputConflictOverlayRoot);
+}
+
+void SettingsScene::buildInputVirtualControllerEditorOverlay(
+    const LayoutMetrics &metrics) {
+  if (activeTab != SettingsTab::Input || !inputVirtualControllerEditorVisible ||
+      !context.inputProfile.virtualController.enabled ||
+      !gameplay::virtualControllerTouchInputSupported()) {
+    return;
+  }
+
+  inputVirtualControllerEditorOverlayRoot = new BlockingOverlayView(
+      0, 0, rendering::window_width, rendering::window_height);
+  inputVirtualControllerEditorOverlayRoot->setPositionType(
+      YGPositionTypeAbsolute);
+  inputVirtualControllerEditorOverlayRoot->setPosition(Edge::Left, 0);
+  inputVirtualControllerEditorOverlayRoot->setPosition(Edge::Top, 0);
+  inputVirtualControllerEditorOverlayRoot->setZIndex(1060);
+  inputVirtualControllerEditorOverlayRoot->setFlexDirection(
+      FlexDirection::Column);
+  inputVirtualControllerEditorOverlayRoot->setAlignItems(YGAlignStretch);
+  inputVirtualControllerEditorOverlayRoot->setGap(metrics.compact ? 10.0F
+                                                                    : 14.0F);
+  inputVirtualControllerEditorOverlayRoot->setPadding(
+      Edge::Top, static_cast<float>(metrics.safe.top + 18));
+  inputVirtualControllerEditorOverlayRoot->setPadding(
+      Edge::Left, static_cast<float>(metrics.safe.left + 18));
+  inputVirtualControllerEditorOverlayRoot->setPadding(
+      Edge::Right, static_cast<float>(metrics.safe.right + 18));
+  inputVirtualControllerEditorOverlayRoot->setPadding(
+      Edge::Bottom, static_cast<float>(metrics.safe.bottom + 18));
+  inputVirtualControllerEditorOverlayRoot->setThemedBackgroundColor(
+      ui_theme::backdrop);
+
+  auto *header = new View();
+  header->setFlexDirection(FlexDirection::Row);
+  header->setAlignItems(YGAlignCenter);
+  header->setJustifyContent(YGJustifySpaceBetween);
+  auto *title = new View();
+  title->setFlexDirection(FlexDirection::Column);
+  title->setFlex(1.0F);
+  title->setGap(4.0F);
+  title->addView(makeText("Virtual Controller Layout", metrics.sectionTitleSize,
+                           ui_theme::textPrimary()));
+  title->addView(makeWrappedText(
+      "Drag the controller to move it. Use the colored handles for size and spacing; the scratch mode is selected on the Input page.",
+      metrics.smallTextSize, ui_theme::textSecondary()));
+  header->addView(title);
+
+  auto *doneButton = makeAccentButton(
+      metrics.actionButtonWidth, metrics.actionButtonHeight,
+      makeText("Done", metrics.bodyTextSize + 2, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE),
+      ui_theme::cyan());
+  doneButton->setFlexShrink(0.0F);
+  doneButton->setOnClickListener([this]() {
+    inputVirtualControllerEditorVisible = false;
+    requestInputViewRebuild();
+  });
+  header->addView(doneButton);
+  inputVirtualControllerEditorOverlayRoot->addView(header);
+
+  inputVirtualControllerEditorOverlayRoot->addView(makeWrappedText(
+      "Lime: position · Amber: size · Cyan: key X spacing · Violet: key Y spacing · Coral: scratch-to-keyplate spacing. Negative spacing overlaps controls.",
+      metrics.smallTextSize, ui_theme::textSecondary()));
+
+  auto *editor = new VirtualControllerEditorView(
+      context.inputProfile.virtualController,
+      [this](input::VirtualControllerConfig config) {
+        commitVirtualControllerSetting(config);
+      });
+  editor->setFlex(1.0F);
+  inputVirtualControllerEditorOverlayRoot->addView(editor);
+  rootLayout->addView(inputVirtualControllerEditorOverlayRoot);
 }

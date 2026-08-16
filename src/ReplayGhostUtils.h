@@ -5,8 +5,11 @@
 
 #include <algorithm>
 #include <functional>
+#include <span>
 #include <unordered_map>
 #include <vector>
+
+struct PlayfieldChartVisualModel;
 
 struct ReplayGhostEvent {
   int lane = -1;
@@ -24,22 +27,31 @@ struct ReplayMissMarker {
 
 namespace replay_ghost {
 
-inline bool hasTimelineAt(
-    const std::vector<const bms_parser::TimeLine *> &timelines,
-    long long noteTimeMicros) {
-  const auto timelineIt = std::lower_bound(
-      timelines.begin(), timelines.end(), noteTimeMicros,
-      [](const bms_parser::TimeLine *timeline, long long timing) {
-        return timeline != nullptr && timeline->Timing < timing;
+// Replay ghosts are sorted once by judge scroll position. Both built-in and
+// selected-skin rendering consume this exact bounded slice per frame.
+[[nodiscard]] inline std::span<const ReplayGhostEvent>
+visibleEventsInScrollRange(std::span<const ReplayGhostEvent> events,
+                           double firstVisibleScrollPosition,
+                           double lastVisibleScrollPosition) {
+  const auto first = std::lower_bound(
+      events.begin(), events.end(), firstVisibleScrollPosition,
+      [](const ReplayGhostEvent &event, double scrollPosition) {
+        return event.judgeScrollPosition < scrollPosition;
       });
-  return timelineIt != timelines.end() && *timelineIt != nullptr &&
-         (*timelineIt)->Timing == noteTimeMicros;
+  const auto last = std::upper_bound(
+      first, events.end(), lastVisibleScrollPosition,
+      [](double scrollPosition, const ReplayGhostEvent &event) {
+        return scrollPosition < event.judgeScrollPosition;
+      });
+  return {first, static_cast<std::size_t>(std::distance(first, last))};
 }
 
+namespace detail {
+
+template <typename HasLane, typename HasTimeline>
 inline std::vector<ReplayGhostEvent> buildReplayGhostEvents(
-    const ReplayData &replayData,
-    const std::vector<const bms_parser::TimeLine *> &timelines,
-    const std::unordered_map<int, size_t> &laneToOrderIndex,
+    const ReplayData &replayData, HasLane &&hasLane,
+    HasTimeline &&hasTimeline,
     const std::function<double(long long)> &positionAtTime) {
   std::vector<ReplayGhostEvent> events;
   if (!positionAtTime) {
@@ -52,13 +64,8 @@ inline std::vector<ReplayGhostEvent> buildReplayGhostEvents(
         event.action == ReplayEventAction::MultiBad ||
         event.action == ReplayEventAction::Release;
     if (!isJudgedNoteEvent || event.judgement == None ||
-        event.noteTimeMicros < 0) {
-      continue;
-    }
-    if (laneToOrderIndex.find(event.lane) == laneToOrderIndex.end()) {
-      continue;
-    }
-    if (!hasTimelineAt(timelines, event.noteTimeMicros)) {
+        event.noteTimeMicros < 0 || !hasLane(event.lane) ||
+        !hasTimeline(event.noteTimeMicros)) {
       continue;
     }
 
@@ -86,6 +93,37 @@ inline std::vector<ReplayGhostEvent> buildReplayGhostEvents(
             });
   return events;
 }
+
+} // namespace detail
+
+inline bool hasTimelineAt(
+    const std::vector<const bms_parser::TimeLine *> &timelines,
+    long long noteTimeMicros) {
+  const auto timelineIt = std::lower_bound(
+      timelines.begin(), timelines.end(), noteTimeMicros,
+      [](const bms_parser::TimeLine *timeline, long long timing) {
+        return timeline != nullptr && timeline->Timing < timing;
+      });
+  return timelineIt != timelines.end() && *timelineIt != nullptr &&
+         (*timelineIt)->Timing == noteTimeMicros;
+}
+
+inline std::vector<ReplayGhostEvent> buildReplayGhostEvents(
+    const ReplayData &replayData,
+    const std::vector<const bms_parser::TimeLine *> &timelines,
+    const std::unordered_map<int, size_t> &laneToOrderIndex,
+    const std::function<double(long long)> &positionAtTime) {
+  return detail::buildReplayGhostEvents(
+      replayData,
+      [&laneToOrderIndex](int lane) {
+        return laneToOrderIndex.find(lane) != laneToOrderIndex.end();
+      },
+      [&timelines](long long time) { return hasTimelineAt(timelines, time); },
+      positionAtTime);
+}
+
+[[nodiscard]] std::vector<ReplayGhostEvent>
+buildReplayGhostEvents(const ReplayData &, const PlayfieldChartVisualModel &);
 
 inline std::vector<ReplayMissMarker> buildReplayMissMarkers(
     const ReplayData &replayData,

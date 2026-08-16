@@ -7,6 +7,7 @@
 
 #include <SDL2/SDL.h>
 
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 
@@ -53,6 +54,33 @@ void click(Button &button) {
 const TextView *buttonText(const Button &button) {
   return dynamic_cast<const TextView *>(button.getContentView());
 }
+
+void testScrollViewUsesPreciseWheelDeltaAndNaturalDirection() {
+  ScrollView scroll(0, 0, 360, 200);
+  auto *content = new View();
+  content->setWidth(360)->setHeight(800);
+  scroll.setContentView(content);
+  scroll.applyYogaLayout();
+
+  SDL_Event normal{};
+  normal.type = SDL_MOUSEWHEEL;
+  normal.wheel.type = SDL_MOUSEWHEEL;
+  normal.wheel.y = 0;
+  normal.wheel.preciseY = 0.25F;
+  normal.wheel.direction = SDL_MOUSEWHEEL_NORMAL;
+  scroll.setScrollOffset(100.0F);
+  scroll.handleEvents(normal);
+  require(std::abs(scroll.getScrollOffset() - 88.0F) < 0.001F,
+          "scroll view uses a fractional normal wheel delta");
+
+  SDL_Event natural = normal;
+  natural.wheel.preciseY = -0.25F;
+  natural.wheel.direction = SDL_MOUSEWHEEL_FLIPPED;
+  scroll.setScrollOffset(100.0F);
+  scroll.handleEvents(natural);
+  require(std::abs(scroll.getScrollOffset() - 112.0F) < 0.001F,
+          "scroll view preserves the iPad natural-scroll direction");
+}
 } // namespace
 
 int main() {
@@ -61,6 +89,8 @@ int main() {
   init.resolution.width = 64;
   init.resolution.height = 64;
   require(bgfx::init(init), "headless bgfx initializes for panel resources");
+
+  testScrollViewUsesPreciseWheelDeltaAndNaturalDirection();
 
   {
     GameplayRuleset selected = GameplayRuleset::LR2;

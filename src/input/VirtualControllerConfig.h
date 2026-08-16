@@ -1,0 +1,52 @@
+#pragma once
+
+#include <compare>
+#include <string>
+#include <vector>
+
+namespace input {
+
+enum class VirtualControllerScratchMode : unsigned char {
+  Flick,
+  Spin,
+};
+
+enum class VirtualControllerPlayer : unsigned char {
+  Player1 = 1,
+  Player2 = 2,
+};
+
+// Values are fractions of the current mobile canvas. The layout code derives
+// pixels from the shorter canvas edge so a profile feels consistent across
+// landscape iPhones and iPads.
+struct VirtualControllerConfig {
+  static constexpr float kDefaultCenterX = 0.50F;
+  static constexpr float kDefaultCenterY = 0.76F;
+  static constexpr float kDefaultButtonSize = 0.095F;
+  // Each spacing value is an edge-to-edge distance in the indicated button
+  // dimension. They are intentionally signed: negative values overlap
+  // controls on that axis, matching common two-row arcade layouts.
+  static constexpr float kDefaultKeySpacingX = -0.35F;
+  static constexpr float kDefaultKeySpacingY = 0.20F;
+  static constexpr float kDefaultScratchKeyplateSpacing = 0.25F;
+
+  bool enabled = false;
+  // Flick preserves the original vertical-swipe behavior. Spin is an
+  // opt-in turntable gesture whose rotation is quantized by the touch router.
+  VirtualControllerScratchMode scratchMode = VirtualControllerScratchMode::Flick;
+  // The selected arcade side determines the deck orientation. On double-play
+  // charts it also selects the matching player lanes.
+  VirtualControllerPlayer player = VirtualControllerPlayer::Player1;
+  float centerX = kDefaultCenterX;
+  float centerY = kDefaultCenterY;
+  float buttonSize = kDefaultButtonSize;
+  float keySpacingX = kDefaultKeySpacingX;
+  float keySpacingY = kDefaultKeySpacingY;
+  float scratchKeyplateSpacing = kDefaultScratchKeyplateSpacing;
+
+  auto operator<=>(const VirtualControllerConfig &) const = default;
+
+  void sanitize(std::vector<std::string> &diagnostics);
+};
+
+} // namespace input

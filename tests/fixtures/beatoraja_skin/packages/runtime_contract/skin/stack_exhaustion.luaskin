@@ -1,0 +1,4 @@
+local function descend(value)
+  return descend(value + 1)
+end
+return descend(0)

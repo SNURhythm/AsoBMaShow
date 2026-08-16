@@ -4,6 +4,7 @@
 #include "CourseIdentity.h"
 #include "ScoreProvenance.h"
 #include "bms_parser.hpp"
+#include "replay/ReplayLaneCoverChange.h"
 #include "scene/play/Judge.h"
 #include "scene/play/RhythmState.h"
 
@@ -43,6 +44,14 @@ struct ReplayEvent {
   int score = 0;
 };
 
+namespace replay_note {
+
+inline std::string key(int lane, long long noteTimeMicros) {
+  return std::to_string(lane) + ":" + std::to_string(noteTimeMicros);
+}
+
+} // namespace replay_note
+
 struct ReplayTouchSample {
   ReplayTouchAction action = ReplayTouchAction::Move;
   long long fingerId = 0;
@@ -54,6 +63,8 @@ struct ReplayTouchSample {
 struct ReplayLaneCoverEvent {
   long long songTimeMicros = 0;
   int noteStartPositionPercent = 0;
+  bool laneCoverEnabled = false;
+  ReplayLaneCoverChangeKind changeKind = ReplayLaneCoverChangeKind::Value;
   bool resetVisibleTimeReference = false;
 };
 
@@ -72,6 +83,9 @@ struct ReplayData {
   GaugeType initialGaugeType = GaugeType::Normal;
   GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
   GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
+  int initialLaneCoverPercent = 0;
+  bool initialLaneCoverEnabled = false;
+  bool hasInitialLaneCoverState = false;
   int finalScore = 0;
   int maxCombo = 0;
   float finalGauge = 0.0f;
@@ -82,6 +96,21 @@ struct ReplayData {
   std::vector<ReplayLaneCoverEvent> laneCoverEvents;
   ScoreProvenance provenance = ScoreProvenance::Legacy();
 };
+
+struct ReplayInitialLaneCoverState {
+  int percent = 0;
+  bool enabled = false;
+};
+
+[[nodiscard]] inline ReplayInitialLaneCoverState replayInitialLaneCoverState(
+    const ReplayData &replay, int fallbackPercent,
+    bool fallbackEnabled) noexcept {
+  if (replay.hasInitialLaneCoverState) {
+    return {.percent = replay.initialLaneCoverPercent,
+            .enabled = replay.initialLaneCoverEnabled};
+  }
+  return {.percent = fallbackPercent, .enabled = fallbackEnabled};
+}
 
 struct CourseReplayStageData {
   ReplayData replay;

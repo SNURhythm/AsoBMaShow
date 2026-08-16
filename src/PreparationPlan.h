@@ -51,6 +51,13 @@ struct Plan {
                          long long audioOffsetMicros) const {
     return realTimeAtChartTime(gameplayTimeMicros - audioOffsetMicros);
   }
+
+  // Beatoraja renders the selected skin throughout STATE_READY, before
+  // TIMER_PLAY begins. The lane-indicator cue is this app's earliest READY
+  // presentation boundary, so skin objects must be live behind the cue.
+  [[nodiscard]] long long skinAnimationStartTimeMicros() const noexcept {
+    return playbackStartTimeMicros;
+  }
 };
 
 std::vector<int>

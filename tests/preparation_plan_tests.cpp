@@ -149,6 +149,9 @@ int main() {
             "indicator ends when metronome starts");
   ASSERT_EQ(-2000000LL, plan.metronome.startTimeMicros,
             "metronome still ends at chart start");
+  ASSERT_EQ(-4000000LL, plan.skinAnimationStartTimeMicros(),
+            "skin READY state begins with the lane-indicator cue so the "
+            "selected skin renders behind it");
   ASSERT_EQ(-4000000LL, plan.chartTimeAtRealTime(0),
             "export frame zero starts at the cue origin");
   ASSERT_EQ(-2000000LL, plan.chartTimeAtRealTime(2000000),
@@ -161,6 +164,15 @@ int main() {
   ASSERT_TRUE(!plan.laneIndicator.enabled(), "indicator can be disabled");
   ASSERT_EQ(-2000000LL, plan.playbackStartTimeMicros,
             "disabling indicator preserves metronome lead-in");
+  ASSERT_EQ(-2000000LL, plan.skinAnimationStartTimeMicros(),
+            "skin animation still begins at the prep metronome without lane "
+            "indicators");
+
+  plan = preparation::buildNormalPlan(chart, true, false, 0, 0,
+                                      std::nullopt, normalRate);
+  ASSERT_EQ(plan.playbackStartTimeMicros, plan.skinAnimationStartTimeMicros(),
+            "without a prep metronome skin animation retains the playback "
+            "origin");
 
   bms_parser::Chart emptyChart;
   setChartTempo(emptyChart);

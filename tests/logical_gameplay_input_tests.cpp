@@ -1357,19 +1357,19 @@ void testPlaybackClearPolicyCapsEverySuccessfulClearPath() {
           "neutral playback leaves hard clears unchanged");
   require(
       clear_policy::capRankForPlayback(kClearTypeHardClearRank, assistedRate) ==
-          kClearTypeAssistedEasyClearRank,
-      "rate-assisted hard clears cap at Assisted Easy");
+          kClearTypeLightAssistedEasyClearRank,
+      "altered-playback hard clears cap at Light Assist Easy");
   require(
       clear_policy::capRankForPlayback(kClearTypeFullComboRank, assistedRate) ==
-          kClearTypeAssistedEasyClearRank,
-      "rate-assisted full combos cannot bypass the clear cap");
+          kClearTypeLightAssistedEasyClearRank,
+      "altered-playback full combos cannot bypass the light-assist cap");
   require(clear_policy::capRankForPlayback(
               kClearTypeFailedRank, assistedRate) == kClearTypeFailedRank,
           "the assisted clear cap never promotes a failed attempt");
   require(clear_policy::fullComboRankForPlayback(kClearTypeHardClearRank, true,
                                                  assistedRate) ==
-              kClearTypeAssistedEasyClearRank,
-          "rate-assisted full-combo derivation stays capped");
+              kClearTypeLightAssistedEasyClearRank,
+          "altered-playback full-combo derivation stays light-assisted");
   require(clear_policy::fullComboRankForPlayback(kClearTypeHardClearRank, true,
                                                  audio::PlaybackRate{100}) ==
               kClearTypeFullComboRank,

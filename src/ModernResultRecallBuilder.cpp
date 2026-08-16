@@ -160,7 +160,8 @@ RhythmState resultStateFrom(
     state.setStartingGaugePercent(*score.provenance.startingGaugePercent);
   }
   state.setAssistClearMark(clear_policy::assistClearMarkRequired(
-      assist_options::isEnabled(assistOption), score.provenance.playback));
+      assistOption, chart.Meta.MinBpm, chart.Meta.MaxBpm,
+      score.provenance.playback));
 
   state.resetJudgeCounts();
   state.judgeCount[PGreat] = score.pGreat;

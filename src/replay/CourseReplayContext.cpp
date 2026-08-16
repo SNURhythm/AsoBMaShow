@@ -147,8 +147,7 @@ CourseReplayContextOutcome CourseReplayContext::load(
             preservedResult);
       }
       if (!expectedLongNoteMode ||
-          parsed.longNoteMode != *expectedLongNoteMode ||
-          parsed.longNoteMode != stored.longNoteMode) {
+          parsed.longNoteMode != *expectedLongNoteMode) {
         return failure(
             CourseReplayContextState::LongNoteModeMismatch,
             "Parsed course stage long-note mode differs from the saved result.",

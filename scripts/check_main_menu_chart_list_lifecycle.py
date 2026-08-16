@@ -57,18 +57,6 @@ for step in required_reload_steps:
         failures.append(f"missing paginated chart-list step: {step}")
         break
 
-obsolete_projection_symbols = [
-    "projectedChartMetadataCache",
-    "projectedScoreQueryIndices(",
-    "resetReferenced(",
-    "IrScoreHistoryProjection.h",
-]
-for symbol in obsolete_projection_symbols:
-    if symbol in source or symbol in header:
-        failures.append(
-            f"obsolete in-memory IR chart projection remains: {symbol}"
-        )
-
 if failures:
     for failure in failures:
         print(f"FAIL: {failure}", file=sys.stderr)

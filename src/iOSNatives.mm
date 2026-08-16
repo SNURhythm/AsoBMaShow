@@ -2039,6 +2039,15 @@ static bool RegisterIOSDocumentStreams(unsigned long long operationToken,
   return true;
 }
 
+static void ClearIOSDocumentStreams(unsigned long long operationToken) {
+  std::lock_guard lock(gIOSDocumentIOMutex);
+  if (gIOSDocumentIOToken != operationToken) {
+    return;
+  }
+  gIOSDocumentInput = nil;
+  gIOSDocumentOutput.reset();
+}
+
 static void UnregisterIOSDocumentIO(unsigned long long operationToken) {
   std::lock_guard lock(gIOSDocumentIOMutex);
   if (gIOSDocumentIOToken != operationToken) {
@@ -2657,15 +2666,18 @@ bool IOSPathWithin(const std::filesystem::path &path,
 }
 
 bool IOSIssuedImportPath(const std::filesystem::path &candidate,
-                         const std::filesystem::path &base) {
+                         const std::filesystem::path &base,
+                         bool directory) {
   if (candidate.parent_path() != base) {
     return false;
   }
   const std::string name = candidate.filename().string();
-  if (name.size() != 40 || !name.ends_with(".zip")) {
+  const std::size_t uuidLength = 36;
+  if (name.size() != uuidLength + (directory ? 0 : 4) ||
+      (!directory && !name.ends_with(".zip"))) {
     return false;
   }
-  for (std::size_t index = 0; index < 36; ++index) {
+  for (std::size_t index = 0; index < uuidLength; ++index) {
     const unsigned char value = static_cast<unsigned char>(name[index]);
     const bool hyphen = index == 8 || index == 13 || index == 18 || index == 23;
     if (hyphen ? value != static_cast<unsigned char>('-')
@@ -2757,10 +2769,10 @@ NSString *IOSDocumentHandoffBaseDirectory(NSString **errorMessage) {
   return directory;
 }
 
-bool ValidateIOSTemporaryDocumentPath(
-    const std::filesystem::path &localPath, bool allowMissing,
-    bool allowFinalSymlink,
-    std::string &errorMessage) {
+bool ValidateIOSTemporaryPath(const std::filesystem::path &localPath,
+                              bool directory, bool allowMissing,
+                              bool allowFinalSymlink,
+                              std::string &errorMessage) {
   errorMessage.clear();
   NSString *storageError = nil;
   NSString *baseText = IOSDocumentHandoffBaseDirectory(&storageError);
@@ -2777,8 +2789,8 @@ bool ValidateIOSTemporaryDocumentPath(
     errorMessage = "Temporary document is outside private iOS storage.";
     return false;
   }
-  if (!IOSIssuedImportPath(candidate, base.lexically_normal())) {
-    errorMessage = "Temporary document does not match an issued iOS path.";
+  if (!IOSIssuedImportPath(candidate, base.lexically_normal(), directory)) {
+    errorMessage = "Temporary path does not match an issued iOS import.";
     return false;
   }
   const auto baseStatus = std::filesystem::symlink_status(base, error);
@@ -2819,23 +2831,36 @@ bool ValidateIOSTemporaryDocumentPath(
                       std::filesystem::file_type::not_found))) {
     return true;
   }
-  if (error || (!std::filesystem::is_regular_file(candidateStatus) &&
+  const bool expectedType = directory
+                                ? std::filesystem::is_directory(candidateStatus)
+                                : std::filesystem::is_regular_file(candidateStatus);
+  if (error || (!expectedType &&
                 !(allowFinalSymlink &&
                   std::filesystem::is_symlink(candidateStatus)))) {
-    errorMessage = "Temporary iOS document is not a regular file.";
+    errorMessage = directory
+                       ? "Temporary iOS import is not a directory."
+                       : "Temporary iOS document is not a regular file.";
     return false;
   }
   if (!std::filesystem::is_symlink(candidateStatus)) {
     struct stat privateStatus {};
     if (::lstat(candidate.c_str(), &privateStatus) != 0 ||
-        !S_ISREG(privateStatus.st_mode) ||
+        (directory ? !S_ISDIR(privateStatus.st_mode)
+                   : !S_ISREG(privateStatus.st_mode)) ||
         privateStatus.st_uid != geteuid() ||
-        (privateStatus.st_mode & 0777) != 0600) {
+        (privateStatus.st_mode & 0777) != (directory ? 0700 : 0600)) {
       errorMessage = "Temporary iOS document permissions are unsafe.";
       return false;
     }
   }
   return true;
+}
+
+bool ValidateIOSTemporaryDocumentPath(
+    const std::filesystem::path &localPath, bool allowMissing,
+    bool allowFinalSymlink, std::string &errorMessage) {
+  return ValidateIOSTemporaryPath(localPath, false, allowMissing,
+                                  allowFinalSymlink, errorMessage);
 }
 
 bool CopyIOSDocumentURLBounded(NSURL *sourceURL, NSString *destinationPath,
@@ -3003,8 +3028,434 @@ bool CopyIOSDocumentURLBounded(NSURL *sourceURL, NSString *destinationPath,
   return true;
 }
 
+NSString *CreateIOSPrivateImportDirectory(NSString *baseDirectory,
+                                          NSString **errorMessage) {
+  if (baseDirectory.length == 0) {
+    if (errorMessage != nullptr) {
+      *errorMessage = @"Private document storage is unavailable.";
+    }
+    return nil;
+  }
+  for (int attempt = 0; attempt < 64; ++attempt) {
+    NSString *candidate = [baseDirectory
+        stringByAppendingPathComponent:NSUUID.UUID.UUIDString];
+    const char *path = candidate.fileSystemRepresentation;
+    if (path == nullptr) {
+      continue;
+    }
+    if (::mkdir(path, 0700) != 0) {
+      if (errno == EEXIST) {
+        continue;
+      }
+      if (errorMessage != nullptr) {
+        *errorMessage = [NSError errorWithDomain:NSPOSIXErrorDomain
+                                             code:errno
+                                         userInfo:nil].localizedDescription;
+      }
+      return nil;
+    }
+    struct stat status {};
+    if (::chmod(path, 0700) != 0 || ::lstat(path, &status) != 0 ||
+        !S_ISDIR(status.st_mode) || status.st_uid != geteuid() ||
+        (status.st_mode & 0777) != 0700) {
+      [NSFileManager.defaultManager removeItemAtPath:candidate error:nil];
+      if (errorMessage != nullptr) {
+        *errorMessage = @"Could not secure the private folder copy.";
+      }
+      return nil;
+    }
+    return candidate;
+  }
+  if (errorMessage != nullptr) {
+    *errorMessage = @"Could not allocate private folder storage.";
+  }
+  return nil;
+}
+
+void CleanupIOSIssuedDirectoryAfterFailure(NSString *path) noexcept {
+  try {
+    const auto directory =
+        std::filesystem::path(NSStringToString(path)).lexically_normal();
+    std::string validationError;
+    if (!ValidateIOSTemporaryPath(directory, true, true, true,
+                                  validationError)) {
+      return;
+    }
+    std::error_code error;
+    const auto status = std::filesystem::symlink_status(directory, error);
+    if (error == std::errc::no_such_file_or_directory) {
+      return;
+    }
+    if (error) {
+      return;
+    }
+    if (std::filesystem::is_symlink(status)) {
+      std::filesystem::remove(directory, error);
+    } else {
+      std::filesystem::remove_all(directory, error);
+    }
+  } catch (...) {
+  }
+}
+
+bool SecureIOSPrivateDirectory(NSString *path, NSString **errorMessage) {
+  const char *bytes = path.fileSystemRepresentation;
+  if (bytes == nullptr || ::mkdir(bytes, 0700) != 0) {
+    if (errorMessage != nullptr) {
+      *errorMessage = [NSError errorWithDomain:NSPOSIXErrorDomain
+                                           code:bytes == nullptr ? EINVAL : errno
+                                       userInfo:nil].localizedDescription;
+    }
+    return false;
+  }
+  struct stat status {};
+  if (::chmod(bytes, 0700) != 0 || ::lstat(bytes, &status) != 0 ||
+      !S_ISDIR(status.st_mode) || status.st_uid != geteuid() ||
+      (status.st_mode & 0777) != 0700) {
+    if (errorMessage != nullptr) {
+      *errorMessage = @"Could not secure a private folder directory.";
+    }
+    return false;
+  }
+  return true;
+}
+
+bool CopyIOSDirectoryFileBounded(
+    NSURL *sourceURL, NSString *destinationPath,
+    std::uint64_t operationToken, std::uint64_t maxBytes,
+    std::uint64_t maxRegularFileBytes,
+    std::uint64_t &totalBytes,
+    const std::atomic_bool *cancellationRequested, bool &cancelled,
+    NSString **errorMessage) {
+  auto output = std::make_shared<IOSExclusiveOutputFile>();
+  const char *sourcePath = sourceURL.path.fileSystemRepresentation;
+  int descriptor = sourcePath != nullptr
+                       ? ::open(sourcePath,
+                                O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
+                       : -1;
+  struct stat sourceStatus {};
+  if (descriptor < 0 || ::fstat(descriptor, &sourceStatus) != 0 ||
+      !S_ISREG(sourceStatus.st_mode)) {
+    if (descriptor >= 0) {
+      ::close(descriptor);
+    }
+    if (errorMessage != nullptr) {
+      *errorMessage = @"The selected folder contains a non-regular file.";
+    }
+    return false;
+  }
+  if (sourceStatus.st_size < 0 ||
+      static_cast<std::uint64_t>(sourceStatus.st_size) > maxRegularFileBytes) {
+    ::close(descriptor);
+    if (errorMessage != nullptr) {
+      *errorMessage = @"The selected folder contains a file beyond its limit.";
+    }
+    return false;
+  }
+  if (!RegisterIOSDocumentStreams(operationToken, nil, output)) {
+    ::close(descriptor);
+    cancelled = true;
+    return false;
+  }
+  NSString *openError = nil;
+  const auto openResult = output->open(destinationPath, &openError);
+  if (openResult != IOSExclusiveOutputFile::OpenResult::Opened) {
+    ::close(descriptor);
+    ClearIOSDocumentStreams(operationToken);
+    if (openResult == IOSExclusiveOutputFile::OpenResult::Cancelled ||
+        IOSDocumentCancellationRequested(cancellationRequested)) {
+      cancelled = true;
+    } else if (errorMessage != nullptr) {
+      *errorMessage = openError ?:
+          @"Could not create a private folder file.";
+    }
+    return false;
+  }
+
+  bool complete = false;
+  std::uint64_t copiedFileBytes = 0;
+  std::array<std::uint8_t, 64 * 1024> buffer{};
+  while (true) {
+    if (IOSDocumentCancellationRequested(cancellationRequested)) {
+      cancelled = true;
+      break;
+    }
+    const ssize_t count = ::read(descriptor, buffer.data(), buffer.size());
+    if (count < 0 && errno == EINTR) {
+      continue;
+    }
+    if (count < 0) {
+      if (errorMessage != nullptr) {
+        *errorMessage = @"Reading a selected folder file failed.";
+      }
+      break;
+    }
+    if (count == 0) {
+      complete = true;
+      break;
+    }
+    const auto read = static_cast<std::uint64_t>(count);
+    if (totalBytes > maxBytes || read > maxBytes - totalBytes) {
+      if (errorMessage != nullptr) {
+        *errorMessage = @"The selected folder exceeds the maximum size.";
+      }
+      break;
+    }
+    if (copiedFileBytes > maxRegularFileBytes ||
+        read > maxRegularFileBytes - copiedFileBytes) {
+      if (errorMessage != nullptr) {
+        *errorMessage = @"The selected folder contains a file beyond its limit.";
+      }
+      break;
+    }
+    NSString *writeError = nil;
+    if (!output->write(buffer.data(), static_cast<std::size_t>(count),
+                       &writeError)) {
+      if (output->cancelled() ||
+          IOSDocumentCancellationRequested(cancellationRequested)) {
+        cancelled = true;
+      } else if (errorMessage != nullptr) {
+        *errorMessage = writeError ?:
+            @"Writing a private folder file failed.";
+      }
+      break;
+    }
+    totalBytes += read;
+    copiedFileBytes += read;
+  }
+  struct stat finalSourceStatus {};
+  if (complete &&
+      (::fstat(descriptor, &finalSourceStatus) != 0 ||
+       finalSourceStatus.st_dev != sourceStatus.st_dev ||
+       finalSourceStatus.st_ino != sourceStatus.st_ino ||
+       finalSourceStatus.st_size != sourceStatus.st_size)) {
+    complete = false;
+    if (errorMessage != nullptr) {
+      *errorMessage = @"A selected folder file changed while being copied.";
+    }
+  }
+  ::close(descriptor);
+  if (complete) {
+    NSString *finishError = nil;
+    if (!output->finish(&finishError)) {
+      complete = false;
+      if (output->cancelled() ||
+          IOSDocumentCancellationRequested(cancellationRequested)) {
+        cancelled = true;
+      } else if (errorMessage != nullptr) {
+        *errorMessage = finishError ?:
+            @"Could not finish a private folder file.";
+      }
+    }
+  }
+  ClearIOSDocumentStreams(operationToken);
+  if (!complete) {
+    output->abort();
+    return false;
+  }
+  output->releaseOwnership();
+  return true;
+}
+
+bool CopyIOSDirectoryURLBounded(
+    NSURL *sourceURL, NSString *destinationRoot,
+    std::uint64_t operationToken, std::uint64_t maxBytes,
+    std::uint64_t maxFiles, std::uint32_t maxDepth,
+    std::uint32_t maxPathBytes, std::uint64_t maxRegularFileBytes,
+    const std::atomic_bool *cancellationRequested, bool &cancelled,
+    NSString **errorMessage) {
+  cancelled = false;
+  if (sourceURL == nil || destinationRoot.length == 0 || maxBytes == 0 ||
+      maxFiles == 0 || maxDepth == 0 || maxPathBytes == 0 ||
+      maxRegularFileBytes == 0) {
+    if (errorMessage != nullptr) {
+      *errorMessage = @"Invalid private folder copy request.";
+    }
+    return false;
+  }
+  if (IOSDocumentCancellationRequested(cancellationRequested)) {
+    cancelled = true;
+    return false;
+  }
+
+  __block BOOL copied = NO;
+  __block BOOL copyCancelled = NO;
+  __block NSString *copyError = @"";
+  __block std::uint64_t totalBytes = 0;
+  __block std::uint64_t entryCount = 0;
+  NSFileCoordinator *coordinator =
+      [[NSFileCoordinator alloc] initWithFilePresenter:nil];
+  RegisterIOSDocumentCoordinator(operationToken, coordinator);
+  NSError *coordinationError = nil;
+  [coordinator coordinateReadingItemAtURL:sourceURL
+                                  options:0
+                                    error:&coordinationError
+                               byAccessor:^(NSURL *coordinatedURL) {
+    NSNumber *rootDirectory = nil;
+    NSNumber *rootSymlink = nil;
+    NSNumber *rootAlias = nil;
+    NSError *rootError = nil;
+    const bool rootValues =
+        [coordinatedURL getResourceValue:&rootDirectory
+                                  forKey:NSURLIsDirectoryKey
+                                   error:&rootError] &&
+        [coordinatedURL getResourceValue:&rootSymlink
+                                  forKey:NSURLIsSymbolicLinkKey
+                                   error:&rootError] &&
+        [coordinatedURL getResourceValue:&rootAlias
+                                  forKey:NSURLIsAliasFileKey
+                                   error:&rootError];
+    if (!rootValues || !rootDirectory.boolValue || rootSymlink.boolValue ||
+        rootAlias.boolValue) {
+      copyError = rootError.localizedDescription ?:
+          @"The selected item is not a safe folder.";
+      return;
+    }
+
+    NSString *rootPath = coordinatedURL.path.stringByStandardizingPath;
+    NSString *rootPrefix = [rootPath stringByAppendingString:@"/"];
+    NSArray<NSURLResourceKey> *resourceKeys = @[
+      NSURLIsDirectoryKey, NSURLIsRegularFileKey, NSURLIsSymbolicLinkKey,
+      NSURLIsAliasFileKey, NSURLFileSizeKey
+    ];
+    NSDirectoryEnumerator<NSURL *> *enumerator =
+        [NSFileManager.defaultManager
+            enumeratorAtURL:coordinatedURL
+ includingPropertiesForKeys:resourceKeys
+                    options:0
+               errorHandler:^BOOL(NSURL *url, NSError *error) {
+      (void)url;
+      copyError = error.localizedDescription ?:
+          @"Enumerating the selected folder failed.";
+      return NO;
+    }];
+    for (NSURL *entryURL in enumerator) {
+      if (IOSDocumentCancellationRequested(cancellationRequested)) {
+        copyCancelled = YES;
+        break;
+      }
+      if (++entryCount > maxFiles) {
+        copyError = @"The selected folder contains too many entries.";
+        break;
+      }
+      NSString *entryPath = entryURL.path.stringByStandardizingPath;
+      if (![entryPath hasPrefix:rootPrefix]) {
+        copyError = @"A selected folder entry escaped its package root.";
+        break;
+      }
+      NSString *relative = [entryPath substringFromIndex:rootPrefix.length];
+      const std::string relativeUtf8 = NSStringToString(relative);
+      if (relativeUtf8.empty() || relativeUtf8.size() > maxPathBytes) {
+        copyError = @"A selected folder path exceeds the supported limit.";
+        break;
+      }
+      const auto relativePath = std::filesystem::path(relativeUtf8);
+      std::uint32_t depth = 0;
+      bool unsafeComponent = false;
+      for (const auto &component : relativePath) {
+        const auto value = component.string();
+        if (value.empty() || value == "." || value == "..") {
+          unsafeComponent = true;
+          break;
+        }
+        ++depth;
+      }
+      if (unsafeComponent || depth == 0 || depth > maxDepth ||
+          relativePath.is_absolute()) {
+        copyError = @"A selected folder path is unsafe or too deep.";
+        break;
+      }
+
+      NSNumber *isDirectory = nil;
+      NSNumber *isRegular = nil;
+      NSNumber *isSymlink = nil;
+      NSNumber *isAlias = nil;
+      NSError *resourceError = nil;
+      const bool values =
+          [entryURL getResourceValue:&isDirectory
+                              forKey:NSURLIsDirectoryKey
+                               error:&resourceError] &&
+          [entryURL getResourceValue:&isRegular
+                              forKey:NSURLIsRegularFileKey
+                               error:&resourceError] &&
+          [entryURL getResourceValue:&isSymlink
+                              forKey:NSURLIsSymbolicLinkKey
+                               error:&resourceError] &&
+          [entryURL getResourceValue:&isAlias
+                              forKey:NSURLIsAliasFileKey
+                               error:&resourceError];
+      if (!values || isSymlink.boolValue || isAlias.boolValue ||
+          (isDirectory.boolValue == isRegular.boolValue)) {
+        copyError = resourceError.localizedDescription ?:
+            @"The selected folder contains an unsupported entry.";
+        break;
+      }
+
+      NSString *destination =
+          [destinationRoot stringByAppendingPathComponent:relative];
+      if (isDirectory.boolValue) {
+        NSString *directoryError = nil;
+        if (!SecureIOSPrivateDirectory(destination, &directoryError)) {
+          copyError = directoryError ?:
+              @"Could not create a private folder directory.";
+          break;
+        }
+        continue;
+      }
+      NSNumber *declaredSize = nil;
+      if (![entryURL getResourceValue:&declaredSize
+                               forKey:NSURLFileSizeKey
+                                error:&resourceError]) {
+        copyError = resourceError.localizedDescription ?:
+            @"Could not inspect a selected folder file.";
+        break;
+      }
+      const std::uint64_t declared = declaredSize.unsignedLongLongValue;
+      if (totalBytes > maxBytes || declared > maxBytes - totalBytes) {
+        copyError = @"The selected folder exceeds the maximum size.";
+        break;
+      }
+      if (declared > maxRegularFileBytes) {
+        copyError = @"The selected folder contains a file beyond its limit.";
+        break;
+      }
+      NSString *fileError = nil;
+      bool fileCancelled = false;
+      if (!CopyIOSDirectoryFileBounded(
+              entryURL, destination, operationToken, maxBytes,
+              maxRegularFileBytes, totalBytes, cancellationRequested,
+              fileCancelled, &fileError)) {
+        copyCancelled = fileCancelled;
+        copyError = fileError ?:
+            @"Could not copy a selected folder file.";
+        break;
+      }
+    }
+    copied = !copyCancelled && copyError.length == 0;
+  }];
+  UnregisterIOSDocumentIO(operationToken);
+
+  if (IOSDocumentCancellationRequested(cancellationRequested)) {
+    copyCancelled = YES;
+    copied = NO;
+  }
+  if (!copied) {
+    cancelled = copyCancelled == YES;
+    if (!cancelled && copyError.length == 0 && coordinationError != nil) {
+      copyError = coordinationError.localizedDescription;
+    }
+    if (!cancelled && errorMessage != nullptr) {
+      *errorMessage = copyError.length > 0 ? copyError :
+          @"Could not copy the selected folder.";
+    }
+    return false;
+  }
+  return true;
+}
+
 bool WaitForIOSDocumentPicker(std::uint64_t operationToken,
-                              NSString *mimeType, NSURL *exportURL,
+                              NSString *mimeType, bool directoryImport,
+                              NSURL *exportURL,
                               BOOL (^commitHandler)(void),
                               NSURL *__strong *selectedURL,
                               bool &cancelled, std::string &errorMessage,
@@ -3053,7 +3504,8 @@ bool WaitForIOSDocumentPicker(std::uint64_t operationToken,
               initForExportingURLs:@[ exportURL ]
                             asCopy:YES];
         } else {
-          UTType *contentType = [UTType typeWithMIMEType:mimeType];
+          UTType *contentType =
+              directoryImport ? UTTypeFolder : [UTType typeWithMIMEType:mimeType];
           if (contentType == nil) {
             [delegate finishWithURL:nil
                               error:@"The requested document type is unsupported."
@@ -3149,10 +3601,49 @@ bool CleanupIOSTemporaryDocument(const std::filesystem::path &localPath,
   }
 }
 
+bool ValidateIOSTemporaryDirectory(const std::filesystem::path &localPath,
+                                   std::string &errorMessage) {
+  @autoreleasepool {
+    return ValidateIOSTemporaryPath(localPath, true, false, false,
+                                    errorMessage);
+  }
+}
+
+bool CleanupIOSTemporaryDirectory(const std::filesystem::path &localPath,
+                                  std::string &errorMessage) {
+  @autoreleasepool {
+    if (!ValidateIOSTemporaryPath(localPath, true, true, true,
+                                  errorMessage)) {
+      return false;
+    }
+    std::error_code error;
+    const auto status = std::filesystem::symlink_status(localPath, error);
+    if (error == std::errc::no_such_file_or_directory) {
+      error.clear();
+    } else if (error) {
+      errorMessage = "Temporary iOS directory cleanup failed: " +
+                     error.message();
+      return false;
+    } else if (std::filesystem::is_symlink(status)) {
+      std::filesystem::remove(localPath, error);
+    } else {
+      std::filesystem::remove_all(localPath, error);
+    }
+    if (error) {
+      errorMessage = "Temporary iOS directory cleanup failed: " +
+                     error.message();
+      return false;
+    }
+    errorMessage.clear();
+    return true;
+  }
+}
+
 std::string ImportIOSDocument(std::uint64_t operationToken,
                               const std::string &mimeType,
                               std::uint64_t maxBytes,
-                              const std::atomic_bool *cancellationRequested) {
+                              const std::atomic_bool *cancellationRequested,
+                              std::string *originalSourceName) {
   @autoreleasepool {
     if (mimeType.empty() || maxBytes == 0) {
       return std::string(kIOSDocumentErrorPrefix) +
@@ -3166,12 +3657,15 @@ std::string ImportIOSDocument(std::uint64_t operationToken,
     bool cancelled = false;
     std::string pickerError;
     if (!WaitForIOSDocumentPicker(operationToken, NSStringFromUtf8(mimeType),
-                                  nil, nil, &selectedURL, cancelled,
+                                  false, nil, nil, &selectedURL, cancelled,
                                   pickerError, cancellationRequested)) {
       if (cancelled) {
         return std::string(kIOSDocumentCancelled);
       }
       return std::string(kIOSDocumentErrorPrefix) + pickerError;
+    }
+    if (originalSourceName != nullptr) {
+      *originalSourceName = NSStringToString(selectedURL.lastPathComponent);
     }
 
     BOOL accessing = [selectedURL startAccessingSecurityScopedResource];
@@ -3200,6 +3694,76 @@ std::string ImportIOSDocument(std::uint64_t operationToken,
         return std::string(kIOSDocumentCancelled);
       }
       return IOSErrorResult(copyError, "Private document copy failed.");
+    }
+    return NSStringToString(destination);
+  }
+}
+
+std::string ImportIOSDirectory(
+    std::uint64_t operationToken, std::uint64_t maxBytes,
+    std::uint64_t maxFiles, std::uint32_t maxDepth,
+    std::uint32_t maxPathBytes, std::uint64_t maxRegularFileBytes,
+    const std::atomic_bool *cancellationRequested,
+    std::string *originalSourceName) {
+  @autoreleasepool {
+    if (maxBytes == 0 || maxFiles == 0 || maxDepth == 0 ||
+        maxPathBytes == 0 || maxRegularFileBytes == 0) {
+      return std::string(kIOSDocumentErrorPrefix) +
+             "Invalid folder import request.";
+    }
+    if (IOSDocumentCancellationRequested(cancellationRequested)) {
+      return std::string(kIOSDocumentCancelled);
+    }
+
+    NSURL *selectedURL = nil;
+    bool cancelled = false;
+    std::string pickerError;
+    if (!WaitForIOSDocumentPicker(operationToken, @"", true, nil, nil,
+                                  &selectedURL, cancelled, pickerError,
+                                  cancellationRequested)) {
+      if (cancelled) {
+        return std::string(kIOSDocumentCancelled);
+      }
+      return std::string(kIOSDocumentErrorPrefix) + pickerError;
+    }
+    if (originalSourceName != nullptr) {
+      *originalSourceName = NSStringToString(selectedURL.lastPathComponent);
+    }
+
+    BOOL accessing = [selectedURL startAccessingSecurityScopedResource];
+    NSString *storageError = nil;
+    NSString *baseDirectory = IOSDocumentHandoffBaseDirectory(&storageError);
+    if (baseDirectory == nil) {
+      if (accessing) {
+        [selectedURL stopAccessingSecurityScopedResource];
+      }
+      return IOSErrorResult(storageError, "Private folder storage failed.");
+    }
+    NSString *destination =
+        CreateIOSPrivateImportDirectory(baseDirectory, &storageError);
+    if (destination == nil) {
+      if (accessing) {
+        [selectedURL stopAccessingSecurityScopedResource];
+      }
+      return IOSErrorResult(storageError, "Private folder storage failed.");
+    }
+
+    NSString *copyError = nil;
+    bool copyCancelled = false;
+    const bool copied = CopyIOSDirectoryURLBounded(
+        selectedURL, destination, operationToken, maxBytes, maxFiles,
+        maxDepth, maxPathBytes, maxRegularFileBytes, cancellationRequested,
+        copyCancelled, &copyError);
+    if (accessing) {
+      [selectedURL stopAccessingSecurityScopedResource];
+    }
+    if (!copied || IOSDocumentCancellationRequested(cancellationRequested)) {
+      CleanupIOSIssuedDirectoryAfterFailure(destination);
+      if (copyCancelled ||
+          IOSDocumentCancellationRequested(cancellationRequested)) {
+        return std::string(kIOSDocumentCancelled);
+      }
+      return IOSErrorResult(copyError, "Private folder copy failed.");
     }
     return NSStringToString(destination);
   }
@@ -3266,7 +3830,7 @@ std::string ExportIOSDocument(std::uint64_t operationToken,
       }
     };
     const bool picked = WaitForIOSDocumentPicker(
-        operationToken, NSStringFromUtf8(mimeType),
+        operationToken, NSStringFromUtf8(mimeType), false,
         [NSURL fileURLWithPath:stagedPath], nativeCommitHandler,
         nullptr, cancelled, pickerError, cancellationRequested);
     [NSFileManager.defaultManager removeItemAtPath:exportDirectory error:nil];
@@ -3341,8 +3905,64 @@ void StopIOSSecurityScopedResource(void *resource) {
 }
 
 std::string GetIOSDocumentsPath() {
-  return std::string([[NSSearchPathForDirectoriesInDomains(
-      NSDocumentDirectory, NSUserDomainMask, YES) objectAtIndex:0] UTF8String]);
+  @autoreleasepool {
+    NSFileManager *manager = NSFileManager.defaultManager;
+    NSArray<NSString *> *paths = NSSearchPathForDirectoriesInDomains(
+        NSDocumentDirectory, NSUserDomainMask, YES);
+    if (paths.count == 0) {
+      return {};
+    }
+    NSURL *directory =
+        [NSURL fileURLWithPath:paths.firstObject isDirectory:YES];
+    NSURL *resolvedDirectory = directory.URLByResolvingSymlinksInPath;
+    if (resolvedDirectory == nil) {
+      return {};
+    }
+    NSError *error = nil;
+    if (![manager createDirectoryAtURL:resolvedDirectory
+            withIntermediateDirectories:YES
+                             attributes:nil
+                                  error:&error]) {
+      return {};
+    }
+    return std::string(resolvedDirectory.fileSystemRepresentation);
+  }
+}
+
+std::string GetIOSApplicationSupportPath() {
+  @autoreleasepool {
+    NSFileManager *manager = NSFileManager.defaultManager;
+    NSURL *base = [manager URLForDirectory:NSApplicationSupportDirectory
+                                  inDomain:NSUserDomainMask
+                         appropriateForURL:nil
+                                    create:YES
+                                     error:nil];
+    if (base == nil) {
+      return {};
+    }
+    NSURL *resolvedBase = base.URLByResolvingSymlinksInPath;
+    if (resolvedBase == nil) {
+      return {};
+    }
+    NSURL *directory =
+        [resolvedBase URLByAppendingPathComponent:@"AsoBMaShow"
+                                      isDirectory:YES];
+    NSError *error = nil;
+    if (![manager createDirectoryAtURL:directory
+            withIntermediateDirectories:YES
+                             attributes:nil
+                                  error:&error]) {
+      return {};
+    }
+    if (![directory setResourceValue:@YES
+                              forKey:NSURLIsExcludedFromBackupKey
+                               error:&error]) {
+      // The directory is still usable if iOS rejects this advisory cache
+      // attribute. Do not prevent the user-visible skin root from starting.
+      NSLog(@"Could not exclude private skin storage from backup: %@", error);
+    }
+    return std::string(directory.fileSystemRepresentation);
+  }
 }
 
 // get nwh

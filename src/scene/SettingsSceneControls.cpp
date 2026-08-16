@@ -150,14 +150,16 @@ void applySemanticButtonStyle(Button *button, TextView *text,
 void SettingsScene::refreshSettingsText() {
   const int offsetMs = context.settings.audioOffsetMs;
   const int visualOffsetMs = context.settings.visualOffsetMs;
-  const int visibleTimeGreenNumber = context.settings.visibleTimeGreenNumber;
+  const int visibleTimeDurationMilliseconds =
+      context.settings.visibleTimeDurationMilliseconds;
   const std::string offsetLabel = formatOffsetLabel(offsetMs);
   const std::string visualOffsetLabel = formatOffsetLabel(visualOffsetMs);
   const std::string visibleTimeLabel = formatVisibleTimeLabel(
-      visibleTimeGreenNumber, context.settings.visibleTimeUseMilliseconds);
+      visibleTimeDurationMilliseconds,
+      context.settings.visibleTimeUseMilliseconds);
   const std::string visibleTimeBpmStrategyLabel =
       formatVisibleTimeBpmStrategyLabel(
-          context.settings.visibleTimeBpmStrategy);
+          context.settings.hispeedFixMode);
   const std::string keysoundLabel =
       context.settings.inputKeysoundEnabled ? "Input Trigger" : "Auto Timed";
   const std::string prepMetronomeLabel =
@@ -195,13 +197,15 @@ void SettingsScene::refreshSettingsText() {
       formatNotePriorityModeLabel(context.settings.notePriorityMode);
   const std::string invisibleNotesLabel =
       context.settings.showInvisibleNotes ? "Shown" : "Hidden";
+  const std::string markProcessedNotesLabel =
+      context.settings.markProcessedNotes ? "Enabled" : "Disabled";
   const std::string startLaneIndicatorsLabel =
       context.settings.startLaneIndicatorsEnabled ? "Shown" : "Hidden";
   const std::string touchVisualizationLabel =
       context.settings.touchVisualizationEnabled ? "Shown" : "Hidden";
-  const std::string floatingLaneCoverLabel =
-      context.settings.floatingLaneCoverEnabled ? "Floating On"
-                                                : "Floating Off";
+  const std::string hispeedAutoAdjustLabel =
+      context.settings.hispeedAutoAdjust ? "Hi-Speed Auto Adjust: On"
+                                         : "Hi-Speed Auto Adjust: Off";
   const std::string archiveChartPreviewLabel =
       context.settings.archiveChartPreviewEnabled ? "Enabled" : "Disabled";
   const std::string findBmsSkipUnarchivingLabel =
@@ -329,14 +333,17 @@ void SettingsScene::refreshSettingsText() {
   if (showInvisibleNotesModeText != nullptr) {
     showInvisibleNotesModeText->setText(invisibleNotesLabel);
   }
+  if (markProcessedNotesModeText != nullptr) {
+    markProcessedNotesModeText->setText(markProcessedNotesLabel);
+  }
   if (startLaneIndicatorsModeText != nullptr) {
     startLaneIndicatorsModeText->setText(startLaneIndicatorsLabel);
   }
   if (touchVisualizationModeText != nullptr) {
     touchVisualizationModeText->setText(touchVisualizationLabel);
   }
-  if (floatingLaneCoverModeText != nullptr) {
-    floatingLaneCoverModeText->setText(floatingLaneCoverLabel);
+  if (hispeedAutoAdjustModeText != nullptr) {
+    hispeedAutoAdjustModeText->setText(hispeedAutoAdjustLabel);
   }
   if (archiveChartPreviewModeText != nullptr) {
     archiveChartPreviewModeText->setText(archiveChartPreviewLabel);
@@ -382,7 +389,8 @@ void SettingsScene::refreshSettingsText() {
                                      : "Green Number");
   }
   if (visibleTimeBpmStrategyText != nullptr) {
-    visibleTimeBpmStrategyText->setText("BPM: " + visibleTimeBpmStrategyLabel);
+    visibleTimeBpmStrategyText->setText("Fixed Hi-Speed: " +
+                                         visibleTimeBpmStrategyLabel);
   }
 
   applySemanticButtonStyle(visibleTimeModeButton, visibleTimeModeText,
@@ -391,8 +399,7 @@ void SettingsScene::refreshSettingsText() {
                                : SettingsButtonTone::Info);
   applySemanticButtonStyle(
       visibleTimeBpmStrategyButton, visibleTimeBpmStrategyText,
-      context.settings.visibleTimeBpmStrategy ==
-              AppSettings::VisibleTimeBpmStrategy::MostPrevalent
+      context.settings.hispeedFixMode == AppSettings::HiSpeedFixMode::Main
           ? SettingsButtonTone::Success
           : SettingsButtonTone::Info);
   applySemanticButtonStyle(keysoundModeButton, keysoundModeText,
@@ -413,6 +420,10 @@ void SettingsScene::refreshSettingsText() {
       context.settings.showInvisibleNotes ? SettingsButtonTone::Success
                                           : SettingsButtonTone::Info);
   applySemanticButtonStyle(
+      markProcessedNotesModeButton, markProcessedNotesModeText,
+      context.settings.markProcessedNotes ? SettingsButtonTone::Success
+                                           : SettingsButtonTone::Info);
+  applySemanticButtonStyle(
       startLaneIndicatorsModeButton, startLaneIndicatorsModeText,
       context.settings.startLaneIndicatorsEnabled ? SettingsButtonTone::Success
                                                   : SettingsButtonTone::Info);
@@ -421,9 +432,9 @@ void SettingsScene::refreshSettingsText() {
       context.settings.touchVisualizationEnabled ? SettingsButtonTone::Success
                                                  : SettingsButtonTone::Info);
   applySemanticButtonStyle(
-      floatingLaneCoverModeButton, floatingLaneCoverModeText,
-      context.settings.floatingLaneCoverEnabled ? SettingsButtonTone::Success
-                                                : SettingsButtonTone::Info);
+      hispeedAutoAdjustModeButton, hispeedAutoAdjustModeText,
+      context.settings.hispeedAutoAdjust ? SettingsButtonTone::Success
+                                          : SettingsButtonTone::Info);
   applySemanticButtonStyle(
       archiveChartPreviewModeButton, archiveChartPreviewModeText,
       context.settings.archiveChartPreviewEnabled ? SettingsButtonTone::Success
@@ -522,6 +533,8 @@ void SettingsScene::refreshSettingsText() {
                 SettingsTab::DifficultyTables);
   applyTabStyle(bmsLibraryTabButton, bmsLibraryTabText,
                 SettingsTab::BmsLibrary);
+  applyTabStyle(gameplaySkinsTabButton, gameplaySkinsTabText,
+                SettingsTab::GameplaySkins);
   applyTabStyle(irTabButton, irTabText, SettingsTab::Ir);
 
   if (rootLayout != nullptr) {
@@ -583,7 +596,8 @@ void SettingsScene::syncVisibleTimeInputText(bool force) {
     return;
   }
   visibleTimeInput->setEditingText(
-      formatVisibleTimeInputValue(context.settings.visibleTimeGreenNumber,
+      formatVisibleTimeInputValue(
+                                  context.settings.visibleTimeDurationMilliseconds,
                                   context.settings.visibleTimeUseMilliseconds));
 }
 
@@ -741,14 +755,11 @@ void SettingsScene::commitVisibleTimeInput() {
   try {
     const int parsedValue = std::stoi(rawText);
     if (context.settings.visibleTimeUseMilliseconds) {
-      const int milliseconds =
-          std::clamp(parsedValue, AppSettings::kMinVisibleTimeMs,
-                     AppSettings::kMaxVisibleTimeMs);
-      context.settings.visibleTimeGreenNumber =
-          clampVisibleTimeGreenNumber(millisecondsToGreenNumber(milliseconds));
+      context.settings.visibleTimeDurationMilliseconds = std::clamp(
+          parsedValue, AppSettings::kMinVisibleTimeMs,
+          AppSettings::kMaxVisibleTimeMs);
     } else {
-      context.settings.visibleTimeGreenNumber =
-          clampVisibleTimeGreenNumber(parsedValue);
+      context.settings.setVisibleTimeGreenNumber(parsedValue);
     }
     persistSettings();
     syncVisibleTimeInputText(true);

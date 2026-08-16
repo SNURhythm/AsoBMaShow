@@ -43,6 +43,7 @@ struct GameplayAttemptOptions {
   int carriedCombo = 0;
   int carriedMaxCombo = 0;
   bool assistClearMark = false;
+  bool lightAssistClearMark = false;
   bool autoPlay = false;
   std::size_t replayCapacity = 4096;
   std::size_t automaticResultCapacity = 4096;
@@ -54,6 +55,8 @@ struct GameplayAttemptSnapshot {
   int combo = 0;
   int maxCombo = 0;
   int comboBreak = 0;
+  int stageCombo = 0;
+  int stagePassedNotes = 0;
   int score = 0;
   float gauge = 0.0F;
   GaugeType gaugeType = GaugeType::Normal;
@@ -119,6 +122,7 @@ enum class LaneVisualAction { Press, Release };
 struct LaneVisualEvent {
   LaneVisualAction action = LaneVisualAction::Press;
   int lane = -1;
+  std::int64_t songTimeMicros = 0;
   std::int64_t visualTimeMicros = 0;
   JudgeResult judge = JudgeResult(None, 0);
 };

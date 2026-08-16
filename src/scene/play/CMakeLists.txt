@@ -1,4 +1,9 @@
 target_sources(main PRIVATE GamePlayScene.cpp BMSRenderer.cpp
+                            BeatorajaHiSpeedChart.cpp
+                            BuiltInPlayfieldPresentation.cpp
+                            PlayfieldChartVisualModel.cpp
+                            PlayfieldProjection.cpp
+                            PlayfieldVisualState.cpp
                             RhythmLaneInputController.cpp
                             JudgementIndicatorRenderer.cpp Judge.cpp
                             GameplayJudgeRules.cpp
@@ -12,7 +17,13 @@ target_sources(main PRIVATE GamePlayScene.cpp BMSRenderer.cpp
                             RealtimeGameplayInputBridge.cpp
                             RealtimeGameplayWorker.cpp
                             RealtimeTouchInputRouter.cpp
-                            ReplayKeysoundSchedule.cpp)
+                            VirtualControllerLayout.cpp
+                            ReplayKeysoundSchedule.cpp
+                            PlayfieldPresentationCoordinator.cpp
+                            ReplayPlayfieldPresentation.cpp)
+if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
+    target_sources(main PRIVATE GameplaySkinSessionFactory.cpp)
+endif()
 if(WIN32)
     target_link_libraries(main PRIVATE avrt)
 endif()

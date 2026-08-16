@@ -81,6 +81,40 @@ def firebase_archive_objroot(derived_data_path)
   File.join(derived_data_path, "Build", "FirebaseArchiveIntermediates.noindex")
 end
 
+def release_build_identity
+  repository_root = File.expand_path("../../../..", __dir__)
+  commit, error, status = Open3.capture3(
+    "git", "-C", repository_root, "rev-parse", "HEAD"
+  )
+  UI.user_error!("Unable to resolve the build commit: #{error.strip}") unless status.success?
+  commit = commit.strip
+  unless /\A[0-9a-f]{40}\z/.match?(commit)
+    UI.user_error!("Resolved build commit is not a lowercase SHA-1: #{commit}")
+  end
+
+  dirty, error, status = Open3.capture3(
+    "git", "-C", repository_root, "status", "--porcelain"
+  )
+  UI.user_error!("Unable to resolve source cleanliness: #{error.strip}") unless status.success?
+  { commit: commit, source_clean: dirty.empty? ? "1" : "0" }
+end
+
+def build_identity_xcargs(xcargs, identity)
+  "#{xcargs} ASOBMASHOW_BUILD_COMMIT=#{identity.fetch(:commit)} " \
+    "ASOBMASHOW_SOURCE_CLEAN=#{identity.fetch(:source_clean)}"
+end
+
+def audit_distribution_artifact(artifact, identity)
+  audit = File.expand_path("../../../../scripts/ios_artifact_audit.sh", __dir__)
+  UI.user_error!("iOS artifact audit script is not executable") unless File.executable?(audit)
+  sh(
+    "ASOBMASHOW_EXPECTED_BUILD_COMMIT=#{Shellwords.escape(identity.fetch(:commit))} " \
+    "ASOBMASHOW_EXPECTED_BUILD_CONFIGURATION=Release " \
+    "ASOBMASHOW_EXPECTED_SOURCE_CLEAN=#{Shellwords.escape(identity.fetch(:source_clean))} " \
+    "#{Shellwords.escape(audit)} --require-signature #{Shellwords.escape(artifact)}"
+  )
+end
+
 def app_store_key_id
   key_id = ENV["APP_STORE_KEY_ID"].to_s.strip
   key_id.empty? ? "7459U6UPUW" : key_id
@@ -104,7 +138,11 @@ platform :ios do
     )
     match(type: "adhoc", git_basic_authorization: ENV["GIT_BASIC_AUTHORIZATION"], api_key: api_key)
     build_number = firebase_build_number
-    xcargs = "-allowProvisioningUpdates CURRENT_PROJECT_VERSION=#{build_number} IPHONEOS_DEPLOYMENT_TARGET=14.0"
+    identity = release_build_identity
+    xcargs = build_identity_xcargs(
+      "-allowProvisioningUpdates CURRENT_PROJECT_VERSION=#{build_number} IPHONEOS_DEPLOYMENT_TARGET=14.0",
+      identity
+    )
     derived_data_path = firebase_derived_data_path
     build_options = {
       scheme: "AsoBMaShow",
@@ -116,6 +154,9 @@ platform :ios do
     }
     build_app(**build_options)
     temporary_fix_ios_post_build
+    ipa_location = lane_context[SharedValues::IPA_OUTPUT_PATH].to_s.strip
+    UI.user_error!("Firebase build did not produce an IPA") if ipa_location.empty?
+    audit_distribution_artifact(ipa_location, identity)
 
     firebase_options = firebase_option_env
     firebase_app_distribution(
@@ -144,7 +185,11 @@ platform :ios do
     match(type: "appstore", git_basic_authorization: ENV["GIT_BASIC_AUTHORIZATION"], api_key: api_key)
 
     build_number = latest_testflight_build_number(initial_build_number: 0) + 1
-    xcargs = "-allowProvisioningUpdates CURRENT_PROJECT_VERSION=#{build_number} IPHONEOS_DEPLOYMENT_TARGET=14.0"
+    identity = release_build_identity
+    xcargs = build_identity_xcargs(
+      "-allowProvisioningUpdates CURRENT_PROJECT_VERSION=#{build_number} IPHONEOS_DEPLOYMENT_TARGET=14.0",
+      identity
+    )
     build_app(
       scheme: "AsoBMaShow",
       workspace: "AsoBMaShow.xcworkspace",
@@ -155,15 +200,7 @@ platform :ios do
     temporary_fix_ios_post_build
     ipa_location = lane_context[SharedValues::IPA_OUTPUT_PATH].to_s.strip
     UI.user_error!("TestFlight build did not produce an IPA") if ipa_location.empty?
-    artifact_audit = File.expand_path(
-      "../../../../scripts/ios_artifact_audit.sh",
-      __dir__
-    )
-    UI.user_error!("iOS artifact audit script is not executable") unless File.executable?(artifact_audit)
-    sh(
-      "#{Shellwords.escape(artifact_audit)} --require-signature " \
-      "#{Shellwords.escape(ipa_location)}"
-    )
+    audit_distribution_artifact(ipa_location, identity)
     upload_to_testflight
   end
 end

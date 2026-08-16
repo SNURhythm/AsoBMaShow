@@ -8,6 +8,7 @@
 #include <Windows.h>
 #include <Xinput.h>
 #include <avrt.h>
+#include <Unknwn.h>
 #include <rtworkq.h>
 
 #include <SDL2/SDL_log.h>

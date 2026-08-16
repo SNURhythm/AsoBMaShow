@@ -1,0 +1,19 @@
+assert(type(os) == "table")
+assert(type(os.clock) == "function")
+assert(type(os.date) == "function")
+assert(type(os.difftime) == "function")
+assert(type(os.time) == "function")
+
+local now = os.time()
+assert(type(now) == "number")
+assert(os.difftime(now, now) == 0)
+
+assert(os.execute == nil)
+assert(os.exit == nil)
+assert(os.getenv == nil)
+assert(os.remove == nil)
+assert(os.rename == nil)
+assert(os.setlocale == nil)
+assert(os.tmpname == nil)
+
+return { phase = skin_config and "configured" or "header" }

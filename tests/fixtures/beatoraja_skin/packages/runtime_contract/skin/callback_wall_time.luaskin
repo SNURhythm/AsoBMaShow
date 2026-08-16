@@ -1,0 +1,12 @@
+local function host_heavy_callback()
+  local count = 20
+  local subject = string.rep("a", count)
+  local pattern = string.rep("a?", count) .. string.rep("a", count)
+  assert(string.match(subject, pattern))
+  return 1
+end
+
+return {
+  phase = skin_config and "configured" or "header",
+  host_heavy_callback = host_heavy_callback
+}

@@ -1,0 +1,9 @@
+local captured_main_state = require("main_state")
+
+return {
+  phase = skin_config and "configured" or "header",
+  reentrant_writer = function(value)
+    assert(value == 0.5)
+    return captured_main_state.event_exec(301, 7)
+  end,
+}

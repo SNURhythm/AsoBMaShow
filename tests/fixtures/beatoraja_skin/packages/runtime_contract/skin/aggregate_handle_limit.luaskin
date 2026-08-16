@@ -1,0 +1,5 @@
+local handles = {}
+for i = 1, 5 do
+  handles[i] = assert(io.open("aggregate-" .. i .. ".txt", "r"))
+end
+return { phase = "unreachable" }

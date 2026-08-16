@@ -509,6 +509,10 @@ public:
   int combo = 0;
   int maxCombo = 0;
   int comboBreak = 0;
+  // JudgeManager retains a chart-local combo for the full-combo timer even
+  // when the displayed course combo carries across stage boundaries.
+  int stageCombo = 0;
+  int stagePassedNotes = 0;
   // judge count. default 0
   std::map<Judgement, int> judgeCount;
   std::map<Judgement, JudgementFastSlowCount> judgementFastSlowCount;
@@ -545,11 +549,14 @@ public:
 
   void commitJudge(const JudgeResult &judgeResult) {
     ++judgeCount[judgeResult.judgement];
+    ++stagePassedNotes;
     if (judgeResult.isComboBreak()) {
       combo = 0;
+      stageCombo = 0;
       ++comboBreak;
     } else if (judgeResult.judgement != Kpoor) {
       ++combo;
+      ++stageCombo;
       maxCombo = std::max(maxCombo, combo);
     }
     recordFastSlow(judgeResult);
@@ -570,6 +577,7 @@ public:
   GaugeProfile gaugeProfile = GaugeProfile::Standard;
   GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
   bool assistClearMark = false;
+  bool lightAssistClearMark = false;
   std::array<float, kGaugeTypeCount> gaugeValues{};
   std::array<bool, kGaugeTypeCount> gaugeSurvivalFailed{};
   int fastCount = 0;
@@ -702,7 +710,15 @@ public:
     };
   }
 
-  void setAssistClearMark(bool enabled) { assistClearMark = enabled; }
+  void setAssistClearMark(AssistClearMark mark) {
+    assistClearMark = mark == AssistClearMark::AssistedEasy;
+    lightAssistClearMark = mark == AssistClearMark::LightAssistedEasy;
+  }
+
+  void setAssistClearMark(bool enabled) {
+    setAssistClearMark(enabled ? AssistClearMark::AssistedEasy
+                               : AssistClearMark::None);
+  }
 
   void applyGaugeJudgement(Judgement judgement) {
     applyGaugeJudgementRate(judgement, 1.0f);
@@ -772,6 +788,11 @@ public:
       return gaugeClearType == ClearType::Failed
                  ? ClearType::Failed
                  : ClearType::AssistedEasyClear;
+    }
+    if (lightAssistClearMark) {
+      return gaugeClearType == ClearType::Failed
+                 ? ClearType::Failed
+                 : ClearType::LightAssistedEasyClear;
     }
     return gaugeClearType;
   }

@@ -3,6 +3,10 @@
 //
 
 #include "BMSRenderer.h"
+
+#include "BeatorajaHiSpeedChart.h"
+
+#include "PlayfieldProjection.h"
 #include "GamePlayTiming.h"
 #include "GameplayScrollGeometry.h"
 #include "JudgementTimingText.h"
@@ -10,6 +14,7 @@
 #include "StartLaneIndicatorGeometry.h"
 #include "TouchVisualizationTiming.h"
 
+#include "../../ChartPlaybackDuration.h"
 #include "../../CoursePlaySession.h"
 #include "GameplayGeometry.h"
 #include "Judge.h"
@@ -27,8 +32,10 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
+#include <exception>
 #include <limits>
 #include <memory>
+#include <numeric>
 #include <optional>
 #include <string>
 #include <utility>
@@ -57,6 +64,12 @@ constexpr double kLaneBeamMaxAlpha = 0.2;
 constexpr double kScratchLaneBeamHeldAlpha = 0.08;
 constexpr long long kScratchLaneBeamHeldFadeMicros = 180000LL;
 constexpr long long kLaneBeamReleaseFadeMicros = 200000LL;
+
+void advanceTouchRevision(std::uint64_t &revision) noexcept {
+  revision = revision == std::numeric_limits<std::uint64_t>::max()
+                 ? 1
+                 : revision + 1;
+}
 
 constexpr std::array<const char *, kHudCounterItemCount> kCounterLabels{
     "PGREAT", "GREAT", "GOOD", "BAD", "POOR", "KPOOR", "BREAK"};
@@ -154,6 +167,13 @@ bool shouldKeepDeadLongNoteBody(const bms_parser::LongNote *head) {
 }
 
 gameplay_scroll_geometry::NoteRectangleClip noteRenderClip(
+    long long noteTimeMicros, long long currentTimeMicros, float y,
+    float noteHeight, float judgeY) {
+  return gameplay_scroll_geometry::clipNoteRectangle(
+      noteTimeMicros, currentTimeMicros, y, noteHeight, judgeY);
+}
+
+gameplay_scroll_geometry::NoteRectangleClip noteRenderClip(
     const bms_parser::Note *note, long long currentTimeMicros, float y,
     float noteHeight, float judgeY) {
   if (note == nullptr || note->Timeline == nullptr) {
@@ -162,8 +182,8 @@ gameplay_scroll_geometry::NoteRectangleClip noteRenderClip(
             .height = noteHeight,
             .bottomTextureFraction = 1.0F};
   }
-  return gameplay_scroll_geometry::clipNoteRectangle(
-      note->Timeline->Timing, currentTimeMicros, y, noteHeight, judgeY);
+  return noteRenderClip(note->Timeline->Timing, currentTimeMicros, y,
+                        noteHeight, judgeY);
 }
 
 float clippedBottomV(float topV, float bottomV,
@@ -602,6 +622,13 @@ JudgementCounterLayout judgementCounterLayoutFor(
 }
 } // namespace
 
+struct BMSRenderer::PreparedPresentationFrame {
+  std::uint64_t frameSerial = 0;
+  PresentationFrameOutcome outcome = PresentationFrameOutcome::Ready;
+  std::optional<PlayfieldVisualState> state;
+  std::optional<PlayfieldProjectionResult> projection;
+};
+
 AtomicLaneState::AtomicLaneState(AtomicLaneState &&other) noexcept {
   *this = std::move(other);
 }
@@ -625,11 +652,11 @@ AtomicLaneState::operator=(AtomicLaneState &&other) noexcept {
 BMSRenderer::BMSRenderer(
     bms_parser::Chart *chart,
     const std::map<Judgement, std::pair<long long, long long>> &timingWindows,
-    int visibleTimeGreenNumber, bool renderHud,
+    int visibleTimeDurationMilliseconds, bool renderHud,
     audio::PlaybackRate playbackRate)
     : judgementIndicator(timingWindows),
       latePoorTiming(latePoorTimingFromWindows(timingWindows)),
-      visibleTimeGreenNumber(visibleTimeGreenNumber),
+      visibleTimeDurationMilliseconds(visibleTimeDurationMilliseconds),
       playbackRate(playbackRate), renderHud(renderHud), chart(chart) {
   setCurrentBpm(chart != nullptr ? chart->Meta.Bpm : 0.0);
   auto textureGuard = makeScopeExit([this] { destroyNoteSheetTextures(); });
@@ -688,11 +715,38 @@ BMSRenderer::BMSRenderer(
   }
   timelines.reserve(timelineCount);
   groupedTimelineNotes.reserve(timelineCount);
-  // Beatoraja traverses only timing, section, and note-bearing rows. Omitting
-  // BGA-only rows is part of its scroll-gimmick geometry because each retained
-  // row participates in the incremental future-Y calculation below.
+  // Normal notes remain rendered through their active late-POOR window. Keep
+  // every real chart row after the final visual note as a terminal scroll
+  // anchor, otherwise an active final note in the final measure is clamped at
+  // its own row while zero-note timelines still lie ahead of it.
+  std::optional<size_t> lastVisualNoteTimelineOrdinal;
+  size_t authoredTimelineOrdinal = 0;
+  for (const auto &measure : chart->Measures) {
+    for (const auto &timeLine : measure->TimeLines) {
+      const bool hasPlayableNote =
+          std::any_of(timeLine->Notes.begin(), timeLine->Notes.end(),
+                      [](const auto *note) { return note != nullptr; });
+      const bool hasInvisibleNote =
+          std::any_of(timeLine->InvisibleNotes.begin(),
+                      timeLine->InvisibleNotes.end(),
+                      [](const auto *note) { return note != nullptr; });
+      const bool hasLandmine =
+          std::any_of(timeLine->LandmineNotes.begin(),
+                      timeLine->LandmineNotes.end(),
+                      [](const auto *note) { return note != nullptr; });
+      if (hasPlayableNote || hasInvisibleNote || hasLandmine) {
+        lastVisualNoteTimelineOrdinal = authoredTimelineOrdinal;
+      }
+      ++authoredTimelineOrdinal;
+    }
+  }
+
+  // Beatoraja traverses timing, section, and note-bearing rows. The terminal
+  // continuation above is the additional anchor needed by this renderer's
+  // late-POOR processed-note lifecycle.
   double previousBpm = chart->Meta.Bpm;
   double previousScroll = 1.0;
+  authoredTimelineOrdinal = 0;
   for (const auto &measure : chart->Measures) {
     for (const auto &timeLine : measure->TimeLines) {
       std::vector<bms_parser::Note *> timelineNotes;
@@ -722,12 +776,18 @@ BMSRenderer::BMSRenderer(
           std::any_of(timeLine->LandmineNotes.begin(),
                       timeLine->LandmineNotes.end(),
                       [](const auto *note) { return note != nullptr; });
-      const bool keep = gameplay_scroll_geometry::shouldKeepRenderTimeline(
-          previousBpm, timeLine->Bpm, timeLine->GetStopDuration(),
-          previousScroll, timeLine->Scroll, timeLine->IsFirstInMeasure,
-          hasPlayableNote, hasInvisibleNote, hasLandmine);
+      const bool terminalScrollContinuation =
+          lastVisualNoteTimelineOrdinal.has_value() &&
+          authoredTimelineOrdinal > *lastVisualNoteTimelineOrdinal;
+      const bool keep =
+          terminalScrollContinuation ||
+          gameplay_scroll_geometry::shouldKeepRenderTimeline(
+              previousBpm, timeLine->Bpm, timeLine->GetStopDuration(),
+              previousScroll, timeLine->Scroll, timeLine->IsFirstInMeasure,
+              hasPlayableNote, hasInvisibleNote, hasLandmine);
       previousBpm = timeLine->Bpm;
       previousScroll = timeLine->Scroll;
+      ++authoredTimelineOrdinal;
       if (!keep) {
         continue;
       }
@@ -737,7 +797,7 @@ BMSRenderer::BMSRenderer(
     }
   }
   buildTimelineScrollPositions();
-  mostPrevalentBpm = calculateMostPrevalentBpm();
+  mainBpm = gameplay_hispeed::summarizeChartBpm(*chart).main;
   SpriteLoader spriteLoader(PATH("assets/img/simple_gray.png"));
   if (!spriteLoader.load()) {
     throw std::runtime_error("Failed to load simple_gray.png");
@@ -1792,7 +1852,7 @@ void BMSRenderer::layoutCenteredJudgementText() {
   }
 }
 
-void BMSRenderer::onLanePressed(int lane, const JudgeResult judge,
+void BMSRenderer::onLanePressed(int lane, JudgeResult judge,
                                 long long time) {
   const auto it = laneToOrderIndex.find(lane);
   if (it == laneToOrderIndex.end()) {
@@ -1817,8 +1877,9 @@ void BMSRenderer::onLaneReleased(int lane, long long time) {
   laneState.lastStateTime.store(time, std::memory_order_release);
 }
 void BMSRenderer::onJudge(JudgeResult judgeResult, int combo, int score,
-                          long long displayTimeMicros,
+                          PlayfieldJudgeEventClock clock,
                           bool recordTimingSample) {
+  const long long displayTimeMicros = clock.visualTimeMicros;
   if (judgeResult.judgement == None) {
     return;
   }
@@ -1836,6 +1897,47 @@ void BMSRenderer::onJudge(JudgeResult judgeResult, int combo, int score,
     hudRevision.fetch_add(1, std::memory_order_release);
   }
 }
+
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+std::size_t BMSRenderer::characterizationTimelineOrdinal(
+    const bms_parser::TimeLine *timeline) const {
+  if (timeline == nullptr) {
+    return bms_renderer_characterization::kNoTimelineOrdinal;
+  }
+  const auto found = std::find(timelines.cbegin(), timelines.cend(), timeline);
+  if (found == timelines.cend()) {
+    return bms_renderer_characterization::kNoTimelineOrdinal;
+  }
+  return static_cast<std::size_t>(std::distance(timelines.cbegin(), found));
+}
+
+void BMSRenderer::recordCharacterizationSubmission(
+    bms_renderer_characterization::SubmissionKind kind,
+    bms_renderer_characterization::Surface surface, std::uint32_t depth,
+    const bms_parser::TimeLine *timeline,
+    const bms_parser::TimeLine *pairedTimeline, int lane,
+    std::size_t primitiveOrdinal,
+    bms_renderer_characterization::LongBodyState longBodyState,
+    bms_renderer_characterization::Rect rect) {
+  if (characterizationRecorder == nullptr) {
+    return;
+  }
+  characterizationRecorder->submit({
+      .kind = kind,
+      .surface = surface,
+      .depth = depth,
+      .timelineOrdinal = characterizationTimelineOrdinal(timeline),
+      .pairedTimelineOrdinal =
+          characterizationTimelineOrdinal(pairedTimeline),
+      .timelineMicros = timeline != nullptr ? timeline->Timing : 0,
+      .lane = lane,
+      .primitiveOrdinal = primitiveOrdinal,
+      .longBodyState = longBodyState,
+      .rect = rect,
+  });
+}
+#endif
+
 void BMSRenderer::drawLongNote(
     float headY, float tailY, bms_parser::LongNote *const &head,
     gameplay_note_submission_order::LongNoteOrder order,
@@ -1878,6 +1980,14 @@ void BMSRenderer::drawLongNote(
   const bool hcnBodyRegrabbed = headHasReachedJudge && isHellCharge &&
                                 laneIsCurrentlyPressed(head->Lane);
   const bool bodyActive = head->IsHolding || hcnBodyRegrabbed;
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+  const auto characterizationBodyState =
+      bodyActive
+          ? bms_renderer_characterization::LongBodyState::On
+          : (isHellCharge && headHasReachedJudge
+                 ? bms_renderer_characterization::LongBodyState::Damage
+                 : bms_renderer_characterization::LongBodyState::Off);
+#endif
   bgfx::TextureHandle bodyTexture = BGFX_INVALID_HANDLE;
   float bodyRenderHeight = longBodyRenderHeightOff;
   int bodyFrameCount = 1;
@@ -1921,6 +2031,17 @@ void BMSRenderer::drawLongNote(
       bodyBatch.addRect(laneToX(head->Lane), bodyStartY, bodyWidth, bodyHeight,
                         1.0f, tileV, bodyTexture);
     }
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+    recordCharacterizationSubmission(
+        bms_renderer_characterization::SubmissionKind::LongBody,
+        bms_renderer_characterization::Surface::Main, order.bodyDepth,
+        head->Timeline, head->Tail->Timeline, head->Lane, 0,
+        characterizationBodyState,
+        {.x = laneToX(head->Lane),
+         .y = bodyStartY,
+         .width = bodyWidth,
+         .height = bodyHeight});
+#endif
   }
 
   if (tailClip.visible && !isClassicLongNote &&
@@ -1931,6 +2052,17 @@ void BMSRenderer::drawLongNote(
         clippedBottomV(tailUv.v0, tailUv.v1,
                        tailClip.bottomTextureFraction),
         sheet.texture);
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+    recordCharacterizationSubmission(
+        bms_renderer_characterization::SubmissionKind::LongTail,
+        bms_renderer_characterization::Surface::Main, order.endpointDepth,
+        head->Tail->Timeline, head->Timeline, head->Tail->Lane, 0,
+        bms_renderer_characterization::LongBodyState::None,
+        {.x = laneToX(head->Tail->Lane),
+         .y = tailClip.y,
+         .width = noteRenderWidth,
+         .height = tailClip.height});
+#endif
   }
 
   if (head->IsPlayed || !headClip.visible)
@@ -1943,6 +2075,17 @@ void BMSRenderer::drawLongNote(
       clippedBottomV(headUv.v0, headUv.v1,
                      headClip.bottomTextureFraction),
       sheet.texture);
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+  recordCharacterizationSubmission(
+      bms_renderer_characterization::SubmissionKind::LongHead,
+      bms_renderer_characterization::Surface::Main, order.endpointDepth,
+      head->Timeline, head->Tail->Timeline, head->Lane, 0,
+      bms_renderer_characterization::LongBodyState::None,
+      {.x = laneToX(head->Lane),
+       .y = headClip.y,
+       .width = noteRenderWidth,
+       .height = headClip.height});
+#endif
 }
 
 void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note,
@@ -1967,6 +2110,17 @@ void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note,
       clippedBottomV(sheet.note.v0, sheet.note.v1,
                      clip.bottomTextureFraction),
       sheet.texture);
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+  recordCharacterizationSubmission(
+      bms_renderer_characterization::SubmissionKind::NormalNote,
+      bms_renderer_characterization::Surface::Main, submitDepth,
+      note->Timeline, nullptr, note->Lane, 0,
+      bms_renderer_characterization::LongBodyState::None,
+      {.x = laneToX(note->Lane),
+       .y = clip.y,
+       .width = noteRenderWidth,
+       .height = clip.height});
+#endif
 }
 
 void BMSRenderer::drawInvisibleNote(float y, bms_parser::Note *const &note,
@@ -1990,6 +2144,17 @@ void BMSRenderer::drawInvisibleNote(float y, bms_parser::Note *const &note,
     setInvisibleBatchDepth(submitDepth);
     gimmickBatchRenderer.addRect(x, clip.y, noteRenderWidth, clip.height,
                                  color);
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+    recordCharacterizationSubmission(
+        bms_renderer_characterization::SubmissionKind::InvisiblePrimitive,
+        bms_renderer_characterization::Surface::Main, submitDepth,
+        note->Timeline, nullptr, note->Lane, 0,
+        bms_renderer_characterization::LongBodyState::None,
+        {.x = x,
+         .y = clip.y,
+         .width = noteRenderWidth,
+         .height = clip.height});
+#endif
     return;
   }
 
@@ -2010,6 +2175,17 @@ void BMSRenderer::drawInvisibleNote(float y, bms_parser::Note *const &note,
     const auto &rect = outline.rectangles[i];
     gimmickBatchRenderer.addRect(rect.x, rect.y, rect.width, rect.height,
                                  color);
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+    recordCharacterizationSubmission(
+        bms_renderer_characterization::SubmissionKind::InvisiblePrimitive,
+        bms_renderer_characterization::Surface::Main, submitDepth,
+        note->Timeline, nullptr, note->Lane, i,
+        bms_renderer_characterization::LongBodyState::None,
+        {.x = rect.x,
+         .y = rect.y,
+         .width = rect.width,
+         .height = rect.height});
+#endif
   }
 }
 
@@ -2036,10 +2212,22 @@ void BMSRenderer::drawLandmineNote(float y,
       clippedBottomV(sheet.mine.v0, sheet.mine.v1,
                      clip.bottomTextureFraction),
       sheet.texture);
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+  recordCharacterizationSubmission(
+      bms_renderer_characterization::SubmissionKind::Mine,
+      bms_renderer_characterization::Surface::Main, submitDepth,
+      note->Timeline, nullptr, note->Lane, 0,
+      bms_renderer_characterization::LongBodyState::None,
+      {.x = laneToX(note->Lane),
+       .y = clip.y,
+       .width = noteRenderWidth,
+       .height = clip.height});
+#endif
 }
 
 void BMSRenderer::buildTimelineScrollPositions() {
   timelineScrollPositions.clear();
+  terminalScrollAnchor.reset();
   timelineScrollPositions.reserve(timelines.size());
   if (timelines.empty()) {
     return;
@@ -2054,49 +2242,23 @@ void BMSRenderer::buildTimelineScrollPositions() {
                 prevTimeline->Scroll;
     timelineScrollPositions.push_back(position);
   }
-}
-
-double BMSRenderer::calculateMostPrevalentBpm() const {
-  const double chartBpm = chart != nullptr ? chart->Meta.Bpm : 0.0;
-  if (timelines.empty()) {
-    return chartBpm;
+  const auto *lastTimeline = timelines.back();
+  if (chart == nullptr || lastTimeline == nullptr) {
+    return;
   }
-
-  std::map<double, long long> bpmDurations;
-  std::vector<double> bpmOrder;
-  auto addDuration = [&](double bpm, long long durationMicros) {
-    if (!std::isfinite(bpm) || bpm <= 0.0 || durationMicros <= 0) {
-      return;
-    }
-    if (bpmDurations.find(bpm) == bpmDurations.end()) {
-      bpmOrder.push_back(bpm);
-    }
-    bpmDurations[bpm] += durationMicros;
-  };
-
-  addDuration(chartBpm, timelines.front()->Timing);
-  const long long chartEnd =
-      chart != nullptr
-          ? std::max({chart->Meta.TotalLength, chart->Meta.PlayLength,
-                      timelines.back()->Timing})
-          : timelines.back()->Timing;
-  for (size_t i = 0; i < timelines.size(); ++i) {
-    const auto *timeline = timelines[i];
-    const long long segmentEnd =
-        i + 1 < timelines.size() ? timelines[i + 1]->Timing : chartEnd;
-    addDuration(timeline->Bpm, segmentEnd - timeline->Timing);
+  if (const auto endpoint = chart_playback_duration::terminalScrollEndpointAfter(
+          *chart, lastTimeline->Timing, lastTimeline->BeatPosition);
+      endpoint.has_value()) {
+    terminalScrollAnchor = {
+        .timeMicros = endpoint->timeMicros,
+        .scrollPosition =
+            position + (endpoint->beatPosition - lastTimeline->BeatPosition) *
+                           lastTimeline->Scroll,
+        .stopMicros = 0,
+        .bpm = lastTimeline->Bpm,
+        .scrollRate = lastTimeline->Scroll,
+    };
   }
-
-  double bestBpm = chartBpm;
-  long long bestDuration = 0;
-  for (double bpm : bpmOrder) {
-    const long long duration = bpmDurations[bpm];
-    if (duration > bestDuration) {
-      bestBpm = bpm;
-      bestDuration = duration;
-    }
-  }
-  return bestDuration > 0 ? bestBpm : chartBpm;
 }
 
 double BMSRenderer::visibleTimeReferenceBpm() const {
@@ -2106,11 +2268,24 @@ double BMSRenderer::visibleTimeReferenceBpm() const {
     return *floatingVisibleTimeReferenceBpm;
   }
 
-  double referenceBpm = chart != nullptr ? chart->Meta.Bpm : 0.0;
-  if (visibleTimeBpmStrategy ==
-          AppSettings::VisibleTimeBpmStrategy::MostPrevalent &&
-      std::isfinite(mostPrevalentBpm) && mostPrevalentBpm > 0.0) {
-    referenceBpm = mostPrevalentBpm;
+  const auto summary =
+      chart != nullptr ? gameplay_hispeed::summarizeChartBpm(*chart)
+                       : gameplay_hispeed::ChartBpmSummary{};
+  double referenceBpm = summary.start;
+  switch (hispeedFixMode) {
+  case AppSettings::HiSpeedFixMode::Off:
+  case AppSettings::HiSpeedFixMode::Start:
+    referenceBpm = summary.start;
+    break;
+  case AppSettings::HiSpeedFixMode::Max:
+    referenceBpm = summary.maximum;
+    break;
+  case AppSettings::HiSpeedFixMode::Main:
+    referenceBpm = mainBpm;
+    break;
+  case AppSettings::HiSpeedFixMode::Min:
+    referenceBpm = summary.minimum;
+    break;
   }
   if (!std::isfinite(referenceBpm) || referenceBpm <= 0.0) {
     return 1.0;
@@ -2118,29 +2293,88 @@ double BMSRenderer::visibleTimeReferenceBpm() const {
   return referenceBpm;
 }
 
-int BMSRenderer::effectiveVisibleTimeGreenNumber() const {
-  const double referenceBpm = visibleTimeReferenceBpm();
-  const double bpm =
-      currentBpm > 0.0 && std::isfinite(currentBpm) ? currentBpm : referenceBpm;
-  if (!std::isfinite(referenceBpm) || referenceBpm <= 0.0 ||
-      !std::isfinite(bpm) || bpm <= 0.0) {
-    return std::max(1, visibleTimeGreenNumber);
-  }
+BuiltInRendererTraversal BMSRenderer::builtInProjectionTraversal() const {
+  // This is intentionally the single source for the capture-time projection
+  // geometry and render-time forward walk.  GamePlayScene can freeze it in
+  // PlayfieldProjectionRequest without reimplementing green-number math.
+  const float visibleTimeMs = std::max(
+      1.0F, static_cast<float>(visibleTimeDurationMilliseconds));
+  const float configuredHispeed =
+      configuredHispeedOverride.has_value()
+          ? *configuredHispeedOverride
+          : 240000.0F / static_cast<float>(visibleTimeReferenceBpm()) /
+                visibleTimeMs * hispeedMultiplier * laneCoverHispeedFactor;
+  const float hispeed =
+      configuredHispeed *
+      static_cast<float>(gameplay_timing::playbackTravelScale(playbackRate));
+  const float laneHeight = std::max(0.001F, upperBound - judgeY);
+  const float hiddenRatio =
+      static_cast<float>(noteStartPositionPercent) / 100.0F;
+  const float visibleUpper = judgeY + laneHeight * (1.0F - hiddenRatio);
+  BuiltInRendererTraversal traversal{
+      .lowerBound = lowerBound,
+      .judgeY = judgeY,
+      .upperBound = upperBound,
+      // Beatoraja changes the live Hi-Speed when cover moves.  Keeping that
+      // factor in the raw speed preserves the built-in product while giving
+      // skins the same LaneRenderer::getHispeed() semantics.
+      .rxhs = laneHeight * hispeed,
+      .configuredHispeed = configuredHispeed,
+      .hispeed = hispeed,
+      .noteVisibleUpperBound = visibleUpper};
+  traversal.playableLaneOrder.reserve(laneOrder.size());
+  const auto appendGroup = [this, &traversal](const auto &group) {
+    for (const std::size_t laneIndex : group) {
+      if (laneIndex <= static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        traversal.playableLaneOrder.push_back(static_cast<int>(laneIndex));
+      }
+    }
+  };
+  appendGroup(whiteKeyLaneIndices);
+  appendGroup(blueKeyLaneIndices);
+  appendGroup(scratchLaneIndices);
+  traversal.startRetainedOrdinal =
+      static_cast<std::uint32_t>(std::min(
+          state.currentTimelineIndex,
+          static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())));
+  return traversal;
+}
 
-  const double scaled =
-      static_cast<double>(visibleTimeGreenNumber) * referenceBpm / bpm;
-  if (!std::isfinite(scaled)) {
-    return std::max(1, visibleTimeGreenNumber);
-  }
-  return std::max(1, static_cast<int>(std::lround(scaled)));
+BuiltInRendererTraversal BMSRenderer::projectionTraversal() const {
+  return builtInProjectionTraversal();
+}
+
+void BMSRenderer::advanceRetainedTimelineCursor(
+    std::uint32_t nextRetainedTimelineOrdinal) noexcept {
+  const std::size_t nextCursor = std::min<std::size_t>(
+      nextRetainedTimelineOrdinal, timelines.size());
+  state.currentTimelineIndex = std::max(state.currentTimelineIndex, nextCursor);
+}
+
+int BMSRenderer::effectiveVisibleTimeGreenNumber() const {
+  const double bpm =
+      currentBpm > 0.0 && std::isfinite(currentBpm)
+          ? currentBpm
+          : visibleTimeReferenceBpm();
+  const auto duration = gameplay_visible_time::currentDurationMilliseconds(
+      bpm, builtInProjectionTraversal().configuredHispeed,
+      noteStartPositionPercent, laneCoverEnabled, currentScrollRate);
+  return duration ? gameplay_visible_time::durationToGreenNumber(*duration)
+                  : AppSettings::durationMillisecondsToGreenNumber(
+                        visibleTimeDurationMilliseconds);
 }
 
 std::string BMSRenderer::laneCoverVisibleTimeLabel() const {
   const int greenNumber = effectiveVisibleTimeGreenNumber();
   if (visibleTimeUseMilliseconds) {
-    const int milliseconds = std::max(
-        1, static_cast<int>(std::lround(static_cast<double>(greenNumber) *
-                                        1000.0 / 600.0)));
+    const double bpm = currentBpm > 0.0 && std::isfinite(currentBpm)
+                           ? currentBpm
+                           : visibleTimeReferenceBpm();
+    const auto duration = gameplay_visible_time::currentDurationMilliseconds(
+        bpm, builtInProjectionTraversal().configuredHispeed,
+        noteStartPositionPercent, laneCoverEnabled, currentScrollRate);
+    const int milliseconds = duration.value_or(
+        std::max(1, visibleTimeDurationMilliseconds));
     return std::to_string(milliseconds) + " ms";
   }
   return std::to_string(greenNumber);
@@ -2173,6 +2407,32 @@ double BMSRenderer::scrollPositionAtTime(long long timeMicros) const {
   }
 
   if (timelineIt == timelines.end()) {
+    if (terminalScrollAnchor.has_value() &&
+        timeMicros < terminalScrollAnchor->timeMicros) {
+      const auto *previous = timelines.back();
+      const long long stopEnd =
+          previous->Timing + static_cast<long long>(previous->GetStopDuration());
+      if (timeMicros <= stopEnd) {
+        return timelineScrollPositions.back();
+      }
+      const long long scrollDuration =
+          terminalScrollAnchor->timeMicros - previous->Timing -
+          static_cast<long long>(previous->GetStopDuration());
+      if (scrollDuration > 0) {
+        const double progress = std::clamp(
+            static_cast<double>(timeMicros - stopEnd) /
+                static_cast<double>(scrollDuration),
+            0.0, 1.0);
+        return timelineScrollPositions.back() +
+               (terminalScrollAnchor->scrollPosition -
+                timelineScrollPositions.back()) *
+                   progress;
+      }
+    }
+    if (terminalScrollAnchor.has_value() &&
+        timeMicros >= terminalScrollAnchor->timeMicros) {
+      return terminalScrollAnchor->scrollPosition;
+    }
     return timelineScrollPositions.back();
   }
 
@@ -2220,20 +2480,9 @@ void BMSRenderer::drawReplayGhosts(float rxhs, long long currentTimeMicros,
   const double firstVisibleScrollPosition = visible.minimum;
   const double lastVisibleScrollPosition = visible.maximum;
 
-  const auto firstVisible = std::lower_bound(
-      replayGhostEvents.begin(), replayGhostEvents.end(),
-      firstVisibleScrollPosition,
-      [](const ReplayGhostEvent &event, double scrollPosition) {
-        return event.judgeScrollPosition < scrollPosition;
-      });
-  const auto lastVisible = std::upper_bound(
-      firstVisible, replayGhostEvents.end(), lastVisibleScrollPosition,
-      [](double scrollPosition, const ReplayGhostEvent &event) {
-        return scrollPosition < event.judgeScrollPosition;
-      });
-
-  for (auto it = firstVisible; it != lastVisible; ++it) {
-    const auto &event = *it;
+  const auto visibleEvents = replay_ghost::visibleEventsInScrollRange(
+      replayGhostEvents, firstVisibleScrollPosition, lastVisibleScrollPosition);
+  for (const auto &event : visibleEvents) {
     if (event.judgeTimeMicros < currentTimeMicros) {
       continue;
     }
@@ -2498,8 +2747,191 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   render(context, micro, micro);
 }
 
+void BMSRenderer::render(RenderContext &context,
+                         const PlayfieldVisualState &capturedState,
+                         const PlayfieldProjectionResult &projection) {
+  (void)prepareFrame(capturedState, projection);
+  (void)render(context);
+}
+
+PresentationFrameOutcome BMSRenderer::prepareFrame(
+    const PlayfieldVisualState &capturedState,
+    const PlayfieldProjectionResult &projection) {
+  const std::uint64_t frameSerial = capturedState.clock.serial;
+  preparedPresentationFrame.reset();
+  presentationFailure.reset();
+
+  const auto rejectPrepare =
+      [this, frameSerial](std::string code, std::string message) {
+        presentationFailure = PresentationFailure{
+            .diagnostic = skin::SkinDiagnostic{.code = std::move(code),
+                                               .message = std::move(message)},
+            .frameSerial = frameSerial};
+        preparedPresentationFrame = std::make_unique<PreparedPresentationFrame>(
+            PreparedPresentationFrame{
+                .frameSerial = frameSerial,
+                .outcome = PresentationFrameOutcome::CriticalFailure});
+        return PresentationFrameOutcome::CriticalFailure;
+      };
+
+  if (frameSerial == 0 || projection.frameSerial != frameSerial) {
+    return rejectPrepare(
+        "presentation.frame_mismatch",
+        "The built-in state and projection must have one nonzero frame serial.");
+  }
+  if (frameSerial == lastPreparedPresentationFrameSerial) {
+    return rejectPrepare(
+        "presentation.frame_duplicate",
+        "The built-in presentation frame serial was prepared more than once.");
+  }
+  if (lastPreparedPresentationFrameSerial != 0 &&
+      frameSerial < lastPreparedPresentationFrameSerial) {
+    return rejectPrepare(
+        "presentation.frame_stale",
+        "The built-in presentation frame serial is older than the last "
+        "prepared frame.");
+  }
+
+  try {
+    auto prepared =
+        std::make_unique<PreparedPresentationFrame>(PreparedPresentationFrame{
+            .frameSerial = frameSerial,
+            .outcome = PresentationFrameOutcome::Ready,
+            .state = capturedState,
+            .projection = projection});
+
+    configure(capturedState.configuration);
+    const auto &authority = capturedState.authority;
+    setCurrentBpm(authority.currentBpm);
+    currentScrollRate = std::isfinite(authority.currentScrollRate)
+                            ? authority.currentScrollRate
+                            : 1.0;
+    setJudgementCounters(authority.judgementCounters, authority.comboBreak);
+    setGaugeStatus(authority.gaugeType, authority.gaugeAutoShift,
+                   authority.currentGauge, authority.gaugeRules);
+    setPacemakerTarget(authority.pacemakerTarget);
+    setPacemakerStatus(authority.pacemakerStatus);
+    setPlayOptionStatus(authority.playOptionLabel);
+    setAutoPlayMarkVisible(authority.autoPlayMarkVisible);
+    setStartLaneIndicators(authority.startLaneIndicators);
+    setStartLaneIndicatorsVisible(authority.startLaneIndicatorsVisible);
+    applyLaneCoverState(authority.laneCoverPercent, authority.laneCoverEnabled,
+                        authority.resetLaneCoverVisibleTimeReference);
+
+    const std::size_t laneCount =
+        std::min(laneStatesByOrder.size(), capturedState.lanes.size());
+    for (std::size_t index = 0; index < laneStatesByOrder.size(); ++index) {
+      const LanePresentationState lane =
+          index < laneCount ? capturedState.lanes[index]
+                            : LanePresentationState{};
+      auto &destination = laneStatesByOrder[index];
+      destination.lastPressedJudgement.store(
+          static_cast<int>(lane.lastPressedJudge.judgement),
+          std::memory_order_relaxed);
+      destination.lastPressedDiff.store(lane.lastPressedJudge.Diff,
+                                        std::memory_order_relaxed);
+      destination.lastPressedTime.store(
+          lane.pressMicros == kPlayfieldTimestampOff ? -1 : lane.pressMicros,
+          std::memory_order_relaxed);
+      destination.isPressed.store(lane.pressed, std::memory_order_relaxed);
+      const long long lastStateTime = lane.pressed ? lane.pressMicros
+                                                   : lane.releaseMicros;
+      destination.lastStateTime.store(
+          lastStateTime == kPlayfieldTimestampOff ? -1 : lastStateTime,
+          std::memory_order_release);
+    }
+
+    // Rebuild the event-derived indicator from the immutable snapshot so
+    // rendering consumes a complete frame-local presentation state.
+    judgementIndicator.clear();
+    if (capturedState.lastJudge.judgement != None &&
+        capturedState.lastJudgeVisualMicros != kPlayfieldTimestampOff) {
+      onJudge(capturedState.lastJudge, capturedState.combo, capturedState.score,
+              {.songTimeMicros = capturedState.clock.gameplayTimeMicros,
+               .visualTimeMicros = capturedState.lastJudgeVisualMicros,
+               .bgaTimeMicros = capturedState.clock.bgaTimeMicros},
+              true);
+    }
+
+    clearLiveTouchPoints();
+    for (const auto &touch : capturedState.touches) {
+      setLiveTouchPoint(touch.fingerId, touch.action, touch.normalizedX,
+                        touch.normalizedY, touch.songTimeMicros);
+    }
+
+    // Beatoraja's retained position moves forward during its draw traversal
+    // and rewinds only on explicit reinitialization. Projection is evaluated
+    // from the cursor captured before this call, so prepare warms the built-in
+    // even if the coordinator subsequently chooses a skin for this frame.
+    if (!projection.builtInPlan.traversedTimelineOrdinals.empty()) {
+      advanceRetainedTimelineCursor(
+          projection.builtInPlan.nextStartRetainedOrdinal);
+    }
+
+    lastPreparedPresentationFrameSerial = frameSerial;
+    preparedPresentationFrame = std::move(prepared);
+    return PresentationFrameOutcome::Ready;
+  } catch (const std::exception &error) {
+    return rejectPrepare("presentation.builtin_prepare_failed", error.what());
+  } catch (...) {
+    return rejectPrepare(
+        "presentation.builtin_prepare_failed",
+        "The built-in presentation reported an unknown prepare failure.");
+  }
+}
+
+PresentationFrameResult BMSRenderer::render(RenderContext &context) {
+  if (preparedPresentationFrame == nullptr) {
+    presentationFailure = PresentationFailure{
+        .diagnostic = skin::SkinDiagnostic{
+            .code = "presentation.frame_not_prepared",
+            .message = "The built-in presentation was rendered before prepareFrame."},
+        .frameSerial = 0};
+    return {.frameSerial = 0,
+            .outcome = PresentationFrameOutcome::CriticalFailure,
+            .submittedMode = PresentationMode::BuiltIn,
+            .bgaCompositeMode =
+                GameplayBgaCompositeMode::FullscreenBuiltIn,
+            .failure = presentationFailure};
+  }
+
+  // Consume before the first possible submission. A thrown submission-path
+  // exception cannot be retried and cannot be represented as an atomic
+  // CriticalFailure because earlier bgfx submissions may already exist.
+  std::unique_ptr<PreparedPresentationFrame> prepared =
+      std::move(preparedPresentationFrame);
+  const std::uint64_t frameSerial = prepared->frameSerial;
+  if (prepared->outcome != PresentationFrameOutcome::Ready) {
+    return {.frameSerial = frameSerial,
+            .outcome = prepared->outcome,
+            .submittedMode = PresentationMode::BuiltIn,
+            .bgaCompositeMode =
+                GameplayBgaCompositeMode::FullscreenBuiltIn,
+            .failure = presentationFailure};
+  }
+
+  assert(prepared->state.has_value() && prepared->projection.has_value());
+  renderFrame(context, prepared->state->clock.visualTimeMicros,
+              prepared->state->clock.replayTouchTimeMicros,
+              prepared->projection->useParserBackedBuiltInTraversal
+                  ? nullptr
+                  : &*prepared->projection);
+
+  presentationFailure.reset();
+  return {.frameSerial = frameSerial,
+          .outcome = PresentationFrameOutcome::Ready,
+          .submittedMode = PresentationMode::BuiltIn,
+          .bgaCompositeMode = GameplayBgaCompositeMode::FullscreenBuiltIn};
+}
+
 void BMSRenderer::render(RenderContext &context, long long micro,
                          long long replayTouchTimeMicros) {
+  renderFrame(context, micro, replayTouchTimeMicros, nullptr);
+}
+
+void BMSRenderer::renderFrame(
+    RenderContext &context, long long micro, long long replayTouchTimeMicros,
+    const PlayfieldProjectionResult *projection) {
   const long long chartTimeMicros =
       gameplay_scroll_geometry::chartRenderTimeMicros(micro);
   currentRenderMicros = micro;
@@ -2526,22 +2958,486 @@ void BMSRenderer::render(RenderContext &context, long long micro,
   // judge line
   drawRect(playAreaWidth, noteRenderHeight, playAreaLeftX, judgeY,
            Color(255, 255, 255, 255));
-  // Green number is the legacy BMS visible-time unit: 600 green = 1000 ms.
-  const float visibleTimeMs = std::max(
-      1.0f, static_cast<float>(visibleTimeGreenNumber) * (1000.0f / 600.0f));
-  const float hispeed =
-      240000.0f / static_cast<float>(visibleTimeReferenceBpm()) /
-      visibleTimeMs *
-      static_cast<float>(gameplay_timing::playbackTravelScale(playbackRate));
-  const float laneHeight = std::max(0.001f, upperBound - judgeY);
-  const float hiddenRatio =
-      static_cast<float>(noteStartPositionPercent) / 100.0f;
-  noteVisibleUpperBound = judgeY + laneHeight * (1.0f - hiddenRatio);
-  const float visibleTravelHeight =
-      std::max(0.001f, noteVisibleUpperBound - judgeY);
-  float rxhs = visibleTravelHeight * hispeed;
+  const BuiltInRendererTraversal builtInTraversal =
+      builtInProjectionTraversal();
+  const float hispeed = builtInTraversal.hispeed;
+  noteVisibleUpperBound = builtInTraversal.noteVisibleUpperBound;
+  float rxhs = builtInTraversal.rxhs;
   float y = judgeY;
-  const double currentScrollPosition = scrollPositionAtTime(chartTimeMicros);
+  const double currentScrollPosition =
+      projection != nullptr ? projection->currentScrollPosition
+                            : scrollPositionAtTime(chartTimeMicros);
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+  if (characterizationRecorder != nullptr) {
+    const auto visibleScroll = gameplay_scroll_geometry::visibleScrollRange(
+        currentScrollPosition, rxhs, lowerBound, upperBound, noteRenderHeight,
+        judgeY);
+    const auto coverHandle = laneCoverHandleGeometry();
+    characterizationRecorder->beginFrame({
+        .renderTimeMicros = micro,
+        .chartTimeMicros = chartTimeMicros,
+        .replayTouchTimeMicros = replayTouchTimeMicros,
+        .currentScrollPosition = currentScrollPosition,
+        .visibleScrollMinimum = visibleScroll.minimum,
+        .visibleScrollMaximum = visibleScroll.maximum,
+        .visibleReferenceBpm = visibleTimeReferenceBpm(),
+        .hispeed = hispeed,
+        .rxhs = rxhs,
+        .playAreaLeftX = playAreaLeftX,
+        .playAreaWidth = playAreaWidth,
+        .noteRenderWidth = noteRenderWidth,
+        .noteRenderHeight = noteRenderHeight,
+        .lowerBound = lowerBound,
+        .judgeY = judgeY,
+        .upperBound = upperBound,
+        .noteVisibleUpperBound = noteVisibleUpperBound,
+        .laneCoverPercent = noteStartPositionPercent,
+        .laneCoverHandle = {.x = coverHandle.x,
+                            .y = coverHandle.y,
+                            .width = coverHandle.width,
+                            .height = coverHandle.height},
+    });
+    recordCharacterizationSubmission(
+        bms_renderer_characterization::SubmissionKind::Background,
+        bms_renderer_characterization::Surface::Main, kBackgroundDepth,
+        nullptr, nullptr, -1, 0,
+        bms_renderer_characterization::LongBodyState::None,
+        {.x = playAreaLeftX,
+         .y = judgeY,
+         .width = playAreaWidth,
+         .height = upperBound - judgeY});
+    recordCharacterizationSubmission(
+        bms_renderer_characterization::SubmissionKind::JudgeLine,
+        bms_renderer_characterization::Surface::Main, kBackgroundDepth,
+        nullptr, nullptr, -1, 0,
+        bms_renderer_characterization::LongBodyState::None,
+        {.x = playAreaLeftX,
+         .y = judgeY,
+         .width = playAreaWidth,
+         .height = noteRenderHeight});
+  }
+#endif
+  if (projection != nullptr) {
+    const auto rendererLaneFor = [this](int projectedLane) {
+      return projectedLane >= 0 &&
+                     static_cast<std::size_t>(projectedLane) < laneOrder.size()
+                 ? laneOrder[static_cast<std::size_t>(projectedLane)]
+                 : projectedLane;
+    };
+    const auto &builtInPlan = projection->builtInPlan;
+    std::unordered_set<std::uint32_t> traversedTimelineOrdinals(
+        builtInPlan.traversedTimelineOrdinals.begin(),
+        builtInPlan.traversedTimelineOrdinals.end());
+    const auto timelineWasTraversed =
+        [&traversedTimelineOrdinals](std::uint32_t retainedOrdinal) {
+          return retainedOrdinal != kNoRetainedTimelineOrdinal &&
+                 traversedTimelineOrdinals.contains(retainedOrdinal);
+        };
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+    const auto recordProjectedSubmission =
+        [this](bms_renderer_characterization::SubmissionKind kind,
+               std::uint32_t depth, std::size_t timelineOrdinal,
+               std::size_t pairedTimelineOrdinal, long long timelineMicros,
+               int lane, std::size_t primitiveOrdinal,
+               bms_renderer_characterization::LongBodyState longBodyState,
+               bms_renderer_characterization::Rect rect) {
+          if (characterizationRecorder == nullptr) {
+            return;
+          }
+          characterizationRecorder->submit(
+              {.kind = kind,
+               .surface = bms_renderer_characterization::Surface::Main,
+               .depth = depth,
+               .timelineOrdinal = timelineOrdinal,
+               .pairedTimelineOrdinal = pairedTimelineOrdinal,
+               .timelineMicros = timelineMicros,
+               .lane = lane,
+               .primitiveOrdinal = primitiveOrdinal,
+               .longBodyState = longBodyState,
+               .rect = rect});
+        };
+    if (characterizationRecorder != nullptr) {
+      for (const auto &timeline : builtInPlan.timelines) {
+        characterizationRecorder->project(
+            {.timelineOrdinal = timeline.retainedOrdinal,
+             .timelineMicros = timeline.timeMicros,
+             .y = timeline.renderY,
+             .future = timeline.future,
+             .finite = std::isfinite(timeline.renderY)});
+      }
+    }
+#endif
+
+    const auto drawProjectedLine =
+        [&](const ProjectedLineDescriptor &line, float lineY) {
+      if (line.kind != ProjectedLineKind::Section) {
+        return;
+      }
+      if (!timelineWasTraversed(line.retainedOrdinal)) {
+        return;
+      }
+      if (!gameplay_scroll_geometry::shouldDrawMeasureLine(
+              line.timeMicros, chartTimeMicros, lineY, judgeY, upperBound)) {
+        return;
+      }
+      if (!chartEntityRenderBudget.tryConsume(
+              gameplay_chart_entity_render_budget::
+                  kSingleRectangleEntityCost)) {
+        return;
+      }
+      drawRect(playAreaWidth, 0.05F, playAreaLeftX, lineY,
+               Color(255, 255, 255, 128));
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+      recordProjectedSubmission(
+          bms_renderer_characterization::SubmissionKind::MeasureLine,
+          kBackgroundDepth, line.retainedOrdinal,
+          bms_renderer_characterization::kNoTimelineOrdinal, line.timeMicros,
+          -1, 0, bms_renderer_characterization::LongBodyState::None,
+          {.x = playAreaLeftX,
+           .y = lineY,
+           .width = playAreaWidth,
+           .height = 0.05F});
+#endif
+    };
+
+    const auto drawProjectedNormal =
+        [&](const ProjectedPlayfieldNote &note, bool mine, float noteY) {
+          if (!timelineWasTraversed(note.retainedTimelineOrdinal)) {
+            return;
+          }
+          if (note.timeMicros < (mine ? chartTimeMicros
+                                      : chartTimeMicros - latePoorTiming)) {
+            return;
+          }
+          if (!std::isfinite(noteY)) {
+            return;
+          }
+          const auto clip = noteRenderClip(note.timeMicros, currentRenderMicros,
+                                           noteY,
+                                           noteRenderHeight, judgeY);
+          if (note.judged || !clip.visible ||
+              !gameplay_scroll_geometry::noteRectangleIntersectsViewport(
+                  clip.y, clip.height, lowerBound, upperBound)) {
+            return;
+          }
+          if (!chartEntityRenderBudget.tryConsume(
+                  gameplay_chart_entity_render_budget::
+                      kSingleRectangleEntityCost)) {
+            return;
+          }
+          const int lane = rendererLaneFor(note.lane);
+          const NoteSheet &sheet = sheetForLane(lane);
+          const NoteUvRegion &uv = mine ? sheet.mine : sheet.note;
+          noteTextureBatchAtDepth(note.builtInDepth).addRectUV(
+              laneToX(lane), clip.y, noteRenderWidth, clip.height, uv.u0,
+              uv.v0, uv.u1,
+              clippedBottomV(uv.v0, uv.v1, clip.bottomTextureFraction),
+              sheet.texture);
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+          recordProjectedSubmission(
+              mine ? bms_renderer_characterization::SubmissionKind::Mine
+                   : bms_renderer_characterization::SubmissionKind::NormalNote,
+              note.builtInDepth, note.retainedTimelineOrdinal,
+              bms_renderer_characterization::kNoTimelineOrdinal,
+              note.timeMicros, lane, 0,
+              bms_renderer_characterization::LongBodyState::None,
+              {.x = laneToX(lane),
+               .y = clip.y,
+               .width = noteRenderWidth,
+               .height = clip.height});
+#endif
+        };
+    const auto drawProjectedInvisible =
+        [&](int lane, long long timeMicros, double scrollDelta, bool dead,
+            bool played, bool isLongEndpoint, std::uint32_t depth,
+            std::uint32_t retainedOrdinal, float noteY) {
+          if (!timelineWasTraversed(retainedOrdinal)) {
+            return;
+          }
+          const auto clip = noteRenderClip(timeMicros, currentRenderMicros,
+                                           noteY,
+                                           noteRenderHeight, judgeY);
+          if (timeMicros < chartTimeMicros || dead || played || !clip.visible ||
+              !gameplay_scroll_geometry::noteRectangleIntersectsViewport(
+                  clip.y, clip.height, lowerBound, upperBound)) {
+            return;
+          }
+          lane = rendererLaneFor(lane);
+          const float x = laneToX(lane);
+          const uint32_t color = Color(255, 149, 36, 224).toABGR();
+          if (isLongEndpoint) {
+            if (!chartEntityRenderBudget.tryConsume(
+                    gameplay_chart_entity_render_budget::
+                        kSingleRectangleEntityCost)) {
+              return;
+            }
+            setInvisibleBatchDepth(depth);
+            gimmickBatchRenderer.addRect(x, clip.y, noteRenderWidth,
+                                         clip.height, color);
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+            recordProjectedSubmission(
+                bms_renderer_characterization::SubmissionKind::InvisiblePrimitive,
+                depth, retainedOrdinal,
+                bms_renderer_characterization::kNoTimelineOrdinal, timeMicros,
+                lane, 0, bms_renderer_characterization::LongBodyState::None,
+                {.x = x,
+                 .y = clip.y,
+                 .width = noteRenderWidth,
+                 .height = clip.height});
+#endif
+            return;
+          }
+          const float borderThickness =
+              std::max(0.015F,
+                       noteRenderHeight *
+                           gameplay_scroll_geometry::
+                               kInvisibleNoteBorderHeightRatio);
+          const auto outline = gameplay_scroll_geometry::noteOutlineRectangles(
+              x, noteY, noteRenderWidth, noteRenderHeight,
+              borderThickness, clip);
+          if (outline.count == 0U ||
+              !chartEntityRenderBudget.tryConsume(
+                  static_cast<uint32_t>(outline.count))) {
+            return;
+          }
+          setInvisibleBatchDepth(depth);
+          for (std::size_t index = 0; index < outline.count; ++index) {
+            const auto &rect = outline.rectangles[index];
+            gimmickBatchRenderer.addRect(rect.x, rect.y, rect.width,
+                                         rect.height, color);
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+            recordProjectedSubmission(
+                bms_renderer_characterization::SubmissionKind::InvisiblePrimitive,
+                depth, retainedOrdinal,
+                bms_renderer_characterization::kNoTimelineOrdinal, timeMicros,
+                lane, index, bms_renderer_characterization::LongBodyState::None,
+                {.x = rect.x,
+                 .y = rect.y,
+                 .width = rect.width,
+                 .height = rect.height});
+#endif
+          }
+        };
+
+    const auto drawProjectedLong =
+        [&](const ProjectedLongNoteDescriptor &longNote, float frozenHeadY,
+            float frozenTailY) {
+      if (longNote.headSource == ChartVisualNoteSource::Invisible ||
+          longNote.tailSource == ChartVisualNoteSource::Invisible) {
+        if (longNote.headSource == ChartVisualNoteSource::Invisible) {
+          drawProjectedInvisible(longNote.lane, longNote.headTimeMicros,
+                                 longNote.headScrollDelta, longNote.headDead,
+                                 longNote.headPlayed, true,
+                                 longNote.endpointDepth,
+                                 longNote.headRetainedOrdinal, frozenHeadY);
+        }
+        if (longNote.tailSource == ChartVisualNoteSource::Invisible) {
+          drawProjectedInvisible(longNote.lane, longNote.tailTimeMicros,
+                                 longNote.tailScrollDelta, longNote.tailDead,
+                                 longNote.tailPlayed, true,
+                                 longNote.endpointDepth,
+                                 longNote.tailRetainedOrdinal, frozenTailY);
+        }
+        return;
+      }
+      // Legacy traversal retains a dead long head only while its live tail
+      // has not resolved at or after the tail timing.  The immutable
+      // descriptor carries that exact lifecycle decision, so never revive a
+      // fully dead or resolved pair here.
+      if (longNote.headDead &&
+          (longNote.tailDead || longNote.tailResolvedAtOrAfterTiming)) {
+        return;
+      }
+      if (longNote.tailPlayed && !longNote.tailMissedWithHead &&
+          !longNote.tailReleasedEarly) {
+        return;
+      }
+      if (!chartEntityRenderBudget.tryConsume(
+              gameplay_chart_entity_render_budget::kLongNoteReservationCost)) {
+        return;
+      }
+      const float headY = frozenHeadY;
+      const float tailY = frozenTailY;
+      if (!std::isfinite(headY) || !std::isfinite(tailY)) {
+        return;
+      }
+      const int lane = rendererLaneFor(longNote.lane);
+      const float legacyHeadY =
+          longNote.headTimeMicros < chartTimeMicros - latePoorTiming
+              ? lowerBound
+              : headY;
+      const float headRenderY =
+          longNote.headPlayed && !longNote.headDead ? judgeY : legacyHeadY;
+      const auto headClip = noteRenderClip(longNote.headTimeMicros,
+                                           currentRenderMicros, headRenderY,
+                                           noteRenderHeight, judgeY);
+      const auto tailClip = noteRenderClip(longNote.tailTimeMicros,
+                                           currentRenderMicros, tailY,
+                                           noteRenderHeight, judgeY);
+      float bodyStartY = headRenderY;
+      if (longNote.headTimeMicros >= currentRenderMicros) {
+        bodyStartY = std::max(bodyStartY, judgeY);
+      }
+      const float bodyHeight = tailY - bodyStartY;
+      const NoteSheet &sheet = sheetForLane(lane);
+      const bool isClassicLongNote = longNote.mode == ChartLongNoteMode::LN;
+      const bool isHellCharge = longNote.mode == ChartLongNoteMode::HCN;
+      const NoteUvRegion &headUv =
+          isHellCharge ? sheet.hellChargeHead : sheet.longHead;
+      const NoteUvRegion &tailUv =
+          isHellCharge ? sheet.hellChargeTail : sheet.longTail;
+      const bool headHasReachedJudge = longNote.headPlayed ||
+                                         longNote.headDead || headY <= judgeY;
+      const bool bodyActive = longNote.active ||
+                               (headHasReachedJudge && isHellCharge &&
+                               laneIsCurrentlyPressed(lane));
+      bgfx::TextureHandle bodyTexture = BGFX_INVALID_HANDLE;
+      float bodyRenderHeight = longBodyRenderHeightOff;
+      int bodyFrameCount = 1;
+      int bodyCycleMs = 0;
+      if (isHellCharge) {
+        if (bodyActive) {
+          bodyTexture = sheet.hellChargeBodyOnTexture;
+          bodyRenderHeight = longBodyRenderHeightOn;
+          bodyFrameCount = kAnimatedLongBodyFrameCount;
+          bodyCycleMs = kAnimatedLongBodyCycleMs;
+        } else if (headHasReachedJudge) {
+          bodyTexture = sheet.hellChargeDamageTexture;
+          bodyRenderHeight = longBodyRenderHeightOn;
+          bodyFrameCount = kAnimatedLongBodyFrameCount;
+          bodyCycleMs = kHellChargeDamageCycleMs;
+        } else {
+          bodyTexture = sheet.hellChargeBodyOffTexture;
+        }
+      } else if (bodyActive) {
+        bodyTexture = sheet.longBodyOnTexture;
+        bodyRenderHeight = longBodyRenderHeightOn;
+        bodyFrameCount = kAnimatedLongBodyFrameCount;
+        bodyCycleMs = kAnimatedLongBodyCycleMs;
+      } else {
+        bodyTexture = sheet.longBodyOffTexture;
+      }
+      if (bodyHeight > 0.0F && bgfx::isValid(bodyTexture)) {
+        auto &bodyBatch = noteTextureBatchAtDepth(longNote.bodyDepth);
+        if (bodyFrameCount > 1 && bodyCycleMs > 0) {
+          const int frame = skinAnimationFrame(currentRenderMicros,
+                                               bodyFrameCount, bodyCycleMs);
+          const float v = (static_cast<float>(frame) + 0.5F) /
+                          static_cast<float>(bodyFrameCount);
+          bodyBatch.addRectUV(laneToX(lane), bodyStartY,
+                              noteRenderWidth, bodyHeight, 0.0F, v, 1.0F, v,
+                              bodyTexture);
+        } else {
+          bodyBatch.addRect(laneToX(lane), bodyStartY,
+                            noteRenderWidth, bodyHeight, 1.0F,
+                            bodyHeight / bodyRenderHeight, bodyTexture);
+        }
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+        const auto bodyState =
+            bodyActive ? bms_renderer_characterization::LongBodyState::On
+                       : (isHellCharge && headHasReachedJudge
+                              ? bms_renderer_characterization::LongBodyState::Damage
+                              : bms_renderer_characterization::LongBodyState::Off);
+        recordProjectedSubmission(
+            bms_renderer_characterization::SubmissionKind::LongBody,
+            longNote.bodyDepth, longNote.headRetainedOrdinal,
+            longNote.tailRetainedOrdinal, longNote.headTimeMicros,
+            lane, 0, bodyState,
+            {.x = laneToX(lane),
+             .y = bodyStartY,
+             .width = noteRenderWidth,
+             .height = bodyHeight});
+#endif
+      }
+      // The legacy lookahead flushes an unresolved tail at upperBound after
+      // its forward traversal stops.  It is therefore intentionally drawn
+      // even when the tail's timeline itself was not traversed this frame.
+      if (tailClip.visible && !isClassicLongNote &&
+          (!longNote.tailReleasedEarly || tailY > judgeY)) {
+        noteTextureBatchAtDepth(longNote.endpointDepth).addRectUV(
+            laneToX(lane), tailClip.y, noteRenderWidth,
+            tailClip.height, tailUv.u0, tailUv.v0, tailUv.u1,
+            clippedBottomV(tailUv.v0, tailUv.v1,
+                           tailClip.bottomTextureFraction),
+            sheet.texture);
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+        recordProjectedSubmission(
+            bms_renderer_characterization::SubmissionKind::LongTail,
+            longNote.endpointDepth, longNote.tailRetainedOrdinal,
+            longNote.headRetainedOrdinal, longNote.tailTimeMicros,
+            lane, 0,
+            bms_renderer_characterization::LongBodyState::None,
+            {.x = laneToX(lane),
+             .y = tailClip.y,
+             .width = noteRenderWidth,
+             .height = tailClip.height});
+#endif
+      }
+      if (!longNote.headPlayed && headClip.visible) {
+        noteTextureBatchAtDepth(longNote.endpointDepth).addRectUV(
+            laneToX(lane), headClip.y, noteRenderWidth,
+            headClip.height, headUv.u0, headUv.v0, headUv.u1,
+            clippedBottomV(headUv.v0, headUv.v1,
+                           headClip.bottomTextureFraction),
+            sheet.texture);
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+        recordProjectedSubmission(
+            bms_renderer_characterization::SubmissionKind::LongHead,
+            longNote.endpointDepth, longNote.headRetainedOrdinal,
+            longNote.tailRetainedOrdinal, longNote.headTimeMicros,
+            lane, 0,
+            bms_renderer_characterization::LongBodyState::None,
+            {.x = laneToX(lane),
+             .y = headClip.y,
+             .width = noteRenderWidth,
+             .height = headClip.height});
+#endif
+      }
+    };
+    for (const auto &entry : builtInPlan.entries) {
+      switch (entry.kind) {
+      case BuiltInRendererPlanEntryKind::SectionLine:
+        drawProjectedLine(builtInPlan.lines[entry.descriptorIndex],
+                          entry.renderY);
+        break;
+      case BuiltInRendererPlanEntryKind::Note: {
+        const auto &note = builtInPlan.notes[entry.descriptorIndex];
+        const auto source =
+            note.source == ChartVisualNoteSource::Playable &&
+                    note.kind == ChartVisualNoteKind::Invisible
+                ? ChartVisualNoteSource::Invisible
+                : (note.source == ChartVisualNoteSource::Playable &&
+                           note.kind == ChartVisualNoteKind::Mine
+                       ? ChartVisualNoteSource::Mine
+                       : note.source);
+        if (source == ChartVisualNoteSource::Invisible) {
+          drawProjectedInvisible(
+              note.lane, note.timeMicros, note.scrollDelta, false, note.judged,
+              note.kind == ChartVisualNoteKind::LongHead ||
+                  note.kind == ChartVisualNoteKind::LongTail,
+              note.builtInDepth, note.retainedTimelineOrdinal, entry.renderY);
+        } else {
+          drawProjectedNormal(note, source == ChartVisualNoteSource::Mine,
+                              entry.renderY);
+        }
+        break;
+      }
+      case BuiltInRendererPlanEntryKind::LongNote:
+        drawProjectedLong(builtInPlan.longNotes[entry.descriptorIndex],
+                          entry.renderY, entry.tailRenderY);
+        break;
+      }
+    }
+    // Captured rendering owns only presentation traversal state.  Advancing
+    // this cursor mirrors the legacy render loop without mutating chart or
+    // gameplay/parser state, so the next immutable request starts correctly.
+    if (!projection->builtInPlan.traversedTimelineOrdinals.empty()) {
+      const std::size_t nextCursor = std::min<std::size_t>(
+          projection->builtInPlan.nextStartRetainedOrdinal, timelines.size());
+      state.currentTimelineIndex =
+          std::max(state.currentTimelineIndex, nextCursor);
+    }
+  } else {
   gameplay_note_submission_order::Allocator submissionOrder;
   const auto pastLongNoteOrder = submissionOrder.captureLongNote();
   auto &longNoteLookahead = longNoteLookaheadScratch;
@@ -2600,6 +3496,17 @@ void BMSRenderer::render(RenderContext &context, long long micro,
       y = gameplay_scroll_geometry::renderY(
           timelineScrollPositions[i], currentScrollPosition, rxhs, judgeY);
     }
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+    if (characterizationRecorder != nullptr) {
+      characterizationRecorder->project({
+          .timelineOrdinal = i,
+          .timelineMicros = timeLine->Timing,
+          .y = y,
+          .future = timelineIsFuture,
+          .finite = std::isfinite(y),
+      });
+    }
+#endif
 
     if (timeLine->IsFirstInMeasure &&
         gameplay_scroll_geometry::shouldDrawMeasureLine(
@@ -2609,6 +3516,17 @@ void BMSRenderer::render(RenderContext &context, long long micro,
                 kSingleRectangleEntityCost)) {
       drawRect(playAreaWidth, 0.05f, playAreaLeftX, y,
                Color(255, 255, 255, 128));
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+      recordCharacterizationSubmission(
+          bms_renderer_characterization::SubmissionKind::MeasureLine,
+          bms_renderer_characterization::Surface::Main, kBackgroundDepth,
+          timeLine, nullptr, -1, 0,
+          bms_renderer_characterization::LongBodyState::None,
+          {.x = playAreaLeftX,
+           .y = y,
+           .width = playAreaWidth,
+           .height = 0.05F});
+#endif
     }
     if (timeLine->Timing < chartTimeMicros - latePoorTiming) {
       state.currentTimelineIndex = i;
@@ -2768,8 +3686,6 @@ void BMSRenderer::render(RenderContext &context, long long micro,
           }
           drawInvisibleNote(y, note, *rowInvisibleDepth);
         }
-      } else {
-        note->IsDead = true;
       }
     }
   }
@@ -2779,6 +3695,8 @@ void BMSRenderer::render(RenderContext &context, long long micro,
     drawLongNote(pair.second.headY, upperBound, pair.first,
                  pair.second.order, pair.second.renderBudgetReserved);
   }
+  }
+
   if (replayGhostRenderingEnabled) {
     drawReplayGhosts(rxhs, chartTimeMicros, currentScrollPosition);
     drawReplayMissMarkers(rxhs, currentScrollPosition);
@@ -2791,6 +3709,17 @@ void BMSRenderer::render(RenderContext &context, long long micro,
 
   if (renderLaneBeams) {
     simpleBatchRenderer.setSubmitDepth(kLaneBeamDepth);
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+    recordCharacterizationSubmission(
+        bms_renderer_characterization::SubmissionKind::LaneBeamPass,
+        bms_renderer_characterization::Surface::Main, kLaneBeamDepth, nullptr,
+        nullptr, -1, 0,
+        bms_renderer_characterization::LongBodyState::None,
+        {.x = playAreaLeftX,
+         .y = judgeY,
+         .width = playAreaWidth,
+         .height = std::max(0.0F, noteVisibleUpperBound - judgeY)});
+#endif
     const long long nowMicros =
         useRenderTimeForLaneBeams
             ? micro
@@ -2822,12 +3751,34 @@ void BMSRenderer::render(RenderContext &context, long long micro,
   simpleBatchRenderer.setSubmitDepth(start_lane_indicator::kLaneCoverDepth);
   simpleBatchRenderer.begin();
   drawLaneCover();
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+  recordCharacterizationSubmission(
+      bms_renderer_characterization::SubmissionKind::LaneCoverPass,
+      bms_renderer_characterization::Surface::Main,
+      start_lane_indicator::kLaneCoverDepth, nullptr, nullptr, -1, 0,
+      bms_renderer_characterization::LongBodyState::None,
+      {.x = playAreaLeftX,
+       .y = noteVisibleUpperBound,
+       .width = playAreaWidth,
+       .height = std::max(0.0F, upperBound - noteVisibleUpperBound)});
+#endif
   simpleBatchRenderer.flush();
 
   simpleBatchRenderer.setSubmitView(rendering::main_view);
   simpleBatchRenderer.setSubmitDepth(start_lane_indicator::kIndicatorDepth);
   simpleBatchRenderer.begin();
   drawStartLaneIndicators();
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+  recordCharacterizationSubmission(
+      bms_renderer_characterization::SubmissionKind::StartIndicatorPass,
+      bms_renderer_characterization::Surface::Main,
+      start_lane_indicator::kIndicatorDepth, nullptr, nullptr, -1, 0,
+      bms_renderer_characterization::LongBodyState::None,
+      {.x = playAreaLeftX,
+       .y = judgeY,
+       .width = playAreaWidth,
+       .height = std::max(0.0F, noteVisibleUpperBound - judgeY)});
+#endif
   simpleBatchRenderer.flush();
   layoutLaneCoverNumberTexts();
   if (laneCoverWhiteNumberText != nullptr) {
@@ -2852,6 +3803,18 @@ void BMSRenderer::render(RenderContext &context, long long micro,
                                .playAreaWidth = playAreaWidth,
                                .noteRenderWidth = noteRenderWidth,
                                .noteRenderHeight = noteRenderHeight});
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+    recordCharacterizationSubmission(
+        bms_renderer_characterization::SubmissionKind::JudgementIndicatorPass,
+        indicatorHudMode ? bms_renderer_characterization::Surface::Ui
+                         : bms_renderer_characterization::Surface::Main,
+        indicatorHudMode ? 0U : kJudgementIndicatorDepth, nullptr, nullptr, -1,
+        0, bms_renderer_characterization::LongBodyState::None,
+        {.x = playAreaLeftX,
+         .y = judgeY,
+         .width = playAreaWidth,
+         .height = std::max(0.0F, upperBound - judgeY)});
+#endif
     simpleBatchRenderer.flush();
     simpleBatchRenderer.setSubmitView(rendering::main_view);
   }
@@ -2862,6 +3825,18 @@ void BMSRenderer::render(RenderContext &context, long long micro,
       simpleBatchRenderer.setSubmitDepth(kGaugeDepth);
       simpleBatchRenderer.begin();
       drawGaugeBar();
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+      const auto gaugeRect = worldGaugeRect();
+      recordCharacterizationSubmission(
+          bms_renderer_characterization::SubmissionKind::GaugePass,
+          bms_renderer_characterization::Surface::Main, kGaugeDepth, nullptr,
+          nullptr, -1, 0,
+          bms_renderer_characterization::LongBodyState::None,
+          {.x = gaugeRect[0],
+           .y = gaugeRect[1],
+           .width = gaugeRect[2],
+           .height = gaugeRect[3]});
+#endif
       simpleBatchRenderer.flush();
     }
     layoutCenteredJudgementText();
@@ -2872,11 +3847,32 @@ void BMSRenderer::render(RenderContext &context, long long micro,
     drawGameplayHudPanels();
     if (gaugeBarPosition != AppSettings::GaugeBarPosition::World) {
       drawGaugeBar();
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+      const auto gaugeRect = hudGaugeRect();
+      recordCharacterizationSubmission(
+          bms_renderer_characterization::SubmissionKind::GaugePass,
+          bms_renderer_characterization::Surface::Ui, 0, nullptr, nullptr, -1,
+          0, bms_renderer_characterization::LongBodyState::None,
+          {.x = gaugeRect[0],
+           .y = gaugeRect[1],
+           .width = gaugeRect[2],
+           .height = gaugeRect[3]});
+#endif
     }
     if (judgementCounterEnabled) {
       drawJudgementCounterPanels();
     }
     drawJudgementAccentBar();
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+    recordCharacterizationSubmission(
+        bms_renderer_characterization::SubmissionKind::HudPass,
+        bms_renderer_characterization::Surface::Ui, 0, nullptr, nullptr, -1,
+        0, bms_renderer_characterization::LongBodyState::None,
+        {.x = 0.0F,
+         .y = 0.0F,
+         .width = static_cast<float>(rendering::window_width),
+         .height = static_cast<float>(rendering::window_height)});
+#endif
     simpleBatchRenderer.flush();
     simpleBatchRenderer.setSubmitView(rendering::main_view);
     drawTitle(context);
@@ -2905,6 +3901,16 @@ void BMSRenderer::render(RenderContext &context, long long micro,
     simpleBatchRenderer.setSubmitDepth(1);
     simpleBatchRenderer.begin();
     drawTouchPoints(replayTouchTimeMicros);
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+    recordCharacterizationSubmission(
+        bms_renderer_characterization::SubmissionKind::TouchPass,
+        bms_renderer_characterization::Surface::Ui, 1, nullptr, nullptr, -1,
+        0, bms_renderer_characterization::LongBodyState::None,
+        {.x = 0.0F,
+         .y = 0.0F,
+         .width = static_cast<float>(rendering::window_width),
+         .height = static_cast<float>(rendering::window_height)});
+#endif
     simpleBatchRenderer.flush();
     simpleBatchRenderer.setSubmitView(rendering::main_view);
   }
@@ -3124,7 +4130,152 @@ void BMSRenderer::updateJudgementCounterText() {
   }
 }
 
+void BMSRenderer::configure(
+    const PlayfieldPresentationConfig &configuration) {
+  setVisibleTimeDurationMilliseconds(
+      configuration.visibleTimeDurationMilliseconds);
+  if (configuration.configuredHispeed &&
+      std::isfinite(*configuration.configuredHispeed) &&
+      *configuration.configuredHispeed >= 0.0F) {
+    configuredHispeedOverride = configuration.configuredHispeed;
+  } else {
+    configuredHispeedOverride.reset();
+  }
+  setHispeedMultiplier(configuration.hispeedMultiplier);
+  setVisibleTimeUseMilliseconds(configuration.visibleTimeUseMilliseconds);
+  setHiSpeedFixMode(configuration.hispeedFixMode);
+  setPlayAreaWidth(configuration.playAreaWidth);
+  setLaneBeamsEnabled(configuration.laneBeamsEnabled);
+  setLaneCoverHispeedFactor(configuration.laneCoverHispeedFactor);
+  laneCoverEnabled = configuration.laneCoverEnabled;
+  setLaneBeamLengthPercent(configuration.laneBeamLengthPercent);
+  setNoteStartPositionPercent(configuration.noteStartPositionPercent);
+  setLaneBeamClockUsesRenderTime(
+      configuration.laneBeamClockUsesRenderTime);
+  setShowInvisibleNotes(configuration.showInvisibleNotes);
+  setJudgementIndicatorConfig(
+      configuration.judgementIndicatorEnabled,
+      configuration.judgementIndicatorY,
+      configuration.judgementIndicatorWidthScale,
+      configuration.judgementIndicatorHudMode,
+      configuration.judgementIndicatorRangeMilliseconds);
+  setJudgementTextY(configuration.judgementTextY);
+  setJudgementCounterEnabled(configuration.judgementCounterEnabled);
+  setJudgementCounterPosition(configuration.judgementCounterPosition);
+  setJudgementTimingFastSlowCriteria(configuration.fastSlowCriteria);
+  setJudgementTimingMillisecondsCriteria(configuration.millisecondsCriteria);
+  setGaugeBarPosition(configuration.gaugeBarPosition);
+  setTouchVisualizationEnabled(configuration.touchVisualizationEnabled);
+  setReplayGhostRenderingEnabled(configuration.replayGhostRenderingEnabled);
+}
+
+gameplay::RealtimeTouchLayout BMSRenderer::touchLayout() const {
+  gameplay::RealtimeTouchLayout layout;
+  layout.revision = touchLayoutRevision();
+  const auto touchBounds = gameplayTouchBoundsUi();
+  if (!touchBounds || laneOrder.empty() || chart == nullptr ||
+      rendering::render_width <= 0 || rendering::render_height <= 0 ||
+      !std::isfinite(rendering::ui_scale_x) ||
+      !std::isfinite(rendering::ui_scale_y)) {
+    return layout;
+  }
+  const auto normalizedScreenPoint = [](const auto &point) {
+    return gameplay::RealtimeTouchPoint{
+        .x = (point.first * rendering::ui_scale_x +
+              static_cast<float>(rendering::ui_offset_x)) /
+             static_cast<float>(rendering::render_width),
+        .y = (point.second * rendering::ui_scale_y +
+              static_cast<float>(rendering::ui_offset_y)) /
+             static_cast<float>(rendering::render_height)};
+  };
+  layout.bottomLeft = normalizedScreenPoint((*touchBounds)[0]);
+  layout.bottomRight = normalizedScreenPoint((*touchBounds)[1]);
+  layout.topLeft = normalizedScreenPoint((*touchBounds)[2]);
+  layout.topRight = normalizedScreenPoint((*touchBounds)[3]);
+  layout.laneCount = laneOrder.size();
+  layout.keyMode = chart->Meta.KeyMode;
+  layout.lanes = laneOrder;
+  layout.scratch.reserve(laneOrder.size());
+  for (const int lane : laneOrder) {
+    layout.scratch.push_back(chartLaneIsScratch(chart->Meta, lane));
+  }
+  return layout;
+}
+
+std::uint64_t BMSRenderer::touchLayoutRevision() const noexcept {
+  return touchLayoutRevision_;
+}
+
+std::uint64_t BMSRenderer::touchHitRegionsRevision() const noexcept {
+  return touchHitRegionsRevision_;
+}
+
+std::vector<PresentationUiHitRegion> BMSRenderer::touchHitRegions() const {
+  std::vector<PresentationUiHitRegion> result;
+  const PresentationUiHit laneCover{
+      .kind = PresentationUiControlKind::LaneCover,
+      .layoutRevision = touchLayoutRevision(),
+      .permitsLegacyBuiltInFallback = true};
+  const LaneCoverHandleGeometry handle = laneCoverHandleGeometry();
+  if (handle.width > 0.0F && handle.height > 0.0F) {
+    const float hitSlopX = std::max(noteRenderWidth * 0.35F, 0.12F);
+    const float hitSlopY = std::max(noteRenderHeight * 0.55F, 0.10F);
+    const float hitMinY = std::max(noteVisibleUpperBound, handle.y - hitSlopY);
+    const float hitMaxY =
+        std::min(upperBound, handle.y + handle.height + hitSlopY);
+    const float hitMinX = handle.x - hitSlopX;
+    const float hitMaxX = handle.x + handle.width + hitSlopX;
+    const auto first = projectLanePointToUi(hitMinX, hitMinY);
+    const auto second = projectLanePointToUi(hitMaxX, hitMinY);
+    const auto third = projectLanePointToUi(hitMaxX, hitMaxY);
+    const auto fourth = projectLanePointToUi(hitMinX, hitMaxY);
+    if (first && second && third && fourth) {
+      result.push_back(
+          {.hit = laneCover,
+           .boundary = {{{first->first, first->second},
+                         {second->first, second->second},
+                         {third->first, third->second},
+                         {fourth->first, fourth->second}}}});
+    }
+  }
+  if (const auto virtualHandle = laneCoverVirtualHandleGeometry()) {
+    const float right = virtualHandle->x + virtualHandle->width;
+    const float bottom = virtualHandle->y + virtualHandle->height;
+    result.push_back(
+        {.hit = laneCover,
+         .boundary = {{{virtualHandle->x, virtualHandle->y},
+                       {right, virtualHandle->y},
+                       {right, bottom},
+                       {virtualHandle->x, bottom}}}});
+  }
+  return result;
+}
+
+PresentationUiHit BMSRenderer::hitTestUiControl(UiLogicalPoint) const {
+  return {};
+}
+
+PresentationTouchResult BMSRenderer::beginPresentationTouch(
+    const PresentationTouchEvent &) {
+  return {};
+}
+
+PresentationTouchResult BMSRenderer::updatePresentationTouch(
+    const PresentationTouchEvent &) {
+  return {};
+}
+
+PresentationTouchResult BMSRenderer::endPresentationTouch(
+    const PresentationTouchEvent &, bool) {
+  return {};
+}
+
+void BMSRenderer::cancelPresentationTouches(long long) {}
+
 void BMSRenderer::reset() {
+  preparedPresentationFrame.reset();
+  lastPreparedPresentationFrameSerial = 0;
+  presentationFailure.reset();
   state.reset();
   floatingVisibleTimeReferenceBpm.reset();
   judgementIndicator.clear();
@@ -3156,13 +4307,39 @@ void BMSRenderer::reset() {
   }
 }
 
-void BMSRenderer::refreshGeometry() {
-  upperBound = calculateLanePlaneScreenTopIntersection();
-  noteVisibleUpperBound = upperBound;
+PresentationMode BMSRenderer::activeMode() const noexcept {
+  return PresentationMode::BuiltIn;
 }
 
-void BMSRenderer::setVisibleTimeGreenNumber(int greenNumber) {
-  visibleTimeGreenNumber = greenNumber;
+std::optional<PresentationFailure> BMSRenderer::lastFailure() const {
+  return presentationFailure;
+}
+
+void BMSRenderer::refreshGeometry() {
+  const float nextUpperBound = calculateLanePlaneScreenTopIntersection();
+  const float hiddenRatio =
+      static_cast<float>(noteStartPositionPercent) / 100.0F;
+  const float nextVisibleUpperBound =
+      judgeY + std::max(0.0F, nextUpperBound - judgeY) * (1.0F - hiddenRatio);
+  if (nextUpperBound != upperBound ||
+      nextVisibleUpperBound != noteVisibleUpperBound) {
+    advanceTouchRevision(touchLayoutRevision_);
+    advanceTouchRevision(touchHitRegionsRevision_);
+  }
+  upperBound = nextUpperBound;
+  noteVisibleUpperBound = nextVisibleUpperBound;
+}
+
+void BMSRenderer::setVisibleTimeDurationMilliseconds(int milliseconds) {
+  visibleTimeDurationMilliseconds =
+      std::clamp(milliseconds, AppSettings::kMinVisibleTimeMs,
+                 AppSettings::kMaxVisibleTimeMs);
+}
+
+void BMSRenderer::setHispeedMultiplier(float multiplier) {
+  hispeedMultiplier = std::isfinite(multiplier)
+                          ? std::clamp(multiplier, 0.01F, 19.99F)
+                          : 1.0F;
 }
 
 void BMSRenderer::setVisibleTimeUseMilliseconds(bool enabled) {
@@ -3175,9 +4352,8 @@ void BMSRenderer::setCurrentBpm(double bpm) {
   }
 }
 
-void BMSRenderer::setVisibleTimeBpmStrategy(
-    AppSettings::VisibleTimeBpmStrategy strategy) {
-  visibleTimeBpmStrategy = strategy;
+void BMSRenderer::setHiSpeedFixMode(AppSettings::HiSpeedFixMode mode) {
+  hispeedFixMode = mode;
 }
 
 void BMSRenderer::setPlayAreaWidth(float width) {
@@ -3198,8 +4374,8 @@ void BMSRenderer::setLaneBeamsEnabled(bool enabled) {
   renderLaneBeams = enabled;
 }
 
-void BMSRenderer::setLaneCoverFloatingEnabled(bool enabled) {
-  laneCoverFloatingEnabled = enabled;
+void BMSRenderer::setLaneCoverHispeedFactor(float factor) {
+  laneCoverHispeedFactor = factor;
 }
 
 std::optional<std::array<std::pair<float, float>, 4>>
@@ -3223,14 +4399,28 @@ void BMSRenderer::setLaneBeamLengthPercent(int percent) {
 }
 
 void BMSRenderer::setNoteStartPositionPercent(int percent) {
-  noteStartPositionPercent =
+  const int next =
       std::clamp(percent, AppSettings::kMinNoteStartPositionPercent,
                  AppSettings::kMaxNoteStartPositionPercent);
+  if (noteStartPositionPercent == next) {
+    return;
+  }
+  noteStartPositionPercent = next;
+  const float hiddenRatio =
+      static_cast<float>(noteStartPositionPercent) / 100.0F;
+  noteVisibleUpperBound =
+      judgeY + std::max(0.0F, upperBound - judgeY) * (1.0F - hiddenRatio);
+  advanceTouchRevision(touchHitRegionsRevision_);
 }
 
 void BMSRenderer::applyLaneCoverState(int percent,
                                       bool resetVisibleTimeReference) {
-  setNoteStartPositionPercent(percent);
+  applyLaneCoverState(percent, true, resetVisibleTimeReference);
+}
+
+void BMSRenderer::applyLaneCoverState(int percent, bool enabled,
+                                      bool resetVisibleTimeReference) {
+  setNoteStartPositionPercent(enabled ? percent : 0);
   if (resetVisibleTimeReference) {
     floatingVisibleTimeReferenceBpm =
         currentBpm > 0.0 ? currentBpm : visibleTimeReferenceBpm();
@@ -3344,9 +4534,6 @@ bool BMSRenderer::isLaneCoverHandleHit(float renderX, float renderY) const {
 
 std::optional<float>
 BMSRenderer::laneCoverHandleGrabOffset(float renderX, float renderY) const {
-  if (!laneCoverFloatingEnabled) {
-    return std::nullopt;
-  }
   const auto point = lanePlanePointAtRenderPosition(renderX, renderY);
   if (!point.has_value()) {
     return std::nullopt;
@@ -3579,7 +4766,8 @@ void BMSRenderer::setPlayOptionStatus(const std::string &label) {
   playOptionText->setText(label);
 }
 
-void BMSRenderer::setReplayData(const ReplayData *replayData) {
+void BMSRenderer::setReplayData(const ReplayData *replayData,
+                                bool preprocessGhosts) {
   replayGhostEvents.clear();
   replayMissMarkers.clear();
   replayTouchSamples.clear();
@@ -3591,17 +4779,23 @@ void BMSRenderer::setReplayData(const ReplayData *replayData) {
     return;
   }
 
-  std::vector<const bms_parser::TimeLine *> timelineRefs;
-  timelineRefs.reserve(timelines.size());
-  for (const auto *timeline : timelines) {
-    timelineRefs.push_back(timeline);
+  if (preprocessGhosts) {
+    std::vector<const bms_parser::TimeLine *> timelineRefs;
+    timelineRefs.reserve(timelines.size());
+    for (const auto *timeline : timelines) {
+      timelineRefs.push_back(timeline);
+    }
+    replayGhostEvents = replay_ghost::buildReplayGhostEvents(
+        *replayData, timelineRefs, laneToOrderIndex,
+        [this](long long timeMicros) {
+          return scrollPositionAtTime(timeMicros);
+        });
+    replayMissMarkers = replay_ghost::buildReplayMissMarkers(
+        *replayData, timelineRefs, laneToOrderIndex,
+        [this](long long timeMicros) {
+          return scrollPositionAtTime(timeMicros);
+        });
   }
-  replayGhostEvents = replay_ghost::buildReplayGhostEvents(
-      *replayData, timelineRefs, laneToOrderIndex,
-      [this](long long timeMicros) { return scrollPositionAtTime(timeMicros); });
-  replayMissMarkers = replay_ghost::buildReplayMissMarkers(
-      *replayData, timelineRefs, laneToOrderIndex,
-      [this](long long timeMicros) { return scrollPositionAtTime(timeMicros); });
   replayTouchSamples = replayData->touchSamples;
   std::stable_sort(replayTouchSamples.begin(), replayTouchSamples.end(),
                    [](const ReplayTouchSample &a, const ReplayTouchSample &b) {
@@ -3756,7 +4950,7 @@ void BMSRenderer::layoutLaneCoverNumberTexts() {
   }
 
   const LaneCoverHandleGeometry handle = laneCoverHandleGeometry();
-  const bool handleVisible = laneCoverFloatingEnabled && handle.height > 0.0f;
+  const bool handleVisible = handle.height > 0.0f;
   const float labelBottomWorldY =
       handleVisible ? handle.y + handle.height : noteVisibleUpperBound;
   if (labelBottomWorldY >= upperBound) {
@@ -3835,10 +5029,6 @@ void BMSRenderer::drawLaneCover() {
              Color(214, 224, 236, 255));
   }
 
-  if (!laneCoverFloatingEnabled) {
-    return;
-  }
-
   const LaneCoverHandleGeometry handle = laneCoverHandleGeometry();
   if (handle.width <= 0.0f || handle.height <= 0.0f) {
     return;
@@ -3890,6 +5080,8 @@ void BMSRenderer::rebuildPlayAreaGeometry() {
     }
     laneXLookup[static_cast<size_t>(lane)] = computeLaneX(lane);
   }
+  advanceTouchRevision(touchLayoutRevision_);
+  advanceTouchRevision(touchHitRegionsRevision_);
 }
 inline float BMSRenderer::computeLaneX(int lane) const {
   if (const auto it = laneToOrderIndex.find(lane);

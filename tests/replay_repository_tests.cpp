@@ -2333,7 +2333,7 @@ void testChartAndCourseRoundTripAndPathIsolation(
   assert(summaries.front().eligibility == ScoreEligibility::Modified);
   assert(summaries.front().playback == replay.provenance.playback);
   assert(replay_clear_mark::effectiveClearRank(summaries.front()) ==
-         kClearTypeAssistedEasyClearRank);
+         kClearTypeLightAssistedEasyClearRank);
 
   CourseReplayData course;
   course.courseId = 31;
@@ -2366,7 +2366,7 @@ void testChartAndCourseRoundTripAndPathIsolation(
   assert(courseSummaries.front().eligibility == ScoreEligibility::Modified);
   assert(courseSummaries.front().playback == course.provenance.playback);
   assert(replay_clear_mark::effectiveClearRank(courseSummaries.front()) ==
-         kClearTypeAssistedEasyClearRank);
+         kClearTypeLightAssistedEasyClearRank);
 
   assert(second.ListReplays(replay.chartMeta, 0).empty());
   assert(second

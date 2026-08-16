@@ -472,11 +472,6 @@ static int clampVisualOffset(int value) {
                     AppSettings::kMaxVisualOffsetMs);
 }
 
-static int clampVisibleTimeGreenNumber(int value) {
-  return std::clamp(value, AppSettings::kMinVisibleTimeGreenNumber,
-                    AppSettings::kMaxVisibleTimeGreenNumber);
-}
-
 static int clampBgaBrightness(int value) {
   return std::clamp(value, AppSettings::kMinBgaBrightnessPercent,
                     AppSettings::kMaxBgaBrightnessPercent);
@@ -584,28 +579,17 @@ static float judgementIndicatorWidthPercentToScale(int percent) {
                                            100.0f);
 }
 
-static int greenNumberToMilliseconds(int greenNumber) {
-  return static_cast<int>(
-      std::lround(static_cast<double>(greenNumber) * 1000.0 / 600.0));
-}
-
-static int millisecondsToGreenNumber(int milliseconds) {
-  return static_cast<int>(
-      std::lround(static_cast<double>(milliseconds) * 600.0 / 1000.0));
-}
-
-static int adjustVisibleTimeGreenNumber(int currentGreenNumber,
-                                        bool useMilliseconds, int delta) {
-  if (!useMilliseconds) {
-    return clampVisibleTimeGreenNumber(currentGreenNumber + delta);
+static int adjustVisibleTimeDurationMilliseconds(int currentMilliseconds,
+                                                 bool useMilliseconds,
+                                                 int delta) {
+  if (useMilliseconds) {
+    return std::clamp(currentMilliseconds + delta,
+                      AppSettings::kMinVisibleTimeMs,
+                      AppSettings::kMaxVisibleTimeMs);
   }
-
-  const int currentMilliseconds = greenNumberToMilliseconds(currentGreenNumber);
-  const int nextMilliseconds =
-      std::clamp(currentMilliseconds + delta, AppSettings::kMinVisibleTimeMs,
-                 AppSettings::kMaxVisibleTimeMs);
-  return clampVisibleTimeGreenNumber(
-      millisecondsToGreenNumber(nextMilliseconds));
+  return AppSettings::greenNumberToDurationMilliseconds(
+      AppSettings::durationMillisecondsToGreenNumber(currentMilliseconds) +
+      delta);
 }
 
 static std::string formatOffsetLabel(int offsetMs) {
@@ -616,31 +600,40 @@ static std::string formatOffsetInputValue(int offsetMs) {
   return std::to_string(offsetMs);
 }
 
-static std::string formatVisibleTimeLabel(int greenNumber,
+static std::string formatVisibleTimeLabel(int milliseconds,
                                           bool useMilliseconds) {
   if (useMilliseconds) {
-    return std::to_string(greenNumberToMilliseconds(greenNumber)) + " ms";
+    return std::to_string(milliseconds) + " ms";
   }
-  return std::to_string(greenNumber) + " green";
+  return std::to_string(
+             AppSettings::durationMillisecondsToGreenNumber(milliseconds)) +
+         " green";
 }
 
-static std::string formatVisibleTimeInputValue(int greenNumber,
+static std::string formatVisibleTimeInputValue(int milliseconds,
                                                bool useMilliseconds) {
   if (useMilliseconds) {
-    return std::to_string(greenNumberToMilliseconds(greenNumber));
+    return std::to_string(milliseconds);
   }
-  return std::to_string(greenNumber);
+  return std::to_string(
+      AppSettings::durationMillisecondsToGreenNumber(milliseconds));
 }
 
 static std::string formatVisibleTimeBpmStrategyLabel(
-    AppSettings::VisibleTimeBpmStrategy strategy) {
-  switch (strategy) {
-  case AppSettings::VisibleTimeBpmStrategy::Chart:
-    return "Chart BPM";
-  case AppSettings::VisibleTimeBpmStrategy::MostPrevalent:
-    return "Most prevalent";
+    AppSettings::HiSpeedFixMode mode) {
+  switch (mode) {
+  case AppSettings::HiSpeedFixMode::Off:
+    return "Off";
+  case AppSettings::HiSpeedFixMode::Start:
+    return "Start BPM";
+  case AppSettings::HiSpeedFixMode::Max:
+    return "Max BPM";
+  case AppSettings::HiSpeedFixMode::Main:
+    return "Main BPM";
+  case AppSettings::HiSpeedFixMode::Min:
+    return "Min BPM";
   }
-  return "Chart BPM";
+  return "Main BPM";
 }
 
 static std::string formatFloatValue(float value, int precision = 1) {
@@ -851,15 +844,21 @@ nextNotePriorityMode(AppSettings::NotePriorityMode mode) {
   return AppSettings::NotePriorityMode::Lowest;
 }
 
-static AppSettings::VisibleTimeBpmStrategy
-nextVisibleTimeBpmStrategy(AppSettings::VisibleTimeBpmStrategy strategy) {
-  switch (strategy) {
-  case AppSettings::VisibleTimeBpmStrategy::Chart:
-    return AppSettings::VisibleTimeBpmStrategy::MostPrevalent;
-  case AppSettings::VisibleTimeBpmStrategy::MostPrevalent:
-    return AppSettings::VisibleTimeBpmStrategy::Chart;
+static AppSettings::HiSpeedFixMode
+nextVisibleTimeBpmStrategy(AppSettings::HiSpeedFixMode mode) {
+  switch (mode) {
+  case AppSettings::HiSpeedFixMode::Off:
+    return AppSettings::HiSpeedFixMode::Start;
+  case AppSettings::HiSpeedFixMode::Start:
+    return AppSettings::HiSpeedFixMode::Max;
+  case AppSettings::HiSpeedFixMode::Max:
+    return AppSettings::HiSpeedFixMode::Main;
+  case AppSettings::HiSpeedFixMode::Main:
+    return AppSettings::HiSpeedFixMode::Min;
+  case AppSettings::HiSpeedFixMode::Min:
+    return AppSettings::HiSpeedFixMode::Off;
   }
-  return AppSettings::VisibleTimeBpmStrategy::Chart;
+  return AppSettings::HiSpeedFixMode::Main;
 }
 
 static AppSettings::JudgementIndicatorRenderMode

@@ -4,7 +4,9 @@
 #include "audio/PlaybackRate.h"
 #include "ir/IrProfileSettings.h"
 #include "settings/AudioVideoSettings.h"
+#include "skin/SkinProfileSettings.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <iosfwd>
 #include <map>
@@ -33,9 +35,14 @@ public:
     Hud2D = 1,
   };
 
-  enum class VisibleTimeBpmStrategy {
-    Chart = 0,
-    MostPrevalent = 1,
+  // Exact PlayConfig.fixhispeed values from pinned Beatoraja.  Fixed modes
+  // store duration; OFF stores a raw Hi-Speed value instead.
+  enum class HiSpeedFixMode {
+    Off = 0,
+    Start = 1,
+    Max = 2,
+    Main = 3,
+    Min = 4,
   };
 
   enum class JudgementCounterPosition {
@@ -67,10 +74,17 @@ public:
   static constexpr int kMaxAudioOffsetMs = 300;
   static constexpr int kMinVisualOffsetMs = -500;
   static constexpr int kMaxVisualOffsetMs = 500;
-  static constexpr int kMinVisibleTimeGreenNumber = 60;
-  static constexpr int kMaxVisibleTimeGreenNumber = 1200;
-  static constexpr int kMinVisibleTimeMs = 100;
-  static constexpr int kMaxVisibleTimeMs = 2000;
+  // Beatoraja PlayConfig.DURATION_MIN/MAX.  Duration is canonical in
+  // milliseconds; green number is the derived IntegerProperty 313 value.
+  static constexpr int kMinVisibleTimeMs = 1;
+  static constexpr int kMaxVisibleTimeMs = 10000;
+  static constexpr int kDefaultVisibleTimeDurationMilliseconds = 500;
+  static constexpr int kMinVisibleTimeGreenNumber = 0;
+  static constexpr int kMaxVisibleTimeGreenNumber = 6000;
+  static constexpr float kMinGameplayHispeed = 0.01F;
+  static constexpr float kMaxGameplayHispeed = 20.0F;
+  static constexpr float kDefaultHispeedMargin = 0.25F;
+  static constexpr float kMaxHispeedMargin = 10.0F;
   static constexpr int kMinBgaBrightnessPercent = 0;
   static constexpr int kMaxBgaBrightnessPercent = 100;
   static constexpr int kDefaultBgaBrightnessPercent = 100;
@@ -117,13 +131,23 @@ public:
       player_settings::defaultAudioVideoSettingsForPlatform();
   int audioOffsetMs = 0;
   int visualOffsetMs = 0;
-  int visibleTimeGreenNumber = 400;
+  // Matches Beatoraja PlayConfig.duration. Green number is the derived live
+  // LaneRenderer duration, not a separate stored setting.
+  int visibleTimeDurationMilliseconds =
+      kDefaultVisibleTimeDurationMilliseconds;
+  // Matches PlayConfig.hispeed; it is persisted and used only in OFF mode.
+  float gameplayHispeed = 1.0F;
+  // Matches PlayConfig.hispeedmargin.
+  float hispeedMargin = kDefaultHispeedMargin;
   bool visibleTimeUseMilliseconds = false;
-  VisibleTimeBpmStrategy visibleTimeBpmStrategy = VisibleTimeBpmStrategy::Chart;
+  HiSpeedFixMode hispeedFixMode = HiSpeedFixMode::Main;
   bool inputKeysoundEnabled = true;
   bool prepMetronomeEnabled = false;
   bool startLaneIndicatorsEnabled = true;
   bool showInvisibleNotes = false;
+  // Beatoraja PlayerConfig.markprocessednote. When enabled, judged normal
+  // notes use SkinNote's processed-note visual instead of the normal visual.
+  bool markProcessedNotes = false;
   bool touchVisualizationEnabled = true;
   bool archiveChartPreviewEnabled = true;
   bool findBmsSkipUnarchivingForNonSolidArchives = false;
@@ -135,7 +159,11 @@ public:
   float laneLength = kDefaultLaneLength;
   int laneBeamLengthPercent = kDefaultLaneBeamLengthPercent;
   int noteStartPositionPercent = kDefaultNoteStartPositionPercent;
-  bool floatingLaneCoverEnabled = true;
+  bool laneCoverEnabled = true;
+  // Matches PlayConfig.hispeedautoadjust. When lane cover changes during play,
+  // keep the green number at the current BPM instead of the configured
+  // reference BPM.
+  bool hispeedAutoAdjust = false;
   float playAreaWidth4K = kDefaultPlayAreaWidth;
   float playAreaWidth5K = kDefaultPlayAreaWidth;
   float playAreaWidth6K = kDefaultPlayAreaWidth;
@@ -165,8 +193,7 @@ public:
   bool systemPlaybackShowTitle = true;
   bool systemPlaybackShowArtist = true;
   int musicPlayerPlaybackRatePercent = 100;
-  audio::PlaybackMode musicPlayerPlaybackMode =
-      audio::PlaybackMode::PitchShift;
+  audio::PlaybackMode musicPlayerPlaybackMode = audio::PlaybackMode::PitchShift;
   bool gameplayClubModeEnabled = false;
   bool musicPlayerClubModeEnabled = false;
   std::string selectedGameplayRuleset = "lr2";
@@ -183,10 +210,34 @@ public:
   std::map<std::string, ir::IrProviderSettings> irProviders = {
       {std::string(ir::kTachiProviderId), ir::IrProviderSettings{}},
   };
+  skin::SkinProfileSettings skin;
 
   void sanitize();
   float playAreaWidthForKeyMode(int keyMode) const;
   void setPlayAreaWidthForKeyMode(int keyMode, float width);
+  [[nodiscard]] static constexpr int
+  durationMillisecondsToGreenNumber(int milliseconds) noexcept {
+    return (std::clamp(milliseconds, kMinVisibleTimeMs,
+                       kMaxVisibleTimeMs) *
+            3) /
+           5;
+  }
+  [[nodiscard]] static constexpr int
+  greenNumberToDurationMilliseconds(int greenNumber) noexcept {
+    const int bounded = std::clamp(greenNumber, kMinVisibleTimeGreenNumber,
+                                   kMaxVisibleTimeGreenNumber);
+    // IntegerPropertyFactory evaluates `duration * 3 / 5`. Choose the
+    // smallest integral duration that derives the requested green value.
+    return std::clamp((bounded * 5 + 2) / 3, kMinVisibleTimeMs,
+                      kMaxVisibleTimeMs);
+  }
+  [[nodiscard]] constexpr int visibleTimeGreenNumber() const noexcept {
+    return durationMillisecondsToGreenNumber(visibleTimeDurationMilliseconds);
+  }
+  constexpr void setVisibleTimeGreenNumber(int greenNumber) noexcept {
+    visibleTimeDurationMilliseconds =
+        greenNumberToDurationMilliseconds(greenNumber);
+  }
   bool operator==(const AppSettings &) const = default;
 
 private:

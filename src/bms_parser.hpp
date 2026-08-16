@@ -93,12 +93,19 @@ public:
  */
 
 
+#include <optional>
 #include <vector>
 
 /**
  *
  */
 namespace bms_parser {
+inline constexpr int BgaSequenceBlank = -1;
+
+struct BgaPoorSequence {
+  std::vector<int> Frames;
+};
+
 class TimeLine {
 public:
   std::vector<Note *> BackgroundNotes;
@@ -111,7 +118,7 @@ public:
   bool ScrollChange = false;
   int BgaBase = -1;
   int BgaLayer = -1;
-  int BgaPoor = -1;
+  std::optional<BgaPoorSequence> BgaPoor;
 
   double StopLength = 0;
   double Scroll = 1;
@@ -221,6 +228,9 @@ public:
   bool BgaPoorDefault = false;
   int Difficulty = 0;
   double PlayLevel = 3;
+  // BMSDecoder keeps the normalized header string and SongData later applies
+  // Java Integer.parseInt. The numeric field alone loses invalid/decimal input.
+  std::string PlayLevelText;
   double MinBpm = 0;
   double MaxBpm = 0;
   double MostPrevalentBpm = 0;
@@ -667,7 +677,6 @@ private:
 
   bool UseBase62 = false;
   int Lnobj = -1;
-  int Lntype = 1;
   unsigned int Seed;
   std::string RandomPrng = RandomPrngId;
   std::vector<int> RandomValues;

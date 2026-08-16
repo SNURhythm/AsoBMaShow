@@ -12,6 +12,10 @@
 #include <string>
 #include <thread>
 
+#if !defined(_WIN32)
+#include <sys/stat.h>
+#endif
+
 namespace {
 int failures = 0;
 
@@ -136,6 +140,42 @@ void testBridgeImportRequiresAbsoluteLocalPath() {
 
   auto cleanup = valid;
   platform_document_handoff::CleanupTemporaryDocument(cleanup);
+}
+
+void testDefaultBridgeNormalizesPickedSourceNamesAndRejectsInvalidUtf8() {
+  const auto decomposed = makePrivateTestDocument("decomposed-source", "copy");
+  const auto normalized = platform_document_handoff::detail::ParseBridgeResult(
+      decomposed.string(), true, true, PlatformTemporaryPathKind::File,
+      std::string("Cafe\xCC\x81"));
+  expect(normalized.ok() && normalized.originalSourceName == "Caf\xC3\xA9",
+         "default bridge normalization converts a decomposed picked filename to NFC");
+  auto normalizedCleanup = normalized;
+  (void)platform_document_handoff::CleanupTemporaryDocument(normalizedCleanup);
+
+  const auto invalidFile = makePrivateTestDocument("invalid-source-file", "copy");
+  const auto invalidFileRoot = invalidFile.parent_path();
+  const auto invalidFileResult =
+      platform_document_handoff::detail::ParseBridgeResult(
+          invalidFile.string(), true, true, PlatformTemporaryPathKind::File,
+          std::string("\xFF", 1));
+  expect(!invalidFileResult.ok() && !std::filesystem::exists(invalidFile),
+         "invalid UTF-8 rejects and cleans an issued temporary file");
+  std::error_code error;
+  std::filesystem::remove_all(invalidFileRoot, error);
+
+  std::string allocationError;
+  const auto invalidDirectory =
+      platform_document_handoff::detail::CreatePrivateImportDirectoryUnder(
+          std::filesystem::temp_directory_path(), allocationError);
+  std::ofstream(invalidDirectory / "skin.lua", std::ios::binary) << "skin";
+  const auto invalidDirectoryResult =
+      platform_document_handoff::detail::ParseBridgeResult(
+          invalidDirectory.string(), true, true,
+          PlatformTemporaryPathKind::Directory, std::string("\xFF", 1));
+  expect(!invalidDirectoryResult.ok() &&
+             !std::filesystem::exists(invalidDirectory),
+         "invalid UTF-8 rejects and cleans an issued temporary directory");
+  std::filesystem::remove_all(invalidDirectory, error);
 }
 
 void testBridgeExportSuccessHasNoLocalPath() {
@@ -726,6 +766,407 @@ void testTakenTemporaryImportHasExplicitCleanup() {
   std::filesystem::remove_all(root, error);
 }
 
+void testDirectoryCleanupRequiresItsExactIssuedRoot() {
+  std::string errorMessage;
+  const auto root =
+      platform_document_handoff::detail::CreatePrivateImportDirectoryUnder(
+          std::filesystem::temp_directory_path(), errorMessage);
+  expect(!root.empty() && errorMessage.empty(),
+         "directory import test allocates a private issued root");
+  const auto child = root / "chart";
+  std::ofstream(child, std::ios::binary) << "chart";
+
+  auto result = platform_document_handoff::detail::ParseBridgeResult(
+      root.string(), true, true, PlatformTemporaryPathKind::Directory);
+  expect(result.ok() && !result.temporaryLocalFile &&
+             result.temporaryPathKind == PlatformTemporaryPathKind::Directory,
+         "directory result carries an owned directory cleanup capability");
+  expect(!platform_document_handoff::CleanupTemporaryDocument(result) &&
+             std::filesystem::exists(result.localPath),
+         "legacy file cleanup refuses an owned directory");
+
+  const auto issuedRoot = result.localPath;
+  result.localPath = child;
+  expect(!platform_document_handoff::CleanupTemporaryPath(result) &&
+             std::filesystem::exists(issuedRoot),
+         "directory cleanup refuses a child of its issued root");
+  result.localPath = issuedRoot.parent_path();
+  expect(!platform_document_handoff::CleanupTemporaryPath(result) &&
+             std::filesystem::exists(issuedRoot),
+         "directory cleanup refuses a parent of its issued root");
+  result.localPath = std::filesystem::temp_directory_path();
+  expect(!platform_document_handoff::CleanupTemporaryPath(result) &&
+             std::filesystem::exists(issuedRoot),
+         "directory cleanup refuses a substituted path");
+  result.localPath = issuedRoot;
+  expect(platform_document_handoff::CleanupTemporaryPath(result) &&
+             !std::filesystem::exists(issuedRoot),
+         "directory cleanup removes exactly its issued root");
+  expect(platform_document_handoff::CleanupTemporaryPath(result),
+         "directory cleanup is idempotent");
+}
+
+void testDirectoryCleanupRejectsIdentitySwapAndUnlinksFinalSymlink() {
+  std::string allocationError;
+  const auto root =
+      platform_document_handoff::detail::CreatePrivateImportDirectoryUnder(
+          std::filesystem::temp_directory_path(), allocationError);
+  auto result = platform_document_handoff::detail::ParseBridgeResult(
+      root.string(), true, true, PlatformTemporaryPathKind::Directory);
+  expect(result.ok(), "issued directory receives an exact cleanup capability");
+
+  std::error_code error;
+  std::filesystem::remove_all(root, error);
+  std::filesystem::create_directory(root, error);
+  std::string securityError;
+  (void)platform_document_handoff::detail::SecurePrivateDocumentPath(
+      root, true, securityError);
+  const auto replacementMarker = root / "replacement-marker";
+  std::ofstream(replacementMarker, std::ios::binary) << "keep";
+  expect(!platform_document_handoff::CleanupTemporaryPath(result) &&
+             std::filesystem::exists(replacementMarker),
+         "directory cleanup refuses a post-adoption identity swap");
+  std::filesystem::remove_all(root, error);
+
+  const auto symlinkRoot =
+      platform_document_handoff::detail::CreatePrivateImportDirectoryUnder(
+          std::filesystem::temp_directory_path(), allocationError);
+  auto symlinkResult = platform_document_handoff::detail::ParseBridgeResult(
+      symlinkRoot.string(), true, true, PlatformTemporaryPathKind::Directory);
+  const auto outside = std::filesystem::temp_directory_path() /
+                       "asobmashow-directory-cleanup-outside";
+  std::filesystem::remove_all(outside, error);
+  std::filesystem::create_directories(outside, error);
+  const auto outsideMarker = outside / "keep";
+  std::ofstream(outsideMarker, std::ios::binary) << "keep";
+  std::filesystem::remove_all(symlinkRoot, error);
+  std::filesystem::create_directory_symlink(outside, symlinkRoot, error);
+  if (!error) {
+    expect(platform_document_handoff::CleanupTemporaryPath(symlinkResult) &&
+               !std::filesystem::exists(symlinkRoot) &&
+               std::filesystem::exists(outsideMarker),
+           "directory cleanup unlinks a final symlink without traversing it");
+  }
+  std::filesystem::remove_all(outside, error);
+}
+
+void testDirectoryImportUsesThePickedFolderAsItsPrivateRoot() {
+  const auto sourceRoot = std::filesystem::temp_directory_path() /
+                          "asobmashow-directory-import-source" / "Sample Skin";
+  const auto temporaryRoot = std::filesystem::temp_directory_path();
+  std::error_code error;
+  std::filesystem::remove_all(sourceRoot.parent_path(), error);
+  std::filesystem::create_directories(sourceRoot / "nested", error);
+  {
+    std::ofstream(sourceRoot / "skin.lua", std::ios::binary) << "skin";
+    std::ofstream(sourceRoot / "nested" / "readme.txt", std::ios::binary)
+        << "nested";
+  }
+
+  const PlatformDirectoryImportRequest request{
+      .maxBytes = 1024,
+      .maxFiles = 3,
+      .maxRegularFileBytes = 1024,
+      .maxDepth = 2,
+      .maxPathBytes = 128};
+  const auto imported =
+      platform_document_handoff::detail::CopyDirectoryForImport(
+          sourceRoot, request, temporaryRoot);
+  expect(imported.ok() &&
+             imported.temporaryPathKind == PlatformTemporaryPathKind::Directory &&
+             imported.originalSourceName == "Sample Skin",
+         "directory import retains the selected folder name and cleanup root");
+  expect(std::filesystem::is_regular_file(imported.localPath / "skin.lua") &&
+             std::filesystem::is_regular_file(imported.localPath / "nested" /
+                                              "readme.txt") &&
+             !std::filesystem::exists(imported.localPath / "Sample Skin"),
+         "directory import copies the picked folder contents directly at its root");
+
+  auto cleanup = imported;
+  expect(platform_document_handoff::CleanupTemporaryPath(cleanup),
+         "directory import result exposes exact-root cleanup");
+
+  PlatformDirectoryImportRequest invalid = request;
+  invalid.maxFiles = 0;
+  expect(!platform_document_handoff::detail::Validate(invalid).ok(),
+         "directory import requires a non-zero file limit");
+  invalid = request;
+  invalid.maxDepth = 0;
+  expect(!platform_document_handoff::detail::Validate(invalid).ok(),
+         "directory import requires a non-zero depth limit");
+  invalid = request;
+  invalid.maxPathBytes = 0;
+  expect(!platform_document_handoff::detail::Validate(invalid).ok(),
+         "directory import requires a non-zero path limit");
+
+  invalid = request;
+  invalid.maxFiles = 2;
+  expect(!platform_document_handoff::detail::CopyDirectoryForImport(
+              sourceRoot, invalid, temporaryRoot)
+              .ok(),
+         "directory import counts directories toward the selected folder entry "
+         "limit");
+  invalid = request;
+  invalid.maxBytes = 3;
+  expect(!platform_document_handoff::detail::CopyDirectoryForImport(
+              sourceRoot, invalid, temporaryRoot)
+              .ok(),
+         "directory import enforces the selected folder byte limit");
+  invalid = request;
+  invalid.maxDepth = 1;
+  expect(!platform_document_handoff::detail::CopyDirectoryForImport(
+              sourceRoot, invalid, temporaryRoot)
+              .ok(),
+         "directory import enforces the selected folder depth limit");
+  invalid = request;
+  invalid.maxPathBytes = 7;
+  expect(!platform_document_handoff::detail::CopyDirectoryForImport(
+              sourceRoot, invalid, temporaryRoot)
+              .ok(),
+         "directory import enforces the selected folder path-byte limit");
+  invalid = request;
+  invalid.maxRegularFileBytes = 3;
+  expect(!platform_document_handoff::detail::CopyDirectoryForImport(
+              sourceRoot, invalid, temporaryRoot)
+              .ok(),
+         "directory import rejects a source file before copying beyond the per-file limit");
+
+  std::atomic_bool cancelledBeforePicker = true;
+  expect(platform_document_handoff::detail::CopyDirectoryForImport(
+             sourceRoot, request, temporaryRoot, &cancelledBeforePicker)
+             .cancelled(),
+         "directory import observes cancellation before private copy begins");
+
+  std::atomic_bool cancelled = false;
+  const auto cancelledImport =
+      platform_document_handoff::detail::CopyDirectoryForImport(
+          sourceRoot, request, temporaryRoot, &cancelled,
+          [&cancelled](std::uint64_t copied) {
+            if (copied != 0) {
+              cancelled = true;
+            }
+          });
+  expect(cancelledImport.cancelled(),
+         "directory import observes cancellation during copy before commit");
+
+#if !defined(_WIN32)
+  const auto mutableSourceRoot = sourceRoot.parent_path() / "Mutable Skin";
+  std::filesystem::create_directories(mutableSourceRoot, error);
+  const auto mutableSourceFile = mutableSourceRoot / "skin.lua";
+  std::ofstream(mutableSourceFile, std::ios::binary) << "before";
+  bool rewroteSource = false;
+  const auto changedDuringCopy =
+      platform_document_handoff::detail::CopyDirectoryForImport(
+          mutableSourceRoot, request, temporaryRoot, nullptr,
+          [&mutableSourceFile, &rewroteSource](std::uint64_t copied) {
+            if (copied == 0 || rewroteSource) {
+              return;
+            }
+            std::ofstream(mutableSourceFile,
+                          std::ios::binary | std::ios::trunc)
+                << "rewritten while the importer owns its descriptor";
+            rewroteSource = true;
+          });
+  expect(rewroteSource && !changedDuringCopy.ok() &&
+             changedDuringCopy.message.find("changed while being copied") !=
+                 std::string::npos,
+         "directory import rejects an in-place source edit during descriptor copy");
+  std::filesystem::remove_all(mutableSourceRoot, error);
+#endif
+
+  const auto link = sourceRoot / "linked.txt";
+  std::filesystem::create_symlink(sourceRoot / "skin.lua", link, error);
+  if (!error) {
+    const auto linked = platform_document_handoff::detail::CopyDirectoryForImport(
+        sourceRoot, request, temporaryRoot);
+    expect(!linked.ok() && !linked.cancelled(),
+           "directory import rejects symbolic-link source entries");
+    std::filesystem::remove(link, error);
+    error.clear();
+  }
+  const auto sourceRootLink = sourceRoot.parent_path() / "Sample Skin link";
+  std::filesystem::create_directory_symlink(sourceRoot, sourceRootLink, error);
+  if (!error) {
+    const auto linkedRoot =
+        platform_document_handoff::detail::CopyDirectoryForImport(
+            sourceRootLink, request, temporaryRoot);
+    expect(!linkedRoot.ok() && !linkedRoot.cancelled(),
+           "directory import rejects a selected source-root symlink");
+    std::filesystem::remove(sourceRootLink, error);
+    error.clear();
+  }
+#if !defined(_WIN32)
+  const auto fifo = sourceRoot / "special-node";
+  if (::mkfifo(fifo.c_str(), 0600) == 0) {
+    const auto special = platform_document_handoff::detail::CopyDirectoryForImport(
+        sourceRoot, request, temporaryRoot);
+    expect(!special.ok() && !special.cancelled(),
+           "directory import rejects non-regular source entries");
+  }
+#endif
+  std::filesystem::remove_all(sourceRoot.parent_path(), error);
+}
+
+void testPublicAbandonAndSourceNameNormalizationHook() {
+  const auto temporaryImport =
+      makePrivateTestDocument("public-abandon", "temporary");
+  auto operation = platform_document_handoff::detail::StartOperation(
+      [temporaryImport](const std::atomic_bool &) {
+        return platform_document_handoff::detail::ParseBridgeResult(
+            temporaryImport.string(), true, true, PlatformTemporaryPathKind::File,
+            "raw-source-name",
+            [](std::string_view value) -> std::optional<std::string> {
+              return std::string("normalized-") + std::string(value);
+            });
+      },
+      [] {});
+  expect(waitUntil([&] { return operation.ready(); }),
+         "source-name hook test receives a ready import result");
+  auto result = operation.takeResult();
+  expect(result && result->originalSourceName == "normalized-raw-source-name",
+         "bridge import preserves source name through the injected normalizer");
+  operation.abandon();
+  expect(!operation,
+         "public abandon releases the operation handle like the close alias");
+  if (result) {
+    expect(platform_document_handoff::CleanupTemporaryDocument(*result),
+           "taken source-name result retains legacy file cleanup");
+  }
+
+  const auto invalidTemporaryImport =
+      makePrivateTestDocument("invalid-source-name", "temporary");
+  const auto rejected = platform_document_handoff::detail::ParseBridgeResult(
+      invalidTemporaryImport.string(), true, true,
+      PlatformTemporaryPathKind::File,
+      "invalid-source-name",
+      [](std::string_view) -> std::optional<std::string> { return std::nullopt; });
+  expect(!rejected.ok() && !std::filesystem::exists(invalidTemporaryImport) &&
+             rejected.message.find("source name") != std::string::npos,
+         "source-name normalization hook rejects invalid UTF-8 or unsafe names");
+}
+
+void testScheduledTemporaryCleanupAndReadyAbandonAreNonblocking() {
+  const PlatformDocumentHandoffResult defaults;
+  const PlatformDirectoryImportRequest directoryDefaults;
+  expect(defaults.temporaryPathKind == PlatformTemporaryPathKind::None &&
+             directoryDefaults.maxBytes == 0 && directoryDefaults.maxFiles == 0 &&
+             directoryDefaults.maxRegularFileBytes == 0 &&
+             directoryDefaults.maxDepth == 0 &&
+             directoryDefaults.maxPathBytes == 0,
+         "temporary path and directory import value defaults are explicit");
+
+  const auto temporaryImport = makePrivateTestDocument(
+      "scheduled-cleanup", "temporary");
+  const auto firstRoot = temporaryImport.parent_path();
+  std::error_code error;
+  auto result = platform_document_handoff::detail::ParseBridgeResult(
+      temporaryImport.string(), true, true);
+
+  auto blockingCleanup = std::make_shared<BlockingWork>();
+  const auto service =
+      platform_document_handoff::CreatePlatformTemporaryPathCleanupService(
+          [blockingCleanup](PlatformDocumentHandoffResult &) {
+            blockingCleanup->waitForRelease();
+            return false;
+          });
+  const auto scheduledAt = std::chrono::steady_clock::now();
+  expect(service->schedule(result) &&
+             std::chrono::steady_clock::now() - scheduledAt < 250ms &&
+             blockingCleanup->waitUntilEntered(),
+         "injected cleanup service schedules without waiting for its cleaner");
+
+  const auto racedImport =
+      makePrivateTestDocument("ready-abandon", "temporary");
+  auto operation = platform_document_handoff::detail::StartOperation(
+      [racedImport](const std::atomic_bool &) {
+        return platform_document_handoff::detail::ParseBridgeResult(
+            racedImport.string(), true, true);
+      },
+      [] {}, service);
+  expect(waitUntil([&] { return operation.ready(); }),
+         "ready-abandon test receives an unconsumed import result");
+  const auto abandonedAt = std::chrono::steady_clock::now();
+  operation.close();
+  expect(std::chrono::steady_clock::now() - abandonedAt < 250ms,
+         "close transfers a ready import without waiting for the cleaner");
+
+  std::atomic_bool shutdownReturned = false;
+  std::thread shutdownThread([&] {
+    service->shutdown();
+    shutdownReturned = true;
+  });
+  std::this_thread::sleep_for(25ms);
+  expect(!shutdownReturned,
+         "shutdown drains queued cleanup instead of abandoning a capability");
+  blockingCleanup->release();
+  shutdownThread.join();
+  service->shutdown();
+  const auto unprocessed = service->takeUnprocessed();
+  expect(unprocessed.size() == 2,
+         "failed injected cleanup remains reportable after shutdown");
+
+  auto rejected = platform_document_handoff::detail::ParseBridgeResult(
+      makePrivateTestDocument("rejected-cleanup", "temporary").string(), true,
+      true);
+  expect(!service->schedule(rejected) && rejected.temporaryOwnership == nullptr,
+         "rejected scheduling transfers ownership into the service report");
+  const auto rejectedResults = service->takeUnprocessed();
+  expect(rejectedResults.size() == 1,
+         "shutdown service reports capabilities rejected after shutdown");
+
+  std::filesystem::remove_all(firstRoot, error);
+  std::filesystem::remove_all(racedImport.parent_path(), error);
+  for (const auto &pending : rejectedResults) {
+    std::filesystem::remove_all(pending.localPath.parent_path(), error);
+  }
+}
+
+void testReadyTakeResultAndAbandonRaceHasOneNonblockingDisposition() {
+  std::atomic_uint32_t cleanupCalls = 0;
+  const auto service =
+      platform_document_handoff::CreatePlatformTemporaryPathCleanupService(
+          [&cleanupCalls](PlatformDocumentHandoffResult &result) {
+            ++cleanupCalls;
+            return platform_document_handoff::CleanupTemporaryPath(result);
+          });
+
+  for (int iteration = 0; iteration < 64; ++iteration) {
+    const auto temporaryImport = makePrivateTestDocument(
+        "ready-take-abandon-race", "temporary");
+    auto work = std::make_shared<BlockingWork>();
+    auto operation = platform_document_handoff::detail::StartOperation(
+        [work, temporaryImport](const std::atomic_bool &) {
+          work->waitForRelease();
+          return platform_document_handoff::detail::ParseBridgeResult(
+              temporaryImport.string(), true, true);
+        },
+        [] {}, service);
+    expect(work->waitUntilEntered() && !operation.ready(),
+           "race iteration reaches the ready/takeResult boundary");
+    const auto cleanupBefore = cleanupCalls.load(std::memory_order_acquire);
+    work->release();
+    if ((iteration % 2) == 0) {
+      std::this_thread::yield();
+    }
+    auto result = operation.takeResult();
+    const auto abandonAt = std::chrono::steady_clock::now();
+    operation.abandon();
+    expect(std::chrono::steady_clock::now() - abandonAt < 250ms,
+           "abandon remains nonblocking while completion races takeResult");
+    if (result) {
+      expect(platform_document_handoff::CleanupTemporaryPath(*result),
+             "a taken race result has exactly one caller-owned cleanup path");
+    } else {
+      expect(waitUntil([&] {
+               return !std::filesystem::exists(temporaryImport);
+             }) && cleanupCalls.load(std::memory_order_acquire) ==
+                       cleanupBefore + 1,
+             "an untaken race result is disposed exactly once by the worker service");
+    }
+  }
+  service->shutdown();
+}
+
 void testTemporaryCleanupRejectsForgedAndSymlinkEscapes() {
   const auto outsideRoot = std::filesystem::temp_directory_path() /
                            "asobmashow-platform-cleanup-outside";
@@ -1037,6 +1478,7 @@ int main() {
   testBridgeCancellationIsDistinct();
   testBridgeErrorPreservesMessage();
   testBridgeImportRequiresAbsoluteLocalPath();
+  testDefaultBridgeNormalizesPickedSourceNamesAndRejectsInvalidUtf8();
   testBridgeExportSuccessHasNoLocalPath();
   testImportRequestRequiresMimeTypeAndExplicitLimit();
   testExportRequestRequiresLeafNameAndBoundedRegularSource();
@@ -1055,6 +1497,12 @@ int main() {
   testLateImportCompletionIsIgnoredAndCleaned();
   testUnconsumedTemporaryImportIsCleanedOnClose();
   testTakenTemporaryImportHasExplicitCleanup();
+  testDirectoryCleanupRequiresItsExactIssuedRoot();
+  testDirectoryCleanupRejectsIdentitySwapAndUnlinksFinalSymlink();
+  testDirectoryImportUsesThePickedFolderAsItsPrivateRoot();
+  testPublicAbandonAndSourceNameNormalizationHook();
+  testScheduledTemporaryCleanupAndReadyAbandonAreNonblocking();
+  testReadyTakeResultAndAbandonRaceHasOneNonblockingDisposition();
   testTemporaryCleanupRejectsForgedAndSymlinkEscapes();
   testTemporaryOwnershipRequiresExactPrivateShapeAndModes();
   testPrivateImportRootRejectsPreplantedLinks();

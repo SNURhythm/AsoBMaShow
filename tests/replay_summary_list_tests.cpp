@@ -368,8 +368,9 @@ int main() {
                                    .score = 2});
   const RhythmState assistedState =
       replay_result::BuildResultState(chart, assistedReplay);
-  if (assistedState.getClearTypeRank() != kClearTypeAssistedEasyClearRank) {
-    std::cerr << "export result state must retain playback assist cap"
+  if (assistedState.getClearTypeRank() !=
+      kClearTypeLightAssistedEasyClearRank) {
+    std::cerr << "export result state must retain playback light-assist cap"
               << std::endl;
     return 1;
   }
@@ -419,13 +420,62 @@ int main() {
     return 1;
   }
 
+  const ReplayData lightAssistAutoExport = replay_autoplay::BuildReplayData(
+      chart, GaugeType::Hard, GaugeAutoShiftMode::None, {}, std::nullopt,
+      std::nullopt, std::nullopt, std::nullopt, assist_options::kDrag);
+  if (lightAssistAutoExport.assistOption != assist_options::kDrag ||
+      lightAssistAutoExport.clearType !=
+          kClearTypeLightAssistedEasyClearRank) {
+    std::cerr << "synthetic Drag replay must retain Light Assist Easy"
+              << std::endl;
+    return 1;
+  }
+
+  chart.Meta.MinBpm = 120.0;
+  chart.Meta.MaxBpm = 180.0;
+  const ReplayData bpmGuideAutoExport = replay_autoplay::BuildReplayData(
+      chart, GaugeType::Hard, GaugeAutoShiftMode::None, {}, std::nullopt,
+      std::nullopt, std::nullopt, std::nullopt,
+      assist_options::kBpmGuide);
+  if (bpmGuideAutoExport.assistOption != assist_options::kBpmGuide ||
+      bpmGuideAutoExport.clearType != kClearTypeLightAssistedEasyClearRank) {
+    std::cerr << "synthetic BPM Guide replay must retain Light Assist Easy"
+              << std::endl;
+    return 1;
+  }
+
+  chart.Meta.MinBpm = 150.0;
+  chart.Meta.MaxBpm = 150.0;
+  const ReplayData constantTempoBpmGuideAutoExport =
+      replay_autoplay::BuildReplayData(
+          chart, GaugeType::Hard, GaugeAutoShiftMode::None, {}, std::nullopt,
+          std::nullopt, std::nullopt, std::nullopt,
+          assist_options::kBpmGuide);
+  const ReplaySummary constantTempoBpmGuideAutoSummary =
+      replay_autoplay::BuildSummary(
+          chart.Meta, GaugeType::Hard, GaugeAutoShiftMode::None, std::nullopt,
+          std::nullopt, std::nullopt, std::nullopt,
+          assist_options::kBpmGuide);
+  if (constantTempoBpmGuideAutoExport.assistOption !=
+          assist_options::kBpmGuide ||
+      constantTempoBpmGuideAutoSummary.assistOption !=
+          assist_options::kBpmGuide ||
+      constantTempoBpmGuideAutoExport.clearType != kClearTypeFullComboRank ||
+      constantTempoBpmGuideAutoSummary.clearType != kClearTypeFullComboRank) {
+    std::cerr << "constant-tempo BPM Guide replays retain guide rendering "
+                 "without an assisted clear"
+              << std::endl;
+    return 1;
+  }
+
   const ReplaySummary assistedAutoSummary = replay_autoplay::BuildSummary(
       chart.Meta, GaugeType::Normal, GaugeAutoShiftMode::None, std::nullopt,
       std::nullopt, std::nullopt, std::nullopt, assist_options::kOff,
       {.percent = 200});
   if (assistedAutoSummary.playback.percent != 200 ||
-      assistedAutoSummary.clearType != kClearTypeAssistedEasyClearRank) {
-    std::cerr << "synthetic Auto summary must retain playback assist limits"
+      assistedAutoSummary.clearType != kClearTypeLightAssistedEasyClearRank) {
+    std::cerr << "synthetic Auto summary must retain playback light-assist "
+                 "limits"
               << std::endl;
     return 1;
   }

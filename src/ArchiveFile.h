@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -180,6 +181,14 @@ bool exists(const std::filesystem::path &path);
 bool readFile(const std::filesystem::path &path,
               std::vector<unsigned char> &bytes,
               std::string *errorMessage = nullptr);
+// Bounded variant for callers that receive untrusted media.  Archive entries
+// are checked against the indexed uncompressed size before extraction and the
+// libarchive fallback enforces the same cap while streaming output.
+bool readFileBounded(const std::filesystem::path &path,
+                     std::vector<unsigned char> &bytes,
+                     std::size_t maximumBytes,
+                     std::string *errorMessage = nullptr,
+                     std::stop_token stop = {});
 bool isInSolidArchiveFolder(const std::filesystem::path &path);
 SourcePreference sourcePreferenceForPath(const std::filesystem::path &path);
 std::string cacheKeyForPath(const std::filesystem::path &path);

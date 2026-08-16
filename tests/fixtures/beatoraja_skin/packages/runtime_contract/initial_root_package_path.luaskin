@@ -1,0 +1,3 @@
+assert(package.path == "skin/?.lua;skin/?/init.lua")
+
+return { phase = skin_config and "configured" or "header" }

@@ -32,6 +32,9 @@ std::optional<ReplayData> makeReplayDataFromSetup(
     result.initialGaugeType = setup.initialGaugeType;
     result.gaugeAutoShift = setup.gaugeAutoShift;
     result.gaugeAutoShiftLowerBound = setup.gaugeAutoShiftLowerBound;
+    result.initialLaneCoverPercent = setup.initialLaneCoverPercent;
+    result.initialLaneCoverEnabled = setup.laneCoverEnabled;
+    result.hasInitialLaneCoverState = true;
     result.provenance = provenance;
     return result;
   } catch (...) {

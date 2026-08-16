@@ -39,6 +39,7 @@ public:
   [[nodiscard]] SDL_Color currentColor() const noexcept { return color; }
 
 protected:
+  [[nodiscard]] RenderBounds renderingBounds() const override;
   struct FontFace {
     TTF_Font *font = nullptr;
     std::string path;

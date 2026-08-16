@@ -1003,6 +1003,14 @@ int main() {
     require(chart_audio::replayEventRawTimeMicros(1120000, 120000) ==
                 1000000,
             "offline replay keysounds convert gameplay time to raw time");
+    require(chart_audio::isScheduledBeforePlaybackEnd(15'000'000,
+                                                      std::nullopt) &&
+                chart_audio::isScheduledBeforePlaybackEnd(
+                    15'000'000, 15'000'000) &&
+                !chart_audio::isScheduledBeforePlaybackEnd(
+                    15'000'001, 15'000'000),
+            "offline replay audio starts no event after BMSPlayer leaves "
+            "STATE_PLAY");
 
     const ScheduledAudioEvent defaultEvent;
     require(defaultEvent.wav == bms_parser::Parser::NoWav &&

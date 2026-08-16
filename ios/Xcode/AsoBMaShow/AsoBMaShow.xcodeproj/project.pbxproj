@@ -29,6 +29,7 @@
 		B7CA78302F290E9D0016BA21 /* libluajit.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = B7CA782F2F290E9D0016BA21 /* libluajit.xcframework */; };
 		B7CA78312F3010010016BA21 /* libarchive.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = B7CA78322F3010010016BA21 /* libarchive.xcframework */; };
 		B7CA78342F3020010016BA21 /* lib7zip.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = B7CA78332F3020010016BA21 /* lib7zip.xcframework */; };
+		B7CA78362F3020030016BA21 /* libutf8proc.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = B7CA78372F3020030016BA21 /* libutf8proc.xcframework */; };
 		B7D27A9F2C7CD1F300189ED7 /* CoreMedia.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B7D27A9E2C7CD1F300189ED7 /* CoreMedia.framework */; };
 		B7D27AA12C7CD21100189ED7 /* libbz2.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = B7D27AA02C7CD21100189ED7 /* libbz2.tbd */; };
 		B7D27AA32C7CD21900189ED7 /* libiconv.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = B7D27AA22C7CD21900189ED7 /* libiconv.tbd */; };
@@ -644,6 +645,7 @@
 		B7CA782F2F290E9D0016BA21 /* libluajit.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = libluajit.xcframework; path = lib/libluajit.xcframework; sourceTree = "<group>"; };
 		B7CA78322F3010010016BA21 /* libarchive.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = libarchive.xcframework; path = lib/libarchive.xcframework; sourceTree = "<group>"; };
 		B7CA78332F3020010016BA21 /* lib7zip.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = lib7zip.xcframework; path = lib/lib7zip.xcframework; sourceTree = "<group>"; };
+		B7CA78372F3020030016BA21 /* libutf8proc.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = libutf8proc.xcframework; path = lib/libutf8proc.xcframework; sourceTree = "<group>"; };
 		B7D27A9E2C7CD1F300189ED7 /* CoreMedia.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreMedia.framework; path = System/Library/Frameworks/CoreMedia.framework; sourceTree = SDKROOT; };
 		B7D27AA02C7CD21100189ED7 /* libbz2.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libbz2.tbd; path = usr/lib/libbz2.tbd; sourceTree = SDKROOT; };
 		B7D27AA22C7CD21900189ED7 /* libiconv.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libiconv.tbd; path = usr/lib/libiconv.tbd; sourceTree = SDKROOT; };
@@ -713,6 +715,7 @@
 				AndroidNatives.cpp,
 				CMakeLists.txt,
 				ChartScanWorkScheduler.md,
+				MsvcCliDiagnostics.cpp,
 				audio/CMakeLists.txt,
 				bms_search/CMakeLists.txt,
 				game/CMakeLists.txt,
@@ -769,6 +772,7 @@
 				B7D27AA92C7CD23900189ED7 /* VideoToolbox.framework in Frameworks */,
 				B7CA78312F3010010016BA21 /* libarchive.xcframework in Frameworks */,
 				B7CA78342F3020010016BA21 /* lib7zip.xcframework in Frameworks */,
+				B7CA78362F3020030016BA21 /* libutf8proc.xcframework in Frameworks */,
 				B7CA782D2F2906130016BA21 /* libsndfile.xcframework in Frameworks */,
 				B7CA782E2F2906130016BA21 /* ffmpeg.xcframework in Frameworks */,
 				B7CA78302F290E9D0016BA21 /* libluajit.xcframework in Frameworks */,
@@ -844,6 +848,7 @@
 				B7CA782F2F290E9D0016BA21 /* libluajit.xcframework */,
 				B7CA78332F3020010016BA21 /* lib7zip.xcframework */,
 				B7CA78322F3010010016BA21 /* libarchive.xcframework */,
+				B7CA78372F3020030016BA21 /* libutf8proc.xcframework */,
 				B7CA782C2F2906120016BA21 /* ffmpeg.xcframework */,
 				B7CA782B2F2906120016BA21 /* libsndfile.xcframework */,
 				B7CA78272F28E3D70016BA21 /* libFLAC.a */,
@@ -1916,6 +1921,8 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = FAAD4CE37952A091955C8A78 /* Pods-AsoBMaShow.debug.xcconfig */;
 			buildSettings = {
+				ASOBMASHOW_BUILD_COMMIT = 0000000000000000000000000000000000000000;
+				ASOBMASHOW_SOURCE_CLEAN = 0;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AsoBMaShowIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_IDENTITY = "Apple Development";
@@ -1929,6 +1936,10 @@
 					"DEBUG=1",
 					"$(inherited)",
 					"BX_CONFIG_DEBUG=0",
+					"ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1",
+					"ASOBMASHOW_BUILD_COMMIT=\\\"$(ASOBMASHOW_BUILD_COMMIT)\\\"",
+					"ASOBMASHOW_BUILD_CONFIGURATION=\\\"$(CONFIGURATION)\\\"",
+					"ASOBMASHOW_SOURCE_CLEAN=$(ASOBMASHOW_SOURCE_CLEAN)",
 				);
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = (
@@ -2001,6 +2012,8 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 8BB58BF3E3216A181DA42E9C /* Pods-AsoBMaShow.release.xcconfig */;
 			buildSettings = {
+				ASOBMASHOW_BUILD_COMMIT = 0000000000000000000000000000000000000000;
+				ASOBMASHOW_SOURCE_CLEAN = 0;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AsoBMaShowIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_IDENTITY = "Apple Development";
@@ -2008,7 +2021,14 @@
 				CURRENT_PROJECT_VERSION = 202605261207;
 				DEVELOPMENT_TEAM = 4U66W7TDBL;
 				EXCLUDED_ARCHS = "i386 x86_64";
-				GCC_PREPROCESSOR_DEFINITIONS = "BX_CONFIG_DEBUG=0";
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"BX_CONFIG_DEBUG=0",
+					"ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1",
+					"ASOBMASHOW_BUILD_COMMIT=\\\"$(ASOBMASHOW_BUILD_COMMIT)\\\"",
+					"ASOBMASHOW_BUILD_CONFIGURATION=\\\"$(CONFIGURATION)\\\"",
+					"ASOBMASHOW_SOURCE_CLEAN=$(ASOBMASHOW_SOURCE_CLEAN)",
+				);
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = (
 					"\"$(SRCROOT)/../../../include\"",

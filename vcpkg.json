@@ -5,6 +5,7 @@
     "builtin-baseline": "75a2e14262fc23c1f03bac18e135c4866dd25b51",
     "dependencies": [
         "libsndfile",
+        "utf8proc",
         "sdl2",
         "sdl2-ttf",
         {
@@ -31,7 +32,7 @@
         "7zip",
         {
             "name": "unarr",
-            "platform": "!ios"
+            "platform": "!ios & !windows"
         },
         {
             "name": "lua",

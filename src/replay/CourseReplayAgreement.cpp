@@ -71,8 +71,7 @@ CourseReplayAgreement compareCourseReplayToResult(
             index);
       }
       if (!expectedLongNoteMode ||
-          setup.longNoteMode != *expectedLongNoteMode ||
-          setup.longNoteMode != result.longNoteMode) {
+          setup.longNoteMode != *expectedLongNoteMode) {
         return disagreement(
             CourseReplayAgreementIssue::LongNoteMode,
             "course replay stage long-note mode differs from the saved result",

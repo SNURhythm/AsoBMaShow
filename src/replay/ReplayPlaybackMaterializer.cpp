@@ -197,6 +197,10 @@ ReplayPlaybackMaterializer::materializeForConsumers(
       std::max<std::size_t>(4096, definition.noteCount() * 4 +
                                       document.playback.input.size() * 2 +
                                       1024));
+  const AssistClearMark assistClearMark =
+      clear_policy::assistClearMarkRequired(
+          setup.assistOption, chart.Meta.MinBpm, chart.Meta.MaxBpm,
+          setup.playback);
   gameplay::GameplaySimulation simulation(
       definition,
       {.judge = policy.policy->judge,
@@ -213,8 +217,10 @@ ReplayPlaybackMaterializer::materializeForConsumers(
             .carriedGauge = carry.gauge,
             .carriedCombo = carry.combo,
             .carriedMaxCombo = carry.maximumCombo,
-            .assistClearMark = clear_policy::assistClearMarkRequired(
-                assist_options::isEnabled(setup.assistOption), setup.playback),
+            .assistClearMark =
+                assistClearMark == AssistClearMark::AssistedEasy,
+            .lightAssistClearMark =
+                assistClearMark == AssistClearMark::LightAssistedEasy,
             .autoPlay = false,
             .replayCapacity = capacity,
             .automaticResultCapacity = capacity,
@@ -351,6 +357,8 @@ ReplayPlaybackMaterializer::materializeForConsumers(
     replay.laneCoverEvents.push_back(
         {.songTimeMicros = event.songTimeMicros,
          .noteStartPositionPercent = event.noteStartPositionPercent,
+         .laneCoverEnabled = event.laneCoverEnabled,
+         .changeKind = event.changeKind,
          .resetVisibleTimeReference = event.resetVisibleTimeReference});
   }
   outcome.replayData = std::make_shared<ReplayData>(std::move(replay));

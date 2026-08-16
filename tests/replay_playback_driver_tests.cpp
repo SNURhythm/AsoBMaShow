@@ -196,7 +196,7 @@ void testConcreteMaterializerBuildsConsumerTrackDespiteResultDisagreement() {
   auto alteredRateSaved = saved;
   alteredRateSaved.score.provenance.playback =
       alteredRateReplay.playback.setup.playback;
-  alteredRateSaved.score.clearType = kClearTypeAssistedEasyClearRank;
+  alteredRateSaved.score.clearType = kClearTypeLightAssistedEasyClearRank;
   alteredRateSaved.resultFingerprint =
       result_persistence::modernResultFingerprint(alteredRateSaved);
   const auto alteredRate =
@@ -218,6 +218,8 @@ void testConsumerSetupAdapterOwnsEveryReplaySetupTranslation() {
   replay.playback.setup.initialGaugeType = GaugeType::Hard;
   replay.playback.setup.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
   replay.playback.setup.gaugeAutoShiftLowerBound = GaugeType::Easy;
+  replay.playback.setup.initialLaneCoverPercent = 37;
+  replay.playback.setup.laneCoverEnabled = true;
   replay.playback.setup.doublePlayOption = DoublePlayOption::Flip;
   replay.playback.setup.playback = {
       .percent = 125, .mode = audio::PlaybackMode::TimeStretch};
@@ -245,6 +247,9 @@ void testConsumerSetupAdapterOwnsEveryReplaySetupTranslation() {
              translated->playOption2Seed == 5678 &&
              translated->assistOption == assist_options::kDrag &&
              translated->initialGaugeType == GaugeType::Hard &&
+             translated->initialLaneCoverPercent == 37 &&
+             translated->initialLaneCoverEnabled &&
+             translated->hasInitialLaneCoverState &&
              translated->provenance == provenance,
          "one adapter projects complete setup for every chart consumer");
 

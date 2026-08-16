@@ -483,6 +483,73 @@ void testNegativeCountInKeepsBgaAtPreChartState() {
           "time-zero BGA activates when the chart timeline begins");
 }
 
+void appendPoorBgaSequence(bms_parser::Chart &chart, long long timingMicros,
+                           std::vector<int> frames) {
+  auto *measure = new bms_parser::Measure();
+  auto *timeline = new bms_parser::TimeLine(1, false);
+  timeline->Timing = timingMicros;
+  timeline->BgaPoor =
+      bms_parser::BgaPoorSequence{.Frames = std::move(frames)};
+  measure->TimeLines.push_back(timeline);
+  chart.Measures.push_back(measure);
+}
+
+void testPoorBgaSchedulePreservesRawSequencesAndResources() {
+  bms_parser::Chart chart;
+  chart.ReferencedBmpTable.emplace(17, "sample.bmp");
+  appendPoorBgaSequence(chart, 1'000, {17, bms_parser::BgaSequenceBlank,
+                                       17, bms_parser::BgaSequenceBlank});
+  appendPoorBgaSequence(chart, 3'000, {});
+
+  const auto schedule = BuildBgaPoorSequenceSchedule(chart);
+  require(schedule.size() == 2,
+          "each authored channel-06 measure sequence has one schedule entry");
+  require(schedule[0].startMicros == 1'000 &&
+              schedule[0].frames ==
+                  std::vector<int>{17, bms_parser::BgaSequenceBlank, 17,
+                                   bms_parser::BgaSequenceBlank},
+          "poor-BGA scheduling retains every authored frame including blanks");
+  require(schedule[1].startMicros == 3'000 && schedule[1].frames.empty(),
+          "poor-BGA scheduling retains an empty authored sequence");
+
+  chart.Meta.Folder =
+      std::filesystem::path(ASOBMASHOW_SOURCE_DIR) / "SDL" / "test";
+  Stopwatch stopwatch;
+  auto control = std::make_shared<BackendControl>();
+  Jukebox jukebox(&stopwatch, std::make_unique<TestFactory>(control));
+  std::atomic_bool cancelled = false;
+  jukebox.loadVisuals(chart, cancelled);
+  require(jukebox.hasLoadedResources(),
+          "Jukebox preloads a visual referenced only by channel 06");
+  require(jukebox.poorBgaSequenceSchedule() == schedule,
+          "Jukebox retains the raw poor-BGA schedule without rendering it");
+}
+
+void testPoorBgaScheduleSelectsLatestAndRecomputesOnSeek() {
+  bms_parser::Chart chart;
+  appendPoorBgaSequence(chart, 0, {1});
+  appendPoorBgaSequence(chart, 100, {2});
+  appendPoorBgaSequence(chart, 250, {3});
+  const auto schedule = BuildBgaPoorSequenceSchedule(chart);
+
+  require(!SelectBgaPoorSequenceIndexAt(schedule, -1).has_value(),
+          "no poor-BGA sequence is selected before its first start");
+  require(SelectBgaPoorSequenceIndexAt(schedule, 0) == 0 &&
+              SelectBgaPoorSequenceIndexAt(schedule, 249) == 1,
+          "the latest poor-BGA sequence at or before the BGA clock is active");
+  require(NextBgaPoorSequenceStartAfter(schedule, 0) == 100 &&
+              NextBgaPoorSequenceStartAfter(schedule, 100) == 250,
+          "the next poor-BGA sequence boundary is strictly after the clock");
+  Stopwatch stopwatch;
+  auto control = std::make_shared<BackendControl>();
+  Jukebox jukebox(&stopwatch, std::make_unique<TestFactory>(control));
+  std::atomic_bool cancelled = false;
+  jukebox.loadVisuals(chart, cancelled);
+  require(jukebox.poorBgaSequenceIndexAt(260) == 2 &&
+              jukebox.poorBgaSequenceIndexAt(50) == 0,
+          "backward seek recomputes the poor-BGA sequence from the immutable schedule");
+}
+
 } // namespace
 
 int main() {
@@ -498,6 +565,8 @@ int main() {
     testArchivedVisualsPreloadInOneArchiveBatch();
     testRateScaledSnapshotRestoresBgaTimeline();
     testNegativeCountInKeepsBgaAtPreChartState();
+    testPoorBgaSchedulePreservesRawSequencesAndResources();
+    testPoorBgaScheduleSelectsLatestAndRecomputesOnSeek();
     rendering::UniformCache::getInstance().destroyAll();
     bgfx::shutdown();
     return 0;

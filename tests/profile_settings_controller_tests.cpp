@@ -6,6 +6,7 @@
 #include <iostream>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -74,6 +75,11 @@ struct FakeServices {
   int archivePipelineEndCalls = 0;
   std::string exportSuccessMessage;
   std::string importSuccessMessage;
+  bool skinMutationAdmission = true;
+  std::uint64_t nextSkinMutationToken = 0;
+  std::vector<std::optional<std::string>> skinMutationBegins;
+  std::vector<std::tuple<std::uint64_t, bool, bool>> skinMutationFinishes;
+  std::vector<std::string> mutationOrder;
 
   PlayerProfile *find(std::string_view id) {
     for (auto &candidate : profiles) {
@@ -96,6 +102,7 @@ struct FakeServices {
             },
         .create =
             [this](std::string name) {
+              mutationOrder.push_back("create");
               ++createCalls;
               PlayerProfile created = profile("charlie", std::move(name));
               profiles.push_back(created);
@@ -106,6 +113,7 @@ struct FakeServices {
             },
         .rename =
             [this](std::string_view id, std::string name) {
+              mutationOrder.push_back("rename");
               ++renameCalls;
               if (auto *existing = find(id)) {
                 existing->displayName = std::move(name);
@@ -120,6 +128,7 @@ struct FakeServices {
             },
         .duplicate =
             [this](std::string_view, std::string name) {
+              mutationOrder.push_back("duplicate");
               ++duplicateCalls;
               PlayerProfile duplicated = profile("delta", std::move(name));
               profiles.push_back(duplicated);
@@ -131,6 +140,7 @@ struct FakeServices {
             },
         .remove =
             [this](std::string_view id) {
+              mutationOrder.push_back("remove");
               ++deleteCalls;
               if (failDelete) {
                 return ProfileResult{.error = ProfileError::IoFailure,
@@ -189,6 +199,7 @@ struct FakeServices {
         .importProfile =
             [this](const std::filesystem::path &,
                    const ProfileImportOptions &options) {
+              mutationOrder.push_back("import");
               ++importCalls;
               if (failImport) {
                 return ProfileArchiveResult{.error = ProfileError::IoFailure,
@@ -245,6 +256,27 @@ struct FakeServices {
             [this]() {
               ++archivePipelineEndCalls;
               archivePipelineActive = false;
+            },
+        .beginSkinProfileCatalogMutation =
+            [this](std::optional<std::string_view> existingTarget,
+                   std::string &error) -> std::optional<std::uint64_t> {
+              mutationOrder.push_back("begin-skin-mutation");
+              skinMutationBegins.emplace_back(
+                  existingTarget
+                      ? std::optional<std::string>(*existingTarget)
+                      : std::nullopt);
+              if (!skinMutationAdmission) {
+                error = "skin mutation barrier unavailable";
+                return std::nullopt;
+              }
+              return ++nextSkinMutationToken;
+            },
+        .finishSkinProfileCatalogMutation =
+            [this](std::uint64_t token, bool succeeded,
+                   bool profileStillExists) {
+              mutationOrder.push_back("finish-skin-mutation");
+              skinMutationFinishes.emplace_back(token, succeeded,
+                                                 profileStillExists);
             }};
   }
 };
@@ -725,6 +757,116 @@ void testArchivePipelineFlagClearsOnEveryTerminalPath() {
             "Private profile archive storage is unavailable.");
   }
 }
+
+void testProfileMembershipMutationsHoldOpaqueSkinBarrier() {
+  FakeServices fake;
+  ProfileSettingsController controller(fake.dependencies());
+
+  REQUIRE(controller.create("Charlie").ok());
+  REQUIRE(fake.skinMutationBegins.size() == 1);
+  REQUIRE(!fake.skinMutationBegins[0].has_value());
+  REQUIRE(fake.skinMutationFinishes.size() == 1);
+  REQUIRE(std::get<1>(fake.skinMutationFinishes[0]));
+  REQUIRE(fake.mutationOrder[0] == "begin-skin-mutation");
+  REQUIRE(fake.mutationOrder[1] == "create");
+  REQUIRE(fake.mutationOrder[2] == "finish-skin-mutation");
+
+  REQUIRE(controller.duplicate("alpha", "Alpha Copy").ok());
+  REQUIRE(fake.skinMutationBegins.size() == 2);
+  REQUIRE(!fake.skinMutationBegins[1].has_value());
+  REQUIRE(fake.skinMutationFinishes.size() == 2);
+  REQUIRE(std::get<1>(fake.skinMutationFinishes[1]));
+
+  REQUIRE(controller.remove("bravo").ok());
+  REQUIRE(fake.skinMutationBegins.size() == 3);
+  REQUIRE(fake.skinMutationBegins[2] == std::optional<std::string>("bravo"));
+  REQUIRE(fake.skinMutationFinishes.size() == 3);
+  REQUIRE(std::get<1>(fake.skinMutationFinishes[2]));
+  REQUIRE(!std::get<2>(fake.skinMutationFinishes[2]));
+
+  const auto beginsBeforeRename = fake.skinMutationBegins.size();
+  REQUIRE(controller.rename("alpha", "Renamed Alpha").ok());
+  REQUIRE(fake.skinMutationBegins.size() == beginsBeforeRename);
+}
+
+void testSkinBarrierRejectsAndFinishesFailuresAndExceptions() {
+  {
+    FakeServices fake;
+    fake.skinMutationAdmission = false;
+    ProfileSettingsController controller(fake.dependencies());
+    REQUIRE(!controller.create("Blocked").ok());
+    REQUIRE(fake.createCalls == 0);
+    REQUIRE(fake.skinMutationFinishes.empty());
+    REQUIRE(controller.status().message == "skin mutation barrier unavailable");
+  }
+  {
+    FakeServices fake;
+    fake.failDelete = true;
+    ProfileSettingsController controller(fake.dependencies());
+    REQUIRE(!controller.remove("bravo").ok());
+    REQUIRE(fake.skinMutationFinishes.size() == 1);
+    REQUIRE(!std::get<1>(fake.skinMutationFinishes[0]));
+    REQUIRE(std::get<2>(fake.skinMutationFinishes[0]));
+  }
+  {
+    FakeServices fake;
+    fake.throwAfterMutation = "remove";
+    ProfileSettingsController controller(fake.dependencies());
+    REQUIRE(!controller.remove("bravo").ok());
+    REQUIRE(fake.skinMutationFinishes.size() == 1);
+    REQUIRE(std::get<1>(fake.skinMutationFinishes[0]));
+    REQUIRE(!std::get<2>(fake.skinMutationFinishes[0]));
+  }
+}
+
+void testImportRetainsSkinBarrierUntilMainThreadCompletionOrAbandon() {
+  {
+    FakeServices fake;
+    ProfileSettingsController controller(fake.dependencies());
+    auto task = controller.beginImport(
+        "/tmp/create.asobprofile",
+        ProfileImportOptions{.mode = ProfileImportMode::CreateWithNewId});
+    REQUIRE(task.has_value());
+    REQUIRE(fake.skinMutationBegins.size() == 1);
+    REQUIRE(!fake.skinMutationBegins[0]);
+    REQUIRE(fake.skinMutationFinishes.empty());
+    const auto result = task->execute();
+    REQUIRE(fake.skinMutationFinishes.empty());
+    REQUIRE(controller.completeArchive(task->kind(), task->generation(),
+                                       result));
+    REQUIRE(fake.skinMutationFinishes.size() == 1);
+    REQUIRE(std::get<1>(fake.skinMutationFinishes[0]));
+  }
+  {
+    FakeServices fake;
+    ProfileSettingsController controller(fake.dependencies());
+    REQUIRE(controller.requestOverwrite("bravo").ok());
+    const ProfileImportOptions options{
+        .mode = ProfileImportMode::Overwrite,
+        .overwriteProfileId = std::string("bravo")};
+    auto task = controller.beginImport("/tmp/overwrite.asobprofile", options);
+    REQUIRE(task.has_value());
+    REQUIRE(fake.skinMutationBegins[0] ==
+            std::optional<std::string>("bravo"));
+    const auto result = task->execute();
+    REQUIRE(controller.completeArchive(task->kind(), task->generation(),
+                                       result));
+    REQUIRE(fake.skinMutationFinishes.size() == 1);
+    REQUIRE(std::get<1>(fake.skinMutationFinishes[0]));
+    REQUIRE(std::get<2>(fake.skinMutationFinishes[0]));
+  }
+  {
+    FakeServices fake;
+    ProfileSettingsController controller(fake.dependencies());
+    auto task = controller.beginImport(
+        "/tmp/abandon.asobprofile",
+        ProfileImportOptions{.mode = ProfileImportMode::CreateWithNewId});
+    REQUIRE(task.has_value());
+    controller.abandonArchive(task->generation());
+    REQUIRE(fake.skinMutationFinishes.size() == 1);
+    REQUIRE(!std::get<1>(fake.skinMutationFinishes[0]));
+  }
+}
 } // namespace
 
 int main() {
@@ -740,6 +882,9 @@ int main() {
   testMutationExceptionsStillRefreshAuthoritativeState();
   testNonStandardFlushExceptionsAreMappedToFailures();
   testArchivePipelineFlagClearsOnEveryTerminalPath();
+  testProfileMembershipMutationsHoldOpaqueSkinBarrier();
+  testSkinBarrierRejectsAndFinishesFailuresAndExceptions();
+  testImportRetainsSkinBarrierUntilMainThreadCompletionOrAbandon();
   std::cout << "profile settings controller tests passed\n";
   return 0;
 }

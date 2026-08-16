@@ -8,6 +8,7 @@
 #include "SettingsAudioVideoModel.h"
 #include "SettingsSceneProfileEditorState.h"
 #include "Scene.h"
+#include "../skin/LuaGameplaySkinFeature.h"
 #include "play/Judge.h"
 #include <atomic>
 #include <cstdint>
@@ -28,8 +29,13 @@ class ScrollView;
 class DropdownView;
 class OverlayPortal;
 class BMSRenderer;
+struct GameplayGaugeRules;
 class RhythmInputHandler;
 class RhythmLaneInputController;
+struct PlayfieldChartVisualModel;
+struct PlayfieldVisualState;
+class PlayfieldVisualStateStore;
+class PlayfieldPresentationEventFanout;
 class DropdownView;
 class InputCaptureController;
 
@@ -58,6 +64,9 @@ class Note;
 #include "../input/IRhythmControl.h"
 #include "../input/InputTypes.h"
 #include "SettingsSceneInputRebuild.h"
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+#include "GameplaySkinSettingsController.h"
+#endif
 
 enum class SettingsDestination { Profile, Ir };
 
@@ -91,6 +100,7 @@ private:
     Display,
     DifficultyTables,
     BmsLibrary,
+    GameplaySkins,
     Ir,
   };
 
@@ -131,8 +141,9 @@ private:
   TextView *prepMetronomeModeText = nullptr;
   TextView *startLaneIndicatorsModeText = nullptr;
   TextView *showInvisibleNotesModeText = nullptr;
+  TextView *markProcessedNotesModeText = nullptr;
   TextView *touchVisualizationModeText = nullptr;
-  TextView *floatingLaneCoverModeText = nullptr;
+  TextView *hispeedAutoAdjustModeText = nullptr;
   TextView *archiveChartPreviewModeText = nullptr;
   TextView *findBmsSkipUnarchivingModeText = nullptr;
   TextView *notePriorityModeText = nullptr;
@@ -158,8 +169,9 @@ private:
   Button *prepMetronomeModeButton = nullptr;
   Button *startLaneIndicatorsModeButton = nullptr;
   Button *showInvisibleNotesModeButton = nullptr;
+  Button *markProcessedNotesModeButton = nullptr;
   Button *touchVisualizationModeButton = nullptr;
-  Button *floatingLaneCoverModeButton = nullptr;
+  Button *hispeedAutoAdjustModeButton = nullptr;
   Button *archiveChartPreviewModeButton = nullptr;
   Button *findBmsSkipUnarchivingModeButton = nullptr;
   Button *notePriorityModeButton = nullptr;
@@ -184,6 +196,7 @@ private:
   Button *displayTabButton = nullptr;
   Button *difficultyTablesTabButton = nullptr;
   Button *bmsLibraryTabButton = nullptr;
+  Button *gameplaySkinsTabButton = nullptr;
   Button *irTabButton = nullptr;
   TextView *timingTabText = nullptr;
   TextView *visualTabText = nullptr;
@@ -194,6 +207,7 @@ private:
   TextView *displayTabText = nullptr;
   TextView *difficultyTablesTabText = nullptr;
   TextView *bmsLibraryTabText = nullptr;
+  TextView *gameplaySkinsTabText = nullptr;
   TextView *irTabText = nullptr;
   TextView *irPendingCountText = nullptr;
   TextView *irAwaitingCountText = nullptr;
@@ -244,6 +258,7 @@ private:
   TextView *inputCaptureStateText = nullptr;
   TextView *inputErrorText = nullptr;
   View *inputConflictOverlayRoot = nullptr;
+  View *inputVirtualControllerEditorOverlayRoot = nullptr;
   std::unique_ptr<InputCaptureController> inputCaptureController;
   InputProfileReplacementNotifier::Registration
       inputProfileReplacementRegistration;
@@ -256,13 +271,22 @@ private:
   std::optional<input::LogicalAction> inputCaptureAction;
   float inputGyroscopeAxisValue = 0.0F;
   std::string inputGyroscopeSettingsError;
+  std::string inputVirtualControllerSettingsError;
+  bool inputVirtualControllerEditorVisible = false;
   settings_scene::InputSettingsRebuildGate inputViewRebuildGate;
   std::string inputLastViewSignature;
   bool previewActive = false;
   bool previewPanelFolded = false;
   int previewPanelPage = 0;
   std::unique_ptr<bms_parser::Chart> previewChart;
+  std::unique_ptr<PlayfieldChartVisualModel> previewChartVisualModel;
+  std::unique_ptr<PlayfieldVisualStateStore> previewVisualStateStore;
+  std::unique_ptr<PlayfieldVisualState> previewCapturedVisualState;
+  std::unique_ptr<GameplayGaugeRules> previewGaugeRules;
+  std::vector<const bms_parser::Note *> previewVisualNoteSources;
+  std::uint64_t previewFrameSerial = 0;
   std::unique_ptr<BMSRenderer> previewRenderer;
+  std::unique_ptr<PlayfieldPresentationEventFanout> previewPresentationEvents;
   std::unique_ptr<RhythmInputHandler> previewInputHandler;
   std::unique_ptr<RhythmLaneInputController> previewLaneController;
   std::unordered_map<int, bool> previewLanePressed;
@@ -280,6 +304,20 @@ private:
   std::jthread profileArchiveThread;
   std::shared_ptr<SettingsProfileArchiveMailbox> profileArchiveMailbox;
   std::unique_ptr<ProfileSettingsController> profileController;
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  std::unique_ptr<skin::GameplaySkinSettingsController>
+      gameplaySkinSettingsController;
+  std::string gameplaySkinSettingsProfileId;
+  std::string gameplaySkinSettingsPresentationKey;
+  std::string gameplaySkinUiMessage;
+  int gameplaySkinActiveTraitSkinType = 0;
+  bool gameplaySkinTraitDropdownOpen = false;
+  bool gameplaySkinSafetyDropdownOpen = false;
+  std::string gameplaySkinConfigurationDropdownOpenKey;
+  bool gameplaySkinReplaceConfirmationArmed = false;
+  std::string gameplaySkinRemovalConfirmationKey;
+  View *gameplaySkinSafetyOverlayRoot = nullptr;
+#endif
   platform_document_handoff::PlatformDocumentHandoffOperation
       profileDocumentHandoff;
   SettingsProfileDocumentHandoffKind profileDocumentHandoffKind =
@@ -377,11 +415,14 @@ private:
   View *buildInputTab(const settings_scene::LayoutMetrics &metrics);
   void buildInputConflictOverlay(
       const settings_scene::LayoutMetrics &metrics);
+  void buildInputVirtualControllerEditorOverlay(
+      const settings_scene::LayoutMetrics &metrics);
   View *buildMiscTab(const settings_scene::LayoutMetrics &metrics);
   View *buildAudioTab(const settings_scene::LayoutMetrics &metrics);
   View *buildDisplayTab(const settings_scene::LayoutMetrics &metrics);
   View *buildDifficultyTablesTab(const settings_scene::LayoutMetrics &metrics);
   View *buildBmsLibraryTab(const settings_scene::LayoutMetrics &metrics);
+  View *buildGameplaySkinsTab(const settings_scene::LayoutMetrics &metrics);
   View *buildIrTab(const settings_scene::LayoutMetrics &metrics);
   void
   buildDifficultyTableImportModal(const settings_scene::LayoutMetrics &metrics);
@@ -390,6 +431,9 @@ private:
   void stopLanePreview();
   void ensurePreviewRenderer();
   void destroyPreviewRenderer();
+  void syncPreviewPresentationConfiguration();
+  void syncPreviewAuthority();
+  void capturePreviewVisualState();
   void ensurePreviewInputHandler();
   void destroyPreviewInputHandler();
   void ensureInputCaptureController();
@@ -398,11 +442,13 @@ private:
   void refreshInputDropdowns();
   void requestInputViewRebuild();
   void commitGyroscopeTurntableSetting(bool stepAngle, std::string_view text);
+  void commitVirtualControllerSetting(input::VirtualControllerConfig config);
   std::string inputViewSignature() const;
   void forwardPreviewInputEvent(SDL_Event &event);
   void syncPreviewInputPlayAreaWidth();
   void resetPreviewHudSample();
-  void publishPreviewJudgement(const JudgeResult &judgeResult);
+  void publishPreviewJudgement(const JudgeResult &judgeResult,
+                               long long sourceSongTimeMicros);
   void resetPreviewSimulation();
   void loadDifficultyTables();
   void loadChartEntries();
@@ -437,6 +483,13 @@ private:
   void refreshSettingsText();
   void refreshIrSettingsPresentation();
   void ensureProfileController();
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  void ensureGameplaySkinSettingsController();
+  void updateGameplaySkinSettingsController();
+  void buildGameplaySkinSafetyOverlay(
+      const settings_scene::LayoutMetrics &metrics);
+  bool handleGameplaySkinActionResult(skin::ControllerActionResult result);
+#endif
   void applyPendingProfileArchiveCompletion();
   void applyPendingProfileDocumentHandoff();
   bool startProfileArchiveTask(ProfileArchiveTask task,

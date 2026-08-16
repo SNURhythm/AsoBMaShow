@@ -136,6 +136,43 @@ struct RenderContext {
             .y = transform.b * x + transform.d * y + transform.ty};
   }
 
+  [[nodiscard]] inline bool boundsIntersectScissor(float x, float y,
+                                                    float width,
+                                                    float height) const {
+    if (scissor.width < 0 || scissor.height < 0) {
+      return true;
+    }
+    if (scissor.width == 0 || scissor.height == 0) {
+      return false;
+    }
+    if (width <= 0.0f || height <= 0.0f) {
+      return false;
+    }
+    if (transformStack.empty()) {
+      return x + width > static_cast<float>(scissor.x) &&
+             x < static_cast<float>(scissor.x + scissor.width) &&
+             y + height > static_cast<float>(scissor.y) &&
+             y < static_cast<float>(scissor.y + scissor.height);
+    }
+
+    const Point topLeft = transformPoint(x, y);
+    const Point topRight = transformPoint(x + width, y);
+    const Point bottomRight = transformPoint(x + width, y + height);
+    const Point bottomLeft = transformPoint(x, y + height);
+    const float minX =
+        std::min({topLeft.x, topRight.x, bottomRight.x, bottomLeft.x});
+    const float minY =
+        std::min({topLeft.y, topRight.y, bottomRight.y, bottomLeft.y});
+    const float maxX =
+        std::max({topLeft.x, topRight.x, bottomRight.x, bottomLeft.x});
+    const float maxY =
+        std::max({topLeft.y, topRight.y, bottomRight.y, bottomLeft.y});
+    return maxX > static_cast<float>(scissor.x) &&
+           minX < static_cast<float>(scissor.x + scissor.width) &&
+           maxY > static_cast<float>(scissor.y) &&
+           minY < static_cast<float>(scissor.y + scissor.height);
+  }
+
   inline void applyTransform() const {
     if (!transformStack.empty()) {
       bgfx::setTransform(transformMatrix.data());
@@ -218,6 +255,13 @@ class View {
 public:
   using ThemeColorProvider = std::function<Color()>;
 
+  struct RenderBounds {
+    float x = 0.0f;
+    float y = 0.0f;
+    float width = 0.0f;
+    float height = 0.0f;
+  };
+
   struct LayoutBatchScope {
     LayoutBatchScope() { View::beginLayoutBatch(); }
     ~LayoutBatchScope() { View::endLayoutBatch(); }
@@ -276,55 +320,62 @@ public:
         context, rotationDegrees,
         static_cast<float>(getX()) + static_cast<float>(getWidth()) * 0.5f,
         static_cast<float>(getY()) + static_cast<float>(getHeight()) * 0.5f);
+    const RenderBounds bounds = renderingBounds();
+    const bool selfIntersectsScissor = context.boundsIntersectScissor(
+        bounds.x, bounds.y, bounds.width, bounds.height);
+    if (selfIntersectsScissor) {
 #if DEBUG
-    if (drawBoundingBox) {
-      float x = getX();
-      float y = getY();
-      float width = getWidth();
-      float height = getHeight();
-      bgfx::TransientVertexBuffer tvb{};
-      bgfx::TransientIndexBuffer tib{};
-      // Define the vertex layout
-      bgfx::VertexLayout layout = rendering::PosColorVertex::ms_decl;
+      if (drawBoundingBox) {
+        float x = getX();
+        float y = getY();
+        float width = getWidth();
+        float height = getHeight();
+        bgfx::TransientVertexBuffer tvb{};
+        bgfx::TransientIndexBuffer tib{};
+        // Define the vertex layout
+        bgfx::VertexLayout layout = rendering::PosColorVertex::ms_decl;
 
-      bgfx::allocTransientVertexBuffer(&tvb, 4, layout);
-      bgfx::allocTransientIndexBuffer(&tib, 6);
+        bgfx::allocTransientVertexBuffer(&tvb, 4, layout);
+        bgfx::allocTransientIndexBuffer(&tib, 6);
 
-      auto *vertices = (rendering::PosColorVertex *)tvb.data;
-      auto *index = (uint16_t *)tib.data;
+        auto *vertices = (rendering::PosColorVertex *)tvb.data;
+        auto *index = (uint16_t *)tib.data;
 
-      uint32_t abgr = dbgColor.toABGR();
-      vertices[0] = {x, y, 0.0f, abgr};
-      vertices[1] = {x + width, y, 0.0f, abgr};
-      vertices[2] = {x + width, y + height, 0.0f, abgr};
-      vertices[3] = {x, y + height, 0.0f, abgr};
+        uint32_t abgr = dbgColor.toABGR();
+        vertices[0] = {x, y, 0.0f, abgr};
+        vertices[1] = {x + width, y, 0.0f, abgr};
+        vertices[2] = {x + width, y + height, 0.0f, abgr};
+        vertices[3] = {x, y + height, 0.0f, abgr};
 
-      // Set up indices for two triangles (quad)
-      index[0] = 0;
-      index[1] = 1;
-      index[2] = 2;
-      index[3] = 2;
-      index[4] = 3;
-      index[5] = 0;
+        // Set up indices for two triangles (quad)
+        index[0] = 0;
+        index[1] = 1;
+        index[2] = 2;
+        index[3] = 2;
+        index[4] = 3;
+        index[5] = 0;
 
-      // Set up state (e.g., render state, texture, shaders)
-      uint64_t state =
-          BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA;
-      bgfx::setState(state);
-      context.applyTransform();
+        // Set up state (e.g., render state, texture, shaders)
+        uint64_t state =
+            BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA;
+        bgfx::setState(state);
+        context.applyTransform();
 
-      // Set the vertex and index buffers
-      bgfx::setVertexBuffer(0, &tvb);
-      bgfx::setIndexBuffer(&tib);
+        // Set the vertex and index buffers
+        bgfx::setVertexBuffer(0, &tvb);
+        bgfx::setIndexBuffer(&tib);
 
-      // Submit the draw call
-      static const bgfx::ProgramHandle kSimpleProgram =
-          rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
-      bgfx::submit(rendering::ui_view, kSimpleProgram);
-    }
+        // Submit the draw call
+        static const bgfx::ProgramHandle kSimpleProgram =
+            rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
+        bgfx::submit(rendering::ui_view, kSimpleProgram);
+      }
 #endif
-    renderBoxDecoration(context);
-    renderImpl(context);
+      renderBoxDecoration(context);
+      renderImpl(context);
+    }
+    // Children can be absolutely positioned outside their layout parent's
+    // bounds, so cull only this view's own drawing work.
     for (auto view : children) {
       view->render(context);
     }
@@ -506,6 +557,12 @@ public:
   }
 
 protected:
+  [[nodiscard]] virtual RenderBounds renderingBounds() const {
+    return {.x = static_cast<float>(getX()),
+            .y = static_cast<float>(getY()),
+            .width = static_cast<float>(getWidth()),
+            .height = static_cast<float>(getHeight())};
+  }
   virtual void renderImpl(RenderContext &context) {};
   virtual inline bool handleEventsImpl(SDL_Event &event) { return true; };
   virtual void onThemeChanged();

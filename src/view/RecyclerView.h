@@ -1,6 +1,7 @@
 #pragma once
 
 #include "SDL2/SDL_events.h"
+#include "../input/SDLPointerEvent.h"
 #include "ScrollMomentum.h"
 #include "View.h"
 #include <bgfx/bgfx.h>
@@ -59,6 +60,9 @@ private:
   }
 
   inline bool handleEventsImpl(SDL_Event &event) override {
+    if (sdl_pointer_event::isMouseSynthesizedTouch(event)) {
+      return true;
+    }
     if (shouldForwardEventToVisibleItems(event)) {
       for (auto it = viewEntries.rbegin(); it != viewEntries.rend(); ++it) {
         if (it->first != nullptr && !it->first->handleEvents(event)) {
@@ -145,7 +149,8 @@ private:
       }
       touchMomentum.stop();
       revealScrollbar();
-      scrollBy(-event.wheel.y * 15.0f);
+      scrollBy(sdl_pointer_event::verticalWheelScrollDelta(event.wheel,
+                                                           15.0F));
       break;
     }
     case SDL_MOUSEBUTTONUP:

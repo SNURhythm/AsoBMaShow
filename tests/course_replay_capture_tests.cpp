@@ -252,6 +252,21 @@ void testBeatorajaConstraintIdentityIsCanonical() {
          "malformed constraint metadata cannot invent replay identity");
 }
 
+void testSkinCourseTitlesUseBeatorajaPropertyBounds() {
+  CoursePlaySession session;
+  for (int index = 0; index < 12; ++index) {
+    CoursePlayEntry entry;
+    entry.meta.Title = "Stage " + std::to_string(index + 1);
+    session.entries.push_back(std::move(entry));
+  }
+
+  const auto titles = session.beatorajaSkinStageTitles();
+  expect(titles.size() == 10 && titles.front() == "Stage 1" &&
+             titles.back() == "Stage 10",
+         "skin course-title snapshots retain only Beatoraja's ten exposed "
+         "course-title properties");
+}
+
 #endif
 
 } // namespace
@@ -261,6 +276,7 @@ int main() {
   testResultCaptureDerivesPartialAggregateFromOrderedFacts();
   testRawCaptureDropsOnlyReplayAttachment();
   testBeatorajaConstraintIdentityIsCanonical();
+  testSkinCourseTitlesUseBeatorajaPropertyBounds();
 #else
   expect(false, "CourseReplayCapture contract is not implemented");
 #endif

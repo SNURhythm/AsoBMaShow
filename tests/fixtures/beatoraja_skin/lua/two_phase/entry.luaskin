@@ -1,0 +1,22 @@
+local shared = require("shared")
+
+if skin_config then
+  return {
+    phase = "configured",
+    package_loaded = package.loaded.shared ~= nil,
+    module_load_count = __trace_shared_load_count,
+    same_module_table = shared == package.loaded.shared,
+    observed_header_mutation = shared.mutation,
+    observed_global_mutation = __trace_two_phase_global
+  }
+else
+  local mutation = __trace_header_mutation or "header-mutated"
+  shared.mutation = mutation
+  __trace_two_phase_global = mutation
+  return {
+    phase = "header",
+    package_loaded = package.loaded.shared ~= nil,
+    module_load_count = __trace_shared_load_count,
+    mutation = shared.mutation
+  }
+end

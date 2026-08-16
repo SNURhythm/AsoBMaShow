@@ -1,0 +1,5 @@
+package.path = "Hub/?.lua;" .. package.path
+local const = require("const")
+assert(const.source == "Hub")
+
+return { phase = skin_config and "configured" or "header" }

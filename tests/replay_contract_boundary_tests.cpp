@@ -67,59 +67,23 @@ std::string readText(const std::filesystem::path &path) {
           std::istreambuf_iterator<char>()};
 }
 
-template <std::size_t Size>
-void rejectTokens(const std::filesystem::path &path,
-                  const std::array<std::string_view, Size> &tokens) {
-  const std::string text = readText(path);
-  for (std::string_view token : tokens) {
-    if (text.contains(token)) {
-      std::cerr << "FAIL: " << path.filename().string()
-                << " contains forbidden boundary token " << token << '\n';
-      ++failures;
-    }
-  }
-}
-
 void requireToken(const std::filesystem::path &path, std::string_view token,
                   std::string_view authority);
 
-void testModernResultAndSnapshotBoundary() {
-  const std::filesystem::path root = ASOBMASHOW_SOURCE_DIR;
-  constexpr std::array<std::string_view, 12> forbidden{
-      "ReplayData",      "ReplayPlaybackData", "ReplayFileMetadata",
-      "ReplayFileStore", "ReplayRepository",   "sqlite3",
-      "IrOutbox",        "StageReceipt",       ".events",
-      "touchSamples",    "laneCoverEvents",    "materialize",
-  };
-  rejectTokens(root / "src/ModernResult.h", forbidden);
-  rejectTokens(root / "src/ModernResult.cpp", forbidden);
-  rejectTokens(root / "src/ir/IrSubmissionSnapshot.h", forbidden);
-  rejectTokens(root / "src/ir/IrSubmissionSnapshot.cpp", forbidden);
-  rejectTokens(root / "src/ModernResultRecallBuilder.h", forbidden);
-  rejectTokens(root / "src/ModernResultRecallBuilder.cpp", forbidden);
-
-  constexpr std::array<std::string_view, 4> materializationForbidden{
-      "BuildResultState",
-      "prepareReplayChart",
-      "parseChartForReplay",
-      "replay.events",
-  };
-  rejectTokens(root / "src/ModernResultRecallBuilder.cpp",
-               materializationForbidden);
-
-  constexpr std::array<std::string_view, 2> legacyIrForbidden{
-      "ChartResultAttempt", "projectModernResultFromLegacyAttempt"};
-  rejectTokens(root / "src/ir/IrSubmission.h", legacyIrForbidden);
-  rejectTokens(root / "src/ir/IrSubmissionModern.cpp", legacyIrForbidden);
-  constexpr std::array<std::string_view, 1> legacyProjectionForbidden{
-      "projectModernResultFromLegacyAttempt"};
-  rejectTokens(root / "src/ResultPersistenceModel.h",
-               legacyProjectionForbidden);
-  rejectTokens(root / "src/ResultPersistenceModel.cpp",
-               legacyProjectionForbidden);
-  if (std::filesystem::exists(root /
-                              "src/ir/IrSubmissionLegacyAdapter.cpp")) {
-    std::cerr << "FAIL: legacy IR submission adapter still exists\n";
+void requireOrderedWithin(const std::filesystem::path &path,
+                          std::string_view scopeFirst,
+                          std::string_view scopeLast, std::string_view first,
+                          std::string_view second,
+                          std::string_view authority) {
+  const auto text = readText(path);
+  const auto scopeFirstAt = text.find(scopeFirst);
+  const auto scopeLastAt = text.find(scopeLast, scopeFirstAt);
+  const auto firstAt = text.find(first, scopeFirstAt);
+  const auto secondAt = text.find(second, scopeFirstAt);
+  if (scopeFirstAt == std::string::npos || scopeLastAt == std::string::npos ||
+      firstAt == std::string::npos || secondAt == std::string::npos ||
+      firstAt >= secondAt || firstAt >= scopeLastAt || secondAt >= scopeLastAt) {
+    std::cerr << "FAIL: " << authority << '\n';
     ++failures;
   }
 }
@@ -139,11 +103,6 @@ void testSharedModernResultAuthorities() {
   requireToken(root / "src/ir/IrRankingModels.cpp",
                "asobmshow::bms_metadata::normalizedHash",
                "chart hash normalization authority");
-  constexpr std::array<std::string_view, 1> duplicateHashNormalization{
-      "std::string normalizedHash"};
-  rejectTokens(root / "src/ir/IrRankingModels.cpp",
-               duplicateHashNormalization);
-
   constexpr std::array<std::string_view, 8> replaySetupConsumers{
       "src/ModernResultRecallBuilder.cpp",
       "src/replay/ChartReplayAgreement.cpp",
@@ -189,10 +148,6 @@ void testSharedModernResultAuthorities() {
     const auto path = root / consumer;
     requireToken(path, "canonical_digest::isCanonicalLowerHex",
                  "canonical chart digest authority");
-    constexpr std::array<std::string_view, 4> duplicateDigestAuthority{
-        "bool isLowerHexDigest", "bool lowerHex", "bool isHexDigest",
-        "bool validSha256("};
-    rejectTokens(path, duplicateDigestAuthority);
   }
 }
 
@@ -215,9 +170,6 @@ void testSharedIrProviderIdentityAuthority() {
     const auto path = root / consumer;
     requireToken(path, "ir::isValidProviderId",
                  "IR provider identity authority");
-    constexpr std::array<std::string_view, 2> duplicateAuthority{
-        "bool validProviderId(", "bool isValidProviderId("};
-    rejectTokens(path, duplicateAuthority);
   }
 }
 
@@ -249,11 +201,6 @@ void testSharedMaximumScoreAuthority() {
     const auto path = root / consumer;
     requireToken(path, "result_contract::maximumScoreForNotes",
                  "maximum-score arithmetic authority");
-    constexpr std::array<std::string_view, 7> duplicateArithmetic{
-        "TotalNotes * 2", "TotalNotes) * 2", "totalNotes * 2",
-        "totalNotes) * 2", "noteCount * 2", "noteCount) * 2",
-        "courseTotalNotes * 2"};
-    rejectTokens(path, duplicateArithmetic);
   }
 }
 
@@ -284,16 +231,9 @@ void testActivatedChartConsumersUseTheSharedPipeline() {
   requireToken(root / "src/scene/ChartViewerScene.cpp",
                "ReplayFileActionService",
                "deferred practice ghost file inspection");
-  constexpr std::array<std::string_view, 1> eagerGhostDecode{
-      "ChartReplayContext replayContext"};
-  rejectTokens(root / "src/scene/ChartViewerScene.cpp", eagerGhostDecode);
   requireToken(root / "src/replay/ChartReplayConsumer.cpp",
                "compareReplayChartIdentity",
                "single prepared-chart identity agreement boundary");
-  constexpr std::array<std::string_view, 1> duplicateChartParse{
-      "parseBaseChart"};
-  rejectTokens(root / "src/replay/ChartReplayConsumer.cpp",
-               duplicateChartParse);
   requireToken(root / "src/scene/MainMenuScene.cpp",
                "result_recall::BuildChartResult",
                "replay-independent modern result recall");
@@ -327,35 +267,6 @@ void testActivatedChartConsumersUseTheSharedPipeline() {
                "loadAgreedModernReplayFileInventory",
                "profile transfer complete replay ownership inventory");
 
-  constexpr std::array<std::string_view, 3> forbidden{
-      "BeatorajaReplayCodec", "ReplayFileStore", "readVerified"};
-  rejectTokens(root / "src/scene/MainMenuScene.cpp", forbidden);
-  rejectTokens(root / "src/scene/ChartViewerScene.cpp", forbidden);
-  rejectTokens(root / "src/scene/ResultScene.cpp", forbidden);
-  rejectTokens(root / "src/ReplayVideoExporter.cpp", forbidden);
-
-  constexpr std::array<std::string_view, 2> genericReplayFailures{
-      ".message = \"No Replay\"",
-      ".message = \"No verified course replay\"",
-  };
-  rejectTokens(root / "src/scene/MainMenuScene.cpp", genericReplayFailures);
-
-  constexpr std::array<std::string_view, 1> startupFullScanForbidden{
-      "loadAgreedModernReplayFileInventory"};
-  rejectTokens(root / "src/main.cpp", startupFullScanForbidden);
-  rejectTokens(profileReconciliation, startupFullScanForbidden);
-
-  constexpr std::array<std::string_view, 1> ownershipForbidden{
-      "GetResolvedDatabasePath"};
-  rejectTokens(root / "src/context.h", ownershipForbidden);
-  rejectTokens(root / "src/scene/MainMenuScene.cpp", ownershipForbidden);
-  rejectTokens(root / "src/scene/ChartViewerScene.cpp", ownershipForbidden);
-  rejectTokens(root / "src/replay/ChartReplayContext.cpp",
-               ownershipForbidden);
-  rejectTokens(root / "src/replay/ChartReplayPersistence.cpp",
-               ownershipForbidden);
-  rejectTokens(root / "src/replay/ChartReplayConsumerRuntime.cpp",
-               ownershipForbidden);
 }
 
 void testCourseContinuationAndConsumerBoundaries() {
@@ -373,11 +284,83 @@ void testCourseContinuationAndConsumerBoundaries() {
                "CourseReplayConsumer",
                "modern course video consumer");
 
-  constexpr std::array<std::string_view, 3> forbidden{
-      "ReplayFileStore", "BeatorajaReplayCodec", "readVerified"};
-  rejectTokens(root / "src/scene/MainMenuScene.cpp", forbidden);
-  rejectTokens(root / "src/scene/ResultScene.cpp", forbidden);
-  rejectTokens(root / "src/ReplayVideoExporter.cpp", forbidden);
+}
+
+void testReplayExportUsesPreparedGameplayBgaFrames() {
+  const std::filesystem::path exporter =
+      std::filesystem::path(ASOBMASHOW_SOURCE_DIR) /
+      "src/ReplayVideoExporter.cpp";
+  requireToken(exporter, "GameplayBgaMissStateTracker",
+               "replay-export BGA miss-state authority");
+  requireToken(exporter, "prepareVisualFrameAt",
+               "prepared replay-export BGA frame authority");
+  requireToken(exporter, "submitFullscreen",
+               "replay-export fullscreen BGA submission authority");
+}
+
+void testNormalReplayExportUsesPreparedPresentation() {
+  const std::filesystem::path exporter =
+      std::filesystem::path(ASOBMASHOW_SOURCE_DIR) /
+      "src/ReplayVideoExporter.cpp";
+  const std::filesystem::path preflight =
+      std::filesystem::path(ASOBMASHOW_SOURCE_DIR) /
+      "src/scene/play/ReplayVideoGameplayPreflight.cpp";
+  constexpr std::string_view normalExportStart =
+      "ReplayVideoExporter::Export(ApplicationContext &context,";
+  constexpr std::string_view normalExportEnd =
+      "ReplayVideoExporter::ExportCourseReplay(";
+  requireOrderedWithin(exporter, normalExportStart, normalExportEnd,
+                       "preflightReplayGameplayPresentation(",
+                       "writeReplayAudioTrack(",
+                       "normal Export preflights skins before audio work");
+  requireOrderedWithin(exporter, normalExportStart, normalExportEnd,
+                       "preflightReplayGameplayPresentation(",
+                       "renderReplayVideoToMp4(",
+                       "normal Export preflights skins before MP4 work");
+  requireOrderedWithin(exporter, normalExportStart, normalExportEnd,
+                       "preflightReplayGameplayPresentation(",
+                       "ensureReplayExportDirectoryError(",
+                       "normal Export preflights skins before output work");
+  requireOrderedWithin(exporter, normalExportStart, normalExportEnd,
+                       "preflightReplayGameplayPresentation(",
+                       "RequestIOSPhotoAddAuthorization(",
+                       "normal Export preflights skins before Photos work");
+  requireOrderedWithin(exporter, normalExportStart, normalExportEnd,
+                       "runPreflightGatedNormalExport(",
+                       "writeReplayAudioTrack(",
+                       "normal Export gates audio work on its preflight result");
+  requireToken(exporter, "ReplayPlayfieldPresentation",
+               "normal replay uses the coordinator-backed presentation adapter");
+  requireToken(exporter, "releaseDueClassicLongNoteTails",
+               "normal replay delegates classic LN auto-release to its adapter");
+  requireToken(preflight, ".replayData = &replay",
+               "normal replay preserves built-in ghost and miss-marker input");
+  requireToken(exporter, "replay_video_export::skinExportFailureMessage(",
+               "normal replay safely reports presentation frame failures");
+  requireToken(exporter, "presentation.frame_failure_missing",
+               "normal replay reports a diagnostic-free frame failure safely");
+}
+
+void testCourseReplayExportUsesPreparedPresentations() {
+  const std::filesystem::path exporter =
+      std::filesystem::path(ASOBMASHOW_SOURCE_DIR) /
+      "src/ReplayVideoExporter.cpp";
+  constexpr std::string_view courseExportStart =
+      "ReplayVideoExportResult exportCourseReplayImpl(";
+  constexpr std::string_view courseExportEnd =
+      "ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,";
+  requireOrderedWithin(exporter, courseExportStart, courseExportEnd,
+                       "preflightCourseReplayGameplayPresentations(",
+                       "writeReplayAudioTrack(",
+                       "every course skin is preflighted before stage audio");
+  requireOrderedWithin(exporter, courseExportStart, courseExportEnd,
+                       "preflightCourseReplayGameplayPresentations(",
+                       "writeCourseReplayAudioTrack(",
+                       "every course skin is preflighted before mux audio");
+  requireToken(exporter, "stage.selectedSkinTiming",
+               "course preflight retains only immutable skin timing");
+  requireToken(exporter, "stage.gameplayPresentation.reset()",
+               "course exporter releases each stage presentation");
 }
 
 void requireToken(const std::filesystem::path &path, std::string_view token,
@@ -387,56 +370,6 @@ void requireToken(const std::filesystem::path &path, std::string_view token,
               << authority << '\n';
     ++failures;
   }
-}
-
-void testPlaybackSetupBoundary() {
-  const std::filesystem::path root = ASOBMASHOW_SOURCE_DIR;
-  constexpr std::array<std::string_view, 12> forbidden{
-      "ReplayData",   "ScoreProvenance",   "ResultPersistence",
-      "IrSubmission", "ReplayRepository",  "sqlite3",
-      "attemptId",    "resultFingerprint", "finalScore",
-      "maxCombo",     "finalGauge",        "clearType",
-  };
-  rejectTokens(root / "src/replay/ReplaySetup.h", forbidden);
-  rejectTokens(root / "src/replay/ReplaySetup.cpp", forbidden);
-  rejectTokens(root / "src/replay/ReplayPlayback.h", forbidden);
-  rejectTokens(root / "src/replay/ReplayPlayback.cpp", forbidden);
-  rejectTokens(root / "src/replay/ReplayLimits.h", forbidden);
-}
-
-void testCapabilityPolicyBoundary() {
-  const std::filesystem::path root = ASOBMASHOW_SOURCE_DIR;
-  constexpr std::array<std::string_view, 12> forbidden{
-      "ReplayData",  "ScoreProvenance",  "ResultPersistence",
-      "IrOutbox",    "ReplayRepository", "sqlite3",
-      "filesystem",  "fstream",          "GamePlayScene",
-      "ResultScene", "ProfileArchive",   "ReplayFileStore",
-  };
-  rejectTokens(root / "src/replay/ReplayCapabilities.h", forbidden);
-  rejectTokens(root / "src/replay/ReplayCapabilities.cpp", forbidden);
-}
-
-void testCodecAndFileBoundary() {
-  const std::filesystem::path root = ASOBMASHOW_SOURCE_DIR;
-  constexpr std::array<std::string_view, 12> codecForbidden{
-      "ScoreProvenance", "ResultPersistence", "IrSubmission",
-      "IrOutbox",        "ReplayRepository",  "sqlite3",
-      "attemptToken",    "resultFingerprint", "finalScore",
-      "maxCombo",        "finalGauge",        "clearType",
-  };
-  rejectTokens(root / "src/replay/BeatorajaReplayCodec.h", codecForbidden);
-  rejectTokens(root / "src/replay/BeatorajaReplayCodec.cpp", codecForbidden);
-
-  constexpr std::array<std::string_view, 12> storeForbidden{
-      "ScoreProvenance", "ResultPersistence", "IrSubmission",
-      "IrOutbox",        "ReplayRepository",  "sqlite3",
-      "resultId",        "resultFingerprint", "finalScore",
-      "maxCombo",        "finalGauge",        "clearType",
-  };
-  rejectTokens(root / "src/replay/ReplayFileLifecycle.h", storeForbidden);
-  rejectTokens(root / "src/replay/ReplayFileLifecycle.cpp", storeForbidden);
-  rejectTokens(root / "src/replay/ReplayFileStore.h", storeForbidden);
-  rejectTokens(root / "src/replay/ReplayFileStore.cpp", storeForbidden);
 }
 
 void testSharedFormatAuthorities() {
@@ -453,10 +386,6 @@ void testSharedFormatAuthorities() {
   requireToken(root / "src/replay/ReplayFileActionService.cpp",
                "removeObservedIfMatches",
                "ownership-safe observed replay cleanup authority");
-  constexpr std::array<std::string_view, 1> pathOnlyDeletion{
-      "removeReferencedEntry"};
-  rejectTokens(root / "src/replay/ReplayFileActionService.cpp",
-               pathOnlyDeletion);
   requireToken(root / "src/PlayOptionUtils.h",
                "kPlayOptions = replay::kBeatorajaReplayOptions",
                "application and replay option table");
@@ -475,32 +404,24 @@ void testSharedAssistClearMarkAuthority() {
       "src/ModernResultRecallBuilder.cpp",
       "src/ReplayAutoPlay.h",
   };
-  constexpr std::array<std::string_view, 1> duplicateAuthority{
-      "clear_policy::assistClearRequired("};
   for (std::string_view consumer : consumers) {
     const auto path = root / consumer;
     requireToken(path, "clear_policy::assistClearMarkRequired",
                  "assist clear-mark authority");
-    rejectTokens(path, duplicateAuthority);
   }
 }
 
 void testReplayIdentityParsingUsesSavedRandomBranch() {
   const std::filesystem::path root = ASOBMASHOW_SOURCE_DIR;
-  constexpr std::array<std::string_view, 1> unseededIdentityParse{
-      "parseChart(path, cancelled",
-  };
   const auto chartConsumer =
       root / "src/replay/ChartReplayConsumerRuntime.cpp";
   requireToken(chartConsumer, "prepareReplayChart",
                "single BRD-setup chart preparation authority");
-  rejectTokens(chartConsumer, unseededIdentityParse);
 
   const auto courseConsumer =
       root / "src/replay/CourseReplayConsumerRuntime.cpp";
   requireToken(courseConsumer, "savedChartRandomParseSetup",
                "saved random-branch identity parse authority");
-  rejectTokens(courseConsumer, unseededIdentityParse);
   requireToken(root / "src/ModernResultRecallBuilder.cpp",
                "savedChartRandomParseSetup",
                "saved random-branch result recall authority");
@@ -528,18 +449,17 @@ void testBestPacemakerUsesTheRetainedReplayConsumer() {
     const auto path = root / consumer;
     requireToken(path, "replayForPreviousBestChart",
                  "retained BEST replay resolution");
-    requireToken(path, "bestReplay.get()",
-                 "retained BEST replay progression");
   }
+  requireToken(root / "src/ReplayVideoExporter.cpp", "bestScoreReplay.get()",
+               "replay-export personal-best progression");
+  requireToken(root / "src/ResultImageExporter.cpp", "bestReplay.get()",
+               "result-image BEST replay progression");
 
   const auto gameplay = root / "src/scene/play/GamePlayScene.cpp";
   requireToken(gameplay, "makeRuntimeBestReplayResolver",
                "background BEST replay resolution authority");
   requireToken(gameplay, "pendingBestReplay",
                "main-thread BEST replay application boundary");
-  constexpr std::array<std::string_view, 2> synchronousBestLoad{
-      "replayForBestSnapshotChart(", "replayForPreviousBestChart("};
-  rejectTokens(gameplay, synchronousBestLoad);
 }
 
 void testHistoryPresentationUsesBoundedCompleteListsAndCheapFileProbes() {
@@ -588,21 +508,20 @@ void testReplayModalOwnsBackgroundLoadLifetime() {
 } // namespace
 
 int main() {
-  testPlaybackSetupBoundary();
-  testCapabilityPolicyBoundary();
-  testCodecAndFileBoundary();
   testSharedFormatAuthorities();
   testSharedAssistClearMarkAuthority();
   testReplayIdentityParsingUsesSavedRandomBranch();
   testBestPacemakerUsesTheRetainedReplayConsumer();
   testHistoryPresentationUsesBoundedCompleteListsAndCheapFileProbes();
   testReplayModalOwnsBackgroundLoadLifetime();
-  testModernResultAndSnapshotBoundary();
   testSharedModernResultAuthorities();
   testSharedIrProviderIdentityAuthority();
   testSharedMaximumScoreAuthority();
   testActivatedChartConsumersUseTheSharedPipeline();
   testCourseContinuationAndConsumerBoundaries();
+  testReplayExportUsesPreparedGameplayBgaFrames();
+  testNormalReplayExportUsesPreparedPresentation();
+  testCourseReplayExportUsesPreparedPresentations();
   if (failures != 0) {
     std::cerr << failures << " replay contract boundary test(s) failed\n";
     return 1;

@@ -4,6 +4,8 @@
 #include <filesystem>
 #include <functional>
 #include <iostream>
+#include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -18,7 +20,9 @@
 #include <SDL2/SDL.h>
 #include "AppSettings.h"
 #include "AppSettingsStore.h"
+#include "PlatformDocumentHandoff.h"
 #include "PlayerProfileManager.h"
+#include "ProfileSettingsPersistenceCoordinator.h"
 #include "ProfileSessionCoordinator.h"
 #include "repositories/ChartRepository.h"
 #include "repositories/ReplayRepository.h"
@@ -28,6 +32,7 @@
 #include "Utils.h"
 #include "game/GameState.h"
 #include "scene/SceneManager.h"
+#include "audio/GameplayBgaFrame.h"
 #include "audio/Jukebox.h"
 #include "audio/AudioDeviceManager.h"
 #include "audio/NativeMusicPlayer.h"
@@ -48,6 +53,22 @@
 #include "video/FramePacer.h"
 #include "video/RendererAccessCoordinator.h"
 #include "view/UiTheme.h"
+#include "skin/LuaGameplaySkinFeature.h"
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+#include "skin/GameplaySkinLifecycle.h"
+#include "skin/GameplaySkinActivationRequest.h"
+#include "skin/SkinCommitCoordinator.h"
+#include "skin/SkinConfigurationWriteQueue.h"
+#include "skin/SkinStoragePaths.h"
+#include "skin/beatoraja/GameplaySkinValidator.h"
+#include "skin/beatoraja/SkinDiagnosticHistory.h"
+#include "skin/beatoraja/SkinLiveResourceCounters.h"
+#include "skin/beatoraja/SkinResourceCatalog.h"
+#include "skin/package/SkinAliasDetector.h"
+#include "skin/package/SkinPackageCatalog.h"
+#include "skin/package/SkinPackageOperationService.h"
+#include "skin/package/SkinPackageStore.h"
+#endif
 
 namespace application_context_detail {
 inline std::string firstDiagnostic(const std::vector<std::string> &diagnostics,
@@ -98,6 +119,19 @@ inline InputProfile loadActiveInput(PlayerProfileManager &manager,
       loaded.diagnostics, "Unable to load the active input profile.");
   return makeDefaultInputProfile();
 }
+
+inline std::uint64_t allocateSkinProfileCatalogMutationToken() noexcept {
+  static std::atomic_uint64_t nextToken{0};
+  auto current = nextToken.load(std::memory_order_relaxed);
+  while (current != std::numeric_limits<std::uint64_t>::max()) {
+    if (nextToken.compare_exchange_weak(current, current + 1,
+                                        std::memory_order_relaxed,
+                                        std::memory_order_relaxed)) {
+      return current + 1;
+    }
+  }
+  return 0;
+}
 } // namespace application_context_detail
 
 class ApplicationContext {
@@ -127,6 +161,8 @@ public:
   std::set<std::string> irCredentialReadyProfiles;
   std::set<std::string> irCredentialBlockedProfiles;
   InputProfileReplacementNotifier inputProfileReplacementNotifier;
+  std::unique_ptr<ProfileSettingsPersistenceCoordinator>
+      profileSettingsPersistenceCoordinator;
   std::unique_ptr<ProfileSessionCoordinator> profileSessionCoordinator;
   std::atomic<bool> profileGameplayActive{false};
   std::atomic<bool> profileArchiveOperationActive{false};
@@ -146,6 +182,10 @@ public:
   audio::AudioDeviceManager audioDeviceManager;
   audio::ApplyResult audioStartupApplyResult;
   music_player::MusicPlayerService musicPlayer;
+  // One application-owned asynchronous cleanup boundary for every temporary
+  // document/folder handoff. Scene teardown only abandons operations into it.
+  platform_document_handoff::PlatformTemporaryPathCleanupServiceHandle
+      temporaryPathCleanupService;
   std::mutex bgfxRenderMutex;
   std::atomic<bool> replayVideoExportActive{false};
   display::RendererAccessCoordinator rendererAccess{bgfxRenderMutex,
@@ -155,6 +195,7 @@ public:
   std::atomic<bool> appInBackground{false};
   std::atomic<bool> backgroundTasksPausedForForegroundScene{false};
   std::atomic<bool> ignoreBgaPostOptions{false};
+  GameplayBgaCompositeState gameplayBgaCompositeState;
   std::atomic<std::uint32_t> bgfxResetFlags{0};
   FramePacer framePacer;
   std::unique_ptr<display::IDisplayBackend> displayBackend;
@@ -166,6 +207,295 @@ public:
 
   // string: annotation, thread: thread
   std::vector<std::pair<std::string, std::thread>> threads;
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  std::optional<skin::SkinStorageRoots> skinStorageRoots;
+  std::unique_ptr<skin::SkinAliasDetector> skinAliasDetector;
+  std::unique_ptr<skin::SkinPackageCatalog> skinPackageCatalog;
+  std::unique_ptr<skin::SkinPackageStore> skinPackageStore;
+  std::optional<skin::SkinRecoveryResult> skinRecoveryResult;
+  std::unique_ptr<skin::SkinResourcePreparationService>
+      skinResourcePreparationService;
+  std::shared_ptr<skin::SkinLiveResourceCounters> skinLiveResourceCounters;
+  std::unique_ptr<skin::GameplaySkinValidator> gameplaySkinValidator;
+  std::unique_ptr<skin::SkinPackageOperationService>
+      skinPackageOperationService;
+  std::unique_ptr<skin::SkinDiagnosticHistory> skinDiagnosticHistory;
+  std::unique_ptr<skin::SkinConfigurationWriteQueue>
+      skinConfigurationWriteQueue;
+  std::unique_ptr<skin::SkinCommitCoordinator> skinCommitCoordinator;
+  std::unique_ptr<skin::GameplaySkinLifecycle> gameplaySkinLifecycle;
+  struct SkinProfileCatalogMutationState {
+    SkinProfileCatalogMutationState(
+        skin::ProfileInventoryMutationBarrier &&inventoryValue,
+        std::optional<skin::SkinProfileMutationBarrier> &&profileValue)
+        : inventory(std::move(inventoryValue)),
+          profile(std::move(profileValue)) {}
+
+    skin::ProfileInventoryMutationBarrier inventory;
+    // Declared after inventory so an abandoned state resumes the per-profile
+    // gate before its inventory barrier releases.
+    std::optional<skin::SkinProfileMutationBarrier> profile;
+  };
+  std::map<std::uint64_t, SkinProfileCatalogMutationState>
+      skinProfileCatalogMutations;
+  // Task 24 supplies the lifecycle-owned callback. Empty means built-in-only;
+  // GamePlayScene is intentionally unable to reach package activation APIs.
+  skin::AcquireGameplaySkinForNextChart acquireGameplaySkinForNextChart;
+
+  void initializeGameplaySkinServices() {
+    try {
+      skinStorageRoots = skin::defaultSkinStorageRoots();
+      skinAliasDetector = skin::createPlatformSkinAliasDetector();
+      skinPackageCatalog = std::make_unique<skin::SkinPackageCatalog>(
+          skinStorageRoots->privateCatalog);
+      skinPackageStore = std::make_unique<skin::SkinPackageStore>(
+          *skinStorageRoots, *skinPackageCatalog, *skinAliasDetector,
+          *profileSettingsPersistenceCoordinator);
+      skinRecoveryResult = skinPackageStore->recoverBeforeServiceStart();
+
+      if (skinRecoveryResult->disposition ==
+          skin::SkinRecoveryDisposition::Recovered) {
+        skinLiveResourceCounters =
+            std::make_shared<skin::SkinLiveResourceCounters>();
+        skinResourcePreparationService =
+            std::make_unique<skin::SkinResourcePreparationService>();
+        gameplaySkinValidator =
+            std::make_unique<skin::GameplaySkinValidator>(
+                *skinResourcePreparationService);
+        skinPackageOperationService =
+            std::make_unique<skin::SkinPackageOperationService>(
+                *skinPackageStore, *gameplaySkinValidator);
+        skinDiagnosticHistory =
+            std::make_unique<skin::SkinDiagnosticHistory>(*skinPackageCatalog);
+        skinConfigurationWriteQueue =
+            std::make_unique<skin::SkinConfigurationWriteQueue>();
+        skinCommitCoordinator =
+            std::make_unique<skin::SkinCommitCoordinator>(
+                *skinPackageStore, *profileSettingsPersistenceCoordinator);
+        const auto activeProfileId =
+            skin::makeSkinProfileId(profileManager.activeProfile().id);
+        if (!activeProfileId) {
+          throw std::runtime_error("The active profile ID is invalid");
+        }
+        const auto lifecycleClientId = skinCommitCoordinator->createClient();
+        if (lifecycleClientId == 0) {
+          throw std::runtime_error(
+              "The gameplay skin lifecycle client was not admitted");
+        }
+        gameplaySkinLifecycle = std::make_unique<skin::GameplaySkinLifecycle>(
+            *skinStorageRoots, *skinPackageOperationService,
+            *skinDiagnosticHistory, *skinConfigurationWriteQueue,
+            *profileSettingsPersistenceCoordinator,
+            *profileSettingsPersistenceCoordinator, *skinCommitCoordinator,
+            lifecycleClientId);
+        gameplaySkinLifecycle->startAfterProfileInitialization(
+            *activeProfileId);
+        acquireGameplaySkinForNextChart = [this](int keyMode) {
+          return gameplaySkinLifecycle
+                     ? gameplaySkinLifecycle->acquireForNextChart(keyMode)
+                     : skin::GameplaySkinAcquisition{};
+        };
+      }
+    } catch (...) {
+      unwindGameplaySkinServicesAfterStartupFailure();
+      skinRecoveryResult = skin::SkinRecoveryResult{
+          .disposition = skin::SkinRecoveryDisposition::Failed,
+          .diagnostics = {skin::SkinDiagnostic{
+              .code = "skin.startup.unavailable",
+              .message = "Gameplay skin services could not be initialized",
+              .severity = skin::DiagnosticSeverity::Error,
+          }},
+      };
+    }
+  }
+
+  // Startup can run before an iOS container has finished making its private
+  // storage available. Retry only a failed, fully unwound bootstrap; never
+  // replace a live service graph or weaken the normal fail-closed boundary.
+  bool retryGameplaySkinServices() noexcept {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    if (!profileInitializationResult.ok() ||
+        !profileSettingsPersistenceCoordinator ||
+        !skinRecoveryResult ||
+        skinRecoveryResult->disposition !=
+            skin::SkinRecoveryDisposition::Failed ||
+        gameplaySkinLifecycle || skinPackageOperationService ||
+        skinCommitCoordinator) {
+      return false;
+    }
+    unwindGameplaySkinServicesAfterStartupFailure();
+    initializeGameplaySkinServices();
+    return gameplaySkinLifecycle != nullptr;
+#else
+    return false;
+#endif
+  }
+
+  void shutdownGameplaySkinLifecycle() noexcept {
+    acquireGameplaySkinForNextChart = {};
+    if (gameplaySkinLifecycle) {
+      gameplaySkinLifecycle->shutdown();
+      gameplaySkinLifecycle.reset();
+    }
+  }
+
+  void shutdownGameplaySkinOperationService() noexcept {
+    if (skinPackageOperationService) {
+      skinPackageOperationService->shutdown();
+      skinPackageOperationService.reset();
+    }
+  }
+
+  void shutdownGameplaySkinCommitCoordinator() noexcept {
+    if (skinCommitCoordinator) {
+      skinCommitCoordinator->shutdown();
+      skinCommitCoordinator.reset();
+    }
+  }
+
+  void flushAndShutdownGameplaySkinBackingServices() noexcept {
+    if (skinDiagnosticHistory) {
+      try {
+        skinDiagnosticHistory->flush();
+      } catch (...) {
+      }
+    }
+    if (skinPackageCatalog) {
+      try {
+        skinPackageCatalog->flush();
+      } catch (...) {
+      }
+      skinPackageCatalog->shutdown();
+    }
+    if (skinResourcePreparationService) {
+      skinResourcePreparationService->shutdown();
+    }
+  }
+
+  void destroyGameplaySkinServices() noexcept {
+    if (skinConfigurationWriteQueue) {
+      skinConfigurationWriteQueue->close();
+      skinConfigurationWriteQueue.reset();
+    }
+    skinDiagnosticHistory.reset();
+    gameplaySkinValidator.reset();
+    skinPackageStore.reset();
+    skinPackageCatalog.reset();
+    skinResourcePreparationService.reset();
+    skinLiveResourceCounters.reset();
+    skinAliasDetector.reset();
+    skinRecoveryResult.reset();
+    skinStorageRoots.reset();
+  }
+
+  void unwindGameplaySkinServicesAfterStartupFailure() noexcept {
+    shutdownGameplaySkinLifecycle();
+    shutdownGameplaySkinOperationService();
+    shutdownGameplaySkinCommitCoordinator();
+    flushAndShutdownGameplaySkinBackingServices();
+    destroyGameplaySkinServices();
+  }
+#endif
+
+  std::optional<std::uint64_t> beginSkinProfileCatalogMutation(
+      std::optional<std::string_view> existingTargetId,
+      std::string &error) {
+    const auto token =
+        application_context_detail::allocateSkinProfileCatalogMutationToken();
+    if (token == 0) {
+      error = "Profile mutation token IDs are exhausted.";
+      return std::nullopt;
+    }
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    if (!profileSettingsPersistenceCoordinator) {
+      return token;
+    }
+    std::optional<skin::SkinProfileMutationBarrier> profileBarrier;
+    if (existingTargetId && skinCommitCoordinator) {
+      const auto profileId = skin::makeSkinProfileId(*existingTargetId);
+      if (!profileId) {
+        error = "The target profile ID is invalid.";
+        return std::nullopt;
+      }
+      auto started = skinCommitCoordinator->beginProfileMutation(*profileId);
+      if (!started.barrier) {
+        error = started.error.empty()
+                    ? "The profile's gameplay skin transactions could not be "
+                      "drained."
+                    : std::move(started.error);
+        return std::nullopt;
+      }
+      profileBarrier.emplace(std::move(*started.barrier));
+    }
+    try {
+      auto inventoryBarrier =
+          profileSettingsPersistenceCoordinator->beginInventoryMutation();
+      skinProfileCatalogMutations.emplace(
+          token, SkinProfileCatalogMutationState(
+                     std::move(inventoryBarrier), std::move(profileBarrier)));
+    } catch (...) {
+      error = "The profile inventory mutation barrier could not be acquired.";
+      return std::nullopt;
+    }
+#else
+    (void)existingTargetId;
+#endif
+    return token;
+  }
+
+  void finishSkinProfileCatalogMutation(std::uint64_t token, bool succeeded,
+                                        bool profileStillExists) noexcept {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    const auto found = skinProfileCatalogMutations.find(token);
+    if (found == skinProfileCatalogMutations.end()) {
+      return;
+    }
+    auto state = skinProfileCatalogMutations.extract(found);
+    if (state.mapped().profile) {
+      if (skinCommitCoordinator) {
+        skinCommitCoordinator->finishProfileMutation(
+            std::move(*state.mapped().profile), succeeded,
+            profileStillExists);
+      } else {
+        state.mapped().profile.reset();
+      }
+    }
+    if (profileSettingsPersistenceCoordinator) {
+      profileSettingsPersistenceCoordinator->finishInventoryMutation(
+          std::move(state.mapped().inventory));
+    }
+#else
+    (void)token;
+    (void)succeeded;
+    (void)profileStillExists;
+#endif
+  }
+
+  void abandonSkinProfileCatalogMutations() noexcept {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    while (!skinProfileCatalogMutations.empty()) {
+      finishSkinProfileCatalogMutation(skinProfileCatalogMutations.begin()->first,
+                                       false, true);
+    }
+#endif
+  }
+
+  // This lifecycle hook deliberately exposes no enabled-only type, so callers
+  // poll it unconditionally on platforms where Lua gameplay skins are off.
+  void pollGameplaySkinCommits() noexcept {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    try {
+      if (skinCommitCoordinator) {
+        skinCommitCoordinator->poll();
+      }
+      if (gameplaySkinLifecycle) {
+        gameplaySkinLifecycle->poll();
+      }
+    } catch (...) {
+      SDL_Log("Gameplay skin commit polling failed unexpectedly");
+    }
+#endif
+  }
 
   ApplicationContext()
       : quitFlag(false), applicationDataRoot(Utils::GetDocumentsPath()),
@@ -182,7 +512,9 @@ public:
         jukebox(&gameStopwatch),
         audioDeviceManager(jukebox.audioRuntime(), jukebox,
                            settings.audioVideo.audio),
-        musicPlayer(musicPlaylistRepository, chartRepository) {
+        musicPlayer(musicPlaylistRepository, chartRepository),
+        temporaryPathCleanupService(
+            platform_document_handoff::CreatePlatformTemporaryPathCleanupService()) {
     std::string irDriverDiagnostic;
     if (!irDrivers.registerDriver(
             std::make_shared<ir::tachi::TachiDriver>(bokutachiCacheStore),
@@ -201,6 +533,12 @@ public:
     const PlayerProfilePaths activePaths = profileManager.activePaths();
     scoreRepository.SetDatabasePath(activePaths.scoresDb);
     replayRepository.SetDatabasePath(activePaths.replaysDb);
+    profileSettingsPersistenceCoordinator =
+        std::make_unique<ProfileSettingsPersistenceCoordinator>(profileManager,
+                                                                settings);
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    initializeGameplaySkinServices();
+#endif
     saveActiveInputProfile = [this](const InputProfile &candidate,
                                     std::string &error) {
       if (!profileInitializationResult.ok()) {
@@ -265,6 +603,17 @@ public:
           }
         },
         ProfileSessionDependencies{
+            .saveSettings =
+                [this](std::string_view profileId, AppSettings &candidate,
+                       std::string &error) {
+                  const auto typedId = skin::makeSkinProfileId(profileId);
+                  if (!typedId || !profileSettingsPersistenceCoordinator) {
+                    error = "The profile settings owner is unavailable.";
+                    return false;
+                  }
+                  return profileSettingsPersistenceCoordinator
+                      ->saveActiveSettingsAndWait(*typedId, candidate, error);
+                },
             .saveInput =
                 [this](const std::filesystem::path &path, std::string &error) {
                   if (path != profileManager.activePaths().inputJson) {
@@ -293,6 +642,25 @@ public:
                        const AppSettings &activeSettings, std::string &error) {
                   return activateIrProfileServices(profileId, activeSettings,
                                                    error);
+                },
+            .activeProfileCommitted =
+                [this](std::string_view profileId,
+                       AppSettings &activeSettings) noexcept {
+                  try {
+                    const auto typedId = skin::makeSkinProfileId(profileId);
+                    if (!typedId || !profileSettingsPersistenceCoordinator) {
+                      return;
+                    }
+                    profileSettingsPersistenceCoordinator
+                        ->bindCommittedActiveProfile(*typedId, activeSettings);
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+                    if (gameplaySkinLifecycle) {
+                      gameplaySkinLifecycle->profileChanged(*typedId);
+                    }
+#endif
+                  } catch (...) {
+                    SDL_Log("Gameplay skin profile binding failed unexpectedly");
+                  }
                 }});
 
     settings.sanitize();
@@ -366,7 +734,7 @@ public:
 
   [[nodiscard]] replay::ChartReplayPersistenceOutcome
   persistModernChart(const replay::ChartReplayPersistenceAttempt &attempt,
-      std::span<const ir::IrOutboxDraft> drafts = {}) noexcept {
+                     std::span<const ir::IrOutboxDraft> drafts = {}) noexcept {
     try {
       if (!profileInitializationResult.ok()) {
         return {.state = replay::ChartReplayPersistenceState::Retryable,
@@ -477,8 +845,7 @@ public:
     }
   }
 
-  bool loadIrCredential(std::string_view profileId,
-                        std::string_view providerId,
+  bool loadIrCredential(std::string_view profileId, std::string_view providerId,
                         std::optional<std::string> &apiKey,
                         std::string &diagnostic) noexcept {
     apiKey.reset();
@@ -502,8 +869,7 @@ public:
   }
 
   bool replaceIrCredential(std::string_view profileId,
-                           std::string_view providerId,
-                           std::string_view apiKey,
+                           std::string_view providerId, std::string_view apiKey,
                            std::string &diagnostic) noexcept {
     if (!prepareIrCredentials(profileId, diagnostic)) {
       return false;
@@ -559,8 +925,7 @@ public:
           !overwriteRetried.diagnostic.empty()) {
         SDL_Log("Pending overwritten-profile credential cleanup retained %zu "
                 "item(s): %s",
-                overwriteRetried.retained,
-                overwriteRetried.diagnostic.c_str());
+                overwriteRetried.retained, overwriteRetried.diagnostic.c_str());
       }
       const auto retried = ir::retryPendingProfileCredentialCleanup(
           pendingIrCredentialCleanup,
@@ -574,8 +939,8 @@ public:
             }
             // Treat inspection failures conservatively: a profile that might
             // still exist must keep its secure credentials.
-            return error || status.type() !=
-                                std::filesystem::file_type::not_found;
+            return error ||
+                   status.type() != std::filesystem::file_type::not_found;
           },
           [this](std::string_view profileId, std::string &diagnostic) {
             return removeProfileIrCredentials(profileId, diagnostic);
@@ -608,7 +973,7 @@ public:
       }
       if (scoreRepository.ImportedIrScoresAreCurrent(providerId, serverOrigin,
                                                      state.syncGeneration,
-              state.scoreCount)) {
+                                                     state.scoreCount)) {
         return true;
       }
       const auto mirrored =
@@ -828,14 +1193,30 @@ public:
       error = profileInitializationResult.message.empty()
                   ? "Player profiles are not initialized."
                   : profileInitializationResult.message;
-    } else if (AppSettingsStore::Save(profileManager.activePaths().settingsJson,
-                                      settings, error)) {
+    } else if (saveSettingsCandidate(settings, error)) {
       return true;
     }
     if (errorMessage != nullptr) {
       *errorMessage = std::move(error);
     }
     return false;
+  }
+
+  bool saveSettingsCandidate(AppSettings candidate, std::string &error) {
+    if (!profileReady() || !profileSettingsPersistenceCoordinator) {
+      error = profileInitializationResult.message.empty()
+                  ? "Player profiles are not initialized."
+                  : profileInitializationResult.message;
+      return false;
+    }
+    const auto profileId =
+        skin::makeSkinProfileId(profileManager.activeProfile().id);
+    if (!profileId) {
+      error = "The active profile ID is invalid.";
+      return false;
+    }
+    return profileSettingsPersistenceCoordinator->saveActiveSettingsAndWait(
+        *profileId, candidate, error);
   }
 
   ProfileSwitchResult switchProfile(std::string_view profileId) {
@@ -868,6 +1249,26 @@ public:
     irSubmissionService.reset();
     irRankingService.reset();
     irHttpClient.reset();
+    abandonSkinProfileCatalogMutations();
+    profileSessionCoordinator.reset();
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    shutdownGameplaySkinLifecycle();
+    shutdownGameplaySkinOperationService();
+#endif
+    if (temporaryPathCleanupService) {
+      temporaryPathCleanupService->shutdown();
+    }
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    shutdownGameplaySkinCommitCoordinator();
+    flushAndShutdownGameplaySkinBackingServices();
+#endif
+    if (profileSettingsPersistenceCoordinator) {
+      profileSettingsPersistenceCoordinator->shutdown();
+      profileSettingsPersistenceCoordinator.reset();
+    }
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    destroyGameplaySkinServices();
+#endif
     scoreRepository.Shutdown();
     replayRepository.Shutdown();
     std::cout << "Main function is quitting..." << std::endl;

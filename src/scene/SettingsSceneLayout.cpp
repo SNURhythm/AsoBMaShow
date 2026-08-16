@@ -87,8 +87,9 @@ void SettingsScene::resetViewState() {
   prepMetronomeModeText = nullptr;
   startLaneIndicatorsModeText = nullptr;
   showInvisibleNotesModeText = nullptr;
+  markProcessedNotesModeText = nullptr;
   touchVisualizationModeText = nullptr;
-  floatingLaneCoverModeText = nullptr;
+  hispeedAutoAdjustModeText = nullptr;
   archiveChartPreviewModeText = nullptr;
   findBmsSkipUnarchivingModeText = nullptr;
   notePriorityModeText = nullptr;
@@ -114,8 +115,9 @@ void SettingsScene::resetViewState() {
   prepMetronomeModeButton = nullptr;
   startLaneIndicatorsModeButton = nullptr;
   showInvisibleNotesModeButton = nullptr;
+  markProcessedNotesModeButton = nullptr;
   touchVisualizationModeButton = nullptr;
-  floatingLaneCoverModeButton = nullptr;
+  hispeedAutoAdjustModeButton = nullptr;
   archiveChartPreviewModeButton = nullptr;
   findBmsSkipUnarchivingModeButton = nullptr;
   notePriorityModeButton = nullptr;
@@ -140,6 +142,7 @@ void SettingsScene::resetViewState() {
   displayTabButton = nullptr;
   difficultyTablesTabButton = nullptr;
   bmsLibraryTabButton = nullptr;
+  gameplaySkinsTabButton = nullptr;
   irTabButton = nullptr;
   timingTabText = nullptr;
   visualTabText = nullptr;
@@ -150,6 +153,7 @@ void SettingsScene::resetViewState() {
   displayTabText = nullptr;
   difficultyTablesTabText = nullptr;
   bmsLibraryTabText = nullptr;
+  gameplaySkinsTabText = nullptr;
   irTabText = nullptr;
   irPendingCountText = nullptr;
   irAwaitingCountText = nullptr;
@@ -199,6 +203,10 @@ void SettingsScene::resetViewState() {
   inputCaptureStateText = nullptr;
   inputErrorText = nullptr;
   inputConflictOverlayRoot = nullptr;
+  inputVirtualControllerEditorOverlayRoot = nullptr;
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  gameplaySkinSafetyOverlayRoot = nullptr;
+#endif
 }
 
 void SettingsScene::ensureLayoutUpToDate() {
@@ -255,10 +263,7 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
         !context.settings.visibleTimeUseMilliseconds;
     persistSettings();
     syncVisibleTimeInputText(true);
-    if (previewRenderer != nullptr) {
-      previewRenderer->setVisibleTimeUseMilliseconds(
-          context.settings.visibleTimeUseMilliseconds);
-    }
+    syncPreviewPresentationConfiguration();
   });
   View *visibleTimeModeRow = nullptr;
   if (compactAdjustments) {
@@ -281,13 +286,10 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
       makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
                         visibleTimeBpmStrategyText);
   visibleTimeBpmStrategyButton->setOnClickListener([this]() {
-    context.settings.visibleTimeBpmStrategy =
-        nextVisibleTimeBpmStrategy(context.settings.visibleTimeBpmStrategy);
+    context.settings.hispeedFixMode =
+        nextVisibleTimeBpmStrategy(context.settings.hispeedFixMode);
     persistSettings();
-    if (previewRenderer != nullptr) {
-      previewRenderer->setVisibleTimeBpmStrategy(
-          context.settings.visibleTimeBpmStrategy);
-    }
+    syncPreviewPresentationConfiguration();
   });
   if (visibleTimeModeRow != nullptr) {
     visibleTimeModeRow->addView(visibleTimeBpmStrategyButton);
@@ -308,8 +310,9 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
   }
 
   auto updateVisibleTime = [this](int delta) {
-    context.settings.visibleTimeGreenNumber = adjustVisibleTimeGreenNumber(
-        context.settings.visibleTimeGreenNumber,
+    context.settings.visibleTimeDurationMilliseconds =
+        adjustVisibleTimeDurationMilliseconds(
+        context.settings.visibleTimeDurationMilliseconds,
         context.settings.visibleTimeUseMilliseconds, delta);
     persistSettings();
     syncVisibleTimeInputText(true);
@@ -365,7 +368,7 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
 
     auto *resetVisibleTime = makeResetButton(metrics);
     resetVisibleTime->setOnClickListener([this]() {
-      context.settings.visibleTimeGreenNumber = 400;
+      context.settings.setVisibleTimeGreenNumber(400);
       persistSettings();
       syncVisibleTimeInputText(true);
     });
@@ -1506,15 +1509,32 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
   showInvisibleNotesModeButton->setOnClickListener([this]() {
     context.settings.showInvisibleNotes = !context.settings.showInvisibleNotes;
     persistSettings();
-    if (previewRenderer != nullptr) {
-      previewRenderer->setShowInvisibleNotes(
-          context.settings.showInvisibleNotes);
-    }
+    syncPreviewPresentationConfiguration();
   });
   invisibleNoteControls->addView(showInvisibleNotesModeButton);
   cardsColumn->addView(makeCard(
       metrics, "Invisible Notes", "Show invisible notes as lane markers.",
       invisibleNoteControls, metrics.modeCardHeight, metrics.cardsWidth));
+
+  auto *processedNoteControls = new View();
+  processedNoteControls->setFlexDirection(FlexDirection::Column);
+  processedNoteControls->setGap(metrics.compact ? 12.0f : 16.0f);
+  processedNoteControls->setAlignItems(YGAlignFlexStart);
+  markProcessedNotesModeText =
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE);
+  markProcessedNotesModeButton =
+      makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                        markProcessedNotesModeText);
+  markProcessedNotesModeButton->setOnClickListener([this]() {
+    context.settings.markProcessedNotes = !context.settings.markProcessedNotes;
+    persistSettings();
+  });
+  processedNoteControls->addView(markProcessedNotesModeButton);
+  cardsColumn->addView(makeCard(
+      metrics, "Mark Processed Notes",
+      "Replace judged normal notes with Beatoraja's processed-note visual.",
+      processedNoteControls, metrics.modeCardHeight, metrics.cardsWidth));
 
   auto *startLaneIndicatorControls = new View();
   startLaneIndicatorControls->setFlexDirection(FlexDirection::Column);
@@ -1813,18 +1833,24 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   noteStartControls->addView(resetNoteStart);
   noteStartPanel->addView(noteStartControls);
 
-  floatingLaneCoverModeText =
-      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+  hispeedAutoAdjustModeText =
+      makeText("Hi-Speed Auto Adjust: Off", metrics.bodyTextSize + 6,
+               ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
-  floatingLaneCoverModeButton =
-      makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
-                        floatingLaneCoverModeText);
-  floatingLaneCoverModeButton->setOnClickListener([this]() {
-    context.settings.floatingLaneCoverEnabled =
-        !context.settings.floatingLaneCoverEnabled;
+  constexpr int hispeedAutoAdjustHorizontalPadding = 32;
+  const int hispeedAutoAdjustButtonWidth =
+      std::max(metrics.actionButtonWidth,
+               hispeedAutoAdjustModeText->textureWidth() +
+                   hispeedAutoAdjustHorizontalPadding);
+  hispeedAutoAdjustModeButton =
+      makeControlButton(hispeedAutoAdjustButtonWidth,
+                        metrics.actionButtonHeight,
+                        hispeedAutoAdjustModeText);
+  hispeedAutoAdjustModeButton->setOnClickListener([this]() {
+    context.settings.hispeedAutoAdjust = !context.settings.hispeedAutoAdjust;
     persistSettings();
   });
-  noteStartPanel->addView(floatingLaneCoverModeButton);
+  noteStartPanel->addView(hispeedAutoAdjustModeButton);
   cardsColumn->addView(makeCard(
       metrics, "Note Start Position", "Set where notes enter the lane.",
       noteStartPanel, metrics.offsetCardHeight, metrics.cardsWidth));
@@ -2715,6 +2741,11 @@ void SettingsScene::initView() {
         profileController->cancelConfirmation();
       }
       activeTab = tab;
+      if (activeTab == SettingsTab::GameplaySkins) {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+        ensureGameplaySkinSettingsController();
+#endif
+      }
       lastLayoutWidth = -1;
     });
     return button;
@@ -2736,6 +2767,9 @@ void SettingsScene::initView() {
                     &difficultyTablesTabText);
   bmsLibraryTabButton =
       makeTabButton(SettingsTab::BmsLibrary, "BMS Library", &bmsLibraryTabText);
+  gameplaySkinsTabButton = makeTabButton(SettingsTab::GameplaySkins,
+                                         "Gameplay Skins",
+                                         &gameplaySkinsTabText);
   irTabButton = makeTabButton(SettingsTab::Ir, "IR", &irTabText);
   tabControls->addView(profileTabButton);
   tabControls->addView(timingTabButton);
@@ -2747,6 +2781,7 @@ void SettingsScene::initView() {
   tabControls->addView(displayTabButton);
   tabControls->addView(difficultyTablesTabButton);
   tabControls->addView(bmsLibraryTabButton);
+  tabControls->addView(gameplaySkinsTabButton);
   tabControls->addView(irTabButton);
   auto *tabRail = new ScrollView();
   tabRail->setWidth(static_cast<float>(tabColumnWidth));
@@ -2802,6 +2837,9 @@ void SettingsScene::initView() {
   case SettingsTab::BmsLibrary:
     cardsColumn = buildBmsLibraryTab(metrics);
     break;
+  case SettingsTab::GameplaySkins:
+    cardsColumn = buildGameplaySkinsTab(metrics);
+    break;
   case SettingsTab::Ir:
     cardsColumn = buildIrTab(metrics);
     break;
@@ -2817,6 +2855,10 @@ void SettingsScene::initView() {
 
   buildDifficultyTableImportModal(metrics);
   buildInputConflictOverlay(metrics);
+  buildInputVirtualControllerEditorOverlay(metrics);
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  buildGameplaySkinSafetyOverlay(metrics);
+#endif
   buildDisplayPreviewOverlay(metrics);
 
   rootLayout->applyYogaLayout();

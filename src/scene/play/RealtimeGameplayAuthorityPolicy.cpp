@@ -30,10 +30,13 @@ RealtimeGameplayAuthorityPolicy makeRealtimeGameplayAuthorityPolicy(
 }
 
 RealtimeGameplayTerminalAction classifyRealtimeGameplayTerminal(
-    GameplayTerminalReason reason, bool sessionBackedPractice) noexcept {
+    GameplayTerminalReason reason, bool sessionBackedPractice,
+    bool sourcePlaytimeElapsed) noexcept {
   switch (reason) {
   case GameplayTerminalReason::None:
-    return RealtimeGameplayTerminalAction::Wait;
+    return sourcePlaytimeElapsed && !sessionBackedPractice
+               ? RealtimeGameplayTerminalAction::CompleteChart
+               : RealtimeGameplayTerminalAction::Wait;
   case GameplayTerminalReason::ChartComplete:
     return RealtimeGameplayTerminalAction::CompleteChart;
   case GameplayTerminalReason::PracticeComplete:

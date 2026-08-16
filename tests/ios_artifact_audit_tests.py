@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import plistlib
+import os
 import shutil
 import subprocess
 import tempfile
@@ -10,6 +11,183 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 AUDIT = ROOT / "scripts/ios_artifact_audit.sh"
+SKIN_SHADER_AUDIT = ROOT / "scripts/verify_skin_shader_outputs.py"
+BUILD_COMMIT = "1234567890abcdef1234567890abcdef12345678"
+BUILD_CONFIGURATION = "Release"
+BUILD_SOURCE_CLEAN = "1"
+
+
+class SkinShaderOutputVerifierTests(unittest.TestCase):
+    def make_shader_tree(self, root: Path) -> Path:
+        (root / "shader_src").mkdir(parents=True)
+        for shader in ("skin_quad", "skin_yuvrgb"):
+            (root / f"shader_src/vs_{shader}.sc").write_text(
+                "void main() { /* synthetic vertex */ }\n", encoding="utf-8"
+            )
+            (root / f"shader_src/fs_{shader}.sc").write_text(
+                "void main() { /* synthetic fragment */ }\n", encoding="utf-8"
+            )
+            for backend in ("metal", "spirv", "essl", "dx11"):
+                output = root / "shaders" / backend
+                output.mkdir(parents=True, exist_ok=True)
+                (output / f"vs_{shader}.bin").write_bytes(
+                    f"{backend}-{shader}-vertex".encode("ascii")
+                )
+                (output / f"fs_{shader}.bin").write_bytes(
+                    f"{backend}-{shader}-fragment".encode("ascii")
+                )
+        return root / "tests/fixtures/beatoraja_skin/shaders/skin_shader_manifest.json"
+
+    def run_shader_audit(self, root: Path, *arguments: str):
+        return subprocess.run(
+            [
+                "python3",
+                str(SKIN_SHADER_AUDIT),
+                "--root",
+                str(root),
+                "--shader",
+                "skin_quad",
+                *arguments,
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+        )
+
+    def test_manifest_write_and_read_verification_are_deterministic(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            manifest = self.make_shader_tree(root)
+            result = self.run_shader_audit(
+                root,
+                "--require-backends",
+                "metal,spirv,essl,dx11",
+                "--write-manifest",
+                str(manifest),
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            first = manifest.read_bytes()
+            result = self.run_shader_audit(
+                root,
+                "--require-backends",
+                "metal,spirv,essl,dx11",
+                "--write-manifest",
+                str(manifest),
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual(first, manifest.read_bytes())
+            result = self.run_shader_audit(
+                root,
+                "--require-backends",
+                "metal,spirv,essl,dx11",
+                "--manifest",
+                str(manifest),
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_missing_empty_and_hash_mismatched_outputs_fail(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            manifest = self.make_shader_tree(root)
+            result = self.run_shader_audit(
+                root,
+                "--require-backends",
+                "metal,spirv,essl,dx11",
+                "--write-manifest",
+                str(manifest),
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+
+            output = root / "shaders/dx11/fs_skin_quad.bin"
+            output.unlink()
+            result = self.run_shader_audit(
+                root, "--require-backends", "metal,spirv,essl,dx11"
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("missing", result.stderr.lower())
+
+            output.write_bytes(b"")
+            result = self.run_shader_audit(
+                root, "--require-backends", "metal,spirv,essl,dx11"
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("empty", result.stderr.lower())
+
+            output.write_bytes(b"tampered")
+            result = self.run_shader_audit(
+                root,
+                "--require-backends",
+                "metal,spirv,essl,dx11",
+                "--manifest",
+                str(manifest),
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("manifest", result.stderr.lower())
+
+    def test_unexpected_shader_tree_change_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_shader_tree(root)
+            result = self.run_shader_audit(
+                root,
+                "--require-backends",
+                "metal,spirv,essl",
+                "--changed-path",
+                "shader_src/unrelated.sc",
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("unexpected shader-tree change", result.stderr.lower())
+
+    def test_multiple_shader_families_accept_each_others_generated_paths(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_shader_tree(root)
+            result = self.run_shader_audit(
+                root,
+                "--shader",
+                "skin_yuvrgb",
+                "--require-backends",
+                "metal,spirv,essl,dx11",
+                "--changed-path",
+                "shader_src/vs_skin_quad.sc",
+                "--changed-path",
+                "shaders/metal/fs_skin_yuvrgb.bin",
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_explicit_changed_path_cannot_hide_dirty_git_shader_tree(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_shader_tree(root)
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            subprocess.run(
+                ["git", "config", "user.email", "fixture@example.invalid"],
+                cwd=root,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Shader Fixture"],
+                cwd=root,
+                check=True,
+            )
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            subprocess.run(
+                ["git", "commit", "-qm", "fixture baseline"],
+                cwd=root,
+                check=True,
+            )
+            (root / "shader_src/unrelated.sc").write_text(
+                "unexpected\n", encoding="utf-8"
+            )
+            result = self.run_shader_audit(
+                root,
+                "--require-backends",
+                "metal,spirv,essl",
+                "--changed-path",
+                "shader_src/vs_skin_quad.sc",
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("shader_src/unrelated.sc", result.stderr)
 
 
 class IOSArtifactAuditTests(unittest.TestCase):
@@ -23,7 +201,13 @@ class IOSArtifactAuditTests(unittest.TestCase):
         app.mkdir()
         executable = "Fixture"
         source = root / "main.c"
-        source.write_text("int main(void) { return 0; }\n", encoding="utf-8")
+        source.write_text(
+            'const char buildIdentity[] = '
+            '"AsoBMaShowBuildIdentityV1|'
+            f'{BUILD_COMMIT}|{BUILD_CONFIGURATION}|{BUILD_SOURCE_CLEAN}";\n'
+            "int main(void) { return buildIdentity[0] == 0; }\n",
+            encoding="utf-8",
+        )
         subprocess.run(
             [
                 "xcrun",
@@ -61,19 +245,64 @@ class IOSArtifactAuditTests(unittest.TestCase):
             "NSPhotoLibraryUsageDescription": "Replay export access.",
             "NSPhotoLibraryAddUsageDescription": "Save replay exports.",
             "NSAppTransportSecurity": {"NSAllowsArbitraryLoads": True},
+            "UIFileSharingEnabled": True,
+            "LSSupportsOpeningDocumentsInPlace": True,
+            "UISupportsDocumentBrowser": True,
+            "AsoBMaShowBuildCommit": BUILD_COMMIT,
+            "AsoBMaShowBuildConfiguration": BUILD_CONFIGURATION,
+            "AsoBMaShowSourceClean": BUILD_SOURCE_CLEAN,
         }
         with (app / "Info.plist").open("wb") as handle:
             plistlib.dump(info, handle)
         (app / "FixtureIcon60x60@2x.png").write_bytes(b"fixture-icon")
+        shader_directory = app / "shaders/metal"
+        shader_directory.mkdir(parents=True)
+        (shader_directory / "vs_skin_quad.bin").write_bytes(b"metal-vertex")
+        (shader_directory / "fs_skin_quad.bin").write_bytes(b"metal-fragment")
+        (shader_directory / "vs_skin_yuvrgb.bin").write_bytes(b"metal-yuv-vertex")
+        (shader_directory / "fs_skin_yuvrgb.bin").write_bytes(b"metal-yuv-fragment")
         return app
 
     def run_audit(self, artifact: Path, *arguments: str):
+        environment = {
+            **os.environ,
+            "ASOBMASHOW_EXPECTED_BUILD_COMMIT": BUILD_COMMIT,
+            "ASOBMASHOW_EXPECTED_BUILD_CONFIGURATION": BUILD_CONFIGURATION,
+            "ASOBMASHOW_EXPECTED_SOURCE_CLEAN": BUILD_SOURCE_CLEAN,
+        }
         return subprocess.run(
             [str(AUDIT), *arguments, str(artifact)],
             cwd=ROOT,
             text=True,
             capture_output=True,
+            env=environment,
         )
+
+    def test_build_identity_must_match_plist_compiled_marker_and_expected_environment(self):
+        cases = (
+            ("AsoBMaShowBuildCommit", "f" * 40, "build commit"),
+            ("AsoBMaShowBuildConfiguration", "Debug", "build configuration"),
+            ("AsoBMaShowSourceClean", "0", "source-clean"),
+        )
+        for key, value, diagnostic in cases:
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as temp:
+                app = self.make_app(Path(temp))
+                self.mutate_plist(app, key, value)
+                result = self.run_audit(app)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(diagnostic, result.stderr.lower())
+
+        with tempfile.TemporaryDirectory() as temp:
+            app = self.make_app(Path(temp))
+            executable = app / "Fixture"
+            binary = executable.read_bytes().replace(
+                b"AsoBMaShowBuildIdentityV1|", b"AsoBMaShowInvalidIdentityV1|",
+                1,
+            )
+            executable.write_bytes(binary)
+            result = self.run_audit(app)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("compiled build identity", result.stderr.lower())
 
     def mutate_plist(self, app: Path, key: str, value) -> None:
         plist_path = app / "Info.plist"
@@ -107,6 +336,29 @@ class IOSArtifactAuditTests(unittest.TestCase):
             result = self.run_audit(ipa)
             self.assertEqual(0, result.returncode, result.stderr)
 
+    def test_missing_or_empty_metal_skin_shader_fails(self):
+        for name in (
+            "vs_skin_quad.bin",
+            "fs_skin_quad.bin",
+            "vs_skin_yuvrgb.bin",
+            "fs_skin_yuvrgb.bin",
+        ):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temp:
+                app = self.make_app(Path(temp))
+                (app / "shaders/metal" / name).unlink()
+                result = self.run_audit(app)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("Metal skin shader is missing", result.stderr)
+                self.assertIn(name, result.stderr)
+
+        with tempfile.TemporaryDirectory() as temp:
+            app = self.make_app(Path(temp))
+            (app / "shaders/metal/fs_skin_quad.bin").write_bytes(b"")
+            result = self.run_audit(app)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("Metal skin shader is empty", result.stderr)
+            self.assertIn("fs_skin_quad.bin", result.stderr)
+
     def test_release_metadata_failures_are_specific(self):
         cases = (
             ("CFBundleShortVersionString", "0.0.2", "version"),
@@ -117,6 +369,13 @@ class IOSArtifactAuditTests(unittest.TestCase):
             ("CFBundleIcons", {}, "icon"),
             ("NSMotionUsageDescription", "", "NSMotionUsageDescription"),
             ("NSAppTransportSecurity", {}, "NSAllowsArbitraryLoads"),
+            ("UIFileSharingEnabled", False, "UIFileSharingEnabled"),
+            (
+                "LSSupportsOpeningDocumentsInPlace",
+                False,
+                "LSSupportsOpeningDocumentsInPlace",
+            ),
+            ("UISupportsDocumentBrowser", False, "UISupportsDocumentBrowser"),
         )
         for key, value, diagnostic in cases:
             with self.subTest(key=key), tempfile.TemporaryDirectory() as temp:

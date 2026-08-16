@@ -43,6 +43,7 @@ void InputProfile::sanitize(std::vector<std::string> &diagnostics) {
   }
 
   gyroscopeTurntable.sanitize(diagnostics);
+  virtualController.sanitize(diagnostics);
 
   for (auto &binding : bindings) {
     if (binding.scope.player != 1 && binding.scope.player != 2) {

@@ -1,0 +1,7 @@
+local count = 18
+local subject = string.rep("a", count)
+local pattern = string.rep("a?", count) .. string.rep("a", count)
+for _ = 1, 1000 do
+  assert(string.match(subject, pattern))
+end
+return { phase = "header" }

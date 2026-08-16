@@ -283,7 +283,8 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   assistOptionLabel = makeLabel("Assist Option");
   addView(assistOptionLabel);
   auto *assistRow = makeRow();
-  for (const char *option : {assist_options::kOff, assist_options::kDrag}) {
+  for (const char *option : {assist_options::kOff, assist_options::kDrag,
+                             assist_options::kBpmGuide}) {
     TextView *text = nullptr;
     auto *button = makeButton(option, 18, &text);
     button->setOnClickListener([this, option = std::string(option)]() {
@@ -424,10 +425,13 @@ void PlayOptionsPanelView::refresh(const PlayOptionsPanelState &newState) {
                 !state.assistOptionLocked);
   }
   if (assistOptionLabel != nullptr) {
-    const bool assistedEasy = state.playbackRatePercent != 100 ||
-                              assist_options::isEnabled(state.assistOption);
-    assistOptionLabel->setText(assistedEasy ? "Assist Option - A-EASY enabled"
-                                            : "Assist Option");
+    if (state.playbackRatePercent != 100) {
+      assistOptionLabel->setText("Assist Option - Light Assist Easy");
+    } else if (assist_options::isEnabled(state.assistOption)) {
+      assistOptionLabel->setText("Assist Option - Light Assist Easy");
+    } else {
+      assistOptionLabel->setText("Assist Option");
+    }
   }
   if (playbackRateText != nullptr) {
     playbackRateText->setText(std::to_string(state.playbackRatePercent) + "%");

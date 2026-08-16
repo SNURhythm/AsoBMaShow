@@ -1,0 +1,17 @@
+local shared = require("runtime_shared")
+
+if skin_config then
+  assert(shared.marker == "header-mutated")
+  assert(__runtime_contract_global == "header-mutated")
+  assert(__runtime_contract_module_loads == 1)
+  assert(package.loaded.runtime_shared == shared)
+  return {
+    phase = "configured"
+  }
+end
+
+shared.marker = "header-mutated"
+__runtime_contract_global = "header-mutated"
+return {
+  phase = "header"
+}
