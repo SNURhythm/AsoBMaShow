@@ -12,6 +12,6 @@ createBuiltInPlayfieldPresentation(
       &creation.chart, creation.timingWindows,
       creation.visibleTimeDurationMilliseconds, creation.renderHud,
       creation.playbackRate);
-  presentation->setReplayData(creation.replayData);
+  presentation->setReplayData(creation.replayData, creation.replayGhostsEnabled);
   return presentation;
 }

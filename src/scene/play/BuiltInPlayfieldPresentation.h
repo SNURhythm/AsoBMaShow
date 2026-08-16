@@ -49,6 +49,10 @@ struct BuiltInPlayfieldPresentationCreateInfo {
   // replay ghosts/touches before the factory returns and retains no ReplayData
   // pointer.
   const ReplayData *replayData = nullptr;
+  // Ghosts and miss markers are optional replay overlays.  Touch samples are
+  // still copied when this is false so touch visualization remains independent
+  // from the ghost option.
+  bool replayGhostsEnabled = true;
 };
 
 [[nodiscard]] std::unique_ptr<BuiltInPlayfieldPresentation>

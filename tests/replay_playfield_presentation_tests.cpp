@@ -374,6 +374,20 @@ void testModelReplayGhostsRetainRawLanesAndTimelinePositions() {
          "model-backed replay ghosts retain raw lanes and timeline positions");
 }
 
+void testReplayGhostVisibleScrollRangeSharesBuiltInOrdering() {
+  const std::array events{
+      ReplayGhostEvent{.lane = 1, .judgeScrollPosition = -3.0},
+      ReplayGhostEvent{.lane = 2, .judgeScrollPosition = 0.5},
+      ReplayGhostEvent{.lane = 3, .judgeScrollPosition = 1.25},
+      ReplayGhostEvent{.lane = 4, .judgeScrollPosition = 3.0},
+  };
+  const auto visible = replay_ghost::visibleEventsInScrollRange(
+      events, 0.0, 1.5);
+  expect(visible.size() == 2 && visible[0].lane == 2 &&
+             visible[1].lane == 3,
+         "replay ghost range returns only scroll-visible sorted events");
+}
+
 void testExportPixelSizesMapToLogicalGameplayBounds() {
   const auto default4k =
       replay_video_export::replayGameplayLogicalUiBounds(3840, 2160);
@@ -1332,8 +1346,9 @@ void testSelectedReadySkinReceivesOneInitialSnapshotAndSubmitsSkinFrame() {
   expect(frame.frameSerial == 8 &&
              frame.outcome == PresentationFrameOutcome::Ready &&
              frame.submittedMode == PresentationMode::Skin &&
+             !created.presentation->lastFrameBuiltBuiltInPlanForTesting() &&
              bga.prepareCalls == 1 && bga.fullscreenCalls == 0,
-         "selected ready skin renders one coordinator frame without built-in submission");
+         "selected ready skin renders one bounded skin frame without built-in submission");
 }
 
 void testSelectedSkinRuntimeFailureDoesNotSubmitBuiltIn() {
@@ -1452,6 +1467,11 @@ void testBuiltInReplayPresentationPreprocessesGhostsAndMisses() {
        .judgeTimeMicros = 1'020,
        .judgement = Bad},
   };
+  replay.touchSamples = {{.action = ReplayTouchAction::Down,
+                          .fingerId = 9,
+                          .songTimeMicros = 1'000,
+                          .x = 0.25F,
+                          .y = 0.75F}};
   AppSettings settings;
   PlayfieldPresentationConfig configuration;
   TestBga bga;
@@ -1464,6 +1484,21 @@ void testBuiltInReplayPresentationPreprocessesGhostsAndMisses() {
              created.presentation->builtInRenderer()
                      .replayMissMarkerCountForTesting() == 1,
          "built-in replay presentation receives ghost and miss-marker replay data");
+
+  PlayfieldPresentationConfig ghostsDisabled;
+  ghostsDisabled.replayGhostRenderingEnabled = false;
+  auto disabledInfo = createInfo(chart, settings, ghostsDisabled, bga);
+  disabledInfo.replayData = &replay;
+  const auto disabled =
+      ReplayPlayfieldPresentation::create(std::move(disabledInfo));
+  expect(disabled.presentation != nullptr &&
+             disabled.presentation->builtInRenderer()
+                     .replayGhostEventCountForTesting() == 0 &&
+             disabled.presentation->builtInRenderer()
+                     .replayMissMarkerCountForTesting() == 0 &&
+             disabled.presentation->builtInRenderer()
+                     .replayTouchSampleCountForTesting() == 1,
+         "disabled replay ghosts skip ghost and miss-marker preprocessing but retain touches");
 }
 
 void testAppliedJudgeCarriesTheProvidedBgaClockIntoSnapshot() {
@@ -1877,6 +1912,7 @@ int main() {
   rendering::PosTexVertex::init();
   rendering::PosTexCoord0Vertex::init();
   testModelReplayGhostsRetainRawLanesAndTimelinePositions();
+  testReplayGhostVisibleScrollRangeSharesBuiltInOrdering();
   testExportPixelSizesMapToLogicalGameplayBounds();
   testReplayExportConfigPreservesGameplayPresentationSettings();
   testReplayExportConfigCarriesBpmGuide();

@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <ranges>
 
 namespace skin {
@@ -201,7 +202,43 @@ SkinCommandBuffer buildSyntheticReplayGhostOverlay(
     return result;
   }
 
-  for (const ReplayGhostEvent &event : input.events) {
+  const double scrollScale = geometry.sharedLaneHeight * input.hispeed;
+  if (!std::isfinite(scrollScale) || scrollScale <= 0.0) {
+    return result;
+  }
+  double firstVisibleScrollPosition = std::numeric_limits<double>::infinity();
+  double lastVisibleScrollPosition =
+      -std::numeric_limits<double>::infinity();
+  for (const auto &lane : geometry.lanes) {
+    if (!validRect(lane.normalNote) || !validRect(lane.clip)) {
+      continue;
+    }
+    const double clipTop = std::max(lane.clip.y, sharedPlayArea.y);
+    const double clipBottom =
+        std::min(lane.clip.y + lane.clip.height, laneCoverBottom);
+    if (!std::isfinite(clipTop) || !std::isfinite(clipBottom) ||
+        clipBottom <= clipTop) {
+      continue;
+    }
+    firstVisibleScrollPosition = std::min(
+        firstVisibleScrollPosition,
+        input.currentScrollPosition +
+            (clipTop - lane.normalNote.y - lane.normalNote.height) /
+                scrollScale);
+    lastVisibleScrollPosition = std::max(
+        lastVisibleScrollPosition,
+        input.currentScrollPosition +
+            (clipBottom - lane.normalNote.y) / scrollScale);
+  }
+  if (!std::isfinite(firstVisibleScrollPosition) ||
+      !std::isfinite(lastVisibleScrollPosition) ||
+      lastVisibleScrollPosition < firstVisibleScrollPosition) {
+    return result;
+  }
+
+  const auto visibleEvents = replay_ghost::visibleEventsInScrollRange(
+      input.events, firstVisibleScrollPosition, lastVisibleScrollPosition);
+  for (const ReplayGhostEvent &event : visibleEvents) {
     if (event.judgeTimeMicros < input.visualTimeMicros ||
         !std::isfinite(event.judgeScrollPosition)) {
       continue;

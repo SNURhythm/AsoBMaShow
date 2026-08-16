@@ -53,18 +53,32 @@ ReplayPlayfieldPresentation::ReplayPlayfieldPresentation(
     throw std::invalid_argument(
         "ReplayPlayfieldPresentation requires a coordinator and BMSRenderer");
   }
-  std::unordered_map<ChartVisualId, long long> timelineTimeById;
-  timelineTimeById.reserve(chartModel_->timelines.size());
+  timelineTimeById_.reserve(chartModel_->timelines.size());
+  std::unordered_map<long long, ChartVisualId> firstTimelineIdByTime;
+  firstTimelineIdByTime.reserve(chartModel_->timelines.size());
   for (const auto &timeline : chartModel_->timelines) {
-    timelineTimeById.emplace(timeline.id, timeline.timeMicros);
+    timelineTimeById_.emplace(timeline.id, timeline.timeMicros);
+    firstTimelineIdByTime.try_emplace(timeline.timeMicros, timeline.id);
   }
+  notesById_.reserve(chartModel_->notes.size());
+  replayNotesByTimeLaneAndSource_.reserve(chartModel_->notes.size());
   for (const auto &note : chartModel_->notes) {
+    notesById_.emplace(note.id, &note);
     noteStates_.emplace(note.id, NotePresentationState{.id = note.id});
     lanePressed_.try_emplace(note.lane, false);
+    if (const auto timelineTime = timelineTimeById_.find(note.timelineId);
+        timelineTime != timelineTimeById_.end() &&
+        firstTimelineIdByTime.at(timelineTime->second) == note.timelineId) {
+      replayNotesByTimeLaneAndSource_.try_emplace(
+          ReplayNoteLookupKey{.timeMicros = timelineTime->second,
+                              .lane = note.lane,
+                              .source = note.source},
+          &note);
+    }
     if (note.kind == ChartVisualNoteKind::LongHead &&
         note.longNoteMode == ChartLongNoteMode::HCN) {
-      if (const auto timeline = timelineTimeById.find(note.timelineId);
-          timeline != timelineTimeById.end()) {
+      if (const auto timeline = timelineTimeById_.find(note.timelineId);
+          timeline != timelineTimeById_.end()) {
         hcnPairs_.push_back({.headId = note.id,
                              .tailId = note.pairId,
                              .lane = note.lane,
@@ -79,18 +93,12 @@ ReplayPlayfieldPresentation::ReplayPlayfieldPresentation(
   }
   std::sort(classicLongTailIds_.begin(), classicLongTailIds_.end(),
             [this](ChartVisualId leftId, ChartVisualId rightId) {
-              const auto left = std::ranges::find(
-                  chartModel_->notes, leftId, &ChartVisualNote::id);
-              const auto right = std::ranges::find(
-                  chartModel_->notes, rightId, &ChartVisualNote::id);
-              const auto timelineTime = [this](const ChartVisualNote &note) {
-                return std::ranges::find(chartModel_->timelines,
-                                         note.timelineId,
-                                         &ChartVisualTimeline::id)
-                    ->timeMicros;
-              };
-              const long long leftTime = timelineTime(*left);
-              const long long rightTime = timelineTime(*right);
+              const auto *left = notesById_.at(leftId);
+              const auto *right = notesById_.at(rightId);
+              const long long leftTime =
+                  timelineTimeById_.at(left->timelineId);
+              const long long rightTime =
+                  timelineTimeById_.at(right->timelineId);
               return leftTime == rightTime ? left->lane < right->lane
                                            : leftTime < rightTime;
             });
@@ -139,6 +147,7 @@ ReplayPlayfieldPresentationCreateResult ReplayPlayfieldPresentation::create(
       .renderHud = true,
       .playbackRate = creation.playback,
       .replayData = creation.replayData,
+      .replayGhostsEnabled = creation.configuration.replayGhostRenderingEnabled,
   });
   auto *renderer = dynamic_cast<BMSRenderer *>(builtIn.get());
   if (renderer == nullptr) {
@@ -189,7 +198,7 @@ ReplayPlayfieldPresentationCreateResult ReplayPlayfieldPresentation::create(
           .persistViewport = {},
           .recordFailure = std::move(creation.recordFailure),
           .replayGhostEvents =
-              creation.replayData
+              creation.configuration.replayGhostRenderingEnabled && creation.replayData
                   ? replay_ghost::buildReplayGhostEvents(*creation.replayData,
                                                          *model)
                   : std::vector<ReplayGhostEvent>{},
@@ -257,23 +266,15 @@ ReplayPlayfieldPresentation::replayNote(const ReplayEvent &event) const {
   if (event.noteTimeMicros < 0) {
     return nullptr;
   }
-  const auto timeline = std::ranges::find_if(
-      chartModel_->timelines, [&event](const ChartVisualTimeline &value) {
-        return value.timeMicros == event.noteTimeMicros;
-      });
-  if (timeline == chartModel_->timelines.end()) {
-    return nullptr;
-  }
-  const auto note = std::ranges::find_if(
-      chartModel_->notes, [&event, timeline](const ChartVisualNote &value) {
-        const ChartVisualNoteSource expectedSource =
-            event.action == ReplayEventAction::Mine
-                ? ChartVisualNoteSource::Mine
-                : ChartVisualNoteSource::Playable;
-        return value.timelineId == timeline->id && value.lane == event.lane &&
-               value.source == expectedSource;
-      });
-  return note == chartModel_->notes.end() ? nullptr : &*note;
+  const ChartVisualNoteSource expectedSource =
+      event.action == ReplayEventAction::Mine ? ChartVisualNoteSource::Mine
+                                               : ChartVisualNoteSource::Playable;
+  const auto note = replayNotesByTimeLaneAndSource_.find(
+      {.timeMicros = event.noteTimeMicros,
+       .lane = event.lane,
+       .source = expectedSource});
+  return note == replayNotesByTimeLaneAndSource_.end() ? nullptr
+                                                        : note->second;
 }
 
 NotePresentationState *
@@ -378,9 +379,7 @@ void ReplayPlayfieldPresentation::markReplayMissedNote(
   // before its authored time stays non-dead; both endpoints lose holding.
   const bool tailJudgedBeforeTiming =
       note.kind == ChartVisualNoteKind::LongTail &&
-      judgedTimeMicros < std::ranges::find(chartModel_->timelines, note.timelineId,
-                                            &ChartVisualTimeline::id)
-                             ->timeMicros;
+      judgedTimeMicros < timelineTimeById_.at(note.timelineId);
   current->dead = !tailJudgedBeforeTiming;
   current->longActive = false;
   setHcnHolding(note, false);
@@ -517,12 +516,9 @@ void ReplayPlayfieldPresentation::releaseDueClassicLongNoteTails(
     long long gameplayTimeMicros) {
   while (classicLongTailCursor_ < classicLongTailIds_.size()) {
     const ChartVisualId tailId = classicLongTailIds_[classicLongTailCursor_];
-    const auto note = std::ranges::find(chartModel_->notes, tailId,
-                                        &ChartVisualNote::id);
-    const auto timeline = std::ranges::find(chartModel_->timelines,
-                                            note->timelineId,
-                                            &ChartVisualTimeline::id);
-    if (timeline->timeMicros > gameplayTimeMicros) {
+    const auto *note = notesById_.at(tailId);
+    const long long timelineTime = timelineTimeById_.at(note->timelineId);
+    if (timelineTime > gameplayTimeMicros) {
       break;
     }
     if (auto *tail = noteState(tailId);
@@ -531,7 +527,7 @@ void ReplayPlayfieldPresentation::releaseDueClassicLongNoteTails(
       // legacy exporter: the tail is played at its authored time and both
       // endpoints stop holding without an extra replay judgement.
       tail->judged = true;
-      tail->playedTimeMicros = timeline->timeMicros;
+      tail->playedTimeMicros = timelineTime;
       tail->longActive = false;
       publishNoteState(tailId);
       if (auto *head = noteState(note->pairId); head != nullptr) {
@@ -553,6 +549,11 @@ PresentationFrameResult ReplayPlayfieldPresentation::renderFrame(
   PlayfieldProjectionRequest effectiveRequest = request;
   effectiveRequest.bpmGuideEnabled =
       effectiveRequest.bpmGuideEnabled || configuration_.bpmGuideEnabled;
+  // A selected skin consumes generic DTOs only. BMSRenderer's compatibility
+  // plan remains necessary for built-in replay frames because parser note
+  // state is intentionally immutable in this adapter.
+  effectiveRequest.buildBuiltInPlan =
+      coordinator_->activeMode() != PresentationMode::Skin;
   if (!effectiveRequest.builtInTraversal) {
     effectiveRequest.builtInTraversal = builtIn_->projectionTraversal();
   }
@@ -562,6 +563,9 @@ PresentationFrameResult ReplayPlayfieldPresentation::renderFrame(
   }
   const PlayfieldProjectionResult projection =
       projection_->project(*chartModel_, state, effectiveRequest);
+#if defined(ASOBMASHOW_REPLAY_PLAYFIELD_PRESENTATION_TESTING)
+  lastFrameBuiltBuiltInPlanForTesting_ = !projection.builtInPlan.entries.empty();
+#endif
   (void)coordinator_->prepareFrame(state, projection);
   return coordinator_->render(context);
 }

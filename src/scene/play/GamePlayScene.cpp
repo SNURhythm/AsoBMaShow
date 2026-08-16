@@ -2501,6 +2501,8 @@ void GamePlayScene::init() {
       .renderHud = true,
       .playbackRate = options.playback,
       .replayData = options.replayData.get(),
+      .replayGhostsEnabled =
+          options.replayGhostRenderingEnabled.value_or(true),
   });
   builtInPresentation = builtIn.get();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
@@ -2535,7 +2537,8 @@ void GamePlayScene::init() {
                         : std::optional<std::uint64_t>(failure.frameSerial));
               },
           .replayGhostEvents =
-              options.replayData
+              options.replayGhostRenderingEnabled.value_or(true) &&
+                      options.replayData
                   ? replay_ghost::buildReplayGhostEvents(
                         *options.replayData, playfieldChartVisualModel)
                   : std::vector<ReplayGhostEvent>{},

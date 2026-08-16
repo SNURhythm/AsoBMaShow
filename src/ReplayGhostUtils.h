@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <span>
 #include <unordered_map>
 #include <vector>
 
@@ -25,6 +26,25 @@ struct ReplayMissMarker {
 };
 
 namespace replay_ghost {
+
+// Replay ghosts are sorted once by judge scroll position. Both built-in and
+// selected-skin rendering consume this exact bounded slice per frame.
+[[nodiscard]] inline std::span<const ReplayGhostEvent>
+visibleEventsInScrollRange(std::span<const ReplayGhostEvent> events,
+                           double firstVisibleScrollPosition,
+                           double lastVisibleScrollPosition) {
+  const auto first = std::lower_bound(
+      events.begin(), events.end(), firstVisibleScrollPosition,
+      [](const ReplayGhostEvent &event, double scrollPosition) {
+        return event.judgeScrollPosition < scrollPosition;
+      });
+  const auto last = std::upper_bound(
+      first, events.end(), lastVisibleScrollPosition,
+      [](double scrollPosition, const ReplayGhostEvent &event) {
+        return scrollPosition < event.judgeScrollPosition;
+      });
+  return {first, static_cast<std::size_t>(std::distance(first, last))};
+}
 
 namespace detail {
 

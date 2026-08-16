@@ -234,20 +234,32 @@ TimelinePositionWalk walkTimelinePositions(
   return result;
 }
 
-} // namespace
+std::vector<const ChartVisualTimeline *>
+orderedProjectionTimelines(const PlayfieldChartVisualModel &model) {
+  std::vector<const ChartVisualTimeline *> result;
+  result.reserve(model.timelines.size());
+  for (const auto &timeline : model.timelines) {
+    result.push_back(&timeline);
+  }
+  std::stable_sort(result.begin(), result.end(),
+                   [](const auto *left, const auto *right) {
+                     return std::tie(left->authoredOrdinal, left->id) <
+                            std::tie(right->authoredOrdinal, right->id);
+                   });
+  return result;
+}
 
-double scrollPositionAtTime(const PlayfieldChartVisualModel &model,
-                            long long timeMicros) {
-  std::vector<const ChartVisualTimeline *> retained;
-  retained.reserve(model.timelines.size());
+std::vector<const ChartVisualTimeline *>
+retainedScrollTimelines(const PlayfieldChartVisualModel &model) {
+  std::vector<const ChartVisualTimeline *> result;
+  result.reserve(model.timelines.size());
   for (const auto &timeline : model.timelines) {
     if (timeline.retainedForProjection) {
-      retained.push_back(&timeline);
+      result.push_back(&timeline);
     }
   }
   std::stable_sort(
-      retained.begin(), retained.end(),
-      [](const auto *left, const auto *right) {
+      result.begin(), result.end(), [](const auto *left, const auto *right) {
         const auto leftOrdinal =
             left->retainedOrdinal == kNoRetainedTimelineOrdinal
                 ? left->authoredOrdinal
@@ -259,21 +271,43 @@ double scrollPositionAtTime(const PlayfieldChartVisualModel &model,
         return std::tie(leftOrdinal, left->authoredOrdinal, left->id) <
                std::tie(rightOrdinal, right->authoredOrdinal, right->id);
       });
-  std::vector<gameplay_scroll_geometry::ScrollPositionTimeline> values;
-  values.reserve(retained.size() + 1);
-  for (const auto *timeline : retained) {
-    values.push_back({.timeMicros = timeline->timeMicros,
+  return result;
+}
+
+std::vector<gameplay_scroll_geometry::ScrollPositionTimeline>
+scrollPositionTimelines(
+    std::span<const ChartVisualTimeline *const> orderedTimelines,
+    const std::optional<gameplay_scroll_geometry::ScrollPositionTimeline>
+        &terminalScrollAnchor) {
+  std::vector<gameplay_scroll_geometry::ScrollPositionTimeline> result;
+  result.reserve(orderedTimelines.size() + 1U);
+  for (const auto *timeline : orderedTimelines) {
+    if (!timeline->retainedForProjection) {
+      continue;
+    }
+    result.push_back({.timeMicros = timeline->timeMicros,
                       .scrollPosition = timeline->scrollPosition,
                       .stopMicros = timeline->stopMicros,
                       .bpm = timeline->bpm,
                       .scrollRate = timeline->scrollRate});
   }
-  if (model.terminalScrollAnchor.has_value() &&
-      (values.empty() || values.back().timeMicros <
-                             model.terminalScrollAnchor->timeMicros)) {
-    values.push_back(*model.terminalScrollAnchor);
+  if (terminalScrollAnchor.has_value() &&
+      (result.empty() ||
+       result.back().timeMicros < terminalScrollAnchor->timeMicros)) {
+    result.push_back(*terminalScrollAnchor);
   }
-  return gameplay_scroll_geometry::scrollPositionAtTime(values, timeMicros);
+  return result;
+}
+
+} // namespace
+
+double scrollPositionAtTime(const PlayfieldChartVisualModel &model,
+                            long long timeMicros) {
+  const auto orderedTimelines = retainedScrollTimelines(model);
+  const auto scrollTimelines = scrollPositionTimelines(
+      orderedTimelines, model.terminalScrollAnchor);
+  return gameplay_scroll_geometry::scrollPositionAtTime(scrollTimelines,
+                                                         timeMicros);
 }
 
 void PlayfieldProjection::rebuildIndex(const PlayfieldChartVisualModel &model) {
@@ -299,29 +333,19 @@ void PlayfieldProjection::rebuildIndex(const PlayfieldChartVisualModel &model) {
     previousTimeline = timeline;
   }
   index_.retainedTimelines.reserve(index_.orderedTimelines.size());
-  index_.scrollTimelines.reserve(index_.orderedTimelines.size() + 1U);
   for (const auto *timeline : index_.orderedTimelines) {
     if (!timeline->retainedForProjection) {
       continue;
     }
-    index_.scrollTimelines.push_back(
-        {.timeMicros = timeline->timeMicros,
-         .scrollPosition = timeline->scrollPosition,
-         .stopMicros = timeline->stopMicros,
-         .bpm = timeline->bpm,
-         .scrollRate = timeline->scrollRate});
     if (timeline->retainedOrdinal != kNoRetainedTimelineOrdinal) {
       index_.retainedTimelines.push_back(timeline);
       index_.retainedTimelinesByOrdinal.emplace(timeline->retainedOrdinal,
                                                 timeline);
     }
   }
-  if (model.terminalScrollAnchor.has_value() &&
-      (index_.scrollTimelines.empty() ||
-       index_.scrollTimelines.back().timeMicros <
-           model.terminalScrollAnchor->timeMicros)) {
-    index_.scrollTimelines.push_back(*model.terminalScrollAnchor);
-  }
+  index_.scrollTimelines =
+      scrollPositionTimelines(index_.orderedTimelines,
+                              model.terminalScrollAnchor);
 
   index_.notesById.reserve(model.notes.size());
   index_.orderedNotes.reserve(model.notes.size());
@@ -1292,18 +1316,17 @@ buildReplayGhostEvents(const ReplayData &replayData,
                        const PlayfieldChartVisualModel &model) {
   std::unordered_set<int> playableLanes(model.laneOrder.begin(),
                                         model.laneOrder.end());
+  const auto orderedTimelines = retainedScrollTimelines(model);
   std::vector<long long> timelineTimes;
-  timelineTimes.reserve(model.timelines.size());
-  for (const auto &timeline : model.timelines) {
-    // Match BMSRenderer's ordered timeline input: discarded chart rows do not
-    // participate in either note projection or replay-ghost lookup.
-    if (timeline.retainedForProjection) {
-      timelineTimes.push_back(timeline.timeMicros);
-    }
+  timelineTimes.reserve(orderedTimelines.size());
+  for (const auto *timeline : orderedTimelines) {
+    timelineTimes.push_back(timeline->timeMicros);
   }
   std::ranges::sort(timelineTimes);
   timelineTimes.erase(std::unique(timelineTimes.begin(), timelineTimes.end()),
                       timelineTimes.end());
+  const auto scrollTimelines = scrollPositionTimelines(
+      orderedTimelines, model.terminalScrollAnchor);
   return detail::buildReplayGhostEvents(
       replayData,
       [&playableLanes](int lane) {
@@ -1313,7 +1336,10 @@ buildReplayGhostEvents(const ReplayData &replayData,
         return std::binary_search(timelineTimes.begin(), timelineTimes.end(),
                                   time);
       },
-      [&model](long long time) { return scrollPositionAtTime(model, time); });
+      [&scrollTimelines](long long time) {
+        return gameplay_scroll_geometry::scrollPositionAtTime(scrollTimelines,
+                                                               time);
+      });
 }
 
 } // namespace replay_ghost

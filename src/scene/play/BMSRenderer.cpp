@@ -2480,20 +2480,9 @@ void BMSRenderer::drawReplayGhosts(float rxhs, long long currentTimeMicros,
   const double firstVisibleScrollPosition = visible.minimum;
   const double lastVisibleScrollPosition = visible.maximum;
 
-  const auto firstVisible = std::lower_bound(
-      replayGhostEvents.begin(), replayGhostEvents.end(),
-      firstVisibleScrollPosition,
-      [](const ReplayGhostEvent &event, double scrollPosition) {
-        return event.judgeScrollPosition < scrollPosition;
-      });
-  const auto lastVisible = std::upper_bound(
-      firstVisible, replayGhostEvents.end(), lastVisibleScrollPosition,
-      [](double scrollPosition, const ReplayGhostEvent &event) {
-        return scrollPosition < event.judgeScrollPosition;
-      });
-
-  for (auto it = firstVisible; it != lastVisible; ++it) {
-    const auto &event = *it;
+  const auto visibleEvents = replay_ghost::visibleEventsInScrollRange(
+      replayGhostEvents, firstVisibleScrollPosition, lastVisibleScrollPosition);
+  for (const auto &event : visibleEvents) {
     if (event.judgeTimeMicros < currentTimeMicros) {
       continue;
     }
@@ -4777,7 +4766,8 @@ void BMSRenderer::setPlayOptionStatus(const std::string &label) {
   playOptionText->setText(label);
 }
 
-void BMSRenderer::setReplayData(const ReplayData *replayData) {
+void BMSRenderer::setReplayData(const ReplayData *replayData,
+                                bool preprocessGhosts) {
   replayGhostEvents.clear();
   replayMissMarkers.clear();
   replayTouchSamples.clear();
@@ -4789,17 +4779,23 @@ void BMSRenderer::setReplayData(const ReplayData *replayData) {
     return;
   }
 
-  std::vector<const bms_parser::TimeLine *> timelineRefs;
-  timelineRefs.reserve(timelines.size());
-  for (const auto *timeline : timelines) {
-    timelineRefs.push_back(timeline);
+  if (preprocessGhosts) {
+    std::vector<const bms_parser::TimeLine *> timelineRefs;
+    timelineRefs.reserve(timelines.size());
+    for (const auto *timeline : timelines) {
+      timelineRefs.push_back(timeline);
+    }
+    replayGhostEvents = replay_ghost::buildReplayGhostEvents(
+        *replayData, timelineRefs, laneToOrderIndex,
+        [this](long long timeMicros) {
+          return scrollPositionAtTime(timeMicros);
+        });
+    replayMissMarkers = replay_ghost::buildReplayMissMarkers(
+        *replayData, timelineRefs, laneToOrderIndex,
+        [this](long long timeMicros) {
+          return scrollPositionAtTime(timeMicros);
+        });
   }
-  replayGhostEvents = replay_ghost::buildReplayGhostEvents(
-      *replayData, timelineRefs, laneToOrderIndex,
-      [this](long long timeMicros) { return scrollPositionAtTime(timeMicros); });
-  replayMissMarkers = replay_ghost::buildReplayMissMarkers(
-      *replayData, timelineRefs, laneToOrderIndex,
-      [this](long long timeMicros) { return scrollPositionAtTime(timeMicros); });
   replayTouchSamples = replayData->touchSamples;
   std::stable_sort(replayTouchSamples.begin(), replayTouchSamples.end(),
                    [](const ReplayTouchSample &a, const ReplayTouchSample &b) {

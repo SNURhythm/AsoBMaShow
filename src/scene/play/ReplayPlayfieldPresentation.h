@@ -85,9 +85,37 @@ public:
   void setDestructionObserverForTesting(std::function<void()> observer) {
     destructionObserverForTesting_ = std::move(observer);
   }
+  [[nodiscard]] bool
+  lastFrameBuiltBuiltInPlanForTesting() const noexcept {
+    return lastFrameBuiltBuiltInPlanForTesting_;
+  }
 #endif
 
 private:
+  // Replay events resolve to the first model timeline at a timestamp, then a
+  // lane/source in that timeline.  Cache that existing lookup at construction
+  // so a dense autoplay replay does not rescan the immutable chart per event.
+  struct ReplayNoteLookupKey {
+    long long timeMicros = 0;
+    int lane = -1;
+    ChartVisualNoteSource source = ChartVisualNoteSource::Playable;
+
+    bool operator==(const ReplayNoteLookupKey &) const = default;
+  };
+
+  struct ReplayNoteLookupKeyHash {
+    [[nodiscard]] std::size_t
+    operator()(const ReplayNoteLookupKey &key) const noexcept {
+      std::size_t hash = std::hash<long long>{}(key.timeMicros);
+      hash ^= std::hash<int>{}(key.lane) + 0x9e3779b9U + (hash << 6U) +
+              (hash >> 2U);
+      hash ^= std::hash<unsigned int>{}(
+                  static_cast<unsigned int>(key.source)) +
+              0x9e3779b9U + (hash << 6U) + (hash >> 2U);
+      return hash;
+    }
+  };
+
   struct HcnPairPlaybackState {
     ChartVisualId headId = 0;
     ChartVisualId tailId = 0;
@@ -126,6 +154,11 @@ private:
   gameplay_hispeed::State hispeed_;
   std::optional<skin::RuntimeSkinConfigurationSelection>
       runtimeSkinConfigurationSelection_;
+  std::unordered_map<ChartVisualId, long long> timelineTimeById_;
+  std::unordered_map<ChartVisualId, const ChartVisualNote *> notesById_;
+  std::unordered_map<ReplayNoteLookupKey, const ChartVisualNote *,
+                     ReplayNoteLookupKeyHash>
+      replayNotesByTimeLaneAndSource_;
   std::unordered_map<ChartVisualId, NotePresentationState> noteStates_;
   std::unordered_map<int, bool> lanePressed_;
   std::vector<HcnPairPlaybackState> hcnPairs_;
@@ -136,5 +169,6 @@ private:
   int stagePassedNotes_ = 0;
 #if defined(ASOBMASHOW_REPLAY_PLAYFIELD_PRESENTATION_TESTING)
   std::function<void()> destructionObserverForTesting_;
+  bool lastFrameBuiltBuiltInPlanForTesting_ = false;
 #endif
 };
