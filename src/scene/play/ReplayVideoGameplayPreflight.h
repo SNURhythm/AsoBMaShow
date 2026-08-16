@@ -19,6 +19,11 @@ namespace replay_video_export {
 
 inline constexpr long long kReplayResultScreenTailMicros = 10'000'000;
 
+// Export callers may provide an already-parsed chart instead of going through
+// play_options::prepareReplayChart. Apply the replay's recorded long-note
+// mode before constructing any score, timing, or skin state from that chart.
+void prepareReplayChartForExport(bms_parser::Chart &, const ReplayData &);
+
 [[nodiscard]] skin::UiLogicalRect
 replayGameplayLogicalUiBounds(int exportWidth, int exportHeight) noexcept;
 

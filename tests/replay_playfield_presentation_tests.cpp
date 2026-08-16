@@ -2,6 +2,7 @@
 #include "scene/play/ReplayVideoGameplayPreflight.h"
 #include "CourseConstraintUtils.h"
 #include "PreparationPlan.h"
+#include "ReplayAutoPlay.h"
 #include "ReplayGhostUtils.h"
 #include "ResultPresentationUtils.h"
 #include "skin/beatoraja/GameplaySkinValidator.h"
@@ -1890,6 +1891,71 @@ void testReplayAdapterCarriesStageFullComboAuthority() {
          "replay reducer retains stage-local full-combo authority instead of course combo");
 }
 
+void testAutoplayReplayReducerMatchesEffectiveScorableTotal() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  auto *measure = new bms_parser::Measure;
+  chart.Measures.push_back(measure);
+  auto *normalTimeline = new bms_parser::TimeLine(8, false);
+  normalTimeline->Timing = 1'000;
+  normalTimeline->SetNote(1, new bms_parser::Note(bms_parser::Parser::NoWav));
+  measure->TimeLines.push_back(normalTimeline);
+  addLongNotePair(chart, bms_parser::LongNoteType::ChargeNote, 2, 2'000,
+                  3'000);
+  addLongNotePair(chart, bms_parser::LongNoteType::HellChargeNote, 3, 4'000,
+                  5'000);
+  applyEffectiveLongNoteModeToChart(chart);
+  const auto expected = buildPlayfieldChartVisualModel(chart, chart.Meta.LnMode)
+                            .staticMetadata.totalNotes;
+  const ReplayData replay = replay_autoplay::BuildReplayData(
+      chart, GaugeType::Normal, GaugeAutoShiftMode::None);
+
+  AppSettings settings;
+  PlayfieldPresentationConfig configuration;
+  TestBga bga;
+  const auto created = ReplayPlayfieldPresentation::create(
+      createInfo(chart, settings, configuration, bga));
+  if (!created.presentation) {
+    expect(false, "autoplay replay adapter is created");
+    return;
+  }
+  for (const auto &event : replay.events) {
+    (void)created.presentation->applyReplayEvent(
+        event,
+        {.songTimeMicros = event.songTimeMicros,
+         .visualTimeMicros = event.songTimeMicros,
+         .bgaTimeMicros = event.songTimeMicros},
+        true);
+  }
+  created.presentation->applyAuthorityUpdate({});
+  const auto state = created.presentation->captureVisualStateForTesting({});
+  expect(expected == 5 && chart.Meta.TotalNotes == expected &&
+             state.authority.stagePassedNotes == expected &&
+             state.score == replay.finalScore &&
+             state.score == expected * 2,
+         "autoplay export reduces normal, CN, and HCN endpoints to the same "
+         "Beatoraja scorable total as the selected skin");
+}
+
+void testReplayExportPreparesSavedLongNoteScoreMetadata() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 1;
+  addLongNotePair(chart, bms_parser::LongNoteType::Undefined, 1, 1'000,
+                  2'000);
+  ReplayData replay;
+  replay.chartMeta.LnMode = long_note_mode::kCnValue;
+
+  replay_video_export::prepareReplayChartForExport(chart, replay);
+
+  expect(chart.Meta.LnMode == long_note_mode::kCnValue &&
+             chart.Meta.TotalNotes == 2 &&
+             buildPlayfieldChartVisualModel(chart, chart.Meta.LnMode)
+                     .staticMetadata.totalNotes == chart.Meta.TotalNotes,
+         "direct replay export applies the saved long-note mode before the "
+         "skin model and score reducer are created");
+}
+
 } // namespace
 
 int main() {
@@ -1951,6 +2017,8 @@ int main() {
   testMineReplayEventFindsLandmineSource();
   testMaximumComboAdvancesOnlyWithAppliedReplayEvents();
   testReplayAdapterCarriesStageFullComboAuthority();
+  testAutoplayReplayReducerMatchesEffectiveScorableTotal();
+  testReplayExportPreparesSavedLongNoteScoreMetadata();
   bgfx::shutdown();
   SDL_Quit();
   if (failures != 0) {

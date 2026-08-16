@@ -3992,6 +3992,7 @@ ReplayVideoExporter::Export(ApplicationContext &context,
   }
   reportReplayExportProgress(options, 0.0, "Preparing export");
 
+  replay_video_export::prepareReplayChartForExport(*chart, replay);
   const auto resolvedOptions = resolveReplayVideoExportOptions(options);
   const preparation::Plan preparationPlan = preparation::buildNormalPlan(
       *chart, context.settings.startLaneIndicatorsEnabled,
@@ -4214,6 +4215,7 @@ ReplayVideoExportResult exportCourseReplayImpl(
       return {.success = false, .message = "Failed to load course replay stage"};
     }
     applyCourseConstraintsToChart(*chart, courseConstraintSettings.rules);
+    replay_video_export::prepareReplayChartForExport(*chart, stageReplay);
 
     preparation::Plan stagePreparationPlan = preparation::buildNormalPlan(
         *chart, context.settings.startLaneIndicatorsEnabled,

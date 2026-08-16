@@ -14,6 +14,11 @@
 
 namespace replay_video_export {
 
+void prepareReplayChartForExport(bms_parser::Chart &chart,
+                                 const ReplayData &replay) {
+  applyEffectiveLongNoteModeToChart(chart, replay.chartMeta.LnMode);
+}
+
 skin::UiLogicalRect replayGameplayLogicalUiBounds(int exportWidth,
                                                   int exportHeight) noexcept {
   if (exportWidth <= 0 || exportHeight <= 0) {
