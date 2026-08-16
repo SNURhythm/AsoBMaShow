@@ -2200,6 +2200,8 @@ void GamePlayScene::syncRealtimeGameplaySnapshot() {
   state->combo = snapshot->attempt.combo;
   state->maxCombo = snapshot->attempt.maxCombo;
   state->comboBreak = snapshot->attempt.comboBreak;
+  state->stageCombo = snapshot->attempt.stageCombo;
+  state->stagePassedNotes = snapshot->attempt.stagePassedNotes;
   state->fastCount = snapshot->fastCount;
   state->slowCount = snapshot->slowCount;
   for (int judgement = 0; judgement < JudgementCount; ++judgement) {

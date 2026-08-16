@@ -85,7 +85,10 @@ bool sameAttemptSnapshot(const gameplay::GameplayAttemptSnapshot &left,
                          const gameplay::GameplayAttemptSnapshot &right) {
   return left.judgeCounts == right.judgeCounts &&
          left.combo == right.combo && left.maxCombo == right.maxCombo &&
-         left.comboBreak == right.comboBreak && left.score == right.score &&
+         left.comboBreak == right.comboBreak &&
+         left.stageCombo == right.stageCombo &&
+         left.stagePassedNotes == right.stagePassedNotes &&
+         left.score == right.score &&
          left.gauge == right.gauge && left.gaugeType == right.gaugeType &&
          left.clearTypeRank == right.clearTypeRank;
 }
@@ -616,6 +619,7 @@ void testTransactionsOwnScoreGaugeAndPostStateReplay() {
   const auto postJudge = simulation.snapshot();
   require(postJudge.judgeCounts[PGreat] == 1 && postJudge.score == 2 &&
               postJudge.combo == 1 && postJudge.maxCombo == 1 &&
+              postJudge.stageCombo == 1 && postJudge.stagePassedNotes == 1 &&
               postJudge.gauge == simulation.scoreState().currentGauge &&
               postJudge.gaugeType == simulation.scoreState().gaugeType &&
               postJudge.clearTypeRank ==

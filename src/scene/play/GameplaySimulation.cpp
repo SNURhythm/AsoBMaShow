@@ -177,6 +177,8 @@ GameplayAttemptSnapshot GameplaySimulation::snapshot() const noexcept {
   result.combo = scoreState_.combo;
   result.maxCombo = scoreState_.maxCombo;
   result.comboBreak = scoreState_.comboBreak;
+  result.stageCombo = scoreState_.stageCombo;
+  result.stagePassedNotes = scoreState_.stagePassedNotes;
   result.score = scoreState_.getScore();
   result.gauge = scoreState_.currentGauge;
   result.gaugeType = scoreState_.gaugeType;
