@@ -345,7 +345,8 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
          .entry = activation.entry,
          .storageRoots = context.storageRoots,
          .profileId = context.profileId,
-         .allowDataWrites = true});
+         .allowDataWrites = true,
+         .safetyPolicy = context.safetyPolicy});
     if (!runtimeFiles.fileSystem) {
       result.diagnostics.push_back(sessionDiagnostic(
           "skin_lua_filesystem_create_failed",
@@ -361,7 +362,8 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
 
     auto runtime = LuaSkinRuntime::create(
         {.purpose = LuaRuntimePurpose::Gameplay,
-         .fileSystem = std::move(runtimeFiles.fileSystem)});
+         .fileSystem = std::move(runtimeFiles.fileSystem),
+         .safetyPolicy = context.safetyPolicy});
     if (!runtime.runtime) {
       appendFailure(result.diagnostics, std::move(runtime.failure),
                     "skin_lua_runtime_create_failed",
@@ -392,7 +394,8 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
         {.revision = revision,
          .entry = activation.entry,
          .storageRoots = context.storageRoots,
-         .profileId = context.profileId});
+         .profileId = context.profileId,
+         .safetyPolicy = context.safetyPolicy});
     if (!resourceFiles.fileSystem) {
       result.diagnostics.push_back(sessionDiagnostic(
           "skin_lua_filesystem_create_failed",

@@ -3,6 +3,7 @@
 #include "SkinActivationCommitStore.h"
 #include "SkinArchiveImporter.h"
 #include "SkinPackageCatalog.h"
+#include "../SkinSafetyPolicy.h"
 
 #include <atomic>
 #include <cstdint>
@@ -102,6 +103,12 @@ public:
   validate(SkinRevisionReadView revision, const SkinEntryId &entry,
            const EntryProfileSettings *desiredSettings,
            std::stop_token stop) = 0;
+  virtual SkinValidationResult
+  validate(SkinRevisionReadView revision, const SkinEntryId &entry,
+           const EntryProfileSettings *desiredSettings, std::stop_token stop,
+           const SkinSafetyPolicy &) {
+    return validate(std::move(revision), entry, desiredSettings, stop);
+  }
 };
 
 class SkinPackageStore : public SkinActivationCommitStore {

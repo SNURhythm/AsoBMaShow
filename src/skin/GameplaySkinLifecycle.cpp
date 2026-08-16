@@ -1309,7 +1309,8 @@ GameplaySkinLifecycle::acquireForNextChart(int keyMode) {
                 .sessionSerial = sessionSerial,
                 .profileId = base.profileId,
                 .activation = std::move(*acquired.activation),
-                .viewport = selected->second.viewport}};
+                .viewport = selected->second.viewport,
+                .safetyLevel = base.settings.safetyLevel}};
   } catch (...) {
     auto diagnostic = lifecycleDiagnostic(
         "skin.lifecycle.acquire_failed",

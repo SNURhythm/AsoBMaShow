@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../SkinProfileSettings.h"
+#include "../SkinSafetyPolicy.h"
 #include "../SkinStoragePaths.h"
 #include "../package/SkinTreeSnapshotter.h"
 
@@ -92,6 +93,7 @@ struct LuaSkinFileSystemOptions {
   SkinStorageRoots storageRoots;
   std::optional<SkinProfileId> profileId;
   bool allowDataWrites = false;
+  SkinSafetyPolicy safetyPolicy{};
   SkinDataOverlayPolicy dataPolicy;
 };
 

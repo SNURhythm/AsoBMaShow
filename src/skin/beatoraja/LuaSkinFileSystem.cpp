@@ -254,11 +254,15 @@ struct LuaSkinFileSystem::Impl {
   fs::path beatorajaSkinRoot;
   std::unique_ptr<SkinAliasDetector> aliases;
   bool allowDataWrites = false;
+  SkinSafetyPolicy safetyPolicy;
   mutable std::mutex operationMutex;
 
   std::optional<SkinFileFailure>
   rejectAliasedPath(const fs::path &root, const fs::path &resolved,
                     std::string_view authored) const {
+    if (!safetyPolicy.enforces(SkinSafetyGuard::VirtualFileContainment)) {
+      return std::nullopt;
+    }
     if (!isWithinDirectory(resolved, root)) {
       return failure(SkinFileError::EscapesPackage, authored,
                      "skin file access is outside the skin directory");
@@ -320,6 +324,17 @@ struct LuaSkinFileSystem::Impl {
 
   NormalizedReference normalize(std::string_view authored,
                                 bool allowPackageRoot = false) const {
+    if (!safetyPolicy.enforces(SkinSafetyGuard::VirtualFileContainment)) {
+      if (authored.empty() || authored.find('\0') != std::string_view::npos) {
+        return {.failure = failure(SkinFileError::InvalidPath, authored,
+                                   "skin file path is invalid")};
+      }
+      const fs::path authoredPath = pathFromUtf8(authored);
+      const fs::path resolved =
+          (authoredPath.is_absolute() ? authoredPath : skinDirectory / authoredPath)
+              .lexically_normal();
+      return {.path = utf8Path(resolved)};
+    }
     // SkinLoader#getPath returns paths rooted at Beatoraja's `skin/`
     // directory.  A configured skin can subsequently pass that exact result
     // to dofile/io, including a sibling reached through `..` from its entry
@@ -366,6 +381,9 @@ struct LuaSkinFileSystem::Impl {
                                          bool allowPackageRoot = false) const {
     auto normalized = normalize(authored, allowPackageRoot);
     if (!normalized.path) {
+      return normalized;
+    }
+    if (!safetyPolicy.enforces(SkinSafetyGuard::VirtualFileContainment)) {
       return normalized;
     }
     if (!isWithinDirectory(pathFromUtf8(*normalized.path), packageRoot)) {
@@ -476,10 +494,15 @@ LuaSkinFileSystem::create(LuaSkinFileSystemOptions options) {
       .skinDirectory = skinDirectory,
       .entryPath = entryPath,
       .beatorajaSkinRoot = beatorajaSkinRoot,
-      .aliases = createPlatformSkinAliasDetector(),
+      .aliases = options.safetyPolicy.enforces(
+                     SkinSafetyGuard::VirtualFileContainment)
+                     ? createPlatformSkinAliasDetector()
+                     : nullptr,
       .allowDataWrites = options.allowDataWrites,
+      .safetyPolicy = options.safetyPolicy,
   });
-  if (!impl->aliases) {
+  if (impl->safetyPolicy.enforces(SkinSafetyGuard::VirtualFileContainment) &&
+      !impl->aliases) {
     return {.failure = failure(SkinFileError::IoError,
                                impl->entry.packageRelativePath,
                                "skin link inspector is unavailable")};
@@ -499,7 +522,8 @@ LuaSkinFileSystem::~LuaSkinFileSystem() = default;
 SkinFileResolveResult LuaSkinFileSystem::resolve(std::string_view virtualPath,
                                                  SkinFileUse use) const {
   const std::scoped_lock lock(impl_->operationMutex);
-  if (use == SkinFileUse::DataWrite && !impl_->allowDataWrites) {
+  if (use == SkinFileUse::DataWrite && !impl_->allowDataWrites &&
+      impl_->safetyPolicy.enforces(SkinSafetyGuard::CatalogWriteAuthorization)) {
     return {.failure = failure(SkinFileError::WrongUse, virtualPath,
                                "Lua data writes are unavailable in this phase")};
   }
@@ -509,7 +533,8 @@ SkinFileResolveResult LuaSkinFileSystem::resolve(std::string_view virtualPath,
   if (!normalized.path) {
     return {.failure = normalized.failure};
   }
-  if (use == SkinFileUse::LuaEntry &&
+  if (impl_->safetyPolicy.enforces(SkinSafetyGuard::VirtualFileContainment) &&
+      use == SkinFileUse::LuaEntry &&
       pathFromUtf8(*normalized.path) != impl_->entryPath) {
     return {.failure = failure(SkinFileError::WrongUse, *normalized.path,
                                "Lua entry access is limited to the selected entry")};
@@ -623,10 +648,12 @@ LuaSkinFileSystem::resolveModule(std::string_view moduleName) const {
 SkinFileReadResult
 LuaSkinFileSystem::readEntry(std::uint64_t maximumBytes) const {
   const std::scoped_lock lock(impl_->operationMutex);
-  if (const auto rejected = impl_->rejectAliasedPath(
-          impl_->packageRoot, impl_->entryPath,
-          impl_->entry.packageRelativePath)) {
-    return {.failure = rejected};
+  if (impl_->safetyPolicy.enforces(SkinSafetyGuard::VirtualFileContainment)) {
+    if (const auto rejected = impl_->rejectAliasedPath(
+            impl_->packageRoot, impl_->entryPath,
+            impl_->entry.packageRelativePath)) {
+      return {.failure = rejected};
+    }
   }
   return impl_->readNormalized(utf8Path(impl_->entryPath),
                                SkinFileUse::LuaEntry, maximumBytes);
@@ -644,7 +671,8 @@ SkinFileReadResult LuaSkinFileSystem::read(std::string_view virtualPath,
   if (!normalized.path) {
     return {.failure = normalized.failure};
   }
-  if (use == SkinFileUse::LuaEntry &&
+  if (impl_->safetyPolicy.enforces(SkinSafetyGuard::VirtualFileContainment) &&
+      use == SkinFileUse::LuaEntry &&
       pathFromUtf8(*normalized.path) != impl_->entryPath) {
     return {.failure = failure(SkinFileError::WrongUse, *normalized.path,
                                "Lua entry access is limited to the selected entry")};
@@ -742,7 +770,8 @@ SkinFileWriteResult
 LuaSkinFileSystem::writeData(std::string_view virtualPath,
                              std::span<const std::byte> bytes, bool append) {
   const std::scoped_lock lock(impl_->operationMutex);
-  if (!impl_->allowDataWrites) {
+  if (!impl_->allowDataWrites &&
+      impl_->safetyPolicy.enforces(SkinSafetyGuard::CatalogWriteAuthorization)) {
     return {.failure = failure(SkinFileError::WrongUse, virtualPath,
                                "Lua data writes are unavailable in this phase")};
   }
@@ -786,7 +815,8 @@ LuaSkinFileSystem::writeData(std::string_view virtualPath,
 SkinFileWriteResult
 LuaSkinFileSystem::mkdirData(std::string_view virtualDirectory) {
   const std::scoped_lock lock(impl_->operationMutex);
-  if (!impl_->allowDataWrites) {
+  if (!impl_->allowDataWrites &&
+      impl_->safetyPolicy.enforces(SkinSafetyGuard::CatalogWriteAuthorization)) {
     return {.failure =
                 failure(SkinFileError::WrongUse, virtualDirectory,
                         "Lua data writes are unavailable in this phase")};

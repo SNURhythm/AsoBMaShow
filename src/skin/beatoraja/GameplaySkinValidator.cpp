@@ -106,13 +106,21 @@ GameplaySkinValidator::GameplaySkinValidator(
 SkinValidationResult GameplaySkinValidator::validate(
     SkinRevisionReadView revision, const SkinEntryId &entry,
     const EntryProfileSettings *desiredSettings, std::stop_token stop) {
+  return validate(std::move(revision), entry, desiredSettings, stop,
+                  SkinSafetyPolicy{});
+}
+
+SkinValidationResult GameplaySkinValidator::validate(
+    SkinRevisionReadView revision, const SkinEntryId &entry,
+    const EntryProfileSettings *desiredSettings, std::stop_token stop,
+    const SkinSafetyPolicy &safetyPolicy) {
   SkinValidationResult result;
   if (cancelled(stop, result)) {
     return result;
   }
   try {
-    auto runtimeFiles =
-        LuaSkinFileSystem::create({.revision = revision, .entry = entry});
+    auto runtimeFiles = LuaSkinFileSystem::create(
+        {.revision = revision, .entry = entry, .safetyPolicy = safetyPolicy});
     if (!runtimeFiles.fileSystem) {
       const std::string message =
           runtimeFiles.failure ? runtimeFiles.failure->message
@@ -128,7 +136,8 @@ SkinValidationResult GameplaySkinValidator::validate(
 
     auto runtime = LuaSkinRuntime::create(
         {.purpose = LuaRuntimePurpose::Validation,
-         .fileSystem = std::move(runtimeFiles.fileSystem)});
+         .fileSystem = std::move(runtimeFiles.fileSystem),
+         .safetyPolicy = safetyPolicy});
     if (!runtime.runtime) {
       appendFailure(result.diagnostics, std::move(runtime.failure),
                     "skin_lua_runtime_create_failed",
@@ -157,8 +166,8 @@ SkinValidationResult GameplaySkinValidator::validate(
     // The configuration reconciliation uses a fresh, equivalent package
     // filesystem. The Lua runtime exclusively owns the first filesystem for
     // both loader phases, matching LuaSkinLoader.load's single-state flow.
-    auto configurationFiles =
-        LuaSkinFileSystem::create({.revision = revision, .entry = entry});
+    auto configurationFiles = LuaSkinFileSystem::create(
+        {.revision = revision, .entry = entry, .safetyPolicy = safetyPolicy});
     if (!configurationFiles.fileSystem) {
       const std::string message =
           configurationFiles.failure

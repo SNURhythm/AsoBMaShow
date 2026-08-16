@@ -2,6 +2,7 @@
 
 #include "BeatorajaSkinConfiguration.h"
 #include "SkinCompatibilityDiagnostics.h"
+#include "../SkinSafetyPolicy.h"
 #include "../package/SkinPackageTypes.h"
 
 #include <chrono>
@@ -215,6 +216,7 @@ struct LuaCallbackResult {
 struct LuaSkinRuntimeOptions {
   LuaRuntimePurpose purpose = LuaRuntimePurpose::Catalog;
   std::unique_ptr<LuaSkinFileSystem> fileSystem;
+  SkinSafetyPolicy safetyPolicy{};
 };
 
 class LuaSkinRuntime final {

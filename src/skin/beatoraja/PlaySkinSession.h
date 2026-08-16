@@ -24,6 +24,7 @@ namespace skin {
 struct PlaySkinSessionContext {
   std::uint64_t sessionSerial = 0;
   SkinProfileId profileId;
+  SkinSafetyPolicy safetyPolicy{};
   // Immutable chart-lifetime snapshot. The caller owns it and must keep it
   // alive and unchanged until the resulting PlaySkinSession is destroyed.
   const PlayfieldChartVisualModel &chartModel;

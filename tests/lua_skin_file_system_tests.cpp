@@ -1,4 +1,5 @@
 #include "skin/SkinStoragePaths.h"
+#include "skin/SkinSafetyPolicy.h"
 #include "skin/beatoraja/LuaSkinFileSystem.h"
 #include "skin/beatoraja/SkinCompatibilityDiagnostics.h"
 #include "skin/package/SkinAliasDetector.h"
@@ -127,13 +128,16 @@ public:
     }
   }
 
-  LuaSkinFileSystemCreateResult create(const SkinEntryId &selectedEntry,
-                                       bool writes) {
+  LuaSkinFileSystemCreateResult create(
+      const SkinEntryId &selectedEntry, bool writes,
+      SkinSafetyLevel safetyLevel = SkinSafetyLevel::Standard) {
     return LuaSkinFileSystem::create({.revision = prepared->readView(),
                                       .entry = selectedEntry,
                                       .storageRoots = roots,
                                       .profileId = std::nullopt,
-                                      .allowDataWrites = writes});
+                                      .allowDataWrites = writes,
+                                      .safetyPolicy =
+                                          SkinSafetyPolicy(safetyLevel)});
   }
 
   TempDirectory temp;
@@ -289,6 +293,61 @@ void testReadOnlyFilesystemRejectsDataWrites() {
          "a catalog filesystem refuses a Lua data write");
 }
 
+void testUnrestrictedFilesystemLiftsWriteAndContainmentGuards() {
+  PackageFixture fixture;
+  if (!fixture.prepared) {
+    return;
+  }
+
+  auto created = fixture.create(fixture.entry, false,
+                                SkinSafetyLevel::Unrestricted);
+  expect(created.fileSystem != nullptr,
+         "an unrestricted filesystem is created for catalog work");
+  if (!created.fileSystem) {
+    return;
+  }
+
+  const fs::path outside = fixture.temp.root() / "outside" / "state.txt";
+  const auto write = created.fileSystem->writeData(
+      outside.string(), bytesOf("unrestricted write\n"), false);
+  expect(!write.failure && readText(outside) == "unrestricted write\n",
+         "Unrestricted permits catalog writes outside the selected package");
+}
+
+void testCompatibilityFilesystemLiftsOnlyProtectiveWriteGuard() {
+  PackageFixture fixture;
+  if (!fixture.prepared) {
+    return;
+  }
+
+  const fs::path visiblePackage =
+      fixture.roots.visiblePackages / fixture.package.directoryName;
+  fs::create_directories(visiblePackage.parent_path());
+  fs::copy(fixture.temp.root() / "source", visiblePackage,
+           fs::copy_options::recursive);
+
+  auto created = fixture.create(fixture.entry, false,
+                                SkinSafetyLevel::BeatorajaCompatibility);
+  expect(created.fileSystem != nullptr,
+         "a compatibility filesystem is created for catalog work");
+  if (!created.fileSystem) {
+    return;
+  }
+
+  const auto inside = created.fileSystem->writeData(
+      "History/compatibility.txt", bytesOf("compatible write\n"), false);
+  expect(!inside.failure &&
+             readText(created.fileSystem->skinDirectory() /
+                      "History/compatibility.txt") == "compatible write\n",
+         "Beatoraja compatibility permits catalog writes in the skin package");
+
+  const fs::path outside = fixture.temp.root() / "outside" / "state.txt";
+  const auto escaped = created.fileSystem->writeData(
+      outside.string(), bytesOf("must remain contained\n"), false);
+  expect(escaped.failure && escaped.failure->code == SkinFileError::EscapesPackage,
+         "Beatoraja compatibility retains catastrophic path containment");
+}
+
 void testLinkedVisibleSkinChildCannotEscapeLuaIoBoundary() {
   PackageFixture fixture;
   if (!fixture.prepared) {
@@ -336,6 +395,8 @@ void testLinkedVisibleSkinChildCannotEscapeLuaIoBoundary() {
 int main() {
   testBeatorajaDirectSkinDirectorySemantics();
   testReadOnlyFilesystemRejectsDataWrites();
+  testCompatibilityFilesystemLiftsOnlyProtectiveWriteGuard();
+  testUnrestrictedFilesystemLiftsWriteAndContainmentGuards();
   testLinkedVisibleSkinChildCannotEscapeLuaIoBoundary();
   testCompatibilityDiagnosticsDeduplicateAndRetainCriticality();
   if (failures != 0) {

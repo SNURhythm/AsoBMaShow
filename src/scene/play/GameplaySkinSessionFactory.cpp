@@ -138,6 +138,7 @@ createGameplaySkinSession(GameplaySkinSessionServices services,
     skin::PlaySkinSessionContext context{
         .sessionSerial = request.sessionSerial,
         .profileId = std::move(request.profileId),
+        .safetyPolicy = skin::SkinSafetyPolicy(request.safetyLevel),
         .chartModel = *input.chartModel,
         .initialState = input.initialState,
         .initialProjection = input.initialProjection,

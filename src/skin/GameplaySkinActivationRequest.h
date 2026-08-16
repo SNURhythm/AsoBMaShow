@@ -18,6 +18,7 @@ struct GameplaySkinActivationRequest {
   SkinProfileId profileId;
   ValidatedSkinActivation activation;
   ViewportSettings viewport;
+  SkinSafetyLevel safetyLevel = SkinSafetyLevel::Standard;
 };
 
 // Built-in gameplay is a deliberate selection only when the chart trait has

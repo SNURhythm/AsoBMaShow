@@ -4042,7 +4042,7 @@ PrepareActivationResult SkinPackageStore::prepareActivation(
       lease->readView(), entry,
       desired == candidateProfileSettings.entries.end() ? nullptr
                                                         : &desired->second,
-      stop);
+      stop, SkinSafetyPolicy(candidateProfileSettings.safetyLevel));
   (void)failClosedMismatchedConfigurationDigest(entry, validation);
   result.diagnostics.insert(
       result.diagnostics.end(),

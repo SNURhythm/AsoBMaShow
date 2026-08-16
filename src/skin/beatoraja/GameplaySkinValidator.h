@@ -13,6 +13,9 @@ public:
   SkinValidationResult validate(SkinRevisionReadView, const SkinEntryId &,
                                 const EntryProfileSettings *,
                                 std::stop_token) override;
+  SkinValidationResult validate(SkinRevisionReadView, const SkinEntryId &,
+                                const EntryProfileSettings *, std::stop_token,
+                                const SkinSafetyPolicy &) override;
 
 private:
   SkinResourcePreparationService *resources_ = nullptr;
