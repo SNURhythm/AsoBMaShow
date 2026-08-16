@@ -1972,7 +1972,9 @@ SkinPropertyLookup<double> PlaySkinStateBridge::floatProperty(
     return {};
   }
   const int totalNotes = context_.chartModel.staticMetadata.totalNotes;
-  const int playedNotes = snapshot->authority.pacemakerStatus.playedNotes;
+  // BMSPlayer updates ScoreDataProperty with JudgeManager.getPastNotes(),
+  // independently of whether a pacemaker target was configured.
+  const int playedNotes = snapshot->authority.stagePassedNotes;
   const auto currentFullRate = scoreRate(snapshot->score, totalNotes);
   const auto currentRate = scoreRate(snapshot->score, playedNotes);
   const auto bestFullRate =

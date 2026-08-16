@@ -2239,6 +2239,27 @@ void testLr2AutoplayAndReplayStyleLongNoteSequences() {
               autoplay.snapshot().judgeCounts[PGreat] == 1,
           "LR2 autoplay presses and resolves a classic LN once");
 
+  for (const auto type : {bms_parser::LongNoteType::ChargeNote,
+                          bms_parser::LongNoteType::HellChargeNote}) {
+    bms_parser::Chart longChart;
+    longChart.Meta.KeyMode = 7;
+    longChart.Meta.TotalNotes = 2;
+    auto *longMeasure = new bms_parser::Measure();
+    addLongNote(*longMeasure, 1'000'000, 2'000'000, 1, type);
+    longChart.Measures.push_back(longMeasure);
+
+    const auto longDefinition = gameplay::buildGameplayDefinition(longChart, 0);
+    gameplay::GameplaySimulation longAutoplay(
+        longDefinition, {.judge = lr2Judge(), .attempt = {.autoPlay = true}});
+    const auto longAutomatic = longAutoplay.advanceTo(2'000'000, 2'000'000);
+    const auto longSnapshot = longAutoplay.snapshot();
+    require(longAutomatic.transactions.size() >= 2 &&
+                longSnapshot.judgeCounts[PGreat] == 2 &&
+                longSnapshot.stagePassedNotes == 2 && longSnapshot.score == 4,
+            "LR2 autoplay judges both CN/HCN endpoints for the skin score "
+            "denominator");
+  }
+
   gameplay::GameplaySimulation direct(definition, {.judge = lr2Judge()});
   gameplay::GameplaySimulation replayed(definition, {.judge = lr2Judge()});
   direct.pressLane(1, {.songTimeMicros = 1'050'000});

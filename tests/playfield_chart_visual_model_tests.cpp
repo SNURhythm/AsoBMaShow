@@ -49,7 +49,7 @@ bool testStaticChartMetadata() {
   if (model.chartMd5 != "chart-md5" || model.chartSha256 != "chart-sha256" ||
       metadata.difficulty != 3 || metadata.judgeRank != 72 ||
       metadata.minimumBpm != 124.25 || metadata.maximumBpm != 248.5 ||
-      metadata.durationMicros != 123'456'789 || metadata.totalNotes != 987 ||
+      metadata.durationMicros != 123'456'789 || metadata.totalNotes != 0 ||
       metadata.totalLandmineNotes != 8 || !metadata.hasBga ||
       !metadata.hasRandomSequence || !metadata.hasBpmStop ||
       metadata.stageFilePath != "stage.png" ||
@@ -212,10 +212,6 @@ bool testExactBeatorajaChartPropertyMetadata() {
     lnScratchHeadTimeline->SetNote(7, lnScratchHead);
     lnScratchTailTimeline->SetNote(7, lnScratchTail);
     chart.Measures.push_back(measure);
-    // BMSModel.getTotalNotes() is the gameplay scoring authority.  The
-    // displayed note-type breakdown below is independently projected.
-    chart.Meta.TotalNotes = 7;
-
     const auto model = buildPlayfieldChartVisualModel(chart, 2);
     const auto &metadata = model.staticMetadata;
     if (metadata.normalKeyNotes != 1 || metadata.longKeyNotes != 4 ||
@@ -224,6 +220,37 @@ bool testExactBeatorajaChartPropertyMetadata() {
       std::cerr << "LN-mode-dependent mutually exclusive note counts failed\n";
       return false;
     }
+  }
+  return true;
+}
+
+bool testTotalNotesCountsChargeLongTail() {
+  // BMSModel.getTotalNotes() counts both endpoints when the effective LN
+  // mode is CN. The parser's pre-resolution metadata has only the head here;
+  // the skin total must still match the live JudgeManager score denominator.
+  bms_parser::Chart chart;
+  chart.Meta.LnMode = 2;
+  chart.Meta.TotalNotes = 1;
+  auto *measure = new bms_parser::Measure();
+  auto *headTimeline = new bms_parser::TimeLine(8, false);
+  headTimeline->Timing = 1'000'000;
+  auto *tailTimeline = new bms_parser::TimeLine(8, false);
+  tailTimeline->Timing = 2'000'000;
+  auto *head = new bms_parser::LongNote(
+      1, bms_parser::LongNoteType::Undefined);
+  auto *tail = new bms_parser::LongNote(
+      1, bms_parser::LongNoteType::Undefined);
+  head->Tail = tail;
+  tail->Head = head;
+  headTimeline->SetNote(0, head);
+  tailTimeline->SetNote(0, tail);
+  measure->TimeLines = {headTimeline, tailTimeline};
+  chart.Measures.push_back(measure);
+
+  const auto model = buildPlayfieldChartVisualModel(chart, 0);
+  if (model.staticMetadata.totalNotes != 2) {
+    std::cerr << "CN skin score total must include both long-note endpoints\n";
+    return false;
   }
   return true;
 }
@@ -298,6 +325,9 @@ bool testParserStoredLandminesRetainTheirMineSource() {
 } // namespace
 
 int main() {
+  if (!testTotalNotesCountsChargeLongTail()) {
+    return EXIT_FAILURE;
+  }
   if (!testStaticChartMetadata()) {
     return EXIT_FAILURE;
   }

@@ -984,6 +984,14 @@ void testRemainingDirectGameplayStatePropertyWiring() {
            "direct audio float property uses the pinned source: " +
                std::to_string(id));
   }
+  const auto currentRate = bridge.floatProperty({111});
+  const auto currentRateFloat = bridge.floatProperty(
+      {1102}, SkinFloatPropertyDomain::FloatValue);
+  expect(currentRate.supported && currentRateFloat.supported &&
+             std::abs(currentRate.value - 0.75) < 0.000001 &&
+             std::abs(currentRateFloat.value - 0.75) < 0.000001,
+         "current score rates use JudgeManager past notes even without a "
+         "pacemaker target");
   expect(bridge.stringProperty({1030}).supported &&
              bridge.stringProperty({1030}).value == "captured-md5" &&
              bridge.stringProperty({1031}).supported &&

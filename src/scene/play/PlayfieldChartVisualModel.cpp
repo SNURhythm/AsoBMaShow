@@ -443,11 +443,11 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
       .longKeyNotes = noteCounts.longKey,
       .normalScratchNotes = noteCounts.normalScratch,
       .longScratchNotes = noteCounts.longScratch,
-      // ScoreDataProperty and skin total-note properties use the prepared
-      // BMSModel total.  It is the gameplay score denominator after play
-      // options and effective long-note mode have been applied; deriving it
-      // from the render projection can drift from the authoritative score.
-      .totalNotes = chart.Meta.TotalNotes,
+      // BMSModel.getTotalNotes() dynamically resolves the effective long-note
+      // mode. Keep the skin score denominator on that same traversal rather
+      // than the parser's pre-resolution metadata total.
+      .totalNotes = noteCounts.normalKey + noteCounts.longKey +
+                    noteCounts.normalScratch + noteCounts.longScratch,
       .totalLandmineNotes = chart.Meta.TotalLandmineNotes,
       .hasAnyLongNote = longNoteFeatures.any,
       .hasUndefinedLongNote = longNoteFeatures.undefined,
