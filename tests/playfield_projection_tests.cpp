@@ -421,6 +421,90 @@ bool testSkinLongNoteExtendsToViewportWhenTailIsOutsideBoundedWalk() {
          closeTo(skin.longNotes.front().tailAuthoredYDisplacement, 0.25);
 }
 
+bool testPracticeCountInKeepsNotesAtOrAfterStart() {
+  // Count-in must hide only the range already skipped by the practice start.
+  // Notes exactly at the boundary and later still scroll. A long pair that
+  // began before the boundary remains skipped with its later tail.
+  PlayfieldChartVisualModel model;
+  model.laneOrder = {0};
+  model.timelines = {
+      {.id = 1,
+       .timeMicros = 0,
+       .scrollPosition = 0.0,
+       .sectionLine = true,
+       .retainedForProjection = true,
+       .authoredOrdinal = 0,
+       .retainedOrdinal = 0},
+      {.id = 2,
+       .timeMicros = 100,
+       .scrollPosition = 0.1,
+       .retainedForProjection = true,
+       .authoredOrdinal = 1,
+       .retainedOrdinal = 1},
+      {.id = 3,
+       .timeMicros = 200,
+       .scrollPosition = 0.2,
+       .retainedForProjection = true,
+       .authoredOrdinal = 2,
+       .retainedOrdinal = 2},
+  };
+  model.notes = {
+      {.id = 10, .timelineId = 1, .lane = 0, .authoredOrdinal = 0},
+      {.id = 11,
+       .timelineId = 2,
+       .lane = 0,
+       .authoredOrdinal = 1},
+      {.id = 12,
+       .timelineId = 1,
+       .pairId = 15,
+       .lane = 0,
+       .kind = ChartVisualNoteKind::LongHead,
+       .authoredOrdinal = 2},
+      {.id = 13,
+       .timelineId = 2,
+       .pairId = 14,
+       .lane = 0,
+       .kind = ChartVisualNoteKind::LongHead,
+       .authoredOrdinal = 3},
+      {.id = 14,
+       .timelineId = 3,
+       .pairId = 13,
+       .lane = 0,
+       .kind = ChartVisualNoteKind::LongTail,
+       .authoredOrdinal = 4},
+      {.id = 15,
+       .timelineId = 2,
+       .pairId = 12,
+       .lane = 0,
+       .kind = ChartVisualNoteKind::LongTail,
+       .authoredOrdinal = 5},
+  };
+  PlayfieldVisualState state;
+  state.clock = {.serial = 1, .visualTimeMicros = 0};
+
+  PlayfieldProjection projection;
+  const auto result = projection.project(
+      model, state,
+      {.minimumVisibleNoteTimeMicros = 100,
+       .buildBuiltInPlan = false,
+       .builtInTraversal = BuiltInRendererTraversal{.judgeY = 0.0F,
+                                                     .upperBound = 1.0F,
+                                                     .rxhs = 1.0F,
+                                                     .hispeed = 1.0F}});
+  const auto skin = adaptPlayfieldProjectionForSkin(result);
+  if (result.notes.size() != 1U || result.notes.front().noteId != 11U ||
+      result.longNotes.size() != 1U || result.longNotes.front().headId != 13U ||
+      result.longNotes.front().tailId != 14U || skin.notes.size() != 1U ||
+      skin.notes.front().visualId != 11U || skin.longNotes.size() != 1U ||
+      skin.longNotes.front().headVisualId != 13U ||
+      skin.longNotes.front().tailVisualId != 14U) {
+    std::cerr << "practice count-in must keep notes at or after the start "
+                 "while omitting skipped pairs\n";
+    return false;
+  }
+  return true;
+}
+
 bool testReplayProjectionDoesNotRescanOffscreenChartRowsEachFrame() {
   // Replay watch and video export both call this same projection boundary.
   // LaneRenderer advances a retained cursor and stops at the upper lane edge;
@@ -515,6 +599,9 @@ int main() {
   if (!testSkinLongNoteExtendsToViewportWhenTailIsOutsideBoundedWalk()) {
     std::cerr << "skin long notes must extend through the visible lane before "
                  "their tail timeline enters the bounded traversal\n";
+    return EXIT_FAILURE;
+  }
+  if (!testPracticeCountInKeepsNotesAtOrAfterStart()) {
     return EXIT_FAILURE;
   }
   if (!testReplayProjectionDoesNotRescanOffscreenChartRowsEachFrame()) {

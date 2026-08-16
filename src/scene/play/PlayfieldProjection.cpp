@@ -399,6 +399,31 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
   const auto stateFor = [&state](ChartVisualId id) {
     return state.noteState(id);
   };
+  const auto isBeforeVisibleNoteStart =
+      [&notes, &request, &timelines](const ChartVisualNote *note) {
+        if (!request.minimumVisibleNoteTimeMicros || note == nullptr) {
+          return false;
+        }
+        const auto isBeforeStart = [&timelines, &request](
+                                       const ChartVisualNote *candidate) {
+          if (candidate == nullptr) {
+            return false;
+          }
+          const auto timeline = timelines.find(candidate->timelineId);
+          return timeline != timelines.end() &&
+                 timeline->second->timeMicros <
+                     *request.minimumVisibleNoteTimeMicros;
+        };
+        if (isBeforeStart(note)) {
+          return true;
+        }
+        if (note->kind != ChartVisualNoteKind::LongHead &&
+            note->kind != ChartVisualNoteKind::LongTail) {
+          return false;
+        }
+        const auto pair = notes.find(note->pairId);
+        return pair != notes.end() && isBeforeStart(pair->second);
+      };
 
   gameplay_chart_entity_render_budget::Budget budget;
   const auto reserve = [&result, &budget](std::uint32_t cost) {
@@ -567,6 +592,9 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
 #if defined(ASOBMASHOW_PLAYFIELD_PROJECTION_TESTING)
         ++workStats.noteDescriptorsExamined;
 #endif
+        if (isBeforeVisibleNoteStart(note)) {
+          continue;
+        }
         const auto source = effectiveSource(*note);
         if (source == ChartVisualNoteSource::Invisible) {
           needsInvisibleDepth = needsInvisibleDepth ||
@@ -645,9 +673,10 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
   std::vector<const ChartVisualNote *> candidateLongHeads;
   std::unordered_set<ChartVisualId> candidateLongHeadIds;
   const auto appendCandidateLongHead =
-      [&candidateLongHeads, &candidateLongHeadIds](
-          const ChartVisualNote *head) {
-        if (head != nullptr && candidateLongHeadIds.insert(head->id).second) {
+      [&candidateLongHeads, &candidateLongHeadIds,
+       &isBeforeVisibleNoteStart](const ChartVisualNote *head) {
+        if (head != nullptr && !isBeforeVisibleNoteStart(head) &&
+            candidateLongHeadIds.insert(head->id).second) {
           candidateLongHeads.push_back(head);
         }
       };
@@ -661,6 +690,9 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
     ++workStats.noteDescriptorsExamined;
 #endif
     if (consumedLongEndpoints.contains(note->id)) {
+      return;
+    }
+    if (isBeforeVisibleNoteStart(note)) {
       return;
     }
     const auto timelineIt = timelines.find(note->timelineId);
@@ -904,6 +936,9 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
       };
   const auto appendBuiltInNote = [&](const ChartVisualNote &note,
                                      const ChartVisualTimeline &timeline) {
+    if (isBeforeVisibleNoteStart(&note)) {
+      return;
+    }
     if (note.kind == ChartVisualNoteKind::LongHead ||
         note.kind == ChartVisualNoteKind::LongTail) {
       return;
@@ -1009,6 +1044,9 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
         tail->pairId != head->id || tail->lane != head->lane ||
         tail->longNoteMode != head->longNoteMode ||
         headTimeline->timeMicros > tailTimelineIt->second->timeMicros) {
+      continue;
+    }
+    if (isBeforeVisibleNoteStart(head)) {
       continue;
     }
     const auto *tailTimeline = tailTimelineIt->second;

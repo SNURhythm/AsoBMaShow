@@ -106,6 +106,7 @@ private:
   void capturePlayfieldVisualState(long long gameplayTimeMicros,
                                    long long visualTimeMicros,
                                    bool startLaneIndicatorsVisible,
+                                   bool practiceCountInActive,
                                    bool selectedSkinActive);
   void showPauseMenu(bool pausePlayback);
   void closePauseMenu();
@@ -147,6 +148,7 @@ private:
   [[nodiscard]] bool practiceReplayEventAllowed(const ReplayEvent &event) const;
   [[nodiscard]] bool
   preparationIndicatorActive(long long rawSongTimeMicros) const;
+  [[nodiscard]] bool practiceCountInActive(long long rawSongTimeMicros) const;
   bool startCourseReplayChartAtCurrentIndex();
   bool startCourseChartAtCurrentIndex();
   bool startNextCourseChart();

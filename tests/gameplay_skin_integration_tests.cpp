@@ -143,8 +143,10 @@ void gameplaySceneOwnsOnlyThePresentationBoundary() {
                  "const bool selectedSkinActive =\n      presentation != nullptr &&\n      presentation->activeMode() == PresentationMode::Skin;",
                  "only an active selected skin requires the full chart projection");
   expectContains(source,
-                 "capturePlayfieldVisualState(gameplayTimeMicros, visualTimeMicros,\n                              startLaneIndicatorsVisible, selectedSkinActive);",
+                 "capturePlayfieldVisualState(gameplayTimeMicros, visualTimeMicros,\n                              startLaneIndicatorsVisible, practiceCountIn,\n                              selectedSkinActive);",
                  "built-in gameplay captures authority without cloning every note state");
+  expectContains(source, ".minimumVisibleNoteTimeMicros =",
+                 "practice count-in retains selected-skin notes at and after the practice start");
   expectContains(source,
                  ".useParserBackedBuiltInTraversal = true",
                  "built-in gameplay keeps the renderer's retained forward walk");

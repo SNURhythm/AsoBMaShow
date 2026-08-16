@@ -63,6 +63,9 @@ struct PlayfieldProjectionRequest {
   std::size_t maxTimelines = 0;
   std::size_t maxNotes = 0;
   bool includeInvisibleNotes = false;
+  // Practice count-in still renders notes at or after this immutable chart
+  // boundary. A long-note pair that begins before it remains skipped.
+  std::optional<long long> minimumVisibleNoteTimeMicros;
   // LaneRenderer emits BPM and STOP guide lines only with bpmguide enabled.
   bool bpmGuideEnabled = false;
   // The exact late-poor edge belongs to the active gameplay judge.  A caller

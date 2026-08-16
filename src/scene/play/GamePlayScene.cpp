@@ -3063,7 +3063,8 @@ bool GamePlayScene::reset() {
   capturePlayfieldVisualState(
       initialGameplayTimeMicros,
       getVisualTimeMicros(initialGameplayTimeMicros),
-      preparationIndicatorActive(initialRawSongTimeMicros), true);
+      preparationIndicatorActive(initialRawSongTimeMicros),
+      practiceCountInActive(initialRawSongTimeMicros), true);
   acquireGameplaySkinForAttempt();
   if (playbackInitializationFailed) {
     return false;
@@ -3632,6 +3633,12 @@ bool GamePlayScene::practiceReplayEventAllowed(const ReplayEvent &event) const {
 bool GamePlayScene::preparationIndicatorActive(
     long long rawSongTimeMicros) const {
   return preparationPlan.indicatorVisibleAt(rawSongTimeMicros);
+}
+
+bool GamePlayScene::practiceCountInActive(long long rawSongTimeMicros) const {
+  return options.practiceSession != nullptr && preparationPlan.metronome.enabled &&
+         rawSongTimeMicros >= preparationPlan.metronome.startTimeMicros &&
+         rawSongTimeMicros < getStartPositionMicros();
 }
 
 bool GamePlayScene::isCoursePlayback() const {
@@ -4489,7 +4496,8 @@ void GamePlayScene::initializePlayfieldVisualNoteSources() {
 
 void GamePlayScene::capturePlayfieldVisualState(
     long long gameplayTimeMicros, long long visualTimeMicros,
-    bool startLaneIndicatorsVisible, bool selectedSkinActive) {
+    bool startLaneIndicatorsVisible, bool practiceCountInActive,
+    bool selectedSkinActive) {
   if (playfieldVisualStateStore == nullptr || state == nullptr) {
     return;
   }
@@ -4632,6 +4640,10 @@ void GamePlayScene::capturePlayfieldVisualState(
         playfieldChartVisualModel, capturedPlayfieldVisualState,
         {.includeInvisibleNotes =
              capturedPlayfieldVisualState.configuration.showInvisibleNotes,
+         .minimumVisibleNoteTimeMicros =
+             practiceCountInActive
+                 ? std::optional<long long>{getStartPositionMicros()}
+                 : std::nullopt,
          .bpmGuideEnabled =
              capturedPlayfieldVisualState.configuration.bpmGuideEnabled,
          .latePoorTimingMicros =
@@ -5155,6 +5167,7 @@ void GamePlayScene::renderScene() {
   const long long rawSongTimeMicros = context.jukebox.getTimeMicros();
   const bool startLaneIndicatorsVisible =
       preparationIndicatorActive(rawSongTimeMicros);
+  const bool practiceCountIn = practiceCountInActive(rawSongTimeMicros);
   long long gameplayTimeMicros = getGameplayTimeMicros(rawSongTimeMicros);
   if (options.practiceSession == nullptr && !options.practiceMode) {
     gameplayTimeMicros = beatorajaGameplayFrameMicros(gameplayTimeMicros);
@@ -5168,7 +5181,8 @@ void GamePlayScene::renderScene() {
       presentation != nullptr &&
       presentation->activeMode() == PresentationMode::Skin;
   capturePlayfieldVisualState(gameplayTimeMicros, visualTimeMicros,
-                              startLaneIndicatorsVisible, selectedSkinActive);
+                              startLaneIndicatorsVisible, practiceCountIn,
+                              selectedSkinActive);
   (void)presentation->prepareFrame(capturedPlayfieldVisualState,
                                    capturedPlayfieldProjection);
   const PresentationFrameResult presentationFrame =
