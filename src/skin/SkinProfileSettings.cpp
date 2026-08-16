@@ -204,6 +204,11 @@ makeSkinProfileId(std::string_view existingPlayerProfileId) {
 }
 
 void SkinProfileSettings::sanitize() {
+  if (safetyLevel != SkinSafetyLevel::Standard &&
+      safetyLevel != SkinSafetyLevel::BeatorajaCompatibility &&
+      safetyLevel != SkinSafetyLevel::Unrestricted) {
+    safetyLevel = SkinSafetyLevel::Standard;
+  }
   // A legacy profile represented one optional 7K selection plus a global
   // enable bit. Preserve its disabled state by only migrating when it was
   // enabled. Once a new-format map is present, it is wholly authoritative.

@@ -216,6 +216,18 @@ void testActionDrivingChangesInvalidatePresentation() {
   requirePresentationChange(
       base,
       [](auto &value) {
+        value.safetyLevel = skin::SkinSafetyLevel::BeatorajaCompatibility;
+      },
+      "skin safety-level changes invalidate presentation");
+  requirePresentationChange(
+      base,
+      [](auto &value) {
+        value.pendingSafetyLevel = skin::SkinSafetyLevel::Unrestricted;
+      },
+      "pending unrestricted confirmation invalidates presentation");
+  requirePresentationChange(
+      base,
+      [](auto &value) {
         value.selectedGameplayEntries.emplace(1, entryId("-5k"));
       },
       "trait-specific selection changes invalidate presentation");

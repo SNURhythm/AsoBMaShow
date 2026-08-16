@@ -315,6 +315,12 @@ void SettingsScene::renderScene() {
     inputVirtualControllerEditorOverlayRoot->setSize(rendering::window_width,
                                                       rendering::window_height);
   }
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (gameplaySkinSafetyOverlayRoot != nullptr) {
+    gameplaySkinSafetyOverlayRoot->setSize(rendering::window_width,
+                                            rendering::window_height);
+  }
+#endif
   if (previewActive && previewRenderer != nullptr) {
     syncPreviewPresentationConfiguration();
     capturePreviewVisualState();
@@ -539,6 +545,9 @@ void SettingsScene::cleanupScene() {
   inputErrorText = nullptr;
   inputConflictOverlayRoot = nullptr;
   inputVirtualControllerEditorOverlayRoot = nullptr;
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  gameplaySkinSafetyOverlayRoot = nullptr;
+#endif
   lastLayoutWidth = -1;
   lastLayoutHeight = -1;
   lastSafeTop = -1;

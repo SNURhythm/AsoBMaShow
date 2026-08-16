@@ -20,6 +20,11 @@ struct SkinProfileSettingsPolicy {
 
 enum class ViewportMode : std::uint8_t { Fit, Stretch, Custom };
 enum class CustomViewportBase : std::uint8_t { Fit, Stretch };
+enum class SkinSafetyLevel : std::uint8_t {
+  Standard,
+  BeatorajaCompatibility,
+  Unrestricted,
+};
 
 struct ConfigOffset {
   int x = 0;
@@ -67,6 +72,7 @@ std::optional<std::string>
 normalizeSkinConfigurationKey(std::string_view value);
 
 struct SkinProfileSettings {
+  SkinSafetyLevel safetyLevel = SkinSafetyLevel::Standard;
   // This is the authoritative gameplay-skin selection. The key is the
   // Beatoraja gameplay SkinType value, constrained by GameplaySkinTraits.
   std::map<int, SkinEntryId> selectedGameplayEntries;

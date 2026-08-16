@@ -338,6 +338,11 @@ std::string gameplaySkinSettingsPresentationKey(
   encodeEnum(encoder, snapshot.state);
   encoder.boolean(snapshot.featureAvailable);
   encoder.boolean(snapshot.compatibilityEnabled);
+  encodeEnum(encoder, snapshot.safetyLevel);
+  encoder.boolean(snapshot.pendingSafetyLevel.has_value());
+  if (snapshot.pendingSafetyLevel) {
+    encodeEnum(encoder, *snapshot.pendingSafetyLevel);
+  }
   encoder.text(snapshot.statusMessage);
   encoder.boolean(snapshot.canCancel);
   encoder.boolean(snapshot.hasPackageProgress);

@@ -312,9 +312,11 @@ private:
   std::string gameplaySkinUiMessage;
   int gameplaySkinActiveTraitSkinType = 0;
   bool gameplaySkinTraitDropdownOpen = false;
+  bool gameplaySkinSafetyDropdownOpen = false;
   std::string gameplaySkinConfigurationDropdownOpenKey;
   bool gameplaySkinReplaceConfirmationArmed = false;
   std::string gameplaySkinRemovalConfirmationKey;
+  View *gameplaySkinSafetyOverlayRoot = nullptr;
 #endif
   platform_document_handoff::PlatformDocumentHandoffOperation
       profileDocumentHandoff;
@@ -484,6 +486,8 @@ private:
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   void ensureGameplaySkinSettingsController();
   void updateGameplaySkinSettingsController();
+  void buildGameplaySkinSafetyOverlay(
+      const settings_scene::LayoutMetrics &metrics);
   bool handleGameplaySkinActionResult(skin::ControllerActionResult result);
 #endif
   void applyPendingProfileArchiveCompletion();

@@ -48,6 +48,8 @@ struct GameplaySkinSettingsSnapshot {
   GameplaySkinSettingsState state = GameplaySkinSettingsState::Empty;
   bool featureAvailable = true;
   bool compatibilityEnabled = false;
+  SkinSafetyLevel safetyLevel = SkinSafetyLevel::Standard;
+  std::optional<SkinSafetyLevel> pendingSafetyLevel;
   std::map<int, SkinEntryId> selectedGameplayEntries;
   // Transitional projection for old callers. The trait map above is the UI's
   // source of truth.
@@ -124,6 +126,9 @@ public:
   // Transitional convenience API: selects the trait declared by the entry.
   [[nodiscard]] ControllerActionResult select(const SkinEntryId &entry);
   [[nodiscard]] ControllerActionResult setCompatibilityEnabled(bool enabled);
+  [[nodiscard]] ControllerActionResult setSafetyLevel(SkinSafetyLevel level);
+  [[nodiscard]] ControllerActionResult confirmSafetyLevelChange();
+  void cancelSafetyLevelChange() noexcept;
   [[nodiscard]] ControllerActionResult setOption(const SkinEntryId &entry,
                                                  std::string name, int value);
   [[nodiscard]] ControllerActionResult

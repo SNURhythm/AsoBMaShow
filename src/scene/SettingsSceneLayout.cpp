@@ -204,6 +204,9 @@ void SettingsScene::resetViewState() {
   inputErrorText = nullptr;
   inputConflictOverlayRoot = nullptr;
   inputVirtualControllerEditorOverlayRoot = nullptr;
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  gameplaySkinSafetyOverlayRoot = nullptr;
+#endif
 }
 
 void SettingsScene::ensureLayoutUpToDate() {
@@ -2853,6 +2856,9 @@ void SettingsScene::initView() {
   buildDifficultyTableImportModal(metrics);
   buildInputConflictOverlay(metrics);
   buildInputVirtualControllerEditorOverlay(metrics);
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  buildGameplaySkinSafetyOverlay(metrics);
+#endif
   buildDisplayPreviewOverlay(metrics);
 
   rootLayout->applyYogaLayout();

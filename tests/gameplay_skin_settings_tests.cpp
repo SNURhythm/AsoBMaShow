@@ -1486,6 +1486,35 @@ void testInvalidAndStaleActivationRetainPreviousProfileSettings() {
          "stale activation retains the prior durable profile settings");
 }
 
+void testSafetyLevelRequiresExplicitUnrestrictedAcknowledgement() {
+  Fixture fixture;
+  auto controller = fixture.makeController();
+  expect(controller->snapshot().safetyLevel == SkinSafetyLevel::Standard,
+         "gameplay skin safety defaults to Standard");
+
+  expect(controller->setSafetyLevel(SkinSafetyLevel::Unrestricted).accepted,
+         "requesting Unrestricted safety level opens confirmation");
+  expect(controller->snapshot().pendingSafetyLevel ==
+             SkinSafetyLevel::Unrestricted,
+         "Unrestricted remains pending before confirmation");
+  expect(fixture.owner.snapshot(fixture.profileA).settings.safetyLevel ==
+             SkinSafetyLevel::Standard,
+         "a pending Unrestricted request is not persisted");
+
+  controller->cancelSafetyLevelChange();
+  expect(!controller->snapshot().pendingSafetyLevel,
+         "cancelling Unrestricted leaves no pending safety change");
+
+  expect(controller->setSafetyLevel(SkinSafetyLevel::Unrestricted).accepted &&
+             controller->confirmSafetyLevelChange().accepted,
+         "confirming Unrestricted submits the profile change");
+  expect(pumpUntil(fixture, *controller, [&] {
+           return fixture.owner.snapshot(fixture.profileA)
+                      .settings.safetyLevel == SkinSafetyLevel::Unrestricted;
+         }),
+         "confirmed Unrestricted safety level persists to its profile");
+}
+
 void testLifecycleCallbacksCustomViewportAndRemoval() {
   Fixture fixture;
   const auto folder = fixture.temp.root() / "LifecycleAndRemoval";
@@ -1594,6 +1623,7 @@ int main() {
   testEditableConfigurationValidationAndDiagnosticProjection();
   testCloseDetachesAcceptedProfileAndActivationCommitsDurably();
   testInvalidAndStaleActivationRetainPreviousProfileSettings();
+  testSafetyLevelRequiresExplicitUnrestrictedAcknowledgement();
   testLifecycleCallbacksCustomViewportAndRemoval();
   if (failures == 0) {
     std::cout << "gameplay skin settings tests passed\n";

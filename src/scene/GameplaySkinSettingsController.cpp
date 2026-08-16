@@ -167,6 +167,11 @@ struct GameplaySkinSettingsController::Impl {
     number(projectedProfileGeneration);
     number(static_cast<unsigned>(projected.state));
     number(projected.compatibilityEnabled);
+    number(static_cast<unsigned>(projected.safetyLevel));
+    number(projected.pendingSafetyLevel.has_value());
+    number(projected.pendingSafetyLevel
+               ? static_cast<unsigned>(*projected.pendingSafetyLevel)
+               : 0U);
     append(projected.statusMessage);
     number(projected.canCancel);
     number(projected.hasPackageProgress);
@@ -249,6 +254,7 @@ struct GameplaySkinSettingsController::Impl {
       // title, configuration declaration, and diagnostic again.
       projected.compatibilityEnabled =
           profile.settings.gameplayCompatibilityEnabled;
+      projected.safetyLevel = profile.settings.safetyLevel;
       projected.selectedGameplayEntries =
           profile.settings.selectedGameplayEntries;
       projected.selected7KeyEntry = profile.settings.selected7KeyEntry;
@@ -1060,6 +1066,7 @@ void GameplaySkinSettingsController::profileChanged(
   impl_->projected.hasPackageProgress = false;
   impl_->projected.progress = {};
   impl_->projected.canCancel = false;
+  impl_->projected.pendingSafetyLevel.reset();
   impl_->dependencies.profileId = std::move(profileId);
   impl_->dependencies.clientId = clientId;
   impl_->projected.statusMessage.clear();
@@ -1197,6 +1204,51 @@ GameplaySkinSettingsController::setCompatibilityEnabled(bool enabled) {
   }
   candidate.gameplayCompatibilityEnabled = enabled;
   return impl_->submitProfileOnly(std::move(candidate));
+}
+
+ControllerActionResult
+GameplaySkinSettingsController::setSafetyLevel(SkinSafetyLevel level) {
+  if (impl_->closed || impl_->hasControllerOperation()) {
+    return rejected("Another gameplay skin operation is active.");
+  }
+  if (level == SkinSafetyLevel::Unrestricted &&
+      impl_->projected.safetyLevel != SkinSafetyLevel::Unrestricted) {
+    impl_->projected.pendingSafetyLevel = level;
+    impl_->refreshCachedPresentationKey();
+    return accepted("Unrestricted skin mode requires confirmation.", false);
+  }
+  auto candidate =
+      impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId)
+          .settings;
+  candidate.safetyLevel = level;
+  impl_->projected.pendingSafetyLevel.reset();
+  return impl_->submitProfileOnly(std::move(candidate));
+}
+
+ControllerActionResult
+GameplaySkinSettingsController::confirmSafetyLevelChange() {
+  if (impl_->closed || impl_->hasControllerOperation() ||
+      !impl_->projected.pendingSafetyLevel) {
+    return rejected("No skin safety-level confirmation is pending.");
+  }
+  auto candidate =
+      impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId)
+          .settings;
+  candidate.safetyLevel = *impl_->projected.pendingSafetyLevel;
+  const auto result = impl_->submitProfileOnly(std::move(candidate));
+  if (result.accepted) {
+    impl_->projected.pendingSafetyLevel.reset();
+    impl_->refreshCachedPresentationKey();
+  }
+  return result;
+}
+
+void GameplaySkinSettingsController::cancelSafetyLevelChange() noexcept {
+  if (impl_->closed) {
+    return;
+  }
+  impl_->projected.pendingSafetyLevel.reset();
+  impl_->refreshCachedPresentationKey();
 }
 
 ControllerActionResult

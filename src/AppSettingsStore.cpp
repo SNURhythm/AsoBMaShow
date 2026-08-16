@@ -169,7 +169,8 @@ json skinProfileSettingsToJson(const skin::SkinProfileSettings &skinSettings) {
   for (const auto &[skinType, entry] : skinSettings.selectedGameplayEntries) {
     selectedGameplayEntries[std::to_string(skinType)] = skinEntryIdToJson(entry);
   }
-  return {{"selectedGameplayEntries", std::move(selectedGameplayEntries)},
+  return {{"safetyLevel", static_cast<int>(skinSettings.safetyLevel)},
+          {"selectedGameplayEntries", std::move(selectedGameplayEntries)},
           {"entries", std::move(entries)}};
 }
 
@@ -260,6 +261,7 @@ void readSkinProfileSettings(const json &document,
   }
   readValue(*found, "gameplayCompatibilityEnabled",
             destination.gameplayCompatibilityEnabled, diagnostics);
+  readEnum(*found, "safetyLevel", destination.safetyLevel, diagnostics);
   if (const auto selected = found->find("selected7KeyEntry");
       selected != found->end() && !selected->is_null()) {
     destination.selected7KeyEntry =
@@ -761,7 +763,7 @@ AppSettingsLoadStatus mapFailure(versioned_json::LoadStatus status) {
 
 AppSettingsLoadResult
 AppSettingsStore::Load(const std::filesystem::path &settingsJson) {
-  const std::array<versioned_json::Migration, 6> migrations = {
+  const std::array<versioned_json::Migration, 7> migrations = {
       [](json &document, std::string &) {
         document["schemaVersion"] = 1;
         return true;
@@ -844,6 +846,17 @@ AppSettingsStore::Load(const std::filesystem::path &settingsJson) {
         }
         if (!document.contains("hispeedMargin")) {
           document["hispeedMargin"] = AppSettings::kDefaultHispeedMargin;
+        }
+        return true;
+      },
+      [](json &document, std::string &) {
+        if (!document.contains("skin")) {
+          document["skin"] = json::object();
+        }
+        if (document["skin"].is_object() &&
+            !document["skin"].contains("safetyLevel")) {
+          document["skin"]["safetyLevel"] =
+              static_cast<int>(skin::SkinSafetyLevel::Standard);
         }
         return true;
       }};

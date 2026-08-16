@@ -143,6 +143,7 @@ AppSettings makeDistinctSettings() {
   value.selectedAssistOption = "DRAG";
   value.selectedPacemakerTarget = "AAA";
   value.defaultDifficultyTablesSeeded = true;
+  value.skin.safetyLevel = skin::SkinSafetyLevel::Unrestricted;
   value.sanitize();
   return value;
 }
@@ -154,6 +155,7 @@ void testLegacyFixtureLoadsEverySetting() {
   expected.audioVideo = player_settings::defaultAudioVideoSettingsForPlatform();
   expected.findBmsSkipUnarchivingForNonSolidArchives = false;
   expected.markProcessedNotes = false;
+  expected.skin.safetyLevel = skin::SkinSafetyLevel::Standard;
   // The retired floating-cover UI field must not silently opt legacy users
   // into current-BPM Hi-Speed Auto Adjust.
   expected.hispeedAutoAdjust = false;
@@ -216,8 +218,8 @@ void testJsonRoundTripIncludesAudioAndVideo() {
              *entry.entry)) == expectedConfigurationDigest,
          "restart reconstructs the exact configuration digest from persisted "
          "entry maps");
-  expect(readFile(path).find("\"schemaVersion\": 6") != std::string::npos,
-         "saved JSON declares schema version 6");
+  expect(readFile(path).find("\"schemaVersion\": 7") != std::string::npos,
+         "saved JSON declares schema version 7");
   expect(readFile(path).find("\"visibleTimeDurationMilliseconds\": 1295") !=
              std::string::npos,
          "saved JSON persists exact canonical visible duration milliseconds");
@@ -317,6 +319,8 @@ void testSchemaThreeMigrationDisablesCompatibility() {
          "schema 3 settings migrate to the current schema");
   expect(!loaded.settings.skin.gameplayCompatibilityEnabled,
          "schema 3 migration disables compatibility");
+  expect(loaded.settings.skin.safetyLevel == skin::SkinSafetyLevel::Standard,
+         "schema 3 migration defaults skin safety to Standard");
   expect(!loaded.settings.skin.selected7KeyEntry.has_value(),
          "schema 3 migration has no selected gameplay skin");
   expect(loaded.settings.skin.entries.empty(),
@@ -978,6 +982,7 @@ void testVersionFixturesAndNoRewrite() {
   expectedV0.findBmsSkipUnarchivingForNonSolidArchives = false;
   expectedV0.hispeedAutoAdjust = false;
   expectedV0.markProcessedNotes = false;
+  expectedV0.skin.safetyLevel = skin::SkinSafetyLevel::Standard;
   expect(v0.settings == expectedV0, "v0 migration is lossless");
 
   const auto v1 = AppSettingsStore::Load(fixture("settings-v1.json"));

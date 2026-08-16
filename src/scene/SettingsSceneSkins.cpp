@@ -6,6 +6,7 @@
 #include "GameplaySkinSettingsPresentation.h"
 #include "../skin/GameplaySkinTraits.h"
 #include "../skin/beatoraja/BeatorajaSkinConfiguration.h"
+#include "../view/BlockingOverlayView.h"
 #include "../view/DropdownView.h"
 
 #include <algorithm>
@@ -152,6 +153,18 @@ std::string formatViewportComponent(float value) {
   return std::move(stream).str();
 }
 
+const char *safetyLevelLabel(skin::SkinSafetyLevel level) {
+  switch (level) {
+  case skin::SkinSafetyLevel::Standard:
+    return "Standard";
+  case skin::SkinSafetyLevel::BeatorajaCompatibility:
+    return "Beatoraja compatibility";
+  case skin::SkinSafetyLevel::Unrestricted:
+    return "Unrestricted";
+  }
+  return "Standard";
+}
+
 } // namespace
 
 bool SettingsScene::handleGameplaySkinActionResult(
@@ -250,6 +263,7 @@ void SettingsScene::ensureGameplaySkinSettingsController() {
   gameplaySkinSettingsProfileId = profileId->opaque;
   gameplaySkinSettingsPresentationKey.clear();
   gameplaySkinUiMessage.clear();
+  gameplaySkinSafetyDropdownOpen = false;
   gameplaySkinConfigurationDropdownOpenKey.clear();
   gameplaySkinReplaceConfirmationArmed = false;
   gameplaySkinRemovalConfirmationKey.clear();
@@ -355,6 +369,50 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
                                       metrics.smallTextSize,
                                       ui_theme::textSecondary()));
   }
+  auto *safetyRow = new View();
+  safetyRow->setFlexDirection(FlexDirection::Row);
+  safetyRow->setFlexWrap(YGWrapWrap);
+  safetyRow->setAlignItems(YGAlignCenter);
+  safetyRow->setGap(metrics.compact ? 8.0f : 10.0f);
+  auto *safetyLabel = makeText("Skin safety", metrics.smallTextSize,
+                               ui_theme::textSecondary(), TextView::LEFT,
+                               TextView::MIDDLE);
+  safetyLabel->setMinWidth(0.0f);
+  safetyLabel->setFlexShrink(1.0f);
+  safetyRow->addView(safetyLabel);
+  auto *safetyDropdown = new DropdownView(
+      {.onOpenChanged =
+           [this](bool open) {
+             gameplaySkinSafetyDropdownOpen = open;
+             lastLayoutWidth = -1;
+           },
+       .onOptionSelected = [this](const std::string &id) {
+         gameplaySkinSafetyDropdownOpen = false;
+         int value = static_cast<int>(skin::SkinSafetyLevel::Standard);
+         const auto parsed = std::from_chars(id.data(), id.data() + id.size(),
+                                             value);
+         if (parsed.ec == std::errc{} &&
+             parsed.ptr == id.data() + id.size() &&
+             value >= static_cast<int>(skin::SkinSafetyLevel::Standard) &&
+             value <= static_cast<int>(skin::SkinSafetyLevel::Unrestricted)) {
+           handleGameplaySkinActionResult(
+               gameplaySkinSettingsController->setSafetyLevel(
+                   static_cast<skin::SkinSafetyLevel>(value)));
+         }
+       }},
+      overlayPortal);
+  safetyDropdown->refresh(
+      {.label = "",
+       .selectedId = std::to_string(static_cast<int>(snapshot.safetyLevel)),
+       .options = {{.id = "0", .label = safetyLevelLabel(skin::SkinSafetyLevel::Standard), .available = ordinaryActionsEnabled},
+                   {.id = "1", .label = safetyLevelLabel(skin::SkinSafetyLevel::BeatorajaCompatibility), .available = ordinaryActionsEnabled},
+                   {.id = "2", .label = safetyLevelLabel(skin::SkinSafetyLevel::Unrestricted), .available = ordinaryActionsEnabled}},
+       .open = gameplaySkinSafetyDropdownOpen,
+       .enabled = ordinaryActionsEnabled,
+       .maxVisibleItems = 3,
+       .menuWidth = 0.0f});
+  safetyRow->addView(safetyDropdown);
+  overview->addView(safetyRow);
   column->addView(makeCard(metrics, "Gameplay Skins", "Availability and mode",
                            overview, metrics.modeCardHeight,
                            metrics.cardsWidth));
@@ -1145,6 +1203,76 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
                              metrics.cardsWidth));
   }
   return column;
+}
+
+void SettingsScene::buildGameplaySkinSafetyOverlay(
+    const LayoutMetrics &metrics) {
+  if (activeTab != SettingsTab::GameplaySkins ||
+      gameplaySkinSettingsController == nullptr ||
+      !gameplaySkinSettingsController->snapshot().pendingSafetyLevel) {
+    return;
+  }
+
+  gameplaySkinSafetyOverlayRoot = new BlockingOverlayView(
+      0, 0, rendering::window_width, rendering::window_height);
+  gameplaySkinSafetyOverlayRoot->setPositionType(YGPositionTypeAbsolute);
+  gameplaySkinSafetyOverlayRoot->setPosition(Edge::Left, 0);
+  gameplaySkinSafetyOverlayRoot->setPosition(Edge::Top, 0);
+  gameplaySkinSafetyOverlayRoot->setZIndex(1050);
+  gameplaySkinSafetyOverlayRoot->setFlexDirection(FlexDirection::Column);
+  gameplaySkinSafetyOverlayRoot->setAlignItems(YGAlignCenter);
+  gameplaySkinSafetyOverlayRoot->setJustifyContent(YGJustifyCenter);
+  gameplaySkinSafetyOverlayRoot->setThemedBackgroundColor(ui_theme::scrim);
+
+  auto *panel = new View();
+  panel->setWidth(static_cast<float>(std::min(
+      metrics.compact ? 620 : 760, std::max(280, metrics.contentWidth - 32))));
+  panel->setFlexDirection(FlexDirection::Column);
+  panel->setAlignItems(YGAlignStretch);
+  panel->setGap(metrics.compact ? 14.0F : 18.0F);
+  panel->setPadding(Edge::All, static_cast<float>(metrics.cardPadding));
+  panel->setThemedBackgroundColor(ui_theme::panelStrong);
+  panel->setCornerRadius(ui_theme::panelRadius());
+  panel->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow);
+  panel->setThemedBorderColor(ui_theme::hairline);
+  panel->setBorderWidth(1);
+  panel->addView(makeWrappedText("Enable unrestricted skins",
+                                 metrics.sectionTitleSize,
+                                 ui_theme::textPrimary()));
+  panel->addView(makeWrappedText(
+      "This removes every gameplay-skin safeguard. A skin may read or write "
+      "outside its package, change process-wide state, or exhaust memory, "
+      "storage, CPU, and file descriptors. Enable it only for skins you trust.",
+      metrics.bodyTextSize, ui_theme::amber()));
+
+  auto *actions = new View();
+  actions->setFlexDirection(FlexDirection::Row);
+  actions->setFlexWrap(YGWrapWrap);
+  actions->setGap(metrics.compact ? 10.0F : 14.0F);
+  actions->setJustifyContent(YGJustifyCenter);
+  auto *cancel = makeControlButton(
+      metrics.actionButtonWidth, metrics.actionButtonHeight,
+      makeText("Cancel", metrics.bodyTextSize + 2, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE));
+  cancel->setOnClickListener([this]() {
+    gameplaySkinSettingsController->cancelSafetyLevelChange();
+    lastLayoutWidth = -1;
+  });
+  actions->addView(cancel);
+  auto *enable = makeAccentButton(
+      metrics.actionButtonWidth, metrics.actionButtonHeight,
+      makeText("Enable Unrestricted", metrics.bodyTextSize + 2,
+               ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
+      ui_theme::coral());
+  enable->setOnClickListener([this]() {
+    handleGameplaySkinActionResult(
+        gameplaySkinSettingsController->confirmSafetyLevelChange());
+    lastLayoutWidth = -1;
+  });
+  actions->addView(enable);
+  panel->addView(actions);
+  gameplaySkinSafetyOverlayRoot->addView(panel);
+  rootLayout->addView(gameplaySkinSafetyOverlayRoot);
 }
 
 #endif
