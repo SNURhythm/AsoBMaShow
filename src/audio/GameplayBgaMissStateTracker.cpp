@@ -2,8 +2,7 @@
 
 bool GameplayBgaMissState::isActiveAt(
     std::int64_t bgaTimeMicros) const noexcept {
-  if (!active || startedBgaMicros == 0 || durationMicros <= 0 ||
-      bgaTimeMicros < startedBgaMicros) {
+  if (!active || durationMicros <= 0 || bgaTimeMicros < startedBgaMicros) {
     return false;
   }
   return bgaTimeMicros - startedBgaMicros < durationMicros;

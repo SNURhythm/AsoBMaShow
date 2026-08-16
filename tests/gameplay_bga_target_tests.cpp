@@ -1201,11 +1201,9 @@ void testZeroStartAndFrameBoundariesAreDeterministic() {
   tracker.onJudge(JudgeResult(PGreat, 0), 0, clockAt(0));
   auto state = tracker.snapshot();
   require(state.active && state.startedBgaMicros == 0 &&
-              state.triggerSerial == 1 && !state.isActiveAt(0) &&
-              !state.isActiveAt(499'999) &&
-              !state.frameIndexAt(0, 4).has_value(),
-          "BGA timestamp zero is retained but preserves the pinned invisible "
-          "misslayertime sentinel");
+              state.triggerSerial == 1 && state.isActiveAt(0) &&
+              state.isActiveAt(499'999) && state.frameIndexAt(0, 4) == 0,
+          "BGA timestamp zero starts an active miss sequence");
 
   tracker.onJudge(JudgeResult(Poor, 0), 0, clockAt(1));
   state = tracker.snapshot();

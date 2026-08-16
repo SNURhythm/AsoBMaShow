@@ -284,6 +284,10 @@ PlayfieldPresentationCoordinator::render(RenderContext &context) {
       [this, &pending](PresentationFailure failure,
                        PresentationFrameOutcome outcome) {
         cancelAndClearActiveTouches();
+        if (pending.bga) {
+          bga_.finalizePrepared(*pending.bga);
+          pending.bga.reset();
+        }
         skin_.reset();
         markTouchTargetChanged();
         failure.frameSerial = pending.frameSerial;
@@ -293,7 +297,6 @@ PlayfieldPresentationCoordinator::render(RenderContext &context) {
             .outcome = outcome,
             .submittedMode = PresentationMode::Skin,
             .bgaCompositeMode = GameplayBgaCompositeMode::EmbeddedSkin,
-            .preparedBga = std::move(pending.bga),
             .failure = std::move(failure),
         };
       };

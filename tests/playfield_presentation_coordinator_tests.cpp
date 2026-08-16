@@ -583,8 +583,8 @@ void testCriticalSkinFailureNeverSubstitutesBuiltInPresentation() {
              result.submittedMode == PresentationMode::Skin &&
              result.bgaCompositeMode ==
                  GameplayBgaCompositeMode::EmbeddedSkin &&
-             result.preparedBga && result.preparedBga->sequence == 743,
-         "skin failure retains the exact prepared BGA without substitution");
+             !result.preparedBga && bga.finalizeCalls == 1,
+         "skin failure finalizes an unsubmitted BGA without substitution");
   expect(coordinator.activeMode() == PresentationMode::BuiltIn,
          "failed skin is disabled for the rest of the chart");
   expect(recorded.size() == 1 &&
