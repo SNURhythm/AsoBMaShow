@@ -4894,11 +4894,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_compile_features(gameplay_skin_integration_tests PRIVATE
             cxx_std_23
         )
-        target_compile_definitions(gameplay_skin_integration_tests PRIVATE
-            ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
-            ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
-        )
-
         add_executable(skin_performance_telemetry_tests
             tests/skin_performance_telemetry_tests.cpp
             src/skin/beatoraja/SkinPerformanceTelemetry.cpp

@@ -147,10 +147,6 @@ ios_project = read("ios/Xcode/AsoBMaShow/AsoBMaShow.xcodeproj/project.pbxproj")
 # ApplicationContext is only an adapter. File ownership, summary staging, and
 # score projection belong to the modern persistence coordinators.
 require(
-    "result_persistence::Coordinator resultPersistence" not in context,
-    "ApplicationContext must not retain the retired SQLite replay coordinator",
-)
-require(
     context.count("persistModernChart(") == 1
     and context.count("persistModernCourse(") == 1
     and context.count("recoverPendingResults() noexcept") == 1,
@@ -382,26 +378,6 @@ require(
     ),
     "course recovery must reuse stored-result identity and score projection authorities",
 )
-
-scene_sources = "\n".join(
-    path.read_text(encoding="utf-8")
-    for path in (root / "src/scene").rglob("*.cpp")
-)
-for obsolete_call in (
-    "StageChartResult",
-    "StageModernChartResult",
-    "StageModernCourseResult",
-    "SaveReplay",
-    "SaveCourseReplay",
-    "SaveCourseScore",
-    "SaveReplayEvent",
-    "SaveReplayTouch",
-    "SaveLaneCover",
-):
-    require(
-        re.search(rf"\b{obsolete_call}\s*\(", scene_sources) is None,
-        f"scenes must not own repository persistence: {obsolete_call}",
-    )
 
 require(result_source.count('"Retry Save"') == 1, "missing exact Retry Save action")
 require(

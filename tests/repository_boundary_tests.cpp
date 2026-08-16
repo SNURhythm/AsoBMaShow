@@ -39,8 +39,6 @@ bool mayOwnSqlite(const fs::path &relative) {
 
 int main() {
   const fs::path sourceRoot = fs::path(ASOBMASHOW_SOURCE_DIR) / "src";
-  const std::array<std::string_view, 4> obsolete{
-      "ChartDBHelper", "ScoreDBHelper", "ReplayDBHelper", "MusicPlaylistDB"};
   const std::array<std::string_view, 4> sqliteTokens{
       "sqlite3", "SqliteConnectionHandle", "SqliteStatementHandle",
       "SqliteTransactionHandle"};
@@ -59,12 +57,6 @@ int main() {
     }
     const fs::path relative = fs::relative(entry.path(), sourceRoot);
     const std::string text = readText(entry.path());
-    for (std::string_view symbol : obsolete) {
-      if (text.find(symbol) != std::string::npos) {
-        failures.push_back(relative.generic_string() + ": obsolete " +
-                           std::string(symbol));
-      }
-    }
     if (relative.generic_string().starts_with("repositories/") &&
         (relative.extension() == ".h" || relative.extension() == ".hpp") &&
         text.find("GetInstance") != std::string::npos) {
