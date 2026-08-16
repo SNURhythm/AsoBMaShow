@@ -49,7 +49,7 @@ bool testStaticChartMetadata() {
   if (model.chartMd5 != "chart-md5" || model.chartSha256 != "chart-sha256" ||
       metadata.difficulty != 3 || metadata.judgeRank != 72 ||
       metadata.minimumBpm != 124.25 || metadata.maximumBpm != 248.5 ||
-      metadata.durationMicros != 123'456'789 || metadata.totalNotes != 0 ||
+      metadata.durationMicros != 123'456'789 || metadata.totalNotes != 987 ||
       metadata.totalLandmineNotes != 8 || !metadata.hasBga ||
       !metadata.hasRandomSequence || !metadata.hasBpmStop ||
       metadata.stageFilePath != "stage.png" ||
@@ -212,6 +212,9 @@ bool testExactBeatorajaChartPropertyMetadata() {
     lnScratchHeadTimeline->SetNote(7, lnScratchHead);
     lnScratchTailTimeline->SetNote(7, lnScratchTail);
     chart.Measures.push_back(measure);
+    // BMSModel.getTotalNotes() is the gameplay scoring authority.  The
+    // displayed note-type breakdown below is independently projected.
+    chart.Meta.TotalNotes = 7;
 
     const auto model = buildPlayfieldChartVisualModel(chart, 2);
     const auto &metadata = model.staticMetadata;
