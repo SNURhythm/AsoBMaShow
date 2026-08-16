@@ -257,43 +257,65 @@ struct ProfileSettingsPersistenceCoordinator::Impl {
     skin::AllSkinProfileSnapshotsResult result;
     skin::ProfileInventorySnapshot inventory{.inventoryGeneration =
                                                  job.inventoryGeneration};
+    const auto mutateIfCurrent = [&](auto &&mutation) {
+      const auto gate = inventoryGate;
+      std::lock_guard gateLock(gate->mutex);
+      std::lock_guard lock(mutex);
+      if (gate->stopping || stopping ||
+          job.inventoryGeneration != gate->generation) {
+        return false;
+      }
+      mutation();
+      return true;
+    };
     for (const auto &input : job.snapshotInputs) {
       if (snapshotWasCancelled(job.ticket)) {
         result.cancelled = true;
         break;
       }
       if (input.active) {
-        std::lock_guard lock(mutex);
-        inventory.profiles.push_back(snapshotLocked(input.id));
+        if (!mutateIfCurrent(
+                [&] { inventory.profiles.push_back(snapshotLocked(input.id)); })) {
+          result.cancelled = true;
+          break;
+        }
         continue;
       }
       const auto loaded = dependencies.loadSettings(input.path);
       if (loaded.status != AppSettingsLoadStatus::Loaded) {
+        if (!mutateIfCurrent([] {})) {
+          result.cancelled = true;
+          break;
+        }
         result.diagnostics.push_back(failureDiagnostic(
             "skin_profile_snapshot_load_failed",
             "Profile settings could not be loaded for " + input.id.opaque));
         continue;
       }
-      std::lock_guard lock(mutex);
-      auto [state, inserted] = profiles.try_emplace(input.id.opaque);
-      if (inserted) {
-        state->second.settings = loaded.settings.skin;
-        state->second.durableSettings = loaded.settings;
-      } else if (state->second.settings != loaded.settings.skin ||
-                 state->second.durableSettings != loaded.settings) {
-        if (state->second.highWaterGeneration ==
-            std::numeric_limits<std::uint64_t>::max()) {
-          result.diagnostics.push_back(failureDiagnostic(
-              "skin_profile_generation_exhausted",
-              "Profile generations are exhausted during inventory refresh"));
-          continue;
-        }
-        ++state->second.highWaterGeneration;
-        state->second.generation = state->second.highWaterGeneration;
-        state->second.settings = loaded.settings.skin;
-        state->second.durableSettings = loaded.settings;
+      if (!mutateIfCurrent([&] {
+            auto [state, inserted] = profiles.try_emplace(input.id.opaque);
+            if (inserted) {
+              state->second.settings = loaded.settings.skin;
+              state->second.durableSettings = loaded.settings;
+            } else if (state->second.settings != loaded.settings.skin ||
+                       state->second.durableSettings != loaded.settings) {
+              if (state->second.highWaterGeneration ==
+                  std::numeric_limits<std::uint64_t>::max()) {
+                result.diagnostics.push_back(failureDiagnostic(
+                    "skin_profile_generation_exhausted",
+                    "Profile generations are exhausted during inventory refresh"));
+                return;
+              }
+              ++state->second.highWaterGeneration;
+              state->second.generation = state->second.highWaterGeneration;
+              state->second.settings = loaded.settings.skin;
+              state->second.durableSettings = loaded.settings;
+            }
+            inventory.profiles.push_back(snapshotLocked(input.id));
+          })) {
+        result.cancelled = true;
+        break;
       }
-      inventory.profiles.push_back(snapshotLocked(input.id));
     }
     if (!result.cancelled && result.diagnostics.empty() &&
         inventory.profiles.size() == job.snapshotInputs.size()) {
@@ -301,18 +323,20 @@ struct ProfileSettingsPersistenceCoordinator::Impl {
       for (const auto &input : job.snapshotInputs) {
         capturedProfileIds.insert(input.id.opaque);
       }
-      {
-        std::lock_guard lock(mutex);
-        std::erase_if(profiles, [&capturedProfileIds](const auto &profile) {
-          return !capturedProfileIds.contains(profile.first);
-        });
+      if (!mutateIfCurrent([&] {
+            std::erase_if(profiles, [&capturedProfileIds](const auto &profile) {
+              return !capturedProfileIds.contains(profile.first);
+            });
+          })) {
+        result.cancelled = true;
+      } else {
+        std::sort(inventory.profiles.begin(), inventory.profiles.end(),
+                  [](const auto &left, const auto &right) {
+                    return left.profileId < right.profileId;
+                  });
+        result.complete = true;
+        result.inventory = std::move(inventory);
       }
-      std::sort(inventory.profiles.begin(), inventory.profiles.end(),
-                [](const auto &left, const auto &right) {
-                  return left.profileId < right.profileId;
-                });
-      result.complete = true;
-      result.inventory = std::move(inventory);
     }
     std::lock_guard lock(mutex);
     pendingSnapshots.erase(job.ticket);

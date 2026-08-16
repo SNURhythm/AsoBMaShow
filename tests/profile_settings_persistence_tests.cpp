@@ -62,7 +62,8 @@ PlayerProfileManagerDependencies managerDependencies() {
   auto ids = std::make_shared<std::vector<std::string>>(
       std::initializer_list<std::string>{
           "11111111-1111-4111-8111-111111111111",
-          "22222222-2222-4222-8222-222222222222"});
+          "22222222-2222-4222-8222-222222222222",
+          "33333333-3333-4333-8333-333333333333"});
   auto index = std::make_shared<std::size_t>(0);
   PlayerProfileManagerDependencies dependencies;
   dependencies.generateUuid = [ids, index] { return ids->at((*index)++); };
@@ -639,6 +640,56 @@ void testSnapshotAdmissionRejectsInventoryChangedDuringCapture() {
          "snapshot captured across an inventory generation is cancelled before enqueue");
 }
 
+void testSnapshotWorkerCannotReconcileAcrossInventoryMutation() {
+  TempDirectory temp;
+  PlayerProfileManager manager(temp.path(), managerDependencies());
+  expect(manager.Initialize().ok(),
+         "profile manager initializes for snapshot worker race");
+  const auto blocker = manager.createProfile("Snapshot Blocker");
+  expect(blocker.ok() && blocker.profile,
+         "snapshot worker race creates an inactive profile to load");
+  AppSettings active;
+  TestBlockingPoint inactiveLoad;
+  ProfileSettingsPersistenceCoordinator coordinator(
+      manager, active,
+      {.loadSettings = [&](const std::filesystem::path &path) {
+        inactiveLoad.arriveAndWait();
+        return AppSettingsStore::Load(path);
+      }});
+
+  const auto ticket = coordinator.beginSnapshotAllProfiles();
+  inactiveLoad.waitUntilArrived();
+
+  auto mutation = coordinator.beginInventoryMutation();
+  const auto late = manager.createProfile("Late Profile");
+  expect(late.ok() && late.profile,
+         "snapshot worker race creates the profile outside its capture");
+  coordinator.finishInventoryMutation(std::move(mutation));
+  expect(late.profile && manager.commitActiveProfile(late.profile->id).ok(),
+         "snapshot worker race activates the later profile after mutation");
+  const auto lateId = late.profile
+                          ? skin::makeSkinProfileId(late.profile->id)
+                          : std::optional<skin::SkinProfileId>{};
+  AppSettings lateSettings;
+  lateSettings.skin = selectedSettings(67);
+  if (lateId) {
+    coordinator.bindCommittedActiveProfile(*lateId, lateSettings);
+  }
+
+  inactiveLoad.release();
+  std::optional<skin::AllSkinProfileSnapshotsResult> result;
+  for (int attempt = 0; attempt < 500 && !result; ++attempt) {
+    result = coordinator.pollSnapshotAllProfiles(ticket);
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  const auto lateSnapshot =
+      lateId ? coordinator.snapshot(*lateId) : skin::VersionedSkinProfileSettings{};
+  expect(result && result->cancelled && !result->complete && !result->inventory &&
+             lateId && lateSnapshot.settings == lateSettings.skin,
+         "a snapshot worker that loses its inventory generation cannot erase "
+         "or overwrite a later bound profile");
+}
+
 void testNonStandardSkinWorkerFailureRollsBackAndTerminatesTicket() {
   TempDirectory temp;
   PlayerProfileManager manager(temp.path(), managerDependencies());
@@ -940,6 +991,7 @@ int main() {
   testSnapshotTicketsAndInventoryFenceRejectAba();
   testSnapshotAdmissionAfterShutdownIsTerminallyCancelled();
   testSnapshotAdmissionRejectsInventoryChangedDuringCapture();
+  testSnapshotWorkerCannotReconcileAcrossInventoryMutation();
   testNonStandardSkinWorkerFailureRollsBackAndTerminatesTicket();
   testNonStandardSnapshotWorkerFailureTerminatesTicket();
   testInventoryRaiiTokensCanOutliveCoordinatorShutdown();
