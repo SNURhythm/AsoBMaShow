@@ -239,7 +239,6 @@ struct LuaSkinHostModulesImpl {
   LuaCoroutineCreatedCallback coroutineCreated = nullptr;
   LuaSkinEventExecutor eventExecutor;
   SkinCompatibilityDiagnostics diagnostics;
-  std::vector<std::weak_ptr<LuaFileHandle>> handles;
   int fileTokenReference = LUA_NOREF;
   int gdxTokenReference = LUA_NOREF;
   const BeatorajaSkinConfiguration *pendingConfiguration = nullptr;
@@ -289,7 +288,6 @@ struct LuaSkinHostModulesImpl {
                "legacy Lua authority is outside the audited facade");
   }
 
-  void releaseHandle(LuaFileHandle &handle) noexcept;
   bool copyConfiguredFiles(const std::vector<ConfiguredFile> &) noexcept;
   bool resolveConfiguredPath(std::string_view) noexcept;
 };
@@ -308,10 +306,6 @@ struct LuaFileHandle {
 };
 
 } // namespace
-
-void LuaSkinHostModulesImpl::releaseHandle(LuaFileHandle &handle) noexcept {
-  (void)handle;
-}
 
 bool LuaSkinHostModulesImpl::copyConfiguredFiles(
     const std::vector<ConfiguredFile> &files) noexcept {
@@ -764,7 +758,6 @@ int fileLineIterator(lua_State *state) {
       if (handle->closeOnEndOfLines) {
         handle->file.close();
         handle->closed = true;
-        handle->owner->releaseHandle(*handle);
       }
       return 0;
     }
@@ -1150,7 +1143,6 @@ int fileClose(lua_State *state) {
     return raiseStoredError(state, handle->owner);
   }
   handle->closed = true;
-  handle->owner->releaseHandle(*handle);
   lua_pushboolean(state, 1);
   return 1;
 }
@@ -1260,7 +1252,6 @@ int ioOpen(lua_State *state) {
     new (storage) SharedLuaFileHandle(handle);
     luaL_getmetatable(state, kHandleMetatable);
     lua_setmetatable(state, -2);
-    impl->handles.push_back(handle);
   } catch (...) {
     return expectedFailure(state, "Lua skin file handle could not allocate");
   }

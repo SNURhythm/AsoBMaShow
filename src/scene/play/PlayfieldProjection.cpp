@@ -94,6 +94,21 @@ bool isVisibleSingleNote(ChartVisualNoteSource source,
          request.includeInvisibleNotes;
 }
 
+// The compatibility plan feeds BMSRenderer, whose normal-note loop retains
+// playable notes until the active late-POOR deadline. Mines and invisible
+// notes keep LaneRenderer's future-only rule. Skin DTOs intentionally retain
+// the future-only policy above.
+bool isVisibleBuiltInSingleNote(
+    ChartVisualNoteSource source, long long timelineMicros,
+    long long visualTimeMicros,
+    const PlayfieldProjectionRequest &request) noexcept {
+  return source == ChartVisualNoteSource::Playable
+             ? isWithinLatePoorWindow(timelineMicros, visualTimeMicros,
+                                      request)
+             : isVisibleSingleNote(source, timelineMicros, visualTimeMicros,
+                                   request);
+}
+
 skin::SkinProjectedNoteKind toSkinNoteKind(ChartVisualNoteSource source) {
   switch (source) {
   case ChartVisualNoteSource::Invisible:
@@ -853,8 +868,8 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
     }
     const auto source = effectiveSource(note);
     const auto *noteState = stateFor(note.id);
-    if (!isVisibleSingleNote(source, timeline.timeMicros, timeMicros,
-                             request)) {
+    if (!isVisibleBuiltInSingleNote(source, timeline.timeMicros, timeMicros,
+                                    request)) {
       return;
     }
     const auto lane = std::ranges::find(model.laneOrder, note.lane);

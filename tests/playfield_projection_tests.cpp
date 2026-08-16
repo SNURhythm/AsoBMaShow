@@ -937,6 +937,52 @@ int main() {
     return EXIT_FAILURE;
   }
 
+  // The generic skin DTO is future-only, but BMSRenderer retains an
+  // unjudged playable note through the active late-POOR deadline.  Replay
+  // watch/export consume the immutable built-in plan, so the two contracts
+  // must remain deliberately distinct.
+  PlayfieldChartVisualModel latePoorNormalModel;
+  latePoorNormalModel.laneOrder = {1};
+  latePoorNormalModel.timelines = {
+      {.id = 80,
+       .timeMicros = 0,
+       .scrollPosition = 0.0,
+       .retainedForProjection = true,
+       .retainedOrdinal = 0,
+       .authoredOrdinal = 0},
+  };
+  latePoorNormalModel.notes = {
+      {.id = 801,
+       .timelineId = 80,
+       .lane = 1,
+       .kind = ChartVisualNoteKind::Normal,
+       .source = ChartVisualNoteSource::Playable,
+       .authoredOrdinal = 0},
+      {.id = 802,
+       .timelineId = 80,
+       .lane = 1,
+       .kind = ChartVisualNoteKind::Mine,
+       .source = ChartVisualNoteSource::Mine,
+       .authoredOrdinal = 1},
+      {.id = 803,
+       .timelineId = 80,
+       .lane = 1,
+       .kind = ChartVisualNoteKind::Invisible,
+       .source = ChartVisualNoteSource::Invisible,
+       .authoredOrdinal = 2},
+  };
+  PlayfieldVisualState latePoorNormalState;
+  latePoorNormalState.clock.visualTimeMicros = 100'000;
+  const auto latePoorNormalResult = projection.project(
+      latePoorNormalModel, latePoorNormalState,
+      {.includeInvisibleNotes = true, .latePoorTimingMicros = 200'000});
+  if (!latePoorNormalResult.notes.empty() ||
+      latePoorNormalResult.builtInPlan.notes.size() != 1 ||
+      latePoorNormalResult.builtInPlan.notes.front().noteId != 801U) {
+    std::cerr << "built-in plan must retain only playable late-POOR notes\n";
+    return EXIT_FAILURE;
+  }
+
   // BMSRenderer reserves 181/182 for every long body whose head has already
   // passed the late-poor window.  Those rows must not consume an additional
   // per-row depth before the current/future traversal begins.  This exact
