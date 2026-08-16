@@ -843,6 +843,8 @@ struct GameplaySkinSettingsController::Impl {
                 ? dependencies.beginFolderHandoff(
                       {.maxBytes = SkinPackagePolicy::maxExpandedBytes,
                        .maxFiles = SkinPackagePolicy::maxFiles,
+                       .maxRegularFileBytes =
+                           SkinPackagePolicy::maxRegularFileBytes,
                        .maxDepth = SkinPackagePolicy::maxPathComponents,
                        .maxPathBytes = SkinPackagePolicy::maxPathBytes})
                 : platform_document_handoff::PlatformDocumentHandoffOperation{};

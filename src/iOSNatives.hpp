@@ -111,7 +111,7 @@ std::string ImportIOSDocument(std::uint64_t operationToken,
 std::string ImportIOSDirectory(
     std::uint64_t operationToken, std::uint64_t maxBytes,
     std::uint64_t maxFiles, std::uint32_t maxDepth,
-    std::uint32_t maxPathBytes,
+    std::uint32_t maxPathBytes, std::uint64_t maxRegularFileBytes,
     const std::atomic_bool *cancellationRequested,
     std::string *originalSourceName = nullptr);
 std::string ExportIOSDocument(std::uint64_t operationToken,

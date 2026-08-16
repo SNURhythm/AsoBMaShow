@@ -866,6 +866,7 @@ void testDirectoryImportUsesThePickedFolderAsItsPrivateRoot() {
   const PlatformDirectoryImportRequest request{
       .maxBytes = 1024,
       .maxFiles = 3,
+      .maxRegularFileBytes = 1024,
       .maxDepth = 2,
       .maxPathBytes = 128};
   const auto imported =
@@ -923,6 +924,12 @@ void testDirectoryImportUsesThePickedFolderAsItsPrivateRoot() {
               sourceRoot, invalid, temporaryRoot)
               .ok(),
          "directory import enforces the selected folder path-byte limit");
+  invalid = request;
+  invalid.maxRegularFileBytes = 3;
+  expect(!platform_document_handoff::detail::CopyDirectoryForImport(
+              sourceRoot, invalid, temporaryRoot)
+              .ok(),
+         "directory import rejects a source file before copying beyond the per-file limit");
 
   std::atomic_bool cancelledBeforePicker = true;
   expect(platform_document_handoff::detail::CopyDirectoryForImport(
@@ -1043,6 +1050,7 @@ void testScheduledTemporaryCleanupAndReadyAbandonAreNonblocking() {
   const PlatformDirectoryImportRequest directoryDefaults;
   expect(defaults.temporaryPathKind == PlatformTemporaryPathKind::None &&
              directoryDefaults.maxBytes == 0 && directoryDefaults.maxFiles == 0 &&
+             directoryDefaults.maxRegularFileBytes == 0 &&
              directoryDefaults.maxDepth == 0 &&
              directoryDefaults.maxPathBytes == 0,
          "temporary path and directory import value defaults are explicit");

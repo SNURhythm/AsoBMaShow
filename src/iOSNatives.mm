@@ -3123,6 +3123,7 @@ bool SecureIOSPrivateDirectory(NSString *path, NSString **errorMessage) {
 bool CopyIOSDirectoryFileBounded(
     NSURL *sourceURL, NSString *destinationPath,
     std::uint64_t operationToken, std::uint64_t maxBytes,
+    std::uint64_t maxRegularFileBytes,
     std::uint64_t &totalBytes,
     const std::atomic_bool *cancellationRequested, bool &cancelled,
     NSString **errorMessage) {
@@ -3140,6 +3141,14 @@ bool CopyIOSDirectoryFileBounded(
     }
     if (errorMessage != nullptr) {
       *errorMessage = @"The selected folder contains a non-regular file.";
+    }
+    return false;
+  }
+  if (sourceStatus.st_size < 0 ||
+      static_cast<std::uint64_t>(sourceStatus.st_size) > maxRegularFileBytes) {
+    ::close(descriptor);
+    if (errorMessage != nullptr) {
+      *errorMessage = @"The selected folder contains a file beyond its limit.";
     }
     return false;
   }
@@ -3164,6 +3173,7 @@ bool CopyIOSDirectoryFileBounded(
   }
 
   bool complete = false;
+  std::uint64_t copiedFileBytes = 0;
   std::array<std::uint8_t, 64 * 1024> buffer{};
   while (true) {
     if (IOSDocumentCancellationRequested(cancellationRequested)) {
@@ -3191,6 +3201,13 @@ bool CopyIOSDirectoryFileBounded(
       }
       break;
     }
+    if (copiedFileBytes > maxRegularFileBytes ||
+        read > maxRegularFileBytes - copiedFileBytes) {
+      if (errorMessage != nullptr) {
+        *errorMessage = @"The selected folder contains a file beyond its limit.";
+      }
+      break;
+    }
     NSString *writeError = nil;
     if (!output->write(buffer.data(), static_cast<std::size_t>(count),
                        &writeError)) {
@@ -3204,6 +3221,7 @@ bool CopyIOSDirectoryFileBounded(
       break;
     }
     totalBytes += read;
+    copiedFileBytes += read;
   }
   struct stat finalSourceStatus {};
   if (complete &&
@@ -3243,12 +3261,13 @@ bool CopyIOSDirectoryURLBounded(
     NSURL *sourceURL, NSString *destinationRoot,
     std::uint64_t operationToken, std::uint64_t maxBytes,
     std::uint64_t maxFiles, std::uint32_t maxDepth,
-    std::uint32_t maxPathBytes,
+    std::uint32_t maxPathBytes, std::uint64_t maxRegularFileBytes,
     const std::atomic_bool *cancellationRequested, bool &cancelled,
     NSString **errorMessage) {
   cancelled = false;
   if (sourceURL == nil || destinationRoot.length == 0 || maxBytes == 0 ||
-      maxFiles == 0 || maxDepth == 0 || maxPathBytes == 0) {
+      maxFiles == 0 || maxDepth == 0 || maxPathBytes == 0 ||
+      maxRegularFileBytes == 0) {
     if (errorMessage != nullptr) {
       *errorMessage = @"Invalid private folder copy request.";
     }
@@ -3396,11 +3415,16 @@ bool CopyIOSDirectoryURLBounded(
         copyError = @"The selected folder exceeds the maximum size.";
         break;
       }
+      if (declared > maxRegularFileBytes) {
+        copyError = @"The selected folder contains a file beyond its limit.";
+        break;
+      }
       NSString *fileError = nil;
       bool fileCancelled = false;
       if (!CopyIOSDirectoryFileBounded(
-              entryURL, destination, operationToken, maxBytes, totalBytes,
-              cancellationRequested, fileCancelled, &fileError)) {
+              entryURL, destination, operationToken, maxBytes,
+              maxRegularFileBytes, totalBytes, cancellationRequested,
+              fileCancelled, &fileError)) {
         copyCancelled = fileCancelled;
         copyError = fileError ?:
             @"Could not copy a selected folder file.";
@@ -3678,12 +3702,12 @@ std::string ImportIOSDocument(std::uint64_t operationToken,
 std::string ImportIOSDirectory(
     std::uint64_t operationToken, std::uint64_t maxBytes,
     std::uint64_t maxFiles, std::uint32_t maxDepth,
-    std::uint32_t maxPathBytes,
+    std::uint32_t maxPathBytes, std::uint64_t maxRegularFileBytes,
     const std::atomic_bool *cancellationRequested,
     std::string *originalSourceName) {
   @autoreleasepool {
     if (maxBytes == 0 || maxFiles == 0 || maxDepth == 0 ||
-        maxPathBytes == 0) {
+        maxPathBytes == 0 || maxRegularFileBytes == 0) {
       return std::string(kIOSDocumentErrorPrefix) +
              "Invalid folder import request.";
     }
@@ -3728,8 +3752,8 @@ std::string ImportIOSDirectory(
     bool copyCancelled = false;
     const bool copied = CopyIOSDirectoryURLBounded(
         selectedURL, destination, operationToken, maxBytes, maxFiles,
-        maxDepth, maxPathBytes, cancellationRequested, copyCancelled,
-        &copyError);
+        maxDepth, maxPathBytes, maxRegularFileBytes, cancellationRequested,
+        copyCancelled, &copyError);
     if (accessing) {
       [selectedURL stopAccessingSecurityScopedResource];
     }

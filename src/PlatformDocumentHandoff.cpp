@@ -1394,7 +1394,8 @@ importDirectory(std::uint64_t operationToken,
   std::string originalSourceName;
   const std::string bridgeResult = ImportIOSDirectory(
       operationToken, request.maxBytes, request.maxFiles, request.maxDepth,
-      request.maxPathBytes, &cancellationRequested, &originalSourceName);
+      request.maxPathBytes, request.maxRegularFileBytes,
+      &cancellationRequested, &originalSourceName);
   return detail::ParseBridgeResult(bridgeResult, true, true,
                                    PlatformTemporaryPathKind::Directory,
                                    std::move(originalSourceName));
@@ -1607,11 +1608,11 @@ Validate(const PlatformDocumentImportRequest &request) {
 PlatformDocumentHandoffResult
 Validate(const PlatformDirectoryImportRequest &request) {
   if (request.maxBytes == 0 || request.maxFiles == 0 || request.maxDepth == 0 ||
-      request.maxPathBytes == 0 ||
+      request.maxPathBytes == 0 || request.maxRegularFileBytes == 0 ||
       request.maxBytes > static_cast<std::uint64_t>(
                              std::numeric_limits<std::int64_t>::max())) {
     return failure("Directory import requires non-zero supported byte, file, "
-                   "depth, and path limits.");
+                   "per-file, depth, and path limits.");
   }
   return success();
 }
@@ -1766,7 +1767,15 @@ PlatformDocumentHandoffResult CopyDirectoryForImport(
         output.abort();
         return failCopy("The selected folder contains a reparse-point file.");
       }
+      if (standardInfo.EndOfFile.QuadPart < 0 ||
+          static_cast<std::uint64_t>(standardInfo.EndOfFile.QuadPart) >
+              request.maxRegularFileBytes) {
+        CloseHandle(input);
+        output.abort();
+        return failCopy("The selected folder contains a file beyond its limit.");
+      }
       std::array<char, 64 * 1024> buffer{};
+      std::uint64_t copiedFileBytes = 0;
       while (true) {
         if (cancelled()) {
           CloseHandle(input);
@@ -1784,16 +1793,26 @@ PlatformDocumentHandoffResult CopyDirectoryForImport(
           break;
         }
         const auto bytes = static_cast<std::uint64_t>(count);
-        if (bytes > request.maxBytes - copiedBytes ||
-            !output.write(buffer.data(), static_cast<std::size_t>(count),
+        if (bytes > request.maxBytes - copiedBytes) {
+          CloseHandle(input);
+          output.abort();
+          return failCopy("The selected folder exceeds its byte limit.");
+        }
+        if (bytes > request.maxRegularFileBytes - copiedFileBytes) {
+          CloseHandle(input);
+          output.abort();
+          return failCopy("The selected folder contains a file beyond its limit.");
+        }
+        if (!output.write(buffer.data(), static_cast<std::size_t>(count),
                           errorMessage)) {
           CloseHandle(input);
           output.abort();
           return failCopy(errorMessage.empty()
-                              ? "The selected folder exceeds its byte limit."
+                              ? "Unable to write a private folder copy."
                               : std::move(errorMessage));
         }
         copiedBytes += bytes;
+        copiedFileBytes += bytes;
         if (progress) {
           progress(copiedBytes);
         }
@@ -1811,7 +1830,15 @@ PlatformDocumentHandoffResult CopyDirectoryForImport(
         output.abort();
         return failCopy("The selected folder contains a non-regular file.");
       }
+      if (before.st_size < 0 ||
+          static_cast<std::uint64_t>(before.st_size) >
+              request.maxRegularFileBytes) {
+        ::close(descriptor);
+        output.abort();
+        return failCopy("The selected folder contains a file beyond its limit.");
+      }
       std::array<char, 64 * 1024> buffer{};
+      std::uint64_t copiedFileBytes = 0;
       while (true) {
         if (cancelled()) {
           ::close(descriptor);
@@ -1831,16 +1858,26 @@ PlatformDocumentHandoffResult CopyDirectoryForImport(
           break;
         }
         const auto bytes = static_cast<std::uint64_t>(count);
-        if (bytes > request.maxBytes - copiedBytes ||
-            !output.write(buffer.data(), static_cast<std::size_t>(count),
+        if (bytes > request.maxBytes - copiedBytes) {
+          ::close(descriptor);
+          output.abort();
+          return failCopy("The selected folder exceeds its byte limit.");
+        }
+        if (bytes > request.maxRegularFileBytes - copiedFileBytes) {
+          ::close(descriptor);
+          output.abort();
+          return failCopy("The selected folder contains a file beyond its limit.");
+        }
+        if (!output.write(buffer.data(), static_cast<std::size_t>(count),
                           errorMessage)) {
           ::close(descriptor);
           output.abort();
           return failCopy(errorMessage.empty()
-                              ? "The selected folder exceeds its byte limit."
+                              ? "Unable to write a private folder copy."
                               : std::move(errorMessage));
         }
         copiedBytes += bytes;
+        copiedFileBytes += bytes;
         if (progress) {
           progress(copiedBytes);
         }

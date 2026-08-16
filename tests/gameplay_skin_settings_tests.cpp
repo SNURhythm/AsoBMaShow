@@ -570,7 +570,9 @@ void testArchiveFolderSelectionAndDurableLayoutFlow() {
   installQueuedImport(fixture, *controller, false);
   expect(fixture.lastFolderRequest.maxBytes ==
                  SkinPackagePolicy::maxExpandedBytes &&
-             fixture.lastFolderRequest.maxFiles == SkinPackagePolicy::maxFiles,
+             fixture.lastFolderRequest.maxFiles == SkinPackagePolicy::maxFiles &&
+             fixture.lastFolderRequest.maxRegularFileBytes ==
+                 SkinPackagePolicy::maxRegularFileBytes,
          "folder picker receives the bounded package policy");
   expect(controller->snapshot().entries.size() == 2,
          "archive and unarchived folder packages coexist in the catalog");

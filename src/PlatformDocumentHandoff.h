@@ -68,6 +68,7 @@ struct PlatformDocumentImportRequest {
 struct PlatformDirectoryImportRequest {
   std::uint64_t maxBytes = 0;
   std::uint64_t maxFiles = 0;
+  std::uint64_t maxRegularFileBytes = 0;
   std::uint32_t maxDepth = 0;
   std::uint32_t maxPathBytes = 0;
 };
