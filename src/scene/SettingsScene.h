@@ -306,7 +306,7 @@ private:
   std::unique_ptr<skin::GameplaySkinSettingsController>
       gameplaySkinSettingsController;
   std::string gameplaySkinSettingsProfileId;
-  std::string gameplaySkinSettingsPresentationKey;
+  std::string gameplaySkinSettingsLayoutKey;
   std::string gameplaySkinUiMessage;
   int gameplaySkinActiveTraitSkinType = 0;
   bool gameplaySkinTraitDropdownOpen = false;
@@ -314,7 +314,13 @@ private:
   std::string gameplaySkinConfigurationDropdownOpenKey;
   bool gameplaySkinReplaceConfirmationArmed = false;
   std::string gameplaySkinRemovalConfirmationKey;
+  TextView *gameplaySkinStatusText = nullptr;
+  TextView *gameplaySkinUiMessageText = nullptr;
+  TextView *gameplaySkinConfigurationDigestText = nullptr;
   View *gameplaySkinSafetyOverlayRoot = nullptr;
+  View *gameplaySkinBusyOverlayRoot = nullptr;
+  TextView *gameplaySkinBusyOverlayStatusText = nullptr;
+  Button *gameplaySkinBusyOverlayCancelButton = nullptr;
 #endif
   platform_document_handoff::PlatformDocumentHandoffOperation
       profileDocumentHandoff;
@@ -484,6 +490,10 @@ private:
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   void ensureGameplaySkinSettingsController();
   void updateGameplaySkinSettingsController();
+  void updateGameplaySkinSettingsLiveUi(
+      const skin::GameplaySkinSettingsSnapshot &snapshot);
+  void ensureGameplaySkinBusyOverlay(
+      const skin::GameplaySkinSettingsSnapshot &snapshot);
   [[nodiscard]] bool gameplaySkinTraitsRuntimeAvailable() const noexcept;
   void appendSelectedSkinHudSettings(View *body,
                                      const settings_scene::LayoutMetrics &metrics,

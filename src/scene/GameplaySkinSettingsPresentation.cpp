@@ -414,6 +414,68 @@ std::string gameplaySkinSettingsPresentationKey(
   return std::move(encoder).finish();
 }
 
+std::string gameplaySkinSettingsLayoutKey(
+    const GameplaySkinSettingsSnapshot &snapshot) {
+  PresentationKeyEncoder encoder;
+  encoder.boolean(snapshot.featureAvailable);
+  encoder.boolean(snapshot.state == GameplaySkinSettingsState::Error);
+  encoder.boolean(snapshot.compatibilityEnabled);
+  encodeEnum(encoder, snapshot.safetyLevel);
+  encoder.boolean(snapshot.pendingSafetyLevel.has_value());
+  if (snapshot.pendingSafetyLevel) {
+    encodeEnum(encoder, *snapshot.pendingSafetyLevel);
+  }
+
+  encoder.unsignedNumber(snapshot.selectedGameplayEntries.size());
+  for (const auto &[skinType, entry] : snapshot.selectedGameplayEntries) {
+    encoder.signedNumber(skinType);
+    encodeEntry(encoder, entry);
+  }
+
+  encoder.boolean(snapshot.preparedName.has_value());
+  if (snapshot.preparedName) {
+    encoder.text(snapshot.preparedName->originalSourceName);
+    encoder.text(snapshot.preparedName->suggestedPackageName);
+    encoder.text(snapshot.preparedName->validationError);
+  }
+
+  encoder.boolean(snapshot.collisionPackage.has_value());
+  if (snapshot.collisionPackage) {
+    encodePackage(encoder, *snapshot.collisionPackage);
+  }
+
+  encoder.unsignedNumber(snapshot.entries.size());
+  for (const auto &row : snapshot.entries) {
+    encodeEntry(encoder, row.entry);
+    encodeMetadata(encoder, row.metadata);
+    encoder.text(row.revisionDigest);
+    encodeEnum(encoder, row.validation);
+    encoder.unsignedNumber(row.diagnostics.size());
+    for (const auto &diagnostic : row.diagnostics) {
+      encodeDiagnostic(encoder, diagnostic);
+    }
+  }
+
+  encoder.unsignedNumber(snapshot.history.size());
+  for (const auto &record : snapshot.history) {
+    encoder.unsignedNumber(record.recordSerial);
+    encodeEntry(encoder, record.entry);
+    encoder.text(record.revisionDigest);
+    encoder.text(record.configurationDigest);
+    encodeEnum(encoder, record.phase);
+    encodeDiagnostic(encoder, record.diagnostic);
+    encoder.boolean(record.luaLine.has_value());
+    if (record.luaLine) {
+      encoder.unsignedNumber(*record.luaLine);
+    }
+    encoder.boolean(record.frameSerial.has_value());
+    if (record.frameSerial) {
+      encoder.unsignedNumber(*record.frameSerial);
+    }
+  }
+  return std::move(encoder).finish();
+}
+
 std::string gameplaySkinPackageProgressDisplayText(const SkinProgress &progress) {
   std::string text = progressPhaseLabel(progress.phase);
   if (progress.totalBytes > 0) {

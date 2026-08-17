@@ -222,6 +222,9 @@ void SettingsScene::init() {
   ensureProfileController();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   ensureGameplaySkinSettingsController();
+  if (activeTab == SettingsTab::GameplaySkins) {
+    updateGameplaySkinSettingsController();
+  }
 #endif
   ensureAudioVideoSession();
   context.profileSwitchBlockers.scene = [this]() -> std::optional<std::string> {
@@ -320,6 +323,10 @@ void SettingsScene::renderScene() {
     gameplaySkinSafetyOverlayRoot->setSize(rendering::window_width,
                                             rendering::window_height);
   }
+  if (gameplaySkinBusyOverlayRoot != nullptr) {
+    gameplaySkinBusyOverlayRoot->setSize(rendering::window_width,
+                                          rendering::window_height);
+  }
 #endif
   if (previewActive && previewRenderer != nullptr) {
     syncPreviewPresentationConfiguration();
@@ -369,7 +376,7 @@ void SettingsScene::cleanupScene() {
     gameplaySkinSettingsController.reset();
   }
   gameplaySkinSettingsProfileId.clear();
-  gameplaySkinSettingsPresentationKey.clear();
+  gameplaySkinSettingsLayoutKey.clear();
   gameplaySkinUiMessage.clear();
   gameplaySkinReplaceConfirmationArmed = false;
   gameplaySkinRemovalConfirmationKey.clear();
@@ -546,6 +553,12 @@ void SettingsScene::cleanupScene() {
   inputVirtualControllerEditorOverlayRoot = nullptr;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   gameplaySkinSafetyOverlayRoot = nullptr;
+  gameplaySkinStatusText = nullptr;
+  gameplaySkinUiMessageText = nullptr;
+  gameplaySkinConfigurationDigestText = nullptr;
+  gameplaySkinBusyOverlayRoot = nullptr;
+  gameplaySkinBusyOverlayStatusText = nullptr;
+  gameplaySkinBusyOverlayCancelButton = nullptr;
 #endif
   lastLayoutWidth = -1;
   lastLayoutHeight = -1;

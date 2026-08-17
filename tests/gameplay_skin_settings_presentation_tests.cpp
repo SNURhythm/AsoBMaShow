@@ -233,6 +233,62 @@ void testActionDrivingChangesInvalidatePresentation() {
       "trait-specific selection changes invalidate presentation");
 }
 
+void testLayoutKeyIgnoresLiveOperationAndConfigurationValues() {
+  const auto base = snapshotWithEntry();
+  auto liveOperation = base;
+  liveOperation.state = skin::GameplaySkinSettingsState::Busy;
+  liveOperation.canCancel = true;
+  liveOperation.hasPackageProgress = false;
+  liveOperation.statusMessage = "Saving skin configuration";
+  liveOperation.progress.completedBytes = 19;
+  liveOperation.progress.completedFiles = 4;
+  liveOperation.rescanProgress.packageProgress.completedBytes = 11;
+  require(skin::gameplaySkinSettingsLayoutKey(base) ==
+              skin::gameplaySkinSettingsLayoutKey(liveOperation),
+          "live operation progress does not rebuild the gameplay skins tab");
+
+  auto configured = base;
+  configured.entries[0].configurationDigest = "new-configuration";
+  configured.entries[0].settings.options["Lane cover"] = 0;
+  require(skin::gameplaySkinSettingsLayoutKey(base) ==
+              skin::gameplaySkinSettingsLayoutKey(configured),
+          "committed option values do not rebuild the gameplay skins tab");
+
+  auto changedSelection = base;
+  changedSelection.selectedGameplayEntries.emplace(1, entryId("-5k"));
+  require(skin::gameplaySkinSettingsLayoutKey(base) !=
+              skin::gameplaySkinSettingsLayoutKey(changedSelection),
+          "trait selection changes rebuild the gameplay skins tab");
+
+  auto changedCatalog = base;
+  changedCatalog.entries[0].validation = skin::SkinValidationDisposition::Invalid;
+  require(skin::gameplaySkinSettingsLayoutKey(base) !=
+              skin::gameplaySkinSettingsLayoutKey(changedCatalog),
+          "catalog structure changes rebuild the gameplay skins tab");
+
+  auto failed = base;
+  failed.state = skin::GameplaySkinSettingsState::Error;
+  require(skin::gameplaySkinSettingsLayoutKey(base) !=
+              skin::gameplaySkinSettingsLayoutKey(failed),
+          "terminal operation errors rebuild the gameplay skins tab");
+
+  auto newDiagnostics = base;
+  newDiagnostics.entries[0].diagnostics[0].message = "A new validation error";
+  require(skin::gameplaySkinSettingsLayoutKey(base) !=
+              skin::gameplaySkinSettingsLayoutKey(newDiagnostics),
+          "entry diagnostics rebuild the gameplay skins tab");
+
+  auto newHistory = base;
+  skin::SkinDiagnosticHistoryRecord record;
+  record.recordSerial = 1;
+  record.entry = entryId("-history");
+  record.diagnostic.message = "New diagnostic history item";
+  newHistory.history.push_back(std::move(record));
+  require(skin::gameplaySkinSettingsLayoutKey(base) !=
+              skin::gameplaySkinSettingsLayoutKey(newHistory),
+          "diagnostic history changes rebuild the gameplay skins tab");
+}
+
 void testPresentationEncodingHasNoDelimiterOrOptionalAmbiguity() {
   auto left = snapshotWithEntry();
   left.preparedName =
@@ -426,6 +482,7 @@ int main() {
   testCollisionConfirmationAvailabilityIsExact();
   testMetadataChangesInvalidateAnUnchangedDigest();
   testActionDrivingChangesInvalidatePresentation();
+  testLayoutKeyIgnoresLiveOperationAndConfigurationValues();
   testPresentationEncodingHasNoDelimiterOrOptionalAmbiguity();
   testCachedControllerPresentationKeyAvoidsReencodingStaticCatalogRows();
   testCatalogItemsFollowBeatorajaCategoryAndOtherOrder();

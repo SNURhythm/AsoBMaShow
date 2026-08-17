@@ -138,8 +138,10 @@ void DropdownView::buildView() {
     if (!current.enabled) {
       return;
     }
+    const bool open = !current.open;
+    setOpen(open);
     if (callbacks.onOpenChanged) {
-      callbacks.onOpenChanged(!current.open);
+      callbacks.onOpenChanged(open);
     }
   });
 
@@ -267,9 +269,20 @@ void DropdownView::rebuildOptions() {
           !optionSelectable(current, *option)) {
         return;
       }
+      const std::string previousId = current.selectedId;
+      current.selectedId = id;
+      setOpen(false);
+      refreshVisualState();
       ScopedBoolFlag dispatching(dispatchingOptionCallback);
-      if (callbacks.onOptionSelected) {
+      const bool accepted = callbacks.onOptionSelectedResult
+                                ? callbacks.onOptionSelectedResult(id)
+                                : true;
+      if (!callbacks.onOptionSelectedResult && callbacks.onOptionSelected) {
         callbacks.onOptionSelected(id);
+      }
+      if (!accepted) {
+        current.selectedId = previousId;
+        refreshVisualState();
       }
       if (callbacks.onOpenChanged) {
         callbacks.onOpenChanged(false);
@@ -327,6 +340,15 @@ void DropdownView::refreshVisualState() {
                 item.available);
     refreshIndicator(item.indicator, item.leadingColor);
   }
+}
+
+void DropdownView::setOpen(bool open) {
+  if (current.open == open) {
+    return;
+  }
+  current.open = open;
+  refreshVisualState();
+  updateMenuPlacement();
 }
 
 void DropdownView::updateMenuPlacement() {
@@ -494,6 +516,7 @@ bool DropdownView::handleEventsImpl(SDL_Event &event) {
     float uiY = 0.0f;
     if (mouseEventToUi(event.button, uiX, uiY) &&
         !pointInsideOpenArea(uiX, uiY)) {
+      setOpen(false);
       if (callbacks.onOpenChanged) {
         callbacks.onOpenChanged(false);
       }
@@ -505,8 +528,11 @@ bool DropdownView::handleEventsImpl(SDL_Event &event) {
     float uiX = 0.0f;
     float uiY = 0.0f;
     fingerEventToUi(event.tfinger, uiX, uiY);
-    if (!pointInsideOpenArea(uiX, uiY) && callbacks.onOpenChanged) {
-      callbacks.onOpenChanged(false);
+    if (!pointInsideOpenArea(uiX, uiY)) {
+      setOpen(false);
+      if (callbacks.onOpenChanged) {
+        callbacks.onOpenChanged(false);
+      }
     }
     return true;
   }

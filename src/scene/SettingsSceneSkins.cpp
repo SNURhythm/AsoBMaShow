@@ -14,6 +14,7 @@
 #include <cmath>
 #include <functional>
 #include <iomanip>
+#include <memory>
 #include <sstream>
 #include <utility>
 #include <vector>
@@ -54,7 +55,35 @@ struct GameplaySkinChoiceButton {
   std::string label;
   bool selected = false;
   std::function<void()> action;
+  std::function<bool()> tryAction;
 };
+
+void styleGameplaySkinChoiceButton(Button *button, bool selected) {
+  button->setSelected(selected);
+  if (!selected) {
+    button->setThemedBackgroundColors(ui_theme::control, ui_theme::controlHover,
+                                      ui_theme::controlPressed);
+    button->setThemedBorderColors(ui_theme::hairline, ui_theme::accentBorder,
+                                  ui_theme::accentBorderStrong);
+    return;
+  }
+
+  const auto accent = []() { return ui_theme::cyan(); };
+  const auto accentWithModeAlpha = [](uint8_t lightAlpha, uint8_t darkAlpha) {
+    return [lightAlpha, darkAlpha]() {
+      return ui_theme::withAlpha(
+          ui_theme::cyan(), ui_theme::activeMode() == ui_theme::ThemeMode::Light
+                                ? lightAlpha
+                                : darkAlpha);
+    };
+  };
+  button->setThemedBackgroundColors(accentWithModeAlpha(54, 82),
+                                    accentWithModeAlpha(74, 108),
+                                    accentWithModeAlpha(100, 136));
+  button->setThemedBorderColors(
+      []() { return ui_theme::withAlpha(ui_theme::cyan(), 178); },
+      []() { return ui_theme::withAlpha(ui_theme::cyan(), 216); }, accent);
+}
 
 View *makeGameplaySkinChoiceRow(
     const LayoutMetrics &metrics, const std::string &label, bool enabled,
@@ -76,6 +105,7 @@ View *makeGameplaySkinChoiceRow(
   buttons->setFlexDirection(FlexDirection::Row);
   buttons->setFlexWrap(YGWrapWrap);
   buttons->setGap(metrics.compact ? 6.0f : 8.0f);
+  auto choiceButtons = std::make_shared<std::vector<Button *>>();
   for (auto &choice : choices) {
     auto *choiceLabel = makeText(choice.label, metrics.smallTextSize,
                                  ui_theme::textPrimary(), TextView::CENTER,
@@ -90,10 +120,22 @@ View *makeGameplaySkinChoiceRow(
                                           choiceLabel, ui_theme::cyan())
                        : makeControlButton(width, metrics.actionButtonHeight,
                                            choiceLabel);
+    button->setSelected(choice.selected);
     button->setEnabled(enabled);
     if (enabled) {
-      button->setOnClickListener(std::move(choice.action));
+      button->setOnClickListener(
+          [button, choiceButtons, action = std::move(choice.action),
+           tryAction = std::move(choice.tryAction)]() mutable {
+            const bool accepted = tryAction ? tryAction() : (action(), true);
+            if (!accepted) {
+              return;
+            }
+            for (auto *candidate : *choiceButtons) {
+              styleGameplaySkinChoiceButton(candidate, candidate == button);
+            }
+          });
     }
+    choiceButtons->push_back(button);
     buttons->addView(button);
   }
   row->addView(buttons);
@@ -170,14 +212,19 @@ const char *safetyLevelLabel(skin::SkinSafetyLevel level) {
 
 bool SettingsScene::handleGameplaySkinActionResult(
     skin::ControllerActionResult result) {
-  const bool accepted = result.accepted;
-  if (!result.accepted && !result.message.empty()) {
+  if (!result.message.empty() &&
+      (!result.accepted || !result.asynchronous)) {
     gameplaySkinUiMessage = result.message;
-  } else if (!result.message.empty()) {
-    gameplaySkinUiMessage = result.message;
+  } else if (result.accepted && result.asynchronous) {
+    gameplaySkinUiMessage.clear();
   }
-  lastLayoutWidth = -1;
-  return accepted;
+  if (result.accepted && !result.asynchronous) {
+    lastLayoutWidth = -1;
+  }
+  if (gameplaySkinSettingsController != nullptr) {
+    updateGameplaySkinSettingsLiveUi(gameplaySkinSettingsController->snapshot());
+  }
+  return result.accepted;
 }
 
 void SettingsScene::ensureGameplaySkinSettingsController() {
@@ -262,7 +309,7 @@ void SettingsScene::ensureGameplaySkinSettingsController() {
     gameplaySkinSettingsController->profileChanged(*profileId, clientId);
   }
   gameplaySkinSettingsProfileId = profileId->opaque;
-  gameplaySkinSettingsPresentationKey.clear();
+  gameplaySkinSettingsLayoutKey.clear();
   gameplaySkinUiMessage.clear();
   gameplaySkinSafetyDropdownOpen = false;
   gameplaySkinConfigurationDropdownOpenKey.clear();
@@ -288,12 +335,132 @@ void SettingsScene::updateGameplaySkinSettingsController() {
                    })) {
     gameplaySkinRemovalConfirmationKey.clear();
   }
-  const std::string next = skin::gameplaySkinSettingsPresentationKey(snapshot);
-  if (next != gameplaySkinSettingsPresentationKey) {
-    gameplaySkinSettingsPresentationKey = next;
+  const std::string next = skin::gameplaySkinSettingsLayoutKey(snapshot);
+  if (next != gameplaySkinSettingsLayoutKey) {
+    gameplaySkinSettingsLayoutKey = next;
     if (activeTab == SettingsTab::GameplaySkins) {
       lastLayoutWidth = -1;
     }
+  }
+  updateGameplaySkinSettingsLiveUi(snapshot);
+}
+
+void SettingsScene::updateGameplaySkinSettingsLiveUi(
+    const skin::GameplaySkinSettingsSnapshot &snapshot) {
+  if (activeTab != SettingsTab::GameplaySkins) {
+    return;
+  }
+
+  if (gameplaySkinStatusText != nullptr) {
+    gameplaySkinStatusText->setText(snapshot.statusMessage);
+  }
+  if (gameplaySkinUiMessageText != nullptr) {
+    gameplaySkinUiMessageText->setText(gameplaySkinUiMessage ==
+                                               snapshot.statusMessage
+                                           ? std::string{}
+                                           : gameplaySkinUiMessage);
+  }
+  if (gameplaySkinConfigurationDigestText != nullptr) {
+    const auto selected = snapshot.selectedGameplayEntries.find(
+        gameplaySkinActiveTraitSkinType);
+    const auto row = selected == snapshot.selectedGameplayEntries.end()
+                         ? snapshot.entries.end()
+                         : std::ranges::find_if(
+                               snapshot.entries, [&selected](const auto &entry) {
+                                 return entry.entry == selected->second;
+                               });
+    if (row != snapshot.entries.end()) {
+      gameplaySkinConfigurationDigestText->setText(
+          "Revision: " + row->revisionDigest +
+          " • Configuration: " + row->configurationDigest);
+    }
+  }
+
+  if (snapshot.state != skin::GameplaySkinSettingsState::Busy) {
+    if (gameplaySkinBusyOverlayRoot != nullptr) {
+      gameplaySkinBusyOverlayRoot->setVisible(false);
+    }
+    return;
+  }
+  ensureGameplaySkinBusyOverlay(snapshot);
+  if (gameplaySkinBusyOverlayRoot != nullptr) {
+    gameplaySkinBusyOverlayRoot->setVisible(true);
+  }
+}
+
+void SettingsScene::ensureGameplaySkinBusyOverlay(
+    const skin::GameplaySkinSettingsSnapshot &snapshot) {
+  if (rootLayout == nullptr) {
+    return;
+  }
+  if (gameplaySkinBusyOverlayRoot == nullptr) {
+    gameplaySkinBusyOverlayRoot = new BlockingOverlayView(
+        0, 0, rendering::window_width, rendering::window_height);
+    gameplaySkinBusyOverlayRoot->setPositionType(YGPositionTypeAbsolute);
+    gameplaySkinBusyOverlayRoot->setPosition(Edge::Left, 0);
+    gameplaySkinBusyOverlayRoot->setPosition(Edge::Top, 0);
+    gameplaySkinBusyOverlayRoot->setZIndex(1040);
+    gameplaySkinBusyOverlayRoot->setFlexDirection(FlexDirection::Column);
+    gameplaySkinBusyOverlayRoot->setAlignItems(YGAlignCenter);
+    gameplaySkinBusyOverlayRoot->setJustifyContent(YGJustifyCenter);
+    gameplaySkinBusyOverlayRoot->setThemedBackgroundColor(ui_theme::scrim);
+
+    auto *panel = new View();
+    panel->setWidth(520.0F);
+    panel->setFlexDirection(FlexDirection::Column);
+    panel->setAlignItems(YGAlignStretch);
+    panel->setGap(14.0F);
+    panel->setPadding(Edge::All, 28.0F);
+    panel->setThemedBackgroundColor(ui_theme::panelStrong);
+    panel->setCornerRadius(ui_theme::panelRadius());
+    panel->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow);
+    panel->setThemedBorderColor(ui_theme::hairline);
+    panel->setBorderWidth(1);
+    panel->addView(makeWrappedText("Updating gameplay skins", 26,
+                                   ui_theme::textPrimary()));
+    gameplaySkinBusyOverlayStatusText =
+        makeWrappedText({}, 20, ui_theme::textSecondary());
+    panel->addView(gameplaySkinBusyOverlayStatusText);
+    gameplaySkinBusyOverlayCancelButton = makeControlButton(
+        180, 60,
+        makeText("Cancel", 20, ui_theme::textPrimary(), TextView::CENTER,
+                 TextView::MIDDLE));
+    gameplaySkinBusyOverlayCancelButton->setOnClickListener([this]() {
+      if (gameplaySkinSettingsController != nullptr) {
+        gameplaySkinSettingsController->cancelOperation();
+        updateGameplaySkinSettingsLiveUi(
+            gameplaySkinSettingsController->snapshot());
+      }
+    });
+    panel->addView(gameplaySkinBusyOverlayCancelButton);
+    gameplaySkinBusyOverlayRoot->addView(panel);
+    rootLayout->addView(gameplaySkinBusyOverlayRoot);
+  }
+
+  std::string message = snapshot.statusMessage;
+  if (snapshot.hasPackageProgress) {
+    const std::string progress =
+        skin::gameplaySkinPackageProgressDisplayText(snapshot.progress);
+    if (!progress.empty()) {
+      message += message.empty() ? progress : "\n" + progress;
+    }
+  }
+  if (snapshot.rescanProgress.phase != skin::SkinRescanProgressPhase::Idle &&
+      snapshot.rescanProgress.phase !=
+          skin::SkinRescanProgressPhase::Succeeded &&
+      snapshot.rescanProgress.phase !=
+          skin::SkinRescanProgressPhase::Failed) {
+    const std::string progress =
+        skin::gameplaySkinRescanProgressDisplayText(snapshot.rescanProgress);
+    if (!progress.empty()) {
+      message += message.empty() ? progress : "\n" + progress;
+    }
+  }
+  if (gameplaySkinBusyOverlayStatusText != nullptr) {
+    gameplaySkinBusyOverlayStatusText->setText(message);
+  }
+  if (gameplaySkinBusyOverlayCancelButton != nullptr) {
+    gameplaySkinBusyOverlayCancelButton->setEnabled(snapshot.canCancel);
   }
 }
 
@@ -671,17 +838,14 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   overview->addView(makeWrappedText("Files location: " + visibleSkinFolder,
                                     metrics.smallTextSize,
                                     ui_theme::textMuted()));
-  if (!snapshot.statusMessage.empty()) {
-    overview->addView(makeWrappedText(snapshot.statusMessage,
-                                      metrics.smallTextSize,
-                                      ui_theme::textSecondary()));
-  }
-  if (!gameplaySkinUiMessage.empty() &&
-      gameplaySkinUiMessage != snapshot.statusMessage) {
-    overview->addView(makeWrappedText(gameplaySkinUiMessage,
-                                      metrics.smallTextSize,
-                                      ui_theme::textSecondary()));
-  }
+  gameplaySkinStatusText = makeWrappedText(
+      snapshot.statusMessage, metrics.smallTextSize, ui_theme::textSecondary());
+  overview->addView(gameplaySkinStatusText);
+  gameplaySkinUiMessageText = makeWrappedText(
+      gameplaySkinUiMessage != snapshot.statusMessage ? gameplaySkinUiMessage
+                                                       : std::string{},
+      metrics.smallTextSize, ui_theme::textSecondary());
+  overview->addView(gameplaySkinUiMessageText);
   auto *safetyRow = new View();
   safetyRow->setFlexDirection(FlexDirection::Row);
   safetyRow->setFlexWrap(YGWrapWrap);
@@ -697,9 +861,8 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
       {.onOpenChanged =
            [this](bool open) {
              gameplaySkinSafetyDropdownOpen = open;
-             lastLayoutWidth = -1;
            },
-       .onOptionSelected = [this](const std::string &id) {
+       .onOptionSelectedResult = [this](const std::string &id) {
          gameplaySkinSafetyDropdownOpen = false;
          int value = static_cast<int>(skin::SkinSafetyLevel::Standard);
          const auto parsed = std::from_chars(id.data(), id.data() + id.size(),
@@ -708,10 +871,11 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
              parsed.ptr == id.data() + id.size() &&
              value >= static_cast<int>(skin::SkinSafetyLevel::Standard) &&
              value <= static_cast<int>(skin::SkinSafetyLevel::Unrestricted)) {
-           handleGameplaySkinActionResult(
+           return handleGameplaySkinActionResult(
                gameplaySkinSettingsController->setSafetyLevel(
                    static_cast<skin::SkinSafetyLevel>(value)));
          }
+         return false;
        }},
       overlayPortal);
   safetyDropdown->refresh(
@@ -917,27 +1081,26 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
       {.onOpenChanged =
            [this](bool open) {
              gameplaySkinTraitDropdownOpen = open;
-             lastLayoutWidth = -1;
            },
-       .onOptionSelected =
+       .onOptionSelectedResult =
            [this, skinType = gameplaySkinActiveTraitSkinType,
             entries = std::move(dropdownEntries)](const std::string &id) {
              gameplaySkinTraitDropdownOpen = false;
              gameplaySkinConfigurationDropdownOpenKey.clear();
              if (id.empty()) {
-               handleGameplaySkinActionResult(
+               return handleGameplaySkinActionResult(
                    gameplaySkinSettingsController->clearGameplayTrait(skinType));
-               return;
              }
              const auto selectedEntry = std::ranges::find_if(
                  entries, [&id](const auto &entry) {
                    return entry.collisionKey == id;
                  });
              if (selectedEntry != entries.end()) {
-               handleGameplaySkinActionResult(
+               return handleGameplaySkinActionResult(
                    gameplaySkinSettingsController->selectGameplayTrait(
                        skinType, *selectedEntry));
              }
+             return false;
            }},
       overlayPortal);
   skinDropdown->refresh(
@@ -999,10 +1162,11 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
     }
     entryBody->addView(makeWrappedText(metadata, metrics.smallTextSize,
                                        ui_theme::textMuted()));
-    entryBody->addView(
-        makeWrappedText("Revision: " + row.revisionDigest +
-                            " • Configuration: " + row.configurationDigest,
-                        metrics.smallTextSize, ui_theme::textMuted()));
+    gameplaySkinConfigurationDigestText = makeWrappedText(
+        "Revision: " + row.revisionDigest +
+            " • Configuration: " + row.configurationDigest,
+        metrics.smallTextSize, ui_theme::textMuted());
+    entryBody->addView(gameplaySkinConfigurationDigestText);
     appendSelectedSkinHudSettings(entryBody, metrics, false);
     for (const auto &diagnostic : row.diagnostics) {
       entryBody->addView(makeWrappedText(diagnosticPresentation(diagnostic),
@@ -1057,9 +1221,8 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
                  [this, dropdownKey](bool open) {
                    gameplaySkinConfigurationDropdownOpenKey =
                        open ? dropdownKey : std::string{};
-                   lastLayoutWidth = -1;
                  },
-             .onOptionSelected =
+             .onOptionSelectedResult =
                  [this, entry = row.entry, name = option.name,
                   values = std::move(values)](const std::string &id) {
                    gameplaySkinConfigurationDropdownOpenKey.clear();
@@ -1069,10 +1232,11 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
                    if (parsed.ec == std::errc{} &&
                        parsed.ptr == id.data() + id.size() &&
                        index < values.size()) {
-                     handleGameplaySkinActionResult(
+                     return handleGameplaySkinActionResult(
                          gameplaySkinSettingsController->setOption(
                              entry, name, values[index]));
                    }
+                   return false;
                  }},
             overlayPortal);
         dropdown->refresh(
@@ -1104,9 +1268,9 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
           choices.push_back(
               {.label = choice.label,
                .selected = choice.value == selected->value,
-               .action = [this, entry = row.entry, name = option.name,
-                          value = choice.value]() {
-                 handleGameplaySkinActionResult(
+               .tryAction = [this, entry = row.entry, name = option.name,
+                             value = choice.value]() {
+                 return handleGameplaySkinActionResult(
                      gameplaySkinSettingsController->setOption(entry, name,
                                                                value));
                }});
@@ -1148,9 +1312,8 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
                  [this, dropdownKey](bool open) {
                    gameplaySkinConfigurationDropdownOpenKey =
                        open ? dropdownKey : std::string{};
-                   lastLayoutWidth = -1;
                  },
-             .onOptionSelected =
+             .onOptionSelectedResult =
                  [this, entry = row.entry, name = file.name,
                   choices = file.choices](const std::string &id) {
                    gameplaySkinConfigurationDropdownOpenKey.clear();
@@ -1160,10 +1323,11 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
                    if (parsed.ec == std::errc{} &&
                        parsed.ptr == id.data() + id.size() &&
                        index < choices.size()) {
-                     handleGameplaySkinActionResult(
+                     return handleGameplaySkinActionResult(
                          gameplaySkinSettingsController->setFileChoice(
                              entry, name, choices[index]));
                    }
+                   return false;
                  }},
             overlayPortal);
         dropdown->refresh(
@@ -1194,9 +1358,9 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
           choices.push_back(
               {.label = choice,
                .selected = choice == *current,
-               .action = [this, entry = row.entry, name = file.name,
-                          value = choice]() {
-                 handleGameplaySkinActionResult(
+               .tryAction = [this, entry = row.entry, name = file.name,
+                             value = choice]() {
+                 return handleGameplaySkinActionResult(
                      gameplaySkinSettingsController->setFileChoice(entry, name,
                                                                    value));
                }});
