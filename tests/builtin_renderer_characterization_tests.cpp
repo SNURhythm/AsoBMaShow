@@ -29,6 +29,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -893,6 +894,53 @@ public:
     return {.state = state, .projection = std::move(projection)};
   }
 };
+
+void verifyPreparedFrameRetainsRecentJudgementIndicatorSamples() {
+  PresentationStateFixture fixture;
+  PlayfieldPresentationEventFanout fanout(fixture.store, fixture.renderer);
+  for (const auto &[judgement, diffMicros, visualMicros] :
+       std::array<std::tuple<Judgement, long long, long long>, 3>{
+           {{PGreat, -1'500, 1'400'000},
+            {Great, 500, 1'401'000},
+            {Good, 2'000, 1'402'000}}}) {
+    fanout.onJudge(JudgeResult(judgement, diffMicros), 1, 2,
+                   {.songTimeMicros = visualMicros,
+                    .visualTimeMicros = visualMicros,
+                    .bgaTimeMicros = visualMicros},
+                   true);
+  }
+
+  const PresentationInput frame = fixture.input(71);
+  expect(fixture.renderer.prepareFrame(frame.state, frame.projection) ==
+             PresentationFrameOutcome::Ready,
+         "the multi-judge built-in frame prepares successfully");
+  expect(fixture.renderer.judgementIndicatorSampleCountForTesting() == 3,
+         "preparing a captured frame retains every recent judgement sample");
+}
+
+void verifyPreparedFrameKeepsTheLatestNonSampledJudgementForHudText() {
+  PresentationStateFixture fixture;
+  PlayfieldPresentationEventFanout fanout(fixture.store, fixture.renderer);
+  fanout.onJudge(JudgeResult(Great, -1'500), 1, 2,
+                 {.songTimeMicros = 1'400'000,
+                  .visualTimeMicros = 1'400'000,
+                  .bgaTimeMicros = 1'400'000},
+                 true);
+  fanout.onJudge(JudgeResult(Kpoor, 3'000), 0, 2,
+                 {.songTimeMicros = 1'401'000,
+                  .visualTimeMicros = 1'401'000,
+                  .bgaTimeMicros = 1'401'000},
+                 false);
+
+  const PresentationInput frame = fixture.input(72);
+  expect(fixture.renderer.prepareFrame(frame.state, frame.projection) ==
+             PresentationFrameOutcome::Ready,
+         "a frame with sampled and non-sampled judgements prepares");
+  expect(fixture.renderer.pendingJudgementForTesting().judgement == Kpoor &&
+             fixture.renderer.pendingJudgementForTesting().Diff == 3'000,
+         "indicator reconstruction leaves HUD text on the latest non-sampled "
+         "judgement");
+}
 
 void verifyPreparedPresentationIsOneShot(const RenderTarget &target) {
   configureGeometryAndViews(target.framebuffer);
@@ -1761,6 +1809,8 @@ int main() {
       verifyVisibleTimeDurationUsesMilliseconds();
       verifyGreenNumberUsesLiveConfiguredHispeed();
       verifyExplicitZeroConfiguredHispeedDoesNotFallBack();
+      verifyPreparedFrameRetainsRecentJudgementIndicatorSamples();
+      verifyPreparedFrameKeepsTheLatestNonSampledJudgementForHudText();
     } catch (const std::exception &error) {
       std::cerr << "FAIL: characterization threw: " << error.what() << '\n';
       ++failures;

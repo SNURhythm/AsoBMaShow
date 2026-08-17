@@ -7,6 +7,7 @@
 #include "../../skin/beatoraja/SyntheticReplayGhostOverlay.h"
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 // Renderer-independent chart-lifetime boundary used by the coordinator.
@@ -37,6 +38,10 @@ public:
   // never by re-enabling the built-in playfield.
   virtual void submitSyntheticStartLaneIndicators(
       RenderContext &, const skin::SyntheticStartLaneIndicatorFrameInput &) {}
+  [[nodiscard]] virtual std::optional<skin::SelectedSkinHudGeometry>
+  selectedSkinHudGeometry(std::uint64_t) const {
+    return std::nullopt;
+  }
   virtual void setViewport(skin::ViewportSettings) = 0;
   virtual void updateViewportGeometry(skin::UiLogicalRect) = 0;
   [[nodiscard]] virtual gameplay::RealtimeTouchLayout touchLayout() const = 0;

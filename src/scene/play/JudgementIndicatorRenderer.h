@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <utility>
 
 namespace rendering {
@@ -23,6 +24,12 @@ public:
     float playAreaWidth = 8.0f;
     float noteRenderWidth = 1.0f;
     float noteRenderHeight = 1.0f;
+    // Built-in lanes use increasing world Y; selected-skin HUD coordinates
+    // are UI pixels and therefore increase downward.
+    float verticalDirection = 1.0f;
+    // A selected skin anchors the indicator to its lanes even when the user
+    // chose the built-in HUD mode, which otherwise centers on the window.
+    std::optional<bool> hudModeOverride;
   };
 
   explicit JudgementIndicatorRenderer(
@@ -38,10 +45,14 @@ public:
 
   [[nodiscard]] bool isEnabled() const;
   [[nodiscard]] bool isHudMode() const;
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+  [[nodiscard]] std::size_t retainedSampleCountForTesting() const noexcept;
+#endif
 
 private:
   static constexpr size_t kAverageSampleCount = 20;
-  static constexpr size_t kMaxVisibleSamples = 96;
+  static constexpr size_t kMaxVisibleSamples =
+      judgement_indicator::kRecentTimingSampleCapacity;
 
   struct Sample {
     long long diffMicros = 0;

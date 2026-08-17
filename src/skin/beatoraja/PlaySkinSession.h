@@ -128,6 +128,8 @@ public:
       RenderContext &, const SyntheticReplayGhostFrameInput &) override;
   void submitSyntheticStartLaneIndicators(
       RenderContext &, const SyntheticStartLaneIndicatorFrameInput &) override;
+  [[nodiscard]] std::optional<SelectedSkinHudGeometry>
+  selectedSkinHudGeometry(std::uint64_t frameSerial) const override;
   void setViewport(ViewportSettings) override;
   // Geometry-only chart-lifetime refresh for safe-area/rotation changes. This
   // preserves the selected viewport settings and immutable activation identity

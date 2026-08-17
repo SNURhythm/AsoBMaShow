@@ -157,9 +157,6 @@ void SettingsScene::refreshSettingsText() {
   const std::string visibleTimeLabel = formatVisibleTimeLabel(
       visibleTimeDurationMilliseconds,
       context.settings.visibleTimeUseMilliseconds);
-  const std::string visibleTimeBpmStrategyLabel =
-      formatVisibleTimeBpmStrategyLabel(
-          context.settings.hispeedFixMode);
   const std::string keysoundLabel =
       context.settings.inputKeysoundEnabled ? "Input Trigger" : "Auto Timed";
   const std::string prepMetronomeLabel =
@@ -388,19 +385,9 @@ void SettingsScene::refreshSettingsText() {
                                      ? "Milliseconds"
                                      : "Green Number");
   }
-  if (visibleTimeBpmStrategyText != nullptr) {
-    visibleTimeBpmStrategyText->setText("Fixed Hi-Speed: " +
-                                         visibleTimeBpmStrategyLabel);
-  }
-
   applySemanticButtonStyle(visibleTimeModeButton, visibleTimeModeText,
                            context.settings.visibleTimeUseMilliseconds
                                ? SettingsButtonTone::Success
-                               : SettingsButtonTone::Info);
-  applySemanticButtonStyle(
-      visibleTimeBpmStrategyButton, visibleTimeBpmStrategyText,
-      context.settings.hispeedFixMode == AppSettings::HiSpeedFixMode::Main
-          ? SettingsButtonTone::Success
           : SettingsButtonTone::Info);
   applySemanticButtonStyle(keysoundModeButton, keysoundModeText,
                            context.settings.inputKeysoundEnabled

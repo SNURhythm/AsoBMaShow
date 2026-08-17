@@ -844,23 +844,6 @@ nextNotePriorityMode(AppSettings::NotePriorityMode mode) {
   return AppSettings::NotePriorityMode::Lowest;
 }
 
-static AppSettings::HiSpeedFixMode
-nextVisibleTimeBpmStrategy(AppSettings::HiSpeedFixMode mode) {
-  switch (mode) {
-  case AppSettings::HiSpeedFixMode::Off:
-    return AppSettings::HiSpeedFixMode::Start;
-  case AppSettings::HiSpeedFixMode::Start:
-    return AppSettings::HiSpeedFixMode::Max;
-  case AppSettings::HiSpeedFixMode::Max:
-    return AppSettings::HiSpeedFixMode::Main;
-  case AppSettings::HiSpeedFixMode::Main:
-    return AppSettings::HiSpeedFixMode::Min;
-  case AppSettings::HiSpeedFixMode::Min:
-    return AppSettings::HiSpeedFixMode::Off;
-  }
-  return AppSettings::HiSpeedFixMode::Main;
-}
-
 static AppSettings::JudgementIndicatorRenderMode
 nextJudgementIndicatorRenderMode(
     AppSettings::JudgementIndicatorRenderMode mode) {

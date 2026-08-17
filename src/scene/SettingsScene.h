@@ -136,7 +136,6 @@ private:
   TextInputBox *judgementIndicatorWidthInput = nullptr;
   TextInputBox *judgementIndicatorRangeInput = nullptr;
   TextView *visibleTimeModeText = nullptr;
-  TextView *visibleTimeBpmStrategyText = nullptr;
   TextView *keysoundModeText = nullptr;
   TextView *prepMetronomeModeText = nullptr;
   TextView *startLaneIndicatorsModeText = nullptr;
@@ -164,7 +163,6 @@ private:
   TextView *profileDeleteReasonText = nullptr;
   TextInputBox *profileCreateNameInput = nullptr;
   Button *visibleTimeModeButton = nullptr;
-  Button *visibleTimeBpmStrategyButton = nullptr;
   Button *keysoundModeButton = nullptr;
   Button *prepMetronomeModeButton = nullptr;
   Button *startLaneIndicatorsModeButton = nullptr;
@@ -486,6 +484,12 @@ private:
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   void ensureGameplaySkinSettingsController();
   void updateGameplaySkinSettingsController();
+  [[nodiscard]] bool gameplaySkinTraitsRuntimeAvailable() const noexcept;
+  void appendSelectedSkinHudSettings(View *body,
+                                     const settings_scene::LayoutMetrics &metrics,
+                                     bool includeBuiltInOnlySettings);
+  void appendBuiltInGameplayTraitSettings(
+      View *body, const settings_scene::LayoutMetrics &metrics, int keyMode);
   void buildGameplaySkinSafetyOverlay(
       const settings_scene::LayoutMetrics &metrics);
   bool handleGameplaySkinActionResult(skin::ControllerActionResult result);

@@ -45,6 +45,12 @@ gameplaySkinManagementEntries(const GameplaySkinSettingsSnapshot &snapshot);
 gameplaySkinSettingsActionAvailability(
     const GameplaySkinSettingsSnapshot &snapshot) noexcept;
 
+// The native Built-in trait panel replaces the legacy controls only when the
+// Lua feature and its settings controller are both available. Otherwise the
+// normal Timing, Visual, and Lane tabs retain those controls.
+[[nodiscard]] bool gameplaySkinTraitsRuntimeAvailable(
+    bool luaFeatureAvailable, bool controllerAvailable) noexcept;
+
 // Returns a canonical, unambiguous encoding of every snapshot field that can
 // affect the rendered settings tab or any action exposed by it.
 [[nodiscard]] std::string gameplaySkinSettingsPresentationKey(

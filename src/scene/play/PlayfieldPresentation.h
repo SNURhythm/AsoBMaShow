@@ -13,6 +13,10 @@
 struct PlayfieldProjectionResult;
 struct RenderContext;
 
+namespace skin {
+struct SelectedSkinHudGeometry;
+}
+
 enum class PresentationMode : std::uint8_t { BuiltIn, Skin };
 
 enum class PresentationFrameOutcome : std::uint8_t {
@@ -52,6 +56,12 @@ public:
   virtual void advanceRetainedTimelineCursor(
       std::uint32_t nextRetainedTimelineOrdinal) noexcept {}
   [[nodiscard]] virtual PresentationFrameResult render(RenderContext &) = 0;
+  // The selected skin remains the sole playfield owner. This optional
+  // application overlay renders only the built-in timing indicator/counter
+  // against the selected SkinNote lane geometry after a skin frame succeeds.
+  virtual void renderSelectedSkinHud(RenderContext &,
+                                     const PlayfieldVisualState &,
+                                     const skin::SelectedSkinHudGeometry &) {}
   [[nodiscard]] virtual gameplay::RealtimeTouchLayout touchLayout() const = 0;
   // Cheap stable identity for the currently published touch topology. Unlike
   // touchLayout(), this must not copy lane geometry and must not advance for a

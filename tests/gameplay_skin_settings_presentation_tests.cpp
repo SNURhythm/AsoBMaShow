@@ -384,6 +384,16 @@ void testSkinRescanProgressAvoidsInventedWorkTotals() {
           "package scan delegates to measured package-worker progress");
 }
 
+void testGameplaySkinTraitsRuntimeAvailabilityRequiresBothServices() {
+  require(!skin::gameplaySkinTraitsRuntimeAvailable(false, false),
+          "compiled-out skins do not own the traits panel");
+  require(!skin::gameplaySkinTraitsRuntimeAvailable(true, false),
+          "an unavailable skin controller leaves built-in controls in their "
+          "normal settings tabs");
+  require(skin::gameplaySkinTraitsRuntimeAvailable(true, true),
+          "ready skin services move built-in controls into gameplay traits");
+}
+
 void testViewportModeChangesPreserveEveryOtherField() {
   const skin::ViewportSettings original = {
       .mode = skin::ViewportMode::Custom,
@@ -422,6 +432,7 @@ int main() {
   testNonSelectableEntriesRemainInManagementProjection();
   testSkinPackageProgressUsesMeasuredWork();
   testSkinRescanProgressAvoidsInventedWorkTotals();
+  testGameplaySkinTraitsRuntimeAvailabilityRequiresBothServices();
   testViewportModeChangesPreserveEveryOtherField();
   return 0;
 }

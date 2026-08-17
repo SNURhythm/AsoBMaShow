@@ -1472,6 +1472,38 @@ void testSyntheticReplayGhostUsesMatchingLaneGeometry() {
          "synthetic replay ghost uses lane one width, height, and scroll");
 }
 
+void testSelectedSkinHudUsesThePublishedSkinNoteLaneSpan() {
+  SyntheticReplayGhostGeometry geometry{
+      .frameSerial = 17,
+      .viewport = {.authoredToUi = {.m00 = 0.5, .tx = 7.0,
+                                    .m11 = 0.25, .ty = 9.0},
+                   .uiToAuthored = {},
+                   .drawableAuthoredBounds =
+                       {.x = 0.0, .y = 0.0, .width = 1280.0, .height = 720.0},
+                   .safeUiBounds =
+                       {.x = 0.0, .y = 0.0, .width = 1280.0, .height = 720.0},
+                   .valid = true},
+      .sharedLaneHeight = 200.0,
+      .lanes = {
+          {.lane = 0,
+           .normalNote = {.x = 10.0, .y = 100.0, .width = 30.0, .height = 8.0},
+           .clip = {.x = 10.0, .y = 100.0, .width = 30.0, .height = 500.0}},
+          {.lane = 1,
+           .normalNote = {.x = 90.0, .y = 100.0, .width = 52.0, .height = 16.0},
+           .clip = {.x = 90.0, .y = 100.0, .width = 52.0, .height = 500.0}},
+      }};
+
+  const auto hud = selectedSkinHudGeometry(geometry);
+  expect(hud && hud->frameSerial == 17 && hud->laneCount == 2 &&
+             std::abs(hud->playArea.x - 12.0) < 0.0001 &&
+             std::abs(hud->playArea.y - 34.0) < 0.0001 &&
+             std::abs(hud->playArea.width - 66.0) < 0.0001 &&
+             std::abs(hud->playArea.height - 125.0) < 0.0001 &&
+             std::abs(hud->judgementLineY - 34.0) < 0.0001,
+         "selected-skin HUD derives and projects its full lane span and "
+         "judgement line from published SkinNote geometry");
+}
+
 void testSyntheticStartLaneIndicatorsUseSelectedSkinLaneGeometry() {
   const PlaySkinViewport viewport{
       .authoredToUi = {},
@@ -2706,6 +2738,7 @@ int main() {
   testEvaluatorFailureDiscardsWriterTransaction();
   testSerialMismatchDoesNotConsumeRuntimeFrame();
   testSyntheticReplayGhostUsesMatchingLaneGeometry();
+  testSelectedSkinHudUsesThePublishedSkinNoteLaneSpan();
   testSyntheticStartLaneIndicatorsUseSelectedSkinLaneGeometry();
   testSyntheticReplayGhostRespectsDisabledOption();
   testSyntheticReplayGhostSkipsEventsOutsideLaneClip();

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../../AppSettings.h"
+#include "../../JudgementIndicatorRange.h"
 #include "../../ReplayData.h"
 #include "../../audio/GameplayBgaMissStateTracker.h"
 #include "GameplayGaugeRules.h"
@@ -8,6 +9,8 @@
 #include "PlayfieldChartVisualModel.h"
 #include "PlayfieldPresentationEvents.h"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <map>
@@ -267,6 +270,14 @@ struct PresentationTouchPoint {
   bool operator==(const PresentationTouchPoint &) const = default;
 };
 
+// A chronological bounded copy of the timing samples that feed the built-in
+// judgement indicator. It is part of the immutable presentation snapshot so
+// a prepared frame has the same recent window as the event-driven renderer.
+struct PlayfieldJudgementIndicatorSample {
+  JudgeResult judge = JudgeResult(None, 0);
+  long long visualTimeMicros = kPlayfieldTimestampOff;
+};
+
 struct PlayfieldVisualState {
   PlayfieldFrameClock clock;
   PlayfieldPresentationConfig configuration;
@@ -282,6 +293,10 @@ struct PlayfieldVisualState {
   std::vector<PresentationTouchPoint> touches;
   JudgeResult lastJudge = JudgeResult(None, 0);
   long long lastJudgeVisualMicros = kPlayfieldTimestampOff;
+  std::array<PlayfieldJudgementIndicatorSample,
+             judgement_indicator::kRecentTimingSampleCapacity>
+      judgementIndicatorSamples{};
+  std::size_t judgementIndicatorSampleCount = 0;
   GameplayBgaMissState bgaMiss;
   int combo = 0;
   int score = 0;
@@ -406,6 +421,11 @@ private:
   GameplayBgaMissStateTracker bgaMissTracker_;
   JudgeResult lastJudge_ = JudgeResult(None, 0);
   long long lastJudgeVisualMicros_ = kPlayfieldTimestampOff;
+  std::array<PlayfieldJudgementIndicatorSample,
+             judgement_indicator::kRecentTimingSampleCapacity>
+      judgementIndicatorSamples_{};
+  std::size_t judgementIndicatorSampleCount_ = 0;
+  std::size_t nextJudgementIndicatorSample_ = 0;
   int combo_ = 0;
   int score_ = 0;
   int fastSlowMicros_ = 0;

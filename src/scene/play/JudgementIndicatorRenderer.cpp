@@ -165,7 +165,7 @@ void JudgementIndicatorRenderer::render(rendering::SimpleBatchRenderer &batch,
     }
   }
 
-  const bool currentHudMode = isHudMode();
+  const bool currentHudMode = geometry.hudModeOverride.value_or(isHudMode());
   const long long currentRangeMicros =
       rangeMicros.load(std::memory_order_relaxed);
   const Layout indicatorLayout = layout(geometry, currentHudMode);
@@ -254,6 +254,23 @@ bool JudgementIndicatorRenderer::isHudMode() const {
   return hudMode.load(std::memory_order_relaxed);
 }
 
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+std::size_t JudgementIndicatorRenderer::retainedSampleCountForTesting() const
+    noexcept {
+  const uint64_t nextSequence = writeSequence.load(std::memory_order_acquire);
+  const uint64_t firstSequence =
+      nextSequence > kMaxVisibleSamples ? nextSequence - kMaxVisibleSamples : 0;
+  std::size_t count = 0;
+  for (uint64_t sequence = firstSequence; sequence < nextSequence; ++sequence) {
+    Sample sample;
+    if (readSample(sequence, sample)) {
+      ++count;
+    }
+  }
+  return count;
+}
+#endif
+
 JudgementIndicatorRenderer::Layout
 JudgementIndicatorRenderer::layout(const Geometry &geometry,
                                    bool hudMode) const {
@@ -292,8 +309,10 @@ JudgementIndicatorRenderer::layout(const Geometry &geometry,
                           widthScale;
   indicatorLayout.x = geometry.playAreaLeftX + geometry.playAreaWidth * 0.5f -
                       indicatorLayout.width * 0.5f;
-  const float laneHeight = std::max(0.1f, geometry.upperBound - geometry.judgeY);
-  indicatorLayout.centerY = geometry.judgeY + laneHeight * normalizedY;
+  const float laneHeight = std::max(0.1f, std::abs(geometry.upperBound - geometry.judgeY));
+  const float verticalDirection =
+      geometry.verticalDirection < 0.0f ? -1.0f : 1.0f;
+  indicatorLayout.centerY = geometry.judgeY + verticalDirection * laneHeight * normalizedY;
   indicatorLayout.barHeight =
       std::max(0.02f, geometry.noteRenderHeight * 0.08f);
   indicatorLayout.markerHeight =

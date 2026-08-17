@@ -329,6 +329,11 @@ GameplaySkinSettingsActionAvailability gameplaySkinSettingsActionAvailability(
   };
 }
 
+bool gameplaySkinTraitsRuntimeAvailable(bool luaFeatureAvailable,
+                                        bool controllerAvailable) noexcept {
+  return luaFeatureAvailable && controllerAvailable;
+}
+
 std::string gameplaySkinSettingsPresentationKey(
     const GameplaySkinSettingsSnapshot &snapshot) {
   if (!snapshot.cachedPresentationKey.empty()) {
