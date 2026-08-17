@@ -74,7 +74,8 @@ public:
               .profileOverlays = temp.path() / "overlays"},
         profile(*makeSkinProfileId("99999999-9999-4999-8999-999999999999")),
         package(*normalizePackageId("LifecycleSkin").package),
-        entry(*normalizeEntryPath(package, "skin/main.luaskin").entry) {
+        entry(*normalizeEntryPath(package, "skin/main.luaskin").entry),
+        secondEntry(*normalizeEntryPath(package, "skin/five.luaskin").entry) {
     fs::create_directories(temp.path() / "source/skin");
     std::ofstream(temp.path() / "source/skin/main.luaskin")
         << "return { type = 0 }\n";
@@ -98,7 +99,8 @@ public:
     owner.settings.selected7KeyEntry = entry;
     owner.settings.selectedGameplayEntries.emplace(0, entry);
     owner.settings.entries[entry].options["choice"] = 0;
-    activeEntrySettings = owner.settings.entries.at(entry);
+    activeEntrySettings.emplace(entry, owner.settings.entries.at(entry));
+    activatedEntries.push_back(entry);
     catalog = std::make_shared<SkinPackageCatalogSnapshot>();
   }
 
@@ -122,14 +124,18 @@ public:
               ++acquireCalls;
               operationEvents.emplace_back("acquire");
               AcquireActivationResult result;
-              if (requested != profile || selected != entry || !currentLease ||
-                  digest != skinConfigurationDigest(activeEntrySettings)) {
+              const auto configured = activeEntrySettings.find(selected);
+              const bool active = std::ranges::find(activatedEntries, selected) !=
+                                  activatedEntries.end();
+              if (requested != profile || !currentLease || !active ||
+                  configured == activeEntrySettings.end() ||
+                  digest != skinConfigurationDigest(configured->second)) {
                 return result;
               }
               result.activation.emplace(ValidatedSkinActivation{
                   .revision = currentLease->clone(),
-                  .entry = entry,
-                  .reconciledSettings = activeEntrySettings,
+                  .entry = selected,
+                  .reconciledSettings = configured->second,
                   .configurationDigest = std::string(digest)});
               return result;
             },
@@ -276,7 +282,7 @@ public:
     require(index < prepares.size(), "prepare completion exists");
     PendingPrepare pending = std::move(prepares[index]);
     prepares.erase(prepares.begin() + static_cast<std::ptrdiff_t>(index));
-    const auto &settings = pending.candidate.entries.at(entry);
+    const auto &settings = pending.candidate.entries.at(pending.entry);
     PrepareActivationResult result;
     result.prepared.emplace(PreparedSkinActivation{
         .sourceGeneration = 10,
@@ -284,7 +290,7 @@ public:
         .expectedProfileGeneration = pending.base.generation,
         .profileId = profile,
         .activation = {.revision = currentLease->clone(),
-                       .entry = entry,
+                       .entry = pending.entry,
                        .reconciledSettings = settings,
                        .configurationDigest =
                            skinConfigurationDigest(settings)},
@@ -352,7 +358,12 @@ public:
     require(found != pendingCommits.end(), "activation commit exists");
     auto prepared = std::move(found->second);
     pendingCommits.erase(found);
-    activeEntrySettings = prepared.activation.reconciledSettings;
+    if (std::ranges::find(activatedEntries, prepared.activation.entry) ==
+        activatedEntries.end()) {
+      activatedEntries.push_back(prepared.activation.entry);
+    }
+    activeEntrySettings.insert_or_assign(prepared.activation.entry,
+                                         prepared.activation.reconciledSettings);
     if (resultLease) {
       prepared.activation.revision = resultLease->clone();
     }
@@ -384,6 +395,11 @@ public:
 
   void advanceOwnerGenerationWithoutChangingSettings() { ++owner.generation; }
 
+  void simulateRestart() {
+    currentLease = nullptr;
+    activatedEntries.clear();
+  }
+
   SkinConfigurationWriteRequest
   request(const GameplaySkinActivationRequest &chart, std::uint64_t frame,
           std::vector<PersistedSkinConfigurationWrite> ordered) const {
@@ -403,11 +419,13 @@ public:
   SkinProfileId profile;
   SkinPackageId package;
   SkinEntryId entry;
+  SkinEntryId secondEntry;
   std::optional<SkinRevisionLease> firstLease;
   std::optional<SkinRevisionLease> secondLease;
   SkinRevisionLease *currentLease = nullptr;
   VersionedSkinProfileSettings owner;
-  EntryProfileSettings activeEntrySettings;
+  std::map<SkinEntryId, EntryProfileSettings> activeEntrySettings;
+  std::vector<SkinEntryId> activatedEntries;
   std::shared_ptr<SkinPackageCatalogSnapshot> catalog;
   std::vector<PendingPrepare> prepares;
   std::map<std::uint64_t, AllSkinProfileSnapshotsResult> inventoryCompletions;
@@ -464,7 +482,7 @@ void testStartupRestoresPersistedSelectionWithoutRescan() {
   LifecycleFake fake;
   // A process restart recovers the catalog and persisted profile selection,
   // but intentionally has no in-memory activation lease yet.
-  fake.currentLease = nullptr;
+  fake.simulateRestart();
   GameplaySkinLifecycle lifecycle(fake.dependencies());
   lifecycle.startAfterProfileInitialization(fake.profile);
   lifecycle.poll();
@@ -501,6 +519,43 @@ void testStartupRestoresPersistedSelectionWithoutRescan() {
                                    }),
           "the persisted selected skin is ready after restart without "
           "reselection or a catalog rescan");
+}
+
+void testStartupRevalidatesEverySelectedTraitFromCurrentGeneration() {
+  LifecycleFake fake;
+  fake.owner.settings.selectedGameplayEntries.emplace(1, fake.secondEntry);
+  fake.owner.settings.entries[fake.secondEntry].options["choice"] = 5;
+  fake.simulateRestart();
+
+  GameplaySkinLifecycle lifecycle(fake.dependencies());
+  lifecycle.startAfterProfileInitialization(fake.profile);
+  lifecycle.poll();
+  require(fake.prepares.size() == 1 &&
+              fake.prepares.front().entry == fake.entry,
+          "startup begins with the persisted 7K activation");
+
+  fake.currentLease = &*fake.firstLease;
+  fake.completePrepare();
+  lifecycle.poll();
+  fake.completeActivation(fake.pendingCommits.begin()->first);
+  lifecycle.poll();
+
+  require(fake.prepares.size() == 1 &&
+              fake.prepares.front().entry == fake.secondEntry &&
+              fake.prepares.front().base.generation == fake.owner.generation,
+          "each later selected trait revalidates from the persisted successor "
+          "generation");
+
+  fake.completePrepare();
+  lifecycle.poll();
+  fake.completeActivation(fake.pendingCommits.begin()->first);
+  lifecycle.poll();
+
+  const auto acquired = lifecycle.acquireForNextChart(5);
+  require(acquired.disposition == GameplaySkinAcquisitionDisposition::Ready &&
+              acquired.request &&
+              acquired.request->activation.entry == fake.secondEntry,
+          "a selected non-7K skin remains activated after restart");
 }
 
 void testLaterFailedRescanPreservesReadyAcquisitionAndCatalog() {
@@ -1110,6 +1165,7 @@ void testShutdownPersistsAcceptedWriterRequests() {
 int main() {
   testStartupUsesRecoveredCatalogWithoutRescan();
   testStartupRestoresPersistedSelectionWithoutRescan();
+  testStartupRevalidatesEverySelectedTraitFromCurrentGeneration();
   testLaterFailedRescanPreservesReadyAcquisitionAndCatalog();
   testRescanProgressReportsEachLifecycleStage();
   testAcquisitionUsesOwningActivationAndMonotonicSessionSerial();

@@ -513,6 +513,17 @@ struct GameplaySkinLifecycle::Impl {
     }
     PendingRevalidation work = std::move(pendingRevalidations.front());
     pendingRevalidations.pop_front();
+    // A reactivation commit advances the profile generation. Startup queues
+    // every selected trait at once, so later traits must not submit the
+    // generation captured before an earlier trait was restored.
+    if (!deps.snapshotProfile) {
+      return;
+    }
+    try {
+      work.base = deps.snapshotProfile(work.base.profileId);
+    } catch (...) {
+      return;
+    }
     SkinProfileSettings candidate = work.base.settings;
     auto submission = deps.submitPrepareActivation(
         std::move(work.base), std::move(work.entry), std::move(candidate));
