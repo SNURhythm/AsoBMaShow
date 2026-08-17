@@ -53,18 +53,20 @@ gameplaySkinAnimationCompletionDeadlineMicros(
 
 // AudioWrapper intentionally clamps its presentation clock when its scheduled
 // audio ends. BMSPlayer's TIMER_PLAY instead continues from the main timer at
-// the current frequency. This is the gameplay clock for every presentation;
-// selected skins consume it for their post-song state machine. The real audio
-// clock wins whenever it is still ahead of this continuation.
+// the current frequency for its post-audio state machine. The continuation is
+// anchored at the observed audio-end time, not gameplay start.
 [[nodiscard]] inline std::int64_t beatorajaGameplayFrameClockMicros(
     std::int64_t observedGameplayMicros,
-    std::int64_t endingGameplayStartMicros,
+    std::int64_t continuationGameplayStartMicros,
     std::int64_t endingSteadyStartMicros, std::int64_t currentSteadyMicros,
     audio::PlaybackRate playbackRate) noexcept {
+  if (observedGameplayMicros < continuationGameplayStartMicros) {
+    return observedGameplayMicros;
+  }
   const std::int64_t steadyElapsedMicros =
       std::max<std::int64_t>(0, currentSteadyMicros - endingSteadyStartMicros);
   const std::int64_t continuedGameplayMicros = saturatingAnimationAdd(
-      endingGameplayStartMicros,
+      continuationGameplayStartMicros,
       playbackRate.chartMicrosFromReal(steadyElapsedMicros));
   return std::max(observedGameplayMicros, continuedGameplayMicros);
 }

@@ -4689,21 +4689,29 @@ std::uint64_t GamePlayScene::selectedSkinResultTransitionDelayMillis(
 void GamePlayScene::beginBeatorajaGameplayClock(
     long long gameplayTimeMicros) {
   beatorajaGameplayClock = {
-      .gameplayStartMicros = gameplayTimeMicros,
-      .steadyStartMicros = nowMicros(),
+      .scheduledAudioEndGameplayMicros = std::max(
+          gameplayTimeMicros, getGameplayTimeMicros(
+                                  context.jukebox.getScheduledAudioEndMicros())),
       .playbackRate = context.jukebox.playbackRate(),
   };
 }
 
 long long GamePlayScene::beatorajaGameplayFrameMicros(
-    long long gameplayTimeMicros) const {
+    long long gameplayTimeMicros) {
   if (!beatorajaGameplayClock.has_value() || context.jukebox.isPaused()) {
     return gameplayTimeMicros;
   }
-  const auto &clock = *beatorajaGameplayClock;
+  auto &clock = *beatorajaGameplayClock;
+  if (gameplayTimeMicros < clock.scheduledAudioEndGameplayMicros) {
+    return gameplayTimeMicros;
+  }
+  if (!clock.continuationGameplayStartMicros.has_value()) {
+    clock.continuationGameplayStartMicros = gameplayTimeMicros;
+    clock.continuationSteadyStartMicros = nowMicros();
+  }
   return skin::beatorajaGameplayFrameClockMicros(
-      gameplayTimeMicros, clock.gameplayStartMicros, clock.steadyStartMicros,
-      nowMicros(), clock.playbackRate);
+      gameplayTimeMicros, *clock.continuationGameplayStartMicros,
+      *clock.continuationSteadyStartMicros, nowMicros(), clock.playbackRate);
 }
 
 void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {

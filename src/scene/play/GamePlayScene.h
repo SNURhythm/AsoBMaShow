@@ -132,7 +132,7 @@ private:
   selectedSkinResultTransitionDelayMillis(long long gameplayTimeMicros) const;
   void beginBeatorajaGameplayClock(long long gameplayTimeMicros);
   [[nodiscard]] long long
-  beatorajaGameplayFrameMicros(long long gameplayTimeMicros) const;
+  beatorajaGameplayFrameMicros(long long gameplayTimeMicros);
   void updatePracticeHud(long long chartTimeMicros);
   [[nodiscard]] bool isReplayPlayback() const;
   [[nodiscard]] bool isCoursePlayback() const;
@@ -202,8 +202,9 @@ private:
   float coursePauseHoldProgress = 0.0f;
   float coursePauseHoldRewindStartProgress = 0.0f;
   struct BeatorajaGameplayClock {
-    long long gameplayStartMicros = 0;
-    long long steadyStartMicros = 0;
+    long long scheduledAudioEndGameplayMicros = 0;
+    std::optional<long long> continuationGameplayStartMicros;
+    std::optional<long long> continuationSteadyStartMicros;
     audio::PlaybackRate playbackRate;
   };
   std::optional<BeatorajaGameplayClock> beatorajaGameplayClock;

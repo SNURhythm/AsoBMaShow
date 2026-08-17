@@ -1549,6 +1549,17 @@ void testEndAnimationClockContinuesAfterAudioClockStops() {
          "end animation uses the active chart playback rate");
 }
 
+void testFrameClockDoesNotLeadBeforeContinuationStarts() {
+  // GamePlayScene records the actual audio-exhaustion time before beginning
+  // the steady-clock continuation. Until then, drawing and judgement retain
+  // the same chart time.
+  const audio::PlaybackRate normalRate{.percent = 100};
+  expect(beatorajaGameplayFrameClockMicros(10'000'000, 20'000'000,
+                                           5'000'000, 5'750'000,
+                                           normalRate) == 10'000'000,
+         "the frame clock does not lead before continuation starts");
+}
+
 void testLiveGameplayClockKeepsTheFinalNoteInStatePlayUntilPinnedDeadline() {
   // Pinned Beatoraja BMSPlayer keeps STATE_PLAY through lastNoteTime +
   // TIME_MARGIN, then changes state only when the integer play timer is
@@ -2376,6 +2387,7 @@ int main() {
   testReadyAndLiveTimersUseTheSharedSkinStateClock();
   testClearAndFullComboTimersFollowPinnedBmsPlayerState();
   testEndAnimationClockContinuesAfterAudioClockStops();
+  testFrameClockDoesNotLeadBeforeContinuationStarts();
   testLiveGameplayClockKeepsTheFinalNoteInStatePlayUntilPinnedDeadline();
   testPlayTimerVisualRebaseSaturatesWithoutLosingCancellation();
   testSelectedScuroMappingsUseOnlyAuthoritativeState();
