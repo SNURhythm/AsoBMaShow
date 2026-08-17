@@ -558,7 +558,7 @@ void testStartupRevalidatesEverySelectedTraitFromCurrentGeneration() {
           "a selected non-7K skin remains activated after restart");
 }
 
-void testStartupRevalidationDoesNotRestoreAClearedTrait() {
+void testStartupRevalidationKeepsItsCapturedSelectedEntry() {
   LifecycleFake fake;
   fake.owner.settings.selectedGameplayEntries.emplace(1, fake.secondEntry);
   fake.owner.settings.entries[fake.secondEntry].options["choice"] = 5;
@@ -576,14 +576,16 @@ void testStartupRevalidationDoesNotRestoreAClearedTrait() {
   lifecycle.poll();
   fake.completeActivation(fake.pendingCommits.begin()->first);
 
-  // The second startup revalidation is still queued while the first finishes.
-  // A user clear must win over that stale queued item.
+  // The second startup revalidation retains the selection captured during
+  // initialization. A newer profile representation must not silently drop
+  // that restoration work before it can rebuild the process-local activation.
   fake.owner.settings.selectedGameplayEntries.erase(1);
   ++fake.owner.generation;
   lifecycle.poll();
 
-  require(fake.prepares.empty(),
-          "a queued startup revalidation never restores a cleared trait");
+  require(fake.prepares.size() == 1 &&
+              fake.prepares.front().entry == fake.secondEntry,
+          "a queued startup revalidation keeps its captured selected entry");
 }
 
 void testStartupRevalidationKeepsAnEntrySelectedDuringTraitNormalization() {
@@ -1233,7 +1235,7 @@ int main() {
   testStartupUsesRecoveredCatalogWithoutRescan();
   testStartupRestoresPersistedSelectionWithoutRescan();
   testStartupRevalidatesEverySelectedTraitFromCurrentGeneration();
-  testStartupRevalidationDoesNotRestoreAClearedTrait();
+  testStartupRevalidationKeepsItsCapturedSelectedEntry();
   testStartupRevalidationKeepsAnEntrySelectedDuringTraitNormalization();
   testLaterFailedRescanPreservesReadyAcquisitionAndCatalog();
   testRescanProgressReportsEachLifecycleStage();
