@@ -2848,8 +2848,13 @@ PresentationFrameOutcome BMSRenderer::prepareFrame(
     synchronizeCapturedJudgementHud(capturedState);
     setGaugeStatus(authority.gaugeType, authority.gaugeAutoShift,
                    authority.currentGauge, authority.gaugeRules);
-    setPacemakerTarget(authority.pacemakerTarget);
-    setPacemakerStatus(authority.pacemakerStatus);
+    const pacemaker::Target &builtInPacemakerTarget =
+        pacemaker::targetForBuiltInPresentation(authority.pacemakerTarget,
+                                                 authority.bestScoreTarget);
+    setPacemakerTarget(builtInPacemakerTarget);
+    setPacemakerStatus(pacemaker::snapshotForBuiltInPresentation(
+        authority.pacemakerTarget, authority.pacemakerStatus,
+        authority.bestScoreTarget));
     setPlayOptionStatus(authority.playOptionLabel);
     setAutoPlayMarkVisible(authority.autoPlayMarkVisible);
     setStartLaneIndicators(authority.startLaneIndicators);

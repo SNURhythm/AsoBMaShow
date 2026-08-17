@@ -389,6 +389,15 @@ inline Target targetFromSelection(bms_parser::Chart &chart,
   return {};
 }
 
+inline const Target &targetForBuiltInPresentation(
+    const Target &selectedPacemakerTarget, const Target &bestScoreTarget) {
+  if (selectedPacemakerTarget.label == kTargetBest &&
+      bestScoreTarget.enabled && bestScoreTarget.usesReplayProgression) {
+    return bestScoreTarget;
+  }
+  return selectedPacemakerTarget;
+}
+
 inline int targetScoreAtPlayedNotes(const Target &target, int playedNotes) {
   if (!target.enabled || target.totalNotes <= 0) {
     return 0;
@@ -406,6 +415,29 @@ inline int targetScoreAtPlayedNotes(const Target &target, int playedNotes) {
       static_cast<long long>(target.finalScore) * clampedNotes /
       std::max(1, target.totalNotes);
   return static_cast<int>(std::clamp<long long>(scaled, 0, target.finalScore));
+}
+
+inline Snapshot snapshotForBuiltInPresentation(
+    const Target &selectedPacemakerTarget,
+    const Snapshot &selectedPacemakerSnapshot,
+    const Target &bestScoreTarget) {
+  const Target &target = targetForBuiltInPresentation(
+      selectedPacemakerTarget, bestScoreTarget);
+  if (&target == &selectedPacemakerTarget) {
+    return selectedPacemakerSnapshot;
+  }
+
+  Snapshot snapshot = selectedPacemakerSnapshot;
+  snapshot.enabled = target.enabled;
+  snapshot.label = target.label;
+  snapshot.finalTargetScore = target.finalScore;
+  snapshot.maxScore = target.maxScore;
+  snapshot.totalNotes = target.totalNotes;
+  snapshot.usesReplayProgression = target.usesReplayProgression;
+  snapshot.targetScore =
+      targetScoreAtPlayedNotes(target, snapshot.playedNotes);
+  snapshot.delta = snapshot.currentScore - snapshot.targetScore;
+  return snapshot;
 }
 
 inline Snapshot snapshotForState(const Target &target,
