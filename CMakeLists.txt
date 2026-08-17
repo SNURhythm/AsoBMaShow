@@ -6401,12 +6401,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         asobmashow_register_test(skin_renderer_golden_tests)
         set_tests_properties(skin_renderer_golden_tests PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            RESOURCE_LOCK metal_device
         )
     endif()
     if(TARGET builtin_renderer_characterization_tests)
         asobmashow_register_test(builtin_renderer_characterization_tests)
         set_tests_properties(builtin_renderer_characterization_tests PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            RESOURCE_LOCK metal_device
         )
     endif()
     if (TARGET skin_gauge_node_expansion_tests)
@@ -6463,6 +6465,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if(TARGET replay_playfield_presentation_tests)
         asobmashow_register_test(replay_playfield_presentation_tests)
+        set_tests_properties(replay_playfield_presentation_tests PROPERTIES
+            RESOURCE_LOCK metal_device
+        )
     endif()
     if(TARGET builtin_playfield_presentation_tests)
         asobmashow_register_test(builtin_playfield_presentation_tests)
