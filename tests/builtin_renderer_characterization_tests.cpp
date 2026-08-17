@@ -1019,6 +1019,29 @@ void verifyPreparedFrameKeepsLinearBestPacemakerWithoutSavedGhost() {
          "built-in BEST pacemaker remains linear without a saved-best ghost");
 }
 
+void verifyPreparedFrameKeepsPacemakerOffWithSavedBestGhost() {
+  PresentationStateFixture fixture;
+  PresentationInput frame = fixture.input(75);
+  frame.state.authority.pacemakerTarget = {};
+  frame.state.authority.pacemakerStatus = {};
+  frame.state.authority.bestScoreTarget = {
+      .enabled = true,
+      .label = "BEST",
+      .finalScore = 3,
+      .maxScore = 4,
+      .totalNotes = 2,
+      .usesReplayProgression = true,
+      .scoreAfterNotes = {0, 2, 3},
+  };
+
+  expect(fixture.renderer.prepareFrame(frame.state, frame.projection) ==
+             PresentationFrameOutcome::Ready,
+         "a built-in Pacemaker-off frame prepares successfully");
+  const auto pacemaker = fixture.renderer.pacemakerStateForTesting();
+  expect(!pacemaker.enabled && !pacemaker.usesReplayProgression,
+         "built-in Pacemaker remains off despite a saved-best ghost");
+}
+
 void verifyPreparedPresentationIsOneShot(const RenderTarget &target) {
   configureGeometryAndViews(target.framebuffer);
   bgfx::touch(rendering::clear_view);
@@ -1890,6 +1913,7 @@ int main() {
       verifyPreparedFrameKeepsTheLatestNonSampledJudgementForHudText();
       verifyPreparedFrameUsesSavedBestGhostForBuiltInBestPacemaker();
       verifyPreparedFrameKeepsLinearBestPacemakerWithoutSavedGhost();
+      verifyPreparedFrameKeepsPacemakerOffWithSavedBestGhost();
     } catch (const std::exception &error) {
       std::cerr << "FAIL: characterization threw: " << error.what() << '\n';
       ++failures;

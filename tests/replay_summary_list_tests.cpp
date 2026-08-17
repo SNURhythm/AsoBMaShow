@@ -261,6 +261,55 @@ int main() {
     return 1;
   }
 
+  const pacemaker::Target offTarget;
+  const pacemaker::Snapshot offSnapshot;
+  const auto &builtInOffTarget = pacemaker::targetForBuiltInPresentation(
+      offTarget, savedBestGhostTarget);
+  const pacemaker::Snapshot builtInOffSnapshot =
+      pacemaker::snapshotForBuiltInPresentation(
+          offTarget, offSnapshot, savedBestGhostTarget);
+  if (&builtInOffTarget != &offTarget || builtInOffSnapshot.enabled ||
+      builtInOffSnapshot.usesReplayProgression) {
+    std::cerr << "built-in OFF pacemaker must not enable the saved-best ghost"
+              << std::endl;
+    return 1;
+  }
+
+  const pacemaker::Target gbattleTarget{
+      .enabled = true,
+      .label = "G-BATTLE",
+      .finalScore = 4,
+      .maxScore = 4,
+      .totalNotes = 2,
+      .usesReplayProgression = true,
+      .scoreAfterNotes = {0, 1, 4},
+  };
+  const pacemaker::Snapshot gbattleSnapshot{
+      .enabled = true,
+      .label = "G-BATTLE",
+      .currentScore = 2,
+      .targetScore = 1,
+      .finalTargetScore = 4,
+      .maxScore = 4,
+      .delta = 1,
+      .playedNotes = 1,
+      .totalNotes = 2,
+      .usesReplayProgression = true,
+  };
+  const auto &builtInGbattleTarget = pacemaker::targetForBuiltInPresentation(
+      gbattleTarget, savedBestGhostTarget);
+  const pacemaker::Snapshot builtInGbattleSnapshot =
+      pacemaker::snapshotForBuiltInPresentation(
+          gbattleTarget, gbattleSnapshot, savedBestGhostTarget);
+  if (&builtInGbattleTarget != &gbattleTarget ||
+      builtInGbattleSnapshot.targetScore != 1 ||
+      builtInGbattleSnapshot.finalTargetScore != 4 ||
+      !builtInGbattleSnapshot.usesReplayProgression) {
+    std::cerr << "built-in G-BATTLE pacemaker must keep its own progression"
+              << std::endl;
+    return 1;
+  }
+
   const pacemaker::Target selectedAaTarget{
       .enabled = true,
       .label = "AA",

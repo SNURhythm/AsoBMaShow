@@ -391,7 +391,7 @@ inline Target targetFromSelection(bms_parser::Chart &chart,
 
 inline const Target &targetForBuiltInPresentation(
     const Target &selectedPacemakerTarget, const Target &bestScoreTarget) {
-  if (normalizeTargetId(selectedPacemakerTarget.label) == kTargetBest &&
+  if (selectedPacemakerTarget.label == kTargetBest &&
       bestScoreTarget.enabled && bestScoreTarget.usesReplayProgression) {
     return bestScoreTarget;
   }
