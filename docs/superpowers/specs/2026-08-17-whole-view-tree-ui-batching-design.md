@@ -62,10 +62,11 @@ allocation or update failure skips only that batch, logs a rate-limited
 diagnostic, and leaves the renderer usable for later frames; it must not fall
 back to the transient API.
 
-The batcher has explicit `begin`, `flush`, and `end` operations. `RenderContext`
-exposes only queueing and flush-boundary helpers to view implementations, so
-ownership remains at the render-pass level rather than spreading across
-widgets.
+`ApplicationContext` owns one batcher for the lifetime of the live bgfx
+renderer. `RenderContext` receives a non-owning reference to it and exposes
+only queueing and flush-boundary helpers to view implementations. Each render
+pass has explicit `begin`, `flush`, and `end` operations, so ownership remains
+at the application/render-pass levels rather than spreading across widgets.
 
 ### View integrations
 
@@ -86,8 +87,8 @@ migrated independently later.
 
 ## Error Handling and Lifecycle
 
-- The batcher is lazy-initialized after bgfx is available and destroys its
-  dynamic buffers during renderer teardown.
+- The application-owned batcher is lazy-initialized after bgfx is available
+  and destroys its dynamic buffers before bgfx shutdown.
 - Invalid textures or zero-area geometry are ignored as today.
 - Every state change flushes before modifying uniforms or bindings so no
   queued draw observes another draw's state.
