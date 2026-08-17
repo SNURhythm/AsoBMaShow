@@ -54,7 +54,14 @@ public:
 
   ~BgfxUiBatchBackend() override { shutdown(); }
 
-  void beginFrame() noexcept override { nextBufferSlot_ = 0; }
+  void beginFrame() noexcept override {
+    for (auto &page : bufferPages_) {
+      page.colorVertexCount = 0;
+      page.texturedVertexCount = 0;
+      page.indexCount = 0;
+    }
+    nextBufferPage_ = 0;
+  }
 
   bool submit(const UiBatchSubmission &submission) noexcept override {
     try {
@@ -75,9 +82,20 @@ public:
           !bgfx::isValid(submission.state.texture)) {
         return false;
       }
+      if (bgfx::isValid(submission.state.texture) &&
+          !bgfx::isValid(submission.state.sampler)) {
+        return false;
+      }
+      for (std::size_t index = 0; index < submission.state.uniformCount;
+           ++index) {
+        if (!bgfx::isValid(submission.state.uniforms[index].handle)) {
+          return false;
+        }
+      }
 
-      BufferSlot *bufferSlot = nextBufferSlot(submission.format);
-      if (bufferSlot == nullptr) {
+      BufferPage *bufferPage =
+          nextBufferPage(submission.format, vertexCount, submission.indices.size());
+      if (bufferPage == nullptr) {
         return false;
       }
       const bgfx::Memory *vertexMemory =
@@ -90,27 +108,29 @@ public:
       if (vertexMemory == nullptr || indexMemory == nullptr) {
         return false;
       }
-      const auto vertexBuffer = color ? bufferSlot->colorVertexBuffer
-                                      : bufferSlot->texturedVertexBuffer;
-      bgfx::update(vertexBuffer, 0, vertexMemory);
-      bgfx::update(bufferSlot->indexBuffer, 0, indexMemory);
-      bgfx::setVertexBuffer(0, vertexBuffer, 0,
+      const std::size_t vertexOffset =
+          color ? bufferPage->colorVertexCount
+                : bufferPage->texturedVertexCount;
+      const std::size_t indexOffset = bufferPage->indexCount;
+      const auto vertexBuffer = color ? bufferPage->colorVertexBuffer
+                                      : bufferPage->texturedVertexBuffer;
+      bgfx::update(vertexBuffer, static_cast<std::uint32_t>(vertexOffset),
+                   vertexMemory);
+      bgfx::update(bufferPage->indexBuffer,
+                   static_cast<std::uint32_t>(indexOffset), indexMemory);
+      bgfx::setVertexBuffer(0, vertexBuffer,
+                            static_cast<std::uint32_t>(vertexOffset),
                             static_cast<std::uint32_t>(vertexCount));
-      bgfx::setIndexBuffer(bufferSlot->indexBuffer, 0,
+      bgfx::setIndexBuffer(bufferPage->indexBuffer,
+                           static_cast<std::uint32_t>(indexOffset),
                            static_cast<std::uint32_t>(submission.indices.size()));
       if (bgfx::isValid(submission.state.texture)) {
-        if (!bgfx::isValid(submission.state.sampler)) {
-          return false;
-        }
         bgfx::setTexture(0, submission.state.sampler, submission.state.texture,
                          submission.state.samplerFlags);
       }
       for (std::size_t index = 0; index < submission.state.uniformCount;
            ++index) {
         const auto &uniform = submission.state.uniforms[index];
-        if (!bgfx::isValid(uniform.handle)) {
-          return false;
-        }
         bgfx::setUniform(uniform.handle, uniform.value.data());
       }
       if (submission.state.transform) {
@@ -124,6 +144,12 @@ public:
       }
       bgfx::setState(submission.state.state);
       bgfx::submit(ui_view, submission.state.program);
+      if (color) {
+        bufferPage->colorVertexCount += vertexCount;
+      } else {
+        bufferPage->texturedVertexCount += vertexCount;
+      }
+      bufferPage->indexCount += submission.indices.size();
       return true;
     } catch (...) {
       return false;
@@ -131,58 +157,79 @@ public:
   }
 
   void shutdown() noexcept override {
-    for (auto &slot : bufferSlots_) {
-      if (bgfx::isValid(slot.colorVertexBuffer)) {
-        bgfx::destroy(slot.colorVertexBuffer);
+    for (auto &page : bufferPages_) {
+      if (bgfx::isValid(page.colorVertexBuffer)) {
+        bgfx::destroy(page.colorVertexBuffer);
       }
-      if (bgfx::isValid(slot.texturedVertexBuffer)) {
-        bgfx::destroy(slot.texturedVertexBuffer);
+      if (bgfx::isValid(page.texturedVertexBuffer)) {
+        bgfx::destroy(page.texturedVertexBuffer);
       }
-      if (bgfx::isValid(slot.indexBuffer)) {
-        bgfx::destroy(slot.indexBuffer);
+      if (bgfx::isValid(page.indexBuffer)) {
+        bgfx::destroy(page.indexBuffer);
       }
     }
-    bufferSlots_.clear();
-    nextBufferSlot_ = 0;
+    bufferPages_.clear();
+    nextBufferPage_ = 0;
   }
 
 private:
-  struct BufferSlot {
+  // bgfx executes a frame's dynamic-buffer updates before its draw list. Each
+  // page therefore assigns every UI submission a non-overlapping range instead
+  // of allocating one GPU buffer per texture/state transition.
+  struct BufferPage {
     bgfx::DynamicVertexBufferHandle colorVertexBuffer = BGFX_INVALID_HANDLE;
     bgfx::DynamicVertexBufferHandle texturedVertexBuffer = BGFX_INVALID_HANDLE;
     bgfx::DynamicIndexBufferHandle indexBuffer = BGFX_INVALID_HANDLE;
+    std::size_t colorVertexCount = 0;
+    std::size_t texturedVertexCount = 0;
+    std::size_t indexCount = 0;
   };
 
-  BufferSlot *nextBufferSlot(UiBatchVertexFormat format) noexcept {
-    if (nextBufferSlot_ == bufferSlots_.size()) {
+  BufferPage *nextBufferPage(UiBatchVertexFormat format,
+                             std::size_t vertexCount,
+                             std::size_t indexCount) noexcept {
+    const auto canAppend =
+        [format, vertexCount, indexCount](const BufferPage &page) noexcept {
+      const std::size_t usedVertices =
+          format == UiBatchVertexFormat::Color ? page.colorVertexCount
+                                               : page.texturedVertexCount;
+      return usedVertices <= UiBatchRenderer::kMaximumVertices - vertexCount &&
+             page.indexCount <= UiBatchRenderer::kMaximumIndices - indexCount;
+    };
+    if (nextBufferPage_ == bufferPages_.size()) {
       try {
-        bufferSlots_.push_back({});
+        bufferPages_.push_back({});
       } catch (...) {
         return nullptr;
       }
     }
-    BufferSlot &slot = bufferSlots_[nextBufferSlot_++];
+    BufferPage *page = &bufferPages_[nextBufferPage_];
+    if (!canAppend(*page)) {
+      ++nextBufferPage_;
+      return nextBufferPage(format, vertexCount, indexCount);
+    }
     auto &vertexBuffer = format == UiBatchVertexFormat::Color
-                             ? slot.colorVertexBuffer
-                             : slot.texturedVertexBuffer;
+                             ? page->colorVertexBuffer
+                             : page->texturedVertexBuffer;
     if (!bgfx::isValid(vertexBuffer)) {
       const auto &layout = format == UiBatchVertexFormat::Color
                                ? PosColorVertex::ms_decl
                                : PosTexCoord0Vertex::ms_decl;
       vertexBuffer = bgfx::createDynamicVertexBuffer(
-          1, layout, BGFX_BUFFER_ALLOW_RESIZE);
+          static_cast<std::uint32_t>(UiBatchRenderer::kMaximumVertices),
+          layout);
     }
-    if (!bgfx::isValid(slot.indexBuffer)) {
-      slot.indexBuffer =
-          bgfx::createDynamicIndexBuffer(1, BGFX_BUFFER_ALLOW_RESIZE);
+    if (!bgfx::isValid(page->indexBuffer)) {
+      page->indexBuffer = bgfx::createDynamicIndexBuffer(
+          static_cast<std::uint32_t>(UiBatchRenderer::kMaximumIndices));
     }
-    return bgfx::isValid(vertexBuffer) && bgfx::isValid(slot.indexBuffer)
-               ? &slot
+    return bgfx::isValid(vertexBuffer) && bgfx::isValid(page->indexBuffer)
+               ? page
                : nullptr;
   }
 
-  std::vector<BufferSlot> bufferSlots_;
-  std::size_t nextBufferSlot_ = 0;
+  std::vector<BufferPage> bufferPages_;
+  std::size_t nextBufferPage_ = 0;
 };
 
 } // namespace
@@ -243,12 +290,14 @@ bool UiBatchRenderer::append(UiBatchVertexFormat format,
       })) {
     return false;
   }
-  if (!format_ || !state_ || *format_ != format || !sameState(*state_, state) ||
+  const bool requiresFlush =
+      !format_ || !state_ || *format_ != format || !sameState(*state_, state) ||
       (format == UiBatchVertexFormat::Color
            ? colorVertices_.size() + vertices.size() > kMaximumVertices
            : texturedVertices_.size() + vertices.size() > kMaximumVertices) ||
-      indices_.size() + indices.size() > kMaximumIndices) {
-    flushCurrent();
+      indices_.size() + indices.size() > kMaximumIndices;
+  const bool previousSubmissionFailed = requiresFlush && !flushCurrent();
+  if (requiresFlush) {
     format_ = format;
     state_ = state;
   }
@@ -268,7 +317,7 @@ bool UiBatchRenderer::append(UiBatchVertexFormat format,
   for (const auto index : indices) {
     indices_.push_back(static_cast<std::uint16_t>(base + index));
   }
-  return true;
+  return !previousSubmissionFailed;
 }
 
 bool UiBatchRenderer::flush() noexcept {

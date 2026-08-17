@@ -301,6 +301,25 @@ void testFailedBatchDoesNotBlockLaterSubmission() {
          "a failed UI batch does not corrupt later painter-order geometry");
 }
 
+void testFailedStateTransitionReportsTheRejectedAppend() {
+  RecordingBackend backend;
+  backend.rejectedSubmissions = 1;
+  rendering::UiBatchRenderer renderer(backend);
+  auto secondState = colorState();
+  secondState.program = bgfx::ProgramHandle{8};
+
+  renderer.begin();
+  expect(renderer.appendColor(kFirstQuad, kQuadIndices, colorState()),
+         "the first queued UI quad is accepted");
+  expect(!renderer.appendColor(kSecondQuad, kQuadIndices, secondState),
+         "a rejected state-transition upload reports the append failure");
+  renderer.end();
+
+  expect(backend.submissions.size() == 1 &&
+             backend.submissions.front().vertices.front().x == 20.0F,
+         "the batch after a rejected transition remains independently drawable");
+}
+
 } // namespace
 
 int main() {
@@ -311,6 +330,7 @@ int main() {
   testStateBoundariesPreserveSubmissionOrder();
   testBatchSplitsBeforeUint16IndexLimit();
   testFailedBatchDoesNotBlockLaterSubmission();
+  testFailedStateTransitionReportsTheRejectedAppend();
   if (failures != 0) {
     return 1;
   }
