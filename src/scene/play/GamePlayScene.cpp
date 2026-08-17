@@ -4688,10 +4688,16 @@ std::uint64_t GamePlayScene::selectedSkinResultTransitionDelayMillis(
 
 void GamePlayScene::beginBeatorajaGameplayClock(
     long long gameplayTimeMicros) {
+  const long long lastPlayableNoteMicros =
+      chart == nullptr
+          ? gameplayTimeMicros
+          : gameplay::terminalMicrosForGameplayMode(chart->Meta.PlayLength,
+                                                    chart->Meta.TotalLength);
   beatorajaGameplayClock = {
       .scheduledAudioEndGameplayMicros = std::max(
-          gameplayTimeMicros, getGameplayTimeMicros(
-                                  context.jukebox.getScheduledAudioEndMicros())),
+          {gameplayTimeMicros,
+           getGameplayTimeMicros(context.jukebox.getScheduledAudioEndMicros()),
+           lastPlayableNoteMicros}),
       .playbackRate = context.jukebox.playbackRate(),
   };
 }
