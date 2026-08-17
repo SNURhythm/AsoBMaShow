@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace skin {
@@ -56,6 +57,12 @@ gameplaySkinSettingsActionAvailability(
 [[nodiscard]] std::string gameplaySkinSettingsPresentationKey(
     const GameplaySkinSettingsSnapshot &snapshot);
 
+// Returns the subset of snapshot state that changes the shape of the native
+// settings tab. Live operation state and committed configuration values are
+// updated without reconstructing the full view tree.
+[[nodiscard]] std::string gameplaySkinSettingsLayoutKey(
+    const GameplaySkinSettingsSnapshot &snapshot);
+
 // Formats only progress emitted by the package worker. The picker and
 // profile-inventory phases deliberately remain status text because they do
 // not have measured byte/file totals.
@@ -72,5 +79,13 @@ gameplaySkinViewportWithMode(ViewportSettings current,
 [[nodiscard]] ViewportSettings
 gameplaySkinViewportWithCustomBase(ViewportSettings current,
                                    CustomViewportBase customBase) noexcept;
+
+// These values are written back into retained text inputs after an accepted
+// edit, keeping the field aligned with the queued and persisted value.
+[[nodiscard]] int gameplaySkinSanitizedOffsetComponent(
+    std::string_view text, int fallback) noexcept;
+
+[[nodiscard]] float gameplaySkinSanitizedViewportComponent(
+    std::string_view text, float fallback, float minimum, float maximum);
 
 } // namespace skin

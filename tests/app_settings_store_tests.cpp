@@ -1,6 +1,7 @@
 #include "../src/AppSettingsStore.h"
 #include "../src/AtomicFile.h"
 #include "../src/VersionedJson.h"
+#include "../src/skin/GameplaySkinTraits.h"
 #include "../src/skin/SkinProfileSettings.h"
 #include "../src/skin/package/SkinPathPolicy.h"
 #include "../yoga/lib/nlohmann/json.hpp"
@@ -290,6 +291,35 @@ void testJsonRoundTripIncludesAudioAndVideo() {
          "saved JSON includes non-secret IR provider settings");
   expect(readFile(path).find("sentinel-api-key") == std::string::npos,
          "serialized settings contain no API key material");
+}
+
+void testGameplaySkinTraitSelectionsSurviveRestart() {
+  TempDirectory temp;
+  const auto path = temp.path() / "settings.json";
+  AppSettings settings;
+  std::map<int, skin::SkinEntryId> expectedSelections;
+  for (const auto &trait : skin::gameplaySkinTraits()) {
+    const auto package = skin::normalizePackageId(
+        "Trait" + std::to_string(trait.skinType) + "Skin");
+    const auto entry = skin::normalizeEntryPath(
+        *package.package,
+        "play/trait-" + std::to_string(trait.skinType) + ".luaskin");
+    settings.skin.selectedGameplayEntries.emplace(trait.skinType,
+                                                   *entry.entry);
+    settings.skin.entries.emplace(*entry.entry, skin::EntryProfileSettings{});
+    expectedSelections.emplace(trait.skinType, *entry.entry);
+  }
+
+  std::string error;
+  expect(AppSettingsStore::Save(path, settings, error),
+         "all gameplay trait selections save: " + error);
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.status == AppSettingsLoadStatus::Loaded,
+         "all gameplay trait selections load after restart");
+  expect(loaded.settings.skin.selectedGameplayEntries == expectedSelections,
+         "restart preserves every selected gameplay skin trait, not only 7K");
+  expect(loaded.settings.skin.selected7KeyEntry == expectedSelections.at(0),
+         "the legacy alias remains a derived projection of only the 7K trait");
 }
 
 void testBpmGuideAssistOptionPersists() {
@@ -1267,6 +1297,7 @@ void testAtomicFirstSaveCreatesRelativeNestedParents() {
 int main() {
   testLegacyFixtureLoadsEverySetting();
   testJsonRoundTripIncludesAudioAndVideo();
+  testGameplaySkinTraitSelectionsSurviveRestart();
   testBpmGuideAssistOptionPersists();
   testSchemaThreeMigrationDisablesCompatibility();
   testLegacy7KeySelectionMigratesToTraitSelection();

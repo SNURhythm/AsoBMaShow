@@ -5114,7 +5114,8 @@ void GamePlayScene::renderScene() {
   if (playbackInitializationFailed) {
     return;
   }
-  RenderContext renderContext;
+  RenderContext renderContext(context.uiBatchRenderer);
+  RenderContext::UiBatchScope uiBatchScope(renderContext);
   pauseLayout->setSize(rendering::window_width, rendering::window_height);
   if (pauseButton != nullptr) {
     pauseButton->setPositionNoLayout(rendering::window_width - 88, 38);
@@ -5152,6 +5153,9 @@ void GamePlayScene::renderScene() {
                                    capturedPlayfieldProjection);
   const PresentationFrameResult presentationFrame =
       presentation->render(renderContext);
+  // The gameplay presentation can queue ordinary UI text before subsequent
+  // direct overlay submissions.
+  renderContext.flushUiBatch();
   if (!options.autoPlay && chart != nullptr) {
     float spinScratchRotationDegrees = 0.0F;
     bool virtualControllerReady = false;

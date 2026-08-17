@@ -104,6 +104,7 @@ public:
   void startAfterProfileInitialization(SkinProfileId);
   void profileChanged(SkinProfileId);
   void requestRescan(SkinRescanReason);
+  void cancelRescan() noexcept;
   [[nodiscard]] SkinRescanProgress rescanProgress() const noexcept;
   void requestRevalidation(const SkinEntryId &);
   GameplayViewportPersistenceResult

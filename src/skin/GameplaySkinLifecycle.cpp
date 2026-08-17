@@ -513,6 +513,20 @@ struct GameplaySkinLifecycle::Impl {
     }
     PendingRevalidation work = std::move(pendingRevalidations.front());
     pendingRevalidations.pop_front();
+    // A reactivation commit advances the profile generation. Startup queues
+    // every selected trait at once, so later traits must not submit the
+    // generation captured before an earlier trait was restored.
+    if (!deps.snapshotProfile) {
+      return;
+    }
+    try {
+      work.base = deps.snapshotProfile(work.base.profileId);
+    } catch (...) {
+      return;
+    }
+    if (!selectsGameplayEntry(work.base.settings, work.entry)) {
+      return;
+    }
     SkinProfileSettings candidate = work.base.settings;
     auto submission = deps.submitPrepareActivation(
         std::move(work.base), std::move(work.entry), std::move(candidate));
@@ -598,8 +612,7 @@ struct GameplaySkinLifecycle::Impl {
           for (const auto &[skinType, entry] :
                base.settings.selectedGameplayEntries) {
             (void)skinType;
-            pendingRevalidations.push_back(
-                {.base = base, .entry = entry});
+            pendingRevalidations.push_back({.base = base, .entry = entry});
           }
         } catch (...) {
         }
@@ -981,6 +994,34 @@ struct GameplaySkinLifecycle::Impl {
     }
   }
 
+  void cancelRescan() noexcept {
+    rescanRequested = false;
+    pendingRescanInventory.reset();
+    if (inventoryTicket != 0 && deps.cancelProfileInventory) {
+      try {
+        deps.cancelProfileInventory(inventoryTicket);
+      } catch (...) {
+      }
+    }
+    inventoryTicket = 0;
+    for (auto iterator = prepareOperations.begin();
+         iterator != prepareOperations.end();) {
+      if (iterator->second.purpose != PreparePurpose::Reconcile &&
+          iterator->second.purpose != PreparePurpose::Rescan) {
+        ++iterator;
+        continue;
+      }
+      if (deps.cancelOperation) {
+        try {
+          deps.cancelOperation(iterator->first);
+        } catch (...) {
+        }
+      }
+      iterator = prepareOperations.erase(iterator);
+    }
+    rescanProgress = {};
+  }
+
   GameplaySkinLifecycleDependencies deps;
   std::optional<SkinProfileId> activeProfile;
   std::optional<PlaySkinSessionIdentity> currentIdentity;
@@ -1059,8 +1100,7 @@ void GameplaySkinLifecycle::startAfterProfileInitialization(
               : AcquireActivationResult{};
       if (!acquired.activation || acquired.activation->entry != entry ||
           acquired.activation->configurationDigest != digest) {
-        impl_->pendingRevalidations.push_back(
-            {.base = snapshot, .entry = entry});
+        impl_->pendingRevalidations.push_back({.base = snapshot, .entry = entry});
       }
     }
   } catch (...) {
@@ -1101,8 +1141,7 @@ void GameplaySkinLifecycle::profileChanged(SkinProfileId profile) {
     for (const auto &[skinType, entry] :
          snapshot.settings.selectedGameplayEntries) {
       (void)skinType;
-      impl_->pendingRevalidations.push_back(
-          {.base = snapshot, .entry = entry});
+      impl_->pendingRevalidations.push_back({.base = snapshot, .entry = entry});
     }
   } catch (...) {
   }
@@ -1113,6 +1152,13 @@ void GameplaySkinLifecycle::requestRescan(SkinRescanReason) {
     impl_->rescanRequested = true;
     impl_->rescanProgress.phase = SkinRescanProgressPhase::LoadingProfileInventory;
   }
+}
+
+void GameplaySkinLifecycle::cancelRescan() noexcept {
+  if (!impl_ || impl_->stopped) {
+    return;
+  }
+  impl_->cancelRescan();
 }
 
 SkinRescanProgress GameplaySkinLifecycle::rescanProgress() const noexcept {
@@ -1188,8 +1234,7 @@ void GameplaySkinLifecycle::poll() {
       for (const auto &[skinType, entry] :
            snapshot.settings.selectedGameplayEntries) {
         (void)skinType;
-        impl_->pendingRevalidations.push_back(
-            {.base = snapshot, .entry = entry});
+        impl_->pendingRevalidations.push_back({.base = snapshot, .entry = entry});
       }
     }
   }

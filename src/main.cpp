@@ -1340,6 +1340,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
               std::memory_order_acquire)) {
         bgfx::touch(rendering::clear_view);
         bgfx::touch(rendering::ui_view);
+        context.uiBatchRenderer.beginFrame();
         sceneManager.render();
         bgfx::frame();
         context.replayVideoExportUiFrameSerial.fetch_add(
@@ -1355,6 +1356,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 
         bgfx::touch(rendering::clear_view);
         bgfx::touch(rendering::ui_view);
+        context.uiBatchRenderer.beginFrame();
         sceneManager.render();
 
         const GameplayBgaCompositeState &bgaCompositeState =

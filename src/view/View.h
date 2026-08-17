@@ -8,10 +8,12 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <span>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 #include "../rendering/common.h"
+#include "../rendering/UiBatchRenderer.h"
 #include "../rendering/ShaderManager.h"
 #include "../rendering/Color.h"
 #include "bgfx/bgfx.h"
@@ -51,8 +53,76 @@ struct RenderContext {
     transformStack.reserve(16);
     refreshTransformMatrix();
   }
+  explicit RenderContext(rendering::UiBatchRenderer &renderer)
+      : RenderContext() {
+    uiBatch = &renderer;
+  }
   Scissor scissor = {0, 0, -1, -1};
   std::vector<Scissor> scissorStack;
+
+  bool appendUiColor(std::span<const rendering::PosColorVertex> vertices,
+                     std::span<const std::uint16_t> indices,
+                     const rendering::UiBatchState &state) const {
+    if (uiBatch != nullptr) {
+      return uiBatch->appendColor(vertices, indices, state);
+    }
+    return false;
+  }
+
+  bool appendUiTextured(
+      std::span<const rendering::PosTexCoord0Vertex> vertices,
+      std::span<const std::uint16_t> indices,
+      const rendering::UiBatchState &state) const {
+    if (uiBatch != nullptr) {
+      return uiBatch->appendTextured(vertices, indices, state);
+    }
+    return false;
+  }
+
+  void flushUiBatch() noexcept {
+    if (uiBatch != nullptr) {
+      uiBatch->flush();
+    }
+  }
+
+  [[nodiscard]] rendering::UiBatchState
+  makeUiBatchState(bgfx::ProgramHandle program, std::uint64_t state) const {
+    rendering::UiBatchState result{.program = program, .state = state};
+    if (scissor.width >= 0 && scissor.height >= 0) {
+      result.scissor = {.x = scissor.x,
+                        .y = scissor.y,
+                        .width = scissor.width,
+                        .height = scissor.height};
+    }
+    if (const float *matrix = getTransformMatrix(); matrix != nullptr) {
+      std::array<float, 16> transform;
+      std::copy_n(matrix, transform.size(), transform.begin());
+      result.transform = transform;
+    }
+    return result;
+  }
+
+  struct UiBatchScope {
+    explicit UiBatchScope(RenderContext &context) noexcept : context(context) {
+      if (context.uiBatchDepth++ == 0 && context.uiBatch != nullptr) {
+        context.uiBatch->begin();
+      }
+    }
+    ~UiBatchScope() {
+      if (context.uiBatchDepth == 0) {
+        return;
+      }
+      if (--context.uiBatchDepth == 0 && context.uiBatch != nullptr) {
+        context.uiBatch->end();
+      }
+    }
+
+    UiBatchScope(const UiBatchScope &) = delete;
+    UiBatchScope &operator=(const UiBatchScope &) = delete;
+
+  private:
+    RenderContext &context;
+  };
 
   inline void pushScissor(int x, int y, int width, int height) {
     scissorStack.push_back(scissor);
@@ -217,6 +287,8 @@ private:
   Transform transform;
   std::vector<Transform> transformStack;
   std::array<float, 16> transformMatrix{};
+  rendering::UiBatchRenderer *uiBatch = nullptr;
+  std::size_t uiBatchDepth = 0;
 };
 
 struct ScissorScope {
@@ -330,49 +402,31 @@ public:
         float y = getY();
         float width = getWidth();
         float height = getHeight();
-        bgfx::TransientVertexBuffer tvb{};
-        bgfx::TransientIndexBuffer tib{};
-        // Define the vertex layout
-        bgfx::VertexLayout layout = rendering::PosColorVertex::ms_decl;
-
-        bgfx::allocTransientVertexBuffer(&tvb, 4, layout);
-        bgfx::allocTransientIndexBuffer(&tib, 6);
-
-        auto *vertices = (rendering::PosColorVertex *)tvb.data;
-        auto *index = (uint16_t *)tib.data;
-
         uint32_t abgr = dbgColor.toABGR();
-        vertices[0] = {x, y, 0.0f, abgr};
-        vertices[1] = {x + width, y, 0.0f, abgr};
-        vertices[2] = {x + width, y + height, 0.0f, abgr};
-        vertices[3] = {x, y + height, 0.0f, abgr};
-
-        // Set up indices for two triangles (quad)
-        index[0] = 0;
-        index[1] = 1;
-        index[2] = 2;
-        index[3] = 2;
-        index[4] = 3;
-        index[5] = 0;
-
-        // Set up state (e.g., render state, texture, shaders)
-        uint64_t state =
-            BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA;
-        bgfx::setState(state);
-        context.applyTransform();
-
-        // Set the vertex and index buffers
-        bgfx::setVertexBuffer(0, &tvb);
-        bgfx::setIndexBuffer(&tib);
-
-        // Submit the draw call
+        const std::array vertices = {
+            rendering::PosColorVertex{x, y, 0.0f, abgr},
+            rendering::PosColorVertex{x + width, y, 0.0f, abgr},
+            rendering::PosColorVertex{x + width, y + height, 0.0f, abgr},
+            rendering::PosColorVertex{x, y + height, 0.0f, abgr}};
+        constexpr std::array<uint16_t, 6> indices = {0, 1, 2, 2, 3, 0};
         static const bgfx::ProgramHandle kSimpleProgram =
             rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
-        bgfx::submit(rendering::ui_view, kSimpleProgram);
+        context.appendUiColor(
+            vertices, indices,
+            context.makeUiBatchState(
+                kSimpleProgram, BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA |
+                                    BGFX_STATE_MSAA));
       }
 #endif
       renderBoxDecoration(context);
+      const bool uiBatchBoundary = requiresUiBatchBoundary();
+      if (uiBatchBoundary) {
+        context.flushUiBatch();
+      }
       renderImpl(context);
+      if (uiBatchBoundary) {
+        context.flushUiBatch();
+      }
     }
     // Children can be absolutely positioned outside their layout parent's
     // bounds, so cull only this view's own drawing work.
@@ -562,6 +616,9 @@ protected:
             .y = static_cast<float>(getY()),
             .width = static_cast<float>(getWidth()),
             .height = static_cast<float>(getHeight())};
+  }
+  [[nodiscard]] virtual bool requiresUiBatchBoundary() const noexcept {
+    return false;
   }
   virtual void renderImpl(RenderContext &context) {};
   virtual inline bool handleEventsImpl(SDL_Event &event) { return true; };

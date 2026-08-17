@@ -2785,7 +2785,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
                   "threads: %d, queued memory: %.1f MiB / %.1f MiB budget",
                   frameBufferCount, encoder.videoThreadCount(),
                   frameBufferMemoryMiB, frameBufferBudgetMiB);
-  RenderContext renderContext;
+  RenderContext renderContext(context.uiBatchRenderer);
   size_t replayCursor = 0;
   GameplayBgaMissStateTracker bgaMissTracker;
   std::uint64_t presentationSerial = 1;
@@ -2899,6 +2899,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     freeReadbackTextures.pop_front();
 
     const auto renderStart = std::chrono::steady_clock::now();
+    context.uiBatchRenderer.beginFrame();
     renderFrame();
     bgfx::blit(rendering::readback_view, readbackTextures[readbackTextureIndex],
                0, 0, outputTexture);
@@ -3004,6 +3005,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
 
     bool presentationFailed = false;
     if (!renderAndQueueFrame(frameIndex, videoTimeMicros, [&]() {
+          RenderContext::UiBatchScope uiBatchScope(renderContext);
           bgfx::touch(rendering::clear_view);
           bgfx::touch(rendering::bga_view);
           bgfx::touch(rendering::bga_layer_view);
@@ -3085,7 +3087,10 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
               static_cast<float>(settings.bgaBrightnessPercent) / 100.0f);
           bgfx::touch(rendering::ui_view);
           if (resultRoot != nullptr) {
-            resultRoot->render(renderContext);
+            {
+              RenderContext::UiBatchScope uiBatchScope(renderContext);
+              resultRoot->render(renderContext);
+            }
             drawReplayResultGaugeGraph(resultGraphBatch, replayResultState,
                                        resultGraphPlaceholder);
           }
@@ -3386,7 +3391,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                   frameBufferCount, encoder.videoThreadCount(),
                   frameBufferMemoryMiB, frameBufferBudgetMiB);
 
-  RenderContext renderContext;
+  RenderContext renderContext(context.uiBatchRenderer);
   uint32_t currentFrame = bgfx::frame();
   const auto exportStart = std::chrono::steady_clock::now();
   auto lastUiProgress =
@@ -3494,6 +3499,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     freeReadbackTextures.pop_front();
 
     const auto renderStart = std::chrono::steady_clock::now();
+    context.uiBatchRenderer.beginFrame();
     renderFrame();
     bgfx::blit(rendering::readback_view, readbackTextures[readbackTextureIndex],
                0, 0, outputTexture);
@@ -3740,6 +3746,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
       bool presentationFailed = false;
       if (!renderAndQueueFrame(globalFrameIndex, globalVideoTimeMicros,
                                [&]() {
+                                 RenderContext::UiBatchScope uiBatchScope(
+                                     renderContext);
                                  bgfx::touch(rendering::clear_view);
                                  bgfx::touch(rendering::bga_view);
                                  bgfx::touch(rendering::bga_layer_view);
@@ -3831,7 +3839,11 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                                          100.0f);
                                  bgfx::touch(rendering::ui_view);
                                  if (stageResultRoot != nullptr) {
-                                   stageResultRoot->render(renderContext);
+                                   {
+                                     RenderContext::UiBatchScope uiBatchScope(
+                                         renderContext);
+                                     stageResultRoot->render(renderContext);
+                                   }
                                    drawReplayResultGaugeGraph(
                                        stageResultGraphBatch,
                                        stage.resultState,
@@ -3891,7 +3903,11 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                                        100.0f);
                                bgfx::touch(rendering::ui_view);
                                if (courseResultRoot != nullptr) {
-                                 courseResultRoot->render(renderContext);
+                                 {
+                                   RenderContext::UiBatchScope uiBatchScope(
+                                       renderContext);
+                                   courseResultRoot->render(renderContext);
+                                 }
                                  drawReplayResultGaugeGraph(
                                      courseResultGraphBatch, courseState,
                                      courseResultGraphPlaceholder);

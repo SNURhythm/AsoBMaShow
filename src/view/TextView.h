@@ -20,6 +20,7 @@ public:
 
   void setText(const std::string &newText);
   [[nodiscard]] const std::string &getText() const { return text; }
+  void setDeferredTextureMaterialization(bool deferred);
   void setColor(SDL_Color newColor);
   void setThemedColor(ThemeColorProvider provider);
   void setAlign(TextAlign newAlign);
@@ -29,6 +30,7 @@ public:
   [[nodiscard]] bgfx::TextureHandle textureHandle() const { return texture; }
   [[nodiscard]] int textureWidth() const { return rect.w; }
   [[nodiscard]] int textureHeight() const { return rect.h; }
+  [[nodiscard]] int measureTextWidth(const std::string &utf8);
   [[nodiscard]] const std::string &primaryFontPath() const {
     return primaryFontPath_;
   }
@@ -59,7 +61,6 @@ protected:
   [[nodiscard]] float marqueeOffset(int viewportWidth);
   [[nodiscard]] int textLineHeight() const;
   [[nodiscard]] int rasterTextLineHeight() const;
-  [[nodiscard]] int measureTextWidth(const std::string &utf8);
   [[nodiscard]] int measureRasterTextWidth(const std::string &utf8);
   SelectedFont selectFont(Uint32 codepoint);
   [[nodiscard]] bool hasFontSource(const SelectedFont &source) const;
@@ -94,6 +95,7 @@ protected:
   int fontStyle_ = TTF_STYLE_NORMAL;
   int fontRasterSize = 0;
   int fontLineHeight = 0;
+  int fontLineSkip = 0;
   int fontAscent = 0;
   int fontDescent = 0;
   int iosSystemFontLineHeight = 0;
@@ -107,7 +109,9 @@ protected:
   SDL_Rect rect{};
   std::string text;
   bool wrapEnabled = false;
+  bool deferTextureMaterialization = false;
   int currentWrapWidth = 0;
+  bool metricsDirty = true;
   Uint64 marqueeStartedAt = 0;
   bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
   static YGSize measureFunc(YGNodeConstRef node, float width,
@@ -115,6 +119,7 @@ protected:
                             YGMeasureMode heightMode);
 
   bgfx::UniformHandle s_texColor = BGFX_INVALID_HANDLE;
-  void createTexture(bool markDirty = true, bool force = true,
-                     int requestedWrapWidth = -1);
+  void invalidateTexture();
+  void updateTextMetrics(bool markDirty = true, int requestedWrapWidth = -1);
+  void createTexture();
 };

@@ -4306,10 +4306,14 @@ CommitActivationResult SkinPackageStore::pollPreparedActivationCommit(
       }
     }
     if (!sourceChanged) {
-      const std::string profilePrefix =
-          commit.profileId.opaque + std::string(1, '\0');
+      // A profile can keep one activation for each gameplay trait. Replacing
+      // the whole profile's activation set here made sequential startup
+      // revalidation leave only the final trait ready for acquisition.
+      const std::string entryPrefix =
+          commit.profileId.opaque + std::string(1, '\0') +
+          commit.terminalActivation.entry.collisionKey + std::string(1, '\0');
       std::erase_if(activations_, [&](const auto &item) {
-        return item.first.starts_with(profilePrefix);
+        return item.first.starts_with(entryPrefix);
       });
       activations_.insert(std::move(commit.activationNode));
       result.activation = std::move(commit.terminalActivation);

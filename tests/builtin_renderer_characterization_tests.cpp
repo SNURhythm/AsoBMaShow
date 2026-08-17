@@ -712,6 +712,7 @@ ScenarioResult renderScenario(
   store.setPlayStartMicros(250'000);
 
   Judge judge(fixture.chart->Meta.Rank);
+  rendering::UiBatchRenderer uiBatchRenderer;
   {
     BMSRenderer renderer(fixture.chart.get(), judge.timingWindows,
                          configuration.visibleTimeDurationMilliseconds, true);
@@ -746,23 +747,27 @@ ScenarioResult renderScenario(
           .replayTouchTimeMicros = kRenderMicros,
           .bgaTimeMicros = kBgaMicros,
       };
-      RenderContext warmupContext;
-      if (renderPath == ScenarioRenderPath::Captured) {
-        store.setNoteStates(
-            captureNoteStates(*fixture.chart, model, kRenderMicros));
-        const PlayfieldVisualState warmupState = store.capture(warmupClock);
-        renderer.configure(warmupState.configuration);
-        PlayfieldProjection projector;
-        const PlayfieldProjectionResult warmupProjection = projector.project(
-            model, warmupState,
-            {.includeInvisibleNotes =
-                 warmupState.configuration.showInvisibleNotes,
-             .latePoorTimingMicros = renderer.projectionLatePoorTimingMicros(),
-             .builtInTraversal = renderer.builtInProjectionTraversal()});
-        renderer.render(warmupContext, warmupState, warmupProjection);
-      } else {
-        renderer.render(warmupContext, warmupClock.visualTimeMicros,
-                        warmupClock.replayTouchTimeMicros);
+      uiBatchRenderer.beginFrame();
+      RenderContext warmupContext(uiBatchRenderer);
+      {
+        RenderContext::UiBatchScope uiBatchScope(warmupContext);
+        if (renderPath == ScenarioRenderPath::Captured) {
+          store.setNoteStates(
+              captureNoteStates(*fixture.chart, model, kRenderMicros));
+          const PlayfieldVisualState warmupState = store.capture(warmupClock);
+          renderer.configure(warmupState.configuration);
+          PlayfieldProjection projector;
+          const PlayfieldProjectionResult warmupProjection = projector.project(
+              model, warmupState,
+              {.includeInvisibleNotes =
+                   warmupState.configuration.showInvisibleNotes,
+               .latePoorTimingMicros = renderer.projectionLatePoorTimingMicros(),
+               .builtInTraversal = renderer.builtInProjectionTraversal()});
+          renderer.render(warmupContext, warmupState, warmupProjection);
+        } else {
+          renderer.render(warmupContext, warmupClock.visualTimeMicros,
+                          warmupClock.replayTouchTimeMicros);
+        }
       }
       bgfx::frame();
       result.recorder = {};
@@ -786,23 +791,27 @@ ScenarioResult renderScenario(
     result.invisibleBeforeRender =
         parserNoteState(*fixture.invisibleProbeNote);
 
-    RenderContext context;
-    if (renderPath == ScenarioRenderPath::Captured) {
-      // Projection freezes the renderer's own cutoff and incremental forward
-      // geometry; GamePlayScene uses this same value-returning API.
-      renderer.configure(capturedState.configuration);
-      PlayfieldProjection projector;
-      const PlayfieldProjectionResult capturedProjection = projector.project(
-          model, capturedState,
-          {.includeInvisibleNotes =
-               capturedState.configuration.showInvisibleNotes,
-           .latePoorTimingMicros = renderer.projectionLatePoorTimingMicros(),
-           .builtInTraversal = renderer.builtInProjectionTraversal()});
-      result.projection = capturedProjection;
-      renderer.render(context, capturedState, capturedProjection);
-    } else {
-      renderer.render(context, frameClock.visualTimeMicros,
-                      frameClock.replayTouchTimeMicros);
+    uiBatchRenderer.beginFrame();
+    RenderContext context(uiBatchRenderer);
+    {
+      RenderContext::UiBatchScope uiBatchScope(context);
+      if (renderPath == ScenarioRenderPath::Captured) {
+        // Projection freezes the renderer's own cutoff and incremental forward
+        // geometry; GamePlayScene uses this same value-returning API.
+        renderer.configure(capturedState.configuration);
+        PlayfieldProjection projector;
+        const PlayfieldProjectionResult capturedProjection = projector.project(
+            model, capturedState,
+            {.includeInvisibleNotes =
+                 capturedState.configuration.showInvisibleNotes,
+             .latePoorTimingMicros = renderer.projectionLatePoorTimingMicros(),
+             .builtInTraversal = renderer.builtInProjectionTraversal()});
+        result.projection = capturedProjection;
+        renderer.render(context, capturedState, capturedProjection);
+      } else {
+        renderer.render(context, frameClock.visualTimeMicros,
+                        frameClock.replayTouchTimeMicros);
+      }
     }
     result.invisibleAfterRender =
         parserNoteState(*fixture.invisibleProbeNote);

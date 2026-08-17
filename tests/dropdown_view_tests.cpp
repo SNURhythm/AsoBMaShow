@@ -76,6 +76,9 @@ static_assert(std::is_same_v<decltype(DropdownView::State{}.enabled), bool>);
 static_assert(std::is_same_v<decltype(DropdownView::Option{}.available), bool>);
 static_assert(std::is_same_v<decltype(DropdownView::Callbacks{}.onOpenChanged),
                              std::function<void(bool)>>);
+static_assert(std::is_same_v<
+              decltype(DropdownView::Callbacks{}.onOptionSelectedResult),
+              std::function<bool(const std::string &)>>);
 static_assert(DropdownView::kDefaultWidth == 160.0f);
 static_assert(std::is_same_v<decltype(DropdownView::refreshIndicator(
                                  std::declval<View *>(),

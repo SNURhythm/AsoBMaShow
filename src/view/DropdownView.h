@@ -38,6 +38,7 @@ public:
   struct Callbacks {
     std::function<void(bool)> onOpenChanged;
     std::function<void(const std::string &)> onOptionSelected;
+    std::function<bool(const std::string &)> onOptionSelectedResult;
   };
 
   explicit DropdownView(Callbacks callbacks, OverlayPortal *portal = nullptr);
@@ -72,14 +73,18 @@ private:
   bool menuOwnedByPortal = false;
   bool dispatchingOptionCallback = false;
   bool deferredRefreshScheduled = false;
+  bool deferredOptionViewClearScheduled = false;
   float resolvedWidth = kDefaultWidth;
 
   void buildView();
   void applyRefresh(State state);
   void rebuildOptions();
+  void clearOptionViews();
   void refreshVisualState();
+  void setOpen(bool open);
   void updateMenuPlacement();
   void scheduleDeferredRefresh();
+  void scheduleOptionViewClear();
   [[nodiscard]] float preferredWidth() const;
   [[nodiscard]] std::string selectedLabel() const;
   [[nodiscard]] std::optional<Color> selectedLeadingColor() const;

@@ -1,7 +1,9 @@
 #include "rendering/UniformCache.h"
 #include "view/TextInputBox.h"
+#include "view/TextView.h"
 
 #include <SDL2/SDL.h>
+#include <SDL_ttf.h>
 
 #include <cstdlib>
 #include <iostream>
@@ -112,6 +114,52 @@ void testEmptyInputHasNoClearHitTarget() {
   input.onUnselected();
 }
 
+void testDeferredTextKeepsRasterizedLineHeight() {
+  constexpr int logicalSize = 20;
+  constexpr int rasterScale = 2;
+  constexpr const char *text = "Settings";
+  TextView view("assets/fonts/notosanscjkjp.ttf", logicalSize);
+  view.setDeferredTextureMaterialization(true);
+  view.setText(text);
+
+  TTF_Font *font = TTF_OpenFont("assets/fonts/notosanscjkjp.ttf",
+                                logicalSize * rasterScale);
+  expect(font != nullptr, "test font opens for text geometry comparison");
+  int rasterWidth = 0;
+  int rasterHeight = 0;
+  expect(TTF_SizeUTF8(font, text, &rasterWidth, &rasterHeight) == 0,
+         "SDL_ttf reports the unrendered text raster bounds");
+  TTF_CloseFont(font);
+
+  expect(view.textureHeight() ==
+             (rasterHeight + rasterScale - 1) / rasterScale,
+         "deferred text preserves the rasterized line height before rendering");
+}
+
+void testDeferredWrappedTextKeepsRasterizedLineHeight() {
+  constexpr int logicalSize = 20;
+  constexpr int rasterScale = 2;
+  constexpr const char *text = "Settings";
+  TextView view("assets/fonts/notosanscjkjp.ttf", logicalSize);
+  view.setDeferredTextureMaterialization(true);
+  view.setWrap(true);
+  view.setText(text);
+  view.setWidth(400.0F);
+  view.applyYogaLayout();
+
+  TTF_Font *font = TTF_OpenFont("assets/fonts/notosanscjkjp.ttf",
+                                logicalSize * rasterScale);
+  expect(font != nullptr,
+         "test font opens for wrapped text geometry comparison");
+  const int rasterHeight = TTF_FontLineSkip(font);
+  TTF_CloseFont(font);
+
+  expect(view.textureHeight() ==
+             (rasterHeight + rasterScale - 1) / rasterScale,
+         "deferred wrapped text preserves SDL_ttf line-skip height before "
+         "rendering");
+}
+
 } // namespace
 
 extern "C" void SDLCALL TextInputBoxTest_ClearComposition() {
@@ -128,6 +176,8 @@ int main() {
   testDefaultHorizontalPadding();
   testClearButtonVisibilityAndCallback();
   testEmptyInputHasNoClearHitTarget();
+  testDeferredTextKeepsRasterizedLineHeight();
+  testDeferredWrappedTextKeepsRasterizedLineHeight();
 
   TextInputBox::releaseCachedCursors();
   rendering::UniformCache::getInstance().destroyAll();

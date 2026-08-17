@@ -89,6 +89,10 @@ public:
   }
 
 protected:
+  [[nodiscard]] bool requiresUiBatchBoundary() const noexcept override {
+    return true;
+  }
+
   void renderImpl(RenderContext &context) override {
     const int width = getWidth();
     const int height = getHeight();

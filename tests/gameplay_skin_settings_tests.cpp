@@ -32,6 +32,13 @@ using namespace skin;
 
 int failures = 0;
 
+template <typename Controller>
+concept ExposesUserCancellation = requires(Controller &controller) {
+  controller.cancelOperation();
+};
+
+static_assert(!ExposesUserCancellation<GameplaySkinSettingsController>);
+
 void expect(bool condition, std::string_view message) {
   if (!condition) {
     std::cerr << "FAIL: " << message << '\n';
@@ -429,6 +436,7 @@ struct Fixture {
             .commits = commits,
             .clientId = commits.createClient(),
             .requestRescan = [&] { ++rescanRequests; },
+            .cancelRescan = [&] { ++rescanCancellations; },
             .rescanProgress = [&] { return rescanProgress; },
             .requestRevalidation =
                 [&](const SkinEntryId &) { ++revalidationRequests; },
@@ -480,6 +488,7 @@ struct Fixture {
   std::deque<PlatformDocumentHandoffResult> folderResults;
   PlatformDirectoryImportRequest lastFolderRequest;
   int rescanRequests = 0;
+  int rescanCancellations = 0;
   SkinRescanProgress rescanProgress;
   int revalidationRequests = 0;
   int catalogSnapshotCalls = 0;
@@ -688,6 +697,23 @@ void testPickedArchiveAndFolderInstallWithoutPackageNameConfirmation() {
          "folder installation leaves no package-name confirmation state");
 }
 
+void testActivationPreparationDoesNotExposeCancellation() {
+  Fixture fixture;
+  const auto folder = fixture.temp.root() / "NonCancellableSelection";
+  writeText(folder / "play/play7.luaskin", "return { type = 0 }");
+  fixture.folderResults.push_back(picked(
+      folder, "NonCancellableSelection", PlatformTemporaryPathKind::Directory));
+  auto controller = fixture.makeController();
+  installQueuedImport(fixture, *controller, false);
+
+  const auto selected =
+      controller->select(controller->snapshot().entries.front().entry);
+  expect(selected.accepted && selected.asynchronous,
+         "selection starts activation preparation");
+  expect(controller->snapshot().state == GameplaySkinSettingsState::Busy,
+         "activation preparation remains blocking until its result commits");
+}
+
 void testSelectionIsScopedToTheSkinDeclaredGameplayTrait() {
   Fixture fixture;
   fixture.validator.skinType = 1;
@@ -787,39 +813,6 @@ void testRejectedPrepareTransfersExactTemporaryCleanupOffControllerThread() {
       "reserved worker eventually consumes the temporary ownership");
   expect(observer->reservedDisposals() == 1,
          "rejected prepare cleanup transfers exactly once");
-}
-
-void testNameReadyCancelTransfersOwnedSourceThroughReservedLane() {
-  auto observer = std::make_shared<FailFirstAndBlockReservedDisposal>();
-  Fixture fixture(observer);
-  auto [ownedFolder, ownedResult] = ownedPickedFolder("CancelOwnedSource");
-  expect(ownedResult.ok() && ownedResult.temporaryOwnership,
-         "cancel fixture owns a private picked folder capability");
-  fixture.folderResults.push_back(std::move(ownedResult));
-  auto controller = fixture.makeController();
-
-  expect(controller->beginFolderImport().accepted,
-         "cancel fixture starts owned folder selection");
-  expect(pumpUntil(
-             fixture, *controller,
-             [&] { return controller->snapshot().preparedName.has_value(); }),
-         "owned folder reaches package-name confirmation");
-  const auto cancelStarted = std::chrono::steady_clock::now();
-  controller->cancelOperation();
-  expect(std::chrono::steady_clock::now() - cancelStarted <
-             std::chrono::milliseconds(100),
-         "NameReady cancellation does not run owned cleanup on the caller");
-
-  const bool disposalStarted = observer->waitForReservedDisposal();
-  expect(disposalStarted && fs::exists(ownedFolder),
-         "NameReady cancellation transfers the exact cleanup to its reserved "
-         "lane");
-  observer->releaseDisposal();
-  expect(
-      pumpUntil(fixture, *controller, [&] { return !fs::exists(ownedFolder); }),
-      "reserved cancellation cleanup removes the owned folder after release");
-  expect(observer->reservedDisposals() == 1,
-         "NameReady cancellation consumes the reservation exactly once");
 }
 
 void testNameReadyCloseTransfersOwnedSourceThroughReservedLane() {
@@ -1528,14 +1521,15 @@ void testLifecycleCallbacksCustomViewportAndRemoval() {
   const SkinEntryId entry = controller->snapshot().entries.front().entry;
 
   expect(controller->requestRescan().accepted && fixture.rescanRequests == 1 &&
-             controller->snapshot().state == GameplaySkinSettingsState::Busy,
-         "manual rescans stay busy until the lifecycle reports a terminal state");
-  fixture.rescanProgress.phase = SkinRescanProgressPhase::Succeeded;
-  controller->poll();
-  expect(controller->snapshot().state == GameplaySkinSettingsState::Ready &&
+             controller->snapshot().state == GameplaySkinSettingsState::Busy &&
+             controller->snapshot().canCancel,
+         "manual rescans are the only cancellable gameplay skin operation");
+  controller->cancelRescan();
+  expect(fixture.rescanCancellations == 1 &&
+             controller->snapshot().state == GameplaySkinSettingsState::Ready &&
              controller->requestRevalidation(entry).accepted &&
              fixture.revalidationRequests == 1,
-         "manual lifecycle actions use only injected rescan/revalidation owners");
+         "cancelling a rescan returns to regular lifecycle actions");
 
   const ViewportSettings excessiveCustom{.mode = ViewportMode::Custom,
                                          .customBase =
@@ -1609,6 +1603,7 @@ int main() {
   testSourceNameSuggestionPreservesTypedSemantics();
   testSnapshotUsesCachedSettingsProjectionUntilTheNextPoll();
   testArchiveFolderSelectionAndDurableLayoutFlow();
+  testActivationPreparationDoesNotExposeCancellation();
   testPickedArchiveAndFolderInstallWithoutPackageNameConfirmation();
   testSelectionIsScopedToTheSkinDeclaredGameplayTrait();
   testRejectedPublishTransfersReservedStagingOffControllerThread();

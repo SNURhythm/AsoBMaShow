@@ -173,7 +173,6 @@ struct GameplaySkinSettingsController::Impl {
                ? static_cast<unsigned>(*projected.pendingSafetyLevel)
                : 0U);
     append(projected.statusMessage);
-    number(projected.canCancel);
     number(projected.hasPackageProgress);
     number(static_cast<unsigned>(projected.progress.phase));
     number(projected.progress.completedBytes);
@@ -211,12 +210,7 @@ struct GameplaySkinSettingsController::Impl {
   }
 
   [[nodiscard]] bool phaseCanCancel() const noexcept {
-    return phase == Phase::PickingArchive || phase == Phase::PickingFolder ||
-           phase == Phase::NameReady || phase == Phase::PreparingPackage ||
-           phase == Phase::LoadingInventory ||
-           phase == Phase::LoadingRemovalInventory ||
-           phase == Phase::Publishing ||
-           phase == Phase::PreparingActivation || phase == Phase::Removing;
+    return phase == Phase::Rescanning;
   }
 
   std::shared_ptr<const SkinPackageCatalogSnapshot> catalog() const {
@@ -505,7 +499,6 @@ struct GameplaySkinSettingsController::Impl {
         projected.state = GameplaySkinSettingsState::Ready;
         projected.statusMessage =
             "A package with this name is already installed. Confirm replacement.";
-        projected.canCancel = true;
         refreshProjection();
         return;
       }
@@ -964,7 +957,7 @@ struct GameplaySkinSettingsController::Impl {
     return accepted("Gameplay skin settings save started.");
   }
 
-  void cancelOperation() noexcept {
+  void abortUncommittedOperation() noexcept {
     if (closed) {
       return;
     }
@@ -998,7 +991,7 @@ struct GameplaySkinSettingsController::Impl {
       progress.reset();
       phase = Phase::Idle;
       errorState = false;
-      projected.statusMessage = "Operation cancelled.";
+      projected.statusMessage = "Operation abandoned.";
       projected.canCancel = false;
       refreshProjection();
     } catch (...) {
@@ -1063,7 +1056,7 @@ void GameplaySkinSettingsController::profileChanged(
   if (impl_->closed) {
     return;
   }
-  impl_->cancelOperation();
+  impl_->abortUncommittedOperation();
   impl_->dependencies.commits.detachClient(impl_->dependencies.clientId);
   // Accepted coordinator transactions are durable after detachment, but their
   // delivery-only wait state belongs to the old profile binding.
@@ -1100,7 +1093,8 @@ ControllerActionResult GameplaySkinSettingsController::confirmPreparedImport(
 
 ControllerActionResult GameplaySkinSettingsController::requestRescan() {
   if (impl_->closed || impl_->hasControllerOperation() ||
-      !impl_->dependencies.requestRescan || !impl_->dependencies.rescanProgress) {
+      !impl_->dependencies.requestRescan || !impl_->dependencies.cancelRescan ||
+      !impl_->dependencies.rescanProgress) {
     return rejected("A gameplay skin rescan is not currently available.");
   }
   impl_->dependencies.requestRescan();
@@ -1347,8 +1341,17 @@ GameplaySkinSettingsController::resetLayout(const SkinEntryId &entry) {
   return setViewport(entry, ViewportSettings{.mode = ViewportMode::Fit});
 }
 
-void GameplaySkinSettingsController::cancelOperation() noexcept {
-  impl_->cancelOperation();
+void GameplaySkinSettingsController::cancelRescan() noexcept {
+  if (impl_->closed || impl_->phase != Impl::Phase::Rescanning ||
+      !impl_->dependencies.cancelRescan) {
+    return;
+  }
+  try {
+    impl_->dependencies.cancelRescan();
+    impl_->setIdle("Skin scan cancelled.");
+  } catch (...) {
+    std::terminate();
+  }
 }
 
 void GameplaySkinSettingsController::close() noexcept { impl_->close(); }

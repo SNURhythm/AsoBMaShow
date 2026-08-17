@@ -3,13 +3,68 @@
 #include "UiTheme.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <utility>
+#include <vector>
 
 namespace {
 constexpr float kHorizontalInset = 12.0F;
 constexpr float kTrackHeight = 6.0F;
 constexpr float kThumbRadius = 10.0F;
+constexpr float kPi = 3.14159265358979323846F;
+
+void appendRoundedRect(RenderContext &context, float x, float y, float width,
+                       float height, float radius, std::uint32_t color) {
+  if (width <= 0.0F || height <= 0.0F) {
+    return;
+  }
+  radius = std::clamp(radius, 0.0F, std::min(width, height) * 0.5F);
+  std::vector<rendering::PosColorVertex> vertices;
+  std::vector<std::uint16_t> indices;
+  if (radius <= 0.5F) {
+    vertices = {{x, y, 0.0F, color},
+                {x + width, y, 0.0F, color},
+                {x + width, y + height, 0.0F, color},
+                {x, y + height, 0.0F, color}};
+    indices = {0, 1, 2, 0, 2, 3};
+  } else {
+    const int segments =
+        std::clamp(static_cast<int>(std::ceil(radius / 4.0F)), 4, 12);
+    const auto ringVertexCount =
+        static_cast<std::uint16_t>((segments + 1) * 4);
+    vertices.reserve(static_cast<std::size_t>(ringVertexCount) + 1U);
+    indices.reserve(static_cast<std::size_t>(ringVertexCount) * 3U);
+    vertices.push_back({x + width * 0.5F, y + height * 0.5F, 0.0F, color});
+    const auto appendCorner = [&](float centerX, float centerY,
+                                  float startAngle) {
+      for (int index = 0; index <= segments; ++index) {
+        const float t = static_cast<float>(index) / static_cast<float>(segments);
+        const float angle = startAngle + t * (kPi * 0.5F);
+        vertices.push_back({centerX + std::cos(angle) * radius,
+                            centerY + std::sin(angle) * radius, 0.0F, color});
+      }
+    };
+    appendCorner(x + width - radius, y + radius, -kPi * 0.5F);
+    appendCorner(x + width - radius, y + height - radius, 0.0F);
+    appendCorner(x + radius, y + height - radius, kPi * 0.5F);
+    appendCorner(x + radius, y + radius, kPi);
+    for (std::uint16_t index = 0; index < ringVertexCount; ++index) {
+      indices.push_back(0);
+      indices.push_back(static_cast<std::uint16_t>(index + 1));
+      indices.push_back(
+          static_cast<std::uint16_t>((index + 1) % ringVertexCount + 1));
+    }
+  }
+  static const bgfx::ProgramHandle kProgram =
+      rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
+  context.appendUiColor(
+      vertices, indices,
+      context.makeUiBatchState(kProgram, BGFX_STATE_WRITE_RGB |
+                                             BGFX_STATE_WRITE_A |
+                                             BGFX_STATE_BLEND_ALPHA |
+                                             BGFX_STATE_MSAA));
+}
 
 void mouseToUi(int rawX, int rawY, float &x, float &y) {
   rendering::screenToUi(rawX * rendering::widthScale,
@@ -19,7 +74,6 @@ void mouseToUi(int rawX, int rawY, float &x, float &y) {
 
 SnappedSlider::SnappedSlider(std::function<void(int)> onValueChanged)
     : onValueChanged(std::move(onValueChanged)) {
-  batch.setSubmitView(rendering::ui_view);
   setHeight(44);
   setMinWidth(120);
 }
@@ -74,18 +128,16 @@ void SnappedSlider::renderImpl(RenderContext &context) {
     thumbColor = ui_theme::withAlpha(thumbColor, 110);
   }
 
-  rendering::setScissorUI(context.scissor.x, context.scissor.y,
-                          context.scissor.width, context.scissor.height);
-  batch.begin(context.getTransformMatrix());
-  batch.addRoundedRect(trackX, trackY, trackWidth, kTrackHeight,
-                       kTrackHeight * 0.5F, trackColor.toABGR());
+  appendRoundedRect(context, trackX, trackY, trackWidth, kTrackHeight,
+                    kTrackHeight * 0.5F, trackColor.toABGR());
   const float fillWidth = std::clamp(trackWidth * fraction, 0.0F, trackWidth);
   if (fillWidth > 0.0F) {
-    batch.addRoundedRect(trackX, trackY, fillWidth, kTrackHeight,
-                         kTrackHeight * 0.5F, fillColor.toABGR());
+    appendRoundedRect(context, trackX, trackY, fillWidth, kTrackHeight,
+                      kTrackHeight * 0.5F, fillColor.toABGR());
   }
-  batch.addCircle(thumbX, thumbY, kThumbRadius, thumbColor.toABGR());
-  batch.end();
+  appendRoundedRect(context, thumbX - kThumbRadius, thumbY - kThumbRadius,
+                    kThumbRadius * 2.0F, kThumbRadius * 2.0F, kThumbRadius,
+                    thumbColor.toABGR());
 }
 
 bool SnappedSlider::handleEventsImpl(SDL_Event &event) {

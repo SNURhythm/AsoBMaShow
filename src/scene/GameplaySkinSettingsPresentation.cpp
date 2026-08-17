@@ -318,11 +318,10 @@ gameplaySkinManagementEntries(const GameplaySkinSettingsSnapshot &snapshot) {
 GameplaySkinSettingsActionAvailability gameplaySkinSettingsActionAvailability(
     const GameplaySkinSettingsSnapshot &snapshot) noexcept {
   const bool nameReady = snapshot.state == GameplaySkinSettingsState::Ready &&
-                         snapshot.canCancel &&
                          snapshot.preparedName.has_value();
   return {
       .ordinaryActions = snapshot.state != GameplaySkinSettingsState::Busy &&
-                         !snapshot.canCancel,
+                         !nameReady,
       .canCancel = snapshot.canCancel,
       .canEditPreparedName = false,
       .canInstallPrepared = nameReady && snapshot.preparedName->ok(),
@@ -414,6 +413,68 @@ std::string gameplaySkinSettingsPresentationKey(
   return std::move(encoder).finish();
 }
 
+std::string gameplaySkinSettingsLayoutKey(
+    const GameplaySkinSettingsSnapshot &snapshot) {
+  PresentationKeyEncoder encoder;
+  encoder.boolean(snapshot.featureAvailable);
+  encoder.boolean(snapshot.state == GameplaySkinSettingsState::Error);
+  encoder.boolean(snapshot.compatibilityEnabled);
+  encodeEnum(encoder, snapshot.safetyLevel);
+  encoder.boolean(snapshot.pendingSafetyLevel.has_value());
+  if (snapshot.pendingSafetyLevel) {
+    encodeEnum(encoder, *snapshot.pendingSafetyLevel);
+  }
+
+  encoder.unsignedNumber(snapshot.selectedGameplayEntries.size());
+  for (const auto &[skinType, entry] : snapshot.selectedGameplayEntries) {
+    encoder.signedNumber(skinType);
+    encodeEntry(encoder, entry);
+  }
+
+  encoder.boolean(snapshot.preparedName.has_value());
+  if (snapshot.preparedName) {
+    encoder.text(snapshot.preparedName->originalSourceName);
+    encoder.text(snapshot.preparedName->suggestedPackageName);
+    encoder.text(snapshot.preparedName->validationError);
+  }
+
+  encoder.boolean(snapshot.collisionPackage.has_value());
+  if (snapshot.collisionPackage) {
+    encodePackage(encoder, *snapshot.collisionPackage);
+  }
+
+  encoder.unsignedNumber(snapshot.entries.size());
+  for (const auto &row : snapshot.entries) {
+    encodeEntry(encoder, row.entry);
+    encodeMetadata(encoder, row.metadata);
+    encoder.text(row.revisionDigest);
+    encodeEnum(encoder, row.validation);
+    encoder.unsignedNumber(row.diagnostics.size());
+    for (const auto &diagnostic : row.diagnostics) {
+      encodeDiagnostic(encoder, diagnostic);
+    }
+  }
+
+  encoder.unsignedNumber(snapshot.history.size());
+  for (const auto &record : snapshot.history) {
+    encoder.unsignedNumber(record.recordSerial);
+    encodeEntry(encoder, record.entry);
+    encoder.text(record.revisionDigest);
+    encoder.text(record.configurationDigest);
+    encodeEnum(encoder, record.phase);
+    encodeDiagnostic(encoder, record.diagnostic);
+    encoder.boolean(record.luaLine.has_value());
+    if (record.luaLine) {
+      encoder.unsignedNumber(*record.luaLine);
+    }
+    encoder.boolean(record.frameSerial.has_value());
+    if (record.frameSerial) {
+      encoder.unsignedNumber(*record.frameSerial);
+    }
+  }
+  return std::move(encoder).finish();
+}
+
 std::string gameplaySkinPackageProgressDisplayText(const SkinProgress &progress) {
   std::string text = progressPhaseLabel(progress.phase);
   if (progress.totalBytes > 0) {
@@ -464,6 +525,31 @@ gameplaySkinViewportWithCustomBase(ViewportSettings current,
   current.mode = ViewportMode::Custom;
   current.customBase = customBase;
   return current;
+}
+
+int gameplaySkinSanitizedOffsetComponent(std::string_view text,
+                                         int fallback) noexcept {
+  int value = 0;
+  const auto result =
+      std::from_chars(text.data(), text.data() + text.size(), value);
+  return result.ec == std::errc{} && result.ptr == text.data() + text.size()
+             ? value
+             : fallback;
+}
+
+float gameplaySkinSanitizedViewportComponent(std::string_view text,
+                                             float fallback, float minimum,
+                                             float maximum) {
+  try {
+    std::size_t consumed = 0;
+    const float value = std::stof(std::string(text), &consumed);
+    if (consumed != text.size() || !std::isfinite(value)) {
+      return fallback;
+    }
+    return std::clamp(value, minimum, maximum);
+  } catch (...) {
+    return fallback;
+  }
 }
 
 } // namespace skin

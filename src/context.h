@@ -52,6 +52,7 @@
 #include "video/DisplaySettingsManager.h"
 #include "video/FramePacer.h"
 #include "video/RendererAccessCoordinator.h"
+#include "rendering/UiBatchRenderer.h"
 #include "view/UiTheme.h"
 #include "skin/LuaGameplaySkinFeature.h"
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
@@ -187,6 +188,7 @@ public:
   platform_document_handoff::PlatformTemporaryPathCleanupServiceHandle
       temporaryPathCleanupService;
   std::mutex bgfxRenderMutex;
+  rendering::UiBatchRenderer uiBatchRenderer;
   std::atomic<bool> replayVideoExportActive{false};
   display::RendererAccessCoordinator rendererAccess{bgfxRenderMutex,
                                                     replayVideoExportActive};
@@ -1240,6 +1242,7 @@ public:
         thread.second.join();
       }
     }
+    uiBatchRenderer.shutdown();
     if (irSubmissionService) {
       irSubmissionService->stop();
     }

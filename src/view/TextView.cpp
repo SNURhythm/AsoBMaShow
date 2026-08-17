@@ -3,6 +3,7 @@
 #include "../RAII.h"
 #include <bgfx/bgfx.h>
 #include <bgfx/platform.h>
+#include <array>
 #include <cstring>
 #include <cmath>
 #include <map>
@@ -260,17 +261,26 @@ bool isIgnorableUnsupportedCodepoint(Uint32 codepoint) {
          (codepoint >= 0xFE20 && codepoint <= 0xFE2F);
 }
 
-int sizeUtf8Width(TTF_Font *font, const std::string &utf8) {
+struct RasterTextSize {
+  int width = 0;
+  int height = 0;
+};
+
+RasterTextSize sizeUtf8(TTF_Font *font, const std::string &utf8) {
   text_runtime::OperationGuard operation;
   if (font == nullptr || utf8.empty()) {
-    return 0;
+    return {};
   }
 
-  int width = 0;
-  if (TTF_SizeUTF8(font, utf8.c_str(), &width, nullptr) != 0) {
-    return 0;
+  RasterTextSize size;
+  if (TTF_SizeUTF8(font, utf8.c_str(), &size.width, &size.height) != 0) {
+    return {};
   }
-  return width;
+  return size;
+}
+
+int sizeUtf8Width(TTF_Font *font, const std::string &utf8) {
+  return sizeUtf8(font, utf8).width;
 }
 
 int rasterFontSizeFor(int logicalFontSize) {
@@ -343,10 +353,28 @@ void TextView::setText(const std::string &newText) {
   }
   this->text = newText;
   marqueeStartedAt = SDL_GetTicks64();
-  createTexture();
+  metricsDirty = true;
+  invalidateTexture();
+  updateTextMetrics();
+  if (!deferTextureMaterialization) {
+    createTexture();
+  }
+}
+
+void TextView::setDeferredTextureMaterialization(bool deferred) {
+  if (deferTextureMaterialization == deferred) {
+    return;
+  }
+  deferTextureMaterialization = deferred;
+  if (!deferTextureMaterialization && !bgfx::isValid(texture)) {
+    createTexture();
+  }
 }
 
 void TextView::renderImpl(RenderContext &context) {
+  if (!bgfx::isValid(texture)) {
+    createTexture();
+  }
   if (!bgfx::isValid(texture)) {
     return;
   }
@@ -368,37 +396,21 @@ void TextView::renderImpl(RenderContext &context) {
     const float top = static_cast<float>(drawRect.y);
     const float right = left + static_cast<float>(drawRect.w);
     const float bottom = top + static_cast<float>(drawRect.h);
-    rendering::PosTexVertex vertices[] = {
-        {left, top, 0.0f, 0.0f, 0.0f},
-        {right, top, 0.0f, 1.0f, 0.0f},
-        {right, bottom, 0.0f, 1.0f, 1.0f},
-        {left, bottom, 0.0f, 0.0f, 1.0f},
+    const std::array vertices = {
+        rendering::PosTexCoord0Vertex{left, top, 0.0f, 0.0f, 0.0f},
+        rendering::PosTexCoord0Vertex{right, top, 0.0f, 1.0f, 0.0f},
+        rendering::PosTexCoord0Vertex{right, bottom, 0.0f, 1.0f, 1.0f},
+        rendering::PosTexCoord0Vertex{left, bottom, 0.0f, 0.0f, 1.0f},
     };
 
-    const uint16_t indices[] = {0, 1, 2, 0, 2, 3};
-    bgfx::TransientVertexBuffer tvb;
-    bgfx::TransientIndexBuffer tib;
-    if (bgfx::getAvailTransientVertexBuffer(
-            4, rendering::PosTexVertex::ms_decl) < 4 ||
-        bgfx::getAvailTransientIndexBuffer(6) < 6) {
-      return;
-    }
-    bgfx::allocTransientVertexBuffer(&tvb, 4, rendering::PosTexVertex::ms_decl);
-    bgfx::allocTransientIndexBuffer(&tib, 6);
-    bx::memCopy(tvb.data, vertices, sizeof(vertices));
-    bx::memCopy(tib.data, indices, sizeof(indices));
-
-    context.applyTransform();
-    bgfx::setTexture(0, s_texColor, texture);
-    bgfx::setVertexBuffer(0, &tvb);
-    bgfx::setIndexBuffer(&tib);
-
-    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
-    rendering::setScissorUI(context.scissor.x, context.scissor.y,
-                            context.scissor.width, context.scissor.height);
+    constexpr std::array<uint16_t, 6> indices = {0, 1, 2, 0, 2, 3};
     static const bgfx::ProgramHandle kProgram =
         rendering::ShaderManager::getInstance().getProgram(SHADER_TEXT);
-    bgfx::submit(rendering::ui_view, kProgram);
+    auto state = context.makeUiBatchState(
+        kProgram, BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
+    state.texture = texture;
+    state.sampler = s_texColor;
+    context.appendUiTextured(vertices, indices, state);
   };
 
   if (clip) {
@@ -464,6 +476,7 @@ void TextView::includeFontMetrics(TTF_Font *loadedFont) {
   }
 
   fontLineHeight = std::max(fontLineHeight, TTF_FontHeight(loadedFont));
+  fontLineSkip = std::max(fontLineSkip, TTF_FontLineSkip(loadedFont));
   fontAscent = std::max(fontAscent, TTF_FontAscent(loadedFont));
   fontDescent = std::max(fontDescent, -TTF_FontDescent(loadedFont));
 }
@@ -884,7 +897,10 @@ void TextView::setColor(SDL_Color newColor) {
     return;
   }
   this->color = newColor;
-  createTexture(); // Update the texture since newColor has changed
+  invalidateTexture();
+  if (!deferTextureMaterialization) {
+    createTexture();
+  }
 }
 
 void TextView::setThemedColor(ThemeColorProvider provider) {
@@ -900,7 +916,10 @@ void TextView::setThemedColor(ThemeColorProvider provider) {
     return;
   }
   color = newColor;
-  createTexture();
+  invalidateTexture();
+  if (!deferTextureMaterialization) {
+    createTexture();
+  }
 }
 
 void TextView::onThemeChanged() {
@@ -916,11 +935,20 @@ void TextView::onThemeChanged() {
     return;
   }
   color = newColor;
-  createTexture();
+  invalidateTexture();
+  if (!deferTextureMaterialization) {
+    createTexture();
+  }
 }
 
-void TextView::createTexture(bool markDirty, bool force,
-                             int requestedWrapWidth) {
+void TextView::invalidateTexture() {
+  if (bgfx::isValid(texture)) {
+    bgfx::destroy(texture);
+  }
+  texture = BGFX_INVALID_HANDLE;
+}
+
+void TextView::updateTextMetrics(bool markDirty, int requestedWrapWidth) {
   text_runtime::OperationGuard operation;
   const int previousWidth = rect.w;
   const int previousHeight = rect.h;
@@ -928,16 +956,15 @@ void TextView::createTexture(bool markDirty, bool force,
       wrapEnabled ? std::max(0, requestedWrapWidth >= 0 ? requestedWrapWidth
                                                         : currentWrapWidth)
                   : 0;
-  const int rasterWrapWidth = rasterLengthFor(effectiveWrapWidth);
-  if (!force && effectiveWrapWidth == currentWrapWidth &&
-      bgfx::isValid(texture)) {
+  if (!metricsDirty && effectiveWrapWidth == currentWrapWidth) {
     return;
   }
 
+  const bool wrapWidthChanged = effectiveWrapWidth != currentWrapWidth;
   currentWrapWidth = effectiveWrapWidth;
-  if (bgfx::isValid(texture)) {
-    bgfx::destroy(texture);
-    texture = BGFX_INVALID_HANDLE;
+  metricsDirty = false;
+  if (wrapWidthChanged) {
+    invalidateTexture();
   }
 
   if (text.empty() || fontFaces.empty()) {
@@ -949,6 +976,54 @@ void TextView::createTexture(bool markDirty, bool force,
     }
     return;
   }
+  ensureFontsForText(text);
+  const int rasterWrapWidth = rasterLengthFor(effectiveWrapWidth);
+  const TextLineMetrics metrics = {
+      fontAscent, fontDescent, rasterTextLineHeight()};
+  if (metrics.height <= 0) {
+    rect.w = 0;
+    rect.h = 0;
+    return;
+  }
+  const bool usePrimaryFont = font != nullptr && primaryFontSupportsText(text);
+  const auto lines = rasterWrapWidth > 0 ? wrappedTextLines(rasterWrapWidth)
+                                         : wrappedTextLines(0);
+  int rasterWidth = 0;
+  for (const auto &line : lines) {
+    rasterWidth = std::max(rasterWidth, measureRasterTextWidth(line));
+  }
+  int rasterHeight =
+      metrics.height * static_cast<int>(std::max<std::size_t>(1, lines.size()));
+  if (usePrimaryFont) {
+    if (wrapEnabled && rasterWrapWidth > 0) {
+      if (lines.size() > 1) {
+        rasterWidth = rasterWrapWidth;
+      }
+      rasterHeight = std::max(fontLineSkip, metrics.height) *
+                     static_cast<int>(std::max<std::size_t>(1, lines.size()));
+    } else {
+      const RasterTextSize size = sizeUtf8(font, text);
+      rasterWidth = size.width;
+      rasterHeight = size.height;
+    }
+  }
+  rect.w = logicalLengthFor(rasterWidth);
+  rect.h = logicalLengthFor(rasterHeight);
+  if (markDirty && (rect.w != previousWidth || rect.h != previousHeight)) {
+    YGNodeMarkDirty(getNode());
+    applyYogaLayoutFromRoot();
+  }
+}
+
+void TextView::createTexture() {
+  text_runtime::OperationGuard operation;
+  updateTextMetrics(false);
+  invalidateTexture();
+
+  if (text.empty() || fontFaces.empty()) {
+    return;
+  }
+  const int rasterWrapWidth = rasterLengthFor(currentWrapWidth);
   SurfacePtr surface(nullptr);
   int fallbackSurfaceWidth = 0;
   int fallbackSurfaceHeight = 0;
@@ -972,17 +1047,9 @@ void TextView::createTexture(bool markDirty, bool force,
     SDL_Log("Failed to render text: %s", TTF_GetError());
     return;
   }
-  const int rasterWidth =
-      fallbackSurfaceHeight > 0 ? fallbackSurfaceWidth : surface->w;
-  const int rasterHeight =
-      fallbackSurfaceHeight > 0 ? fallbackSurfaceHeight : surface->h;
-  rect.w = logicalLengthFor(rasterWidth);
-  rect.h = logicalLengthFor(rasterHeight);
+  (void)fallbackSurfaceWidth;
+  (void)fallbackSurfaceHeight;
   texture = rendering::sdlSurfaceToBgfxTexture(surface.get());
-  if (markDirty && (rect.w != previousWidth || rect.h != previousHeight)) {
-    YGNodeMarkDirty(getNode());
-    applyYogaLayoutFromRoot();
-  }
 }
 
 YGSize TextView::measureFunc(YGNodeConstRef node, float width,
@@ -993,7 +1060,7 @@ YGSize TextView::measureFunc(YGNodeConstRef node, float width,
   (void)heightMode;
   if (view->wrapEnabled && widthMode != YGMeasureModeUndefined &&
       width > 0.0f) {
-    view->createTexture(false, false, static_cast<int>(std::floor(width)));
+    view->updateTextMetrics(false, static_cast<int>(std::floor(width)));
   }
 
   float measuredWidth = static_cast<float>(view->rect.w);
@@ -1028,5 +1095,10 @@ void TextView::setWrap(bool enabled) {
   if (!wrapEnabled) {
     currentWrapWidth = 0;
   }
-  createTexture();
+  metricsDirty = true;
+  invalidateTexture();
+  updateTextMetrics();
+  if (!deferTextureMaterialization) {
+    createTexture();
+  }
 }

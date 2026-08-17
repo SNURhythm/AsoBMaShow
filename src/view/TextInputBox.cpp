@@ -6,6 +6,7 @@
 #include "UiTheme.h"
 #include "SDL2/SDL_events.h"
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstring>
@@ -91,17 +92,20 @@ void submitRect(RenderContext &context, bgfx::ProgramHandle program, int x,
   if (width <= 0 || height <= 0) {
     return;
   }
-
-  bgfx::TransientVertexBuffer tvb;
-  bgfx::TransientIndexBuffer tib;
-  rendering::createRect(tvb, tib, x, y, width, height, color);
-  bgfx::setVertexBuffer(0, &tvb);
-  bgfx::setIndexBuffer(&tib);
-  context.applyTransform();
-  rendering::setScissorUI(context.scissor.x, context.scissor.y,
-                          context.scissor.width, context.scissor.height);
-  bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
-  bgfx::submit(rendering::ui_view, program);
+  const std::array vertices = {
+      rendering::PosColorVertex{static_cast<float>(x), static_cast<float>(y),
+                                0.0f, color},
+      rendering::PosColorVertex{static_cast<float>(x + width),
+                                static_cast<float>(y), 0.0f, color},
+      rendering::PosColorVertex{static_cast<float>(x + width),
+                                static_cast<float>(y + height), 0.0f, color},
+      rendering::PosColorVertex{static_cast<float>(x),
+                                static_cast<float>(y + height), 0.0f, color}};
+  constexpr std::array<uint16_t, 6> indices = {0, 1, 2, 0, 2, 3};
+  context.appendUiColor(
+      vertices, indices,
+      context.makeUiBatchState(
+          program, BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA));
 }
 } // namespace
 

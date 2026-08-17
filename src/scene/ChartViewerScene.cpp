@@ -554,6 +554,10 @@ public:
   }
 
 protected:
+  [[nodiscard]] bool requiresUiBatchBoundary() const noexcept override {
+    return true;
+  }
+
   struct TouchPoint {
     float x = 0.0f;
     float y = 0.0f;

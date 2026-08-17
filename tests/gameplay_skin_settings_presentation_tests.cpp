@@ -97,17 +97,15 @@ void requirePresentationChange(const skin::GameplaySkinSettingsSnapshot &base,
           message);
 }
 
-void testCollisionConfirmationAvailabilityIsExact() {
+void testPreparedImportAvailabilityIsExact() {
   skin::GameplaySkinSettingsSnapshot snapshot;
   snapshot.state = skin::GameplaySkinSettingsState::Ready;
-  snapshot.canCancel = true;
   snapshot.preparedName = skin::SkinPackageNameSuggestion{
       .originalSourceName = "source", .suggestedPackageName = "skin"};
 
   auto availability = skin::gameplaySkinSettingsActionAvailability(snapshot);
   require(!availability.ordinaryActions,
           "ordinary actions stay disabled during collision confirmation");
-  require(availability.canCancel, "collision confirmation remains cancellable");
   require(!availability.canEditPreparedName,
           "automatic installs never expose a package-name edit gate");
   require(availability.canInstallPrepared,
@@ -123,33 +121,29 @@ void testCollisionConfirmationAvailabilityIsExact() {
   snapshot.state = skin::GameplaySkinSettingsState::Busy;
   snapshot.preparedName->validationError.clear();
   availability = skin::gameplaySkinSettingsActionAvailability(snapshot);
-  require(!availability.canEditPreparedName &&
-              !availability.canInstallPrepared && availability.canCancel,
+  require(!availability.canEditPreparedName && !availability.canInstallPrepared,
           "Busy never exposes collision confirmation actions");
 
   snapshot.state = skin::GameplaySkinSettingsState::Ready;
-  snapshot.canCancel = false;
+  snapshot.preparedName.reset();
   availability = skin::gameplaySkinSettingsActionAvailability(snapshot);
   require(availability.ordinaryActions && !availability.canEditPreparedName &&
               !availability.canInstallPrepared,
           "idle Ready with stale name data is not a collision confirmation");
 
-  snapshot.canCancel = true;
-  snapshot.preparedName.reset();
+  snapshot.preparedName = skin::SkinPackageNameSuggestion{
+      .originalSourceName = "source", .suggestedPackageName = "skin"};
+  snapshot.preparedName->validationError = "invalid";
   availability = skin::gameplaySkinSettingsActionAvailability(snapshot);
-  require(!availability.ordinaryActions && availability.canCancel &&
-              !availability.canEditPreparedName &&
+  require(!availability.ordinaryActions && !availability.canEditPreparedName &&
               !availability.canInstallPrepared,
-          "a cancellable Ready snapshot without a prepared name is not a "
-          "collision confirmation");
+          "an invalid prepared import does not expose ordinary actions");
 
   snapshot.state = skin::GameplaySkinSettingsState::Error;
-  snapshot.canCancel = false;
   snapshot.preparedName = skin::SkinPackageNameSuggestion{
       .originalSourceName = "stale", .suggestedPackageName = "stale"};
   availability = skin::gameplaySkinSettingsActionAvailability(snapshot);
-  require(availability.ordinaryActions && !availability.canCancel &&
-              !availability.canEditPreparedName &&
+  require(availability.ordinaryActions && !availability.canEditPreparedName &&
               !availability.canInstallPrepared,
           "terminal Error is not a collision confirmation even when stale "
           "name data exists");
@@ -191,9 +185,6 @@ void testMetadataChangesInvalidateAnUnchangedDigest() {
 void testActionDrivingChangesInvalidatePresentation() {
   const auto base = snapshotWithEntry();
   requirePresentationChange(
-      base, [](auto &value) { value.canCancel = true; },
-      "cancellability changes invalidate presentation");
-  requirePresentationChange(
       base, [](auto &value) { value.hasPackageProgress = false; },
       "package-progress visibility changes invalidate presentation");
   requirePresentationChange(
@@ -231,6 +222,94 @@ void testActionDrivingChangesInvalidatePresentation() {
         value.selectedGameplayEntries.emplace(1, entryId("-5k"));
       },
       "trait-specific selection changes invalidate presentation");
+}
+
+void testLayoutKeyIgnoresLiveOperationAndConfigurationValues() {
+  const auto base = snapshotWithEntry();
+  auto liveOperation = base;
+  liveOperation.state = skin::GameplaySkinSettingsState::Busy;
+  liveOperation.hasPackageProgress = false;
+  liveOperation.statusMessage = "Saving skin configuration";
+  liveOperation.progress.completedBytes = 19;
+  liveOperation.progress.completedFiles = 4;
+  liveOperation.rescanProgress.packageProgress.completedBytes = 11;
+  require(skin::gameplaySkinSettingsLayoutKey(base) ==
+              skin::gameplaySkinSettingsLayoutKey(liveOperation),
+          "live operation progress does not rebuild the gameplay skins tab");
+
+  auto configured = base;
+  configured.entries[0].configurationDigest = "new-configuration";
+  configured.entries[0].settings.options["Lane cover"] = 0;
+  require(skin::gameplaySkinSettingsLayoutKey(base) ==
+              skin::gameplaySkinSettingsLayoutKey(configured),
+          "committed option values do not rebuild the gameplay skins tab");
+
+  auto changedSelection = base;
+  changedSelection.selectedGameplayEntries.emplace(1, entryId("-5k"));
+  require(skin::gameplaySkinSettingsLayoutKey(base) !=
+              skin::gameplaySkinSettingsLayoutKey(changedSelection),
+          "trait selection changes rebuild the gameplay skins tab");
+
+  auto changedCatalog = base;
+  changedCatalog.entries[0].validation = skin::SkinValidationDisposition::Invalid;
+  require(skin::gameplaySkinSettingsLayoutKey(base) !=
+              skin::gameplaySkinSettingsLayoutKey(changedCatalog),
+          "catalog structure changes rebuild the gameplay skins tab");
+
+  auto addedControl = base;
+  addedControl.entries[0].metadata.options.push_back(
+      {.category = "Appearance",
+       .name = "Lane frame",
+       .choices = {{.label = "Default", .value = 0},
+                   {.label = "Minimal", .value = 1}},
+       .defaultLabel = "Default"});
+  require(skin::gameplaySkinSettingsLayoutKey(base) !=
+              skin::gameplaySkinSettingsLayoutKey(addedControl),
+          "a skin with more controls rebuilds the gameplay skins tab");
+
+  auto removedControl = base;
+  removedControl.entries[0].metadata.offsets.clear();
+  require(skin::gameplaySkinSettingsLayoutKey(base) !=
+              skin::gameplaySkinSettingsLayoutKey(removedControl),
+          "a skin with fewer controls rebuilds the gameplay skins tab");
+
+  auto failed = base;
+  failed.state = skin::GameplaySkinSettingsState::Error;
+  require(skin::gameplaySkinSettingsLayoutKey(base) !=
+              skin::gameplaySkinSettingsLayoutKey(failed),
+          "terminal operation errors rebuild the gameplay skins tab");
+
+  auto newDiagnostics = base;
+  newDiagnostics.entries[0].diagnostics[0].message = "A new validation error";
+  require(skin::gameplaySkinSettingsLayoutKey(base) !=
+              skin::gameplaySkinSettingsLayoutKey(newDiagnostics),
+          "entry diagnostics rebuild the gameplay skins tab");
+
+  auto newHistory = base;
+  skin::SkinDiagnosticHistoryRecord record;
+  record.recordSerial = 1;
+  record.entry = entryId("-history");
+  record.diagnostic.message = "New diagnostic history item";
+  newHistory.history.push_back(std::move(record));
+  require(skin::gameplaySkinSettingsLayoutKey(base) !=
+              skin::gameplaySkinSettingsLayoutKey(newHistory),
+          "diagnostic history changes rebuild the gameplay skins tab");
+}
+
+void testConfigurationInputSanitization() {
+  require(skin::gameplaySkinSanitizedOffsetComponent("-12", 3) == -12,
+          "valid skin offset input is preserved");
+  require(skin::gameplaySkinSanitizedOffsetComponent("invalid", 3) == 3,
+          "invalid skin offset input restores the committed value");
+  require(skin::gameplaySkinSanitizedViewportComponent("1.25", 1.0F, 0.5F,
+                                                        2.0F) == 1.25F,
+          "valid skin viewport input is preserved");
+  require(skin::gameplaySkinSanitizedViewportComponent("9", 1.0F, 0.5F,
+                                                        2.0F) == 2.0F,
+          "out-of-range skin viewport input is clamped before display");
+  require(skin::gameplaySkinSanitizedViewportComponent("invalid", 1.0F,
+                                                        0.5F, 2.0F) == 1.0F,
+          "invalid skin viewport input restores the committed value");
 }
 
 void testPresentationEncodingHasNoDelimiterOrOptionalAmbiguity() {
@@ -423,9 +502,11 @@ void testViewportModeChangesPreserveEveryOtherField() {
 } // namespace
 
 int main() {
-  testCollisionConfirmationAvailabilityIsExact();
+  testPreparedImportAvailabilityIsExact();
   testMetadataChangesInvalidateAnUnchangedDigest();
   testActionDrivingChangesInvalidatePresentation();
+  testLayoutKeyIgnoresLiveOperationAndConfigurationValues();
+  testConfigurationInputSanitization();
   testPresentationEncodingHasNoDelimiterOrOptionalAmbiguity();
   testCachedControllerPresentationKeyAvoidsReencodingStaticCatalogRows();
   testCatalogItemsFollowBeatorajaCategoryAndOtherOrder();

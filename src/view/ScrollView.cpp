@@ -1,11 +1,12 @@
 #include "ScrollView.h"
 
 #include "../input/SDLPointerEvent.h"
-#include "../rendering/SimpleBatchRenderer.h"
 #include "UiTheme.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <vector>
 
 namespace {
 constexpr float kWheelStepUi = 48.0f;
@@ -13,6 +14,58 @@ constexpr float kDragThresholdUi = 12.0f;
 constexpr float kScrollbarInset = 4.0f;
 constexpr float kScrollbarTrackWidth = 6.0f;
 constexpr float kScrollbarMinThumbHeight = 36.0f;
+constexpr float kPi = 3.14159265358979323846f;
+
+void appendRoundedRect(RenderContext &context, float x, float y, float width,
+                       float height, float radius, std::uint32_t color) {
+  if (width <= 0.0f || height <= 0.0f) {
+    return;
+  }
+  radius = std::clamp(radius, 0.0f, std::min(width, height) * 0.5f);
+  std::vector<rendering::PosColorVertex> vertices;
+  std::vector<std::uint16_t> indices;
+  if (radius <= 0.5f) {
+    vertices = {{x, y, 0.0f, color},
+                {x + width, y, 0.0f, color},
+                {x + width, y + height, 0.0f, color},
+                {x, y + height, 0.0f, color}};
+    indices = {0, 1, 2, 0, 2, 3};
+  } else {
+    const int segments =
+        std::clamp(static_cast<int>(std::ceil(radius / 4.0f)), 4, 12);
+    const auto ringVertexCount = static_cast<std::uint16_t>((segments + 1) * 4);
+    vertices.reserve(static_cast<std::size_t>(ringVertexCount) + 1U);
+    indices.reserve(static_cast<std::size_t>(ringVertexCount) * 3U);
+    vertices.push_back({x + width * 0.5f, y + height * 0.5f, 0.0f, color});
+    const auto appendCorner = [&](float centerX, float centerY,
+                                  float startAngle) {
+      for (int index = 0; index <= segments; ++index) {
+        const float t = static_cast<float>(index) / static_cast<float>(segments);
+        const float angle = startAngle + t * (kPi * 0.5f);
+        vertices.push_back({centerX + std::cos(angle) * radius,
+                            centerY + std::sin(angle) * radius, 0.0f, color});
+      }
+    };
+    appendCorner(x + width - radius, y + radius, -kPi * 0.5f);
+    appendCorner(x + width - radius, y + height - radius, 0.0f);
+    appendCorner(x + radius, y + height - radius, kPi * 0.5f);
+    appendCorner(x + radius, y + radius, kPi);
+    for (std::uint16_t index = 0; index < ringVertexCount; ++index) {
+      indices.push_back(0);
+      indices.push_back(static_cast<std::uint16_t>(index + 1));
+      indices.push_back(
+          static_cast<std::uint16_t>((index + 1) % ringVertexCount + 1));
+    }
+  }
+  static const bgfx::ProgramHandle kProgram =
+      rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
+  context.appendUiColor(
+      vertices, indices,
+      context.makeUiBatchState(kProgram, BGFX_STATE_WRITE_RGB |
+                                             BGFX_STATE_WRITE_A |
+                                             BGFX_STATE_BLEND_ALPHA |
+                                             BGFX_STATE_MSAA));
+}
 
 SDL_Event makeCancelledMouseUpEvent(const SDL_Event &event) {
   SDL_Event cancelled = event;
@@ -397,20 +450,14 @@ void ScrollView::renderPersistentScrollbar(RenderContext &context) const {
                        kScrollbarInset - kScrollbarTrackWidth;
   const float trackY = static_cast<float>(getViewportY()) + kScrollbarInset;
 
-  rendering::SimpleBatchRenderer batch;
-  batch.setSubmitView(rendering::ui_view);
-  batch.begin(context.getTransformMatrix());
-  batch.addRoundedRect(trackX, trackY, kScrollbarTrackWidth, trackHeight,
-                       kScrollbarTrackWidth * 0.5f,
-                       ui_theme::withAlpha(ui_theme::hairlineStrong(), 118)
-                           .toABGR());
-  batch.addRoundedRect(trackX, thumbY, kScrollbarTrackWidth, thumbHeight,
-                       kScrollbarTrackWidth * 0.5f,
-                       ui_theme::withAlpha(ui_theme::textSecondary(), 218)
-                           .toABGR());
-  rendering::setScissorUI(context.scissor.x, context.scissor.y,
-                          context.scissor.width, context.scissor.height);
-  batch.end();
+  appendRoundedRect(context, trackX, trackY, kScrollbarTrackWidth, trackHeight,
+                    kScrollbarTrackWidth * 0.5f,
+                    ui_theme::withAlpha(ui_theme::hairlineStrong(), 118)
+                        .toABGR());
+  appendRoundedRect(context, trackX, thumbY, kScrollbarTrackWidth, thumbHeight,
+                    kScrollbarTrackWidth * 0.5f,
+                    ui_theme::withAlpha(ui_theme::textSecondary(), 218)
+                        .toABGR());
 }
 
 void ScrollView::clampScrollOffset() {

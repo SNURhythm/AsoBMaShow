@@ -366,6 +366,10 @@ public:
   }
 
 protected:
+  [[nodiscard]] bool requiresUiBatchBoundary() const noexcept override {
+    return true;
+  }
+
   void renderImpl(RenderContext &context) override {
     if (getWidth() <= 0 || getHeight() <= 0) {
       return;
@@ -672,7 +676,8 @@ ResultImageExportResult renderResultImageWithSkinData(
   }
   resultRoot->applyYogaLayout();
 
-  RenderContext renderContext;
+  context.uiBatchRenderer.beginFrame();
+  RenderContext renderContext(context.uiBatchRenderer);
   rendering::SimpleBatchRenderer backdropBatch;
   rendering::SimpleBatchRenderer graphBatch;
   bgfx::touch(rendering::clear_view);
@@ -683,7 +688,10 @@ ResultImageExportResult renderResultImageWithSkinData(
                         static_cast<float>(rendering::window_height),
                         ui_theme::backdrop().toABGR());
   backdropBatch.end();
-  resultRoot->render(renderContext);
+  {
+    RenderContext::UiBatchScope uiBatchScope(renderContext);
+    resultRoot->render(renderContext);
+  }
   if (!attachGaugeAsView) {
     drawResultGaugeGraph(graphBatch, gaugeGraph, graphPlaceHolder);
   }

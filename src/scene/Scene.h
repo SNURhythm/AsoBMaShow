@@ -71,16 +71,22 @@ public:
   }
   // Render the scene (non-virtual public method)
   void render() {
-    RenderContext context;
-    for (auto view : views) {
-      if (renderViewBeforeScene(view)) {
-        view->render(context);
+    RenderContext renderContext(context.uiBatchRenderer);
+    {
+      RenderContext::UiBatchScope uiBatchScope(renderContext);
+      for (auto view : views) {
+        if (renderViewBeforeScene(view)) {
+          view->render(renderContext);
+        }
       }
     }
     renderScene(); // Additional custom rendering
-    for (auto view : views) {
-      if (!renderViewBeforeScene(view)) {
-        view->render(context);
+    {
+      RenderContext::UiBatchScope uiBatchScope(renderContext);
+      for (auto view : views) {
+        if (!renderViewBeforeScene(view)) {
+          view->render(renderContext);
+        }
       }
     }
   }

@@ -159,6 +159,10 @@ public:
   }
 
 protected:
+  [[nodiscard]] bool requiresUiBatchBoundary() const noexcept override {
+    return true;
+  }
+
   void renderImpl(RenderContext &context) override {
     const auto &selectedGraph = graph();
     if (!selectedGraph.has_value() || getWidth() <= 0 || getHeight() <= 0) {
