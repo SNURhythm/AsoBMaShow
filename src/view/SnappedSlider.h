@@ -1,6 +1,5 @@
 #pragma once
 
-#include "../rendering/SimpleBatchRenderer.h"
 #include "View.h"
 
 #include <functional>
@@ -27,7 +26,6 @@ protected:
 private:
   State current;
   std::function<void(int)> onValueChanged;
-  rendering::SimpleBatchRenderer batch;
   bool mouseDragging = false;
   bool hovered = false;
   SDL_FingerID activeTouchId = -1;

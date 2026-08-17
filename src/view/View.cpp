@@ -51,43 +51,56 @@ float visibleUiBorderInset(float width) {
                                   oneDrawablePixelInUi(rendering::ui_scale_y)));
 }
 
+std::optional<rendering::UiBatchScissor>
+batchScissor(const RenderContext &context) {
+  if (context.scissor.width < 0 || context.scissor.height < 0) {
+    return std::nullopt;
+  }
+  return rendering::UiBatchScissor{.x = context.scissor.x,
+                                   .y = context.scissor.y,
+                                   .width = context.scissor.width,
+                                   .height = context.scissor.height};
+}
+
+std::optional<std::array<float, 16>>
+batchTransform(const RenderContext &context) {
+  const float *transform = context.getTransformMatrix();
+  if (transform == nullptr) {
+    return std::nullopt;
+  }
+  std::array<float, 16> result;
+  std::copy_n(transform, result.size(), result.begin());
+  return result;
+}
+
+rendering::UiBatchState
+batchState(const RenderContext &context, bgfx::ProgramHandle program,
+           std::uint64_t state) {
+  return {.program = program,
+          .state = state,
+          .scissor = batchScissor(context),
+          .transform = batchTransform(context)};
+}
+
 void submitColoredRect(const RenderContext &context, float x, float y,
                        float width, float height, const Color &color) {
   if (width <= 0.0f || height <= 0.0f || color.a == 0) {
     return;
   }
 
-  bgfx::TransientVertexBuffer tvb{};
-  bgfx::TransientIndexBuffer tib{};
-  if (bgfx::getAvailTransientVertexBuffer(
-          4, rendering::PosColorVertex::ms_decl) < 4 ||
-      bgfx::getAvailTransientIndexBuffer(6) < 6) {
-    return;
-  }
-  bgfx::allocTransientVertexBuffer(&tvb, 4, rendering::PosColorVertex::ms_decl);
-  bgfx::allocTransientIndexBuffer(&tib, 6);
-  auto *vertices = reinterpret_cast<rendering::PosColorVertex *>(tvb.data);
-  auto *indices = reinterpret_cast<uint16_t *>(tib.data);
   const uint32_t abgr = color.toABGR();
-  vertices[0] = {x, y, 0.0f, abgr};
-  vertices[1] = {x + width, y, 0.0f, abgr};
-  vertices[2] = {x + width, y + height, 0.0f, abgr};
-  vertices[3] = {x, y + height, 0.0f, abgr};
-  indices[0] = 0;
-  indices[1] = 1;
-  indices[2] = 2;
-  indices[3] = 2;
-  indices[4] = 3;
-  indices[5] = 0;
-  bgfx::setVertexBuffer(0, &tvb);
-  bgfx::setIndexBuffer(&tib);
-  context.applyTransform();
-  rendering::setScissorUI(context.scissor.x, context.scissor.y,
-                          context.scissor.width, context.scissor.height);
-  bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
+  const std::array vertices = {
+      rendering::PosColorVertex{x, y, 0.0f, abgr},
+      rendering::PosColorVertex{x + width, y, 0.0f, abgr},
+      rendering::PosColorVertex{x + width, y + height, 0.0f, abgr},
+      rendering::PosColorVertex{x, y + height, 0.0f, abgr}};
+  constexpr std::array<uint16_t, 6> indices = {0, 1, 2, 2, 3, 0};
   static const bgfx::ProgramHandle kSimpleProgram =
       rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
-  bgfx::submit(rendering::ui_view, kSimpleProgram);
+  context.appendUiColor(
+      vertices, indices,
+      batchState(context, kSimpleProgram,
+                 BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA));
 }
 
 void submitRoundedRect(const RenderContext &context, float x, float y,
@@ -109,22 +122,12 @@ void submitRoundedRect(const RenderContext &context, float x, float y,
   const uint16_t vertexCount = static_cast<uint16_t>(ringVertexCount + 1);
   const uint16_t indexCount = static_cast<uint16_t>(ringVertexCount * 3);
 
-  bgfx::TransientVertexBuffer tvb{};
-  bgfx::TransientIndexBuffer tib{};
-  if (bgfx::getAvailTransientVertexBuffer(
-          vertexCount, rendering::PosColorVertex::ms_decl) < vertexCount ||
-      bgfx::getAvailTransientIndexBuffer(indexCount) < indexCount) {
-    return;
-  }
-  bgfx::allocTransientVertexBuffer(&tvb, vertexCount,
-                                   rendering::PosColorVertex::ms_decl);
-  bgfx::allocTransientIndexBuffer(&tib, indexCount);
-
-  auto *vertices = reinterpret_cast<rendering::PosColorVertex *>(tvb.data);
-  auto *indices = reinterpret_cast<uint16_t *>(tib.data);
+  std::array<rendering::PosColorVertex, 53> vertices;
+  std::array<uint16_t, 156> indices;
   const uint32_t abgr = color.toABGR();
   uint16_t vertexIndex = 0;
-  vertices[vertexIndex++] = {x + width * 0.5f, y + height * 0.5f, 0.0f, abgr};
+  vertices[vertexIndex++] = {x + width * 0.5f, y + height * 0.5f, 0.0f,
+                             abgr};
 
   const auto appendCorner = [&](float cx, float cy, float startAngle) {
     for (int i = 0; i <= segments; ++i) {
@@ -140,23 +143,21 @@ void submitRoundedRect(const RenderContext &context, float x, float y,
   appendCorner(x + radius, y + height - radius, kPi * 0.5f);
   appendCorner(x + radius, y + radius, kPi);
 
-  uint16_t index = 0;
+  uint16_t indexCountUsed = 0;
   for (uint16_t i = 0; i < ringVertexCount; ++i) {
-    indices[index++] = 0;
-    indices[index++] = static_cast<uint16_t>(i + 1);
-    indices[index++] = static_cast<uint16_t>((i + 1) % ringVertexCount + 1);
+    indices[indexCountUsed++] = 0;
+    indices[indexCountUsed++] = static_cast<uint16_t>(i + 1);
+    indices[indexCountUsed++] =
+        static_cast<uint16_t>((i + 1) % ringVertexCount + 1);
   }
-
-  bgfx::setVertexBuffer(0, &tvb);
-  bgfx::setIndexBuffer(&tib);
-  context.applyTransform();
-  rendering::setScissorUI(context.scissor.x, context.scissor.y,
-                          context.scissor.width, context.scissor.height);
-  bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA |
-                 BGFX_STATE_MSAA);
   static const bgfx::ProgramHandle kSimpleProgram =
       rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
-  bgfx::submit(rendering::ui_view, kSimpleProgram);
+  context.appendUiColor(
+      std::span(vertices).first(vertexCount),
+      std::span(indices).first(indexCount),
+      batchState(context, kSimpleProgram,
+                 BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA |
+                     BGFX_STATE_MSAA));
 }
 
 void submitShadowRect(const RenderContext &context, int x, int y, int width,
@@ -173,37 +174,22 @@ void submitShadowRect(const RenderContext &context, int x, int y, int width,
   const int shadowWidth = width + spread * 2;
   const int shadowHeight = height + spread * 2;
 
-  bgfx::TransientVertexBuffer tvb{};
-  bgfx::TransientIndexBuffer tib{};
   constexpr uint32_t kVertexCount = 4;
   constexpr uint32_t kIndexCount = 6;
-  if (bgfx::getAvailTransientVertexBuffer(
-          kVertexCount, rendering::PosTexCoord0Vertex::ms_decl) <
-          kVertexCount ||
-      bgfx::getAvailTransientIndexBuffer(kIndexCount) < kIndexCount) {
-    return;
-  }
-  bgfx::allocTransientVertexBuffer(&tvb, kVertexCount,
-                                   rendering::PosTexCoord0Vertex::ms_decl);
-  bgfx::allocTransientIndexBuffer(&tib, kIndexCount);
-
-  auto *vertices = reinterpret_cast<rendering::PosTexCoord0Vertex *>(tvb.data);
-  auto *indices = reinterpret_cast<uint16_t *>(tib.data);
-  vertices[0] = {static_cast<float>(shadowX), static_cast<float>(shadowY), 0.0f,
-                 0.0f, 0.0f};
-  vertices[1] = {static_cast<float>(shadowX + shadowWidth),
-                 static_cast<float>(shadowY), 0.0f, 1.0f, 0.0f};
-  vertices[2] = {static_cast<float>(shadowX + shadowWidth),
-                 static_cast<float>(shadowY + shadowHeight), 0.0f, 1.0f, 1.0f};
-  vertices[3] = {static_cast<float>(shadowX),
-                 static_cast<float>(shadowY + shadowHeight), 0.0f, 0.0f, 1.0f};
-
-  indices[0] = 0;
-  indices[1] = 1;
-  indices[2] = 2;
-  indices[3] = 2;
-  indices[4] = 3;
-  indices[5] = 0;
+  const std::array vertices = {
+      rendering::PosTexCoord0Vertex{static_cast<float>(shadowX),
+                                     static_cast<float>(shadowY), 0.0f, 0.0f,
+                                     0.0f},
+      rendering::PosTexCoord0Vertex{static_cast<float>(shadowX + shadowWidth),
+                                     static_cast<float>(shadowY), 0.0f, 1.0f,
+                                     0.0f},
+      rendering::PosTexCoord0Vertex{
+          static_cast<float>(shadowX + shadowWidth),
+          static_cast<float>(shadowY + shadowHeight), 0.0f, 1.0f, 1.0f},
+      rendering::PosTexCoord0Vertex{static_cast<float>(shadowX),
+                                     static_cast<float>(shadowY + shadowHeight),
+                                     0.0f, 0.0f, 1.0f}};
+  constexpr std::array<uint16_t, kIndexCount> indices = {0, 1, 2, 2, 3, 0};
 
   const float inv255 = 1.0f / 255.0f;
   const float shadowColor[4] = {static_cast<float>(color.r) * inv255,
@@ -213,21 +199,18 @@ void submitShadowRect(const RenderContext &context, int x, int y, int width,
   const float shadowParams[4] = {static_cast<float>(width),
                                  static_cast<float>(height), radius,
                                  static_cast<float>(spread)};
-  bgfx::setUniform(
-      rendering::UniformCache::getInstance().getVec4("u_shadowColor"),
-      shadowColor);
-  bgfx::setUniform(
-      rendering::UniformCache::getInstance().getVec4("u_shadowParams"),
-      shadowParams);
-  bgfx::setVertexBuffer(0, &tvb);
-  bgfx::setIndexBuffer(&tib);
-  context.applyTransform();
-  rendering::setScissorUI(context.scissor.x, context.scissor.y,
-                          context.scissor.width, context.scissor.height);
-  bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
   static const bgfx::ProgramHandle kShadowProgram =
       rendering::ShaderManager::getInstance().getProgram(SHADER_UI_SHADOW);
-  bgfx::submit(rendering::ui_view, kShadowProgram);
+  auto state = batchState(context, kShadowProgram,
+                          BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
+  state.uniforms[0] = {
+      .handle = rendering::UniformCache::getInstance().getVec4("u_shadowColor"),
+      .value = {shadowColor[0], shadowColor[1], shadowColor[2], shadowColor[3]}};
+  state.uniforms[1] = {
+      .handle = rendering::UniformCache::getInstance().getVec4("u_shadowParams"),
+      .value = {shadowParams[0], shadowParams[1], shadowParams[2], shadowParams[3]}};
+  state.uniformCount = 2;
+  context.appendUiTextured(vertices, indices, state);
 }
 
 void submitGradientRect(const RenderContext &context, float x, float y,
@@ -238,37 +221,20 @@ void submitGradientRect(const RenderContext &context, float x, float y,
     return;
   }
 
-  bgfx::TransientVertexBuffer tvb{};
-  bgfx::TransientIndexBuffer tib{};
-  bgfx::allocTransientVertexBuffer(&tvb, 4, rendering::PosColorVertex::ms_decl);
-  bgfx::allocTransientIndexBuffer(&tib, 6);
-
-  auto *vertices = reinterpret_cast<rendering::PosColorVertex *>(tvb.data);
-  auto *indices = reinterpret_cast<uint16_t *>(tib.data);
   const uint32_t top = topColor.toABGR();
   const uint32_t bottom = bottomColor.toABGR();
-
-  vertices[0] = {x, y, 0.0f, top};
-  vertices[1] = {x + width, y, 0.0f, top};
-  vertices[2] = {x + width, y + height, 0.0f, bottom};
-  vertices[3] = {x, y + height, 0.0f, bottom};
-
-  indices[0] = 0;
-  indices[1] = 1;
-  indices[2] = 2;
-  indices[3] = 2;
-  indices[4] = 3;
-  indices[5] = 0;
-
-  bgfx::setVertexBuffer(0, &tvb);
-  bgfx::setIndexBuffer(&tib);
-  context.applyTransform();
-  rendering::setScissorUI(context.scissor.x, context.scissor.y,
-                          context.scissor.width, context.scissor.height);
-  bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
+  const std::array vertices = {
+      rendering::PosColorVertex{x, y, 0.0f, top},
+      rendering::PosColorVertex{x + width, y, 0.0f, top},
+      rendering::PosColorVertex{x + width, y + height, 0.0f, bottom},
+      rendering::PosColorVertex{x, y + height, 0.0f, bottom}};
+  constexpr std::array<uint16_t, 6> indices = {0, 1, 2, 2, 3, 0};
   static const bgfx::ProgramHandle kSimpleProgram =
       rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
-  bgfx::submit(rendering::ui_view, kSimpleProgram);
+  context.appendUiColor(
+      vertices, indices,
+      batchState(context, kSimpleProgram,
+                 BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA));
 }
 } // namespace
 

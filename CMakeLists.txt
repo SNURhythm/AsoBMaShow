@@ -6111,6 +6111,31 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         endif()
     endforeach()
 
+    foreach(ui_batch_view_target IN ITEMS
+        builtin_renderer_characterization_tests
+        ir_ranking_modal_tests
+        image_view_fade_tests
+        chart_list_item_view_tests
+        context_menu_view_tests
+        view_layout_tests
+        button_enabled_tests
+        text_input_box_tests
+        checkbox_button_content_tests
+        play_options_panel_view_tests
+        replay_summary_list_view_tests
+        result_record_list_view_tests
+        ir_upload_candidate_list_view_tests
+        replay_playfield_presentation_tests
+        result_presentation_model_tests
+        result_image_exporter_partial_tests
+    )
+        if(TARGET ${ui_batch_view_target})
+            target_sources(${ui_batch_view_target} PRIVATE
+                src/rendering/UiBatchRenderer.cpp
+            )
+        endif()
+    endforeach()
+
     function(asobmashow_register_test target_name)
         set(test_name ${target_name})
         set(test_command_arguments)
@@ -6350,6 +6375,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     if (TARGET skin_quad_batch_renderer_tests)
         asobmashow_register_test(skin_quad_batch_renderer_tests)
     endif()
+    add_executable(ui_batch_renderer_tests
+        tests/ui_batch_renderer_tests.cpp
+        src/rendering/UiBatchRenderer.cpp
+    )
+    target_include_directories(ui_batch_renderer_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(ui_batch_renderer_tests PRIVATE cxx_std_23)
+    target_link_libraries(ui_batch_renderer_tests PRIVATE ${COMMON_LIBS} bgfx)
+    asobmashow_register_test(ui_batch_renderer_tests)
     if (TARGET skin_renderer_golden_tests)
         asobmashow_register_test(skin_renderer_golden_tests)
         set_tests_properties(skin_renderer_golden_tests PROPERTIES

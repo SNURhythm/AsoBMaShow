@@ -3,6 +3,7 @@
 #include "../RAII.h"
 #include <bgfx/bgfx.h>
 #include <bgfx/platform.h>
+#include <array>
 #include <cstring>
 #include <cmath>
 #include <map>
@@ -368,37 +369,21 @@ void TextView::renderImpl(RenderContext &context) {
     const float top = static_cast<float>(drawRect.y);
     const float right = left + static_cast<float>(drawRect.w);
     const float bottom = top + static_cast<float>(drawRect.h);
-    rendering::PosTexVertex vertices[] = {
-        {left, top, 0.0f, 0.0f, 0.0f},
-        {right, top, 0.0f, 1.0f, 0.0f},
-        {right, bottom, 0.0f, 1.0f, 1.0f},
-        {left, bottom, 0.0f, 0.0f, 1.0f},
+    const std::array vertices = {
+        rendering::PosTexCoord0Vertex{left, top, 0.0f, 0.0f, 0.0f},
+        rendering::PosTexCoord0Vertex{right, top, 0.0f, 1.0f, 0.0f},
+        rendering::PosTexCoord0Vertex{right, bottom, 0.0f, 1.0f, 1.0f},
+        rendering::PosTexCoord0Vertex{left, bottom, 0.0f, 0.0f, 1.0f},
     };
 
-    const uint16_t indices[] = {0, 1, 2, 0, 2, 3};
-    bgfx::TransientVertexBuffer tvb;
-    bgfx::TransientIndexBuffer tib;
-    if (bgfx::getAvailTransientVertexBuffer(
-            4, rendering::PosTexVertex::ms_decl) < 4 ||
-        bgfx::getAvailTransientIndexBuffer(6) < 6) {
-      return;
-    }
-    bgfx::allocTransientVertexBuffer(&tvb, 4, rendering::PosTexVertex::ms_decl);
-    bgfx::allocTransientIndexBuffer(&tib, 6);
-    bx::memCopy(tvb.data, vertices, sizeof(vertices));
-    bx::memCopy(tib.data, indices, sizeof(indices));
-
-    context.applyTransform();
-    bgfx::setTexture(0, s_texColor, texture);
-    bgfx::setVertexBuffer(0, &tvb);
-    bgfx::setIndexBuffer(&tib);
-
-    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
-    rendering::setScissorUI(context.scissor.x, context.scissor.y,
-                            context.scissor.width, context.scissor.height);
+    constexpr std::array<uint16_t, 6> indices = {0, 1, 2, 0, 2, 3};
     static const bgfx::ProgramHandle kProgram =
         rendering::ShaderManager::getInstance().getProgram(SHADER_TEXT);
-    bgfx::submit(rendering::ui_view, kProgram);
+    auto state = context.makeUiBatchState(
+        kProgram, BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
+    state.texture = texture;
+    state.sampler = s_texColor;
+    context.appendUiTextured(vertices, indices, state);
   };
 
   if (clip) {

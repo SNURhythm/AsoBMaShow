@@ -325,7 +325,8 @@ void SettingsScene::renderScene() {
     syncPreviewPresentationConfiguration();
     capturePreviewVisualState();
     previewRenderer->refreshGeometry();
-    RenderContext renderContext;
+    RenderContext renderContext(context.uiBatchRenderer);
+    RenderContext::UiBatchScope uiBatchScope(renderContext);
     previewRenderer->render(renderContext, previewElapsedMicros);
   }
 }

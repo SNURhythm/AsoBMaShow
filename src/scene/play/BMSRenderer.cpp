@@ -3970,6 +3970,7 @@ void BMSRenderer::renderFrame(
          .width = playAreaWidth,
          .height = std::max(0.0F, upperBound - judgeY)});
 #endif
+    context.flushUiBatch();
     simpleBatchRenderer.flush();
     simpleBatchRenderer.setSubmitView(rendering::main_view);
   }
@@ -4028,6 +4029,7 @@ void BMSRenderer::renderFrame(
          .width = static_cast<float>(rendering::window_width),
          .height = static_cast<float>(rendering::window_height)});
 #endif
+    context.flushUiBatch();
     simpleBatchRenderer.flush();
     simpleBatchRenderer.setSubmitView(rendering::main_view);
     drawTitle(context);
@@ -4066,6 +4068,7 @@ void BMSRenderer::renderFrame(
          .width = static_cast<float>(rendering::window_width),
          .height = static_cast<float>(rendering::window_height)});
 #endif
+    context.flushUiBatch();
     simpleBatchRenderer.flush();
     simpleBatchRenderer.setSubmitView(rendering::main_view);
   }

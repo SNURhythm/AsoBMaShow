@@ -32,6 +32,7 @@
 #include <fstream>
 #include <limits>
 #include <optional>
+#include <span>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -450,7 +451,8 @@ void submitTexturedRoundedRect(const RenderContext &context,
                                bgfx::TextureHandle texture,
                                bgfx::UniformHandle sampler, int x, int y,
                                int width, int height, float radius,
-                               bgfx::ProgramHandle program) {
+                               bgfx::ProgramHandle program,
+                               std::span<const rendering::UiBatchUniform> uniforms) {
   if (!bgfx::isValid(texture) || width <= 0 || height <= 0) {
     return;
   }
@@ -458,37 +460,22 @@ void submitTexturedRoundedRect(const RenderContext &context,
   radius = std::clamp(radius, 0.0f,
                       static_cast<float>(std::min(width, height)) * 0.5f);
 
-  bgfx::TransientVertexBuffer tvb{};
-  bgfx::TransientIndexBuffer tib{};
+  std::vector<rendering::PosTexCoord0Vertex> vertices;
+  std::vector<uint16_t> indices;
   if (radius <= 0.5f) {
     constexpr uint32_t kVertexCount = 4;
     constexpr uint32_t kIndexCount = 6;
-    if (bgfx::getAvailTransientVertexBuffer(
-            kVertexCount, rendering::PosTexCoord0Vertex::ms_decl) <
-            kVertexCount ||
-        bgfx::getAvailTransientIndexBuffer(kIndexCount) < kIndexCount) {
-      return;
-    }
-    bgfx::allocTransientVertexBuffer(&tvb, kVertexCount,
-                                     rendering::PosTexCoord0Vertex::ms_decl);
-    bgfx::allocTransientIndexBuffer(&tib, kIndexCount);
-    auto *vertices = reinterpret_cast<rendering::PosTexCoord0Vertex *>(tvb.data);
-    vertices[0] = {static_cast<float>(x), static_cast<float>(y + height), 0.0f,
-                   0.0f, 1.0f};
-    vertices[1] = {static_cast<float>(x + width),
-                   static_cast<float>(y + height), 0.0f, 1.0f, 1.0f};
-    vertices[2] = {static_cast<float>(x), static_cast<float>(y), 0.0f, 0.0f,
-                   0.0f};
-    vertices[3] = {static_cast<float>(x + width), static_cast<float>(y), 0.0f,
-                   1.0f, 0.0f};
-
-    auto *indices = reinterpret_cast<uint16_t *>(tib.data);
-    indices[0] = 0;
-    indices[1] = 1;
-    indices[2] = 2;
-    indices[3] = 1;
-    indices[4] = 3;
-    indices[5] = 2;
+    vertices.reserve(kVertexCount);
+    indices.reserve(kIndexCount);
+    vertices = {{static_cast<float>(x), static_cast<float>(y + height), 0.0f,
+                 0.0f, 1.0f},
+                {static_cast<float>(x + width), static_cast<float>(y + height),
+                 0.0f, 1.0f, 1.0f},
+                {static_cast<float>(x), static_cast<float>(y), 0.0f, 0.0f,
+                 0.0f},
+                {static_cast<float>(x + width), static_cast<float>(y), 0.0f,
+                 1.0f, 0.0f}};
+    indices = {0, 1, 2, 1, 3, 2};
   } else {
     const int segments =
         std::clamp(static_cast<int>(std::ceil(radius / 4.0f)), 4, 12);
@@ -496,27 +483,15 @@ void submitTexturedRoundedRect(const RenderContext &context,
     const uint16_t vertexCount = static_cast<uint16_t>(ringVertexCount + 1);
     const uint16_t indexCount = static_cast<uint16_t>(ringVertexCount * 3);
 
-    if (bgfx::getAvailTransientVertexBuffer(
-            vertexCount, rendering::PosTexCoord0Vertex::ms_decl) <
-            vertexCount ||
-        bgfx::getAvailTransientIndexBuffer(indexCount) < indexCount) {
-      return;
-    }
-    bgfx::allocTransientVertexBuffer(&tvb, vertexCount,
-                                     rendering::PosTexCoord0Vertex::ms_decl);
-    bgfx::allocTransientIndexBuffer(&tib, indexCount);
-
-    auto *vertices = reinterpret_cast<rendering::PosTexCoord0Vertex *>(tvb.data);
-    auto *indices = reinterpret_cast<uint16_t *>(tib.data);
-    uint16_t vertexIndex = 0;
+    vertices.reserve(vertexCount);
+    indices.reserve(indexCount);
 
     const float fx = static_cast<float>(x);
     const float fy = static_cast<float>(y);
     const float fw = static_cast<float>(width);
     const float fh = static_cast<float>(height);
     const auto appendVertex = [&](float px, float py) {
-      vertices[vertexIndex++] = {px, py, 0.0f, (px - fx) / fw,
-                                 (py - fy) / fh};
+      vertices.push_back({px, py, 0.0f, (px - fx) / fw, (py - fy) / fh});
     };
 
     appendVertex(fx + fw * 0.5f, fy + fh * 0.5f);
@@ -534,23 +509,19 @@ void submitTexturedRoundedRect(const RenderContext &context,
     appendCorner(fx + radius, fy + fh - radius, kPi * 0.5f);
     appendCorner(fx + radius, fy + radius, kPi);
 
-    uint16_t index = 0;
     for (uint16_t i = 0; i < ringVertexCount; ++i) {
-      indices[index++] = 0;
-      indices[index++] = static_cast<uint16_t>(i + 1);
-      indices[index++] = static_cast<uint16_t>((i + 1) % ringVertexCount + 1);
+      indices.push_back(0);
+      indices.push_back(static_cast<uint16_t>(i + 1));
+      indices.push_back(static_cast<uint16_t>((i + 1) % ringVertexCount + 1));
     }
   }
-
-  bgfx::setVertexBuffer(0, &tvb);
-  bgfx::setIndexBuffer(&tib);
-  bgfx::setTexture(0, sampler, texture);
-  context.applyTransform();
-  rendering::setScissorUI(context.scissor.x, context.scissor.y,
-                          context.scissor.width, context.scissor.height);
-  bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA |
-                 BGFX_STATE_MSAA);
-  bgfx::submit(rendering::ui_view, program);
+  auto state = context.makeUiBatchState(
+      program, BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA);
+  state.texture = texture;
+  state.sampler = sampler;
+  state.uniformCount = std::min(uniforms.size(), state.uniforms.size());
+  std::copy_n(uniforms.begin(), state.uniformCount, state.uniforms.begin());
+  context.appendUiTextured(vertices, indices, state);
 }
 } // namespace
 
@@ -822,13 +793,16 @@ void ImageView::renderImpl(RenderContext &context) {
     return;
   }
   bgfx::ProgramHandle program;
+  std::array<rendering::UiBatchUniform, 2> uniforms;
+  std::size_t uniformCount = 0;
   if (fade_.has_value() || scrimColor_.has_value()) {
     const ImageFade fade = fade_.value_or(
         makeImageFade(ImageFadeDirection::LeftToRight, 0.0F));
     const auto fadeParams = imageFadeShaderParameters(fade);
-    bgfx::setUniform(
-        rendering::UniformCache::getInstance().getVec4("u_imageFadeParams"),
-        fadeParams.data());
+    uniforms[uniformCount++] = {
+        .handle =
+            rendering::UniformCache::getInstance().getVec4("u_imageFadeParams"),
+        .value = {fadeParams[0], fadeParams[1], fadeParams[2], fadeParams[3]}};
 
     const Color scrim = scrimColor_.value_or(Color(0, 0, 0, 0));
     constexpr float inv255 = 1.0F / 255.0F;
@@ -837,16 +811,20 @@ void ImageView::renderImpl(RenderContext &context) {
         static_cast<float>(scrim.g) * inv255,
         static_cast<float>(scrim.b) * inv255,
         static_cast<float>(scrim.a) * inv255};
-    bgfx::setUniform(
-        rendering::UniformCache::getInstance().getVec4("u_imageScrimColor"),
-        scrimParams.data());
+    uniforms[uniformCount++] = {
+        .handle =
+            rendering::UniformCache::getInstance().getVec4("u_imageScrimColor"),
+        .value = {scrimParams[0], scrimParams[1], scrimParams[2],
+                  scrimParams[3]}};
     program = rendering::ShaderManager::getInstance().getProgram(
         "vs_text.bin", "fs_image_fade.bin");
   } else {
     program = rendering::ShaderManager::getInstance().getProgram(SHADER_TEXT);
   }
   submitTexturedRoundedRect(context, texture, s_texColor, getX(), getY(),
-                            getWidth(), getHeight(), getCornerRadius(), program);
+                            getWidth(), getHeight(), getCornerRadius(), program,
+                            std::span<const rendering::UiBatchUniform>(uniforms)
+                                .first(uniformCount));
 }
 ImageView::ImageView(int x, int y, int width, int height)
     : View(x, y, width, height) {

@@ -41,34 +41,23 @@ void drawButtonRect(const RenderContext &context, int x, int y, int width,
   }
   radius = std::clamp(radius, 0.0f,
                       static_cast<float>(std::min(width, height)) * 0.5f);
+  std::array<rendering::PosColorVertex, 53> vertices;
+  std::array<uint16_t, 156> indices;
+  uint16_t vertexCount = 0;
+  uint16_t indexCount = 0;
+  const uint32_t abgr = color.toABGR();
   if (radius > 0.5f) {
     const int segments =
         std::clamp(static_cast<int>(std::ceil(radius / 4.0f)), 4, 12);
     const uint16_t ringVertexCount = static_cast<uint16_t>((segments + 1) * 4);
-    const uint16_t vertexCount = static_cast<uint16_t>(ringVertexCount + 1);
-    const uint16_t indexCount = static_cast<uint16_t>(ringVertexCount * 3);
-    if (bgfx::getAvailTransientVertexBuffer(
-            vertexCount, rendering::PosColorVertex::ms_decl) < vertexCount ||
-        bgfx::getAvailTransientIndexBuffer(indexCount) < indexCount) {
-      return;
-    }
-    bgfx::TransientVertexBuffer tvb{};
-    bgfx::TransientIndexBuffer tib{};
-    bgfx::allocTransientVertexBuffer(&tvb, vertexCount,
-                                     rendering::PosColorVertex::ms_decl);
-    bgfx::allocTransientIndexBuffer(&tib, indexCount);
-    auto *vertices = reinterpret_cast<rendering::PosColorVertex *>(tvb.data);
-    auto *indices = reinterpret_cast<uint16_t *>(tib.data);
-    const uint32_t abgr = color.toABGR();
-    uint16_t vertexIndex = 0;
-    vertices[vertexIndex++] = {
+    vertices[vertexCount++] = {
         static_cast<float>(x) + static_cast<float>(width) * 0.5f,
         static_cast<float>(y) + static_cast<float>(height) * 0.5f, 0.0f, abgr};
     const auto appendCorner = [&](float cx, float cy, float startAngle) {
       for (int i = 0; i <= segments; ++i) {
         const float t = static_cast<float>(i) / static_cast<float>(segments);
         const float angle = startAngle + t * (kPi * 0.5f);
-        vertices[vertexIndex++] = {cx + std::cos(angle) * radius,
+        vertices[vertexCount++] = {cx + std::cos(angle) * radius,
                                    cy + std::sin(angle) * radius, 0.0f, abgr};
       }
     };
@@ -80,29 +69,31 @@ void drawButtonRect(const RenderContext &context, int x, int y, int width,
     appendCorner(fx + fw - radius, fy + fh - radius, 0.0f);
     appendCorner(fx + radius, fy + fh - radius, kPi * 0.5f);
     appendCorner(fx + radius, fy + radius, kPi);
-    uint16_t index = 0;
     for (uint16_t i = 0; i < ringVertexCount; ++i) {
-      indices[index++] = 0;
-      indices[index++] = static_cast<uint16_t>(i + 1);
-      indices[index++] = static_cast<uint16_t>((i + 1) % ringVertexCount + 1);
+      indices[indexCount++] = 0;
+      indices[indexCount++] = static_cast<uint16_t>(i + 1);
+      indices[indexCount++] =
+          static_cast<uint16_t>((i + 1) % ringVertexCount + 1);
     }
-    bgfx::setVertexBuffer(0, &tvb);
-    bgfx::setIndexBuffer(&tib);
   } else {
-    bgfx::TransientVertexBuffer tvb{};
-    bgfx::TransientIndexBuffer tib{};
-    rendering::createRect(tvb, tib, x, y, width, height, color.toABGR());
-    bgfx::setVertexBuffer(0, &tvb);
-    bgfx::setIndexBuffer(&tib);
+    vertices[vertexCount++] = {static_cast<float>(x), static_cast<float>(y),
+                               0.0f, abgr};
+    vertices[vertexCount++] = {static_cast<float>(x + width),
+                               static_cast<float>(y), 0.0f, abgr};
+    vertices[vertexCount++] = {static_cast<float>(x + width),
+                               static_cast<float>(y + height), 0.0f, abgr};
+    vertices[vertexCount++] = {static_cast<float>(x),
+                               static_cast<float>(y + height), 0.0f, abgr};
+    indices = {0, 1, 2, 0, 2, 3};
+    indexCount = 6;
   }
-  context.applyTransform();
-  rendering::setScissorUI(context.scissor.x, context.scissor.y,
-                          context.scissor.width, context.scissor.height);
-  bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA |
-                 BGFX_STATE_MSAA);
   static const bgfx::ProgramHandle kSimpleProgram =
       rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
-  bgfx::submit(rendering::ui_view, kSimpleProgram);
+  context.appendUiColor(
+      std::span(vertices).first(vertexCount), std::span(indices).first(indexCount),
+      context.makeUiBatchState(kSimpleProgram,
+                               BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA |
+                                   BGFX_STATE_MSAA));
 }
 } // namespace
 

@@ -564,25 +564,22 @@ private:
     if (width <= 0 || height <= 0) {
       return;
     }
-    if (bgfx::getAvailTransientVertexBuffer(
-            4, rendering::PosColorVertex::ms_decl) < 4 ||
-        bgfx::getAvailTransientIndexBuffer(6) < 6) {
-      return;
-    }
-
-    bgfx::TransientVertexBuffer tvb;
-    bgfx::TransientIndexBuffer tib;
-    rendering::createRect(tvb, tib, x, y, width, height, color);
-
-    bgfx::setVertexBuffer(0, &tvb);
-    bgfx::setIndexBuffer(&tib);
-    context.applyTransform();
-    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
-    rendering::setScissorUI(context.scissor.x, context.scissor.y,
-                            context.scissor.width, context.scissor.height);
+    const std::array vertices = {
+        rendering::PosColorVertex{static_cast<float>(x), static_cast<float>(y),
+                                  0.0f, color},
+        rendering::PosColorVertex{static_cast<float>(x + width),
+                                  static_cast<float>(y), 0.0f, color},
+        rendering::PosColorVertex{static_cast<float>(x + width),
+                                  static_cast<float>(y + height), 0.0f, color},
+        rendering::PosColorVertex{static_cast<float>(x),
+                                  static_cast<float>(y + height), 0.0f, color}};
+    constexpr std::array<uint16_t, 6> indices = {0, 1, 2, 0, 2, 3};
     static const bgfx::ProgramHandle kProgram =
         rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
-    bgfx::submit(rendering::ui_view, kProgram);
+    context.appendUiColor(
+        vertices, indices,
+        context.makeUiBatchState(
+            kProgram, BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA));
   }
 
   inline void renderScrollbar(RenderContext &context) const {
