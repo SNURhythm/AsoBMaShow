@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -30,6 +31,19 @@ struct SyntheticReplayGhostGeometry {
   double sharedLaneHeight = 0.0;
   std::vector<SyntheticReplayGhostLaneGeometry> lanes;
 };
+
+// Application HUD shown above a selected skin is anchored to the evaluated
+// SkinNote source. The lane span is expressed in UI logical coordinates after
+// the skin's active viewport transform.
+struct SelectedSkinHudGeometry {
+  std::uint64_t frameSerial = 0;
+  UiLogicalRect playArea;
+  double judgementLineY = 0.0;
+  std::size_t laneCount = 0;
+};
+
+[[nodiscard]] std::optional<SelectedSkinHudGeometry>
+selectedSkinHudGeometry(const SyntheticReplayGhostGeometry &);
 
 struct SyntheticReplayGhostFrameInput {
   std::uint64_t frameSerial = 0;

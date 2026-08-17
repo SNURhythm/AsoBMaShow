@@ -35,6 +35,10 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+
+namespace skin {
+struct SelectedSkinHudGeometry;
+}
 #include <utility>
 #include <vector>
 
@@ -414,8 +418,8 @@ private:
   float projectedLaneLeftUiInBand(float bandTop, float bandBottom) const;
   void layoutCenteredJudgementText();
   void updateJudgementCounterText();
-  void publishJudgementCounterSnapshot(
-      const JudgementCounterSnapshot &snapshot);
+  void synchronizeCapturedJudgementHud(const PlayfieldVisualState &);
+  void publishJudgementCounterSnapshot(const JudgementCounterSnapshot &snapshot);
   void drawLaneBeam(int lane, const LaneState &laneState, long long time);
   void drawStartLaneIndicators();
   void drawLaneCover();
@@ -534,6 +538,8 @@ public:
   void advanceRetainedTimelineCursor(
       std::uint32_t nextRetainedTimelineOrdinal) noexcept override;
   [[nodiscard]] PresentationFrameResult render(RenderContext &) override;
+  void renderSelectedSkinHud(RenderContext &, const PlayfieldVisualState &,
+                             const skin::SelectedSkinHudGeometry &) override;
   [[nodiscard]] gameplay::RealtimeTouchLayout touchLayout() const override;
   [[nodiscard]] std::uint64_t
   touchLayoutRevision() const noexcept override;

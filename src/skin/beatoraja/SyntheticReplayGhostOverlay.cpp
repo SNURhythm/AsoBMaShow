@@ -61,6 +61,47 @@ bool validRect(const AuthoredRect &rect) noexcept {
          rect.width > 0.0 && rect.height > 0.0;
 }
 
+AuthoredPoint transformPoint(const Affine2D &transform, double x,
+                             double y) noexcept {
+  return {.x = transform.m00 * x + transform.m01 * y + transform.tx,
+          .y = transform.m10 * x + transform.m11 * y + transform.ty};
+}
+
+std::optional<UiLogicalRect>
+projectAuthoredRect(const PlaySkinViewport &viewport,
+                    const AuthoredRect &rect) noexcept {
+  if (!validRect(rect) || !viewport.valid) {
+    return std::nullopt;
+  }
+  const std::array corners{
+      transformPoint(viewport.authoredToUi, rect.x, rect.y),
+      transformPoint(viewport.authoredToUi, rect.x + rect.width, rect.y),
+      transformPoint(viewport.authoredToUi, rect.x + rect.width,
+                     rect.y + rect.height),
+      transformPoint(viewport.authoredToUi, rect.x, rect.y + rect.height),
+  };
+  const auto [minimumX, maximumX] = std::minmax_element(
+      corners.begin(), corners.end(),
+      [](const AuthoredPoint &left, const AuthoredPoint &right) {
+        return left.x < right.x;
+      });
+  const auto [minimumY, maximumY] = std::minmax_element(
+      corners.begin(), corners.end(),
+      [](const AuthoredPoint &left, const AuthoredPoint &right) {
+        return left.y < right.y;
+      });
+  const UiLogicalRect projected{.x = minimumX->x,
+                                .y = minimumY->y,
+                                .width = maximumX->x - minimumX->x,
+                                .height = maximumY->y - minimumY->y};
+  return std::isfinite(projected.x) && std::isfinite(projected.y) &&
+                 std::isfinite(projected.width) &&
+                 std::isfinite(projected.height) && projected.width > 0.0 &&
+                 projected.height > 0.0
+             ? std::optional<UiLogicalRect>(projected)
+             : std::nullopt;
+}
+
 bool intersects(const AuthoredRect &left, const AuthoredRect &right) noexcept {
   return left.x < right.x + right.width && right.x < left.x + left.width &&
          left.y < right.y + right.height &&
@@ -163,6 +204,54 @@ void appendStartLaneIndicator(
 }
 
 } // namespace
+
+std::optional<SelectedSkinHudGeometry>
+selectedSkinHudGeometry(const SyntheticReplayGhostGeometry &geometry) {
+  if (geometry.frameSerial == 0 || !geometry.viewport.valid ||
+      geometry.lanes.empty() || !validRect(geometry.lanes.front().clip)) {
+    return std::nullopt;
+  }
+
+  double left = std::numeric_limits<double>::infinity();
+  double right = -std::numeric_limits<double>::infinity();
+  std::size_t laneCount = 0;
+  for (const auto &lane : geometry.lanes) {
+    if (!validRect(lane.normalNote)) {
+      continue;
+    }
+    left = std::min(left, lane.normalNote.x);
+    right = std::max(right, lane.normalNote.x + lane.normalNote.width);
+    ++laneCount;
+  }
+  if (laneCount == 0 || !std::isfinite(left) || !std::isfinite(right) ||
+      right <= left) {
+    return std::nullopt;
+  }
+
+  // The same primary lane clip defines the shared vertical play area for the
+  // replay overlay and the selected-skin HUD. Every lane still contributes to
+  // the horizontal span because note widths and positions may differ.
+  const auto &primary = geometry.lanes.front();
+  const AuthoredRect authoredPlayArea{.x = left,
+                                      .y = primary.clip.y,
+                                      .width = right - left,
+                                      .height = primary.clip.height};
+  const auto playArea =
+      projectAuthoredRect(geometry.viewport, authoredPlayArea);
+  if (!playArea) {
+    return std::nullopt;
+  }
+  const AuthoredPoint judgement =
+      transformPoint(geometry.viewport.authoredToUi, primary.normalNote.x,
+                     primary.normalNote.y);
+  if (!std::isfinite(judgement.y)) {
+    return std::nullopt;
+  }
+  return SelectedSkinHudGeometry{.frameSerial = geometry.frameSerial,
+                                 .playArea = *playArea,
+                                 .judgementLineY = judgement.y,
+                                 .laneCount = laneCount};
+}
 
 SkinCommandBuffer buildSyntheticReplayGhostOverlay(
     const SyntheticReplayGhostGeometry &geometry,

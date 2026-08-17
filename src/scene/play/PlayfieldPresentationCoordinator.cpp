@@ -164,6 +164,9 @@ PresentationFrameOutcome PlayfieldPresentationCoordinator::prepareFrame(
   PendingFrame pending;
   pending.frameSerial = state.clock.serial;
   pending.hadSkin = static_cast<bool>(skin_);
+  if (pending.hadSkin) {
+    pending.selectedSkinHudState = state;
+  }
   if (pending.hadSkin && projection.builtInTraversal) {
     pending.nextRetainedTimelineOrdinal =
         projection.builtInPlan.nextStartRetainedOrdinal;
@@ -380,6 +383,16 @@ PlayfieldPresentationCoordinator::render(RenderContext &context) {
                       .visibleLaneHeightRatio =
                           pending.startLaneIndicatorVisibleLaneHeightRatio});
       } catch (...) {
+      }
+    }
+    if (pending.selectedSkinHudState) {
+      if (const auto geometry =
+              skin_->selectedSkinHudGeometry(pending.frameSerial)) {
+        try {
+          builtIn_->renderSelectedSkinHud(
+              context, *pending.selectedSkinHudState, *geometry);
+        } catch (...) {
+        }
       }
     }
     if (skinResult.failure) {

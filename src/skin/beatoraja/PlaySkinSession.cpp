@@ -1029,6 +1029,15 @@ void PlaySkinSession::submitSyntheticStartLaneIndicators(
   }
 }
 
+std::optional<SelectedSkinHudGeometry>
+PlaySkinSession::selectedSkinHudGeometry(std::uint64_t frameSerial) const {
+  if (!publishedReplayGhostGeometry_ ||
+      publishedReplayGhostGeometry_->frameSerial != frameSerial) {
+    return std::nullopt;
+  }
+  return skin::selectedSkinHudGeometry(*publishedReplayGhostGeometry_);
+}
+
 void PlaySkinSession::clearPublishedGeometry(bool advanceTopology) noexcept {
   captures_.fill({});
   publishedLayout_.reset();

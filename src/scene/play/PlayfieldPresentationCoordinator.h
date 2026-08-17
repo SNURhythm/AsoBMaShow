@@ -113,6 +113,7 @@ private:
     PresentationFailure skinRenderExceptionFailure;
     PresentationFailure skinNoSubmissionFailure;
     skin::SyntheticReplayGhostFrameInput replayGhostFrame;
+    std::optional<PlayfieldVisualState> selectedSkinHudState;
     std::vector<int> startLaneIndicatorLanes;
     double startLaneIndicatorVisibleLaneHeightRatio = 1.0;
     bool startLaneIndicatorsVisible = false;

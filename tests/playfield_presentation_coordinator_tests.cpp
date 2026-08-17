@@ -74,6 +74,10 @@ struct PresentationStats {
   std::uint64_t syntheticStartLaneIndicatorFrameSerial = 0;
   double syntheticStartLaneIndicatorVisibleLaneHeightRatio = 0.0;
   std::vector<int> syntheticStartLaneIndicatorLanes;
+  int selectedSkinHudCalls = 0;
+  skin::SelectedSkinHudGeometry selectedSkinHudGeometry;
+  std::uint64_t selectedSkinHudStateSerial = 0;
+  std::optional<skin::SelectedSkinHudGeometry> publishedSkinHudGeometry;
 };
 
 void recordEvent(const std::shared_ptr<PresentationStats> &stats,
@@ -112,6 +116,14 @@ public:
     result.submittedMode = PresentationMode::BuiltIn;
     result.bgaCompositeMode = GameplayBgaCompositeMode::FullscreenBuiltIn;
     return result;
+  }
+  void renderSelectedSkinHud(
+      RenderContext &, const PlayfieldVisualState &state,
+      const skin::SelectedSkinHudGeometry &geometry) override {
+    ++stats_->selectedSkinHudCalls;
+    stats_->selectedSkinHudStateSerial = state.clock.serial;
+    stats_->selectedSkinHudGeometry = geometry;
+    recordEvent(stats_, "builtin.skin_hud");
   }
   void advanceRetainedTimelineCursor(
       std::uint32_t nextRetainedTimelineOrdinal) noexcept override {
@@ -233,6 +245,14 @@ public:
     stats_->syntheticStartLaneIndicatorLanes.assign(input.lanes.begin(),
                                                     input.lanes.end());
     recordEvent(stats_, "skin.start_lane_indicators");
+  }
+  std::optional<skin::SelectedSkinHudGeometry>
+  selectedSkinHudGeometry(std::uint64_t frameSerial) const override {
+    if (!stats_->publishedSkinHudGeometry ||
+        stats_->publishedSkinHudGeometry->frameSerial != frameSerial) {
+      return std::nullopt;
+    }
+    return stats_->publishedSkinHudGeometry;
   }
   void setViewport(skin::ViewportSettings viewport) override {
     ++stats_->viewportCalls;
@@ -544,6 +564,45 @@ void testSelectedSkinReceivesPreparationLaneIndicatorsPreservingOwnership() {
   expect(
       skinStats->syntheticStartLaneIndicatorCalls == 1,
       "hidden preparation indicators are not submitted to the selected skin");
+}
+
+void testSelectedSkinRendersBuiltInHudFromPublishedLaneGeometry() {
+  auto builtIn = std::make_shared<PresentationStats>();
+  auto skinStats = std::make_shared<PresentationStats>();
+  auto order = std::make_shared<std::vector<std::string>>();
+  builtIn->sharedOrder = order;
+  skinStats->sharedOrder = order;
+  skinStats->renderResult = {.outcome = PresentationFrameOutcome::Ready,
+                             .submittedMode = PresentationMode::Skin,
+                             .bgaCompositeMode =
+                                 GameplayBgaCompositeMode::EmbeddedSkin};
+  skinStats->publishedSkinHudGeometry = {
+      .frameSerial = 68,
+      .playArea = {.x = 420.0, .y = 80.0, .width = 480.0, .height = 720.0},
+      .judgementLineY = 700.0,
+      .laneCount = 7,
+  };
+  FakeBga bga;
+  PlayfieldPresentationCoordinator coordinator({
+      .builtIn = std::make_unique<FakeBuiltIn>(builtIn),
+      .skin = std::make_unique<FakeSkin>(skinStats, identity()),
+      .bga = bga,
+  });
+  PlayfieldProjectionResult projection;
+  auto state = frame(68);
+  expect(coordinator.prepareFrame(state, projection) ==
+             PresentationFrameOutcome::Ready,
+         "selected-skin HUD frame prepares successfully");
+  RenderContext context;
+  const auto result = coordinator.render(context);
+  expect(result.submittedMode == PresentationMode::Skin &&
+             builtIn->renderCalls == 0 && builtIn->selectedSkinHudCalls == 1 &&
+             builtIn->selectedSkinHudStateSerial == 68 &&
+             builtIn->selectedSkinHudGeometry.playArea.width == 480.0 &&
+             eventIndex(*order, "skin.render") <
+                 eventIndex(*order, "builtin.skin_hud"),
+         "selected skin retains ownership while the built-in HUD follows its "
+         "published lane geometry");
 }
 
 void testCriticalSkinFailureNeverSubstitutesBuiltInPresentation() {
@@ -979,6 +1038,7 @@ int main() {
   testSkinSuccessSubmitsNoBuiltInWork();
   testSelectedSkinReceivesOptionGatedReplayGhostFrame();
   testSelectedSkinReceivesPreparationLaneIndicatorsPreservingOwnership();
+  testSelectedSkinRendersBuiltInHudFromPublishedLaneGeometry();
   testCriticalSkinFailureNeverSubstitutesBuiltInPresentation();
   testCriticalSelectedSkinPrepareFailureReturnsTransactionDiagnostic();
   testPostDrawRecoverableFailureNeverCreatesHybrid();

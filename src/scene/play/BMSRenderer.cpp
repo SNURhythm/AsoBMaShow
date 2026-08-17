@@ -16,6 +16,7 @@
 
 #include "../../ChartPlaybackDuration.h"
 #include "../../CoursePlaySession.h"
+#include "../../skin/beatoraja/SyntheticReplayGhostOverlay.h"
 #include "GameplayGeometry.h"
 #include "Judge.h"
 #include "../../RAII.h"
@@ -1898,6 +1899,42 @@ void BMSRenderer::onJudge(JudgeResult judgeResult, int combo, int score,
   }
 }
 
+void BMSRenderer::synchronizeCapturedJudgementHud(
+    const PlayfieldVisualState &capturedState) {
+  setJudgementCounters(capturedState.authority.judgementCounters,
+                       capturedState.authority.comboBreak);
+
+  // Rebuild from the bounded history captured with the immutable frame.
+  // A single lastJudge field is insufficient: the indicator displays a
+  // recent sample window rather than only the most recent judgement.
+  judgementIndicator.clear();
+  if (capturedState.judgementIndicatorSampleCount > 0) {
+    const std::size_t sampleCount =
+        std::min(capturedState.judgementIndicatorSampleCount,
+                 capturedState.judgementIndicatorSamples.size());
+    for (std::size_t index = 0; index < sampleCount; ++index) {
+      const auto &sample = capturedState.judgementIndicatorSamples[index];
+      if (sample.judge.judgement != None &&
+          sample.visualTimeMicros != kPlayfieldTimestampOff) {
+        onJudge(sample.judge, capturedState.combo, capturedState.score,
+                {.songTimeMicros = capturedState.clock.gameplayTimeMicros,
+                 .visualTimeMicros = sample.visualTimeMicros,
+                 .bgaTimeMicros = capturedState.clock.bgaTimeMicros},
+                true);
+      }
+    }
+  } else if (capturedState.lastJudge.judgement != None &&
+             capturedState.lastJudgeVisualMicros != kPlayfieldTimestampOff) {
+    // Preserve standalone snapshot callers that predate the bounded history
+    // and supply only their latest judgement.
+    onJudge(capturedState.lastJudge, capturedState.combo, capturedState.score,
+            {.songTimeMicros = capturedState.clock.gameplayTimeMicros,
+             .visualTimeMicros = capturedState.lastJudgeVisualMicros,
+             .bgaTimeMicros = capturedState.clock.bgaTimeMicros},
+            true);
+  }
+}
+
 #if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
 std::size_t BMSRenderer::characterizationTimelineOrdinal(
     const bms_parser::TimeLine *timeline) const {
@@ -2806,7 +2843,7 @@ PresentationFrameOutcome BMSRenderer::prepareFrame(
     currentScrollRate = std::isfinite(authority.currentScrollRate)
                             ? authority.currentScrollRate
                             : 1.0;
-    setJudgementCounters(authority.judgementCounters, authority.comboBreak);
+    synchronizeCapturedJudgementHud(capturedState);
     setGaugeStatus(authority.gaugeType, authority.gaugeAutoShift,
                    authority.currentGauge, authority.gaugeRules);
     setPacemakerTarget(authority.pacemakerTarget);
@@ -2841,37 +2878,6 @@ PresentationFrameOutcome BMSRenderer::prepareFrame(
           std::memory_order_release);
     }
 
-    // Rebuild from the bounded history captured with the immutable frame.
-    // A single lastJudge field is insufficient: the indicator displays a
-    // recent sample window rather than only the most recent judgement.
-    judgementIndicator.clear();
-    if (capturedState.judgementIndicatorSampleCount > 0) {
-      const std::size_t sampleCount = std::min(
-          capturedState.judgementIndicatorSampleCount,
-          capturedState.judgementIndicatorSamples.size());
-      for (std::size_t index = 0; index < sampleCount; ++index) {
-        const auto &sample = capturedState.judgementIndicatorSamples[index];
-        if (sample.judge.judgement != None &&
-            sample.visualTimeMicros != kPlayfieldTimestampOff) {
-          onJudge(sample.judge, capturedState.combo, capturedState.score,
-                  {.songTimeMicros = capturedState.clock.gameplayTimeMicros,
-                   .visualTimeMicros = sample.visualTimeMicros,
-                   .bgaTimeMicros = capturedState.clock.bgaTimeMicros},
-                  true);
-        }
-      }
-    } else if (capturedState.lastJudge.judgement != None &&
-               capturedState.lastJudgeVisualMicros !=
-                   kPlayfieldTimestampOff) {
-      // Preserve standalone snapshot callers that predate the bounded
-      // history and supply only their latest judgement.
-      onJudge(capturedState.lastJudge, capturedState.combo, capturedState.score,
-              {.songTimeMicros = capturedState.clock.gameplayTimeMicros,
-               .visualTimeMicros = capturedState.lastJudgeVisualMicros,
-               .bgaTimeMicros = capturedState.clock.bgaTimeMicros},
-              true);
-    }
-
     clearLiveTouchPoints();
     for (const auto &touch : capturedState.touches) {
       setLiveTouchPoint(touch.fingerId, touch.action, touch.normalizedX,
@@ -2904,7 +2910,8 @@ PresentationFrameResult BMSRenderer::render(RenderContext &context) {
     presentationFailure = PresentationFailure{
         .diagnostic = skin::SkinDiagnostic{
             .code = "presentation.frame_not_prepared",
-            .message = "The built-in presentation was rendered before prepareFrame."},
+            .message = "The built-in presentation was rendered before "
+                       "prepareFrame."},
         .frameSerial = 0};
     return {.frameSerial = 0,
             .outcome = PresentationFrameOutcome::CriticalFailure,
@@ -2941,6 +2948,133 @@ PresentationFrameResult BMSRenderer::render(RenderContext &context) {
           .outcome = PresentationFrameOutcome::Ready,
           .submittedMode = PresentationMode::BuiltIn,
           .bgaCompositeMode = GameplayBgaCompositeMode::FullscreenBuiltIn};
+}
+
+void BMSRenderer::renderSelectedSkinHud(
+    RenderContext &context, const PlayfieldVisualState &capturedState,
+    const skin::SelectedSkinHudGeometry &geometry) {
+  if (!renderHud || geometry.frameSerial == 0 ||
+      geometry.frameSerial != capturedState.clock.serial ||
+      !std::isfinite(geometry.playArea.x) ||
+      !std::isfinite(geometry.playArea.y) ||
+      !std::isfinite(geometry.playArea.width) ||
+      !std::isfinite(geometry.playArea.height) ||
+      !std::isfinite(geometry.judgementLineY) ||
+      geometry.playArea.width <= 0.0 || geometry.playArea.height <= 0.0 ||
+      geometry.laneCount == 0) {
+    return;
+  }
+
+  configure(capturedState.configuration);
+  synchronizeCapturedJudgementHud(capturedState);
+  currentRenderMicros = capturedState.clock.visualTimeMicros;
+  updateJudgementCounterText();
+
+  const float playAreaLeft = static_cast<float>(geometry.playArea.x);
+  const float playAreaTop = static_cast<float>(geometry.playArea.y);
+  const float playAreaWidth = static_cast<float>(geometry.playArea.width);
+  const float playAreaHeight = static_cast<float>(geometry.playArea.height);
+  const float judgementLineY = static_cast<float>(geometry.judgementLineY);
+  const float noteWidth =
+      std::max(1.0F, playAreaWidth / static_cast<float>(geometry.laneCount));
+  const float noteHeight = std::max(1.0F, playAreaHeight * 0.016F);
+
+  if (judgementIndicator.isEnabled()) {
+    simpleBatchRenderer.setSubmitView(rendering::ui_view);
+    simpleBatchRenderer.setSubmitDepth(
+        std::numeric_limits<std::uint32_t>::max() - 2U);
+    simpleBatchRenderer.begin();
+    judgementIndicator.render(simpleBatchRenderer, currentRenderMicros,
+                              {.judgeY = judgementLineY,
+                               .upperBound = playAreaTop,
+                               .playAreaLeftX = playAreaLeft,
+                               .playAreaWidth = playAreaWidth,
+                               .noteRenderWidth = noteWidth,
+                               .noteRenderHeight = noteHeight,
+                               .verticalDirection = -1.0F,
+                               .hudModeOverride = false});
+    simpleBatchRenderer.flush();
+  }
+
+  if (!judgementCounterEnabled) {
+    return;
+  }
+
+  JudgementCounterLayout layout;
+  layout.horizontal =
+      judgementCounterPosition == AppSettings::JudgementCounterPosition::Top;
+  layout.gap = std::clamp(playAreaWidth * 0.015F, 4.0F, 8.0F);
+  if (layout.horizontal) {
+    layout.itemWidth =
+        std::clamp((playAreaWidth -
+                    layout.gap * static_cast<float>(kHudCounterItemCount - 1)) /
+                       static_cast<float>(kHudCounterItemCount),
+                   42.0F, 118.0F);
+    layout.itemHeight = std::clamp(layout.itemWidth * 0.56F, 32.0F, 58.0F);
+    const float totalWidth = layout.itemWidth * kHudCounterItemCount +
+                             layout.gap * (kHudCounterItemCount - 1);
+    layout.x = playAreaLeft + (playAreaWidth - totalWidth) * 0.5F;
+    layout.y = std::max(8.0F, playAreaTop - layout.itemHeight - layout.gap);
+  } else {
+    layout.itemWidth = std::clamp(playAreaWidth * 0.20F, 58.0F, 118.0F);
+    layout.itemHeight = std::clamp(playAreaHeight / 10.0F, 36.0F, 50.0F);
+    const float totalHeight = layout.itemHeight * kHudCounterItemCount +
+                              layout.gap * (kHudCounterItemCount - 1);
+    layout.y =
+        std::clamp(playAreaTop + (playAreaHeight - totalHeight) * 0.5F, 8.0F,
+                   std::max(8.0F, static_cast<float>(rendering::window_height) -
+                                      totalHeight - 8.0F));
+    if (judgementCounterPosition ==
+        AppSettings::JudgementCounterPosition::Left) {
+      layout.x = std::max(8.0F, playAreaLeft - layout.gap - layout.itemWidth);
+    } else {
+      layout.x = std::min(static_cast<float>(rendering::window_width) -
+                              layout.itemWidth - 8.0F,
+                          playAreaLeft + playAreaWidth + layout.gap);
+    }
+  }
+
+  simpleBatchRenderer.setSubmitView(rendering::ui_view);
+  simpleBatchRenderer.setSubmitDepth(std::numeric_limits<std::uint32_t>::max() -
+                                     1U);
+  simpleBatchRenderer.begin();
+  for (std::size_t index = 0; index < kHudCounterItemCount; ++index) {
+    const float itemX =
+        layout.x +
+        (layout.horizontal ? (layout.itemWidth + layout.gap) * index : 0.0F);
+    const float itemY =
+        layout.y +
+        (layout.horizontal ? 0.0F : (layout.itemHeight + layout.gap) * index);
+    const int value = counterValueAt(renderedJudgementCounterSnapshot, index);
+    drawHudRoundedPanel(itemX, itemY, layout.itemWidth, layout.itemHeight,
+                        10.0F,
+                        hudCounterFill(index, value > 0, layout.horizontal),
+                        hudCounterBorder(index, value > 0, layout.horizontal));
+    placeText(
+        judgementCounterLabelTexts[index].get(),
+        static_cast<int>(std::round(itemX + 8.0F)),
+        static_cast<int>(std::round(itemY + 6.0F)),
+        std::max(1, static_cast<int>(std::round(layout.itemWidth - 16.0F))),
+        layout.horizontal ? 18 : 16);
+    placeText(
+        judgementCounterValueTexts[index].get(),
+        static_cast<int>(std::round(itemX + 8.0F)),
+        static_cast<int>(
+            std::round(itemY + (layout.horizontal ? 24.0F : 22.0F))),
+        std::max(1, static_cast<int>(std::round(layout.itemWidth - 16.0F))),
+        std::max(
+            1, static_cast<int>(std::round(
+                   layout.itemHeight - (layout.horizontal ? 28.0F : 24.0F)))));
+  }
+  simpleBatchRenderer.flush();
+  for (std::size_t index = 0; index < kHudCounterItemCount; ++index) {
+    if (judgementCounterLabelTexts[index] != nullptr) {
+      judgementCounterLabelTexts[index]->render(context);
+    }
+    if (judgementCounterValueTexts[index] != nullptr) {
+      judgementCounterValueTexts[index]->render(context);
+    }
+  }
 }
 
 void BMSRenderer::render(RenderContext &context, long long micro,
@@ -3580,8 +3714,8 @@ void BMSRenderer::renderFrame(
       return *rowLongOrder;
     };
     //    SDL_Log("BeatPosition: %f", timeLine->BeatPosition);
-    // Render notes in grouped lane order (white/blue/scratch) to reduce texture
-    // switches while keeping per-lane ordering intact.
+    // Render notes in grouped lane order (white/blue/scratch) to reduce
+    // texture switches while keeping per-lane ordering intact.
     auto processNote = [&](bms_parser::Note *note) {
       if (note == nullptr) {
         return;
