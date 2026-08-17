@@ -237,6 +237,30 @@ int main() {
     return 1;
   }
 
+  const pacemaker::Target unavailableBestGhostTarget{
+      .enabled = true,
+      .label = "BEST",
+      .finalScore = 3,
+      .maxScore = 4,
+      .totalNotes = 2,
+  };
+  const auto &builtInFallbackBestTarget =
+      pacemaker::targetForBuiltInPresentation(selectedBestTarget,
+                                              unavailableBestGhostTarget);
+  const pacemaker::Snapshot builtInFallbackBestSnapshot =
+      pacemaker::snapshotForBuiltInPresentation(
+          selectedBestTarget, selectedBestSnapshot,
+          unavailableBestGhostTarget);
+  if (&builtInFallbackBestTarget != &selectedBestTarget ||
+      builtInFallbackBestSnapshot.usesReplayProgression ||
+      builtInFallbackBestSnapshot.targetScore != 1 ||
+      builtInFallbackBestSnapshot.delta != 1) {
+    std::cerr << "built-in BEST pacemaker must retain its linear target when "
+                 "the saved-best replay is unavailable"
+              << std::endl;
+    return 1;
+  }
+
   const pacemaker::Target selectedAaTarget{
       .enabled = true,
       .label = "AA",

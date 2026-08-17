@@ -216,6 +216,13 @@ public:
   virtual void submit(const Submission &submission) = 0;
 };
 
+struct PacemakerState {
+  bool enabled = false;
+  int targetScore = 0;
+  int delta = 0;
+  bool usesReplayProgression = false;
+};
+
 } // namespace bms_renderer_characterization
 #endif
 
@@ -664,6 +671,15 @@ public:
   [[nodiscard]] JudgeResult pendingJudgementForTesting() const noexcept {
     return {static_cast<Judgement>(pendingJudge.load(std::memory_order_relaxed)),
             pendingJudgeDiffMicros.load(std::memory_order_relaxed)};
+  }
+  [[nodiscard]] bms_renderer_characterization::PacemakerState
+  pacemakerStateForTesting() const noexcept {
+    return {.enabled = pendingPacemakerEnabled.load(std::memory_order_relaxed),
+            .targetScore =
+                pendingPacemakerTargetScore.load(std::memory_order_relaxed),
+            .delta = pendingPacemakerDelta.load(std::memory_order_relaxed),
+            .usesReplayProgression = pendingPacemakerUsesReplayProgression.load(
+                std::memory_order_relaxed)};
   }
 #endif
   void setLiveTouchPoint(long long fingerId, ReplayTouchAction action, float x,
