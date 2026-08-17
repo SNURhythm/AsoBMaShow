@@ -2493,6 +2493,42 @@ void hashText(file_checksum::Sha256 &hash, std::string_view text) {
   hash.update(std::as_bytes(std::span(text.data(), text.size())));
 }
 
+std::set<std::string> emptyDirectoryPaths(const ArchiveInventory &inventory) {
+  std::set<std::string> nonemptyDirectories;
+  for (const ArchiveMember &member : inventory.members) {
+    for (std::size_t slash = member.installedPath.find('/');
+         slash != std::string::npos;
+         slash = member.installedPath.find('/', slash + 1)) {
+      nonemptyDirectories.emplace(member.installedPath.substr(0, slash));
+    }
+  }
+
+  std::set<std::string> emptyDirectories;
+  for (const ArchiveMember &member : inventory.members) {
+    if (member.kind == MemberKind::Directory &&
+        !member.installedPath.empty() &&
+        !nonemptyDirectories.contains(member.installedPath)) {
+      emptyDirectories.emplace(member.installedPath);
+    }
+  }
+  return emptyDirectories;
+}
+
+void hashEmptyDirectoryPaths(file_checksum::Sha256 &hash,
+                             const std::set<std::string> &paths) {
+  if (paths.empty()) {
+    return;
+  }
+  hashText(hash, "ASOBMSKIN-EMPTY-DIRECTORIES-V1");
+  const std::array<std::byte, 1> terminator{std::byte{0}};
+  hash.update(terminator);
+  hashBigEndian(hash, static_cast<std::uint64_t>(paths.size()));
+  for (const std::string &path : paths) {
+    hashBigEndian(hash, static_cast<std::uint32_t>(path.size()));
+    hashText(hash, path);
+  }
+}
+
 std::optional<std::string>
 digestArchivePayload(const ArchiveInventory &inventory,
                      const SecureStagingTree &staging, std::stop_token stop,
@@ -2610,6 +2646,7 @@ digestArchivePayload(const ArchiveInventory &inventory,
       return std::nullopt;
     }
   }
+  hashEmptyDirectoryPaths(hash, emptyDirectoryPaths(inventory));
   return hash.finalHex();
 }
 

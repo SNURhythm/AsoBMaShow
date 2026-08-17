@@ -2752,9 +2752,11 @@ bool replay_repository_detail::PrepareReplayDatabaseOnConnection(
     logSqlError("inspecting replay schema before migration", database);
     return false;
   }
-  if (*version >= kReplayDatabaseSchemaVersion ||
-      (*version == 0 && !hasSchema)) {
+  if (*version == 0 && !hasSchema) {
     return CreateReplayTablesOnConnection(database);
+  }
+  if (*version >= kReplayDatabaseSchemaVersion) {
+    return MigrateSchema(database);
   }
   return prepareReplayDatabaseWithCompaction(database, path);
 }

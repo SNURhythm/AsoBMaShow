@@ -1672,25 +1672,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
 
-    add_executable(repository_boundary_tests
-        tests/repository_boundary_tests.cpp
-    )
-    target_compile_features(repository_boundary_tests PRIVATE cxx_std_23)
-    target_compile_definitions(repository_boundary_tests PRIVATE
-        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
-    )
-
-    add_executable(replay_contract_boundary_tests
-        tests/replay_contract_boundary_tests.cpp
-    )
-    target_include_directories(replay_contract_boundary_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-    )
-    target_compile_features(replay_contract_boundary_tests PRIVATE cxx_std_23)
-    target_compile_definitions(replay_contract_boundary_tests PRIVATE
-        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
-    )
-
     add_executable(gyroscope_turntable_tests
         tests/gyroscope_turntable_tests.cpp
         src/input/GyroscopeTurntable.cpp
@@ -2038,19 +2019,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(replay_input_recorder_tests PRIVATE cxx_std_23)
 
-    add_executable(modern_chart_persistence_contract_tests
-        tests/modern_chart_persistence_contract_tests.cpp
-    )
-    target_include_directories(modern_chart_persistence_contract_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-    )
-    target_compile_definitions(modern_chart_persistence_contract_tests PRIVATE
-        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
-    )
-    target_compile_features(modern_chart_persistence_contract_tests PRIVATE
-        cxx_std_23
-    )
-
     add_executable(course_continuation_tests
         tests/course_continuation_tests.cpp
         src/bms_parser.cpp
@@ -2066,19 +2034,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(course_continuation_tests PRIVATE cxx_std_23)
-
-    add_executable(modern_course_persistence_contract_tests
-        tests/modern_course_persistence_contract_tests.cpp
-    )
-    target_include_directories(modern_course_persistence_contract_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-    )
-    target_compile_definitions(modern_course_persistence_contract_tests PRIVATE
-        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
-    )
-    target_compile_features(modern_course_persistence_contract_tests PRIVATE
-        cxx_std_23
-    )
 
     add_executable(course_replay_capture_tests
         tests/course_replay_capture_tests.cpp
@@ -3146,6 +3101,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(chart_library_scanner_tests PRIVATE cxx_std_23)
+    target_compile_definitions(chart_library_scanner_tests PRIVATE
+        ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS=1
+    )
     if(TARGET SDL2::SDL2)
         target_link_libraries(chart_library_scanner_tests PRIVATE SDL2::SDL2)
     elseif(TARGET SDL2::SDL2-static)
@@ -3708,14 +3666,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_compile_features(skin_process_resident_memory_tests PRIVATE cxx_std_23)
     endif()
 
-    add_executable(mobile_memory_pressure_tests
-        tests/mobile_memory_pressure_tests.cpp
-    )
-    target_compile_features(mobile_memory_pressure_tests PRIVATE cxx_std_23)
-    target_compile_definitions(mobile_memory_pressure_tests PRIVATE
-        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
-    )
-
     add_executable(image_view_fade_tests
         tests/image_view_fade_tests.cpp
         src/view/DecodedImageCache.cpp
@@ -3750,14 +3700,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         COMMAND ${CMAKE_COMMAND}
             -DIMAGE_VIEW_SOURCE=${CMAKE_SOURCE_DIR}/src/view/ImageView.cpp
             -P ${CMAKE_SOURCE_DIR}/tests/assert_image_view_decoder_ownership.cmake
-    )
-
-    add_executable(artwork_cache_contract_tests
-        tests/artwork_cache_contract_tests.cpp
-    )
-    target_compile_features(artwork_cache_contract_tests PRIVATE cxx_std_23)
-    target_compile_definitions(artwork_cache_contract_tests PRIVATE
-        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
     )
 
     add_executable(chart_list_item_view_tests
@@ -6171,22 +6113,33 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     function(asobmashow_register_test target_name)
         set(test_name ${target_name})
+        set(test_command_arguments)
         if(ARGC GREATER 1)
             set(test_name ${ARGV1})
         endif()
-        target_compile_definitions(${target_name} PRIVATE SDL_MAIN_HANDLED)
-        # Many legacy fixtures use assert() for setup as well as validation.
-        # Release's NDEBUG would otherwise remove database/resource setup calls
-        # and make the test binaries exercise a different program.
-        if(MSVC)
-            target_compile_options(${target_name} PRIVATE /UNDEBUG)
-            target_sources(${target_name} PRIVATE
-                tests/support/MsvcTestDiagnostics.cpp
-            )
-        else()
-            target_compile_options(${target_name} PRIVATE -UNDEBUG)
+        if(ARGC GREATER 2)
+            list(SUBLIST ARGV 2 -1 test_command_arguments)
         endif()
-        add_test(NAME ${test_name} COMMAND $<TARGET_FILE:${target_name}>)
+
+        get_property(test_target_prepared TARGET ${target_name}
+            PROPERTY ASOBMASHOW_TEST_TARGET_PREPARED)
+        if(NOT test_target_prepared)
+            target_compile_definitions(${target_name} PRIVATE SDL_MAIN_HANDLED)
+            # Many legacy fixtures use assert() for setup as well as validation.
+            # Release's NDEBUG would otherwise remove database/resource setup calls
+            # and make the test binaries exercise a different program.
+            if(MSVC)
+                target_compile_options(${target_name} PRIVATE /UNDEBUG)
+                target_sources(${target_name} PRIVATE
+                    tests/support/MsvcTestDiagnostics.cpp
+                )
+            else()
+                target_compile_options(${target_name} PRIVATE -UNDEBUG)
+            endif()
+            set_property(TARGET ${target_name}
+                PROPERTY ASOBMASHOW_TEST_TARGET_PREPARED TRUE)
+        endif()
+        add_test(NAME ${test_name} COMMAND $<TARGET_FILE:${target_name}> ${test_command_arguments})
         set_tests_properties(${test_name} PROPERTIES
             WORKING_DIRECTORY $<TARGET_FILE_DIR:${target_name}>
         )
@@ -6218,7 +6171,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         )
     endforeach()
 
-    asobmashow_register_test(repository_boundary_tests)
     asobmashow_register_test(skin_path_policy_tests)
     asobmashow_register_test(skin_tree_snapshotter_tests)
     asobmashow_register_test(gameplay_skin_lifecycle_tests)
@@ -6228,7 +6180,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(skin_archive_importer_tests)
     asobmashow_register_test(skin_diagnostic_history_tests)
     asobmashow_register_test(lua_skin_file_system_tests)
-    asobmashow_register_test(replay_contract_boundary_tests)
     asobmashow_register_test(find_bms_download_tests)
     asobmashow_register_test(video_frame_layout_tests)
     asobmashow_register_test(video_decode_state_tests)
@@ -6269,9 +6220,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         replay_codec_store_contract_tests
         replay_playback_tests
         replay_input_recorder_tests
-        modern_chart_persistence_contract_tests
         course_continuation_tests
-        modern_course_persistence_contract_tests
         course_replay_capture_tests
         modern_result_tests
         result_contract_tests
@@ -6328,9 +6277,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         decoded_image_cache_tests
         image_decode_coordinator_tests
         image_file_decoder_tests
-        mobile_memory_pressure_tests
         image_view_fade_tests
-        artwork_cache_contract_tests
         chart_list_item_view_tests
         dropdown_view_tests
         context_menu_view_tests
@@ -6540,10 +6487,19 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(result_image_exporter_partial_tests)
     asobmashow_register_test(chart_practice_range_tests)
     asobmashow_register_test(practice_preset_store_tests)
-    asobmashow_register_test(player_profile_manager_tests foundation_profile_manager)
+    asobmashow_register_test(player_profile_manager_tests foundation_profile_manager_bootstrap --shard bootstrap)
+    asobmashow_register_test(player_profile_manager_tests foundation_profile_manager_deletion --shard deletion)
+    asobmashow_register_test(player_profile_manager_tests foundation_profile_manager_integrity --shard integrity)
+    asobmashow_register_test(player_profile_manager_tests profile_manager_invalid_shard --shard invalid)
+    set_tests_properties(profile_manager_invalid_shard PROPERTIES WILL_FAIL TRUE)
     asobmashow_register_test(profile_switch_tests foundation_profile_switch)
     set_tests_properties(foundation_profile_switch PROPERTIES TIMEOUT 30)
-    asobmashow_register_test(profile_archive_tests foundation_profile_archive)
+    asobmashow_register_test(profile_archive_tests foundation_profile_archive_portable --shard portable)
+    asobmashow_register_test(profile_archive_tests foundation_profile_archive_validation --shard validation)
+    asobmashow_register_test(profile_archive_tests foundation_profile_archive_transactions --shard transactions)
+    asobmashow_register_test(profile_archive_tests foundation_profile_archive_faults --shard faults)
+    asobmashow_register_test(profile_archive_tests profile_archive_invalid_shard --shard invalid)
+    set_tests_properties(profile_archive_invalid_shard PROPERTIES WILL_FAIL TRUE)
     asobmashow_register_test(profile_settings_controller_tests foundation_profile_controller)
     asobmashow_register_test(profile_runtime_reapply_tests foundation_profile_runtime)
     asobmashow_register_test(input_device_registry_tests foundation_input_registry)

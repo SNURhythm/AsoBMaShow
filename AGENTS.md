@@ -89,3 +89,5 @@
 
 - For desktop local compile checks, use the existing `cmake-build-debug` folder:
   `cmake --build cmake-build-debug --target main -j 6`
+- For full CTest runs, execute tests in parallel:
+  `ctest --test-dir cmake-build-debug --output-on-failure -j 6`

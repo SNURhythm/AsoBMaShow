@@ -569,6 +569,24 @@ void testCanonicalWrapperAndExplicitDirectoryRules() {
                          "a special entry cannot masquerade as wrapper root");
 }
 
+void testExplicitEmptyDirectoriesAreMaterialized() {
+  TempDirectory temp;
+  const auto roots = rootsBelow(temp.root());
+  auto result = prepareZip(
+      makeZip(temp.root() / "empty-directory.zip",
+              {{"Wrapper/", {}, AE_IFDIR},
+               {"Wrapper/empty/", {}, AE_IFDIR},
+               {"Wrapper/skin/play.luaskin", "return {type = 0}\n"}}),
+      roots);
+  expect(result.prepared.has_value(),
+         "archives with explicit empty directories still prepare");
+  if (result.prepared) {
+    expect(fs::is_directory(result.prepared->visibleStagingRoot() / "empty") &&
+               fs::is_directory(result.prepared->readView().root() / "empty"),
+           "explicit empty archive directories become package data");
+  }
+}
+
 void testUnsafeNamesAndCollisionsRejectWholePackage() {
   struct Case {
     const char *label;
@@ -1142,10 +1160,23 @@ void testZipDeclaredAndAggregateLimitsRejectBeforeExtraction() {
       members.push_back({"d" + std::to_string(index) + "/", {}, AE_IFDIR});
     }
     members.push_back({"play.luaskin", "return {}\n"});
+    std::stop_source source;
+    bool reachedPostInventoryCheckpoint = false;
     auto result = prepareZip(
-        makeZip(temp.root() / "directory-count.zip", members), roots);
-    expect(result.prepared.has_value(),
-           "maxFiles counts regular files, not explicit directories");
+        makeZip(temp.root() / "directory-count.zip", members), roots,
+        source.get_token(),
+        [&](const SkinProgress &progress) {
+          if (progress.phase == SkinProgressPhase::Inspecting &&
+              progress.totalBytes > 0) {
+            reachedPostInventoryCheckpoint =
+                progress.completedFiles == SkinPackagePolicy::maxFiles + 1;
+            source.request_stop();
+          }
+        });
+    expect(reachedPostInventoryCheckpoint,
+           "maxFiles accepts explicit directories before extraction");
+    expect(result.cancelled,
+           "maxFiles boundary test cancels after inventory");
   }
 }
 
@@ -1553,6 +1584,7 @@ int main() {
   testMoveOnlyPreparationContract();
   testZipFolderAndManualTreeHaveOneIdentity();
   testCanonicalWrapperAndExplicitDirectoryRules();
+  testExplicitEmptyDirectoriesAreMaterialized();
   testUnsafeNamesAndCollisionsRejectWholePackage();
   testInvalidUtf8AndNulNamesReject();
   testLinksAndNonregularEntriesRejectWholePackage();

@@ -874,6 +874,46 @@ void testVersion17OpenKeyModeRetryImageAdvancesMarker() {
   assert(queryText(database.get(), "PRAGMA integrity_check") == "ok");
 }
 
+struct SessionMarkerWriteProbe {
+  std::filesystem::path path;
+  bool attempted = false;
+  bool committed = false;
+};
+
+void tryWriteMarkerAfterSessionSchemaValidation(void *context) {
+  auto &probe = *static_cast<SessionMarkerWriteProbe *>(context);
+  probe.attempted = true;
+  sqlite3 *raw = nullptr;
+  assert(sqlite3_open(probe.path.string().c_str(), &raw) == SQLITE_OK);
+  SqliteConnectionHandle concurrent(raw);
+  sqlite3_busy_timeout(concurrent.get(), 0);
+  probe.committed =
+      sqlite3_exec(concurrent.get(), "PRAGMA user_version=17", nullptr,
+                   nullptr, nullptr) == SQLITE_OK;
+}
+
+void testSessionSchemaValidationDoesNotCacheConcurrentMarker() {
+  TemporaryDirectory temporary;
+  const auto path = temporary.path / "session-schema-marker-race.db";
+  ReplayRepository repository(path);
+  assert(repository.EnsureSchema());
+  {
+    auto database = openDatabase(path);
+    exec(database.get(), "PRAGMA user_version=17");
+  }
+
+  SessionMarkerWriteProbe probe{.path = path};
+  replay_repository_test::SetSessionSchemaValidatedHook(
+      &probe, tryWriteMarkerAfterSessionSchemaValidation);
+  assert(repository.EnsureSchema());
+  replay_repository_test::SetSessionSchemaValidatedHook(nullptr, nullptr);
+
+  assert(probe.attempted);
+  assert(!probe.committed);
+  auto database = openDatabase(path);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 18);
+}
+
 enum class KeyModeMigrationPhase : std::uint8_t {
   None,
   ChartSchema,
@@ -1587,6 +1627,7 @@ int main() {
   testVersion15OwnershipMigrationPreservesPathOnlyReservations();
   testVersion17KeyModeMigrationPreservesRowsAndOpensPositiveCounts();
   testVersion17OpenKeyModeRetryImageAdvancesMarker();
+  testSessionSchemaValidationDoesNotCacheConcurrentMarker();
   testVersion17KeyModeMigrationRollbackFaultMatrix();
   testRollbackFaultMatrixPreservesOriginalDatabase();
   testPathMigrationReclaimsDroppedReplayDetailPages();

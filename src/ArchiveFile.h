@@ -108,6 +108,11 @@ using UnzipProgressCallback = std::function<void(const UnzipProgress &)>;
 using PauseCallback = std::function<bool()>;
 using CachePathNormalizer = std::function<void(std::filesystem::path &)>;
 using FileDataCallback = std::function<bool(FileData &&)>;
+#if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
+using StreamingEntryObserverForTesting =
+    std::function<void(const std::filesystem::path &,
+                       const std::filesystem::path &)>;
+#endif
 
 struct UnzipArchiveResult {
   std::filesystem::path outputFolder;
@@ -134,6 +139,10 @@ bool isArchiveSupportAvailable();
 bool hasSupportedArchiveExtension(const std::filesystem::path &path);
 void setCachePathNormalizer(CachePathNormalizer normalizer);
 void appendDebugLogLine(const std::string &message);
+#if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
+void setStreamingEntryObserverForTesting(
+    StreamingEntryObserverForTesting observer);
+#endif
 std::uint64_t debugLogRevision();
 std::vector<std::string> debugLogLines();
 std::string debugLogText();

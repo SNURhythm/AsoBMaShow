@@ -34,7 +34,13 @@ git submodule update --init --recursive
 - [x] Chart viewer
 - [ ] Support PMS
 - [ ] Portrait mode (mobile)
-- [ ] Support skin
+- [x] Support skin (Lua gameplay skins are enabled on desktop builds)
+
+### Repository guide
+
+See the [repository guide](docs/repository-guide.md) for the current codebase
+map and [feature documentation](docs/features/README.md) for subsystem intent,
+ownership, and focused test locations.
 
 ## Dependency
 

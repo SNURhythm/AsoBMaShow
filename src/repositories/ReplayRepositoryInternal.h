@@ -12,6 +12,8 @@ struct ReplayRepository::Impl {
   mutable std::mutex sessionMutex;
   std::filesystem::path databasePath;
   sqlite3 *sessionDatabase = nullptr;
+  int sessionSchemaVersion = -1;
+  int sessionUserVersion = -1;
 };
 
 namespace replay_repository_detail {

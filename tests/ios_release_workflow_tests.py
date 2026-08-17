@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -57,12 +58,36 @@ RELEASE_CRITICAL_SKIN_TESTS = {
     "skin_overlay_digest_provider_tests": "skin_overlay_digest_provider_tests",
     "skin_acceptance_recorder_tests": "skin_acceptance_recorder_tests",
     "gameplay_skin_acceptance_controller_tests": "gameplay_skin_acceptance_controller_tests",
-    "player_profile_manager_tests": "foundation_profile_manager",
     "profile_switch_tests": "foundation_profile_switch",
-    "profile_archive_tests": "foundation_profile_archive",
     "profile_settings_controller_tests": "foundation_profile_controller",
     "profile_runtime_reapply_tests": "foundation_profile_runtime",
 }
+
+RELEASE_CRITICAL_PROFILE_TESTS = {
+    "player_profile_manager_tests": {
+        "foundation_profile_manager_bootstrap",
+        "foundation_profile_manager_deletion",
+        "foundation_profile_manager_integrity",
+    },
+    "profile_archive_tests": {
+        "foundation_profile_archive_portable",
+        "foundation_profile_archive_validation",
+        "foundation_profile_archive_transactions",
+        "foundation_profile_archive_faults",
+    },
+}
+
+RELEASE_CRITICAL_PROFILE_INVALID_TESTS = {
+    "profile_manager_invalid_shard",
+    "profile_archive_invalid_shard",
+}
+
+
+def native_test_targets(script):
+    block = re.search(r"NATIVE_TEST_TARGETS=\(\n(.*?)\n\)", script, re.DOTALL)
+    if block is None:
+        raise AssertionError("NATIVE_TEST_TARGETS block is missing")
+    return re.findall(r"^  ([a-z0-9_]+)$", block.group(1), re.MULTILINE)
 
 
 class IOSReleaseWorkflowTests(unittest.TestCase):
@@ -232,6 +257,59 @@ class IOSReleaseWorkflowTests(unittest.TestCase):
         ):
             with self.subTest(registered_audit=registered_audit):
                 self.assertIn(registered_audit, self.verify_script)
+
+    def test_release_verifier_selects_complete_profile_shard_collections(self):
+        pattern = re.search(
+            r"NATIVE_CTEST_PATTERN='([^']+)'", self.verify_script
+        ).group(1)
+        registered_names = set(pattern.removeprefix("^(").removesuffix(")$").split("|"))
+        profile_family = {
+            name
+            for name in registered_names
+            if name.startswith(("foundation_profile_manager", "foundation_profile_archive"))
+        }
+        expected_profile_names = set().union(*RELEASE_CRITICAL_PROFILE_TESTS.values())
+        self.assertEqual(profile_family, expected_profile_names)
+        self.assertNotEqual(
+            profile_family | {"foundation_profile_manager", "foundation_profile_archive"},
+            expected_profile_names,
+        )
+        for target, expected_names in RELEASE_CRITICAL_PROFILE_TESTS.items():
+            with self.subTest(target=target):
+                self.assertIn(target, self.verify_script)
+        self.assertTrue(
+            RELEASE_CRITICAL_PROFILE_INVALID_TESTS.isdisjoint(registered_names)
+        )
+
+    def test_release_verifier_runs_native_checks_in_parallel(self):
+        self.assertIn(
+            'run ctest --test-dir "${BUILD_DIR}" \\\n'
+            '  -R "${NATIVE_CTEST_PATTERN}" \\\n'
+            '  --output-on-failure \\\n'
+            '  --parallel "${BUILD_JOBS}"',
+            self.verify_script,
+        )
+
+    def test_release_verifier_builds_each_profile_test_once_in_native_targets(self):
+        duplicate = self.verify_script.replace(
+            "  profile_archive_tests\n",
+            "  profile_archive_tests\n  profile_archive_tests\n",
+            1,
+        )
+        self.assertEqual(
+            native_test_targets(duplicate).count("profile_archive_tests"),
+            2,
+            "the NATIVE_TEST_TARGETS parser detects an artificial duplicate",
+        )
+
+        targets = native_test_targets(self.verify_script)
+        for target in RELEASE_CRITICAL_PROFILE_TESTS:
+            with self.subTest(target=target):
+                self.assertEqual(
+                    targets.count(target),
+                    1,
+                    "each profile executable occurs once in NATIVE_TEST_TARGETS",
+                )
 
     def test_local_firebase_wrapper_calls_only_the_firebase_lane(self):
         script = DEPLOY_SCRIPT.read_text(encoding="utf-8")

@@ -13,6 +13,7 @@ enum class PathMigrationFault {
 };
 
 using PathMigrationAfterSnapshotHook = void (*)(void *context);
+using SessionSchemaValidatedHook = void (*)(void *context);
 
 // Test-only seam for transaction fault injection around the schema owner.
 // Production callers migrate through ReplayRepository::EnsureSchema().
@@ -20,5 +21,7 @@ using PathMigrationAfterSnapshotHook = void (*)(void *context);
 void SetPathMigrationFault(PathMigrationFault fault);
 void SetPathMigrationAfterSnapshotHook(void *context,
                                        PathMigrationAfterSnapshotHook hook);
+void SetSessionSchemaValidatedHook(void *context,
+                                   SessionSchemaValidatedHook hook);
 
 } // namespace replay_repository_test
