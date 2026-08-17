@@ -2891,7 +2891,6 @@ bool GamePlayScene::reset() {
   stopRealtimeGameplayAuthority(false);
   realtimeGameplayAuthorityWaitingForSkinGeometry = false;
   playbackInitializationFailed = false;
-  beatorajaGameplayClock.reset();
   context.inputDeviceRegistry.resetGyroscopeTurntableSession();
   ownedState.reset();
   state = nullptr;
@@ -3072,10 +3071,6 @@ bool GamePlayScene::reset() {
   updateSkinResetLayoutVisibility();
 #endif
   context.jukebox.play(preparationPlan.playbackStartTimeMicros);
-  if (options.practiceSession == nullptr && !options.practiceMode) {
-    beginBeatorajaGameplayClock(
-        getGameplayTimeMicros(context.jukebox.getTimeMicros()));
-  }
   replayEventCursor = 0;
   replayLaneCoverCursor = 0;
   touchVisualizerLoaded = false;
@@ -3233,10 +3228,6 @@ void GamePlayScene::showPauseMenu(bool pausePlayback) {
 void GamePlayScene::closePauseMenu() {
   if (!isCoursePlayback() && context.jukebox.isPaused()) {
     context.jukebox.resume();
-    if (beatorajaGameplayClock.has_value()) {
-      beginBeatorajaGameplayClock(
-          getGameplayTimeMicros(context.jukebox.getTimeMicros()));
-    }
   }
   if (realtimeGameplayAuthorityActive() &&
       !realtimeGameplaySession->worker->resume()) {
@@ -4686,40 +4677,6 @@ std::uint64_t GamePlayScene::selectedSkinResultTransitionDelayMillis(
   return static_cast<std::uint64_t>((remainingRealMicros + 1'000) / 1'000);
 }
 
-void GamePlayScene::beginBeatorajaGameplayClock(
-    long long gameplayTimeMicros) {
-  const long long lastPlayableNoteMicros =
-      chart == nullptr
-          ? gameplayTimeMicros
-          : gameplay::terminalMicrosForGameplayMode(chart->Meta.PlayLength,
-                                                    chart->Meta.TotalLength);
-  beatorajaGameplayClock = {
-      .scheduledAudioEndGameplayMicros = std::max(
-          {gameplayTimeMicros,
-           getGameplayTimeMicros(context.jukebox.getScheduledAudioEndMicros()),
-           lastPlayableNoteMicros}),
-      .playbackRate = context.jukebox.playbackRate(),
-  };
-}
-
-long long GamePlayScene::beatorajaGameplayFrameMicros(
-    long long gameplayTimeMicros) {
-  if (!beatorajaGameplayClock.has_value() || context.jukebox.isPaused()) {
-    return gameplayTimeMicros;
-  }
-  auto &clock = *beatorajaGameplayClock;
-  if (gameplayTimeMicros < clock.scheduledAudioEndGameplayMicros) {
-    return gameplayTimeMicros;
-  }
-  if (!clock.continuationGameplayStartMicros.has_value()) {
-    clock.continuationGameplayStartMicros = gameplayTimeMicros;
-    clock.continuationSteadyStartMicros = nowMicros();
-  }
-  return skin::beatorajaGameplayFrameClockMicros(
-      gameplayTimeMicros, *clock.continuationGameplayStartMicros,
-      *clock.continuationSteadyStartMicros, nowMicros(), clock.playbackRate);
-}
-
 void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
   if (resultTransitionScheduled) {
     return;
@@ -5019,9 +4976,6 @@ void GamePlayScene::update(float dt) {
 
   const long long rawSongTimeMicros = context.jukebox.getTimeMicros();
   long long gameplayTimeMicros = getGameplayTimeMicros(rawSongTimeMicros);
-  if (options.practiceSession == nullptr && !options.practiceMode) {
-    gameplayTimeMicros = beatorajaGameplayFrameMicros(gameplayTimeMicros);
-  }
   bool practiceSectionComplete = false;
   if (options.practiceSession != nullptr) {
     const auto practiceFrame = gameplay_timing::practiceFrameTiming(
@@ -5183,9 +5137,6 @@ void GamePlayScene::renderScene() {
       preparationIndicatorActive(rawSongTimeMicros);
   const bool practiceCountIn = practiceCountInActive(rawSongTimeMicros);
   long long gameplayTimeMicros = getGameplayTimeMicros(rawSongTimeMicros);
-  if (options.practiceSession == nullptr && !options.practiceMode) {
-    gameplayTimeMicros = beatorajaGameplayFrameMicros(gameplayTimeMicros);
-  }
   if (const auto range = practiceNoteRange();
       range.has_value() && gameplayTimeMicros >= range->endMicros) {
     gameplayTimeMicros = range->endMicros - 1;

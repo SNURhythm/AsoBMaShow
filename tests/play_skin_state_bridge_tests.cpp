@@ -1529,49 +1529,11 @@ void testClearAndFullComboTimersFollowPinnedBmsPlayerState() {
   bridge.discardFrame();
 }
 
-void testEndAnimationClockContinuesAfterAudioClockStops() {
-  // AudioWrapper clamps its audio clock at the scheduled sound end. The
-  // BMSPlayer timer still advances at the active playback rate through the
-  // end-of-notes, finish-margin, and fadeout phases.
-  const audio::PlaybackRate normalRate{.percent = 100};
-  expect(beatorajaGameplayFrameClockMicros(10'000'000, 10'000'000,
-                                           5'000'000, 5'750'000,
-                                           normalRate) == 10'750'000,
-         "end animation advances after the capped audio clock at normal rate");
-  expect(beatorajaGameplayFrameClockMicros(11'500'000, 10'000'000,
-                                           5'000'000, 5'750'000,
-                                           normalRate) == 11'500'000,
-         "the advancing audio clock remains authoritative when it is ahead");
-  const audio::PlaybackRate doubleRate{.percent = 200};
-  expect(beatorajaGameplayFrameClockMicros(10'000'000, 10'000'000,
-                                           5'000'000, 5'750'000,
-                                           doubleRate) == 11'500'000,
-         "end animation uses the active chart playback rate");
-}
-
-void testFrameClockDoesNotLeadBeforeContinuationStarts() {
-  // GamePlayScene records the actual audio-exhaustion time before beginning
-  // the steady-clock continuation. Until then, drawing and judgement retain
-  // the same chart time.
-  const audio::PlaybackRate normalRate{.percent = 100};
-  expect(beatorajaGameplayFrameClockMicros(10'000'000, 20'000'000,
-                                           5'000'000, 5'750'000,
-                                           normalRate) == 10'000'000,
-         "the frame clock does not lead before continuation starts");
-}
-
 void testLiveGameplayClockKeepsTheFinalNoteInStatePlayUntilPinnedDeadline() {
   // Pinned Beatoraja BMSPlayer keeps STATE_PLAY through lastNoteTime +
   // TIME_MARGIN, then changes state only when the integer play timer is
-  // strictly greater than that deadline. This is deliberately independent of
-  // AudioWrapper's sound-buffer end: a chart whose final sound ends on the
-  // final note still needs a live gameplay clock to age that note out.
-  const audio::PlaybackRate normalRate{.percent = 100};
-  expect(beatorajaGameplayFrameClockMicros(10'000'000, 10'000'000,
-                                           1'000'000, 6'000'000,
-                                           normalRate) == 15'000'000,
-         "the live gameplay clock retains the five-second post-note state-play "
-         "margin");
+  // strictly greater than that deadline. The active Jukebox callback clock
+  // remains the single source for both gameplay and skin presentation.
   expect(!beatorajaGameplayStateFinished(15'000'000, 15'000),
          "the exact BMSPlayer playtime remains in STATE_PLAY");
   expect(beatorajaGameplayStateFinished(15'001'000, 15'000),
@@ -2386,8 +2348,6 @@ int main() {
   testPlayTimerPropertiesMatchPinnedJavaConversions();
   testReadyAndLiveTimersUseTheSharedSkinStateClock();
   testClearAndFullComboTimersFollowPinnedBmsPlayerState();
-  testEndAnimationClockContinuesAfterAudioClockStops();
-  testFrameClockDoesNotLeadBeforeContinuationStarts();
   testLiveGameplayClockKeepsTheFinalNoteInStatePlayUntilPinnedDeadline();
   testPlayTimerVisualRebaseSaturatesWithoutLosingCancellation();
   testSelectedScuroMappingsUseOnlyAuthoritativeState();

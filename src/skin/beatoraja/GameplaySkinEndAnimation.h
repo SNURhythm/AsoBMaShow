@@ -1,7 +1,6 @@
 #pragma once
 
 #include "BeatorajaSkinModel.h"
-#include "../../audio/PlaybackRate.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -49,26 +48,6 @@ gameplaySkinAnimationCompletionDeadlineMicros(
       deadline, nonnegativeAnimationMicros(timing.finishMarginMillis));
   return saturatingAnimationAdd(deadline,
                                  nonnegativeAnimationMicros(timing.fadeoutMillis));
-}
-
-// AudioWrapper intentionally clamps its presentation clock when its scheduled
-// audio ends. BMSPlayer's TIMER_PLAY instead continues from the main timer at
-// the current frequency for its post-audio state machine. The continuation is
-// anchored at the observed audio-end time, not gameplay start.
-[[nodiscard]] inline std::int64_t beatorajaGameplayFrameClockMicros(
-    std::int64_t observedGameplayMicros,
-    std::int64_t continuationGameplayStartMicros,
-    std::int64_t endingSteadyStartMicros, std::int64_t currentSteadyMicros,
-    audio::PlaybackRate playbackRate) noexcept {
-  if (observedGameplayMicros < continuationGameplayStartMicros) {
-    return observedGameplayMicros;
-  }
-  const std::int64_t steadyElapsedMicros =
-      std::max<std::int64_t>(0, currentSteadyMicros - endingSteadyStartMicros);
-  const std::int64_t continuedGameplayMicros = saturatingAnimationAdd(
-      continuationGameplayStartMicros,
-      playbackRate.chartMicrosFromReal(steadyElapsedMicros));
-  return std::max(observedGameplayMicros, continuedGameplayMicros);
 }
 
 // Kept separate from selected-skin timing because BMSPlayer's STATE_PLAY
