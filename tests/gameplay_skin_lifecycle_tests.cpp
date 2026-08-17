@@ -586,6 +586,29 @@ void testStartupRevalidationDoesNotRestoreAClearedTrait() {
           "a queued startup revalidation never restores a cleared trait");
 }
 
+void testStartupRevalidationKeepsAnEntrySelectedDuringTraitNormalization() {
+  LifecycleFake fake;
+  fake.owner.settings.selectedGameplayEntries.clear();
+  fake.owner.settings.selectedGameplayEntries.emplace(1, fake.entry);
+  fake.simulateRestart();
+
+  GameplaySkinLifecycle lifecycle(fake.dependencies());
+  lifecycle.startAfterProfileInitialization(fake.profile);
+
+  // Profile recovery can normalize the trait map after startup queued work
+  // from its first snapshot. The selected entry is unchanged, so recovery
+  // must continue rather than leaving it without a process-local activation.
+  fake.owner.settings.selectedGameplayEntries.clear();
+  fake.owner.settings.selectedGameplayEntries.emplace(2, fake.entry);
+  ++fake.owner.generation;
+  lifecycle.poll();
+
+  require(fake.prepares.size() == 1 &&
+              fake.prepares.front().entry == fake.entry &&
+              fake.prepares.front().base.generation == fake.owner.generation,
+          "startup revalidation survives a selected entry's trait normalization");
+}
+
 void testLaterFailedRescanPreservesReadyAcquisitionAndCatalog() {
   LifecycleFake fake;
   GameplaySkinLifecycle lifecycle(fake.dependencies());
@@ -1195,6 +1218,7 @@ int main() {
   testStartupRestoresPersistedSelectionWithoutRescan();
   testStartupRevalidatesEverySelectedTraitFromCurrentGeneration();
   testStartupRevalidationDoesNotRestoreAClearedTrait();
+  testStartupRevalidationKeepsAnEntrySelectedDuringTraitNormalization();
   testLaterFailedRescanPreservesReadyAcquisitionAndCatalog();
   testRescanProgressReportsEachLifecycleStage();
   testAcquisitionUsesOwningActivationAndMonotonicSessionSerial();
