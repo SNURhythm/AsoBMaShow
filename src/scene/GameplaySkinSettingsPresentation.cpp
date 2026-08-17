@@ -527,4 +527,29 @@ gameplaySkinViewportWithCustomBase(ViewportSettings current,
   return current;
 }
 
+int gameplaySkinSanitizedOffsetComponent(std::string_view text,
+                                         int fallback) noexcept {
+  int value = 0;
+  const auto result =
+      std::from_chars(text.data(), text.data() + text.size(), value);
+  return result.ec == std::errc{} && result.ptr == text.data() + text.size()
+             ? value
+             : fallback;
+}
+
+float gameplaySkinSanitizedViewportComponent(std::string_view text,
+                                             float fallback, float minimum,
+                                             float maximum) {
+  try {
+    std::size_t consumed = 0;
+    const float value = std::stof(std::string(text), &consumed);
+    if (consumed != text.size() || !std::isfinite(value)) {
+      return fallback;
+    }
+    return std::clamp(value, minimum, maximum);
+  } catch (...) {
+    return fallback;
+  }
+}
+
 } // namespace skin

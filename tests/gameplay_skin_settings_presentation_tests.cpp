@@ -296,6 +296,22 @@ void testLayoutKeyIgnoresLiveOperationAndConfigurationValues() {
           "diagnostic history changes rebuild the gameplay skins tab");
 }
 
+void testConfigurationInputSanitization() {
+  require(skin::gameplaySkinSanitizedOffsetComponent("-12", 3) == -12,
+          "valid skin offset input is preserved");
+  require(skin::gameplaySkinSanitizedOffsetComponent("invalid", 3) == 3,
+          "invalid skin offset input restores the committed value");
+  require(skin::gameplaySkinSanitizedViewportComponent("1.25", 1.0F, 0.5F,
+                                                        2.0F) == 1.25F,
+          "valid skin viewport input is preserved");
+  require(skin::gameplaySkinSanitizedViewportComponent("9", 1.0F, 0.5F,
+                                                        2.0F) == 2.0F,
+          "out-of-range skin viewport input is clamped before display");
+  require(skin::gameplaySkinSanitizedViewportComponent("invalid", 1.0F,
+                                                        0.5F, 2.0F) == 1.0F,
+          "invalid skin viewport input restores the committed value");
+}
+
 void testPresentationEncodingHasNoDelimiterOrOptionalAmbiguity() {
   auto left = snapshotWithEntry();
   left.preparedName =
@@ -490,6 +506,7 @@ int main() {
   testMetadataChangesInvalidateAnUnchangedDigest();
   testActionDrivingChangesInvalidatePresentation();
   testLayoutKeyIgnoresLiveOperationAndConfigurationValues();
+  testConfigurationInputSanitization();
   testPresentationEncodingHasNoDelimiterOrOptionalAmbiguity();
   testCachedControllerPresentationKeyAvoidsReencodingStaticCatalogRows();
   testCatalogItemsFollowBeatorajaCategoryAndOtherOrder();

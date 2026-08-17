@@ -1447,11 +1447,14 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
                   [this, input, entry = row.entry, name = offset.name,
                    member](const std::string &) {
                     auto configured = gameplaySkinOffsetForEntry(entry, name);
-                    configured.*member = sanitizeOffsetComponent(
+                    const int value = skin::gameplaySkinSanitizedOffsetComponent(
                         input->getText(), configured.*member);
-                    handleGameplaySkinActionResult(
-                        gameplaySkinSettingsController->setOffset(entry, name,
-                                                                  configured));
+                    configured.*member = value;
+                    if (handleGameplaySkinActionResult(
+                            gameplaySkinSettingsController->setOffset(
+                                entry, name, configured))) {
+                      input->setEditingText(std::to_string(value));
+                    }
                   });
             }
             group->addView(input);
@@ -1542,12 +1545,14 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
           float &component =
               scale ? (horizontal ? viewport.scaleX : viewport.scaleY)
                     : (horizontal ? viewport.translateX : viewport.translateY);
-          component = sanitizeViewportComponent(input->getText(), component,
-                                                minimum, maximum);
+          component = skin::gameplaySkinSanitizedViewportComponent(
+              input->getText(), component, minimum, maximum);
           viewport = skin::gameplaySkinViewportWithMode(
               viewport, skin::ViewportMode::Custom);
-          handleGameplaySkinActionResult(
-              gameplaySkinSettingsController->setViewport(entry, viewport));
+          if (handleGameplaySkinActionResult(
+                  gameplaySkinSettingsController->setViewport(entry, viewport))) {
+            input->setEditingText(formatViewportComponent(component));
+          }
         });
       }
       group->addView(input);

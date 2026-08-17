@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace skin {
@@ -78,5 +79,13 @@ gameplaySkinViewportWithMode(ViewportSettings current,
 [[nodiscard]] ViewportSettings
 gameplaySkinViewportWithCustomBase(ViewportSettings current,
                                    CustomViewportBase customBase) noexcept;
+
+// These values are written back into retained text inputs after an accepted
+// edit, keeping the field aligned with the queued and persisted value.
+[[nodiscard]] int gameplaySkinSanitizedOffsetComponent(
+    std::string_view text, int fallback) noexcept;
+
+[[nodiscard]] float gameplaySkinSanitizedViewportComponent(
+    std::string_view text, float fallback, float minimum, float maximum);
 
 } // namespace skin
