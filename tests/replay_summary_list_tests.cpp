@@ -196,6 +196,78 @@ int main() {
     return 1;
   }
 
+  const pacemaker::Target selectedBestTarget{
+      .enabled = true,
+      .label = "BEST",
+      .finalScore = 3,
+      .maxScore = 4,
+      .totalNotes = 2,
+  };
+  const pacemaker::Target savedBestGhostTarget{
+      .enabled = true,
+      .label = "BEST",
+      .finalScore = 3,
+      .maxScore = 4,
+      .totalNotes = 2,
+      .usesReplayProgression = true,
+      .scoreAfterNotes = {0, 2, 3},
+  };
+  const pacemaker::Snapshot selectedBestSnapshot{
+      .enabled = true,
+      .label = "BEST",
+      .currentScore = 2,
+      .targetScore = 1,
+      .finalTargetScore = 3,
+      .maxScore = 4,
+      .delta = 1,
+      .playedNotes = 1,
+      .totalNotes = 2,
+  };
+  const auto &builtInBestTarget = pacemaker::targetForBuiltInPresentation(
+      selectedBestTarget, savedBestGhostTarget);
+  const pacemaker::Snapshot builtInBestSnapshot =
+      pacemaker::snapshotForBuiltInPresentation(
+          selectedBestTarget, selectedBestSnapshot, savedBestGhostTarget);
+  if (&builtInBestTarget != &savedBestGhostTarget ||
+      !builtInBestSnapshot.usesReplayProgression ||
+      builtInBestSnapshot.targetScore != 2 || builtInBestSnapshot.delta != 0) {
+    std::cerr << "built-in BEST pacemaker must reuse the validated best-ghost "
+                 "progression"
+              << std::endl;
+    return 1;
+  }
+
+  const pacemaker::Target selectedAaTarget{
+      .enabled = true,
+      .label = "AA",
+      .finalScore = 1,
+      .maxScore = 4,
+      .totalNotes = 2,
+  };
+  const pacemaker::Snapshot selectedAaSnapshot{
+      .enabled = true,
+      .label = "AA",
+      .currentScore = 2,
+      .targetScore = 0,
+      .finalTargetScore = 1,
+      .maxScore = 4,
+      .delta = 2,
+      .playedNotes = 1,
+      .totalNotes = 2,
+  };
+  const auto &builtInAaTarget = pacemaker::targetForBuiltInPresentation(
+      selectedAaTarget, savedBestGhostTarget);
+  const pacemaker::Snapshot builtInAaSnapshot =
+      pacemaker::snapshotForBuiltInPresentation(
+          selectedAaTarget, selectedAaSnapshot, savedBestGhostTarget);
+  if (&builtInAaTarget != &selectedAaTarget ||
+      builtInAaSnapshot.usesReplayProgression ||
+      builtInAaSnapshot.targetScore != 0 || builtInAaSnapshot.delta != 2) {
+    std::cerr << "built-in non-BEST pacemaker must retain its linear target"
+              << std::endl;
+    return 1;
+  }
+
   ReplayData legacyRulesetReplay = lr2RulesetReplay;
   legacyRulesetReplay.provenance = ScoreProvenance::Legacy();
   const RhythmState legacyRulesetResult =
