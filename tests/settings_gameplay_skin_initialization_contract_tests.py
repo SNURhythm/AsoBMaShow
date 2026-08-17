@@ -89,6 +89,28 @@ class SettingsGameplaySkinInitializationContracts(unittest.TestCase):
             "viewport edits must merge into the latest settings snapshot",
         )
 
+    def test_diagnostic_history_keeps_one_text_view_per_record(self) -> None:
+        source = (ROOT / "src/scene/SettingsSceneSkins.cpp").read_text(
+            encoding="utf-8"
+        )
+        history = re.search(
+            r"if \(!snapshot\.history\.empty\(\)\) \{(?P<body>[\s\S]*?)\n  \}",
+            source,
+        )
+        self.assertIsNotNone(history)
+        body = history.group("body")
+        loop = re.search(
+            r"for \(const auto &record : snapshot\.history\) \{(?P<body>[\s\S]*?)\n    \}",
+            body,
+        )
+        self.assertIsNotNone(loop)
+        self.assertIn(
+            "history->addView(makeWrappedText(recordText",
+            loop.group("body"),
+            "each diagnostic history entity must retain its own TextView "
+            "rather than joining the entire history into one texture",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -20,6 +20,7 @@ public:
 
   void setText(const std::string &newText);
   [[nodiscard]] const std::string &getText() const { return text; }
+  void setDeferredTextureMaterialization(bool deferred);
   void setColor(SDL_Color newColor);
   void setThemedColor(ThemeColorProvider provider);
   void setAlign(TextAlign newAlign);
@@ -107,7 +108,9 @@ protected:
   SDL_Rect rect{};
   std::string text;
   bool wrapEnabled = false;
+  bool deferTextureMaterialization = false;
   int currentWrapWidth = 0;
+  bool metricsDirty = true;
   Uint64 marqueeStartedAt = 0;
   bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
   static YGSize measureFunc(YGNodeConstRef node, float width,
@@ -115,6 +118,7 @@ protected:
                             YGMeasureMode heightMode);
 
   bgfx::UniformHandle s_texColor = BGFX_INVALID_HANDLE;
-  void createTexture(bool markDirty = true, bool force = true,
-                     int requestedWrapWidth = -1);
+  void invalidateTexture();
+  void updateTextMetrics(bool markDirty = true, int requestedWrapWidth = -1);
+  void createTexture();
 };

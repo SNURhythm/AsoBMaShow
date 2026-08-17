@@ -344,10 +344,28 @@ void TextView::setText(const std::string &newText) {
   }
   this->text = newText;
   marqueeStartedAt = SDL_GetTicks64();
-  createTexture();
+  metricsDirty = true;
+  invalidateTexture();
+  updateTextMetrics();
+  if (!deferTextureMaterialization) {
+    createTexture();
+  }
+}
+
+void TextView::setDeferredTextureMaterialization(bool deferred) {
+  if (deferTextureMaterialization == deferred) {
+    return;
+  }
+  deferTextureMaterialization = deferred;
+  if (!deferTextureMaterialization && !bgfx::isValid(texture)) {
+    createTexture();
+  }
 }
 
 void TextView::renderImpl(RenderContext &context) {
+  if (!bgfx::isValid(texture)) {
+    createTexture();
+  }
   if (!bgfx::isValid(texture)) {
     return;
   }
@@ -869,7 +887,10 @@ void TextView::setColor(SDL_Color newColor) {
     return;
   }
   this->color = newColor;
-  createTexture(); // Update the texture since newColor has changed
+  invalidateTexture();
+  if (!deferTextureMaterialization) {
+    createTexture();
+  }
 }
 
 void TextView::setThemedColor(ThemeColorProvider provider) {
@@ -885,7 +906,10 @@ void TextView::setThemedColor(ThemeColorProvider provider) {
     return;
   }
   color = newColor;
-  createTexture();
+  invalidateTexture();
+  if (!deferTextureMaterialization) {
+    createTexture();
+  }
 }
 
 void TextView::onThemeChanged() {
@@ -901,11 +925,20 @@ void TextView::onThemeChanged() {
     return;
   }
   color = newColor;
-  createTexture();
+  invalidateTexture();
+  if (!deferTextureMaterialization) {
+    createTexture();
+  }
 }
 
-void TextView::createTexture(bool markDirty, bool force,
-                             int requestedWrapWidth) {
+void TextView::invalidateTexture() {
+  if (bgfx::isValid(texture)) {
+    bgfx::destroy(texture);
+  }
+  texture = BGFX_INVALID_HANDLE;
+}
+
+void TextView::updateTextMetrics(bool markDirty, int requestedWrapWidth) {
   text_runtime::OperationGuard operation;
   const int previousWidth = rect.w;
   const int previousHeight = rect.h;
@@ -913,16 +946,15 @@ void TextView::createTexture(bool markDirty, bool force,
       wrapEnabled ? std::max(0, requestedWrapWidth >= 0 ? requestedWrapWidth
                                                         : currentWrapWidth)
                   : 0;
-  const int rasterWrapWidth = rasterLengthFor(effectiveWrapWidth);
-  if (!force && effectiveWrapWidth == currentWrapWidth &&
-      bgfx::isValid(texture)) {
+  if (!metricsDirty && effectiveWrapWidth == currentWrapWidth) {
     return;
   }
 
+  const bool wrapWidthChanged = effectiveWrapWidth != currentWrapWidth;
   currentWrapWidth = effectiveWrapWidth;
-  if (bgfx::isValid(texture)) {
-    bgfx::destroy(texture);
-    texture = BGFX_INVALID_HANDLE;
+  metricsDirty = false;
+  if (wrapWidthChanged) {
+    invalidateTexture();
   }
 
   if (text.empty() || fontFaces.empty()) {
@@ -934,6 +966,39 @@ void TextView::createTexture(bool markDirty, bool force,
     }
     return;
   }
+  ensureFontsForText(text);
+  const int rasterWrapWidth = rasterLengthFor(effectiveWrapWidth);
+  const TextLineMetrics metrics = {
+      fontAscent, fontDescent, rasterTextLineHeight()};
+  if (metrics.height <= 0) {
+    rect.w = 0;
+    rect.h = 0;
+    return;
+  }
+  const auto lines = rasterWrapWidth > 0 ? wrappedTextLines(rasterWrapWidth)
+                                         : wrappedTextLines(0);
+  int rasterWidth = 0;
+  for (const auto &line : lines) {
+    rasterWidth = std::max(rasterWidth, measureRasterTextWidth(line));
+  }
+  rect.w = logicalLengthFor(rasterWidth);
+  rect.h = logicalLengthFor(
+      metrics.height * static_cast<int>(std::max<std::size_t>(1, lines.size())));
+  if (markDirty && (rect.w != previousWidth || rect.h != previousHeight)) {
+    YGNodeMarkDirty(getNode());
+    applyYogaLayoutFromRoot();
+  }
+}
+
+void TextView::createTexture() {
+  text_runtime::OperationGuard operation;
+  updateTextMetrics(false);
+  invalidateTexture();
+
+  if (text.empty() || fontFaces.empty()) {
+    return;
+  }
+  const int rasterWrapWidth = rasterLengthFor(currentWrapWidth);
   SurfacePtr surface(nullptr);
   int fallbackSurfaceWidth = 0;
   int fallbackSurfaceHeight = 0;
@@ -957,17 +1022,9 @@ void TextView::createTexture(bool markDirty, bool force,
     SDL_Log("Failed to render text: %s", TTF_GetError());
     return;
   }
-  const int rasterWidth =
-      fallbackSurfaceHeight > 0 ? fallbackSurfaceWidth : surface->w;
-  const int rasterHeight =
-      fallbackSurfaceHeight > 0 ? fallbackSurfaceHeight : surface->h;
-  rect.w = logicalLengthFor(rasterWidth);
-  rect.h = logicalLengthFor(rasterHeight);
+  (void)fallbackSurfaceWidth;
+  (void)fallbackSurfaceHeight;
   texture = rendering::sdlSurfaceToBgfxTexture(surface.get());
-  if (markDirty && (rect.w != previousWidth || rect.h != previousHeight)) {
-    YGNodeMarkDirty(getNode());
-    applyYogaLayoutFromRoot();
-  }
 }
 
 YGSize TextView::measureFunc(YGNodeConstRef node, float width,
@@ -978,7 +1035,7 @@ YGSize TextView::measureFunc(YGNodeConstRef node, float width,
   (void)heightMode;
   if (view->wrapEnabled && widthMode != YGMeasureModeUndefined &&
       width > 0.0f) {
-    view->createTexture(false, false, static_cast<int>(std::floor(width)));
+    view->updateTextMetrics(false, static_cast<int>(std::floor(width)));
   }
 
   float measuredWidth = static_cast<float>(view->rect.w);
@@ -1013,5 +1070,10 @@ void TextView::setWrap(bool enabled) {
   if (!wrapEnabled) {
     currentWrapWidth = 0;
   }
-  createTexture();
+  metricsDirty = true;
+  invalidateTexture();
+  updateTextMetrics();
+  if (!deferTextureMaterialization) {
+    createTexture();
+  }
 }

@@ -250,6 +250,7 @@ static TextView *makeText(const std::string &text, int size, const Color &color,
                           TextView::TextAlign align = TextView::LEFT,
                           TextView::TextVAlign valign = TextView::TOP) {
   auto *view = new TextView(kFontPath, size);
+  view->setDeferredTextureMaterialization(true);
   view->setText(text);
   const auto themedProvider = themeTextColorProvider(color);
   if (themedProvider) {

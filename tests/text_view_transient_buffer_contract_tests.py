@@ -43,6 +43,34 @@ class TextViewTransientBufferContractTests(unittest.TestCase):
             "TextView must not consume bgfx transient buffers per draw",
         )
 
+    def test_text_texture_materializes_only_when_the_view_is_rendered(self):
+        source = (
+            Path(__file__).resolve().parents[1] / "src/view/TextView.cpp"
+        ).read_text()
+        set_text = source[
+            source.index("void TextView::setText") : source.index(
+                "void TextView::renderImpl"
+            )
+        ]
+        render = source[
+            source.index("void TextView::renderImpl") : source.index(
+                "SDL_Rect TextView::resolvedTextRect"
+            )
+        ]
+
+        self.assertIn(
+            "if (!deferTextureMaterialization)",
+            set_text,
+            "text updates must avoid eager texture work when a view opts into "
+            "deferred materialization",
+        )
+        self.assertIn(
+            "createTexture(",
+            render,
+            "a visible TextView must materialize its missing texture before "
+            "submitting its batch quad",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
