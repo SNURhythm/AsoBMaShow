@@ -6385,12 +6385,17 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(ui_batch_renderer_tests
         tests/ui_batch_renderer_tests.cpp
         src/rendering/UiBatchRenderer.cpp
+        src/rendering/Color.cpp
+        src/rendering/UniformCache.cpp
+        src/view/View.cpp
     )
     target_include_directories(ui_batch_renderer_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(ui_batch_renderer_tests PRIVATE cxx_std_23)
-    target_link_libraries(ui_batch_renderer_tests PRIVATE ${COMMON_LIBS} bgfx)
+    target_link_libraries(ui_batch_renderer_tests PRIVATE
+        ${COMMON_LIBS} bgfx yogacore
+    )
     asobmashow_register_test(ui_batch_renderer_tests)
     if (TARGET skin_renderer_golden_tests)
         asobmashow_register_test(skin_renderer_golden_tests)

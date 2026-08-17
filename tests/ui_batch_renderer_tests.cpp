@@ -85,6 +85,37 @@ constexpr std::array<rendering::PosColorVertex, 4> kSecondQuad = {
 
 constexpr std::array<std::uint16_t, 6> kQuadIndices = {0, 1, 2, 0, 2, 3};
 
+class DirectUiBoundaryProbeView final : public View {
+public:
+  explicit DirectUiBoundaryProbeView(RecordingBackend &backend)
+      : backend(backend) {}
+
+  [[nodiscard]] bool sawQueuedUiBeforeCustomDraw() const noexcept {
+    return sawQueuedUiBeforeCustomDraw_;
+  }
+
+protected:
+  [[nodiscard]] bool requiresUiBatchBoundary() const noexcept override {
+    return true;
+  }
+
+  void renderImpl(RenderContext &context) override {
+    sawQueuedUiBeforeCustomDraw_ = backend.submissions.size() == 1;
+    context.appendUiColor(kSecondQuad, kQuadIndices, colorState());
+  }
+
+private:
+  RecordingBackend &backend;
+  bool sawQueuedUiBeforeCustomDraw_ = false;
+};
+
+class QueuedUiParentView final : public View {
+protected:
+  void renderImpl(RenderContext &context) override {
+    context.appendUiColor(kFirstQuad, kQuadIndices, colorState());
+  }
+};
+
 void testCompatibleColoredGeometryCoalesces() {
   RecordingBackend backend;
   rendering::UiBatchRenderer renderer(backend);
@@ -137,6 +168,27 @@ void testRenderContextScopeFlushesOnlyAtExplicitBoundary() {
   expect(backend.submissions[0].vertices.size() == 8 &&
              backend.submissions[1].vertices.size() == 4,
          "outer scope preserves ordered geometry across an explicit boundary");
+}
+
+void testDirectViewFlushesDecorationsBeforeAndUiAfterCustomDraw() {
+  RecordingBackend backend;
+  rendering::UiBatchRenderer renderer(backend);
+  RenderContext context(renderer);
+  QueuedUiParentView parent;
+  auto *view = new DirectUiBoundaryProbeView(backend);
+  parent.addView(view);
+  parent.setSize(32, 24);
+  view->setSize(32, 24);
+
+  {
+    RenderContext::UiBatchScope scope(context);
+    parent.render(context);
+  }
+
+  expect(view->sawQueuedUiBeforeCustomDraw(),
+         "a direct view observes queued UI before custom drawing");
+  expect(backend.submissions.size() == 2,
+         "a direct view flushes UI queued after custom drawing before later views");
 }
 
 void testProgramBoundaryPreservesSubmissionOrder() {
@@ -254,6 +306,7 @@ void testFailedBatchDoesNotBlockLaterSubmission() {
 int main() {
   testCompatibleColoredGeometryCoalesces();
   testRenderContextScopeFlushesOnlyAtExplicitBoundary();
+  testDirectViewFlushesDecorationsBeforeAndUiAfterCustomDraw();
   testProgramBoundaryPreservesSubmissionOrder();
   testStateBoundariesPreserveSubmissionOrder();
   testBatchSplitsBeforeUint16IndexLimit();

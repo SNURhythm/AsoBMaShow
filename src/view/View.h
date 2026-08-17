@@ -419,7 +419,14 @@ public:
       }
 #endif
       renderBoxDecoration(context);
+      const bool uiBatchBoundary = requiresUiBatchBoundary();
+      if (uiBatchBoundary) {
+        context.flushUiBatch();
+      }
       renderImpl(context);
+      if (uiBatchBoundary) {
+        context.flushUiBatch();
+      }
     }
     // Children can be absolutely positioned outside their layout parent's
     // bounds, so cull only this view's own drawing work.
@@ -609,6 +616,9 @@ protected:
             .y = static_cast<float>(getY()),
             .width = static_cast<float>(getWidth()),
             .height = static_cast<float>(getHeight())};
+  }
+  [[nodiscard]] virtual bool requiresUiBatchBoundary() const noexcept {
+    return false;
   }
   virtual void renderImpl(RenderContext &context) {};
   virtual inline bool handleEventsImpl(SDL_Event &event) { return true; };

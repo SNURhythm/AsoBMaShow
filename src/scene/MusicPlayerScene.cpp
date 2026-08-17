@@ -521,6 +521,10 @@ public:
   void setFraction(float value) { fraction = std::clamp(value, 0.0f, 1.0f); }
 
 protected:
+  [[nodiscard]] bool requiresUiBatchBoundary() const noexcept override {
+    return true;
+  }
+
   void renderImpl(RenderContext &context) override {
     const float fillWidth =
         std::clamp(static_cast<float>(getWidth()) * fraction, 0.0f,

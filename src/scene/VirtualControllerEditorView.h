@@ -17,6 +17,9 @@ public:
                               CommitCallback onCommit);
 
 protected:
+  [[nodiscard]] bool requiresUiBatchBoundary() const noexcept override {
+    return true;
+  }
   void renderImpl(RenderContext &context) override;
   bool handleEventsImpl(SDL_Event &event) override;
 
