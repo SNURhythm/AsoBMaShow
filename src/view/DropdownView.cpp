@@ -212,9 +212,12 @@ void DropdownView::refresh(const State &state) {
 
 void DropdownView::applyRefresh(State state) {
   const bool rebuild = !optionsMatch(state.options);
+  const bool wasOpen = current.open;
   current = std::move(state);
-  if (rebuild) {
+  if (current.open && (rebuild || optionButtons.empty())) {
     rebuildOptions();
+  } else if (wasOpen) {
+    scheduleOptionViewClear();
   }
   refreshVisualState();
   resolvedWidth = std::max(current.menuWidth, preferredWidth());
@@ -224,11 +227,10 @@ void DropdownView::applyRefresh(State state) {
 }
 
 void DropdownView::rebuildOptions() {
-  optionButtons.clear();
+  clearOptionViews();
   if (menuContent == nullptr) {
     return;
   }
-  menuContent->clearChildren();
 
   for (const auto &option : current.options) {
     auto *button = new Button(0, 0, 160, static_cast<int>(kOptionHeight));
@@ -305,6 +307,17 @@ void DropdownView::rebuildOptions() {
   }
 }
 
+void DropdownView::clearOptionViews() {
+  optionButtons.clear();
+  if (menuContent != nullptr) {
+    menuContent->clearChildren();
+  }
+  if (menuScroll != nullptr) {
+    menuScroll->setScrollOffset(0.0f);
+    menuScroll->refreshContentLayout();
+  }
+}
+
 void DropdownView::refreshVisualState() {
   const bool menuVisible =
       current.enabled && current.open && !current.options.empty();
@@ -347,7 +360,13 @@ void DropdownView::setOpen(bool open) {
     return;
   }
   current.open = open;
+  if (open) {
+    rebuildOptions();
+  }
   refreshVisualState();
+  if (!open) {
+    scheduleOptionViewClear();
+  }
   updateMenuPlacement();
 }
 
@@ -388,18 +407,15 @@ float DropdownView::preferredWidth() const {
     return kDefaultWidth;
   }
 
-  const std::string displayed = triggerText->getText();
   int widestValue = 0;
   bool hasLeadingIndicator = false;
   for (const auto &option : current.options) {
     const std::string text = current.label.empty()
                                  ? option.label
                                  : current.label + ": " + option.label;
-    triggerText->setText(text);
-    widestValue = std::max(widestValue, triggerText->textureWidth());
+    widestValue = std::max(widestValue, triggerText->measureTextWidth(text));
     hasLeadingIndicator = hasLeadingIndicator || option.leadingColor.has_value();
   }
-  triggerText->setText(displayed);
 
   const float horizontalChrome =
       kTriggerHorizontalChrome +
@@ -426,6 +442,24 @@ void DropdownView::scheduleDeferredRefresh() {
     State next = std::move(*pendingRefresh);
     pendingRefresh.reset();
     applyRefresh(std::move(next));
+  });
+}
+
+void DropdownView::scheduleOptionViewClear() {
+  if (deferredOptionViewClearScheduled) {
+    return;
+  }
+  deferredOptionViewClearScheduled = true;
+  std::weak_ptr<bool> aliveToken = lifetimeToken;
+  View::deferAfterEvent([this, aliveToken]() {
+    const auto alive = aliveToken.lock();
+    if (!alive || !*alive) {
+      return;
+    }
+    deferredOptionViewClearScheduled = false;
+    if (!current.open) {
+      clearOptionViews();
+    }
   });
 }
 

@@ -29,6 +29,7 @@ public:
   [[nodiscard]] bgfx::TextureHandle textureHandle() const { return texture; }
   [[nodiscard]] int textureWidth() const { return rect.w; }
   [[nodiscard]] int textureHeight() const { return rect.h; }
+  [[nodiscard]] int measureTextWidth(const std::string &utf8);
   [[nodiscard]] const std::string &primaryFontPath() const {
     return primaryFontPath_;
   }
@@ -59,7 +60,6 @@ protected:
   [[nodiscard]] float marqueeOffset(int viewportWidth);
   [[nodiscard]] int textLineHeight() const;
   [[nodiscard]] int rasterTextLineHeight() const;
-  [[nodiscard]] int measureTextWidth(const std::string &utf8);
   [[nodiscard]] int measureRasterTextWidth(const std::string &utf8);
   SelectedFont selectFont(Uint32 codepoint);
   [[nodiscard]] bool hasFontSource(const SelectedFont &source) const;

@@ -1,5 +1,15 @@
 #include "view/Button.h"
 #include "view/CheckboxButtonContent.h"
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wkeyword-macro"
+#endif
+#define private public
+#include "view/DropdownView.h"
+#undef private
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 #include "view/PlayOptionsPanelView.h"
 #include "view/ScrollView.h"
 #include "view/TextView.h"
@@ -81,6 +91,57 @@ void testScrollViewUsesPreciseWheelDeltaAndNaturalDirection() {
   require(std::abs(scroll.getScrollOffset() - 112.0F) < 0.001F,
           "scroll view preserves the iPad natural-scroll direction");
 }
+
+void testDropdownDefersOptionViewsUntilOpen() {
+  DropdownView dropdown({}, nullptr);
+  DropdownView::State state;
+  state.options.reserve(261);
+  for (int index = 0; index < 261; ++index) {
+    state.options.push_back({.id = std::to_string(index),
+                             .label = "Option " + std::to_string(index)});
+  }
+
+  dropdown.refresh(state);
+  require(dropdown.optionButtons.empty(),
+          "closed dropdown does not create hidden option views");
+
+  dropdown.setOpen(true);
+  require(dropdown.optionButtons.size() == state.options.size(),
+          "opening dropdown creates its current option views");
+
+  dropdown.setOpen(false);
+  View::dispatchDeferredEventCallbacks();
+  require(dropdown.optionButtons.empty(),
+          "closing dropdown releases hidden option views after the event");
+}
+
+void testDropdownSelectionDefersTeardownUntilItsCallbackReturns() {
+  DropdownView *dropdownRef = nullptr;
+  DropdownView dropdown(
+      {.onOptionSelected = [&](const std::string &selectedId) {
+        DropdownView::State refreshed;
+        refreshed.selectedId = selectedId;
+        refreshed.options = {{.id = "first", .label = "First"},
+                             {.id = "second", .label = "Second"}};
+        dropdownRef->refresh(refreshed);
+      }},
+      nullptr);
+  dropdownRef = &dropdown;
+
+  DropdownView::State state;
+  state.options = {{.id = "first", .label = "First"},
+                   {.id = "second", .label = "Second"}};
+  dropdown.refresh(state);
+  dropdown.setOpen(true);
+
+  click(*dropdown.optionButtons.front().button);
+  require(!dropdown.current.open && !dropdown.optionButtons.empty(),
+          "option selection keeps its view alive until the click callback ends");
+
+  View::dispatchDeferredEventCallbacks();
+  require(dropdown.optionButtons.empty(),
+          "option selection releases hidden views after its callback returns");
+}
 } // namespace
 
 int main() {
@@ -91,6 +152,8 @@ int main() {
   require(bgfx::init(init), "headless bgfx initializes for panel resources");
 
   testScrollViewUsesPreciseWheelDeltaAndNaturalDirection();
+  testDropdownDefersOptionViewsUntilOpen();
+  testDropdownSelectionDefersTeardownUntilItsCallbackReturns();
 
   {
     GameplayRuleset selected = GameplayRuleset::LR2;
