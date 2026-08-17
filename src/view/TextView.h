@@ -95,6 +95,7 @@ protected:
   int fontStyle_ = TTF_STYLE_NORMAL;
   int fontRasterSize = 0;
   int fontLineHeight = 0;
+  int fontLineSkip = 0;
   int fontAscent = 0;
   int fontDescent = 0;
   int iosSystemFontLineHeight = 0;

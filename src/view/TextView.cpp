@@ -261,17 +261,26 @@ bool isIgnorableUnsupportedCodepoint(Uint32 codepoint) {
          (codepoint >= 0xFE20 && codepoint <= 0xFE2F);
 }
 
-int sizeUtf8Width(TTF_Font *font, const std::string &utf8) {
+struct RasterTextSize {
+  int width = 0;
+  int height = 0;
+};
+
+RasterTextSize sizeUtf8(TTF_Font *font, const std::string &utf8) {
   text_runtime::OperationGuard operation;
   if (font == nullptr || utf8.empty()) {
-    return 0;
+    return {};
   }
 
-  int width = 0;
-  if (TTF_SizeUTF8(font, utf8.c_str(), &width, nullptr) != 0) {
-    return 0;
+  RasterTextSize size;
+  if (TTF_SizeUTF8(font, utf8.c_str(), &size.width, &size.height) != 0) {
+    return {};
   }
-  return width;
+  return size;
+}
+
+int sizeUtf8Width(TTF_Font *font, const std::string &utf8) {
+  return sizeUtf8(font, utf8).width;
 }
 
 int rasterFontSizeFor(int logicalFontSize) {
@@ -467,6 +476,7 @@ void TextView::includeFontMetrics(TTF_Font *loadedFont) {
   }
 
   fontLineHeight = std::max(fontLineHeight, TTF_FontHeight(loadedFont));
+  fontLineSkip = std::max(fontLineSkip, TTF_FontLineSkip(loadedFont));
   fontAscent = std::max(fontAscent, TTF_FontAscent(loadedFont));
   fontDescent = std::max(fontDescent, -TTF_FontDescent(loadedFont));
 }
@@ -975,15 +985,30 @@ void TextView::updateTextMetrics(bool markDirty, int requestedWrapWidth) {
     rect.h = 0;
     return;
   }
+  const bool usePrimaryFont = font != nullptr && primaryFontSupportsText(text);
   const auto lines = rasterWrapWidth > 0 ? wrappedTextLines(rasterWrapWidth)
                                          : wrappedTextLines(0);
   int rasterWidth = 0;
   for (const auto &line : lines) {
     rasterWidth = std::max(rasterWidth, measureRasterTextWidth(line));
   }
+  int rasterHeight =
+      metrics.height * static_cast<int>(std::max<std::size_t>(1, lines.size()));
+  if (usePrimaryFont) {
+    if (wrapEnabled && rasterWrapWidth > 0) {
+      if (lines.size() > 1) {
+        rasterWidth = rasterWrapWidth;
+      }
+      rasterHeight = std::max(fontLineSkip, metrics.height) *
+                     static_cast<int>(std::max<std::size_t>(1, lines.size()));
+    } else {
+      const RasterTextSize size = sizeUtf8(font, text);
+      rasterWidth = size.width;
+      rasterHeight = size.height;
+    }
+  }
   rect.w = logicalLengthFor(rasterWidth);
-  rect.h = logicalLengthFor(
-      metrics.height * static_cast<int>(std::max<std::size_t>(1, lines.size())));
+  rect.h = logicalLengthFor(rasterHeight);
   if (markDirty && (rect.w != previousWidth || rect.h != previousHeight)) {
     YGNodeMarkDirty(getNode());
     applyYogaLayoutFromRoot();
