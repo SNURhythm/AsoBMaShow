@@ -318,11 +318,10 @@ gameplaySkinManagementEntries(const GameplaySkinSettingsSnapshot &snapshot) {
 GameplaySkinSettingsActionAvailability gameplaySkinSettingsActionAvailability(
     const GameplaySkinSettingsSnapshot &snapshot) noexcept {
   const bool nameReady = snapshot.state == GameplaySkinSettingsState::Ready &&
-                         snapshot.canCancel &&
                          snapshot.preparedName.has_value();
   return {
       .ordinaryActions = snapshot.state != GameplaySkinSettingsState::Busy &&
-                         !snapshot.canCancel,
+                         !nameReady,
       .canCancel = snapshot.canCancel,
       .canEditPreparedName = false,
       .canInstallPrepared = nameReady && snapshot.preparedName->ok(),

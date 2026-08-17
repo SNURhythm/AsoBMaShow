@@ -85,6 +85,7 @@ struct GameplaySkinSettingsControllerDependencies {
   SkinCommitCoordinator &commits;
   SkinActivationClientId clientId;
   std::function<void()> requestRescan;
+  std::function<void()> cancelRescan;
   std::function<SkinRescanProgress()> rescanProgress;
   std::function<void(const SkinEntryId &)> requestRevalidation;
   std::function<std::shared_ptr<const SkinPackageCatalogSnapshot>()>
@@ -141,7 +142,7 @@ public:
   requestRemoval(const SkinPackageId &package);
   [[nodiscard]] ControllerActionResult resetLayout(const SkinEntryId &entry);
 
-  void cancelOperation() noexcept;
+  void cancelRescan() noexcept;
   void close() noexcept;
 
 private:

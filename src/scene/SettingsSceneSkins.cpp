@@ -274,6 +274,12 @@ void SettingsScene::ensureGameplaySkinSettingsController() {
                         skin::SkinRescanReason::Explicit);
                   }
                 },
+            .cancelRescan =
+                [this]() {
+                  if (context.gameplaySkinLifecycle != nullptr) {
+                    context.gameplaySkinLifecycle->cancelRescan();
+                  }
+                },
             .rescanProgress =
                 [this]() {
                   return context.gameplaySkinLifecycle != nullptr
@@ -463,7 +469,7 @@ void SettingsScene::ensureGameplaySkinBusyOverlay(
                  TextView::MIDDLE));
     gameplaySkinBusyOverlayCancelButton->setOnClickListener([this]() {
       if (gameplaySkinSettingsController != nullptr) {
-        gameplaySkinSettingsController->cancelOperation();
+        gameplaySkinSettingsController->cancelRescan();
         updateGameplaySkinSettingsLiveUi(
             gameplaySkinSettingsController->snapshot());
       }
@@ -496,7 +502,7 @@ void SettingsScene::ensureGameplaySkinBusyOverlay(
     gameplaySkinBusyOverlayStatusText->setText(message);
   }
   if (gameplaySkinBusyOverlayCancelButton != nullptr) {
-    gameplaySkinBusyOverlayCancelButton->setEnabled(snapshot.canCancel);
+    gameplaySkinBusyOverlayCancelButton->setVisible(snapshot.canCancel);
   }
 }
 
@@ -960,7 +966,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
     importActions->addView(makeGameplaySkinAction(
         metrics, "Cancel", true,
         [this, rerender]() {
-          gameplaySkinSettingsController->cancelOperation();
+          gameplaySkinSettingsController->cancelRescan();
           rerender();
         },
         ui_theme::coral()));

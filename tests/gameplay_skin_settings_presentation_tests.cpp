@@ -97,17 +97,15 @@ void requirePresentationChange(const skin::GameplaySkinSettingsSnapshot &base,
           message);
 }
 
-void testCollisionConfirmationAvailabilityIsExact() {
+void testPreparedImportAvailabilityIsExact() {
   skin::GameplaySkinSettingsSnapshot snapshot;
   snapshot.state = skin::GameplaySkinSettingsState::Ready;
-  snapshot.canCancel = true;
   snapshot.preparedName = skin::SkinPackageNameSuggestion{
       .originalSourceName = "source", .suggestedPackageName = "skin"};
 
   auto availability = skin::gameplaySkinSettingsActionAvailability(snapshot);
   require(!availability.ordinaryActions,
           "ordinary actions stay disabled during collision confirmation");
-  require(availability.canCancel, "collision confirmation remains cancellable");
   require(!availability.canEditPreparedName,
           "automatic installs never expose a package-name edit gate");
   require(availability.canInstallPrepared,
@@ -123,33 +121,29 @@ void testCollisionConfirmationAvailabilityIsExact() {
   snapshot.state = skin::GameplaySkinSettingsState::Busy;
   snapshot.preparedName->validationError.clear();
   availability = skin::gameplaySkinSettingsActionAvailability(snapshot);
-  require(!availability.canEditPreparedName &&
-              !availability.canInstallPrepared && availability.canCancel,
+  require(!availability.canEditPreparedName && !availability.canInstallPrepared,
           "Busy never exposes collision confirmation actions");
 
   snapshot.state = skin::GameplaySkinSettingsState::Ready;
-  snapshot.canCancel = false;
+  snapshot.preparedName.reset();
   availability = skin::gameplaySkinSettingsActionAvailability(snapshot);
   require(availability.ordinaryActions && !availability.canEditPreparedName &&
               !availability.canInstallPrepared,
           "idle Ready with stale name data is not a collision confirmation");
 
-  snapshot.canCancel = true;
-  snapshot.preparedName.reset();
+  snapshot.preparedName = skin::SkinPackageNameSuggestion{
+      .originalSourceName = "source", .suggestedPackageName = "skin"};
+  snapshot.preparedName->validationError = "invalid";
   availability = skin::gameplaySkinSettingsActionAvailability(snapshot);
-  require(!availability.ordinaryActions && availability.canCancel &&
-              !availability.canEditPreparedName &&
+  require(!availability.ordinaryActions && !availability.canEditPreparedName &&
               !availability.canInstallPrepared,
-          "a cancellable Ready snapshot without a prepared name is not a "
-          "collision confirmation");
+          "an invalid prepared import does not expose ordinary actions");
 
   snapshot.state = skin::GameplaySkinSettingsState::Error;
-  snapshot.canCancel = false;
   snapshot.preparedName = skin::SkinPackageNameSuggestion{
       .originalSourceName = "stale", .suggestedPackageName = "stale"};
   availability = skin::gameplaySkinSettingsActionAvailability(snapshot);
-  require(availability.ordinaryActions && !availability.canCancel &&
-              !availability.canEditPreparedName &&
+  require(availability.ordinaryActions && !availability.canEditPreparedName &&
               !availability.canInstallPrepared,
           "terminal Error is not a collision confirmation even when stale "
           "name data exists");
@@ -190,9 +184,6 @@ void testMetadataChangesInvalidateAnUnchangedDigest() {
 
 void testActionDrivingChangesInvalidatePresentation() {
   const auto base = snapshotWithEntry();
-  requirePresentationChange(
-      base, [](auto &value) { value.canCancel = true; },
-      "cancellability changes invalidate presentation");
   requirePresentationChange(
       base, [](auto &value) { value.hasPackageProgress = false; },
       "package-progress visibility changes invalidate presentation");
@@ -237,7 +228,6 @@ void testLayoutKeyIgnoresLiveOperationAndConfigurationValues() {
   const auto base = snapshotWithEntry();
   auto liveOperation = base;
   liveOperation.state = skin::GameplaySkinSettingsState::Busy;
-  liveOperation.canCancel = true;
   liveOperation.hasPackageProgress = false;
   liveOperation.statusMessage = "Saving skin configuration";
   liveOperation.progress.completedBytes = 19;
@@ -496,7 +486,7 @@ void testViewportModeChangesPreserveEveryOtherField() {
 } // namespace
 
 int main() {
-  testCollisionConfirmationAvailabilityIsExact();
+  testPreparedImportAvailabilityIsExact();
   testMetadataChangesInvalidateAnUnchangedDigest();
   testActionDrivingChangesInvalidatePresentation();
   testLayoutKeyIgnoresLiveOperationAndConfigurationValues();

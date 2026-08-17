@@ -994,6 +994,34 @@ struct GameplaySkinLifecycle::Impl {
     }
   }
 
+  void cancelRescan() noexcept {
+    rescanRequested = false;
+    pendingRescanInventory.reset();
+    if (inventoryTicket != 0 && deps.cancelProfileInventory) {
+      try {
+        deps.cancelProfileInventory(inventoryTicket);
+      } catch (...) {
+      }
+    }
+    inventoryTicket = 0;
+    for (auto iterator = prepareOperations.begin();
+         iterator != prepareOperations.end();) {
+      if (iterator->second.purpose != PreparePurpose::Reconcile &&
+          iterator->second.purpose != PreparePurpose::Rescan) {
+        ++iterator;
+        continue;
+      }
+      if (deps.cancelOperation) {
+        try {
+          deps.cancelOperation(iterator->first);
+        } catch (...) {
+        }
+      }
+      iterator = prepareOperations.erase(iterator);
+    }
+    rescanProgress = {};
+  }
+
   GameplaySkinLifecycleDependencies deps;
   std::optional<SkinProfileId> activeProfile;
   std::optional<PlaySkinSessionIdentity> currentIdentity;
@@ -1124,6 +1152,13 @@ void GameplaySkinLifecycle::requestRescan(SkinRescanReason) {
     impl_->rescanRequested = true;
     impl_->rescanProgress.phase = SkinRescanProgressPhase::LoadingProfileInventory;
   }
+}
+
+void GameplaySkinLifecycle::cancelRescan() noexcept {
+  if (!impl_ || impl_->stopped) {
+    return;
+  }
+  impl_->cancelRescan();
 }
 
 SkinRescanProgress GameplaySkinLifecycle::rescanProgress() const noexcept {

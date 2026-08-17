@@ -661,6 +661,22 @@ void testRescanProgressReportsEachLifecycleStage() {
           "a completed visible-package scan reports success");
 }
 
+void testCancellingARequestedRescanPreventsInventoryWork() {
+  LifecycleFake fake;
+  GameplaySkinLifecycle lifecycle(fake.dependencies());
+  lifecycle.startAfterProfileInitialization(fake.profile);
+  fake.completeReadiness(lifecycle);
+  fake.operationEvents.clear();
+
+  lifecycle.requestRescan(SkinRescanReason::Explicit);
+  lifecycle.cancelRescan();
+  lifecycle.poll();
+
+  require(fake.operationEvents.empty() &&
+              lifecycle.rescanProgress().phase == SkinRescanProgressPhase::Idle,
+          "cancelling a requested rescan prevents inventory work");
+}
+
 void testAcquisitionUsesOwningActivationAndMonotonicSessionSerial() {
   LifecycleFake fake;
   GameplaySkinLifecycle lifecycle(fake.dependencies());
@@ -1221,6 +1237,7 @@ int main() {
   testStartupRevalidationKeepsAnEntrySelectedDuringTraitNormalization();
   testLaterFailedRescanPreservesReadyAcquisitionAndCatalog();
   testRescanProgressReportsEachLifecycleStage();
+  testCancellingARequestedRescanPreventsInventoryWork();
   testAcquisitionUsesOwningActivationAndMonotonicSessionSerial();
   testSelectedActivationFailureIsNotTreatedAsBuiltIn();
   testWriterChainRebasesBOnlyAfterASuccess();
