@@ -297,6 +297,12 @@ void SettingsScene::updateGameplaySkinSettingsController() {
   }
 }
 
+bool SettingsScene::gameplaySkinTraitsRuntimeAvailable() const noexcept {
+  return skin::gameplaySkinTraitsRuntimeAvailable(
+      skin::luaGameplaySkinsAvailable(),
+      gameplaySkinSettingsController != nullptr);
+}
+
 void SettingsScene::appendSelectedSkinHudSettings(
     View *body, const LayoutMetrics &metrics, bool includeBuiltInOnlySettings) {
   const auto appendHeading = [body, &metrics](const std::string &label) {
@@ -605,8 +611,7 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
 
 View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   auto *column = makeGameplaySkinsColumn(metrics);
-  if (!skin::luaGameplaySkinsAvailable() ||
-      gameplaySkinSettingsController == nullptr) {
+  if (!gameplaySkinTraitsRuntimeAvailable()) {
     auto *body = new View();
     body->setFlexDirection(FlexDirection::Column);
     body->setGap(static_cast<float>(metrics.cardGap));
@@ -619,7 +624,8 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
           context.skinRecoveryResult->diagnostics.front());
     }
     body->addView(makeWrappedText(
-        availabilityMessage,
+        availabilityMessage + " Built-in gameplay controls remain available "
+                              "in the Timing, Visual, and Lane tabs.",
         metrics.bodyTextSize, ui_theme::textSecondary()));
     const bool canRetryStartup =
         skin::luaGameplaySkinsAvailable() && context.skinRecoveryResult &&

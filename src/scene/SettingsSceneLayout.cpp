@@ -990,6 +990,12 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
 
 View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   auto *cardsColumn = makeCardsColumn(metrics);
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  const bool showLegacyBuiltInGameplayControls =
+      !gameplaySkinTraitsRuntimeAvailable();
+#else
+  constexpr bool showLegacyBuiltInGameplayControls = true;
+#endif
   auto *offsetControls = new View();
   offsetControls->setFlexDirection(FlexDirection::Row);
   offsetControls->setFlexWrap(YGWrapWrap);
@@ -1124,7 +1130,7 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
       metrics, "Visual Offset", "Move notes without changing audio or BGA.",
       visualOffsetControls, metrics.offsetCardHeight, metrics.cardsWidth));
 
-#if !ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (showLegacyBuiltInGameplayControls) {
   auto *judgementFeedbackControls = new View();
   judgementFeedbackControls->setFlexDirection(FlexDirection::Column);
   judgementFeedbackControls->setGap(metrics.compact ? 12.0f : 16.0f);
@@ -1438,7 +1444,7 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
       judgementIndicatorControls, metrics.visibleTimeCardHeight,
       metrics.cardsWidth));
 
-#endif
+  }
 
   auto *secondaryCards = new View();
   secondaryCards->setFlexDirection(
@@ -1503,6 +1509,12 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
 
 View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
   auto *cardsColumn = makeCardsColumn(metrics);
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  const bool showLegacyBuiltInGameplayControls =
+      !gameplaySkinTraitsRuntimeAvailable();
+#else
+  constexpr bool showLegacyBuiltInGameplayControls = true;
+#endif
   auto *bgaControls = new View();
   bgaControls->setFlexDirection(FlexDirection::Column);
   bgaControls->setGap(metrics.compact ? 12.0f : 16.0f);
@@ -1601,7 +1613,7 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
       metrics, "Touch Points", "Show touch positions during play.",
       touchVisualizationControls, metrics.modeCardHeight, metrics.cardsWidth));
 
-#if !ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (showLegacyBuiltInGameplayControls) {
   auto *judgementCounterControls = new View();
   judgementCounterControls->setFlexDirection(FlexDirection::Column);
   judgementCounterControls->setGap(metrics.compact ? 12.0f : 16.0f);
@@ -1669,7 +1681,7 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
       metrics, "Gauge Bar", "Choose the gauge position.",
       gaugeControls, metrics.modeCardHeight, metrics.cardsWidth));
 
-#endif
+  }
 
   auto *bgaDisplayControls = new View();
   bgaDisplayControls->setFlexDirection(FlexDirection::Column);
@@ -1789,6 +1801,12 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
 
 View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   auto *cardsColumn = makeCardsColumn(metrics);
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  const bool showLegacyBuiltInGameplayControls =
+      !gameplaySkinTraitsRuntimeAvailable();
+#else
+  constexpr bool showLegacyBuiltInGameplayControls = true;
+#endif
 
   auto *previewControls = new View();
   previewControls->setFlexDirection(FlexDirection::Column);
@@ -1882,7 +1900,7 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
       metrics, "Note Start Position", "Set where notes enter the lane.",
       noteStartPanel, metrics.offsetCardHeight, metrics.cardsWidth));
 
-#if !ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (showLegacyBuiltInGameplayControls) {
   auto *angleControls = new View();
   angleControls->setFlexDirection(FlexDirection::Row);
   angleControls->setFlexWrap(YGWrapWrap);
@@ -2102,7 +2120,7 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
       metrics, "Lane Beam Length", "Set press feedback height.",
       beamControls, metrics.offsetCardHeight, metrics.cardsWidth));
 
-#endif
+  }
 
   return cardsColumn;
 }

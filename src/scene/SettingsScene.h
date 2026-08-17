@@ -484,6 +484,7 @@ private:
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   void ensureGameplaySkinSettingsController();
   void updateGameplaySkinSettingsController();
+  [[nodiscard]] bool gameplaySkinTraitsRuntimeAvailable() const noexcept;
   void appendSelectedSkinHudSettings(View *body,
                                      const settings_scene::LayoutMetrics &metrics,
                                      bool includeBuiltInOnlySettings);

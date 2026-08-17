@@ -1923,15 +1923,17 @@ void BMSRenderer::synchronizeCapturedJudgementHud(
                 true);
       }
     }
-  } else if (capturedState.lastJudge.judgement != None &&
-             capturedState.lastJudgeVisualMicros != kPlayfieldTimestampOff) {
-    // Preserve standalone snapshot callers that predate the bounded history
-    // and supply only their latest judgement.
+  }
+  if (capturedState.lastJudge.judgement != None &&
+      capturedState.lastJudgeVisualMicros != kPlayfieldTimestampOff) {
+    // Indicator samples are intentionally selective. The latest judgement is
+    // authoritative for text and FAST/SLOW feedback even when it was not
+    // recorded into the timing graph (for example an automatic miss).
     onJudge(capturedState.lastJudge, capturedState.combo, capturedState.score,
             {.songTimeMicros = capturedState.clock.gameplayTimeMicros,
              .visualTimeMicros = capturedState.lastJudgeVisualMicros,
              .bgaTimeMicros = capturedState.clock.bgaTimeMicros},
-            true);
+            false);
   }
 }
 

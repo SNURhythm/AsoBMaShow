@@ -661,6 +661,10 @@ public:
       noexcept {
     return judgementIndicator.retainedSampleCountForTesting();
   }
+  [[nodiscard]] JudgeResult pendingJudgementForTesting() const noexcept {
+    return {static_cast<Judgement>(pendingJudge.load(std::memory_order_relaxed)),
+            pendingJudgeDiffMicros.load(std::memory_order_relaxed)};
+  }
 #endif
   void setLiveTouchPoint(long long fingerId, ReplayTouchAction action, float x,
                          float y, long long songTimeMicros);

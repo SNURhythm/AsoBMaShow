@@ -918,6 +918,30 @@ void verifyPreparedFrameRetainsRecentJudgementIndicatorSamples() {
          "preparing a captured frame retains every recent judgement sample");
 }
 
+void verifyPreparedFrameKeepsTheLatestNonSampledJudgementForHudText() {
+  PresentationStateFixture fixture;
+  PlayfieldPresentationEventFanout fanout(fixture.store, fixture.renderer);
+  fanout.onJudge(JudgeResult(Great, -1'500), 1, 2,
+                 {.songTimeMicros = 1'400'000,
+                  .visualTimeMicros = 1'400'000,
+                  .bgaTimeMicros = 1'400'000},
+                 true);
+  fanout.onJudge(JudgeResult(Kpoor, 3'000), 0, 2,
+                 {.songTimeMicros = 1'401'000,
+                  .visualTimeMicros = 1'401'000,
+                  .bgaTimeMicros = 1'401'000},
+                 false);
+
+  const PresentationInput frame = fixture.input(72);
+  expect(fixture.renderer.prepareFrame(frame.state, frame.projection) ==
+             PresentationFrameOutcome::Ready,
+         "a frame with sampled and non-sampled judgements prepares");
+  expect(fixture.renderer.pendingJudgementForTesting().judgement == Kpoor &&
+             fixture.renderer.pendingJudgementForTesting().Diff == 3'000,
+         "indicator reconstruction leaves HUD text on the latest non-sampled "
+         "judgement");
+}
+
 void verifyPreparedPresentationIsOneShot(const RenderTarget &target) {
   configureGeometryAndViews(target.framebuffer);
   bgfx::touch(rendering::clear_view);
@@ -1786,6 +1810,7 @@ int main() {
       verifyGreenNumberUsesLiveConfiguredHispeed();
       verifyExplicitZeroConfiguredHispeedDoesNotFallBack();
       verifyPreparedFrameRetainsRecentJudgementIndicatorSamples();
+      verifyPreparedFrameKeepsTheLatestNonSampledJudgementForHudText();
     } catch (const std::exception &error) {
       std::cerr << "FAIL: characterization threw: " << error.what() << '\n';
       ++failures;
