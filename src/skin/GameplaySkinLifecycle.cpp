@@ -524,6 +524,9 @@ struct GameplaySkinLifecycle::Impl {
     } catch (...) {
       return;
     }
+    if (!selectsGameplayEntry(work.base.settings, work.entry)) {
+      return;
+    }
     SkinProfileSettings candidate = work.base.settings;
     auto submission = deps.submitPrepareActivation(
         std::move(work.base), std::move(work.entry), std::move(candidate));

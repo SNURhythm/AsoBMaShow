@@ -2571,6 +2571,108 @@ void testActivationCommitRemovalAndLeaseAwareGarbageCollection() {
          "the final released revision lease makes the revision collectible");
 }
 
+void testActivationCommitRetainsOtherSelectedTraitActivation() {
+  TempDirectory temp;
+  const SkinStorageRoots roots = rootsBelow(temp.root());
+  const auto firstPackage = normalizePackageId("FirstTraitSkin");
+  const auto secondPackage = normalizePackageId("SecondTraitSkin");
+  if (!firstPackage.package || !secondPackage.package) {
+    expect(false, "multi-trait activation fixture package IDs are valid");
+    return;
+  }
+
+  NoAliases aliases;
+  SkinArchiveImporter importer(roots, aliases);
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  FakeProfileSnapshots profiles;
+  SelectableValidator validator;
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  expect(store.recoverBeforeServiceStart().disposition ==
+             SkinRecoveryDisposition::Recovered,
+         "multi-trait activation fixture bootstraps the store");
+
+  const auto publish = [&](const SkinPackageId &package,
+                           const fs::path &source, int skinType) {
+    writeText(source / "play/main.luaskin",
+              "return { type = " + std::to_string(skinType) + " }");
+    validator.skinType = skinType;
+    auto prepared = importer.prepareFolder(source, package, {}, {});
+    if (!prepared.prepared) {
+      expect(false, "multi-trait fixture prepares its package");
+      return PublishPackageResult{};
+    }
+    return store.publish(std::move(*prepared.prepared),
+                         PackageCollisionPolicy::Reject,
+                         ProfileInventorySnapshot{.inventoryGeneration = 1},
+                         validator, {}, {});
+  };
+
+  const auto firstPublished =
+      publish(*firstPackage.package, temp.root() / "first-source", 0);
+  const auto secondPublished =
+      publish(*secondPackage.package, temp.root() / "second-source", 1);
+  expect(firstPublished.published && firstPublished.entries.size() == 1 &&
+             secondPublished.published && secondPublished.entries.size() == 1,
+         "multi-trait fixture publishes both selected gameplay entries");
+  if (!firstPublished.published || firstPublished.entries.size() != 1 ||
+      !secondPublished.published || secondPublished.entries.size() != 1) {
+    return;
+  }
+
+  const SkinEntryId firstEntry = firstPublished.entries.front();
+  const SkinEntryId secondEntry = secondPublished.entries.front();
+  VersionedSkinProfileSettings base{
+      .profileId =
+          SkinProfileId{.opaque = "12345678-1234-1234-1234-123456789abc"},
+      .generation = 4};
+  base.settings.selectedGameplayEntries.emplace(0, firstEntry);
+  base.settings.selectedGameplayEntries.emplace(1, secondEntry);
+  base.settings.entries.emplace(firstEntry, EntryProfileSettings{});
+  base.settings.entries.emplace(secondEntry, EntryProfileSettings{});
+  FakeProfileOwner owner(base);
+  owner.persisted = true;
+
+  const auto activate = [&](const SkinEntryId &entry, int skinType) {
+    validator.skinType = skinType;
+    const auto current = owner.snapshot(base.profileId);
+    auto prepared = store.prepareActivation(current, entry, current.settings,
+                                            validator, {});
+    expect(prepared.prepared.has_value(),
+           "each selected trait prepares a durable activation");
+    if (!prepared.prepared) {
+      return std::optional<ValidatedSkinActivation>{};
+    }
+    const auto begun = store.beginPreparedActivationCommit(
+        std::move(*prepared.prepared), owner);
+    expect(begun.disposition == ActivationCommitDisposition::PendingProfileSave &&
+               begun.ticket != 0,
+           "each selected trait activation is admitted for profile save");
+    if (begun.ticket == 0) {
+      return std::optional<ValidatedSkinActivation>{};
+    }
+    auto committed = store.pollPreparedActivationCommit(begun.ticket, owner);
+    expect(committed.disposition == ActivationCommitDisposition::ActivatedRequested &&
+               committed.activation,
+           "each selected trait activation commits successfully");
+    return std::move(committed.activation);
+  };
+
+  const auto firstActivation = activate(firstEntry, 0);
+  const auto secondActivation = activate(secondEntry, 1);
+  if (!firstActivation || !secondActivation) {
+    return;
+  }
+  expect(store.acquireValidatedActivation(base.profileId, firstEntry,
+                                          firstActivation->configurationDigest)
+                 .activation &&
+             store.acquireValidatedActivation(base.profileId, secondEntry,
+                                              secondActivation
+                                                  ->configurationDigest)
+                 .activation,
+         "committing one selected trait retains the other selected trait's "
+         "activation");
+}
+
 static_assert(!std::is_copy_constructible_v<ValidatedSkinActivation>);
 static_assert(!std::is_copy_constructible_v<SkinDeferredCleanup>);
 static_assert(!std::is_copy_constructible_v<SkinProfileMutationBarrier>);
@@ -2615,6 +2717,7 @@ int main(int argc, char **argv) {
   testManualInvalidEditRetainsActivationButDeleteHidesIt();
   testReplacementPublishesExactlyTheNewWholePackage();
   testActivationCommitRemovalAndLeaseAwareGarbageCollection();
+  testActivationCommitRetainsOtherSelectedTraitActivation();
 
   if (failures != 0) {
     std::cerr << failures << " skin package store assertion(s) failed\n";
