@@ -1544,6 +1544,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(settings_gameplay_skin_initialization_contract PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
+    add_test(NAME replay_video_ui_batch_contract
+        COMMAND ${Python3_EXECUTABLE}
+                -m unittest
+                tests/replay_video_ui_batch_contract_tests.py -v)
+    set_tests_properties(replay_video_ui_batch_contract PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
     add_test(NAME text_view_transient_buffer_contract
         COMMAND ${Python3_EXECUTABLE}
                 -m unittest

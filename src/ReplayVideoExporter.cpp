@@ -3005,6 +3005,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
 
     bool presentationFailed = false;
     if (!renderAndQueueFrame(frameIndex, videoTimeMicros, [&]() {
+          RenderContext::UiBatchScope uiBatchScope(renderContext);
           bgfx::touch(rendering::clear_view);
           bgfx::touch(rendering::bga_view);
           bgfx::touch(rendering::bga_layer_view);
@@ -3745,6 +3746,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
       bool presentationFailed = false;
       if (!renderAndQueueFrame(globalFrameIndex, globalVideoTimeMicros,
                                [&]() {
+                                 RenderContext::UiBatchScope uiBatchScope(
+                                     renderContext);
                                  bgfx::touch(rendering::clear_view);
                                  bgfx::touch(rendering::bga_view);
                                  bgfx::touch(rendering::bga_layer_view);

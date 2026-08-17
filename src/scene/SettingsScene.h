@@ -314,6 +314,7 @@ private:
   std::string gameplaySkinConfigurationDropdownOpenKey;
   bool gameplaySkinReplaceConfirmationArmed = false;
   std::string gameplaySkinRemovalConfirmationKey;
+  bool gameplaySkinControlsBuiltDisabled = false;
   TextView *gameplaySkinStatusText = nullptr;
   TextView *gameplaySkinUiMessageText = nullptr;
   TextView *gameplaySkinConfigurationDigestText = nullptr;
@@ -494,6 +495,11 @@ private:
       const skin::GameplaySkinSettingsSnapshot &snapshot);
   void ensureGameplaySkinBusyOverlay(
       const skin::GameplaySkinSettingsSnapshot &snapshot);
+  [[nodiscard]] skin::ConfigOffset
+  gameplaySkinOffsetForEntry(const skin::SkinEntryId &entry,
+                             const std::string &name) const;
+  [[nodiscard]] skin::ViewportSettings
+  gameplaySkinViewportForEntry(const skin::SkinEntryId &entry) const;
   [[nodiscard]] bool gameplaySkinTraitsRuntimeAvailable() const noexcept;
   void appendSelectedSkinHudSettings(View *body,
                                      const settings_scene::LayoutMetrics &metrics,

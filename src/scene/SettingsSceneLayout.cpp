@@ -203,7 +203,14 @@ void SettingsScene::resetViewState() {
   inputConflictOverlayRoot = nullptr;
   inputVirtualControllerEditorOverlayRoot = nullptr;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  gameplaySkinControlsBuiltDisabled = false;
+  gameplaySkinStatusText = nullptr;
+  gameplaySkinUiMessageText = nullptr;
+  gameplaySkinConfigurationDigestText = nullptr;
   gameplaySkinSafetyOverlayRoot = nullptr;
+  gameplaySkinBusyOverlayRoot = nullptr;
+  gameplaySkinBusyOverlayStatusText = nullptr;
+  gameplaySkinBusyOverlayCancelButton = nullptr;
 #endif
 }
 

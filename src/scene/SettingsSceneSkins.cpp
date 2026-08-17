@@ -315,6 +315,7 @@ void SettingsScene::ensureGameplaySkinSettingsController() {
   gameplaySkinConfigurationDropdownOpenKey.clear();
   gameplaySkinReplaceConfirmationArmed = false;
   gameplaySkinRemovalConfirmationKey.clear();
+  gameplaySkinControlsBuiltDisabled = false;
 }
 
 void SettingsScene::updateGameplaySkinSettingsController() {
@@ -335,6 +336,11 @@ void SettingsScene::updateGameplaySkinSettingsController() {
                    })) {
     gameplaySkinRemovalConfirmationKey.clear();
   }
+  if (activeTab == SettingsTab::GameplaySkins &&
+      gameplaySkinControlsBuiltDisabled &&
+      skin::gameplaySkinSettingsActionAvailability(snapshot).ordinaryActions) {
+    lastLayoutWidth = -1;
+  }
   const std::string next = skin::gameplaySkinSettingsLayoutKey(snapshot);
   if (next != gameplaySkinSettingsLayoutKey) {
     gameplaySkinSettingsLayoutKey = next;
@@ -343,6 +349,36 @@ void SettingsScene::updateGameplaySkinSettingsController() {
     }
   }
   updateGameplaySkinSettingsLiveUi(snapshot);
+}
+
+skin::ConfigOffset SettingsScene::gameplaySkinOffsetForEntry(
+    const skin::SkinEntryId &entry, const std::string &name) const {
+  if (gameplaySkinSettingsController == nullptr) {
+    return {};
+  }
+  const auto &entries = gameplaySkinSettingsController->snapshot().entries;
+  const auto row = std::ranges::find_if(entries, [&entry](const auto &value) {
+    return value.entry == entry;
+  });
+  if (row == entries.end()) {
+    return {};
+  }
+  const auto offset = row->settings.offsets.find(name);
+  return offset == row->settings.offsets.end() ? skin::ConfigOffset{}
+                                                : offset->second;
+}
+
+skin::ViewportSettings SettingsScene::gameplaySkinViewportForEntry(
+    const skin::SkinEntryId &entry) const {
+  if (gameplaySkinSettingsController == nullptr) {
+    return {};
+  }
+  const auto &entries = gameplaySkinSettingsController->snapshot().entries;
+  const auto row = std::ranges::find_if(entries, [&entry](const auto &value) {
+    return value.entry == entry;
+  });
+  return row == entries.end() ? skin::ViewportSettings{}
+                              : row->settings.viewport;
 }
 
 void SettingsScene::updateGameplaySkinSettingsLiveUi(
@@ -777,6 +813,7 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
 }
 
 View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
+  gameplaySkinControlsBuiltDisabled = false;
   auto *column = makeGameplaySkinsColumn(metrics);
   if (!gameplaySkinTraitsRuntimeAvailable()) {
     auto *body = new View();
@@ -818,6 +855,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   const auto actionAvailability =
       skin::gameplaySkinSettingsActionAvailability(snapshot);
   const bool ordinaryActionsEnabled = actionAvailability.ordinaryActions;
+  gameplaySkinControlsBuiltDisabled = !ordinaryActionsEnabled;
   auto rerender = [this]() { lastLayoutWidth = -1; };
 
   auto *overview = new View();
@@ -1401,7 +1439,8 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
             if (ordinaryActionsEnabled) {
               input->onEditingFinished(
                   [this, input, entry = row.entry, name = offset.name,
-                   configured, member](const std::string &) mutable {
+                   member](const std::string &) {
+                    auto configured = gameplaySkinOffsetForEntry(entry, name);
                     configured.*member = sanitizeOffsetComponent(
                         input->getText(), configured.*member);
                     handleGameplaySkinActionResult(
@@ -1458,17 +1497,19 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
     customViewport->setGap(metrics.compact ? 8.0f : 10.0f);
     customViewport->addView(makeGameplaySkinAction(
         metrics, "Custom Base: Fit", ordinaryActionsEnabled,
-        [this, entry = row.entry, viewport = row.settings.viewport]() mutable {
-          viewport = skin::gameplaySkinViewportWithCustomBase(
-              viewport, skin::CustomViewportBase::Fit);
+        [this, entry = row.entry]() {
+          const auto viewport = skin::gameplaySkinViewportWithCustomBase(
+              gameplaySkinViewportForEntry(entry),
+              skin::CustomViewportBase::Fit);
           handleGameplaySkinActionResult(
               gameplaySkinSettingsController->setViewport(entry, viewport));
         }));
     customViewport->addView(makeGameplaySkinAction(
         metrics, "Custom Base: Stretch", ordinaryActionsEnabled,
-        [this, entry = row.entry, viewport = row.settings.viewport]() mutable {
-          viewport = skin::gameplaySkinViewportWithCustomBase(
-              viewport, skin::CustomViewportBase::Stretch);
+        [this, entry = row.entry]() {
+          const auto viewport = skin::gameplaySkinViewportWithCustomBase(
+              gameplaySkinViewportForEntry(entry),
+              skin::CustomViewportBase::Stretch);
           handleGameplaySkinActionResult(
               gameplaySkinSettingsController->setViewport(entry, viewport));
         }));
@@ -1483,15 +1524,15 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
       auto *input = makeTextInput(metrics, metrics.compact ? 132 : 156);
       input->setEditingText(formatViewportComponent(value));
       if (ordinaryActionsEnabled) {
-        input->onEditingFinished([this, input, entry = row.entry,
-                                  viewport = row.settings.viewport, scale,
-                                  horizontal](const std::string &) mutable {
+        input->onEditingFinished([this, input, entry = row.entry, scale,
+                                  horizontal](const std::string &) {
           const float minimum =
               scale ? skin::SkinProfileSettingsPolicy::minCustomScale
                     : skin::SkinProfileSettingsPolicy::minCustomTranslation;
           const float maximum =
               scale ? skin::SkinProfileSettingsPolicy::maxCustomScale
                     : skin::SkinProfileSettingsPolicy::maxCustomTranslation;
+          auto viewport = gameplaySkinViewportForEntry(entry);
           float &component =
               scale ? (horizontal ? viewport.scaleX : viewport.scaleY)
                     : (horizontal ? viewport.translateX : viewport.translateY);
@@ -1546,25 +1587,26 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
         ui_theme::coral()));
     actions->addView(makeGameplaySkinAction(
         metrics, "Fit", ordinaryActionsEnabled,
-        [this, entry = row.entry, viewport = row.settings.viewport]() mutable {
-          viewport = skin::gameplaySkinViewportWithMode(
-              viewport, skin::ViewportMode::Fit);
+        [this, entry = row.entry]() {
+          const auto viewport = skin::gameplaySkinViewportWithMode(
+              gameplaySkinViewportForEntry(entry), skin::ViewportMode::Fit);
           handleGameplaySkinActionResult(
               gameplaySkinSettingsController->setViewport(entry, viewport));
         }));
     actions->addView(makeGameplaySkinAction(
         metrics, "Stretch", ordinaryActionsEnabled,
-        [this, entry = row.entry, viewport = row.settings.viewport]() mutable {
-          viewport = skin::gameplaySkinViewportWithMode(
-              viewport, skin::ViewportMode::Stretch);
+        [this, entry = row.entry]() {
+          const auto viewport = skin::gameplaySkinViewportWithMode(
+              gameplaySkinViewportForEntry(entry),
+              skin::ViewportMode::Stretch);
           handleGameplaySkinActionResult(
               gameplaySkinSettingsController->setViewport(entry, viewport));
         }));
     actions->addView(makeGameplaySkinAction(
         metrics, "Custom", ordinaryActionsEnabled,
-        [this, entry = row.entry, viewport = row.settings.viewport]() mutable {
-          viewport = skin::gameplaySkinViewportWithMode(
-              viewport, skin::ViewportMode::Custom);
+        [this, entry = row.entry]() {
+          const auto viewport = skin::gameplaySkinViewportWithMode(
+              gameplaySkinViewportForEntry(entry), skin::ViewportMode::Custom);
           handleGameplaySkinActionResult(
               gameplaySkinSettingsController->setViewport(entry, viewport));
         }));
