@@ -38,10 +38,14 @@ public:
 
   [[nodiscard]] bool isEnabled() const;
   [[nodiscard]] bool isHudMode() const;
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+  [[nodiscard]] std::size_t retainedSampleCountForTesting() const noexcept;
+#endif
 
 private:
   static constexpr size_t kAverageSampleCount = 20;
-  static constexpr size_t kMaxVisibleSamples = 96;
+  static constexpr size_t kMaxVisibleSamples =
+      judgement_indicator::kRecentTimingSampleCapacity;
 
   struct Sample {
     long long diffMicros = 0;

@@ -254,6 +254,23 @@ bool JudgementIndicatorRenderer::isHudMode() const {
   return hudMode.load(std::memory_order_relaxed);
 }
 
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+std::size_t JudgementIndicatorRenderer::retainedSampleCountForTesting() const
+    noexcept {
+  const uint64_t nextSequence = writeSequence.load(std::memory_order_acquire);
+  const uint64_t firstSequence =
+      nextSequence > kMaxVisibleSamples ? nextSequence - kMaxVisibleSamples : 0;
+  std::size_t count = 0;
+  for (uint64_t sequence = firstSequence; sequence < nextSequence; ++sequence) {
+    Sample sample;
+    if (readSample(sequence, sample)) {
+      ++count;
+    }
+  }
+  return count;
+}
+#endif
+
 JudgementIndicatorRenderer::Layout
 JudgementIndicatorRenderer::layout(const Geometry &geometry,
                                    bool hudMode) const {

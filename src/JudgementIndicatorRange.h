@@ -10,6 +10,10 @@ namespace judgement_indicator {
 inline constexpr int kDefaultRangeMilliseconds = 180;
 inline constexpr int kMinRangeMilliseconds = 1;
 inline constexpr int kMaxRangeMilliseconds = 1000;
+// The presentation snapshot retains the same bounded recent-judge window as
+// the renderer, so preparing an immutable frame cannot collapse it to only
+// the latest judgement.
+inline constexpr std::size_t kRecentTimingSampleCapacity = 96;
 
 [[nodiscard]] constexpr int
 sanitizeStoredRangeMilliseconds(int value) noexcept {

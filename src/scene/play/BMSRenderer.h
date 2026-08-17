@@ -651,6 +651,10 @@ public:
       bms_renderer_characterization::Recorder *recorder) {
     characterizationRecorder = recorder;
   }
+  [[nodiscard]] std::size_t judgementIndicatorSampleCountForTesting() const
+      noexcept {
+    return judgementIndicator.retainedSampleCountForTesting();
+  }
 #endif
   void setLiveTouchPoint(long long fingerId, ReplayTouchAction action, float x,
                          float y, long long songTimeMicros);

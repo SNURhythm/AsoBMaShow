@@ -2841,11 +2841,30 @@ PresentationFrameOutcome BMSRenderer::prepareFrame(
           std::memory_order_release);
     }
 
-    // Rebuild the event-derived indicator from the immutable snapshot so
-    // rendering consumes a complete frame-local presentation state.
+    // Rebuild from the bounded history captured with the immutable frame.
+    // A single lastJudge field is insufficient: the indicator displays a
+    // recent sample window rather than only the most recent judgement.
     judgementIndicator.clear();
-    if (capturedState.lastJudge.judgement != None &&
-        capturedState.lastJudgeVisualMicros != kPlayfieldTimestampOff) {
+    if (capturedState.judgementIndicatorSampleCount > 0) {
+      const std::size_t sampleCount = std::min(
+          capturedState.judgementIndicatorSampleCount,
+          capturedState.judgementIndicatorSamples.size());
+      for (std::size_t index = 0; index < sampleCount; ++index) {
+        const auto &sample = capturedState.judgementIndicatorSamples[index];
+        if (sample.judge.judgement != None &&
+            sample.visualTimeMicros != kPlayfieldTimestampOff) {
+          onJudge(sample.judge, capturedState.combo, capturedState.score,
+                  {.songTimeMicros = capturedState.clock.gameplayTimeMicros,
+                   .visualTimeMicros = sample.visualTimeMicros,
+                   .bgaTimeMicros = capturedState.clock.bgaTimeMicros},
+                  true);
+        }
+      }
+    } else if (capturedState.lastJudge.judgement != None &&
+               capturedState.lastJudgeVisualMicros !=
+                   kPlayfieldTimestampOff) {
+      // Preserve standalone snapshot callers that predate the bounded
+      // history and supply only their latest judgement.
       onJudge(capturedState.lastJudge, capturedState.combo, capturedState.score,
               {.songTimeMicros = capturedState.clock.gameplayTimeMicros,
                .visualTimeMicros = capturedState.lastJudgeVisualMicros,

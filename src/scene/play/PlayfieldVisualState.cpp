@@ -110,6 +110,9 @@ void PlayfieldVisualStateStore::resetModel(
   bgaMissTracker_.reset();
   lastJudge_ = JudgeResult(None, 0);
   lastJudgeVisualMicros_ = kPlayfieldTimestampOff;
+  judgementIndicatorSamples_ = {};
+  judgementIndicatorSampleCount_ = 0;
+  nextJudgementIndicatorSample_ = 0;
   combo_ = 0;
   score_ = 0;
   fastSlowMicros_ = 0;
@@ -270,7 +273,7 @@ PlayfieldVisualState
 PlayfieldVisualStateStore::capture(PlayfieldFrameClock clock,
                                    bool includeNotes) const {
   captureTouches(clock.replayTouchTimeMicros);
-  return {
+  PlayfieldVisualState result{
       .clock = clock,
       .configuration = configuration_,
       .authority = authority_,
@@ -287,6 +290,21 @@ PlayfieldVisualStateStore::capture(PlayfieldFrameClock clock,
       .sceneStartMicros = sceneStartMicros_,
       .playStartMicros = playStartMicros_,
   };
+
+  result.judgementIndicatorSampleCount = judgementIndicatorSampleCount_;
+  const std::size_t firstSample =
+      judgementIndicatorSampleCount_ ==
+              judgement_indicator::kRecentTimingSampleCapacity
+          ? nextJudgementIndicatorSample_
+          : 0;
+  for (std::size_t index = 0; index < judgementIndicatorSampleCount_;
+       ++index) {
+    result.judgementIndicatorSamples[index] =
+        judgementIndicatorSamples_[
+            (firstSample + index) %
+            judgement_indicator::kRecentTimingSampleCapacity];
+  }
+  return result;
 }
 
 PlayfieldVisualState PlayfieldVisualStateStore::captureForPresentation(
@@ -346,13 +364,24 @@ void PlayfieldVisualStateStore::onJudge(JudgeResult judge, int combo,
                                         int score,
                                         PlayfieldJudgeEventClock clock,
                                         bool recordTimingSample) {
-  (void)recordTimingSample;
   bgaMissTracker_.onJudge(judge, combo, clock);
   if (judge.judgement == None) {
     return;
   }
   lastJudge_ = judge;
   lastJudgeVisualMicros_ = clock.visualTimeMicros;
+  if (recordTimingSample) {
+    judgementIndicatorSamples_[nextJudgementIndicatorSample_] = {
+        .judge = judge,
+        .visualTimeMicros = clock.visualTimeMicros,
+    };
+    nextJudgementIndicatorSample_ =
+        (nextJudgementIndicatorSample_ + 1) %
+        judgement_indicator::kRecentTimingSampleCapacity;
+    judgementIndicatorSampleCount_ = std::min(
+        judgementIndicatorSampleCount_ + 1,
+        judgement_indicator::kRecentTimingSampleCapacity);
+  }
   combo_ = combo;
   score_ = score;
   fastSlowMicros_ = static_cast<int>(std::clamp(

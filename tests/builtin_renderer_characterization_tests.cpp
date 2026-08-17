@@ -29,6 +29,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -893,6 +894,29 @@ public:
     return {.state = state, .projection = std::move(projection)};
   }
 };
+
+void verifyPreparedFrameRetainsRecentJudgementIndicatorSamples() {
+  PresentationStateFixture fixture;
+  PlayfieldPresentationEventFanout fanout(fixture.store, fixture.renderer);
+  for (const auto &[judgement, diffMicros, visualMicros] :
+       std::array<std::tuple<Judgement, long long, long long>, 3>{
+           {{PGreat, -1'500, 1'400'000},
+            {Great, 500, 1'401'000},
+            {Good, 2'000, 1'402'000}}}) {
+    fanout.onJudge(JudgeResult(judgement, diffMicros), 1, 2,
+                   {.songTimeMicros = visualMicros,
+                    .visualTimeMicros = visualMicros,
+                    .bgaTimeMicros = visualMicros},
+                   true);
+  }
+
+  const PresentationInput frame = fixture.input(71);
+  expect(fixture.renderer.prepareFrame(frame.state, frame.projection) ==
+             PresentationFrameOutcome::Ready,
+         "the multi-judge built-in frame prepares successfully");
+  expect(fixture.renderer.judgementIndicatorSampleCountForTesting() == 3,
+         "preparing a captured frame retains every recent judgement sample");
+}
 
 void verifyPreparedPresentationIsOneShot(const RenderTarget &target) {
   configureGeometryAndViews(target.framebuffer);
@@ -1761,6 +1785,7 @@ int main() {
       verifyVisibleTimeDurationUsesMilliseconds();
       verifyGreenNumberUsesLiveConfiguredHispeed();
       verifyExplicitZeroConfiguredHispeedDoesNotFallBack();
+      verifyPreparedFrameRetainsRecentJudgementIndicatorSamples();
     } catch (const std::exception &error) {
       std::cerr << "FAIL: characterization threw: " << error.what() << '\n';
       ++failures;
