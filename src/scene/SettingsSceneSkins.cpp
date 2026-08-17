@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cmath>
+#include <functional>
 #include <iomanip>
 #include <sstream>
 #include <utility>
@@ -294,6 +295,312 @@ void SettingsScene::updateGameplaySkinSettingsController() {
       lastLayoutWidth = -1;
     }
   }
+}
+
+void SettingsScene::appendSelectedSkinHudSettings(
+    View *body, const LayoutMetrics &metrics, bool includeBuiltInOnlySettings) {
+  const auto appendHeading = [body, &metrics](const std::string &label) {
+    body->addView(
+        makeWrappedText(label, metrics.bodyTextSize, ui_theme::cyan()));
+  };
+  const auto appendNumeric =
+      [this, body, &metrics](const std::string &label, const std::string &value,
+                             std::function<void(const std::string &)> apply) {
+        auto *row = new View();
+        row->setFlexDirection(FlexDirection::Row);
+        row->setFlexWrap(YGWrapWrap);
+        row->setAlignItems(YGAlignCenter);
+        row->setGap(metrics.compact ? 8.0F : 10.0F);
+        auto *labelView =
+            makeText(label, metrics.smallTextSize, ui_theme::textSecondary(),
+                     TextView::LEFT, TextView::MIDDLE);
+        labelView->setMinWidth(0.0F);
+        labelView->setFlexShrink(1.0F);
+        row->addView(labelView);
+        auto *input = makeTextInput(metrics, metrics.compact ? 116 : 136);
+        input->setEditingText(value);
+        input->onEditingFinished(
+            [this, input, apply = std::move(apply)](const std::string &) {
+              apply(input->getText());
+              lastLayoutWidth = -1;
+            });
+        row->addView(input);
+        body->addView(row);
+      };
+  const auto appendToggle = [this, body,
+                             &metrics](const std::string &label, bool value,
+                                       std::function<void(bool)> set) {
+    body->addView(makeGameplaySkinChoiceRow(
+        metrics, label, true,
+        {{.label = "Off",
+          .selected = !value,
+          .action =
+              [this, set]() mutable {
+                set(false);
+                lastLayoutWidth = -1;
+              }},
+         {.label = "On", .selected = value, .action = [this, set]() mutable {
+            set(true);
+            lastLayoutWidth = -1;
+          }}}));
+  };
+  const auto appendChoices =
+      [this, body, &metrics](const std::string &label,
+                             std::vector<GameplaySkinChoiceButton> choices) {
+        body->addView(makeGameplaySkinChoiceRow(metrics, label, true,
+                                                std::move(choices)));
+      };
+
+  appendHeading("Application Judgement HUD");
+  appendToggle("Judgement Indicator",
+               context.settings.judgementIndicatorEnabled,
+               [this](bool enabled) {
+                 context.settings.judgementIndicatorEnabled = enabled;
+                 persistSettings();
+               });
+  appendNumeric(
+      "Indicator Y (%)",
+      std::to_string(
+          judgementIndicatorYToPercent(context.settings.judgementIndicatorY)),
+      [this](const std::string &text) {
+        context.settings.judgementIndicatorY = judgementIndicatorPercentToY(
+            std::clamp(sanitizeOffsetComponent(
+                           text, judgementIndicatorYToPercent(
+                                     context.settings.judgementIndicatorY)),
+                       0, 100));
+        persistSettings();
+      });
+  appendNumeric("Indicator Width (%)",
+                std::to_string(judgementIndicatorWidthScaleToPercent(
+                    context.settings.judgementIndicatorWidthScale)),
+                [this](const std::string &text) {
+                  const int current = judgementIndicatorWidthScaleToPercent(
+                      context.settings.judgementIndicatorWidthScale);
+                  context.settings.judgementIndicatorWidthScale =
+                      judgementIndicatorWidthPercentToScale(std::clamp(
+                          sanitizeOffsetComponent(text, current), 50, 200));
+                  persistSettings();
+                });
+  appendNumeric(
+      "Indicator Range (ms)",
+      std::to_string(context.settings.judgementIndicatorRangeMilliseconds),
+      [this](const std::string &text) {
+        context.settings.judgementIndicatorRangeMilliseconds =
+            clampJudgementIndicatorRangeMilliseconds(sanitizeOffsetComponent(
+                text, context.settings.judgementIndicatorRangeMilliseconds));
+        persistSettings();
+      });
+
+  if (includeBuiltInOnlySettings) {
+    appendChoices(
+        "Indicator Layout",
+        {{.label = "3D Space",
+          .selected = context.settings.judgementIndicatorRenderMode ==
+                      AppSettings::JudgementIndicatorRenderMode::World3D,
+          .action =
+              [this]() {
+                context.settings.judgementIndicatorRenderMode =
+                    AppSettings::JudgementIndicatorRenderMode::World3D;
+                persistSettings();
+                lastLayoutWidth = -1;
+              }},
+         {.label = "2D HUD",
+          .selected = context.settings.judgementIndicatorRenderMode ==
+                      AppSettings::JudgementIndicatorRenderMode::Hud2D,
+          .action = [this]() {
+            context.settings.judgementIndicatorRenderMode =
+                AppSettings::JudgementIndicatorRenderMode::Hud2D;
+            persistSettings();
+            lastLayoutWidth = -1;
+          }}});
+  }
+
+  appendToggle("Judgement Counter", context.settings.judgementCounterEnabled,
+               [this](bool enabled) {
+                 context.settings.judgementCounterEnabled = enabled;
+                 persistSettings();
+               });
+  appendChoices("Counter Position",
+                {{.label = "Top",
+                  .selected = context.settings.judgementCounterPosition ==
+                              AppSettings::JudgementCounterPosition::Top,
+                  .action =
+                      [this]() {
+                        context.settings.judgementCounterPosition =
+                            AppSettings::JudgementCounterPosition::Top;
+                        persistSettings();
+                        lastLayoutWidth = -1;
+                      }},
+                 {.label = "Left",
+                  .selected = context.settings.judgementCounterPosition ==
+                              AppSettings::JudgementCounterPosition::Left,
+                  .action =
+                      [this]() {
+                        context.settings.judgementCounterPosition =
+                            AppSettings::JudgementCounterPosition::Left;
+                        persistSettings();
+                        lastLayoutWidth = -1;
+                      }},
+                 {.label = "Right",
+                  .selected = context.settings.judgementCounterPosition ==
+                              AppSettings::JudgementCounterPosition::Right,
+                  .action = [this]() {
+                    context.settings.judgementCounterPosition =
+                        AppSettings::JudgementCounterPosition::Right;
+                    persistSettings();
+                    lastLayoutWidth = -1;
+                  }}});
+
+  if (!includeBuiltInOnlySettings) {
+    return;
+  }
+
+  appendHeading("Judgement Feedback");
+  appendNumeric(
+      "Judge Text Y (%)",
+      std::to_string(judgementTextYToPercent(context.settings.judgementTextY)),
+      [this](const std::string &text) {
+        context.settings.judgementTextY = judgementTextPercentToY(std::clamp(
+            sanitizeOffsetComponent(
+                text, judgementTextYToPercent(context.settings.judgementTextY)),
+            0, 100));
+        persistSettings();
+      });
+  const auto timingChoices =
+      [this](AppSettings::JudgementTimingDisplayCriteria value, auto assign) {
+        std::vector<GameplaySkinChoiceButton> choices;
+        for (const auto criteria :
+             {AppSettings::JudgementTimingDisplayCriteria::PGreatOrBelow,
+              AppSettings::JudgementTimingDisplayCriteria::GreatOrBelow,
+              AppSettings::JudgementTimingDisplayCriteria::GoodOrBelow,
+              AppSettings::JudgementTimingDisplayCriteria::BadOrBelow,
+              AppSettings::JudgementTimingDisplayCriteria::Off}) {
+          choices.push_back(
+              {.label = formatJudgementTimingDisplayCriteriaLabel(criteria),
+               .selected = value == criteria,
+               .action = [this, criteria, assign]() mutable {
+                 assign(criteria);
+                 persistSettings();
+                 lastLayoutWidth = -1;
+               }});
+        }
+        return choices;
+      };
+  appendChoices(
+      "FAST/SLOW",
+      timingChoices(
+          context.settings.judgementTimingFastSlowCriteria,
+          [this](AppSettings::JudgementTimingDisplayCriteria criteria) {
+            context.settings.judgementTimingFastSlowCriteria = criteria;
+          }));
+  appendChoices(
+      "+/- ms",
+      timingChoices(
+          context.settings.judgementTimingMillisecondsCriteria,
+          [this](AppSettings::JudgementTimingDisplayCriteria criteria) {
+            context.settings.judgementTimingMillisecondsCriteria = criteria;
+          }));
+
+  appendHeading("Gauge");
+  appendChoices("Gauge Position",
+                {{.label = "World",
+                  .selected = context.settings.gaugeBarPosition ==
+                              AppSettings::GaugeBarPosition::World,
+                  .action =
+                      [this]() {
+                        context.settings.gaugeBarPosition =
+                            AppSettings::GaugeBarPosition::World;
+                        persistSettings();
+                        lastLayoutWidth = -1;
+                      }},
+                 {.label = "Left HUD",
+                  .selected = context.settings.gaugeBarPosition ==
+                              AppSettings::GaugeBarPosition::Left,
+                  .action =
+                      [this]() {
+                        context.settings.gaugeBarPosition =
+                            AppSettings::GaugeBarPosition::Left;
+                        persistSettings();
+                        lastLayoutWidth = -1;
+                      }},
+                 {.label = "Right HUD",
+                  .selected = context.settings.gaugeBarPosition ==
+                              AppSettings::GaugeBarPosition::Right,
+                  .action = [this]() {
+                    context.settings.gaugeBarPosition =
+                        AppSettings::GaugeBarPosition::Right;
+                    persistSettings();
+                    lastLayoutWidth = -1;
+                  }}});
+}
+
+void SettingsScene::appendBuiltInGameplayTraitSettings(
+    View *body, const LayoutMetrics &metrics, int keyMode) {
+  body->addView(makeWrappedText("Built-in gameplay", metrics.bodyTextSize,
+                                ui_theme::lime()));
+  const auto appendNumeric =
+      [this, body, &metrics](const std::string &label, const std::string &value,
+                             std::function<void(const std::string &)> apply) {
+        auto *row = new View();
+        row->setFlexDirection(FlexDirection::Row);
+        row->setFlexWrap(YGWrapWrap);
+        row->setAlignItems(YGAlignCenter);
+        row->setGap(metrics.compact ? 8.0F : 10.0F);
+        auto *labelView =
+            makeText(label, metrics.smallTextSize, ui_theme::textSecondary(),
+                     TextView::LEFT, TextView::MIDDLE);
+        labelView->setMinWidth(0.0F);
+        labelView->setFlexShrink(1.0F);
+        row->addView(labelView);
+        auto *input = makeTextInput(metrics, metrics.compact ? 116 : 136);
+        input->setEditingText(value);
+        input->onEditingFinished(
+            [this, input, apply = std::move(apply)](const std::string &) {
+              apply(input->getText());
+              lastLayoutWidth = -1;
+            });
+        row->addView(input);
+        body->addView(row);
+      };
+
+  appendNumeric("Lane Angle (deg)",
+                formatFloatValue(context.settings.laneAngleDegrees, 1),
+                [this](const std::string &text) {
+                  context.settings.laneAngleDegrees = sanitizeViewportComponent(
+                      text, context.settings.laneAngleDegrees,
+                      AppSettings::kMinLaneAngleDegrees,
+                      AppSettings::kMaxLaneAngleDegrees);
+                  persistSettings();
+                });
+  appendNumeric("Lane Length", formatFloatValue(context.settings.laneLength, 1),
+                [this](const std::string &text) {
+                  context.settings.laneLength = sanitizeViewportComponent(
+                      text, context.settings.laneLength,
+                      AppSettings::kMinLaneLength, AppSettings::kMaxLaneLength);
+                  persistSettings();
+                });
+  appendNumeric("Beam Length (%)",
+                std::to_string(context.settings.laneBeamLengthPercent),
+                [this](const std::string &text) {
+                  context.settings.laneBeamLengthPercent =
+                      clampLaneBeamLengthPercent(sanitizeOffsetComponent(
+                          text, context.settings.laneBeamLengthPercent));
+                  persistSettings();
+                });
+  appendNumeric("Play Area Width (" + std::to_string(keyMode) + "K)",
+                formatPlayAreaWidthLabel(
+                    context.settings.playAreaWidthForKeyMode(keyMode)),
+                [this, keyMode](const std::string &text) {
+                  context.settings.setPlayAreaWidthForKeyMode(
+                      keyMode,
+                      sanitizeViewportComponent(
+                          text,
+                          context.settings.playAreaWidthForKeyMode(keyMode),
+                          AppSettings::kMinPlayAreaWidth,
+                          AppSettings::kMaxPlayAreaWidth));
+                  persistSettings();
+                });
+  appendSelectedSkinHudSettings(body, metrics, true);
 }
 
 View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
@@ -690,6 +997,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
         makeWrappedText("Revision: " + row.revisionDigest +
                             " • Configuration: " + row.configurationDigest,
                         metrics.smallTextSize, ui_theme::textMuted()));
+    appendSelectedSkinHudSettings(entryBody, metrics, false);
     for (const auto &diagnostic : row.diagnostics) {
       entryBody->addView(makeWrappedText(diagnosticPresentation(diagnostic),
                                          metrics.smallTextSize,
@@ -1099,6 +1407,13 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
         ui_theme::coral()));
     entryBody->addView(actions);
     traitPanel->addView(entryBody);
+  } else if (selected == snapshot.selectedGameplayEntries.end()) {
+    auto *builtInBody = new View();
+    builtInBody->setFlexDirection(FlexDirection::Column);
+    builtInBody->setGap(metrics.compact ? 10.0F : 12.0F);
+    appendBuiltInGameplayTraitSettings(builtInBody, metrics,
+                                       activeTrait->keyMode);
+    traitPanel->addView(builtInBody);
   }
 
   traitWorkspace->addView(traitPanel);

@@ -91,3 +91,10 @@
   `cmake --build cmake-build-debug --target main -j 6`
 - For full CTest runs, execute tests in parallel:
   `ctest --test-dir cmake-build-debug --output-on-failure -j 6`
+
+## Formatting
+
+- Do not run a whole-file formatter (including `clang-format -i`) on this
+  repository. Preserve surrounding style and format only the lines changed for
+  the task. Whole-file formatting creates noisy diffs and can obscure the
+  intended semantic change.

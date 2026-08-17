@@ -82,7 +82,6 @@ void SettingsScene::resetViewState() {
   judgementIndicatorWidthInput = nullptr;
   judgementIndicatorRangeInput = nullptr;
   visibleTimeModeText = nullptr;
-  visibleTimeBpmStrategyText = nullptr;
   keysoundModeText = nullptr;
   prepMetronomeModeText = nullptr;
   startLaneIndicatorsModeText = nullptr;
@@ -110,7 +109,6 @@ void SettingsScene::resetViewState() {
   profileDeleteReasonText = nullptr;
   profileCreateNameInput = nullptr;
   visibleTimeModeButton = nullptr;
-  visibleTimeBpmStrategyButton = nullptr;
   keysoundModeButton = nullptr;
   prepMetronomeModeButton = nullptr;
   startLaneIndicatorsModeButton = nullptr;
@@ -279,25 +277,48 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
     visibleTimeControls->addView(visibleTimeModeButton);
   }
 
-  visibleTimeBpmStrategyText =
-      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
-               TextView::CENTER, TextView::MIDDLE);
-  visibleTimeBpmStrategyButton =
-      makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
-                        visibleTimeBpmStrategyText);
-  visibleTimeBpmStrategyButton->setOnClickListener([this]() {
-    context.settings.hispeedFixMode =
-        nextVisibleTimeBpmStrategy(context.settings.hispeedFixMode);
-    persistSettings();
-    syncPreviewPresentationConfiguration();
-  });
   if (visibleTimeModeRow != nullptr) {
-    visibleTimeModeRow->addView(visibleTimeBpmStrategyButton);
     visibleTimeControls->addView(visibleTimeModeRow);
-  } else {
-    visibleTimeControls->addView(visibleTimeBpmStrategyButton);
   }
 
+  auto *fixedHispeedChoices = new View();
+  fixedHispeedChoices->setFlexDirection(FlexDirection::Row);
+  fixedHispeedChoices->setFlexWrap(YGWrapWrap);
+  fixedHispeedChoices->setAlignItems(YGAlignCenter);
+  fixedHispeedChoices->setGap(metrics.compact ? 6.0F : 8.0F);
+  auto *fixedHispeedLabel =
+      makeText("Fixed Hi-Speed", metrics.smallTextSize,
+               ui_theme::textSecondary(), TextView::LEFT, TextView::MIDDLE);
+  fixedHispeedLabel->setMinWidth(0.0F);
+  fixedHispeedLabel->setFlexShrink(1.0F);
+  fixedHispeedChoices->addView(fixedHispeedLabel);
+  for (const auto mode :
+       {AppSettings::HiSpeedFixMode::Off, AppSettings::HiSpeedFixMode::Start,
+        AppSettings::HiSpeedFixMode::Max, AppSettings::HiSpeedFixMode::Main,
+        AppSettings::HiSpeedFixMode::Min}) {
+    auto *choiceLabel = makeText(formatVisibleTimeBpmStrategyLabel(mode),
+                                 metrics.smallTextSize, ui_theme::textPrimary(),
+                                 TextView::CENTER, TextView::MIDDLE);
+    const int width =
+        std::max(metrics.compact ? 84 : 96, choiceLabel->textureWidth() + 28);
+    auto *choice =
+        context.settings.hispeedFixMode == mode
+            ? makeAccentButton(width, metrics.actionButtonHeight,
+                               choiceLabel,
+                               ui_theme::cyan())
+            : makeControlButton(width, metrics.actionButtonHeight, choiceLabel);
+    choice->setOnClickListener([this, mode]() {
+      if (context.settings.hispeedFixMode == mode) {
+        return;
+      }
+      context.settings.hispeedFixMode = mode;
+      persistSettings();
+      syncPreviewPresentationConfiguration();
+      lastLayoutWidth = -1;
+    });
+    fixedHispeedChoices->addView(choice);
+  }
+  visibleTimeControls->addView(fixedHispeedChoices);
   auto *visibleTimeValueControls = new View();
   visibleTimeValueControls->setFlexDirection(FlexDirection::Row);
   visibleTimeValueControls->setFlexWrap(YGWrapWrap);
@@ -1103,6 +1124,7 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
       metrics, "Visual Offset", "Move notes without changing audio or BGA.",
       visualOffsetControls, metrics.offsetCardHeight, metrics.cardsWidth));
 
+#if !ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   auto *judgementFeedbackControls = new View();
   judgementFeedbackControls->setFlexDirection(FlexDirection::Column);
   judgementFeedbackControls->setGap(metrics.compact ? 12.0f : 16.0f);
@@ -1416,6 +1438,8 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
       judgementIndicatorControls, metrics.visibleTimeCardHeight,
       metrics.cardsWidth));
 
+#endif
+
   auto *secondaryCards = new View();
   secondaryCards->setFlexDirection(
       metrics.useDualCardRow ? FlexDirection::Row : FlexDirection::Column);
@@ -1577,6 +1601,7 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
       metrics, "Touch Points", "Show touch positions during play.",
       touchVisualizationControls, metrics.modeCardHeight, metrics.cardsWidth));
 
+#if !ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   auto *judgementCounterControls = new View();
   judgementCounterControls->setFlexDirection(FlexDirection::Column);
   judgementCounterControls->setGap(metrics.compact ? 12.0f : 16.0f);
@@ -1643,6 +1668,8 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
   cardsColumn->addView(makeCard(
       metrics, "Gauge Bar", "Choose the gauge position.",
       gaugeControls, metrics.modeCardHeight, metrics.cardsWidth));
+
+#endif
 
   auto *bgaDisplayControls = new View();
   bgaDisplayControls->setFlexDirection(FlexDirection::Column);
@@ -1855,6 +1882,7 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
       metrics, "Note Start Position", "Set where notes enter the lane.",
       noteStartPanel, metrics.offsetCardHeight, metrics.cardsWidth));
 
+#if !ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   auto *angleControls = new View();
   angleControls->setFlexDirection(FlexDirection::Row);
   angleControls->setFlexWrap(YGWrapWrap);
@@ -2073,6 +2101,8 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   cardsColumn->addView(makeCard(
       metrics, "Lane Beam Length", "Set press feedback height.",
       beamControls, metrics.offsetCardHeight, metrics.cardsWidth));
+
+#endif
 
   return cardsColumn;
 }

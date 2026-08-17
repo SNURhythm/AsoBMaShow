@@ -438,7 +438,6 @@ void SettingsScene::cleanupScene() {
   judgementIndicatorWidthInput = nullptr;
   judgementIndicatorRangeInput = nullptr;
   visibleTimeModeText = nullptr;
-  visibleTimeBpmStrategyText = nullptr;
   keysoundModeText = nullptr;
   prepMetronomeModeText = nullptr;
   startLaneIndicatorsModeText = nullptr;
@@ -457,7 +456,6 @@ void SettingsScene::cleanupScene() {
   profileDeleteReasonText = nullptr;
   profileCreateNameInput = nullptr;
   visibleTimeModeButton = nullptr;
-  visibleTimeBpmStrategyButton = nullptr;
   keysoundModeButton = nullptr;
   prepMetronomeModeButton = nullptr;
   startLaneIndicatorsModeButton = nullptr;
