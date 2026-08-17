@@ -266,6 +266,23 @@ void testLayoutKeyIgnoresLiveOperationAndConfigurationValues() {
               skin::gameplaySkinSettingsLayoutKey(changedCatalog),
           "catalog structure changes rebuild the gameplay skins tab");
 
+  auto addedControl = base;
+  addedControl.entries[0].metadata.options.push_back(
+      {.category = "Appearance",
+       .name = "Lane frame",
+       .choices = {{.label = "Default", .value = 0},
+                   {.label = "Minimal", .value = 1}},
+       .defaultLabel = "Default"});
+  require(skin::gameplaySkinSettingsLayoutKey(base) !=
+              skin::gameplaySkinSettingsLayoutKey(addedControl),
+          "a skin with more controls rebuilds the gameplay skins tab");
+
+  auto removedControl = base;
+  removedControl.entries[0].metadata.offsets.clear();
+  require(skin::gameplaySkinSettingsLayoutKey(base) !=
+              skin::gameplaySkinSettingsLayoutKey(removedControl),
+          "a skin with fewer controls rebuilds the gameplay skins tab");
+
   auto failed = base;
   failed.state = skin::GameplaySkinSettingsState::Error;
   require(skin::gameplaySkinSettingsLayoutKey(base) !=
