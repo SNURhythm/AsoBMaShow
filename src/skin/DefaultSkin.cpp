@@ -155,6 +155,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data,
       .currentClearLabelOverride = data->currentClearLabelOverride,
       .currentClearRankOverride = data->currentClearRankOverride,
       .previousBest = data->previousBest,
+      .previousLampBest = data->previousLampBest,
       .pacemaker = data->pacemaker,
   };
   ResultPresentationModel localPresentation = makeLocalResultPresentation(

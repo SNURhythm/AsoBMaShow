@@ -238,7 +238,7 @@ inline const char *gaugeTypeToShortLabel(GaugeType gaugeType) {
 inline int gaugeTypeToClearRank(GaugeType gaugeType) {
   switch (gaugeType) {
   case GaugeType::AssistedEasy:
-    return kClearTypeLightAssistedEasyClearRank;
+    return kClearTypeAssistedEasyClearRank;
   case GaugeType::Easy:
     return kClearTypeEasyClearRank;
   case GaugeType::Normal:

@@ -43,6 +43,7 @@ struct ResultSkinData {
   std::optional<std::string> currentClearLabelOverride;
   std::optional<int> currentClearRankOverride;
   std::optional<ResultPreviousBestData> previousBest;
+  std::optional<ResultPreviousBestData> previousLampBest;
   std::optional<ResultPacemakerData> pacemaker;
   const ResultPresentationModel *presentation = nullptr;
 };

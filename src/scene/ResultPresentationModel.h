@@ -55,6 +55,7 @@ struct ResultLocalPresentationOptions {
   std::optional<std::string> currentClearLabelOverride;
   std::optional<int> currentClearRankOverride;
   std::optional<ResultPreviousBestData> previousBest;
+  std::optional<ResultPreviousBestData> previousLampBest;
   std::optional<ResultPacemakerData> pacemaker;
   std::optional<practice::ResultModel> timingAnalytics;
 };

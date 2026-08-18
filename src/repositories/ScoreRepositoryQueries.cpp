@@ -1239,6 +1239,21 @@ std::optional<ScoreBestSnapshot> ScoreRepository::LoadBestScore(
       selectedLongNoteMode);
 }
 
+std::optional<ScoreBestSnapshot> ScoreRepository::LoadBestClearScore(
+    const bms_parser::ChartMeta &chartMeta,
+    const std::optional<std::string> &beforeCreatedAt,
+    const std::optional<std::string> &excludeAttemptId,
+    int selectedLongNoteMode) {
+  profile_database_activity::ReadGuard operation;
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return std::nullopt;
+  }
+  return score_repository_detail::LoadBestClearScoreOnConnection(
+      impl_->sessionDatabase, chartMeta, beforeCreatedAt, excludeAttemptId,
+      selectedLongNoteMode);
+}
+
 std::optional<ScoreBestSnapshot> ScoreRepository::LoadBestScoreForRuleset(
     const bms_parser::ChartMeta &chartMeta,
     const RulesetDescriptor &requiredRuleset, int selectedLongNoteMode) {
@@ -1346,6 +1361,88 @@ score_repository_detail::LoadBestScoreOnConnection(
     return snapshot;
   }
   return std::nullopt;
+}
+
+std::optional<ScoreBestSnapshot>
+score_repository_detail::LoadBestClearScoreOnConnection(
+    sqlite3 *db, const bms_parser::ChartMeta &chartMeta,
+    const std::optional<std::string> &beforeCreatedAt,
+    const std::optional<std::string> &excludeAttemptId,
+    int selectedLongNoteMode) {
+  const auto match = scoreChartMatchFor(chartMeta);
+  const std::string cutoff = beforeCreatedAt.value_or("");
+  const int longNoteMode =
+      scoreLongNoteModeForClearLamp(chartMeta, selectedLongNoteMode);
+  const bool legacyLongNoteModeFallback = longNoteMode == 1;
+  const std::string effectiveClearRank =
+      score_cache_queries::detail::fullComboClearRankExpr("s", {}, true);
+
+  std::string query = "SELECT score, max_score, max_combo, combo_break, "
+      "CAST(bad AS INTEGER) + CAST(poor AS INTEGER) + "
+      "CAST(kpoor AS INTEGER), final_gauge, ";
+  query += effectiveClearRank +
+           ", created_at, score_source, attempt_id "
+           "FROM scores s WHERE ";
+  query += scoreChartMatchPredicate();
+  query += " AND " +
+           score_cache_queries::detail::scoreParticipatesInBestExpr("s") +
+           " AND s.score_source = " +
+           std::to_string(static_cast<int>(ScoreStorageSource::LocalGameplay)) +
+           " AND (ln_mode = ? OR ln_mode = -1 OR (? != 0 AND ln_mode = 0)) "
+           "AND (? = '' OR created_at < ?) ";
+  if (excludeAttemptId.has_value()) {
+    query += "AND (attempt_id IS NULL OR attempt_id <> ?) ";
+  }
+  query += "ORDER BY CASE WHEN ln_mode = ? OR ln_mode = -1 THEN 0 ELSE 1 END, " +
+           effectiveClearRank + " DESC, s.score DESC, s.created_at DESC, "
+           "s.id DESC";
+
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(db, query, stmt, "loading best clear",
+                                    logSqlErrorText)) {
+    return std::nullopt;
+  }
+
+  int bindIndex = 1;
+  bindIndex = bindScoreChartMatch(stmt.get(), bindIndex, match);
+  sqlite3_bind_int(stmt.get(), bindIndex++, longNoteMode);
+  sqlite3_bind_int(stmt.get(), bindIndex++, legacyLongNoteModeFallback ? 1 : 0);
+  bindSqliteText(stmt.get(), bindIndex++, cutoff);
+  bindSqliteText(stmt.get(), bindIndex++, cutoff);
+  if (excludeAttemptId.has_value()) {
+    bindSqliteText(stmt.get(), bindIndex++, *excludeAttemptId);
+  }
+  sqlite3_bind_int(stmt.get(), bindIndex++, longNoteMode);
+
+  if (sqlite3_step(stmt.get()) != SQLITE_ROW) {
+    return std::nullopt;
+  }
+
+  ScoreBestSnapshot snapshot;
+  snapshot.score = sqlite3_column_int(stmt.get(), 0);
+  snapshot.maxScore = sqlite3_column_int(stmt.get(), 1);
+  const bool imported = sqlite3_column_int(stmt.get(), 8) ==
+                        static_cast<int>(ScoreStorageSource::ImportedIr);
+  if (!imported) {
+    snapshot.maxCombo = sqlite3_column_int(stmt.get(), 2);
+    snapshot.comboBreak = sqlite3_column_int(stmt.get(), 3);
+    if (sqlite3_column_type(stmt.get(), 4) == SQLITE_INTEGER) {
+      const sqlite3_int64 badPoints = sqlite3_column_int64(stmt.get(), 4);
+      if (badPoints >= 0 && badPoints <= std::numeric_limits<int>::max()) {
+        snapshot.badPoints = static_cast<int>(badPoints);
+      }
+    }
+    snapshot.finalGauge =
+        static_cast<float>(sqlite3_column_double(stmt.get(), 5));
+  }
+  snapshot.clearType = sqlite3_column_int(stmt.get(), 6);
+  snapshot.createdAt = sqliteColumnString(stmt.get(), 7);
+  if (sqlite3_column_type(stmt.get(), 9) == SQLITE_TEXT) {
+    snapshot.attemptId = sqliteColumnString(stmt.get(), 9);
+  }
+  snapshot.source =
+      imported ? ScoreBestSource::ImportedIr : ScoreBestSource::Local;
+  return snapshot;
 }
 
 std::optional<ScoreBestSnapshot>

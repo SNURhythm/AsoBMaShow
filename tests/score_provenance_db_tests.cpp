@@ -1,5 +1,6 @@
 #include "../src/CourseIdentity.h"
 #include "../src/CoursePlaySession.h"
+#include "../src/ResultPresentationUtils.h"
 #include "../src/repositories/ReplayRepository.h"
 #include "../src/repositories/ScoreCacheQueries.h"
 #include "../src/repositories/ScoreRepository.h"
@@ -1235,6 +1236,73 @@ void testPreviousBestExcludesExactAttemptAtSameTimestamp(
   assert(legacyFallback.has_value());
   assert(legacyFallback->score == legacyState.getScore());
   assert(legacyFallback->createdAt == sharedTimestamp);
+}
+
+void testBestClearScoreIsIndependentFromBestScore(
+    const std::filesystem::path &root) {
+  const auto path = root / "best-clear-separate-from-score" / "score.db";
+  ScoreRepository helper(path);
+  auto bestScore = samplePendingScore(root, "best-clear-separate-from-score",
+                                      21, "2026-07-14 05:06:07", 40, 5);
+  bestScore.score.comboBreak = 1;
+  bestScore.score.clearType = kClearTypeNormalClearRank;
+  bestScore.score.finalGauge = 82.0F;
+  auto bestLamp = samplePendingScore(root, "best-clear-separate-from-score",
+                                     22, "2026-07-14 05:05:07", 20, 5);
+  bestLamp.score.comboBreak = 1;
+  bestLamp.score.clearType = kClearTypeHardClearRank;
+  bestLamp.score.finalGauge = 100.0F;
+  assert(helper.SaveProjectedScore(bestScore).status ==
+         result_persistence::ProjectionStatus::Inserted);
+  assert(helper.SaveProjectedScore(bestLamp).status ==
+         result_persistence::ProjectionStatus::Inserted);
+
+  const auto meta = sampleMeta(root, "best-clear-separate-from-score");
+  const auto score = helper.LoadBestScore(meta);
+  const auto lamp = helper.LoadBestClearScore(meta);
+  assert(score.has_value() && score->score == bestScore.score.score &&
+         score->clearType == kClearTypeNormalClearRank);
+  assert(lamp.has_value() && lamp->score == bestLamp.score.score &&
+         lamp->clearType == kClearTypeHardClearRank &&
+         lamp->finalGauge == 100.0F);
+}
+
+void testBestClearScoreUsesPresentableLocalLamp(
+    const std::filesystem::path &root) {
+  const auto path = root / "best-clear-local-lamp" / "score.db";
+  ScoreRepository helper(path);
+  auto local = samplePendingScore(root, "best-clear-local-lamp", 23,
+                                  "2026-07-14 05:05:07", 20, 5);
+  local.score.comboBreak = 1;
+  local.score.clearType = kClearTypeHardClearRank;
+  local.score.finalGauge = 100.0F;
+  auto imported = samplePendingScore(root, "best-clear-local-lamp", 24,
+                                     "2026-07-14 05:06:07", 40, 5);
+  imported.score.comboBreak = 1;
+  imported.score.clearType = kClearTypeFullComboRank;
+  assert(helper.SaveProjectedScore(local).status ==
+         result_persistence::ProjectionStatus::Inserted);
+  assert(helper.SaveProjectedScore(imported).status ==
+         result_persistence::ProjectionStatus::Inserted);
+  {
+    auto db = openDatabase(path);
+    execOrAbort(db.get(), "UPDATE scores SET score_source=1 WHERE attempt_id='" +
+                              imported.attemptId + "'");
+  }
+
+  const auto meta = sampleMeta(root, "best-clear-local-lamp");
+  const auto lamp = helper.LoadBestClearScore(meta);
+  assert(lamp.has_value() && lamp->score == local.score.score &&
+         lamp->clearType == kClearTypeHardClearRank &&
+         lamp->finalGauge == 100.0F);
+
+  ReplayData replay;
+  replay.createdAt = "2026-07-14 05:07:07";
+  const auto previous =
+      result_presentation::previousLampBestForReplayChart(helper, meta, replay);
+  assert(previous.has_value() &&
+         previous->clearType == kClearTypeHardClearRank &&
+         previous->finalGauge == 100.0F);
 }
 
 void testProjectedScoreValidatesStoredTypesAndCanonicalProvenance(
@@ -2722,6 +2790,8 @@ int main() {
   testBestScoreLoadsKpoorInclusiveBadPoints(root);
   testBestScoreCanFilterExactRuleset(root);
   testPreviousBestExcludesExactAttemptAtSameTimestamp(root);
+  testBestClearScoreIsIndependentFromBestScore(root);
+  testBestClearScoreUsesPresentableLocalLamp(root);
   testProjectedScoreValidatesStoredTypesAndCanonicalProvenance(root);
   testUnrelatedScoreConstraintIsStorageFailure(root);
   testAttemptIdentityShadowConstraintIsStorageFailure(root);

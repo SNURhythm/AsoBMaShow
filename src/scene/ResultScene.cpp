@@ -528,6 +528,7 @@ ResultSkinData ResultScene::makeResultSkinData() const {
   }
   data.currentClearRankOverride = local->currentClearRankOverride;
   data.previousBest = local->previousBest;
+  data.previousLampBest = local->previousLampBest;
   data.pacemaker = pacemakerDataForCurrentResult();
   data.presentation = &local->presentation;
   return data;
@@ -550,6 +551,7 @@ void ResultScene::rebuildLocalPresentation(
                                         : local->currentClearLabelOverride,
        .currentClearRankOverride = local->currentClearRankOverride,
        .previousBest = local->previousBest,
+       .previousLampBest = local->previousLampBest,
        .pacemaker = pacemakerDataForCurrentResult(),
        .timingAnalytics = std::move(analyticsModel)});
 }
@@ -684,6 +686,7 @@ void ResultScene::loadPreviousBest() {
   const auto &persistenceOptions = local->persistenceOptions;
   local->previousBestLoaded = true;
   local->previousBest.reset();
+  local->previousLampBest.reset();
 
   std::optional<std::string> beforeCreatedAt;
   std::optional<std::string> excludeAttemptId;
@@ -705,6 +708,14 @@ void ResultScene::loadPreviousBest() {
   if (best.has_value()) {
     local->previousBest =
         result_presentation::previousBestDataFromSnapshot(*best);
+  }
+  if (!isCourseFinalResult()) {
+    const auto bestLamp = context.scoreRepository.LoadBestClearScore(
+        local->meta, beforeCreatedAt, excludeAttemptId);
+    if (bestLamp.has_value()) {
+      local->previousLampBest =
+          result_presentation::previousBestDataFromSnapshot(*bestLamp);
+    }
   }
 }
 
@@ -2035,6 +2046,7 @@ void ResultScene::exportPhoto() {
     result = ResultImageExporter::Export(
         context, local->meta, local->resultState, local->playModeLabel,
         local->laneOrderLabel, local->difficultyLabel, local->previousBest,
+        local->previousLampBest,
         local->currentClearLabelOverride, local->currentClearRankOverride,
         local->headerDifficultyLabelOverride, pacemaker, analyticsModel);
   }

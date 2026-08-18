@@ -118,6 +118,11 @@ public:
       const std::optional<std::string> &beforeCreatedAt = std::nullopt,
       const std::optional<std::string> &excludeAttemptId = std::nullopt,
       int selectedLongNoteMode = 0);
+  std::optional<ScoreBestSnapshot> LoadBestClearScore(
+      const bms_parser::ChartMeta &chartMeta,
+      const std::optional<std::string> &beforeCreatedAt = std::nullopt,
+      const std::optional<std::string> &excludeAttemptId = std::nullopt,
+      int selectedLongNoteMode = 0);
   std::optional<ScoreBestSnapshot>
   LoadBestScoreForRuleset(const bms_parser::ChartMeta &chartMeta,
       const RulesetDescriptor &requiredRuleset,

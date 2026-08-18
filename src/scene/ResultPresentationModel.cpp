@@ -273,9 +273,13 @@ localScoreComparison(int currentScore, int maxScore,
 ResultComparisonCard
 localLampComparison(const RhythmState &state,
                     const ResultLocalPresentationOptions &options) {
-  const bool hasPrevious = options.previousBest.has_value();
+  const ResultPreviousBestData *const previous =
+      options.previousLampBest
+          ? &*options.previousLampBest
+          : options.previousBest ? &*options.previousBest : nullptr;
+  const bool hasPrevious = previous != nullptr;
   const int previousRank =
-      hasPrevious ? options.previousBest->clearType : kNoClearTypeRank;
+      hasPrevious ? previous->clearType : kNoClearTypeRank;
   const int currentRank =
       options.currentClearRankOverride.value_or(state.getClearTypeRank());
   const std::string currentLabel =
@@ -289,7 +293,7 @@ localLampComparison(const RhythmState &state,
               .value = clearTypeRankToLabel(previousRank),
               .detail =
                   hasPrevious
-                      ? "GAUGE " + formatGauge(options.previousBest->finalGauge)
+                      ? "GAUGE " + formatGauge(previous->finalGauge)
                       : std::string{},
               .accent = hasPrevious ? clearLampColorForRank(previousRank)
                                     : ui_theme::textMuted()},

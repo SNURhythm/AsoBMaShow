@@ -138,6 +138,9 @@ public:
                                         const std::optional<
                                             ResultPreviousBestData>
                                             &previousBest = std::nullopt,
+                                        const std::optional<
+                                            ResultPreviousBestData>
+                                            &previousLampBest = std::nullopt,
                                         const std::optional<std::string>
                                             &currentClearLabelOverride =
                                                 std::nullopt,
