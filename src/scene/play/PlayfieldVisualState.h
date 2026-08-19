@@ -8,6 +8,7 @@
 #include "Pacemaker.h"
 #include "PlayfieldChartVisualModel.h"
 #include "PlayfieldPresentationEvents.h"
+#include "../../practice/PracticeConfiguration.h"
 
 #include <array>
 #include <cstddef>
@@ -283,6 +284,7 @@ struct PlayfieldAuthorityUpdate {
   ReplayLaneCoverChangeKind laneCoverChangeKind =
       ReplayLaneCoverChangeKind::Value;
   bool resetLaneCoverVisibleTimeReference = false;
+  std::optional<practice::SkinMenuState> practiceMenu;
 
   bool operator==(const PlayfieldAuthorityUpdate &other) const;
 };

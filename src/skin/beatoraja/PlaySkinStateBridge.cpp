@@ -1410,6 +1410,18 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
     }
     return {.value = !positive.value, .supported = true};
   }
+  if (*id >= 3000 && *id <= 3015) {
+    const auto &menu = snapshot->authority.practiceMenu;
+    const std::size_t index = static_cast<std::size_t>(*id - 3000);
+    return {.value = menu.has_value() && menu->items[index].available,
+            .supported = true};
+  }
+  if (*id >= 3020 && *id <= 3035) {
+    const auto &menu = snapshot->authority.practiceMenu;
+    const std::size_t index = static_cast<std::size_t>(*id - 3020);
+    return {.value = menu.has_value() && menu->items[index].selected,
+            .supported = true};
+  }
   switch (*id) {
   case 32:
     // AsoBMaShow has no autoplay play mode. Its regular gameplay session is
@@ -2718,6 +2730,27 @@ SkinPropertyLookup<std::string_view> PlaySkinStateBridge::stringProperty(
     return {};
   }
   const auto &text = context_.chartModel.text;
+  if (*id >= 1040 && *id <= 1055) {
+    const auto &menu = state()->authority.practiceMenu;
+    const std::size_t index = static_cast<std::size_t>(*id - 1040);
+    return {.value = menu ? std::string_view(menu->items[index].text)
+                           : std::string_view{},
+            .supported = true};
+  }
+  if (*id >= 1060 && *id <= 1075) {
+    const auto &menu = state()->authority.practiceMenu;
+    const std::size_t index = static_cast<std::size_t>(*id - 1060);
+    return {.value = menu ? std::string_view(menu->items[index].label)
+                           : std::string_view{},
+            .supported = true};
+  }
+  if (*id >= 1080 && *id <= 1095) {
+    const auto &menu = state()->authority.practiceMenu;
+    const std::size_t index = static_cast<std::size_t>(*id - 1080);
+    return {.value = menu ? std::string_view(menu->items[index].value)
+                           : std::string_view{},
+            .supported = true};
+  }
   switch (*id) {
   case 2:
     return {.value = state()->authority.playerName, .supported = true};

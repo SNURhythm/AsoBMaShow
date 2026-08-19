@@ -4,6 +4,7 @@
 #include "../scene/play/RhythmState.h"
 
 #include <cstdint>
+#include <array>
 #include <optional>
 #include <span>
 #include <string>
@@ -57,6 +58,32 @@ struct Configuration {
   audio::PlaybackRate playback;
   bool operator==(const Configuration &) const = default;
 };
+
+struct SkinMenuItem {
+  bool available = false;
+  bool selected = false;
+  std::string label;
+  std::string value;
+  std::string text;
+};
+
+struct SkinMenuInputs {
+  long long chartEndMicros = 0;
+  int judgeRank = 0;
+  double chartTotal = 0.0;
+  int keyMode = 0;
+  int random1P = 0;
+  int random2P = 0;
+  int doublePlay = 0;
+};
+
+struct SkinMenuState {
+  std::array<SkinMenuItem, 16> items;
+  float itemScrollPosition = 0.0F;
+};
+
+[[nodiscard]] SkinMenuState buildSkinMenuState(const Configuration &,
+                                                const SkinMenuInputs &);
 
 [[nodiscard]] std::span<const GaugeOption> practiceGaugeOptions();
 [[nodiscard]] std::string practiceGaugeOptionId(const Configuration &value);

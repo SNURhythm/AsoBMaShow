@@ -41,6 +41,28 @@ void testFreshCountInUsesChartMeasureSize() {
          "invalid chart measure size falls back to four beats");
 }
 
+void testSkinMenuUsesPinnedInitialPracticeViewport() {
+  practice::Configuration configuration{
+      .startMicros = 0,
+      .endMicros = 90'000'000,
+  };
+  const auto menu = practice::buildSkinMenuState(
+      configuration,
+      {.chartEndMicros = 90'000'000,
+       .judgeRank = 100,
+       .chartTotal = 200.0,
+       .keyMode = 7,
+       .random1P = 0,
+       .random2P = 0,
+       .doublePlay = 0});
+  expect(menu.items[0].available && menu.items[0].selected &&
+             menu.items[0].label == "START TIME" &&
+             menu.items[0].value == " 0:00.0" &&
+             menu.items[9].available && menu.items[9].label == "OPTION-1P" &&
+             !menu.items[10].available,
+         "practice skin menu preserves the source ten-slot initial viewport");
+}
+
 void testListenUsesPracticeStartInsteadOfCursorOrEndMarker() {
   practice::Configuration configuration{
       .startMicros = 2'250'000,
@@ -210,6 +232,7 @@ void testPlayabilityIssuesExplainBlockingConfiguration() {
 int main() {
   testPlaybackRateConversions();
   testFreshCountInUsesChartMeasureSize();
+  testSkinMenuUsesPinnedInitialPracticeViewport();
   testListenUsesPracticeStartInsteadOfCursorOrEndMarker();
   testConfigurationSanitization();
   testGaugeAutoShiftDropdownModel();

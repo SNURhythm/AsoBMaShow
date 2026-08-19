@@ -13,6 +13,13 @@ work from [`docs/todo.md`](todo.md). The pinned authority is Beatoraja commit
 
 ## Completed
 
+- The initial practice-menu property surface now captures Beatoraja
+  `PracticeConfiguration`'s source default: its ten visible rows, selected
+  `START TIME` cursor, and `practice_item` text/label/value selectors. The
+  separate `STATE_PRACTICE` UI is not present in AsoBMaShow, so this does not
+  claim user-driven row or scroll mutation. Verified by
+  `practice_configuration_tests` and `play_skin_state_bridge_tests`.
+
 - Constant play now forwards `PlayConfig.duration` and
   `constantFadeinTime` through selected-skin projection. Normal notes, long
   notes, and section/BPM/STOP lines share the pinned `LaneRenderer` time

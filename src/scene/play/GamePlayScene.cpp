@@ -4697,6 +4697,25 @@ void GamePlayScene::capturePlayfieldVisualState(
       .laneCoverAdjustmentHeld = startButtonPressed || selectButtonPressed,
       .resetLaneCoverVisibleTimeReference =
           playfieldLaneCoverResetPending,
+      .practiceMenu = [&] {
+        if (options.practiceSession == nullptr) {
+          return std::optional<practice::SkinMenuState>{};
+        }
+        return std::optional<practice::SkinMenuState>{
+            practice::buildSkinMenuState(
+                options.practiceSession->configuration(),
+                {.chartEndMicros = playfieldChartVisualModel.staticMetadata
+                                      .durationMicros,
+                 .judgeRank = playfieldChartVisualModel.staticMetadata.judgeRank,
+                 .chartTotal = playfieldChartVisualModel.staticMetadata
+                                   .songInformation
+                                       .value_or(PlayfieldSongInformation{})
+                                       .total,
+                 .keyMode = playfieldChartVisualModel.keyCount,
+                 .random1P = gameplayRandomOptionIndex(playOptions.option),
+                 .random2P = gameplayRandomOptionIndex(playOptions.option2),
+                 .doublePlay = options.doublePlayFlip ? 1 : 0})};
+      }(),
   };
   playfieldVisualStateStore->applyAuthorityUpdate(authority);
 

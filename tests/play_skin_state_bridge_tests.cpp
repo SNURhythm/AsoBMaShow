@@ -836,6 +836,18 @@ void testExistingGameplayStatePropertyWiring() {
   state.configuration.sevenToNinePattern = 6;
   state.configuration.sevenToNineType = 2;
   state.configuration.constantScroll = true;
+  practice::SkinMenuState practiceMenu;
+  practiceMenu.items[0] = {.available = true,
+                           .selected = true,
+                           .label = "START TIME",
+                           .value = " 0:00.0",
+                           .text = "START TIME :  0:00.0"};
+  practiceMenu.items[1] = {.available = true,
+                           .selected = false,
+                           .label = "END TIME",
+                           .value = " 1:30.0",
+                           .text = "END TIME :  1:30.0"};
+  state.authority.practiceMenu = std::move(practiceMenu);
   state.clock.playTimer = {.active = true,
                            .startMicros = 0,
                            .elapsedMillisExact = true,
@@ -855,6 +867,22 @@ void testExistingGameplayStatePropertyWiring() {
   expect(bridge.stringProperty({1010}).supported &&
              bridge.stringProperty({1010}).value == "0.0.1",
          "version string reads the declared application version");
+  expect(bridge.booleanProperty({3000}).supported &&
+             bridge.booleanProperty({3000}).value &&
+             bridge.booleanProperty({3001}).supported &&
+             bridge.booleanProperty({3001}).value &&
+             bridge.booleanProperty({3002}).supported &&
+             !bridge.booleanProperty({3002}).value &&
+             bridge.booleanProperty({3020}).supported &&
+             bridge.booleanProperty({3020}).value &&
+             bridge.booleanProperty({3021}).supported &&
+             !bridge.booleanProperty({3021}).value &&
+             bridge.stringProperty({1040}).value == "START TIME :  0:00.0" &&
+             bridge.stringProperty({1061}).value == "END TIME" &&
+             bridge.stringProperty({1081}).value == " 1:30.0" &&
+             bridge.stringProperty({std::string{"practice_item2"}}).value ==
+                 "END TIME :  1:30.0",
+         "practice menu selectors use the captured visible rows and labels");
 
   for (const auto [id, expected] : std::array{
            std::pair{40, false}, std::pair{41, true}, std::pair{82, true},

@@ -7,6 +7,8 @@
 #include <array>
 #include <cctype>
 #include <string_view>
+#include <iomanip>
+#include <sstream>
 
 namespace practice {
 namespace {
@@ -65,6 +67,48 @@ bool validGaugeType(GaugeType value) {
   return false;
 }
 } // namespace
+
+SkinMenuState buildSkinMenuState(const Configuration &configuration,
+                                 const SkinMenuInputs &inputs) {
+  SkinMenuState result;
+  const auto formatTime = [](long long micros) {
+    const long long tenths = micros / 100'000LL;
+    std::ostringstream value;
+    value << std::setw(2) << tenths / 600 << ':' << std::setfill('0')
+          << std::setw(2) << (tenths / 10) % 60 << '.' << tenths % 10;
+    return value.str();
+  };
+  const auto set = [&result](std::size_t index, std::string label,
+                             std::string value) {
+    auto &item = result.items[index];
+    item.available = index < 10;
+    item.selected = index == 0;
+    item.label = std::move(label);
+    item.value = std::move(value);
+    item.text = item.label + " : " + item.value;
+  };
+  set(0, "START TIME", formatTime(configuration.startMicros));
+  set(1, "END TIME", formatTime(configuration.endMicros));
+  static constexpr std::array<std::string_view, 6> gaugeNames = {
+      "ASSIST EASY", "EASY", "NORMAL", "HARD", "EX-HARD", "HAZARD"};
+  set(2, "GAUGE TYPE", std::string(gaugeNames[static_cast<std::size_t>(
+                              gaugeTypeIndex(configuration.gaugeType))]));
+  const std::string_view category =
+      inputs.keyMode == 5 || inputs.keyMode == 10 ? "FIVEKEYS"
+      : inputs.keyMode == 9 ? "PMS"
+      : inputs.keyMode == 24 || inputs.keyMode == 48 ? "KEYBOARD"
+      : "SEVENKEYS";
+  set(3, "GAUGE CATEGORY", std::string(category));
+  set(4, "GAUGE VALUE", configuration.startingGaugePercent
+                              ? std::to_string(*configuration.startingGaugePercent)
+                              : std::to_string(defaultStartingGaugePercent(configuration)));
+  set(5, "JUDGERANK", std::to_string(inputs.judgeRank));
+  set(6, "TOTAL", std::to_string(static_cast<int>(inputs.chartTotal)));
+  set(7, "FREQUENCY", std::to_string(configuration.playback.percent));
+  set(8, "GRAPHTYPE", "NOTETYPE");
+  set(9, "OPTION-1P", "NORMAL");
+  return result;
+}
 
 std::span<const GaugeOption> practiceGaugeOptions() { return kGaugeOptions; }
 

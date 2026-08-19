@@ -28,7 +28,11 @@ source default are not compatibility work for gameplay skins.
 - [x] Constant scroll (`400`) now captures the persisted `PlayConfig`
   enablement flag for both its image-index and boolean forms. Implementing
   the source renderer's constant-speed/fade behavior remains separate work.
-- Practice item availability and selection (`3000`–`3015`, `3020`–`3035`).
+- [x] Initial practice item availability and selection (`3000`–`3015`,
+  `3020`–`3035`) now follow the captured `PracticeConfiguration` viewport:
+  the ten default visible rows are available and the initial `START TIME`
+  cursor is selected. Aso has no source-compatible `STATE_PRACTICE` menu, so
+  user-driven row selection and scrolling remain unavailable.
 
 ### Integer-value properties
 
@@ -125,7 +129,10 @@ gameplay.
   project version, matching `MainController.getVersion()`'s application-level
   source instead of a gameplay-scene fallback.
 - Configured target-name neighbours (`200`–`219`).
-- Practice item text, labels, and values (`1040`–`1095`).
+- [x] Initial practice item text, labels, and values (`1040`–`1095`) expose
+  the captured source-compatible ten-row `PracticeConfiguration` viewport.
+  User-driven menu mutation remains unavailable with the separate
+  `STATE_PRACTICE` UI.
 
 ### Timers
 
