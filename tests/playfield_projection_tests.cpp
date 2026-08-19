@@ -1,4 +1,5 @@
 #include "scene/play/PlayfieldProjection.h"
+#include "scene/play/GamePlayTiming.h"
 #include "bms_parser.hpp"
 
 #include <algorithm>
@@ -60,6 +61,124 @@ bool testPassedNormalNotesDoNotRemainInTheSkinProjection() {
   return !containsNote(result.notes, 10) && containsNote(result.notes, 11) &&
          skin.notes.size() == 1 &&
          skin.notes.front().kind == skin::SkinProjectedNoteKind::Mine;
+}
+
+bool testShowPastNotesKeepsOnlyAnUnprocessedPastNormalNote() {
+  // Pinned LaneRenderer's optional showpastnote path is deliberately narrow:
+  // it retains an already-past NormalNote only while its source state is 0.
+  // A resolved note must stay absent, and mines never participate.
+  PlayfieldChartVisualModel model;
+  model.laneOrder = {0};
+  model.timelines = {
+      {.id = 1,
+       .timeMicros = 0,
+       .scrollPosition = 0.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 0,
+       .retainedOrdinal = 0},
+      {.id = 2,
+       .timeMicros = 10,
+       .scrollPosition = 0.1,
+       .retainedForProjection = true,
+       .authoredOrdinal = 1,
+       .retainedOrdinal = 1},
+      {.id = 3,
+       .timeMicros = 20,
+       .scrollPosition = 0.2,
+       .retainedForProjection = true,
+       .authoredOrdinal = 2,
+       .retainedOrdinal = 2},
+  };
+  model.notes = {
+      {.id = 10, .timelineId = 1, .lane = 0, .authoredOrdinal = 0},
+      {.id = 11, .timelineId = 2, .lane = 0, .authoredOrdinal = 1},
+      {.id = 12,
+       .timelineId = 3,
+       .lane = 0,
+       .kind = ChartVisualNoteKind::Mine,
+       .source = ChartVisualNoteSource::Mine,
+       .authoredOrdinal = 2},
+  };
+  PlayfieldVisualState state;
+  state.clock = {.serial = 1, .visualTimeMicros = 30};
+  state.notes = {
+      {.id = 10},
+      {.id = 11, .judged = true},
+      {.id = 12},
+  };
+
+  PlayfieldProjection projection;
+  const auto result = projection.project(
+      model, state,
+      {.visibleScrollBefore = 1.0,
+       .visibleScrollAfter = 1.0,
+       .showPastNormalNotes = true});
+  return containsNote(result.notes, 10) && !containsNote(result.notes, 11) &&
+         !containsNote(result.notes, 12);
+}
+
+bool testNotesDisplayTimingAutoAdjustUsesPinnedJudgeStep() {
+  // JudgeManager adjusts only PGREAT/GREAT/GOOD within ±150 ms. Java integer
+  // division truncates toward zero after applying its sign-specific 15 ms
+  // half-step; no configuration clamp occurs in this update path.
+  return gameplay_timing::nextNotesDisplayTimingMilliseconds(
+             7, true, true, PGreat, 15'000) == 6 &&
+         gameplay_timing::nextNotesDisplayTimingMilliseconds(
+             7, true, true, Great, -15'000) == 8 &&
+         gameplay_timing::nextNotesDisplayTimingMilliseconds(
+             7, true, true, Good, 150'000) == 2 &&
+         gameplay_timing::nextNotesDisplayTimingMilliseconds(
+             7, true, true, Bad, 30'000) == 7 &&
+         gameplay_timing::nextNotesDisplayTimingMilliseconds(
+             7, true, false, PGreat, 30'000) == 7 &&
+         gameplay_timing::nextNotesDisplayTimingMilliseconds(
+             7, true, true, PGreat, 150'001) == 7;
+}
+
+bool testConstantProjectionUsesPinnedPositiveFadeWindow() {
+  // LaneRenderer starts its Constant cutoff at visual time + duration. With a
+  // positive fade it keeps the target row fully opaque, fades only the strict
+  // interval after it, and skips the exact fade endpoint.
+  PlayfieldChartVisualModel model;
+  model.laneOrder = {0};
+  model.timelines = {
+      {.id = 1, .timeMicros = 900'000, .scrollPosition = 0.9,
+       .retainedForProjection = true, .authoredOrdinal = 0,
+       .retainedOrdinal = 0},
+      {.id = 2, .timeMicros = 1'000'000, .scrollPosition = 1.0,
+       .retainedForProjection = true, .authoredOrdinal = 1,
+       .retainedOrdinal = 1},
+      {.id = 3, .timeMicros = 1'050'000, .scrollPosition = 1.05,
+       .retainedForProjection = true, .authoredOrdinal = 2,
+       .retainedOrdinal = 2},
+      {.id = 4, .timeMicros = 1'100'000, .scrollPosition = 1.1,
+       .retainedForProjection = true, .authoredOrdinal = 3,
+       .retainedOrdinal = 3},
+  };
+  model.notes = {
+      {.id = 10, .timelineId = 1, .lane = 0, .authoredOrdinal = 0},
+      {.id = 11, .timelineId = 2, .lane = 0, .authoredOrdinal = 1},
+      {.id = 12, .timelineId = 3, .lane = 0, .authoredOrdinal = 2},
+      {.id = 13, .timelineId = 4, .lane = 0, .authoredOrdinal = 3},
+  };
+  PlayfieldVisualState state;
+  state.clock = {.serial = 1, .visualTimeMicros = 0};
+  PlayfieldProjection projection;
+  const auto result = projection.project(
+      model, state,
+      {.visibleScrollAfter = 2.0,
+       .constantScroll = true,
+       .constantDurationMilliseconds = 1'000,
+       .constantFadeInMilliseconds = 100});
+  const auto note = [&](ChartVisualId id) -> const ProjectedPlayfieldNote * {
+    const auto found = std::ranges::find(result.notes, id,
+                                         &ProjectedPlayfieldNote::noteId);
+    return found == result.notes.end() ? nullptr : &*found;
+  };
+  return note(10) != nullptr && closeTo(note(10)->opacity, 1.0) &&
+         note(11) != nullptr && closeTo(note(11)->opacity, 1.0) &&
+         note(12) != nullptr && closeTo(note(12)->opacity, 0.5) &&
+         note(13) == nullptr;
 }
 
 bool testFinalMeasureTailContinuesScrollWithoutParserRows() {
@@ -582,6 +701,20 @@ int main() {
   if (!testPassedNormalNotesDoNotRemainInTheSkinProjection()) {
     std::cerr << "passed normal notes must not remain in the default skin "
                  "projection, while mines retain their Mine visual kind\n";
+    return EXIT_FAILURE;
+  }
+  if (!testShowPastNotesKeepsOnlyAnUnprocessedPastNormalNote()) {
+    std::cerr << "showpastnote must retain only source-state-zero normal notes\n";
+    return EXIT_FAILURE;
+  }
+  if (!testNotesDisplayTimingAutoAdjustUsesPinnedJudgeStep()) {
+    std::cerr << "notes-display timing auto-adjust must use the pinned "
+                 "JudgeManager step formula\n";
+    return EXIT_FAILURE;
+  }
+  if (!testConstantProjectionUsesPinnedPositiveFadeWindow()) {
+    std::cerr << "Constant projection must use LaneRenderer's positive fade "
+                 "window\n";
     return EXIT_FAILURE;
   }
   if (!testFinalMeasureTailContinuesScrollWithoutParserRows()) {

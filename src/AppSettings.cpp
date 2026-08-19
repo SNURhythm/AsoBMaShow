@@ -694,10 +694,27 @@ bool AppSettings::parseLegacyCfg(std::istream &file, AppSettings &settings,
         if (parseBool(value, parsed)) {
           settings.showInvisibleNotes = parsed;
         }
+      } else if (key == "show_past_notes") {
+        bool parsed = settings.showPastNotes;
+        if (parseBool(value, parsed)) {
+          settings.showPastNotes = parsed;
+        }
+      } else if (key == "judge_timing") {
+        settings.notesDisplayTimingMilliseconds = std::stoi(value);
       } else if (key == "mark_processed_notes") {
         bool parsed = settings.markProcessedNotes;
         if (parseBool(value, parsed)) {
           settings.markProcessedNotes = parsed;
+        }
+      } else if (key == "custom_judge") {
+        bool parsed = settings.customJudge;
+        if (parseBool(value, parsed)) {
+          settings.customJudge = parsed;
+        }
+      } else if (key == "show_judge_area") {
+        bool parsed = settings.showJudgeArea;
+        if (parseBool(value, parsed)) {
+          settings.showJudgeArea = parsed;
         }
       } else if (key == "touch_visualization_enabled") {
         bool parsed = settings.touchVisualizationEnabled;

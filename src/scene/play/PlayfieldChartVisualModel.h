@@ -83,6 +83,18 @@ struct PlayfieldChartTextMetadata {
   bool operator==(const PlayfieldChartTextMetadata &) const = default;
 };
 
+// Immutable equivalent of Beatoraja SongData.getInformation(). A missing value
+// remains observable because the source factories return their numeric
+// sentinels when SongInformation has not been prepared.
+struct PlayfieldSongInformation {
+  double density = 0.0;
+  double peakDensity = 0.0;
+  double endDensity = 0.0;
+  double total = 0.0;
+
+  bool operator==(const PlayfieldSongInformation &) const = default;
+};
+
 // Immutable chart data used by static Beatoraja skin properties. This remains
 // parser-free after conversion so projection and skin evaluation never need to
 // retain the mutable parser chart.
@@ -115,6 +127,7 @@ struct PlayfieldChartStaticMetadata {
   bool hasBpmStop = false;
   std::string stageFilePath;
   std::string backBmpPath;
+  std::optional<PlayfieldSongInformation> songInformation;
 
   bool operator==(const PlayfieldChartStaticMetadata &) const = default;
 };

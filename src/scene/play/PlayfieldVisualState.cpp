@@ -44,16 +44,27 @@ bool PlayfieldAuthorityUpdate::operator==(
          stageCombo == other.stageCombo &&
          stagePassedNotes == other.stagePassedNotes &&
          bestScore == other.bestScore &&
+         persistedScore == other.persistedScore &&
+         rivalScore == other.rivalScore &&
+         playerScoreHistory == other.playerScoreHistory &&
          sameTarget(bestScoreTarget, other.bestScoreTarget) &&
          gaugeAutoShift == other.gaugeAutoShift &&
+         gaugeAutoShiftLowerBound == other.gaugeAutoShiftLowerBound &&
          currentGauge == other.currentGauge && gaugeRules == other.gaugeRules &&
          sameTarget(pacemakerTarget, other.pacemakerTarget) &&
          sameSnapshot(pacemakerStatus, other.pacemakerStatus) &&
          player1RandomOption == other.player1RandomOption &&
          player2RandomOption == other.player2RandomOption &&
          doublePlayOption == other.doublePlayOption &&
+         targetPlayOption == other.targetPlayOption &&
+         favoriteChartState == other.favoriteChartState &&
+         chartHasDocument == other.chartHasDocument &&
+         stageFileAvailable == other.stageFileAvailable &&
+         backBmpAvailable == other.backBmpAvailable &&
          playerName == other.playerName &&
          playOptionLabel == other.playOptionLabel &&
+         currentFramesPerSecond == other.currentFramesPerSecond &&
+         applicationUptimeMillis == other.applicationUptimeMillis &&
          autoPlayMarkVisible == other.autoPlayMarkVisible &&
          gameplayMode == other.gameplayMode &&
          loadingState == other.loadingState &&
@@ -68,6 +79,7 @@ bool PlayfieldAuthorityUpdate::operator==(
          liftEnabled == other.liftEnabled && liftRatio == other.liftRatio &&
          hiddenEnabled == other.hiddenEnabled &&
          hiddenRatio == other.hiddenRatio &&
+         failureAnimationActive == other.failureAnimationActive &&
          laneCoverAdjustmentHeld == other.laneCoverAdjustmentHeld &&
          laneCoverChanged == other.laneCoverChanged &&
          laneCoverChangeKind == other.laneCoverChangeKind &&

@@ -99,7 +99,12 @@ AppSettings makeDistinctSettings() {
   value.prepMetronomeEnabled = true;
   value.startLaneIndicatorsEnabled = false;
   value.showInvisibleNotes = true;
+  value.showPastNotes = true;
+  value.notesDisplayTimingMilliseconds = -67;
+  value.constantFadeInMilliseconds = -75;
   value.markProcessedNotes = true;
+  value.customJudge = true;
+  value.showJudgeArea = true;
   value.touchVisualizationEnabled = false;
   value.archiveChartPreviewEnabled = false;
   value.findBmsSkipUnarchivingForNonSolidArchives = true;
@@ -155,7 +160,11 @@ void testLegacyFixtureLoadsEverySetting() {
   AppSettings expected = makeDistinctSettings();
   expected.audioVideo = player_settings::defaultAudioVideoSettingsForPlatform();
   expected.findBmsSkipUnarchivingForNonSolidArchives = false;
+  expected.showPastNotes = false;
+  expected.notesDisplayTimingMilliseconds = 0;
   expected.markProcessedNotes = false;
+  expected.customJudge = false;
+  expected.showJudgeArea = false;
   expected.skin.safetyLevel = skin::SkinSafetyLevel::Standard;
   // The retired floating-cover UI field must not silently opt legacy users
   // into current-BPM Hi-Speed Auto Adjust.
@@ -249,6 +258,15 @@ void testJsonRoundTripIncludesAudioAndVideo() {
   expect(readFile(path).find("\"startLaneIndicatorsEnabled\": false") !=
              std::string::npos,
          "saved JSON includes the start lane indicator setting");
+  expect(readFile(path).find("\"showPastNotes\": true") !=
+             std::string::npos,
+         "saved JSON includes the Beatoraja past-note setting");
+  expect(readFile(path).find("\"notesDisplayTimingMilliseconds\": -67") !=
+             std::string::npos,
+         "saved JSON includes the Beatoraja display-timing setting");
+  expect(readFile(path).find("\"constantFadeInMilliseconds\": -75") !=
+             std::string::npos,
+         "saved JSON includes the Beatoraja Constant fade setting");
   expect(readFile(path).find("\"markProcessedNotes\": true") !=
              std::string::npos,
          "saved JSON includes the Beatoraja processed-note marker setting");
@@ -291,6 +309,41 @@ void testJsonRoundTripIncludesAudioAndVideo() {
          "saved JSON includes non-secret IR provider settings");
   expect(readFile(path).find("sentinel-api-key") == std::string::npos,
          "serialized settings contain no API key material");
+}
+
+void testGameplaySkinPlayerConfigSelectorsRoundTrip() {
+  TempDirectory temp;
+  const auto path = temp.path() / "gameplay-skin-player-config.json";
+  AppSettings expected;
+  expected.notesDisplayTimingAutoAdjust = true;
+  expected.autoSaveReplay = {1, 2, 3, 10};
+  expected.guideSoundEffects = true;
+  expected.extraNoteDepth = 23;
+  expected.mineMode = 3;
+  expected.scrollMode = 1;
+  expected.longNoteModifierMode = 4;
+  expected.sevenToNinePattern = 6;
+  expected.sevenToNineType = 2;
+  expected.constantScroll = true;
+
+  std::string error;
+  expect(AppSettingsStore::Save(path, expected, error),
+         "gameplay skin PlayerConfig selector settings save: " + error);
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.status == AppSettingsLoadStatus::Loaded &&
+             loaded.settings.notesDisplayTimingAutoAdjust ==
+                 expected.notesDisplayTimingAutoAdjust &&
+             loaded.settings.autoSaveReplay == expected.autoSaveReplay &&
+             loaded.settings.guideSoundEffects == expected.guideSoundEffects &&
+             loaded.settings.extraNoteDepth == expected.extraNoteDepth &&
+             loaded.settings.mineMode == expected.mineMode &&
+             loaded.settings.scrollMode == expected.scrollMode &&
+             loaded.settings.longNoteModifierMode ==
+                 expected.longNoteModifierMode &&
+             loaded.settings.sevenToNinePattern == expected.sevenToNinePattern &&
+             loaded.settings.sevenToNineType == expected.sevenToNineType &&
+             loaded.settings.constantScroll == expected.constantScroll,
+         "gameplay skin PlayerConfig selectors survive settings round trip");
 }
 
 void testGameplaySkinTraitSelectionsSurviveRestart() {
@@ -1011,7 +1064,11 @@ void testVersionFixturesAndNoRewrite() {
   AppSettings expectedV0 = makeDistinctSettings();
   expectedV0.findBmsSkipUnarchivingForNonSolidArchives = false;
   expectedV0.hispeedAutoAdjust = false;
+  expectedV0.showPastNotes = false;
+  expectedV0.notesDisplayTimingMilliseconds = 0;
   expectedV0.markProcessedNotes = false;
+  expectedV0.customJudge = false;
+  expectedV0.showJudgeArea = false;
   expectedV0.skin.safetyLevel = skin::SkinSafetyLevel::Standard;
   expect(v0.settings == expectedV0, "v0 migration is lossless");
 
@@ -1297,6 +1354,7 @@ void testAtomicFirstSaveCreatesRelativeNestedParents() {
 int main() {
   testLegacyFixtureLoadsEverySetting();
   testJsonRoundTripIncludesAudioAndVideo();
+  testGameplaySkinPlayerConfigSelectorsRoundTrip();
   testGameplaySkinTraitSelectionsSurviveRestart();
   testBpmGuideAssistOptionPersists();
   testSchemaThreeMigrationDisablesCompatibility();

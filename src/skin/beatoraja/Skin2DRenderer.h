@@ -75,6 +75,7 @@ struct SkinProjectedNoteView {
   std::optional<double> scrollSpeed;
   double authoredYDisplacement = 0.0;
   bool judged = false;
+  double opacity = 1.0;
   std::uint32_t submissionOrdinal = 0;
 };
 

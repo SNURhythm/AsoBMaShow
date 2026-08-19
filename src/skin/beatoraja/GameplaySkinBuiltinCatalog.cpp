@@ -149,6 +149,17 @@ std::vector<SkinBuiltinBindingCatalogEntry> makeCatalog() {
     add(entries, rate, selector);
   }
 
+  // FloatPropertyFactory.RateType provides built-in writers only for these
+  // Config.AudioConfig fields. The lane-cover and practice-position writers
+  // stay absent until Aso has their source mutation authority.
+  const SkinBindingType floatWriter{.kind = SkinBindingKind::FloatWriter};
+  for (const int selector : {17, 18, 19}) {
+    add(entries, floatWriter, selector);
+  }
+  for (const char *selector : {"mastervolume", "keyvolume", "bgmvolume"}) {
+    add(entries, floatWriter, selector);
+  }
+
   // getFloatProperty is FloatType + its pattern table + RateType fallback.
   const SkinBindingType floatValue{
       .kind = SkinBindingKind::FloatProperty,

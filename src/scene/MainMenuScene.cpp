@@ -10276,9 +10276,11 @@ void MainMenuScene::startModernGBattlePlayback(
 
           struct Completion {
             replay::ChartReplayConsumerOutcome loaded;
+            result_persistence::ChartScoreWrite targetScore;
           };
           auto completion = std::make_shared<Completion>(
-              Completion{.loaded = std::move(loaded)});
+              Completion{.loaded = std::move(loaded),
+                         .targetScore = modern.result.score});
           queueReplayLoadCompletion(
               [this, completion, gaugeType, gaugeAutoShift,
                gaugeAutoShiftLowerBound, autoKeySound, ruleset,
@@ -10309,6 +10311,7 @@ void MainMenuScene::startModernGBattlePlayback(
                                .gaugeAutoShiftLowerBound =
                                    gaugeAutoShiftLowerBound,
                                .gbattleRecordData = recordData,
+                               .targetScore = completion->targetScore,
                                .playOption = recordData->playOption,
                                .playOptionSeed = recordData->playOptionSeed,
                                .playOption2 = recordData->playOption2,

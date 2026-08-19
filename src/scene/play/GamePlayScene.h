@@ -249,6 +249,14 @@ private:
   pacemaker::Target activePacemakerTarget;
   pacemaker::Target activeBestScoreTarget;
   std::optional<ScoreBestSnapshot> activePacemakerBest;
+  std::optional<ChartScoreHistorySnapshot> activePersistedScore;
+  std::optional<PlayfieldRivalScoreState> activeRivalScore;
+  std::optional<int> activeTargetPlayOption;
+  PlayerScoreHistorySnapshot activePlayerScoreHistory;
+  int playfieldFavoriteChartState = 0;
+  bool playfieldChartHasDocument = false;
+  bool playfieldStageFileAvailable = false;
+  bool playfieldBackBmpAvailable = false;
   std::optional<ResultPreviousBestData> activeReplayPacemakerPreviousBest;
   std::jthread bestReplayLoadThread;
   std::shared_ptr<std::atomic_bool> bestReplayLoadCancelled =
@@ -329,6 +337,10 @@ private:
   void applyPendingBestReplay();
   void stopBestReplayLoad();
   void updatePacemakerStatus();
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  void applySkinAudioVolume(skin::SkinAudioVolumeWriterTarget target,
+                            float value);
+#endif
   void updateGaugeStatusText();
   bool finishIfGaugeFailed();
   void updateLaneStateText();

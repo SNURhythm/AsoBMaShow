@@ -17,6 +17,11 @@ PlayfieldProjectionRequest initialProjectionRequest(
     const BMSRenderer &renderer) {
   return {
       .includeInvisibleNotes = configuration.showInvisibleNotes,
+      .showPastNormalNotes = configuration.showPastNotes,
+      .constantScroll = configuration.constantScroll,
+      .constantDurationMilliseconds =
+          configuration.visibleTimeDurationMilliseconds,
+      .constantFadeInMilliseconds = configuration.constantFadeInMilliseconds,
       .bpmGuideEnabled = configuration.bpmGuideEnabled,
       .latePoorTimingMicros = renderer.projectionLatePoorTimingMicros(),
       .builtInTraversal = renderer.projectionTraversal(),
@@ -549,6 +554,8 @@ PresentationFrameResult ReplayPlayfieldPresentation::renderFrame(
   PlayfieldProjectionRequest effectiveRequest = request;
   effectiveRequest.bpmGuideEnabled =
       effectiveRequest.bpmGuideEnabled || configuration_.bpmGuideEnabled;
+  effectiveRequest.showPastNormalNotes =
+      effectiveRequest.showPastNormalNotes || configuration_.showPastNotes;
   // A selected skin consumes generic DTOs only. BMSRenderer's compatibility
   // plan remains necessary for built-in replay frames because parser note
   // state is intentionally immutable in this adapter.

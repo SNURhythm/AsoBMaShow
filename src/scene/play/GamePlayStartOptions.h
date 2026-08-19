@@ -1,10 +1,12 @@
 #pragma once
 
 #include "../../CoursePlaySession.h"
+#include "../../ModernResult.h"
 #include "../../ReplayData.h"
 #include "../../AppSettings.h"
 #include "../../input/InputTypes.h"
 #include "../../practice/PracticeSession.h"
+#include "../../replay/ReplayOption.h"
 #include "Pacemaker.h"
 #include "GameplayCandidateSelection.h"
 #include "GameplayRulesetPolicy.h"
@@ -75,6 +77,9 @@ struct StartOptions {
   GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
   std::shared_ptr<ReplayData> replayData = nullptr;
   std::shared_ptr<ReplayData> gbattleRecordData = nullptr;
+  // The persisted result behind a G-Battle replay is the only current
+  // gameplay target that carries ScoreData-equivalent judge counts.
+  std::optional<result_persistence::ChartScoreWrite> targetScore;
   std::optional<std::string> playOption;
   std::optional<long long> playOptionSeed;
   std::optional<std::string> playOption2;
@@ -102,6 +107,49 @@ struct StartOptions {
   std::optional<RulesetDescriptor> requiredRulesetDescriptor;
   std::optional<ScoreStageProvenance> replayRulesetOverride;
 };
+
+// BMSPlayer stores ScoreData.option as randomoption plus, only for a
+// two-player mode, randomoption2 * 10 and doubleoption * 100. A completed
+// Aso target keeps the equivalent option inputs in its immutable provenance;
+// project them only when an actual target score is present.
+[[nodiscard]] inline int
+targetScorePlayOption(const result_persistence::ChartScoreWrite &target,
+                      const bms_parser::ChartMeta &targetMeta) {
+  const auto optionIndex = [](const PlayerOptionProvenance &player) {
+    return replay::projectedBeatorajaReplayOptionIndex(player.option)
+        .value_or(0);
+  };
+
+  int option = optionIndex(target.provenance.player1);
+  if (targetMeta.IsDP) {
+    option += optionIndex(target.provenance.player2) * 10;
+    option += target.provenance.doublePlayFlip ? 100 : 0;
+  }
+  return option;
+}
+
+[[nodiscard]] inline std::optional<int>
+targetScorePlayOption(
+    const std::optional<result_persistence::ChartScoreWrite> &target,
+    const bms_parser::ChartMeta &targetMeta) {
+  if (!target.has_value()) {
+    return std::nullopt;
+  }
+  return targetScorePlayOption(*target, targetMeta);
+}
+
+// BMSPlayer's practice branch does not install PlayerResource.targetScoreData.
+// Every other gameplay branch resolves TargetProperty, whose freshly-created
+// ScoreData begins with option zero when no persisted target record supplies
+// a different value.
+[[nodiscard]] inline std::optional<int>
+targetScorePlayOptionForGameplay(const StartOptions &options,
+                                 const bms_parser::ChartMeta &targetMeta) {
+  if (options.practiceMode || options.practiceSession != nullptr) {
+    return std::nullopt;
+  }
+  return targetScorePlayOption(options.targetScore, targetMeta).value_or(0);
+}
 
 namespace play_start_detail {
 [[nodiscard]] inline std::optional<

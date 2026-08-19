@@ -849,6 +849,11 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   uint64_t coalescedMouseMotionInWindow = 0;
   uint64_t coalescedFingerMotionInWindow = 0;
   uint64_t coalescedResizeInWindow = 0;
+  // Pinned gdx-backend-lwjgl's LwjglGraphics.updateTime() starts with a
+  // zero fps value, then publishes the prior whole-second frame count before
+  // counting the current frame in the next window.
+  std::optional<std::chrono::steady_clock::time_point> fpsWindowStart;
+  int renderedFramesInWindow = 0;
   float appliedLaneAngleDegrees = context.settings.laneAngleDegrees;
   float appliedLaneLength = context.settings.laneLength;
   bool hasDeferredRenderResize = false;
@@ -952,6 +957,11 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     context.pollGameplaySkinCommits();
 
     auto currentFrameTime = std::chrono::steady_clock::now();
+    context.applicationUptimeMillis.store(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            currentFrameTime - context.bootTime)
+            .count(),
+        std::memory_order_release);
     const bool exportActiveForPacing =
         context.replayVideoExportActive.load(std::memory_order_acquire);
     if (exportActiveForPacing != pacingExportActive) {
@@ -1398,6 +1408,19 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         bgfx::frame();
         renderedFrame = true;
       }
+    }
+
+    if (!fpsWindowStart.has_value()) {
+      fpsWindowStart = currentFrameTime;
+    } else if (currentFrameTime - *fpsWindowStart >=
+               std::chrono::seconds(1)) {
+      context.currentFramesPerSecond.store(renderedFramesInWindow,
+                                           std::memory_order_release);
+      renderedFramesInWindow = 0;
+      fpsWindowStart = currentFrameTime;
+    }
+    if (renderedFrame) {
+      ++renderedFramesInWindow;
     }
 
 #if ASOBMASHOW_ENABLE_PERF_TELEMETRY

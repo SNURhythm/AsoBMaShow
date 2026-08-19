@@ -73,10 +73,25 @@ struct SessionPresentationWrite {
   std::uint8_t argumentCount = 0;
 };
 
+// Pinned FloatPropertyFactory.RateType exposes these three built-in
+// FloatWriter targets during BMSPlayer gameplay. They mutate Config.AudioConfig
+// rather than the skin configuration.
+enum class SkinAudioVolumeWriterTarget : std::uint8_t {
+  Master,
+  Keysound,
+  Bgm,
+};
+
+struct SetSkinAudioVolume {
+  SkinAudioVolumeWriterTarget target = SkinAudioVolumeWriterTarget::Master;
+  float value = 1.0F;
+};
+
 using PersistedSkinConfigurationWrite =
     std::variant<SetSkinOption, SetSkinFilePath, SetSkinOffset>;
 using SkinFrameMutation =
-    std::variant<SessionPresentationWrite, PersistedSkinConfigurationWrite>;
+    std::variant<SessionPresentationWrite, PersistedSkinConfigurationWrite,
+                 SetSkinAudioVolume>;
 
 enum class SkinHostCallStatus : std::uint8_t {
   Completed,
@@ -182,6 +197,7 @@ private:
       void *, int, std::span<const int>) noexcept;
   [[nodiscard]] const PlayfieldVisualState *state() const noexcept;
   void updatePinnedPlayTimers();
+  void updatePinnedPomyuTimers();
   [[nodiscard]] std::optional<int>
   numericSelector(const SkinBuiltinPropertySelector &) const noexcept;
 
@@ -202,6 +218,20 @@ private:
   std::int64_t musicEndTimerStartMicros_ = kPlayfieldTimestampOff;
   std::int64_t fadeoutTimerStartMicros_ = kPlayfieldTimestampOff;
   std::int64_t fullComboTimerStartMicros_ = kPlayfieldTimestampOff;
+  std::int64_t rhythmTimerStartMicros_ = kPlayfieldTimestampOff;
+  std::int64_t rhythmAccumulatorMicros_ = 0;
+  std::optional<std::int64_t> rhythmPreviousClockMicros_;
+  std::size_t rhythmSectionIndex_ = 0;
+  // PlaySkin constructs PomyuCharaProcessor for every gameplay skin. Its
+  // unconfigured motion durations are all one millisecond; a future decoded
+  // pmchara object may replace those source defaults per timer.
+  std::array<std::int64_t, 8> pomyuTimerStarts_ = {
+      kPlayfieldTimestampOff, kPlayfieldTimestampOff,
+      kPlayfieldTimestampOff, kPlayfieldTimestampOff,
+      kPlayfieldTimestampOff, kPlayfieldTimestampOff,
+      kPlayfieldTimestampOff, kPlayfieldTimestampOff};
+  std::array<int, 2> pomyuLastNotes_{};
+  std::int64_t pomyuDanceTimerStartMicros_ = kPlayfieldTimestampOff;
   std::unordered_map<int, std::int64_t> pinnedSwitchTimerStarts_;
   std::vector<SkinDiagnostic> diagnostics_;
 };

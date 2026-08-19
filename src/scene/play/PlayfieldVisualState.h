@@ -69,6 +69,7 @@ struct PlayfieldPresentationConfig {
   int noteStartPositionPercent = 0;
   bool laneBeamClockUsesRenderTime = false;
   bool showInvisibleNotes = false;
+  bool showPastNotes = false;
   // Config.AudioConfig's system/key/background gains, captured when the
   // presentation begins so gameplay skins read the same profile values in
   // live play, replay watch, and replay export.
@@ -83,6 +84,19 @@ struct PlayfieldPresentationConfig {
   // PlayConfig.isEnableHispeedAutoAdjust.
   bool hispeedAutoAdjust = false;
   bool markProcessedNotes = false;
+  bool customJudge = false;
+  bool showJudgeArea = false;
+  bool notesDisplayTimingAutoAdjust = false;
+  std::array<int, 4> autoSaveReplay{};
+  bool guideSoundEffects = false;
+  int extraNoteDepth = 0;
+  int mineMode = 0;
+  int scrollMode = 0;
+  int longNoteModifierMode = 0;
+  int sevenToNinePattern = 0;
+  int sevenToNineType = 0;
+  bool constantScroll = false;
+  int constantFadeInMilliseconds = 100;
   bool judgementIndicatorEnabled = true;
   float judgementIndicatorY = 0.0F;
   float judgementIndicatorWidthScale = 1.0F;
@@ -147,6 +161,38 @@ enum class PlayfieldLoadingState : std::uint8_t {
   Loaded,
 };
 
+// Immutable projection of the local persisted score record read by
+// Beatoraja's ScoreDataProperty at BMSPlayer startup. It stays separate from
+// the live JudgeManager counters in this frame.
+struct PlayfieldPersistedScoreState {
+  int score = 0;
+  int maxScore = 0;
+  int totalNotes = 0;
+  std::array<int, 5> judgementCounts{};
+  std::optional<std::int64_t> lastPlayedUnixSeconds;
+
+  bool operator==(const PlayfieldPersistedScoreState &) const = default;
+};
+
+// Immutable ScoreData-equivalent target record. It is kept distinct from a
+// pacemaker, which carries score progression but not source judge counts.
+struct PlayfieldRivalScoreState {
+  int score = 0;
+  int totalNotes = 0;
+  std::array<int, 5> judgementCounts{};
+
+  bool operator==(const PlayfieldRivalScoreState &) const = default;
+};
+
+struct PlayfieldPlayerScoreHistoryState {
+  int playCount = 0;
+  int clearCount = 0;
+  std::array<int, 5> judgementCounts{};
+  std::int64_t playDurationSeconds = 0;
+
+  bool operator==(const PlayfieldPlayerScoreHistoryState &) const = default;
+};
+
 struct PlayfieldAuthorityUpdate {
   double currentBpm = 0.0;
   // TimeLine.getScroll() currently active at the authoritative gameplay
@@ -165,12 +211,19 @@ struct PlayfieldAuthorityUpdate {
   // ScoreDataProperty's persisted best score.  It is zero when the chart has
   // no local best record, matching its gameplay-side initialization.
   int bestScore = 0;
+  // ScoreDataProperty.scoreData is the local persisted record, not the live
+  // judgement state. It drives properties 80-89, their float counterparts,
+  // and the last-play calendar values.
+  std::optional<PlayfieldPersistedScoreState> persistedScore;
+  std::optional<PlayfieldRivalScoreState> rivalScore;
+  PlayfieldPlayerScoreHistoryState playerScoreHistory;
   // ScoreDataProperty projects the persisted best ghost to the current passed
   // note count for NUMBER_DIFF_HIGHSCORE.  This target carries that optional
   // progression independently of the player-selected pacemaker target.
   pacemaker::Target bestScoreTarget;
   GaugeType gaugeType = GaugeType::Normal;
   GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
+  GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
   float currentGauge = 0.0F;
   GameplayGaugeRules gaugeRules;
   pacemaker::Target pacemakerTarget;
@@ -180,10 +233,29 @@ struct PlayfieldAuthorityUpdate {
   int player1RandomOption = 0;
   int player2RandomOption = 0;
   int doublePlayOption = 0;
+  // IndexType.option_target1_* reads ScoreData.option when the active target
+  // owns one. Aso has no rival/target ScoreData transport yet, so absence is
+  // retained distinctly from an authored NORMAL option value of zero.
+  std::optional<int> targetPlayOption;
+  // SongReview.favorite_chart has states none/favorite/invisible. The chart
+  // repository currently owns only none/favorite, represented as 0/1.
+  int favoriteChartState = 0;
+  // SongData.CONTENT_TEXT captured by the chart-library scan. Beatoraja
+  // assigns it to every chart in a folder containing an immediate .txt file.
+  bool chartHasDocument = false;
+  // BMSResource.setBMSFile() exposes these only after PixmapResourcePool has
+  // decoded the declared image and created the gameplay resource.
+  bool stageFileAvailable = false;
+  bool backBmpAvailable = false;
   // StringPropertyFactory.player reads PlayerConfig.name. The application's
   // active profile supplies the equivalent immutable name for a presentation.
   std::string playerName;
   std::string playOptionLabel;
+  // IntegerPropertyFactory.current_fps and MainController.getPlayTime(),
+  // sampled by the outer application loop rather than inferred from chart
+  // timing.
+  int currentFramesPerSecond = 0;
+  std::int64_t applicationUptimeMillis = 0;
   bool autoPlayMarkVisible = false;
   PlayfieldGameplayMode gameplayMode = PlayfieldGameplayMode::Unknown;
   PlayfieldLoadingState loadingState = PlayfieldLoadingState::Unknown;
@@ -201,6 +273,9 @@ struct PlayfieldAuthorityUpdate {
   float liftRatio = 0.0F;
   bool hiddenEnabled = false;
   float hiddenRatio = 0.0F;
+  // BMSPlayer starts TIMER_FAILED when its active survival gauge transitions
+  // into failure. Keep that event distinct from a display gauge at zero.
+  bool failureAnimationActive = false;
   // BMSPlayer's lane-cover-changing option is true while either physical
   // Start or Select is held, not only when an adjustment was emitted.
   bool laneCoverAdjustmentHeld = false;

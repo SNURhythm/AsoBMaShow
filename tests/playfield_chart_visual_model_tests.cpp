@@ -2,8 +2,11 @@
 #include "bms_parser.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <tuple>
 
 namespace {
 
@@ -228,6 +231,38 @@ bool testExactBeatorajaChartPropertyMetadata() {
   return true;
 }
 
+bool testSongInformationDensityMatchesPinnedConstructor() {
+  // Pinned SongInformation bins prepared notes into whole seconds. These
+  // three ordinary notes yield [1, 1, 1, 0], so density is .75 while peak and
+  // end density are 1. TOTAL remains the authored chart total.
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 3;
+  chart.Meta.Total = 100.0;
+  auto *measure = new bms_parser::Measure();
+  for (const auto [time, lane, wav] :
+       std::array<std::tuple<long long, int, int>, 3>{{
+           {0, 0, 1}, {1'000'000, 1, 2}, {2'000'000, 2, 3}}}) {
+    auto *timeline = new bms_parser::TimeLine(8, false);
+    timeline->Timing = time;
+    timeline->Bpm = 120.0;
+    timeline->SetNote(lane, new bms_parser::Note(wav));
+    measure->TimeLines.push_back(timeline);
+  }
+  chart.Measures.push_back(measure);
+
+  const auto model = buildPlayfieldChartVisualModel(chart, 1);
+  const auto &information = model.staticMetadata.songInformation;
+  if (!information || std::abs(information->density - 0.75) > 0.000001 ||
+      std::abs(information->peakDensity - 1.0) > 0.000001 ||
+      std::abs(information->endDensity - 1.0) > 0.000001 ||
+      std::abs(information->total - 100.0) > 0.000001) {
+    std::cerr << "pinned SongInformation density conversion failed\n";
+    return false;
+  }
+  return true;
+}
+
 bool testTerminalZeroNoteTimelinesRemainProjectionAnchors() {
   bms_parser::Chart chart;
   auto *measure = new bms_parser::Measure();
@@ -302,6 +337,9 @@ int main() {
     return EXIT_FAILURE;
   }
   if (!testExactBeatorajaChartPropertyMetadata()) {
+    return EXIT_FAILURE;
+  }
+  if (!testSongInformationDensityMatchesPinnedConstructor()) {
     return EXIT_FAILURE;
   }
   if (!testTerminalZeroNoteTimelinesRemainProjectionAnchors()) {

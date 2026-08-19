@@ -63,6 +63,13 @@ struct PlayfieldProjectionRequest {
   std::size_t maxTimelines = 0;
   std::size_t maxNotes = 0;
   bool includeInvisibleNotes = false;
+  // PlayerConfig.showpastnote. LaneRenderer retains only an unprocessed
+  // normal note after its timeline passes the judgement line.
+  bool showPastNormalNotes = false;
+  // PlayConfig.enableConstant and its two LaneRenderer time-window inputs.
+  bool constantScroll = false;
+  int constantDurationMilliseconds = 500;
+  int constantFadeInMilliseconds = 100;
   // Practice count-in still renders notes at or after this immutable chart
   // boundary. A long-note pair that begins before it remains skipped.
   std::optional<long long> minimumVisibleNoteTimeMicros;
@@ -101,6 +108,8 @@ struct ProjectedPlayfieldNote {
   std::uint32_t authoredOrdinal = 0;
   std::uint32_t retainedTimelineOrdinal = kNoRetainedTimelineOrdinal;
   bool judged = false;
+  // LaneRenderer's Constant fade alpha. Non-Constant and opaque rows use 1.
+  double opacity = 1.0;
   std::uint32_t submissionOrdinal = 0;
   // The built-in renderer shares one primary depth across playable notes and
   // mines in a timeline row. Skin submission order stays unique and separate.

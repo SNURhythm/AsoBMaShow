@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../../audio/PlaybackRate.h"
+#include "Judgement.h"
 
 #include <cmath>
 #include <optional>
@@ -68,6 +69,22 @@ inline PracticeFrameTiming practiceFrameTiming(long long rawSongTimeMicros,
 inline long long visualTimeMicros(long long songTimeMicros,
                                   long long visualOffsetMicros) {
   return songTimeMicros - visualOffsetMicros;
+}
+
+// Exact JudgeManager notes-display timing auto-adjust. The source mutates
+// PlayerConfig.judgetiming only for judge IDs 0 through 2 while PLAY or
+// PRACTICE is active; Java's signed integer division truncates toward zero.
+[[nodiscard]] inline int nextNotesDisplayTimingMilliseconds(
+    int currentMilliseconds, bool enabled, bool playOrPractice,
+    Judgement judgement, long long judgementDiffMicros) noexcept {
+  if (!enabled || !playOrPractice || static_cast<int>(judgement) > 2 ||
+      judgementDiffMicros < -150'000 || judgementDiffMicros > 150'000) {
+    return currentMilliseconds;
+  }
+  const long long adjusted =
+      judgementDiffMicros >= 0 ? judgementDiffMicros + 15'000
+                               : judgementDiffMicros - 15'000;
+  return currentMilliseconds - static_cast<int>(adjusted / 30'000);
 }
 
 inline long long realJudgementDiffMicros(long long chartDiffMicros,

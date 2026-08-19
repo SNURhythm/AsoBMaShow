@@ -2052,7 +2052,8 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
   const auto appendVisual = [&](const SkinLaneNotePresentation &lane,
                                 SkinNoteVisualKind kind,
                                 const SkinAuthoredRect &rect,
-                                GameplayVisualLoweringResult &output) {
+                                GameplayVisualLoweringResult &output,
+                                float opacity = 1.0F) {
     const auto *visual = findNoteVisual(lane, kind);
     if (!visual) {
       output.failure =
@@ -2071,9 +2072,11 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
     if (emptyClip) {
       return;
     }
+    auto geometry = gameplayVisualGeometry(rect, laneClip);
+    geometry.rgba[3] *= opacity;
     auto lowered = lowerNoteVisual(
         inputs, index, object.id, destination.presentation.authoredOrdinal,
-        gameplayVisualGeometry(rect, laneClip),
+        geometry,
         *visual,
         &preparedVisuals[static_cast<std::size_t>(lane.authoredLane)]
                         [static_cast<std::size_t>(kind)]);
@@ -2171,7 +2174,10 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
               .width = lane->laneDestination.width,
               .height = noteHeight};
     }
-    appendVisual(*lane, kind, rect, output);
+    // LaneRenderer's Constant processor sets the sprite color before this
+    // row; authored destination alpha remains multiplicative.
+    appendVisual(*lane, kind, rect, output,
+                 static_cast<float>(projected.opacity));
   };
 
   const auto lowerProjectedLongNote =

@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -141,6 +142,12 @@ public:
   std::atomic<bool> quitFlag;
   SceneManager *sceneManager = nullptr;
   Uint64 currentFrame = 0;
+  // MainController records its boot timestamp at construction. Keep the same
+  // application-lifetime boundary separate from gameplay scene clocks.
+  const std::chrono::steady_clock::time_point bootTime =
+      std::chrono::steady_clock::now();
+  std::atomic<std::int64_t> applicationUptimeMillis{0};
+  std::atomic<int> currentFramesPerSecond{0};
   std::filesystem::path applicationDataRoot;
   ir::PendingIrCredentialCleanup pendingIrCredentialCleanup;
   PlayerProfileManager profileManager;

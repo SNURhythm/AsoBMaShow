@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.22)
 
 include(ExternalProject)
 project(AsoBMaShow VERSION 0.0.1 LANGUAGES C CXX)
+add_compile_definitions(ASOBMASHOW_APPLICATION_VERSION="${PROJECT_VERSION}")
 include(CTest)
 option(ASOBMASHOW_BUILD_TESTS "Build lightweight unit tests" ON)
 option(ASOBMASHOW_ENABLE_PERF_TELEMETRY
@@ -3570,6 +3571,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(image_file_decoder_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(image_file_decoder_tests PRIVATE cxx_std_23)
     target_compile_definitions(image_file_decoder_tests PRIVATE ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    target_link_libraries(image_file_decoder_tests PRIVATE ${FFMPEG_LIBRARIES})
 
     if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS AND NOT IOS)
         add_executable(gameplay_skin_validator_tests

@@ -444,7 +444,23 @@ json settingsToJson(const AppSettings &settings) {
       {"prepMetronomeEnabled", settings.prepMetronomeEnabled},
       {"startLaneIndicatorsEnabled", settings.startLaneIndicatorsEnabled},
       {"showInvisibleNotes", settings.showInvisibleNotes},
+      {"showPastNotes", settings.showPastNotes},
       {"markProcessedNotes", settings.markProcessedNotes},
+      {"customJudge", settings.customJudge},
+      {"showJudgeArea", settings.showJudgeArea},
+      {"notesDisplayTimingAutoAdjust", settings.notesDisplayTimingAutoAdjust},
+      {"notesDisplayTimingMilliseconds",
+       settings.notesDisplayTimingMilliseconds},
+      {"autoSaveReplay", settings.autoSaveReplay},
+      {"guideSoundEffects", settings.guideSoundEffects},
+      {"extraNoteDepth", settings.extraNoteDepth},
+      {"mineMode", settings.mineMode},
+      {"scrollMode", settings.scrollMode},
+      {"longNoteModifierMode", settings.longNoteModifierMode},
+      {"sevenToNinePattern", settings.sevenToNinePattern},
+      {"sevenToNineType", settings.sevenToNineType},
+      {"constantScroll", settings.constantScroll},
+      {"constantFadeInMilliseconds", settings.constantFadeInMilliseconds},
       {"touchVisualizationEnabled", settings.touchVisualizationEnabled},
       {"archiveChartPreviewEnabled", settings.archiveChartPreviewEnabled},
       {"findBmsSkipUnarchivingForNonSolidArchives",
@@ -567,8 +583,33 @@ AppSettings settingsFromJson(const json &document,
             settings.startLaneIndicatorsEnabled, diagnostics);
   readValue(document, "showInvisibleNotes", settings.showInvisibleNotes,
             diagnostics);
+  readValue(document, "showPastNotes", settings.showPastNotes, diagnostics);
   readValue(document, "markProcessedNotes", settings.markProcessedNotes,
             diagnostics);
+  readValue(document, "customJudge", settings.customJudge, diagnostics);
+  readValue(document, "showJudgeArea", settings.showJudgeArea, diagnostics);
+  readValue(document, "notesDisplayTimingAutoAdjust",
+            settings.notesDisplayTimingAutoAdjust, diagnostics);
+  readValue(document, "notesDisplayTimingMilliseconds",
+            settings.notesDisplayTimingMilliseconds, diagnostics);
+  readValue(document, "autoSaveReplay", settings.autoSaveReplay,
+            diagnostics);
+  readValue(document, "guideSoundEffects", settings.guideSoundEffects,
+            diagnostics);
+  readValue(document, "extraNoteDepth", settings.extraNoteDepth,
+            diagnostics);
+  readValue(document, "mineMode", settings.mineMode, diagnostics);
+  readValue(document, "scrollMode", settings.scrollMode, diagnostics);
+  readValue(document, "longNoteModifierMode", settings.longNoteModifierMode,
+            diagnostics);
+  readValue(document, "sevenToNinePattern", settings.sevenToNinePattern,
+            diagnostics);
+  readValue(document, "sevenToNineType", settings.sevenToNineType,
+            diagnostics);
+  readValue(document, "constantScroll", settings.constantScroll,
+            diagnostics);
+  readValue(document, "constantFadeInMilliseconds",
+            settings.constantFadeInMilliseconds, diagnostics);
   readValue(document, "touchVisualizationEnabled",
             settings.touchVisualizationEnabled, diagnostics);
   readValue(document, "archiveChartPreviewEnabled",

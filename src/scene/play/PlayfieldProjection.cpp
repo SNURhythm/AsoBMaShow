@@ -83,12 +83,22 @@ bool isWithinLatePoorWindow(
 // timeline is at or ahead of the current visual time. Long-note heads have a
 // separate tail-span rule below. PlayerConfig.showpastnote is false by
 // default; Aso does not currently expose that optional Beatoraja setting.
-bool isVisibleSingleNote(ChartVisualNoteSource source,
+bool isSourceStateZero(const NotePresentationState *state) noexcept {
+  // Aso carries the source normal-note state through its explicit resolved
+  // flags: an unresolved note has neither a judged nor a dead transition.
+  return state == nullptr || (!state->judged && !state->dead);
+}
+
+bool isVisibleSingleNote(const ChartVisualNote &note,
+                         ChartVisualNoteSource source,
                          long long timelineMicros,
                          long long visualTimeMicros,
+                         const NotePresentationState *state,
                          const PlayfieldProjectionRequest &request) noexcept {
   if (timelineMicros < visualTimeMicros) {
-    return false;
+    return request.showPastNormalNotes &&
+           source == ChartVisualNoteSource::Playable &&
+           note.kind == ChartVisualNoteKind::Normal && isSourceStateZero(state);
   }
   return source != ChartVisualNoteSource::Invisible ||
          request.includeInvisibleNotes;
@@ -99,14 +109,49 @@ bool isVisibleSingleNote(ChartVisualNoteSource source,
 // notes keep LaneRenderer's future-only rule. Skin DTOs intentionally retain
 // the future-only policy above.
 bool isVisibleBuiltInSingleNote(
-    ChartVisualNoteSource source, long long timelineMicros,
-    long long visualTimeMicros,
+    const ChartVisualNote &note, ChartVisualNoteSource source,
+    long long timelineMicros, long long visualTimeMicros,
+    const NotePresentationState *state,
     const PlayfieldProjectionRequest &request) noexcept {
-  return source == ChartVisualNoteSource::Playable
-             ? isWithinLatePoorWindow(timelineMicros, visualTimeMicros,
-                                      request)
-             : isVisibleSingleNote(source, timelineMicros, visualTimeMicros,
-                                   request);
+  if (source != ChartVisualNoteSource::Playable) {
+    return isVisibleSingleNote(note, source, timelineMicros, visualTimeMicros,
+                               state, request);
+  }
+  return isWithinLatePoorWindow(timelineMicros, visualTimeMicros, request) ||
+         (request.showPastNormalNotes &&
+          note.kind == ChartVisualNoteKind::Normal && isSourceStateZero(state));
+}
+
+std::optional<double>
+constantOpacity(long long timelineMicros, long long visualTimeMicros,
+                const PlayfieldProjectionRequest &request) noexcept {
+  if (!request.constantScroll) {
+    return 1.0;
+  }
+  const long long targetTime =
+      visualTimeMicros +
+      static_cast<long long>(request.constantDurationMilliseconds) * 1'000LL;
+  const long long timeDifference = timelineMicros - targetTime;
+  const long long alphaLimit =
+      static_cast<long long>(request.constantFadeInMilliseconds) * 1'000LL;
+  if (alphaLimit >= 0) {
+    if (timelineMicros < targetTime) {
+      return 1.0;
+    }
+    if (timeDifference >= alphaLimit) {
+      return std::nullopt;
+    }
+    return static_cast<double>(alphaLimit - timeDifference) /
+           static_cast<double>(alphaLimit);
+  }
+  if (timelineMicros >= targetTime) {
+    return std::nullopt;
+  }
+  if (timeDifference > alphaLimit) {
+    return 1.0 - static_cast<double>(alphaLimit - timeDifference) /
+                     static_cast<double>(alphaLimit);
+  }
+  return 1.0;
 }
 
 skin::SkinProjectedNoteKind toSkinNoteKind(ChartVisualNoteSource source) {
@@ -596,19 +641,20 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
           continue;
         }
         const auto source = effectiveSource(*note);
+        const auto *noteState = stateFor(note->id);
         if (source == ChartVisualNoteSource::Invisible) {
           needsInvisibleDepth = needsInvisibleDepth ||
                                 (isVisibleSingleNote(
-                                     source, timeline->timeMicros, timeMicros,
-                                     request) &&
+                                     *note, source, timeline->timeMicros,
+                                     timeMicros, noteState, request) &&
                                  isVisible(*rowScrollDelta, visibleInterval));
           continue;
         }
         if (source == ChartVisualNoteSource::Mine) {
           needsPrimaryDepth = needsPrimaryDepth ||
                               (isVisibleSingleNote(
-                                   source, timeline->timeMicros, timeMicros,
-                                   request) &&
+                                   *note, source, timeline->timeMicros,
+                                   timeMicros, noteState, request) &&
                                isVisible(*rowScrollDelta, visibleInterval));
           continue;
         }
@@ -648,8 +694,8 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
         }
         needsPrimaryDepth =
             needsPrimaryDepth ||
-            (isVisibleSingleNote(source, timeline->timeMicros, timeMicros,
-                                 request) &&
+            (isVisibleBuiltInSingleNote(*note, source, timeline->timeMicros,
+                                        timeMicros, noteState, request) &&
              isVisible(*rowScrollDelta, visibleInterval));
       }
 
@@ -857,8 +903,14 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
       return;
     }
 
-    if (!isVisibleSingleNote(source, timeline->timeMicros, timeMicros,
-                             request)) {
+    const auto opacity = constantOpacity(timeline->timeMicros, timeMicros,
+                                         request);
+    if (!opacity) {
+      return;
+    }
+
+    if (!isVisibleSingleNote(*note, source, timeline->timeMicros, timeMicros,
+                             noteState, request)) {
       return;
     }
     if (atNoteLimit()) {
@@ -884,6 +936,7 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
          .authoredOrdinal = note->authoredOrdinal,
          .retainedTimelineOrdinal = timeline->retainedOrdinal,
          .judged = noteState != nullptr && noteState->judged,
+         .opacity = *opacity,
          .submissionOrdinal = order.next(),
          .builtInDepth = [&]() {
            const auto found = builtInDepths.find(note->timelineId);
@@ -945,8 +998,8 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
     }
     const auto source = effectiveSource(note);
     const auto *noteState = stateFor(note.id);
-    if (!isVisibleBuiltInSingleNote(source, timeline.timeMicros, timeMicros,
-                                    request)) {
+    if (!isVisibleBuiltInSingleNote(note, source, timeline.timeMicros,
+                                    timeMicros, noteState, request)) {
       return;
     }
     const auto lane = std::ranges::find(model.laneOrder, note.lane);
@@ -1337,6 +1390,7 @@ adaptPlayfieldProjectionForSkin(const PlayfieldProjectionResult &projection) {
                             .scrollSpeed = scrollSpeed,
                             .authoredYDisplacement = note.scrollDelta,
                             .judged = note.judged,
+                            .opacity = note.opacity,
                             .submissionOrdinal = note.submissionOrdinal});
   }
   for (const auto &longNote : projection.longNotes) {

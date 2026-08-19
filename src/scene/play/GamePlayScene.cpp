@@ -21,6 +21,7 @@
 #include "../../practice/PracticeResultFlow.h"
 #include "../../rendering/SimpleBatchRenderer.h"
 #include "../../skin/beatoraja/GameplaySkinEndAnimation.h"
+#include "../../view/ImageFileDecoder.h"
 #include "../../view/TextView.h"
 #include "../../view/IconText.h"
 #include "BuiltInPlayfieldPresentation.h"
@@ -83,6 +84,22 @@ constexpr uint32_t kIconRestart = 0xf2f9;
 constexpr long long kReplayTouchMoveMinIntervalMicros = 8000LL;
 constexpr float kReplayTouchMoveMinDistance = 0.002f;
 constexpr long long kHellChargeGaugeTickMicros = 200000LL;
+
+bool bmsResourceImageAvailable(const bms_parser::ChartMeta &meta,
+                               const std::filesystem::path &declaredPath) {
+  if (declaredPath.empty() || meta.BmsPath.empty()) {
+    return false;
+  }
+  try {
+    return image_decode::decodeImageFile(meta.BmsPath.parent_path() /
+                                          declaredPath)
+        .has_value();
+  } catch (...) {
+    // BMSResource.setBMSFile() catches decoder failures and leaves the
+    // corresponding TextureRegion absent.
+    return false;
+  }
+}
 constexpr long long kCoursePauseHoldMicros = 650000LL;
 constexpr long long kCoursePauseRewindMicros = 260000LL;
 constexpr float kPi = 3.14159265358979323846f;
@@ -1464,7 +1481,12 @@ void GamePlayScene::acquireGameplaySkinForAttempt() {
     return;
   }
   const skin::UiLogicalRect safeUiBounds = gameplaySkinSafeUiBounds();
-  auto result = createGameplaySkinSession(gameplaySkinSessionServices(context), {
+  auto services = gameplaySkinSessionServices(context);
+  services.applyAudioVolume =
+      [this](skin::SkinAudioVolumeWriterTarget target, float value) {
+        applySkinAudioVolume(target, value);
+      };
+  auto result = createGameplaySkinSession(std::move(services), {
       .keyMode = chart->Meta.KeyMode,
       .chartModel = &playfieldChartVisualModel,
       .initialState = &capturedPlayfieldVisualState,
@@ -1486,6 +1508,38 @@ void GamePlayScene::acquireGameplaySkinForAttempt() {
   }
 #endif
 }
+
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+void GamePlayScene::applySkinAudioVolume(
+    skin::SkinAudioVolumeWriterTarget target, float value) {
+  switch (target) {
+  case skin::SkinAudioVolumeWriterTarget::Master:
+    context.settings.audioVideo.audio.masterVolume = value;
+    playfieldPresentationConfiguration.masterVolume = value;
+    break;
+  case skin::SkinAudioVolumeWriterTarget::Keysound:
+    context.settings.audioVideo.audio.keysoundVolume = value;
+    playfieldPresentationConfiguration.keysoundVolume = value;
+    break;
+  case skin::SkinAudioVolumeWriterTarget::Bgm:
+    context.settings.audioVideo.audio.bgmVolume = value;
+    playfieldPresentationConfiguration.bgmVolume = value;
+    break;
+  }
+
+  // FloatPropertyFactory mutates Config.AudioConfig directly. Aso routes the
+  // resulting three-field configuration through its live audio boundary,
+  // without introducing a skin-specific range policy.
+  (void)context.audioDeviceManager.apply(context.settings.audioVideo.audio);
+  if (playfieldVisualStateStore != nullptr) {
+    playfieldVisualStateStore->setConfiguration(
+        playfieldPresentationConfiguration);
+  }
+  if (presentation != nullptr) {
+    presentation->configure(playfieldPresentationConfiguration);
+  }
+}
+#endif
 
 void GamePlayScene::refreshGameplayPresentationGeometry() {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
@@ -2491,6 +2545,38 @@ void GamePlayScene::init() {
   }
   playfieldChartVisualModel =
       buildPlayfieldChartVisualModel(*chart, options.longNoteMode);
+  activePersistedScore = context.scoreRepository.LoadChartScoreHistory(
+      chart->Meta, options.longNoteMode);
+  activeRivalScore.reset();
+  activeTargetPlayOption =
+      targetScorePlayOptionForGameplay(options, chart->Meta);
+  if (options.targetScore.has_value()) {
+    const auto &target = *options.targetScore;
+    activeRivalScore = PlayfieldRivalScoreState{
+        // ScoreDataProperty.update(score, rival) reads ScoreData.getExscore,
+        // which is recomputed from the target's PGREAT/GREAT counts.
+        .score = target.pGreat * 2 + target.great,
+        .totalNotes = target.maxScore / 2,
+        .judgementCounts = {target.pGreat, target.great, target.good,
+                            target.bad, target.poor},
+    };
+  }
+  activePlayerScoreHistory = context.scoreRepository.LoadPlayerScoreHistory();
+  playfieldFavoriteChartState = 0;
+  playfieldChartHasDocument = false;
+  playfieldStageFileAvailable =
+      bmsResourceImageAvailable(chart->Meta, chart->Meta.StageFile);
+  playfieldBackBmpAvailable =
+      bmsResourceImageAvailable(chart->Meta, chart->Meta.BackBmp);
+  if (auto chartSession = context.chartRepository.OpenSession()) {
+    const std::array<std::filesystem::path, 1> paths{chart->Meta.BmsPath};
+    const auto records = chartSession->SelectChartMetaByPaths(paths);
+    if (records.status == ChartMetaPathBatchReadStatus::Loaded &&
+        !records.records.empty()) {
+      playfieldFavoriteChartState = records.records.front().favorite ? 1 : 0;
+      playfieldChartHasDocument = records.records.front().hasDocument;
+    }
+  }
   initializePlayfieldVisualNoteSources();
   ownedPlayfieldVisualStateStore =
       std::make_unique<PlayfieldVisualStateStore>(playfieldChartVisualModel);
@@ -2567,6 +2653,7 @@ void GamePlayScene::init() {
       .noteStartPositionPercent = effectiveNoteStartPositionPercent(),
       .laneBeamClockUsesRenderTime = true,
       .showInvisibleNotes = context.settings.showInvisibleNotes,
+      .showPastNotes = context.settings.showPastNotes,
       .masterVolume = context.settings.audioVideo.audio.masterVolume,
       .keysoundVolume = context.settings.audioVideo.audio.keysoundVolume,
       .bgmVolume = context.settings.audioVideo.audio.bgmVolume,
@@ -2576,6 +2663,21 @@ void GamePlayScene::init() {
                                         : options.assistOption),
       .hispeedAutoAdjust = context.settings.hispeedAutoAdjust,
       .markProcessedNotes = context.settings.markProcessedNotes,
+      .customJudge = context.settings.customJudge,
+      .showJudgeArea = context.settings.showJudgeArea,
+      .notesDisplayTimingAutoAdjust =
+          context.settings.notesDisplayTimingAutoAdjust,
+      .autoSaveReplay = context.settings.autoSaveReplay,
+      .guideSoundEffects = context.settings.guideSoundEffects,
+      .extraNoteDepth = context.settings.extraNoteDepth,
+      .mineMode = context.settings.mineMode,
+      .scrollMode = context.settings.scrollMode,
+      .longNoteModifierMode = context.settings.longNoteModifierMode,
+      .sevenToNinePattern = context.settings.sevenToNinePattern,
+      .sevenToNineType = context.settings.sevenToNineType,
+      .constantScroll = context.settings.constantScroll,
+      .constantFadeInMilliseconds =
+          context.settings.constantFadeInMilliseconds,
       .judgementIndicatorEnabled = context.settings.judgementIndicatorEnabled,
       .judgementIndicatorY = context.settings.judgementIndicatorY,
       .judgementIndicatorWidthScale =
@@ -4439,7 +4541,9 @@ long long GamePlayScene::getVisualOffsetMicros() const {
 
 long long GamePlayScene::getVisualTimeMicros(long long songTimeMicros) const {
   return gameplay_timing::visualTimeMicros(songTimeMicros,
-                                           getVisualOffsetMicros());
+                                           getVisualOffsetMicros()) +
+         static_cast<long long>(context.settings.notesDisplayTimingMilliseconds) *
+             1'000LL;
 }
 
 PlayfieldJudgeEventClock
@@ -4514,9 +4618,31 @@ void GamePlayScene::capturePlayfieldVisualState(
       .stageCombo = state->stageCombo,
       .stagePassedNotes = state->stagePassedNotes,
       .bestScore = activePacemakerBest ? activePacemakerBest->score : 0,
+      .persistedScore = [&] {
+        if (!activePersistedScore) {
+          return std::optional<PlayfieldPersistedScoreState>{};
+        }
+        return std::optional<PlayfieldPersistedScoreState>{
+            PlayfieldPersistedScoreState{
+                .score = activePersistedScore->score,
+                .maxScore = activePersistedScore->maxScore,
+                .totalNotes = activePersistedScore->totalNotes,
+                .judgementCounts = activePersistedScore->judgementCounts,
+                .lastPlayedUnixSeconds =
+                    activePersistedScore->lastPlayedUnixSeconds}};
+      }(),
+      .rivalScore = activeRivalScore,
+      .playerScoreHistory =
+          PlayfieldPlayerScoreHistoryState{
+              .playCount = activePlayerScoreHistory.playCount,
+              .clearCount = activePlayerScoreHistory.clearCount,
+              .judgementCounts = activePlayerScoreHistory.judgementCounts,
+              .playDurationSeconds =
+                  activePlayerScoreHistory.playDurationSeconds},
       .bestScoreTarget = activeBestScoreTarget,
       .gaugeType = state->gaugeType,
       .gaugeAutoShift = state->gaugeAutoShift,
+      .gaugeAutoShiftLowerBound = options.gaugeAutoShiftLowerBound,
       .currentGauge = state->currentGauge,
       .gaugeRules = state->gaugeRules(),
       .pacemakerTarget = activePacemakerTarget,
@@ -4525,8 +4651,17 @@ void GamePlayScene::capturePlayfieldVisualState(
       .player1RandomOption = gameplayRandomOptionIndex(playOptions.option),
       .player2RandomOption = gameplayRandomOptionIndex(playOptions.option2),
       .doublePlayOption = options.doublePlayFlip ? 1 : 0,
+      .targetPlayOption = activeTargetPlayOption,
+      .favoriteChartState = playfieldFavoriteChartState,
+      .chartHasDocument = playfieldChartHasDocument,
+      .stageFileAvailable = playfieldStageFileAvailable,
+      .backBmpAvailable = playfieldBackBmpAvailable,
       .playerName = context.profileManager.activeProfile().displayName,
       .playOptionLabel = gameplayPlayOptionLabel(options),
+      .currentFramesPerSecond =
+          context.currentFramesPerSecond.load(std::memory_order_acquire),
+      .applicationUptimeMillis =
+          context.applicationUptimeMillis.load(std::memory_order_acquire),
       .autoPlayMarkVisible =
           options.autoPlay ||
           (options.replayData != nullptr && options.replayData->autoPlay),
@@ -4558,6 +4693,7 @@ void GamePlayScene::capturePlayfieldVisualState(
       .liftRatio = 0.0F,
       .hiddenEnabled = false,
       .hiddenRatio = 0.0F,
+      .failureAnimationActive = state->activeGaugeFailed(),
       .laneCoverAdjustmentHeld = startButtonPressed || selectButtonPressed,
       .resetLaneCoverVisibleTimeReference =
           playfieldLaneCoverResetPending,
@@ -4631,6 +4767,17 @@ void GamePlayScene::capturePlayfieldVisualState(
         playfieldChartVisualModel, capturedPlayfieldVisualState,
         {.includeInvisibleNotes =
              capturedPlayfieldVisualState.configuration.showInvisibleNotes,
+         .showPastNormalNotes =
+             capturedPlayfieldVisualState.configuration.showPastNotes,
+         .constantScroll =
+             capturedPlayfieldVisualState.configuration.constantScroll &&
+             capturedPlayfieldVisualState.authority.gameplayMode !=
+                 PlayfieldGameplayMode::Practice,
+         .constantDurationMilliseconds =
+             capturedPlayfieldVisualState.configuration
+                 .visibleTimeDurationMilliseconds,
+         .constantFadeInMilliseconds =
+             capturedPlayfieldVisualState.configuration.constantFadeInMilliseconds,
          .minimumVisibleNoteTimeMicros =
              practiceCountInActive
                  ? std::optional<long long>{getStartPositionMicros()}
@@ -6110,6 +6257,12 @@ void GamePlayScene::onJudge(const JudgeResult &judgeResult,
   presentationEventFanout->onJudge(judgeResult, state->combo,
                                    state->getScore(), clock,
                                    recordTimingSample);
+  context.settings.notesDisplayTimingMilliseconds =
+      gameplay_timing::nextNotesDisplayTimingMilliseconds(
+          context.settings.notesDisplayTimingMilliseconds,
+          context.settings.notesDisplayTimingAutoAdjust,
+          !isReplayPlayback() && !options.autoPlay, judgeResult.judgement,
+          judgeResult.Diff);
   (void)judgementCount;
   // CurrentRhythmHUD->OnJudge(state);
   // UE_LOG(LogTemp, Warning, TEXT("Judge: %s, Combo: %d, Diff: %lld"),

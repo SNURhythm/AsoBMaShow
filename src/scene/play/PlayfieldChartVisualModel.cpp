@@ -365,6 +365,132 @@ BeatorajaNoteCounts beatorajaNoteCounts(const bms_parser::Chart &chart,
   return result;
 }
 
+int javaDoubleToIntForSongInformation(double value) {
+  if (std::isnan(value)) {
+    return 0;
+  }
+  if (value >= static_cast<double>(std::numeric_limits<int>::max())) {
+    return std::numeric_limits<int>::max();
+  }
+  if (value <= static_cast<double>(std::numeric_limits<int>::min())) {
+    return std::numeric_limits<int>::min();
+  }
+  return static_cast<int>(value);
+}
+
+PlayfieldSongInformation
+beatorajaSongInformation(const bms_parser::Chart &chart,
+                         int longNoteModeOverride) {
+  // This follows SongInformation(BMSModel) at the pinned Beatoraja revision.
+  // Keep the source's fixed seven buckets even though gameplay skins only
+  // consume its aggregate density values.
+  long long lastTimeMicros = 0;
+  for (const auto *measure : chart.Measures) {
+    if (measure == nullptr) {
+      continue;
+    }
+    for (const auto *timeline : measure->TimeLines) {
+      if (timeline != nullptr) {
+        lastTimeMicros = std::max(lastTimeMicros, timeline->Timing);
+      }
+    }
+  }
+  const std::size_t bucketCount =
+      static_cast<std::size_t>(std::max(0LL, lastTimeMicros / 1'000'000)) +
+      2U;
+  std::vector<std::array<int, 7>> data(bucketCount);
+  const auto scratchLanes = chart.Meta.GetScratchLaneIndices();
+  const auto isScratch = [&](int lane) {
+    return std::ranges::find(scratchLanes, lane) != scratchLanes.end();
+  };
+
+  const double borderValue =
+      static_cast<double>(chart.Meta.TotalNotes) *
+      (1.0 - 100.0 / chart.Meta.Total);
+  int border = javaDoubleToIntForSongInformation(borderValue);
+  std::size_t borderPosition = 0;
+  for (const auto *measure : chart.Measures) {
+    if (measure == nullptr) {
+      continue;
+    }
+    for (const auto *timeline : measure->TimeLines) {
+      if (timeline == nullptr) {
+        continue;
+      }
+      const std::size_t second =
+          static_cast<std::size_t>(timeline->Timing / 1'000'000);
+      for (const auto *note : timeline->Notes) {
+        if (note == nullptr) {
+          continue;
+        }
+        const bool scratch = isScratch(note->Lane);
+        const auto *longNote = dynamic_cast<const bms_parser::LongNote *>(note);
+        if (longNote != nullptr && !longNote->IsTail()) {
+          const long long tailMillis =
+              longNote->Tail->Timeline->Timing / 1'000'000;
+          const std::size_t tailSecond = static_cast<std::size_t>(tailMillis);
+          for (std::size_t index = second; index <= tailSecond; ++index) {
+            ++data[index][scratch ? 1 : 4];
+          }
+        }
+
+        const bool omittedLnTail =
+            longNote != nullptr && longNote->IsTail() &&
+            longNoteMode(*longNote, chart, longNoteModeOverride) ==
+                ChartLongNoteMode::LN;
+        if (omittedLnTail) {
+          continue;
+        }
+        if (dynamic_cast<const bms_parser::LandmineNote *>(note) != nullptr) {
+          ++data[second][6];
+        } else if (longNote != nullptr) {
+          ++data[second][scratch ? 0 : 3];
+          --data[second][scratch ? 1 : 4];
+        } else {
+          ++data[second][scratch ? 2 : 5];
+        }
+        --border;
+        if (border == 0) {
+          borderPosition = second;
+        }
+      }
+    }
+  }
+
+  const int minimumDensity =
+      chart.Meta.TotalNotes / static_cast<int>(data.size()) / 4;
+  PlayfieldSongInformation result;
+  int densityCount = 0;
+  for (const auto &bucket : data) {
+    const int notes = bucket[0] + bucket[1] + bucket[2] + bucket[3] +
+                      bucket[4] + bucket[5];
+    result.peakDensity = std::max(result.peakDensity,
+                                  static_cast<double>(notes));
+    if (notes >= minimumDensity) {
+      result.density += notes;
+      ++densityCount;
+    }
+  }
+  result.density /= densityCount;
+
+  const std::size_t window =
+      std::min<std::size_t>(5U, data.size() - borderPosition - 1U);
+  for (std::size_t index = borderPosition; index < data.size() - window;
+       ++index) {
+    int notes = 0;
+    for (std::size_t next = 0; next < window; ++next) {
+      const auto &bucket = data[index + next];
+      notes += bucket[0] + bucket[1] + bucket[2] + bucket[3] + bucket[4] +
+               bucket[5];
+    }
+    result.endDensity = std::max(
+        result.endDensity,
+        static_cast<double>(notes) / static_cast<double>(window));
+  }
+  result.total = chart.Meta.Total;
+  return result;
+}
+
 } // namespace
 
 std::vector<std::string> PlayfieldChartVisualModel::runtimeStrings() const {
@@ -463,6 +589,7 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
       .hasBpmStop = hasBpmStop,
       .stageFilePath = chart.Meta.StageFile.generic_string(),
       .backBmpPath = chart.Meta.BackBmp.generic_string(),
+      .songInformation = beatorajaSongInformation(chart, longNoteModeOverride),
   };
   result.laneOrder = chart.Meta.GetTotalLaneIndices();
 
