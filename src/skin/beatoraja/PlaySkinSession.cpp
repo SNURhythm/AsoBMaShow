@@ -204,6 +204,8 @@ struct PlaySkinSession::OwnedActivation final {
                   std::unique_ptr<LuaSkinRuntime> runtimeValue,
                   std::unique_ptr<SkinResourceCatalog> resourcesValue,
                   SkinConfigurationWriteQueue &configurationWritesValue,
+                  std::function<void(SkinAudioVolumeWriterTarget, float)>
+                      applyAudioVolumeValue,
                   ViewportSettings viewportSettingsValue,
                   UiLogicalRect safeUiBoundsValue,
                   PlaySkinViewport viewportValue,
@@ -216,6 +218,7 @@ struct PlaySkinSession::OwnedActivation final {
         mutationTable(makePinnedSkinEventMutationTableV1()),
         runtime(std::move(runtimeValue)), resources(std::move(resourcesValue)),
         configurationWrites(&configurationWritesValue),
+        applyAudioVolume(std::move(applyAudioVolumeValue)),
         viewportSettings(viewportSettingsValue),
         safeUiBounds(safeUiBoundsValue), viewport(viewportValue),
         safetyPolicy(safetyPolicyValue),
@@ -243,6 +246,7 @@ struct PlaySkinSession::OwnedActivation final {
   std::unique_ptr<LuaSkinRuntime> runtime;
   std::unique_ptr<SkinResourceCatalog> resources;
   SkinConfigurationWriteQueue *configurationWrites = nullptr;
+  std::function<void(SkinAudioVolumeWriterTarget, float)> applyAudioVolume;
   ViewportSettings viewportSettings;
   UiLogicalRect safeUiBounds;
   PlaySkinViewport viewport;
@@ -281,6 +285,7 @@ PlaySkinSession::PlaySkinSession(
                .renderer = owned_->renderer,
                .quadRenderer = owned_->quadRenderer,
                .configurationWrites = *owned_->configurationWrites,
+               .applyAudioVolume = owned_->applyAudioVolume,
                .gaugeRandomSource = owned_->gaugeRandom.get()},
       touchLayoutRevision_(context_.sessionSerial == 0
                                ? 1
@@ -568,7 +573,7 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
         context.chartModel, result.reconciledSettings,
         std::move(*validatedModel.model), std::move(configuration),
         std::move(runtime.runtime), std::move(uploaded.catalog),
-        context.configurationWrites,
+        context.configurationWrites, std::move(context.applyAudioVolume),
         context.viewport, context.safeUiBounds, viewport,
         context.safetyPolicy);
     result.session.reset(new PlaySkinSession(std::move(owned)));
@@ -928,6 +933,14 @@ PresentationFrameResult PlaySkinSession::render(
   result.outcome = PresentationFrameOutcome::Ready;
   result.submittedMode = PresentationMode::Skin;
   result.bgaCompositeMode = GameplayBgaCompositeMode::EmbeddedSkin;
+
+  if (context_.applyAudioVolume) {
+    for (const auto &mutation : transaction.committed.orderedMutations) {
+      if (const auto *write = std::get_if<SetSkinAudioVolume>(&mutation)) {
+        context_.applyAudioVolume(write->target, write->value);
+      }
+    }
+  }
 
   if (persistenceFailure == PersistencePreparationFailure::Copy) {
     return std::move(*copyFailureResult);

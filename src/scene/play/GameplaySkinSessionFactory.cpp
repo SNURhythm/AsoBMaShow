@@ -145,6 +145,7 @@ createGameplaySkinSession(GameplaySkinSessionServices services,
         .textureDevice = std::make_shared<skin::BgfxSkinTextureDevice>(),
         .liveResourceCounters = std::move(services.liveResourceCounters),
         .configurationWrites = *services.configurationWrites,
+        .applyAudioVolume = std::move(services.applyAudioVolume),
         .pinnedRuntimeSelection = std::move(input.pinnedRuntimeSelection),
         .stop = {}};
 #if defined(ASOBMASHOW_GAMEPLAY_SKIN_SESSION_FACTORY_TESTING)

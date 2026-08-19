@@ -33,6 +33,8 @@ struct GameplaySkinSessionServices {
   std::shared_ptr<skin::SkinLiveResourceCounters> liveResourceCounters;
   skin::SkinConfigurationWriteQueue *configurationWrites = nullptr;
   skin::SkinDiagnosticHistory *diagnosticHistory = nullptr;
+  std::function<void(skin::SkinAudioVolumeWriterTarget, float)>
+      applyAudioVolume;
 
 #if defined(ASOBMASHOW_GAMEPLAY_SKIN_SESSION_FACTORY_TESTING)
   std::function<skin::PlaySkinSessionCreateResult(skin::ValidatedSkinActivation,

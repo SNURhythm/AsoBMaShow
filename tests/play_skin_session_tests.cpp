@@ -1102,7 +1102,11 @@ return {
         .bridge = *bridge_,
         .renderer = renderer_,
         .quadRenderer = quadRenderer_,
-        .configurationWrites = configurationWrites_});
+        .configurationWrites = configurationWrites_,
+        .applyAudioVolume = [this](SkinAudioVolumeWriterTarget target,
+                                   float value) {
+          audioVolumeWrites_.emplace_back(target, value);
+        }});
   }
 
   bool ready() const noexcept { return session_ != nullptr; }
@@ -1119,6 +1123,10 @@ return {
   SessionQuadBackend &quadBackend() { return quadBackend_; }
   SkinConfigurationWriteQueue &configurationWrites() {
     return configurationWrites_;
+  }
+  const std::vector<std::pair<SkinAudioVolumeWriterTarget, float>> &
+  audioVolumeWrites() const {
+    return audioVolumeWrites_;
   }
 
   void addBgaMarker(std::uint32_t ordinal = 90) {
@@ -1302,6 +1310,8 @@ private:
   SessionQuadBackend quadBackend_;
   rendering::SkinQuadBatchRenderer quadRenderer_;
   SkinConfigurationWriteQueue configurationWrites_;
+  std::vector<std::pair<SkinAudioVolumeWriterTarget, float>>
+      audioVolumeWrites_;
   std::unique_ptr<PlaySkinStateBridge> bridge_;
   std::unique_ptr<PlaySkinSession> session_;
 };
@@ -2129,6 +2139,34 @@ void testForwardCompatiblePersistedMutationsEnqueueOneExactOrderedBatch() {
          "one exact deep-owned persisted batch in authored order");
 }
 
+void testAudioVolumeMutationAppliesOnlyAfterSkinSubmission() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addBgaMarker();
+  const std::vector<SkinFrameMutation> writes{
+      SetSkinAudioVolume{.target = SkinAudioVolumeWriterTarget::Keysound,
+                         .value = 0.35F},
+  };
+  expect(fixture.session().prepareFrameForTesting(
+             stateAt(1), projectionAt(1), {}, writes) ==
+             PresentationFrameOutcome::Ready &&
+             fixture.audioVolumeWrites().empty(),
+         "audio volume mutation remains staged until the skin frame submits");
+
+  SessionBgaSubmitter bga;
+  RenderContext context;
+  const auto result = fixture.session().render(context, bgaFrame(82), bga);
+  expect(result.outcome == PresentationFrameOutcome::Ready &&
+             fixture.audioVolumeWrites().size() == 1 &&
+             fixture.audioVolumeWrites().front().first ==
+                 SkinAudioVolumeWriterTarget::Keysound &&
+             fixture.audioVolumeWrites().front().second == 0.35F,
+         "submitted skin frame applies the staged native audio writer exactly "
+         "once");
+}
+
 void testPersistenceRequestIsFullyAllocatedBeforeSkinSubmission() {
   SessionFixture fixture;
   if (!fixture.ready()) {
@@ -2754,6 +2792,7 @@ int main() {
   testSkinLaneTouchLayoutUsesDrawableScreenCoordinates();
   testCriticalEvaluationAndPreflightFailuresPublishNoFrameState();
   testForwardCompatiblePersistedMutationsEnqueueOneExactOrderedBatch();
+  testAudioVolumeMutationAppliesOnlyAfterSkinSubmission();
   testPersistenceRequestIsFullyAllocatedBeforeSkinSubmission();
   testQueueFullAndClosedAreRecoverableOnlyAfterSuccessfulSkinDraw();
   testTouchCaptureLifecycleFailsClosedAndQueuesOnlyDown();

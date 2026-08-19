@@ -290,6 +290,11 @@ void testAuthoritativeCatalogAdmitsCompatibilityIntegerFactoryDomain() {
   expect(!catalog.contains({.kind = SkinBindingKind::FloatWriter},
                            SkinBuiltinPropertySelector{4}),
          "catalog rejects the lane-cover writer until it is executable");
+  for (const int selector : {17, 18, 19}) {
+    expect(catalog.contains({.kind = SkinBindingKind::FloatWriter},
+                            SkinBuiltinPropertySelector{selector}),
+           "catalog admits each executable Config.AudioConfig writer");
+  }
   expect(catalog.contains({.kind = SkinBindingKind::FloatProperty,
                            .floatDomain = SkinFloatPropertyDomain::FloatValue},
                           SkinBuiltinPropertySelector{4}),

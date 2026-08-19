@@ -40,6 +40,9 @@ struct PlaySkinSessionContext {
   std::shared_ptr<SkinTextureDevice> textureDevice;
   std::shared_ptr<SkinLiveResourceCounters> liveResourceCounters;
   SkinConfigurationWriteQueue &configurationWrites;
+  // Config.AudioConfig FloatWriter IDs 17-19 apply only after an authored
+  // skin frame has submitted successfully.
+  std::function<void(SkinAudioVolumeWriterTarget, float)> applyAudioVolume;
   std::optional<RuntimeSkinConfigurationSelection> pinnedRuntimeSelection;
   std::stop_token stop;
 };
@@ -69,6 +72,7 @@ struct PlaySkinSessionFrameContext {
   Skin2DRenderer &renderer;
   rendering::SkinQuadBatchRenderer &quadRenderer;
   SkinConfigurationWriteQueue &configurationWrites;
+  std::function<void(SkinAudioVolumeWriterTarget, float)> applyAudioVolume;
   ISkinGaugeRandomSource *gaugeRandomSource = nullptr;
 };
 
