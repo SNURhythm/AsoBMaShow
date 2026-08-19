@@ -93,6 +93,13 @@ void compileLr2Standard(GameplayGaugeRules &rules) {
       {0.1F, 0.1F, 0.05F, -12.0F, -20.0F, -2.0F}, true);
   rules.gauges[gaugeTypeIndex(GaugeType::Hazard)] = lr2SurvivalDefinition(
       {0.15F, 0.06F, 0.0F, -100.0F, -100.0F, -10.0F}, false);
+  rules.gauges[gaugeTypeIndex(GaugeType::Grade)] = lr2SurvivalDefinition(
+      {0.10F, 0.10F, 0.05F, -2.0F, -3.0F, -2.0F}, false);
+  rules.gauges[gaugeTypeIndex(GaugeType::ExGrade)] = lr2SurvivalDefinition(
+      {0.10F, 0.10F, 0.05F, -6.0F, -10.0F, -2.0F}, false);
+  rules.gauges[gaugeTypeIndex(GaugeType::ExHardGrade)] =
+      lr2SurvivalDefinition(
+          {0.10F, 0.10F, 0.05F, -12.0F, -20.0F, -2.0F}, false);
 }
 
 void compileLr2Course(GameplayGaugeRules &rules) {

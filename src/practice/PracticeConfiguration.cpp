@@ -1,5 +1,7 @@
 #include "PracticeConfiguration.h"
 
+#include "../CoursePlaySession.h"
+
 #include "../CanonicalDigest.h"
 #include "../scene/play/GameplayAttemptSetup.h"
 
@@ -63,6 +65,9 @@ bool validGaugeType(GaugeType value) {
   case GaugeType::Hard:
   case GaugeType::ExHard:
   case GaugeType::Hazard:
+  case GaugeType::Grade:
+  case GaugeType::ExGrade:
+  case GaugeType::ExHardGrade:
     return true;
   }
   return false;
@@ -139,6 +144,23 @@ constexpr int skinMenuGaugeMaximum(SkinMenuGaugeCategory category,
                                                                     : 100;
 }
 
+constexpr GaugeProfile
+skinMenuGaugeProfile(SkinMenuGaugeCategory category) noexcept {
+  switch (category) {
+  case SkinMenuGaugeCategory::FiveKeys:
+    return GaugeProfile::Standard5Keys;
+  case SkinMenuGaugeCategory::SevenKeys:
+    return GaugeProfile::Standard;
+  case SkinMenuGaugeCategory::Pms:
+    return GaugeProfile::Standard9Keys;
+  case SkinMenuGaugeCategory::Keyboard:
+    return GaugeProfile::Standard24Keys;
+  case SkinMenuGaugeCategory::Lr2:
+    return GaugeProfile::StandardLr2;
+  }
+  return GaugeProfile::Standard;
+}
+
 constexpr int roundDownToHundredMillis(int value) noexcept {
   return value / 100 * 100;
 }
@@ -170,6 +192,85 @@ SkinMenuController::SkinMenuController(Configuration configuration,
   property_.frequencyPercent = configuration_.playback.percent;
   property_.total = inputs_.chartTotal;
   synchronizeConfiguration();
+}
+
+SkinMenuAttemptPlan
+skinMenuAttemptPlan(const SkinMenuProperty &property) noexcept {
+  const long long scale = 100LL;
+  return {
+      .startMicros =
+          static_cast<long long>(property.startTimeMillis) * scale * 1'000LL /
+          property.frequencyPercent,
+      .endMicros =
+          static_cast<long long>(property.endTimeMillis) * scale * 1'000LL /
+          property.frequencyPercent,
+      .gaugeType = gaugeTypeAtIndex(property.gaugeType),
+      .gaugeProfile = skinMenuGaugeProfile(property.gaugeCategory),
+      .startingGaugePercent = property.startGauge,
+      .judgeRank = property.judgeRank,
+      .total = property.total,
+      .playback = {.percent = property.frequencyPercent,
+                   .mode = audio::PlaybackMode::PitchShift},
+      .random1P = property.random1P,
+      .random2P = property.random2P,
+      .doublePlayFlip = property.doublePlay != 0,
+  };
+}
+
+void applySkinMenuPracticeModifier(bms_parser::Chart &chart,
+                                   const SkinMenuAttemptPlan &attempt) {
+  const int totalNotesBeforeModifier = chart.Meta.TotalNotes;
+  chart.Meta.HasTotal = true;
+  chart.Meta.Total = attempt.total;
+  for (auto *measure : chart.Measures) {
+    if (measure == nullptr) {
+      continue;
+    }
+    for (auto *timeline : measure->TimeLines) {
+      if (timeline == nullptr ||
+          (timeline->Timing >= attempt.startMicros &&
+           timeline->Timing < attempt.endMicros)) {
+        continue;
+      }
+      for (auto &note : timeline->Notes) {
+        if (note == nullptr) {
+          continue;
+        }
+        timeline->AddBackgroundNote(note);
+        note = nullptr;
+      }
+    }
+  }
+  recalculateEffectiveLongNoteCounts(chart, chart.Meta.LnMode);
+  if (gaugeTypeIndex(attempt.gaugeType) < 3) {
+    chart.Meta.Total = chart.Meta.Total * static_cast<double>(chart.Meta.TotalNotes) /
+                       static_cast<double>(totalNotesBeforeModifier);
+  }
+}
+
+void applySkinMenuDoublePlayFlip(bms_parser::Chart &chart) {
+  const auto flip = [](std::vector<bms_parser::Note *> &notes) {
+    const std::size_t playerLaneCount = notes.size() / 2;
+    for (std::size_t lane = 0; lane < playerLaneCount; ++lane) {
+      std::swap(notes[lane], notes[lane + playerLaneCount]);
+    }
+    for (std::size_t lane = 0; lane < notes.size(); ++lane) {
+      if (notes[lane] != nullptr) {
+        notes[lane]->Lane = static_cast<int>(lane);
+      }
+    }
+  };
+  for (auto *measure : chart.Measures) {
+    if (measure == nullptr) {
+      continue;
+    }
+    for (auto *timeline : measure->TimeLines) {
+      if (timeline != nullptr) {
+        flip(timeline->Notes);
+        flip(timeline->InvisibleNotes);
+      }
+    }
+  }
 }
 
 void SkinMenuController::setItemScrollPosition(float position) noexcept {
@@ -423,6 +524,115 @@ SkinMenuState buildSkinMenuState(const Configuration &configuration,
   SkinMenuController controller(configuration, inputs);
   controller.setItemScrollPosition(itemScrollPosition);
   return controller.skinMenuState();
+}
+
+int sourcePracticeJudgeRank(int keyMode, int bmsRank) noexcept {
+  constexpr std::array<int, 5> normalRanks = {25, 50, 75, 100, 125};
+  constexpr std::array<int, 5> pmsRanks = {33, 50, 70, 100, 133};
+  const auto &ranks = isPopnKeyMode(keyMode) ? pmsRanks : normalRanks;
+  return bmsRank >= 0 && bmsRank < static_cast<int>(ranks.size())
+             ? ranks[static_cast<std::size_t>(bmsRank)]
+             : ranks[2];
+}
+
+gameplay::GameplayJudgeRules
+sourcePracticeJudgeRules(int keyMode, int judgeRank) noexcept {
+  using Bounds = std::array<long long, 10>;
+  struct SourceJudgeProperty {
+    Bounds note;
+    Bounds scratch;
+    Bounds longNote;
+    Bounds longScratch;
+    bool pGreatFixed = false;
+  };
+  constexpr SourceJudgeProperty fiveKeys{
+      .note = {-20'000, 20'000, -50'000, 50'000, -100'000, 100'000,
+               -150'000, 150'000, -150'000, 500'000},
+      .scratch = {-30'000, 30'000, -60'000, 60'000, -110'000, 110'000,
+                  -160'000, 160'000, -160'000, 500'000},
+      .longNote = {-120'000, 120'000, -150'000, 150'000, -200'000, 200'000,
+                   -250'000, 250'000, 1, 0},
+      .longScratch = {-130'000, 130'000, -160'000, 160'000, -110'000,
+                      110'000, -260'000, 260'000, 1, 0},
+  };
+  constexpr SourceJudgeProperty sevenKeys{
+      .note = {-20'000, 20'000, -60'000, 60'000, -150'000, 150'000,
+               -280'000, 220'000, -150'000, 500'000},
+      .scratch = {-30'000, 30'000, -70'000, 70'000, -160'000, 160'000,
+                  -290'000, 230'000, -160'000, 500'000},
+      .longNote = {-120'000, 120'000, -160'000, 160'000, -200'000, 200'000,
+                   -280'000, 220'000, 1, 0},
+      .longScratch = {-130'000, 130'000, -170'000, 170'000, -210'000,
+                      210'000, -290'000, 230'000, 1, 0},
+  };
+  constexpr SourceJudgeProperty pms{
+      .note = {-20'000, 20'000, -50'000, 50'000, -117'000, 117'000,
+               -183'000, 183'000, -175'000, 500'000},
+      .scratch = {-20'000, 20'000, -50'000, 50'000, -117'000, 117'000,
+                  -183'000, 183'000, -175'000, 500'000},
+      .longNote = {-120'000, 120'000, -150'000, 150'000, -217'000, 217'000,
+                   -283'000, 283'000, 1, 0},
+      .longScratch = {-120'000, 120'000, -150'000, 150'000, -217'000,
+                      217'000, -283'000, 283'000, 1, 0},
+      .pGreatFixed = true,
+  };
+  constexpr SourceJudgeProperty keyboard{
+      .note = {-30'000, 30'000, -90'000, 90'000, -200'000, 200'000,
+               -320'000, 240'000, -200'000, 650'000},
+      .scratch = {-30'000, 30'000, -90'000, 90'000, -200'000, 200'000,
+                  -320'000, 240'000, -200'000, 650'000},
+      .longNote = {-160'000, 25'000, -200'000, 75'000, -260'000, 140'000,
+                   -320'000, 240'000, 1, 0},
+      .longScratch = {-160'000, 25'000, -200'000, 75'000, -260'000,
+                      140'000, -320'000, 240'000, 1, 0},
+  };
+  const SourceJudgeProperty &source =
+      keyMode == 5 || keyMode == 10   ? fiveKeys
+      : keyMode == 9                  ? pms
+      : keyMode == 24 || keyMode == 48 ? keyboard
+                                      : sevenKeys;
+  const auto makeWindowSet = [&source, judgeRank](const Bounds &bounds) {
+    gameplay::JudgeWindowSet result;
+    constexpr std::array<Judgement, 5> judgements = {
+        PGreat, Great, Good, Bad, Kpoor};
+    for (std::size_t index = 0; index < judgements.size(); ++index) {
+      long long early = bounds[index * 2];
+      long long late = bounds[index * 2 + 1];
+      if (index < 3 && !(source.pGreatFixed && index == 0)) {
+        early = early * judgeRank / 100;
+        late = late * judgeRank / 100;
+        const auto clampMagnitude = [](long long value, long long boundary) {
+          return std::llabs(value) > std::llabs(boundary) ? boundary : value;
+        };
+        early = clampMagnitude(early, bounds[6]);
+        late = clampMagnitude(late, bounds[7]);
+        if (index > 0) {
+          const auto &previous = result.windows[index - 1];
+          if (std::llabs(early) < std::llabs(previous.earlyMicros)) {
+            early = previous.earlyMicros;
+          }
+          if (std::llabs(late) < std::llabs(previous.lateMicros)) {
+            late = previous.lateMicros;
+          }
+        }
+      }
+      result.windows[index] = {judgements[index], early, late};
+    }
+    return result;
+  };
+
+  gameplay::GameplayJudgeRules result;
+  result.ruleset = GameplayRuleset::Beatoraja;
+  result.contexts[static_cast<std::size_t>(gameplay::JudgeWindowContext::Normal)] =
+      makeWindowSet(source.note);
+  result.contexts[static_cast<std::size_t>(gameplay::JudgeWindowContext::Scratch)] =
+      makeWindowSet(source.scratch);
+  result.contexts[static_cast<std::size_t>(gameplay::JudgeWindowContext::LongNoteTail)] =
+      makeWindowSet(source.longNote);
+  result.contexts[static_cast<std::size_t>(gameplay::JudgeWindowContext::LongScratchTail)] =
+      makeWindowSet(source.longScratch);
+  result.automaticPoorLateMicros = source.note[9];
+  return result;
 }
 
 std::span<const GaugeOption> practiceGaugeOptions() { return kGaugeOptions; }

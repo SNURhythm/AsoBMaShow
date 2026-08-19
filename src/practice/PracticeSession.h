@@ -23,6 +23,9 @@ public:
   [[nodiscard]] std::size_t abandonedAttemptCount() const;
   [[nodiscard]] const Configuration &configuration() const;
   void configureSkinMenu(SkinMenuInputs);
+  [[nodiscard]] std::optional<SkinMenuAttemptPlan>
+  skinMenuAttemptPlan() const noexcept;
+  void beginSkinMenuAttempt(const SkinMenuAttemptPlan &);
   void setSkinItemScrollPosition(float position) noexcept;
   [[nodiscard]] bool changeSkinMenuVisibleItem(std::size_t index,
                                                bool increment);
@@ -33,6 +36,7 @@ public:
 private:
   Configuration configuration_;
   std::optional<SkinMenuController> skinMenu_;
+  std::optional<Configuration> skinMenuAttemptConfiguration_;
   std::vector<ReplayData> completedAttempts_;
   std::size_t abandonedAttemptCount_ = 0;
   bool attemptActive_ = false;

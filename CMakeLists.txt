@@ -4355,6 +4355,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/practice/PracticeConfiguration.cpp
         src/practice/PracticeSession.cpp
         src/scene/play/GameplayGaugeRules.cpp
+        src/bms_parser.cpp
     )
     target_include_directories(practice_configuration_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src

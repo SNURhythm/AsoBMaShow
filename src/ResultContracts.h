@@ -30,7 +30,7 @@ namespace result_contract {
 isKnownGaugeProfile(GaugeProfile value) noexcept {
   const int index = static_cast<int>(value);
   return index >= static_cast<int>(GaugeProfile::Standard) &&
-         index <= static_cast<int>(GaugeProfile::Standard24Keys);
+         index <= static_cast<int>(GaugeProfile::StandardLr2);
 }
 
 [[nodiscard]] inline constexpr bool

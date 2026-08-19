@@ -1,4 +1,5 @@
 #include "audio/PlaybackRate.h"
+#include "bms_parser.hpp"
 #include "practice/PracticeConfiguration.h"
 #include "practice/PracticeSession.h"
 #include "scene/ChartListenStart.h"
@@ -62,6 +63,34 @@ void testSkinMenuUsesPinnedInitialPracticeViewport() {
              menu.items[9].available && menu.items[9].label == "OPTION-1P" &&
              !menu.items[10].available,
          "practice skin menu preserves the source ten-slot initial viewport");
+}
+
+void testSkinMenuInitialJudgeRankUsesPinnedBmsRuleConversion() {
+  expect(practice::sourcePracticeJudgeRank(7, 3) == 100 &&
+             practice::sourcePracticeJudgeRank(7, 5) == 75 &&
+             practice::sourcePracticeJudgeRank(9, 2) == 70,
+         "practice JUDGERANK converts BMS RANK through the pinned mode rule");
+}
+
+void testSkinMenuJudgeRankUsesPinnedWindowRule() {
+  const auto seven = practice::sourcePracticeJudgeRules(7, 50);
+  const auto &sevenWindows =
+      seven.contexts[static_cast<std::size_t>(gameplay::JudgeWindowContext::Normal)]
+          .windows;
+  const auto pms = practice::sourcePracticeJudgeRules(9, 50);
+  const auto &pmsWindows =
+      pms.contexts[static_cast<std::size_t>(gameplay::JudgeWindowContext::Normal)]
+          .windows;
+  expect(sevenWindows[0].earlyMicros == -10'000 &&
+             sevenWindows[1].lateMicros == 30'000 &&
+             sevenWindows[2].lateMicros == 75'000 &&
+             sevenWindows[3].earlyMicros == -280'000 &&
+             sevenWindows[4].lateMicros == 500'000 &&
+             pmsWindows[0].lateMicros == 20'000 &&
+             pmsWindows[1].lateMicros == 25'000 &&
+             pmsWindows[2].lateMicros == 58'500,
+         "practice JUDGERANK scales only the pinned adjustable windows and "
+         "retains their source fixed bounds");
 }
 
 void testSkinMenuScrollUsesPinnedDoublePlayViewport() {
@@ -199,6 +228,117 @@ void testPracticeSessionUsesRetainedSkinMenuController() {
   const auto state = session.skinMenuState();
   expect(state.items[9].selected && state.items[9].value == "FLIP",
          "practice session retains the controller's selected DP row");
+}
+
+void testSkinMenuPropertyProducesPinnedAttemptPlan() {
+  practice::Configuration configuration{
+      .startMicros = 2'000'000,
+      .endMicros = 9'000'000,
+      .gaugeType = GaugeType::Normal,
+      .startingGaugePercent = 20,
+      .playback = {.percent = 200, .mode = audio::PlaybackMode::PitchShift},
+  };
+  practice::SkinMenuController menu(
+      configuration,
+      {.lastTimelineMicros = 90'000'000,
+       .judgeRank = 250,
+       .chartTotal = 333.0,
+       .keyMode = 14,
+       .random1P = 0,
+       .random2P = 0,
+       .doublePlay = 0});
+
+  menu.setItemScrollPosition(1.0F);
+  for (int index = 0; index < 4; ++index) {
+    expect(menu.changeVisibleItem(0, true),
+           "source gauge row advances to the Grade gauge");
+    if (index == 3) {
+      break;
+    }
+    expect(menu.changeVisibleItem(1, true),
+           "source gauge category row advances to LR2");
+  }
+
+  const auto attempt = practice::skinMenuAttemptPlan(menu.property());
+  expect(attempt.startMicros == 1'000'000 &&
+             attempt.endMicros == 4'500'000 &&
+             attempt.gaugeType == GaugeType::Grade &&
+             attempt.gaugeProfile == GaugeProfile::StandardLr2 &&
+             attempt.startingGaugePercent == 100 && attempt.judgeRank == 250 &&
+             attempt.total == 333.0 && attempt.playback.percent == 200,
+         "source menu property retains frequency-scaled range and Grade/LR2 "
+         "attempt authority");
+}
+
+void testSkinMenuAttemptPlanMovesOutOfRangeNotesToBackground() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 1;
+  chart.Meta.TotalNotes = 3;
+  chart.Meta.HasTotal = true;
+  chart.Meta.Total = 300.0;
+  auto *measure = new bms_parser::Measure();
+  for (const long long timing : {0LL, 1'000'000LL, 2'000'000LL}) {
+    auto *timeline = new bms_parser::TimeLine(1, false);
+    timeline->Timing = timing;
+    timeline->SetNote(0, new bms_parser::Note(1));
+    measure->TimeLines.push_back(timeline);
+  }
+  chart.Measures.push_back(measure);
+
+  practice::applySkinMenuPracticeModifier(
+      chart, {.startMicros = 500'000,
+              .endMicros = 1'500'000,
+              .gaugeType = GaugeType::Normal,
+              .total = 300.0});
+
+  expect(measure->TimeLines[0]->Notes[0] == nullptr &&
+             measure->TimeLines[0]->BackgroundNotes.size() == 1 &&
+             measure->TimeLines[1]->Notes[0] != nullptr &&
+             measure->TimeLines[2]->Notes[0] == nullptr &&
+             measure->TimeLines[2]->BackgroundNotes.size() == 1 &&
+             chart.Meta.TotalNotes == 1 && chart.Meta.Total == 100.0,
+         "source practice modifier keeps only the selected range visible and "
+         "scales NORMAL TOTAL by its remaining note count");
+}
+
+void testSkinMenuDoublePlayFlipSwapsSourcePlayerHalves() {
+  bms_parser::Chart chart;
+  auto *measure = new bms_parser::Measure();
+  auto *timeline = new bms_parser::TimeLine(16, false);
+  auto *note = new bms_parser::Note(1);
+  timeline->SetNote(0, note);
+  measure->TimeLines.push_back(timeline);
+  chart.Measures.push_back(measure);
+
+  practice::applySkinMenuDoublePlayFlip(chart);
+
+  expect(timeline->Notes[0] == nullptr && timeline->Notes[8] == note &&
+             note->Lane == 8,
+         "source PlayerFlipModifier rotates every double-play lane by one "
+         "player half");
+}
+
+void testSessionRetainsRawMenuRangeDuringRateAdjustedAttempt() {
+  practice::Session session(
+      {.startMicros = 2'000'000,
+       .endMicros = 9'000'000,
+       .playback = {.percent = 200,
+                    .mode = audio::PlaybackMode::PitchShift}});
+  session.configureSkinMenu({.lastTimelineMicros = 90'000'000,
+                             .judgeRank = 100,
+                             .chartTotal = 200.0,
+                             .keyMode = 7,
+                             .random1P = 0,
+                             .random2P = 0,
+                             .doublePlay = 0});
+  const auto plan = session.skinMenuAttemptPlan();
+  expect(plan.has_value(), "configured practice menu has a source attempt plan");
+  session.beginSkinMenuAttempt(*plan);
+  expect(session.configuration().startMicros == 2'000'000 &&
+             session.configuration().endMicros == 9'000'000 &&
+             session.configuration().playback.percent == 200,
+         "practice session retains source chart coordinates while Aso's "
+         "playback clock applies the selected frequency");
 }
 
 void testListenUsesPracticeStartInsteadOfCursorOrEndMarker() {
@@ -370,11 +510,17 @@ void testPlayabilityIssuesExplainBlockingConfiguration() {
 int main() {
   testPlaybackRateConversions();
   testFreshCountInUsesChartMeasureSize();
+  testSkinMenuInitialJudgeRankUsesPinnedBmsRuleConversion();
+  testSkinMenuJudgeRankUsesPinnedWindowRule();
   testSkinMenuUsesPinnedInitialPracticeViewport();
   testSkinMenuScrollUsesPinnedDoublePlayViewport();
   testSkinMenuControllerRetainsSourceRowsAndActions();
   testSkinMenuControllerUsesPinnedRowDomains();
   testPracticeSessionUsesRetainedSkinMenuController();
+  testSkinMenuPropertyProducesPinnedAttemptPlan();
+  testSkinMenuAttemptPlanMovesOutOfRangeNotesToBackground();
+  testSkinMenuDoublePlayFlipSwapsSourcePlayerHalves();
+  testSessionRetainsRawMenuRangeDuringRateAdjustedAttempt();
   testListenUsesPracticeStartInsteadOfCursorOrEndMarker();
   testConfigurationSanitization();
   testGaugeAutoShiftDropdownModel();

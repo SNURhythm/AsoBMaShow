@@ -95,6 +95,10 @@ private:
   void refreshGameplayPresentationGeometry();
   void updateSkinResetLayoutVisibility();
   void acquireGameplaySkinForAttempt();
+  [[nodiscard]] bool shouldEnterPracticeMenu() const noexcept;
+  void enterPracticeMenu();
+  void consumePracticeMenuLaneInput(int lane, bool pressed);
+  void startPracticeAttemptFromMenu();
   [[nodiscard]] bool publishRealtimeTouchHitSnapshot();
   void updateRealtimeVisualTimeline(long long gameplayTimeMicros);
   void syncRealtimeGameplaySnapshot();
@@ -302,6 +306,8 @@ private:
   size_t replayLaneCoverCursor = 0;
   bool touchVisualizerLoaded = false;
   bool playbackInitializationFailed = false;
+  bool practiceMenuActive = false;
+  long long practiceMenuStartPressedMicros = 0;
   bool practiceGhostPublished = false;
   bool recordedAttemptCompleted = false;
   bool resultTransitionScheduled = false;

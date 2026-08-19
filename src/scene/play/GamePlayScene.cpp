@@ -1519,6 +1519,145 @@ void GamePlayScene::acquireGameplaySkinForAttempt() {
 #endif
 }
 
+bool GamePlayScene::shouldEnterPracticeMenu() const noexcept {
+  return options.practiceSession != nullptr && !options.autoPlay &&
+         !isReplayPlayback();
+}
+
+void GamePlayScene::enterPracticeMenu() {
+  if (!shouldEnterPracticeMenu() || chart == nullptr ||
+      options.practiceSession == nullptr) {
+    return;
+  }
+  options.practiceSession->configureSkinMenu(
+      {.lastTimelineMicros = playfieldChartVisualModel.timelines.empty()
+                                 ? 0
+                                 : playfieldChartVisualModel.timelines.back()
+                                       .timeMicros,
+       .judgeRank = practice::sourcePracticeJudgeRank(
+           chart->Meta.KeyMode, chart->Meta.Rank),
+       .chartTotal = playfieldChartVisualModel.staticMetadata.songInformation
+                         .value_or(PlayfieldSongInformation{})
+                         .total,
+       .keyMode = playfieldChartVisualModel.keyCount,
+       .random1P = gameplayRandomOptionIndex(options.playOption),
+       .random2P = gameplayRandomOptionIndex(options.playOption2),
+       .doublePlay = options.doublePlayFlip ? 1 : 0});
+  ownedState = std::make_unique<RhythmState>(chart, false,
+                                             rulesetPolicyBuild.policy->gauge);
+  state = ownedState.get();
+  state->configureGauge(options.gaugeType, options.gaugeAutoShift,
+                        options.gaugeProfile, options.gaugeAutoShiftLowerBound);
+  state->isPlaying = false;
+  practiceMenuActive = true;
+  practiceMenuStartPressedMicros = 0;
+  capturePlayfieldVisualState(0, getVisualTimeMicros(0), false, false, true);
+  acquireGameplaySkinForAttempt();
+}
+
+void GamePlayScene::consumePracticeMenuLaneInput(int lane, bool pressed) {
+  if (!practiceMenuActive || chart == nullptr) {
+    return;
+  }
+  const auto lanes = chart->Meta.GetTotalLaneIndices();
+  if (lanes.empty() || lane != lanes.front()) {
+    return;
+  }
+  practiceMenuStartPressedMicros = pressed ? nowMicros() : 0;
+}
+
+void GamePlayScene::startPracticeAttemptFromMenu() {
+  if (!practiceMenuActive || chart == nullptr ||
+      options.practiceSession == nullptr) {
+    return;
+  }
+  const auto attempt = options.practiceSession->skinMenuAttemptPlan();
+  if (!attempt.has_value()) {
+    return;
+  }
+
+  practice::SkinMenuAttemptPlan chartAttempt = *attempt;
+  const auto &menuConfiguration = options.practiceSession->configuration();
+  chartAttempt.startMicros = menuConfiguration.startMicros;
+  chartAttempt.endMicros = menuConfiguration.endMicros;
+  options.practiceSession->beginSkinMenuAttempt(*attempt);
+  options.startPosition =
+      static_cast<unsigned long long>(chartAttempt.startMicros);
+  options.gaugeType = attempt->gaugeType;
+  options.gaugeProfile = attempt->gaugeProfile;
+  options.gaugeAutoShift = GaugeAutoShiftMode::None;
+  options.startingGaugePercent = attempt->startingGaugePercent;
+  options.playback = attempt->playback;
+  options.doublePlayFlip = attempt->doublePlayFlip;
+  options.playOption = std::string(
+      replay::beatorajaReplayOptionName(attempt->random1P).value());
+  options.playOptionSeed.reset();
+  options.playOption2 = std::string(
+      replay::beatorajaReplayOptionName(attempt->random2P).value());
+  options.playOption2Seed.reset();
+
+  practice::applySkinMenuPracticeModifier(*chart, chartAttempt);
+  if (chart->Meta.IsDP && options.doublePlayFlip) {
+    practice::applySkinMenuDoublePlayFlip(*chart);
+  }
+  std::optional<std::string> appliedOption;
+  std::optional<long long> appliedSeed;
+  // BMSPlayer applies the second player before the first in practice.
+  if (chart->Meta.IsDP) {
+    (void)play_options::applyPlayOptionModifier(
+        *chart, *options.playOption2, std::nullopt, 1, appliedOption,
+        appliedSeed, "practice");
+  }
+  (void)play_options::applyPlayOptionModifier(
+      *chart, *options.playOption, std::nullopt, 0, appliedOption, appliedSeed,
+      "practice");
+
+  rulesetPolicyBuild = buildGameplayRulesetPolicyAtPlayStart(
+      options, chart->Meta, context.settings.notePriorityMode);
+  if (!rulesetPolicyBuild.built()) {
+    showPlaybackInitializationFailure(rulesetPolicyBuild.diagnostic);
+    return;
+  }
+  auto sourceJudgeRules =
+      practice::sourcePracticeJudgeRules(chart->Meta.KeyMode, attempt->judgeRank);
+  const auto &existingJudgeRules = rulesetPolicyBuild.policy->judge.rules();
+  sourceJudgeRules.candidateSelection = existingJudgeRules.candidateSelection;
+  sourceJudgeRules.repeatedKpoor = existingJudgeRules.repeatedKpoor;
+  sourceJudgeRules.multiBad = existingJudgeRules.multiBad;
+  sourceJudgeRules.rejectsLateBadForLongNoteHead =
+      existingJudgeRules.rejectsLateBadForLongNoteHead;
+  rulesetPolicyBuild.policy->judge =
+      gameplay::CompiledGameplayJudge::from(std::move(sourceJudgeRules));
+  judge = Judge(3);
+  judge.timingWindows.clear();
+  for (const auto &window :
+       rulesetPolicyBuild.policy->judge.rules()
+           .contexts[static_cast<std::size_t>(
+               gameplay::JudgeWindowContext::Normal)]
+           .windows) {
+    judge.timingWindows.emplace(window.judgement,
+                                std::pair{window.earlyMicros,
+                                          window.lateMicros});
+  }
+  judge.setAllowedNoteRange(practiceAllowedNoteRange(options));
+  latePoorTiming = rulesetPolicyBuild.policy->judge.automaticPoorLateMicros();
+  playfieldChartVisualModel =
+      buildPlayfieldChartVisualModel(*chart, options.longNoteMode);
+  initializePlayfieldVisualNoteSources();
+  if (playfieldVisualStateStore != nullptr) {
+    playfieldVisualStateStore->resetModel(playfieldChartVisualModel);
+  }
+  ownedLaneInputController = std::make_unique<RhythmLaneInputController>(
+      chart, presentationEventFanout, lanePressed, rulesetPolicyBuild.policy->judge,
+      options.longNoteMode, practiceNoteRange());
+  laneInputController = ownedLaneInputController.get();
+  attemptProvenance = captureScoreProvenanceAtPlayStart(
+      options, chart->Meta, *rulesetPolicyBuild.policy);
+  practiceMenuActive = false;
+  practiceMenuStartPressedMicros = 0;
+  (void)reset();
+}
+
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 void GamePlayScene::applySkinAudioVolume(
     skin::SkinAudioVolumeWriterTarget target, float value) {
@@ -2726,7 +2865,9 @@ void GamePlayScene::init() {
   std::string musicStopError;
   context.musicPlayer.Stop(musicStopError);
   context.jukebox.stop();
-  if (!reset()) {
+  if (shouldEnterPracticeMenu()) {
+    enterPracticeMenu();
+  } else if (!reset()) {
     return;
   }
   if (!isReplayPlayback() && !options.autoPlay) {
@@ -2744,6 +2885,8 @@ void GamePlayScene::init() {
         context.settings.playAreaWidthForKeyMode(chart->Meta.KeyMode),
         LogicalGameplayRegistryPolicy{},
         [this](const auto &transition) {
+          consumePracticeMenuLaneInput(transition.physicalLane,
+                                       transition.pressed);
           captureModernReplayInput(
               transition.physicalLane, transition.control,
               transition.hasReplayControl, transition.pressed,
@@ -2785,7 +2928,9 @@ void GamePlayScene::init() {
       options.longNoteMode, practiceNoteRange());
   laneInputController = ownedLaneInputController.get();
 
-  (void)startRealtimeGameplayAuthority();
+  if (!practiceMenuActive) {
+    (void)startRealtimeGameplayAuthority();
+  }
 
   if constexpr (kShowLaneStateOverlay) {
     ownedLaneStateText =
@@ -4768,6 +4913,7 @@ void GamePlayScene::capturePlayfieldVisualState(
       .laneCoverAdjustmentHeld = startButtonPressed || selectButtonPressed,
       .resetLaneCoverVisibleTimeReference =
           playfieldLaneCoverResetPending,
+      .practiceMenuActive = practiceMenuActive,
       .practiceMenu = [&] {
         if (options.practiceSession == nullptr) {
           return std::optional<practice::SkinMenuState>{};
@@ -4778,7 +4924,8 @@ void GamePlayScene::capturePlayfieldVisualState(
                      playfieldChartVisualModel.timelines.empty()
                          ? 0
                          : playfieldChartVisualModel.timelines.back().timeMicros,
-                 .judgeRank = playfieldChartVisualModel.staticMetadata.judgeRank,
+                 .judgeRank = practice::sourcePracticeJudgeRank(
+                     chart->Meta.KeyMode, chart->Meta.Rank),
                  .chartTotal = playfieldChartVisualModel.staticMetadata
                                    .songInformation
                                        .value_or(PlayfieldSongInformation{})
@@ -5207,6 +5354,13 @@ void GamePlayScene::update(float dt) {
       realtimeGameplaySession->touchRoutingRecoveryRequested.store(
           true, std::memory_order_release);
     }
+  }
+  if (practiceMenuActive) {
+    if (practiceMenuStartPressedMicros != 0 &&
+        nowMicros() - practiceMenuStartPressedMicros > 1'000'000) {
+      startPracticeAttemptFromMenu();
+    }
+    return;
   }
   if (startSelectControl.has_value() && !isReplayPlayback() &&
       !options.autoPlay) {

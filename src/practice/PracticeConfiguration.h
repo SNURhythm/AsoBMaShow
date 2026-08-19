@@ -2,6 +2,7 @@
 
 #include "../audio/PlaybackRate.h"
 #include "../scene/play/RhythmState.h"
+#include "../scene/play/GameplayJudgeRules.h"
 
 #include <array>
 #include <cstddef>
@@ -11,6 +12,10 @@
 #include <string>
 #include <string_view>
 #include <vector>
+
+namespace bms_parser {
+class Chart;
+}
 
 namespace practice {
 enum class Marker : std::uint8_t { Start = 0, End = 1 };
@@ -112,6 +117,28 @@ struct SkinMenuProperty {
   bool operator==(const SkinMenuProperty &) const = default;
 };
 
+// This is the complete source property projected into an attempted play.  It
+// remains separate from Configuration because the skin menu exposes gauge
+// categories and grade gauges that are not persisted by Aso's practice panel.
+struct SkinMenuAttemptPlan {
+  long long startMicros = 0;
+  long long endMicros = 0;
+  GaugeType gaugeType = GaugeType::Normal;
+  GaugeProfile gaugeProfile = GaugeProfile::Standard;
+  int startingGaugePercent = 20;
+  int judgeRank = 100;
+  double total = 0.0;
+  audio::PlaybackRate playback;
+  int random1P = 0;
+  int random2P = 0;
+  bool doublePlayFlip = false;
+};
+
+[[nodiscard]] SkinMenuAttemptPlan
+skinMenuAttemptPlan(const SkinMenuProperty &) noexcept;
+void applySkinMenuPracticeModifier(bms_parser::Chart &, const SkinMenuAttemptPlan &);
+void applySkinMenuDoublePlayFlip(bms_parser::Chart &);
+
 class SkinMenuController {
 public:
   SkinMenuController(Configuration, SkinMenuInputs);
@@ -143,6 +170,10 @@ private:
 [[nodiscard]] SkinMenuState buildSkinMenuState(const Configuration &,
                                                 const SkinMenuInputs &,
                                                 float itemScrollPosition = 0.0F);
+[[nodiscard]] int sourcePracticeJudgeRank(int keyMode,
+                                          int bmsRank) noexcept;
+[[nodiscard]] gameplay::GameplayJudgeRules
+sourcePracticeJudgeRules(int keyMode, int judgeRank) noexcept;
 
 [[nodiscard]] std::span<const GaugeOption> practiceGaugeOptions();
 [[nodiscard]] std::string practiceGaugeOptionId(const Configuration &value);

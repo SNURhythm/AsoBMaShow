@@ -40,12 +40,33 @@ std::size_t Session::abandonedAttemptCount() const {
 }
 
 const Configuration &Session::configuration() const {
+  if (skinMenuAttemptConfiguration_.has_value()) {
+    return *skinMenuAttemptConfiguration_;
+  }
   return skinMenu_.has_value() ? skinMenu_->configuration() : configuration_;
 }
 
 void Session::configureSkinMenu(SkinMenuInputs inputs) {
+  skinMenuAttemptConfiguration_.reset();
   skinMenu_.emplace(configuration_, std::move(inputs));
   skinMenu_->setItemScrollPosition(skinItemScrollPosition_);
+}
+
+std::optional<SkinMenuAttemptPlan>
+Session::skinMenuAttemptPlan() const noexcept {
+  return skinMenu_.has_value()
+             ? std::optional(practice::skinMenuAttemptPlan(skinMenu_->property()))
+             : std::nullopt;
+}
+
+void Session::beginSkinMenuAttempt(const SkinMenuAttemptPlan &attempt) {
+  Configuration configuration = skinMenu_.has_value()
+                                  ? skinMenu_->configuration()
+                                  : configuration_;
+  configuration.gaugeType = attempt.gaugeType;
+  configuration.startingGaugePercent = attempt.startingGaugePercent;
+  configuration.playback = attempt.playback;
+  skinMenuAttemptConfiguration_ = std::move(configuration);
 }
 
 void Session::setSkinItemScrollPosition(float position) noexcept {

@@ -359,6 +359,12 @@ const char *gaugeTypeName(GaugeType value) {
     return "ex-hard";
   case GaugeType::Hazard:
     return "hazard";
+  case GaugeType::Grade:
+    return "grade";
+  case GaugeType::ExGrade:
+    return "ex-grade";
+  case GaugeType::ExHardGrade:
+    return "exhard-grade";
   }
   throw std::invalid_argument("Unknown gauge type value.");
 }
@@ -381,6 +387,15 @@ std::optional<GaugeType> gaugeTypeFromName(std::string_view value) {
   }
   if (value == "hazard") {
     return GaugeType::Hazard;
+  }
+  if (value == "grade") {
+    return GaugeType::Grade;
+  }
+  if (value == "ex-grade") {
+    return GaugeType::ExGrade;
+  }
+  if (value == "exhard-grade") {
+    return GaugeType::ExHardGrade;
   }
   return std::nullopt;
 }
@@ -418,6 +433,8 @@ const char *gaugeProfileName(GaugeProfile value) {
     return "standard-9-keys";
   case GaugeProfile::Standard24Keys:
     return "standard-24-keys";
+  case GaugeProfile::StandardLr2:
+    return "standard-lr2";
   }
   throw std::invalid_argument("Unknown gauge profile value.");
 }
@@ -452,6 +469,9 @@ std::optional<GaugeProfile> gaugeProfileFromName(std::string_view value) {
   }
   if (value == "standard-24-keys") {
     return GaugeProfile::Standard24Keys;
+  }
+  if (value == "standard-lr2") {
+    return GaugeProfile::StandardLr2;
   }
   return std::nullopt;
 }
