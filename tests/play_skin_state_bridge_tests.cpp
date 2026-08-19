@@ -820,7 +820,9 @@ void testExistingGameplayStatePropertyWiring() {
   state.authority.gaugeAutoShiftLowerBound = GaugeType::ExHard;
   state.authority.laneCoverEnabled = true;
   state.authority.liftEnabled = true;
-  state.authority.hiddenEnabled = false;
+  state.authority.liftRatio = 0.25F;
+  state.authority.hiddenEnabled = true;
+  state.authority.hiddenRatio = 0.75F;
   state.configuration.hispeedFixMode = AppSettings::HiSpeedFixMode::Max;
   state.configuration.hispeedAutoAdjust = true;
   state.configuration.bpmGuideEnabled = true;
@@ -886,6 +888,7 @@ void testExistingGameplayStatePropertyWiring() {
 
   for (const auto [id, expected] : std::array{
            std::pair{40, false}, std::pair{41, true}, std::pair{82, true},
+           std::pair{272, true}, std::pair{273, true},
            std::pair{160, false}, std::pair{161, false},
            std::pair{162, true}, std::pair{163, false},
            std::pair{164, false}, std::pair{1160, false},
@@ -898,7 +901,7 @@ void testExistingGameplayStatePropertyWiring() {
   for (const auto [id, expected] : std::array{
            std::pair{40, 4LL}, std::pair{55, 2LL}, std::pair{78, 4LL},
            std::pair{72, 0LL}, std::pair{306, 1LL}, std::pair{330, 1LL},
-           std::pair{331, 1LL}, std::pair{332, 0LL}, std::pair{341, 4LL},
+           std::pair{331, 1LL}, std::pair{332, 1LL}, std::pair{341, 4LL},
            std::pair{342, 1LL}, std::pair{301, 1LL}, std::pair{303, 1LL},
            std::pair{75, 1LL}, std::pair{321, 1LL}, std::pair{322, 2LL},
            std::pair{323, 3LL}, std::pair{324, 10LL}, std::pair{343, 1LL},
@@ -909,6 +912,14 @@ void testExistingGameplayStatePropertyWiring() {
         {id}, SkinIntegerPropertyDomain::ImageIndex);
     expect(value.supported && value.value == expected,
            "existing gameplay image index uses the pinned source: " +
+               std::to_string(id));
+  }
+  for (const auto [id, expected] :
+       std::array{std::pair{314, 250LL}, std::pair{315, 750LL},
+                  std::pair{316, 337LL}}) {
+    const auto value = bridge.integerProperty({id});
+    expect(value.supported && value.value == expected,
+           "Lift/HIDDEN numeric property uses the captured PlayConfig state: " +
                std::to_string(id));
   }
   expect(bridge.booleanProperty({400}).supported &&

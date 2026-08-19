@@ -2529,6 +2529,12 @@ void GamePlayScene::init() {
   playfieldLaneCoverPercent = replayInitialLaneCover.percent;
   playfieldLaneCoverPercentExact =
       static_cast<float>(playfieldLaneCoverPercent);
+  playfieldLiftEnabled = context.settings.liftEnabled;
+  playfieldLiftRatio = courseNoSpeed() ? 0.0F : context.settings.liftRatio;
+  playfieldHiddenEnabled = context.settings.hiddenEnabled;
+  playfieldHiddenRatio =
+      courseNoSpeed() ? 0.0F : context.settings.hiddenRatio;
+  playfieldChangeLiftTarget = true;
   playfieldHispeedState.emplace(
       gameplay_hispeed::Settings{
           .mode = gameplay_hispeed::fixModeFromEncoded(
@@ -3454,25 +3460,62 @@ void GamePlayScene::applyStartSelectControlActions(
       break;
     case gameplay::StartSelectControlActionKind::AdjustLaneCover:
       if (!courseNoSpeed() && action.delta != 0) {
-        const float next = std::clamp(
-            playfieldLaneCoverPercentExact +
-                static_cast<float>(action.delta) * 0.1F,
-            static_cast<float>(AppSettings::kMinNoteStartPositionPercent),
-            static_cast<float>(AppSettings::kMaxNoteStartPositionPercent));
-        const int nextPercent = static_cast<int>(std::lround(next));
-        if (next != playfieldLaneCoverPercentExact) {
-          playfieldLaneCoverPercentExact = next;
-          context.settings.noteStartPositionPercent = nextPercent;
-          playfieldLaneCoverPercent = nextPercent;
-          playfieldHispeedState->setLaneCover(
-              nextPercent, currentGameplayBpm, context.settings.hispeedAutoAdjust);
-          playfieldLaneCoverResetPending = false;
-          refreshRuntimePresentationConfiguration();
-          appendReplayLaneCoverEvent(
-              nextPercent, getGameplayTimeMicros(context.jukebox.getTimeMicros()),
-              context.settings.hispeedAutoAdjust,
-              ReplayLaneCoverChangeKind::Value);
-          (void)context.saveSettings();
+        // This is ControlInputProcessor.setCoverValue's exact priority:
+        // lane cover while enabled (or when neither alternate plane is
+        // enabled), then Lift, then HIDDEN. Its low margin is 0.001; the
+        // existing Aso percent lane-cover state therefore advances by 0.1.
+        if (playfieldLaneCoverEnabled ||
+            (!playfieldLiftEnabled && !playfieldHiddenEnabled)) {
+          const float next = std::clamp(
+              playfieldLaneCoverPercentExact +
+                  static_cast<float>(action.delta) * 0.1F,
+              static_cast<float>(AppSettings::kMinNoteStartPositionPercent),
+              static_cast<float>(AppSettings::kMaxNoteStartPositionPercent));
+          const int nextPercent = static_cast<int>(std::lround(next));
+          if (next != playfieldLaneCoverPercentExact) {
+            playfieldLaneCoverPercentExact = next;
+            context.settings.noteStartPositionPercent = nextPercent;
+            playfieldLaneCoverPercent = nextPercent;
+            playfieldHispeedState->setLaneCover(
+                nextPercent, currentGameplayBpm,
+                context.settings.hispeedAutoAdjust);
+            playfieldLaneCoverResetPending = false;
+            refreshRuntimePresentationConfiguration();
+            appendReplayLaneCoverEvent(
+                nextPercent,
+                getGameplayTimeMicros(context.jukebox.getTimeMicros()),
+                context.settings.hispeedAutoAdjust,
+                ReplayLaneCoverChangeKind::Value);
+            (void)context.saveSettings();
+          }
+        } else if (playfieldLiftEnabled &&
+                   (!playfieldHiddenEnabled || playfieldChangeLiftTarget)) {
+          const float next = std::clamp(
+              playfieldLiftRatio - static_cast<float>(action.delta) * 0.001F,
+              0.0F, 1.0F);
+          if (next != playfieldLiftRatio) {
+            playfieldLiftRatio = next;
+            context.settings.liftRatio = next;
+            playfieldHispeedState->setLaneCover(
+                playfieldLaneCoverPercent, currentGameplayBpm,
+                context.settings.hispeedAutoAdjust);
+            refreshRuntimePresentationConfiguration();
+            (void)context.saveSettings();
+          }
+        } else {
+          const float next = std::clamp(
+              playfieldHiddenRatio -
+                  static_cast<float>(action.delta) * 0.001F,
+              0.0F, 1.0F);
+          if (next != playfieldHiddenRatio) {
+            playfieldHiddenRatio = next;
+            context.settings.hiddenRatio = next;
+            playfieldHispeedState->setLaneCover(
+                playfieldLaneCoverPercent, currentGameplayBpm,
+                context.settings.hispeedAutoAdjust);
+            refreshRuntimePresentationConfiguration();
+            (void)context.saveSettings();
+          }
         }
       }
       break;
@@ -3491,9 +3534,7 @@ void GamePlayScene::applyStartSelectControlActions(
       }
       break;
     case gameplay::StartSelectControlActionKind::ToggleLiftHiddenTarget:
-      // Aso has no configurable Lift/Hidden planes yet.  The control-state
-      // edge is intentionally retained here so its future renderer support
-      // can use the same source-faithful input stream.
+      playfieldChangeLiftTarget = !playfieldChangeLiftTarget;
       break;
     case gameplay::StartSelectControlActionKind::Exit:
       abortPlayFromStartSelectControl();
@@ -4689,10 +4730,10 @@ void GamePlayScene::capturePlayfieldVisualState(
       .startLaneIndicatorsVisible = startLaneIndicatorsVisible,
       .laneCoverPercent = laneCover.percent,
       .laneCoverEnabled = laneCover.enabled,
-      .liftEnabled = false,
-      .liftRatio = 0.0F,
-      .hiddenEnabled = false,
-      .hiddenRatio = 0.0F,
+      .liftEnabled = playfieldLiftEnabled,
+      .liftRatio = playfieldLiftRatio,
+      .hiddenEnabled = playfieldHiddenEnabled,
+      .hiddenRatio = playfieldHiddenRatio,
       .failureAnimationActive = state->activeGaugeFailed(),
       .laneCoverAdjustmentHeld = startButtonPressed || selectButtonPressed,
       .resetLaneCoverVisibleTimeReference =

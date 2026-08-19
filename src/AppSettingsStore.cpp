@@ -474,6 +474,10 @@ json settingsToJson(const AppSettings &settings) {
       {"laneBeamLengthPercent", settings.laneBeamLengthPercent},
       {"noteStartPositionPercent", settings.noteStartPositionPercent},
       {"laneCoverEnabled", settings.laneCoverEnabled},
+      {"liftEnabled", settings.liftEnabled},
+      {"liftRatio", settings.liftRatio},
+      {"hiddenEnabled", settings.hiddenEnabled},
+      {"hiddenRatio", settings.hiddenRatio},
       {"hispeedAutoAdjust", settings.hispeedAutoAdjust},
       {"playAreaWidth4K", settings.playAreaWidth4K},
       {"playAreaWidth5K", settings.playAreaWidth5K},
@@ -630,6 +634,10 @@ AppSettings settingsFromJson(const json &document,
             settings.noteStartPositionPercent, diagnostics);
   readValue(document, "laneCoverEnabled", settings.laneCoverEnabled,
             diagnostics);
+  readValue(document, "liftEnabled", settings.liftEnabled, diagnostics);
+  readValue(document, "liftRatio", settings.liftRatio, diagnostics);
+  readValue(document, "hiddenEnabled", settings.hiddenEnabled, diagnostics);
+  readValue(document, "hiddenRatio", settings.hiddenRatio, diagnostics);
   readValue(document, "hispeedAutoAdjust", settings.hispeedAutoAdjust,
             diagnostics);
   readValue(document, "playAreaWidth4K", settings.playAreaWidth4K, diagnostics);

@@ -309,6 +309,13 @@ private:
   std::optional<gameplay::StartSelectControl> startSelectControl;
   std::optional<gameplay_hispeed::State> playfieldHispeedState;
   bool playfieldLaneCoverEnabled = true;
+  bool playfieldLiftEnabled = false;
+  float playfieldLiftRatio = 0.1F;
+  bool playfieldHiddenEnabled = false;
+  float playfieldHiddenRatio = 0.1F;
+  // ControlInputProcessor starts on Lift when both Lift and HIDDEN are active,
+  // and flips this target on each short START+SELECT conjunction.
+  bool playfieldChangeLiftTarget = true;
   bool floatingLaneCoverDragActive = false;
   bool floatingLaneCoverDragChanged = false;
   bool floatingLaneCoverSettingsDirty = false;

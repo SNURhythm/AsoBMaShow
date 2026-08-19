@@ -116,6 +116,10 @@ AppSettings makeDistinctSettings() {
   value.laneLength = 10.25f;
   value.laneBeamLengthPercent = 61;
   value.noteStartPositionPercent = 33;
+  value.liftEnabled = true;
+  value.liftRatio = 0.63F;
+  value.hiddenEnabled = true;
+  value.hiddenRatio = 0.37F;
   value.hispeedAutoAdjust = true;
   value.playAreaWidth4K = 5.1f;
   value.playAreaWidth5K = 5.2f;
@@ -166,6 +170,10 @@ void testLegacyFixtureLoadsEverySetting() {
   expected.markProcessedNotes = false;
   expected.customJudge = false;
   expected.showJudgeArea = false;
+  expected.liftEnabled = false;
+  expected.liftRatio = 0.1F;
+  expected.hiddenEnabled = false;
+  expected.hiddenRatio = 0.1F;
   expected.skin.safetyLevel = skin::SkinSafetyLevel::Standard;
   // The retired floating-cover UI field must not silently opt legacy users
   // into current-BPM Hi-Speed Auto Adjust.
@@ -271,14 +279,19 @@ void testJsonRoundTripIncludesAudioAndVideo() {
   expect(readFile(path).find("\"markProcessedNotes\": true") !=
              std::string::npos,
          "saved JSON includes the Beatoraja processed-note marker setting");
-  expect(readFile(path).find("\"gameplayHispeed\": 1.75") !=
+  const std::string saved = readFile(path);
+  expect(saved.find("\"gameplayHispeed\": 1.75") !=
                  std::string::npos &&
-             readFile(path).find("\"hispeedMargin\": 0.5") !=
+             saved.find("\"hispeedMargin\": 0.5") !=
                  std::string::npos &&
-             readFile(path).find("\"laneCoverEnabled\": false") !=
+             saved.find("\"laneCoverEnabled\": false") !=
                  std::string::npos,
          "saved JSON includes source-faithful Hi-Speed and lane-cover state");
-  const std::string saved = readFile(path);
+  expect(saved.find("\"liftEnabled\": true") != std::string::npos &&
+             saved.find("\"liftRatio\":") != std::string::npos &&
+             saved.find("\"hiddenEnabled\": true") != std::string::npos &&
+             saved.find("\"hiddenRatio\":") != std::string::npos,
+         "saved JSON includes the pinned PlayConfig Lift and HIDDEN state");
   expect(saved.find("\"hispeedAutoAdjust\": true") != std::string::npos,
          "saved JSON persists the Beatoraja Hi-Speed Auto Adjust setting");
   expect(saved.find("floatingLaneCoverEnabled") == std::string::npos,
@@ -1071,6 +1084,10 @@ void testVersionFixturesAndNoRewrite() {
   expectedV0.markProcessedNotes = false;
   expectedV0.customJudge = false;
   expectedV0.showJudgeArea = false;
+  expectedV0.liftEnabled = false;
+  expectedV0.liftRatio = 0.1F;
+  expectedV0.hiddenEnabled = false;
+  expectedV0.hiddenRatio = 0.1F;
   expectedV0.skin.safetyLevel = skin::SkinSafetyLevel::Standard;
   expect(v0.settings == expectedV0, "v0 migration is lossless");
 

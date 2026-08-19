@@ -202,6 +202,11 @@ gameplay.
   target row and excludes the fade endpoint). Its separate forced-speed path
   remains blocked only by the source speed-object parser work below.
 
-- Implement configurable Lift and Hidden planes and the source
-  `isChangeLift` input path. The current Start+Select edge is retained, but
-  neither source configuration nor renderer plane exists.
+- [x] Lift/HIDDEN `PlayConfig` state now persists the pinned defaults and
+  `[0,1]` finite ranges, captures the live enablement/ratios for all matching
+  selectors, and follows `ControlInputProcessor.setCoverValue`'s scratch
+  routing plus its `isChangeLift` START+SELECT target toggle.
+- Implement Lift/HIDDEN renderer planes and the dynamic source offsets
+  `OFFSET_LIFT` (`3`) / `OFFSET_HIDDEN_COVER` (`5`). The stored state must not
+  be treated as visual compatibility until selected-skin lane geometry and
+  cover destinations use those runtime offsets.

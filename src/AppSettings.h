@@ -187,6 +187,12 @@ public:
   int laneBeamLengthPercent = kDefaultLaneBeamLengthPercent;
   int noteStartPositionPercent = kDefaultNoteStartPositionPercent;
   bool laneCoverEnabled = true;
+  // PlayConfig's Lift/HIDDEN configuration. The pinned source defaults each
+  // ratio to 0.1 while both planes begin disabled.
+  bool liftEnabled = false;
+  float liftRatio = 0.1F;
+  bool hiddenEnabled = false;
+  float hiddenRatio = 0.1F;
   // Matches PlayConfig.hispeedautoadjust. When lane cover changes during play,
   // keep the green number at the current BPM instead of the configured
   // reference BPM.

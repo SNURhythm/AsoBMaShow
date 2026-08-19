@@ -445,6 +445,8 @@ void AppSettings::sanitize() {
   noteStartPositionPercent =
       std::clamp(noteStartPositionPercent, kMinNoteStartPositionPercent,
                  kMaxNoteStartPositionPercent);
+  liftRatio = sanitizeFloat(liftRatio, 0.1F, 0.0F, 1.0F);
+  hiddenRatio = sanitizeFloat(hiddenRatio, 0.1F, 0.0F, 1.0F);
   playAreaWidth4K = sanitizePlayAreaWidth(playAreaWidth4K);
   playAreaWidth5K = sanitizePlayAreaWidth(playAreaWidth5K);
   playAreaWidth6K = sanitizePlayAreaWidth(playAreaWidth6K);
@@ -751,6 +753,20 @@ bool AppSettings::parseLegacyCfg(std::istream &file, AppSettings &settings,
         if (parseBool(value, parsed)) {
           settings.laneCoverEnabled = parsed;
         }
+      } else if (key == "lift_enabled") {
+        bool parsed = settings.liftEnabled;
+        if (parseBool(value, parsed)) {
+          settings.liftEnabled = parsed;
+        }
+      } else if (key == "lift_ratio") {
+        settings.liftRatio = std::stof(value);
+      } else if (key == "hidden_enabled") {
+        bool parsed = settings.hiddenEnabled;
+        if (parseBool(value, parsed)) {
+          settings.hiddenEnabled = parsed;
+        }
+      } else if (key == "hidden_ratio") {
+        settings.hiddenRatio = std::stof(value);
       } else if (key == "hispeed_auto_adjust") {
         bool parsed = settings.hispeedAutoAdjust;
         if (parseBool(value, parsed)) {
