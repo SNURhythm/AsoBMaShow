@@ -1,0 +1,195 @@
+# Gameplay-skin compatibility progress
+
+This log records verified completed work and explicitly scoped in-progress
+work from [`docs/todo.md`](todo.md). The pinned authority is Beatoraja commit
+`c2ed5db1a46145ed10790c3872f717e95b59db9d` in
+`~/workspace/SNURhythm/beatoraja`.
+
+## In progress
+
+- Constant-scroll rendering remains a separate renderer task. Its persisted
+  selector/configuration state is present, but the pinned `LaneRenderer`
+  constant-speed and fade rules must not be replaced with a simpler cutoff.
+
+## Completed
+
+- `notesDisplayTimingAutoAdjust` (`75`) now implements its source behavior,
+  not only its image selector: eligible PGREAT/GREAT/GOOD judgements in live
+  play or practice mutate the separate display-only `judgetiming` state using
+  Beatoraja `JudgeManager`'s signed 30,000µs Java-truncating step. Replay and
+  autoplay stay excluded. Verified by `playfield_projection_tests` and
+  `app_settings_store_tests`.
+
+- `PlayerConfig.showpastnote` now persists as `showPastNotes` and reaches
+  live play, replay presentation, and replay export. The projection mirrors
+  the pinned `LaneRenderer` branch precisely: after the timeline has passed,
+  only an unresolved ordinary note is retained; judged/dead notes, mines, and
+  invisible notes remain absent. Verified by `playfield_projection_tests` and
+  `app_settings_store_tests`.
+
+- String property `1010` now returns AsoBMaShow's CMake-declared application
+  version (`0.0.1` in this build), matching Beatoraja's controller-level
+  version source. Verified by `play_skin_state_bridge_tests`.
+
+- Image indexes `75`, `321`–`324`, `343`, `350`–`353`, `360`–`361`, and
+  `400` now carry their exact raw `PlayerConfig`/`PlayConfig` values through
+  persistent app settings into immutable gameplay presentation. Boolean
+  `OPTION_CONSTANT` shares the same captured `PlayConfig` flag. This adds
+  selector compatibility; applying Constant's note-traversal behavior remains
+  a renderer task. Verified by `app_settings_store_tests` and
+  `play_skin_state_bridge_tests`.
+
+- Image indexes `301` and `303` now carry the source `PlayerConfig`
+  `customJudge` and `showjudgearea` booleans. Both values persist in app
+  settings and are captured for gameplay rather than inferred from Aso's
+  judge display controls. Verified by `app_settings_store_tests` and
+  `play_skin_state_bridge_tests`.
+
+- Stagefile/backbmp booleans (`190`–`191`, `194`–`195`) now cover the last
+  standard JDK `ImageIO` fallback in pinned `PixmapResourcePool`: Type-0
+  WBMP. The shared bounded decoder already covered the native image formats,
+  LibGDX CIM, and FFmpeg WebP path. Verified by
+  `image_file_decoder_tests`.
+
+- `TIMER_RHYTHM` (`140`) now mirrors pinned `RhythmTimerProcessor` behavior:
+  source-order integer accumulation from frame deltas, the active BPM, and
+  default 100% `BMSPlayer` play speed, followed by at-most-one section-line
+  reset to the current skin clock. Verified by
+  `play_skin_state_bridge_tests` across two section boundaries and a BPM
+  change.
+
+- Image index `341` now exposes the active auto-shift lower bound with the
+  pinned `GrooveGauge` index. The value is preserved in immutable gameplay
+  authority from `StartOptions`, rather than inferred from the currently
+  selected gauge. Verified by `play_skin_state_bridge_tests`.
+
+- Player total-play-time fields `17`–`19` now sum each local attempt's pinned
+  `PlayDataAccessor.writeScoreData()` duration: the final playable-note
+  timestamp truncated to whole seconds. The duration travels in score
+  provenance across modern-result retries, is projected into score schema v12,
+  and schema migration backfills matching existing attempts from chart
+  metadata. Imported IR rows remain excluded. Verified by
+  `score_provenance_tests`, `score_provenance_db_tests`, and
+  `play_skin_state_bridge_tests`.
+
+- Built-in FloatWriter IDs `17`–`19` now mutate master, keysound, and BGM
+  volume respectively, as pinned `FloatPropertyFactory.RateType` mutates
+  `Config.AudioConfig`. The writer values retain the normalized slider range,
+  stage in invocation order, and reach the live Aso audio boundary only after
+  the skin frame submits. Lane-cover remains correctly non-writable and
+  practice-position awaits a source-compatible practice menu. Verified by
+  `play_skin_state_bridge_tests`, `play_skin_session_tests`,
+  `gameplay_skin_validator_tests`, and a targeted desktop build.
+
+- Extended 1P lane timers: `1010`–`1099`, `1210`–`1299`, `1410`–`1499`,
+  `1610`–`1699`, `1810`–`1899`, and `2010`–`2099` now use the same
+  `LaneProperty` skin offset and `SkinPropertyMapper` ranges as Beatoraja.
+  Classic long-note, HCN-increase, and HCN-damage state remains distinct.
+  Verified by `play_skin_state_bridge_tests`, including a 24K offset-10
+  regression case.
+
+- `SongInformation` density, peak density, end density, and TOTAL now live in
+  immutable chart state. The calculation follows the pinned constructor's
+  whole-second bins and long-note accounting; numeric property factories keep
+  its Java integer/float conversion and missing-information sentinels.
+  Verified by `playfield_chart_visual_model_tests` and
+  `play_skin_state_bridge_tests`.
+
+- `TIMER_STARTINPUT` (`1`) now uses `BMSPlayer`'s strict post-`input` delay
+  transition and preserves the first observed timer-clock timestamp. Verified
+  by `play_skin_state_bridge_tests`.
+
+- `TIMER_FAILED` (`3`) now starts from the active survival-gauge failure event,
+  matching the source `STATE_FAILED` transition without using an inferred
+  numeric gauge threshold. Verified by `play_skin_state_bridge_tests`.
+
+- `favorite_chart` image index (`90`) now captures the active chart's
+  repository favourite flag at gameplay activation. The app owns the source's
+  none/favourite states (`0`/`1`); its separate invisible and song-level
+  favourite states are deliberately still pending. Verified by
+  `play_skin_state_bridge_tests`.
+
+- Normal 1P HCN active and damage timers (`250`–`259`, `270`–`279`) now use
+  the captured HCN increase/damage state rather than ordinary long-note hold.
+  Verified by `play_skin_state_bridge_tests`.
+
+- Persisted score properties `80`–`89`, float rates `85`–`89`, and last-play
+  properties `243`–`249` now read an immutable ScoreData-equivalent captured
+  at gameplay activation. Its judgement values come from the first attempt to
+  establish the high EX score (computed from PGREAT/GREAT, not a denormalized
+  storage field); its timestamp is the latest local play, exactly as pinned
+  `ScoreData.update()` and `PlayDataAccessor.writeScoreData()` keep them.
+  Verified by `play_skin_state_bridge_tests` and
+  `score_provenance_db_tests`.
+
+- Player-history properties `30`–`37` and `333` now use the corresponding
+  locally persisted aggregate: play count, clear count, five judgement totals,
+  and the source-defined note subtotal. Imported IR projections are excluded,
+  as they do not pass through Beatoraja `PlayDataAccessor.updatePlayerData()`.
+  Verified by `play_skin_state_bridge_tests` and
+  `score_provenance_db_tests`.
+
+- Wall-clock integer properties `21`–`26` now read the local calendar at the
+  same evaluation boundary as `MainController.getCurrnetTime()`. Verified by
+  `play_skin_state_bridge_tests`.
+
+- Player-2 and player-3 judge-duration properties `526`–`527` retain the
+  pinned `JudgeManager.getRecentJudgeTiming()` out-of-range value of zero,
+  matching Aso's absent 2P/3P authority slots.
+
+- Play-level aliases `45`–`49` now share property `96`'s immutable chart
+  play-level value, matching `IntegerPropertyFactory.createPlayLevelProperty`.
+
+- Banner options `192`–`193` now preserve the pinned gameplay resource state:
+  `BMSResource.setBMSFile()` leaves its banner texture null, so `no_banner`
+  is active and `banner` is inactive even for a declared BMS banner path.
+
+- The default `PomyuCharaProcessor` state now drives timers `900`–`907` and
+  `909`: both neutral motions are initialized, judgement/gauge transitions
+  use the pinned player-1/player-2 mapping, completed motions return to
+  neutral, and dance stays active. The source processor's unconfigured
+  one-millisecond cycles are retained until declared `pmchara` cycle data is
+  represented. Verified by `play_skin_state_bridge_tests`.
+
+- Target-option image indices `61`–`63` now follow the pinned BMSPlayer
+  target lifecycle: regular gameplay uses the default `TargetProperty`
+  `ScoreData.option` of zero, practice retains the absence sentinel
+  `Integer.MIN_VALUE`, and G-Battle projects its persisted target as
+  `1P + 10 * 2P + 100 * DP`. Verified by `score_provenance_tests` and
+  `play_skin_state_bridge_tests`.
+
+- The practice-position rate `20` now exposes the pinned freshly created
+  `PracticeConfiguration` value of zero. User-adjusted practice-menu scroll
+  state remains pending with the rest of that distinct source UI.
+
+- Float loading progress `165` now follows the bridge's source-compatible
+  Loading/Loaded authority: zero before resource completion and one after
+  BMSPlayer's media-ready transition. Verified by
+  `play_skin_state_bridge_tests`.
+
+- `song_no_text` / `song_text` (`174`–`175`) now carry Beatoraja's
+  `SongData.CONTENT_TEXT` bit from the chart scan through gameplay authority.
+  The scanner checks immediate non-directory `*.txt` children with
+  case-insensitive matching, stores the result per chart, and forces a normal
+  library rescan on migration because prior metadata lacks that source fact.
+  Android SAF enumeration transfers the same per-directory result. Verified
+  by `chart_library_scanner_tests`, `chart_repository_tests`, and
+  `play_skin_state_bridge_tests`.
+
+- `current_fps` (`20`) and boot-time hours/minutes/seconds (`27`–`29`) now
+  capture live outer-loop runtime authority: rendered frames are measured in
+  one-second windows, while uptime begins with `ApplicationContext`
+  construction like `MainController.boottime`. Verified by
+  `play_skin_state_bridge_tests` and targeted `main` object compilation.
+
+- `OPTION_CONSTANT` (`400`) is explicitly inactive. The application has no
+  constant-speed play configuration, so this follows Beatoraja's disabled
+  `PlayerConfig` branch rather than relying on an unclassified selector
+  fallback.
+
+- G-Battle now passes the persisted target `ChartScoreWrite` into gameplay.
+  Rival selectors `271`, `280`–`289`, and float rates `285`–`289` therefore
+  use the same target-score/judgement-count model as Beatoraja
+  `ScoreDataProperty`; absent target records keep its zero or sentinel values.
+  Verified by `play_skin_state_bridge_tests` and targeted gameplay/menu
+  compilation.
