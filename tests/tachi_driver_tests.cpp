@@ -183,6 +183,40 @@ void testCapabilitiesAndDraftDelegation() {
          "driver delegates draft construction to Batch Manual mapping");
 }
 
+void testAuthenticatedAccountUsesTachiUserName() {
+  const ir::tachi::TachiDriver driver;
+  FakeHttpClient http;
+  http.responses.push_back(
+      {.statusCode = 200, .body = R"({"id":42,"username":"source-account"})"});
+
+  const auto result =
+      driver.fetchAuthenticatedAccount(runtimeConfig(), http, {});
+  expect(result.status == ir::IrAuthenticatedAccountStatus::Succeeded &&
+             result.account && result.account->name == "source-account",
+         "authenticated Tachi account retains the server username");
+  expect(http.requests.size() == 1,
+         "authenticated account lookup makes one request");
+  if (!http.requests.empty()) {
+    const auto &request = http.requests.front();
+    expect(request.method == ir::IrHttpMethod::Get &&
+               request.url == "https://boku.tachi.ac/api/v1/users/me" &&
+               request.headers ==
+                   std::vector<std::pair<std::string, std::string>>{
+                       {"Authorization", "Bearer fresh-api-key"}} &&
+               request.body.empty() && !request.followRedirects,
+           "authenticated account uses the pinned Tachi login-equivalent "
+           "request");
+  }
+
+  http.responses.push_back({.statusCode = 401, .body = R"({"success":false})"});
+  const auto unauthenticated =
+      driver.fetchAuthenticatedAccount(runtimeConfig(), http, {});
+  expect(unauthenticated.status ==
+                 ir::IrAuthenticatedAccountStatus::AuthenticationRequired &&
+             !unauthenticated.account,
+         "an unsuccessful authenticated account request exposes no account");
+}
+
 void testImmediateSubmissionRequestAndAcceptedResponse() {
   const ir::tachi::TachiDriver driver;
   FakeHttpClient http;
@@ -1571,6 +1605,7 @@ void testRankingPreflightNeverLeaksCredentials() {
 
 int main() {
   testCapabilitiesAndDraftDelegation();
+  testAuthenticatedAccountUsesTachiUserName();
   testImmediateSubmissionRequestAndAcceptedResponse();
   testAutomaticSubmissionOmitsUserIntent();
   testBlocksLegacyAndMismatchedRulesetProofsBeforeHttp();

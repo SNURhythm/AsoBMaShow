@@ -41,6 +41,12 @@ ChartRankingOutcome unsupportedRanking(std::string_view diagnostic) {
           .diagnostic = sanitizeDiagnostic(diagnostic)};
 }
 
+IrAuthenticatedAccountOutcome
+unsupportedAuthenticatedAccount(std::string_view diagnostic) {
+  return {.status = IrAuthenticatedAccountStatus::Unsupported,
+          .diagnostic = sanitizeDiagnostic(diagnostic)};
+}
+
 IrUserScoreSnapshotOutcome
 unsupportedReconciliation(std::string_view diagnostic) {
   return {.status = IrUserScoreSnapshotStatus::Unsupported,
@@ -114,6 +120,12 @@ IrDriver::fetchChartRankingPage(const IrChartQuery &, std::string_view,
                                 const IrProviderRuntimeConfig &, IrHttpClient &,
                                 std::stop_token) const {
   return unsupportedRanking("driver does not support paged chart rankings");
+}
+
+IrAuthenticatedAccountOutcome IrDriver::fetchAuthenticatedAccount(
+    const IrProviderRuntimeConfig &, IrHttpClient &, std::stop_token) const {
+  return unsupportedAuthenticatedAccount(
+      "driver does not support authenticated account lookup");
 }
 
 IrUserScoreSnapshotOutcome
@@ -334,6 +346,22 @@ ChartRankingOutcome IrDriverRegistry::fetchChartRankingPage(
   } catch (...) {
     return {.status = ChartRankingStatus::TransientFailure,
             .diagnostic = "IR ranking page driver failed"};
+  }
+}
+
+IrAuthenticatedAccountOutcome IrDriverRegistry::fetchAuthenticatedAccount(
+    std::string_view providerId, const IrProviderRuntimeConfig &config,
+    IrHttpClient &http, std::stop_token stopToken) const {
+  const auto driver = find(providerId);
+  if (!driver) {
+    return unsupportedAuthenticatedAccount(
+        "IR provider does not support authenticated account lookup");
+  }
+  try {
+    return driver->fetchAuthenticatedAccount(config, http, stopToken);
+  } catch (...) {
+    return {.status = IrAuthenticatedAccountStatus::TransientFailure,
+            .diagnostic = "IR authenticated account lookup failed"};
   }
 }
 

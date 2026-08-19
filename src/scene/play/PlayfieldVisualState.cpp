@@ -64,6 +64,7 @@ bool PlayfieldAuthorityUpdate::operator==(
          backBmpAvailable == other.backBmpAvailable &&
          playerName == other.playerName &&
          irProviderName == other.irProviderName &&
+         irAccountName == other.irAccountName &&
          playOptionLabel == other.playOptionLabel &&
          tableName == other.tableName && tableLevel == other.tableLevel &&
          tableFullName == other.tableFullName &&

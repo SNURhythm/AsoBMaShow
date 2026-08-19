@@ -1620,6 +1620,38 @@ void testIrProviderStringUsesCapturedProfileConfiguration() {
   bridge.discardFrame();
 }
 
+void testIrAccountStringUsesCapturedConnectedAccount() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = runtime.runtime(),
+                              .mutationTable = mutations});
+  auto state = stateAt(216);
+  state.authority.irAccountName = "source-account";
+  bridge.beginFrame(state, projectionAt(216));
+  expect(bridge.stringProperty({1021}).value == "source-account",
+         "StringPropertyFactory.irUserName exposes the first connected IR "
+         "account rather than a local or provider name");
+  bridge.discardFrame();
+
+  state.clock.serial = 217;
+  state.authority.irAccountName.clear();
+  bridge.beginFrame(state, projectionAt(217));
+  expect(bridge.stringProperty({1021}).value.empty(),
+         "StringPropertyFactory.irUserName remains empty without a connected "
+         "account");
+  bridge.discardFrame();
+}
+
 void testSongInformationPropertiesUseImmutableSourceAnalysis() {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
@@ -3494,6 +3526,7 @@ int main() {
   testPomyuTimersFollowPinnedDefaultProcessorCycles();
   testPomyuTimersUseAuthoredMotionCycles();
   testIrProviderStringUsesCapturedProfileConfiguration();
+  testIrAccountStringUsesCapturedConnectedAccount();
   testSongInformationPropertiesUseImmutableSourceAnalysis();
   testPersistedScorePropertiesUseScoreDataRatherThanLiveJudgements();
   testRivalScorePropertiesRequireCapturedTargetScoreData();

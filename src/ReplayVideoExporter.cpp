@@ -152,6 +152,7 @@ preflightReplayGameplayPresentation(
   const PlayfieldAuthorityUpdate fallbackInitialAuthority{
       .playerName = context.profileManager.activeProfile().displayName,
       .irProviderName = gameplaySkinFirstIrProviderName(settings.irProviders),
+      .irAccountName = context.irAccountName,
       .modeFilterName = settings.skinModeFilterName,
       .sortId = settings.skinSortId,
       .difficultyFilterName = settings.skinDifficultyFilterName,
@@ -1132,6 +1133,7 @@ preflightCourseReplayGameplayPresentations(
              .playerName = context.profileManager.activeProfile().displayName,
              .irProviderName =
                  gameplaySkinFirstIrProviderName(settings.irProviders),
+             .irAccountName = context.irAccountName,
              .modeFilterName = settings.skinModeFilterName,
              .sortId = settings.skinSortId,
              .difficultyFilterName = settings.skinDifficultyFilterName,
@@ -3016,6 +3018,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
         .doublePlayOption = replay.provenance.doublePlayFlip ? 1 : 0,
         .playerName = context.profileManager.activeProfile().displayName,
         .irProviderName = gameplaySkinFirstIrProviderName(settings.irProviders),
+        .irAccountName = context.irAccountName,
         .modeFilterName = settings.skinModeFilterName,
         .sortId = settings.skinSortId,
         .difficultyFilterName = settings.skinDifficultyFilterName,
@@ -3575,6 +3578,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     PlayfieldAuthorityUpdate initialAuthority{
         .playerName = context.profileManager.activeProfile().displayName,
         .irProviderName = gameplaySkinFirstIrProviderName(settings.irProviders),
+        .irAccountName = context.irAccountName,
         .modeFilterName = settings.skinModeFilterName,
         .sortId = settings.skinSortId,
         .difficultyFilterName = settings.skinDifficultyFilterName,
@@ -3772,6 +3776,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
           .playerName = context.profileManager.activeProfile().displayName,
           .irProviderName =
               gameplaySkinFirstIrProviderName(settings.irProviders),
+          .irAccountName = context.irAccountName,
           .modeFilterName = settings.skinModeFilterName,
           .sortId = settings.skinSortId,
           .difficultyFilterName = settings.skinDifficultyFilterName,

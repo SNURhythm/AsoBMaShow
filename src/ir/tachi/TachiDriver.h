@@ -44,6 +44,10 @@ public:
                         const IrProviderRuntimeConfig &config,
                         IrHttpClient &http,
                         std::stop_token stopToken) const override;
+  [[nodiscard]] IrAuthenticatedAccountOutcome
+  fetchAuthenticatedAccount(const IrProviderRuntimeConfig &config,
+                            IrHttpClient &http,
+                            std::stop_token stopToken) const override;
   [[nodiscard]] IrUserScoreSnapshotOutcome
   fetchUserScoreSnapshot(const IrProviderRuntimeConfig &config,
                          IrHttpClient &http, std::stop_token stopToken,

@@ -164,6 +164,7 @@ public:
   std::unique_ptr<ir::IrHttpClient> irHttpClient;
   std::unique_ptr<ir::IrRankingService> irRankingService;
   std::unique_ptr<ir::IrSubmissionService> irSubmissionService;
+  std::string irAccountName;
   std::atomic<std::uint64_t> irAccountEvidenceRevision{0};
   std::mutex irCredentialMutex;
   std::set<std::string> irCredentialReadyProfiles;
@@ -815,6 +816,35 @@ public:
     return std::move(*apiKey);
   }
 
+  void refreshIrAccountName(const ir::IrActiveProfileConfig &config) noexcept {
+    irAccountName.clear();
+    if (!irHttpClient) {
+      return;
+    }
+    try {
+      for (const auto &[providerId, provider] : config.providers) {
+        const std::string apiKey =
+            lookupActiveIrCredential(config.profileId, providerId);
+        if (apiKey.empty()) {
+          continue;
+        }
+        const auto account = irDrivers.fetchAuthenticatedAccount(
+            providerId,
+            {.profileId = config.profileId,
+             .serverOrigin = provider.serverOrigin,
+             .apiKey = apiKey},
+            *irHttpClient, {});
+        if (account.status == ir::IrAuthenticatedAccountStatus::Succeeded &&
+            account.account) {
+          irAccountName = account.account->name;
+          return;
+        }
+      }
+    } catch (...) {
+      irAccountName.clear();
+    }
+  }
+
   bool prepareIrCredentials(std::string_view profileId,
                             std::string &diagnostic) noexcept {
     try {
@@ -1124,7 +1154,9 @@ public:
       const std::string profileId = profileManager.activeProfile().id;
       restoreMirroredIrScores(profileId, settings);
       irRankingService->activateProfile(profileId);
-      irSubmissionService->start(irProfileConfig(profileId, settings));
+      const auto irConfig = irProfileConfig(profileId, settings);
+      refreshIrAccountName(irConfig);
+      irSubmissionService->start(irConfig);
       irSubmissionService->setApplicationActive(
           !appInBackground.load(std::memory_order_acquire));
       return true;
@@ -1169,8 +1201,11 @@ public:
       }
       restoreMirroredIrScores(profileId, profileSettings);
       if (irSubmissionService) {
-        irSubmissionService->activateProfile(
-            irProfileConfig(profileId, profileSettings));
+        const auto irConfig = irProfileConfig(profileId, profileSettings);
+        refreshIrAccountName(irConfig);
+        irSubmissionService->activateProfile(irConfig);
+      } else {
+        refreshIrAccountName(irProfileConfig(profileId, profileSettings));
       }
       return true;
     } catch (...) {

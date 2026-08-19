@@ -204,6 +204,32 @@ ChartRankingOutcome rankingFailure(ChartRankingStatus status,
           .diagnostic = redact(std::move(diagnostic), apiKey)};
 }
 
+IrAuthenticatedAccountOutcome
+accountFailure(IrAuthenticatedAccountStatus status, std::string diagnostic,
+               std::string_view apiKey = {}) {
+  return {.status = status, .diagnostic = redact(std::move(diagnostic), apiKey)};
+}
+
+IrAuthenticatedAccountOutcome
+authenticatedAccountTransportFailure(const IrHttpResponse &response,
+                                    std::string_view apiKey) {
+  if (response.transportError == IrTransportError::Cancelled) {
+    return accountFailure(IrAuthenticatedAccountStatus::Cancelled,
+                          "Tachi authenticated account request was cancelled");
+  }
+  if (response.transportError == IrTransportError::ResponseTooLarge) {
+    return accountFailure(IrAuthenticatedAccountStatus::OversizedResponse,
+                          "Tachi authenticated account response exceeded the "
+                          "size limit");
+  }
+  return accountFailure(
+      IrAuthenticatedAccountStatus::TransientFailure,
+      response.diagnostic.empty()
+          ? "Tachi authenticated account request failed"
+          : response.diagnostic,
+      apiKey);
+}
+
 IrUserScoreSnapshotOutcome userScoreFailure(IrUserScoreSnapshotStatus status,
                                             std::string_view code,
                                             std::string diagnostic,
@@ -888,6 +914,78 @@ ChartRankingOutcome TachiDriver::fetchChartRankingPage(
       normalizedQuery, *origin, nativeBmsGame(query.keyMode), cursor->chartId,
       cursor->userId, cursor->startRanking, cursor->loadedEntries,
       cursor->outOf, config, http, stopToken);
+}
+
+IrAuthenticatedAccountOutcome TachiDriver::fetchAuthenticatedAccount(
+    const IrProviderRuntimeConfig &config, IrHttpClient &http,
+    std::stop_token stopToken) const {
+  if (stopToken.stop_requested()) {
+    return accountFailure(IrAuthenticatedAccountStatus::Cancelled,
+                          "Tachi authenticated account request was cancelled");
+  }
+  if (!validCredential(config.apiKey)) {
+    return accountFailure(IrAuthenticatedAccountStatus::AuthenticationRequired,
+                          "Tachi API key is missing or invalid");
+  }
+  const auto origin = normalizeServerOrigin(config.serverOrigin);
+  if (!origin) {
+    return accountFailure(IrAuthenticatedAccountStatus::MalformedResponse,
+                          "Tachi server origin is missing or invalid");
+  }
+  if (!isHttpsServerOrigin(*origin)) {
+    return accountFailure(IrAuthenticatedAccountStatus::AuthenticationRequired,
+                          "Authenticated Tachi account lookup requires HTTPS");
+  }
+
+  const IrHttpRequest request{
+      .method = IrHttpMethod::Get,
+      .url = *origin + "/api/v1/users/me",
+      .headers = {{"Authorization", "Bearer " + config.apiKey}},
+      .maximumResponseBytes = kMaximumTachiResponseBytes,
+      .followRedirects = false,
+  };
+  const IrHttpResponse response = http.perform(request, stopToken);
+  if (response.transportError != IrTransportError::None) {
+    return authenticatedAccountTransportFailure(response, config.apiKey);
+  }
+  if (response.statusCode == 401 || response.statusCode == 403) {
+    return accountFailure(IrAuthenticatedAccountStatus::AuthenticationRequired,
+                          "Tachi authentication failed", config.apiKey);
+  }
+  if (response.statusCode == 408 || response.statusCode == 429 ||
+      response.statusCode >= 500 || response.statusCode <= 0) {
+    return accountFailure(IrAuthenticatedAccountStatus::TransientFailure,
+                          "Tachi authenticated account request failed with HTTP " +
+                              std::to_string(response.statusCode),
+                          config.apiKey);
+  }
+  if (!isHttpSuccess(response.statusCode)) {
+    return accountFailure(IrAuthenticatedAccountStatus::MalformedResponse,
+                          "Tachi authenticated account request failed with HTTP " +
+                              std::to_string(response.statusCode),
+                          config.apiKey);
+  }
+  try {
+    const auto document = nlohmann::json::parse(response.body);
+    if (!document.is_object()) {
+      return accountFailure(IrAuthenticatedAccountStatus::MalformedResponse,
+                            "Tachi authenticated account response is malformed",
+                            config.apiKey);
+    }
+    const auto username = document.find("username");
+    if (username == document.end() || !username->is_string()) {
+      return accountFailure(IrAuthenticatedAccountStatus::MalformedResponse,
+                            "Tachi authenticated account response is malformed",
+                            config.apiKey);
+    }
+    return {.status = IrAuthenticatedAccountStatus::Succeeded,
+            .account = IrAuthenticatedAccount{
+                .name = username->get<std::string>()}};
+  } catch (...) {
+    return accountFailure(IrAuthenticatedAccountStatus::MalformedResponse,
+                          "Tachi authenticated account response is malformed",
+                          config.apiKey);
+  }
 }
 
 IrUserScoreSnapshotOutcome TachiDriver::fetchUserScoreSnapshot(

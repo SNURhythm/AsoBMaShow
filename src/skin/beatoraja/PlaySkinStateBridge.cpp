@@ -3160,6 +3160,8 @@ SkinPropertyLookup<std::string_view> PlaySkinStateBridge::stringProperty(
             .supported = true};
   case 1020:
     return {.value = state()->authority.irProviderName, .supported = true};
+  case 1021:
+    return {.value = state()->authority.irAccountName, .supported = true};
   case 50:
     if (context_.model != nullptr) {
       return {.value = context_.model->model.header.name, .supported = true};

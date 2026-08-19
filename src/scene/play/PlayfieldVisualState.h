@@ -258,6 +258,9 @@ struct PlayfieldAuthorityUpdate {
   // even when that provider is disabled. Aso persists its supported provider
   // registry in AppSettings::irProviders; retain its first entry verbatim.
   std::string irProviderName;
+  // StringPropertyFactory.irUserName reads the first successfully connected
+  // MainController.IRStatus account instead of PlayerConfig or a provider id.
+  std::string irAccountName;
   // StringPropertyFactory reads these PlayerConfig values in every state.
   // Mode and difficulty retain their enum display names; sort and replication
   // retain the raw persisted identifiers.
