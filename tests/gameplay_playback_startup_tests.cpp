@@ -134,6 +134,23 @@ bool testCompletionPersistenceRoutes() {
              "ineligible attempts do not acquire a persistence route");
 }
 
+bool testPracticeMenuSamePatternSeedSelection() {
+  const std::optional<std::string> configuredOption = "RANDOM";
+  const std::optional<long long> configuredSeed = 1234;
+  return expect(practiceMenuSelectedOptionSeed(
+                    true, configuredOption, configuredSeed, "RANDOM") ==
+                    configuredSeed,
+                "Same Pattern keeps an unchanged practice random seed") &&
+         expect(!practiceMenuSelectedOptionSeed(
+                     true, configuredOption, configuredSeed, "MIRROR")
+                     .has_value(),
+                "changing the practice menu option drops the old random seed") &&
+         expect(!practiceMenuSelectedOptionSeed(
+                     false, configuredOption, configuredSeed, "RANDOM")
+                     .has_value(),
+                "new-pattern practice retries do not reuse random seeds");
+}
+
 bool testCourseRetrySameUsesValidatedSetupWithoutReplayInput() {
   auto session = std::make_shared<CoursePlaySession>();
   session->autoKeySound = true;
@@ -224,6 +241,7 @@ int main() {
   if (!testLocalReplaySetupCapture() ||
       !testSavedChartRandomBranchAuthority() ||
       !testCompletionPersistenceRoutes() ||
+      !testPracticeMenuSamePatternSeedSelection() ||
       !testCourseRetrySameUsesValidatedSetupWithoutReplayInput()) {
     return 1;
   }

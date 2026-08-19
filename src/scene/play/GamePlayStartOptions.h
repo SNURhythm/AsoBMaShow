@@ -20,6 +20,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -96,6 +97,9 @@ struct StartOptions {
   CourseConstraintRules courseConstraints;
   bool ownsChart = false;
   std::shared_ptr<practice::Session> practiceSession = nullptr;
+  // ResultScene sets this only for a session-backed Same Pattern retry. The
+  // skin menu may retain an unchanged player option's recorded random seed.
+  bool practiceMenuPreservePlayOptionSeeds = false;
   bool practiceMode = false;
   unsigned long long practiceLeadInMicros = 0;
   audio::PlaybackRate playback;
@@ -111,6 +115,17 @@ struct StartOptions {
   std::optional<RulesetDescriptor> requiredRulesetDescriptor;
   std::optional<ScoreStageProvenance> replayRulesetOverride;
 };
+
+[[nodiscard]] inline std::optional<long long>
+practiceMenuSelectedOptionSeed(
+    bool preserveSeeds, const std::optional<std::string> &configuredOption,
+    const std::optional<long long> &configuredSeed,
+    std::string_view selectedOption) noexcept {
+  return preserveSeeds && configuredOption.has_value() &&
+                 *configuredOption == selectedOption
+             ? configuredSeed
+             : std::nullopt;
+}
 
 // BMSPlayer stores ScoreData.option as randomoption plus, only for a
 // two-player mode, randomoption2 * 10 and doubleoption * 100. A completed

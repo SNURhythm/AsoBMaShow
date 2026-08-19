@@ -1591,12 +1591,22 @@ void GamePlayScene::startPracticeAttemptFromMenu() {
   options.startingGaugePercent = attempt->startingGaugePercent;
   options.playback = attempt->playback;
   options.doublePlayFlip = attempt->doublePlayFlip;
-  options.playOption = std::string(
+  const std::string selectedPlayOption = std::string(
       replay::beatorajaReplayOptionName(attempt->random1P).value());
-  options.playOptionSeed.reset();
-  options.playOption2 = std::string(
+  const std::string selectedPlayOption2 = std::string(
       replay::beatorajaReplayOptionName(attempt->random2P).value());
-  options.playOption2Seed.reset();
+  const std::optional<long long> selectedPlayOptionSeed =
+      practiceMenuSelectedOptionSeed(
+          options.practiceMenuPreservePlayOptionSeeds, options.playOption,
+          options.playOptionSeed, selectedPlayOption);
+  const std::optional<long long> selectedPlayOption2Seed =
+      practiceMenuSelectedOptionSeed(
+          options.practiceMenuPreservePlayOptionSeeds, options.playOption2,
+          options.playOption2Seed, selectedPlayOption2);
+  options.playOption = selectedPlayOption;
+  options.playOptionSeed = selectedPlayOptionSeed;
+  options.playOption2 = selectedPlayOption2;
+  options.playOption2Seed = selectedPlayOption2Seed;
 
   practice::applySkinMenuPracticeModifier(*chart, chartAttempt);
   if (chart->Meta.IsDP && options.doublePlayFlip) {
@@ -1607,12 +1617,24 @@ void GamePlayScene::startPracticeAttemptFromMenu() {
   // BMSPlayer applies the second player before the first in practice.
   if (chart->Meta.IsDP) {
     (void)play_options::applyPlayOptionModifier(
-        *chart, *options.playOption2, std::nullopt, 1, appliedOption,
+        *chart, *options.playOption2, options.playOption2Seed, 1, appliedOption,
         appliedSeed, "practice");
+    if (appliedOption.has_value()) {
+      options.playOption2 = std::move(appliedOption);
+      options.playOption2Seed = appliedSeed;
+    }
   }
+  appliedOption.reset();
+  appliedSeed.reset();
   (void)play_options::applyPlayOptionModifier(
-      *chart, *options.playOption, std::nullopt, 0, appliedOption, appliedSeed,
+      *chart, *options.playOption, options.playOptionSeed, 0, appliedOption,
+      appliedSeed,
       "practice");
+  if (appliedOption.has_value()) {
+    options.playOption = std::move(appliedOption);
+    options.playOptionSeed = appliedSeed;
+  }
+  options.practiceMenuPreservePlayOptionSeeds = false;
 
   rulesetPolicyBuild = buildGameplayRulesetPolicyAtPlayStart(
       options, chart->Meta, context.settings.notePriorityMode);
