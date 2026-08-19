@@ -1111,6 +1111,9 @@ return {
         },
         .applyPracticeItemScroll = [this](float position) {
           practiceItemScrollWrites_.push_back(position);
+        },
+        .applyPracticeMenuItem = [this](std::size_t index, bool increment) {
+          practiceMenuItemWrites_.emplace_back(index, increment);
         }});
   }
 
@@ -1135,6 +1138,10 @@ return {
   }
   const std::vector<float> &practiceItemScrollWrites() const {
     return practiceItemScrollWrites_;
+  }
+  const std::vector<std::pair<std::size_t, bool>> &practiceMenuItemWrites()
+      const {
+    return practiceMenuItemWrites_;
   }
 
   void addBgaMarker(std::uint32_t ordinal = 90) {
@@ -1324,6 +1331,7 @@ private:
   std::vector<std::pair<SkinAudioVolumeWriterTarget, float>>
       audioVolumeWrites_;
   std::vector<float> practiceItemScrollWrites_;
+  std::vector<std::pair<std::size_t, bool>> practiceMenuItemWrites_;
   std::unique_ptr<PlaySkinStateBridge> bridge_;
   std::unique_ptr<PlaySkinSession> session_;
 };
@@ -2218,6 +2226,32 @@ void testPracticeScrollMutationAppliesOnlyAfterSkinSubmission() {
          "exactly once");
 }
 
+void testPracticeMenuItemMutationAppliesOnlyAfterSkinSubmission() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addBgaMarker();
+  const std::vector<SkinFrameMutation> writes{
+      SetPracticeMenuItem{.visibleIndex = 9, .increment = false},
+  };
+  expect(fixture.session().prepareFrameForTesting(
+             stateAt(1), projectionAt(1), {}, writes) ==
+             PresentationFrameOutcome::Ready &&
+             fixture.practiceMenuItemWrites().empty(),
+         "practice item remains staged until the skin frame submits");
+
+  SessionBgaSubmitter bga;
+  RenderContext context;
+  const auto result = fixture.session().render(context, bgaFrame(84), bga);
+  expect(result.outcome == PresentationFrameOutcome::Ready &&
+             fixture.practiceMenuItemWrites().size() == 1 &&
+             fixture.practiceMenuItemWrites().front() ==
+                 std::pair<std::size_t, bool>{9, false},
+         "submitted skin frame applies the staged source practice row exactly "
+         "once");
+}
+
 void testPersistenceRequestIsFullyAllocatedBeforeSkinSubmission() {
   SessionFixture fixture;
   if (!fixture.ready()) {
@@ -2846,6 +2880,7 @@ int main() {
   testForwardCompatiblePersistedMutationsEnqueueOneExactOrderedBatch();
   testAudioVolumeMutationAppliesOnlyAfterSkinSubmission();
   testPracticeScrollMutationAppliesOnlyAfterSkinSubmission();
+  testPracticeMenuItemMutationAppliesOnlyAfterSkinSubmission();
   testPersistenceRequestIsFullyAllocatedBeforeSkinSubmission();
   testQueueFullAndClosedAreRecoverableOnlyAfterSuccessfulSkinDraw();
   testTouchCaptureLifecycleFailsClosedAndQueuesOnlyDown();

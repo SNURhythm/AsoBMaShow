@@ -93,7 +93,8 @@ bool PlayfieldAuthorityUpdate::operator==(
          laneCoverChanged == other.laneCoverChanged &&
          laneCoverChangeKind == other.laneCoverChangeKind &&
          resetLaneCoverVisibleTimeReference ==
-             other.resetLaneCoverVisibleTimeReference;
+             other.resetLaneCoverVisibleTimeReference &&
+         practiceMenuActive == other.practiceMenuActive;
 }
 
 PlayfieldVisualStateStore::PlayfieldVisualStateStore(

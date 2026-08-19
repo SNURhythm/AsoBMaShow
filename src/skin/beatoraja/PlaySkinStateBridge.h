@@ -93,11 +93,20 @@ struct SetPracticeItemScroll {
   float position = 0.0F;
 };
 
+// BMSPlayer.executeEvent applies BUTTON_PRACTICE_ITEM1 through ITEM16 only
+// while STATE_PRACTICE is active. The visible row and arg1 direction are
+// value-owned until the selected skin frame has submitted.
+struct SetPracticeMenuItem {
+  std::size_t visibleIndex = 0;
+  bool increment = true;
+};
+
 using PersistedSkinConfigurationWrite =
     std::variant<SetSkinOption, SetSkinFilePath, SetSkinOffset>;
 using SkinFrameMutation =
     std::variant<SessionPresentationWrite, PersistedSkinConfigurationWrite,
-                 SetSkinAudioVolume, SetPracticeItemScroll>;
+                 SetSkinAudioVolume, SetPracticeItemScroll,
+                 SetPracticeMenuItem>;
 
 enum class SkinHostCallStatus : std::uint8_t {
   Completed,

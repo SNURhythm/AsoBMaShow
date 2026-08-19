@@ -1491,6 +1491,11 @@ void GamePlayScene::acquireGameplaySkinForAttempt() {
       options.practiceSession->setSkinItemScrollPosition(position);
     }
   };
+  services.applyPracticeMenuItem = [this](std::size_t index, bool increment) {
+    if (options.practiceSession != nullptr) {
+      (void)options.practiceSession->changeSkinMenuVisibleItem(index, increment);
+    }
+  };
   auto result = createGameplaySkinSession(std::move(services), {
       .keyMode = chart->Meta.KeyMode,
       .chartModel = &playfieldChartVisualModel,

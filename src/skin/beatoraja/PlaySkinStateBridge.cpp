@@ -1263,6 +1263,27 @@ PlaySkinStateBridge::executeEvent(int eventId, std::span<const int> arguments) {
             .diagnostics = diagnostics_};
   }
 
+  if (eventId >= 370 && eventId <= 385) {
+    // EventFactory constructs each practice_itemN event with Event's zero
+    // default arg1. BMSPlayer performs no practice mutation outside
+    // STATE_PRACTICE, but the declared event remains a successful no-op.
+    const auto *snapshot = state();
+    if (snapshot != nullptr && snapshot->authority.practiceMenuActive) {
+      try {
+        staged_.orderedMutations.emplace_back(SetPracticeMenuItem{
+            .visibleIndex = static_cast<std::size_t>(eventId - 370),
+            .increment = arguments.empty() || arguments.front() >= 0});
+      } catch (...) {
+        reportDiagnostic({.code = "skin.play_state.mutation_limit_exceeded",
+                          .message = "Practice item write could not be "
+                                     "staged."});
+        return {.status = SkinHostCallStatus::CriticalFailure,
+                .diagnostics = diagnostics_};
+      }
+    }
+    return {.diagnostics = diagnostics_};
+  }
+
   if (context_.model != nullptr) {
     if (const auto event = std::ranges::find_if(
             context_.model->model.customEvents,
@@ -1764,13 +1785,18 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
     return {.value = !positive.value, .supported = true};
   }
   if (*id >= 3000 && *id <= 3015) {
-    // BooleanPropertyFactory gates practice-item availability on BMSPlayer's
-    // STATE_PRACTICE, not merely BMSPlayerMode.PRACTICE. AsoBMaShow starts a
-    // practice attempt directly in play and has no equivalent menu state.
-    return {.value = false, .supported = true};
+    const auto &menu = snapshot->authority.practiceMenu;
+    const std::size_t index = static_cast<std::size_t>(*id - 3000);
+    return {.value = snapshot->authority.practiceMenuActive && menu &&
+                         menu->items[index].available,
+            .supported = true};
   }
   if (*id >= 3020 && *id <= 3035) {
-    return {.value = false, .supported = true};
+    const auto &menu = snapshot->authority.practiceMenu;
+    const std::size_t index = static_cast<std::size_t>(*id - 3020);
+    return {.value = snapshot->authority.practiceMenuActive && menu &&
+                         menu->items[index].selected,
+            .supported = true};
   }
   switch (*id) {
   case 32:
@@ -2062,9 +2088,8 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
     return {.value = capturedJudgeCount(*snapshot, Poor) > 0,
             .supported = true};
   case 1080:
-    // See the practice-item conditions above. AsoBMaShow's practice gameplay
-    // is source-equivalent to STATE_PLAY, never STATE_PRACTICE.
-    return {.value = false, .supported = true};
+    return {.value = snapshot->authority.practiceMenuActive,
+            .supported = true};
   default:
     break;
   }

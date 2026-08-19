@@ -989,6 +989,72 @@ void testExistingGameplayStatePropertyWiring() {
   bridge.discardFrame();
 }
 
+void testPracticeMenuSelectorsAndEventsRequireCapturedMenuState() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = runtime.runtime(),
+                              .mutationTable = mutations});
+
+  auto state = stateAt(206);
+  state.authority.gameplayMode = PlayfieldGameplayMode::Practice;
+  state.authority.practiceMenuActive = true;
+  practice::SkinMenuState menu;
+  menu.items[0] = {.available = true, .selected = false};
+  menu.items[1] = {.available = true, .selected = true};
+  state.authority.practiceMenu = std::move(menu);
+  bridge.beginFrame(state, projectionAt(206));
+
+  expect(bridge.booleanProperty({1080}).supported &&
+             bridge.booleanProperty({1080}).value &&
+             bridge.booleanProperty({3000}).supported &&
+             bridge.booleanProperty({3000}).value &&
+             bridge.booleanProperty({3001}).supported &&
+             bridge.booleanProperty({3001}).value &&
+             bridge.booleanProperty({3020}).supported &&
+             !bridge.booleanProperty({3020}).value &&
+             bridge.booleanProperty({3021}).supported &&
+             bridge.booleanProperty({3021}).value,
+         "captured STATE_PRACTICE menu authority drives source row booleans");
+  expect(bridge.executeEvent(370, {}).status == SkinHostCallStatus::Completed &&
+             bridge.executeEvent(371, std::array{-1}).status ==
+                 SkinHostCallStatus::Completed,
+         "practice item events preserve Java's default increment and negative "
+         "decrement direction");
+  const auto committed = bridge.commitFrame();
+  expect(committed.orderedMutations.size() == 2,
+         "active practice events stage one mutation per source event");
+  if (committed.orderedMutations.size() == 2) {
+    const auto *first = std::get_if<SetPracticeMenuItem>(
+        &committed.orderedMutations[0]);
+    const auto *second = std::get_if<SetPracticeMenuItem>(
+        &committed.orderedMutations[1]);
+    expect(first != nullptr && first->visibleIndex == 0 && first->increment &&
+               second != nullptr && second->visibleIndex == 1 &&
+               !second->increment,
+           "practice event mutations retain visible row and source direction");
+  }
+
+  state.clock.serial = 207;
+  state.authority.practiceMenuActive = false;
+  bridge.beginFrame(state, projectionAt(207));
+  expect(bridge.booleanProperty({1080}).supported &&
+             !bridge.booleanProperty({1080}).value &&
+             bridge.booleanProperty({3000}).supported &&
+             !bridge.booleanProperty({3000}).value &&
+             bridge.executeEvent(370, {}).status == SkinHostCallStatus::Completed &&
+             bridge.commitFrame().orderedMutations.empty(),
+         "practice item events remain source no-ops outside STATE_PRACTICE");
+}
+
 void testLiftHiddenOffsetsFollowPinnedLaneRenderer() {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
@@ -3420,6 +3486,7 @@ int main() {
   testFramePropertiesUseAuthoritativeGaugeAndTimerRules();
   testGameplayModeAndLoadingBooleanProperties();
   testExistingGameplayStatePropertyWiring();
+  testPracticeMenuSelectorsAndEventsRequireCapturedMenuState();
   testLiftHiddenOffsetsFollowPinnedLaneRenderer();
   testRemainingDirectGameplayStatePropertyWiring();
   testLongNoteHoldTimersUseCapturedLaneState();

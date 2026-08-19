@@ -307,6 +307,9 @@ struct PlayfieldAuthorityUpdate {
   ReplayLaneCoverChangeKind laneCoverChangeKind =
       ReplayLaneCoverChangeKind::Value;
   bool resetLaneCoverVisibleTimeReference = false;
+  // This is BMSPlayer.STATE_PRACTICE, not BMSPlayerMode.PRACTICE. It is
+  // true only while the source-shaped settings menu owns the session.
+  bool practiceMenuActive = false;
   std::optional<practice::SkinMenuState> practiceMenu;
 
   bool operator==(const PlayfieldAuthorityUpdate &other) const;
