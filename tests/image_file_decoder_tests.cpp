@@ -73,6 +73,31 @@ void verifyOptionalCimTree() {
              decoded->height == 2048,
          "LITONE12 graph/main.cim decodes through the gameplay resource policy");
 }
+
+void testWebpFfmpegFallback() {
+  constexpr std::array<unsigned char, 68> webp = {
+      0x52, 0x49, 0x46, 0x46, 0x3c, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42,
+      0x50, 0x56, 0x50, 0x38, 0x20, 0x30, 0x00, 0x00, 0x00, 0xd0, 0x01,
+      0x00, 0x9d, 0x01, 0x2a, 0x02, 0x00, 0x02, 0x00, 0x02, 0x00, 0x34,
+      0x25, 0xa0, 0x02, 0x74, 0xba, 0x01, 0xf8, 0x00, 0x03, 0xb0, 0x00,
+      0xfe, 0xf0, 0xc4, 0x0b, 0xff, 0x20, 0xb9, 0x61, 0x75, 0xc8, 0xd7,
+      0xff, 0x20, 0x3f, 0xe4, 0x07, 0xfc, 0x80, 0xff, 0xf8, 0xf2, 0x00,
+      0x00, 0x00};
+  const auto path = std::filesystem::temp_directory_path() /
+                    "asobmashow-image-decoder-fallback.webp";
+  {
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    output.write(reinterpret_cast<const char *>(webp.data()),
+                 static_cast<std::streamsize>(webp.size()));
+  }
+  const auto decoded = image_decode::decodeImageFile(
+      path, {.maximumDimension = 16, .maximumEncodedBytes = 1024,
+             .maximumDecodedBytes = 1024});
+  expect(decoded && decoded->width == 2 && decoded->height == 2,
+         "WebP uses the PixmapResourcePool-compatible FFmpeg fallback");
+  std::error_code error;
+  std::filesystem::remove(path, error);
+}
 }
 
 int main() {
@@ -174,6 +199,21 @@ int main() {
       {0x78, 0x9c, 0x63, 0x60, 0x60, 0x60, 0x64, 0x80, 0x60, 0x36, 0x13,
        0x21, 0x00, 0x00, 0xac, 0x00, 0x4f},
       {0x11, 0x22, 0x33, 0x44});
+
+  // WBMP is the standard JDK ImageIO reader not covered by LibGDX's native
+  // Pixmap loaders or stb. PixmapResourcePool reaches it on the stagefile and
+  // backbmp fallback path. This is a 2x1 Type-0 WBMP with one packed pixel
+  // byte.
+  const std::vector<std::byte> wbmp = {
+      std::byte{0x00}, std::byte{0x00}, std::byte{0x02},
+      std::byte{0x01}, std::byte{0x80}};
+  const auto decodedWbmp = image_decode::decodeImageMemory(
+      wbmp, {.maximumDimension = 16, .maximumEncodedBytes = 1024,
+             .maximumDecodedBytes = 1024});
+  expect(decodedWbmp && decodedWbmp->valid() && decodedWbmp->width == 2 &&
+             decodedWbmp->height == 1,
+         "standard JDK ImageIO WBMP fallback decodes BMS image resources");
   verifyOptionalCimTree();
+  testWebpFfmpegFallback();
   return failures == 0 ? 0 : 1;
 }
