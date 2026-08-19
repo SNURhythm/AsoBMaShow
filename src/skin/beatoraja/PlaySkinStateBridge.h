@@ -87,11 +87,17 @@ struct SetSkinAudioVolume {
   float value = 1.0F;
 };
 
+// FloatPropertyFactory.practice_position mutates BMSPlayer's retained
+// PracticeConfiguration viewport, independently of STATE_PRACTICE.
+struct SetPracticeItemScroll {
+  float position = 0.0F;
+};
+
 using PersistedSkinConfigurationWrite =
     std::variant<SetSkinOption, SetSkinFilePath, SetSkinOffset>;
 using SkinFrameMutation =
     std::variant<SessionPresentationWrite, PersistedSkinConfigurationWrite,
-                 SetSkinAudioVolume>;
+                 SetSkinAudioVolume, SetPracticeItemScroll>;
 
 enum class SkinHostCallStatus : std::uint8_t {
   Completed,

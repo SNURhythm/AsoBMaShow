@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <string_view>
 #include <iomanip>
 #include <sstream>
@@ -69,7 +70,8 @@ bool validGaugeType(GaugeType value) {
 } // namespace
 
 SkinMenuState buildSkinMenuState(const Configuration &configuration,
-                                 const SkinMenuInputs &inputs) {
+                                 const SkinMenuInputs &inputs,
+                                 float itemScrollPosition) {
   SkinMenuState result;
   const auto formatTime = [](long long micros) {
     const long long tenths = micros / 100'000LL;
@@ -78,11 +80,10 @@ SkinMenuState buildSkinMenuState(const Configuration &configuration,
           << std::setw(2) << (tenths / 10) % 60 << '.' << tenths % 10;
     return value.str();
   };
-  const auto set = [&result](std::size_t index, std::string label,
-                             std::string value) {
-    auto &item = result.items[index];
-    item.available = index < 10;
-    item.selected = index == 0;
+  std::array<SkinMenuItem, 12> elements;
+  const auto set = [&elements](std::size_t index, std::string label,
+                               std::string value) {
+    auto &item = elements[index];
     item.label = std::move(label);
     item.value = std::move(value);
     item.text = item.label + " : " + item.value;
@@ -106,7 +107,52 @@ SkinMenuState buildSkinMenuState(const Configuration &configuration,
   set(6, "TOTAL", std::to_string(static_cast<int>(inputs.chartTotal)));
   set(7, "FREQUENCY", std::to_string(configuration.playback.percent));
   set(8, "GRAPHTYPE", "NOTETYPE");
-  set(9, "OPTION-1P", "NORMAL");
+  static constexpr std::array<std::string_view, 10> randomNames = {
+      "NORMAL", "MIRROR", "RANDOM", "R-RANDOM", "S-RANDOM", "SPIRAL",
+      "H-RANDOM", "ALL-SCR", "RANDOM-EX", "S-RANDOM-EX"};
+  static constexpr std::array<std::string_view, 2> doublePlayNames = {
+      "NORMAL", "FLIP"};
+  set(9, "OPTION-1P",
+      std::string(randomNames.at(static_cast<std::size_t>(inputs.random1P))));
+
+  const bool doublePlay =
+      inputs.keyMode == 10 || inputs.keyMode == 14 || inputs.keyMode == 48;
+  std::size_t elementCount = 10;
+  if (doublePlay) {
+    set(10, "OPTION-2P",
+        std::string(randomNames.at(
+            static_cast<std::size_t>(inputs.random2P))));
+    set(11, "OPTION-DP",
+        std::string(doublePlayNames.at(
+            static_cast<std::size_t>(inputs.doublePlay))));
+    elementCount = 12;
+  }
+
+  constexpr std::size_t visibleItemCount = 10;
+  const std::size_t maxOffset = elementCount - visibleItemCount;
+  const float clampedPosition = itemScrollPosition < 0.0F   ? 0.0F
+                                : itemScrollPosition > 1.0F ? 1.0F
+                                                             : itemScrollPosition;
+  // MathUtils.clamp preserves NaN and Math.round(NaN) returns zero.
+  const std::size_t offset = std::isnan(clampedPosition)
+                                 ? 0
+                                 : static_cast<std::size_t>(std::floor(
+                                       clampedPosition *
+                                           static_cast<float>(maxOffset) +
+                                       0.5F));
+  result.itemScrollPosition =
+      maxOffset == 0 ? 0.0F
+                     : static_cast<float>(offset) /
+                           static_cast<float>(maxOffset);
+  for (std::size_t visible = 0; visible < visibleItemCount; ++visible) {
+    const std::size_t element = offset + visible;
+    if (element >= elementCount) {
+      continue;
+    }
+    result.items[visible] = elements[element];
+    result.items[visible].available = true;
+    result.items[visible].selected = visible == 0;
+  }
   return result;
 }
 

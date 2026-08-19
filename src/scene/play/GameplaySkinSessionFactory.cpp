@@ -146,6 +146,7 @@ createGameplaySkinSession(GameplaySkinSessionServices services,
         .liveResourceCounters = std::move(services.liveResourceCounters),
         .configurationWrites = *services.configurationWrites,
         .applyAudioVolume = std::move(services.applyAudioVolume),
+        .applyPracticeItemScroll = std::move(services.applyPracticeItemScroll),
         .pinnedRuntimeSelection = std::move(input.pinnedRuntimeSelection),
         .stop = {}};
 #if defined(ASOBMASHOW_GAMEPLAY_SKIN_SESSION_FACTORY_TESTING)

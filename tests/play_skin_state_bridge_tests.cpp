@@ -3299,6 +3299,8 @@ void testFloatWritersResolveLocallyAndRollbackCallbackMutations() {
        .source = SkinBuiltinPropertySelector{.value = 18}},
       {.id = SkinFloatWriterId{10},
        .source = SkinBuiltinPropertySelector{.value = 19}},
+      {.id = SkinFloatWriterId{11},
+       .source = SkinBuiltinPropertySelector{.value = 20}},
   };
   BeatorajaSkinConfiguration configuration;
   auto rules = makePinnedSkinEventMutationTableV1();
@@ -3313,7 +3315,9 @@ void testFloatWritersResolveLocallyAndRollbackCallbackMutations() {
                               .configuration = configuration,
                               .runtime = runtime.runtime(),
                               .mutationTable = mutations});
-  bridge.beginFrame(stateAt(121), projectionAt(121));
+  auto state = stateAt(121);
+  state.authority.practiceMenu = practice::SkinMenuState{};
+  bridge.beginFrame(state, projectionAt(121));
   expect(runtime.runtime().beginFrame(121).ok,
          "writer transaction shares the renderer-owned Lua frame budget");
 
@@ -3339,6 +3343,9 @@ void testFloatWritersResolveLocallyAndRollbackCallbackMutations() {
     expect(result.status == SkinHostCallStatus::Completed,
            "pinned audio writer is staged as a built-in gameplay mutation");
   }
+  expect(bridge.invokeWriter(SkinFloatWriterId{11}, 0.5).status ==
+             SkinHostCallStatus::Completed,
+         "practice-position writer stages the source viewport mutation");
 
   for (const double value : {-2.0, 2.0, 0.25}) {
     const auto result = bridge.invokeWriter(SkinFloatWriterId{1}, value);
@@ -3362,7 +3369,7 @@ void testFloatWritersResolveLocallyAndRollbackCallbackMutations() {
          "authority-changing and unknown direct events remain unsupported");
   const auto committed = bridge.commitFrame();
   expect(committed.frameSerial == 121 &&
-             committed.orderedMutations.size() == 6,
+             committed.orderedMutations.size() == 7,
          "failed callbacks roll back only their savepoint before one commit");
   const std::array expectedAudioWrites{
       SetSkinAudioVolume{.target = SkinAudioVolumeWriterTarget::Master,
@@ -3380,10 +3387,14 @@ void testFloatWritersResolveLocallyAndRollbackCallbackMutations() {
            "successful built-in audio writers preserve pinned target and "
            "clamped value order");
   }
+  const auto *practiceScroll = std::get_if<SetPracticeItemScroll>(
+      &committed.orderedMutations[expectedAudioWrites.size()]);
+  expect(practiceScroll != nullptr && practiceScroll->position == 0.5F,
+         "practice-position preserves its normalized authored value");
   const std::array<int, 3> expectedArguments{0, 100, 25};
   for (std::size_t index = 0; index < expectedArguments.size(); ++index) {
     const auto *presentation = std::get_if<SessionPresentationWrite>(
-        &committed.orderedMutations[index + expectedAudioWrites.size()]);
+        &committed.orderedMutations[index + expectedAudioWrites.size() + 1]);
     expect(presentation != nullptr && presentation->eventId == 900 &&
                presentation->argumentCount == 1 &&
                presentation->arguments[0] == expectedArguments[index],

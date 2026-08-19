@@ -1486,6 +1486,11 @@ void GamePlayScene::acquireGameplaySkinForAttempt() {
       [this](skin::SkinAudioVolumeWriterTarget target, float value) {
         applySkinAudioVolume(target, value);
       };
+  services.applyPracticeItemScroll = [this](float position) {
+    if (options.practiceSession != nullptr) {
+      options.practiceSession->setSkinItemScrollPosition(position);
+    }
+  };
   auto result = createGameplaySkinSession(std::move(services), {
       .keyMode = chart->Meta.KeyMode,
       .chartModel = &playfieldChartVisualModel,
@@ -4763,8 +4768,7 @@ void GamePlayScene::capturePlayfieldVisualState(
           return std::optional<practice::SkinMenuState>{};
         }
         return std::optional<practice::SkinMenuState>{
-            practice::buildSkinMenuState(
-                options.practiceSession->configuration(),
+            options.practiceSession->skinMenuState(
                 {.chartEndMicros = playfieldChartVisualModel.staticMetadata
                                       .durationMicros,
                  .judgeRank = playfieldChartVisualModel.staticMetadata.judgeRank,

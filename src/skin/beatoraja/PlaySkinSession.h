@@ -43,6 +43,7 @@ struct PlaySkinSessionContext {
   // Config.AudioConfig FloatWriter IDs 17-19 apply only after an authored
   // skin frame has submitted successfully.
   std::function<void(SkinAudioVolumeWriterTarget, float)> applyAudioVolume;
+  std::function<void(float)> applyPracticeItemScroll;
   std::optional<RuntimeSkinConfigurationSelection> pinnedRuntimeSelection;
   std::stop_token stop;
 };
@@ -73,6 +74,7 @@ struct PlaySkinSessionFrameContext {
   rendering::SkinQuadBatchRenderer &quadRenderer;
   SkinConfigurationWriteQueue &configurationWrites;
   std::function<void(SkinAudioVolumeWriterTarget, float)> applyAudioVolume;
+  std::function<void(float)> applyPracticeItemScroll;
   ISkinGaugeRandomSource *gaugeRandomSource = nullptr;
 };
 

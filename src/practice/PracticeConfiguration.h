@@ -83,7 +83,8 @@ struct SkinMenuState {
 };
 
 [[nodiscard]] SkinMenuState buildSkinMenuState(const Configuration &,
-                                                const SkinMenuInputs &);
+                                                const SkinMenuInputs &,
+                                                float itemScrollPosition = 0.0F);
 
 [[nodiscard]] std::span<const GaugeOption> practiceGaugeOptions();
 [[nodiscard]] std::string practiceGaugeOptionId(const Configuration &value);

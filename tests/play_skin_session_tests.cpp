@@ -1108,6 +1108,9 @@ return {
         .applyAudioVolume = [this](SkinAudioVolumeWriterTarget target,
                                    float value) {
           audioVolumeWrites_.emplace_back(target, value);
+        },
+        .applyPracticeItemScroll = [this](float position) {
+          practiceItemScrollWrites_.push_back(position);
         }});
   }
 
@@ -1129,6 +1132,9 @@ return {
   const std::vector<std::pair<SkinAudioVolumeWriterTarget, float>> &
   audioVolumeWrites() const {
     return audioVolumeWrites_;
+  }
+  const std::vector<float> &practiceItemScrollWrites() const {
+    return practiceItemScrollWrites_;
   }
 
   void addBgaMarker(std::uint32_t ordinal = 90) {
@@ -1317,6 +1323,7 @@ private:
   SkinConfigurationWriteQueue configurationWrites_;
   std::vector<std::pair<SkinAudioVolumeWriterTarget, float>>
       audioVolumeWrites_;
+  std::vector<float> practiceItemScrollWrites_;
   std::unique_ptr<PlaySkinStateBridge> bridge_;
   std::unique_ptr<PlaySkinSession> session_;
 };
@@ -2186,6 +2193,31 @@ void testAudioVolumeMutationAppliesOnlyAfterSkinSubmission() {
          "once");
 }
 
+void testPracticeScrollMutationAppliesOnlyAfterSkinSubmission() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addBgaMarker();
+  const std::vector<SkinFrameMutation> writes{
+      SetPracticeItemScroll{.position = 0.5F},
+  };
+  expect(fixture.session().prepareFrameForTesting(
+             stateAt(1), projectionAt(1), {}, writes) ==
+             PresentationFrameOutcome::Ready &&
+             fixture.practiceItemScrollWrites().empty(),
+         "practice scroll remains staged until the skin frame submits");
+
+  SessionBgaSubmitter bga;
+  RenderContext context;
+  const auto result = fixture.session().render(context, bgaFrame(83), bga);
+  expect(result.outcome == PresentationFrameOutcome::Ready &&
+             fixture.practiceItemScrollWrites().size() == 1 &&
+             fixture.practiceItemScrollWrites().front() == 0.5F,
+         "submitted skin frame applies the staged practice viewport writer "
+         "exactly once");
+}
+
 void testPersistenceRequestIsFullyAllocatedBeforeSkinSubmission() {
   SessionFixture fixture;
   if (!fixture.ready()) {
@@ -2813,6 +2845,7 @@ int main() {
   testCriticalEvaluationAndPreflightFailuresPublishNoFrameState();
   testForwardCompatiblePersistedMutationsEnqueueOneExactOrderedBatch();
   testAudioVolumeMutationAppliesOnlyAfterSkinSubmission();
+  testPracticeScrollMutationAppliesOnlyAfterSkinSubmission();
   testPersistenceRequestIsFullyAllocatedBeforeSkinSubmission();
   testQueueFullAndClosedAreRecoverableOnlyAfterSuccessfulSkinDraw();
   testTouchCaptureLifecycleFailsClosedAndQueuesOnlyDown();

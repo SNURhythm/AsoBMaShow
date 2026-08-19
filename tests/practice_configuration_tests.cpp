@@ -63,6 +63,29 @@ void testSkinMenuUsesPinnedInitialPracticeViewport() {
          "practice skin menu preserves the source ten-slot initial viewport");
 }
 
+void testSkinMenuScrollUsesPinnedDoublePlayViewport() {
+  practice::Configuration configuration{
+      .startMicros = 0,
+      .endMicros = 90'000'000,
+  };
+  const auto menu = practice::buildSkinMenuState(
+      configuration,
+      {.chartEndMicros = 90'000'000,
+       .judgeRank = 100,
+       .chartTotal = 200.0,
+       .keyMode = 14,
+       .random1P = 0,
+       .random2P = 1,
+       .doublePlay = 1},
+      1.0F);
+  expect(menu.itemScrollPosition == 1.0F && menu.items[0].available &&
+             menu.items[0].label == "GAUGE TYPE" &&
+             menu.items[9].available && menu.items[9].label == "OPTION-DP" &&
+             menu.items[9].value == "FLIP",
+         "practice scroll follows Beatoraja's two-row double-play viewport "
+         "offset");
+}
+
 void testListenUsesPracticeStartInsteadOfCursorOrEndMarker() {
   practice::Configuration configuration{
       .startMicros = 2'250'000,
@@ -233,6 +256,7 @@ int main() {
   testPlaybackRateConversions();
   testFreshCountInUsesChartMeasureSize();
   testSkinMenuUsesPinnedInitialPracticeViewport();
+  testSkinMenuScrollUsesPinnedDoublePlayViewport();
   testListenUsesPracticeStartInsteadOfCursorOrEndMarker();
   testConfigurationSanitization();
   testGaugeAutoShiftDropdownModel();

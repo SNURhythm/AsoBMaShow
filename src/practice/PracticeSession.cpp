@@ -41,6 +41,14 @@ std::size_t Session::abandonedAttemptCount() const {
 
 const Configuration &Session::configuration() const { return configuration_; }
 
+void Session::setSkinItemScrollPosition(float position) noexcept {
+  skinItemScrollPosition_ = position;
+}
+
+SkinMenuState Session::skinMenuState(const SkinMenuInputs &inputs) const {
+  return buildSkinMenuState(configuration_, inputs, skinItemScrollPosition_);
+}
+
 const ReplayData *
 completedAttemptForGhost(const Session *session,
                          const ReplayData &sessionlessAttempt,

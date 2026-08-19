@@ -110,10 +110,12 @@ gameplay.
 
 ### Float and rate properties
 
-- [ ] Practice-item scroll authority for `20`: the bridge exposes pinned
-  `PracticeConfiguration`'s initial zero position, but its writer cannot
-  mutate user-adjusted state without Aso's missing separate `STATE_PRACTICE`
-  menu.
+- [x] Practice-item scroll authority and writer (`20`) now retain the pinned
+  `PracticeConfiguration` viewport in the active practice session. The bridge
+  stages the writer, applies it only after the authored skin frame submits,
+  and rebuilds the next frame's source ten-item window with Java's normalized
+  rounding; the 12-row double-play configuration therefore scrolls by two
+  rows. This does not fabricate the separate `STATE_PRACTICE` booleans.
 - [x] Float loading progress (`165`) exposes the exact completed source value
   while gameplay is loaded (and zero before it). The bridge has no source
   authority for intermediate AudioDriver/BGAProcessor fractions.
@@ -159,10 +161,11 @@ gameplay.
   and normal/course replay export. They use `TargetProperty`'s exact static,
   generic rate, rival/IR, `RANK_NEXT`, and unknown-id-to-`MAX` names; an absent
   configured target id still returns the source empty string.
-- [ ] Initial practice item text, labels, and values (`1040`–`1095`) expose
-  Aso's captured ten-row launch configuration. The full source viewport,
-  conditional 2P/DP rows, and user-driven mutation require the separate
-  `STATE_PRACTICE` UI.
+- [x] Practice item text, labels, and values (`1040`–`1095`) now expose the
+  pinned 10-item viewport and its conditional 2P/DP rows from Aso's captured
+  practice launch configuration. They move with writer `20` in every
+  BMSPlayer-equivalent state, as the source string factory does; row-event
+  mutation remains unavailable without the separate `STATE_PRACTICE` UI.
 
 ### Timers
 
@@ -200,9 +203,9 @@ gameplay.
   applies it to Aso's live audio boundary only after the authored skin frame
   has submitted.
 - The pinned `FloatPropertyFactory.RateType` has no writer for lane cover
-  (`4`, `5`). Practice-position writer (`20`) remains unavailable: Aso has no
-  `STATE_PRACTICE` configuration/menu state to mutate. Lua callback writers
-  remain supported independently of these built-in writer IDs.
+  (`4`, `5`). Practice-position writer (`20`) mutates the retained session
+  viewport without implying `STATE_PRACTICE`; Lua callback writers remain
+  supported independently of these built-in writer IDs.
 - The application has no two-player/three-player gameplay authority. The
   corresponding judge and timer families remain unavailable rather than being
   fabricated from 1P state.

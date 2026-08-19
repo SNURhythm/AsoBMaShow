@@ -1637,6 +1637,26 @@ SkinHostCallResult PlaySkinStateBridge::invokeWriter(
         selector = namedFloatPropertySelector(*name);
       }
     }
+    if (selector.value_or(-1) == 20) {
+      // FloatPropertyFactory invokes PracticeConfiguration's setter for every
+      // BMSPlayer state. A newly constructed non-practice player has no model
+      // viewport, so its source setter is an inert successful write.
+      if (const auto *snapshot = state();
+          snapshot != nullptr && snapshot->authority.practiceMenu.has_value()) {
+        try {
+          staged_.orderedMutations.emplace_back(SetPracticeItemScroll{
+              .position = static_cast<float>(std::clamp(normalizedValue, 0.0,
+                                                        1.0))});
+        } catch (...) {
+          reportDiagnostic({.code = "skin.play_state.mutation_limit_exceeded",
+                            .message = "Practice viewport write could not be "
+                                       "staged."});
+          return {.status = SkinHostCallStatus::CriticalFailure,
+                  .diagnostics = diagnostics_};
+        }
+      }
+      return {.diagnostics = diagnostics_};
+    }
     const auto target = [&]() -> std::optional<SkinAudioVolumeWriterTarget> {
       switch (selector.value_or(-1)) {
       case 17:
@@ -2963,10 +2983,10 @@ SkinPropertyLookup<double> PlaySkinStateBridge::floatProperty(
   case 19:
     return {.value = snapshot->configuration.bgmVolume, .supported = true};
   case 20:
-    // PracticeConfiguration starts with itemOffset == 0, making its
-    // getItemScrollPosition() exactly zero until the separate STATE_PRACTICE
-    // menu changes it. Aso has no equivalent menu authority yet.
-    return {.value = 0.0, .supported = true};
+    return {.value = snapshot->authority.practiceMenu
+                         ? snapshot->authority.practiceMenu->itemScrollPosition
+                         : 0.0,
+            .supported = true};
   case 285:
   case 286:
   case 287:

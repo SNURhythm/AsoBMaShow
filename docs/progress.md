@@ -251,8 +251,12 @@ work from [`docs/todo.md`](todo.md). The pinned authority is Beatoraja commit
   `play_skin_state_bridge_tests`.
 
 - The practice-position rate `20` exposes the pinned freshly created
-  `PracticeConfiguration` value of zero. User-adjusted practice-menu scroll
-  state remains pending with the rest of that distinct source UI.
+  `PracticeConfiguration` value of zero and now accepts its source writer.
+  The active practice session retains the scroll offset; it is applied only
+  after successful skin submission and rebuilds the next ten-row viewport,
+  including the two-row double-play scroll range. Verified by
+  `practice_configuration_tests`, `play_skin_state_bridge_tests`, and
+  `play_skin_session_tests`.
 
 - Float loading progress `165` now follows the bridge's source-compatible
   Loading/Loaded authority: zero before resource completion and one after
