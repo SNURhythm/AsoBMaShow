@@ -263,6 +263,29 @@ bool testSongInformationDensityMatchesPinnedConstructor() {
   return true;
 }
 
+bool testSongInformationUsesSparseDistantTimelineBuckets() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 1;
+  chart.Meta.Total = 100.0;
+  auto *measure = new bms_parser::Measure();
+  auto *timeline = new bms_parser::TimeLine(8, false);
+  constexpr long long kDistantMicros = 100'000'000'000'000LL;
+  timeline->Timing = kDistantMicros;
+  timeline->Bpm = 120.0;
+  timeline->SetNote(0, new bms_parser::Note(1));
+  measure->TimeLines.push_back(timeline);
+  chart.Measures.push_back(measure);
+
+  const auto model = buildPlayfieldChartVisualModel(chart, 1);
+  const auto &information = model.staticMetadata.songInformation;
+  constexpr double kBucketCount = 100'000'002.0;
+  return information.has_value() &&
+         std::abs(information->density - 1.0 / kBucketCount) < 0.000000001 &&
+         std::abs(information->peakDensity - 1.0) < 0.000001 &&
+         std::abs(information->endDensity - 0.2) < 0.000001;
+}
+
 bool testTerminalZeroNoteTimelinesRemainProjectionAnchors() {
   bms_parser::Chart chart;
   auto *measure = new bms_parser::Measure();
@@ -364,6 +387,10 @@ int main() {
     return EXIT_FAILURE;
   }
   if (!testSongInformationDensityMatchesPinnedConstructor()) {
+    return EXIT_FAILURE;
+  }
+  if (!testSongInformationUsesSparseDistantTimelineBuckets()) {
+    std::cerr << "distant SongInformation timeline must stay sparse\n";
     return EXIT_FAILURE;
   }
   if (!testTerminalZeroNoteTimelinesRemainProjectionAnchors()) {

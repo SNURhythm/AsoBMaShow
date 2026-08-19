@@ -10,9 +10,12 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <optional>
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace {
 
@@ -398,12 +401,18 @@ beatorajaSongInformation(const bms_parser::Chart &chart,
   const std::size_t bucketCount =
       static_cast<std::size_t>(std::max(0LL, lastTimeMicros / 1'000'000)) +
       2U;
-  std::vector<std::array<int, 7>> data(bucketCount);
-  const auto scratchLanes = chart.Meta.GetScratchLaneIndices();
-  const auto isScratch = [&](int lane) {
-    return std::ranges::find(scratchLanes, lane) != scratchLanes.end();
+  // SongInformation uses one bucket per elapsed second. Retaining every zero
+  // bucket lets a distant malformed timeline allocate gigabytes, while its
+  // aggregate results only depend on sparse note changes. Keep the source's
+  // inclusive per-second semantics as delta intervals instead.
+  std::map<std::size_t, long long> noteCountDeltas;
+  const auto addNoteRange = [&](std::size_t start, std::size_t end) {
+    if (start > end) {
+      return;
+    }
+    ++noteCountDeltas[start];
+    --noteCountDeltas[end + 1U];
   };
-
   const double borderValue =
       static_cast<double>(chart.Meta.TotalNotes) *
       (1.0 - 100.0 / chart.Meta.Total);
@@ -423,15 +432,12 @@ beatorajaSongInformation(const bms_parser::Chart &chart,
         if (note == nullptr) {
           continue;
         }
-        const bool scratch = isScratch(note->Lane);
         const auto *longNote = dynamic_cast<const bms_parser::LongNote *>(note);
         if (longNote != nullptr && !longNote->IsTail()) {
           const long long tailMillis =
               longNote->Tail->Timeline->Timing / 1'000'000;
           const std::size_t tailSecond = static_cast<std::size_t>(tailMillis);
-          for (std::size_t index = second; index <= tailSecond; ++index) {
-            ++data[index][scratch ? 1 : 4];
-          }
+          addNoteRange(second, tailSecond);
         }
 
         const bool omittedLnTail =
@@ -442,12 +448,9 @@ beatorajaSongInformation(const bms_parser::Chart &chart,
           continue;
         }
         if (dynamic_cast<const bms_parser::LandmineNote *>(note) != nullptr) {
-          ++data[second][6];
-        } else if (longNote != nullptr) {
-          ++data[second][scratch ? 0 : 3];
-          --data[second][scratch ? 1 : 4];
-        } else {
-          ++data[second][scratch ? 2 : 5];
+          // Mines do not contribute to the density aggregate.
+        } else if (longNote == nullptr) {
+          addNoteRange(second, second);
         }
         --border;
         if (border == 0) {
@@ -457,35 +460,82 @@ beatorajaSongInformation(const bms_parser::Chart &chart,
     }
   }
 
+  const int bucketCountForMinimum =
+      bucketCount > static_cast<std::size_t>(std::numeric_limits<int>::max())
+          ? std::numeric_limits<int>::max()
+          : static_cast<int>(bucketCount);
   const int minimumDensity =
-      chart.Meta.TotalNotes / static_cast<int>(data.size()) / 4;
+      chart.Meta.TotalNotes / bucketCountForMinimum / 4;
   PlayfieldSongInformation result;
-  int densityCount = 0;
-  for (const auto &bucket : data) {
-    const int notes = bucket[0] + bucket[1] + bucket[2] + bucket[3] +
-                      bucket[4] + bucket[5];
-    result.peakDensity = std::max(result.peakDensity,
-                                  static_cast<double>(notes));
-    if (notes >= minimumDensity) {
-      result.density += notes;
-      ++densityCount;
+  struct NoteCountSegment {
+    std::size_t start = 0;
+    std::size_t end = 0;
+    long long notes = 0;
+  };
+  std::vector<NoteCountSegment> segments;
+  segments.reserve(noteCountDeltas.size() + 1U);
+  std::size_t segmentStart = 0;
+  long long currentNotes = 0;
+  const auto appendSegment = [&](std::size_t end) {
+    if (segmentStart < end) {
+      segments.push_back(
+          {.start = segmentStart, .end = end, .notes = currentNotes});
+    }
+  };
+  for (const auto &[second, delta] : noteCountDeltas) {
+    if (second >= bucketCount) {
+      break;
+    }
+    appendSegment(second);
+    currentNotes += delta;
+    segmentStart = second;
+  }
+  appendSegment(bucketCount);
+
+  long double densityTotal = 0.0;
+  long double densityCount = 0.0;
+  for (const auto &segment : segments) {
+    result.peakDensity =
+        std::max(result.peakDensity, static_cast<double>(segment.notes));
+    if (segment.notes >= minimumDensity) {
+      const long double length =
+          static_cast<long double>(segment.end - segment.start);
+      densityTotal += static_cast<long double>(segment.notes) * length;
+      densityCount += length;
     }
   }
-  result.density /= densityCount;
+  result.density = static_cast<double>(densityTotal / densityCount);
 
   const std::size_t window =
-      std::min<std::size_t>(5U, data.size() - borderPosition - 1U);
-  for (std::size_t index = borderPosition; index < data.size() - window;
-       ++index) {
-    int notes = 0;
-    for (std::size_t next = 0; next < window; ++next) {
-      const auto &bucket = data[index + next];
-      notes += bucket[0] + bucket[1] + bucket[2] + bucket[3] + bucket[4] +
-               bucket[5];
+      std::min<std::size_t>(5U, bucketCount - borderPosition - 1U);
+  const std::size_t lastWindowStart = bucketCount - window - 1U;
+  std::set<std::size_t> windowStarts = {borderPosition, lastWindowStart};
+  for (const auto &[second, delta] : noteCountDeltas) {
+    (void)delta;
+    const std::size_t first =
+        second > window ? second - window : static_cast<std::size_t>(0);
+    const std::size_t last = std::min(second, lastWindowStart);
+    for (std::size_t start = std::max(first, borderPosition); start <= last;
+         ++start) {
+      windowStarts.insert(start);
     }
-    result.endDensity = std::max(
-        result.endDensity,
-        static_cast<double>(notes) / static_cast<double>(window));
+  }
+  const auto notesAt = [&segments](std::size_t second) {
+    const auto it = std::upper_bound(
+        segments.begin(), segments.end(), second,
+        [](std::size_t value, const NoteCountSegment &segment) {
+          return value < segment.start;
+        });
+    return std::prev(it)->notes;
+  };
+  for (const std::size_t start : windowStarts) {
+    long long notes = 0;
+    for (std::size_t next = 0; next < window; ++next) {
+      notes += notesAt(start + next);
+    }
+    result.endDensity = std::max(result.endDensity,
+                                 static_cast<double>(notes) /
+                                     static_cast<double>(window));
   }
   result.total = chart.Meta.Total;
   return result;
