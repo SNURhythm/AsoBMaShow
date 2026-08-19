@@ -162,6 +162,7 @@ void testLegacyFixtureLoadsEverySetting() {
   expected.findBmsSkipUnarchivingForNonSolidArchives = false;
   expected.showPastNotes = false;
   expected.notesDisplayTimingMilliseconds = 0;
+  expected.constantFadeInMilliseconds = 100;
   expected.markProcessedNotes = false;
   expected.customJudge = false;
   expected.showJudgeArea = false;
@@ -1066,6 +1067,7 @@ void testVersionFixturesAndNoRewrite() {
   expectedV0.hispeedAutoAdjust = false;
   expectedV0.showPastNotes = false;
   expectedV0.notesDisplayTimingMilliseconds = 0;
+  expectedV0.constantFadeInMilliseconds = 100;
   expectedV0.markProcessedNotes = false;
   expectedV0.customJudge = false;
   expectedV0.showJudgeArea = false;
