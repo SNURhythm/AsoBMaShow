@@ -349,6 +349,7 @@ private:
   bool visibleTimeUseMilliseconds = false;
   double currentBpm = 0.0;
   double currentScrollRate = 1.0;
+  double currentSpeedMultiplier = 1.0;
   bool laneCoverEnabled = true;
   std::optional<double> floatingVisibleTimeReferenceBpm;
   AppSettings::HiSpeedFixMode hispeedFixMode =

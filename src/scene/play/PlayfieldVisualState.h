@@ -197,8 +197,10 @@ struct PlayfieldPlayerScoreHistoryState {
 struct PlayfieldAuthorityUpdate {
   double currentBpm = 0.0;
   // TimeLine.getScroll() currently active at the authoritative gameplay
-  // cursor. LaneRenderer's duration_green divides by this value.
+  // cursor. LaneRenderer's duration_green divides by this value before its
+  // independent TimeLine SPEED multiplier.
   double currentScrollRate = 1.0;
+  double currentSpeedMultiplier = 1.0;
   std::map<Judgement, int> judgementCounters;
   std::map<Judgement, PlayfieldJudgementFastSlowCount>
       judgementFastSlowCounters;

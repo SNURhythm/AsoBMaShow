@@ -37,6 +37,7 @@ bool PlayfieldAuthorityUpdate::operator==(
     const PlayfieldAuthorityUpdate &other) const {
   return currentBpm == other.currentBpm &&
          currentScrollRate == other.currentScrollRate &&
+         currentSpeedMultiplier == other.currentSpeedMultiplier &&
          judgementCounters == other.judgementCounters &&
          judgementFastSlowCounters == other.judgementFastSlowCounters &&
          comboBreak == other.comboBreak && gaugeType == other.gaugeType &&

@@ -330,6 +330,30 @@ bool testParserStoredLandminesRetainTheirMineSource() {
   return true;
 }
 
+bool testSpeedObjectInterpolationUsesPinnedTimelineSemantics() {
+  // Pinned LaneRenderer#getCurrentSpeed starts at 1.0, interpolates only
+  // between authored SPEED objects, and keeps the final authored multiplier.
+  PlayfieldChartVisualModel model;
+  model.timelines = {
+      {.id = 1,
+       .timeMicros = 1'000'000,
+       .speed = 0.5,
+       .hasSpeedObject = true},
+      {.id = 2,
+       .timeMicros = 2'000'000,
+       .speed = 1.5,
+       .hasSpeedObject = true},
+      {.id = 3, .timeMicros = 3'000'000, .speed = 1.5},
+  };
+
+  return std::abs(speedObjectMultiplierAtTime(model, 500'000) - 0.75) <
+             0.000001 &&
+         std::abs(speedObjectMultiplierAtTime(model, 1'500'000) - 1.0) <
+             0.000001 &&
+         std::abs(speedObjectMultiplierAtTime(model, 2'500'000) - 1.5) <
+             0.000001;
+}
+
 } // namespace
 
 int main() {
@@ -346,6 +370,10 @@ int main() {
     return EXIT_FAILURE;
   }
   if (!testParserStoredLandminesRetainTheirMineSource()) {
+    return EXIT_FAILURE;
+  }
+  if (!testSpeedObjectInterpolationUsesPinnedTimelineSemantics()) {
+    std::cerr << "SPEED object interpolation must match LaneRenderer\n";
     return EXIT_FAILURE;
   }
 

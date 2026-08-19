@@ -116,12 +116,14 @@ public:
   bool BpmChange = false;
   bool BpmChangeApplied = false;
   bool ScrollChange = false;
+  bool HasSpeedObject = false;
   int BgaBase = -1;
   int BgaLayer = -1;
   std::optional<BgaPoorSequence> BgaPoor;
 
   double StopLength = 0;
   double Scroll = 1;
+  double Speed = 1;
 
   // musical timing in microseconds
   long long Timing = 0;
@@ -674,6 +676,7 @@ private:
   std::unordered_map<int, double> BpmTable;
   std::unordered_map<int, double> StopLengthTable;
   std::unordered_map<int, double> ScrollTable;
+  std::unordered_map<int, double> SpeedTable;
 
   bool UseBase62 = false;
   int Lnobj = -1;

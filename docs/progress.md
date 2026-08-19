@@ -7,10 +7,6 @@ work from [`docs/todo.md`](todo.md). The pinned authority is Beatoraja commit
 
 ## In progress
 
-- The remaining Constant speed override depends on the same parser speed-object
-  authority recorded below. The source fade window is complete; no separate
-  visibility cutoff is used.
-
 - Table strings use the selected difficulty-table path now. The pinned
   `PlayerResource.setTableinfo()` fallback additionally searches the user's
   ordered `Config.tableURL` collection for direct launches; Aso has no
@@ -18,6 +14,15 @@ work from [`docs/todo.md`](todo.md). The pinned authority is Beatoraja commit
   source reset value rather than selecting an arbitrary imported table.
 
 ## Completed
+
+- `#SPEEDxx` / `#mmmSP` speed objects now flow from the shared parser through
+  immutable chart state, the live and replay-export authorities, selected-skin
+  duration selectors, and the built-in traversal. The frame-local multiplier
+  follows pinned `LaneRenderer.getCurrentSpeed`: base `1.0`, clamped linear
+  interpolation between authored points, then the final point's value. It is
+  multiplied with `#SCROLL` rather than replacing it; Constant forces only
+  that multiplier to `1.0` outside practice. The parser dependency is committed
+  and pushed as `bms-parser-cpp` `7ffff21`.
 
 - Selected difficulty-table launches now capture `PlayerResource`'s table
   strings: name (`1001`), folder label (`1002`), and its exact

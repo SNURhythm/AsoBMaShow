@@ -652,6 +652,8 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
           previous != nullptr ? previous->Bpm : timeline->Bpm;
       const double previousScroll =
           previous != nullptr ? previous->Scroll : timeline->Scroll;
+      const double previousSpeed =
+          previous != nullptr ? previous->Speed : timeline->Speed;
       const bool terminalScrollContinuation =
           lastVisualNoteTimelineOrdinal.has_value() &&
           timelineOrdinal > *lastVisualNoteTimelineOrdinal;
@@ -659,7 +661,8 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
           terminalScrollContinuation ||
           gameplay_scroll_geometry::shouldKeepRenderTimeline(
               previousBpm, timeline->Bpm, stopMicros(*timeline), previousScroll,
-              timeline->Scroll, timeline->IsFirstInMeasure,
+              timeline->Scroll, previousSpeed, timeline->Speed,
+              timeline->HasSpeedObject, timeline->IsFirstInMeasure,
               hasAny(timeline->Notes), hasAny(timeline->InvisibleNotes),
               hasAny(timeline->LandmineNotes));
       ChartVisualTimeline value{
@@ -669,7 +672,8 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
           .scrollPosition = scrollPosition,
           .bpm = timeline->Bpm,
           .scrollRate = timeline->Scroll,
-          .speed = 1.0,
+          .speed = timeline->Speed,
+          .hasSpeedObject = timeline->HasSpeedObject,
           .stopMicros = stopMicros(*timeline),
           .sectionLine = timeline->IsFirstInMeasure,
           .bgaOnly = hasBga && !hasNotes,
@@ -813,4 +817,35 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
     result.notes.push_back(entry.value);
   }
   return result;
+}
+
+double speedObjectMultiplierAtTime(const PlayfieldChartVisualModel &model,
+                                   long long timeMicros) noexcept {
+  double speed = 1.0;
+  const ChartVisualTimeline *previous = nullptr;
+  const ChartVisualTimeline *next = nullptr;
+  for (const auto &timeline : model.timelines) {
+    if (!timeline.hasSpeedObject) {
+      continue;
+    }
+    if (timeline.timeMicros <= timeMicros) {
+      speed = timeline.speed;
+      previous = &timeline;
+    } else {
+      next = &timeline;
+      break;
+    }
+  }
+  if (next == nullptr) {
+    return speed;
+  }
+  const long long start = previous != nullptr ? previous->timeMicros : 0;
+  const long long end = next->timeMicros;
+  if (end <= start) {
+    return next->speed;
+  }
+  double progress = static_cast<double>(timeMicros - start) /
+                    static_cast<double>(end - start);
+  progress = std::max(0.0, std::min(1.0, progress));
+  return speed + (next->speed - speed) * progress;
 }

@@ -4642,9 +4642,23 @@ void GamePlayScene::capturePlayfieldVisualState(
       playfieldLaneCoverPercent, playfieldLaneCoverEnabled);
   const GameplayPlayOptionSelection playOptions =
       gameplayPlayOptionSelection(options);
+  const PlayfieldGameplayMode gameplayMode =
+      isReplayPlayback()
+          ? PlayfieldGameplayMode::Replay
+          : ((options.practiceMode || options.practiceSession != nullptr)
+                 ? PlayfieldGameplayMode::Practice
+                 : PlayfieldGameplayMode::Play);
+  const double sourceSpeed = speedObjectMultiplierAtTime(
+      playfieldChartVisualModel, visualTimeMicros);
+  const double currentSpeedMultiplier =
+      context.settings.constantScroll &&
+              gameplayMode != PlayfieldGameplayMode::Practice
+          ? 1.0
+          : sourceSpeed;
   PlayfieldAuthorityUpdate authority{
       .currentBpm = currentGameplayBpm,
       .currentScrollRate = currentGameplayScrollRate,
+      .currentSpeedMultiplier = currentSpeedMultiplier,
       .judgementCounters = state->judgeCount,
       .judgementFastSlowCounters = [&] {
         std::map<Judgement, PlayfieldJudgementFastSlowCount> counters;
@@ -4709,12 +4723,7 @@ void GamePlayScene::capturePlayfieldVisualState(
       .autoPlayMarkVisible =
           options.autoPlay ||
           (options.replayData != nullptr && options.replayData->autoPlay),
-      .gameplayMode =
-          isReplayPlayback()
-              ? PlayfieldGameplayMode::Replay
-              : ((options.practiceMode || options.practiceSession != nullptr)
-                     ? PlayfieldGameplayMode::Practice
-                     : PlayfieldGameplayMode::Play),
+      .gameplayMode = gameplayMode,
       .loadingState = PlayfieldLoadingState::Loaded,
       .courseMode = isCoursePlayback(),
       .courseStageIndex = isCoursePlayback()
@@ -4826,6 +4835,11 @@ void GamePlayScene::capturePlayfieldVisualState(
           ? playfieldVisualStateStore->captureForPresentation(frameClock)
           : playfieldVisualStateStore->capture(frameClock, false);
   if (selectedSkinActive) {
+    auto traversal = builtInPresentation->projectionTraversal();
+    traversal.hispeed = traversal.baseHispeed *
+                         static_cast<float>(currentSpeedMultiplier);
+    traversal.rxhs = (traversal.upperBound - traversal.judgeY) *
+                      traversal.hispeed;
     capturedPlayfieldProjection = playfieldProjection.project(
         playfieldChartVisualModel, capturedPlayfieldVisualState,
         {.includeInvisibleNotes =
@@ -4850,7 +4864,7 @@ void GamePlayScene::capturePlayfieldVisualState(
          .latePoorTimingMicros =
              builtInPresentation->projectionLatePoorTimingMicros(),
          .buildBuiltInPlan = false,
-         .builtInTraversal = builtInPresentation->projectionTraversal()});
+         .builtInTraversal = std::move(traversal)});
   } else {
     capturedPlayfieldProjection = {
         .frameSerial = capturedPlayfieldVisualState.clock.serial,

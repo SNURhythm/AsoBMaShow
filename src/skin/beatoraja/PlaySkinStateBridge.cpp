@@ -2018,7 +2018,8 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
           snapshot->authority.currentBpm, builtInTraversal_->configuredHispeed,
           snapshot->authority.laneCoverPercent,
           snapshot->authority.laneCoverEnabled,
-          snapshot->authority.currentScrollRate);
+          snapshot->authority.currentScrollRate,
+          snapshot->authority.currentSpeedMultiplier);
       if (!current) {
         return std::nullopt;
       }

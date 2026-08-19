@@ -41,9 +41,10 @@ struct ChartVisualTimeline {
   double scrollPosition = 0.0;
   double bpm = 0.0;
   double scrollRate = 1.0;
-  // bms-parser-cpp does not expose SPEED/hasSpeedObj. Projection therefore
-  // intentionally uses a fixed neutral speed until parser support exists.
+  // Pinned TimeLine#getSpeed() is the propagated multiplier. Only authored
+  // SPEED points carry the matching hasSpeedObj marker.
   double speed = 1.0;
+  bool hasSpeedObject = false;
   long long stopMicros = 0;
   bool sectionLine = false;
   bool bgaOnly = false;
@@ -164,3 +165,8 @@ struct PlayfieldChartVisualModel {
 [[nodiscard]] PlayfieldChartVisualModel
 buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
                                int longNoteModeOverride);
+
+// LaneRenderer#getCurrentSpeed(), expressed against the immutable chart DTO.
+[[nodiscard]] double
+speedObjectMultiplierAtTime(const PlayfieldChartVisualModel &model,
+                            long long timeMicros) noexcept;

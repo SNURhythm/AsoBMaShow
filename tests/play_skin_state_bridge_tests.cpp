@@ -350,6 +350,35 @@ void testZeroHispeedDurationBindingsFollowJavaCurrentDuration() {
          "fallback or unsupported property");
 }
 
+void testDurationBindingsUseFrameLocalSpeedObjectMultiplier() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = runtime.runtime(),
+                              .mutationTable = mutations});
+
+  auto state = stateAt(202);
+  state.authority.currentBpm = 180.0;
+  state.authority.laneCoverPercent = 25;
+  state.authority.laneCoverEnabled = true;
+  state.authority.currentSpeedMultiplier = 0.5;
+  bridge.beginFrame(state, projectionAt(202));
+
+  const auto duration = bridge.integerProperty({312});
+  const auto green = bridge.integerProperty({313});
+  expect(duration.supported && duration.value == 1'000 && green.supported &&
+             green.value == 600,
+         "duration selectors divide by the frame-local SPEED multiplier");
+}
+
 void testHispeedBindingsUsePinnedIntegerAndFloatProperties() {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
@@ -3143,6 +3172,7 @@ int main() {
   testPinnedMutationTableMatchesFrozenFixtureExhaustively();
   testDurationBindingsUsePinnedLaneRendererFormula();
   testZeroHispeedDurationBindingsFollowJavaCurrentDuration();
+  testDurationBindingsUseFrameLocalSpeedObjectMultiplier();
   testHispeedBindingsUsePinnedIntegerAndFloatProperties();
   testIntegerPropertyFactoryDomainNeverRejectsGameplaySkins();
   testMarkProcessedNoteImageIndexTracksPlayerConfiguration();

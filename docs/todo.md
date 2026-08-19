@@ -198,17 +198,19 @@ gameplay.
 
 ### Existing parser and renderer work
 
-- Preserve Beatoraja `TimeLine` speed-object state in `bms-parser-cpp` and
-  carry the frame-local interpolated speed into shared gameplay authority.
-  Pinned `LaneRenderer.getCurrentSpeed` combines it with `#SCROLL`; the parser
-  currently exposes no speed-object model, so synthesis here would not be
-  source-faithful.
+- [x] `bms-parser-cpp` now preserves Beatoraja `TimeLine` SPEED objects:
+  `#SPEEDxx` definitions and `#mmmSP` (base-36 `1033`) references retain both
+  each propagated multiplier and its explicit-object marker. Gameplay and
+  replay-export authority reproduce `LaneRenderer.getCurrentSpeed`'s default
+  `1.0`, clamped linear interpolation, and final-value behavior. The renderer
+  composes that factor with the independently active `#SCROLL` rate; Constant
+  forces only SPEED to `1.0` outside practice, exactly as the pinned source.
 
 - [x] `PlayConfig.enableConstant` now applies `LaneRenderer`'s duration and
   signed fade window to selected-skin normal notes, long notes, and timeline
   lines. The exact endpoint behavior is retained (positive fade includes the
-  target row and excludes the fade endpoint). Its separate forced-speed path
-  remains blocked only by the source speed-object parser work below.
+  target row and excludes the fade endpoint); its forced-SPEED path now shares
+  the source-faithful speed-object authority above.
 
 - [x] Lift/HIDDEN `PlayConfig` state now persists the pinned defaults and
   `[0,1]` finite ranges, captures the live enablement/ratios for all matching

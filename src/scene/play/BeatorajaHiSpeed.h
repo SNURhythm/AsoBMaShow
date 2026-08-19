@@ -78,11 +78,11 @@ struct Settings {
 }
 
 // LaneRenderer's frame-local `currentduration` computation. `scrollRate` is
-// TimeLine.getScroll(); BMS speed objects are outside the parser's present
-// visual model and must not be faked here.
+// TimeLine.getScroll() and `speedMultiplier` is getCurrentSpeed().
 [[nodiscard]] inline std::optional<double>
 liveDurationValue(double bpm, float hispeed, int laneCoverPercent,
-                  bool laneCoverEnabled, double scrollRate = 1.0) {
+                  bool laneCoverEnabled, double scrollRate = 1.0,
+                  double speedMultiplier = 1.0) {
   if (!std::isfinite(bpm) || bpm <= 0.0 ||
       !std::isfinite(static_cast<double>(hispeed)) || hispeed < 0.0F ||
       !std::isfinite(scrollRate)) {
@@ -97,11 +97,9 @@ liveDurationValue(double bpm, float hispeed, int laneCoverPercent,
                                  100.0
                            : 0.0;
   const double duration =
-      240000.0 / bpm / static_cast<double>(hispeed) / scrollRate *
+      240000.0 / bpm / static_cast<double>(hispeed) / speedMultiplier /
+      scrollRate *
       (1.0 - cover);
-  if (duration < 0.0) {
-    return std::nullopt;
-  }
   return duration;
 }
 
@@ -126,9 +124,11 @@ liveDurationValue(double bpm, float hispeed, int laneCoverPercent,
 
 [[nodiscard]] inline std::optional<int>
 liveDurationMilliseconds(double bpm, float hispeed, int laneCoverPercent,
-                         bool laneCoverEnabled, double scrollRate = 1.0) {
+                         bool laneCoverEnabled, double scrollRate = 1.0,
+                         double speedMultiplier = 1.0) {
   const auto duration = liveDurationValue(bpm, hispeed, laneCoverPercent,
-                                          laneCoverEnabled, scrollRate);
+                                          laneCoverEnabled, scrollRate,
+                                          speedMultiplier);
   if (!duration) {
     return std::nullopt;
   }

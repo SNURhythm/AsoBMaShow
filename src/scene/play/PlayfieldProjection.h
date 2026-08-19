@@ -19,9 +19,11 @@ namespace gameplay_visible_time {
 // derived from the same configured Hi-Speed that determines note travel.
 [[nodiscard]] inline std::optional<int> currentDurationMilliseconds(
     double bpm, float configuredHispeed, int laneCoverPercent,
-    bool laneCoverEnabled, double scrollRate = 1.0) {
+    bool laneCoverEnabled, double scrollRate = 1.0,
+    double speedMultiplier = 1.0) {
   return gameplay_hispeed::liveDurationMilliseconds(
-      bpm, configuredHispeed, laneCoverPercent, laneCoverEnabled, scrollRate);
+      bpm, configuredHispeed, laneCoverPercent, laneCoverEnabled, scrollRate,
+      speedMultiplier);
 }
 
 [[nodiscard]] constexpr int durationToGreenNumber(int duration) noexcept {
@@ -48,6 +50,7 @@ struct BuiltInRendererTraversal {
   // The raw LaneRenderer::getHispeed()-equivalent value exposed to skin
   // properties. `hispeed` remains the playback-scaled traversal speed.
   float configuredHispeed = 0.0F;
+  float baseHispeed = 0.0F;
   float hispeed = 0.0F;
   float noteVisibleUpperBound = 0.0F;
   // Raw parser lane IDs in the exact white, blue, scratch traversal order.

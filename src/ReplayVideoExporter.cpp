@@ -25,6 +25,7 @@
 #include "scene/PracticeAnalyticsView.h"
 #include "scene/play/BMSRenderer.h"
 #include "scene/play/GamePlayTiming.h"
+#include "scene/play/PlayfieldChartVisualModel.h"
 #include "scene/play/ReplayPlayfieldPresentation.h"
 #include "scene/play/ReplayVideoGameplayPreflight.h"
 #include "skin/DefaultSkin.h"
@@ -2634,6 +2635,9 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
           gameplayDurationMicros, stoppedOnGaugeFailure,
           preparedGameplay.presentation.get());
 
+  const PlayfieldChartVisualModel exportChartVisualModel =
+      buildPlayfieldChartVisualModel(chart, 0);
+
   const auto playbackRateChangeTimelines =
       collectPlaybackRateChangeTimelines(chart);
   size_t playbackRateChangeCursor = 0;
@@ -2955,6 +2959,11 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
       ++replayCursor;
     }
     applyExportPlaybackRate(frameTiming.gameplayTimeMicros);
+    const double currentExportSpeedMultiplier =
+        settings.constantScroll
+            ? 1.0
+            : speedObjectMultiplierAtTime(exportChartVisualModel,
+                                          frameTiming.visualTimeMicros);
     const auto laneCover = laneCoverPlayback.advance(
         replay.laneCoverEvents, frameTiming.gameplayTimeMicros);
     for (const auto &transition : laneCover.transitions) {
@@ -2967,6 +2976,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     preparedGameplay.presentation->applyAuthorityUpdate({
         .currentBpm = currentExportBpm,
         .currentScrollRate = currentExportScrollRate,
+        .currentSpeedMultiplier = currentExportSpeedMultiplier,
         .judgementCounters = replayJudgementAuthority.judgementCounters(),
         .judgementFastSlowCounters =
             replayJudgementAuthority.judgementFastSlowCounters(),
@@ -3534,6 +3544,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     bgaMissTracker.reset();
     bms_parser::Chart &chart = *stage.chart;
     const ReplayData &stageReplay = stage.replay;
+    const PlayfieldChartVisualModel stageChartVisualModel =
+        buildPlayfieldChartVisualModel(chart, 0);
 
     if (!stage.gameplayPresentation.has_value()) {
       stage.gameplayPresentation.emplace();
@@ -3688,6 +3700,11 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
         ++replayCursor;
       }
       applyExportPlaybackRate(frameTiming.gameplayTimeMicros);
+      const double currentExportSpeedMultiplier =
+          settings.constantScroll
+              ? 1.0
+              : speedObjectMultiplierAtTime(stageChartVisualModel,
+                                            frameTiming.visualTimeMicros);
       const auto laneCover = stage.constraints.noSpeed
                                  ? replay_video_export::ReplayLaneCoverFrameState{
                                        .percent =
@@ -3704,6 +3721,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
       presentation.applyAuthorityUpdate({
           .currentBpm = currentExportBpm,
           .currentScrollRate = currentExportScrollRate,
+          .currentSpeedMultiplier = currentExportSpeedMultiplier,
           .judgementCounters = replayJudgementAuthority.judgementCounters(),
           .judgementFastSlowCounters =
               replayJudgementAuthority.judgementFastSlowCounters(),
