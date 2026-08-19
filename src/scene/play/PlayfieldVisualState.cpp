@@ -68,6 +68,9 @@ bool PlayfieldAuthorityUpdate::operator==(
          tableName == other.tableName && tableLevel == other.tableLevel &&
          tableFullName == other.tableFullName &&
          currentFramesPerSecond == other.currentFramesPerSecond &&
+         modeFilterName == other.modeFilterName && sortId == other.sortId &&
+         difficultyFilterName == other.difficultyFilterName &&
+         chartReplicationMode == other.chartReplicationMode &&
          applicationUptimeMillis == other.applicationUptimeMillis &&
          autoPlayMarkVisible == other.autoPlayMarkVisible &&
          gameplayMode == other.gameplayMode &&

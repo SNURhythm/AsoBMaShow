@@ -522,6 +522,10 @@ json settingsToJson(const AppSettings &settings) {
       {"selectedLnMode", settings.selectedLnMode},
       {"selectedAssistOption", settings.selectedAssistOption},
       {"selectedPacemakerTarget", settings.selectedPacemakerTarget},
+      {"skinModeFilterName", settings.skinModeFilterName},
+      {"skinSortId", settings.skinSortId},
+      {"skinDifficultyFilterName", settings.skinDifficultyFilterName},
+      {"skinChartReplicationMode", settings.skinChartReplicationMode},
       {"selectedPlaybackRatePercent", settings.selectedPlaybackRatePercent},
       {"selectedPlaybackMode", static_cast<int>(settings.selectedPlaybackMode)},
       {"defaultDifficultyTablesSeeded", settings.defaultDifficultyTablesSeeded},
@@ -710,6 +714,13 @@ AppSettings settingsFromJson(const json &document,
             diagnostics);
   readValue(document, "selectedPacemakerTarget",
             settings.selectedPacemakerTarget, diagnostics);
+  readValue(document, "skinModeFilterName", settings.skinModeFilterName,
+            diagnostics);
+  readValue(document, "skinSortId", settings.skinSortId, diagnostics);
+  readValue(document, "skinDifficultyFilterName",
+            settings.skinDifficultyFilterName, diagnostics);
+  readValue(document, "skinChartReplicationMode",
+            settings.skinChartReplicationMode, diagnostics);
   readValue(document, "selectedPlaybackRatePercent",
             settings.selectedPlaybackRatePercent, diagnostics);
   readEnum(document, "selectedPlaybackMode", settings.selectedPlaybackMode,

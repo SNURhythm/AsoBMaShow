@@ -126,7 +126,12 @@ gameplay.
 ### String properties
 
 - Rival and selected target: `1`, `3`.
-- Global profile filters/configuration: `60`–`62`, `86`.
+- [x] Global PlayerConfig strings (`60`–`62`, `86`) now persist their pinned
+  source-shaped values and reach live play, replay watching, and replay
+  export: ModeFilter/DifficultyFilter display text, raw `sortid`, and raw
+  `chartReplicationMode`. Defaults are the source values `ALL`, `TITLE`,
+  `ALL`, and `RIVALCHART`; configured values are retained verbatim rather than
+  synthesized from chart state.
 - [x] Selected difficulty-table launch strings (`1001`–`1003`) now retain the
   active local table name and the pinned `TableData.tag + level` folder title;
   `tablefull` preserves `PlayerResource`'s level-before-name concatenation.

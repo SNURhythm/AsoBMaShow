@@ -237,6 +237,13 @@ public:
   std::string selectedLnMode = kDefaultLnMode;
   std::string selectedAssistOption = kDefaultAssistOption;
   std::string selectedPacemakerTarget = kDefaultPacemakerTarget;
+  // Direct StringPropertyFactory PlayerConfig values. Mode and difficulty
+  // retain ModeFilter/DifficultyFilter display text, while sort and chart
+  // replication retain their source identifiers verbatim.
+  std::string skinModeFilterName = "ALL";
+  std::string skinSortId = "TITLE";
+  std::string skinDifficultyFilterName = "ALL";
+  std::string skinChartReplicationMode = "RIVALCHART";
   int selectedPlaybackRatePercent = 100;
   audio::PlaybackMode selectedPlaybackMode = audio::PlaybackMode::PitchShift;
   bool defaultDifficultyTablesSeeded = false;

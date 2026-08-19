@@ -360,6 +360,29 @@ void testGameplaySkinPlayerConfigSelectorsRoundTrip() {
          "gameplay skin PlayerConfig selectors survive settings round trip");
 }
 
+void testPlayerConfigurationSkinStringsRoundTrip() {
+  // The values are StringPropertyFactory's direct PlayerConfig outputs, not
+  // labels synthesized by a gameplay skin.
+  TempDirectory temp;
+  const auto path = temp.path() / "player-config-skin-strings.json";
+  AppSettings settings;
+  settings.skinModeFilterName = "24KEY";
+  settings.skinSortId = "MISSCOUNT";
+  settings.skinDifficultyFilterName = "LONG NOTE CHART";
+  settings.skinChartReplicationMode = "RIVALCHART";
+
+  std::string error;
+  expect(AppSettingsStore::Save(path, settings, error),
+         "player-config skin strings save successfully: " + error);
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.status == AppSettingsLoadStatus::Loaded &&
+             loaded.settings.skinModeFilterName == "24KEY" &&
+             loaded.settings.skinSortId == "MISSCOUNT" &&
+             loaded.settings.skinDifficultyFilterName == "LONG NOTE CHART" &&
+             loaded.settings.skinChartReplicationMode == "RIVALCHART",
+         "PlayerConfig string values survive settings persistence verbatim");
+}
+
 void testGameplaySkinTraitSelectionsSurviveRestart() {
   TempDirectory temp;
   const auto path = temp.path() / "settings.json";
@@ -1374,6 +1397,7 @@ int main() {
   testLegacyFixtureLoadsEverySetting();
   testJsonRoundTripIncludesAudioAndVideo();
   testGameplaySkinPlayerConfigSelectorsRoundTrip();
+  testPlayerConfigurationSkinStringsRoundTrip();
   testGameplaySkinTraitSelectionsSurviveRestart();
   testBpmGuideAssistOptionPersists();
   testSchemaThreeMigrationDisablesCompatibility();

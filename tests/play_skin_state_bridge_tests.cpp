@@ -1985,6 +1985,39 @@ void testDifficultyTableStringsUseCapturedSelectionContext() {
   bridge.discardFrame();
 }
 
+void testPlayerConfigurationStringsUseCapturedSourceValues() {
+  // StringPropertyFactory reads these four PlayerConfig values in every
+  // gameplay state.  The display strings below are the pinned enum outputs;
+  // sort and replication stay the exact configured identifiers.
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = runtime.runtime(),
+                              .mutationTable = mutations});
+  auto state = stateAt(233);
+  state.authority.modeFilterName = "14KEY";
+  state.authority.sortId = "MISSCOUNT";
+  state.authority.difficultyFilterName = "SPEED CHANGE CHART";
+  state.authority.chartReplicationMode = "RIVALCHART";
+  bridge.beginFrame(state, projectionAt(233));
+
+  expect(bridge.stringProperty({60}).value == "14KEY" &&
+             bridge.stringProperty({"sort"}).value == "MISSCOUNT" &&
+             bridge.stringProperty({62}).value == "SPEED CHANGE CHART" &&
+             bridge.stringProperty({"chartreplication"}).value ==
+                 "RIVALCHART",
+         "source PlayerConfig strings survive immutable gameplay capture");
+}
+
 void testChartDocumentBooleansUseCapturedLibraryMetadata() {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
@@ -3292,6 +3325,7 @@ int main() {
   testFavoriteChartImageIndexUsesCapturedRepositoryState();
   testSongReviewImageIndexesUsePinnedBitmaskStates();
   testDifficultyTableStringsUseCapturedSelectionContext();
+  testPlayerConfigurationStringsUseCapturedSourceValues();
   testChartDocumentBooleansUseCapturedLibraryMetadata();
   testScoreAndComboTimersUseCapturedGameplayState();
   testPlayTimerPropertiesMatchPinnedJavaConversions();

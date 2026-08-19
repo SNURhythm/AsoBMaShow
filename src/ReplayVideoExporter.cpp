@@ -151,7 +151,11 @@ preflightReplayGameplayPresentation(
   const auto resolvedOptions = resolveReplayVideoExportOptions(options);
   const PlayfieldAuthorityUpdate fallbackInitialAuthority{
       .playerName = context.profileManager.activeProfile().displayName,
-      .irProviderName = gameplaySkinFirstIrProviderName(settings.irProviders)};
+      .irProviderName = gameplaySkinFirstIrProviderName(settings.irProviders),
+      .modeFilterName = settings.skinModeFilterName,
+      .sortId = settings.skinSortId,
+      .difficultyFilterName = settings.skinDifficultyFilterName,
+      .chartReplicationMode = settings.skinChartReplicationMode};
   const auto configuration = replay_video_export::replayGameplayPresentationConfig(
       settings, settings.playAreaWidthForKeyMode(chart.Meta.KeyMode), chart,
       resolvedOptions.renderTouchPoints, resolvedOptions.renderReplayGhosts,
@@ -1126,6 +1130,10 @@ preflightCourseReplayGameplayPresentations(
              .playerName = context.profileManager.activeProfile().displayName,
              .irProviderName =
                  gameplaySkinFirstIrProviderName(settings.irProviders),
+             .modeFilterName = settings.skinModeFilterName,
+             .sortId = settings.skinSortId,
+             .difficultyFilterName = settings.skinDifficultyFilterName,
+             .chartReplicationMode = settings.skinChartReplicationMode,
              .courseMode = true,
              .courseStageIndex = static_cast<int>(stageIndex),
              .courseStageCount = static_cast<int>(stages.size()),
@@ -3004,6 +3012,10 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
         .doublePlayOption = replay.provenance.doublePlayFlip ? 1 : 0,
         .playerName = context.profileManager.activeProfile().displayName,
         .irProviderName = gameplaySkinFirstIrProviderName(settings.irProviders),
+        .modeFilterName = settings.skinModeFilterName,
+        .sortId = settings.skinSortId,
+        .difficultyFilterName = settings.skinDifficultyFilterName,
+        .chartReplicationMode = settings.skinChartReplicationMode,
         .playOptionLabel = replayExportPlayOptionLabel(replay),
         .autoPlayMarkVisible = replay.autoPlay,
         .gameplayMode = PlayfieldGameplayMode::Replay,
@@ -3557,6 +3569,10 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     PlayfieldAuthorityUpdate initialAuthority{
         .playerName = context.profileManager.activeProfile().displayName,
         .irProviderName = gameplaySkinFirstIrProviderName(settings.irProviders),
+        .modeFilterName = settings.skinModeFilterName,
+        .sortId = settings.skinSortId,
+        .difficultyFilterName = settings.skinDifficultyFilterName,
+        .chartReplicationMode = settings.skinChartReplicationMode,
         .courseMode = true,
         .courseStageIndex = static_cast<int>(stageIndex),
         .courseStageCount = static_cast<int>(stages.size()),
@@ -3748,6 +3764,10 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
           .playerName = context.profileManager.activeProfile().displayName,
           .irProviderName =
               gameplaySkinFirstIrProviderName(settings.irProviders),
+          .modeFilterName = settings.skinModeFilterName,
+          .sortId = settings.skinSortId,
+          .difficultyFilterName = settings.skinDifficultyFilterName,
+          .chartReplicationMode = settings.skinChartReplicationMode,
           .gaugeType = replayGaugeType,
           .gaugeAutoShift = replay.gaugeAutoShift,
           .currentGauge = replayGauge,

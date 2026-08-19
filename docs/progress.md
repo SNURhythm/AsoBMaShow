@@ -15,6 +15,13 @@ work from [`docs/todo.md`](todo.md). The pinned authority is Beatoraja commit
 
 ## Completed
 
+- String properties `60`–`62` and `86` now mirror the persisted Beatoraja
+  `PlayerConfig` values in live play, replay watching, and replay export:
+  ModeFilter/DifficultyFilter display strings plus raw `sortid` and
+  `chartReplicationMode`. Aso keeps the source defaults (`ALL`, `TITLE`,
+  `ALL`, `RIVALCHART`) and preserves configured strings verbatim. Verified by
+  `app_settings_store_tests` and `play_skin_state_bridge_tests`.
+
 - `skin.note.dst2` now implements Beatoraja PMS missed-POOR drawing through
   live gameplay, replay watching, and replay export. The selected skin
   publishes lane-zero's shared destination geometry; projection mirrors

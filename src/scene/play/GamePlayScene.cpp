@@ -4714,6 +4714,10 @@ void GamePlayScene::capturePlayfieldVisualState(
       .playerName = context.profileManager.activeProfile().displayName,
       .irProviderName =
           gameplaySkinFirstIrProviderName(context.settings.irProviders),
+      .modeFilterName = context.settings.skinModeFilterName,
+      .sortId = context.settings.skinSortId,
+      .difficultyFilterName = context.settings.skinDifficultyFilterName,
+      .chartReplicationMode = context.settings.skinChartReplicationMode,
       .playOptionLabel = gameplayPlayOptionLabel(options),
       .tableName = options.tableName,
       .tableLevel = options.tableLevel,

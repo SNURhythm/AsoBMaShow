@@ -2828,6 +2828,16 @@ SkinPropertyLookup<std::string_view> PlaySkinStateBridge::stringProperty(
   switch (*id) {
   case 2:
     return {.value = state()->authority.playerName, .supported = true};
+  case 60:
+    return {.value = state()->authority.modeFilterName, .supported = true};
+  case 61:
+    return {.value = state()->authority.sortId, .supported = true};
+  case 62:
+    return {.value = state()->authority.difficultyFilterName,
+            .supported = true};
+  case 86:
+    return {.value = state()->authority.chartReplicationMode,
+            .supported = true};
   case 1020:
     return {.value = state()->authority.irProviderName, .supported = true};
   case 50:
