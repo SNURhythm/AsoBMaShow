@@ -47,6 +47,7 @@ constexpr int kScoreAttemptIdentitySchemaVersion = 9;
 constexpr int kScoreImportedIrSchemaVersion = 10;
 constexpr int kCourseScoreProjectionSchemaVersion = 11;
 constexpr int kScorePlayDurationSchemaVersion = 12;
+constexpr int kScorePlayDurationRetrySchemaVersion = 13;
 constexpr int kScoreDatabaseSchemaVersion =
     ScoreRepository::kCurrentSchemaVersion;
 constexpr const char *kScoreMigrationChartSchema = "score_migration_chart";
@@ -1492,6 +1493,106 @@ bool chartDatabaseRebuildRequiredForScoreMigration(sqlite3 *db) {
   return selectScalarInt(db, requiredQuery, 0) > 0;
 }
 
+bool scoreMigrationChartDatabaseIsAttached(sqlite3 *db) {
+  SqliteStatementHandle statement;
+  if (!prepareSqliteStatementLogged(db, "PRAGMA database_list", statement,
+                                    "inspecting score migration attachments",
+                                    logSqlErrorText)) {
+    return false;
+  }
+  while (sqlite3_step(statement.get()) == SQLITE_ROW) {
+    if (sqliteColumnString(statement.get(), 1) == kScoreMigrationChartSchema) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool migrateScoreDatabaseToVersion13(
+    sqlite3 *db, const std::filesystem::path &chartDatabasePath) {
+  std::string versionError;
+  const auto version = readSqliteUserVersion(db, versionError);
+  if (!version.has_value()) {
+    logSqlErrorText("reading score play-duration retry version", versionError);
+    return false;
+  }
+  if (*version > kScoreDatabaseSchemaVersion) {
+    return false;
+  }
+  if (*version >= kScorePlayDurationRetrySchemaVersion) {
+    return true;
+  }
+  if (*version < kScorePlayDurationSchemaVersion) {
+    SDL_Log("Score database must reach version %d before retrying play-duration "
+            "migration",
+            kScorePlayDurationSchemaVersion);
+    return false;
+  }
+
+  bool updated = false;
+  const bool attachedHere = !scoreMigrationChartDatabaseIsAttached(db);
+  if (!attachedHere || attachChartDatabaseForScoreMigration(db, chartDatabasePath)) {
+    if (chartDatabaseRebuildRequiredForScoreMigration(db)) {
+      if (attachedHere) {
+        detachChartDatabaseForScoreMigration(db);
+      }
+      SDL_Log("Deferring score play-duration retry until chart metadata rebuild "
+              "completes");
+      return true;
+    }
+    if (chartDatabaseHasRowsForScoreMigration(db)) {
+      const std::string chartTable =
+          std::string(kScoreMigrationChartSchema) + ".chart_meta";
+      const std::string matchPredicate = scoreMigrationChartMatchPredicate("cm");
+      const std::string matchRank = scoreMigrationChartMatchRankExpr("cm");
+      const std::string betterMatchRank =
+          scoreMigrationChartMatchRankExpr("cm_better");
+      const std::string sourcePriority = chartSourcePriorityExpr("cm");
+      const std::string betterSourcePriority =
+          chartSourcePriorityExpr("cm_better");
+      const std::string sourceArchiveSize = chartSourceArchiveSizeExpr("cm");
+      const std::string betterSourceArchiveSize =
+          chartSourceArchiveSizeExpr("cm_better");
+      const std::string betterMatchPredicate =
+          "NOT EXISTS (SELECT 1 FROM " + chartTable + " cm_better WHERE " +
+          scoreMigrationChartMatchPredicate("cm_better") + " AND (" +
+          betterMatchRank + " < " + matchRank + " OR (" +
+          betterMatchRank + " = " + matchRank + " AND (" +
+          betterSourcePriority + " < " + sourcePriority + " OR (" +
+          betterSourcePriority + " = " + sourcePriority + " AND (" +
+          betterSourceArchiveSize + " < " + sourceArchiveSize + " OR (" +
+          betterSourceArchiveSize + " = " + sourceArchiveSize +
+          " AND cm_better.path < cm.path)))))))";
+      const std::string updateQuery =
+          "UPDATE scores SET play_duration_seconds = COALESCE((SELECT "
+          "CAST(cm.length / 1000000 AS INTEGER) FROM " +
+          chartTable + " cm WHERE " + matchPredicate + " AND " +
+          betterMatchPredicate +
+          " ORDER BY cm.path LIMIT 1), 0) WHERE score_source = " +
+          std::to_string(static_cast<int>(ScoreStorageSource::LocalGameplay)) +
+          " AND play_duration_seconds = 0";
+      if (!execSql(db, updateQuery.c_str(),
+                   "retrying score play-duration backfill from chart metadata")) {
+        if (attachedHere) {
+          detachChartDatabaseForScoreMigration(db);
+        }
+        return false;
+      }
+      updated = sqlite3_changes(db) > 0;
+    }
+    if (attachedHere) {
+      detachChartDatabaseForScoreMigration(db);
+    }
+  }
+  if (!setDatabaseUserVersion(db, kScorePlayDurationRetrySchemaVersion)) {
+    return false;
+  }
+  if (updated) {
+    score_repository_detail::IncrementRevision();
+  }
+  return true;
+}
+
 std::string scoreMigrationHashHasValue(std::string_view columnName) {
   const std::string column(columnName);
   return "scores." + column + " IS NOT NULL AND trim(scores." + column +
@@ -1920,7 +2021,8 @@ bool score_repository_detail::EnsureSchemaOnConnection(
       !migrateScoreDatabaseToVersion9(db) ||
       !migrateScoreDatabaseToVersion10(db) ||
       !migrateScoreDatabaseToVersion11(db) ||
-      !migrateScoreDatabaseToVersion12(db, chartDatabasePath)) {
+      !migrateScoreDatabaseToVersion12(db, chartDatabasePath) ||
+      !migrateScoreDatabaseToVersion13(db, chartDatabasePath)) {
     return false;
   }
   if (!transaction.commit(transactionError)) {

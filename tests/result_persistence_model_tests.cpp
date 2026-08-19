@@ -4,6 +4,8 @@
 #include "BmsMetadataText.h"
 #include "Utils.h"
 
+#include <nlohmann/json.hpp>
+
 #include <cmath>
 #include <filesystem>
 #include <iostream>
@@ -929,6 +931,32 @@ void testProvenanceFingerprintCoverage() {
       "provenance.eligibility");
 }
 
+void testPreDurationProvenanceFingerprintIgnoresSynthesizedDuration() {
+  const AttemptFixture fixture;
+  auto legacy = fixture.replay.provenance;
+  legacy.schemaVersion = ScoreProvenance::kDoublePlayFlipSchemaVersion;
+  auto serialized = nlohmann::json::parse(serializeScoreProvenance(legacy));
+  serialized["schemaVersion"] = ScoreProvenance::kDoublePlayFlipSchemaVersion;
+  serialized["stages"][0].erase("playDurationSeconds");
+
+  std::string diagnostic;
+  const auto decoded = deserializeScoreProvenance(serialized.dump(), diagnostic);
+  expect(decoded.has_value() && diagnostic.empty(),
+         "pre-duration provenance deserializes");
+  if (!decoded) {
+    return;
+  }
+
+  ReplayData replay = fixture.replay;
+  replay.provenance = *decoded;
+  const auto score = scoreFor(fixture);
+  const std::string baseline = result_persistence::payloadFingerprint(replay, score);
+  replay.provenance.stages.front().playDurationSeconds = 77;
+  expect(result_persistence::payloadFingerprint(replay, score) == baseline,
+         "pre-duration provenance keeps its stored fingerprint when the "
+         "runtime supplies a zero-defaulted duration");
+}
+
 void testScoreFingerprintCoverage() {
   const AttemptFixture fixture;
   expectScoreFingerprintChange(
@@ -977,6 +1005,7 @@ int main() {
   testVersionOneFingerprintGolden();
   testReplayFingerprintCoverage();
   testProvenanceFingerprintCoverage();
+  testPreDurationProvenanceFingerprintIgnoresSynthesizedDuration();
   testScoreFingerprintCoverage();
   if (failures != 0) {
     std::cerr << failures << " result persistence model test(s) failed\n";

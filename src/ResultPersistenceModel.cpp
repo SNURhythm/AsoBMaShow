@@ -144,7 +144,9 @@ void appendProvenance(CanonicalEncoder &encoder,
   const int fingerprintSchemaVersion =
       provenance.stages.empty() && provenance.ruleset.version == 0
           ? ScoreProvenance::kDoublePlayFlipSchemaVersion
-          : provenance.schemaVersion;
+          : (provenance.fingerprintSchemaVersion > 0
+                 ? provenance.fingerprintSchemaVersion
+                 : provenance.schemaVersion);
   encoder.integer(static_cast<std::int32_t>(fingerprintSchemaVersion));
   encoder.string(provenance.ruleset.id);
   encoder.integer(static_cast<std::int32_t>(provenance.ruleset.version));
@@ -167,7 +169,9 @@ void appendProvenance(CanonicalEncoder &encoder,
       encoder.integer(static_cast<std::int32_t>(value));
     });
     encoder.integer(static_cast<std::int32_t>(stage.totalNotes));
-    encoder.integer(stage.playDurationSeconds);
+    if (fingerprintSchemaVersion >= ScoreProvenance::kPlayDurationSchemaVersion) {
+      encoder.integer(stage.playDurationSeconds);
+    }
     encoder.optional(stage.authoredGaugeTotal,
                      [&](double value) { encoder.float64(value); });
     encoder.float64(stage.effectiveGaugeTotal);

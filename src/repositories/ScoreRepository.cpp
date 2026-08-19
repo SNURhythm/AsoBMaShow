@@ -174,11 +174,18 @@ void ScoreRepository::Shutdown() {
 bool ScoreRepository::EnsureSessionDatabaseLocked() {
   if (impl_->sessionDatabase != nullptr) {
     if (sqlite3_get_autocommit(impl_->sessionDatabase) != 0) {
-      return score_repository_detail::CurrentSchemaIsValid(
-          impl_->sessionDatabase);
+      if (score_repository_detail::CurrentSchemaIsValid(
+              impl_->sessionDatabase)) {
+        return true;
+      }
+      // A deferred migration can intentionally leave the database below the
+      // current version while chart metadata is rebuilding. Reopen it so the
+      // next EnsureSchema call can retry once that authority is available.
+      CloseSessionDatabaseLocked();
+    } else {
+      SDL_Log("Discarding score database with an unfinished transaction");
+      CloseSessionDatabaseLocked();
     }
-    SDL_Log("Discarding score database with an unfinished transaction");
-    CloseSessionDatabaseLocked();
   }
 
   const std::filesystem::path path = GetResolvedDatabasePathLocked();

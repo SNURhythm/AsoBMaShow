@@ -933,6 +933,10 @@ deserializeScoreProvenance(std::string_view serialized, std::string &error) {
 
     ScoreProvenance result = ScoreProvenance::Legacy();
     result.schemaVersion = ScoreProvenance::kSchemaVersion;
+    result.fingerprintSchemaVersion =
+        schemaVersion < ScoreProvenance::kPlayDurationSchemaVersion
+            ? schemaVersion
+            : 0;
     if (const auto ruleset = root.find("ruleset"); ruleset != root.end()) {
       result.ruleset = rulesetFromJson(*ruleset, schemaVersion);
     }
@@ -1182,6 +1186,7 @@ ScoreProvenance mergeCourseProvenance(std::span<const ScoreProvenance> stages) {
     result.ruleset = RulesetDescriptor::Legacy();
   }
   result.schemaVersion = ScoreProvenance::kSchemaVersion;
+  result.fingerprintSchemaVersion = 0;
   result.eligibility = eligibility;
   return result;
 }

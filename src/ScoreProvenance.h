@@ -15,6 +15,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -86,6 +87,10 @@ struct ScoreProvenance {
   static constexpr int kSchemaVersion = kPlayDurationSchemaVersion;
 
   int schemaVersion = kSchemaVersion;
+  // Kept only while reading an existing result. Schema upgrades normalize the
+  // public provenance shape, but its saved fingerprint must retain the wire
+  // schema that originally determined which facts were canonical.
+  int fingerprintSchemaVersion = 0;
   RulesetDescriptor ruleset;
   std::vector<ScoreStageProvenance> stages;
   GaugeType gaugeType = GaugeType::Normal;
@@ -105,7 +110,21 @@ struct ScoreProvenance {
   std::optional<int> startingGaugePercent;
   ScoreEligibility eligibility = ScoreEligibility::LegacyUnverified;
 
-  bool operator==(const ScoreProvenance &) const = default;
+  bool operator==(const ScoreProvenance &other) const {
+    return std::tie(schemaVersion, ruleset, stages, gaugeType, gaugeProfile,
+                    gaugeAutoShift, gaugeAutoShiftLowerBound, player1, player2,
+                    doublePlayFlip, assistOption, inputDevices, autoPlay,
+                    practice, clubMode, playback, judgeWindowScalePercent,
+                    startingGaugePercent, eligibility) ==
+           std::tie(other.schemaVersion, other.ruleset, other.stages,
+                    other.gaugeType, other.gaugeProfile,
+                    other.gaugeAutoShift, other.gaugeAutoShiftLowerBound,
+                    other.player1, other.player2, other.doublePlayFlip,
+                    other.assistOption, other.inputDevices, other.autoPlay,
+                    other.practice, other.clubMode, other.playback,
+                    other.judgeWindowScalePercent,
+                    other.startingGaugePercent, other.eligibility);
+  }
 
   static ScoreProvenance Legacy();
 };
