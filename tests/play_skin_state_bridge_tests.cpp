@@ -2062,6 +2062,62 @@ void testConfiguredTargetNameNeighborsFollowPinnedTargetRing() {
          "semantics");
 }
 
+void testTargetScoreStringsFollowPinnedTargetSource() {
+  // During BMSPlayer gameplay, StringPropertyFactory.rival and .target both
+  // read targetScoreData.player. These cases cover the source's static,
+  // local-only rival, no-ranking IR, and practice branches without treating
+  // Aso's pacemaker label as a player name.
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = runtime.runtime(),
+                              .mutationTable = mutations});
+  auto state = stateAt(236);
+  state.authority.gameplayMode = PlayfieldGameplayMode::Play;
+  state.authority.skinTargetId = "RATE_AA";
+  bridge.beginFrame(state, projectionAt(236));
+  expect(bridge.stringProperty({1}).value == "RANK AA" &&
+             bridge.stringProperty({"target"}).value == "RANK AA",
+         "static target ScoreData player labels drive both gameplay strings");
+  bridge.discardFrame();
+
+  state = stateAt(237);
+  state.authority.gameplayMode = PlayfieldGameplayMode::Play;
+  state.authority.skinTargetId = "RIVAL_RANK_1";
+  state.authority.persistedScore = PlayfieldPersistedScoreState{.score = 42};
+  bridge.beginFrame(state, projectionAt(237));
+  expect(bridge.stringProperty({1}).value.empty() &&
+             bridge.stringProperty({3}).value.empty(),
+         "local-only rival rank preserves the pinned empty self-player name");
+  bridge.discardFrame();
+
+  state = stateAt(238);
+  state.authority.gameplayMode = PlayfieldGameplayMode::Play;
+  state.authority.skinTargetId = "IR_NEXT_1";
+  bridge.beginFrame(state, projectionAt(238));
+  expect(bridge.stringProperty({1}).value == "NO DATA" &&
+             bridge.stringProperty({3}).value == "NO DATA",
+         "IR targets retain TargetProperty's no-RankingData player label");
+  bridge.discardFrame();
+
+  state = stateAt(239);
+  state.authority.gameplayMode = PlayfieldGameplayMode::Practice;
+  state.authority.skinTargetId = "MAX";
+  bridge.beginFrame(state, projectionAt(239));
+  expect(bridge.stringProperty({1}).value.empty() &&
+             bridge.stringProperty({3}).value.empty(),
+         "practice keeps BMSPlayer's absent target-score strings empty");
+}
+
 void testChartDocumentBooleansUseCapturedLibraryMetadata() {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
@@ -3371,6 +3427,7 @@ int main() {
   testDifficultyTableStringsUseCapturedSelectionContext();
   testPlayerConfigurationStringsUseCapturedSourceValues();
   testConfiguredTargetNameNeighborsFollowPinnedTargetRing();
+  testTargetScoreStringsFollowPinnedTargetSource();
   testChartDocumentBooleansUseCapturedLibraryMetadata();
   testScoreAndComboTimersUseCapturedGameplayState();
   testPlayTimerPropertiesMatchPinnedJavaConversions();

@@ -428,6 +428,58 @@ std::string beatorajaTargetPropertyName(std::string_view id) {
   return "MAX";
 }
 
+std::string
+beatorajaTargetScorePlayerName(const PlayfieldAuthorityUpdate &authority) {
+  // BMSPlayer's practice branch passes a null target ScoreData, so both
+  // StringPropertyFactory.rival and .target return an empty string.
+  if (authority.gameplayMode == PlayfieldGameplayMode::Practice) {
+    return {};
+  }
+
+  const std::string_view id = authority.skinTargetId;
+  if (id == "RANK_NEXT") {
+    return "NEXT RANK";
+  }
+  if (id.starts_with("RATE_")) {
+    // StaticTargetProperty assigns its display name to ScoreData.player. A
+    // malformed RATE id falls through TargetProperty's MAX default below.
+    if (id == "RATE_A-" || id == "RATE_A" || id == "RATE_A+" ||
+        id == "RATE_AA-" || id == "RATE_AA" || id == "RATE_AA+" ||
+        id == "RATE_AAA-" || id == "RATE_AAA" || id == "RATE_AAA+" ||
+        id == "RATE_MAX-" || beatorajaRateTargetName(id.substr(5))) {
+      return beatorajaTargetPropertyName(id);
+    }
+  }
+  if (id == "MAX") {
+    return "MAX";
+  }
+  if (id.starts_with("RIVAL_NEXT_") || id.starts_with("RIVAL_RANK_")) {
+    const auto index = id.starts_with("RIVAL_NEXT_")
+                           ? positiveTargetSuffix(id, "RIVAL_NEXT_")
+                           : positiveTargetSuffix(id, "RIVAL_RANK_");
+    if (index) {
+      // Aso has no RivalDataAccessor entries. TargetProperty's score array
+      // therefore contains only the local record when one exists; it assigns
+      // that self score an empty player string before selecting it.
+      return authority.persistedScore ? std::string{} : "NO RIVAL";
+    }
+  }
+  if (positiveTargetSuffix(id, "RIVAL_")) {
+    // There is no configured Aso rival PlayerInformation/ScoreData cache, so
+    // RivalTargetProperty's no-name/no-score branch is the source result.
+    return "NO RIVAL";
+  }
+  const auto irRankRate = positiveTargetSuffix(id, "IR_RANKRATE_");
+  if (positiveTargetSuffix(id, "IR_NEXT_") ||
+      positiveTargetSuffix(id, "IR_RANK_") ||
+      (irRankRate && *irRankRate < 100)) {
+    // Aso does not create a gameplay RankingData instance. This exactly maps
+    // InternetRankingTargetProperty's ranking == null branch.
+    return "NO DATA";
+  }
+  return "MAX";
+}
+
 std::vector<std::string>
 beatorajaTargetNeighbourNames(const PlayfieldAuthorityUpdate &authority) {
   std::vector<std::string> names(20);
@@ -1125,6 +1177,7 @@ void PlaySkinStateBridge::beginFrame(
 
   state_ = state;
   targetNeighbourNames_ = beatorajaTargetNeighbourNames(state.authority);
+  targetScorePlayerName_ = beatorajaTargetScorePlayerName(state.authority);
   builtInTraversal_ = projection.builtInTraversal;
   projection_ = adaptPlayfieldProjectionForSkin(projection);
   frameSerial_ = state.clock.serial;
@@ -3048,6 +3101,9 @@ SkinPropertyLookup<std::string_view> PlaySkinStateBridge::stringProperty(
             .supported = true};
   }
   switch (*id) {
+  case 1:
+  case 3:
+    return {.value = targetScorePlayerName_, .supported = true};
   case 2:
     return {.value = state()->authority.playerName, .supported = true};
   case 60:

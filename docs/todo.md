@@ -125,7 +125,13 @@ gameplay.
 
 ### String properties
 
-- Rival and selected target: `1`, `3`.
+- [x] Rival and selected target (`1`, `3`) now share the captured
+  `TargetProperty(config.targetid).getTarget(...).player` equivalent rather
+  than Aso's pacemaker label. Static/rank-next targets retain their source
+  names; no configured Aso rival takes `NO RIVAL` (or the local self-score's
+  empty name for rival rank/next); absent gameplay ranking data takes `NO
+  DATA`; practice keeps BMSPlayer's empty target-score branch. G-Battle does
+  not fabricate an unavailable remote player name.
 - [x] Global PlayerConfig strings (`60`–`62`, `86`) now persist their pinned
   source-shaped values and reach live play, replay watching, and replay
   export: ModeFilter/DifficultyFilter display text, raw `sortid`, and raw

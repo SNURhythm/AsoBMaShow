@@ -49,6 +49,15 @@ work from [`docs/todo.md`](todo.md). The pinned authority is Beatoraja commit
   configured id remains the source empty-string branch. Verified by
   `app_settings_store_tests` and `play_skin_state_bridge_tests`.
 
+- Gameplay `rival` and `target` strings (`1`, `3`) now share their pinned
+  `BMSPlayer` target-score-player source, independently of Aso's pacemaker
+  presentation. Static and next-rank targets expose their `TargetProperty`
+  player label; no Aso RivalDataAccessor produces the source `NO RIVAL` or
+  local-self empty branches, and without a gameplay RankingData instance IR
+  targets produce `NO DATA`. Practice remains empty. G-Battle does not invent
+  a player name absent from its record. Verified by
+  `play_skin_state_bridge_tests`.
+
 - `#SPEEDxx` / `#mmmSP` speed objects now flow from the shared parser through
   immutable chart state, the live and replay-export authorities, selected-skin
   duration selectors, and the built-in traversal. The frame-local multiplier
