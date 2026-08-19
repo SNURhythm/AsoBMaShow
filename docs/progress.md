@@ -15,6 +15,19 @@ work from [`docs/todo.md`](todo.md). The pinned authority is Beatoraja commit
 
 ## Completed
 
+- Practice now has a source-shaped no-audio `BMSPlayer.STATE_PRACTICE` phase.
+  Before its held first input begins an attempt, selector `1080`, row
+  availability/selection `3000`–`3035`, practice text strings, and committed
+  row-event changes all use the retained ten-row controller. The start path
+  applies `PracticeModifier`'s visible-note/background split and TOTAL
+  correction, source frequency timing, DP flip and random options, the
+  five-category/nine-gauge `GaugeProperty` table, and the pinned percentage
+  JUDGERANK window rule. Normal practice gameplay remains outside that state,
+  so its practice booleans stay false. Verified by
+  `practice_configuration_tests`, `gameplay_gauge_rules_tests`,
+  `playfield_visual_state_tests`, `play_skin_state_bridge_tests`, and
+  `play_skin_session_tests`.
+
 - String properties `60`–`62` and `86` now mirror the persisted Beatoraja
   `PlayerConfig` values in live play, replay watching, and replay export:
   ModeFilter/DifficultyFilter display strings plus raw `sortid` and

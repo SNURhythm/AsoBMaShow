@@ -29,11 +29,14 @@ source default are not compatibility work for gameplay skins.
   enablement flag for both its image-index and boolean forms. Its source
   duration/fade projection is complete; only the separately tracked parser
   speed-object authority still prevents Constant's forced-speed path.
-- [ ] Practice item availability and selection (`3000`–`3015`,
-  `3020`–`3035`) and `state_practice` (`1080`) require Beatoraja's distinct
-  `BMSPlayer.STATE_PRACTICE` menu. Aso starts a practice attempt directly in
-  source-equivalent `STATE_PLAY`, so these selectors deliberately return false
-  rather than treat gameplay mode as menu state.
+- [x] Practice item availability and selection (`3000`–`3015`,
+  `3020`–`3035`) and `state_practice` (`1080`) now use a distinct no-audio
+  pre-play menu phase. The retained source menu accepts committed skin row
+  events, starts after the pinned held-first-input transition, and applies its
+  range, frequency, TOTAL, judge rank, random/flip, category, and all nine
+  gauge choices to the attempt. The selectors remain false during the active
+  practice attempt, exactly as `BMSPlayer` leaves `STATE_PRACTICE` for
+  `STATE_READY`/`STATE_PLAY`.
 
 ### Integer-value properties
 
