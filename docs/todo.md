@@ -127,7 +127,13 @@ gameplay.
 
 - Rival and selected target: `1`, `3`.
 - Global profile filters/configuration: `60`–`62`, `86`.
-- Table and IR: `1001`–`1003`, `1020`–`1021`.
+- [x] Selected difficulty-table launch strings (`1001`–`1003`) now retain the
+  active local table name and the pinned `TableData.tag + level` folder title;
+  `tablefull` preserves `PlayerResource`'s level-before-name concatenation.
+  Beatoraja's separate direct-launch fallback searches the per-profile ordered
+  `Config.tableURL` list, which Aso does not own, so it correctly remains
+  empty outside a selected difficulty-table context.
+- IR provider/account strings: `1020`–`1021`.
 - [x] Application version (`1010`) returns the CMake-declared AsoBMaShow
   project version, matching `MainController.getVersion()`'s application-level
   source instead of a gameplay-scene fallback.

@@ -1833,6 +1833,35 @@ void testSongReviewImageIndexesUsePinnedBitmaskStates() {
   bridge.discardFrame();
 }
 
+void testDifficultyTableStringsUseCapturedSelectionContext() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = runtime.runtime(),
+                              .mutationTable = mutations});
+  auto state = stateAt(224);
+  state.authority.tableName = "Example Difficulty Table";
+  state.authority.tableLevel = "★12";
+  state.authority.tableFullName = "★12Example Difficulty Table";
+  bridge.beginFrame(state, projectionAt(224));
+  expect(bridge.stringProperty({1001}).value == "Example Difficulty Table" &&
+             bridge.stringProperty({1002}).value == "★12" &&
+             bridge.stringProperty({1003}).value ==
+                 "★12Example Difficulty Table",
+         "table string selectors preserve PlayerResource's level-before-name "
+         "concatenation");
+  bridge.discardFrame();
+}
+
 void testChartDocumentBooleansUseCapturedLibraryMetadata() {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
@@ -2325,8 +2354,7 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
                 .subartist = "subartist",
                 .fullArtist = "artist subartist",
                 .genre = "genre",
-                .auditedStringProperties = {{12, "full title"},
-                                            {1003, "leveltable"}}};
+                .auditedStringProperties = {{12, "full title"}}};
   chart.staticMetadata = {.difficulty = 3,
                           .judgeRank = 70,
                           .minimumBpm = 120.9,
@@ -2394,6 +2422,9 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   state.authority.loadingState = PlayfieldLoadingState::Loaded;
   state.authority.stageFileAvailable = true;
   state.authority.backBmpAvailable = true;
+  state.authority.tableName = "table";
+  state.authority.tableLevel = "level";
+  state.authority.tableFullName = "leveltable";
   state.configuration.visibleTimeDurationMilliseconds = 667;
   state.lanes.resize(8);
   for (std::size_t index = 0; index < state.lanes.size(); ++index) {
@@ -2586,7 +2617,7 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
                  "artist subartist" &&
              bridge.stringProperty({std::string{"tablefull"}}).value ==
                  "leveltable",
-         "pinned full artist and table text use immutable chart metadata");
+         "pinned full artist and table text use their authoritative states");
   const auto practiceText =
       bridge.stringProperty({std::string{"practice_item1"}});
   expect(practiceText.supported && practiceText.value.empty(),
@@ -3134,6 +3165,7 @@ int main() {
   testRhythmTimerUsesPinnedSectionAndBpmAccumulator();
   testFavoriteChartImageIndexUsesCapturedRepositoryState();
   testSongReviewImageIndexesUsePinnedBitmaskStates();
+  testDifficultyTableStringsUseCapturedSelectionContext();
   testChartDocumentBooleansUseCapturedLibraryMetadata();
   testScoreAndComboTimersUseCapturedGameplayState();
   testPlayTimerPropertiesMatchPinnedJavaConversions();

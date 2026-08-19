@@ -4699,6 +4699,9 @@ void GamePlayScene::capturePlayfieldVisualState(
       .backBmpAvailable = playfieldBackBmpAvailable,
       .playerName = context.profileManager.activeProfile().displayName,
       .playOptionLabel = gameplayPlayOptionLabel(options),
+      .tableName = options.tableName,
+      .tableLevel = options.tableLevel,
+      .tableFullName = options.tableLevel + options.tableName,
       .currentFramesPerSecond =
           context.currentFramesPerSecond.load(std::memory_order_acquire),
       .applicationUptimeMillis =

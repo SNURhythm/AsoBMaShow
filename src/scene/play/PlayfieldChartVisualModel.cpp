@@ -539,9 +539,6 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
       {13, chart.Meta.Genre},
       {14, chart.Meta.Artist},
       {15, chart.Meta.SubArtist},
-      // A chart session has no selected table unless the application provides
-      // one.  Beatoraja concatenates two empty resource values in that case.
-      {1003, ""},
   };
   const BeatorajaNoteCounts noteCounts =
       beatorajaNoteCounts(chart, longNoteModeOverride);

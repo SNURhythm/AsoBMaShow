@@ -2850,16 +2850,12 @@ SkinPropertyLookup<std::string_view> PlaySkinStateBridge::stringProperty(
   }
   case 16:
     return {.value = text.fullArtist, .supported = true};
-  case 1003: {
-    const auto audited = text.auditedStringProperties.find(*id);
-    if (audited != text.auditedStringProperties.end()) {
-      return {.value = audited->second, .supported = true};
-    }
-    // PlayerResource.getTableFullname() is an empty concatenation when no
-    // table context is selected, which is the authoritative app state here.
-    static constexpr std::string_view empty;
-    return {.value = empty, .supported = true};
-  }
+  case 1001:
+    return {.value = state()->authority.tableName, .supported = true};
+  case 1002:
+    return {.value = state()->authority.tableLevel, .supported = true};
+  case 1003:
+    return {.value = state()->authority.tableFullName, .supported = true};
   case 1010: {
     static constexpr std::string_view version = ASOBMASHOW_APPLICATION_VERSION;
     return {.value = version, .supported = true};

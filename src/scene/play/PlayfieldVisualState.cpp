@@ -63,6 +63,8 @@ bool PlayfieldAuthorityUpdate::operator==(
          backBmpAvailable == other.backBmpAvailable &&
          playerName == other.playerName &&
          playOptionLabel == other.playOptionLabel &&
+         tableName == other.tableName && tableLevel == other.tableLevel &&
+         tableFullName == other.tableFullName &&
          currentFramesPerSecond == other.currentFramesPerSecond &&
          applicationUptimeMillis == other.applicationUptimeMillis &&
          autoPlayMarkVisible == other.autoPlayMarkVisible &&

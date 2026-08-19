@@ -88,6 +88,10 @@ struct StartOptions {
   int longNoteMode = 0;
   std::string assistOption = assist_options::kOff;
   std::string pacemakerTarget = pacemaker::kTargetBest;
+  // PlayerResource receives these from the selected TableBar/HashBar path.
+  // Empty values preserve the source reset state for non-table launches.
+  std::string tableName;
+  std::string tableLevel;
   std::shared_ptr<CoursePlaySession> courseSession = nullptr;
   CourseConstraintRules courseConstraints;
   bool ownsChart = false;

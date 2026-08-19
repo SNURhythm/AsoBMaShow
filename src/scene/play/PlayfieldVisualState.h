@@ -253,6 +253,11 @@ struct PlayfieldAuthorityUpdate {
   // active profile supplies the equivalent immutable name for a presentation.
   std::string playerName;
   std::string playOptionLabel;
+  // PlayerResource.tablename/tablelevel are set from the selected TableBar
+  // and HashBar. tableFullName retains its exact level-before-name join.
+  std::string tableName;
+  std::string tableLevel;
+  std::string tableFullName;
   // IntegerPropertyFactory.current_fps and MainController.getPlayTime(),
   // sampled by the outer application loop rather than inferred from chart
   // timing.

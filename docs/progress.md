@@ -11,7 +11,19 @@ work from [`docs/todo.md`](todo.md). The pinned authority is Beatoraja commit
   authority recorded below. The source fade window is complete; no separate
   visibility cutoff is used.
 
+- Table strings use the selected difficulty-table path now. The pinned
+  `PlayerResource.setTableinfo()` fallback additionally searches the user's
+  ordered `Config.tableURL` collection for direct launches; Aso has no
+  equivalent per-profile table configuration, so those launches retain the
+  source reset value rather than selecting an arbitrary imported table.
+
 ## Completed
+
+- Selected difficulty-table launches now capture `PlayerResource`'s table
+  strings: name (`1001`), folder label (`1002`), and its exact
+  level-before-name full value (`1003`). Aso's table symbol and raw level make
+  the same `TableDataAccessor` `tag + level` label as the pinned source.
+  Verified by `play_skin_state_bridge_tests` and a desktop `main` build.
 
 - Lift/HIDDEN state now follows `PlayConfig`: disabled 0.1 defaults, source
   finite `[0,1]` sanitization, persistence, gameplay capture, and the exact

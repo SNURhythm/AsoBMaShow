@@ -5637,12 +5637,31 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
       normalizedPlayOption.empty() || normalizedPlayOption == "NORMAL";
   const SelectedChartRandomInfo chartRandomInfo =
       selectedChartRandomInfoForPath(record.meta.BmsPath);
+  std::string tableName;
+  std::string tableLevel;
+  if ((activeFolder.type == LibraryFolderItem::Type::DifficultyTable ||
+       activeFolder.type == LibraryFolderItem::Type::DifficultyLevel ||
+       activeFolder.type == LibraryFolderItem::Type::DifficultyClearMark) &&
+      activeFolder.tableId > 0) {
+    const auto table = std::ranges::find_if(
+        folderMetadataCache.tables, [this](const DifficultyTableInfo &item) {
+          return item.id == activeFolder.tableId;
+        });
+    if (table != folderMetadataCache.tables.end()) {
+      tableName = table->name;
+      if (!activeFolder.tableLevel.empty()) {
+        // TableDataAccessor builds HashBar titles as TableData.tag + level.
+        tableLevel = table->symbol + activeFolder.tableLevel;
+      }
+    }
+  }
 
   defer(
       [this, record, gaugeType, gaugeAutoShift, gaugeAutoShiftLowerBound,
        ruleset, autoKeySound, playOption, selectedLongNoteMode, assistOption,
        pacemakerTarget, playback,
-       canReusePreviewForStart, chartRandomInfo]() {
+       canReusePreviewForStart, chartRandomInfo, tableName = std::move(tableName),
+       tableLevel = std::move(tableLevel)]() {
         auto finishStart = [this]() {
           resetStartLoadingUi();
           return true;
@@ -5678,6 +5697,8 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
                                     .longNoteMode = selectedLongNoteMode,
                                     .assistOption = assistOption,
                                     .pacemakerTarget = pacemakerTarget,
+                                    .tableName = tableName,
+                                    .tableLevel = tableLevel,
                                     .playback = playback,
                                     .ruleset = ruleset,
                                 });
@@ -5733,6 +5754,8 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
                                       .longNoteMode = selectedLongNoteMode,
                                       .assistOption = assistOption,
                                       .pacemakerTarget = pacemakerTarget,
+                                      .tableName = tableName,
+                                      .tableLevel = tableLevel,
                                       .playback = playback,
                                       .ruleset = ruleset,
                                   });
@@ -5758,6 +5781,8 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
                                          .longNoteMode = selectedLongNoteMode,
                                          .assistOption = assistOption,
                                          .pacemakerTarget = pacemakerTarget,
+                                         .tableName = tableName,
+                                         .tableLevel = tableLevel,
                                          .playback = playback,
                                          .ruleset = ruleset,
                                      });
