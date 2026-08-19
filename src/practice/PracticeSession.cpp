@@ -39,14 +39,36 @@ std::size_t Session::abandonedAttemptCount() const {
   return abandonedAttemptCount_;
 }
 
-const Configuration &Session::configuration() const { return configuration_; }
+const Configuration &Session::configuration() const {
+  return skinMenu_.has_value() ? skinMenu_->configuration() : configuration_;
+}
+
+void Session::configureSkinMenu(SkinMenuInputs inputs) {
+  skinMenu_.emplace(configuration_, std::move(inputs));
+  skinMenu_->setItemScrollPosition(skinItemScrollPosition_);
+}
 
 void Session::setSkinItemScrollPosition(float position) noexcept {
   skinItemScrollPosition_ = position;
+  if (skinMenu_.has_value()) {
+    skinMenu_->setItemScrollPosition(position);
+  }
+}
+
+bool Session::changeSkinMenuVisibleItem(std::size_t index, bool increment) {
+  return skinMenu_.has_value() &&
+         skinMenu_->changeVisibleItem(index, increment);
+}
+
+SkinMenuState Session::skinMenuState() const {
+  return skinMenu_.has_value() ? skinMenu_->skinMenuState() : SkinMenuState{};
 }
 
 SkinMenuState Session::skinMenuState(const SkinMenuInputs &inputs) const {
-  return buildSkinMenuState(configuration_, inputs, skinItemScrollPosition_);
+  return skinMenu_.has_value()
+             ? skinMenu_->skinMenuState()
+             : buildSkinMenuState(configuration_, inputs,
+                                  skinItemScrollPosition_);
 }
 
 const ReplayData *

@@ -1,5 +1,6 @@
 #include "audio/PlaybackRate.h"
 #include "practice/PracticeConfiguration.h"
+#include "practice/PracticeSession.h"
 #include "scene/ChartListenStart.h"
 
 #include <iostream>
@@ -48,7 +49,7 @@ void testSkinMenuUsesPinnedInitialPracticeViewport() {
   };
   const auto menu = practice::buildSkinMenuState(
       configuration,
-      {.chartEndMicros = 90'000'000,
+      {.lastTimelineMicros = 90'000'000,
        .judgeRank = 100,
        .chartTotal = 200.0,
        .keyMode = 7,
@@ -70,7 +71,7 @@ void testSkinMenuScrollUsesPinnedDoublePlayViewport() {
   };
   const auto menu = practice::buildSkinMenuState(
       configuration,
-      {.chartEndMicros = 90'000'000,
+      {.lastTimelineMicros = 90'000'000,
        .judgeRank = 100,
        .chartTotal = 200.0,
        .keyMode = 14,
@@ -84,6 +85,120 @@ void testSkinMenuScrollUsesPinnedDoublePlayViewport() {
              menu.items[9].value == "FLIP",
          "practice scroll follows Beatoraja's two-row double-play viewport "
          "offset");
+}
+
+void testSkinMenuControllerRetainsSourceRowsAndActions() {
+  practice::Configuration configuration{
+      .startMicros = 0,
+      .endMicros = 90'000'000,
+      .gaugeType = GaugeType::Normal,
+      .startingGaugePercent = 20,
+      .playback = {.percent = 100, .mode = audio::PlaybackMode::PitchShift},
+  };
+  practice::SkinMenuInputs inputs{
+      .lastTimelineMicros = 90'000'000,
+      .judgeRank = 100,
+      .chartTotal = 200.0,
+      .keyMode = 14,
+      .random1P = 0,
+      .random2P = 0,
+      .doublePlay = 0,
+  };
+  practice::SkinMenuController menu(configuration, inputs);
+
+  auto state = menu.skinMenuState();
+  expect(state.items[0].available && state.items[0].selected &&
+             state.items[0].label == "START TIME" &&
+             state.items[9].available && state.items[9].label == "OPTION-1P" &&
+             !state.items[10].available,
+         "source menu starts with its first ten double-play rows visible");
+
+  menu.setItemScrollPosition(1.0F);
+  state = menu.skinMenuState();
+  expect(state.itemScrollPosition == 1.0F && state.items[0].selected &&
+             state.items[0].label == "GAUGE TYPE" &&
+             state.items[9].label == "OPTION-DP" &&
+             state.items[9].value == "NORMAL",
+         "source scroll selects the first visible row at the two-row maximum");
+
+  expect(menu.changeVisibleItem(0, false),
+         "source gauge row accepts a decrement event");
+  state = menu.skinMenuState();
+  expect(state.items[0].selected && state.items[0].value == "EASY",
+         "source gauge event updates the selected scrolled row");
+
+  expect(menu.changeVisibleItem(9, true),
+         "source double-play row accepts an increment event");
+  state = menu.skinMenuState();
+  expect(state.items[9].selected && state.items[9].value == "FLIP",
+         "source double-play event toggles the DP option and selects its row");
+}
+
+void testSkinMenuControllerUsesPinnedRowDomains() {
+  practice::Configuration configuration{
+      .startMicros = 0,
+      .endMicros = 5'000'000,
+      .gaugeType = GaugeType::Normal,
+      .startingGaugePercent = 20,
+      .playback = {.percent = 100, .mode = audio::PlaybackMode::PitchShift},
+  };
+  practice::SkinMenuInputs inputs{
+      .lastTimelineMicros = 5'000'000,
+      .judgeRank = 100,
+      .chartTotal = 200.0,
+      .keyMode = 9,
+      .random1P = 0,
+      .random2P = 0,
+      .doublePlay = 0,
+  };
+  practice::SkinMenuController menu(configuration, inputs);
+
+  expect(menu.changeVisibleItem(9, false),
+         "source Pop'n option row accepts a decrement event");
+  auto state = menu.skinMenuState();
+  expect(state.items[9].value == "H-RANDOM",
+         "source Pop'n option row wraps through seven random modes");
+
+  expect(menu.changeVisibleItem(8, false),
+         "source graph-type row accepts a decrement event");
+  state = menu.skinMenuState();
+  expect(state.items[8].value == "EARLYLATE",
+         "source graph type decrements through its three-value ring");
+
+  expect(menu.changeVisibleItem(7, false),
+         "source frequency row accepts a decrement event");
+  expect(menu.configuration().playback.percent == 95,
+         "source non-turbo frequency changes in five-percent steps");
+
+  expect(menu.changeVisibleItem(0, true),
+         "source start-time row accepts an increment event");
+  expect(menu.configuration().startMicros == 100'000,
+         "source start time changes in one-hundred-millisecond steps");
+  expect(menu.changeVisibleItem(1, false),
+         "source end-time row accepts a decrement event");
+  expect(menu.configuration().endMicros == 4'900'000,
+         "source end time preserves its one-second minimum above start");
+}
+
+void testPracticeSessionUsesRetainedSkinMenuController() {
+  practice::Configuration configuration{
+      .startMicros = 0,
+      .endMicros = 90'000'000,
+  };
+  practice::Session session(configuration);
+  session.configureSkinMenu({.lastTimelineMicros = 90'000'000,
+                             .judgeRank = 100,
+                             .chartTotal = 200.0,
+                             .keyMode = 14,
+                             .random1P = 0,
+                             .random2P = 0,
+                             .doublePlay = 0});
+  session.setSkinItemScrollPosition(1.0F);
+  expect(session.changeSkinMenuVisibleItem(9, true),
+         "practice session forwards a visible source row action");
+  const auto state = session.skinMenuState();
+  expect(state.items[9].selected && state.items[9].value == "FLIP",
+         "practice session retains the controller's selected DP row");
 }
 
 void testListenUsesPracticeStartInsteadOfCursorOrEndMarker() {
@@ -257,6 +372,9 @@ int main() {
   testFreshCountInUsesChartMeasureSize();
   testSkinMenuUsesPinnedInitialPracticeViewport();
   testSkinMenuScrollUsesPinnedDoublePlayViewport();
+  testSkinMenuControllerRetainsSourceRowsAndActions();
+  testSkinMenuControllerUsesPinnedRowDomains();
+  testPracticeSessionUsesRetainedSkinMenuController();
   testListenUsesPracticeStartInsteadOfCursorOrEndMarker();
   testConfigurationSanitization();
   testGaugeAutoShiftDropdownModel();

@@ -4769,8 +4769,10 @@ void GamePlayScene::capturePlayfieldVisualState(
         }
         return std::optional<practice::SkinMenuState>{
             options.practiceSession->skinMenuState(
-                {.chartEndMicros = playfieldChartVisualModel.staticMetadata
-                                      .durationMicros,
+                {.lastTimelineMicros =
+                     playfieldChartVisualModel.timelines.empty()
+                         ? 0
+                         : playfieldChartVisualModel.timelines.back().timeMicros,
                  .judgeRank = playfieldChartVisualModel.staticMetadata.judgeRank,
                  .chartTotal = playfieldChartVisualModel.staticMetadata
                                    .songInformation

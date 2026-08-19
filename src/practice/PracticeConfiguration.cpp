@@ -67,93 +67,362 @@ bool validGaugeType(GaugeType value) {
   }
   return false;
 }
+
+constexpr std::array<std::string_view, 9> kSkinMenuGaugeNames = {
+    "ASSIST EASY", "EASY",      "NORMAL",       "HARD",    "EX-HARD",
+    "HAZARD",      "GRADE",     "EX GRADE",     "EXHARD GRADE"};
+constexpr std::array<std::string_view, 10> kSkinMenuRandomNames = {
+    "NORMAL", "MIRROR", "RANDOM", "R-RANDOM", "S-RANDOM",
+    "SPIRAL", "H-RANDOM", "ALL-SCR", "RANDOM-EX", "S-RANDOM-EX"};
+constexpr std::array<std::string_view, 2> kSkinMenuDoublePlayNames = {
+    "NORMAL", "FLIP"};
+constexpr std::array<std::string_view, 3> kSkinMenuGraphTypeNames = {
+    "NOTETYPE", "JUDGE", "EARLYLATE"};
+
+constexpr bool isDoublePlayKeyMode(int keyMode) noexcept {
+  return keyMode == 10 || keyMode == 14 || keyMode == 48;
+}
+
+constexpr bool isPopnKeyMode(int keyMode) noexcept {
+  return keyMode == 5 || keyMode == 9;
+}
+
+constexpr SkinMenuGaugeCategory
+defaultSkinMenuGaugeCategory(int keyMode) noexcept {
+  if (keyMode == 5 || keyMode == 10) {
+    return SkinMenuGaugeCategory::FiveKeys;
+  }
+  if (keyMode == 9) {
+    return SkinMenuGaugeCategory::Pms;
+  }
+  if (keyMode == 24 || keyMode == 48) {
+    return SkinMenuGaugeCategory::Keyboard;
+  }
+  return SkinMenuGaugeCategory::SevenKeys;
+}
+
+constexpr std::string_view
+skinMenuGaugeCategoryName(SkinMenuGaugeCategory category) noexcept {
+  switch (category) {
+  case SkinMenuGaugeCategory::FiveKeys:
+    return "FIVEKEYS";
+  case SkinMenuGaugeCategory::SevenKeys:
+    return "SEVENKEYS";
+  case SkinMenuGaugeCategory::Pms:
+    return "PMS";
+  case SkinMenuGaugeCategory::Keyboard:
+    return "KEYBOARD";
+  case SkinMenuGaugeCategory::Lr2:
+    return "LR2";
+  }
+  return "SEVENKEYS";
+}
+
+constexpr int skinMenuGaugeInitial(SkinMenuGaugeCategory category,
+                                   int gaugeType) noexcept {
+  switch (category) {
+  case SkinMenuGaugeCategory::Pms:
+    return gaugeType <= 2 ? 30 : 100;
+  case SkinMenuGaugeCategory::Keyboard:
+    return gaugeType == 0 ? 30 : (gaugeType <= 2 ? 20 : 100);
+  case SkinMenuGaugeCategory::FiveKeys:
+  case SkinMenuGaugeCategory::SevenKeys:
+  case SkinMenuGaugeCategory::Lr2:
+    return gaugeType <= 2 ? 20 : 100;
+  }
+  return 20;
+}
+
+constexpr int skinMenuGaugeMaximum(SkinMenuGaugeCategory category,
+                                   int gaugeType) noexcept {
+  return category == SkinMenuGaugeCategory::Pms && gaugeType <= 2 ? 120
+                                                                    : 100;
+}
+
+constexpr int roundDownToHundredMillis(int value) noexcept {
+  return value / 100 * 100;
+}
+
+std::string formatSkinMenuTime(int milliseconds) {
+  std::ostringstream value;
+  value << std::setw(2) << milliseconds / 60'000 << ':' << std::setfill('0')
+        << std::setw(2) << (milliseconds / 1'000) % 60 << '.'
+        << (milliseconds / 100) % 10;
+  return value.str();
+}
 } // namespace
 
-SkinMenuState buildSkinMenuState(const Configuration &configuration,
-                                 const SkinMenuInputs &inputs,
-                                 float itemScrollPosition) {
+SkinMenuController::SkinMenuController(Configuration configuration,
+                                       SkinMenuInputs inputs)
+    : configuration_(std::move(configuration)), inputs_(std::move(inputs)) {
+  property_.startTimeMillis =
+      static_cast<int>(configuration_.startMicros / 1'000LL);
+  property_.endTimeMillis =
+      static_cast<int>(configuration_.endMicros / 1'000LL);
+  property_.gaugeCategory = defaultSkinMenuGaugeCategory(inputs_.keyMode);
+  property_.gaugeType = gaugeTypeIndex(configuration_.gaugeType);
+  property_.startGauge = configuration_.startingGaugePercent.value_or(
+      skinMenuGaugeInitial(property_.gaugeCategory, property_.gaugeType));
+  property_.random1P = inputs_.random1P;
+  property_.random2P = inputs_.random2P;
+  property_.doublePlay = inputs_.doublePlay;
+  property_.judgeRank = inputs_.judgeRank;
+  property_.frequencyPercent = configuration_.playback.percent;
+  property_.total = inputs_.chartTotal;
+  synchronizeConfiguration();
+}
+
+void SkinMenuController::setItemScrollPosition(float position) noexcept {
+  const float clampedPosition = position < 0.0F   ? 0.0F
+                                : position > 1.0F ? 1.0F
+                                                   : position;
+  // MathUtils.clamp preserves NaN and Math.round(NaN) returns zero.
+  itemOffset_ = std::isnan(clampedPosition)
+                    ? 0
+                    : static_cast<std::size_t>(std::floor(
+                          clampedPosition * static_cast<float>(maxItemOffset()) +
+                          0.5F));
+  if (const auto firstVisible = visibleElement(0); firstVisible.has_value()) {
+    cursorPosition_ = *firstVisible;
+  }
+}
+
+float SkinMenuController::itemScrollPosition() const noexcept {
+  const std::size_t maximum = maxItemOffset();
+  return maximum == 0
+             ? 0.0F
+             : static_cast<float>(itemOffset_) / static_cast<float>(maximum);
+}
+
+SkinMenuState SkinMenuController::skinMenuState() const {
   SkinMenuState result;
-  const auto formatTime = [](long long micros) {
-    const long long tenths = micros / 100'000LL;
-    std::ostringstream value;
-    value << std::setw(2) << tenths / 600 << ':' << std::setfill('0')
-          << std::setw(2) << (tenths / 10) % 60 << '.' << tenths % 10;
-    return value.str();
-  };
-  std::array<SkinMenuItem, 12> elements;
-  const auto set = [&elements](std::size_t index, std::string label,
-                               std::string value) {
-    auto &item = elements[index];
+  const auto set = [&result](std::size_t index, std::string label,
+                             std::string value) {
+    auto &item = result.items[index];
     item.label = std::move(label);
     item.value = std::move(value);
     item.text = item.label + " : " + item.value;
   };
-  set(0, "START TIME", formatTime(configuration.startMicros));
-  set(1, "END TIME", formatTime(configuration.endMicros));
-  static constexpr std::array<std::string_view, 6> gaugeNames = {
-      "ASSIST EASY", "EASY", "NORMAL", "HARD", "EX-HARD", "HAZARD"};
-  set(2, "GAUGE TYPE", std::string(gaugeNames[static_cast<std::size_t>(
-                              gaugeTypeIndex(configuration.gaugeType))]));
-  const std::string_view category =
-      inputs.keyMode == 5 || inputs.keyMode == 10 ? "FIVEKEYS"
-      : inputs.keyMode == 9 ? "PMS"
-      : inputs.keyMode == 24 || inputs.keyMode == 48 ? "KEYBOARD"
-      : "SEVENKEYS";
-  set(3, "GAUGE CATEGORY", std::string(category));
-  set(4, "GAUGE VALUE", configuration.startingGaugePercent
-                              ? std::to_string(*configuration.startingGaugePercent)
-                              : std::to_string(defaultStartingGaugePercent(configuration)));
-  set(5, "JUDGERANK", std::to_string(inputs.judgeRank));
-  set(6, "TOTAL", std::to_string(static_cast<int>(inputs.chartTotal)));
-  set(7, "FREQUENCY", std::to_string(configuration.playback.percent));
-  set(8, "GRAPHTYPE", "NOTETYPE");
-  static constexpr std::array<std::string_view, 10> randomNames = {
-      "NORMAL", "MIRROR", "RANDOM", "R-RANDOM", "S-RANDOM", "SPIRAL",
-      "H-RANDOM", "ALL-SCR", "RANDOM-EX", "S-RANDOM-EX"};
-  static constexpr std::array<std::string_view, 2> doublePlayNames = {
-      "NORMAL", "FLIP"};
-  set(9, "OPTION-1P",
-      std::string(randomNames.at(static_cast<std::size_t>(inputs.random1P))));
+  const auto visible = [this](std::size_t index) {
+    return visibleElement(index);
+  };
+  const auto elementLabel = [](std::size_t element) -> std::string_view {
+    static constexpr std::array<std::string_view, 12> labels = {
+        "START TIME", "END TIME",  "GAUGE TYPE", "GAUGE CATEGORY",
+        "GAUGE VALUE", "JUDGERANK", "TOTAL",      "FREQUENCY",
+        "GRAPHTYPE",  "OPTION-1P", "OPTION-2P",  "OPTION-DP"};
+    return labels[element];
+  };
+  const auto elementValue = [this](std::size_t element) -> std::string {
+    switch (element) {
+    case 0:
+      return formatSkinMenuTime(property_.startTimeMillis);
+    case 1:
+      return formatSkinMenuTime(property_.endTimeMillis);
+    case 2:
+      return std::string(kSkinMenuGaugeNames[static_cast<std::size_t>(
+          property_.gaugeType)]);
+    case 3:
+      return std::string(skinMenuGaugeCategoryName(property_.gaugeCategory));
+    case 4:
+      return std::to_string(property_.startGauge);
+    case 5:
+      return std::to_string(property_.judgeRank);
+    case 6:
+      return std::to_string(static_cast<int>(property_.total));
+    case 7:
+      return std::to_string(property_.frequencyPercent);
+    case 8:
+      return std::string(kSkinMenuGraphTypeNames[static_cast<std::size_t>(
+          property_.graphType)]);
+    case 9:
+      return std::string(kSkinMenuRandomNames[static_cast<std::size_t>(
+          property_.random1P)]);
+    case 10:
+      return std::string(kSkinMenuRandomNames[static_cast<std::size_t>(
+          property_.random2P)]);
+    case 11:
+      return std::string(kSkinMenuDoublePlayNames[static_cast<std::size_t>(
+          property_.doublePlay)]);
+    default:
+      return {};
+    }
+  };
 
-  const bool doublePlay =
-      inputs.keyMode == 10 || inputs.keyMode == 14 || inputs.keyMode == 48;
-  std::size_t elementCount = 10;
-  if (doublePlay) {
-    set(10, "OPTION-2P",
-        std::string(randomNames.at(
-            static_cast<std::size_t>(inputs.random2P))));
-    set(11, "OPTION-DP",
-        std::string(doublePlayNames.at(
-            static_cast<std::size_t>(inputs.doublePlay))));
-    elementCount = 12;
-  }
-
-  constexpr std::size_t visibleItemCount = 10;
-  const std::size_t maxOffset = elementCount - visibleItemCount;
-  const float clampedPosition = itemScrollPosition < 0.0F   ? 0.0F
-                                : itemScrollPosition > 1.0F ? 1.0F
-                                                             : itemScrollPosition;
-  // MathUtils.clamp preserves NaN and Math.round(NaN) returns zero.
-  const std::size_t offset = std::isnan(clampedPosition)
-                                 ? 0
-                                 : static_cast<std::size_t>(std::floor(
-                                       clampedPosition *
-                                           static_cast<float>(maxOffset) +
-                                       0.5F));
-  result.itemScrollPosition =
-      maxOffset == 0 ? 0.0F
-                     : static_cast<float>(offset) /
-                           static_cast<float>(maxOffset);
-  for (std::size_t visible = 0; visible < visibleItemCount; ++visible) {
-    const std::size_t element = offset + visible;
-    if (element >= elementCount) {
+  result.itemScrollPosition = itemScrollPosition();
+  for (std::size_t index = 0; index < 10; ++index) {
+    const auto element = visible(index);
+    if (!element.has_value()) {
       continue;
     }
-    result.items[visible] = elements[element];
-    result.items[visible].available = true;
-    result.items[visible].selected = visible == 0;
+    set(index, std::string(elementLabel(*element)), elementValue(*element));
+    result.items[index].available = true;
+    result.items[index].selected = *element == cursorPosition_;
   }
   return result;
+}
+
+bool SkinMenuController::changeVisibleItem(std::size_t index, bool increment,
+                                           bool analog, bool turbo) {
+  const auto element = visibleElement(index);
+  if (!element.has_value()) {
+    return false;
+  }
+  cursorPosition_ = *element;
+  switch (*element) {
+  case 0: {
+    const int maximum = roundDownToHundredMillis(
+        static_cast<int>(inputs_.lastTimelineMicros / 1'000LL) - 2'000);
+    const int change = turbo ? (analog ? 1'000 : 2'500) : 100;
+    if (increment) {
+      property_.startTimeMillis =
+          std::min(property_.startTimeMillis + change, maximum);
+      property_.endTimeMillis = std::max(
+          property_.endTimeMillis, property_.startTimeMillis + 1'000);
+    } else {
+      property_.startTimeMillis =
+          std::max(property_.startTimeMillis - change, 0);
+    }
+    break;
+  }
+  case 1: {
+    const int maximum = roundDownToHundredMillis(
+        static_cast<int>(inputs_.lastTimelineMicros / 1'000LL) + 1'000);
+    const int minimum = roundDownToHundredMillis(property_.startTimeMillis +
+                                                  1'000);
+    const int change = turbo ? (analog ? 1'000 : 2'500) : 100;
+    property_.endTimeMillis = increment
+                                 ? std::min(property_.endTimeMillis + change,
+                                            maximum)
+                                 : std::max(property_.endTimeMillis - change,
+                                            minimum);
+    break;
+  }
+  case 2:
+    property_.gaugeType =
+        (property_.gaugeType + (increment ? 1 : 8)) % 9;
+    if (isPopnKeyMode(inputs_.keyMode) && property_.gaugeType >= 3 &&
+        property_.startGauge > 100) {
+      property_.startGauge = 100;
+    }
+    break;
+  case 3:
+    property_.gaugeCategory = static_cast<SkinMenuGaugeCategory>(
+        (static_cast<int>(property_.gaugeCategory) + (increment ? 1 : 4)) %
+        5);
+    property_.startGauge =
+        skinMenuGaugeInitial(property_.gaugeCategory, property_.gaugeType);
+    break;
+  case 4: {
+    const int change = turbo ? 10 : 1;
+    const int maximum =
+        skinMenuGaugeMaximum(property_.gaugeCategory, property_.gaugeType);
+    if (increment && turbo && property_.startGauge == 1) {
+      property_.startGauge = std::min(change, maximum);
+    } else {
+      property_.startGauge = std::clamp(
+          property_.startGauge + (increment ? change : -change), 1, maximum);
+    }
+    break;
+  }
+  case 5: {
+    const int change = turbo ? 25 : 1;
+    if (increment && turbo && property_.judgeRank == 1) {
+      property_.judgeRank = std::min(change, 400);
+    } else {
+      property_.judgeRank =
+          std::clamp(property_.judgeRank + (increment ? change : -change), 1,
+                     400);
+    }
+    break;
+  }
+  case 6: {
+    const int change = analog ? (turbo ? 20 : 1) : (turbo ? 25 : 5);
+    property_.total = std::clamp(property_.total + (increment ? change : -change),
+                                 10.0, 5'000.0);
+    break;
+  }
+  case 7: {
+    const int change = analog ? (turbo ? 10 : 1) : (turbo ? 25 : 5);
+    property_.frequencyPercent =
+        std::clamp(property_.frequencyPercent + (increment ? change : -change),
+                   50, 200);
+    break;
+  }
+  case 8:
+    property_.graphType = (property_.graphType + (increment ? 1 : 2)) % 3;
+    break;
+  case 9: {
+    const int options = isPopnKeyMode(inputs_.keyMode) ? 7 : 10;
+    property_.random1P =
+        (property_.random1P + (increment ? 1 : options - 1)) % options;
+    break;
+  }
+  case 10:
+    property_.random2P = (property_.random2P + (increment ? 1 : 9)) % 10;
+    break;
+  case 11:
+    property_.doublePlay = (property_.doublePlay + 1) % 2;
+    break;
+  default:
+    return false;
+  }
+  synchronizeConfiguration();
+  return true;
+}
+
+const Configuration &SkinMenuController::configuration() const noexcept {
+  return configuration_;
+}
+
+const SkinMenuProperty &SkinMenuController::property() const noexcept {
+  return property_;
+}
+
+bool SkinMenuController::elementAvailable(std::size_t element) const noexcept {
+  return element < 10 || (element < 12 && isDoublePlayKeyMode(inputs_.keyMode));
+}
+
+std::optional<std::size_t>
+SkinMenuController::visibleElement(std::size_t index) const noexcept {
+  if (index >= 10) {
+    return std::nullopt;
+  }
+  std::size_t availableIndex = itemOffset_ + index;
+  for (std::size_t element = 0; element < 12; ++element) {
+    if (elementAvailable(element) && availableIndex-- == 0) {
+      return element;
+    }
+  }
+  return std::nullopt;
+}
+
+std::size_t SkinMenuController::availableElementCount() const noexcept {
+  return isDoublePlayKeyMode(inputs_.keyMode) ? 12 : 10;
+}
+
+std::size_t SkinMenuController::maxItemOffset() const noexcept {
+  return availableElementCount() - 10;
+}
+
+void SkinMenuController::synchronizeConfiguration() noexcept {
+  configuration_.startMicros =
+      static_cast<long long>(property_.startTimeMillis) * 1'000LL;
+  configuration_.endMicros =
+      static_cast<long long>(property_.endTimeMillis) * 1'000LL;
+  configuration_.startingGaugePercent = property_.startGauge;
+  configuration_.playback.percent = property_.frequencyPercent;
+  if (property_.gaugeType <= 5) {
+    configuration_.gaugeType = gaugeTypeAtIndex(property_.gaugeType);
+  }
+}
+
+SkinMenuState buildSkinMenuState(const Configuration &configuration,
+                                 const SkinMenuInputs &inputs,
+                                 float itemScrollPosition) {
+  SkinMenuController controller(configuration, inputs);
+  controller.setItemScrollPosition(itemScrollPosition);
+  return controller.skinMenuState();
 }
 
 std::span<const GaugeOption> practiceGaugeOptions() { return kGaugeOptions; }

@@ -4353,6 +4353,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(practice_configuration_tests
         tests/practice_configuration_tests.cpp
         src/practice/PracticeConfiguration.cpp
+        src/practice/PracticeSession.cpp
         src/scene/play/GameplayGaugeRules.cpp
     )
     target_include_directories(practice_configuration_tests PRIVATE

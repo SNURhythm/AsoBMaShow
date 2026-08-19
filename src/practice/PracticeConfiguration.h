@@ -3,8 +3,9 @@
 #include "../audio/PlaybackRate.h"
 #include "../scene/play/RhythmState.h"
 
-#include <cstdint>
 #include <array>
+#include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <string>
@@ -68,7 +69,7 @@ struct SkinMenuItem {
 };
 
 struct SkinMenuInputs {
-  long long chartEndMicros = 0;
+  long long lastTimelineMicros = 0;
   int judgeRank = 0;
   double chartTotal = 0.0;
   int keyMode = 0;
@@ -80,6 +81,63 @@ struct SkinMenuInputs {
 struct SkinMenuState {
   std::array<SkinMenuItem, 16> items;
   float itemScrollPosition = 0.0F;
+};
+
+// PracticeConfiguration.PracticeProperty retains values that are not present
+// in Aso's persisted practice Configuration.  This controller deliberately
+// keeps the source menu value domain intact; applying all values to an
+// attempt is a separate lifecycle concern.
+enum class SkinMenuGaugeCategory : std::uint8_t {
+  FiveKeys,
+  SevenKeys,
+  Pms,
+  Keyboard,
+  Lr2,
+};
+
+struct SkinMenuProperty {
+  int startTimeMillis = 0;
+  int endTimeMillis = 10'000;
+  SkinMenuGaugeCategory gaugeCategory = SkinMenuGaugeCategory::SevenKeys;
+  int gaugeType = 2;
+  int startGauge = 20;
+  int random1P = 0;
+  int random2P = 0;
+  int doublePlay = 0;
+  int judgeRank = 100;
+  int frequencyPercent = 100;
+  double total = 0.0;
+  int graphType = 0;
+
+  bool operator==(const SkinMenuProperty &) const = default;
+};
+
+class SkinMenuController {
+public:
+  SkinMenuController(Configuration, SkinMenuInputs);
+
+  void setItemScrollPosition(float) noexcept;
+  [[nodiscard]] float itemScrollPosition() const noexcept;
+  [[nodiscard]] SkinMenuState skinMenuState() const;
+  [[nodiscard]] bool changeVisibleItem(std::size_t index, bool increment,
+                                       bool analog = false,
+                                       bool turbo = false);
+  [[nodiscard]] const Configuration &configuration() const noexcept;
+  [[nodiscard]] const SkinMenuProperty &property() const noexcept;
+
+private:
+  [[nodiscard]] bool elementAvailable(std::size_t) const noexcept;
+  [[nodiscard]] std::optional<std::size_t>
+  visibleElement(std::size_t) const noexcept;
+  [[nodiscard]] std::size_t availableElementCount() const noexcept;
+  [[nodiscard]] std::size_t maxItemOffset() const noexcept;
+  void synchronizeConfiguration() noexcept;
+
+  Configuration configuration_;
+  SkinMenuInputs inputs_;
+  SkinMenuProperty property_;
+  std::size_t cursorPosition_ = 0;
+  std::size_t itemOffset_ = 0;
 };
 
 [[nodiscard]] SkinMenuState buildSkinMenuState(const Configuration &,

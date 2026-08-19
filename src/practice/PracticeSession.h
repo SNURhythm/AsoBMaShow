@@ -4,6 +4,7 @@
 #include "PracticeConfiguration.h"
 
 #include <cstddef>
+#include <optional>
 #include <vector>
 
 namespace practice {
@@ -21,12 +22,17 @@ public:
   [[nodiscard]] const std::vector<ReplayData> &completedAttempts() const;
   [[nodiscard]] std::size_t abandonedAttemptCount() const;
   [[nodiscard]] const Configuration &configuration() const;
+  void configureSkinMenu(SkinMenuInputs);
   void setSkinItemScrollPosition(float position) noexcept;
+  [[nodiscard]] bool changeSkinMenuVisibleItem(std::size_t index,
+                                               bool increment);
+  [[nodiscard]] SkinMenuState skinMenuState() const;
   [[nodiscard]] SkinMenuState
   skinMenuState(const SkinMenuInputs &inputs) const;
 
 private:
-  const Configuration configuration_;
+  Configuration configuration_;
+  std::optional<SkinMenuController> skinMenu_;
   std::vector<ReplayData> completedAttempts_;
   std::size_t abandonedAttemptCount_ = 0;
   bool attemptActive_ = false;
