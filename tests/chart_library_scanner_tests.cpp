@@ -8,6 +8,7 @@
 #include <archive_entry.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cassert>
 #include <chrono>
@@ -239,6 +240,39 @@ void testBasicNoOpAndDeleteScan() {
   assert(scanner.Scan(*session, {root}) == 1);
   assert(session->CountAllChartMeta() == 0);
   assert(repository.GetLibraryRevision() > stableRevision);
+}
+
+void testFolderTextDocumentFlagMatchesBeatorajaScanScope() {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  const auto documented = root / "documented";
+  const auto undocumented = root / "undocumented";
+  const auto nested = undocumented / "nested";
+  const auto documentedChart =
+      writeChart(documented, "documented", "Documented Scanner Chart");
+  const auto undocumentedChart =
+      writeChart(undocumented, "undocumented", "Undocumented Scanner Chart");
+  const auto nestedChart = writeChart(nested, "nested", "Nested Scanner Chart");
+  {
+    std::ofstream(documented / "README.TXT") << "chart documentation";
+    std::ofstream(nested / "notes.txt") << "nested documentation";
+  }
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+  assert(scanner.Scan(*session, {root}) == 3);
+
+  const std::array<std::filesystem::path, 3> paths{
+      documentedChart, undocumentedChart, nestedChart};
+  const auto records = session->SelectChartMetaByPaths(paths);
+  assert(records.status == ChartMetaPathBatchReadStatus::Loaded);
+  assert(records.records.size() == paths.size());
+  assert(records.records[0].hasDocument);
+  assert(!records.records[1].hasDocument);
+  assert(records.records[2].hasDocument);
 }
 
 void testAddedDirectoryScanPreservesUnrelatedMissingChart() {

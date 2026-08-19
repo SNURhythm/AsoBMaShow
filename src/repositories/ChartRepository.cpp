@@ -29,7 +29,7 @@
 
 namespace {
 using asobmshow::chart_sql::normalizedSqlHash;
-constexpr int kChartDatabaseSchemaVersion = 3;
+constexpr int kChartDatabaseSchemaVersion = 4;
 
 std::string columnString(sqlite3_stmt *stmt, int idx);
 
@@ -162,6 +162,7 @@ bool createChartMetaTableSchema(sqlite3 *db) {
       "total_scratch_notes INTEGER,"
       "total_backspin_notes INTEGER,"
       "ln_mode INTEGER NOT NULL DEFAULT 0,"
+      "has_document INTEGER NOT NULL DEFAULT 0,"
       "source_priority INTEGER,"
       "source_archive_size INTEGER"
       ")";
@@ -517,6 +518,13 @@ bool migrateChartDatabaseToVersion3(sqlite3 *db, bool &completed) {
   return invalidateChartMetadataForNormalScan(db, completed);
 }
 
+bool migrateChartDatabaseToVersion4(sqlite3 *db, bool &completed) {
+  // Beatoraja derives CONTENT_TEXT while it walks each chart directory. The
+  // older cache has no equivalent source fact, so a normal rescan is required
+  // instead of fabricating a value for already-indexed charts.
+  return invalidateChartMetadataForNormalScan(db, completed);
+}
+
 bool runChartDatabaseMigrationPasses(
     sqlite3 *db, const ChartDatabaseMigrationPass *passes,
     std::size_t passCount, int latestVersion) {
@@ -559,6 +567,7 @@ bool migrateChartDatabaseSchema(sqlite3 *db) {
       {1, "chart metadata rebuild", migrateChartDatabaseToVersion1},
       {2, "normalize chart identity storage", migrateChartDatabaseToVersion2},
       {3, "persist authored TOTAL metadata", migrateChartDatabaseToVersion3},
+      {4, "persist folder document metadata", migrateChartDatabaseToVersion4},
   };
   return runChartDatabaseMigrationPasses(
       db, kMigrationPasses,

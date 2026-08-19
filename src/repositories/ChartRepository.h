@@ -74,6 +74,9 @@ struct ChartMetaQuery {
 
 struct ChartMetaRecord {
   bms_parser::ChartMeta meta;
+  // SongData.CONTENT_TEXT as established by Beatoraja's library scan. This
+  // is a folder-level fact, separate from BMS header metadata.
+  bool hasDocument = false;
   std::string difficultyTableLabels;
   bool courseStart = false;
   bool unavailable = false;
@@ -171,7 +174,8 @@ public:
 
       bool UpsertChart(
           const bms_parser::ChartMeta &meta,
-          std::optional<ChartSourcePreference> sourcePreference);
+          std::optional<ChartSourcePreference> sourcePreference,
+          bool hasDocument = false);
       bool DeleteChart(const std::filesystem::path &path);
       bool DeleteCharts(std::span<const std::filesystem::path> paths);
       bool DeleteChartsInArchive(const std::filesystem::path &path);

@@ -137,6 +137,7 @@ const char *insertChartMetaSql() {
          "total_scratch_notes,"
          "total_backspin_notes,"
          "ln_mode,"
+         "has_document,"
          "source_priority,"
          "source_archive_size"
          ") VALUES("
@@ -169,6 +170,7 @@ const char *insertChartMetaSql() {
          "@total_scratch_notes,"
          "@total_backspin_notes,"
          "@ln_mode,"
+         "@has_document,"
          "@source_priority,"
          "@source_archive_size"
          ")";
@@ -177,7 +179,8 @@ const char *insertChartMetaSql() {
 bool bindAndInsertChartMeta(
     sqlite3 *database, sqlite3_stmt *statement,
     const bms_parser::ChartMeta &chartMeta,
-    const std::optional<ChartSourcePreference> &sourcePreferenceHint) {
+    const std::optional<ChartSourcePreference> &sourcePreferenceHint,
+    bool hasDocument) {
   if (statement == nullptr) {
     logSdlSqlErrorText("inserting a chart", "statement is not prepared");
     return false;
@@ -227,8 +230,9 @@ bool bindAndInsertChartMeta(
   sqlite3_bind_int(statement, 27, chartMeta.TotalScratchNotes);
   sqlite3_bind_int(statement, 28, chartMeta.TotalBackSpinNotes);
   sqlite3_bind_int(statement, 29, chartMeta.LnMode);
-  sqlite3_bind_int(statement, 30, sourcePreference.priority);
-  sqlite3_bind_int64(statement, 31,
+  sqlite3_bind_int(statement, 30, hasDocument ? 1 : 0);
+  sqlite3_bind_int(statement, 31, sourcePreference.priority);
+  sqlite3_bind_int64(statement, 32,
                      clampSqlInteger(sourcePreference.archiveSize));
   if (sqlite3_step(statement) != SQLITE_DONE) {
     logSdlSqlError("inserting a chart", database);
@@ -404,7 +408,7 @@ bool ChartRepository::Session::InsertChartMeta(
     return false;
   }
   if (!bindAndInsertChartMeta(database, statement.get(), chartMeta,
-                              std::nullopt)) {
+                              std::nullopt, false)) {
     return false;
   }
   chart_repository_detail::BumpLibraryRevision();
@@ -487,7 +491,7 @@ ChartRepository::Session::ScanBatch::operator=(ScanBatch &&) noexcept = default;
 
 bool ChartRepository::Session::ScanBatch::UpsertChart(
     const bms_parser::ChartMeta &meta,
-    std::optional<ChartSourcePreference> sourcePreference) {
+    std::optional<ChartSourcePreference> sourcePreference, bool hasDocument) {
   if (impl_ == nullptr || !impl_->ready || impl_->committed) {
     return false;
   }
@@ -498,7 +502,7 @@ bool ChartRepository::Session::ScanBatch::UpsertChart(
   sqlite3_clear_bindings(impl_->chartInsertStatement.get());
   if (!bindAndInsertChartMeta(impl_->database(),
                               impl_->chartInsertStatement.get(), meta,
-                              sourcePreference)) {
+                              sourcePreference, hasDocument)) {
     return false;
   }
   impl_->noteChanged();

@@ -84,6 +84,7 @@ constexpr const char *kDifficultyEntrySelectColumns =
     "COALESCE(cm.total_scratch_notes, 0),"
     "COALESCE(cm.total_backspin_notes, 0),"
     "COALESCE(cm.ln_mode, 0),"
+    "COALESCE(cm.has_document, 0),"
     "dt.symbol || dte.level,"
     "CASE WHEN cm.path IS NULL THEN 1 ELSE 0 END";
 
@@ -130,6 +131,7 @@ constexpr const char *kDifficultyCourseEntrySelectColumns =
     "COALESCE(cm.total_scratch_notes, 0),"
     "COALESCE(cm.total_backspin_notes, 0),"
     "COALESCE(cm.ln_mode, 0),"
+    "COALESCE(cm.has_document, 0),"
     "COALESCE(NULLIF(dt.symbol || NULLIF(NULLIF(dce.level, ''), '0'), "
     "dt.symbol), NULLIF(dt.symbol || NULLIF(dte.level, ''), dt.symbol), "
     "NULLIF(dt.symbol || NULLIF(dce.level, ''), dt.symbol), "
@@ -1982,6 +1984,9 @@ ChartMetaRecord readChartMetaRecord(sqlite3_stmt *stmt) {
   ChartMetaRecord record;
   record.meta = readChartMeta(stmt);
   int idx = kChartMetaColumnCount;
+  if (sqlite3_column_count(stmt) > idx) {
+    record.hasDocument = sqlite3_column_int(stmt, idx++) != 0;
+  }
   if (sqlite3_column_count(stmt) > idx) {
     record.difficultyTableLabels = columnString(stmt, idx++);
   }

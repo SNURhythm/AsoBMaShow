@@ -118,6 +118,40 @@ bool parsedChartMetaLooksInsertable(const bms_parser::ChartMeta &meta) {
          (meta.TotalNotes > 0 || meta.TotalLandmineNotes > 0);
 }
 
+bool hasTextDocumentExtension(const std::filesystem::path &path) {
+  std::string filename = fspath_to_utf8(path.filename());
+  if (filename.size() < 4) {
+    return false;
+  }
+  for (char &character : filename) {
+    character = static_cast<char>(
+        std::tolower(static_cast<unsigned char>(character)));
+  }
+  return filename.ends_with(".txt");
+}
+
+bool folderContainsTextDocument(const std::filesystem::path &folder) {
+  // SQLiteSongDatabaseAccessor.BMSFolder.addFile() sets SongData's
+  // CONTENT_TEXT flag from any immediate, non-directory child whose
+  // Locale.ROOT-lowercased name ends in ".txt". This is deliberately not a
+  // BMS-header or recursive-file check.
+  std::error_code error;
+  std::filesystem::directory_iterator iterator(
+      folder, std::filesystem::directory_options::skip_permission_denied,
+      error);
+  for (const auto end = std::filesystem::directory_iterator();
+       !error && iterator != end; iterator.increment(error)) {
+    std::error_code typeError;
+    if (iterator->is_directory(typeError) || typeError) {
+      continue;
+    }
+    if (hasTextDocumentExtension(iterator->path())) {
+      return true;
+    }
+  }
+  return false;
+}
+
 struct ArchiveScanResult {
   bool readable = false;
   bool solid = false;
@@ -402,6 +436,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     std::filesystem::path path;
     bool deleted = false;
     bool parseAttempted = false;
+    bool hasDocument = false;
     std::optional<bms_parser::ChartMeta> preparedMeta;
   };
   std::vector<ScanDiff> diffs;
@@ -657,6 +692,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   struct PreparedOrdinaryChart {
     std::filesystem::path path;
     bool parseAttempted = false;
+    bool hasDocument = false;
     std::optional<bms_parser::ChartMeta> meta;
   };
   struct PreparedArchive {
@@ -1163,7 +1199,20 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
         storePreparedEntity(sequence, std::move(*preparedArchive));
       };
 
-  auto scheduleOrdinaryChart = [&](const std::filesystem::path &path) {
+  std::unordered_map<path_t, bool> documentByFolder;
+  auto hasDocumentForChartPath = [&](const std::filesystem::path &path) {
+    const std::filesystem::path folder = path.parent_path();
+    const path_t key = fspath_to_path_t(folder.lexically_normal());
+    if (const auto found = documentByFolder.find(key);
+        found != documentByFolder.end()) {
+      return found->second;
+    }
+    const bool hasDocument = folderContainsTextDocument(folder);
+    return documentByFolder.emplace(key, hasDocument).first->second;
+  };
+
+  auto scheduleOrdinaryChart = [&](const std::filesystem::path &path,
+                                   bool hasDocument) {
     const path_t key = fspath_to_path_t(path);
     if (knownChartPaths.contains(key) ||
         !discoveredOrdinaryChartPaths.insert(key).second) {
@@ -1172,7 +1221,10 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
 
     const std::size_t sequence = reservePreparedEntity();
     if (checkpoint.found) {
-      storePreparedEntity(sequence, PreparedOrdinaryChart{.path = path});
+      storePreparedEntity(sequence, PreparedOrdinaryChart{
+                                        .path = path,
+                                        .hasDocument = hasDocument,
+                                    });
       return;
     }
 
@@ -1184,16 +1236,23 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
             PreparedOrdinaryChart prepared{
                 .path = path,
                 .parseAttempted = true,
+                .hasDocument = hasDocument,
                 .meta = parseChartMeta(path, nullptr),
             };
             storePreparedEntity(sequence, std::move(prepared));
           } catch (...) {
             storePreparedEntityIfMissing(sequence,
-                                         PreparedOrdinaryChart{.path = path});
+                                         PreparedOrdinaryChart{
+                                             .path = path,
+                                             .hasDocument = hasDocument,
+                                         });
             throw;
           }
         })) {
-      storePreparedEntity(sequence, PreparedOrdinaryChart{.path = path});
+      storePreparedEntity(sequence, PreparedOrdinaryChart{
+                                        .path = path,
+                                        .hasDocument = hasDocument,
+                                    });
     }
   };
 
@@ -1307,9 +1366,9 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
                    ChartScanProgressStage::ScanningRoots);
 #if TARGET_OS_ANDROID
     if (IsAndroidTreePath(root)) {
-      std::vector<std::filesystem::path> androidChartPaths;
+      std::vector<AndroidTreeChartFile> androidChartFiles;
       std::string androidError;
-      if (!ListAndroidTreeChartFiles(root, androidChartPaths, androidError,
+      if (!ListAndroidTreeChartFiles(root, androidChartFiles, androidError,
                                      stopToken)) {
         if (!androidError.empty()) {
           SDL_Log("Failed while scanning Android chart folder %s: %s",
@@ -1318,13 +1377,14 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
         ++scannedRootCount;
         continue;
       }
-      for (const auto &path : androidChartPaths) {
+      for (const auto &chartFile : androidChartFiles) {
         if (shouldStop()) {
           entityScheduler.cancel();
           return {};
         }
+        const std::filesystem::path &path = chartFile.path;
         if (asobmshow::bms_chart_file::isBmsChartPath(path)) {
-          scheduleOrdinaryChart(path);
+          scheduleOrdinaryChart(path, chartFile.hasDocument);
           continue;
         }
         if (archive_file::hasSupportedArchiveExtension(path)) {
@@ -1354,7 +1414,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     if (std::filesystem::is_regular_file(root, rootTypeError) &&
         !rootTypeError) {
       if (asobmshow::bms_chart_file::isBmsChartPath(root)) {
-        scheduleOrdinaryChart(root);
+        scheduleOrdinaryChart(root, hasDocumentForChartPath(root));
       } else if (archive_file::hasSupportedArchiveExtension(root)) {
         scheduleArchivePath(root);
       }
@@ -1384,7 +1444,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       }
       const std::filesystem::path path = iterator->path();
       if (asobmshow::bms_chart_file::isBmsChartPath(path)) {
-        scheduleOrdinaryChart(path);
+        scheduleOrdinaryChart(path, hasDocumentForChartPath(path));
         continue;
       }
       if (archive_file::hasSupportedArchiveExtension(path)) {
@@ -1430,6 +1490,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
           .path = std::move(ordinary->path),
           .deleted = false,
           .parseAttempted = ordinary->parseAttempted,
+          .hasDocument = ordinary->hasDocument,
           .preparedMeta = std::move(ordinary->meta),
       });
       continue;
@@ -1955,8 +2016,10 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     }
   }
 
-  auto insertIndividualChartMeta = [&](bms_parser::ChartMeta &meta) -> bool {
-    if (!recordStorageResult(scanBatch->UpsertChart(meta, std::nullopt))) {
+  auto insertIndividualChartMeta = [&](bms_parser::ChartMeta &meta,
+                                       bool hasDocument) -> bool {
+    if (!recordStorageResult(
+            scanBatch->UpsertChart(meta, std::nullopt, hasDocument))) {
       return false;
     }
     if (!reconcileExisting) {
@@ -2098,7 +2161,8 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       reportProgress(parseCurrent, parseTotal,
                      ChartScanProgressStage::ParsingCharts);
       if (parsedMetas[offset].has_value()) {
-        insertIndividualChartMeta(*parsedMetas[offset]);
+        insertIndividualChartMeta(*parsedMetas[offset],
+                                  individualDiffs[currentIndex].hasDocument);
       }
       ++parseCurrent;
       const std::size_t nextIndex = currentIndex + 1;
