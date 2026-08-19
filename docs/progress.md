@@ -7,11 +7,18 @@ work from [`docs/todo.md`](todo.md). The pinned authority is Beatoraja commit
 
 ## In progress
 
-- Constant-scroll rendering remains a separate renderer task. Its persisted
-  selector/configuration state is present, but the pinned `LaneRenderer`
-  constant-speed and fade rules must not be replaced with a simpler cutoff.
+- The remaining Constant speed override depends on the same parser speed-object
+  authority recorded below. The source fade window is complete; no separate
+  visibility cutoff is used.
 
 ## Completed
+
+- Constant play now forwards `PlayConfig.duration` and
+  `constantFadeinTime` through selected-skin projection. Normal notes, long
+  notes, and section/BPM/STOP lines share the pinned `LaneRenderer` time
+  window and alpha, including the signed negative-fade branch and the strict
+  positive-fade endpoint. Verified by `playfield_projection_tests`,
+  `app_settings_store_tests`, and a desktop `main` build.
 
 - `notesDisplayTimingAutoAdjust` (`75`) now implements its source behavior,
   not only its image selector: eligible PGREAT/GREAT/GOOD judgements in live

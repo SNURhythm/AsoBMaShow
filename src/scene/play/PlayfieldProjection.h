@@ -147,6 +147,7 @@ struct ProjectedLongNoteDescriptor {
   bool tailReleasedEarly = false;
   bool tailMissedWithHead = false;
   bool tailResolvedAtOrAfterTiming = false;
+  double opacity = 1.0;
   std::uint32_t submissionOrdinal = 0;
   std::uint32_t bodyDepth = 0;
   std::uint32_t endpointDepth = 0;
@@ -159,6 +160,7 @@ struct ProjectedLineDescriptor {
   long long timeMicros = 0;
   std::uint32_t authoredOrdinal = 0;
   std::uint32_t retainedOrdinal = kNoRetainedTimelineOrdinal;
+  double opacity = 1.0;
   std::uint32_t submissionOrdinal = 0;
 };
 

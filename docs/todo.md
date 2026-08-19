@@ -188,9 +188,11 @@ gameplay.
   currently exposes no speed-object model, so synthesis here would not be
   source-faithful.
 
-- Apply `PlayConfig.enableConstant` to the renderer using the pinned
-  `LaneRenderer` constant-speed region and fade-in rules. The selector state
-  for image/boolean property `400` is already captured.
+- [x] `PlayConfig.enableConstant` now applies `LaneRenderer`'s duration and
+  signed fade window to selected-skin normal notes, long notes, and timeline
+  lines. The exact endpoint behavior is retained (positive fade includes the
+  target row and excludes the fade endpoint). Its separate forced-speed path
+  remains blocked only by the source speed-object parser work below.
 
 - Implement configurable Lift and Hidden planes and the source
   `isChangeLift` input path. The current Start+Select edge is retained, but

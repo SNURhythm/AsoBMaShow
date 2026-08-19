@@ -551,7 +551,8 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
   std::uint32_t lineOrdinal = 1;
   const auto appendLine = [&result, &reserve, &lineOrdinal](
                               const ChartVisualTimeline &timeline,
-                              ProjectedLineKind kind, double scrollDelta) {
+                              ProjectedLineKind kind, double scrollDelta,
+                              double opacity) {
     if (!reserve(
             gameplay_chart_entity_render_budget::kSingleRectangleEntityCost)) {
       return;
@@ -562,6 +563,7 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
                             .timeMicros = timeline.timeMicros,
                             .authoredOrdinal = timeline.authoredOrdinal,
                             .retainedOrdinal = timeline.retainedOrdinal,
+                            .opacity = opacity,
                             .submissionOrdinal = lineOrdinal++});
   };
 
@@ -570,7 +572,9 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
     ++workStats.timelineRowsExamined;
 #endif
     const auto scrollDelta = positionedScrollDelta(*timeline);
-    if (timeline->retainedForProjection && scrollDelta &&
+    const auto opacity = constantOpacity(timeline->timeMicros, timeMicros,
+                                         request);
+    if (timeline->retainedForProjection && scrollDelta && opacity &&
         isVisible(*scrollDelta, visibleInterval)) {
       if (request.maxTimelines != 0 &&
           result.timelines.size() >= request.maxTimelines) {
@@ -584,16 +588,19 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
              .retainedOrdinal = timeline->retainedOrdinal,
              .submissionOrdinal = timeline->authoredOrdinal});
         if (timeline->sectionLine) {
-          appendLine(*timeline, ProjectedLineKind::Section, *scrollDelta);
+          appendLine(*timeline, ProjectedLineKind::Section, *scrollDelta,
+                     *opacity);
         }
         const auto previous = index_.previousTimelinesById.find(timeline->id);
         if (request.bpmGuideEnabled &&
             previous != index_.previousTimelinesById.end() &&
             previous->second != nullptr && timeline->bpm != previous->second->bpm) {
-          appendLine(*timeline, ProjectedLineKind::BpmChange, *scrollDelta);
+          appendLine(*timeline, ProjectedLineKind::BpmChange, *scrollDelta,
+                     *opacity);
         }
         if (request.bpmGuideEnabled && timeline->stopMicros > 0) {
-          appendLine(*timeline, ProjectedLineKind::Stop, *scrollDelta);
+          appendLine(*timeline, ProjectedLineKind::Stop, *scrollDelta,
+                     *opacity);
         }
       }
     }
@@ -756,6 +763,11 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
     }
     const auto *noteState = stateFor(note->id);
     const auto source = effectiveSource(*note);
+    const auto opacity = constantOpacity(timeline->timeMicros, timeMicros,
+                                         request);
+    if (!opacity) {
+      return;
+    }
 
     if (request.buildBuiltInPlan &&
         source == ChartVisualNoteSource::Playable) {
@@ -890,6 +902,7 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
                  tailState != nullptr && tailState->judged &&
                  tailState->playedTimeMicros != kPlayfieldTimestampOff &&
                  tailState->playedTimeMicros >= tailTimeline->timeMicros,
+             .opacity = *opacity,
              .submissionOrdinal = order.next(),
              .bodyDepth = builtInLongOrder.bodyDepth,
              .endpointDepth = builtInLongOrder.endpointDepth});
@@ -900,12 +913,6 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
     }
 
     if (!isVisible(*scrollDelta, visibleInterval)) {
-      return;
-    }
-
-    const auto opacity = constantOpacity(timeline->timeMicros, timeMicros,
-                                         request);
-    if (!opacity) {
       return;
     }
 
@@ -1407,6 +1414,7 @@ adaptPlayfieldProjectionForSkin(const PlayfieldProjectionResult &projection) {
          .reactive = longNote.reactive,
          .headJudged = longNote.headJudged,
          .tailJudged = longNote.tailJudged,
+         .opacity = longNote.opacity,
          .submissionOrdinal = longNote.submissionOrdinal});
   }
   for (const auto &line : projection.lines) {
@@ -1414,6 +1422,7 @@ adaptPlayfieldProjectionForSkin(const PlayfieldProjectionResult &projection) {
                             .kind = toSkinLineKind(line.kind),
                             .scrollSpeed = scrollSpeed,
                             .authoredYDisplacement = line.scrollDelta,
+                            .opacity = line.opacity,
                             .submissionOrdinal = line.submissionOrdinal});
   }
   return result;

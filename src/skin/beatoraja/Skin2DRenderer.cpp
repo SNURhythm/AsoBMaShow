@@ -2245,7 +2245,7 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
                       .y = chip.y + chip.height,
                       .width = chip.width,
                       .height = displacement - chip.height},
-                     output);
+                     output, static_cast<float>(projected.opacity));
         if (output.failure) {
           return;
         }
@@ -2255,12 +2255,13 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
                         .y = tailY,
                         .width = chip.width,
                         .height = chip.height},
-                       output);
+                       output, static_cast<float>(projected.opacity));
           if (output.failure) {
             return;
           }
         }
-        appendVisual(*lane, start, chip, output);
+        appendVisual(*lane, start, chip, output,
+                     static_cast<float>(projected.opacity));
       };
 
   const auto lowerProjectedLine = [&](const SkinProjectedLineView &projected,
@@ -2318,6 +2319,7 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
         continue;
       }
       evaluated.geometry->rect.y += authoredY;
+      evaluated.geometry->rgba[3] *= static_cast<float>(projected.opacity);
       // LaneRenderer invokes nested line images directly, so their own clip
       // is inert. The containing Note clip remains active for every group.
       // Unlike the thin group-image destination, the default vertical play

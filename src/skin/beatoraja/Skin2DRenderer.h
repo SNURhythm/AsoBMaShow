@@ -94,6 +94,7 @@ struct SkinProjectedLongNoteView {
   bool reactive = false;
   bool headJudged = false;
   bool tailJudged = false;
+  double opacity = 1.0;
   std::uint32_t submissionOrdinal = 0;
 };
 
@@ -109,6 +110,7 @@ struct SkinProjectedLineView {
   SkinProjectedLineKind kind = SkinProjectedLineKind::Time;
   std::optional<double> scrollSpeed;
   double authoredYDisplacement = 0.0;
+  double opacity = 1.0;
   std::uint32_t submissionOrdinal = 0;
 };
 

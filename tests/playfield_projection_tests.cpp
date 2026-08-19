@@ -149,17 +149,33 @@ bool testConstantProjectionUsesPinnedPositiveFadeWindow() {
        .retainedForProjection = true, .authoredOrdinal = 1,
        .retainedOrdinal = 1},
       {.id = 3, .timeMicros = 1'050'000, .scrollPosition = 1.05,
+       .sectionLine = true,
        .retainedForProjection = true, .authoredOrdinal = 2,
        .retainedOrdinal = 2},
       {.id = 4, .timeMicros = 1'100'000, .scrollPosition = 1.1,
        .retainedForProjection = true, .authoredOrdinal = 3,
        .retainedOrdinal = 3},
+      {.id = 5, .timeMicros = 1'200'000, .scrollPosition = 1.2,
+       .retainedForProjection = true, .authoredOrdinal = 4,
+       .retainedOrdinal = 4},
   };
   model.notes = {
       {.id = 10, .timelineId = 1, .lane = 0, .authoredOrdinal = 0},
       {.id = 11, .timelineId = 2, .lane = 0, .authoredOrdinal = 1},
       {.id = 12, .timelineId = 3, .lane = 0, .authoredOrdinal = 2},
       {.id = 13, .timelineId = 4, .lane = 0, .authoredOrdinal = 3},
+      {.id = 14,
+       .timelineId = 3,
+       .pairId = 15,
+       .lane = 0,
+       .kind = ChartVisualNoteKind::LongHead,
+       .authoredOrdinal = 4},
+      {.id = 15,
+       .timelineId = 5,
+       .pairId = 14,
+       .lane = 0,
+       .kind = ChartVisualNoteKind::LongTail,
+       .authoredOrdinal = 5},
   };
   PlayfieldVisualState state;
   state.clock = {.serial = 1, .visualTimeMicros = 0};
@@ -175,10 +191,16 @@ bool testConstantProjectionUsesPinnedPositiveFadeWindow() {
                                          &ProjectedPlayfieldNote::noteId);
     return found == result.notes.end() ? nullptr : &*found;
   };
+  const auto line = std::ranges::find(result.lines, ChartVisualId{3},
+                                      &ProjectedLineDescriptor::timelineId);
+  const auto longNote = std::ranges::find(result.longNotes, ChartVisualId{14},
+                                          &ProjectedLongNoteDescriptor::headId);
   return note(10) != nullptr && closeTo(note(10)->opacity, 1.0) &&
          note(11) != nullptr && closeTo(note(11)->opacity, 1.0) &&
          note(12) != nullptr && closeTo(note(12)->opacity, 0.5) &&
-         note(13) == nullptr;
+         note(13) == nullptr && line != result.lines.end() &&
+         closeTo(line->opacity, 0.5) && longNote != result.longNotes.end() &&
+         closeTo(longNote->opacity, 0.5);
 }
 
 bool testFinalMeasureTailContinuesScrollWithoutParserRows() {
