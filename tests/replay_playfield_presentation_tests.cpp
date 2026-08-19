@@ -408,6 +408,7 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
   settings.gameplayHispeed = 1.75F;
   settings.hispeedFixMode = AppSettings::HiSpeedFixMode::Off;
   settings.visibleTimeUseMilliseconds = true;
+  settings.notesDisplayTimingMilliseconds = -37;
   settings.laneBeamLengthPercent = 71;
   settings.noteStartPositionPercent = 40;
   settings.showInvisibleNotes = true;
@@ -451,6 +452,7 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
              configuration.configuredHispeed &&
              *configuration.configuredHispeed == 1.75F &&
              configuration.visibleTimeUseMilliseconds &&
+             configuration.notesDisplayTimingMilliseconds == -37 &&
              configuration.hispeedFixMode == AppSettings::HiSpeedFixMode::Off &&
              configuration.playAreaWidth == 9.5F &&
              configuration.laneBeamLengthPercent == 71 &&
@@ -699,6 +701,7 @@ void testReplayGameplayFrameStateMirrorsLiveTimerAndStartClocks() {
   AppSettings settings;
   settings.audioOffsetMs = 20;
   settings.visualOffsetMs = 10;
+  settings.notesDisplayTimingMilliseconds = -37;
   preparation::Plan plan;
   plan.playback = {.percent = 100};
   plan.playbackStartTimeMicros = -2'000'000;
@@ -730,6 +733,9 @@ void testReplayGameplayFrameStateMirrorsLiveTimerAndStartClocks() {
              gameplay.clock.playTimer.elapsedMillisExact &&
              gameplay.clock.playTimer.playtimeMillis == 125'000,
          "gameplay export frame keeps Timer 41 and progress authority live");
+  expect(replay_video_export::replayGameplayNoteDisplayTimeMicros(
+             gameplay, settings) == -27'000,
+         "replay projection derives note display time from the shared settings");
 }
 
 void testReplayGameplayStatePlayDeadlineMatchesPinnedBmsPlayer() {

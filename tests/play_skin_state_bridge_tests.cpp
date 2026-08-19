@@ -858,6 +858,7 @@ void testExistingGameplayStatePropertyWiring() {
   state.configuration.bpmGuideEnabled = true;
   state.configuration.customJudge = true;
   state.configuration.showJudgeArea = true;
+  state.configuration.notesDisplayTimingMilliseconds = -37;
   state.configuration.notesDisplayTimingAutoAdjust = true;
   state.configuration.autoSaveReplay = {1, 2, 3, 10};
   state.configuration.guideSoundEffects = true;
@@ -945,6 +946,9 @@ void testExistingGameplayStatePropertyWiring() {
            "existing gameplay image index uses the pinned source: " +
                std::to_string(id));
   }
+  const auto displayTiming = bridge.integerProperty({12});
+  expect(displayTiming.supported && displayTiming.value == -37,
+         "notes-display timing uses the captured PlayerConfig value");
   for (const auto [id, expected] :
        std::array{std::pair{314, 250LL}, std::pair{315, 750LL},
                   std::pair{316, 337LL}}) {

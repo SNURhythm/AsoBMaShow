@@ -2365,9 +2365,8 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
   }
   switch (*id) {
   case 12:
-    // PlayerConfig defaults notes-display timing to zero. Aso does not yet
-    // expose a per-profile adjustment, so preserve that upstream default.
-    return {.value = 0, .supported = true};
+    return {.value = snapshot->configuration.notesDisplayTimingMilliseconds,
+            .supported = true};
   case 17:
   case 18:
   case 19: {

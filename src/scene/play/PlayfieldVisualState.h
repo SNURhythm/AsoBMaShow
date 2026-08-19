@@ -87,6 +87,9 @@ struct PlayfieldPresentationConfig {
   bool markProcessedNotes = false;
   bool customJudge = false;
   bool showJudgeArea = false;
+  // PlayerConfig.judgetiming. It affects LaneRenderer note positioning and
+  // integer property 12, but not the gameplay or skin frame clock.
+  int notesDisplayTimingMilliseconds = 0;
   bool notesDisplayTimingAutoAdjust = false;
   std::array<int, 4> autoSaveReplay{};
   bool guideSoundEffects = false;

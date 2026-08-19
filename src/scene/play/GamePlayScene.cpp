@@ -2851,6 +2851,8 @@ void GamePlayScene::init() {
       .markProcessedNotes = context.settings.markProcessedNotes,
       .customJudge = context.settings.customJudge,
       .showJudgeArea = context.settings.showJudgeArea,
+      .notesDisplayTimingMilliseconds =
+          context.settings.notesDisplayTimingMilliseconds,
       .notesDisplayTimingAutoAdjust =
           context.settings.notesDisplayTimingAutoAdjust,
       .autoSaveReplay = context.settings.autoSaveReplay,
@@ -3742,6 +3744,8 @@ void GamePlayScene::refreshRuntimePresentationConfiguration() {
   playfieldPresentationConfiguration.laneCoverHispeedFactor = 1.0F;
   playfieldPresentationConfiguration.laneCoverEnabled =
       playfieldLaneCoverEnabled;
+  playfieldPresentationConfiguration.notesDisplayTimingMilliseconds =
+      context.settings.notesDisplayTimingMilliseconds;
   playfieldVisualStateStore->setConfiguration(
       playfieldPresentationConfiguration);
   presentation->configure(playfieldPresentationConfiguration);
@@ -4774,9 +4778,8 @@ long long GamePlayScene::getVisualTimeMicros(long long songTimeMicros) const {
 
 long long GamePlayScene::getNoteDisplayTimeMicros(
     long long visualTimeMicros) const {
-  return visualTimeMicros +
-         static_cast<long long>(context.settings.notesDisplayTimingMilliseconds) *
-             1'000LL;
+  return gameplay_timing::noteDisplayTimeMicros(
+      visualTimeMicros, context.settings.notesDisplayTimingMilliseconds);
 }
 
 PlayfieldJudgeEventClock
@@ -6561,6 +6564,7 @@ void GamePlayScene::onJudge(const JudgeResult &judgeResult,
     context.settings.notesDisplayTimingMilliseconds =
         adjustedNotesDisplayTimingMilliseconds;
     notesDisplayTimingSettingsDirty = true;
+    refreshRuntimePresentationConfiguration();
   }
   (void)judgementCount;
   // CurrentRhythmHUD->OnJudge(state);

@@ -71,6 +71,8 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
       .noteStartPositionPercent = noteStartPositionPercent,
       .laneBeamClockUsesRenderTime = true,
       .showInvisibleNotes = settings.showInvisibleNotes,
+      .notesDisplayTimingMilliseconds =
+          settings.notesDisplayTimingMilliseconds,
       .masterVolume = settings.audioVideo.audio.masterVolume,
       .keysoundVolume = settings.audioVideo.audio.keysoundVolume,
       .bgmVolume = settings.audioVideo.audio.bgmVolume,
@@ -176,6 +178,12 @@ ReplayGameplayFrameState replayGameplayFrameState(
       .sceneStartMicros = sceneStart.visualTimeMicros,
       .playStartMicros = 0,
   };
+}
+
+long long replayGameplayNoteDisplayTimeMicros(
+    const ReplayGameplayFrameState &frame, const AppSettings &settings) noexcept {
+  return gameplay_timing::noteDisplayTimeMicros(
+      frame.clock.visualTimeMicros, settings.notesDisplayTimingMilliseconds);
 }
 
 long long replayGameplayDurationWithSelectedSkinAnimation(

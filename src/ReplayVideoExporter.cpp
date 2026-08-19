@@ -3093,7 +3093,10 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
           const auto presentationFrame = preparedGameplay.presentation->renderFrame(
               renderContext,
               presentationFrameState.clock,
-              {.includeInvisibleNotes = settings.showInvisibleNotes});
+              {.noteDisplayTimeMicros =
+                   replay_video_export::replayGameplayNoteDisplayTimeMicros(
+                       presentationFrameState, settings),
+               .includeInvisibleNotes = settings.showInvisibleNotes});
           if (presentationFrame.outcome ==
                   PresentationFrameOutcome::CriticalFailure ||
               presentationFrame.failure) {
@@ -3871,7 +3874,12 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                                      presentation.renderFrame(
                                          renderContext,
                                          presentationFrameState.clock,
-                                         {.includeInvisibleNotes =
+                                         {.noteDisplayTimeMicros =
+                                              replay_video_export::
+                                                  replayGameplayNoteDisplayTimeMicros(
+                                                      presentationFrameState,
+                                                      settings),
+                                          .includeInvisibleNotes =
                                               settings.showInvisibleNotes});
                                  if (presentationFrame.outcome ==
                                          PresentationFrameOutcome::CriticalFailure ||

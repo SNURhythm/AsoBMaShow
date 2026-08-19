@@ -71,6 +71,12 @@ inline long long visualTimeMicros(long long songTimeMicros,
   return songTimeMicros - visualOffsetMicros;
 }
 
+inline long long noteDisplayTimeMicros(long long visualTimeMicros,
+                                       int displayTimingMilliseconds) {
+  return visualTimeMicros +
+         static_cast<long long>(displayTimingMilliseconds) * 1'000LL;
+}
+
 // Exact JudgeManager notes-display timing auto-adjust. The source mutates
 // PlayerConfig.judgetiming only for judge IDs 0 through 2 while PLAY or
 // PRACTICE is active; Java's signed integer division truncates toward zero.
