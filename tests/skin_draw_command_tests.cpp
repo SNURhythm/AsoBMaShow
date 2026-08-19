@@ -281,11 +281,15 @@ public:
   stringProperty(const SkinBuiltinPropertySelector &) override {
     return stringResult;
   }
-  SkinPropertyLookup<ConfigOffset> offsetProperty(int id) override {
+  SkinPropertyLookup<SkinRuntimeOffset> offsetProperty(int id) override {
     accessOrder.push_back(3'000 + id);
     const auto found = offsets.find(id);
-    return found == offsets.end() ? SkinPropertyLookup<ConfigOffset>{}
+    return found == offsets.end() ? SkinPropertyLookup<SkinRuntimeOffset>{}
                                   : found->second;
+  }
+  [[nodiscard]] SkinLaneCoverStateView
+  laneCoverState() const noexcept override {
+    return laneCoverResult;
   }
   std::int64_t
   timerProperty(const SkinBuiltinPropertySelector &selector) override {
@@ -328,6 +332,7 @@ public:
   SkinGaugeStateView gaugeResult;
   SkinJudgeStateView judgeResult;
   SkinNoteExpansionStateView noteExpansionResult;
+  SkinLaneCoverStateView laneCoverResult;
   SkinPropertyLookup<bool> booleanResult;
   SkinPropertyLookup<std::int64_t> integerResult;
   SkinPropertyLookup<double> floatResult;
@@ -338,7 +343,7 @@ public:
   std::size_t booleanCalls = 0;
   std::size_t timerCalls = 0;
   mutable std::size_t noteExpansionCalls = 0;
-  std::map<int, SkinPropertyLookup<ConfigOffset>> offsets;
+  std::map<int, SkinPropertyLookup<SkinRuntimeOffset>> offsets;
   std::vector<int> accessOrder;
   std::uint64_t capturedSerial = 1;
 };
@@ -459,12 +464,12 @@ void testOffsetSentinelAndSourceAwarePrecedence() {
   FakeResources resources;
   resources.addImage(1, {.x = 0, .y = 0, .w = 10, .h = 10});
   FakeState state;
-  state.offsets.emplace(5, SkinPropertyLookup<ConfigOffset>{.value = {.x = 10},
+  state.offsets.emplace(7, SkinPropertyLookup<SkinRuntimeOffset>{.value = {.x = 10},
                                                             .supported = true});
   ValidatedBeatorajaSkinModel model;
   model.model.objects = {imageObject(1, 1, true)};
   auto presented = destination(1, 10, 10.0);
-  presented.presentation.offsetIds = {0, -9, 200, 5};
+  presented.presentation.offsetIds = {0, -9, 200, 7};
   model.model.destinations = {std::move(presented)};
 
   const auto dynamic = evaluate(renderer, runtime, model, resources, state, 1);
@@ -479,7 +484,7 @@ void testOffsetSentinelAndSourceAwarePrecedence() {
   }
 
   BeatorajaSkinConfiguration configuration;
-  configuration.offsetsById.emplace(5, ConfigOffset{.x = 20});
+  configuration.offsetsById.emplace(7, ConfigOffset{.x = 20});
   const auto configured = evaluate(renderer, runtime, model, resources, state,
                                    2, 0, &configuration);
   expect(configured.submitReady && configured.submitReady->commands.size() == 1,
@@ -2271,7 +2276,7 @@ void testHiddenGaugeStillAdvancesAndDirectDrawIgnoresImageTransforms() {
         evaluate(renderer, runtime, model, resources, state, 1, 1'000);
     state.booleanResult.value = true;
     state.offsets.emplace(
-        5, SkinPropertyLookup<ConfigOffset>{.value = {}, .supported = true});
+        5, SkinPropertyLookup<SkinRuntimeOffset>{.value = {}, .supported = true});
     state.timerResult = 0;
     const auto visible =
         evaluate(renderer, runtime, model, resources, state, 2, 5'000);
@@ -2636,7 +2641,7 @@ void testJudgeMaxGaugeFallsBackImageAndDetailIndependently() {
   detailDestination.loop = -1;
   detailDestination.frames = {
       {.timeMillis = 0, .x = 0.0, .y = 0.0, .width = 10.0, .height = 20.0}};
-  detailDestination.offsetIds = {5};
+  detailDestination.offsetIds = {7};
 
   SkinJudgeObject judge;
   judge.grades.resize(7);
@@ -2664,7 +2669,7 @@ void testJudgeMaxGaugeFallsBackImageAndDetailIndependently() {
 
   BeatorajaSkinConfiguration configuration;
   configuration.offsetsById.emplace(
-      5, ConfigOffset{.x = 50, .y = 60, .w = 4, .h = 6});
+      7, ConfigOffset{.x = 50, .y = 60, .w = 4, .h = 6});
   const auto result = evaluate(renderer, runtime, model, resources, state, 1, 0,
                                &configuration);
   expect(result.submitReady && result.submitReady->commands.size() == 2,
@@ -2696,7 +2701,7 @@ void testHiddenJudgeStillPreparesChildrenInPinnedCallbackOrder() {
   state.booleanResult = {.value = true, .supported = true};
   state.timerResult = 0;
   state.offsets.emplace(
-      5, SkinPropertyLookup<ConfigOffset>{.value = {}, .supported = true});
+      5, SkinPropertyLookup<SkinRuntimeOffset>{.value = {}, .supported = true});
   state.judgeResult = {.supported = true,
                        .optionalZeroBasedGrade = 0,
                        .combo = 0,
@@ -3083,6 +3088,44 @@ void testLiveScrollUnitsUseSkinLaneHeightAndHispeed() {
          "long-note extent uses the same skin lane height and hispeed");
 }
 
+void testLiftUsesPinnedSharedLaneOriginAndScrollHeight() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  state.laneCoverResult = {.supported = true,
+                           .liftEnabled = true,
+                           .lift = 0.25};
+  state.notes = {{.visualId = 10,
+                  .lane = 0,
+                  .kind = SkinProjectedNoteKind::Normal,
+                  .scrollSpeed = 1.0,
+                  .authoredYDisplacement = 0.5,
+                  .submissionOrdinal = 1}};
+
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects = {{.id = 1,
+                          .authoredName = "lift-scroll-units",
+                          .payload = gameplayNoteObject(resources),
+                          .authoredOrdinal = 1,
+                          .critical = true}};
+  auto presented = destination(1, 1, 0.0);
+  presented.presentation.frames.clear();
+  model.model.destinations = {std::move(presented)};
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  expect(result.submitReady && result.submitReady->commands.size() == 1,
+         "Lift test emits its projected normal note");
+  if (!result.submitReady || result.submitReady->commands.size() != 1) {
+    return;
+  }
+  const auto &note =
+      std::get<SkinTexturedQuadCommand>(result.submitReady->commands[0].payload);
+  expect(note.vertices[0].y == 332.5F && note.vertices[2].y == 322.5F,
+         "Lift raises LaneRenderer's shared origin and shortens its scroll "
+         "height before applying Hi-Speed");
+}
+
 void testEveryLongNoteBodyStateUsesItsDistinctVisualRole() {
   RuntimeHarness runtime;
   Skin2DRenderer renderer;
@@ -3320,8 +3363,14 @@ void testHiddenAndLiftCoversApplyDisappearLineClipping() {
   model.model.destinations = {std::move(hiddenDestination),
                               std::move(liftDestination)};
   BeatorajaSkinConfiguration configuration;
-  configuration.offsetsById.emplace(3, ConfigOffset{.y = 10});
-  configuration.offsetsById.emplace(5, ConfigOffset{.y = 20});
+  configuration.offsetsById.emplace(3, ConfigOffset{.y = 100});
+  configuration.offsetsById.emplace(5, ConfigOffset{.y = 200});
+  state.offsets.emplace(
+      3, SkinPropertyLookup<SkinRuntimeOffset>{.value = {.y = 10.5},
+                                                .supported = true});
+  state.offsets.emplace(
+      5, SkinPropertyLookup<SkinRuntimeOffset>{.value = {.y = 20.25},
+                                                .supported = true});
 
   const auto result = evaluate(renderer, runtime, model, resources, state, 1, 0,
                                &configuration);
@@ -3335,15 +3384,16 @@ void testHiddenAndLiftCoversApplyDisappearLineClipping() {
   const auto &lift = std::get<SkinTexturedQuadCommand>(
       result.submitReady->commands[1].payload);
   expect(hidden.state.scissor && hidden.state.scissor->x == 100.0 &&
-             hidden.state.scissor->y == 490.0 &&
+             hidden.state.scissor->y == 489.25 &&
              hidden.state.scissor->width == 100.0 &&
-             hidden.state.scissor->height == 70.0,
-         "hidden cover links its disappear line to Lift after offsets");
+             hidden.state.scissor->height == 70.25,
+         "hidden cover uses the fractional runtime Lift offset after the "
+         "configured offset is installed");
   expect(lift.state.scissor && lift.state.scissor->x == 300.0 &&
-             lift.state.scissor->y == 510.0 &&
+             lift.state.scissor->y == 509.5 &&
              lift.state.scissor->width == 100.0 &&
-             lift.state.scissor->height == 60.0,
-         "lift cover uses its fixed authored disappear line");
+             lift.state.scissor->height == 60.5,
+         "lift cover applies the same fractional runtime Lift offset");
 }
 
 void testUnclippedCoverUsesProjectedSkinResolutionScissor() {
@@ -4300,6 +4350,7 @@ int main() {
   testCriticalJudgeRequiresSupportedState();
   testNoteLongNoteAndLineCommandsPreserveMergedProjectionOrder();
   testLiveScrollUnitsUseSkinLaneHeightAndHispeed();
+  testLiftUsesPinnedSharedLaneOriginAndScrollHeight();
   testEveryLongNoteBodyStateUsesItsDistinctVisualRole();
   testProjectedLineEmitsEveryLaneGroupAndIgnoresNestedClip();
   testSynthesizedNoteFallbacksHonorMarkProcessedNote();

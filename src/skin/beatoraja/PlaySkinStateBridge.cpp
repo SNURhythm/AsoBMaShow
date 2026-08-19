@@ -526,7 +526,20 @@ SkinEventMutationTable makePinnedSkinEventMutationTableV1() {
 }
 
 PlaySkinStateBridge::PlaySkinStateBridge(PlaySkinStateBridgeContext context)
-    : context_(context) {}
+    : context_(context) {
+  if (const auto found = context_.configuration.offsetsById.find(3);
+      found != context_.configuration.offsetsById.end()) {
+    liftOffset_ = skinRuntimeOffset(found->second);
+  }
+  if (const auto found = context_.configuration.offsetsById.find(4);
+      found != context_.configuration.offsetsById.end()) {
+    laneCoverOffset_ = skinRuntimeOffset(found->second);
+  }
+  if (const auto found = context_.configuration.offsetsById.find(5);
+      found != context_.configuration.offsetsById.end()) {
+    hiddenCoverOffset_ = skinRuntimeOffset(found->second);
+  }
+}
 
 PlaySkinStateBridge::~PlaySkinStateBridge() { closeFrame(); }
 
@@ -827,6 +840,54 @@ void PlaySkinStateBridge::updatePinnedPlayTimers() {
   updatePinnedPomyuTimers();
 }
 
+void PlaySkinStateBridge::updatePinnedLaneCoverOffsets() {
+  const auto *snapshot = state();
+  if (snapshot == nullptr || context_.model == nullptr) {
+    return;
+  }
+
+  // JsonPlaySkinObjectLoader installs the SkinNote lane rectangles into
+  // PlaySkin as it loads the authored objects. Retain the last one, matching
+  // PlaySkin.setLaneRegion's replacement semantics before LaneRenderer reads
+  // lane region zero.
+  const SkinLaneNotePresentation *firstLane = nullptr;
+  for (const auto &object : context_.model->model.objects) {
+    const auto *note = std::get_if<SkinNoteObject>(&object.payload);
+    if (note != nullptr && !note->lanes.empty()) {
+      firstLane = &note->lanes.front();
+    }
+  }
+  if (firstLane == nullptr) {
+    return;
+  }
+
+  const double laneHeight = firstLane->laneDestination.height;
+  const double lift = snapshot->authority.liftEnabled
+                          ? static_cast<double>(snapshot->authority.liftRatio)
+                          : 0.0;
+  const double laneCover =
+      snapshot->authority.laneCoverEnabled
+          ? static_cast<double>(snapshot->authority.laneCoverPercent) / 100.0
+          : 0.0;
+
+  // Ported directly from LaneRenderer.draw. It deliberately updates only y
+  // for Lift/lane cover, preserving the initial skin offset's other fields.
+  liftOffset_.y = laneHeight * lift;
+  laneCoverOffset_.y = (liftOffset_.y - laneHeight) * laneCover;
+
+  // LaneRenderer keeps HIDDEN's prior y while disabled and changes only its
+  // alpha to -255. That retained value remains observable through
+  // main_state.offset, so do not replace it with a local default here.
+  if (snapshot->authority.hiddenEnabled) {
+    hiddenCoverOffset_.a = 0.0;
+    hiddenCoverOffset_.y =
+        (snapshot->authority.liftEnabled ? 1.0 - lift : 1.0) *
+        static_cast<double>(snapshot->authority.hiddenRatio) * laneHeight;
+  } else {
+    hiddenCoverOffset_.a = -255.0;
+  }
+}
+
 void PlaySkinStateBridge::beginFrame(
     const PlayfieldVisualState &state,
     const PlayfieldProjectionResult &projection) {
@@ -853,6 +914,7 @@ void PlaySkinStateBridge::beginFrame(
   phase_ = FramePhase::Active;
   customObjectsUpdated_ = false;
   customTimerValues_.clear();
+  updatePinnedLaneCoverOffsets();
   updatePinnedPlayTimers();
 
   context_.runtime.setFrameState(this);
@@ -2832,22 +2894,51 @@ SkinPropertyLookup<std::string_view> PlaySkinStateBridge::stringProperty(
   return {};
 }
 
-SkinPropertyLookup<ConfigOffset> PlaySkinStateBridge::offsetProperty(int id) {
+SkinPropertyLookup<SkinRuntimeOffset>
+PlaySkinStateBridge::offsetProperty(int id) {
   if (state() != nullptr) {
+    // LaneRenderer overwrites the reserved gameplay offsets every frame after
+    // the skin's initial offsets have been installed. SkinProperty reserves
+    // 3/4/5 for this purpose; user-defined offsets start at 40.
+    switch (id) {
+    case 3:
+      return {.value = liftOffset_, .supported = true};
+    case 4:
+      return {.value = laneCoverOffset_, .supported = true};
+    case 5:
+      return {.value = hiddenCoverOffset_, .supported = true};
+    default:
+      break;
+    }
     const auto found = context_.configuration.offsetsById.find(id);
     if (found != context_.configuration.offsetsById.end()) {
-      return {.value = found->second, .supported = true};
+      return {.value = skinRuntimeOffset(found->second), .supported = true};
     }
     // MainController constructs a SkinOffset for every slot from zero through
     // SkinProperty.OFFSET_MAX. JSONSkinLoader configures only the selected
     // custom offsets, so an otherwise unconfigured valid slot remains the
     // default all-zero offset rather than becoming an unsupported lookup.
     if (id >= 0 && id <= SkinCommandPolicy::maximumBeatorajaOffsetId) {
-      return {.value = ConfigOffset{}, .supported = true};
+      return {.value = SkinRuntimeOffset{}, .supported = true};
     }
   }
   reportUnsupported("offset", SkinBuiltinPropertySelector{.value = id});
   return {};
+}
+
+SkinLaneCoverStateView PlaySkinStateBridge::laneCoverState() const noexcept {
+  const auto *snapshot = state();
+  if (snapshot == nullptr) {
+    return {};
+  }
+  return {.supported = true,
+          .laneCoverEnabled = snapshot->authority.laneCoverEnabled,
+          .laneCover =
+              static_cast<double>(snapshot->authority.laneCoverPercent) / 100.0,
+          .liftEnabled = snapshot->authority.liftEnabled,
+          .lift = static_cast<double>(snapshot->authority.liftRatio),
+          .hiddenEnabled = snapshot->authority.hiddenEnabled,
+          .hidden = static_cast<double>(snapshot->authority.hiddenRatio)};
 }
 
 std::int64_t PlaySkinStateBridge::timerProperty(

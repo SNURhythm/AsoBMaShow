@@ -402,7 +402,9 @@ public:
   }
   SkinPropertyLookup<std::string_view>
   stringProperty(const SkinBuiltinPropertySelector &) override { return {}; }
-  SkinPropertyLookup<ConfigOffset> offsetProperty(int) override { return {}; }
+  SkinPropertyLookup<SkinRuntimeOffset> offsetProperty(int) override {
+    return {};
+  }
   std::int64_t timerProperty(const SkinBuiltinPropertySelector &) override {
     return std::numeric_limits<std::int64_t>::min();
   }

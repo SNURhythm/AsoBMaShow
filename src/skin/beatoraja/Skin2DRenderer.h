@@ -155,7 +155,11 @@ public:
                 SkinFloatPropertyDomain = SkinFloatPropertyDomain::Rate) = 0;
   virtual SkinPropertyLookup<std::string_view>
   stringProperty(const SkinBuiltinPropertySelector &) = 0;
-  virtual SkinPropertyLookup<ConfigOffset> offsetProperty(int) = 0;
+  virtual SkinPropertyLookup<SkinRuntimeOffset> offsetProperty(int) = 0;
+  [[nodiscard]] virtual SkinLaneCoverStateView
+  laneCoverState() const noexcept {
+    return {};
+  }
   virtual std::int64_t timerProperty(const SkinBuiltinPropertySelector &) = 0;
   virtual std::span<const SkinProjectedNoteView>
   projectedNotes() const noexcept = 0;

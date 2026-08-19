@@ -159,7 +159,9 @@ public:
                 SkinFloatPropertyDomain = SkinFloatPropertyDomain::Rate) override;
   SkinPropertyLookup<std::string_view>
   stringProperty(const SkinBuiltinPropertySelector &) override;
-  SkinPropertyLookup<ConfigOffset> offsetProperty(int) override;
+  SkinPropertyLookup<SkinRuntimeOffset> offsetProperty(int) override;
+  [[nodiscard]] SkinLaneCoverStateView
+  laneCoverState() const noexcept override;
   std::int64_t timerProperty(const SkinBuiltinPropertySelector &) override;
   [[nodiscard]] std::span<const SkinProjectedNoteView>
   projectedNotes() const noexcept override;
@@ -196,6 +198,7 @@ private:
   static LuaSkinEventExecutionResult executeHostEvent(
       void *, int, std::span<const int>) noexcept;
   [[nodiscard]] const PlayfieldVisualState *state() const noexcept;
+  void updatePinnedLaneCoverOffsets();
   void updatePinnedPlayTimers();
   void updatePinnedPomyuTimers();
   [[nodiscard]] std::optional<int>
@@ -210,6 +213,9 @@ private:
   std::uint64_t frameSerial_ = 0;
   std::uint64_t lastAcceptedFrameSerial_ = 0;
   std::optional<BuiltInRendererTraversal> builtInTraversal_;
+  SkinRuntimeOffset liftOffset_;
+  SkinRuntimeOffset laneCoverOffset_;
+  SkinRuntimeOffset hiddenCoverOffset_;
   PlayfieldSkinProjectionViews projection_;
   PlaySkinFrameCommit staged_;
   std::unordered_map<int, std::int64_t> customTimerValues_;

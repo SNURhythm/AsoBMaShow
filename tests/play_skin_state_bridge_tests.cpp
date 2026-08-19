@@ -958,6 +958,73 @@ void testExistingGameplayStatePropertyWiring() {
   bridge.discardFrame();
 }
 
+void testLiftHiddenOffsetsFollowPinnedLaneRenderer() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  SkinNoteObject note;
+  note.lanes.push_back({.authoredLane = 0,
+                        .laneDestination = {.x = 100.0,
+                                            .y = 200.0,
+                                            .width = 40.0,
+                                            .height = 200.0}});
+  model.model.objects.push_back(
+      {.id = 1, .payload = std::move(note), .authoredOrdinal = 1});
+  BeatorajaSkinConfiguration configuration;
+  configuration.offsetsById.emplace(3, ConfigOffset{.x = 7});
+  configuration.offsetsById.emplace(4, ConfigOffset{.x = 8});
+  configuration.offsetsById.emplace(5, ConfigOffset{.x = 9});
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = runtime.runtime(),
+                              .mutationTable = mutations});
+
+  auto state = stateAt(208);
+  state.authority.laneCoverEnabled = true;
+  state.authority.laneCoverPercent = 40;
+  state.authority.liftEnabled = true;
+  state.authority.liftRatio = 0.333F;
+  state.authority.hiddenEnabled = true;
+  state.authority.hiddenRatio = 0.25F;
+  bridge.beginFrame(state, projectionAt(208));
+  const auto lift = bridge.offsetProperty(3);
+  const auto laneCover = bridge.offsetProperty(4);
+  const auto hidden = bridge.offsetProperty(5);
+  expect(lift.supported && laneCover.supported && hidden.supported &&
+             lift.value.x == 7.0 && laneCover.value.x == 8.0 &&
+             hidden.value.x == 9.0 &&
+             std::abs(lift.value.y - 66.6) < 0.0001 &&
+             std::abs(laneCover.value.y + 53.36) < 0.0001 &&
+             std::abs(hidden.value.y - 33.35) < 0.0001 &&
+             hidden.value.a == 0.0,
+         "LaneRenderer writes fractional Lift, lane-cover, and HIDDEN "
+         "offsets while preserving the loaded reserved offset fields");
+  bridge.discardFrame();
+
+  state = stateAt(209);
+  state.authority.laneCoverEnabled = true;
+  state.authority.laneCoverPercent = 40;
+  state.authority.liftEnabled = false;
+  state.authority.hiddenEnabled = false;
+  bridge.beginFrame(state, projectionAt(209));
+  const auto disabledLift = bridge.offsetProperty(3);
+  const auto disabledLaneCover = bridge.offsetProperty(4);
+  const auto disabledHidden = bridge.offsetProperty(5);
+  expect(disabledLift.supported && disabledLaneCover.supported &&
+             disabledHidden.supported && disabledLift.value.y == 0.0 &&
+             disabledLaneCover.value.y == -80.0 &&
+             std::abs(disabledHidden.value.y - 33.35) < 0.0001 &&
+             disabledHidden.value.a == -255.0,
+         "disabled HIDDEN keeps LaneRenderer's prior y while suppressing "
+         "draws through alpha");
+  bridge.discardFrame();
+}
+
 void testRemainingDirectGameplayStatePropertyWiring() {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
@@ -2496,7 +2563,9 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   }
   for (const int id : {1, 2, 199}) {
     const auto offset = bridge.offsetProperty(id);
-    expect(offset.supported && offset.value == ConfigOffset{},
+    expect(offset.supported && offset.value.x == 0.0 && offset.value.y == 0.0 &&
+               offset.value.w == 0.0 && offset.value.h == 0.0 &&
+               offset.value.r == 0.0 && offset.value.a == 0.0,
            "every unconfigured pinned SkinOffset ID returns Beatoraja's "
            "zero-initialized offset");
   }
@@ -3014,6 +3083,7 @@ int main() {
   testFramePropertiesUseAuthoritativeGaugeAndTimerRules();
   testGameplayModeAndLoadingBooleanProperties();
   testExistingGameplayStatePropertyWiring();
+  testLiftHiddenOffsetsFollowPinnedLaneRenderer();
   testRemainingDirectGameplayStatePropertyWiring();
   testLongNoteHoldTimersUseCapturedLaneState();
   testExtendedPlayerOneLaneTimersUsePinnedSkinOffsets();

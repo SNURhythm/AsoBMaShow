@@ -512,17 +512,17 @@ int mainStateOffset(lua_State *state) {
     return luaL_error(state, "unsupported main_state.offset id: %d", id);
   }
   lua_createtable(state, 0, 6);
-  lua_pushinteger(state, result.value.x);
+  lua_pushnumber(state, result.value.x);
   lua_setfield(state, -2, "x");
-  lua_pushinteger(state, result.value.y);
+  lua_pushnumber(state, result.value.y);
   lua_setfield(state, -2, "y");
-  lua_pushinteger(state, result.value.w);
+  lua_pushnumber(state, result.value.w);
   lua_setfield(state, -2, "w");
-  lua_pushinteger(state, result.value.h);
+  lua_pushnumber(state, result.value.h);
   lua_setfield(state, -2, "h");
-  lua_pushinteger(state, result.value.r);
+  lua_pushnumber(state, result.value.r);
   lua_setfield(state, -2, "r");
-  lua_pushinteger(state, result.value.a);
+  lua_pushnumber(state, result.value.a);
   lua_setfield(state, -2, "a");
   return 1;
 }

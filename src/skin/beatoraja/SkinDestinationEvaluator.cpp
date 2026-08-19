@@ -61,9 +61,9 @@ double interpolate(double lower, double upper, double rate) {
   return lower + (upper - lower) * rate;
 }
 
-void applyRectOffset(AuthoredRect &rect, const ConfigOffset &offset) {
-  rect.x += static_cast<double>(offset.x) - static_cast<double>(offset.w) / 2.0;
-  rect.y += static_cast<double>(offset.y) - static_cast<double>(offset.h) / 2.0;
+void applyRectOffset(AuthoredRect &rect, const SkinRuntimeOffset &offset) {
+  rect.x += offset.x - offset.w / 2.0;
+  rect.y += offset.y - offset.h / 2.0;
   rect.width += offset.w;
   rect.height += offset.h;
 }

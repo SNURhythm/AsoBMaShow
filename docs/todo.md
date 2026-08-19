@@ -206,7 +206,10 @@ gameplay.
   `[0,1]` finite ranges, captures the live enablement/ratios for all matching
   selectors, and follows `ControlInputProcessor.setCoverValue`'s scratch
   routing plus its `isChangeLift` START+SELECT target toggle.
-- Implement Lift/HIDDEN renderer planes and the dynamic source offsets
-  `OFFSET_LIFT` (`3`) / `OFFSET_HIDDEN_COVER` (`5`). The stored state must not
-  be treated as visual compatibility until selected-skin lane geometry and
-  cover destinations use those runtime offsets.
+- [x] Selected-skin Lift/HIDDEN rendering now mirrors `LaneRenderer`: lane
+  region zero drives fractional reserved offsets `OFFSET_LIFT` (`3`),
+  `OFFSET_LANECOVER` (`4`), and `OFFSET_HIDDEN_COVER` (`5`); HIDDEN preserves
+  its previous y while disabled and applies -255 alpha; Lift raises the shared
+  note origin and shortens the source Hi-Speed scroll span. Authored cover
+  destinations consume the runtime values after `LaneRenderer` overwrites the
+  configured reserved offsets' dynamic fields, as in the pinned source.

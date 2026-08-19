@@ -181,6 +181,13 @@ bool laneCoverRateSelector(const SkinBuiltinPropertySelector &builtin) {
   return selector == "lanecover" || selector == "lanecover2";
 }
 
+bool pinnedLaneCoverRuntimeOffset(int id) noexcept {
+  // SkinProperty reserves 3/4/5. LaneRenderer overwrites these MainController
+  // offsets every gameplay frame, after the skin's configured offsets load.
+  return id == kSkinCoverLiftOffsetId || id == 4 ||
+         id == kSkinCoverHiddenOffsetId;
+}
+
 bool laneCoverRateProperty(const ValidatedBeatorajaSkinModel &model,
                            const SkinSliderObject &slider) {
   const auto *propertyId = std::get_if<SkinFloatPropertyId>(&slider.value);
@@ -1540,7 +1547,7 @@ resolveDestination(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
     return result;
   }
 
-  std::vector<ConfigOffset> offsets;
+  std::vector<SkinRuntimeOffset> offsets;
   offsets.reserve(presentation.offsetIds.size());
   double relativeTranslationX = 0.0;
   double relativeTranslationY = 0.0;
@@ -1549,8 +1556,9 @@ resolveDestination(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
       continue;
     }
     const auto configured = inputs.configuration.offsetsById.find(id);
-    if (configured != inputs.configuration.offsetsById.end()) {
-      offsets.push_back(configured->second);
+    if (!pinnedLaneCoverRuntimeOffset(id) &&
+        configured != inputs.configuration.offsetsById.end()) {
+      offsets.push_back(skinRuntimeOffset(configured->second));
     } else {
       const auto dynamic = inputs.state.offsetProperty(id);
       if (!dynamic.supported) {
@@ -1973,7 +1981,7 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
                 const SkinObjectDefinition &object,
                 const SkinDestination &destination, const SkinNoteObject &note,
                 const AuthoredDestinationGeometry *outerGeometry,
-                std::span<const ConfigOffset> offsets,
+                std::span<const SkinRuntimeOffset> offsets,
                 std::span<const ProjectionElement> mergedElements,
                 const PreparedNoteVisuals &preparedVisuals) {
   GameplayVisualLoweringResult result;
@@ -1987,6 +1995,18 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
     offsetWidth += offset.w;
     offsetHeight += offset.h;
   }
+
+  // LaneRenderer uses lane zero for the shared playfield origin and scroll
+  // height. Lift raises that origin and shortens the scroll span before every
+  // normal, long, mine, invisible-note, and line projection is evaluated.
+  const auto laneCover = inputs.state.laneCoverState();
+  const double sharedLaneOriginY = note.lanes.front().laneDestination.y;
+  const double sharedLaneHeight = note.lanes.front().laneDestination.height;
+  const double liftOffsetY =
+      laneCover.supported && laneCover.liftEnabled
+          ? sharedLaneHeight * laneCover.lift
+          : 0.0;
+  const double sharedScrollHeight = sharedLaneHeight - liftOffsetY;
 
   float expansionWidth = 1.0F;
   float expansionHeight = 1.0F;
@@ -2118,8 +2138,7 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
     // Beatoraja LaneRenderer derives one shared rxhs from lanes[0].region,
     // then applies it to every note and timeline line. `scrollSpeed` is the
     // captured hispeed, so this is its exact skin-owned pixel conversion.
-    return authoredDisplacement * note.lanes.front().laneDestination.height *
-           *scrollSpeed;
+    return authoredDisplacement * sharedScrollHeight * *scrollSpeed;
   };
 
   const auto lowerProjectedNote = [&](const SkinProjectedNoteView &projected,
@@ -2164,13 +2183,13 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
     SkinAuthoredRect rect;
     if (applyOffsets) {
       rect = expandChip(
-          lane->laneDestination.x + offsetX, lane->laneDestination.y +
-                                               authoredY + offsetY,
+          lane->laneDestination.x + offsetX,
+          sharedLaneOriginY + liftOffsetY + authoredY + offsetY,
           lane->laneDestination.width + offsetWidth, noteHeight + offsetHeight,
           lane->laneDestination.width, noteHeight);
     } else {
       rect = {.x = lane->laneDestination.x,
-              .y = lane->laneDestination.y + authoredY,
+              .y = sharedLaneOriginY + liftOffsetY + authoredY,
               .width = lane->laneDestination.width,
               .height = noteHeight};
     }
@@ -2211,8 +2230,7 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
         }
         const auto chip =
             expandChip(lane->laneDestination.x + offsetX,
-                       lane->laneDestination.y +
-                           headY + offsetY,
+                       sharedLaneOriginY + liftOffsetY + headY + offsetY,
                        lane->laneDestination.width + offsetWidth,
                        referenceHeight + offsetHeight,
                        lane->laneDestination.width, referenceHeight);
@@ -3016,7 +3034,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       const SkinDestination *destination = nullptr;
       const SkinNoteObject *note = nullptr;
       std::optional<AuthoredDestinationGeometry> geometry;
-      std::vector<ConfigOffset> offsets;
+      std::vector<SkinRuntimeOffset> offsets;
       PreparedNoteVisuals preparedVisuals;
     };
     std::vector<DeferredNoteLowering> deferredNotes;
@@ -3291,7 +3309,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
         continue;
       }
 
-      std::vector<ConfigOffset> offsets;
+      std::vector<SkinRuntimeOffset> offsets;
       std::optional<double> coverLiftOffsetY;
       if (!judgeUsesConstructorDestinationWithoutFrame && destinationVisible) {
         offsets.reserve(destination.presentation.offsetIds.size());
@@ -3305,8 +3323,9 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
             continue;
           }
           const auto found = inputs.configuration.offsetsById.find(id);
-          if (found != inputs.configuration.offsetsById.end()) {
-            offsets.push_back(found->second);
+          if (!pinnedLaneCoverRuntimeOffset(id) &&
+              found != inputs.configuration.offsetsById.end()) {
+            offsets.push_back(skinRuntimeOffset(found->second));
             if (cover && id == kSkinCoverLiftOffsetId) {
               coverLiftOffsetY = found->second.y;
             }

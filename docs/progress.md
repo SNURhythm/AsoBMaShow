@@ -18,9 +18,12 @@ work from [`docs/todo.md`](todo.md). The pinned authority is Beatoraja commit
   `ControlInputProcessor.setCoverValue` selection order. A short
   START+SELECT conjunction switches between the two enabled planes, while
   automatic fixed-Hi-Speed recalculation remains gated by
-  `hispeedAutoAdjust`. This completes the property/input state only; visual
-  plane and dynamic offset rendering remain tracked separately. Verified by
-  `app_settings_store_tests` and `play_skin_state_bridge_tests`.
+  `hispeedAutoAdjust`. Selected-skin rendering now also mirrors
+  `LaneRenderer`: dynamic fractional offsets 3/4/5 come from lane region
+  zero, HIDDEN preserves its prior y while disabled and hides with -255 alpha,
+  and Lift moves the shared note origin while shortening its Hi-Speed scroll
+  height. Verified by `app_settings_store_tests`,
+  `play_skin_state_bridge_tests`, and `skin_draw_command_tests`.
 
 - The initial practice-menu property surface now captures Beatoraja
   `PracticeConfiguration`'s source default: its ten visible rows, selected
