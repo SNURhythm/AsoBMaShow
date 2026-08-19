@@ -1,4 +1,5 @@
 #include "ImageFileDecoder.h"
+#include "../path.h"
 
 #ifdef _WIN32
 #define STBI_WINDOWS_UTF8
@@ -347,7 +348,7 @@ decodeWebpWithFfmpeg(const std::filesystem::path &path,
                      const ImageDecodeOptions &options) {
   if (stopped(options)) return std::nullopt;
 
-  const std::string encodedPath = path.string();
+  const std::string encodedPath = fspath_to_utf8(path);
   AVFormatContext *rawFormat = nullptr;
   if (avformat_open_input(&rawFormat, encodedPath.c_str(), nullptr, nullptr) <
       0) {
