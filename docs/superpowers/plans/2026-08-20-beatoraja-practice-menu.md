@@ -170,7 +170,7 @@
 
   Expected: `** BUILD SUCCEEDED **`; no Firebase upload occurs.
 
-- [ ] **Step 4: Commit the documentation result**
+- [x] **Step 4: Commit the documentation result**
 
   Run: `git add docs/todo.md docs/progress.md docs/superpowers/plans/2026-08-20-beatoraja-practice-menu.md && git commit -m "docs: record practice skin menu compatibility"`
 
