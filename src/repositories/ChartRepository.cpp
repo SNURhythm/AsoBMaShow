@@ -29,7 +29,7 @@
 
 namespace {
 using asobmshow::chart_sql::normalizedSqlHash;
-constexpr int kChartDatabaseSchemaVersion = 4;
+constexpr int kChartDatabaseSchemaVersion = 5;
 
 std::string columnString(sqlite3_stmt *stmt, int idx);
 
@@ -525,6 +525,46 @@ bool migrateChartDatabaseToVersion4(sqlite3 *db, bool &completed) {
   return invalidateChartMetadataForNormalScan(db, completed);
 }
 
+bool createSongReviewTable(sqlite3 *db) {
+  // Pinned SongReviewAccessor stores this exact record shape.  Its separate
+  // database is an application layout detail; the chart repository owns the
+  // same durable per-SHA authority here.
+  return execSql(db,
+                 "CREATE TABLE IF NOT EXISTS review ("
+                 "sha256 TEXT NOT NULL,"
+                 "tag TEXT,"
+                 "favorite INTEGER,"
+                 "levelreview REAL,"
+                 "comment TEXT,"
+                 "PRIMARY KEY(sha256)"
+                 ")",
+                 "creating song review table");
+}
+
+bool migrateChartDatabaseToVersion5(sqlite3 *db, bool &completed) {
+  if (!createSongReviewTable(db)) {
+    return false;
+  }
+
+  bool favoritesExist = false;
+  if (!sqliteTableExists(db, "chart_favorites", favoritesExist,
+                         "checking legacy chart favorites")) {
+    return false;
+  }
+  if (favoritesExist &&
+      !execSql(db,
+               "INSERT INTO review(sha256, favorite) "
+               "SELECT chart_sha256, 2 FROM chart_favorites "
+               "WHERE chart_sha256 != '' "
+               "ON CONFLICT(sha256) DO UPDATE SET "
+               "favorite = review.favorite | excluded.favorite",
+               "migrating legacy chart favorites to song reviews")) {
+    return false;
+  }
+  completed = true;
+  return true;
+}
+
 bool runChartDatabaseMigrationPasses(
     sqlite3 *db, const ChartDatabaseMigrationPass *passes,
     std::size_t passCount, int latestVersion) {
@@ -568,6 +608,7 @@ bool migrateChartDatabaseSchema(sqlite3 *db) {
       {2, "normalize chart identity storage", migrateChartDatabaseToVersion2},
       {3, "persist authored TOTAL metadata", migrateChartDatabaseToVersion3},
       {4, "persist folder document metadata", migrateChartDatabaseToVersion4},
+      {5, "persist SongReview favorite flags", migrateChartDatabaseToVersion5},
   };
   return runChartDatabaseMigrationPasses(
       db, kMigrationPasses,
@@ -1077,7 +1118,7 @@ static bool createFavoritesTable(sqlite3 *db) {
     }
   }
 
-  return migrateChartDatabaseSchema(db);
+  return createSongReviewTable(db) && migrateChartDatabaseSchema(db);
 }
 
 static bool createSolidArchiveTable(sqlite3 *db) {

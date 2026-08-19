@@ -129,11 +129,14 @@ work from [`docs/todo.md`](todo.md). The pinned authority is Beatoraja commit
   matching the source `STATE_FAILED` transition without using an inferred
   numeric gauge threshold. Verified by `play_skin_state_bridge_tests`.
 
-- `favorite_chart` image index (`90`) now captures the active chart's
-  repository favourite flag at gameplay activation. The app owns the source's
-  none/favourite states (`0`/`1`); its separate invisible and song-level
-  favourite states are deliberately still pending. Verified by
-  `play_skin_state_bridge_tests`.
+- SongReview image indexes `89` and `90` now capture the active chart's
+  pinned SHA-256 review bitmask. Each selector projects its own favourite and
+  invisible pair to the source none/favourite/invisible states (`0`/`1`/`2`),
+  including invisible precedence. Chart schema v5 uses the source review
+  columns, migrates existing chart favourites to `FAVORITE_CHART`, and keeps
+  unrelated bits when the app's chart-favourite toggle changes. Verified by
+  `chart_repository_tests`, `chart_library_scanner_tests`,
+  `play_skin_state_bridge_tests`, and a desktop `main` build.
 
 - Normal 1P HCN active and damage timers (`250`–`259`, `270`–`279`) now use
   the captured HCN increase/damage state rather than ordinary long-note hold.

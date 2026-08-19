@@ -1883,9 +1883,20 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
               .supported = true};
     }
     switch (*id) {
-    case 90:
-      return {.value = snapshot->authority.favoriteChartState,
+    case 89:
+    case 90: {
+      // IntegerPropertyFactory.IndexType derives one ternary state for each
+      // SongReview bit pair.  INVISIBLE takes precedence if a persisted value
+      // happens to contain both bits, exactly as the pinned source does.
+      const int favoriteBit = *id == 89 ? 1 : 2;
+      const int invisibleBit = *id == 89 ? 4 : 8;
+      const int favorite = snapshot->authority.songReviewFavorite;
+      const int state = (favorite & invisibleBit) != 0
+                            ? 2
+                            : (favorite & favoriteBit) != 0 ? 1 : 0;
+      return {.value = state,
               .supported = true};
+    }
     case 40:
       return {.value = gaugeTypeIndex(snapshot->authority.gaugeType),
               .supported = true};

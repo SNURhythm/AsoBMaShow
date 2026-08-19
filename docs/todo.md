@@ -80,11 +80,13 @@ source default are not compatibility work for gameplay skins.
   practice retains the upstream `Integer.MIN_VALUE` absence sentinel, and a
   G-Battle target projects its persisted 1P/2P/DP options with the pinned
   `1P + 10 * 2P + 100 * DP` encoding.
-- Favourite song state (`89`) and the source's invisible variants remain
-  unavailable.
-- [x] Favourite chart state (`90`) uses the repository's exact chart-level
-  none/favourite state (`0`/`1`); it does not fabricate the unsupported
-  invisible state (`2`).
+- [x] Favourite song/chart states (`89`, `90`) now read the pinned
+  SHA-256-keyed `SongReview.favorite` bitmask: `FAVORITE_SONG`/`CHART`
+  (`1`/`2`) and `INVISIBLE_SONG`/`CHART` (`4`/`8`). Each index maps its own
+  pair to none/favourite/invisible (`0`/`1`/`2`), with the source's invisible
+  precedence. Chart schema v5 stores the source review columns, migrates
+  existing chart favourites to bit `2`, and retains the unrelated song and
+  invisible bits when the app's chart-favourite toggle changes.
 - [x] Custom judge and judge-area configuration (`301`, `303`) now preserve
   the exact `PlayerConfig` boolean values in app settings and capture them at
   gameplay activation for `IndexType`.

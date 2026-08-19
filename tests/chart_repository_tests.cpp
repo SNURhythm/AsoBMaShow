@@ -379,7 +379,7 @@ void testSessionRoundTripAndReadinessCost() {
 
   Database inspection = openDatabase(path);
   assert(inspection);
-  assert(queryInt(inspection.get(), "PRAGMA user_version") == 4);
+  assert(queryInt(inspection.get(), "PRAGMA user_version") == 5);
   SqliteStatementHandle journalMode;
   assert(prepareSqliteStatement(inspection.get(), "PRAGMA journal_mode",
                                 journalMode) == SQLITE_OK);
@@ -420,6 +420,15 @@ void testSelectChartMetaByPathsHydratesInInputOrder() {
   assert(session->InsertChartMeta(first));
   assert(session->InsertChartMeta(second));
 
+  {
+    Database reviewDatabase = openDatabase(databasePath);
+    assert(reviewDatabase);
+    assert(execute(
+        reviewDatabase.get(),
+        "INSERT INTO review(sha256, favorite) VALUES('" + first.SHA256 +
+            "', 9),('" + second.SHA256 + "', 6)"));
+  }
+
   const auto missing = temporary.path() / "missing.bms";
   const std::array requestedPaths{first.BmsPath, second.BmsPath,
                                   first.BmsPath, missing};
@@ -435,9 +444,11 @@ void testSelectChartMetaByPathsHydratesInInputOrder() {
   assert(loaded.records[0].meta.MD5 == first.MD5);
   assert(loaded.records[0].meta.SHA256 == first.SHA256);
   assert(loaded.records[0].meta.TotalNotes == first.TotalNotes);
+  assert(loaded.records[0].songReviewFavorite == 9);
   assert(loaded.records[1].meta.BmsPath == second.BmsPath);
   assert(loaded.records[1].meta.StageFile == second.StageFile);
   assert(loaded.records[1].meta.TotalNotes == second.TotalNotes);
+  assert(loaded.records[1].songReviewFavorite == 6);
   assert(loaded.missingPaths == 1);
 
   const auto empty = session->SelectChartMetaByPaths({});
@@ -462,6 +473,37 @@ void testSelectChartMetaByPathsHydratesInInputOrder() {
   const auto storageFailure = session->SelectChartMetaByPaths(failurePath);
   assert(storageFailure.status == ChartMetaPathBatchReadStatus::StorageFailure);
   assert(storageFailure.records.empty());
+}
+
+void testFavoriteToggleMaintainsSongReviewChartBit() {
+  TempDirectory temporary;
+  const auto databasePath = temporary.path() / "chart.db";
+  ChartRepository repository(databasePath);
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+
+  auto meta = chartMeta(temporary.path());
+  assert(session->InsertChartMeta(meta));
+  assert(session->SetFavorite(meta, true));
+  const std::array paths{meta.BmsPath};
+  auto loaded = session->SelectChartMetaByPaths(paths);
+  assert(loaded.status == ChartMetaPathBatchReadStatus::Loaded);
+  assert(loaded.records.size() == 1);
+  assert(loaded.records.front().songReviewFavorite == 2);
+
+  {
+    Database reviewDatabase = openDatabase(databasePath);
+    assert(reviewDatabase);
+    assert(execute(reviewDatabase.get(),
+                   "UPDATE review SET favorite=15 WHERE sha256='" +
+                       meta.SHA256 + "'"));
+  }
+  assert(session->SetFavorite(meta, false));
+  loaded = session->SelectChartMetaByPaths(paths);
+  assert(loaded.status == ChartMetaPathBatchReadStatus::Loaded);
+  assert(loaded.records.size() == 1);
+  assert(loaded.records.front().songReviewFavorite == 13);
 }
 
 void testSelectChartMetaByHashUsesDurableIndexedIdentity() {
@@ -516,7 +558,7 @@ void testRejectedFamiliesRemainUnchanged() {
     assert(execute(database.get(),
                    "CREATE TABLE sentinel(value TEXT);"
                    "INSERT INTO sentinel VALUES('unchanged');"
-                   "PRAGMA user_version=5"));
+                   "PRAGMA user_version=6"));
   }
   const auto futureBefore =
       repository_test::rawDatabaseFamilySnapshot(futurePath);
@@ -904,7 +946,7 @@ void testChartMigrationCompatibilityMatrix() {
     assert(migrated.EnsureReady());
     Database database = openDatabase(path);
     assert(database);
-    assert(queryInt(database.get(), "PRAGMA user_version") == 4);
+    assert(queryInt(database.get(), "PRAGMA user_version") == 5);
     assert(queryInt(database.get(), "SELECT COUNT(*) FROM chart_meta") ==
            (inputVersion == 4 ? 1 : 0));
     assert(queryInt(database.get(),
@@ -914,6 +956,11 @@ void testChartMigrationCompatibilityMatrix() {
     assert(queryString(database.get(),
                        "SELECT chart_sha256 FROM chart_favorites") ==
            lowerSha);
+    assert(queryInt(database.get(), "SELECT COUNT(*) FROM review") == 1);
+    const std::string reviewFavoriteQuery =
+        "SELECT favorite FROM review WHERE sha256='" +
+        std::string(lowerSha) + "'";
+    assert(queryInt(database.get(), reviewFavoriteQuery.c_str()) == 2);
     const bool rebuildTableExists =
         queryInt(database.get(),
                  "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND "
@@ -929,9 +976,9 @@ void testChartMigrationCompatibilityMatrix() {
                        "SELECT required FROM chart_meta_rebuild_state "
                        "WHERE id=1")
             : 0;
-    assert(inputVersion == 4 ? rebuildRequired == 0
+    assert(inputVersion >= 4 ? rebuildRequired == 0
                              : rebuildRowExists && rebuildRequired == 1);
-    if (inputVersion == 4) {
+    if (inputVersion >= 4) {
       assert(queryInt(database.get(), "SELECT total FROM chart_meta") == 234);
       assert(queryInt(database.get(),
                       "SELECT has_total FROM chart_meta") == 1);
@@ -976,7 +1023,7 @@ void testChartMigrationReleaseFailureDoesNotReportSuccess() {
   {
     Database database = openDatabase(path);
     assert(database);
-    assert(queryInt(database.get(), "PRAGMA user_version") == 4);
+    assert(queryInt(database.get(), "PRAGMA user_version") == 5);
     assert(queryInt(database.get(), "SELECT COUNT(*) FROM chart_meta") == 0);
     assert(queryInt(database.get(),
                     "SELECT required FROM chart_meta_rebuild_state "
@@ -1211,6 +1258,7 @@ int main() {
   testScanBatchReusesPreparedInsertAndTransaction();
   testSessionRoundTripAndReadinessCost();
   testSelectChartMetaByPathsHydratesInInputOrder();
+  testFavoriteToggleMaintainsSongReviewChartBit();
   testSelectChartMetaByHashUsesDurableIndexedIdentity();
   testRejectedFamiliesRemainUnchanged();
   testChartQueryBehaviorMatrix();

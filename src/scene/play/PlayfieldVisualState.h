@@ -238,9 +238,10 @@ struct PlayfieldAuthorityUpdate {
   // owns one. Aso has no rival/target ScoreData transport yet, so absence is
   // retained distinctly from an authored NORMAL option value of zero.
   std::optional<int> targetPlayOption;
-  // SongReview.favorite_chart has states none/favorite/invisible. The chart
-  // repository currently owns only none/favorite, represented as 0/1.
-  int favoriteChartState = 0;
+  // Pinned SongReview.favorite stores independent song/chart favourite and
+  // invisible bits under this chart's SHA-256 identity.  Image indexes 89/90
+  // project their respective bit pairs to none/favourite/invisible states.
+  int songReviewFavorite = 0;
   // SongData.CONTENT_TEXT captured by the chart-library scan. Beatoraja
   // assigns it to every chart in a folder containing an immediate .txt file.
   bool chartHasDocument = false;

@@ -253,7 +253,7 @@ private:
   std::optional<PlayfieldRivalScoreState> activeRivalScore;
   std::optional<int> activeTargetPlayOption;
   PlayerScoreHistorySnapshot activePlayerScoreHistory;
-  int playfieldFavoriteChartState = 0;
+  int playfieldSongReviewFavorite = 0;
   bool playfieldChartHasDocument = false;
   bool playfieldStageFileAvailable = false;
   bool playfieldBackBmpAvailable = false;

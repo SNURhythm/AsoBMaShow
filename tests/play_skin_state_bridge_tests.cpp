@@ -1785,7 +1785,7 @@ void testFavoriteChartImageIndexUsesCapturedRepositoryState() {
                               .runtime = runtime.runtime(),
                               .mutationTable = mutations});
   auto state = stateAt(221);
-  state.authority.favoriteChartState = 1;
+  state.authority.songReviewFavorite = 2;
   bridge.beginFrame(state, projectionAt(221));
   expect(bridge.integerProperty({90}, SkinIntegerPropertyDomain::ImageIndex)
                  .supported &&
@@ -1794,6 +1794,42 @@ void testFavoriteChartImageIndexUsesCapturedRepositoryState() {
                  1,
          "favorite_chart uses the captured chart repository state rather than "
          "the generic image-index fallback");
+  bridge.discardFrame();
+}
+
+void testSongReviewImageIndexesUsePinnedBitmaskStates() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = runtime.runtime(),
+                              .mutationTable = mutations});
+  auto state = stateAt(222);
+  state.authority.songReviewFavorite = 3;
+  bridge.beginFrame(state, projectionAt(222));
+  expect(bridge.integerProperty({89}, SkinIntegerPropertyDomain::ImageIndex)
+                 .value == 1 &&
+             bridge.integerProperty({90}, SkinIntegerPropertyDomain::ImageIndex)
+                     .value == 1,
+         "SongReview favourite bits select state one for both image indexes");
+  bridge.discardFrame();
+
+  state.clock.serial = 223;
+  state.authority.songReviewFavorite = 12;
+  bridge.beginFrame(state, projectionAt(223));
+  expect(bridge.integerProperty({89}, SkinIntegerPropertyDomain::ImageIndex)
+                 .value == 2 &&
+             bridge.integerProperty({90}, SkinIntegerPropertyDomain::ImageIndex)
+                     .value == 2,
+         "SongReview invisible bits take precedence for both image indexes");
   bridge.discardFrame();
 }
 
@@ -3097,6 +3133,7 @@ int main() {
   testFailureTimerUsesCapturedSurvivalFailureEvent();
   testRhythmTimerUsesPinnedSectionAndBpmAccumulator();
   testFavoriteChartImageIndexUsesCapturedRepositoryState();
+  testSongReviewImageIndexesUsePinnedBitmaskStates();
   testChartDocumentBooleansUseCapturedLibraryMetadata();
   testScoreAndComboTimersUseCapturedGameplayState();
   testPlayTimerPropertiesMatchPinnedJavaConversions();

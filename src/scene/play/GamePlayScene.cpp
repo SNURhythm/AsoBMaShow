@@ -2568,7 +2568,7 @@ void GamePlayScene::init() {
     };
   }
   activePlayerScoreHistory = context.scoreRepository.LoadPlayerScoreHistory();
-  playfieldFavoriteChartState = 0;
+  playfieldSongReviewFavorite = 0;
   playfieldChartHasDocument = false;
   playfieldStageFileAvailable =
       bmsResourceImageAvailable(chart->Meta, chart->Meta.StageFile);
@@ -2579,7 +2579,7 @@ void GamePlayScene::init() {
     const auto records = chartSession->SelectChartMetaByPaths(paths);
     if (records.status == ChartMetaPathBatchReadStatus::Loaded &&
         !records.records.empty()) {
-      playfieldFavoriteChartState = records.records.front().favorite ? 1 : 0;
+      playfieldSongReviewFavorite = records.records.front().songReviewFavorite;
       playfieldChartHasDocument = records.records.front().hasDocument;
     }
   }
@@ -4693,7 +4693,7 @@ void GamePlayScene::capturePlayfieldVisualState(
       .player2RandomOption = gameplayRandomOptionIndex(playOptions.option2),
       .doublePlayOption = options.doublePlayFlip ? 1 : 0,
       .targetPlayOption = activeTargetPlayOption,
-      .favoriteChartState = playfieldFavoriteChartState,
+      .songReviewFavorite = playfieldSongReviewFavorite,
       .chartHasDocument = playfieldChartHasDocument,
       .stageFileAvailable = playfieldStageFileAvailable,
       .backBmpAvailable = playfieldBackBmpAvailable,

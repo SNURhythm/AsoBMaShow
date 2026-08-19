@@ -57,7 +57,7 @@ bool PlayfieldAuthorityUpdate::operator==(
          player2RandomOption == other.player2RandomOption &&
          doublePlayOption == other.doublePlayOption &&
          targetPlayOption == other.targetPlayOption &&
-         favoriteChartState == other.favoriteChartState &&
+         songReviewFavorite == other.songReviewFavorite &&
          chartHasDocument == other.chartHasDocument &&
          stageFileAvailable == other.stageFileAvailable &&
          backBmpAvailable == other.backBmpAvailable &&

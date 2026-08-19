@@ -85,6 +85,10 @@ struct ChartMetaRecord {
   std::uint64_t archiveUncompressedSize = 0;
   int archiveFileCount = 0;
   bool favorite = false;
+  // SongReview.favorite is persisted by the pinned Beatoraja review table
+  // under this chart's SHA-256 identity.  Its bit assignments are consumed by
+  // gameplay skin image indexes 89 and 90.
+  int songReviewFavorite = 0;
 };
 
 enum class ChartMetaPathBatchReadStatus { Loaded, Invalid, StorageFailure };
