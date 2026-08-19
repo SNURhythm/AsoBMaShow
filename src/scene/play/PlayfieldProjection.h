@@ -70,6 +70,10 @@ struct PmsPoorDestinationGeometry {
 };
 
 struct PlayfieldProjectionRequest {
+  // LaneRenderer applies PlayerConfig.judgetiming only while drawing notes.
+  // The frame clock remains the gameplay/skin clock so timers, events, and
+  // skin properties do not inherit a note-display-only adjustment.
+  std::optional<long long> noteDisplayTimeMicros;
   double visibleScrollBefore = 0.0;
   double visibleScrollAfter = 0.0;
   std::size_t maxTimelines = 0;

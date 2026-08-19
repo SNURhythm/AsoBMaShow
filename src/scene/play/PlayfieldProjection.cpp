@@ -580,7 +580,8 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
   PlayfieldProjectionResult result;
   result.frameSerial = state.clock.serial;
   result.builtInTraversal = request.builtInTraversal;
-  const long long timeMicros = state.clock.visualTimeMicros;
+  const long long timeMicros = request.noteDisplayTimeMicros.value_or(
+      state.clock.visualTimeMicros);
   result.currentScrollPosition = gameplay_scroll_geometry::scrollPositionAtTime(
       index_.scrollTimelines, timeMicros);
   const auto &retainedTimelines = index_.retainedTimelines;

@@ -63,6 +63,40 @@ bool testPassedNormalNotesDoNotRemainInTheSkinProjection() {
          skin.notes.front().kind == skin::SkinProjectedNoteKind::Mine;
 }
 
+bool testNoteDisplayTimeIsScopedToProjection() {
+  // PlayerConfig.judgetiming is a LaneRenderer-only offset. Projection must
+  // accept it without changing the frame clock observed by skins and events.
+  PlayfieldChartVisualModel model;
+  model.laneOrder = {0};
+  model.timelines = {
+      {.id = 1,
+       .timeMicros = 0,
+       .scrollPosition = 0.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 0,
+       .retainedOrdinal = 0},
+      {.id = 2,
+       .timeMicros = 100,
+       .scrollPosition = 1.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 1,
+       .retainedOrdinal = 1},
+  };
+  model.notes = {
+      {.id = 10, .timelineId = 1, .lane = 0, .authoredOrdinal = 0},
+  };
+  PlayfieldVisualState state;
+  state.clock = {.serial = 1, .visualTimeMicros = 50};
+
+  PlayfieldProjection projection;
+  const auto result = projection.project(
+      model, state,
+      {.noteDisplayTimeMicros = 0,
+       .visibleScrollBefore = 1.0,
+       .visibleScrollAfter = 1.0});
+  return state.clock.visualTimeMicros == 50 && containsNote(result.notes, 10);
+}
+
 bool testShowPastNotesKeepsOnlyAnUnprocessedPastNormalNote() {
   // Pinned LaneRenderer's optional showpastnote path is deliberately narrow:
   // it retains an already-past NormalNote only while its source state is 0.
@@ -880,6 +914,10 @@ int main() {
   if (!testPassedNormalNotesDoNotRemainInTheSkinProjection()) {
     std::cerr << "passed normal notes must not remain in the default skin "
                  "projection, while mines retain their Mine visual kind\n";
+    return EXIT_FAILURE;
+  }
+  if (!testNoteDisplayTimeIsScopedToProjection()) {
+    std::cerr << "note display timing must not change the frame clock\n";
     return EXIT_FAILURE;
   }
   if (!testShowPastNotesKeepsOnlyAnUnprocessedPastNormalNote()) {

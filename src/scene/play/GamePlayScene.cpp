@@ -4740,7 +4740,12 @@ long long GamePlayScene::getVisualOffsetMicros() const {
 
 long long GamePlayScene::getVisualTimeMicros(long long songTimeMicros) const {
   return gameplay_timing::visualTimeMicros(songTimeMicros,
-                                           getVisualOffsetMicros()) +
+                                           getVisualOffsetMicros());
+}
+
+long long GamePlayScene::getNoteDisplayTimeMicros(
+    long long visualTimeMicros) const {
+  return visualTimeMicros +
          static_cast<long long>(context.settings.notesDisplayTimingMilliseconds) *
              1'000LL;
 }
@@ -4807,7 +4812,7 @@ void GamePlayScene::capturePlayfieldVisualState(
                  ? PlayfieldGameplayMode::Practice
                  : PlayfieldGameplayMode::Play);
   const double sourceSpeed = speedObjectMultiplierAtTime(
-      playfieldChartVisualModel, visualTimeMicros);
+      playfieldChartVisualModel, getNoteDisplayTimeMicros(visualTimeMicros));
   const double currentSpeedMultiplier =
       context.settings.constantScroll &&
               gameplayMode != PlayfieldGameplayMode::Practice
@@ -4967,7 +4972,8 @@ void GamePlayScene::capturePlayfieldVisualState(
         const bool headReachedJudge =
             head->IsPlayed || head->IsDead ||
             (head->Timeline != nullptr &&
-             head->Timeline->Timing <= visualTimeMicros);
+             head->Timeline->Timing <=
+                 getNoteDisplayTimeMicros(visualTimeMicros));
         const auto laneIt = lanePressed.find(head->Lane);
         const bool laneDown =
             laneIt != lanePressed.end() && laneIt->second;
@@ -5012,7 +5018,8 @@ void GamePlayScene::capturePlayfieldVisualState(
                       traversal.hispeed;
     capturedPlayfieldProjection = playfieldProjection.project(
         playfieldChartVisualModel, capturedPlayfieldVisualState,
-        {.includeInvisibleNotes =
+        {.noteDisplayTimeMicros = getNoteDisplayTimeMicros(visualTimeMicros),
+         .includeInvisibleNotes =
              capturedPlayfieldVisualState.configuration.showInvisibleNotes,
          .showPastNormalNotes =
              capturedPlayfieldVisualState.configuration.showPastNotes,

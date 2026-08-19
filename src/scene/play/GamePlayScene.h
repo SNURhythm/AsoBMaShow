@@ -188,6 +188,8 @@ private:
                                                  double inputDelay = 0.0) const;
   [[nodiscard]] long long getVisualOffsetMicros() const;
   [[nodiscard]] long long getVisualTimeMicros(long long songTimeMicros) const;
+  [[nodiscard]] long long
+  getNoteDisplayTimeMicros(long long visualTimeMicros) const;
   View *pauseLayout = nullptr;
   View *playbackFailureLayout = nullptr;
   Button *pauseButton = nullptr;
