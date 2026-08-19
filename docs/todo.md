@@ -197,12 +197,15 @@ gameplay.
   presentation and matches the pinned `LaneRenderer` condition: only an
   unresolved ordinary note remains after its timeline; resolved notes, mines,
   and hidden notes do not gain a past-note path.
-- `skin.note.dst2` is decoded and its lane geometry is preserved, but the
-  source's PMS missed-POOR path is not implemented. In pinned `LaneRenderer`,
-  a configured `dstnote2` changes ordinary-note eligibility by judgement state
-  and then renders the missed-POOR descent separately. The current projection
-  has only judged/dead state, not the required source judgement-state and
-  descent timing.
+- [x] `skin.note.dst2` now reproduces pinned `LaneRenderer`'s PMS
+  missed-POOR path in live play, replay watching, and replay export. The
+  selected SkinNote provides lane-zero's shared `dstnote2` geometry; the
+  projection preserves the source cursor, late-BAD hold, STOP/BPM no-speed
+  descent, destination clamp, and `state == 0 || state >= 4` normal-note
+  eligibility. It emits the separate falling pass with the normal image,
+  source clipping, lift origin, note expansion, and inherited final
+  Constant-pass alpha rather than treating it as an ordinary scrolled or
+  processed note.
 
 ### Existing parser and renderer work
 

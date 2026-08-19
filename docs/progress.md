@@ -15,6 +15,16 @@ work from [`docs/todo.md`](todo.md). The pinned authority is Beatoraja commit
 
 ## Completed
 
+- `skin.note.dst2` now implements Beatoraja PMS missed-POOR drawing through
+  live gameplay, replay watching, and replay export. The selected skin
+  publishes lane-zero's shared destination geometry; projection mirrors
+  `LaneRenderer`'s retained cursor, late-BAD hold, STOP/BPM no-speed descent,
+  `dstnote2` clamp, and source normal-note states (`0` or `>= 4`). The
+  renderer uses the normal sprite, source clip/position behavior, note
+  expansion, and the inherited final Constant-pass alpha. Verified by
+  `playfield_projection_tests`, `skin_draw_command_tests`, and
+  `play_skin_session_tests`.
+
 - String property `1020` (`irname`) now carries Aso's first persisted IR
   provider id through live play, replay viewing, and normal/course replay
   export. It intentionally includes disabled providers, as the pinned

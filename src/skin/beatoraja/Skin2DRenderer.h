@@ -74,6 +74,7 @@ struct SkinProjectedNoteView {
   // retain the historical pixel-displacement representation.
   std::optional<double> scrollSpeed;
   double authoredYDisplacement = 0.0;
+  std::optional<double> pmsPoorYDisplacement;
   bool judged = false;
   double opacity = 1.0;
   std::uint32_t submissionOrdinal = 0;

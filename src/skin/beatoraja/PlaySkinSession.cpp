@@ -741,6 +741,26 @@ PlaySkinSession::selectedSkinGameplayTiming() const {
   return context_.model.model.timing;
 }
 
+std::optional<PmsPoorDestinationGeometry>
+PlaySkinSession::pmsPoorDestinationGeometry() const {
+  const auto note = std::ranges::find_if(
+      context_.model.model.objects, [](const SkinObjectDefinition &object) {
+        return std::holds_alternative<SkinNoteObject>(object.payload);
+      });
+  if (note == context_.model.model.objects.end()) {
+    return std::nullopt;
+  }
+  const auto &lanes = std::get<SkinNoteObject>(note->payload).lanes;
+  if (lanes.empty() || !lanes.front().secondaryDestinationY) {
+    return std::nullopt;
+  }
+  return PmsPoorDestinationGeometry{
+      .laneOriginY = lanes.front().laneDestination.y,
+      .laneHeight = lanes.front().laneDestination.height,
+      .secondaryDestinationY =
+          static_cast<double>(*lanes.front().secondaryDestinationY)};
+}
+
 PlaySkinFrameTransactionResult PlaySkinSession::runFrameTransaction(
     const PlayfieldVisualState &state,
     const PlayfieldProjectionResult &projection,

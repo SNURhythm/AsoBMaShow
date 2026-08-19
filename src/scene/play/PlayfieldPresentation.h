@@ -4,13 +4,13 @@
 #include "../../skin/beatoraja/BeatorajaSkinModel.h"
 #include "../../skin/package/SkinPackageTypes.h"
 #include "PlayfieldPresentationEvents.h"
+#include "PlayfieldProjection.h"
 #include "PlayfieldVisualState.h"
 #include "RealtimeTouchInputRouter.h"
 
 #include <optional>
 #include <string>
 
-struct PlayfieldProjectionResult;
 struct RenderContext;
 
 namespace skin {
@@ -95,6 +95,10 @@ public:
   // can retain the same end-of-notes/finish/fade lifecycle.
   [[nodiscard]] virtual std::optional<skin::SkinGameplayTiming>
   selectedSkinGameplayTiming() const {
+    return std::nullopt;
+  }
+  [[nodiscard]] virtual std::optional<PmsPoorDestinationGeometry>
+  pmsPoorDestinationGeometry() const {
     return std::nullopt;
   }
 };

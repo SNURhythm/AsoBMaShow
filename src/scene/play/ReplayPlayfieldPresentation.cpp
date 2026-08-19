@@ -568,6 +568,10 @@ PresentationFrameResult ReplayPlayfieldPresentation::renderFrame(
     effectiveRequest.latePoorTimingMicros =
         builtIn_->projectionLatePoorTimingMicros();
   }
+  if (!effectiveRequest.pmsPoorDestination) {
+    effectiveRequest.pmsPoorDestination =
+        coordinator_->pmsPoorDestinationGeometry();
+  }
   const PlayfieldProjectionResult projection =
       projection_->project(*chartModel_, state, effectiveRequest);
 #if defined(ASOBMASHOW_REPLAY_PLAYFIELD_PRESENTATION_TESTING)

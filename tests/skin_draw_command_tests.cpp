@@ -3126,6 +3126,50 @@ void testLiftUsesPinnedSharedLaneOriginAndScrollHeight() {
          "height before applying Hi-Speed");
 }
 
+void testPmsDst2DescentUsesNormalSpriteAndNoHispeed() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  state.laneCoverResult = {.supported = true,
+                           .liftEnabled = true,
+                           .lift = 0.25};
+  state.notes = {{.visualId = 10,
+                  .lane = 0,
+                  .kind = SkinProjectedNoteKind::Normal,
+                  .scrollSpeed = 8.0,
+                  .authoredYDisplacement = 0.5,
+                  .pmsPoorYDisplacement = -25.0,
+                  .judged = true,
+                  .submissionOrdinal = 1}};
+
+  auto note = gameplayNoteObject(resources);
+  note.lanes.front().secondaryDestinationY = -20;
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects = {{.id = 1,
+                          .authoredName = "pms-dst2",
+                          .payload = std::move(note),
+                          .authoredOrdinal = 1,
+                          .critical = true}};
+  auto presented = destination(1, 1, 0.0);
+  presented.presentation.frames.clear();
+  model.model.destinations = {std::move(presented)};
+
+  const auto result = evaluate(renderer, runtime, model, resources, state, 1,
+                               0, nullptr, std::nullopt, nullptr, 1, true);
+  expect(result.submitReady && result.submitReady->commands.size() == 1,
+         "PMS dst2 descent emits its past normal note");
+  if (!result.submitReady || result.submitReady->commands.size() != 1) {
+    return;
+  }
+  const auto &draw =
+      std::get<SkinTexturedQuadCommand>(result.submitReady->commands[0].payload);
+  expect(draw.resource == 100 && draw.vertices[0].y == 470.0F &&
+             draw.vertices[2].y == 460.0F,
+         "PMS dst2 keeps the normal sprite and applies its raw no-speed "
+         "descent below the Lift-adjusted judgement origin");
+}
+
 void testEveryLongNoteBodyStateUsesItsDistinctVisualRole() {
   RuntimeHarness runtime;
   Skin2DRenderer renderer;
@@ -4351,6 +4395,7 @@ int main() {
   testNoteLongNoteAndLineCommandsPreserveMergedProjectionOrder();
   testLiveScrollUnitsUseSkinLaneHeightAndHispeed();
   testLiftUsesPinnedSharedLaneOriginAndScrollHeight();
+  testPmsDst2DescentUsesNormalSpriteAndNoHispeed();
   testEveryLongNoteBodyStateUsesItsDistinctVisualRole();
   testProjectedLineEmitsEveryLaneGroupAndIgnoresNestedClip();
   testSynthesizedNoteFallbacksHonorMarkProcessedNote();

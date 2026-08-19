@@ -87,6 +87,8 @@ public:
   [[nodiscard]] std::optional<PresentationFailure> lastFailure() const override;
   [[nodiscard]] std::optional<skin::SkinGameplayTiming>
   selectedSkinGameplayTiming() const override;
+  [[nodiscard]] std::optional<PmsPoorDestinationGeometry>
+  pmsPoorDestinationGeometry() const override;
 
 private:
   struct PendingFrame {

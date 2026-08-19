@@ -117,6 +117,163 @@ bool testShowPastNotesKeepsOnlyAnUnprocessedPastNormalNote() {
          !containsNote(result.notes, 12);
 }
 
+bool testPmsDst2ProjectsSourceLatePoorDescent() {
+  // Removing the dedicated PMS path, treating its late-BAD hold as moving
+  // time, or reusing a processed-note visual must all make this fail.
+  // LaneRenderer holds a note for the BAD late window, then drops it at
+  // no-speed velocity: 500,000us * 120 BPM / 240,000,000 * 100px = 25px.
+  PlayfieldChartVisualModel model;
+  model.laneOrder = {0};
+  model.timelines = {
+      {.id = 1,
+       .timeMicros = 0,
+       .bpm = 120.0,
+       .scrollPosition = 0.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 0,
+       .retainedOrdinal = 0},
+      {.id = 2,
+       .timeMicros = 1'000'000,
+       .bpm = 120.0,
+       .scrollPosition = 4.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 1,
+       .retainedOrdinal = 1},
+  };
+  model.notes = {
+      {.id = 10, .timelineId = 1, .lane = 0, .authoredOrdinal = 0},
+      {.id = 11, .timelineId = 1, .lane = 0, .authoredOrdinal = 1},
+      {.id = 12, .timelineId = 1, .lane = 0, .authoredOrdinal = 2},
+  };
+  PlayfieldVisualState state;
+  state.clock = {.serial = 1, .visualTimeMicros = 1'000'000};
+  state.notes = {
+      {.id = 10},
+      {.id = 11, .judged = true},
+      {.id = 12, .judged = true, .dead = true},
+  };
+
+  PlayfieldProjection projection;
+  const auto result = projection.project(
+      model, state,
+      {.latePoorTimingMicros = 500'000,
+       .pmsPoorDestination = PmsPoorDestinationGeometry{
+           .laneOriginY = 10.0,
+           .laneHeight = 100.0,
+           .secondaryDestinationY = -20.0},
+       .buildBuiltInPlan = false});
+  const auto skin = adaptPlayfieldProjectionForSkin(result);
+  const auto descent = [](const auto &notes, std::uint32_t id) {
+    const auto found = std::ranges::find(notes, id,
+                                         &skin::SkinProjectedNoteView::visualId);
+    return found == notes.end() ? std::optional<double>{}
+                                : found->pmsPoorYDisplacement;
+  };
+  return skin.notes.size() == 2 && descent(skin.notes, 10).has_value() &&
+         closeTo(*descent(skin.notes, 10), -25.0) &&
+         !descent(skin.notes, 11).has_value() &&
+         descent(skin.notes, 12).has_value() &&
+         closeTo(*descent(skin.notes, 12), -25.0);
+}
+
+bool testPmsDst2DescentTraversesBeforeRetainedCursor() {
+  // LaneRenderer uses `pos` only to find its current timeline. Its dst2
+  // descent then walks all the way back to timeline zero, so a previous frame
+  // having advanced `pos` must not hide an older missed POOR.
+  PlayfieldChartVisualModel model;
+  model.laneOrder = {0};
+  model.timelines = {
+      {.id = 1,
+       .timeMicros = 0,
+       .bpm = 120.0,
+       .scrollPosition = 0.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 0,
+       .retainedOrdinal = 0},
+      {.id = 2,
+       .timeMicros = 100'000,
+       .bpm = 120.0,
+       .scrollPosition = 1.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 1,
+       .retainedOrdinal = 1},
+      {.id = 3,
+       .timeMicros = 2'000'000,
+       .bpm = 120.0,
+       .scrollPosition = 2.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 2,
+       .retainedOrdinal = 2},
+  };
+  model.notes = {{.id = 10, .timelineId = 1, .lane = 0}};
+  const auto request = PlayfieldProjectionRequest{
+      .pmsPoorDestination = PmsPoorDestinationGeometry{
+          .laneOriginY = 0.0,
+          .laneHeight = 100.0,
+          .secondaryDestinationY = -100.0},
+      .buildBuiltInPlan = false};
+
+  PlayfieldVisualState state;
+  PlayfieldProjection projection;
+  state.clock = {.serial = 1, .visualTimeMicros = 1'000'000};
+  [[maybe_unused]] const auto first = projection.project(model, state, request);
+  state.clock = {.serial = 2, .visualTimeMicros = 1'500'000};
+  const auto result = projection.project(model, state, request);
+  const auto note = std::ranges::find(result.notes, ChartVisualId{10},
+                                      &ProjectedPlayfieldNote::noteId);
+  return note != result.notes.end() && note->pmsPoorYDisplacement.has_value() &&
+         closeTo(*note->pmsPoorYDisplacement, -75.0);
+}
+
+bool testPmsDst2DescentInheritsTheLastConstantFade() {
+  // LaneRenderer resets the sprite to white before its primary note pass.
+  // Its subsequent dst2 pass does not reset that color, so a past missed POOR
+  // inherits the last primary future-row Constant fade (here 50%).
+  PlayfieldChartVisualModel model;
+  model.laneOrder = {0};
+  model.timelines = {
+      {.id = 1,
+       .timeMicros = 0,
+       .bpm = 120.0,
+       .scrollPosition = 0.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 0,
+       .retainedOrdinal = 0},
+      {.id = 2,
+       .timeMicros = 1'050'000,
+       .bpm = 120.0,
+       .scrollPosition = 0.5,
+       .retainedForProjection = true,
+       .authoredOrdinal = 1,
+       .retainedOrdinal = 1},
+  };
+  model.notes = {{.id = 10, .timelineId = 1, .lane = 0}};
+  PlayfieldVisualState state;
+  state.clock = {.serial = 1, .visualTimeMicros = 700'000};
+  PlayfieldProjection projection;
+  const auto result = projection.project(
+      model, state,
+      {.constantScroll = true,
+       .constantDurationMilliseconds = 300,
+       .constantFadeInMilliseconds = 100,
+       .pmsPoorDestination = PmsPoorDestinationGeometry{
+           .laneOriginY = 0.0,
+           .laneHeight = 100.0,
+           .secondaryDestinationY = -100.0},
+       .buildBuiltInPlan = false,
+       .builtInTraversal = BuiltInRendererTraversal{
+           .lowerBound = -100.0F,
+           .judgeY = 0.0F,
+           .upperBound = 100.0F,
+           .rxhs = 100.0F,
+           .hispeed = 1.0F,
+           .startRetainedOrdinal = 0}});
+  const auto note = std::ranges::find(result.notes, ChartVisualId{10},
+                                      &ProjectedPlayfieldNote::noteId);
+  return note != result.notes.end() && note->pmsPoorYDisplacement.has_value() &&
+         closeTo(note->opacity, 0.5);
+}
+
 bool testNotesDisplayTimingAutoAdjustUsesPinnedJudgeStep() {
   // JudgeManager adjusts only PGREAT/GREAT/GOOD within ±150 ms. Java integer
   // division truncates toward zero after applying its sign-specific 15 ms
@@ -727,6 +884,18 @@ int main() {
   }
   if (!testShowPastNotesKeepsOnlyAnUnprocessedPastNormalNote()) {
     std::cerr << "showpastnote must retain only source-state-zero normal notes\n";
+    return EXIT_FAILURE;
+  }
+  if (!testPmsDst2ProjectsSourceLatePoorDescent()) {
+    std::cerr << "PMS dst2 late-POOR descent projection failed\n";
+    return EXIT_FAILURE;
+  }
+  if (!testPmsDst2DescentTraversesBeforeRetainedCursor()) {
+    std::cerr << "PMS dst2 descent must traverse before the retained cursor\n";
+    return EXIT_FAILURE;
+  }
+  if (!testPmsDst2DescentInheritsTheLastConstantFade()) {
+    std::cerr << "PMS dst2 descent must inherit the Constant fade\n";
     return EXIT_FAILURE;
   }
   if (!testNotesDisplayTimingAutoAdjustUsesPinnedJudgeStep()) {

@@ -1150,7 +1150,9 @@ return {
               .authoredOrdinal = ordinal}});
   }
 
-  void addTouchGeometry(SkinFloatWriterId writer = SkinFloatWriterId{1}) {
+  void addTouchGeometry(
+      SkinFloatWriterId writer = SkinFloatWriterId{1},
+      std::optional<double> firstLaneSecondaryDestinationY = std::nullopt) {
     resources_.addImage(80);
     const SkinFloatPropertyId valueProperty{
         writer == SkinFloatWriterId{4} ? 2U : 1U};
@@ -1178,7 +1180,8 @@ return {
          .laneDestination = {.x = 100.0,
                              .y = 20.0,
                              .width = 80.0,
-                             .height = 500.0}},
+                             .height = 500.0},
+         .secondaryDestinationY = firstLaneSecondaryDestinationY},
         {.authoredLane = 0,
          .laneDestination = {.x = 200.0,
                              .y = 20.0,
@@ -1514,6 +1517,20 @@ void testSelectedSkinHudUsesThePublishedSkinNoteLaneSpan() {
              std::abs(hud->judgementLineY - 34.0) < 0.0001,
          "selected-skin HUD derives and projects its full lane span and "
          "judgement line from published SkinNote geometry");
+}
+
+void testPmsPoorDestinationUsesFirstSelectedSkinLane() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addTouchGeometry(SkinFloatWriterId{1}, -42.0);
+  const auto geometry = fixture.session().pmsPoorDestinationGeometry();
+  expect(geometry.has_value() &&
+             std::abs(geometry->laneOriginY - 20.0) < 0.0001 &&
+             std::abs(geometry->laneHeight - 500.0) < 0.0001 &&
+             std::abs(geometry->secondaryDestinationY + 42.0) < 0.0001,
+         "PMS dst2 forwards the selected SkinNote's source lane-zero geometry");
 }
 
 void testSyntheticStartLaneIndicatorsUseSelectedSkinLaneGeometry() {
@@ -2779,6 +2796,7 @@ int main() {
   testSerialMismatchDoesNotConsumeRuntimeFrame();
   testSyntheticReplayGhostUsesMatchingLaneGeometry();
   testSelectedSkinHudUsesThePublishedSkinNoteLaneSpan();
+  testPmsPoorDestinationUsesFirstSelectedSkinLane();
   testSyntheticStartLaneIndicatorsUseSelectedSkinLaneGeometry();
   testSyntheticReplayGhostRespectsDisabledOption();
   testSyntheticReplayGhostSkipsEventsOutsideLaneClip();

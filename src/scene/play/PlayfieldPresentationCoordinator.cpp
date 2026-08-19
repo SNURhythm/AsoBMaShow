@@ -67,6 +67,11 @@ PlayfieldPresentationCoordinator::selectedSkinGameplayTiming() const {
   return skin_ ? skin_->selectedSkinGameplayTiming() : std::nullopt;
 }
 
+std::optional<PmsPoorDestinationGeometry>
+PlayfieldPresentationCoordinator::pmsPoorDestinationGeometry() const {
+  return skin_ ? skin_->pmsPoorDestinationGeometry() : std::nullopt;
+}
+
 bool PlayfieldPresentationCoordinator::resetLayoutToFit() {
   if (!skin_) {
     return false;

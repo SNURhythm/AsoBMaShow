@@ -4865,6 +4865,7 @@ void GamePlayScene::capturePlayfieldVisualState(
              capturedPlayfieldVisualState.configuration.bpmGuideEnabled,
          .latePoorTimingMicros =
              builtInPresentation->projectionLatePoorTimingMicros(),
+         .pmsPoorDestination = presentation->pmsPoorDestinationGeometry(),
          .buildBuiltInPlan = false,
          .builtInTraversal = std::move(traversal)});
   } else {

@@ -24,6 +24,10 @@ public:
   selectedSkinGameplayTiming() const {
     return std::nullopt;
   }
+  [[nodiscard]] virtual std::optional<PmsPoorDestinationGeometry>
+  pmsPoorDestinationGeometry() const {
+    return std::nullopt;
+  }
   [[nodiscard]] virtual PresentationFrameOutcome prepareFrame(
       const PlayfieldVisualState &, const PlayfieldProjectionResult &) = 0;
   [[nodiscard]] virtual PresentationFrameResult

@@ -2073,7 +2073,8 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
                                 SkinNoteVisualKind kind,
                                 const SkinAuthoredRect &rect,
                                 GameplayVisualLoweringResult &output,
-                                float opacity = 1.0F) {
+                                float opacity = 1.0F,
+                                bool pmsPoorDescent = false) {
     const auto *visual = findNoteVisual(lane, kind);
     if (!visual) {
       output.failure =
@@ -2082,13 +2083,16 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
       return;
     }
     bool emptyClip = false;
-    const auto laneClip = intersectAuthoredRects(
-        outerGeometry ? outerGeometry->clip : std::nullopt,
-        AuthoredRect{.x = lane.laneDestination.x,
-                     .y = lane.laneDestination.y,
-                     .width = lane.laneDestination.width,
-                     .height = lane.laneDestination.height},
-        emptyClip);
+    const auto laneClip =
+        pmsPoorDescent
+            ? (outerGeometry ? outerGeometry->clip : std::nullopt)
+            : intersectAuthoredRects(
+                  outerGeometry ? outerGeometry->clip : std::nullopt,
+                  AuthoredRect{.x = lane.laneDestination.x,
+                               .y = lane.laneDestination.y,
+                               .width = lane.laneDestination.width,
+                               .height = lane.laneDestination.height},
+                  emptyClip);
     if (emptyClip) {
       return;
     }
@@ -2144,14 +2148,18 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
   const auto lowerProjectedNote = [&](const SkinProjectedNoteView &projected,
                                       GameplayVisualLoweringResult &output) {
     const auto *lane = laneAt(projected.lane);
+    const bool pmsPoorDescent = projected.pmsPoorYDisplacement.has_value();
     if (!lane || !std::isfinite(projected.authoredYDisplacement)) {
       output.failure = diagnostic(
           "skin.renderer.note.projection",
           "Projected note lane or authored displacement is invalid.");
       return;
     }
-    const double authoredY = resolveScrollDisplacement(
-        projected.authoredYDisplacement, projected.scrollSpeed);
+    const double authoredY =
+        pmsPoorDescent ? *projected.pmsPoorYDisplacement
+                        : resolveScrollDisplacement(
+                              projected.authoredYDisplacement,
+                              projected.scrollSpeed);
     if (!std::isfinite(authoredY)) {
       output.failure = diagnostic(
           "skin.renderer.note.projection",
@@ -2164,7 +2172,7 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
     case SkinProjectedNoteKind::Normal:
       // LaneRenderer selects processedImage only when PlayerConfig's
       // Mark Processed Note option is enabled; the default is normalImage.
-      kind = projected.judged && inputs.markProcessedNotes
+      kind = !pmsPoorDescent && projected.judged && inputs.markProcessedNotes
                  ? SkinNoteVisualKind::Processed
                  : SkinNoteVisualKind::Normal;
       break;
@@ -2176,12 +2184,17 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
       kind = SkinNoteVisualKind::Mine;
       break;
     }
-    if (applyOffsets && !resolveExpansion(output)) {
+    if ((applyOffsets || pmsPoorDescent) && !resolveExpansion(output)) {
       return;
     }
     const double noteHeight = lane->authoredNoteHeight.value_or(8.0);
     SkinAuthoredRect rect;
-    if (applyOffsets) {
+    if (pmsPoorDescent) {
+      rect = expandChip(lane->laneDestination.x,
+                        sharedLaneOriginY + liftOffsetY + authoredY,
+                        lane->laneDestination.width, noteHeight,
+                        lane->laneDestination.width, noteHeight);
+    } else if (applyOffsets) {
       rect = expandChip(
           lane->laneDestination.x + offsetX,
           sharedLaneOriginY + liftOffsetY + authoredY + offsetY,
@@ -2196,7 +2209,7 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
     // LaneRenderer's Constant processor sets the sprite color before this
     // row; authored destination alpha remains multiplicative.
     appendVisual(*lane, kind, rect, output,
-                 static_cast<float>(projected.opacity));
+                 static_cast<float>(projected.opacity), pmsPoorDescent);
   };
 
   const auto lowerProjectedLongNote =

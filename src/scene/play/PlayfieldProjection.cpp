@@ -89,6 +89,160 @@ bool isSourceStateZero(const NotePresentationState *state) noexcept {
   return state == nullptr || (!state->judged && !state->dead);
 }
 
+// Note.STATE_DEAD is in the source's >= 4 range. Every intermediate judged
+// state is deliberately excluded from dst2's normal-note paths.
+bool isPmsPoorEligibleNormal(const ChartVisualNote &note,
+                             ChartVisualNoteSource source,
+                             const NotePresentationState *state) noexcept {
+  return source == ChartVisualNoteSource::Playable &&
+         note.kind == ChartVisualNoteKind::Normal &&
+         (state == nullptr || !state->judged || state->dead);
+}
+
+void advancePmsPoorCursor(
+    std::size_t &cursor,
+    const std::vector<const ChartVisualTimeline *> &orderedTimelines,
+    const std::unordered_map<ChartVisualId,
+                             std::vector<const ChartVisualNote *>>
+        &notesByTimeline,
+    const std::unordered_map<ChartVisualId, const ChartVisualNote *> &notes,
+    const std::unordered_map<ChartVisualId, const ChartVisualTimeline *>
+        &timelines,
+    const PlayfieldVisualState &state, long long timeMicros,
+    bool showPastNormalNotes) {
+  if (cursor >= orderedTimelines.size()) {
+    return;
+  }
+  for (std::size_t index = cursor; index < orderedTimelines.size(); ++index) {
+    const auto *timeline = orderedTimelines[index];
+    if (timeline->timeMicros >= timeMicros || cursor != index - 1U) {
+      continue;
+    }
+    bool retainCursor = false;
+    if (const auto row = notesByTimeline.find(timeline->id);
+        row != notesByTimeline.end()) {
+      for (const auto *note : row->second) {
+        if (effectiveSource(*note) != ChartVisualNoteSource::Playable) {
+          continue;
+        }
+        if (note->kind == ChartVisualNoteKind::LongHead) {
+          const auto pair = notes.find(note->pairId);
+          const auto pairTimeline =
+              pair == notes.end() ? timelines.end()
+                                  : timelines.find(pair->second->timelineId);
+          retainCursor =
+              pairTimeline != timelines.end() &&
+              pairTimeline->second->timeMicros >= timeMicros;
+        } else if (showPastNormalNotes &&
+                   isSourceStateZero(state.noteState(note->id))) {
+          retainCursor = true;
+        }
+        if (retainCursor) {
+          break;
+        }
+      }
+    }
+    if (!retainCursor) {
+      cursor = index;
+    }
+  }
+}
+
+struct PmsPoorTimelineDescent {
+  ChartVisualId timelineId = 0;
+  double yDisplacement = 0.0;
+};
+
+std::vector<PmsPoorTimelineDescent> pmsPoorTimelineDescents(
+    std::span<const ChartVisualTimeline *const> orderedTimelines,
+    std::size_t cursor, long long timeMicros, long long badTimeMicros,
+    const PmsPoorDestinationGeometry &geometry, bool liftEnabled,
+    float liftRatio) {
+  std::vector<PmsPoorTimelineDescent> result;
+  if (orderedTimelines.empty()) {
+    return result;
+  }
+
+  const double originY =
+      geometry.laneOriginY +
+      (liftEnabled ? geometry.laneHeight * static_cast<double>(liftRatio)
+                   : 0.0);
+  double lowerY = geometry.secondaryDestinationY;
+  if (lowerY < -geometry.laneHeight) {
+    lowerY = -geometry.laneHeight;
+  }
+  if (lowerY > originY) {
+    lowerY = originY;
+  }
+
+  std::size_t nowPosition = orderedTimelines.size() - 1U;
+  for (std::size_t index = cursor; index < orderedTimelines.size(); ++index) {
+    if (orderedTimelines[index]->timeMicros >= timeMicros) {
+      nowPosition = index;
+      break;
+    }
+  }
+
+  constexpr double kQuarterNoteMicros = 240'000'000.0;
+  for (std::size_t index = nowPosition;; --index) {
+    const auto *timeline = orderedTimelines[index];
+    double y = originY;
+    const double releaseTime =
+        static_cast<double>(timeline->timeMicros + timeline->stopMicros +
+                            badTimeMicros);
+    if (index + 1U < orderedTimelines.size()) {
+      std::size_t segment = index;
+      while (segment + 1U < orderedTimelines.size() &&
+             orderedTimelines[segment + 1U]->timeMicros < timeMicros) {
+        const auto *next = orderedTimelines[segment + 1U];
+        if (static_cast<double>(next->timeMicros) > releaseTime) {
+          const auto *current = orderedTimelines[segment];
+          const double stopTime = std::max(
+              releaseTime - static_cast<double>(current->timeMicros) -
+                  static_cast<double>(current->stopMicros),
+              0.0);
+          y -= (static_cast<double>(next->timeMicros) -
+                static_cast<double>(current->timeMicros) -
+                static_cast<double>(current->stopMicros) - stopTime) *
+               geometry.laneHeight * current->bpm / kQuarterNoteMicros;
+        }
+        ++segment;
+      }
+      const auto *current = orderedTimelines[segment];
+      if (current->timeMicros + current->stopMicros < timeMicros &&
+          static_cast<double>(timeMicros) > releaseTime) {
+        const double stopTime = std::max(
+            releaseTime - static_cast<double>(current->timeMicros) -
+                static_cast<double>(current->stopMicros),
+            0.0);
+        y -= (static_cast<double>(timeMicros) -
+              static_cast<double>(current->timeMicros) -
+              static_cast<double>(current->stopMicros) - stopTime) *
+             geometry.laneHeight * current->bpm / kQuarterNoteMicros;
+      }
+    } else if (timeline->timeMicros + timeline->stopMicros < timeMicros &&
+               static_cast<double>(timeMicros) > releaseTime) {
+      const double stopTime = std::max(
+          releaseTime - static_cast<double>(timeline->timeMicros) -
+              static_cast<double>(timeline->stopMicros),
+          0.0);
+      y -= (static_cast<double>(timeMicros) -
+            static_cast<double>(timeline->timeMicros) -
+            static_cast<double>(timeline->stopMicros) - stopTime) *
+           geometry.laneHeight * timeline->bpm / kQuarterNoteMicros;
+    }
+    if (y < lowerY) {
+      break;
+    }
+    result.push_back({.timelineId = timeline->id,
+                      .yDisplacement = y - originY});
+    if (index == 0U) {
+      break;
+    }
+  }
+  return result;
+}
+
 bool isVisibleSingleNote(const ChartVisualNote &note,
                          ChartVisualNoteSource source,
                          long long timelineMicros,
@@ -357,6 +511,7 @@ double scrollPositionAtTime(const PlayfieldChartVisualModel &model,
 
 void PlayfieldProjection::rebuildIndex(const PlayfieldChartVisualModel &model) {
   index_ = {};
+  pmsPoorCursor_ = 0;
   index_.model = &model;
   index_.timelinesById.reserve(model.timelines.size());
   index_.previousTimelinesById.reserve(model.timelines.size());
@@ -481,6 +636,7 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
 
   const auto &orderedTimelines = index_.orderedTimelines;
   const auto &notesByTimeline = index_.notesByTimeline;
+  const bool hasPmsPoorDestination = request.pmsPoorDestination.has_value();
   // A captured LaneRenderer traversal is the normal gameplay, replay-watch,
   // and export path. Reuse its bounded retained row walk for every DTO and
   // depth pass. The no-capture fallback preserves the existing absolute
@@ -916,6 +1072,14 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
       return;
     }
 
+    if (hasPmsPoorDestination &&
+        effectiveSource(*note) == ChartVisualNoteSource::Playable &&
+        note->kind == ChartVisualNoteKind::Normal &&
+        (timeline->timeMicros < timeMicros ||
+         !isPmsPoorEligibleNormal(*note, source, noteState))) {
+      return;
+    }
+
     if (!isVisibleSingleNote(*note, source, timeline->timeMicros, timeMicros,
                              noteState, request)) {
       return;
@@ -955,6 +1119,77 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
                       : found->second.primaryDepth.value_or(0);
          }()});
   });
+
+  // LaneRenderer resets its sprite before the primary note pass, then leaves
+  // that pass's last Constant color in place for the following PMS dst2
+  // descent.  This is intentionally not the individual falling note's
+  // Constant value: it is the final drawable row's inherited sprite state.
+  double pmsPoorOpacity = 1.0;
+  if (hasPmsPoorDestination && request.constantScroll) {
+    forEachProjectionTimeline([&](const ChartVisualTimeline *timeline) {
+      if (timeline->timeMicros < timeMicros) {
+        return;
+      }
+      if (const auto opacity =
+              constantOpacity(timeline->timeMicros, timeMicros, request)) {
+        pmsPoorOpacity = *opacity;
+      }
+    });
+  }
+
+  if (hasPmsPoorDestination) {
+    advancePmsPoorCursor(pmsPoorCursor_, orderedTimelines, notesByTimeline,
+                          notes, timelines, state, timeMicros,
+                          request.showPastNormalNotes);
+    const auto descents = pmsPoorTimelineDescents(
+        orderedTimelines, pmsPoorCursor_, timeMicros,
+        std::max<std::int64_t>(0, request.latePoorTimingMicros),
+        *request.pmsPoorDestination, state.authority.liftEnabled,
+        state.authority.liftRatio);
+    for (const auto &descent : descents) {
+      const auto row = notesByTimeline.find(descent.timelineId);
+      const auto timeline = timelines.find(descent.timelineId);
+      if (row == notesByTimeline.end() || timeline == timelines.end()) {
+        continue;
+      }
+      for (const auto *note : row->second) {
+        if (isBeforeVisibleNoteStart(note)) {
+          continue;
+        }
+        const auto source = effectiveSource(*note);
+        const auto *noteState = stateFor(note->id);
+        if (timeline->second->timeMicros > timeMicros ||
+            !isPmsPoorEligibleNormal(*note, source, noteState)) {
+          continue;
+        }
+        if (atNoteLimit()) {
+          result.budgetExceeded = true;
+          break;
+        }
+        if (!reserve(
+                gameplay_chart_entity_render_budget::kSingleRectangleEntityCost)) {
+          break;
+        }
+        result.notes.push_back(
+            {.noteId = note->id,
+             .timelineId = timeline->second->id,
+             .pairId = note->pairId,
+             .lane = note->lane,
+             .kind = note->kind,
+             .source = source,
+             .longNoteMode = note->longNoteMode,
+             .mineDamage = note->mineDamage,
+             .scrollDelta = 0.0,
+             .timeMicros = timeline->second->timeMicros,
+             .authoredOrdinal = note->authoredOrdinal,
+             .retainedTimelineOrdinal = timeline->second->retainedOrdinal,
+             .judged = noteState != nullptr && noteState->judged,
+             .opacity = pmsPoorOpacity,
+             .pmsPoorYDisplacement = descent.yDisplacement,
+             .submissionOrdinal = order.next()});
+      }
+    }
+  }
 
   if (retainedCursorLongNoteBlocker) {
     result.builtInPlan.nextStartRetainedOrdinal = std::min(
@@ -1367,7 +1602,10 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
   return result;
 }
 
-void PlayfieldProjection::reset() noexcept { index_ = {}; }
+void PlayfieldProjection::reset() noexcept {
+  index_ = {};
+  pmsPoorCursor_ = 0;
+}
 
 PlayfieldSkinProjectionViews
 adaptPlayfieldProjectionForSkin(const PlayfieldProjectionResult &projection) {
@@ -1396,6 +1634,7 @@ adaptPlayfieldProjectionForSkin(const PlayfieldProjectionResult &projection) {
                             .kind = toSkinNoteKind(source),
                             .scrollSpeed = scrollSpeed,
                             .authoredYDisplacement = note.scrollDelta,
+                            .pmsPoorYDisplacement = note.pmsPoorYDisplacement,
                             .judged = note.judged,
                             .opacity = note.opacity,
                             .submissionOrdinal = note.submissionOrdinal});
