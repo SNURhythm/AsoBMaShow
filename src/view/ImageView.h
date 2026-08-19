@@ -10,8 +10,12 @@
 #include "../path.h"
 #include <bgfx/bgfx.h>
 #include <cstddef>
+#include <filesystem>
 #include <optional>
 #include <string>
+
+[[nodiscard]] bool
+imageResourceAvailable(const std::filesystem::path &path);
 
 class ImageView : public View {
 private:

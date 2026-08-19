@@ -525,6 +525,10 @@ void submitTexturedRoundedRect(const RenderContext &context,
 }
 } // namespace
 
+bool imageResourceAvailable(const std::filesystem::path &path) {
+  return decodeImageFile(path).has_value();
+}
+
 image_decode::DecodedImageCache ImageView::imageCache(
     kDecodedImageCacheBudget);
 ImageView::ImageView(int x, int y, int width, int height, const path_t &path)

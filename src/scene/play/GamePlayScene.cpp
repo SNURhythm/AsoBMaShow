@@ -91,9 +91,7 @@ bool bmsResourceImageAvailable(const bms_parser::ChartMeta &meta,
     return false;
   }
   try {
-    return image_decode::decodeImageFile(meta.BmsPath.parent_path() /
-                                          declaredPath)
-        .has_value();
+    return imageResourceAvailable(meta.BmsPath.parent_path() / declaredPath);
   } catch (...) {
     // BMSResource.setBMSFile() catches decoder failures and leaves the
     // corresponding TextureRegion absent.
