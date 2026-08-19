@@ -15,6 +15,14 @@ work from [`docs/todo.md`](todo.md). The pinned authority is Beatoraja commit
 
 ## Completed
 
+- String property `1020` (`irname`) now carries Aso's first persisted IR
+  provider id through live play, replay viewing, and normal/course replay
+  export. It intentionally includes disabled providers, as the pinned
+  `PlayerConfig.irconfig[0].irname` does. `1021` remains separately pending:
+  Aso has no `IRStatus.player.name` equivalent to capture. Verified by
+  `playfield_visual_state_tests`, `play_skin_state_bridge_tests`, and a
+  desktop `main` build.
+
 - `#SPEEDxx` / `#mmmSP` speed objects now flow from the shared parser through
   immutable chart state, the live and replay-export authorities, selected-skin
   duration selectors, and the built-in traversal. The frame-local multiplier

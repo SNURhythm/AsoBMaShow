@@ -254,6 +254,10 @@ struct PlayfieldAuthorityUpdate {
   // StringPropertyFactory.player reads PlayerConfig.name. The application's
   // active profile supplies the equivalent immutable name for a presentation.
   std::string playerName;
+  // StringPropertyFactory.irname reads the first configured IR provider name
+  // even when that provider is disabled. Aso persists its supported provider
+  // registry in AppSettings::irProviders; retain its first entry verbatim.
+  std::string irProviderName;
   std::string playOptionLabel;
   // PlayerResource.tablename/tablelevel are set from the selected TableBar
   // and HashBar. tableFullName retains its exact level-before-name join.
@@ -296,6 +300,15 @@ struct PlayfieldAuthorityUpdate {
 
   bool operator==(const PlayfieldAuthorityUpdate &other) const;
 };
+
+[[nodiscard]] inline std::string
+gameplaySkinFirstIrProviderName(
+    const std::map<std::string, ir::IrProviderSettings> &providers) {
+  if (providers.empty()) {
+    return {};
+  }
+  return providers.begin()->first;
+}
 
 struct GameplayLaneCoverAuthority {
   int percent = 0;

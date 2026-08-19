@@ -150,7 +150,8 @@ preflightReplayGameplayPresentation(
     bool rendererReservationAlreadyHeld = false) {
   const auto resolvedOptions = resolveReplayVideoExportOptions(options);
   const PlayfieldAuthorityUpdate fallbackInitialAuthority{
-      .playerName = context.profileManager.activeProfile().displayName};
+      .playerName = context.profileManager.activeProfile().displayName,
+      .irProviderName = gameplaySkinFirstIrProviderName(settings.irProviders)};
   const auto configuration = replay_video_export::replayGameplayPresentationConfig(
       settings, settings.playAreaWidthForKeyMode(chart.Meta.KeyMode), chart,
       resolvedOptions.renderTouchPoints, resolvedOptions.renderReplayGhosts,
@@ -1123,6 +1124,8 @@ preflightCourseReplayGameplayPresentations(
          .exportHeight = resolvedOptions.height,
          .initialAuthority = {
              .playerName = context.profileManager.activeProfile().displayName,
+             .irProviderName =
+                 gameplaySkinFirstIrProviderName(settings.irProviders),
              .courseMode = true,
              .courseStageIndex = static_cast<int>(stageIndex),
              .courseStageCount = static_cast<int>(stages.size()),
@@ -3000,6 +3003,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
                                    .value_or(0),
         .doublePlayOption = replay.provenance.doublePlayFlip ? 1 : 0,
         .playerName = context.profileManager.activeProfile().displayName,
+        .irProviderName = gameplaySkinFirstIrProviderName(settings.irProviders),
         .playOptionLabel = replayExportPlayOptionLabel(replay),
         .autoPlayMarkVisible = replay.autoPlay,
         .gameplayMode = PlayfieldGameplayMode::Replay,
@@ -3552,6 +3556,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     }
     PlayfieldAuthorityUpdate initialAuthority{
         .playerName = context.profileManager.activeProfile().displayName,
+        .irProviderName = gameplaySkinFirstIrProviderName(settings.irProviders),
         .courseMode = true,
         .courseStageIndex = static_cast<int>(stageIndex),
         .courseStageCount = static_cast<int>(stages.size()),
@@ -3741,6 +3746,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                                      .value_or(0),
           .doublePlayOption = stageReplay.provenance.doublePlayFlip ? 1 : 0,
           .playerName = context.profileManager.activeProfile().displayName,
+          .irProviderName =
+              gameplaySkinFirstIrProviderName(settings.irProviders),
           .gaugeType = replayGaugeType,
           .gaugeAutoShift = replay.gaugeAutoShift,
           .currentGauge = replayGauge,

@@ -4712,6 +4712,8 @@ void GamePlayScene::capturePlayfieldVisualState(
       .stageFileAvailable = playfieldStageFileAvailable,
       .backBmpAvailable = playfieldBackBmpAvailable,
       .playerName = context.profileManager.activeProfile().displayName,
+      .irProviderName =
+          gameplaySkinFirstIrProviderName(context.settings.irProviders),
       .playOptionLabel = gameplayPlayOptionLabel(options),
       .tableName = options.tableName,
       .tableLevel = options.tableLevel,

@@ -133,7 +133,12 @@ gameplay.
   Beatoraja's separate direct-launch fallback searches the per-profile ordered
   `Config.tableURL` list, which Aso does not own, so it correctly remains
   empty outside a selected difficulty-table context.
-- IR provider/account strings: `1020`–`1021`.
+- [x] IR provider string (`1020`) now captures the first persisted Aso IR
+  provider id in live play and replay export, including a disabled provider,
+  matching `PlayerConfig.irconfig[0].irname` rather than a UI display label.
+- IR account string (`1021`) remains unavailable: it requires the first
+  connected `IRStatus.player.name`, while Aso persists no equivalent remote
+  account-name authority.
 - [x] Application version (`1010`) returns the CMake-declared AsoBMaShow
   project version, matching `MainController.getVersion()`'s application-level
   source instead of a gameplay-scene fallback.

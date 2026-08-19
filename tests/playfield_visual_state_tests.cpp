@@ -97,6 +97,19 @@ const PresentationTouchPoint *touchFor(
   return it == touches.end() ? nullptr : &*it;
 }
 
+void testGameplaySkinIrProviderNameUsesFirstConfiguredProvider() {
+  std::map<std::string, ir::IrProviderSettings> providers{
+      {"tachi", {.enabled = false}}};
+  require(gameplaySkinFirstIrProviderName(providers) == "tachi",
+          "gameplay irname retains the first persisted provider even when it "
+          "is disabled");
+
+  providers.clear();
+  require(gameplaySkinFirstIrProviderName(providers).empty(),
+          "gameplay irname remains empty when no provider configuration "
+          "exists");
+}
+
 void testChartModelOwnsStablePointerFreeValues() {
   ChartFixture fixture;
   const auto model = buildPlayfieldChartVisualModel(fixture.chart, 0);
@@ -781,6 +794,7 @@ void testPresentationCaptureKeepsAnImmutableSharedNoteSnapshot() {
 } // namespace
 
 int main() {
+  testGameplaySkinIrProviderNameUsesFirstConfiguredProvider();
   testChartModelOwnsStablePointerFreeValues();
   testLongNoteModeUsesChartThenOverridePrecedence();
   testVisualStateCaptureAndFanoutAreCoherentValueSnapshots();

@@ -1528,6 +1528,30 @@ void testPomyuTimersUseAuthoredMotionCycles() {
   bridge.discardFrame();
 }
 
+void testIrProviderStringUsesCapturedProfileConfiguration() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = runtime.runtime(),
+                              .mutationTable = mutations});
+  auto state = stateAt(215);
+  state.authority.irProviderName = "tachi";
+  bridge.beginFrame(state, projectionAt(215));
+  expect(bridge.stringProperty({1020}).value == "tachi",
+         "StringPropertyFactory.irname exposes the captured first configured "
+         "IR provider during gameplay");
+  bridge.discardFrame();
+}
+
 void testSongInformationPropertiesUseImmutableSourceAnalysis() {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
@@ -3256,6 +3280,7 @@ int main() {
   testExtendedPlayerOneLaneTimersUsePinnedSkinOffsets();
   testPomyuTimersFollowPinnedDefaultProcessorCycles();
   testPomyuTimersUseAuthoredMotionCycles();
+  testIrProviderStringUsesCapturedProfileConfiguration();
   testSongInformationPropertiesUseImmutableSourceAnalysis();
   testPersistedScorePropertiesUseScoreDataRatherThanLiveJudgements();
   testRivalScorePropertiesRequireCapturedTargetScoreData();
