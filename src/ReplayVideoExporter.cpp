@@ -136,6 +136,30 @@ replayGameplaySkinSessionServices(ApplicationContext &context) {
 #endif
 }
 
+std::optional<PlayfieldPersistedScoreState>
+replayExportPersistedScore(ApplicationContext &context,
+                           const bms_parser::ChartMeta &meta) {
+  const auto persisted = context.scoreRepository.LoadChartScoreHistory(meta, 0);
+  if (!persisted) {
+    return std::nullopt;
+  }
+  return PlayfieldPersistedScoreState{
+      .score = persisted->score,
+      .maxScore = persisted->maxScore,
+      .totalNotes = persisted->totalNotes,
+      .judgementCounts = persisted->judgementCounts,
+      .lastPlayedUnixSeconds = persisted->lastPlayedUnixSeconds};
+}
+
+PlayfieldPlayerScoreHistoryState
+replayExportPlayerScoreHistory(ApplicationContext &context) {
+  const auto history = context.scoreRepository.LoadPlayerScoreHistory();
+  return {.playCount = history.playCount,
+          .clearCount = history.clearCount,
+          .judgementCounts = history.judgementCounts,
+          .playDurationSeconds = history.playDurationSeconds};
+}
+
 [[nodiscard]] std::optional<ReplayVideoExportResult>
 preflightReplayGameplayPresentation(
     ApplicationContext &context, bms_parser::Chart &chart,
@@ -150,6 +174,8 @@ preflightReplayGameplayPresentation(
     bool rendererReservationAlreadyHeld = false) {
   const auto resolvedOptions = resolveReplayVideoExportOptions(options);
   const PlayfieldAuthorityUpdate fallbackInitialAuthority{
+      .persistedScore = replayExportPersistedScore(context, chart.Meta),
+      .playerScoreHistory = replayExportPlayerScoreHistory(context),
       .playerName = context.profileManager.activeProfile().displayName,
       .irProviderName = gameplaySkinFirstIrProviderName(settings.irProviders),
       .irAccountName = context.irAccountName,
@@ -158,7 +184,11 @@ preflightReplayGameplayPresentation(
       .difficultyFilterName = settings.skinDifficultyFilterName,
       .chartReplicationMode = settings.skinChartReplicationMode,
       .skinTargetId = settings.skinTargetId,
-      .skinTargetList = settings.skinTargetList};
+      .skinTargetList = settings.skinTargetList,
+      .liftEnabled = settings.liftEnabled,
+      .liftRatio = constraints.noSpeed ? 0.0F : settings.liftRatio,
+      .hiddenEnabled = settings.hiddenEnabled,
+      .hiddenRatio = constraints.noSpeed ? 0.0F : settings.hiddenRatio};
   const auto configuration = replay_video_export::replayGameplayPresentationConfig(
       settings, settings.playAreaWidthForKeyMode(chart.Meta.KeyMode), chart,
       resolvedOptions.renderTouchPoints, resolvedOptions.renderReplayGhosts,
@@ -1130,6 +1160,9 @@ preflightCourseReplayGameplayPresentations(
          .exportWidth = resolvedOptions.width,
          .exportHeight = resolvedOptions.height,
          .initialAuthority = {
+             .persistedScore = replayExportPersistedScore(context,
+                                                          stage.chart->Meta),
+             .playerScoreHistory = replayExportPlayerScoreHistory(context),
              .playerName = context.profileManager.activeProfile().displayName,
              .irProviderName =
                  gameplaySkinFirstIrProviderName(settings.irProviders),
@@ -1144,6 +1177,11 @@ preflightCourseReplayGameplayPresentations(
              .courseStageIndex = static_cast<int>(stageIndex),
              .courseStageCount = static_cast<int>(stages.size()),
              .courseStageTitles = courseStageTitles,
+             .liftEnabled = settings.liftEnabled,
+             .liftRatio = stage.constraints.noSpeed ? 0.0F : settings.liftRatio,
+             .hiddenEnabled = settings.hiddenEnabled,
+             .hiddenRatio = stage.constraints.noSpeed ? 0.0F
+                                                       : settings.hiddenRatio,
          },
          .skinServices = replayGameplaySkinSessionServices(context),
          .presentation = stage.gameplayPresentation->presentation,
@@ -2654,6 +2692,8 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
 
   const PlayfieldChartVisualModel exportChartVisualModel =
       buildPlayfieldChartVisualModel(chart, 0);
+  const auto replayPersistedScore = replayExportPersistedScore(context, chart.Meta);
+  const auto replayPlayerScoreHistory = replayExportPlayerScoreHistory(context);
 
   const auto playbackRateChangeTimelines =
       collectPlaybackRateChangeTimelines(chart);
@@ -3000,6 +3040,8 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
         .comboBreak = replayJudgementAuthority.comboBreak(),
         .maximumCombo =
             preparedGameplay.presentation->progressiveMaximumCombo(),
+        .persistedScore = replayPersistedScore,
+        .playerScoreHistory = replayPlayerScoreHistory,
         .bestScore = bestScoreAuthority.bestScore,
         .bestScoreTarget = bestScoreAuthority.bestScoreTarget,
         .gaugeType = replayGaugeType,
@@ -3035,6 +3077,10 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
             preparationPlan.indicatorVisibleAt(rawSongTimeMicros),
         .laneCoverPercent = laneCover.percent,
         .laneCoverEnabled = laneCover.enabled,
+        .liftEnabled = settings.liftEnabled,
+        .liftRatio = settings.liftRatio,
+        .hiddenEnabled = settings.hiddenEnabled,
+        .hiddenRatio = settings.hiddenRatio,
         .laneCoverChanged = false,
     });
 
@@ -3660,6 +3706,9 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
             stageReplay, settings, stage.constraints.noSpeed);
     replay_video_export::ReplayLaneCoverPlayback laneCoverPlayback(
         initialLaneCover.percent, initialLaneCover.enabled);
+    const auto replayPersistedScore =
+        replayExportPersistedScore(context, chart.Meta);
+    const auto replayPlayerScoreHistory = replayExportPlayerScoreHistory(context);
     const long long visualOffsetMicros =
         static_cast<long long>(settings.visualOffsetMs) * 1000LL;
     const size_t gameplayFrameCount =
@@ -3760,6 +3809,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
               replayJudgementAuthority.judgementFastSlowCounters(),
           .comboBreak = replayJudgementAuthority.comboBreak(),
           .maximumCombo = courseMaximumComboPlayback.observe(presentation),
+          .persistedScore = replayPersistedScore,
+          .playerScoreHistory = replayPlayerScoreHistory,
           .bestScore = bestScoreAuthority.bestScore,
           .bestScoreTarget = bestScoreAuthority.bestScoreTarget,
           .pacemakerTarget = activePacemakerTarget,
@@ -3800,6 +3851,11 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
               stage.preparationPlan.indicatorVisibleAt(rawSongTimeMicros),
           .laneCoverPercent = laneCover.percent,
           .laneCoverEnabled = laneCover.enabled,
+          .liftEnabled = settings.liftEnabled,
+          .liftRatio = stage.constraints.noSpeed ? 0.0F : settings.liftRatio,
+          .hiddenEnabled = settings.hiddenEnabled,
+          .hiddenRatio = stage.constraints.noSpeed ? 0.0F
+                                                   : settings.hiddenRatio,
           .laneCoverChanged = false,
       });
 
