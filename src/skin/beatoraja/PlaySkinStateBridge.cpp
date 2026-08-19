@@ -1744,16 +1744,13 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
     return {.value = !positive.value, .supported = true};
   }
   if (*id >= 3000 && *id <= 3015) {
-    const auto &menu = snapshot->authority.practiceMenu;
-    const std::size_t index = static_cast<std::size_t>(*id - 3000);
-    return {.value = menu.has_value() && menu->items[index].available,
-            .supported = true};
+    // BooleanPropertyFactory gates practice-item availability on BMSPlayer's
+    // STATE_PRACTICE, not merely BMSPlayerMode.PRACTICE. AsoBMaShow starts a
+    // practice attempt directly in play and has no equivalent menu state.
+    return {.value = false, .supported = true};
   }
   if (*id >= 3020 && *id <= 3035) {
-    const auto &menu = snapshot->authority.practiceMenu;
-    const std::size_t index = static_cast<std::size_t>(*id - 3020);
-    return {.value = menu.has_value() && menu->items[index].selected,
-            .supported = true};
+    return {.value = false, .supported = true};
   }
   switch (*id) {
   case 32:
@@ -2045,9 +2042,9 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
     return {.value = capturedJudgeCount(*snapshot, Poor) > 0,
             .supported = true};
   case 1080:
-    return {.value = snapshot->authority.gameplayMode ==
-                         PlayfieldGameplayMode::Practice,
-            .supported = true};
+    // See the practice-item conditions above. AsoBMaShow's practice gameplay
+    // is source-equivalent to STATE_PLAY, never STATE_PRACTICE.
+    return {.value = false, .supported = true};
   default:
     break;
   }

@@ -803,8 +803,9 @@ void testGameplayModeAndLoadingBooleanProperties() {
              bridge.booleanProperty({84}).supported &&
              !bridge.booleanProperty({84}).value &&
              bridge.booleanProperty({1080}).supported &&
-             bridge.booleanProperty({1080}).value,
-         "practice mode selects only the pinned practice boolean");
+             !bridge.booleanProperty({1080}).value,
+         "practice gameplay does not fabricate Beatoraja's separate "
+         "STATE_PRACTICE menu boolean");
   bridge.discardFrame();
 
   state = stateAt(204);
@@ -899,13 +900,13 @@ void testExistingGameplayStatePropertyWiring() {
              bridge.stringProperty({1010}).value == "0.0.1",
          "version string reads the declared application version");
   expect(bridge.booleanProperty({3000}).supported &&
-             bridge.booleanProperty({3000}).value &&
+             !bridge.booleanProperty({3000}).value &&
              bridge.booleanProperty({3001}).supported &&
-             bridge.booleanProperty({3001}).value &&
+             !bridge.booleanProperty({3001}).value &&
              bridge.booleanProperty({3002}).supported &&
              !bridge.booleanProperty({3002}).value &&
              bridge.booleanProperty({3020}).supported &&
-             bridge.booleanProperty({3020}).value &&
+             !bridge.booleanProperty({3020}).value &&
              bridge.booleanProperty({3021}).supported &&
              !bridge.booleanProperty({3021}).value &&
              bridge.stringProperty({1040}).value == "START TIME :  0:00.0" &&
@@ -913,7 +914,8 @@ void testExistingGameplayStatePropertyWiring() {
              bridge.stringProperty({1081}).value == " 1:30.0" &&
              bridge.stringProperty({std::string{"practice_item2"}}).value ==
                  "END TIME :  1:30.0",
-         "practice menu selectors use the captured visible rows and labels");
+         "practice text remains readable during play while availability and "
+         "selection require the unavailable STATE_PRACTICE UI");
 
   for (const auto [id, expected] : std::array{
            std::pair{40, false}, std::pair{41, true}, std::pair{82, true},

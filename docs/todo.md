@@ -29,11 +29,11 @@ source default are not compatibility work for gameplay skins.
   enablement flag for both its image-index and boolean forms. Its source
   duration/fade projection is complete; only the separately tracked parser
   speed-object authority still prevents Constant's forced-speed path.
-- [x] Initial practice item availability and selection (`3000`–`3015`,
-  `3020`–`3035`) now follow the captured `PracticeConfiguration` viewport:
-  the ten default visible rows are available and the initial `START TIME`
-  cursor is selected. Aso has no source-compatible `STATE_PRACTICE` menu, so
-  user-driven row selection and scrolling remain unavailable.
+- [ ] Practice item availability and selection (`3000`–`3015`,
+  `3020`–`3035`) and `state_practice` (`1080`) require Beatoraja's distinct
+  `BMSPlayer.STATE_PRACTICE` menu. Aso starts a practice attempt directly in
+  source-equivalent `STATE_PLAY`, so these selectors deliberately return false
+  rather than treat gameplay mode as menu state.
 
 ### Integer-value properties
 
@@ -110,9 +110,10 @@ gameplay.
 
 ### Float and rate properties
 
-- Practice-item scroll authority for `20`: the bridge now exposes pinned
-  `PracticeConfiguration`'s default zero position, but Aso has no separate
-  `STATE_PRACTICE` menu to carry user-adjusted scroll state.
+- [ ] Practice-item scroll authority for `20`: the bridge exposes pinned
+  `PracticeConfiguration`'s initial zero position, but its writer cannot
+  mutate user-adjusted state without Aso's missing separate `STATE_PRACTICE`
+  menu.
 - [x] Float loading progress (`165`) exposes the exact completed source value
   while gameplay is loaded (and zero before it). The bridge has no source
   authority for intermediate AudioDriver/BGAProcessor fractions.
@@ -158,9 +159,9 @@ gameplay.
   and normal/course replay export. They use `TargetProperty`'s exact static,
   generic rate, rival/IR, `RANK_NEXT`, and unknown-id-to-`MAX` names; an absent
   configured target id still returns the source empty string.
-- [x] Initial practice item text, labels, and values (`1040`–`1095`) expose
-  the captured source-compatible ten-row `PracticeConfiguration` viewport.
-  User-driven menu mutation remains unavailable with the separate
+- [ ] Initial practice item text, labels, and values (`1040`–`1095`) expose
+  Aso's captured ten-row launch configuration. The full source viewport,
+  conditional 2P/DP rows, and user-driven mutation require the separate
   `STATE_PRACTICE` UI.
 
 ### Timers

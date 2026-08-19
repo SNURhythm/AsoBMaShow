@@ -85,12 +85,13 @@ work from [`docs/todo.md`](todo.md). The pinned authority is Beatoraja commit
   height. Verified by `app_settings_store_tests`,
   `play_skin_state_bridge_tests`, and `skin_draw_command_tests`.
 
-- The initial practice-menu property surface now captures Beatoraja
-  `PracticeConfiguration`'s source default: its ten visible rows, selected
-  `START TIME` cursor, and `practice_item` text/label/value selectors. The
-  separate `STATE_PRACTICE` UI is not present in AsoBMaShow, so this does not
-  claim user-driven row or scroll mutation. Verified by
-  `practice_configuration_tests` and `play_skin_state_bridge_tests`.
+- Aso's initial practice launch configuration is available to
+  `practice_item` text/label/value selectors. The audit corrected the boolean
+  selectors: Beatoraja gates `state_practice` and every visible-row
+  availability/selection selector on its distinct `STATE_PRACTICE` UI, which
+  Aso does not implement, so they remain false rather than infer menu state
+  from an active practice attempt. Verified by `practice_configuration_tests`
+  and `play_skin_state_bridge_tests`.
 
 - Constant play now forwards `PlayConfig.duration` and
   `constantFadeinTime` through selected-skin projection. Normal notes, long
@@ -249,7 +250,7 @@ work from [`docs/todo.md`](todo.md). The pinned authority is Beatoraja commit
   `1P + 10 * 2P + 100 * DP`. Verified by `score_provenance_tests` and
   `play_skin_state_bridge_tests`.
 
-- The practice-position rate `20` now exposes the pinned freshly created
+- The practice-position rate `20` exposes the pinned freshly created
   `PracticeConfiguration` value of zero. User-adjusted practice-menu scroll
   state remains pending with the rest of that distinct source UI.
 
