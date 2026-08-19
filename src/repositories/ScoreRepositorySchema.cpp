@@ -1531,7 +1531,13 @@ bool migrateScoreDatabaseToVersion13(
 
   bool updated = false;
   const bool attachedHere = !scoreMigrationChartDatabaseIsAttached(db);
-  if (!attachedHere || attachChartDatabaseForScoreMigration(db, chartDatabasePath)) {
+  if (attachedHere &&
+      !attachChartDatabaseForScoreMigration(db, chartDatabasePath)) {
+    SDL_Log("Deferring score play-duration retry until chart metadata can be "
+            "attached");
+    return true;
+  }
+  {
     if (chartDatabaseRebuildRequiredForScoreMigration(db)) {
       if (attachedHere) {
         detachChartDatabaseForScoreMigration(db);
