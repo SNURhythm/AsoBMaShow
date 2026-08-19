@@ -734,6 +734,7 @@ ResultImageExportResult renderResultImage(
     const RhythmState &state, const std::string &playModeLabel,
     const std::string &laneOrderLabel, const std::string &difficultyLabel,
     const std::optional<ResultPreviousBestData> &previousBest,
+    const std::optional<ResultPreviousBestData> &previousLampBest,
     const std::optional<std::string> &currentClearLabelOverride,
     const std::optional<int> &currentClearRankOverride,
     const std::optional<std::string> &headerDifficultyLabelOverride,
@@ -755,6 +756,7 @@ ResultImageExportResult renderResultImage(
   resultSkinData.currentClearLabelOverride = currentClearLabelOverride;
   resultSkinData.currentClearRankOverride = currentClearRankOverride;
   resultSkinData.previousBest = previousBest;
+  resultSkinData.previousLampBest = previousLampBest;
   resultSkinData.pacemaker = pacemaker;
   return renderResultImageWithSkinData(context, std::move(resultSkinData),
                                        gaugeGraph, analyticsModel, false, path);
@@ -796,6 +798,8 @@ ResultImageExporter::Export(ApplicationContext &context,
                             const std::string &difficultyLabel,
                             const std::optional<ResultPreviousBestData>
                                 &previousBest,
+                            const std::optional<ResultPreviousBestData>
+                                &previousLampBest,
                             const std::optional<std::string>
                                 &currentClearLabelOverride,
                             const std::optional<int>
@@ -826,7 +830,7 @@ ResultImageExporter::Export(ApplicationContext &context,
       outputDir / (sanitizeFileNamePart(meta.Title) + "_" + makeTimestamp() +
                    ".png");
   return renderResultImage(context, meta, state, playModeLabel, laneOrderLabel,
-                           difficultyLabel, previousBest,
+                           difficultyLabel, previousBest, previousLampBest,
                            currentClearLabelOverride, currentClearRankOverride,
                            headerDifficultyLabelOverride, pacemaker,
                            analyticsModel,
@@ -841,6 +845,9 @@ ResultImageExporter::ExportReplay(ApplicationContext &context,
   RhythmState state = replay_result::BuildResultState(chart, replay);
   std::optional<ResultPreviousBestData> previousBest =
       result_presentation::previousBestForReplayChart(
+          context.scoreRepository, chart.Meta, replay);
+  std::optional<ResultPreviousBestData> previousLampBest =
+      result_presentation::previousLampBestForReplayChart(
           context.scoreRepository, chart.Meta, replay);
   const std::string target =
       pacemakerTarget.empty() ? context.settings.selectedPacemakerTarget
@@ -863,7 +870,8 @@ ResultImageExporter::ExportReplay(ApplicationContext &context,
   const std::optional<practice::ResultModel> analyticsModel(
       std::in_place, chart, attempts, 0);
   return Export(context, chart.Meta, state, display.mode, display.laneOrder,
-                difficultyLabel, previousBest, std::nullopt, std::nullopt,
+                difficultyLabel, previousBest, previousLampBest, std::nullopt,
+                std::nullopt,
                 std::nullopt, pacemaker, analyticsModel);
 }
 
@@ -931,7 +939,10 @@ ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
                                                       chart->Meta),
         result_presentation::previousBestForReplayChart(
             context.scoreRepository, chart->Meta, stageReplay),
-        "NO PLAY", kNoClearTypeRank, std::nullopt, std::nullopt,
+        result_presentation::previousLampBestForReplayChart(
+            context.scoreRepository, chart->Meta, stageReplay),
+        "NO PLAY", kNoClearTypeRank, std::nullopt,
+        std::nullopt,
         analyticsModel,
         outputDir / filename);
     if (!result.success) {
@@ -959,8 +970,9 @@ ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
   clearRankOverride = clearRank;
   const auto courseResult = renderResultImage(
       context, courseMeta, courseState, display.mode, display.laneOrder,
-      "Course", std::nullopt, clearLabelOverride, clearRankOverride, "COURSE",
-      std::nullopt, std::nullopt, outputDir / "course_result.png");
+      "Course", std::nullopt, std::nullopt, clearLabelOverride,
+      clearRankOverride, "COURSE", std::nullopt, std::nullopt,
+      outputDir / "course_result.png");
   if (!courseResult.success) {
     return courseResult;
   }

@@ -144,6 +144,26 @@ void testStageComboRemainsLocalWhenCourseComboCarriesAcrossCharts() {
           "a combo break resets both the displayed and stage-local combos");
 }
 
+void testAssistedEasyGaugeUsesOrdinaryAssistClear() {
+  require(clearTypeForGauge(GaugeType::AssistedEasy, 100.0F, false) ==
+              ClearType::AssistedEasyClear,
+          "legacy Assist Easy gauge helper uses the ordinary Assist Easy lamp");
+
+  GameplayScoreState state(beatorajaScoreConfig(100, 7, 200.0));
+  state.configureGauge(GaugeType::AssistedEasy, GaugeAutoShiftMode::None);
+  state.applyGaugeDelta(100.0F);
+
+  require(state.getClearType() == ClearType::AssistedEasyClear &&
+              state.getClearTypeRank() == kClearTypeAssistedEasyClearRank &&
+              std::string_view(state.getClearTypeLabel()) ==
+                  "ASSIST EASY CLEAR",
+          "Assisted Easy gauge uses the ordinary Assist Easy lamp");
+
+  state.setAssistClearMark(AssistClearMark::LightAssistedEasy);
+  require(state.getClearType() == ClearType::LightAssistedEasyClear,
+          "explicit light-assist modifiers retain the Light Assist Easy lamp");
+}
+
 void testBpmGuideUsesLightAssistOnlyForVariableTempoCharts() {
   GameplayScoreState state(beatorajaScoreConfig(100, 7, 200.0));
   state.configureGauge(GaugeType::Normal, GaugeAutoShiftMode::None);
@@ -199,6 +219,7 @@ int main() {
   testBoundedGasHistoriesShareLogicalLimit();
   testNonGasRecordsOnlyActiveGaugeHistory();
   testStageComboRemainsLocalWhenCourseComboCarriesAcrossCharts();
+  testAssistedEasyGaugeUsesOrdinaryAssistClear();
   testBpmGuideUsesLightAssistOnlyForVariableTempoCharts();
   testAlteredPlaybackUsesLightAssistEasy();
 

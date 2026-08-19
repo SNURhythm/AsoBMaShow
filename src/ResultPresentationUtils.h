@@ -184,6 +184,21 @@ previousBestForReplayChart(ScoreRepository &scores,
   return std::nullopt;
 }
 
+inline std::optional<ResultPreviousBestData>
+previousLampBestForReplayChart(ScoreRepository &scores,
+                               const bms_parser::ChartMeta &meta,
+                               const ReplayData &replay) {
+  std::optional<std::string> beforeCreatedAt;
+  if (!replay.autoPlay && !replay.createdAt.empty()) {
+    beforeCreatedAt = replay.createdAt;
+  }
+  if (const auto best = scores.LoadBestClearScore(meta, beforeCreatedAt);
+      best.has_value()) {
+    return previousBestDataFromSnapshot(*best);
+  }
+  return std::nullopt;
+}
+
 inline std::string difficultyLabelForChart(
     ChartRepository &charts, const bms_parser::ChartMeta &meta) {
   auto session = charts.OpenSession();

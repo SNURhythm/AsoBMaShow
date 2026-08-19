@@ -264,6 +264,15 @@ void testLocalNormalParity() {
   const bms_parser::ChartMeta meta = localMeta();
   const RhythmState state = localState();
   auto options = localOptions();
+  options.previousLampBest = ResultPreviousBestData{
+      .score = 1'200,
+      .maxScore = 2'000,
+      .maxCombo = 500,
+      .comboBreak = 80,
+      .finalGauge = 100.0F,
+      .clearType = kClearTypeHardClearRank,
+      .createdAt = "2026-07-17T12:34:56Z",
+  };
 
   bms_parser::Chart chart;
   chart.Meta = meta;
@@ -304,13 +313,13 @@ void testLocalNormalParity() {
              model.scoreComparison->delta == "DELTA +100",
          "local score comparison text matches DefaultSkin");
   expect(model.lampComparison && model.lampComparison->target &&
-             model.lampComparison->target->value == "EASY CLEAR" &&
-             model.lampComparison->target->detail == "GAUGE 76.0%" &&
+             model.lampComparison->target->value == "HARD CLEAR" &&
+             model.lampComparison->target->detail == "GAUGE 100.0%" &&
              model.lampComparison->current.value == "NORMAL CLEAR" &&
              model.lampComparison->current.detail == "GAUGE 82.5%" &&
              sameColor(model.lampComparison->current.accent,
                        clearLampColorForRank(kClearTypeNormalClearRank)),
-         "local lamp comparison labels, values, and colors are preserved");
+         "local lamp comparison uses the best lamp rather than best score");
   expect(model.comboComparison && model.comboComparison->target &&
              model.comboComparison->target->value == "650" &&
              model.comboComparison->target->detail == "BREAK 35" &&

@@ -464,7 +464,7 @@ inline ClearType clearTypeForGauge(GaugeType gaugeType, float gaugeValue,
   }
   switch (gaugeClearTypeForProfile(gaugeType, profile)) {
   case GaugeType::AssistedEasy:
-    return ClearType::LightAssistedEasyClear;
+    return ClearType::AssistedEasyClear;
   case GaugeType::Easy:
     return ClearType::EasyClear;
   case GaugeType::Hard:
@@ -842,7 +842,7 @@ private:
     }
     switch (gaugeClearTypeForProfile(type, gaugeProfile)) {
     case GaugeType::AssistedEasy:
-      return ClearType::LightAssistedEasyClear;
+      return ClearType::AssistedEasyClear;
     case GaugeType::Easy:
       return ClearType::EasyClear;
     case GaugeType::Hard:

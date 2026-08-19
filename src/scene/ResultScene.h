@@ -169,6 +169,7 @@ struct LocalResultSource {
   std::optional<ReplayData> retryData;
   std::optional<ReplayData> analyticsData;
   std::optional<ResultPreviousBestData> previousBest;
+  std::optional<ResultPreviousBestData> previousLampBest;
   ResultPersistenceOptions persistenceOptions;
   ResultPracticeOptions practiceOptions;
   ResultCourseOptions courseOptions;
