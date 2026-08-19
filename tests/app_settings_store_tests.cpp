@@ -383,6 +383,26 @@ void testPlayerConfigurationSkinStringsRoundTrip() {
          "PlayerConfig string values survive settings persistence verbatim");
 }
 
+void testConfiguredTargetListSkinStringsRoundTrip() {
+  // The bridge must keep PlayerConfig.targetid and targetlist raw: source
+  // TargetProperty performs lookup and fallback only when a skin asks.
+  TempDirectory temp;
+  const auto path = temp.path() / "target-list-skin-strings.json";
+  AppSettings settings;
+  settings.skinTargetId = "custom-target";
+  settings.skinTargetList = {"custom-target", "RATE_50", "RIVAL_2"};
+
+  std::string error;
+  expect(AppSettingsStore::Save(path, settings, error),
+         "target-list skin strings save successfully: " + error);
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.status == AppSettingsLoadStatus::Loaded &&
+             loaded.settings.skinTargetId == "custom-target" &&
+             loaded.settings.skinTargetList ==
+                 std::vector<std::string>{"custom-target", "RATE_50", "RIVAL_2"},
+         "PlayerConfig target strings survive settings persistence verbatim");
+}
+
 void testGameplaySkinTraitSelectionsSurviveRestart() {
   TempDirectory temp;
   const auto path = temp.path() / "settings.json";
@@ -1398,6 +1418,7 @@ int main() {
   testJsonRoundTripIncludesAudioAndVideo();
   testGameplaySkinPlayerConfigSelectorsRoundTrip();
   testPlayerConfigurationSkinStringsRoundTrip();
+  testConfiguredTargetListSkinStringsRoundTrip();
   testGameplaySkinTraitSelectionsSurviveRestart();
   testBpmGuideAssistOptionPersists();
   testSchemaThreeMigrationDisablesCompatibility();

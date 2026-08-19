@@ -244,6 +244,21 @@ public:
   std::string skinSortId = "TITLE";
   std::string skinDifficultyFilterName = "ALL";
   std::string skinChartReplicationMode = "RIVALCHART";
+  // Raw PlayerConfig.targetid and targetlist. TargetProperty performs target
+  // lookup only when StringPropertyFactory asks for a neighbouring label, so
+  // these remain independent from Aso's selectable pacemaker targets.
+  std::string skinTargetId = "MAX";
+  std::vector<std::string> skinTargetList = {
+      "RATE_A-", "RATE_A", "RATE_A+", "RATE_AA-", "RATE_AA", "RATE_AA+",
+      "RATE_AAA-", "RATE_AAA", "RATE_AAA+", "RATE_MAX-", "MAX",
+      "RANK_NEXT", "IR_NEXT_1", "IR_NEXT_2", "IR_NEXT_3", "IR_NEXT_4",
+      "IR_NEXT_5", "IR_NEXT_10", "IR_RANK_1", "IR_RANK_5", "IR_RANK_10",
+      "IR_RANK_20", "IR_RANK_30", "IR_RANK_40", "IR_RANK_50",
+      "IR_RANKRATE_5", "IR_RANKRATE_10", "IR_RANKRATE_15",
+      "IR_RANKRATE_20", "IR_RANKRATE_25", "IR_RANKRATE_30",
+      "IR_RANKRATE_35", "IR_RANKRATE_40", "IR_RANKRATE_45",
+      "IR_RANKRATE_50", "RIVAL_RANK_1", "RIVAL_RANK_2", "RIVAL_RANK_3",
+      "RIVAL_NEXT_1", "RIVAL_NEXT_2", "RIVAL_NEXT_3"};
   int selectedPlaybackRatePercent = 100;
   audio::PlaybackMode selectedPlaybackMode = audio::PlaybackMode::PitchShift;
   bool defaultDifficultyTablesSeeded = false;

@@ -526,6 +526,8 @@ json settingsToJson(const AppSettings &settings) {
       {"skinSortId", settings.skinSortId},
       {"skinDifficultyFilterName", settings.skinDifficultyFilterName},
       {"skinChartReplicationMode", settings.skinChartReplicationMode},
+      {"skinTargetId", settings.skinTargetId},
+      {"skinTargetList", settings.skinTargetList},
       {"selectedPlaybackRatePercent", settings.selectedPlaybackRatePercent},
       {"selectedPlaybackMode", static_cast<int>(settings.selectedPlaybackMode)},
       {"defaultDifficultyTablesSeeded", settings.defaultDifficultyTablesSeeded},
@@ -721,6 +723,9 @@ AppSettings settingsFromJson(const json &document,
             settings.skinDifficultyFilterName, diagnostics);
   readValue(document, "skinChartReplicationMode",
             settings.skinChartReplicationMode, diagnostics);
+  readValue(document, "skinTargetId", settings.skinTargetId, diagnostics);
+  readValue(document, "skinTargetList", settings.skinTargetList,
+            diagnostics);
   readValue(document, "selectedPlaybackRatePercent",
             settings.selectedPlaybackRatePercent, diagnostics);
   readEnum(document, "selectedPlaybackMode", settings.selectedPlaybackMode,

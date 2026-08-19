@@ -265,6 +265,10 @@ struct PlayfieldAuthorityUpdate {
   std::string sortId;
   std::string difficultyFilterName;
   std::string chartReplicationMode;
+  // StringPropertyFactory targetnamep/targetnamen read the raw PlayerConfig
+  // target ring and resolve labels through TargetProperty at lookup time.
+  std::string skinTargetId;
+  std::vector<std::string> skinTargetList;
   std::string playOptionLabel;
   // PlayerResource.tablename/tablelevel are set from the selected TableBar
   // and HashBar. tableFullName retains its exact level-before-name join.

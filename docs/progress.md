@@ -40,6 +40,15 @@ work from [`docs/todo.md`](todo.md). The pinned authority is Beatoraja commit
   `playfield_visual_state_tests`, `play_skin_state_bridge_tests`, and a
   desktop `main` build.
 
+- Target-neighbour strings `200`–`219` now use persisted source-shaped
+  `PlayerConfig.targetid` and `targetlist` values in live play, replay
+  watching, and normal/course replay export. The bridge reproduces
+  `StringPropertyFactory.createTargetname`'s first-match ring and ten-slot
+  wrap, then applies `TargetProperty` names, including generic Java-float rate
+  text, missing-rival `NO RIVAL`, IR labels, and the fallback `MAX`. A missing
+  configured id remains the source empty-string branch. Verified by
+  `app_settings_store_tests` and `play_skin_state_bridge_tests`.
+
 - `#SPEEDxx` / `#mmmSP` speed objects now flow from the shared parser through
   immutable chart state, the live and replay-export authorities, selected-skin
   duration selectors, and the built-in traversal. The frame-local multiplier

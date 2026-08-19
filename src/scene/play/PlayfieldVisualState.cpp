@@ -71,6 +71,8 @@ bool PlayfieldAuthorityUpdate::operator==(
          modeFilterName == other.modeFilterName && sortId == other.sortId &&
          difficultyFilterName == other.difficultyFilterName &&
          chartReplicationMode == other.chartReplicationMode &&
+         skinTargetId == other.skinTargetId &&
+         skinTargetList == other.skinTargetList &&
          applicationUptimeMillis == other.applicationUptimeMillis &&
          autoPlayMarkVisible == other.autoPlayMarkVisible &&
          gameplayMode == other.gameplayMode &&

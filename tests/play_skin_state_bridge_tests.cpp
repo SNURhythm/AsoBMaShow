@@ -2018,6 +2018,50 @@ void testPlayerConfigurationStringsUseCapturedSourceValues() {
          "source PlayerConfig strings survive immutable gameplay capture");
 }
 
+void testConfiguredTargetNameNeighborsFollowPinnedTargetRing() {
+  // StringPropertyFactory resolves 200-209 as the ten preceding target-list
+  // positions and 210-219 as the following ten positions around targetid.
+  // These literals exercise TargetProperty's static, IR, missing-rival, and
+  // unknown-id-to-MAX name branches without using Aso's pacemaker labels.
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = runtime.runtime(),
+                              .mutationTable = mutations});
+  auto state = stateAt(234);
+  state.authority.skinTargetId = "RANK_NEXT";
+  state.authority.skinTargetList = {
+      "RATE_A", "RANK_NEXT", "IR_NEXT_3", "RIVAL_1", "unknown-target"};
+  bridge.beginFrame(state, projectionAt(234));
+
+  expect(bridge.stringProperty({200}).value == "NEXT RANK" &&
+             bridge.stringProperty({"targetnamep1"}).value == "RANK A" &&
+             bridge.stringProperty({210}).value == "IR NEXT 3RANK" &&
+             bridge.stringProperty({"targetnamen2"}).value == "NO RIVAL" &&
+             bridge.stringProperty({212}).value == "MAX" &&
+             bridge.stringProperty({213}).value == "RANK A",
+         "configured target neighbours preserve the pinned target-list ring "
+         "and TargetProperty display branches");
+  bridge.discardFrame();
+
+  state = stateAt(235);
+  state.authority.skinTargetId = "RANK_NEXT";
+  state.authority.skinTargetList = {"RATE_ 50 ", "RANK_NEXT"};
+  bridge.beginFrame(state, projectionAt(235));
+  expect(bridge.stringProperty({210}).value == "SCORE RATE 50.0%",
+         "custom RATE target labels retain Java Float.parseFloat whitespace "
+         "semantics");
+}
+
 void testChartDocumentBooleansUseCapturedLibraryMetadata() {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
@@ -3326,6 +3370,7 @@ int main() {
   testSongReviewImageIndexesUsePinnedBitmaskStates();
   testDifficultyTableStringsUseCapturedSelectionContext();
   testPlayerConfigurationStringsUseCapturedSourceValues();
+  testConfiguredTargetNameNeighborsFollowPinnedTargetRing();
   testChartDocumentBooleansUseCapturedLibraryMetadata();
   testScoreAndComboTimersUseCapturedGameplayState();
   testPlayTimerPropertiesMatchPinnedJavaConversions();

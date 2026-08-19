@@ -222,6 +222,9 @@ private:
   SkinRuntimeOffset laneCoverOffset_;
   SkinRuntimeOffset hiddenCoverOffset_;
   PlayfieldSkinProjectionViews projection_;
+  // StringPropertyFactory resolves target neighbours from a PlayerConfig
+  // target ring. Keep their source names stable for every lookup in a frame.
+  std::vector<std::string> targetNeighbourNames_;
   PlaySkinFrameCommit staged_;
   std::unordered_map<int, std::int64_t> customTimerValues_;
   std::unordered_map<int, std::int64_t> customEventLastExecutionMicros_;

@@ -4718,6 +4718,8 @@ void GamePlayScene::capturePlayfieldVisualState(
       .sortId = context.settings.skinSortId,
       .difficultyFilterName = context.settings.skinDifficultyFilterName,
       .chartReplicationMode = context.settings.skinChartReplicationMode,
+      .skinTargetId = context.settings.skinTargetId,
+      .skinTargetList = context.settings.skinTargetList,
       .playOptionLabel = gameplayPlayOptionLabel(options),
       .tableName = options.tableName,
       .tableLevel = options.tableLevel,

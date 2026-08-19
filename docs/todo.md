@@ -147,7 +147,11 @@ gameplay.
 - [x] Application version (`1010`) returns the CMake-declared AsoBMaShow
   project version, matching `MainController.getVersion()`'s application-level
   source instead of a gameplay-scene fallback.
-- Configured target-name neighbours (`200`–`219`).
+- [x] Configured target-name neighbours (`200`–`219`) now retain the pinned
+  `PlayerConfig.targetid`/`targetlist` ring through live play, replay viewing,
+  and normal/course replay export. They use `TargetProperty`'s exact static,
+  generic rate, rival/IR, `RANK_NEXT`, and unknown-id-to-`MAX` names; an absent
+  configured target id still returns the source empty string.
 - [x] Initial practice item text, labels, and values (`1040`–`1095`) expose
   the captured source-compatible ten-row `PracticeConfiguration` viewport.
   User-driven menu mutation remains unavailable with the separate
