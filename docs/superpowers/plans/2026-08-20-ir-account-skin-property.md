@@ -126,7 +126,7 @@
 
   Expected: `** BUILD SUCCEEDED **`; no Firebase upload occurs.
 
-- [ ] **Step 4: Commit the documentation result and push**
+- [x] **Step 4: Commit the documentation result and push**
 
   Run: `git add docs/todo.md docs/progress.md docs/superpowers/plans/2026-08-20-ir-account-skin-property.md && git commit -m "docs: record IR account skin compatibility" && git push origin feature/skin-compat`
 
