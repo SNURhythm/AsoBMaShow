@@ -2,7 +2,7 @@
 
 ## Gameplay-skin compatibility gaps
 
-This is the source-audited inventory for the pinned Beatoraja checkout
+This is the source-audited inventory for the pinned Beatoraja checkout ~/workspace/SNURhythm/beatoraja
 `c2ed5db1a46145ed10790c3872f717e95b59db9d`. It lists a property only when
 Beatoraja's `BMSPlayer` path can provide non-default data and the gameplay-skin
 bridge currently returns a hard-coded default, a sentinel, or no value.
