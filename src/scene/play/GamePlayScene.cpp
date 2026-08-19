@@ -1685,20 +1685,25 @@ void GamePlayScene::startPracticeAttemptFromMenu() {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 void GamePlayScene::applySkinAudioVolume(
     skin::SkinAudioVolumeWriterTarget target, float value) {
+  bool changed = false;
   switch (target) {
   case skin::SkinAudioVolumeWriterTarget::Master:
+    changed = context.settings.audioVideo.audio.masterVolume != value;
     context.settings.audioVideo.audio.masterVolume = value;
     playfieldPresentationConfiguration.masterVolume = value;
     break;
   case skin::SkinAudioVolumeWriterTarget::Keysound:
+    changed = context.settings.audioVideo.audio.keysoundVolume != value;
     context.settings.audioVideo.audio.keysoundVolume = value;
     playfieldPresentationConfiguration.keysoundVolume = value;
     break;
   case skin::SkinAudioVolumeWriterTarget::Bgm:
+    changed = context.settings.audioVideo.audio.bgmVolume != value;
     context.settings.audioVideo.audio.bgmVolume = value;
     playfieldPresentationConfiguration.bgmVolume = value;
     break;
   }
+  skinAudioSettingsDirty = skinAudioSettingsDirty || changed;
 
   // FloatPropertyFactory mutates Config.AudioConfig directly. Aso routes the
   // resulting three-field configuration through its live audio boundary,
@@ -2657,6 +2662,7 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
 
 GamePlayScene::~GamePlayScene() {
   persistAutoAdjustedNotesDisplayTiming();
+  persistSkinAudioSettings();
   stopBestReplayLoad();
   stopRealtimeGameplayAuthority(false);
   if (profileGameplayBlockerActive) {
@@ -5108,6 +5114,7 @@ void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
   }
   resultTransitionScheduled = true;
   persistAutoAdjustedNotesDisplayTiming();
+  persistSkinAudioSettings();
 
   finishReplayRecording();
   const auto capturePolicy = resultCapturePolicy();
@@ -6809,6 +6816,17 @@ void GamePlayScene::persistAutoAdjustedNotesDisplayTiming() {
     return;
   }
   notesDisplayTimingSettingsDirty = false;
+}
+
+void GamePlayScene::persistSkinAudioSettings() {
+  if (!skinAudioSettingsDirty) {
+    return;
+  }
+  if (!context.saveSettings()) {
+    SDL_Log("Failed to save gameplay skin audio settings");
+    return;
+  }
+  skinAudioSettingsDirty = false;
 }
 
 void GamePlayScene::appendReplayTouchSample(SDL_FingerID fingerIndex,
