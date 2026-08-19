@@ -46,6 +46,7 @@
 #include "ir/IrCredentialMigration.h"
 #include "ir/PendingIrCredentialCleanup.h"
 #include "ir/IrHttpClient.h"
+#include "ir/IrAccountLookupService.h"
 #include "ir/IrRankingService.h"
 #include "ir/IrSubmissionService.h"
 #include "ir/tachi/BokutachiCacheStore.h"
@@ -164,7 +165,9 @@ public:
   std::unique_ptr<ir::IrHttpClient> irHttpClient;
   std::unique_ptr<ir::IrRankingService> irRankingService;
   std::unique_ptr<ir::IrSubmissionService> irSubmissionService;
+  std::unique_ptr<ir::IrAccountLookupService> irAccountLookupService;
   std::string irAccountName;
+  mutable std::mutex irAccountNameMutex;
   std::atomic<std::uint64_t> irAccountEvidenceRevision{0};
   std::mutex irCredentialMutex;
   std::set<std::string> irCredentialReadyProfiles;
@@ -816,13 +819,36 @@ public:
     return std::move(*apiKey);
   }
 
-  void refreshIrAccountName(const ir::IrActiveProfileConfig &config) noexcept {
-    irAccountName.clear();
-    if (!irHttpClient) {
+  [[nodiscard]] std::string irAccountNameSnapshot() const {
+    std::lock_guard lock(irAccountNameMutex);
+    return irAccountName;
+  }
+
+  void publishIrAccountName(std::string_view profileId,
+                            std::string accountName) noexcept {
+    if (!profileInitializationResult.ok() ||
+        profileManager.activeProfile().id != profileId) {
       return;
+    }
+    std::lock_guard lock(irAccountNameMutex);
+    if (irAccountName == accountName) {
+      return;
+    }
+    irAccountName = std::move(accountName);
+    irAccountEvidenceRevision.fetch_add(1, std::memory_order_release);
+  }
+
+  [[nodiscard]] std::string
+  lookupIrAccountName(const ir::IrActiveProfileConfig &config,
+                      std::stop_token stopToken) noexcept {
+    if (!irHttpClient || stopToken.stop_requested()) {
+      return {};
     }
     try {
       for (const auto &[providerId, provider] : config.providers) {
+        if (stopToken.stop_requested()) {
+          return {};
+        }
         const std::string apiKey =
             lookupActiveIrCredential(config.profileId, providerId);
         if (apiKey.empty()) {
@@ -833,15 +859,37 @@ public:
             {.profileId = config.profileId,
              .serverOrigin = provider.serverOrigin,
              .apiKey = apiKey},
-            *irHttpClient, {});
+            *irHttpClient, stopToken);
         if (account.status == ir::IrAuthenticatedAccountStatus::Succeeded &&
             account.account) {
-          irAccountName = account.account->name;
-          return;
+          return account.account->name;
         }
       }
     } catch (...) {
-      irAccountName.clear();
+      return {};
+    }
+    return {};
+  }
+
+  void refreshIrAccountName(const ir::IrActiveProfileConfig &config) noexcept {
+    publishIrAccountName(config.profileId, {});
+    if (!irHttpClient) {
+      return;
+    }
+    try {
+      if (!irAccountLookupService) {
+        irAccountLookupService = std::make_unique<ir::IrAccountLookupService>(
+            [this](const ir::IrActiveProfileConfig &request,
+                   std::stop_token stopToken) {
+              return lookupIrAccountName(request, stopToken);
+            },
+            [this](std::string_view profileId, std::string accountName) {
+              publishIrAccountName(profileId, std::move(accountName));
+            });
+      }
+      irAccountLookupService->request(config);
+    } catch (...) {
+      publishIrAccountName(config.profileId, {});
     }
   }
 
@@ -1291,6 +1339,7 @@ public:
     if (irRankingService) {
       irRankingService->stop();
     }
+    irAccountLookupService.reset();
     irSubmissionService.reset();
     irRankingService.reset();
     irHttpClient.reset();

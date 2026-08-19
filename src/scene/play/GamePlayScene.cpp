@@ -4900,7 +4900,7 @@ void GamePlayScene::capturePlayfieldVisualState(
       .playerName = context.profileManager.activeProfile().displayName,
       .irProviderName =
           gameplaySkinFirstIrProviderName(context.settings.irProviders),
-      .irAccountName = context.irAccountName,
+      .irAccountName = context.irAccountNameSnapshot(),
       .modeFilterName = context.settings.skinModeFilterName,
       .sortId = context.settings.skinSortId,
       .difficultyFilterName = context.settings.skinDifficultyFilterName,
