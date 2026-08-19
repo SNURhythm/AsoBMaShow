@@ -52,6 +52,9 @@ bool stopped(const ImageDecodeOptions &options) {
   return options.stop.stop_requested();
 }
 
+std::optional<DecodedImageData>
+resize(const DecodedImageData &, const ImageDecodeOptions &);
+
 class InflateEndGuard {
 public:
   explicit InflateEndGuard(mz_stream &stream) : stream_(stream) {}
@@ -422,9 +425,7 @@ decodeWebpWithFfmpeg(const std::filesystem::path &path,
       DecodedImageData decoded{.width = frame->width,
                                .height = frame->height,
                                .rgba = std::move(rgba)};
-      return decoded.valid()
-                 ? std::optional<DecodedImageData>(std::move(decoded))
-                 : std::nullopt;
+      return decoded.valid() ? resize(decoded, options) : std::nullopt;
     }
   };
 

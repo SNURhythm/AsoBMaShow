@@ -95,6 +95,14 @@ void testWebpFfmpegFallback() {
              .maximumDecodedBytes = 1024});
   expect(decoded && decoded->width == 2 && decoded->height == 2,
          "WebP uses the PixmapResourcePool-compatible FFmpeg fallback");
+  const auto resized = image_decode::decodeImageFile(
+      path, {.maximumDimension = 16,
+             .maximumEncodedBytes = 1024,
+             .maximumDecodedBytes = 1024,
+             .targetWidth = 1,
+             .targetHeight = 1});
+  expect(resized && resized->width == 1 && resized->height == 1,
+         "WebP FFmpeg fallback applies the requested target-size fit");
   std::error_code error;
   std::filesystem::remove(path, error);
 }
