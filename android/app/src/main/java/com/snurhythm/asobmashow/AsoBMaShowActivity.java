@@ -2143,6 +2143,10 @@ public class AsoBMaShowActivity extends SDLActivity {
             int idColumn = cursor.getColumnIndexOrThrow(Document.COLUMN_DOCUMENT_ID);
             int nameColumn = cursor.getColumnIndexOrThrow(Document.COLUMN_DISPLAY_NAME);
             int mimeColumn = cursor.getColumnIndexOrThrow(Document.COLUMN_MIME_TYPE);
+            ArrayList<String> documentIds = new ArrayList<>();
+            ArrayList<String> names = new ArrayList<>();
+            ArrayList<String> mimeTypes = new ArrayList<>();
+            boolean hasTextDocument = false;
             while (cursor.moveToNext()) {
                 String documentId = cursor.getString(idColumn);
                 String name = cursor.getString(nameColumn);
@@ -2150,6 +2154,18 @@ public class AsoBMaShowActivity extends SDLActivity {
                 if (name == null || name.isEmpty()) {
                     continue;
                 }
+                documentIds.add(documentId);
+                names.add(name);
+                mimeTypes.add(mimeType);
+                if (!Document.MIME_TYPE_DIR.equals(mimeType)
+                        && name.toLowerCase(Locale.ROOT).endsWith(".txt")) {
+                    hasTextDocument = true;
+                }
+            }
+            for (int index = 0; index < names.size(); ++index) {
+                String documentId = documentIds.get(index);
+                String name = names.get(index);
+                String mimeType = mimeTypes.get(index);
                 String relativePath = relativeDir.isEmpty() ? name : relativeDir + "/" + name;
                 boolean isDirectory = Document.MIME_TYPE_DIR.equals(mimeType);
                 boolean isChart = isChartFile(name);
@@ -2160,7 +2176,8 @@ public class AsoBMaShowActivity extends SDLActivity {
                     listChartFilesRecursive(treeUri, documentId, relativePath,
                             syntheticRoot, output);
                 } else if (isChart) {
-                    output.append(syntheticRoot).append('/').append(relativePath).append('\n');
+                    output.append(syntheticRoot).append('/').append(relativePath)
+                            .append('\t').append(hasTextDocument ? '1' : '0').append('\n');
                 }
             }
         }

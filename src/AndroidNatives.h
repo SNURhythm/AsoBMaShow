@@ -79,8 +79,12 @@ void RegisterAndroidChartFolder(const std::filesystem::path &rootPath,
 bool IsAndroidTreePath(const std::filesystem::path &path);
 bool ExistsAndroidTreeFile(const std::filesystem::path &path,
                            std::string &errorMessage);
+struct AndroidTreeChartFile {
+  std::filesystem::path path;
+  bool hasDocument = false;
+};
 bool ListAndroidTreeChartFiles(const std::filesystem::path &rootPath,
-                               std::vector<std::filesystem::path> &chartPaths,
+                               std::vector<AndroidTreeChartFile> &chartFiles,
                                std::string &errorMessage,
                                const std::stop_token *stopToken = nullptr);
 bool ClearAndroidTreeTransientFileCache(std::string &errorMessage);

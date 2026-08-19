@@ -1109,10 +1109,10 @@ bool ExistsAndroidTreeFile(const std::filesystem::path &path,
 }
 
 bool ListAndroidTreeChartFiles(const std::filesystem::path &rootPath,
-                               std::vector<std::filesystem::path> &chartPaths,
+                               std::vector<AndroidTreeChartFile> &chartFiles,
                                std::string &errorMessage,
                                const std::stop_token *stopToken) {
-  chartPaths.clear();
+  chartFiles.clear();
   std::string treeId;
   std::filesystem::path relativePath;
   if (!splitAndroidTreePath(rootPath, treeId, relativePath) ||
@@ -1147,7 +1147,15 @@ bool ListAndroidTreeChartFiles(const std::filesystem::path &rootPath,
       errorMessage = "Scan cancelled.";
       return false;
     }
-    chartPaths.emplace_back(line);
+    const std::size_t separator = line.rfind('\t');
+    const bool hasDocument =
+        separator != std::string::npos && separator + 2 == line.size() &&
+        (line[separator + 1] == '0' || line[separator + 1] == '1');
+    chartFiles.push_back({
+        .path = std::filesystem::path(hasDocument ? line.substr(0, separator)
+                                                   : line),
+        .hasDocument = hasDocument && line[separator + 1] == '1',
+    });
   }
   return true;
 }
