@@ -1222,6 +1222,11 @@ public:
       if (irRankingService) {
         irRankingService->pauseAndCancel();
       }
+      // ProfileSessionCoordinator commits the next active profile immediately
+      // after this callback returns. The account lookup reads the current
+      // profile to obtain credentials, so it must be cancelled and joined
+      // before that mutation can begin.
+      irAccountLookupService.reset();
       return true;
     } catch (...) {
       error = "IR profile work could not be paused.";
