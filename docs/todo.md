@@ -153,9 +153,10 @@ gameplay.
 - [x] IR provider string (`1020`) now captures the first persisted Aso IR
   provider id in live play and replay export, including a disabled provider,
   matching `PlayerConfig.irconfig[0].irname` rather than a UI display label.
-- IR account string (`1021`) remains unavailable: it requires the first
-  connected `IRStatus.player.name`, while Aso persists no equivalent remote
-  account-name authority.
+- [x] IR account string (`1021`) now captures the first successfully
+  authenticated IR account name through the source-equivalent login path and
+  passes it to live play and replay export. Absent or failed authentication
+  remains empty; no local profile or provider value substitutes for it.
 - [x] Application version (`1010`) returns the CMake-declared AsoBMaShow
   project version, matching `MainController.getVersion()`'s application-level
   source instead of a gameplay-scene fallback.

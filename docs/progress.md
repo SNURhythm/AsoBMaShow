@@ -45,13 +45,14 @@ work from [`docs/todo.md`](todo.md). The pinned authority is Beatoraja commit
   `playfield_projection_tests`, `skin_draw_command_tests`, and
   `play_skin_session_tests`.
 
-- String property `1020` (`irname`) now carries Aso's first persisted IR
-  provider id through live play, replay viewing, and normal/course replay
-  export. It intentionally includes disabled providers, as the pinned
-  `PlayerConfig.irconfig[0].irname` does. `1021` remains separately pending:
-  Aso has no `IRStatus.player.name` equivalent to capture. Verified by
-  `playfield_visual_state_tests`, `play_skin_state_bridge_tests`, and a
-  desktop `main` build.
+- String properties `1020` (`irname`) and `1021` (`irUserName`) now carry
+  their distinct source authorities through live play, replay viewing, and
+  normal/course replay export. `1020` retains the first persisted provider id,
+  including a disabled provider. `1021` requests the authenticated Tachi user
+  document and uses the first successful `username`; no local profile or
+  provider fallback is substituted when authentication is absent or fails.
+  Verified by `tachi_driver_tests`, `playfield_visual_state_tests`,
+  `play_skin_state_bridge_tests`, and a desktop `main` build.
 
 - Target-neighbour strings `200`–`219` now use persisted source-shaped
   `PlayerConfig.targetid` and `targetlist` values in live play, replay
