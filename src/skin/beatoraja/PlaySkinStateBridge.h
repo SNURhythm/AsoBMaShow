@@ -125,6 +125,11 @@ struct PlaySkinStateBridgeContext {
   const BeatorajaSkinConfiguration &configuration;
   LuaSkinRuntime &runtime;
   const SkinEventMutationTable &mutationTable;
+  // PomyuCharaProcessor initializes all eight motion cycles to one
+  // millisecond. A decoded PLAY pmchara definition replaces individual
+  // entries with its authored #Frame/#Anime cycle.
+  std::array<int, 8> pomyuMotionCyclesMillis = {1, 1, 1, 1,
+                                                 1, 1, 1, 1};
 };
 
 class PlaySkinStateBridge final : public ISkinFrameState {

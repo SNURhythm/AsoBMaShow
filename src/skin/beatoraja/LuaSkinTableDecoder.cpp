@@ -937,6 +937,14 @@ struct RawSkinIdentity {
   std::string id;
 };
 
+struct RawSkinPmChara {
+  std::string id;
+  std::string source;
+  int color = 1;
+  int type = std::numeric_limits<int>::min();
+  int side = 1;
+};
+
 struct RawSkinNote {
   std::string id;
   std::vector<std::string> note;
@@ -990,7 +998,7 @@ struct GameplayDecodeRequest {
   std::map<std::string, RawSkinIdentity, std::less<>> judgeGraphs;
   std::map<std::string, RawSkinIdentity, std::less<>> timingVisualizers;
   std::map<std::string, RawSkinIdentity, std::less<>> timingDistributionGraphs;
-  std::map<std::string, RawSkinIdentity, std::less<>> pmCharas;
+  std::map<std::string, RawSkinPmChara, std::less<>> pmCharas;
   std::optional<RawSkinGauge> gauge;
   std::optional<RawSkinIdentity> bga;
   std::vector<RawSkinSource> rawSources;
@@ -1012,7 +1020,7 @@ struct GameplayDecodeRequest {
   std::vector<RawSkinIdentity> rawJudgeGraphs;
   std::vector<RawSkinIdentity> rawTimingVisualizers;
   std::vector<RawSkinIdentity> rawTimingDistributionGraphs;
-  std::vector<RawSkinIdentity> rawPmCharas;
+  std::vector<RawSkinPmChara> rawPmCharas;
   std::vector<RawDestination> rawDestinations;
   std::vector<RawCustomTimer> rawCustomTimers;
   std::vector<RawCustomEvent> rawCustomEvents;
@@ -1683,6 +1691,20 @@ bool decodeRawIdentity(lua_State *state, int index, std::size_t depth,
          stringField(state, index, "id", output.id,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, false,
                      request);
+}
+
+bool decodeRawPmChara(lua_State *state, int index, std::size_t depth,
+                      RawSkinPmChara &output, DecodeRequest &request) {
+  return requireObject(state, index, depth, request) &&
+         stringField(state, index, "id", output.id,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, false,
+                     request) &&
+         stringField(state, index, "src", output.source,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         integerField(state, index, "color", output.color, request) &&
+         integerField(state, index, "type", output.type, request) &&
+         integerField(state, index, "side", output.side, request);
 }
 
 bool expandImageFrames(GameplayDecodeRequest &request, RawSkinImage &image) {
@@ -2395,6 +2417,24 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
     output = std::move(object);
     return true;
   }
+  if (pmChara != request.pmCharas.end()) {
+    const RawSkinPmChara &definition = pmChara->second;
+    const auto source = request.sourceIds.find(definition.source);
+    // JsonPlaySkinObjectLoader leaves obj null when getSrcIdPath cannot
+    // resolve the named source or PomyuCharaLoader rejects its type.
+    if (source == request.sourceIds.end() || definition.type < 0 ||
+        definition.type > 15) {
+      ignored = true;
+      return true;
+    }
+    output = SkinPmCharaObject{
+        .source = source->second,
+        .color = definition.color == 2 ? 2 : 1,
+        .type = definition.type,
+        .side = definition.side == 2 ? 2 : 1,
+    };
+    return true;
+  }
   if (number != request.numbers.end()) {
     NumericGlyphAtlas atlas;
     if (!materializeNumericGlyphAtlas(
@@ -3024,7 +3064,7 @@ void decodeGameplayProtected(lua_State *state, int index,
         !decodeObjectArrayField(state, index, "pmchara", 1,
                                 LuaSkinTableDecoderPolicy::maxDecodedObjects,
                                 request->rawPmCharas, request->decoding,
-                                decodeRawIdentity)) {
+                                decodeRawPmChara)) {
       transferDecodeDiagnostics(*request);
       request->result.model.reset();
       return;
@@ -3048,9 +3088,6 @@ void decodeGameplayProtected(lua_State *state, int index,
         *request, request->rawTimingDistributionGraphs,
         "skin_lua_model_timingdistributiongraph_unsupported",
         "timingdistributiongraph");
-    recordUnsupportedDefinitions(*request, request->rawPmCharas,
-                                 "skin_lua_model_pmchara_unsupported",
-                                 "pmchara");
 
     if (!decodeObjectArrayField(state, index, "hiddenCover", 1,
                                 LuaSkinTableDecoderPolicy::maxDecodedObjects,
@@ -3910,7 +3947,7 @@ bool materializeGameplay(GameplayDecodeRequest &request,
       });
   moveFirstDefinitions(
       request.rawPmCharas, request.pmCharas,
-      [](const RawSkinIdentity &identity) -> const std::string & {
+      [](const RawSkinPmChara &identity) -> const std::string & {
         return identity.id;
       });
   moveFirstDefinitions(request.rawHiddenCovers, request.hiddenCovers,

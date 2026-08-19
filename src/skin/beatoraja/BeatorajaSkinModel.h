@@ -409,6 +409,16 @@ struct SkinJudgeObject {
 
 struct SkinBgaObject {};
 
+// JsonPlaySkinObjectLoader resolves each pmchara through its named `source`
+// entry and forwards these normalized fields to PomyuCharaLoader. Rendering
+// support is intentionally separate from its timer-cycle authority.
+struct SkinPmCharaObject {
+  SkinResourceId source = 0;
+  int color = 1;
+  int type = 0;
+  int side = 1;
+};
+
 // JsonSkinLoader recognizes every negative destination ID before resolving
 // authored definitions.  The upstream source reference can legitimately have
 // no texture for an unknown ID, in which case SkinImage simply does not draw.
@@ -426,7 +436,7 @@ using SkinObjectPayload =
                  SkinTextObject, SkinSliderObject, SkinGraphObject,
                  SkinGaugeObject, SkinNoteObject, SkinCoverObject,
                  SkinJudgeObject, SkinBgaObject, SkinBuiltinImageObject,
-                 SkinBlankObject>;
+                 SkinPmCharaObject, SkinBlankObject>;
 
 struct SkinObjectDefinition {
   SkinObjectId id = 0;

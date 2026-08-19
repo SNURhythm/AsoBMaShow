@@ -1,5 +1,6 @@
 #include "skin/beatoraja/LuaSkinTableDecoder.h"
 #include "skin/beatoraja/GameplaySkinBuiltinCatalog.h"
+#include "skin/beatoraja/PomyuCharaCycles.h"
 #include "skin/beatoraja/SkinModelValidator.h"
 #include "skin/beatoraja/SkinCoverNormalization.h"
 #include "lua_skin_binding_test_support.h"
@@ -1439,6 +1440,7 @@ void testOptionalVisualsAndBuiltinImagesStayLiveAcrossRepeatedDestinations() {
   const auto decoded = decodeInlineModel(R"lua(
 return {
   type=0,w=1280,h=720,
+  source={{id='unused',path='alpha.chp'}},
   bpmgraph={{id='bpm'}},
   hiterrorvisualizer={{id='hiterror'}},
   judgegraph={{id='judge'}},
@@ -1458,6 +1460,7 @@ return {
   }
 }
 )lua");
+
   expect(decoded.model && decoded.model->objects.size() == 10 &&
              decoded.model->destinations.size() == 10,
          "every authored destination, including repeated names and negative "
@@ -1467,7 +1470,6 @@ return {
       std::string_view("skin_lua_model_hiterrorvisualizer_unsupported"),
       std::string_view("skin_lua_model_judgegraph_unsupported"),
       std::string_view("skin_lua_model_timingvisualizer_unsupported"),
-      std::string_view("skin_lua_model_pmchara_unsupported"),
   };
   for (const auto code : expectedCodes) {
     expect(std::ranges::find_if(decoded.diagnostics, [&](const auto &entry) {
@@ -1508,6 +1510,68 @@ return {type=0,w=1280,h=720,bpmgraph=definitions,destination={}}
          "unsupported identity arrays remain bounded by the shared decoded-object limit");
 }
 
+void testPomyuCharaCycleExtractionFollowsPinnedLoaderOrder() {
+  constexpr std::string_view source =
+      "#Anime\t100\n"
+      "#Frame\t1\t40\n"
+      "#Frame\t6\t50\n"
+      "#Patern\t1\t000102\n"
+      "#Texture\t6\t00010203\n"
+      "#Layer\t7\t0001\n";
+  const auto cycles = pomyuMotionCyclesFromChp(
+      source, /*type=*/0, /*side=*/1,
+      std::array<int, 8>{1, 1, 1, 1, 1, 1, 1, 1});
+  expect(cycles.has_value() &&
+             *cycles == std::array<int, 8>{120, 200, 200, 1,
+                                            1, 1,   1,   1},
+         "PomyuCharaLoader derives 1P processor cycles from the authored "
+         "Pattern, Texture, and Layer motion data in pinned order");
+
+  const auto secondPlayerCycles = pomyuMotionCyclesFromChp(
+      source, /*type=*/0, /*side=*/2,
+      std::array<int, 8>{1, 1, 1, 1, 1, 1, 1, 1});
+  expect(secondPlayerCycles.has_value() &&
+             *secondPlayerCycles == std::array<int, 8>{1, 1, 1,   1,
+                                                        1, 120, 200, 1},
+         "PomyuCharaLoader applies a PLAY pmchara's source cycles to its "
+         "side-specific processor timer slots");
+}
+
+void testPomyuCharaDefinitionPreservesPinnedSourceFields() {
+  const auto decoded = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  source={{id='chara',path='characters/alpha.chp'}},
+  pmchara={{id='pomyu',src='chara',color=2,type=0,side=2}},
+  destination={{id='pomyu',dst={{x=10,y=20,w=30,h=40}}}}
+}
+)lua");
+  expect(decoded.model.has_value(), "pmchara source fixture decodes");
+  if (!decoded.model) {
+    return;
+  }
+  const auto *definition = findObject(*decoded.model, "pomyu");
+  const auto *pmchara = definition != nullptr
+                             ? std::get_if<SkinPmCharaObject>(&definition->payload)
+                             : nullptr;
+  expect(pmchara != nullptr && pmchara->source == SkinResourceId{1} &&
+             pmchara->color == 2 && pmchara->type == 0 && pmchara->side == 2,
+         "a pmchara destination retains the same source, colour, type, and "
+         "side fields supplied to JsonPlaySkinObjectLoader");
+
+  const auto unresolved = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  pmchara={{id='missing-source',type=0}},
+  destination={{id='missing-source',dst={{x=10,y=20,w=30,h=40}}}}
+}
+)lua");
+  expect(unresolved.model &&
+             findObject(*unresolved.model, "missing-source") == nullptr,
+         "a pmchara without a source follows JsonPlaySkinObjectLoader's null "
+         "object path instead of rejecting the gameplay skin");
+}
+
 } // namespace
 
 int main() {
@@ -1534,6 +1598,8 @@ int main() {
   testGameplayTypeMustBeSupported();
   testBooleanFieldsUseLuaTruthiness();
   testOptionalVisualsAndBuiltinImagesStayLiveAcrossRepeatedDestinations();
+  testPomyuCharaCycleExtractionFollowsPinnedLoaderOrder();
+  testPomyuCharaDefinitionPreservesPinnedSourceFields();
   if (failures != 0) {
     std::cerr << failures << " assertion(s) failed\n";
     return 1;

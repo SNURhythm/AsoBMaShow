@@ -1458,6 +1458,76 @@ void testPomyuTimersFollowPinnedDefaultProcessorCycles() {
   bridge.discardFrame();
 }
 
+void testPomyuTimersUseAuthoredMotionCycles() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({
+      .chartModel = chart,
+      .model = &model,
+      .configuration = configuration,
+      .runtime = runtime.runtime(),
+      .mutationTable = mutations,
+      .pomyuMotionCyclesMillis = {100, 250, 250, 250, 250, 100, 250, 250},
+  });
+
+  auto state = stateAt(215);
+  state.sceneStartMicros = 0;
+  state.clock.visualTimeMicros = 0;
+  state.clock.gameplayTimeMicros = 0;
+  state.clock.playTimer = {.active = true,
+                           .startMicros = 0,
+                           .elapsedMillisExact = true};
+  state.authority.stagePassedNotes = 0;
+  state.lastJudge = JudgeResult(None, 0);
+  bridge.beginFrame(state, projectionAt(215));
+  bridge.discardFrame();
+
+  state.clock.serial = 216;
+  state.clock.visualTimeMicros = 2'000;
+  state.clock.gameplayTimeMicros = 2'000;
+  state.authority.stagePassedNotes = 1;
+  state.lastJudge = JudgeResult(PGreat, 0);
+  bridge.beginFrame(state, projectionAt(216));
+  expect(bridge.timerProperty({900}) == 0 &&
+             bridge.timerProperty({902}) == kPlayfieldTimestampOff &&
+             bridge.timerProperty({905}) == 0 &&
+             bridge.timerProperty({907}) == kPlayfieldTimestampOff,
+         "PomyuCharaProcessor leaves authored neutral motions active until "
+         "their source-defined cycle boundary");
+  bridge.discardFrame();
+
+  state.clock.serial = 217;
+  state.clock.visualTimeMicros = 100'000;
+  state.clock.gameplayTimeMicros = 100'000;
+  bridge.beginFrame(state, projectionAt(217));
+  expect(bridge.timerProperty({900}) == kPlayfieldTimestampOff &&
+             bridge.timerProperty({902}) == 100'000 &&
+             bridge.timerProperty({905}) == kPlayfieldTimestampOff &&
+             bridge.timerProperty({907}) == 100'000,
+         "PomyuCharaProcessor enters judgement motions at the authored "
+         "neutral-cycle boundary");
+  bridge.discardFrame();
+
+  state.clock.serial = 218;
+  state.clock.visualTimeMicros = 350'000;
+  state.clock.gameplayTimeMicros = 350'000;
+  bridge.beginFrame(state, projectionAt(218));
+  expect(bridge.timerProperty({900}) == 350'000 &&
+             bridge.timerProperty({902}) == kPlayfieldTimestampOff &&
+             bridge.timerProperty({905}) == 350'000 &&
+             bridge.timerProperty({907}) == kPlayfieldTimestampOff,
+         "PomyuCharaProcessor holds authored judgement motions for their "
+         "own configured cycle before returning to neutral");
+  bridge.discardFrame();
+}
+
 void testSongInformationPropertiesUseImmutableSourceAnalysis() {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
@@ -3185,6 +3255,7 @@ int main() {
   testLongNoteHoldTimersUseCapturedLaneState();
   testExtendedPlayerOneLaneTimersUsePinnedSkinOffsets();
   testPomyuTimersFollowPinnedDefaultProcessorCycles();
+  testPomyuTimersUseAuthoredMotionCycles();
   testSongInformationPropertiesUseImmutableSourceAnalysis();
   testPersistedScorePropertiesUseScoreDataRatherThanLiveJudgements();
   testRivalScorePropertiesRequireCapturedTargetScoreData();

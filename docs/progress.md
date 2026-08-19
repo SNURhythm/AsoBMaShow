@@ -190,12 +190,14 @@ work from [`docs/todo.md`](todo.md). The pinned authority is Beatoraja commit
   `BMSResource.setBMSFile()` leaves its banner texture null, so `no_banner`
   is active and `banner` is inactive even for a declared BMS banner path.
 
-- The default `PomyuCharaProcessor` state now drives timers `900`–`907` and
-  `909`: both neutral motions are initialized, judgement/gauge transitions
-  use the pinned player-1/player-2 mapping, completed motions return to
-  neutral, and dance stays active. The source processor's unconfigured
-  one-millisecond cycles are retained until declared `pmchara` cycle data is
-  represented. Verified by `play_skin_state_bridge_tests`.
+- `PomyuCharaProcessor` timers `900`–`907` and `909` now also consume declared
+  PLAY `pmchara` cycles. Activation reads the source `.chp` through the skin
+  filesystem and follows `PomyuCharaLoader`'s motion ordering, defaults,
+  side-specific mapping, and positive-cycle update rule; absent or failed
+  character sources retain the source one-millisecond defaults. Character-image
+  rendering remains a separate unsupported visual path. The extractor and
+  frame-state contracts are verified by `beatoraja_skin_model_tests` and
+  `play_skin_state_bridge_tests`.
 
 - Target-option image indices `61`–`63` now follow the pinned BMSPlayer
   target lifecycle: regular gameplay uses the default `TargetProperty`

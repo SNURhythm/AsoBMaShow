@@ -551,10 +551,10 @@ void PlaySkinStateBridge::updatePinnedPomyuTimers() {
 
   // Ported from PomyuCharaProcessor.updateTimer(). PlaySkin constructs the
   // processor regardless of whether the skin declares a pmchara object, so
-  // retain its eight one-millisecond default cycles here. Pinned BMSPlayer
+  // its supplied cycles retain the source one-millisecond defaults until a
+  // decoded PLAY pmchara definition replaces an entry. Pinned BMSPlayer
   // updates the processor once per STATE_PLAY frame after judge/gauge state.
-  constexpr std::array<int, 8> kDefaultMotionCyclesMillis = {1, 1, 1, 1,
-                                                               1, 1, 1, 1};
+  const auto &motionCyclesMillis = context_.pomyuMotionCyclesMillis;
   const std::int64_t now = skinStateClockMicros(*snapshot);
   const auto elapsedMillis = [now](std::int64_t start) {
     return start == kPlayfieldTimestampOff
@@ -597,7 +597,7 @@ void PlaySkinStateBridge::updatePinnedPomyuTimers() {
       }();
   const auto neutralReady = [&](std::size_t index) {
     const std::int64_t elapsed = elapsedMillis(pomyuTimerStarts_[index]);
-    const int cycle = kDefaultMotionCyclesMillis[index];
+    const int cycle = motionCyclesMillis[index];
     return elapsed >= cycle && elapsed % cycle < 17;
   };
 
@@ -621,7 +621,7 @@ void PlaySkinStateBridge::updatePinnedPomyuTimers() {
   for (std::size_t index = 1; index < pomyuTimerStarts_.size(); ++index) {
     if (index == 5 || !isOn(index) ||
         elapsedMillis(pomyuTimerStarts_[index]) <
-            kDefaultMotionCyclesMillis[index]) {
+            motionCyclesMillis[index]) {
       continue;
     }
     if (index <= 4) {

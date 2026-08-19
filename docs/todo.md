@@ -160,9 +160,12 @@ gameplay.
 - [x] Default Pomyu processor timers: `900`–`907`, `909` follow pinned
   `PomyuCharaProcessor` lifecycle and its unconfigured one-millisecond motion
   cycles.
-- Declared `pmchara` objects still need their authored motion-cycle extraction
-  (and renderer support) before those default Pomyu timer cycles can be
-  replaced source-faithfully per skin.
+- [x] Declared PLAY `pmchara` objects now extract their timer cycles from the
+  selected `.chp` source with pinned `PomyuCharaLoader` ordering: `#Patern` /
+  `#Pattern`, `#Texture`, then `#Layer`; `#Frame`/`#Flame` and `#Anime`
+  defaults; side-specific timer mapping; and `setPMcharaTime`'s positive-cycle
+  rule. Character-image rendering remains a separate unsupported visual path;
+  it does not change the source timer authority.
 - [x] Extended 1P key timers: bomb `1010`–`1099`, hold `1210`–`1299`,
   key-down `1410`–`1499`, key-up `1610`–`1699`, HCN active `1810`–`1899`,
   and HCN damage `2010`–`2099`. These follow `LaneProperty` and

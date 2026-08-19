@@ -3,16 +3,22 @@
 #include "GameplaySkinBuiltinCatalog.h"
 #include "LuaSkinFileSystem.h"
 #include "LuaSkinTableDecoder.h"
+#include "PomyuCharaCycles.h"
 #include "SkinModelValidator.h"
+#include "../package/SkinPackageTypes.h"
 #include "../../scene/play/StartLaneIndicatorGeometry.h"
 #include "../../rendering/SkinQuadBatchRenderer.h"
 #include "../../rendering/common.h"
 #include "../../replay/ReplayKeyMode.h"
 
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <cmath>
+#include <filesystem>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <ranges>
@@ -20,6 +26,7 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 namespace skin {
 namespace {
@@ -63,6 +70,135 @@ std::uint64_t identitySeed(const PlaySkinSessionIdentity &identity) noexcept {
   append(identity.revisionDigest);
   append(identity.configurationDigest);
   return result;
+}
+
+std::optional<std::string> configuredPomyuCharaPath(
+    std::string_view authored, const BeatorajaSkinConfiguration &configuration,
+    const SkinSafetyPolicy &safetyPolicy) {
+  const ConfiguredFile *match = nullptr;
+  for (const auto &file : configuration.orderedFiles) {
+    if (!authored.starts_with(file.pattern)) {
+      continue;
+    }
+    if (match != nullptr) {
+      return std::nullopt;
+    }
+    match = &file;
+  }
+  if (match == nullptr) {
+    return authored.find('*') == std::string_view::npos
+               ? std::optional<std::string>(authored)
+               : std::nullopt;
+  }
+  const std::size_t wildcard = authored.rfind('*');
+  if (wildcard == std::string_view::npos ||
+      authored.size() < match->pattern.size()) {
+    return std::nullopt;
+  }
+  const std::size_t suffixSize = authored.size() - match->pattern.size();
+  const std::size_t maximumPathBytes = skinResourceLimit(
+      safetyPolicy, SkinPackagePolicy::maxPathBytes);
+  if (wildcard > maximumPathBytes ||
+      match->selectedValue.size() > maximumPathBytes - wildcard ||
+      suffixSize > maximumPathBytes - wildcard - match->selectedValue.size()) {
+    return std::nullopt;
+  }
+  std::string selected;
+  selected.reserve(wildcard + match->selectedValue.size() + suffixSize);
+  selected.append(authored, 0, wildcard);
+  selected.append(match->selectedValue);
+  selected.append(authored, match->pattern.size(), suffixSize);
+  return selected;
+}
+
+bool hasChpExtension(const std::filesystem::path &path) {
+  std::string extension = path.extension().string();
+  std::ranges::transform(extension, extension.begin(), [](unsigned char value) {
+    return static_cast<char>(std::tolower(value));
+  });
+  return extension == ".chp";
+}
+
+std::optional<std::vector<std::byte>> readPomyuCharaFile(
+    const LuaSkinFileSystem &files, std::string_view configuredPath,
+    SkinSafetyPolicy safetyPolicy) {
+  const auto maximumBytes = skinResourceLimit(
+      safetyPolicy, SkinResourcePolicy::maximumEncodedBytes);
+  const std::filesystem::path path(configuredPath);
+  if (hasChpExtension(path)) {
+    const auto candidate = files.resolveResourceCandidates(configuredPath,
+                                                           configuredPath);
+    if (!candidate.normalizedVirtualPath) {
+      return std::nullopt;
+    }
+    auto read = files.readResolvedResource(*candidate.normalizedVirtualPath,
+                                           maximumBytes);
+    if (!read.failure) {
+      return std::move(read.bytes);
+    }
+    if (read.failure->code != SkinFileError::Missing) {
+      return std::nullopt;
+    }
+  }
+
+  const std::string directory =
+      hasChpExtension(path) ? path.parent_path().generic_string()
+                            : std::string(configuredPath);
+  const auto listed = files.listResourceDirectory(directory);
+  if (listed.failure) {
+    return std::nullopt;
+  }
+  for (const std::string &entry : listed.entries) {
+    if (!hasChpExtension(std::filesystem::path(entry))) {
+      continue;
+    }
+    auto read = files.readResolvedResource(entry, maximumBytes);
+    if (read.failure) {
+      return std::nullopt;
+    }
+    return std::move(read.bytes);
+  }
+  return std::nullopt;
+}
+
+std::array<int, 8> pomyuMotionCyclesForModel(
+    const ValidatedBeatorajaSkinModel &model, const LuaSkinFileSystem &files,
+    const BeatorajaSkinConfiguration &configuration,
+    SkinSafetyPolicy safetyPolicy) {
+  std::array<int, 8> cycles = {1, 1, 1, 1, 1, 1, 1, 1};
+  std::map<SkinResourceId, const SkinImageResource *> resources;
+  for (const auto &definition : model.model.resources) {
+    if (const auto *image = std::get_if<SkinImageResource>(&definition)) {
+      resources.emplace(image->id, image);
+    }
+  }
+  for (const auto &definition : model.model.objects) {
+    const auto *pmchara = std::get_if<SkinPmCharaObject>(&definition.payload);
+    if (pmchara == nullptr) {
+      continue;
+    }
+    const auto resource = resources.find(pmchara->source);
+    if (resource == resources.end()) {
+      continue;
+    }
+    const auto configured = configuredPomyuCharaPath(
+        resource->second->virtualPath, configuration, safetyPolicy);
+    if (!configured) {
+      continue;
+    }
+    const auto bytes = readPomyuCharaFile(files, *configured, safetyPolicy);
+    if (!bytes) {
+      continue;
+    }
+    const auto extracted = pomyuMotionCyclesFromChp(
+        std::string_view(reinterpret_cast<const char *>(bytes->data()),
+                         bytes->size()),
+        pmchara->type, pmchara->side, cycles);
+    if (extracted) {
+      cycles = *extracted;
+    }
+  }
+  return cycles;
 }
 
 class FrameDiscardGuard final {
@@ -209,7 +345,8 @@ struct PlaySkinSession::OwnedActivation final {
                   ViewportSettings viewportSettingsValue,
                   UiLogicalRect safeUiBoundsValue,
                   PlaySkinViewport viewportValue,
-                  SkinSafetyPolicy safetyPolicyValue)
+                  SkinSafetyPolicy safetyPolicyValue,
+                  std::array<int, 8> pomyuMotionCyclesMillisValue)
       : revision(std::move(revisionValue)),
         identity(std::move(identityValue)), chartModel(&chartModelValue),
         reconciledSettings(std::move(reconciledSettingsValue)),
@@ -222,6 +359,7 @@ struct PlaySkinSession::OwnedActivation final {
         viewportSettings(viewportSettingsValue),
         safeUiBounds(safeUiBoundsValue), viewport(viewportValue),
         safetyPolicy(safetyPolicyValue),
+        pomyuMotionCyclesMillis(pomyuMotionCyclesMillisValue),
         gaugeRandom(std::make_unique<DeterministicGaugeRandomSource>(
             identitySeed(identity))),
         bridge(std::make_unique<PlaySkinStateBridge>(PlaySkinStateBridgeContext{
@@ -229,7 +367,8 @@ struct PlaySkinSession::OwnedActivation final {
             .model = &model,
             .configuration = configuration,
             .runtime = *runtime,
-            .mutationTable = mutationTable})) {}
+            .mutationTable = mutationTable,
+            .pomyuMotionCyclesMillis = pomyuMotionCyclesMillis})) {}
 
   // The master revision is declared first and therefore released only after
   // the runtime/filesystem, resource catalog clone, and every borrowed frame
@@ -251,6 +390,8 @@ struct PlaySkinSession::OwnedActivation final {
   UiLogicalRect safeUiBounds;
   PlaySkinViewport viewport;
   SkinSafetyPolicy safetyPolicy{};
+  std::array<int, 8> pomyuMotionCyclesMillis = {1, 1, 1, 1,
+                                                 1, 1, 1, 1};
   Skin2DRenderer renderer;
   rendering::SkinQuadBatchRenderer quadRenderer;
   std::unique_ptr<ISkinGaugeRandomSource> gaugeRandom;
@@ -506,6 +647,10 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
       return result;
     }
 
+    const auto pomyuMotionCycles = pomyuMotionCyclesForModel(
+        *validatedModel.model, *resourceFiles.fileSystem, configuration,
+        context.safetyPolicy);
+
     const std::vector<std::string> runtimeStrings =
         context.chartModel.runtimeStrings();
     auto planned = context.resourcePreparation.decodeAndPlan(
@@ -575,7 +720,7 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
         std::move(runtime.runtime), std::move(uploaded.catalog),
         context.configurationWrites, std::move(context.applyAudioVolume),
         context.viewport, context.safeUiBounds, viewport,
-        context.safetyPolicy);
+        context.safetyPolicy, pomyuMotionCycles);
     result.session.reset(new PlaySkinSession(std::move(owned)));
     return result;
   } catch (...) {

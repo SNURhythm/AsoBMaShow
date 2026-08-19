@@ -72,6 +72,7 @@ resultFor(const SkinObjectResolutionCandidate &candidate) {
     case Kind::LiftCover:
     case Kind::Bga:
     case Kind::Judge:
+    case Kind::PmChara:
       return false;
     case Kind::GaugeGraph:
     case Kind::JudgeGraph:
@@ -80,7 +81,6 @@ resultFor(const SkinObjectResolutionCandidate &candidate) {
     case Kind::TimingVisualizer:
     case Kind::TimingDistributionGraph:
     case Kind::Practice:
-    case Kind::PmChara:
       return true;
     }
     return true;
