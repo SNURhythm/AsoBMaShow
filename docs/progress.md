@@ -48,9 +48,9 @@ work from [`docs/todo.md`](todo.md). The pinned authority is Beatoraja commit
 - Image indexes `75`, `321`–`324`, `343`, `350`–`353`, `360`–`361`, and
   `400` now carry their exact raw `PlayerConfig`/`PlayConfig` values through
   persistent app settings into immutable gameplay presentation. Boolean
-  `OPTION_CONSTANT` shares the same captured `PlayConfig` flag. This adds
-  selector compatibility; applying Constant's note-traversal behavior remains
-  a renderer task. Verified by `app_settings_store_tests` and
+  `OPTION_CONSTANT` shares the same captured `PlayConfig` flag. Its renderer
+  behavior is recorded above; the remaining forced-speed path requires parser
+  speed-object authority. Verified by `app_settings_store_tests` and
   `play_skin_state_bridge_tests`.
 
 - Image indexes `301` and `303` now carry the source `PlayerConfig`
@@ -195,11 +195,6 @@ work from [`docs/todo.md`](todo.md). The pinned authority is Beatoraja commit
   one-second windows, while uptime begins with `ApplicationContext`
   construction like `MainController.boottime`. Verified by
   `play_skin_state_bridge_tests` and targeted `main` object compilation.
-
-- `OPTION_CONSTANT` (`400`) is explicitly inactive. The application has no
-  constant-speed play configuration, so this follows Beatoraja's disabled
-  `PlayerConfig` branch rather than relying on an unclassified selector
-  fallback.
 
 - G-Battle now passes the persisted target `ChartScoreWrite` into gameplay.
   Rival selectors `271`, `280`–`289`, and float rates `285`–`289` therefore

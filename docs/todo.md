@@ -26,8 +26,9 @@ source default are not compatibility work for gameplay skins.
   gameplay load path does not populate the banner texture, so `no_banner` is
   true and `banner` is false even if a chart declares `#BANNER`.
 - [x] Constant scroll (`400`) now captures the persisted `PlayConfig`
-  enablement flag for both its image-index and boolean forms. Implementing
-  the source renderer's constant-speed/fade behavior remains separate work.
+  enablement flag for both its image-index and boolean forms. Its source
+  duration/fade projection is complete; only the separately tracked parser
+  speed-object authority still prevents Constant's forced-speed path.
 - [x] Initial practice item availability and selection (`3000`–`3015`,
   `3020`–`3035`) now follow the captured `PracticeConfiguration` viewport:
   the ten default visible rows are available and the initial `START TIME`
