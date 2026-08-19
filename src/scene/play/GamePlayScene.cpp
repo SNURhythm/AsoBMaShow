@@ -1547,10 +1547,14 @@ void GamePlayScene::enterPracticeMenu() {
   state->configureGauge(options.gaugeType, options.gaugeAutoShift,
                         options.gaugeProfile, options.gaugeAutoShiftLowerBound);
   state->isPlaying = false;
-  practiceMenuActive = true;
-  practiceMenuStartPressedMicros = 0;
   capturePlayfieldVisualState(0, getVisualTimeMicros(0), false, false, true);
   acquireGameplaySkinForAttempt();
+  if (presentation == nullptr ||
+      presentation->activeMode() != PresentationMode::Skin) {
+    return;
+  }
+  practiceMenuActive = true;
+  practiceMenuStartPressedMicros = 0;
 }
 
 void GamePlayScene::consumePracticeMenuLaneInput(int lane, bool pressed) {
@@ -2865,7 +2869,8 @@ void GamePlayScene::init() {
   context.jukebox.stop();
   if (shouldEnterPracticeMenu()) {
     enterPracticeMenu();
-  } else if (!reset()) {
+  }
+  if (!practiceMenuActive && !reset()) {
     return;
   }
   if (!isReplayPlayback() && !options.autoPlay) {
