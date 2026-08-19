@@ -318,6 +318,37 @@ void testSkinMenuDoublePlayFlipSwapsSourcePlayerHalves() {
          "player half");
 }
 
+void testSkinMenuDoublePlayFlipSwapsLandminePlayerHalves() {
+  bms_parser::Chart chart;
+  auto *measure = new bms_parser::Measure();
+  auto *timeline = new bms_parser::TimeLine(16, false);
+  auto *mine = new bms_parser::LandmineNote(24.0F);
+  timeline->SetLandmineNote(1, mine);
+  measure->TimeLines.push_back(timeline);
+  chart.Measures.push_back(measure);
+
+  practice::applySkinMenuDoublePlayFlip(chart);
+
+  expect(timeline->LandmineNotes[1] == nullptr &&
+             timeline->LandmineNotes[9] == mine && mine->Lane == 9,
+         "source PlayerFlipModifier rotates landmines with every other "
+         "double-play lane");
+}
+
+void testSkinMenuShortChartDoesNotSelectNegativeStartTime() {
+  practice::SkinMenuController menu(
+      {.startMicros = 0, .endMicros = 1'000'000},
+      {.lastTimelineMicros = 1'000'000,
+       .judgeRank = 100,
+       .chartTotal = 200.0,
+       .keyMode = 7});
+
+  expect(menu.changeVisibleItem(0, true),
+         "short-chart START TIME accepts a source menu increment event");
+  expect(menu.property().startTimeMillis == 0,
+         "short-chart START TIME remains at the source zero minimum");
+}
+
 void testSessionRetainsRawMenuRangeDuringRateAdjustedAttempt() {
   practice::Session session(
       {.startMicros = 2'000'000,
@@ -520,6 +551,8 @@ int main() {
   testSkinMenuPropertyProducesPinnedAttemptPlan();
   testSkinMenuAttemptPlanMovesOutOfRangeNotesToBackground();
   testSkinMenuDoublePlayFlipSwapsSourcePlayerHalves();
+  testSkinMenuDoublePlayFlipSwapsLandminePlayerHalves();
+  testSkinMenuShortChartDoesNotSelectNegativeStartTime();
   testSessionRetainsRawMenuRangeDuringRateAdjustedAttempt();
   testListenUsesPracticeStartInsteadOfCursorOrEndMarker();
   testConfigurationSanitization();

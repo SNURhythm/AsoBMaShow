@@ -249,7 +249,7 @@ void applySkinMenuPracticeModifier(bms_parser::Chart &chart,
 }
 
 void applySkinMenuDoublePlayFlip(bms_parser::Chart &chart) {
-  const auto flip = [](std::vector<bms_parser::Note *> &notes) {
+  const auto flip = [](auto &notes) {
     const std::size_t playerLaneCount = notes.size() / 2;
     for (std::size_t lane = 0; lane < playerLaneCount; ++lane) {
       std::swap(notes[lane], notes[lane + playerLaneCount]);
@@ -268,6 +268,7 @@ void applySkinMenuDoublePlayFlip(bms_parser::Chart &chart) {
       if (timeline != nullptr) {
         flip(timeline->Notes);
         flip(timeline->InvisibleNotes);
+        flip(timeline->LandmineNotes);
       }
     }
   }
@@ -372,8 +373,10 @@ bool SkinMenuController::changeVisibleItem(std::size_t index, bool increment,
   cursorPosition_ = *element;
   switch (*element) {
   case 0: {
-    const int maximum = roundDownToHundredMillis(
-        static_cast<int>(inputs_.lastTimelineMicros / 1'000LL) - 2'000);
+    const int maximum = std::max(
+        0, roundDownToHundredMillis(
+               static_cast<int>(inputs_.lastTimelineMicros / 1'000LL) -
+               2'000));
     const int change = turbo ? (analog ? 1'000 : 2'500) : 100;
     if (increment) {
       property_.startTimeMillis =
