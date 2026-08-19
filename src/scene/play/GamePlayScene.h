@@ -121,6 +121,7 @@ private:
   void applyStartSelectControlActions(
       const std::vector<gameplay::StartSelectControlAction> &actions);
   void refreshRuntimePresentationConfiguration();
+  void persistAutoAdjustedNotesDisplayTiming();
   void abortPlayFromStartSelectControl();
   void adjustLaneCoverFromInput(int deltaPercent);
   void restartCurrentPattern();
@@ -327,6 +328,7 @@ private:
   bool floatingLaneCoverDragActive = false;
   bool floatingLaneCoverDragChanged = false;
   bool floatingLaneCoverSettingsDirty = false;
+  bool notesDisplayTimingSettingsDirty = false;
   SDL_FingerID floatingLaneCoverFinger = -1;
   float floatingLaneCoverDragOffsetY = 0.0f;
   std::uint64_t playfieldFrameSerial = 0;

@@ -2634,6 +2634,7 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
 }
 
 GamePlayScene::~GamePlayScene() {
+  persistAutoAdjustedNotesDisplayTiming();
   stopBestReplayLoad();
   stopRealtimeGameplayAuthority(false);
   if (profileGameplayBlockerActive) {
@@ -5084,6 +5085,7 @@ void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
     return;
   }
   resultTransitionScheduled = true;
+  persistAutoAdjustedNotesDisplayTiming();
 
   finishReplayRecording();
   const auto capturePolicy = resultCapturePolicy();
@@ -6519,12 +6521,18 @@ void GamePlayScene::onJudge(const JudgeResult &judgeResult,
   presentationEventFanout->onJudge(judgeResult, state->combo,
                                    state->getScore(), clock,
                                    recordTimingSample);
-  context.settings.notesDisplayTimingMilliseconds =
+  const int adjustedNotesDisplayTimingMilliseconds =
       gameplay_timing::nextNotesDisplayTimingMilliseconds(
           context.settings.notesDisplayTimingMilliseconds,
           context.settings.notesDisplayTimingAutoAdjust,
           !isReplayPlayback() && !options.autoPlay, judgeResult.judgement,
           judgeResult.Diff);
+  if (adjustedNotesDisplayTimingMilliseconds !=
+      context.settings.notesDisplayTimingMilliseconds) {
+    context.settings.notesDisplayTimingMilliseconds =
+        adjustedNotesDisplayTimingMilliseconds;
+    notesDisplayTimingSettingsDirty = true;
+  }
   (void)judgementCount;
   // CurrentRhythmHUD->OnJudge(state);
   // UE_LOG(LogTemp, Warning, TEXT("Judge: %s, Combo: %d, Diff: %lld"),
@@ -6768,6 +6776,17 @@ void GamePlayScene::persistFloatingLaneCoverSettings() {
   if (!context.saveSettings()) {
     SDL_Log("Failed to save lane cover drag settings");
   }
+}
+
+void GamePlayScene::persistAutoAdjustedNotesDisplayTiming() {
+  if (!notesDisplayTimingSettingsDirty) {
+    return;
+  }
+  if (!context.saveSettings()) {
+    SDL_Log("Failed to save auto-adjusted notes display timing");
+    return;
+  }
+  notesDisplayTimingSettingsDirty = false;
 }
 
 void GamePlayScene::appendReplayTouchSample(SDL_FingerID fingerIndex,
