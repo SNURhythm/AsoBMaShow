@@ -656,6 +656,7 @@ Json stageToJson(ScoreStageProvenance stage) {
   value["judgeRankSource"] = judgeRankSourceName(stage.judgeRankSource);
   writeOptional(value, "sourceJudgeRank", stage.sourceJudgeRank);
   value["totalNotes"] = stage.totalNotes;
+  value["playDurationSeconds"] = stage.playDurationSeconds;
   writeOptional(value, "authoredGaugeTotal", stage.authoredGaugeTotal);
   value["effectiveGaugeTotal"] = stage.effectiveGaugeTotal;
   value["candidateSelection"] =
@@ -694,6 +695,8 @@ ScoreStageProvenance stageFromJson(const Json &value, int schemaVersion,
       "Unknown judge-rank source in score provenance.");
   result.sourceJudgeRank = readOptional<int>(value, "sourceJudgeRank");
   result.totalNotes = value.value("totalNotes", result.totalNotes);
+  result.playDurationSeconds =
+      value.value("playDurationSeconds", result.playDurationSeconds);
   result.authoredGaugeTotal =
       readOptional<double>(value, "authoredGaugeTotal");
   const auto effectiveTotal = value.find("effectiveGaugeTotal");
@@ -848,6 +851,12 @@ ScoreProvenance ScoreProvenance::Legacy() {
 std::string serializeScoreProvenance(const ScoreProvenance &provenance) {
   ScoreProvenance canonical = provenance;
   canonicalizeDevices(canonical.inputDevices);
+  // Schema v6 adds playDurationSeconds solely to a stage proof. Preserve the
+  // established v5 wire payload for an unverified no-stage provenance so
+  // durable IR snapshots and their fingerprints remain byte-for-byte stable.
+  if (canonical.stages.empty() && canonical.ruleset.version == 0) {
+    canonical.schemaVersion = ScoreProvenance::kDoublePlayFlipSchemaVersion;
+  }
 
   Json root = Json::object();
   root["schemaVersion"] = canonical.schemaVersion;
@@ -1027,6 +1036,8 @@ ScoreProvenance makeScoreProvenance(const ScoreProvenanceBuildInput &input) {
   }
   stage.totalNotes =
       input.totalNotes > 0 ? input.totalNotes : input.chartMeta.TotalNotes;
+  stage.playDurationSeconds =
+      std::max<std::int64_t>(0, input.chartMeta.PlayLength) / 1'000'000;
   stage.authoredGaugeTotal =
       input.authoredGaugeTotal.has_value()
           ? input.authoredGaugeTotal

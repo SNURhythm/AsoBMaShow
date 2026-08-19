@@ -68,6 +68,9 @@ struct ScoreStageProvenance {
   JudgeRankSource judgeRankSource = JudgeRankSource::Unknown;
   std::optional<int> sourceJudgeRank;
   int totalNotes = 0;
+  // PlayDataAccessor.writeScoreData() adds the last playable note's whole
+  // second timestamp to PlayerData.playtime for each persisted local play.
+  std::int64_t playDurationSeconds = 0;
   std::optional<double> authoredGaugeTotal;
   double effectiveGaugeTotal = 0.0;
   gameplay::CandidateSelectionMode candidateSelection =
@@ -79,7 +82,8 @@ struct ScoreStageProvenance {
 
 struct ScoreProvenance {
   static constexpr int kDoublePlayFlipSchemaVersion = 5;
-  static constexpr int kSchemaVersion = kDoublePlayFlipSchemaVersion;
+  static constexpr int kPlayDurationSchemaVersion = 6;
+  static constexpr int kSchemaVersion = kPlayDurationSchemaVersion;
 
   int schemaVersion = kSchemaVersion;
   RulesetDescriptor ruleset;

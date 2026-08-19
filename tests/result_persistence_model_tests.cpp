@@ -820,6 +820,10 @@ void testProvenanceFingerprintCoverage() {
       "provenance.stage.effectiveGaugeTotal");
   expectReplayFingerprintChange(
       fixture,
+      [](auto &v) { ++v.provenance.stages.front().playDurationSeconds; },
+      "provenance.stage.playDurationSeconds");
+  expectReplayFingerprintChange(
+      fixture,
       [](auto &v) {
         v.provenance.stages.front().candidateSelection =
             gameplay::CandidateSelectionMode::Lowest;

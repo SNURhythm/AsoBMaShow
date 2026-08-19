@@ -48,7 +48,7 @@ struct ProjectionOutcome {
 
 class ScoreRepository {
 public:
-  static constexpr int kCurrentSchemaVersion = 11;
+  static constexpr int kCurrentSchemaVersion = 12;
 
   class [[nodiscard]] PreparedScoreQueryDatabase {
   public:
@@ -118,6 +118,10 @@ public:
       const std::optional<std::string> &beforeCreatedAt = std::nullopt,
       const std::optional<std::string> &excludeAttemptId = std::nullopt,
       int selectedLongNoteMode = 0);
+  std::optional<ChartScoreHistorySnapshot> LoadChartScoreHistory(
+      const bms_parser::ChartMeta &chartMeta,
+      int selectedLongNoteMode = 0);
+  PlayerScoreHistorySnapshot LoadPlayerScoreHistory();
   std::optional<ScoreBestSnapshot> LoadBestClearScore(
       const bms_parser::ChartMeta &chartMeta,
       const std::optional<std::string> &beforeCreatedAt = std::nullopt,

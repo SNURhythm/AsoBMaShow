@@ -1108,6 +1108,141 @@ void testProjectedScoreUsesReplayTimestamp(const std::filesystem::path &root) {
   assert(best->attemptId == pending.attemptId);
 }
 
+void testChartScoreHistoryMatchesPinnedScoreDataUpdateRules(
+    const std::filesystem::path &root) {
+  const auto path = root / "chart-score-history" / "score.db";
+  ScoreRepository helper(path);
+  assert(helper.EnsureSchema());
+  auto db = openDatabase(path);
+  const auto meta = sampleMeta(root, "chart-score-history");
+  const std::string prefix =
+      "INSERT INTO scores (chart_sha256, ln_mode, score, max_score, "
+      "max_combo, combo_break, pgreat, great, good, bad, poor, kpoor, fast, "
+      "slow, final_gauge, clear_type, ruleset_version, eligibility, "
+      "provenance_json, score_source, created_at) VALUES ('" +
+      meta.SHA256 + "', 2, ";
+  const std::string suffix =
+      ", 200, 80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 75.0, 0, 0, 2, '" +
+      std::string(kLegacyProvenanceJson) + "', ";
+  // ScoreData.update() retains judgement counts only when an EX score is
+  // strictly improved, while PlayDataAccessor refreshes its date every play.
+  execOrAbort(db.get(), prefix + "150" + suffix +
+                            "0, '2024-01-02 03:04:05')");
+  execOrAbort(db.get(),
+              "UPDATE scores SET pgreat=70, great=10, good=4, bad=3, poor=2 "
+              "WHERE id=1");
+  execOrAbort(db.get(), prefix + "120" + suffix +
+                            "0, '2025-06-07 08:09:10')");
+  // ScoreData.getExscore() derives its value from PGREAT/GREAT, not from
+  // Aso's denormalized score column. Keep this deliberately inconsistent row
+  // to ensure the reconstruction follows the source access path.
+  execOrAbort(db.get(),
+              "UPDATE scores SET clear_type=1, score=200, pgreat=50, great=0 "
+              "WHERE id=2");
+  execOrAbort(db.get(),
+              "UPDATE scores SET play_duration_seconds=500 WHERE id=1");
+  execOrAbort(db.get(),
+              "UPDATE scores SET play_duration_seconds=61 WHERE id=2");
+  execOrAbort(db.get(), prefix + "200" + suffix +
+                            "1, '2026-01-01 00:00:00')");
+  const int expectedLastPlayed = queryInt(
+      db.get(), "SELECT CAST(strftime('%s', '2025-06-07 08:09:10') AS INTEGER)");
+  db.reset();
+
+  const auto history = helper.LoadChartScoreHistory(meta, 2);
+  assert(history.has_value());
+  assert(history->score == 150 && history->maxScore == 200 &&
+         history->totalNotes == 100);
+  assert((history->judgementCounts == std::array<int, 5>{70, 10, 4, 3, 2}));
+  assert(history->lastPlayedUnixSeconds == expectedLastPlayed);
+
+  const auto player = helper.LoadPlayerScoreHistory();
+  assert(player.playCount == 2 && player.clearCount == 1);
+  assert((player.judgementCounts == std::array<int, 5>{120, 10, 4, 3, 2}));
+  assert(player.playDurationSeconds == 561);
+}
+
+void testPlayerHistoryUsesPinnedLastPlayableNoteDuration(
+    const std::filesystem::path &root) {
+  const auto path = root / "player-history-play-duration" / "score.db";
+  ScoreRepository helper(path);
+  auto meta = sampleMeta(root, "player-history-play-duration");
+  meta.PlayLength = 12'999'999;
+
+  ScoreProvenanceBuildInput input;
+  input.chartMeta = meta;
+  input.longNoteMode = meta.LnMode;
+  input.judgeRankSource = JudgeRankSource::Chart;
+  input.sourceJudgeRank = meta.Rank;
+  input.effectiveJudgeWindows = {
+      {PGreat, {-10'000, 10'000}}, {Great, {-30'000, 30'000}},
+      {Good, {-75'000, 75'000}},   {Bad, {-200'000, 200'000}},
+      {Kpoor, {-1'000'000, 0}},
+  };
+  input.totalNotes = meta.TotalNotes;
+  input.effectiveGaugeTotal = 176.0;
+  input.ruleset = RulesetDescriptor::Current();
+  const ScoreProvenance provenance = makeScoreProvenance(input);
+
+  assert(helper.SaveScore(meta, sampleState(20, 5), provenance));
+  auto db = openDatabase(path);
+  assert(queryInt(db.get(), "SELECT play_duration_seconds FROM scores") ==
+         12);
+  db.reset();
+  assert(helper.LoadPlayerScoreHistory().playDurationSeconds == 12);
+}
+
+void testVersion12BackfillsLocalPlayDurationFromChartMetadata(
+    const std::filesystem::path &root) {
+  const auto scorePath = root / "version12-play-duration" / "score.db";
+  const auto chartPath = root / "version12-play-duration" / "chart.db";
+  auto meta = sampleMeta(root, "version12-play-duration");
+  meta.PlayLength = 12'999'999;
+
+  ScoreProvenanceBuildInput input;
+  input.chartMeta = meta;
+  input.longNoteMode = meta.LnMode;
+  input.judgeRankSource = JudgeRankSource::Chart;
+  input.sourceJudgeRank = meta.Rank;
+  input.effectiveJudgeWindows = {
+      {PGreat, {-10'000, 10'000}}, {Great, {-30'000, 30'000}},
+      {Good, {-75'000, 75'000}},   {Bad, {-200'000, 200'000}},
+      {Kpoor, {-1'000'000, 0}},
+  };
+  input.totalNotes = meta.TotalNotes;
+  input.effectiveGaugeTotal = 176.0;
+  input.ruleset = RulesetDescriptor::Current();
+
+  {
+    ScoreRepository bootstrap(scorePath);
+    assert(bootstrap.SaveScore(meta, sampleState(20, 5),
+                               makeScoreProvenance(input)));
+    auto scores = openDatabase(scorePath);
+    execOrAbort(scores.get(), "UPDATE scores SET play_duration_seconds=0");
+    execOrAbort(scores.get(), "PRAGMA user_version = 11");
+  }
+  {
+    auto charts = openDatabase(chartPath);
+    execOrAbort(charts.get(),
+                "CREATE TABLE chart_meta(path TEXT, md5 TEXT, sha256 TEXT, "
+                "length INTEGER, source_priority INTEGER, "
+                "source_archive_size INTEGER)");
+    execOrAbort(charts.get(),
+                "INSERT INTO chart_meta VALUES ('chart.bms','" + meta.MD5 +
+                    "','" + meta.SHA256 +
+                    "',12999999,0,0)");
+  }
+
+  ScoreRepository migrated(scorePath);
+  migrated.SetChartDatabasePath(chartPath);
+  assert(migrated.EnsureSchema());
+  auto scores = openDatabase(scorePath);
+  assert(queryInt(scores.get(), "PRAGMA user_version") ==
+         ScoreRepository::kCurrentSchemaVersion);
+  assert(queryInt(scores.get(), "SELECT play_duration_seconds FROM scores") ==
+         12);
+}
+
 void testProjectedRetryUpdatesSummaryCachesOnce(
     const std::filesystem::path &root) {
   const auto path = root / "projected-score-summary-once" / "score.db";
@@ -2786,6 +2921,9 @@ int main() {
   testProjectedScoreIsIdempotent(root);
   testProjectedScoreConflictDoesNotMutateExistingRow(root);
   testProjectedScoreUsesReplayTimestamp(root);
+  testChartScoreHistoryMatchesPinnedScoreDataUpdateRules(root);
+  testPlayerHistoryUsesPinnedLastPlayableNoteDuration(root);
+  testVersion12BackfillsLocalPlayDurationFromChartMetadata(root);
   testProjectedRetryUpdatesSummaryCachesOnce(root);
   testBestScoreLoadsKpoorInclusiveBadPoints(root);
   testBestScoreCanFilterExactRuleset(root);
