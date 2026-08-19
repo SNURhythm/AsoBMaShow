@@ -180,6 +180,8 @@ public:
           const bms_parser::ChartMeta &meta,
           std::optional<ChartSourcePreference> sourcePreference,
           bool hasDocument = false);
+      bool UpdateChartHasDocument(const std::filesystem::path &path,
+                                  bool hasDocument);
       bool DeleteChart(const std::filesystem::path &path);
       bool DeleteCharts(std::span<const std::filesystem::path> paths);
       bool DeleteChartsInArchive(const std::filesystem::path &path);

@@ -275,6 +275,70 @@ void testFolderTextDocumentFlagMatchesBeatorajaScanScope() {
   assert(records.records[2].hasDocument);
 }
 
+void testArchiveFolderTextDocumentFlagMatchesBeatorajaScanScope() {
+  TempDirectory temporary;
+  const auto archive = writeZip(
+      temporary.path() / "documented.zip",
+      {{"documented/chart.bms", chartText("Documented Archive Chart")},
+       {"documented/README.TXT", "chart documentation"},
+       {"undocumented/chart.bms", chartText("Undocumented Archive Chart")}});
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+  assert(scanner.Scan(*session, {archive}) == 3);
+
+  const auto snapshot = session->LoadScanSnapshot();
+  assert(snapshot.charts.size() == 2);
+  const std::array<std::filesystem::path, 2> paths{
+      snapshot.charts[0].BmsPath, snapshot.charts[1].BmsPath};
+  const auto records = session->SelectChartMetaByPaths(paths);
+  assert(records.status == ChartMetaPathBatchReadStatus::Loaded);
+  assert(records.records.size() == 2);
+  const auto documented = std::find_if(
+      records.records.begin(), records.records.end(), [](const auto &record) {
+        return record.meta.Title == "Documented Archive Chart";
+      });
+  const auto undocumented = std::find_if(
+      records.records.begin(), records.records.end(), [](const auto &record) {
+        return record.meta.Title == "Undocumented Archive Chart";
+      });
+  assert(documented != records.records.end() && documented->hasDocument);
+  assert(undocumented != records.records.end() && !undocumented->hasDocument);
+}
+
+void testKnownChartRefreshesFolderTextDocumentFlag() {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  const auto chart = writeChart(root, "known", "Known Document Chart");
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+  assert(scanner.Scan(*session, {root}) == 1);
+
+  const auto record = [&] {
+    const std::array<std::filesystem::path, 1> paths{chart};
+    const auto loaded = session->SelectChartMetaByPaths(paths);
+    assert(loaded.status == ChartMetaPathBatchReadStatus::Loaded);
+    assert(loaded.records.size() == 1);
+    return loaded.records.front();
+  };
+  assert(!record().hasDocument);
+
+  std::ofstream(root / "README.TXT") << "chart documentation";
+  assert(scanner.Scan(*session, {root}) == 1);
+  assert(record().hasDocument);
+
+  std::filesystem::remove(root / "README.TXT");
+  assert(scanner.Scan(*session, {root}) == 1);
+  assert(!record().hasDocument);
+}
+
 void testAddedDirectoryScanPreservesUnrelatedMissingChart() {
   TempDirectory temporary;
   const auto existingRoot = temporary.path() / "existing";
@@ -1401,6 +1465,9 @@ void testBlockedArchiveDoesNotDelayLaterOrdinaryEntities() {
 
 int main() {
   testBasicNoOpAndDeleteScan();
+  testFolderTextDocumentFlagMatchesBeatorajaScanScope();
+  testArchiveFolderTextDocumentFlagMatchesBeatorajaScanScope();
+  testKnownChartRefreshesFolderTextDocumentFlag();
   testAddedDirectoryScanPreservesUnrelatedMissingChart();
   testAddedArchivePathIsIndexed();
   testFullScanSkipsOnlyFindBmsPrivateStorageDirectory();

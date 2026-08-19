@@ -509,6 +509,32 @@ bool ChartRepository::Session::ScanBatch::UpsertChart(
   return true;
 }
 
+bool ChartRepository::Session::ScanBatch::UpdateChartHasDocument(
+    const std::filesystem::path &path, bool hasDocument) {
+  if (impl_ == nullptr || !impl_->ready || impl_->committed) {
+    return false;
+  }
+  SqliteStatementHandle statement;
+  if (!prepareSqliteStatementLogged(
+          impl_->database(),
+          "UPDATE chart_meta SET has_document = @has_document "
+          "WHERE path = @path AND has_document != @has_document",
+          statement, "preparing chart document flag update", logSqlErrorText)) {
+    return false;
+  }
+  sqlite3_bind_int(statement.get(), 1, hasDocument ? 1 : 0);
+  bindSqliteText(statement.get(), 2,
+                 chart_storage_identity::StoredPathText(path));
+  if (sqlite3_step(statement.get()) != SQLITE_DONE) {
+    logSqlError("updating chart document flag", impl_->database());
+    return false;
+  }
+  if (sqlite3_changes(impl_->database()) > 0) {
+    impl_->noteChanged();
+  }
+  return true;
+}
+
 bool ChartRepository::Session::ScanBatch::DeleteChart(
     const std::filesystem::path &path) {
   if (impl_ == nullptr || !impl_->ready || impl_->committed) {

@@ -158,6 +158,7 @@ struct ArchiveScanResult {
   int fileCount = 0;
   std::uint64_t uncompressedSize = 0;
   std::vector<std::filesystem::path> chartPaths;
+  std::unordered_set<path_t> documentedChartPaths;
 };
 
 ArchiveScanResult
@@ -187,6 +188,7 @@ scanArchiveForChartsOrSolid(const std::filesystem::path &archivePath,
   }
   result.readable = true;
   std::unordered_set<path_t> seenArchiveChartPaths;
+  std::unordered_set<path_t> documentedFolders;
   for (std::size_t entryIndex = 0; entryIndex < entries.size(); ++entryIndex) {
     if (entryIndex > 0 &&
         entryIndex % kArchiveClassificationPauseInterval == 0 &&
@@ -205,6 +207,10 @@ scanArchiveForChartsOrSolid(const std::filesystem::path &archivePath,
     if (entry.solid) {
       result.solid = true;
     }
+    if (hasTextDocumentExtension(entry.path)) {
+      documentedFolders.insert(
+          fspath_to_path_t(entry.path.parent_path().lexically_normal()));
+    }
     if (result.solid ||
         !asobmshow::bms_chart_file::isBmsChartPath(entry.path)) {
       continue;
@@ -216,6 +222,15 @@ scanArchiveForChartsOrSolid(const std::filesystem::path &archivePath,
       continue;
     }
     result.chartPaths.push_back(chartPath);
+  }
+  for (const auto &chartPath : result.chartPaths) {
+    std::filesystem::path parsedArchivePath;
+    std::filesystem::path innerPath;
+    if (archive_file::splitVirtualPath(chartPath, parsedArchivePath, innerPath) &&
+        documentedFolders.contains(
+            fspath_to_path_t(innerPath.parent_path().lexically_normal()))) {
+      result.documentedChartPaths.insert(fspath_to_path_t(chartPath));
+    }
   }
   if (!pauseIfNeeded()) {
     result.readable = false;
@@ -440,6 +455,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     std::optional<bms_parser::ChartMeta> preparedMeta;
   };
   std::vector<ScanDiff> diffs;
+  std::vector<std::pair<std::filesystem::path, bool>> documentFlagUpdates;
   std::vector<std::filesystem::path> sourcePreferenceRefreshPaths;
   struct CachedSourcePreferenceUpdate {
     std::filesystem::path path;
@@ -470,6 +486,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   std::unordered_map<path_t, int> storedArchiveChartCounts;
   std::unordered_set<path_t> scannedArchivePaths;
   diffs.reserve(chartMetas.size());
+  documentFlagUpdates.reserve(chartMetas.size());
   sourcePreferenceRefreshPaths.reserve(chartMetas.size());
   cachedSourcePreferenceUpdates.reserve(chartMetas.size());
 
@@ -637,6 +654,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     std::filesystem::path archivePath;
     std::vector<std::filesystem::path> innerPaths;
     std::vector<bool> parseAttempted;
+    std::vector<bool> hasDocument;
     std::vector<std::optional<bms_parser::ChartMeta>> preparedMetas;
   };
 
@@ -1214,8 +1232,11 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   auto scheduleOrdinaryChart = [&](const std::filesystem::path &path,
                                    bool hasDocument) {
     const path_t key = fspath_to_path_t(path);
-    if (knownChartPaths.contains(key) ||
-        !discoveredOrdinaryChartPaths.insert(key).second) {
+    if (knownChartPaths.contains(key)) {
+      documentFlagUpdates.emplace_back(path, hasDocument);
+      return;
+    }
+    if (!discoveredOrdinaryChartPaths.insert(key).second) {
       return;
     }
 
@@ -1228,7 +1249,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       return;
     }
 
-    if (!entityScheduler.enqueue([&, sequence, path] {
+    if (!entityScheduler.enqueue([&, sequence, path, hasDocument] {
           if (shouldStop()) {
             return;
           }
@@ -1561,9 +1582,12 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
          ++chartIndex) {
       auto &chartPath = archiveScan.chartPaths[chartIndex];
       knownChartPaths.insert(fspath_to_path_t(chartPath));
+      const bool hasDocument = archiveScan.documentedChartPaths.contains(
+          fspath_to_path_t(chartPath));
       ScanDiff diff{
           .path = std::move(chartPath),
           .deleted = false,
+          .hasDocument = hasDocument,
       };
       diffs.push_back(std::move(diff));
     }
@@ -1577,7 +1601,8 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     return {};
   }
   const bool noScanWork =
-      diffs.empty() && sourcePreferenceRefreshPaths.empty() &&
+      diffs.empty() && documentFlagUpdates.empty() &&
+      sourcePreferenceRefreshPaths.empty() &&
       cachedSourcePreferenceUpdates.empty() && solidArchiveDiffs.empty() &&
       archiveCacheDiffs.empty() && pendingArchiveCacheDiffs.empty() &&
       staleSolidArchives.empty() && reindexedArchives.empty();
@@ -1620,6 +1645,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     }
     batchIt->second.innerPaths.push_back(innerPath);
     batchIt->second.parseAttempted.push_back(diff.parseAttempted);
+    batchIt->second.hasDocument.push_back(diff.hasDocument);
     batchIt->second.preparedMetas.push_back(std::move(diff.preparedMeta));
   }
 
@@ -2027,6 +2053,13 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     }
     return true;
   };
+
+  for (const auto &[path, hasDocument] : documentFlagUpdates) {
+    if (shouldStop()) {
+      break;
+    }
+    recordStorageResult(scanBatch->UpdateChartHasDocument(path, hasDocument));
+  }
 
   auto individualParseWorkerCount = [](std::size_t fileCount) {
     return static_cast<std::size_t>(parallel_worker_count(fileCount));
@@ -2712,8 +2745,11 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
         reportProgress(parseCurrent, parseTotal,
                        ChartScanProgressStage::ParsingCharts);
         if (parsed.meta.has_value()) {
+          const bool hasDocument =
+              parsedInBatch < batch.hasDocument.size() &&
+              batch.hasDocument[parsedInBatch];
           if (recordStorageResult(scanBatch->UpsertChart(
-                  *parsed.meta, storedArchiveSourcePreference))) {
+                  *parsed.meta, storedArchiveSourcePreference, hasDocument))) {
             ++insertedCharts;
             ++storedChartCount;
             if (!reconcileExisting) {
