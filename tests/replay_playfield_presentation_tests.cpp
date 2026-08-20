@@ -827,11 +827,12 @@ void testReplayGameplayRuntimeAuthorityCarriesApplicationClocks() {
   PlayfieldAuthorityUpdate authority;
 
   replay_video_export::applyReplayGameplayRuntimeAuthority(
-      authority, 144, 3'661'999);
+      authority, 60, 3'661'999, 2'000'000);
 
-  expect(authority.currentFramesPerSecond == 144 &&
-             authority.applicationUptimeMillis == 3'661'999,
-         "replay export authority retains runtime FPS and application uptime");
+  expect(authority.currentFramesPerSecond == 60 &&
+             authority.applicationUptimeMillis == 3'663'999,
+         "replay export authority advances runtime clocks from the encoded "
+         "frame even when the application loop is blocked");
 }
 
 void testReplayGameplayTargetOptionAuthorityUsesSourceDefault() {

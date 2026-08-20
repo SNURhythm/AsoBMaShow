@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <bit>
 #include <cstdint>
+#include <limits>
 
 namespace replay_video_export {
 
@@ -259,9 +260,15 @@ void applyReplayGameplayGaugeAuthority(PlayfieldAuthorityUpdate &authority,
 
 void applyReplayGameplayRuntimeAuthority(
     PlayfieldAuthorityUpdate &authority, int currentFramesPerSecond,
-    std::int64_t applicationUptimeMillis) noexcept {
+    std::int64_t exportStartUptimeMillis,
+    long long exportElapsedMicros) noexcept {
   authority.currentFramesPerSecond = currentFramesPerSecond;
-  authority.applicationUptimeMillis = applicationUptimeMillis;
+  const std::int64_t start = std::max<std::int64_t>(0, exportStartUptimeMillis);
+  const std::int64_t elapsed = std::max<long long>(0, exportElapsedMicros) / 1'000;
+  authority.applicationUptimeMillis =
+      start > std::numeric_limits<std::int64_t>::max() - elapsed
+          ? std::numeric_limits<std::int64_t>::max()
+          : start + elapsed;
 }
 
 void applyReplayGameplayTargetOptionAuthority(

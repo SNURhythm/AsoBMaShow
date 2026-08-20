@@ -82,8 +82,8 @@ void applyReplayGameplayGaugeAuthority(PlayfieldAuthorityUpdate &,
 
 void applyReplayGameplayRuntimeAuthority(PlayfieldAuthorityUpdate &,
                                          int currentFramesPerSecond,
-                                         std::int64_t applicationUptimeMillis)
-    noexcept;
+                                         std::int64_t exportStartUptimeMillis,
+                                         long long exportElapsedMicros) noexcept;
 
 void applyReplayGameplayTargetOptionAuthority(
     PlayfieldAuthorityUpdate &) noexcept;

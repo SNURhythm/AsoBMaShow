@@ -2554,6 +2554,8 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   const int width = resolvedOptions.width;
   const int height = resolvedOptions.height;
   const int fps = resolvedOptions.fps;
+  const std::int64_t exportStartUptimeMillis =
+      context.applicationUptimeMillis.load(std::memory_order_acquire);
   const long long audioOffsetMicros =
       static_cast<long long>(settings.audioOffsetMs) * 1000LL;
   long long gameplayDurationMicros =
@@ -3084,9 +3086,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     replay_video_export::applyReplayGameplayTargetOptionAuthority(
         frameAuthority);
     replay_video_export::applyReplayGameplayRuntimeAuthority(
-        frameAuthority,
-        context.currentFramesPerSecond.load(std::memory_order_acquire),
-        context.applicationUptimeMillis.load(std::memory_order_acquire));
+        frameAuthority, fps, exportStartUptimeMillis, videoTimeMicros);
     preparedGameplay.presentation->applyAuthorityUpdate(frameAuthority);
 
     bool presentationFailed = false;
@@ -3266,6 +3266,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
   const int width = resolvedOptions.width;
   const int height = resolvedOptions.height;
   const int fps = resolvedOptions.fps;
+  const std::int64_t exportStartUptimeMillis =
+      context.applicationUptimeMillis.load(std::memory_order_acquire);
   const long long audioOffsetMicros =
       static_cast<long long>(settings.audioOffsetMs) * 1000LL;
   const std::vector<std::string> courseStageTitles =
@@ -3860,9 +3862,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
       replay_video_export::applyReplayGameplayTargetOptionAuthority(
           frameAuthority);
       replay_video_export::applyReplayGameplayRuntimeAuthority(
-          frameAuthority,
-          context.currentFramesPerSecond.load(std::memory_order_acquire),
-          context.applicationUptimeMillis.load(std::memory_order_acquire));
+          frameAuthority, fps, exportStartUptimeMillis,
+          globalVideoTimeMicros);
       presentation.applyAuthorityUpdate(frameAuthority);
 
       bool presentationFailed = false;
