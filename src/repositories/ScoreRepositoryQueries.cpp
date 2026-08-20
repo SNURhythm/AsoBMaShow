@@ -60,6 +60,62 @@ int judgeCount(const RhythmState &state, Judgement judgement) {
   return it == state.judgeCount.end() ? 0 : it->second;
 }
 
+class AttachedChartDurationLookup final {
+public:
+  AttachedChartDurationLookup(sqlite3 *database,
+                              const std::filesystem::path &path)
+      : database_(database) {
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(path, error) || error ||
+        attachSqliteDatabase(database_, path, "player_history_chart")) {
+      return;
+    }
+    attached_ = true;
+    constexpr const char *query =
+        "SELECT MIN(2147483647, MAX(0, CAST(length / 1000000 AS INTEGER))) "
+        "FROM player_history_chart.chart_meta WHERE "
+        "((?1 <> '' AND lower(trim(sha256)) = lower(trim(?1))) OR "
+        "(?2 <> '' AND lower(trim(md5)) = lower(trim(?2)))) "
+        "ORDER BY CASE WHEN ?1 <> '' AND lower(trim(sha256)) = "
+        "lower(trim(?1)) THEN 0 ELSE 1 END, source_priority, "
+        "source_archive_size, path LIMIT 1";
+    if (!prepareSqliteStatementLogged(
+            database_, query, statement_,
+            "preparing historical course duration lookup", logSqlErrorText)) {
+      statement_.reset();
+    }
+  }
+
+  ~AttachedChartDurationLookup() {
+    statement_.reset();
+    if (attached_) {
+      sqlite3_exec(database_, "DETACH DATABASE player_history_chart", nullptr,
+                   nullptr, nullptr);
+    }
+  }
+
+  std::optional<std::int64_t>
+  duration(const ScoreStageProvenance &stage) {
+    if (!statement_ || (stage.chartSha256.empty() && stage.chartMd5.empty())) {
+      return std::nullopt;
+    }
+    sqlite3_reset(statement_.get());
+    sqlite3_clear_bindings(statement_.get());
+    if (!bindSqliteText(statement_.get(), 1, stage.chartSha256) ||
+        !bindSqliteText(statement_.get(), 2, stage.chartMd5) ||
+        sqlite3_step(statement_.get()) != SQLITE_ROW ||
+        sqlite3_column_type(statement_.get(), 0) != SQLITE_INTEGER) {
+      return std::nullopt;
+    }
+    return sqlite3_column_int64(statement_.get(), 0);
+  }
+
+private:
+  sqlite3 *database_ = nullptr;
+  SqliteStatementHandle statement_;
+  bool attached_ = false;
+};
+
 bool serializeProvenanceForWrite(const ScoreProvenance &provenance,
                                  const char *scoreKind,
                                  std::string &provenanceJson) {
@@ -1282,7 +1338,7 @@ PlayerScoreHistorySnapshot ScoreRepository::LoadPlayerScoreHistory() {
     return {};
   }
   return score_repository_detail::LoadPlayerScoreHistoryOnConnection(
-      impl_->sessionDatabase);
+      impl_->sessionDatabase, impl_->chartDatabasePath);
 }
 
 std::optional<ScoreBestSnapshot> ScoreRepository::LoadBestClearScore(
@@ -1474,7 +1530,8 @@ score_repository_detail::LoadChartScoreHistoryOnConnection(
 }
 
 PlayerScoreHistorySnapshot
-score_repository_detail::LoadPlayerScoreHistoryOnConnection(sqlite3 *db) {
+score_repository_detail::LoadPlayerScoreHistoryOnConnection(
+    sqlite3 *db, const std::filesystem::path &chartDatabasePath) {
   // PlayDataAccessor.updatePlayerData() records every local play in
   // PlayerData, summing its five judgement families and counting clears above
   // ClearType.Failed. Aso's attempt table is the corresponding local source;
@@ -1522,22 +1579,31 @@ score_repository_detail::LoadPlayerScoreHistoryOnConnection(sqlite3 *db) {
                                     logSqlErrorText)) {
     return snapshot;
   }
-  while (sqlite3_step(courseStatement.get()) == SQLITE_ROW) {
+  AttachedChartDurationLookup chartDurations(db, chartDatabasePath);
+  bool durationSaturated = false;
+  while (!durationSaturated &&
+         sqlite3_step(courseStatement.get()) == SQLITE_ROW) {
     std::string provenanceError;
     const auto provenance = deserializeScoreProvenance(
         sqliteColumnString(courseStatement.get(), 0), provenanceError);
     if (!provenance.has_value()) continue;
     for (const auto &stage : provenance->stages) {
-      if (stage.playDurationSeconds <= 0) continue;
+      const std::int64_t duration =
+          stage.playDurationSeconds > 0
+              ? stage.playDurationSeconds
+              : chartDurations.duration(stage).value_or(0);
+      if (duration <= 0) continue;
       if (snapshot.playDurationSeconds >
           std::numeric_limits<std::int64_t>::max() -
-              stage.playDurationSeconds) {
+              duration) {
         snapshot.playDurationSeconds = std::numeric_limits<std::int64_t>::max();
-        return snapshot;
+        durationSaturated = true;
+        break;
       }
-      snapshot.playDurationSeconds += stage.playDurationSeconds;
+      snapshot.playDurationSeconds += duration;
     }
   }
+  courseStatement.reset();
   return snapshot;
 }
 

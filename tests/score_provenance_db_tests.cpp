@@ -7,6 +7,7 @@
 #include "../src/ScoreProvenance.h"
 #include "../src/repositories/SqliteRAII.h"
 #include "../src/targets.h"
+#include "../yoga/lib/nlohmann/json.hpp"
 
 #include <array>
 #include <cassert>
@@ -1174,6 +1175,42 @@ void testChartScoreHistoryMatchesPinnedScoreDataUpdateRules(
   courseProvenance.stages.front().playDurationSeconds = 42;
   assert(helper.SaveCourseScore(courseSession, sampleState(30, 4), 1, 1,
                                 courseProvenance));
+
+  // Schema-v5 course proofs predate stage durations but retain chart hashes.
+  // PlayerData history must recover that duration from the completed chart
+  // catalog instead of permanently omitting pre-upgrade course playtime.
+  auto legacyCourseProof = nlohmann::json::parse(
+      serializeScoreProvenance(courseProvenance));
+  legacyCourseProof["schemaVersion"] =
+      ScoreProvenance::kPlayDurationSchemaVersion - 1;
+  legacyCourseProof["stages"][0].erase("playDurationSeconds");
+  {
+    auto scores = openDatabase(path);
+    SqliteStatementHandle update;
+    assert(prepareSqliteStatement(
+               scores.get(),
+               "UPDATE course_scores SET provenance_json=? WHERE id=1",
+               update) == SQLITE_OK);
+    const std::string encoded = legacyCourseProof.dump();
+    assert(sqlite3_bind_text(update.get(), 1, encoded.c_str(),
+                             static_cast<int>(encoded.size()),
+                             SQLITE_TRANSIENT) == SQLITE_OK);
+    assert(sqlite3_step(update.get()) == SQLITE_DONE);
+  }
+  const auto chartPath = root / "chart-score-history" / "chart.db";
+  {
+    auto charts = openDatabase(chartPath);
+    execOrAbort(charts.get(),
+                "CREATE TABLE chart_meta(path TEXT, md5 TEXT, sha256 TEXT, "
+                "length INTEGER, source_priority INTEGER, "
+                "source_archive_size INTEGER)");
+    const auto &stage = courseProvenance.stages.front();
+    execOrAbort(charts.get(),
+                "INSERT INTO chart_meta VALUES ('course.bms','" +
+                    stage.chartMd5 + "','" + stage.chartSha256 +
+                    "',42999999,0,0)");
+  }
+  helper.SetChartDatabasePath(chartPath);
 
   const auto history = helper.LoadChartScoreHistory(meta, 2);
   assert(history.has_value());
