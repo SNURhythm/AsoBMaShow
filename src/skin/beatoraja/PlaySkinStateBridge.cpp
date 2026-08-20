@@ -2146,11 +2146,10 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
         }
         return {.value = 2, .supported = true};
       }
-      // PlayerConfig.getLnmode() is one-based (LN/CN/HCN); IndexType.lnmode
-      // exposes the zero-based skin value only for a chart with a declared
-      // long-note type.  For undefined/no-long-note charts it returns that
-      // configuration value directly.
-      return {.value = metadata.selectedLongNoteMode,
+      // Aso's chart/playback contract stores LN/CN/HCN as 1/2/3, while
+      // Beatoraja PlayerConfig.getLnmode() and IndexType.lnmode use 0/1/2.
+      // Convert only at this skin-property boundary for undefined/no-LN charts.
+      return {.value = metadata.selectedLongNoteMode - 1,
               .supported = true};
     }
     // IntegerPropertyFactory.IndexType.markprocessednote is the source's

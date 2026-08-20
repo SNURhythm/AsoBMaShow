@@ -503,6 +503,37 @@ void testMarkProcessedNoteImageIndexTracksPlayerConfiguration() {
   bridge.discardFrame();
 }
 
+void testUndefinedLongNoteImageIndexMatchesBeatorajaPlayerConfig() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+  PlayfieldChartVisualModel chart;
+  chart.staticMetadata.hasAnyLongNote = true;
+  chart.staticMetadata.hasUndefinedLongNote = true;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = runtime.runtime(),
+                              .mutationTable = mutations});
+  bridge.beginFrame(stateAt(234), projectionAt(234));
+
+  for (const auto [selectedMode, expectedIndex] :
+       std::array{std::pair{1, 0LL}, std::pair{2, 1LL},
+                  std::pair{3, 2LL}}) {
+    chart.staticMetadata.selectedLongNoteMode = selectedMode;
+    const auto value = bridge.integerProperty(
+        {308}, SkinIntegerPropertyDomain::ImageIndex);
+    expect(value.supported && value.value == expectedIndex,
+           "undefined-LN ImageIndex 308 matches Beatoraja PlayerConfig mode: " +
+               std::to_string(selectedMode));
+  }
+  bridge.discardFrame();
+}
+
 void testPinnedMutationTableMatchesFrozenFixtureExhaustively() {
   const auto fixture = readJsonFixture(
       "tests/fixtures/beatoraja_skin/event_mutation_table_v1.json");
@@ -3529,6 +3560,7 @@ int main() {
   testHispeedBindingsUsePinnedIntegerAndFloatProperties();
   testIntegerPropertyFactoryDomainNeverRejectsGameplaySkins();
   testMarkProcessedNoteImageIndexTracksPlayerConfiguration();
+  testUndefinedLongNoteImageIndexMatchesBeatorajaPlayerConfig();
   testBridgeOwnsSnapshotAndClosesEachFrameExactlyOnce();
   testFramePropertiesUseAuthoritativeGaugeAndTimerRules();
   testGameplayModeAndLoadingBooleanProperties();
