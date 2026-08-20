@@ -67,6 +67,10 @@ struct ReplayGameplayFrameState {
 replayGameplayNoteDisplayTimeMicros(const ReplayGameplayFrameState &,
                                     const AppSettings &) noexcept;
 
+[[nodiscard]] double replayGameplaySpeedMultiplier(
+    const PlayfieldChartVisualModel &, const ReplayGameplayFrameState &,
+    const AppSettings &) noexcept;
+
 void applyReplayGameplayGaugeAuthority(PlayfieldAuthorityUpdate &,
                                        const ReplayData &, GaugeType,
                                        float currentGauge) noexcept;

@@ -229,6 +229,17 @@ long long replayGameplayNoteDisplayTimeMicros(
       frame.clock.visualTimeMicros, settings.notesDisplayTimingMilliseconds);
 }
 
+double replayGameplaySpeedMultiplier(
+    const PlayfieldChartVisualModel &chartVisualModel,
+    const ReplayGameplayFrameState &frame,
+    const AppSettings &settings) noexcept {
+  return settings.constantScroll
+             ? 1.0
+             : speedObjectMultiplierAtTime(
+                   chartVisualModel,
+                   replayGameplayNoteDisplayTimeMicros(frame, settings));
+}
+
 void applyReplayGameplayGaugeAuthority(PlayfieldAuthorityUpdate &authority,
                                        const ReplayData &replay,
                                        GaugeType currentGaugeType,

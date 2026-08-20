@@ -3056,10 +3056,8 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     }
     applyExportPlaybackRate(frameTiming.gameplayTimeMicros);
     const double currentExportSpeedMultiplier =
-        settings.constantScroll
-            ? 1.0
-            : speedObjectMultiplierAtTime(exportChartVisualModel,
-                                          frameTiming.visualTimeMicros);
+        replay_video_export::replayGameplaySpeedMultiplier(
+            exportChartVisualModel, presentationFrameState, settings);
     const auto laneCover = laneCoverPlayback.advance(
         replay.laneCoverEvents, frameTiming.gameplayTimeMicros);
     for (const auto &transition : laneCover.transitions) {
@@ -3832,10 +3830,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
       }
       applyExportPlaybackRate(frameTiming.gameplayTimeMicros);
       const double currentExportSpeedMultiplier =
-          settings.constantScroll
-              ? 1.0
-              : speedObjectMultiplierAtTime(stageChartVisualModel,
-                                            frameTiming.visualTimeMicros);
+          replay_video_export::replayGameplaySpeedMultiplier(
+              stageChartVisualModel, presentationFrameState, settings);
       const auto laneCover = stage.constraints.noSpeed
                                  ? replay_video_export::ReplayLaneCoverFrameState{
                                        .percent =

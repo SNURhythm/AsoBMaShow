@@ -782,6 +782,29 @@ void testReplayGameplayGaugeAuthorityPreservesRecordedLowerBound() {
          "replay export authority retains the recorded gauge auto-shift lower bound");
 }
 
+void testReplayGameplaySpeedUsesNoteDisplayClock() {
+  PlayfieldChartVisualModel model;
+  model.timelines = {
+      {.id = 1,
+       .timeMicros = 1'000'000,
+       .speed = 0.5,
+       .hasSpeedObject = true},
+      {.id = 2,
+       .timeMicros = 2'000'000,
+       .speed = 1.5,
+       .hasSpeedObject = true},
+  };
+  replay_video_export::ReplayGameplayFrameState frame;
+  frame.clock.visualTimeMicros = 1'500'000;
+  AppSettings settings;
+  settings.notesDisplayTimingMilliseconds = 500;
+
+  expect(std::abs(replay_video_export::replayGameplaySpeedMultiplier(
+                      model, frame, settings) -
+                  1.5) < 0.000001,
+         "replay export samples SPEED objects on the offset note display clock");
+}
+
 void testReplayGameplayStatePlayDeadlineMatchesPinnedBmsPlayer() {
   bms_parser::Chart chart;
   chart.Meta.PlayLength = 10'000'000;
@@ -2126,6 +2149,7 @@ int main() {
   testFirstExportFrameRefreshesPreparedRendererGeometry();
   testReplayGameplayFrameStateMirrorsLiveTimerAndStartClocks();
   testReplayGameplayGaugeAuthorityPreservesRecordedLowerBound();
+  testReplayGameplaySpeedUsesNoteDisplayClock();
   testReplayGameplayStatePlayDeadlineMatchesPinnedBmsPlayer();
   testReplayGameplayTransitionIgnoresChartTailAfterLastLaneNote();
   testReplayAudioTailDoesNotExtendGameplayFrames();
