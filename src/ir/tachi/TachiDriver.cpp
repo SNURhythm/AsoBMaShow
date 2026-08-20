@@ -30,8 +30,29 @@ namespace {
 constexpr std::size_t kMaximumTachiResponseBytes = 1024 * 1024;
 constexpr std::size_t kMaximumRankingPageTokenBytes = 2048;
 constexpr std::size_t kMaximumRankingChartIdBytes = 256;
+// Tachi's account schema is /^[a-zA-Z_-][a-zA-Z0-9_-]{2,20}$/.
+constexpr std::size_t kMinimumTachiUsernameBytes = 3;
+constexpr std::size_t kMaximumTachiUsernameBytes = 21;
 static_assert(BokutachiCacheStore::kMaximumBatchMappings >=
               kMaximumIrRemoteScoreSnapshotEntries);
+
+bool validTachiUsername(std::string_view value) noexcept {
+  if (value.size() < kMinimumTachiUsernameBytes ||
+      value.size() > kMaximumTachiUsernameBytes) {
+    return false;
+  }
+  const auto validLeading = [](unsigned char character) {
+    return (character >= 'a' && character <= 'z') ||
+           (character >= 'A' && character <= 'Z') || character == '_' ||
+           character == '-';
+  };
+  const auto validTrailing = [&](unsigned char character) {
+    return validLeading(character) ||
+           (character >= '0' && character <= '9');
+  };
+  return validLeading(static_cast<unsigned char>(value.front())) &&
+         std::ranges::all_of(value.substr(1), validTrailing);
+}
 
 DeliveryOutcome cancelled() {
   return {.status = DeliveryStatus::Cancelled,
@@ -978,9 +999,15 @@ IrAuthenticatedAccountOutcome TachiDriver::fetchAuthenticatedAccount(
                             "Tachi authenticated account response is malformed",
                             config.apiKey);
     }
+    const auto &accountName = username->get_ref<const std::string &>();
+    if (!validTachiUsername(accountName)) {
+      return accountFailure(IrAuthenticatedAccountStatus::MalformedResponse,
+                            "Tachi authenticated account response is malformed",
+                            config.apiKey);
+    }
     return {.status = IrAuthenticatedAccountStatus::Succeeded,
             .account = IrAuthenticatedAccount{
-                .name = username->get<std::string>()}};
+                .name = accountName}};
   } catch (...) {
     return accountFailure(IrAuthenticatedAccountStatus::MalformedResponse,
                           "Tachi authenticated account response is malformed",

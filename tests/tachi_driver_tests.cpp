@@ -208,6 +208,23 @@ void testAuthenticatedAccountUsesTachiUserName() {
            "request");
   }
 
+  for (const std::string &invalidUsername :
+       {std::string{}, std::string(22, 'a'), std::string("line\nbreak"),
+        std::string("한글사용자")}) {
+    http.responses.push_back(
+        {.statusCode = 200,
+         .body = nlohmann::json{{"id", 42},
+                                {"username", invalidUsername}}
+                     .dump()});
+    const auto malformed =
+        driver.fetchAuthenticatedAccount(runtimeConfig(), http, {});
+    expect(malformed.status ==
+                   ir::IrAuthenticatedAccountStatus::MalformedResponse &&
+               !malformed.account,
+           "authenticated account rejects usernames outside Tachi's display "
+           "contract");
+  }
+
   http.responses.push_back({.statusCode = 401, .body = R"({"success":false})"});
   const auto unauthenticated =
       driver.fetchAuthenticatedAccount(runtimeConfig(), http, {});
