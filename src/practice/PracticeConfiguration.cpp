@@ -89,7 +89,7 @@ constexpr bool isDoublePlayKeyMode(int keyMode) noexcept {
 }
 
 constexpr bool isPopnKeyMode(int keyMode) noexcept {
-  return keyMode == 5 || keyMode == 9;
+  return keyMode == 9;
 }
 
 constexpr SkinMenuGaugeCategory

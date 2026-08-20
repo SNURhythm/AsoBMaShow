@@ -66,10 +66,26 @@ void testSkinMenuUsesPinnedInitialPracticeViewport() {
 }
 
 void testSkinMenuInitialJudgeRankUsesPinnedBmsRuleConversion() {
-  expect(practice::sourcePracticeJudgeRank(7, 3) == 100 &&
+  expect(practice::sourcePracticeJudgeRank(5, 2) == 75 &&
+             practice::sourcePracticeJudgeRank(7, 3) == 100 &&
              practice::sourcePracticeJudgeRank(7, 5) == 75 &&
              practice::sourcePracticeJudgeRank(9, 2) == 70,
          "practice JUDGERANK converts BMS RANK through the pinned mode rule");
+}
+
+void testFiveKeyPracticeUsesTheNormalRandomOptionDomain() {
+  practice::SkinMenuController menu(
+      {.startMicros = 0, .endMicros = 5'000'000},
+      {.lastTimelineMicros = 5'000'000,
+       .judgeRank = 75,
+       .chartTotal = 200.0,
+       .keyMode = 5,
+       .random1P = 0});
+
+  expect(menu.changeVisibleItem(9, false),
+         "five-key option row accepts a decrement event");
+  expect(menu.skinMenuState().items[9].value == "S-RANDOM-EX",
+         "five-key option row uses the normal ten-choice random domain");
 }
 
 void testSkinMenuJudgeRankUsesPinnedWindowRule() {
@@ -543,6 +559,7 @@ int main() {
   testPlaybackRateConversions();
   testFreshCountInUsesChartMeasureSize();
   testSkinMenuInitialJudgeRankUsesPinnedBmsRuleConversion();
+  testFiveKeyPracticeUsesTheNormalRandomOptionDomain();
   testSkinMenuJudgeRankUsesPinnedWindowRule();
   testSkinMenuUsesPinnedInitialPracticeViewport();
   testSkinMenuScrollUsesPinnedDoublePlayViewport();
