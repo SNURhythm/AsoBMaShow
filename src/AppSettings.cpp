@@ -417,6 +417,18 @@ void AppSettings::sanitize() {
   visibleTimeDurationMilliseconds =
       std::clamp(visibleTimeDurationMilliseconds, kMinVisibleTimeMs,
                  kMaxVisibleTimeMs);
+  // Preserve the bounds applied by PlayerConfig.validate() and
+  // PlayConfig.validate() before skins consume these raw image-index values.
+  notesDisplayTimingMilliseconds =
+      std::clamp(notesDisplayTimingMilliseconds, -500, 500);
+  constantFadeInMilliseconds =
+      std::clamp(constantFadeInMilliseconds, -1000, 1000);
+  extraNoteDepth = std::clamp(extraNoteDepth, 0, 100);
+  mineMode = std::clamp(mineMode, 0, 4);
+  scrollMode = std::clamp(scrollMode, 0, 2);
+  longNoteModifierMode = std::clamp(longNoteModifierMode, 0, 5);
+  sevenToNinePattern = std::clamp(sevenToNinePattern, 0, 6);
+  sevenToNineType = std::clamp(sevenToNineType, 0, 2);
   gameplayHispeed = sanitizeFloat(gameplayHispeed, 1.0F,
                                   kMinGameplayHispeed,
                                   kMaxGameplayHispeed);

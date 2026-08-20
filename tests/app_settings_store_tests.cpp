@@ -360,6 +360,44 @@ void testGameplaySkinPlayerConfigSelectorsRoundTrip() {
          "gameplay skin PlayerConfig selectors survive settings round trip");
 }
 
+void testGameplaySkinPlayerConfigSelectorsUseBeatorajaBounds() {
+  AppSettings lower;
+  lower.notesDisplayTimingMilliseconds = -501;
+  lower.constantFadeInMilliseconds = -1001;
+  lower.extraNoteDepth = -1;
+  lower.mineMode = -1;
+  lower.scrollMode = -1;
+  lower.longNoteModifierMode = -1;
+  lower.sevenToNinePattern = -1;
+  lower.sevenToNineType = -1;
+  lower.sanitize();
+  expect(lower.notesDisplayTimingMilliseconds == -500 &&
+             lower.constantFadeInMilliseconds == -1000 &&
+             lower.extraNoteDepth == 0 && lower.mineMode == 0 &&
+             lower.scrollMode == 0 && lower.longNoteModifierMode == 0 &&
+             lower.sevenToNinePattern == 0 && lower.sevenToNineType == 0,
+         "gameplay skin PlayerConfig selectors clamp to Beatoraja's lower "
+         "bounds");
+
+  AppSettings upper;
+  upper.notesDisplayTimingMilliseconds = 501;
+  upper.constantFadeInMilliseconds = 1001;
+  upper.extraNoteDepth = 101;
+  upper.mineMode = 5;
+  upper.scrollMode = 3;
+  upper.longNoteModifierMode = 6;
+  upper.sevenToNinePattern = 7;
+  upper.sevenToNineType = 3;
+  upper.sanitize();
+  expect(upper.notesDisplayTimingMilliseconds == 500 &&
+             upper.constantFadeInMilliseconds == 1000 &&
+             upper.extraNoteDepth == 100 && upper.mineMode == 4 &&
+             upper.scrollMode == 2 && upper.longNoteModifierMode == 5 &&
+             upper.sevenToNinePattern == 6 && upper.sevenToNineType == 2,
+         "gameplay skin PlayerConfig selectors clamp to Beatoraja's upper "
+         "bounds");
+}
+
 void testPlayerConfigurationSkinStringsRoundTrip() {
   // The values are StringPropertyFactory's direct PlayerConfig outputs, not
   // labels synthesized by a gameplay skin.
@@ -1417,6 +1455,7 @@ int main() {
   testLegacyFixtureLoadsEverySetting();
   testJsonRoundTripIncludesAudioAndVideo();
   testGameplaySkinPlayerConfigSelectorsRoundTrip();
+  testGameplaySkinPlayerConfigSelectorsUseBeatorajaBounds();
   testPlayerConfigurationSkinStringsRoundTrip();
   testConfiguredTargetListSkinStringsRoundTrip();
   testGameplaySkinTraitSelectionsSurviveRestart();
