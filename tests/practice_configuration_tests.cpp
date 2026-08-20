@@ -398,6 +398,32 @@ void testSkinMenuPracticeModifierPreservesLandmineOnlyTotal() {
          "no playable notes to scale");
 }
 
+void testSkinMenuPracticeModifierRemovesOutOfRangeLandmines() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 1;
+  chart.Meta.TotalLandmineNotes = 2;
+  auto *measure = new bms_parser::Measure();
+  for (const long long timing : {1'000'000LL, 2'000'000LL}) {
+    auto *timeline = new bms_parser::TimeLine(1, false);
+    timeline->Timing = timing;
+    timeline->SetLandmineNote(0, new bms_parser::LandmineNote(24.0F));
+    measure->TimeLines.push_back(timeline);
+  }
+  chart.Measures.push_back(measure);
+
+  practice::applySkinMenuPracticeModifier(
+      chart, {.startMicros = 500'000,
+              .endMicros = 1'500'000,
+              .gaugeType = GaugeType::Normal,
+              .total = 300.0});
+
+  expect(measure->TimeLines[0]->LandmineNotes[0] != nullptr &&
+             measure->TimeLines[1]->LandmineNotes[0] == nullptr &&
+             chart.Meta.TotalLandmineNotes == 1,
+         "source practice modifier removes separate landmines outside the "
+         "selected range");
+}
+
 void testSkinMenuDoublePlayFlipSwapsSourcePlayerHalves() {
   bms_parser::Chart chart;
   auto *measure = new bms_parser::Measure();
@@ -697,6 +723,7 @@ int main() {
   testSkinMenuAttemptPlanMovesOutOfRangeNotesToBackground();
   testSkinMenuAttemptPlanMovesBothCrossingLongNoteEndpoints();
   testSkinMenuPracticeModifierPreservesLandmineOnlyTotal();
+  testSkinMenuPracticeModifierRemovesOutOfRangeLandmines();
   testSkinMenuDoublePlayFlipSwapsSourcePlayerHalves();
   testSkinMenuDoublePlayFlipSwapsLandminePlayerHalves();
   testSkinMenuShortChartDoesNotSelectNegativeStartTime();

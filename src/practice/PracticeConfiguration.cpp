@@ -256,6 +256,10 @@ void applySkinMenuPracticeModifier(bms_parser::Chart &chart,
         }
         moveToBackground(note);
       }
+      for (auto &landmine : timeline->LandmineNotes) {
+        delete landmine;
+        landmine = nullptr;
+      }
     }
   }
   recalculateEffectiveLongNoteCounts(chart, chart.Meta.LnMode);
