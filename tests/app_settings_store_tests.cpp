@@ -441,6 +441,70 @@ void testConfiguredTargetListSkinStringsRoundTrip() {
          "PlayerConfig target strings survive settings persistence verbatim");
 }
 
+void testPlayerConfigurationSkinStringsAreBounded() {
+  const std::string oversized(
+      AppSettings::kMaximumSkinPropertyStringBytes + 1, 'x');
+  AppSettings direct;
+  direct.skinModeFilterName = oversized;
+  direct.skinSortId = oversized;
+  direct.skinDifficultyFilterName = oversized;
+  direct.skinChartReplicationMode = oversized;
+  direct.skinTargetId = oversized;
+  direct.skinTargetList.assign(
+      AppSettings::kMaximumSkinTargetListEntries + 50, "target");
+  direct.skinTargetList.front() = oversized;
+  direct.sanitize();
+  std::size_t directTargetBytes = 0;
+  for (const auto &target : direct.skinTargetList) {
+    directTargetBytes += target.size();
+  }
+  expect(direct.skinModeFilterName == "ALL" &&
+             direct.skinSortId == "TITLE" &&
+             direct.skinDifficultyFilterName == "ALL" &&
+             direct.skinChartReplicationMode == "RIVALCHART" &&
+             direct.skinTargetId == "MAX" &&
+             direct.skinTargetList.size() ==
+                 AppSettings::kMaximumSkinTargetListEntries &&
+             directTargetBytes <= AppSettings::kMaximumSkinTargetListBytes &&
+             std::ranges::none_of(
+                 direct.skinTargetList, [](const std::string &value) {
+                   return value.size() >
+                          AppSettings::kMaximumSkinPropertyStringBytes;
+                 }),
+         "sanitization bounds every per-frame PlayerConfig skin string");
+
+  TempDirectory temp;
+  const auto path = temp.path() / "bounded-player-config-strings.json";
+  nlohmann::json targetList = nlohmann::json::array();
+  targetList.push_back(oversized);
+  for (std::size_t index = 0;
+       index < AppSettings::kMaximumSkinTargetListEntries + 50; ++index) {
+    targetList.push_back("target-" + std::to_string(index));
+  }
+  const nlohmann::json document = {
+      {"schemaVersion", AppSettingsStore::kCurrentSchemaVersion},
+      {"skinModeFilterName", oversized},
+      {"skinSortId", oversized},
+      {"skinDifficultyFilterName", oversized},
+      {"skinChartReplicationMode", oversized},
+      {"skinTargetId", oversized},
+      {"skinTargetList", std::move(targetList)},
+  };
+  writeFile(path, document.dump());
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.status == AppSettingsLoadStatus::Loaded &&
+             loaded.settings.skinModeFilterName == "ALL" &&
+             loaded.settings.skinSortId == "TITLE" &&
+             loaded.settings.skinDifficultyFilterName == "ALL" &&
+             loaded.settings.skinChartReplicationMode == "RIVALCHART" &&
+             loaded.settings.skinTargetId == "MAX" &&
+             loaded.settings.skinTargetList.size() <=
+                 AppSettings::kMaximumSkinTargetListEntries &&
+             hasDiagnostic(loaded.diagnostics, "skinTargetList", "limit"),
+         "settings decode rejects oversized PlayerConfig strings before "
+         "copying them into the runtime settings object");
+}
+
 void testGameplaySkinTraitSelectionsSurviveRestart() {
   TempDirectory temp;
   const auto path = temp.path() / "settings.json";
@@ -1458,6 +1522,7 @@ int main() {
   testGameplaySkinPlayerConfigSelectorsUseBeatorajaBounds();
   testPlayerConfigurationSkinStringsRoundTrip();
   testConfiguredTargetListSkinStringsRoundTrip();
+  testPlayerConfigurationSkinStringsAreBounded();
   testGameplaySkinTraitSelectionsSurviveRestart();
   testBpmGuideAssistOptionPersists();
   testSchemaThreeMigrationDisablesCompatibility();

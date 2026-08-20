@@ -565,6 +565,31 @@ void AppSettings::sanitize() {
       parseAssistOptionId(selectedAssistOption, kDefaultAssistOption);
   selectedPacemakerTarget =
       parsePacemakerTargetId(selectedPacemakerTarget, kDefaultPacemakerTarget);
+  const auto boundedSkinString = [](std::string &value,
+                                    std::string_view fallback) {
+    if (value.size() > kMaximumSkinPropertyStringBytes) {
+      value = fallback;
+    }
+  };
+  boundedSkinString(skinModeFilterName, "ALL");
+  boundedSkinString(skinSortId, "TITLE");
+  boundedSkinString(skinDifficultyFilterName, "ALL");
+  boundedSkinString(skinChartReplicationMode, "RIVALCHART");
+  boundedSkinString(skinTargetId, "MAX");
+  std::vector<std::string> boundedTargetList;
+  boundedTargetList.reserve(
+      std::min(skinTargetList.size(), kMaximumSkinTargetListEntries));
+  std::size_t targetBytes = 0;
+  for (auto &target : skinTargetList) {
+    if (boundedTargetList.size() >= kMaximumSkinTargetListEntries ||
+        target.size() > kMaximumSkinPropertyStringBytes ||
+        target.size() > kMaximumSkinTargetListBytes - targetBytes) {
+      continue;
+    }
+    targetBytes += target.size();
+    boundedTargetList.push_back(std::move(target));
+  }
+  skinTargetList = std::move(boundedTargetList);
   musicPlayerPlaybackRatePercent =
       ((std::clamp(musicPlayerPlaybackRatePercent, 50, 200) + 2) / 5) * 5;
   switch (musicPlayerPlaybackMode) {

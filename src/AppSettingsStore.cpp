@@ -115,6 +115,68 @@ void readEnum(const json &document, std::string_view key, Enum &destination,
   }
 }
 
+void readBoundedSkinString(const json &document, std::string_view key,
+                           std::string &destination,
+                           std::vector<std::string> &diagnostics) {
+  const auto found = document.find(std::string(key));
+  if (found == document.end()) {
+    return;
+  }
+  if (!found->is_string()) {
+    invalidValue(key, "expected string", diagnostics);
+    return;
+  }
+  const auto &value = found->get_ref<const std::string &>();
+  if (value.size() > AppSettings::kMaximumSkinPropertyStringBytes) {
+    invalidValue(key, "string exceeds skin property byte limit", diagnostics);
+    return;
+  }
+  destination = value;
+}
+
+void readBoundedSkinTargetList(const json &document,
+                               std::vector<std::string> &destination,
+                               std::vector<std::string> &diagnostics) {
+  constexpr std::string_view key = "skinTargetList";
+  const auto found = document.find(std::string(key));
+  if (found == document.end()) {
+    return;
+  }
+  if (!found->is_array()) {
+    invalidValue(key, "expected array", diagnostics);
+    return;
+  }
+  std::vector<std::string> bounded;
+  bounded.reserve(std::min(found->size(),
+                           AppSettings::kMaximumSkinTargetListEntries));
+  std::size_t index = 0;
+  std::size_t bytes = 0;
+  for (const auto &encoded : *found) {
+    if (index >= AppSettings::kMaximumSkinTargetListEntries) {
+      invalidValue(key, "array exceeds skin target count limit", diagnostics);
+      break;
+    }
+    if (!encoded.is_string()) {
+      invalidValue(key, "array contains a non-string value", diagnostics);
+    } else {
+      const auto &value = encoded.get_ref<const std::string &>();
+      if (value.size() > AppSettings::kMaximumSkinPropertyStringBytes) {
+        invalidValue(key, "target exceeds skin property byte limit",
+                     diagnostics);
+      } else if (value.size() >
+                 AppSettings::kMaximumSkinTargetListBytes - bytes) {
+        invalidValue(key, "array exceeds skin target byte limit", diagnostics);
+        break;
+      } else {
+        bytes += value.size();
+        bounded.push_back(value);
+      }
+    }
+    ++index;
+  }
+  destination = std::move(bounded);
+}
+
 const char *viewportModeToString(skin::ViewportMode mode) {
   switch (mode) {
   case skin::ViewportMode::Fit:
@@ -716,16 +778,17 @@ AppSettings settingsFromJson(const json &document,
             diagnostics);
   readValue(document, "selectedPacemakerTarget",
             settings.selectedPacemakerTarget, diagnostics);
-  readValue(document, "skinModeFilterName", settings.skinModeFilterName,
-            diagnostics);
-  readValue(document, "skinSortId", settings.skinSortId, diagnostics);
-  readValue(document, "skinDifficultyFilterName",
-            settings.skinDifficultyFilterName, diagnostics);
-  readValue(document, "skinChartReplicationMode",
-            settings.skinChartReplicationMode, diagnostics);
-  readValue(document, "skinTargetId", settings.skinTargetId, diagnostics);
-  readValue(document, "skinTargetList", settings.skinTargetList,
-            diagnostics);
+  readBoundedSkinString(document, "skinModeFilterName",
+                        settings.skinModeFilterName, diagnostics);
+  readBoundedSkinString(document, "skinSortId", settings.skinSortId,
+                        diagnostics);
+  readBoundedSkinString(document, "skinDifficultyFilterName",
+                        settings.skinDifficultyFilterName, diagnostics);
+  readBoundedSkinString(document, "skinChartReplicationMode",
+                        settings.skinChartReplicationMode, diagnostics);
+  readBoundedSkinString(document, "skinTargetId", settings.skinTargetId,
+                        diagnostics);
+  readBoundedSkinTargetList(document, settings.skinTargetList, diagnostics);
   readValue(document, "selectedPlaybackRatePercent",
             settings.selectedPlaybackRatePercent, diagnostics);
   readEnum(document, "selectedPlaybackMode", settings.selectedPlaybackMode,

@@ -127,6 +127,12 @@ public:
   static constexpr const char *kDefaultLnMode = "LN";
   static constexpr const char *kDefaultAssistOption = "OFF";
   static constexpr const char *kDefaultPacemakerTarget = "BEST";
+  // PlayerConfig strings are copied into the per-frame skin authority. Keep
+  // corrupt settings from turning that snapshot into unbounded allocation
+  // work while retaining ample room for authored display names and targets.
+  static constexpr std::size_t kMaximumSkinPropertyStringBytes = 256;
+  static constexpr std::size_t kMaximumSkinTargetListEntries = 256;
+  static constexpr std::size_t kMaximumSkinTargetListBytes = 16 * 1024;
 
   player_settings::AudioVideoSettings audioVideo =
       player_settings::defaultAudioVideoSettingsForPlatform();
