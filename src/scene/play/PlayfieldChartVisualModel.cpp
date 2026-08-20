@@ -9,6 +9,7 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <optional>
@@ -742,6 +743,10 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
       }
       result.scrollPrefix.push_back(value.scrollPosition);
       result.timelines.push_back(value);
+      if (value.hasSpeedObject) {
+        result.speedPoints.push_back(
+            {.timeMicros = value.timeMicros, .speed = value.speed});
+      }
       previous = timeline;
     }
   }
@@ -871,22 +876,15 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
 
 double speedObjectMultiplierAtTime(const PlayfieldChartVisualModel &model,
                                    long long timeMicros) noexcept {
-  double speed = 1.0;
-  const ChartVisualTimeline *previous = nullptr;
-  const ChartVisualTimeline *next = nullptr;
-  for (const auto &timeline : model.timelines) {
-    if (!timeline.hasSpeedObject) {
-      continue;
-    }
-    if (timeline.timeMicros <= timeMicros) {
-      speed = timeline.speed;
-      previous = &timeline;
-    } else {
-      next = &timeline;
-      break;
-    }
-  }
-  if (next == nullptr) {
+  const auto next = std::upper_bound(
+      model.speedPoints.begin(), model.speedPoints.end(), timeMicros,
+      [](long long time, const ChartVisualSpeedPoint &point) {
+        return time < point.timeMicros;
+      });
+  const ChartVisualSpeedPoint *previous =
+      next == model.speedPoints.begin() ? nullptr : &*std::prev(next);
+  const double speed = previous != nullptr ? previous->speed : 1.0;
+  if (next == model.speedPoints.end()) {
     return speed;
   }
   const long long start = previous != nullptr ? previous->timeMicros : 0;

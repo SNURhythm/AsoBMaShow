@@ -368,13 +368,21 @@ bool testSpeedObjectInterpolationUsesPinnedTimelineSemantics() {
        .hasSpeedObject = true},
       {.id = 3, .timeMicros = 3'000'000, .speed = 1.5},
   };
+  model.speedPoints = {
+      {.timeMicros = 1'000'000, .speed = 0.5},
+      {.timeMicros = 2'000'000, .speed = 1.5},
+  };
+  PlayfieldChartVisualModel ordinaryChart;
+  ordinaryChart.timelines.resize(10'000);
 
-  return std::abs(speedObjectMultiplierAtTime(model, 500'000) - 0.75) <
+  return model.speedPoints.size() == 2 &&
+         std::abs(speedObjectMultiplierAtTime(model, 500'000) - 0.75) <
              0.000001 &&
          std::abs(speedObjectMultiplierAtTime(model, 1'500'000) - 1.0) <
              0.000001 &&
          std::abs(speedObjectMultiplierAtTime(model, 2'500'000) - 1.5) <
-             0.000001;
+             0.000001 &&
+         speedObjectMultiplierAtTime(ordinaryChart, 2'500'000) == 1.0;
 }
 
 } // namespace

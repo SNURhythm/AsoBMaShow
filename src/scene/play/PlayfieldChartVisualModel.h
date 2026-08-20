@@ -57,6 +57,13 @@ struct ChartVisualTimeline {
   bool operator==(const ChartVisualTimeline &) const = default;
 };
 
+struct ChartVisualSpeedPoint {
+  long long timeMicros = 0;
+  double speed = 1.0;
+
+  bool operator==(const ChartVisualSpeedPoint &) const = default;
+};
+
 struct ChartVisualNote {
   ChartVisualId id = 0;
   ChartVisualId timelineId = 0;
@@ -149,6 +156,9 @@ struct PlayfieldChartVisualModel {
   PlayfieldChartStaticMetadata staticMetadata;
   std::vector<int> laneOrder;
   std::vector<ChartVisualTimeline> timelines;
+  // Sparse authored SPEED points used by per-frame LaneRenderer-compatible
+  // interpolation. Ordinary chart timelines never participate in lookup.
+  std::vector<ChartVisualSpeedPoint> speedPoints;
   std::vector<ChartVisualNote> notes;
   std::vector<double> scrollPrefix;
   // The parser has no object for the end of a measure. This is a geometry-only

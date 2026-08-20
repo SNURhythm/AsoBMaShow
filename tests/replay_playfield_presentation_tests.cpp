@@ -856,6 +856,10 @@ void testReplayGameplaySpeedUsesNoteDisplayClock() {
        .speed = 1.5,
        .hasSpeedObject = true},
   };
+  model.speedPoints = {
+      {.timeMicros = 1'000'000, .speed = 0.5},
+      {.timeMicros = 2'000'000, .speed = 1.5},
+  };
   replay_video_export::ReplayGameplayFrameState frame;
   frame.clock.visualTimeMicros = 1'500'000;
   AppSettings settings;
