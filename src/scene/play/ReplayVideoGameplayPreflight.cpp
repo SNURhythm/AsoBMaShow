@@ -256,6 +256,13 @@ void applyReplayGameplayGaugeAuthority(PlayfieldAuthorityUpdate &authority,
   authority.currentGauge = currentGauge;
 }
 
+void applyReplayGameplayRuntimeAuthority(
+    PlayfieldAuthorityUpdate &authority, int currentFramesPerSecond,
+    std::int64_t applicationUptimeMillis) noexcept {
+  authority.currentFramesPerSecond = currentFramesPerSecond;
+  authority.applicationUptimeMillis = applicationUptimeMillis;
+}
+
 long long replayGameplayDurationWithSelectedSkinAnimation(
     const bms_parser::Chart &chart, const ReplayData &replay,
     const preparation::Plan &plan, long long audioOffsetMicros, int fps,

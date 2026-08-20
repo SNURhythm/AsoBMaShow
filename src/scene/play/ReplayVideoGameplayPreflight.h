@@ -9,8 +9,9 @@
 #include "../../repositories/ChartRepository.h"
 #include "../../video/RendererAccessCoordinator.h"
 
-#include <memory>
+#include <cstdint>
 #include <map>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -78,6 +79,11 @@ replayGameplayNoteDisplayTimeMicros(const ReplayGameplayFrameState &,
 void applyReplayGameplayGaugeAuthority(PlayfieldAuthorityUpdate &,
                                        const ReplayData &, GaugeType,
                                        float currentGauge) noexcept;
+
+void applyReplayGameplayRuntimeAuthority(PlayfieldAuthorityUpdate &,
+                                         int currentFramesPerSecond,
+                                         std::int64_t applicationUptimeMillis)
+    noexcept;
 
 [[nodiscard]] ReplayGameplayFrameState replayGameplayFrameState(
     const preparation::Plan &, const bms_parser::Chart &, const ReplayData &,

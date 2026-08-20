@@ -3127,6 +3127,10 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     };
     replay_video_export::applyReplayGameplayGaugeAuthority(
         frameAuthority, replay, replayGaugeType, replayGauge);
+    replay_video_export::applyReplayGameplayRuntimeAuthority(
+        frameAuthority,
+        context.currentFramesPerSecond.load(std::memory_order_acquire),
+        context.applicationUptimeMillis.load(std::memory_order_acquire));
     preparedGameplay.presentation->applyAuthorityUpdate(frameAuthority);
 
     bool presentationFailed = false;
@@ -3913,6 +3917,10 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
       };
       replay_video_export::applyReplayGameplayGaugeAuthority(
           frameAuthority, stageReplay, replayGaugeType, replayGauge);
+      replay_video_export::applyReplayGameplayRuntimeAuthority(
+          frameAuthority,
+          context.currentFramesPerSecond.load(std::memory_order_acquire),
+          context.applicationUptimeMillis.load(std::memory_order_acquire));
       presentation.applyAuthorityUpdate(frameAuthority);
 
       bool presentationFailed = false;

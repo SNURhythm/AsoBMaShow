@@ -782,6 +782,17 @@ void testReplayGameplayGaugeAuthorityPreservesRecordedLowerBound() {
          "replay export authority retains the recorded gauge auto-shift lower bound");
 }
 
+void testReplayGameplayRuntimeAuthorityCarriesApplicationClocks() {
+  PlayfieldAuthorityUpdate authority;
+
+  replay_video_export::applyReplayGameplayRuntimeAuthority(
+      authority, 144, 3'661'999);
+
+  expect(authority.currentFramesPerSecond == 144 &&
+             authority.applicationUptimeMillis == 3'661'999,
+         "replay export authority retains runtime FPS and application uptime");
+}
+
 void testReplayGameplaySpeedUsesNoteDisplayClock() {
   PlayfieldChartVisualModel model;
   model.timelines = {
@@ -2159,6 +2170,7 @@ int main() {
   testFirstExportFrameRefreshesPreparedRendererGeometry();
   testReplayGameplayFrameStateMirrorsLiveTimerAndStartClocks();
   testReplayGameplayGaugeAuthorityPreservesRecordedLowerBound();
+  testReplayGameplayRuntimeAuthorityCarriesApplicationClocks();
   testReplayGameplaySpeedUsesNoteDisplayClock();
   testReplayGameplayFailureAnimationStartsAtFailureClock();
   testReplayGameplayStatePlayDeadlineMatchesPinnedBmsPlayer();
