@@ -439,6 +439,7 @@ private:
 struct ActivationFixtureOptions {
   bool resourceBearing = false;
   bool requireConfiguredState = false;
+  bool repeatedPomyu = false;
 };
 
 class ActivationFixture final {
@@ -466,6 +467,10 @@ public:
       fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
                         "tests/fixtures/beatoraja_skin/resources/fixture.ttf",
                     source / "skin/resources/fixture.ttf");
+    }
+    if (options.repeatedPomyu) {
+      writeText(source / "skin/characters/alpha.chp",
+                "#Anime\t100\n#Pattern\t1\t00\n");
     }
     std::string script = R"lua(
 local phase_count = (rawget(_G, "session_activation_phase_count") or 0) + 1
@@ -500,6 +505,21 @@ if skin_config then
     destination = {
       {id = "fixture-object", dst = {{x = 0, y = 0, w = 40, h = 20}}},
       {id = "runtime-title", dst = {{x = 50, y = 50, w = 500, h = 30}}}
+    }
+  }
+)lua";
+    } else if (options.repeatedPomyu) {
+      script += R"lua(
+  return {
+    type = 0, w = 1280, h = 720,
+    source = {{id = "shared-chara", path = "characters/alpha.chp"}},
+    pmchara = {
+      {id = "pomyu-one", src = "shared-chara", type = 0, side = 1},
+      {id = "pomyu-two", src = "shared-chara", type = 0, side = 1}
+    },
+    destination = {
+      {id = "pomyu-one", dst = {{x = 0, y = 0, w = 64, h = 64}}},
+      {id = "pomyu-two", dst = {{x = 64, y = 0, w = 64, h = 64}}}
     }
   }
 )lua";
@@ -689,6 +709,20 @@ void testConfiguredLoadUsesTheInitializedAuthoritativeState() {
       PlaySkinSession::create(fixture.takeActivation(), fixture.context());
   expect(created.session != nullptr && created.diagnostics.empty(),
          "configured Lua load receives the initialized authoritative state");
+}
+
+void testRepeatedPomyuObjectsShareCyclePreparation() {
+  ActivationFixture fixture({.repeatedPomyu = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  resetPomyuCyclePreparationCountersForTesting();
+  const auto created =
+      PlaySkinSession::create(fixture.takeActivation(), fixture.context());
+  expect(created.session != nullptr &&
+             pomyuCycleFileReadsForTesting() == 1 &&
+             pomyuCycleParsesForTesting() == 1,
+         "repeated Pomyu objects share one bounded CHP read and parse");
 }
 
 void testRequestedExternalGameplaySkinCreatesARealSession() {
@@ -2850,6 +2884,7 @@ void testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin() {
 int main() {
   testActivationCreatesAnOwningFreshStateSession();
   testConfiguredLoadUsesTheInitializedAuthoritativeState();
+  testRepeatedPomyuObjectsShareCyclePreparation();
   testRequestedExternalGameplaySkinCreatesARealSession();
   testActivationRejectsAReconciledDigestMismatch();
   testResourceSessionOwnsUploadsAndExactRuntimeStringAtlas();

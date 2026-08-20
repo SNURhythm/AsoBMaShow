@@ -21,6 +21,12 @@
 
 namespace skin {
 
+#if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
+void resetPomyuCyclePreparationCountersForTesting() noexcept;
+[[nodiscard]] std::size_t pomyuCycleFileReadsForTesting() noexcept;
+[[nodiscard]] std::size_t pomyuCycleParsesForTesting() noexcept;
+#endif
+
 struct PlaySkinSessionContext {
   std::uint64_t sessionSerial = 0;
   SkinProfileId profileId;
