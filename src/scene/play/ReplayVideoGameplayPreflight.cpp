@@ -101,6 +101,30 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
   };
 }
 
+ReplayChartMetadataAuthority projectReplayChartMetadataAuthority(
+    const bms_parser::ChartMeta &chartMeta,
+    const ChartMetaPathBatchReadOutcome &records, bool stageFileAvailable,
+    bool backBmpAvailable) noexcept {
+  ReplayChartMetadataAuthority authority{
+      .stageFileAvailable = stageFileAvailable,
+      .backBmpAvailable = backBmpAvailable,
+  };
+  if (chartMeta.BmsPath.empty() ||
+      records.status != ChartMetaPathBatchReadStatus::Loaded) {
+    return authority;
+  }
+  const auto record = std::find_if(
+      records.records.begin(), records.records.end(),
+      [&chartMeta](const ChartMetaRecord &candidate) {
+        return candidate.meta.BmsPath == chartMeta.BmsPath;
+      });
+  if (record != records.records.end()) {
+    authority.songReviewFavorite = record->songReviewFavorite;
+    authority.chartHasDocument = record->hasDocument;
+  }
+  return authority;
+}
+
 void releaseUnsubmittedReplayGameplayBga(
     IGameplayBgaSubmitter &bga, const PresentationFrameResult &frame) noexcept {
   if (frame.preparedBga.has_value()) {

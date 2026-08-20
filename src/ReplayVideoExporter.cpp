@@ -29,6 +29,7 @@
 #include "scene/play/ReplayPlayfieldPresentation.h"
 #include "scene/play/ReplayVideoGameplayPreflight.h"
 #include "skin/DefaultSkin.h"
+#include "view/ImageView.h"
 #include "view/UiTheme.h"
 #include "view/View.h"
 #include "targets.h"
@@ -160,6 +161,32 @@ replayExportPlayerScoreHistory(ApplicationContext &context) {
           .playDurationSeconds = history.playDurationSeconds};
 }
 
+bool replayExportBmsResourceImageAvailable(
+    const bms_parser::ChartMeta &meta,
+    const std::filesystem::path &declaredPath) {
+  if (declaredPath.empty() || meta.BmsPath.empty()) return false;
+  try {
+    return imageResourceAvailable(meta.BmsPath.parent_path() / declaredPath);
+  } catch (...) {
+    return false;
+  }
+}
+
+replay_video_export::ReplayChartMetadataAuthority
+replayExportChartMetadataAuthority(ApplicationContext &context,
+                                   const bms_parser::ChartMeta &meta) {
+  ChartMetaPathBatchReadOutcome records;
+  if (!meta.BmsPath.empty()) {
+    if (auto session = context.chartRepository.OpenSession()) {
+      const std::array<std::filesystem::path, 1> paths{meta.BmsPath};
+      records = session->SelectChartMetaByPaths(paths);
+    }
+  }
+  return replay_video_export::projectReplayChartMetadataAuthority(
+      meta, records, replayExportBmsResourceImageAvailable(meta, meta.StageFile),
+      replayExportBmsResourceImageAvailable(meta, meta.BackBmp));
+}
+
 [[nodiscard]] std::optional<ReplayVideoExportResult>
 preflightReplayGameplayPresentation(
     ApplicationContext &context, bms_parser::Chart &chart,
@@ -171,7 +198,9 @@ preflightReplayGameplayPresentation(
         nullptr,
     const CourseConstraintRules &constraints = {},
     const PlayfieldAuthorityUpdate *initialAuthority = nullptr,
-    bool rendererReservationAlreadyHeld = false) {
+    bool rendererReservationAlreadyHeld = false,
+    const replay_video_export::ReplayChartMetadataAuthority *chartMetadata =
+        nullptr) {
   const auto resolvedOptions = resolveReplayVideoExportOptions(options);
   const PlayfieldAuthorityUpdate fallbackInitialAuthority{
       .persistedScore = replayExportPersistedScore(context, chart.Meta),
@@ -189,12 +218,20 @@ preflightReplayGameplayPresentation(
       .liftRatio = constraints.noSpeed ? 0.0F : settings.liftRatio,
       .hiddenEnabled = settings.hiddenEnabled,
       .hiddenRatio = constraints.noSpeed ? 0.0F : settings.hiddenRatio};
+  const auto resolvedChartMetadata =
+      chartMetadata != nullptr
+          ? *chartMetadata
+          : replayExportChartMetadataAuthority(context, chart.Meta);
+  PlayfieldAuthorityUpdate authority =
+      initialAuthority != nullptr ? *initialAuthority : fallbackInitialAuthority;
+  authority.songReviewFavorite = resolvedChartMetadata.songReviewFavorite;
+  authority.chartHasDocument = resolvedChartMetadata.chartHasDocument;
+  authority.stageFileAvailable = resolvedChartMetadata.stageFileAvailable;
+  authority.backBmpAvailable = resolvedChartMetadata.backBmpAvailable;
   const auto configuration = replay_video_export::replayGameplayPresentationConfig(
       settings, settings.playAreaWidthForKeyMode(chart.Meta.KeyMode), chart,
       resolvedOptions.renderTouchPoints, resolvedOptions.renderReplayGhosts,
       constraints, replay.assistOption);
-  const PlayfieldAuthorityUpdate &authority =
-      initialAuthority != nullptr ? *initialAuthority : fallbackInitialAuthority;
   const auto result =
       rendererReservationAlreadyHeld
           ? replay_video_export::preflightReplayGameplayPresentationWithReservedRenderer(
@@ -2539,7 +2576,9 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
                        long long requestedGameplayDurationMicros,
                        long long requestedAudioDurationMicros,
                        bool stoppedOnGaugeFailure,
-                       ReplayVideoExportLog *log) {
+                       ReplayVideoExportLog *log,
+                       const replay_video_export::ReplayChartMetadataAuthority &
+                           chartMetadataAuthority) {
   const auto resolvedOptions = resolveReplayVideoExportOptions(options);
   const int width = resolvedOptions.width;
   const int height = resolvedOptions.height;
@@ -3058,6 +3097,10 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
                                    replay.playOption2.value_or("NORMAL"))
                                    .value_or(0),
         .doublePlayOption = replay.provenance.doublePlayFlip ? 1 : 0,
+        .songReviewFavorite = chartMetadataAuthority.songReviewFavorite,
+        .chartHasDocument = chartMetadataAuthority.chartHasDocument,
+        .stageFileAvailable = chartMetadataAuthority.stageFileAvailable,
+        .backBmpAvailable = chartMetadataAuthority.backBmpAvailable,
         .playerName = context.profileManager.activeProfile().displayName,
         .irProviderName = gameplaySkinFirstIrProviderName(settings.irProviders),
         .irAccountName = context.irAccountNameSnapshot(),
@@ -3618,6 +3661,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     bgaMissTracker.reset();
     bms_parser::Chart &chart = *stage.chart;
     const ReplayData &stageReplay = stage.replay;
+    const auto chartMetadataAuthority =
+        replayExportChartMetadataAuthority(context, chart.Meta);
     const PlayfieldChartVisualModel stageChartVisualModel =
         buildPlayfieldChartVisualModel(chart, 0);
 
@@ -3644,7 +3689,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
             resolvedOptions, *stage.gameplayPresentation, log,
             stage.runtimeSkinSelection ? &*stage.runtimeSkinSelection
                                        : nullptr,
-            stage.constraints, &initialAuthority, true)) {
+            stage.constraints, &initialAuthority, true,
+            &chartMetadataAuthority)) {
       bgfxCleanup.runNow();
       return *failure;
     }
@@ -3827,6 +3873,10 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                                      stageReplay.playOption2.value_or("NORMAL"))
                                      .value_or(0),
           .doublePlayOption = stageReplay.provenance.doublePlayFlip ? 1 : 0,
+          .songReviewFavorite = chartMetadataAuthority.songReviewFavorite,
+          .chartHasDocument = chartMetadataAuthority.chartHasDocument,
+          .stageFileAvailable = chartMetadataAuthority.stageFileAvailable,
+          .backBmpAvailable = chartMetadataAuthority.backBmpAvailable,
           .playerName = context.profileManager.activeProfile().displayName,
           .irProviderName =
               gameplaySkinFirstIrProviderName(settings.irProviders),
@@ -4133,6 +4183,8 @@ ReplayVideoExporter::Export(ApplicationContext &context,
   reportReplayExportProgress(options, 0.0, "Preparing export");
 
   replay_video_export::prepareReplayChartForExport(*chart, replay);
+  const auto chartMetadataAuthority =
+      replayExportChartMetadataAuthority(context, chart->Meta);
   const auto resolvedOptions = resolveReplayVideoExportOptions(options);
   const preparation::Plan preparationPlan = preparation::buildNormalPlan(
       *chart, context.settings.startLaneIndicatorsEnabled,
@@ -4143,7 +4195,8 @@ ReplayVideoExporter::Export(ApplicationContext &context,
       [&]() -> std::optional<ReplayVideoExportResult> {
         return preflightReplayGameplayPresentation(
             context, *chart, replay, context.settings, preparationPlan,
-            resolvedOptions, preparedGameplay, nullptr);
+            resolvedOptions, preparedGameplay, nullptr, nullptr, {}, nullptr,
+            false, &chartMetadataAuthority);
       },
       [&]() -> ReplayVideoExportResult {
   auto gameplayPresentationCleanup = makeScopeExit([&]() {
@@ -4269,7 +4322,8 @@ ReplayVideoExporter::Export(ApplicationContext &context,
       context, *chart, replay, context.settings, preparationPlan,
       preparedGameplay, resolvedOptions, wavPath, outputPath,
       gameplayDurationMicros,
-      requestedAudioDurationMicros, failureMicros.has_value(), exportLog);
+      requestedAudioDurationMicros, failureMicros.has_value(), exportLog,
+      chartMetadataAuthority);
   if (!muxResult.success) {
     replayExportLog(exportLog, "Replay export MP4 failed: %s",
                     muxResult.message.c_str());

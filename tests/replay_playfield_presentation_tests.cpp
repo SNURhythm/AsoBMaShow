@@ -2026,6 +2026,28 @@ void testReplayExportPreparesSavedLongNoteScoreMetadata() {
          "skin model and score reducer are created");
 }
 
+void testReplayChartMetadataAuthorityUsesMatchedLibraryRecord() {
+  bms_parser::ChartMeta chartMeta;
+  chartMeta.BmsPath = "/library/replay-chart.bms";
+  ChartMetaPathBatchReadOutcome records;
+  records.status = ChartMetaPathBatchReadStatus::Loaded;
+  records.records = {
+      {.meta = {.BmsPath = "/library/other-chart.bms"},
+       .hasDocument = false,
+       .songReviewFavorite = 1},
+      {.meta = {.BmsPath = chartMeta.BmsPath},
+       .hasDocument = true,
+       .songReviewFavorite = 9},
+  };
+
+  const auto authority = replay_video_export::projectReplayChartMetadataAuthority(
+      chartMeta, records, true, true);
+  expect(authority.songReviewFavorite == 9 && authority.chartHasDocument &&
+             authority.stageFileAvailable && authority.backBmpAvailable,
+         "replay export chart authority retains the matched SongReview, "
+         "document, stage, and back-image facts");
+}
+
 } // namespace
 
 int main() {
@@ -2090,6 +2112,7 @@ int main() {
   testReplayAdapterCarriesStageFullComboAuthority();
   testAutoplayReplayReducerMatchesEffectiveScorableTotal();
   testReplayExportPreparesSavedLongNoteScoreMetadata();
+  testReplayChartMetadataAuthorityUsesMatchedLibraryRecord();
   bgfx::shutdown();
   SDL_Quit();
   if (failures != 0) {

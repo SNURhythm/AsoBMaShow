@@ -6,6 +6,7 @@
 #include "../../CoursePlaySession.h"
 #include "../../PreparationPlan.h"
 #include "../../ReplayVideoExporter.h"
+#include "../../repositories/ChartRepository.h"
 #include "../../video/RendererAccessCoordinator.h"
 
 #include <memory>
@@ -18,6 +19,19 @@
 namespace replay_video_export {
 
 inline constexpr long long kReplayResultScreenTailMicros = 10'000'000;
+
+struct ReplayChartMetadataAuthority {
+  int songReviewFavorite = 0;
+  bool chartHasDocument = false;
+  bool stageFileAvailable = false;
+  bool backBmpAvailable = false;
+};
+
+[[nodiscard]] ReplayChartMetadataAuthority
+projectReplayChartMetadataAuthority(const bms_parser::ChartMeta &,
+                                    const ChartMetaPathBatchReadOutcome &,
+                                    bool stageFileAvailable,
+                                    bool backBmpAvailable) noexcept;
 
 // Export callers may provide an already-parsed chart instead of going through
 // play_options::prepareReplayChart. Apply the replay's recorded long-note
