@@ -1560,18 +1560,13 @@ void GamePlayScene::startPracticeAttemptFromMenu() {
       options.practiceSession == nullptr) {
     return;
   }
-  const auto attempt = options.practiceSession->skinMenuAttemptPlan();
+  const auto attempt = options.practiceSession->beginSkinMenuAttempt();
   if (!attempt.has_value()) {
     return;
   }
 
-  practice::SkinMenuAttemptPlan chartAttempt = *attempt;
-  const auto &menuConfiguration = options.practiceSession->configuration();
-  chartAttempt.startMicros = menuConfiguration.startMicros;
-  chartAttempt.endMicros = menuConfiguration.endMicros;
-  options.practiceSession->beginSkinMenuAttempt(*attempt);
   options.startPosition =
-      static_cast<unsigned long long>(chartAttempt.startMicros);
+      static_cast<unsigned long long>(attempt->startMicros);
   options.gaugeType = attempt->gaugeType;
   options.gaugeProfile = attempt->gaugeProfile;
   options.gaugeAutoShift = GaugeAutoShiftMode::None;
@@ -1595,7 +1590,7 @@ void GamePlayScene::startPracticeAttemptFromMenu() {
   options.playOption2 = selectedPlayOption2;
   options.playOption2Seed = selectedPlayOption2Seed;
 
-  practice::applySkinMenuPracticeModifier(*chart, chartAttempt);
+  practice::applySkinMenuPracticeModifier(*chart, *attempt);
   if (chart->Meta.IsDP && options.doublePlayFlip) {
     practice::applySkinMenuDoublePlayFlip(*chart);
   }

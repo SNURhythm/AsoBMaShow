@@ -362,9 +362,10 @@ void testSessionRetainsRawMenuRangeDuringRateAdjustedAttempt() {
                              .random1P = 0,
                              .random2P = 0,
                              .doublePlay = 0});
-  const auto plan = session.skinMenuAttemptPlan();
-  expect(plan.has_value(), "configured practice menu has a source attempt plan");
-  session.beginSkinMenuAttempt(*plan);
+  const auto plan = session.beginSkinMenuAttempt();
+  expect(plan.has_value() && plan->startMicros == 1'000'000 &&
+             plan->endMicros == 4'500'000,
+         "practice start returns the frequency-scaled chart range");
   expect(session.configuration().startMicros == 2'000'000 &&
              session.configuration().endMicros == 9'000'000 &&
              session.configuration().playback.percent == 200,

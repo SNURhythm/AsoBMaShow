@@ -59,6 +59,14 @@ Session::skinMenuAttemptPlan() const noexcept {
              : std::nullopt;
 }
 
+std::optional<SkinMenuAttemptPlan> Session::beginSkinMenuAttempt() {
+  auto attempt = skinMenuAttemptPlan();
+  if (attempt.has_value()) {
+    beginSkinMenuAttempt(*attempt);
+  }
+  return attempt;
+}
+
 void Session::beginSkinMenuAttempt(const SkinMenuAttemptPlan &attempt) {
   Configuration configuration = skinMenu_.has_value()
                                   ? skinMenu_->configuration()

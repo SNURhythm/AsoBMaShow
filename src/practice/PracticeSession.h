@@ -25,6 +25,7 @@ public:
   void configureSkinMenu(SkinMenuInputs);
   [[nodiscard]] std::optional<SkinMenuAttemptPlan>
   skinMenuAttemptPlan() const noexcept;
+  [[nodiscard]] std::optional<SkinMenuAttemptPlan> beginSkinMenuAttempt();
   void beginSkinMenuAttempt(const SkinMenuAttemptPlan &);
   void setSkinItemScrollPosition(float position) noexcept;
   [[nodiscard]] bool changeSkinMenuVisibleItem(std::size_t index,
