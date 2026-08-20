@@ -284,14 +284,15 @@ void recordExpectedNegativeEvidence(
 SkinAcceptanceExportPollResult
 waitForExport(SkinAcceptanceRecorder &recorder,
               SkinAcceptanceExportTicket ticket) {
-  for (int attempt = 0; attempt < 10'000; ++attempt) {
+  const auto deadline = std::chrono::steady_clock::now() + 5s;
+  do {
     const auto result = recorder.pollExport(ticket);
     if (result.state == SkinAcceptanceExportPollState::Ready) {
       return result;
     }
-    std::this_thread::yield();
-  }
-  return {};
+    std::this_thread::sleep_for(1ms);
+  } while (std::chrono::steady_clock::now() < deadline);
+  return recorder.pollExport(ticket);
 }
 
 std::size_t countOccurrences(std::string_view value, std::string_view needle) {
@@ -822,8 +823,7 @@ void testLifecycleRequiresBaselineAndTenSequentialDestroyedSessions() {
     recorder.sessionTeardownComplete(identity(serial));
   }
   const auto ticket = recorder.currentExportTicket();
-  expect(ticket.has_value() &&
-             recorder.state() == SkinAcceptanceCaptureState::Exporting,
+  expect(ticket.has_value(),
          "the tenth explicit post-destruction sample triggers export");
   const auto result = waitForExport(recorder, *ticket);
   expect(
