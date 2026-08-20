@@ -38,4 +38,9 @@ public class AsoBMaShowActivitySourcePolicyTest {
                         + "                            \"Could not restore an empty export destination.\")",
                 errorSink.group(1).trim());
     }
+
+    @Test(expected = IllegalStateException.class)
+    public void nullSafTraversalCursorIsReportedAsFailure() {
+        AsoBMaShowActivity.requireChartFilesCursor(null);
+    }
 }

@@ -51,6 +51,37 @@ private:
   std::filesystem::path path_;
 };
 
+void setMetadataRebuildRequired(const std::filesystem::path &databasePath,
+                                bool required) {
+  sqlite3 *database = nullptr;
+  assert(sqlite3_open(databasePath.string().c_str(), &database) == SQLITE_OK);
+  const std::string query =
+      "INSERT INTO chart_meta_rebuild_state (id, required, updated_at) "
+      "VALUES (1, " +
+      std::string(required ? "1" : "0") +
+      ", CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET required = " +
+      std::string(required ? "1" : "0") +
+      ", updated_at = CURRENT_TIMESTAMP";
+  assert(sqlite3_exec(database, query.c_str(), nullptr, nullptr, nullptr) ==
+         SQLITE_OK);
+  assert(sqlite3_close(database) == SQLITE_OK);
+}
+
+bool metadataRebuildRequired(const std::filesystem::path &databasePath) {
+  sqlite3 *database = nullptr;
+  assert(sqlite3_open(databasePath.string().c_str(), &database) == SQLITE_OK);
+  sqlite3_stmt *statement = nullptr;
+  assert(sqlite3_prepare_v2(
+             database,
+             "SELECT required FROM chart_meta_rebuild_state WHERE id = 1", -1,
+             &statement, nullptr) == SQLITE_OK);
+  assert(sqlite3_step(statement) == SQLITE_ROW);
+  const bool required = sqlite3_column_int(statement, 0) != 0;
+  assert(sqlite3_finalize(statement) == SQLITE_OK);
+  assert(sqlite3_close(database) == SQLITE_OK);
+  return required;
+}
+
 using ArchiveEntryHandle =
     std::unique_ptr<archive_entry, decltype(&archive_entry_free)>;
 
@@ -513,6 +544,39 @@ public:
   }
 };
 
+std::atomic_bool denyMetadataRebuildStateWrite{false};
+
+int denyMetadataRebuildStateWriteAuthorizer(void *, int action,
+                                             const char *first, const char *,
+                                             const char *, const char *) {
+  if (denyMetadataRebuildStateWrite.load(std::memory_order_relaxed) &&
+      (action == SQLITE_INSERT || action == SQLITE_UPDATE) && first != nullptr &&
+      std::string_view(first) == "chart_meta_rebuild_state") {
+    return SQLITE_DENY;
+  }
+  return SQLITE_OK;
+}
+
+int installDenyMetadataRebuildStateWrite(sqlite3 *database, char **,
+                                         const sqlite3_api_routines *) {
+  return sqlite3_set_authorizer(
+      database, denyMetadataRebuildStateWriteAuthorizer, nullptr);
+}
+
+class ScopedMetadataRebuildStateWriteDenial {
+public:
+  ScopedMetadataRebuildStateWriteDenial() {
+    sqlite3_reset_auto_extension();
+    assert(sqlite3_auto_extension(reinterpret_cast<void (*)()>(
+               installDenyMetadataRebuildStateWrite)) == SQLITE_OK);
+  }
+
+  ~ScopedMetadataRebuildStateWriteDenial() {
+    denyMetadataRebuildStateWrite.store(false, std::memory_order_relaxed);
+    sqlite3_reset_auto_extension();
+  }
+};
+
 std::atomic_bool denyChartRead{false};
 
 int denyChartReadAuthorizer(void *, int action, const char *first,
@@ -604,18 +668,67 @@ public:
 void testStorageFailureLeavesNoChart() {
   TempDirectory temporary;
   const auto root = temporary.path() / "library";
+  const auto databasePath = temporary.path() / "chart.db";
   writeChart(root, "sample", "Denied Scanner");
   ScopedInsertDenial denial;
 
-  ChartRepository repository(temporary.path() / "chart.db");
+  ChartRepository repository(databasePath);
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
+  setMetadataRebuildRequired(databasePath, true);
   denyChartInsert.store(true, std::memory_order_relaxed);
 
   ChartLibraryScanner scanner;
-  assert(scanner.Scan(*session, {root}) == 0);
+  const ChartScanResult result = scanner.ScanWithResult(*session, {root});
+  assert(result.changedCount == 0);
+  assert(!result.completed);
+  assert(!result.committed);
   assert(session->CountAllChartMeta() == 0);
+  denyChartInsert.store(false, std::memory_order_relaxed);
+  assert(metadataRebuildRequired(databasePath));
+}
+
+void testRebuildFlagClearFailureDoesNotReportCompletedScan() {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "empty-library";
+  const auto databasePath = temporary.path() / "chart.db";
+  std::filesystem::create_directories(root);
+  ScopedMetadataRebuildStateWriteDenial denial;
+
+  ChartRepository repository(databasePath);
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  setMetadataRebuildRequired(databasePath, true);
+  denyMetadataRebuildStateWrite.store(true, std::memory_order_relaxed);
+
+  ChartLibraryScanner scanner;
+  const ChartScanResult result = scanner.ScanWithResult(*session, {root});
+  assert(result.changedCount == 0);
+  assert(!result.completed);
+  assert(!result.committed);
+  denyMetadataRebuildStateWrite.store(false, std::memory_order_relaxed);
+  assert(metadataRebuildRequired(databasePath));
+}
+
+void testMissingFullScanRootPreservesMetadataRebuildState() {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "disconnected-library";
+  const auto databasePath = temporary.path() / "chart.db";
+
+  ChartRepository repository(databasePath);
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  setMetadataRebuildRequired(databasePath, true);
+
+  ChartLibraryScanner scanner;
+  const ChartScanResult result = scanner.ScanWithResult(*session, {root});
+  assert(result.changedCount == 0);
+  assert(!result.completed);
+  assert(!result.committed);
+  assert(metadataRebuildRequired(databasePath));
 }
 
 void testAddedScanStorageFailureDoesNotQualifyExistingChart() {
@@ -981,6 +1094,7 @@ void testArchiveStreamFailurePreservesCheckpointPrefix() {
   constexpr int kChartCount = 105;
   TempDirectory temporary;
   const auto root = temporary.path() / "library";
+  const auto databasePath = temporary.path() / "chart.db";
   std::vector<std::pair<std::string, std::string>> files;
   files.reserve(kChartCount);
   for (int index = 0; index < kChartCount; ++index) {
@@ -990,7 +1104,7 @@ void testArchiveStreamFailurePreservesCheckpointPrefix() {
   const auto archivePath =
       writeZip(root / "failed-resume.zip", files);
 
-  ChartRepository repository(temporary.path() / "chart.db");
+  ChartRepository repository(databasePath);
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -1016,9 +1130,10 @@ void testArchiveStreamFailurePreservesCheckpointPrefix() {
   const ChartScanSnapshot interrupted = session->LoadScanSnapshot();
   assert(interrupted.checkpoint.has_value());
   assert(interrupted.checkpoint->subIndex == 100);
+  setMetadataRebuildRequired(databasePath, true);
 
   bool corrupted = false;
-  (void)scanner.Scan(
+  const ChartScanResult result = scanner.ScanWithResult(
       *session, {archivePath}, nullptr,
       [&](const ChartScanProgress &progress) {
         if (!corrupted &&
@@ -1027,8 +1142,36 @@ void testArchiveStreamFailurePreservesCheckpointPrefix() {
         }
       });
   assert(corrupted);
+  assert(!result.completed);
+  assert(!result.committed);
   assert(session->CountAllChartMeta() == 100);
-  assert(session->LoadScanSnapshot().archiveCache.empty());
+  const ChartScanSnapshot failed = session->LoadScanSnapshot();
+  assert(failed.archiveCache.empty());
+  assert(failed.checkpoint.has_value());
+  assert(failed.checkpoint->subIndex == 100);
+  assert(metadataRebuildRequired(databasePath));
+}
+
+void testUnreadableArchivePreservesMetadataRebuildState() {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  const auto databasePath = temporary.path() / "chart.db";
+  std::filesystem::create_directories(root);
+  const auto archivePath = root / "unreadable.zip";
+  std::ofstream(archivePath, std::ios::binary) << "not an archive";
+
+  ChartRepository repository(databasePath);
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  setMetadataRebuildRequired(databasePath, true);
+
+  ChartLibraryScanner scanner;
+  const ChartScanResult result = scanner.ScanWithResult(*session, {root});
+  assert(!result.completed);
+  assert(!result.committed);
+  assert(session->CountAllChartMeta() == 0);
+  assert(metadataRebuildRequired(databasePath));
 }
 
 void testStopAtPreparingUpdatesCancelsArchivePrefetch() {
@@ -1474,6 +1617,8 @@ int main() {
   testStopAndPauseBeforeWork();
   testCheckpointResume();
   testStorageFailureLeavesNoChart();
+  testRebuildFlagClearFailureDoesNotReportCompletedScan();
+  testMissingFullScanRootPreservesMetadataRebuildState();
   testAddedScanStorageFailureDoesNotQualifyExistingChart();
   testAddedScanParseFailureDoesNotQualifyExistingChart();
   testArchiveChartCountReportsStorageReadFailure();
@@ -1486,6 +1631,7 @@ int main() {
   testArchiveCheckpointResumeUsesOrderedFallbackPipeline();
   testMidArchiveCheckpointResumePreservesValidCacheCount();
   testArchiveStreamFailurePreservesCheckpointPrefix();
+  testUnreadableArchivePreservesMetadataRebuildState();
   testStopAtPreparingUpdatesCancelsArchivePrefetch();
   testLargeSingleArchivePreservesAllChartResults();
   testMultipleLargeArchivesPrefetchDuringPreparation();

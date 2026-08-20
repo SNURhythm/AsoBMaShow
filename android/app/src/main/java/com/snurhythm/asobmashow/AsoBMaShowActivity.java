@@ -2137,9 +2137,7 @@ public class AsoBMaShowActivity extends SDLActivity {
         };
         try (Cursor cursor = getContentResolver().query(
                 childrenUri, columns, null, null, null)) {
-            if (cursor == null) {
-                return;
-            }
+            requireChartFilesCursor(cursor);
             int idColumn = cursor.getColumnIndexOrThrow(Document.COLUMN_DOCUMENT_ID);
             int nameColumn = cursor.getColumnIndexOrThrow(Document.COLUMN_DISPLAY_NAME);
             int mimeColumn = cursor.getColumnIndexOrThrow(Document.COLUMN_MIME_TYPE);
@@ -2180,6 +2178,13 @@ public class AsoBMaShowActivity extends SDLActivity {
                             .append('\t').append(hasTextDocument ? '1' : '0').append('\n');
                 }
             }
+        }
+    }
+
+    static void requireChartFilesCursor(Cursor cursor) {
+        if (cursor == null) {
+            throw new IllegalStateException(
+                    "Android chart folder query returned no cursor.");
         }
     }
 

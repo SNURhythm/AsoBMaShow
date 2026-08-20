@@ -763,6 +763,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   };
 
   chart_scan::WorkScheduler entityScheduler(entityWorkerCount, archiveIoLimit);
+  std::atomic_bool discoveryHealthy{true};
   int scheduledArchiveIndexCount = 0;
 
   struct IndexedArchivePrefetch {
@@ -1262,6 +1263,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
             };
             storePreparedEntity(sequence, std::move(prepared));
           } catch (...) {
+            discoveryHealthy.store(false, std::memory_order_relaxed);
             storePreparedEntityIfMissing(sequence,
                                          PreparedOrdinaryChart{
                                              .path = path,
@@ -1270,6 +1272,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
             throw;
           }
         })) {
+      discoveryHealthy.store(false, std::memory_order_relaxed);
       storePreparedEntity(sequence, PreparedOrdinaryChart{
                                         .path = path,
                                         .hasDocument = hasDocument,
@@ -1290,6 +1293,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     std::int64_t archiveSize = 0;
     std::int64_t mtimeNs = 0;
     if (!archiveFileState(archivePath, archiveSize, mtimeNs)) {
+      discoveryHealthy.store(false, std::memory_order_relaxed);
       return;
     }
 
@@ -1354,6 +1358,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
                     });
                 prepareArchiveCharts(sequence, std::move(prepared));
               } catch (...) {
+                discoveryHealthy.store(false, std::memory_order_relaxed);
                 storePreparedEntityIfMissing(sequence,
                                              PreparedArchive{
                                                  .path = archivePath,
@@ -1367,6 +1372,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
             chart_scan::WorkClass::ArchiveIndex)) {
       ++scheduledArchiveIndexCount;
     } else {
+      discoveryHealthy.store(false, std::memory_order_relaxed);
       storePreparedEntity(sequence, PreparedArchive{
                                         .path = archivePath,
                                         .archiveSize = archiveSize,
@@ -1377,6 +1383,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   };
 
   int scannedRootCount = 0;
+  bool traversalHealthy = true;
   const int rootCount =
       static_cast<int>(std::max<std::size_t>(roots.size(), 1));
   for (const auto &root : roots) {
@@ -1391,6 +1398,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       std::string androidError;
       if (!ListAndroidTreeChartFiles(root, androidChartFiles, androidError,
                                      stopToken)) {
+        traversalHealthy = false;
         if (!androidError.empty()) {
           SDL_Log("Failed while scanning Android chart folder %s: %s",
                   fspath_to_utf8(root).c_str(), androidError.c_str());
@@ -1421,12 +1429,18 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     std::error_code error;
     const bool rootExists = std::filesystem::exists(root, error);
     if (error) {
+      traversalHealthy = false;
       SDL_Log("Failed to check chart folder %s: %s",
               fspath_to_utf8(root).c_str(), error.message().c_str());
       ++scannedRootCount;
       continue;
     }
     if (!rootExists) {
+      if (reconcileExisting) {
+        traversalHealthy = false;
+        SDL_Log("Configured chart folder is unavailable: %s",
+                fspath_to_utf8(root).c_str());
+      }
       ++scannedRootCount;
       continue;
     }
@@ -1473,6 +1487,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       }
     }
     if (error) {
+      traversalHealthy = false;
       SDL_Log("Failed while scanning chart folder %s: %s",
               fspath_to_utf8(root).c_str(), error.message().c_str());
     }
@@ -1500,6 +1515,8 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       entityScheduler.cancel();
     }
   }
+  traversalHealthy =
+      traversalHealthy && discoveryHealthy.load(std::memory_order_relaxed);
 
   for (auto &preparedSlot : preparedEntities) {
     if (!preparedSlot.has_value()) {
@@ -1537,12 +1554,15 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
             .uncompressedSize = prepared.cache->uncompressedSize,
             .fileCount = prepared.cache->fileCount,
         });
+      } else {
+        traversalHealthy = false;
       }
       continue;
     }
 
     ArchiveScanResult &archiveScan = *prepared.scan;
     if (!archiveScan.readable) {
+      traversalHealthy = false;
       continue;
     }
     if (!prepared.chartParseError.empty()) {
@@ -1608,11 +1628,15 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       staleSolidArchives.empty() && reindexedArchives.empty();
   if (noScanWork) {
     entityScheduler.finish();
-    session.ClearScanCheckpoint();
-    if (reconcileExisting) {
-      session.ClearChartMetadataRebuildRequired();
+    for (const auto &exception : entityScheduler.takeExceptions()) {
+      (void)exception;
+      traversalHealthy = false;
     }
-    return ChartScanResult{.completed = true};
+    bool finalized = traversalHealthy && session.ClearScanCheckpoint();
+    if (finalized && reconcileExisting) {
+      finalized = session.ClearChartMetadataRebuildRequired();
+    }
+    return ChartScanResult{.completed = finalized};
   }
 
   std::vector<ScanDiff> individualDiffs;
@@ -2807,6 +2831,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
         terminalResult.has_value() && terminalResult->complete &&
         parsedInBatch == batch.innerPaths.size() && !shouldStop();
     if (terminalResult.has_value() && !terminalResult->complete) {
+      traversalHealthy = false;
       if (!terminalResult->errorMessage.empty()) {
         SDL_Log("Failed to read charts from archive %s: %s",
                 archiveText.c_str(), terminalResult->errorMessage.c_str());
@@ -2881,6 +2906,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     archiveParseScheduler->finish();
   }
   for (const auto &exception : archiveParseScheduler->takeExceptions()) {
+    traversalHealthy = false;
     try {
       if (exception != nullptr) {
         std::rethrow_exception(exception);
@@ -2894,8 +2920,11 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     }
   }
   const int changedCount = scanBatch->ChangedCount();
-  const bool commitSucceeded = scanBatch->Commit();
-  if (!commitSucceeded) {
+  const bool commitSucceeded = traversalHealthy && scanBatch->Commit();
+  if (!traversalHealthy) {
+    archive_file::appendDebugLogLine(
+        "Discarded chart scan batch after incomplete source traversal.");
+  } else if (!commitSucceeded) {
     archive_file::appendDebugLogLine(
         "Failed to commit final chart scan batch.");
   }
@@ -2903,13 +2932,14 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     interrupted.store(true, std::memory_order_relaxed);
   }
   acknowledgeFlushRequest(pendingFlushRequest());
-  if (!stopRequested(stopToken)) {
-    session.ClearScanCheckpoint();
-    if (reconcileExisting) {
-      session.ClearChartMetadataRebuildRequired();
+  bool committed = storageHealthy && traversalHealthy && commitSucceeded;
+  if (!stopRequested(stopToken) && committed) {
+    bool finalized = session.ClearScanCheckpoint();
+    if (finalized && reconcileExisting) {
+      finalized = session.ClearChartMetadataRebuildRequired();
     }
+    committed = finalized;
   }
-  const bool committed = storageHealthy && commitSucceeded;
   if (!committed) {
     upsertedChartPaths.clear();
   }
