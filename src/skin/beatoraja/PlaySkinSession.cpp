@@ -10,6 +10,8 @@
 #include "../../rendering/SkinQuadBatchRenderer.h"
 #include "../../rendering/common.h"
 #include "../../replay/ReplayKeyMode.h"
+#include "../../Utils.h"
+#include "../../view/ImageFileDecoder.h"
 
 #include <algorithm>
 #include <array>
@@ -36,6 +38,7 @@ namespace {
 
 #if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
 std::atomic_size_t pomyuCycleFileReadsForTestingValue{0};
+std::atomic_size_t pomyuRequirementParsesForTestingValue{0};
 std::atomic_size_t pomyuCycleParsesForTestingValue{0};
 #endif
 
@@ -131,6 +134,9 @@ struct PomyuCharaFileCache {
   std::map<std::string, std::optional<std::string>> resolvedByConfiguredPath;
   std::map<std::string, std::optional<std::vector<std::byte>>> bytesByPath;
   std::map<std::string, SkinFileError> failuresByPath;
+  std::map<std::string, bool> imageAvailabilityByPath;
+  std::map<std::string, std::optional<PomyuCharaResourceRequirements>>
+      requirementsByPath;
   std::size_t encodedBytes = 0;
   bool budgetExceeded = false;
   bool cancelled = false;
@@ -252,6 +258,97 @@ const std::vector<std::byte> *readPomyuCharaFile(
   return nullptr;
 }
 
+std::optional<std::string>
+normalizedPomyuResourcePath(std::string_view raw,
+                            SkinSafetyPolicy safetyPolicy) {
+  const std::size_t maximumPathBytes = skinResourceLimit(
+      safetyPolicy, SkinPackagePolicy::maxPathBytes);
+  if (raw.empty() || raw.size() > maximumPathBytes ||
+      raw.find('\0') != std::string_view::npos) {
+    return std::nullopt;
+  }
+  auto utf8 = cp932_to_utf8(raw);
+  if (!utf8 || utf8->empty() || utf8->size() > maximumPathBytes ||
+      utf8->find('\0') != std::string::npos) {
+    return std::nullopt;
+  }
+  std::ranges::replace(*utf8, '\\', '/');
+  return utf8;
+}
+
+void normalizePomyuResourceRequirements(
+    PomyuCharaResourceRequirements &requirements,
+    SkinSafetyPolicy safetyPolicy) {
+  const auto normalize = [&](std::optional<std::string> &path) {
+    if (path) {
+      path = normalizedPomyuResourcePath(*path, safetyPolicy);
+    }
+  };
+  normalize(requirements.charBmp);
+  normalize(requirements.charBmp2p);
+  normalize(requirements.charTex);
+  normalize(requirements.charTex2p);
+}
+
+bool pomyuCharaImageAvailable(
+    const LuaSkinFileSystem &files, std::string_view chpPath,
+    std::string_view declaredPath, SkinSafetyPolicy safetyPolicy,
+    std::stop_token stop, PomyuCharaFileCache &cache) {
+  if (declaredPath.empty() || stop.stop_requested()) {
+    cache.cancelled = stop.stop_requested();
+    return false;
+  }
+  std::string joinedPath =
+      std::filesystem::path(chpPath).parent_path().generic_string();
+  if (!joinedPath.empty() && !joinedPath.ends_with('/')) {
+    joinedPath.push_back('/');
+  }
+  // PomyuCharaLoader concatenates basePath + relativePath. Keep that form so
+  // a drive-like token cannot acquire host-root semantics on another OS.
+  joinedPath.append(declaredPath);
+  const std::string resolvedPath =
+      std::filesystem::path(joinedPath).lexically_normal().generic_string();
+  if (const auto cached = cache.imageAvailabilityByPath.find(resolvedPath);
+      cached != cache.imageAvailabilityByPath.end()) {
+    return cached->second;
+  }
+  const std::size_t maximumFileBytes = skinResourceLimit(
+      safetyPolicy, SkinResourcePolicy::maximumEncodedBytes);
+  const std::size_t maximumSessionBytes = skinResourceLimit(
+      safetyPolicy, SkinResourcePolicy::maximumSessionEncodedBytes);
+  auto read = files.readResolvedResource(resolvedPath, maximumFileBytes);
+  if (stop.stop_requested()) {
+    cache.cancelled = true;
+    return false;
+  }
+  if (read.failure ||
+      read.bytes.size() >
+          maximumSessionBytes - std::min(cache.encodedBytes,
+                                         maximumSessionBytes)) {
+    if (!read.failure) {
+      cache.budgetExceeded = true;
+    }
+    cache.imageAvailabilityByPath.emplace(resolvedPath, false);
+    return false;
+  }
+  cache.encodedBytes += read.bytes.size();
+  const bool available =
+      image_decode::decodeImageMemory(
+          std::span<const std::byte>(read.bytes.data(), read.bytes.size()),
+          {.maximumDimension = skinResourceDimensionLimit(safetyPolicy),
+           .maximumEncodedBytes = maximumFileBytes,
+           .maximumDecodedBytes = skinResourceLimit(
+               safetyPolicy, SkinResourcePolicy::maximumImageBytes),
+          .stop = stop})
+          .has_value();
+  if (stop.stop_requested()) {
+    cache.cancelled = true;
+    return false;
+  }
+  cache.imageAvailabilityByPath.emplace(resolvedPath, available);
+  return available;
+}
+
 struct PomyuMotionCyclePreparation {
   std::array<int, 8> cycles = {1, 1, 1, 1, 1, 1, 1, 1};
   bool budgetExceeded = false;
@@ -305,6 +402,77 @@ PomyuMotionCyclePreparation pomyuMotionCyclesForModel(
     if (bytes == nullptr) {
       continue;
     }
+    const std::string_view contents(
+        reinterpret_cast<const char *>(bytes->data()), bytes->size());
+    auto requirements = fileCache.requirementsByPath.find(resolvedPath);
+    if (requirements == fileCache.requirementsByPath.end()) {
+#if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
+      pomyuRequirementParsesForTestingValue.fetch_add(
+          1, std::memory_order_relaxed);
+#endif
+      auto parsed = pomyuResourceRequirementsFromChp(contents, stop);
+      if (parsed) {
+        normalizePomyuResourceRequirements(*parsed, safetyPolicy);
+      }
+      requirements = fileCache.requirementsByPath
+                         .emplace(resolvedPath, std::move(parsed))
+                         .first;
+    }
+    if (stop.stop_requested()) {
+      result.cancelled = true;
+      break;
+    }
+    if (!requirements->second || !requirements->second->charBmp) {
+      continue;
+    }
+    const auto &resourceRequirements = *requirements->second;
+    const bool primaryBmpAvailable = pomyuCharaImageAvailable(
+        files, resolvedPath, *resourceRequirements.charBmp, safetyPolicy, stop,
+        fileCache);
+    if (fileCache.cancelled) {
+      result.cancelled = true;
+      break;
+    }
+    if (fileCache.budgetExceeded) {
+      result.budgetExceeded = true;
+      break;
+    }
+    if (!primaryBmpAvailable) {
+      continue;
+    }
+    const bool useSecondPlayerColor =
+        pmchara->color == 2 && resourceRequirements.charBmp2p &&
+        pomyuCharaImageAvailable(files, resolvedPath,
+                                 *resourceRequirements.charBmp2p, safetyPolicy,
+                                 stop, fileCache) &&
+        (!resourceRequirements.hasTextureDefinitions ||
+         (resourceRequirements.charTex2p &&
+          pomyuCharaImageAvailable(files, resolvedPath,
+                                   *resourceRequirements.charTex2p,
+                                   safetyPolicy, stop, fileCache)));
+    if (fileCache.cancelled) {
+      result.cancelled = true;
+      break;
+    }
+    if (fileCache.budgetExceeded) {
+      result.budgetExceeded = true;
+      break;
+    }
+    if (!useSecondPlayerColor && resourceRequirements.hasTextureDefinitions &&
+        (!resourceRequirements.charTex ||
+         !pomyuCharaImageAvailable(files, resolvedPath,
+                                   *resourceRequirements.charTex, safetyPolicy,
+                                   stop, fileCache))) {
+      if (fileCache.cancelled) {
+        result.cancelled = true;
+        break;
+      }
+      if (fileCache.budgetExceeded) {
+        result.budgetExceeded = true;
+        break;
+      }
+      continue;
+    }
     const int side = pmchara->side == 2 ? 2 : 1;
     const auto key = std::tuple(resolvedPath, pmchara->type, side);
     auto parsed = parsedCycles.find(key);
@@ -315,9 +483,7 @@ PomyuMotionCyclePreparation pomyuMotionCyclesForModel(
       pomyuCycleParsesForTestingValue.fetch_add(1, std::memory_order_relaxed);
 #endif
       auto extracted = pomyuMotionCyclesFromChp(
-          std::string_view(reinterpret_cast<const char *>(bytes->data()),
-                           bytes->size()),
-          pmchara->type, side, patch, stop);
+          contents, pmchara->type, side, patch, stop);
       if (stop.stop_requested()) {
         result.cancelled = true;
         break;
@@ -467,11 +633,17 @@ startLaneIndicatorColor(start_lane_indicator::ColorRole role) noexcept {
 #if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
 void resetPomyuCyclePreparationCountersForTesting() noexcept {
   pomyuCycleFileReadsForTestingValue.store(0, std::memory_order_relaxed);
+  pomyuRequirementParsesForTestingValue.store(0, std::memory_order_relaxed);
   pomyuCycleParsesForTestingValue.store(0, std::memory_order_relaxed);
 }
 
 std::size_t pomyuCycleFileReadsForTesting() noexcept {
   return pomyuCycleFileReadsForTestingValue.load(std::memory_order_relaxed);
+}
+
+std::size_t pomyuRequirementParsesForTesting() noexcept {
+  return pomyuRequirementParsesForTestingValue.load(
+      std::memory_order_relaxed);
 }
 
 std::size_t pomyuCycleParsesForTesting() noexcept {

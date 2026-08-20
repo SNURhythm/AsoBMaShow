@@ -24,6 +24,7 @@ namespace skin {
 #if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
 void resetPomyuCyclePreparationCountersForTesting() noexcept;
 [[nodiscard]] std::size_t pomyuCycleFileReadsForTesting() noexcept;
+[[nodiscard]] std::size_t pomyuRequirementParsesForTesting() noexcept;
 [[nodiscard]] std::size_t pomyuCycleParsesForTesting() noexcept;
 #endif
 

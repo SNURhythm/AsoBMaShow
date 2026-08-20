@@ -10,6 +10,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using AndroidDownloadProgressCallback =
@@ -45,6 +46,7 @@ struct AndroidNativeMusicState {
 std::string GetAndroidExternalFilesDir();
 std::string GetAndroidInternalFilesDir();
 std::string GetAndroidCacheDir();
+std::optional<std::string> ConvertAndroidMs932ToUtf8(std::string_view value);
 bool AndroidBuildHasManageExternalStorage();
 bool PickAndroidChartFolder(std::filesystem::path &rootPath,
                             std::string &treeUri,

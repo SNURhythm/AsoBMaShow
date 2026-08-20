@@ -441,6 +441,11 @@ struct ActivationFixtureOptions {
   bool requireConfiguredState = false;
   bool repeatedPomyu = false;
   bool oversizedPomyuWithSibling = false;
+  bool pomyuMissingCharBmp = false;
+  bool pomyuTextureMissingCharTex = false;
+  bool pomyuCp932BackslashPath = false;
+  bool pomyuRootedResourcePath = false;
+  bool pomyuLeadingBackslashPath = false;
 };
 
 class ActivationFixture final {
@@ -469,16 +474,62 @@ public:
                         "tests/fixtures/beatoraja_skin/resources/fixture.ttf",
                     source / "skin/resources/fixture.ttf");
     }
-    if (options.repeatedPomyu || options.oversizedPomyuWithSibling) {
+    const bool hasPomyu = options.repeatedPomyu ||
+                          options.oversizedPomyuWithSibling ||
+                          options.pomyuMissingCharBmp ||
+                          options.pomyuTextureMissingCharTex ||
+                          options.pomyuCp932BackslashPath ||
+                          options.pomyuRootedResourcePath ||
+                          options.pomyuLeadingBackslashPath;
+    if (hasPomyu) {
+      fs::create_directories(source / "skin/characters");
       if (options.oversizedPomyuWithSibling) {
         writeText(source / "skin/characters/alpha.chp",
                   std::string(SkinResourcePolicy::maximumEncodedBytes + 1U,
                               'x'));
         writeText(source / "skin/characters/beta.chp",
                   "#Anime\t100\n#Frame\t1\t40\n#Pattern\t1\t000102\n");
-      } else {
+      } else if (options.pomyuMissingCharBmp) {
         writeText(source / "skin/characters/alpha.chp",
-                  "#Anime\t100\n#Pattern\t1\t00\n");
+                  "#Anime\t100\n#Frame\t1\t40\n#Pattern\t1\t000102\n");
+      } else if (options.pomyuTextureMissingCharTex) {
+        fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
+                          "tests/fixtures/beatoraja_skin/resources/fixture.png",
+                      source / "skin/characters/fixture.png");
+        writeText(source / "skin/characters/alpha.chp",
+                  "#CharBMP\tfixture.png\n#Anime\t100\n#Frame\t1\t40\n"
+                  "#Texture\t1\t000102\n");
+      } else if (options.pomyuCp932BackslashPath) {
+        const fs::path japaneseDirectory =
+            source / "skin/characters" /
+            fs::path("\xe2\x85\xb0\xe8\xa1\xa8~");
+        fs::create_directories(japaneseDirectory);
+        fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
+                          "tests/fixtures/beatoraja_skin/resources/fixture.png",
+                      japaneseDirectory / "fixture.png");
+        writeText(source / "skin/characters/alpha.chp",
+                  "#CharBMP\t\xfa\x40\x95\x5c~\\fixture.png\n"
+                  "#Anime\t100\n#Frame\t1\t40\n#Pattern\t1\t000102\n");
+      } else if (options.pomyuRootedResourcePath) {
+        fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
+                          "tests/fixtures/beatoraja_skin/resources/fixture.png",
+                      source / "skin/characters/rooted.png");
+        writeText(source / "skin/characters/alpha.chp",
+                  "#CharBMP\t/rooted.png\n"
+                  "#Anime\t100\n#Frame\t1\t40\n#Pattern\t1\t000102\n");
+      } else if (options.pomyuLeadingBackslashPath) {
+        fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
+                          "tests/fixtures/beatoraja_skin/resources/fixture.png",
+                      source / "skin/characters/rooted.png");
+        writeText(source / "skin/characters/alpha.chp",
+                  "#CharBMP\t\\rooted.png\n"
+                  "#Anime\t100\n#Frame\t1\t40\n#Pattern\t1\t000102\n");
+      } else {
+        fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
+                          "tests/fixtures/beatoraja_skin/resources/fixture.png",
+                      source / "skin/characters/fixture.png");
+        writeText(source / "skin/characters/alpha.chp",
+                  "#CharBMP\tfixture.png\n#Anime\t100\n#Pattern\t1\t00\n");
       }
     }
     std::string script = R"lua(
@@ -517,7 +568,7 @@ if skin_config then
     }
   }
 )lua";
-    } else if (options.repeatedPomyu || options.oversizedPomyuWithSibling) {
+    } else if (hasPomyu) {
       script += R"lua(
   return {
     type = 0, w = 1280, h = 720,
@@ -730,8 +781,10 @@ void testRepeatedPomyuObjectsShareCyclePreparation() {
       PlaySkinSession::create(fixture.takeActivation(), fixture.context());
   expect(created.session != nullptr &&
              pomyuCycleFileReadsForTesting() == 1 &&
+             pomyuRequirementParsesForTesting() == 1 &&
              pomyuCycleParsesForTesting() == 1,
-         "repeated Pomyu objects share one bounded CHP read and parse");
+         "repeated Pomyu objects share one bounded CHP read, prerequisite "
+         "scan, and cycle parse");
 }
 
 void testExplicitOversizedPomyuDoesNotFallBackToSibling() {
@@ -745,6 +798,64 @@ void testExplicitOversizedPomyuDoesNotFallBackToSibling() {
              pomyuCycleParsesForTesting() == 0,
          "an oversized explicit CHP does not silently borrow a sibling's "
          "Pomyu timing metadata");
+}
+
+void testIncompletePomyuResourcesKeepDefaultCycles() {
+  for (const ActivationFixtureOptions options : {
+           ActivationFixtureOptions{.pomyuMissingCharBmp = true},
+           ActivationFixtureOptions{.pomyuTextureMissingCharTex = true}}) {
+    ActivationFixture fixture(options);
+    if (!fixture.ready()) {
+      continue;
+    }
+    resetPomyuCyclePreparationCountersForTesting();
+    (void)PlaySkinSession::create(fixture.takeActivation(), fixture.context());
+    expect(pomyuCycleFileReadsForTesting() == 1 &&
+               pomyuCycleParsesForTesting() == 0,
+           "Pomyu cycle metadata is ignored when its upstream character "
+           "image prerequisites cannot load");
+  }
+}
+
+void testPomyuResourcesUseMs932AndWindowsSeparators() {
+  ActivationFixture fixture({.pomyuCp932BackslashPath = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  resetPomyuCyclePreparationCountersForTesting();
+  const auto created =
+      PlaySkinSession::create(fixture.takeActivation(), fixture.context());
+  expect(created.session != nullptr &&
+             pomyuRequirementParsesForTesting() == 1 &&
+             pomyuCycleParsesForTesting() == 1,
+         "Pomyu character prerequisites resolve MS932 names and Windows "
+         "path separators without corrupting multibyte trail bytes");
+}
+
+void testPomyuRootedResourcePathIsRejected() {
+  ActivationFixture fixture({.pomyuRootedResourcePath = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  resetPomyuCyclePreparationCountersForTesting();
+  const auto created =
+      PlaySkinSession::create(fixture.takeActivation(), fixture.context());
+  expect(created.session != nullptr && pomyuCycleParsesForTesting() == 0,
+         "a rooted CHP image value cannot escape the Pomyu character "
+         "directory or apply unrelated timing metadata");
+}
+
+void testPomyuLeadingBackslashPathRemainsCharacterRelative() {
+  ActivationFixture fixture({.pomyuLeadingBackslashPath = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  resetPomyuCyclePreparationCountersForTesting();
+  const auto created =
+      PlaySkinSession::create(fixture.takeActivation(), fixture.context());
+  expect(created.session != nullptr && pomyuCycleParsesForTesting() == 1,
+         "a leading CHP backslash stays relative to the Pomyu character "
+         "directory like the pinned loader");
 }
 
 void testRequestedExternalGameplaySkinCreatesARealSession() {
@@ -2908,6 +3019,10 @@ int main() {
   testConfiguredLoadUsesTheInitializedAuthoritativeState();
   testRepeatedPomyuObjectsShareCyclePreparation();
   testExplicitOversizedPomyuDoesNotFallBackToSibling();
+  testIncompletePomyuResourcesKeepDefaultCycles();
+  testPomyuResourcesUseMs932AndWindowsSeparators();
+  testPomyuRootedResourcePathIsRejected();
+  testPomyuLeadingBackslashPathRemainsCharacterRelative();
   testRequestedExternalGameplaySkinCreatesARealSession();
   testActivationRejectsAReconciledDigestMismatch();
   testResourceSessionOwnsUploadsAndExactRuntimeStringAtlas();

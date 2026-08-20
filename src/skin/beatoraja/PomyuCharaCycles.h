@@ -133,6 +133,69 @@ inline int multiplyAsJavaInt(int left, std::size_t right) noexcept {
 
 } // namespace pomyu_chara_cycles_detail
 
+struct PomyuCharaResourceRequirements {
+  std::optional<std::string> charBmp;
+  std::optional<std::string> charBmp2p;
+  std::optional<std::string> charTex;
+  std::optional<std::string> charTex2p;
+  bool hasTextureDefinitions = false;
+};
+
+[[nodiscard]] inline std::optional<PomyuCharaResourceRequirements>
+pomyuResourceRequirementsFromChp(std::string_view contents,
+                                 std::stop_token stop = {}) {
+  constexpr std::size_t kMaximumRelevantFieldBytes = 64U * 1024U;
+  PomyuCharaResourceRequirements result;
+  std::size_t lineBegin = 0;
+  while (lineBegin <= contents.size()) {
+    if (stop.stop_requested()) {
+      return std::nullopt;
+    }
+    const std::size_t lineEnd = contents.find('\n', lineBegin);
+    std::string_view line = contents.substr(
+        lineBegin,
+        lineEnd == std::string_view::npos ? contents.size() - lineBegin
+                                           : lineEnd - lineBegin);
+    if (line.ends_with('\r')) {
+      line.remove_suffix(1);
+    }
+    const std::size_t firstTab = line.find('\t');
+    if (line.starts_with('#') && firstTab != std::string_view::npos) {
+      const std::string_view command = line.substr(0, firstTab);
+      if (pomyu_chara_cycles_detail::equalsIgnoreCase(command, "#Texture")) {
+        result.hasTextureDefinitions = true;
+      }
+      std::optional<std::string> *destination = nullptr;
+      if (pomyu_chara_cycles_detail::equalsIgnoreCase(command, "#CharBMP")) {
+        destination = &result.charBmp;
+      } else if (pomyu_chara_cycles_detail::equalsIgnoreCase(command,
+                                                              "#CharBMP2P")) {
+        destination = &result.charBmp2p;
+      } else if (pomyu_chara_cycles_detail::equalsIgnoreCase(command,
+                                                              "#CharTex")) {
+        destination = &result.charTex;
+      } else if (pomyu_chara_cycles_detail::equalsIgnoreCase(command,
+                                                              "#CharTex2P")) {
+        destination = &result.charTex2p;
+      }
+      if (destination != nullptr) {
+        const auto values = pomyu_chara_cycles_detail::parseFields<2>(line);
+        if (values.size > 1) {
+          if (values[1].size() > kMaximumRelevantFieldBytes) {
+            return std::nullopt;
+          }
+          *destination = std::string(values[1]);
+        }
+      }
+    }
+    if (lineEnd == std::string_view::npos) {
+      break;
+    }
+    lineBegin = lineEnd + 1;
+  }
+  return result;
+}
+
 // Port of the PomyuCharaLoader path which writes PlaySkin.pomyu motion-cycle
 // lengths. Non-PLAY objects never call setPMcharaTime, so they retain the
 // supplied processor cycles unchanged.
