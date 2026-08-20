@@ -1537,8 +1537,21 @@ void GamePlayScene::enterPracticeMenu() {
   state->isPlaying = false;
   capturePlayfieldVisualState(0, getVisualTimeMicros(0), false, false, true);
   acquireGameplaySkinForAttempt();
-  if (presentation == nullptr ||
-      presentation->activeMode() != PresentationMode::Skin) {
+  if (presentation == nullptr) {
+    return;
+  }
+  if (presentation->activeMode() != PresentationMode::Skin) {
+    if (!applyPracticePlayOptions(*chart, options, "practice fallback")) {
+      showPlaybackInitializationFailure(
+          "Practice play option could not be applied");
+      return;
+    }
+    playfieldChartVisualModel =
+        buildPlayfieldChartVisualModel(*chart, options.longNoteMode);
+    initializePlayfieldVisualNoteSources();
+    if (playfieldVisualStateStore != nullptr) {
+      playfieldVisualStateStore->resetModel(playfieldChartVisualModel);
+    }
     return;
   }
   practiceMenuActive = true;
@@ -1595,27 +1608,10 @@ void GamePlayScene::startPracticeAttemptFromMenu() {
   if (chart->Meta.IsDP && options.doublePlayFlip) {
     practice::applySkinMenuDoublePlayFlip(*chart);
   }
-  std::optional<std::string> appliedOption;
-  std::optional<long long> appliedSeed;
-  // BMSPlayer applies the second player before the first in practice.
-  if (chart->Meta.IsDP) {
-    (void)play_options::applyPlayOptionModifier(
-        *chart, *options.playOption2, options.playOption2Seed, 1, appliedOption,
-        appliedSeed, "practice");
-    if (appliedOption.has_value()) {
-      options.playOption2 = std::move(appliedOption);
-      options.playOption2Seed = appliedSeed;
-    }
-  }
-  appliedOption.reset();
-  appliedSeed.reset();
-  (void)play_options::applyPlayOptionModifier(
-      *chart, *options.playOption, options.playOptionSeed, 0, appliedOption,
-      appliedSeed,
-      "practice");
-  if (appliedOption.has_value()) {
-    options.playOption = std::move(appliedOption);
-    options.playOptionSeed = appliedSeed;
+  if (!applyPracticePlayOptions(*chart, options, "practice")) {
+    showPlaybackInitializationFailure(
+        "Practice play option could not be applied");
+    return;
   }
   options.practiceMenuPreservePlayOptionSeeds = false;
 

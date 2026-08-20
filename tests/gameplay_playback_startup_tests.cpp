@@ -151,6 +151,27 @@ bool testPracticeMenuSamePatternSeedSelection() {
                 "new-pattern practice retries do not reuse random seeds");
 }
 
+bool testBuiltInPracticeAppliesConfiguredViewerModifiers() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  auto *measure = new bms_parser::Measure;
+  auto *timeline = new bms_parser::TimeLine(8, false);
+  auto *note = new bms_parser::Note(1);
+  timeline->Timing = 1'000'000;
+  timeline->SetNote(0, note);
+  measure->TimeLines.push_back(timeline);
+  chart.Measures.push_back(measure);
+  StartOptions options;
+  options.playOption = "MIRROR";
+
+  return expect(applyPracticePlayOptions(chart, options, "practice fallback"),
+                "built-in practice accepts the configured viewer modifier") &&
+         expect(timeline->Notes[0] == nullptr &&
+                    timeline->Notes[6] == note && note->Lane == 6 &&
+                    options.playOption == "MIRROR",
+                "built-in practice applies the viewer modifier before play");
+}
+
 bool testCourseRetrySameUsesValidatedSetupWithoutReplayInput() {
   auto session = std::make_shared<CoursePlaySession>();
   session->autoKeySound = true;
@@ -242,6 +263,7 @@ int main() {
       !testSavedChartRandomBranchAuthority() ||
       !testCompletionPersistenceRoutes() ||
       !testPracticeMenuSamePatternSeedSelection() ||
+      !testBuiltInPracticeAppliesConfiguredViewerModifiers() ||
       !testCourseRetrySameUsesValidatedSetupWithoutReplayInput()) {
     return 1;
   }

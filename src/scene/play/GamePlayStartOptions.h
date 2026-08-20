@@ -2,6 +2,7 @@
 
 #include "../../CoursePlaySession.h"
 #include "../../ModernResult.h"
+#include "../../PlayOptionUtils.h"
 #include "../../ReplayData.h"
 #include "../../AppSettings.h"
 #include "../../input/InputTypes.h"
@@ -125,6 +126,37 @@ practiceMenuSelectedOptionSeed(
                  *configuredOption == selectedOption
              ? configuredSeed
              : std::nullopt;
+}
+
+inline bool applyPracticePlayOptions(bms_parser::Chart &chart,
+                                     StartOptions &options,
+                                     std::string_view logContext) {
+  const auto applyForPlayer = [&](int player,
+                                  std::optional<std::string> &option,
+                                  std::optional<long long> &seed) {
+    if (!option.has_value()) {
+      return true;
+    }
+    std::optional<std::string> appliedOption;
+    std::optional<long long> appliedSeed;
+    if (!play_options::applyPlayOptionModifier(
+            chart, *option, seed, player, appliedOption, appliedSeed,
+            logContext)) {
+      return false;
+    }
+    if (appliedOption.has_value()) {
+      option = std::move(appliedOption);
+      seed = appliedSeed;
+    }
+    return true;
+  };
+
+  // BMSPlayer applies the second player before the first in practice.
+  if (chart.Meta.IsDP &&
+      !applyForPlayer(1, options.playOption2, options.playOption2Seed)) {
+    return false;
+  }
+  return applyForPlayer(0, options.playOption, options.playOptionSeed);
 }
 
 // BMSPlayer stores ScoreData.option as randomoption plus, only for a
