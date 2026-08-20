@@ -401,7 +401,7 @@ void testSkinMenuPracticeModifierPreservesLandmineOnlyTotal() {
 void testSkinMenuPracticeModifierRemovesOutOfRangeLandmines() {
   bms_parser::Chart chart;
   chart.Meta.KeyMode = 1;
-  chart.Meta.TotalLandmineNotes = 2;
+  chart.Meta.TotalLandmineNotes = 3;
   auto *measure = new bms_parser::Measure();
   for (const long long timing : {1'000'000LL, 2'000'000LL}) {
     auto *timeline = new bms_parser::TimeLine(1, false);
@@ -409,6 +409,10 @@ void testSkinMenuPracticeModifierRemovesOutOfRangeLandmines() {
     timeline->SetLandmineNote(0, new bms_parser::LandmineNote(24.0F));
     measure->TimeLines.push_back(timeline);
   }
+  auto *legacyMineTimeline = new bms_parser::TimeLine(1, false);
+  legacyMineTimeline->Timing = 3'000'000;
+  legacyMineTimeline->SetNote(0, new bms_parser::LandmineNote(24.0F));
+  measure->TimeLines.push_back(legacyMineTimeline);
   chart.Measures.push_back(measure);
 
   practice::applySkinMenuPracticeModifier(
@@ -419,9 +423,11 @@ void testSkinMenuPracticeModifierRemovesOutOfRangeLandmines() {
 
   expect(measure->TimeLines[0]->LandmineNotes[0] != nullptr &&
              measure->TimeLines[1]->LandmineNotes[0] == nullptr &&
+             measure->TimeLines[2]->Notes[0] == nullptr &&
+             measure->TimeLines[2]->BackgroundNotes.empty() &&
              chart.Meta.TotalLandmineNotes == 1,
-         "source practice modifier removes separate landmines outside the "
-         "selected range");
+         "source practice modifier discards every out-of-range landmine "
+         "without turning legacy mine-channel notes into BGM");
 }
 
 void testSkinMenuDoublePlayFlipSwapsSourcePlayerHalves() {

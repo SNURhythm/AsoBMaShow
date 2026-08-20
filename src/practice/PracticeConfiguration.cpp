@@ -232,6 +232,11 @@ void applySkinMenuPracticeModifier(bms_parser::Chart &chart,
         note->Timeline->Notes[static_cast<std::size_t>(note->Lane)] != note) {
       return;
     }
+    if (note->IsLandmineNote()) {
+      note->Timeline->Notes[static_cast<std::size_t>(note->Lane)] = nullptr;
+      delete note;
+      return;
+    }
     note->Timeline->AddBackgroundNote(note);
     note->Timeline->Notes[static_cast<std::size_t>(note->Lane)] = nullptr;
   };
