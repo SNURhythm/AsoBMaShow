@@ -12,6 +12,7 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/mem.h>
 #include <libswscale/swscale.h>
 }
 
@@ -24,6 +25,7 @@ extern "C" {
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <cstring>
 #include <climits>
 #include <limits>
 #include <memory>
@@ -346,17 +348,25 @@ bool isWebpPath(const std::filesystem::path &path) {
   return extension == ".webp";
 }
 
+bool isWebpEncoded(std::span<const std::byte> encoded) {
+  constexpr std::array<unsigned char, 4> riff{'R', 'I', 'F', 'F'};
+  constexpr std::array<unsigned char, 4> webp{'W', 'E', 'B', 'P'};
+  if (encoded.size() < 12) return false;
+  return std::equal(riff.begin(), riff.end(), encoded.begin(),
+                    [](unsigned char expected, std::byte actual) {
+                      return expected == std::to_integer<unsigned char>(actual);
+                    }) &&
+         std::equal(webp.begin(), webp.end(), encoded.begin() + 8,
+                    [](unsigned char expected, std::byte actual) {
+                      return expected == std::to_integer<unsigned char>(actual);
+                    });
+}
+
 std::optional<DecodedImageData>
-decodeWebpWithFfmpeg(const std::filesystem::path &path,
-                     const ImageDecodeOptions &options) {
+decodeWebpFormatWithFfmpeg(AVFormatContext *rawFormat,
+                           const ImageDecodeOptions &options) {
   if (stopped(options)) return std::nullopt;
 
-  const std::string encodedPath = fspath_to_utf8(path);
-  AVFormatContext *rawFormat = nullptr;
-  if (avformat_open_input(&rawFormat, encodedPath.c_str(), nullptr, nullptr) <
-      0) {
-    return std::nullopt;
-  }
   const auto format = std::unique_ptr<AVFormatContext,
                                       void (*)(AVFormatContext *)>(
       rawFormat, [](AVFormatContext *value) { avformat_close_input(&value); });
@@ -443,6 +453,86 @@ decodeWebpWithFfmpeg(const std::filesystem::path &path,
   return std::nullopt;
 }
 
+std::optional<DecodedImageData>
+decodeWebpWithFfmpeg(const std::filesystem::path &path,
+                     const ImageDecodeOptions &options) {
+  if (stopped(options)) return std::nullopt;
+  const std::string encodedPath = fspath_to_utf8(path);
+  AVFormatContext *rawFormat = nullptr;
+  if (avformat_open_input(&rawFormat, encodedPath.c_str(), nullptr, nullptr) <
+      0) {
+    return std::nullopt;
+  }
+  return decodeWebpFormatWithFfmpeg(rawFormat, options);
+}
+
+std::optional<DecodedImageData>
+decodeWebpWithFfmpeg(std::span<const std::byte> encoded,
+                     const ImageDecodeOptions &options) {
+  struct MemoryInput {
+    std::span<const std::byte> encoded;
+    std::size_t offset = 0;
+  } input{encoded};
+  const auto read = +[](void *opaque, std::uint8_t *buffer, int bufferSize) {
+    auto &source = *static_cast<MemoryInput *>(opaque);
+    if (bufferSize <= 0 || source.offset >= source.encoded.size()) {
+      return AVERROR_EOF;
+    }
+    const std::size_t count = std::min(
+        static_cast<std::size_t>(bufferSize), source.encoded.size() - source.offset);
+    std::memcpy(buffer, source.encoded.data() + source.offset, count);
+    source.offset += count;
+    return static_cast<int>(count);
+  };
+  const auto seek = +[](void *opaque, std::int64_t offset, int whence) {
+    auto &source = *static_cast<MemoryInput *>(opaque);
+    const std::int64_t size = static_cast<std::int64_t>(source.encoded.size());
+    if (whence == AVSEEK_SIZE) return size;
+    const int origin = whence & ~AVSEEK_FORCE;
+    std::int64_t base = 0;
+    switch (origin) {
+    case SEEK_SET:
+      break;
+    case SEEK_CUR:
+      base = static_cast<std::int64_t>(source.offset);
+      break;
+    case SEEK_END:
+      base = size;
+      break;
+    default:
+      return static_cast<std::int64_t>(AVERROR(EINVAL));
+    }
+    if (offset < 0 ? offset == std::numeric_limits<std::int64_t>::min() ||
+                         base < -offset
+                   : base > size - offset) {
+      return static_cast<std::int64_t>(AVERROR(EINVAL));
+    }
+    source.offset = static_cast<std::size_t>(base + offset);
+    return base + offset;
+  };
+
+  constexpr int ioBufferSize = 4096;
+  auto *ioBuffer = static_cast<std::uint8_t *>(av_malloc(ioBufferSize));
+  if (ioBuffer == nullptr) return std::nullopt;
+  AVIOContext *rawIo =
+      avio_alloc_context(ioBuffer, ioBufferSize, 0, &input, read, nullptr, seek);
+  if (rawIo == nullptr) {
+    av_free(ioBuffer);
+    return std::nullopt;
+  }
+  const auto io = std::unique_ptr<AVIOContext, void (*)(AVIOContext *)>(
+      rawIo, [](AVIOContext *value) { avio_context_free(&value); });
+  AVFormatContext *rawFormat = avformat_alloc_context();
+  if (rawFormat == nullptr) return std::nullopt;
+  rawFormat->pb = io.get();
+  rawFormat->flags |= AVFMT_FLAG_CUSTOM_IO;
+  if (avformat_open_input(&rawFormat, nullptr, nullptr, nullptr) < 0) {
+    if (rawFormat != nullptr) avformat_free_context(rawFormat);
+    return std::nullopt;
+  }
+  return decodeWebpFormatWithFfmpeg(rawFormat, options);
+}
+
 } // namespace
 
 std::optional<DecodedImageData>
@@ -462,7 +552,9 @@ decodeImageMemory(std::span<const std::byte> encoded,
     const auto decoded = decodeLibGdxCim(encoded, options);
     if (decoded) return resize(*decoded, options);
     const auto wbmp = decodeWbmp(encoded, options);
-    return wbmp ? resize(*wbmp, options) : std::nullopt;
+    if (wbmp) return resize(*wbmp, options);
+    return isWebpEncoded(encoded) ? decodeWebpWithFfmpeg(encoded, options)
+                                  : std::nullopt;
   }
   std::size_t bytes = 0;
   if (stopped(options) ||

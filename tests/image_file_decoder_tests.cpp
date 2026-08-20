@@ -83,6 +83,27 @@ void testWebpFfmpegFallback() {
       0xfe, 0xf0, 0xc4, 0x0b, 0xff, 0x20, 0xb9, 0x61, 0x75, 0xc8, 0xd7,
       0xff, 0x20, 0x3f, 0xe4, 0x07, 0xfc, 0x80, 0xff, 0xf8, 0xf2, 0x00,
       0x00, 0x00};
+  std::vector<std::byte> encoded;
+  encoded.reserve(webp.size());
+  for (const unsigned char byte : webp) {
+    encoded.push_back(static_cast<std::byte>(byte));
+  }
+  const auto memoryDecoded = image_decode::decodeImageMemory(
+      encoded, {.maximumDimension = 16, .maximumEncodedBytes = 1024,
+                .maximumDecodedBytes = 1024});
+  expect(memoryDecoded && memoryDecoded->width == 2 &&
+             memoryDecoded->height == 2,
+         "WebP FFmpeg fallback decodes the bounded byte source used by "
+         "virtual resources");
+  const auto memoryResized = image_decode::decodeImageMemory(
+      encoded, {.maximumDimension = 16,
+                .maximumEncodedBytes = 1024,
+                .maximumDecodedBytes = 1024,
+                .targetWidth = 1,
+                .targetHeight = 1});
+  expect(memoryResized && memoryResized->width == 1 &&
+             memoryResized->height == 1,
+         "WebP FFmpeg byte fallback applies the requested target-size fit");
   const auto path = std::filesystem::temp_directory_path() /
                     "asobmashow-image-decoder-fallback.webp";
   {
