@@ -11,7 +11,6 @@
 #include <cstdint>
 #include <iterator>
 #include <limits>
-#include <map>
 #include <optional>
 #include <set>
 #include <unordered_map>
@@ -219,6 +218,7 @@ double beatorajaMainBpm(const bms_parser::Chart &chart,
     std::uint32_t hash = 0;
   };
   std::vector<Entry> entries;
+  std::unordered_map<std::uint64_t, std::size_t> entryIndexByBits;
   for (const auto *measure : chart.Measures) {
     if (measure == nullptr) {
       continue;
@@ -228,13 +228,13 @@ double beatorajaMainBpm(const bms_parser::Chart &chart,
         continue;
       }
       const std::uint64_t bits = javaDoubleBits(timeline->Bpm);
-      const auto found = std::ranges::find_if(
-          entries, [bits](const Entry &entry) { return entry.keyBits == bits; });
       const int noteCount = songInformationTimelineNoteCount(
           *timeline, chart, longNoteModeOverride);
-      if (found != entries.end()) {
-        found->noteCount += noteCount;
+      if (const auto found = entryIndexByBits.find(bits);
+          found != entryIndexByBits.end()) {
+        entries[found->second].noteCount += noteCount;
       } else {
+        entryIndexByBits.emplace(bits, entries.size());
         entries.push_back({.keyBits = bits,
                            .bpm = timeline->Bpm,
                            .noteCount = noteCount,
@@ -406,7 +406,12 @@ beatorajaSongInformation(const bms_parser::Chart &chart,
   // bucket lets a distant malformed timeline allocate gigabytes, while its
   // aggregate results only depend on sparse note changes. Keep the source's
   // inclusive per-second semantics as delta intervals instead.
-  std::map<std::size_t, long long> noteCountDeltas;
+  std::unordered_map<std::size_t, long long> noteCountDeltas;
+  if (chart.Meta.TotalNotes > 0) {
+    noteCountDeltas.reserve(std::min<std::size_t>(
+        static_cast<std::size_t>(chart.Meta.TotalNotes) * 2U + 2U,
+        1U << 20U));
+  }
   const auto addNoteRange = [&](std::size_t start, std::size_t end) {
     if (start > end) {
       return;
@@ -468,6 +473,10 @@ beatorajaSongInformation(const bms_parser::Chart &chart,
   const int minimumDensity =
       chart.Meta.TotalNotes / bucketCountForMinimum / 4;
   PlayfieldSongInformation result;
+  std::vector<std::pair<std::size_t, long long>> orderedNoteCountDeltas(
+      noteCountDeltas.begin(), noteCountDeltas.end());
+  std::ranges::sort(orderedNoteCountDeltas, {},
+                    [](const auto &entry) { return entry.first; });
   struct NoteCountSegment {
     std::size_t start = 0;
     std::size_t end = 0;
@@ -483,7 +492,7 @@ beatorajaSongInformation(const bms_parser::Chart &chart,
           {.start = segmentStart, .end = end, .notes = currentNotes});
     }
   };
-  for (const auto &[second, delta] : noteCountDeltas) {
+  for (const auto &[second, delta] : orderedNoteCountDeltas) {
     if (second >= bucketCount) {
       break;
     }
@@ -511,7 +520,7 @@ beatorajaSongInformation(const bms_parser::Chart &chart,
       std::min<std::size_t>(5U, bucketCount - borderPosition - 1U);
   const std::size_t lastWindowStart = bucketCount - window - 1U;
   std::set<std::size_t> windowStarts = {borderPosition, lastWindowStart};
-  for (const auto &[second, delta] : noteCountDeltas) {
+  for (const auto &[second, delta] : orderedNoteCountDeltas) {
     (void)delta;
     const std::size_t first =
         second > window ? second - window : static_cast<std::size_t>(0);
