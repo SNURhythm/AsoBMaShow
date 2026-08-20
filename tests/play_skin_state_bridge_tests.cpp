@@ -2678,9 +2678,18 @@ void testClearAndFullComboTimersFollowPinnedBmsPlayerState() {
   musicEnded.clock.visualTimeMicros = 11'001'000;
   musicEnded.clock.gameplayTimeMicros = 10'001'000;
   bridge.beginFrame(musicEnded, projectionAt(227));
+  bool pomyuMotionsStopped = true;
+  for (int id = 900; id <= 907; ++id) {
+    pomyuMotionsStopped =
+        pomyuMotionsStopped &&
+        bridge.timerProperty({id}) == kPlayfieldTimestampOff;
+  }
   expect(bridge.timerProperty({908}) == 10'001'000 &&
-             bridge.timerProperty({2}) == kPlayfieldTimestampOff,
-         "music-end starts after the exact complete playtime before fadeout");
+             bridge.timerProperty({2}) == kPlayfieldTimestampOff &&
+             pomyuMotionsStopped &&
+             bridge.timerProperty({909}) == kPlayfieldTimestampOff,
+         "music-end starts after the exact complete playtime before fadeout "
+         "and stops every Pomyu motion timer");
   bridge.discardFrame();
 
   auto fadingOut = musicEnded;

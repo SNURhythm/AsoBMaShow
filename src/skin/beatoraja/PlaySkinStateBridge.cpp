@@ -1107,6 +1107,14 @@ void PlaySkinStateBridge::updatePinnedPlayTimers() {
     fullComboTimerStartMicros_ = skinStateTimestampMicros(*snapshot, source);
   }
   updatePinnedPomyuTimers();
+  // BMSPlayer updates PomyuCharaProcessor for the last STATE_PLAY frame,
+  // then turns every motion timer off as it enters STATE_FINISHED. Apply the
+  // stop after the processor update so neutral and dance cannot restart on
+  // the music-end frame or later finish-margin frames.
+  if (musicEndTimerStartMicros_ != kPlayfieldTimestampOff) {
+    pomyuTimerStarts_.fill(kPlayfieldTimestampOff);
+    pomyuDanceTimerStartMicros_ = kPlayfieldTimestampOff;
+  }
 }
 
 void PlaySkinStateBridge::updatePinnedLaneCoverOffsets() {
