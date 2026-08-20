@@ -126,6 +126,7 @@ createChartDatabase(const std::filesystem::path &databasePath) {
       "total_scratch_notes INTEGER,"
       "total_backspin_notes INTEGER,"
       "ln_mode INTEGER NOT NULL DEFAULT 0,"
+      "has_document INTEGER NOT NULL DEFAULT 0,"
       "source_priority INTEGER,"
       "source_archive_size INTEGER"
       ")");
