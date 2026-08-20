@@ -3,6 +3,7 @@
 //
 
 #include "GamePlayScene.h"
+#include "GameplayBmsResourceAvailability.h"
 #include "GamePlayStartup.h"
 #include "GamePlayTiming.h"
 #include "PracticeNoteFinalizer.h"
@@ -21,7 +22,6 @@
 #include "../../practice/PracticeResultFlow.h"
 #include "../../rendering/SimpleBatchRenderer.h"
 #include "../../skin/beatoraja/GameplaySkinEndAnimation.h"
-#include "../../view/ImageFileDecoder.h"
 #include "../../view/TextView.h"
 #include "../../view/IconText.h"
 #include "BuiltInPlayfieldPresentation.h"
@@ -85,19 +85,6 @@ constexpr long long kReplayTouchMoveMinIntervalMicros = 8000LL;
 constexpr float kReplayTouchMoveMinDistance = 0.002f;
 constexpr long long kHellChargeGaugeTickMicros = 200000LL;
 
-bool bmsResourceImageAvailable(const bms_parser::ChartMeta &meta,
-                               const std::filesystem::path &declaredPath) {
-  if (declaredPath.empty() || meta.BmsPath.empty()) {
-    return false;
-  }
-  try {
-    return imageResourceAvailable(meta.BmsPath.parent_path() / declaredPath);
-  } catch (...) {
-    // BMSResource.setBMSFile() catches decoder failures and leaves the
-    // corresponding TextureRegion absent.
-    return false;
-  }
-}
 constexpr long long kCoursePauseHoldMicros = 650000LL;
 constexpr long long kCoursePauseRewindMicros = 260000LL;
 constexpr float kPi = 3.14159265358979323846f;
@@ -2751,9 +2738,9 @@ void GamePlayScene::init() {
   playfieldSongReviewFavorite = 0;
   playfieldChartHasDocument = false;
   playfieldStageFileAvailable =
-      bmsResourceImageAvailable(chart->Meta, chart->Meta.StageFile);
+      gameplay::bmsResourceImagePresent(chart->Meta, chart->Meta.StageFile);
   playfieldBackBmpAvailable =
-      bmsResourceImageAvailable(chart->Meta, chart->Meta.BackBmp);
+      gameplay::bmsResourceImagePresent(chart->Meta, chart->Meta.BackBmp);
   if (auto chartSession = context.chartRepository.OpenSession()) {
     const std::array<std::filesystem::path, 1> paths{chart->Meta.BmsPath};
     const auto records = chartSession->SelectChartMetaByPaths(paths);

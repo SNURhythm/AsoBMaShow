@@ -1,5 +1,6 @@
 #include "../src/ArchiveFile.h"
 #include "../src/ArchiveRAII.h"
+#include "../src/scene/play/GameplayBmsResourceAvailability.h"
 
 #include <archive_entry.h>
 
@@ -164,6 +165,35 @@ void testZipIndexPreservesFilenameBeyondEmbeddedStatBuffer() {
   assert(archive_file::listEntries(archivePath, entries, &error));
   assert(entries.size() == 1);
   assert(entries.front().path.generic_string() == entryPath);
+}
+
+void testGameplayBmsResourceAvailabilityDoesNotDecodeMetadataImages() {
+  TempDirectory temporary;
+  const auto chartPath = temporary.path() / "chart.bms";
+  const auto stageFilePath = temporary.path() / "stage.webp";
+  std::ofstream(chartPath) << "#TITLE probe\n";
+  std::ofstream(stageFilePath) << "not an encoded image";
+  bms_parser::ChartMeta meta;
+  meta.BmsPath = chartPath;
+
+  assert(gameplay::bmsResourceImagePresent(meta, "stage.webp"));
+  assert(!gameplay::bmsResourceImagePresent(meta, "missing.webp"));
+  assert(!gameplay::bmsResourceImagePresent(meta, {}));
+}
+
+void testGameplayBmsResourceAvailabilityResolvesVirtualChartNeighbors() {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "charts.zip";
+  writeStoredZip(
+      archivePath,
+      {"folder/chart.bms", "folder/stage.webp", "folder/back.bmp"});
+  bms_parser::ChartMeta meta;
+  meta.BmsPath =
+      archive_file::makeVirtualPath(archivePath, "folder/chart.bms");
+
+  assert(gameplay::bmsResourceImagePresent(meta, "stage.webp"));
+  assert(gameplay::bmsResourceImagePresent(meta, "back.bmp"));
+  assert(!gameplay::bmsResourceImagePresent(meta, "missing.png"));
 }
 
 void testZipIndexRejectsEmbeddedNulInShortFilename() {
@@ -428,6 +458,8 @@ void testDebugLogRetainsNewestThousandLines() {
 int main() {
   testZipIndexAmortizesPausePolling();
   testZipIndexPreservesFilenameBeyondEmbeddedStatBuffer();
+  testGameplayBmsResourceAvailabilityDoesNotDecodeMetadataImages();
+  testGameplayBmsResourceAvailabilityResolvesVirtualChartNeighbors();
   testZipIndexRejectsEmbeddedNulInShortFilename();
   testZipIndexPausePollingStillCancelsDuringLargeDirectory();
   testZipIndexUsesCommonSystemEntryFilter();
