@@ -64,6 +64,14 @@ struct ChartVisualSpeedPoint {
   bool operator==(const ChartVisualSpeedPoint &) const = default;
 };
 
+struct ChartVisualTimelineAuthority {
+  double bpm = 0.0;
+  double scrollRate = 1.0;
+  double speedMultiplier = 1.0;
+
+  bool operator==(const ChartVisualTimelineAuthority &) const = default;
+};
+
 struct ChartVisualNote {
   ChartVisualId id = 0;
   ChartVisualId timelineId = 0;
@@ -152,6 +160,7 @@ struct PlayfieldChartVisualModel {
   std::string chartMd5;
   std::string chartSha256;
   int keyCount = 0;
+  double initialBpm = 0.0;
   PlayfieldChartTextMetadata text;
   PlayfieldChartStaticMetadata staticMetadata;
   std::vector<int> laneOrder;
@@ -180,3 +189,9 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
 [[nodiscard]] double
 speedObjectMultiplierAtTime(const PlayfieldChartVisualModel &model,
                             long long timeMicros) noexcept;
+
+// LaneRenderer resolves BPM, #SCROLL, and SPEED after applying the note-only
+// display clock adjustment. Sample all three from one immutable timeline.
+[[nodiscard]] ChartVisualTimelineAuthority
+chartVisualTimelineAuthorityAtTime(const PlayfieldChartVisualModel &model,
+                                   long long timeMicros) noexcept;

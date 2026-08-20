@@ -573,6 +573,7 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
   result.chartMd5 = chart.Meta.MD5;
   result.chartSha256 = chart.Meta.SHA256;
   result.keyCount = chart.Meta.KeyMode;
+  result.initialBpm = chart.Meta.Bpm;
   result.text.title = chart.Meta.Title;
   result.text.subtitle = chart.Meta.SubTitle;
   result.text.artist = chart.Meta.Artist;
@@ -896,4 +897,21 @@ double speedObjectMultiplierAtTime(const PlayfieldChartVisualModel &model,
                     static_cast<double>(end - start);
   progress = std::max(0.0, std::min(1.0, progress));
   return speed + (next->speed - speed) * progress;
+}
+
+ChartVisualTimelineAuthority chartVisualTimelineAuthorityAtTime(
+    const PlayfieldChartVisualModel &model, long long timeMicros) noexcept {
+  ChartVisualTimelineAuthority result{.bpm = model.initialBpm};
+  const auto next = std::upper_bound(
+      model.timelines.begin(), model.timelines.end(), timeMicros,
+      [](long long time, const ChartVisualTimeline &timeline) {
+        return time < timeline.timeMicros;
+      });
+  if (next != model.timelines.begin()) {
+    const auto &current = *std::prev(next);
+    result.bpm = current.bpm;
+    result.scrollRate = current.scrollRate;
+  }
+  result.speedMultiplier = speedObjectMultiplierAtTime(model, timeMicros);
+  return result;
 }

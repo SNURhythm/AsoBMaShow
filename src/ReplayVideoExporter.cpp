@@ -768,35 +768,6 @@ std::string replayExportPlayOptionLabel(const ReplayData &replay) {
   return label.empty() ? "" : "Option: " + label;
 }
 
-// LaneRenderer advances both BPM and #SCROLL from its timeline cursor before
-// computing the live green number and note travel.  Export must carry the
-// same pair into the shared presentation instead of treating BPM changes as
-// the only visual-rate state.
-std::vector<const bms_parser::TimeLine *>
-collectPlaybackRateChangeTimelines(const bms_parser::Chart &chart) {
-  std::vector<const bms_parser::TimeLine *> timelines;
-  for (const auto &measure : chart.Measures) {
-    if (measure == nullptr) {
-      continue;
-    }
-    for (const auto *timeline : measure->TimeLines) {
-      if (timeline == nullptr ||
-          (!timeline->BpmChange && !timeline->ScrollChange) ||
-          !std::isfinite(timeline->Bpm) || timeline->Bpm <= 0.0 ||
-          !std::isfinite(timeline->Scroll)) {
-        continue;
-      }
-      timelines.push_back(timeline);
-    }
-  }
-  std::sort(timelines.begin(), timelines.end(),
-            [](const bms_parser::TimeLine *lhs,
-               const bms_parser::TimeLine *rhs) {
-              return lhs->Timing < rhs->Timing;
-            });
-  return timelines;
-}
-
 struct ReplayAudioTrackResult {
   bool success = false;
   std::filesystem::path outputPath;
@@ -2734,22 +2705,6 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   const auto replayPersistedScore = replayExportPersistedScore(context, chart.Meta);
   const auto replayPlayerScoreHistory = replayExportPlayerScoreHistory(context);
 
-  const auto playbackRateChangeTimelines =
-      collectPlaybackRateChangeTimelines(chart);
-  size_t playbackRateChangeCursor = 0;
-  double currentExportBpm = chart.Meta.Bpm;
-  double currentExportScrollRate = 1.0;
-  auto applyExportPlaybackRate = [&](long long songTimeMicros) {
-    while (playbackRateChangeCursor < playbackRateChangeTimelines.size() &&
-           playbackRateChangeTimelines[playbackRateChangeCursor]->Timing <=
-               songTimeMicros) {
-      const auto *timeline =
-          playbackRateChangeTimelines[playbackRateChangeCursor];
-      currentExportBpm = timeline->Bpm;
-      currentExportScrollRate = timeline->Scroll;
-      ++playbackRateChangeCursor;
-    }
-  };
   const auto initialLaneCover =
       replay_video_export::replayLaneCoverInitialState(replay, settings, false);
   replay_video_export::ReplayLaneCoverPlayback laneCoverPlayback(
@@ -3055,23 +3010,22 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
       }
       ++replayCursor;
     }
-    applyExportPlaybackRate(frameTiming.gameplayTimeMicros);
-    const double currentExportSpeedMultiplier =
-        replay_video_export::replayGameplaySpeedMultiplier(
+    const auto timelineAuthority =
+        replay_video_export::replayGameplayTimelineAuthority(
             exportChartVisualModel, presentationFrameState, settings);
     const auto laneCover = laneCoverPlayback.advance(
         replay.laneCoverEvents, frameTiming.gameplayTimeMicros);
     for (const auto &transition : laneCover.transitions) {
       preparedGameplay.presentation->applyLaneCoverTransition(
-          transition, currentExportBpm);
+          transition, timelineAuthority.bpm);
     }
     preparedGameplay.presentation->releaseDueClassicLongNoteTails(
         frameTiming.gameplayTimeMicros);
 
     PlayfieldAuthorityUpdate frameAuthority{
-        .currentBpm = currentExportBpm,
-        .currentScrollRate = currentExportScrollRate,
-        .currentSpeedMultiplier = currentExportSpeedMultiplier,
+        .currentBpm = timelineAuthority.bpm,
+        .currentScrollRate = timelineAuthority.scrollRate,
+        .currentSpeedMultiplier = timelineAuthority.speedMultiplier,
         .judgementCounters = replayJudgementAuthority.judgementCounters(),
         .judgementFastSlowCounters =
             replayJudgementAuthority.judgementFastSlowCounters(),
@@ -3742,22 +3696,6 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
         stage.initialGaugeState.gaugeProfile,
         stageReplay.gaugeAutoShiftLowerBound);
 
-    const auto playbackRateChangeTimelines =
-        collectPlaybackRateChangeTimelines(chart);
-    size_t playbackRateChangeCursor = 0;
-    double currentExportBpm = chart.Meta.Bpm;
-    double currentExportScrollRate = 1.0;
-    auto applyExportPlaybackRate = [&](long long songTimeMicros) {
-      while (playbackRateChangeCursor < playbackRateChangeTimelines.size() &&
-             playbackRateChangeTimelines[playbackRateChangeCursor]->Timing <=
-                 songTimeMicros) {
-        const auto *timeline =
-            playbackRateChangeTimelines[playbackRateChangeCursor];
-        currentExportBpm = timeline->Bpm;
-        currentExportScrollRate = timeline->Scroll;
-        ++playbackRateChangeCursor;
-      }
-    };
     const auto initialLaneCover =
         replay_video_export::replayLaneCoverInitialState(
             stageReplay, settings, stage.constraints.noSpeed);
@@ -3838,9 +3776,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
         }
         ++replayCursor;
       }
-      applyExportPlaybackRate(frameTiming.gameplayTimeMicros);
-      const double currentExportSpeedMultiplier =
-          replay_video_export::replayGameplaySpeedMultiplier(
+      const auto timelineAuthority =
+          replay_video_export::replayGameplayTimelineAuthority(
               stageChartVisualModel, presentationFrameState, settings);
       const auto laneCover = stage.constraints.noSpeed
                                  ? replay_video_export::ReplayLaneCoverFrameState{
@@ -3851,14 +3788,15 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                                        stageReplay.laneCoverEvents,
                                        frameTiming.gameplayTimeMicros);
       for (const auto &transition : laneCover.transitions) {
-        presentation.applyLaneCoverTransition(transition, currentExportBpm);
+        presentation.applyLaneCoverTransition(transition,
+                                              timelineAuthority.bpm);
       }
       presentation.releaseDueClassicLongNoteTails(
           frameTiming.gameplayTimeMicros);
       PlayfieldAuthorityUpdate frameAuthority{
-          .currentBpm = currentExportBpm,
-          .currentScrollRate = currentExportScrollRate,
-          .currentSpeedMultiplier = currentExportSpeedMultiplier,
+          .currentBpm = timelineAuthority.bpm,
+          .currentScrollRate = timelineAuthority.scrollRate,
+          .currentSpeedMultiplier = timelineAuthority.speedMultiplier,
           .judgementCounters = replayJudgementAuthority.judgementCounters(),
           .judgementFastSlowCounters =
               replayJudgementAuthority.judgementFastSlowCounters(),

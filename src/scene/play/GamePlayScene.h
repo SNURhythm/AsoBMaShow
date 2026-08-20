@@ -193,6 +193,8 @@ private:
   [[nodiscard]] long long getVisualTimeMicros(long long songTimeMicros) const;
   [[nodiscard]] long long
   getNoteDisplayTimeMicros(long long visualTimeMicros) const;
+  [[nodiscard]] double
+  noteDisplayBpmAtGameplayTime(long long gameplayTimeMicros) const;
   View *pauseLayout = nullptr;
   View *playbackFailureLayout = nullptr;
   Button *pauseButton = nullptr;

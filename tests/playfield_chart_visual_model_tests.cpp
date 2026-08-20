@@ -32,6 +32,7 @@ bool testStaticChartMetadata() {
   chart.Meta.MD5 = "chart-md5";
   chart.Meta.SHA256 = "chart-sha256";
   chart.Meta.Rank = 72;
+  chart.Meta.Bpm = 150.0;
   chart.Meta.MinBpm = 124.25;
   chart.Meta.MaxBpm = 248.5;
   chart.Meta.TotalLength = 123'456'789;
@@ -50,6 +51,7 @@ bool testStaticChartMetadata() {
   const auto model = buildPlayfieldChartVisualModel(chart, 0);
   const auto &metadata = model.staticMetadata;
   if (model.chartMd5 != "chart-md5" || model.chartSha256 != "chart-sha256" ||
+      model.initialBpm != 150.0 ||
       metadata.difficulty != 3 || metadata.judgeRank != 72 ||
       metadata.minimumBpm != 124.25 || metadata.maximumBpm != 248.5 ||
       metadata.durationMicros != 123'456'789 || metadata.totalNotes != 987 ||

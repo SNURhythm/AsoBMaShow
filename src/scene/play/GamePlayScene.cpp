@@ -3611,6 +3611,10 @@ void GamePlayScene::consumeStartSelectInput(
 
 void GamePlayScene::applyStartSelectControlActions(
     const std::vector<gameplay::StartSelectControlAction> &actions) {
+  const auto currentNoteDisplayBpm = [this] {
+    return noteDisplayBpmAtGameplayTime(
+        getGameplayTimeMicros(context.jukebox.getTimeMicros()));
+  };
   for (const auto &action : actions) {
     switch (action.kind) {
     case gameplay::StartSelectControlActionKind::AdjustHispeed:
@@ -3653,7 +3657,7 @@ void GamePlayScene::applyStartSelectControlActions(
             context.settings.noteStartPositionPercent = nextPercent;
             playfieldLaneCoverPercent = nextPercent;
             playfieldHispeedState->setLaneCover(
-                nextPercent, currentGameplayBpm,
+                nextPercent, currentNoteDisplayBpm(),
                 context.settings.hispeedAutoAdjust);
             playfieldLaneCoverResetPending = false;
             refreshRuntimePresentationConfiguration();
@@ -3673,7 +3677,7 @@ void GamePlayScene::applyStartSelectControlActions(
             playfieldLiftRatio = next;
             context.settings.liftRatio = next;
             playfieldHispeedState->setLaneCover(
-                playfieldLaneCoverPercent, currentGameplayBpm,
+                playfieldLaneCoverPercent, currentNoteDisplayBpm(),
                 context.settings.hispeedAutoAdjust);
             refreshRuntimePresentationConfiguration();
             (void)context.saveSettings();
@@ -3687,7 +3691,7 @@ void GamePlayScene::applyStartSelectControlActions(
             playfieldHiddenRatio = next;
             context.settings.hiddenRatio = next;
             playfieldHispeedState->setLaneCover(
-                playfieldLaneCoverPercent, currentGameplayBpm,
+                playfieldLaneCoverPercent, currentNoteDisplayBpm(),
                 context.settings.hispeedAutoAdjust);
             refreshRuntimePresentationConfiguration();
             (void)context.saveSettings();
@@ -3790,8 +3794,9 @@ void GamePlayScene::adjustLaneCoverFromInput(int deltaPercent) {
   context.settings.noteStartPositionPercent = next;
   playfieldLaneCoverPercent = next;
   playfieldLaneCoverPercentExact = static_cast<float>(next);
-  playfieldHispeedState->setLaneCover(next, currentGameplayBpm,
-                                      context.settings.hispeedAutoAdjust);
+  playfieldHispeedState->setLaneCover(
+      next, noteDisplayBpmAtGameplayTime(chartTimeMicros),
+      context.settings.hispeedAutoAdjust);
   playfieldLaneCoverResetPending = false;
   refreshRuntimePresentationConfiguration();
   floatingLaneCoverSettingsDirty = true;
@@ -4769,6 +4774,16 @@ long long GamePlayScene::getNoteDisplayTimeMicros(
       visualTimeMicros, context.settings.notesDisplayTimingMilliseconds);
 }
 
+double GamePlayScene::noteDisplayBpmAtGameplayTime(
+    long long gameplayTimeMicros) const {
+  const auto authority = chartVisualTimelineAuthorityAtTime(
+      playfieldChartVisualModel,
+      getNoteDisplayTimeMicros(getVisualTimeMicros(gameplayTimeMicros)));
+  return std::isfinite(authority.bpm) && authority.bpm > 0.0
+             ? authority.bpm
+             : currentGameplayBpm;
+}
+
 PlayfieldJudgeEventClock
 GamePlayScene::judgeEventClock(long long songTimeMicros) const {
   return makePlayfieldJudgeEventClock(songTimeMicros,
@@ -4830,16 +4845,16 @@ void GamePlayScene::capturePlayfieldVisualState(
           : ((options.practiceMode || options.practiceSession != nullptr)
                  ? PlayfieldGameplayMode::Practice
                  : PlayfieldGameplayMode::Play);
-  const double sourceSpeed = speedObjectMultiplierAtTime(
+  const auto timelineAuthority = chartVisualTimelineAuthorityAtTime(
       playfieldChartVisualModel, getNoteDisplayTimeMicros(visualTimeMicros));
   const double currentSpeedMultiplier =
       context.settings.constantScroll &&
               gameplayMode != PlayfieldGameplayMode::Practice
           ? 1.0
-          : sourceSpeed;
+          : timelineAuthority.speedMultiplier;
   PlayfieldAuthorityUpdate authority{
-      .currentBpm = currentGameplayBpm,
-      .currentScrollRate = currentGameplayScrollRate,
+      .currentBpm = timelineAuthority.bpm,
+      .currentScrollRate = timelineAuthority.scrollRate,
       .currentSpeedMultiplier = currentSpeedMultiplier,
       .judgementCounters = state->judgeCount,
       .judgementFastSlowCounters = [&] {
@@ -6280,7 +6295,8 @@ void GamePlayScene::applyReplayLaneCoverEvent(
     playfieldHispeedState->setLaneCoverEnabled(event.laneCoverEnabled);
   } else {
     playfieldHispeedState->setLaneCover(event.noteStartPositionPercent,
-                                        currentGameplayBpm,
+                                        noteDisplayBpmAtGameplayTime(
+                                            event.songTimeMicros),
                                         event.resetVisibleTimeReference);
   }
   playfieldLaneCoverResetPending = false;
@@ -6723,7 +6739,9 @@ bool GamePlayScene::handleFloatingLaneCoverInput(SDL_FingerID fingerIndex,
     if (next == previous) {
       return false;
     }
-    playfieldHispeedState->setLaneCover(next, currentGameplayBpm,
+    playfieldHispeedState->setLaneCover(next,
+                                        noteDisplayBpmAtGameplayTime(
+                                            songTimeMicros),
                                         context.settings.hispeedAutoAdjust);
     playfieldLaneCoverResetPending = false;
     refreshRuntimePresentationConfiguration();

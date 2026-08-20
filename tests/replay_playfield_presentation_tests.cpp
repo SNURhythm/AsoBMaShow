@@ -846,13 +846,18 @@ void testReplayGameplayTargetOptionAuthorityUsesSourceDefault() {
 
 void testReplayGameplaySpeedUsesNoteDisplayClock() {
   PlayfieldChartVisualModel model;
+  model.initialBpm = 120.0;
   model.timelines = {
       {.id = 1,
        .timeMicros = 1'000'000,
+       .bpm = 150.0,
+       .scrollRate = 0.5,
        .speed = 0.5,
        .hasSpeedObject = true},
       {.id = 2,
        .timeMicros = 2'000'000,
+       .bpm = 180.0,
+       .scrollRate = 1.5,
        .speed = 1.5,
        .hasSpeedObject = true},
   };
@@ -865,10 +870,14 @@ void testReplayGameplaySpeedUsesNoteDisplayClock() {
   AppSettings settings;
   settings.notesDisplayTimingMilliseconds = 500;
 
-  expect(std::abs(replay_video_export::replayGameplaySpeedMultiplier(
-                      model, frame, settings) -
-                  1.5) < 0.000001,
-         "replay export samples SPEED objects on the offset note display clock");
+  const auto authority =
+      replay_video_export::replayGameplayTimelineAuthority(model, frame,
+                                                            settings);
+  expect(std::abs(authority.bpm - 180.0) < 0.000001 &&
+             std::abs(authority.scrollRate - 1.5) < 0.000001 &&
+             std::abs(authority.speedMultiplier - 1.5) < 0.000001,
+         "replay export samples BPM, SCROLL, and SPEED on the same offset "
+         "note display clock");
 }
 
 void testReplayGameplayFailureAnimationStartsAtFailureClock() {
