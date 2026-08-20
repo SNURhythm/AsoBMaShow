@@ -71,6 +71,10 @@ replayGameplayNoteDisplayTimeMicros(const ReplayGameplayFrameState &,
     const PlayfieldChartVisualModel &, const ReplayGameplayFrameState &,
     const AppSettings &) noexcept;
 
+[[nodiscard]] bool replayGameplayFailureAnimationActive(
+    long long gameplayTimeMicros,
+    std::optional<long long> failureMicros) noexcept;
+
 void applyReplayGameplayGaugeAuthority(PlayfieldAuthorityUpdate &,
                                        const ReplayData &, GaugeType,
                                        float currentGauge) noexcept;

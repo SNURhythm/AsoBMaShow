@@ -805,6 +805,16 @@ void testReplayGameplaySpeedUsesNoteDisplayClock() {
          "replay export samples SPEED objects on the offset note display clock");
 }
 
+void testReplayGameplayFailureAnimationStartsAtFailureClock() {
+  expect(!replay_video_export::replayGameplayFailureAnimationActive(
+             999'999, 1'000'000) &&
+             replay_video_export::replayGameplayFailureAnimationActive(
+                 1'000'000, 1'000'000) &&
+             !replay_video_export::replayGameplayFailureAnimationActive(
+                 2'000'000, std::nullopt),
+         "replay export starts the failed animation at the recorded failure clock");
+}
+
 void testReplayGameplayStatePlayDeadlineMatchesPinnedBmsPlayer() {
   bms_parser::Chart chart;
   chart.Meta.PlayLength = 10'000'000;
@@ -2150,6 +2160,7 @@ int main() {
   testReplayGameplayFrameStateMirrorsLiveTimerAndStartClocks();
   testReplayGameplayGaugeAuthorityPreservesRecordedLowerBound();
   testReplayGameplaySpeedUsesNoteDisplayClock();
+  testReplayGameplayFailureAnimationStartsAtFailureClock();
   testReplayGameplayStatePlayDeadlineMatchesPinnedBmsPlayer();
   testReplayGameplayTransitionIgnoresChartTailAfterLastLaneNote();
   testReplayAudioTailDoesNotExtendGameplayFrames();

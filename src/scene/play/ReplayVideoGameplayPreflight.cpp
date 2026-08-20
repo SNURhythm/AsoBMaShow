@@ -240,6 +240,12 @@ double replayGameplaySpeedMultiplier(
                    replayGameplayNoteDisplayTimeMicros(frame, settings));
 }
 
+bool replayGameplayFailureAnimationActive(
+    long long gameplayTimeMicros,
+    std::optional<long long> failureMicros) noexcept {
+  return failureMicros.has_value() && gameplayTimeMicros >= *failureMicros;
+}
+
 void applyReplayGameplayGaugeAuthority(PlayfieldAuthorityUpdate &authority,
                                        const ReplayData &replay,
                                        GaugeType currentGaugeType,

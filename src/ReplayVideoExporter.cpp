@@ -2758,6 +2758,11 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
       resolveGaugeProfile(GaugeProfile::Standard, chart.Meta.KeyMode);
   const RhythmState initialGaugeState =
       replay_result::BuildInitialGaugeState(chart, replay, gaugeProfile);
+  const std::optional<long long> failureMicros =
+      stoppedOnGaugeFailure
+          ? replay_result::FindGaugeFailureMicros(
+                chart, replay, GaugeProfile::Standard)
+          : std::nullopt;
   GaugeType replayGaugeType = initialGaugeState.gaugeType;
   float replayGauge = initialGaugeState.currentGauge;
   const std::optional<ResultPreviousBestData> previousBest =
@@ -2797,11 +2802,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   const size_t resultFrameCount = static_cast<size_t>(
       std::ceil(static_cast<long double>(resultTailMicros) * fps / 1000000.0L));
   const size_t frameCount = gameplayFrameCount + resultFrameCount;
-  const ReplayData resultReplay = replayThroughFailure(
-      replay, stoppedOnGaugeFailure
-                  ? replay_result::FindGaugeFailureMicros(
-                        chart, replay, GaugeProfile::Standard)
-                  : std::nullopt);
+  const ReplayData resultReplay = replayThroughFailure(replay, failureMicros);
   const RhythmState replayResultState =
       replay_result::BuildResultState(chart, resultReplay);
   rendering::SimpleBatchRenderer resultGraphBatch;
@@ -3119,6 +3120,9 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
         .liftRatio = settings.liftRatio,
         .hiddenEnabled = settings.hiddenEnabled,
         .hiddenRatio = settings.hiddenRatio,
+        .failureAnimationActive =
+            replay_video_export::replayGameplayFailureAnimationActive(
+                frameTiming.gameplayTimeMicros, failureMicros),
         .laneCoverChanged = false,
     };
     replay_video_export::applyReplayGameplayGaugeAuthority(
@@ -3902,6 +3906,9 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
           .hiddenEnabled = settings.hiddenEnabled,
           .hiddenRatio = stage.constraints.noSpeed ? 0.0F
                                                    : settings.hiddenRatio,
+          .failureAnimationActive =
+              replay_video_export::replayGameplayFailureAnimationActive(
+                  frameTiming.gameplayTimeMicros, stage.failureMicros),
           .laneCoverChanged = false,
       };
       replay_video_export::applyReplayGameplayGaugeAuthority(
