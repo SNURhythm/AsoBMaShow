@@ -170,6 +170,22 @@ void testLegacyPresetDefaultsGaugeAutoShiftOff() {
          "version-one preset JSON without auto shift defaults it off");
 }
 
+void testGradeGaugePresetUsesDocumentedNormalFallback() {
+  TempDirectory temp;
+  practice::PresetStore store(temp.path());
+  auto grade = configuration(1'000'000, 5'000'000);
+  grade.gaugeType = GaugeType::Grade;
+  std::string error;
+  expect(store.saveLastUsed(kHash, grade, error),
+         "ephemeral Grade practice gauge saves with its portable fallback: " +
+             error);
+  const auto loaded = store.load(kHash, 10'000'000);
+  expect(loaded.status == versioned_json::LoadStatus::Loaded &&
+             loaded.data.lastUsed.gaugeType == GaugeType::Normal,
+         "portable presets explicitly normalize ephemeral Grade gauges to "
+         "Normal");
+}
+
 void testHashMismatchIsRejected() {
   TempDirectory temp;
   practice::PresetStore store(temp.path());
@@ -556,6 +572,7 @@ void testLoadResultUsabilityAndNotices() {
 int main() {
   testRoundTripAndMutations();
   testLegacyPresetDefaultsGaugeAutoShiftOff();
+  testGradeGaugePresetUsesDocumentedNormalFallback();
   testHashMismatchIsRejected();
   testPortableFilenameClassificationIsExact();
   testPortableFileValidationRejectsInvalidData();
