@@ -5324,7 +5324,9 @@ void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
                     ? std::optional<std::string>(
                           resultPersistenceOptions.chartAttempt->result.attemptId)
                     : std::nullopt,
-                true),
+                true,
+                ResultTableContext{.tableName = options.tableName,
+                                   .tableLevel = options.tableLevel}),
             false);
         return false;
       },

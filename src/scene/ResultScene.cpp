@@ -371,7 +371,8 @@ ResultScene::ResultScene(
     bms_parser::Chart *reusableRetryChart,
     std::optional<ResultPacemakerData> pacemakerOverride,
     const ReplayData *analyticsSource,
-    std::optional<std::string> modernReplayAttemptId, bool retrySameAllowed)
+    std::optional<std::string> modernReplayAttemptId, bool retrySameAllowed,
+    ResultTableContext tableContext)
     : Scene(context),
       source(LocalResultSource{
           .meta = meta,
@@ -391,6 +392,7 @@ ResultScene::ResultScene(
           .persistenceOptions = std::move(persistenceOptions),
           .practiceOptions = std::move(practiceOptions),
           .courseOptions = std::move(courseOptions),
+          .tableContext = std::move(tableContext),
           .ownedReusableRetryChart = std::move(ownedReusableRetryChart),
           .pacemakerTarget = pacemaker::normalizeTargetId(
               pacemakerTarget.empty() ? context.settings.selectedPacemakerTarget
@@ -2384,6 +2386,7 @@ void ResultScene::startRetry(bool samePattern) {
                 ? pacemaker::kTargetOff
                 : pacemaker::normalizeTargetId(
                       context.settings.selectedPacemakerTarget);
+        applyResultTableContext(options, local->tableContext);
         options.playback = retryPlayback;
         options.ownsChart = true;
         options.requiredRulesetDescriptor = local->attemptProvenance.ruleset;
@@ -2554,6 +2557,7 @@ void ResultScene::startReplay() {
             .replayData = replayData,
             .ownsChart = true,
         };
+        applyResultTableContext(replayOptions, local->tableContext);
         applyReplayProvenanceToStartOptions(replayOptions, *replayData);
         context.sceneManager->changeScene(
             std::make_unique<GamePlayScene>(context, std::move(replayChart),

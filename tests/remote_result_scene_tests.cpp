@@ -350,9 +350,23 @@ void testRemoteRecallRejectsStaleSelectionBeforeAndAfterLookup() {
           "selection changed during lookup cannot transition");
 }
 
+void testResultTableContextRestoresRetryLaunchOptions() {
+  const ResultTableContext table{
+      .tableName = "Insane BMS Table",
+      .tableLevel = "★12",
+  };
+  StartOptions retry;
+  applyResultTableContext(retry, table);
+  require(retry.tableName == table.tableName &&
+              retry.tableLevel == table.tableLevel,
+          "result retries retain their difficulty-table context");
+}
+
 void testLocalRegressionContractsRemainPresent() {
   const std::string header = readSource("src/scene/ResultScene.h");
   const std::string result = readSource("src/scene/ResultScene.cpp");
+  const std::string gameplay =
+      readSource("src/scene/play/GamePlayScene.cpp");
   const std::string combined = header + result;
 
   requireContains(combined,
@@ -370,6 +384,15 @@ void testLocalRegressionContractsRemainPresent() {
                   "remote init installs read-only uploaded IR state");
   requireContains(result, "addRemoteButtons();",
                   "remote init installs only the remote action row");
+  requireContains(
+      gameplay, "ResultTableContext{.tableName = options.tableName",
+      "live gameplay carries table context into its result scene");
+  requireContains(
+      result, "applyResultTableContext(options, local->tableContext);",
+      "result retry restores table context");
+  requireContains(
+      result, "applyResultTableContext(replayOptions, local->tableContext);",
+      "result replay restores table context");
   for (const char *localToken :
        {"Retry Same", "Replay", "Practice Section",
         "addResultPersistenceStatus();", "addIrResultStatus();",
@@ -391,6 +414,7 @@ int main() {
   testRemoteRecallExecutesExactLookupAndRetainedBackLifecycle();
   testRemoteRecallFailsClosedForConcurrentDeletion();
   testRemoteRecallRejectsStaleSelectionBeforeAndAfterLookup();
+  testResultTableContextRestoresRetryLaunchOptions();
   testLocalRegressionContractsRemainPresent();
   std::cout << "remote result scene tests passed\n";
   return 0;
