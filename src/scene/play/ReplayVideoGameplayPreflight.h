@@ -85,6 +85,9 @@ void applyReplayGameplayRuntimeAuthority(PlayfieldAuthorityUpdate &,
                                          std::int64_t applicationUptimeMillis)
     noexcept;
 
+void applyReplayGameplayTargetOptionAuthority(
+    PlayfieldAuthorityUpdate &) noexcept;
+
 [[nodiscard]] ReplayGameplayFrameState replayGameplayFrameState(
     const preparation::Plan &, const bms_parser::Chart &, const ReplayData &,
     const AppSettings &, std::uint64_t serial,

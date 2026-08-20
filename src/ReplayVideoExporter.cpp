@@ -3127,6 +3127,8 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     };
     replay_video_export::applyReplayGameplayGaugeAuthority(
         frameAuthority, replay, replayGaugeType, replayGauge);
+    replay_video_export::applyReplayGameplayTargetOptionAuthority(
+        frameAuthority);
     replay_video_export::applyReplayGameplayRuntimeAuthority(
         frameAuthority,
         context.currentFramesPerSecond.load(std::memory_order_acquire),
@@ -3917,6 +3919,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
       };
       replay_video_export::applyReplayGameplayGaugeAuthority(
           frameAuthority, stageReplay, replayGaugeType, replayGauge);
+      replay_video_export::applyReplayGameplayTargetOptionAuthority(
+          frameAuthority);
       replay_video_export::applyReplayGameplayRuntimeAuthority(
           frameAuthority,
           context.currentFramesPerSecond.load(std::memory_order_acquire),

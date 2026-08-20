@@ -263,6 +263,11 @@ void applyReplayGameplayRuntimeAuthority(
   authority.applicationUptimeMillis = applicationUptimeMillis;
 }
 
+void applyReplayGameplayTargetOptionAuthority(
+    PlayfieldAuthorityUpdate &authority) noexcept {
+  authority.targetPlayOption = 0;
+}
+
 long long replayGameplayDurationWithSelectedSkinAnimation(
     const bms_parser::Chart &chart, const ReplayData &replay,
     const preparation::Plan &plan, long long audioOffsetMicros, int fps,

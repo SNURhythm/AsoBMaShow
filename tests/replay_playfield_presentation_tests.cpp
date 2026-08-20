@@ -793,6 +793,16 @@ void testReplayGameplayRuntimeAuthorityCarriesApplicationClocks() {
          "replay export authority retains runtime FPS and application uptime");
 }
 
+void testReplayGameplayTargetOptionAuthorityUsesSourceDefault() {
+  PlayfieldAuthorityUpdate authority;
+
+  replay_video_export::applyReplayGameplayTargetOptionAuthority(authority);
+
+  expect(authority.targetPlayOption.has_value() &&
+             *authority.targetPlayOption == 0,
+         "replay export installs Beatoraja's default target score option");
+}
+
 void testReplayGameplaySpeedUsesNoteDisplayClock() {
   PlayfieldChartVisualModel model;
   model.timelines = {
@@ -2171,6 +2181,7 @@ int main() {
   testReplayGameplayFrameStateMirrorsLiveTimerAndStartClocks();
   testReplayGameplayGaugeAuthorityPreservesRecordedLowerBound();
   testReplayGameplayRuntimeAuthorityCarriesApplicationClocks();
+  testReplayGameplayTargetOptionAuthorityUsesSourceDefault();
   testReplayGameplaySpeedUsesNoteDisplayClock();
   testReplayGameplayFailureAnimationStartsAtFailureClock();
   testReplayGameplayStatePlayDeadlineMatchesPinnedBmsPlayer();
