@@ -1320,6 +1320,66 @@ void testVersion13RetriesDurationBackfillAfterChartMetadataRebuild(
          12);
 }
 
+void testVersion13RetriesDurationBackfillAfterEmptyChartLibrary(
+    const std::filesystem::path &root) {
+  const auto scorePath = root / "version13-duration-empty-library" / "score.db";
+  const auto chartPath = root / "version13-duration-empty-library" / "chart.db";
+  auto meta = sampleMeta(root, "version13-duration-empty-library");
+  meta.PlayLength = 12'999'999;
+
+  ScoreProvenanceBuildInput input;
+  input.chartMeta = meta;
+  input.longNoteMode = meta.LnMode;
+  input.judgeRankSource = JudgeRankSource::Chart;
+  input.sourceJudgeRank = meta.Rank;
+  input.effectiveJudgeWindows = {
+      {PGreat, {-10'000, 10'000}}, {Great, {-30'000, 30'000}},
+      {Good, {-75'000, 75'000}},   {Bad, {-200'000, 200'000}},
+      {Kpoor, {-1'000'000, 0}},
+  };
+  input.totalNotes = meta.TotalNotes;
+  input.effectiveGaugeTotal = 176.0;
+  input.ruleset = RulesetDescriptor::Current();
+
+  {
+    ScoreRepository bootstrap(scorePath);
+    assert(bootstrap.SaveScore(meta, sampleState(20, 5),
+                               makeScoreProvenance(input)));
+    auto scores = openDatabase(scorePath);
+    execOrAbort(scores.get(), "UPDATE scores SET play_duration_seconds=0");
+    execOrAbort(scores.get(), "PRAGMA user_version = 12");
+  }
+  {
+    auto charts = openDatabase(chartPath);
+    execOrAbort(charts.get(),
+                "CREATE TABLE chart_meta(path TEXT, md5 TEXT, sha256 TEXT, "
+                "length INTEGER, source_priority INTEGER, "
+                "source_archive_size INTEGER)");
+  }
+
+  ScoreRepository migrated(scorePath);
+  migrated.SetChartDatabasePath(chartPath);
+  assert(migrated.EnsureSchema());
+  auto scores = openDatabase(scorePath);
+  assert(queryInt(scores.get(), "PRAGMA user_version") == 12);
+  assert(queryInt(scores.get(), "SELECT play_duration_seconds FROM scores") ==
+         0);
+  scores.reset();
+
+  {
+    auto charts = openDatabase(chartPath);
+    execOrAbort(charts.get(),
+                "INSERT INTO chart_meta VALUES ('chart.bms','" + meta.MD5 +
+                    "','" + meta.SHA256 + "',12999999,0,0)");
+  }
+  assert(migrated.EnsureSchema());
+  scores = openDatabase(scorePath);
+  assert(queryInt(scores.get(), "PRAGMA user_version") ==
+         ScoreRepository::kCurrentSchemaVersion);
+  assert(queryInt(scores.get(), "SELECT play_duration_seconds FROM scores") ==
+         12);
+}
+
 void testVersion13RetriesDurationBackfillAfterChartAttachFailure(
     const std::filesystem::path &root) {
   const auto scorePath = root / "version13-duration-attach-failure" / "score.db";
@@ -3061,6 +3121,7 @@ int main() {
   testPlayerHistoryUsesPinnedLastPlayableNoteDuration(root);
   testVersion12BackfillsLocalPlayDurationFromChartMetadata(root);
   testVersion13RetriesDurationBackfillAfterChartMetadataRebuild(root);
+  testVersion13RetriesDurationBackfillAfterEmptyChartLibrary(root);
   testVersion13RetriesDurationBackfillAfterChartAttachFailure(root);
   testProjectedRetryUpdatesSummaryCachesOnce(root);
   testBestScoreLoadsKpoorInclusiveBadPoints(root);

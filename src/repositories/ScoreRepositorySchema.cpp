@@ -1546,7 +1546,23 @@ bool migrateScoreDatabaseToVersion13(
               "completes");
       return true;
     }
-    if (chartDatabaseHasRowsForScoreMigration(db)) {
+    const bool chartDatabaseHasRows =
+        chartDatabaseHasRowsForScoreMigration(db);
+    if (!chartDatabaseHasRows) {
+      const std::string pendingDurationQuery =
+          "SELECT COUNT(*) FROM scores WHERE score_source = " +
+          std::to_string(static_cast<int>(ScoreStorageSource::LocalGameplay)) +
+          " AND play_duration_seconds = 0";
+      if (selectScalarInt(db, pendingDurationQuery, 0) > 0) {
+        if (attachedHere) {
+          detachChartDatabaseForScoreMigration(db);
+        }
+        SDL_Log("Deferring score play-duration retry until chart metadata is "
+                "available");
+        return true;
+      }
+    }
+    if (chartDatabaseHasRows) {
       const std::string chartTable =
           std::string(kScoreMigrationChartSchema) + ".chart_meta";
       const std::string matchPredicate = scoreMigrationChartMatchPredicate("cm");
