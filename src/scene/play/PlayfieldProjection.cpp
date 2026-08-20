@@ -1190,8 +1190,8 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
              .authoredOrdinal = note->authoredOrdinal,
              .retainedTimelineOrdinal = timeline->second->retainedOrdinal,
              .judged = noteState != nullptr && noteState->judged,
-             .opacity = pmsPoorOpacity,
              .pmsPoorYDisplacement = descent.yDisplacement,
+             .opacity = pmsPoorOpacity,
              .submissionOrdinal = order.next()});
       }
     }
