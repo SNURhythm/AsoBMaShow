@@ -308,7 +308,11 @@ PomyuMotionCyclePreparation pomyuMotionCyclesForModel(
       auto extracted = pomyuMotionCyclesFromChp(
           std::string_view(reinterpret_cast<const char *>(bytes->data()),
                            bytes->size()),
-          pmchara->type, side, patch);
+          pmchara->type, side, patch, stop);
+      if (stop.stop_requested()) {
+        result.cancelled = true;
+        break;
+      }
       parsed = parsedCycles.emplace(std::move(key), std::move(extracted)).first;
     }
     if (parsed->second) {

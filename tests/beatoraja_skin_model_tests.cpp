@@ -1568,6 +1568,35 @@ void testPomyuCharaCycleExtractionFollowsPinnedLoaderOrder() {
          "side-specific processor timer slots");
 }
 
+void testPomyuCharaCycleExtractionBoundsHostileFields() {
+  std::string tabDense = "#Anime\t100\n#Frame\t1\t40\n#Pattern\t1\t000102";
+  tabDense.append(4U * 1024U * 1024U, '\t');
+  tabDense.push_back('\n');
+  const auto cycles = pomyuMotionCyclesFromChp(
+      tabDense, /*type=*/0, /*side=*/1,
+      std::array<int, 8>{1, 1, 1, 1, 1, 1, 1, 1});
+  expect(cycles.has_value() && (*cycles)[0] == 120,
+         "tab-dense CHP lines inspect only the bounded fields needed for a "
+         "Pomyu motion");
+
+  const std::string oversized =
+      "#Pattern\t1\t" + std::string(64U * 1024U + 1U, '0') + "\n";
+  expect(!pomyuMotionCyclesFromChp(
+              oversized, /*type=*/0, /*side=*/1,
+              std::array<int, 8>{1, 1, 1, 1, 1, 1, 1, 1})
+              .has_value(),
+         "oversized relevant CHP fields fail within the parser budget");
+
+  std::stop_source cancelled;
+  cancelled.request_stop();
+  expect(!pomyuMotionCyclesFromChp(
+              tabDense, /*type=*/0, /*side=*/1,
+              std::array<int, 8>{1, 1, 1, 1, 1, 1, 1, 1},
+              cancelled.get_token())
+              .has_value(),
+         "Pomyu cycle parsing observes activation cancellation");
+}
+
 void testPomyuCharaDefinitionPreservesPinnedSourceFields() {
   const auto decoded = decodeInlineModel(R"lua(
 return {
@@ -1631,6 +1660,7 @@ int main() {
   testPracticePositionSliderDecodesItsExecutableWriter();
   testOptionalVisualsAndBuiltinImagesStayLiveAcrossRepeatedDestinations();
   testPomyuCharaCycleExtractionFollowsPinnedLoaderOrder();
+  testPomyuCharaCycleExtractionBoundsHostileFields();
   testPomyuCharaDefinitionPreservesPinnedSourceFields();
   if (failures != 0) {
     std::cerr << failures << " assertion(s) failed\n";
