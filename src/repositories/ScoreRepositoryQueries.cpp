@@ -1478,13 +1478,20 @@ score_repository_detail::LoadPlayerScoreHistoryOnConnection(sqlite3 *db) {
   // PlayDataAccessor.updatePlayerData() records every local play in
   // PlayerData, summing its five judgement families and counting clears above
   // ClearType.Failed. Aso's attempt table is the corresponding local source;
-  // imported IR data is not a player play and must not participate.
+  // imported IR data is not a player play and must not participate.  A course
+  // attempt has its own aggregate row rather than a chart score row, but it
+  // is still one local PlayerData play.
   const std::string query =
       "SELECT COUNT(*), "
       "SUM(CASE WHEN clear_type > ? THEN 1 ELSE 0 END), "
       "SUM(pgreat), SUM(great), SUM(good), SUM(bad), SUM(poor), "
       "SUM(play_duration_seconds) "
-      "FROM scores WHERE score_source = ?";
+      "FROM ("
+      "SELECT clear_type, pgreat, great, good, bad, poor, "
+      "play_duration_seconds FROM scores WHERE score_source = ? "
+      "UNION ALL "
+      "SELECT clear_type, pgreat, great, good, bad, poor, 0 "
+      "FROM course_scores)";
   SqliteStatementHandle statement;
   if (!prepareSqliteStatementLogged(db, query, statement,
                                     "loading player score history",
@@ -1506,6 +1513,31 @@ score_repository_detail::LoadPlayerScoreHistoryOnConnection(sqlite3 *db) {
         sqlite3_column_int(statement.get(), index + 2);
   }
   snapshot.playDurationSeconds = sqlite3_column_int64(statement.get(), 7);
+
+  SqliteStatementHandle courseStatement;
+  if (!prepareSqliteStatementLogged(db, "SELECT provenance_json FROM "
+                                       "course_scores",
+                                    courseStatement,
+                                    "loading course player history duration",
+                                    logSqlErrorText)) {
+    return snapshot;
+  }
+  while (sqlite3_step(courseStatement.get()) == SQLITE_ROW) {
+    std::string provenanceError;
+    const auto provenance = deserializeScoreProvenance(
+        sqliteColumnString(courseStatement.get(), 0), provenanceError);
+    if (!provenance.has_value()) continue;
+    for (const auto &stage : provenance->stages) {
+      if (stage.playDurationSeconds <= 0) continue;
+      if (snapshot.playDurationSeconds >
+          std::numeric_limits<std::int64_t>::max() -
+              stage.playDurationSeconds) {
+        snapshot.playDurationSeconds = std::numeric_limits<std::int64_t>::max();
+        return snapshot;
+      }
+      snapshot.playDurationSeconds += stage.playDurationSeconds;
+    }
+  }
   return snapshot;
 }
 

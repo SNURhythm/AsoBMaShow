@@ -1149,6 +1149,17 @@ void testChartScoreHistoryMatchesPinnedScoreDataUpdateRules(
       db.get(), "SELECT CAST(strftime('%s', '2025-06-07 08:09:10') AS INTEGER)");
   db.reset();
 
+  CoursePlaySession courseSession;
+  courseSession.courseId = 91;
+  courseSession.courseName = "Player history course";
+  courseSession.constraintJson = "[]";
+  courseSession.entries.push_back({.meta = meta});
+  courseSession.courseKey = course_identity::makeCourseKey(courseSession);
+  ScoreProvenance courseProvenance = sampleProvenance("player-history-course");
+  courseProvenance.stages.front().playDurationSeconds = 42;
+  assert(helper.SaveCourseScore(courseSession, sampleState(30, 4), 1, 1,
+                                courseProvenance));
+
   const auto history = helper.LoadChartScoreHistory(meta, 2);
   assert(history.has_value());
   assert(history->score == 150 && history->maxScore == 200 &&
@@ -1157,9 +1168,9 @@ void testChartScoreHistoryMatchesPinnedScoreDataUpdateRules(
   assert(history->lastPlayedUnixSeconds == expectedLastPlayed);
 
   const auto player = helper.LoadPlayerScoreHistory();
-  assert(player.playCount == 2 && player.clearCount == 1);
-  assert((player.judgementCounts == std::array<int, 5>{120, 10, 4, 3, 2}));
-  assert(player.playDurationSeconds == 561);
+  assert(player.playCount == 3 && player.clearCount == 2);
+  assert((player.judgementCounts == std::array<int, 5>{150, 14, 4, 3, 2}));
+  assert(player.playDurationSeconds == 603);
 }
 
 void testPlayerHistoryUsesPinnedLastPlayableNoteDuration(
