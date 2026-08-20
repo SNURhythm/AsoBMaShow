@@ -266,6 +266,7 @@ private:
   PlayerScoreHistorySnapshot activePlayerScoreHistory;
   int playfieldSongReviewFavorite = 0;
   bool playfieldChartHasDocument = false;
+  bool chartImageAvailabilityStarted = false;
   gameplay::BmsResourceImageAvailabilityProbe stageFileAvailability;
   gameplay::BmsResourceImageAvailabilityProbe backBmpAvailability;
   std::optional<ResultPreviousBestData> activeReplayPacemakerPreviousBest;

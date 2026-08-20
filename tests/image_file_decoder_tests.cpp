@@ -148,8 +148,22 @@ bool waitForProbe(const gameplay::BmsResourceImageAvailabilityProbe &probe) {
 void testGameplayBmsResourceProbePublishesDecodedAvailabilityOffThread() {
   const auto resources = std::filesystem::path(ASOBMASHOW_SOURCE_DIR) /
                          "tests/fixtures/beatoraja_skin/resources";
+  const auto temporary =
+      std::filesystem::temp_directory_path() /
+      ("asobmashow-gameplay-image-probe-" +
+       std::to_string(std::chrono::steady_clock::now()
+                          .time_since_epoch()
+                          .count()));
+  std::filesystem::create_directories(temporary);
+  std::filesystem::copy_file(resources / "fixture.png",
+                             temporary / "fixture.png");
+  {
+    std::ofstream(temporary / "chart.bms") << "#TITLE probe\n";
+    std::ofstream(temporary / "corrupt-stage.png", std::ios::binary)
+        << "not an encoded image";
+  }
   bms_parser::ChartMeta meta;
-  meta.BmsPath = resources / "chart.bms";
+  meta.BmsPath = temporary / "chart.bms";
   const auto decode = [](const std::filesystem::path &path,
                          std::stop_token stop) {
     return image_decode::decodeImageFile(
@@ -174,18 +188,11 @@ void testGameplayBmsResourceProbePublishesDecodedAvailabilityOffThread() {
          "gameplay BMS image availability publishes a successful decode "
          "without blocking the gameplay caller");
 
-  const auto corrupt = resources / "corrupt-stage.png";
-  {
-    std::ofstream output(corrupt, std::ios::binary | std::ios::trunc);
-    output << "not an encoded image";
-  }
   gameplay::BmsResourceImageAvailabilityProbe invalid;
-  invalid.start(meta, corrupt.filename(), decode);
+  invalid.start(meta, "corrupt-stage.png", decode);
   expect(waitForProbe(invalid) && !invalid.available(),
          "gameplay BMS image availability stays false when an existing "
          "resource cannot be decoded");
-  std::error_code error;
-  std::filesystem::remove(corrupt, error);
 
   std::atomic_bool cancellationStarted{false};
   std::atomic_bool cancellationObserved{false};
@@ -211,7 +218,11 @@ void testGameplayBmsResourceProbePublishesDecodedAvailabilityOffThread() {
   }
   expect(cancellationObserved.load(std::memory_order_acquire),
          "destroying a gameplay BMS image probe cancels its decoder worker");
+
+  std::error_code error;
+  std::filesystem::remove_all(temporary, error);
 }
+
 }
 
 int main() {

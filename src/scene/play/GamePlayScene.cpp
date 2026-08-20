@@ -2729,14 +2729,6 @@ void GamePlayScene::init() {
   activePlayerScoreHistory = context.scoreRepository.LoadPlayerScoreHistory();
   playfieldSongReviewFavorite = 0;
   playfieldChartHasDocument = false;
-  const auto decodeImageResource = [](const std::filesystem::path &path,
-                                      std::stop_token stop) {
-    return imageResourceAvailable(path, stop);
-  };
-  stageFileAvailability.start(chart->Meta, chart->Meta.StageFile,
-                              decodeImageResource);
-  backBmpAvailability.start(chart->Meta, chart->Meta.BackBmp,
-                            decodeImageResource);
   if (auto chartSession = context.chartRepository.OpenSession()) {
     const std::array<std::filesystem::path, 1> paths{chart->Meta.BmsPath};
     const auto records = chartSession->SelectChartMetaByPaths(paths);
@@ -5645,6 +5637,18 @@ void GamePlayScene::renderScene() {
   renderCoursePauseHoldRing();
   if (laneStateText != nullptr) {
     laneStateText->render(renderContext);
+  }
+  if (selectedSkinActive && chart != nullptr &&
+      !chartImageAvailabilityStarted) {
+    chartImageAvailabilityStarted = true;
+    const auto decodeImageResource = [](const std::filesystem::path &path,
+                                        std::stop_token stop) {
+      return imageResourceAvailable(path, stop);
+    };
+    stageFileAvailability.start(chart->Meta, chart->Meta.StageFile,
+                                decodeImageResource);
+    backBmpAvailability.start(chart->Meta, chart->Meta.BackBmp,
+                              decodeImageResource);
   }
 }
 
