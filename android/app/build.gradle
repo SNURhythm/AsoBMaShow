@@ -98,6 +98,7 @@ android {
                 arguments(
                     '-DANDROID_PLATFORM=android-28',
                     '-DANDROID_STL=c++_shared',
+                    "-DASOBMASHOW_APPLICATION_VERSION=${androidVersionNameText}",
                     "-DCMAKE_TOOLCHAIN_FILE=${vcpkgRoot}/scripts/buildsystems/vcpkg.cmake",
                     "-DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=${androidNdkRoot}/build/cmake/android.toolchain.cmake",
                     '-DVCPKG_TARGET_TRIPLET=arm64-android',

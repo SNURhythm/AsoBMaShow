@@ -43,6 +43,14 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
         )
         self.assertIn("<string>@PROJECT_VERSION@</string>", self.info_plist)
         self.assertIn("findProperty('androidVersionName') ?: '0.0.1'", self.android_gradle)
+        self.assertIn(
+            '"-DASOBMASHOW_APPLICATION_VERSION=${androidVersionNameText}"',
+            self.android_gradle,
+        )
+        self.assertIn(
+            'ASOBMASHOW_APPLICATION_VERSION "${PROJECT_VERSION}" CACHE STRING',
+            self.cmake,
+        )
         self.assertIn('export ANDROID_VERSION_NAME="0.0.1"', self.android_deploy)
         self.assertNotIn('ANDROID_VERSION_NAME="1.0.${ANDROID_VERSION_CODE}"', self.android_deploy)
 

@@ -2,7 +2,10 @@ cmake_minimum_required(VERSION 3.22)
 
 include(ExternalProject)
 project(AsoBMaShow VERSION 0.0.1 LANGUAGES C CXX)
-add_compile_definitions(ASOBMASHOW_APPLICATION_VERSION="${PROJECT_VERSION}")
+set(ASOBMASHOW_APPLICATION_VERSION "${PROJECT_VERSION}" CACHE STRING
+    "Application version exposed to native runtime and gameplay skins")
+add_compile_definitions(
+    ASOBMASHOW_APPLICATION_VERSION="${ASOBMASHOW_APPLICATION_VERSION}")
 include(CTest)
 option(ASOBMASHOW_BUILD_TESTS "Build lightweight unit tests" ON)
 option(ASOBMASHOW_ENABLE_PERF_TELEMETRY
