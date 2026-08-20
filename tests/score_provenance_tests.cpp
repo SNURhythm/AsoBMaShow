@@ -399,6 +399,26 @@ void testVersionOneMigratesToCurrentSchema() {
          error.find("Unsupported") != std::string::npos);
 }
 
+void testPreDurationSchemaWirePayloadSurvivesRoundTrip() {
+  auto legacy = nlohmann::ordered_json::parse(
+      serializeScoreProvenance(sampleVerifiedProvenance("legacy-wire")));
+  legacy["schemaVersion"] =
+      ScoreProvenance::kPlayDurationSchemaVersion - 1;
+  for (auto &stage : legacy["stages"]) {
+    stage.erase("playDurationSeconds");
+  }
+  const std::string serialized = legacy.dump();
+
+  std::string error;
+  const auto decoded = deserializeScoreProvenance(serialized, error);
+  assert(error.empty());
+  assert(decoded.has_value());
+  assert(decoded->schemaVersion == ScoreProvenance::kSchemaVersion);
+  assert(decoded->fingerprintSchemaVersion ==
+         ScoreProvenance::kPlayDurationSchemaVersion - 1);
+  assert(serializeScoreProvenance(*decoded) == serialized);
+}
+
 void testVersionZeroDescriptorRemainsLegacy() {
   auto root = nlohmann::json::parse(
       serializeScoreProvenance(sampleVerifiedProvenance("legacy-ruleset")));
@@ -1028,6 +1048,7 @@ int main() {
   testSignedWindowsAndCanonicalDevices();
   testFutureSchemaIsRejected();
   testVersionOneMigratesToCurrentSchema();
+  testPreDurationSchemaWirePayloadSurvivesRoundTrip();
   testVersionZeroDescriptorRemainsLegacy();
   testSchemaFourPolicyProofRoundTrip();
   testSchemaFourMalformedPolicyProofIsRejected();

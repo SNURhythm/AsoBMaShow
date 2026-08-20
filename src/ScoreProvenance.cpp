@@ -662,7 +662,7 @@ void migrateLegacyBeatorajaWindows(ScoreStageProvenance &stage) {
   }
 }
 
-Json stageToJson(ScoreStageProvenance stage) {
+Json stageToJson(ScoreStageProvenance stage, int wireSchemaVersion) {
   validateStageProof(stage);
   canonicalizeWindows(stage.effectiveJudgeWindows);
 
@@ -676,7 +676,9 @@ Json stageToJson(ScoreStageProvenance stage) {
   value["judgeRankSource"] = judgeRankSourceName(stage.judgeRankSource);
   writeOptional(value, "sourceJudgeRank", stage.sourceJudgeRank);
   value["totalNotes"] = stage.totalNotes;
-  value["playDurationSeconds"] = stage.playDurationSeconds;
+  if (wireSchemaVersion >= ScoreProvenance::kPlayDurationSchemaVersion) {
+    value["playDurationSeconds"] = stage.playDurationSeconds;
+  }
   writeOptional(value, "authoredGaugeTotal", stage.authoredGaugeTotal);
   value["effectiveGaugeTotal"] = stage.effectiveGaugeTotal;
   value["candidateSelection"] =
@@ -871,6 +873,9 @@ ScoreProvenance ScoreProvenance::Legacy() {
 std::string serializeScoreProvenance(const ScoreProvenance &provenance) {
   ScoreProvenance canonical = provenance;
   canonicalizeDevices(canonical.inputDevices);
+  if (canonical.fingerprintSchemaVersion > 0) {
+    canonical.schemaVersion = canonical.fingerprintSchemaVersion;
+  }
   // Schema v6 adds playDurationSeconds solely to a stage proof. Preserve the
   // established v5 wire payload for an unverified no-stage provenance so
   // durable IR snapshots and their fingerprints remain byte-for-byte stable.
@@ -884,7 +889,7 @@ std::string serializeScoreProvenance(const ScoreProvenance &provenance) {
 
   Json stages = Json::array();
   for (const auto &stage : canonical.stages) {
-    stages.push_back(stageToJson(stage));
+    stages.push_back(stageToJson(stage, canonical.schemaVersion));
   }
   root["stages"] = std::move(stages);
   root["gaugeType"] = gaugeTypeName(canonical.gaugeType);
