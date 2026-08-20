@@ -3780,7 +3780,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
       }
       const auto timelineAuthority =
           replay_video_export::replayGameplayTimelineAuthority(
-              stageChartVisualModel, presentationFrameState, settings);
+              stageChartVisualModel, presentationFrameState, settings,
+              stage.constraints.noSpeed);
       const auto laneCover = stage.constraints.noSpeed
                                  ? replay_video_export::ReplayLaneCoverFrameState{
                                        .percent =

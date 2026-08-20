@@ -576,6 +576,7 @@ void testCourseNoSpeedReplayExportConfigOverridesProfileSettings() {
   settings.visibleTimeUseMilliseconds = true;
   settings.noteStartPositionPercent = 40;
   settings.laneCoverEnabled = true;
+  settings.constantScroll = true;
 
   bms_parser::Chart chart;
   chart.Meta.Bpm = 120.0;
@@ -591,6 +592,7 @@ void testCourseNoSpeedReplayExportConfigOverridesProfileSettings() {
              configuration.configuredHispeed &&
              *configuration.configuredHispeed == 1.0F &&
              !configuration.visibleTimeUseMilliseconds &&
+             !configuration.constantScroll &&
              configuration.hispeedFixMode == AppSettings::HiSpeedFixMode::Main &&
              configuration.laneCoverEnabled &&
              configuration.noteStartPositionPercent ==
@@ -879,6 +881,17 @@ void testReplayGameplaySpeedUsesNoteDisplayClock() {
              std::abs(authority.speedMultiplier - 1.5) < 0.000001,
          "replay export samples BPM, SCROLL, and SPEED on the same offset "
          "note display clock");
+
+  settings.constantScroll = true;
+  const auto constantAuthority =
+      replay_video_export::replayGameplayTimelineAuthority(model, frame,
+                                                            settings);
+  const auto noSpeedAuthority =
+      replay_video_export::replayGameplayTimelineAuthority(model, frame,
+                                                            settings, true);
+  expect(std::abs(constantAuthority.speedMultiplier - 1.0) < 0.000001 &&
+             std::abs(noSpeedAuthority.speedMultiplier - 1.5) < 0.000001,
+         "course NO SPEED disables Constant while preserving authored SPEED");
 }
 
 void testReplayGameplayFailureAnimationStartsAtFailureClock() {

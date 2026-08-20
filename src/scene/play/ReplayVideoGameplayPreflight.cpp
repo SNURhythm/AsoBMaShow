@@ -94,7 +94,7 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
       .longNoteModifierMode = settings.longNoteModifierMode,
       .sevenToNinePattern = settings.sevenToNinePattern,
       .sevenToNineType = settings.sevenToNineType,
-      .constantScroll = settings.constantScroll,
+      .constantScroll = !noSpeed && settings.constantScroll,
       .constantFadeInMilliseconds = settings.constantFadeInMilliseconds,
       .judgementIndicatorEnabled = settings.judgementIndicatorEnabled,
       .judgementIndicatorY = settings.judgementIndicatorY,
@@ -233,10 +233,10 @@ long long replayGameplayNoteDisplayTimeMicros(
 ChartVisualTimelineAuthority replayGameplayTimelineAuthority(
     const PlayfieldChartVisualModel &chartVisualModel,
     const ReplayGameplayFrameState &frame,
-    const AppSettings &settings) noexcept {
+    const AppSettings &settings, bool noSpeed) noexcept {
   auto authority = chartVisualTimelineAuthorityAtTime(
       chartVisualModel, replayGameplayNoteDisplayTimeMicros(frame, settings));
-  if (settings.constantScroll) {
+  if (!noSpeed && settings.constantScroll) {
     authority.speedMultiplier = 1.0;
   }
   return authority;

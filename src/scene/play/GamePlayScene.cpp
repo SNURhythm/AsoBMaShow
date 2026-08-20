@@ -2840,7 +2840,7 @@ void GamePlayScene::init() {
       .longNoteModifierMode = context.settings.longNoteModifierMode,
       .sevenToNinePattern = context.settings.sevenToNinePattern,
       .sevenToNineType = context.settings.sevenToNineType,
-      .constantScroll = context.settings.constantScroll,
+      .constantScroll = !courseNoSpeed() && context.settings.constantScroll,
       .constantFadeInMilliseconds =
           context.settings.constantFadeInMilliseconds,
       .judgementIndicatorEnabled = context.settings.judgementIndicatorEnabled,
@@ -4838,7 +4838,7 @@ void GamePlayScene::capturePlayfieldVisualState(
   const auto timelineAuthority = chartVisualTimelineAuthorityAtTime(
       playfieldChartVisualModel, getNoteDisplayTimeMicros(visualTimeMicros));
   const double currentSpeedMultiplier =
-      context.settings.constantScroll &&
+      !courseNoSpeed() && context.settings.constantScroll &&
               gameplayMode != PlayfieldGameplayMode::Practice
           ? 1.0
           : timelineAuthority.speedMultiplier;

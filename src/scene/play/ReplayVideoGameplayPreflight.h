@@ -70,7 +70,7 @@ replayGameplayNoteDisplayTimeMicros(const ReplayGameplayFrameState &,
 
 [[nodiscard]] ChartVisualTimelineAuthority replayGameplayTimelineAuthority(
     const PlayfieldChartVisualModel &, const ReplayGameplayFrameState &,
-    const AppSettings &) noexcept;
+    const AppSettings &, bool noSpeed = false) noexcept;
 
 [[nodiscard]] bool replayGameplayFailureAnimationActive(
     long long gameplayTimeMicros,
