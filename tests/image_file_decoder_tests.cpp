@@ -1,12 +1,16 @@
 #include "view/ImageFileDecoder.h"
+#include "scene/play/GameplayBmsResourceAvailability.h"
 
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <stop_token>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -131,6 +135,83 @@ void testWebpFfmpegFallback() {
   std::error_code error;
   std::filesystem::remove(path, error);
 }
+
+bool waitForProbe(const gameplay::BmsResourceImageAvailabilityProbe &probe) {
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (!probe.complete() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::yield();
+  }
+  return probe.complete();
+}
+
+void testGameplayBmsResourceProbePublishesDecodedAvailabilityOffThread() {
+  const auto resources = std::filesystem::path(ASOBMASHOW_SOURCE_DIR) /
+                         "tests/fixtures/beatoraja_skin/resources";
+  bms_parser::ChartMeta meta;
+  meta.BmsPath = resources / "chart.bms";
+  const auto decode = [](const std::filesystem::path &path,
+                         std::stop_token stop) {
+    return image_decode::decodeImageFile(
+               path, {.maximumDimension = 40,
+                      .maximumEncodedBytes = 1024U * 1024U,
+                      .maximumDecodedBytes = 3200,
+                      .stop = stop})
+        .has_value();
+  };
+
+  const auto callerThread = std::this_thread::get_id();
+  std::atomic_bool decodedOffCallerThread{false};
+  gameplay::BmsResourceImageAvailabilityProbe valid;
+  valid.start(meta, "fixture.png", [&](const std::filesystem::path &path,
+                                        std::stop_token stop) {
+    decodedOffCallerThread.store(std::this_thread::get_id() != callerThread,
+                                 std::memory_order_release);
+    return decode(path, stop);
+  });
+  expect(waitForProbe(valid) && valid.available() &&
+             decodedOffCallerThread.load(std::memory_order_acquire),
+         "gameplay BMS image availability publishes a successful decode "
+         "without blocking the gameplay caller");
+
+  const auto corrupt = resources / "corrupt-stage.png";
+  {
+    std::ofstream output(corrupt, std::ios::binary | std::ios::trunc);
+    output << "not an encoded image";
+  }
+  gameplay::BmsResourceImageAvailabilityProbe invalid;
+  invalid.start(meta, corrupt.filename(), decode);
+  expect(waitForProbe(invalid) && !invalid.available(),
+         "gameplay BMS image availability stays false when an existing "
+         "resource cannot be decoded");
+  std::error_code error;
+  std::filesystem::remove(corrupt, error);
+
+  std::atomic_bool cancellationStarted{false};
+  std::atomic_bool cancellationObserved{false};
+  {
+    gameplay::BmsResourceImageAvailabilityProbe cancelled;
+    cancelled.start(meta, "fixture.png",
+                    [&](const std::filesystem::path &, std::stop_token stop) {
+                      cancellationStarted.store(true,
+                                                std::memory_order_release);
+                      while (!stop.stop_requested()) {
+                        std::this_thread::yield();
+                      }
+                      cancellationObserved.store(true,
+                                                 std::memory_order_release);
+                      return false;
+                    });
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!cancellationStarted.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::yield();
+    }
+  }
+  expect(cancellationObserved.load(std::memory_order_acquire),
+         "destroying a gameplay BMS image probe cancels its decoder worker");
+}
 }
 
 int main() {
@@ -248,5 +329,6 @@ int main() {
          "standard JDK ImageIO WBMP fallback decodes BMS image resources");
   verifyOptionalCimTree();
   testWebpFfmpegFallback();
+  testGameplayBmsResourceProbePublishesDecodedAvailabilityOffThread();
   return failures == 0 ? 0 : 1;
 }

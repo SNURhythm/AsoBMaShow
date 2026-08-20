@@ -24,6 +24,7 @@
 #include "../../skin/beatoraja/GameplaySkinEndAnimation.h"
 #include "../../view/TextView.h"
 #include "../../view/IconText.h"
+#include "../../view/ImageView.h"
 #include "BuiltInPlayfieldPresentation.h"
 #include "BeatorajaHiSpeedChart.h"
 #include "GameplayNoteJudgeRole.h"
@@ -2732,10 +2733,14 @@ void GamePlayScene::init() {
   activePlayerScoreHistory = context.scoreRepository.LoadPlayerScoreHistory();
   playfieldSongReviewFavorite = 0;
   playfieldChartHasDocument = false;
-  playfieldStageFileAvailable =
-      gameplay::bmsResourceImagePresent(chart->Meta, chart->Meta.StageFile);
-  playfieldBackBmpAvailable =
-      gameplay::bmsResourceImagePresent(chart->Meta, chart->Meta.BackBmp);
+  const auto decodeImageResource = [](const std::filesystem::path &path,
+                                      std::stop_token stop) {
+    return imageResourceAvailable(path, stop);
+  };
+  stageFileAvailability.start(chart->Meta, chart->Meta.StageFile,
+                              decodeImageResource);
+  backBmpAvailability.start(chart->Meta, chart->Meta.BackBmp,
+                            decodeImageResource);
   if (auto chartSession = context.chartRepository.OpenSession()) {
     const std::array<std::filesystem::path, 1> paths{chart->Meta.BmsPath};
     const auto records = chartSession->SelectChartMetaByPaths(paths);
@@ -4886,8 +4891,8 @@ void GamePlayScene::capturePlayfieldVisualState(
       .targetPlayOption = activeTargetPlayOption,
       .songReviewFavorite = playfieldSongReviewFavorite,
       .chartHasDocument = playfieldChartHasDocument,
-      .stageFileAvailable = playfieldStageFileAvailable,
-      .backBmpAvailable = playfieldBackBmpAvailable,
+      .stageFileAvailable = stageFileAvailability.available(),
+      .backBmpAvailable = backBmpAvailability.available(),
       .playerName = context.profileManager.activeProfile().displayName,
       .irProviderName =
           gameplaySkinFirstIrProviderName(context.settings.irProviders),

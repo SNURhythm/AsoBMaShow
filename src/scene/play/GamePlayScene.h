@@ -11,6 +11,7 @@
 #include "../../math/Vector3.h"
 #include "GamePlayStartOptions.h"
 #include "BeatorajaHiSpeed.h"
+#include "GameplayBmsResourceAvailability.h"
 #include "NoteTimeRange.h"
 #include "Pacemaker.h"
 #include "PlayfieldChartVisualModel.h"
@@ -263,8 +264,8 @@ private:
   PlayerScoreHistorySnapshot activePlayerScoreHistory;
   int playfieldSongReviewFavorite = 0;
   bool playfieldChartHasDocument = false;
-  bool playfieldStageFileAvailable = false;
-  bool playfieldBackBmpAvailable = false;
+  gameplay::BmsResourceImageAvailabilityProbe stageFileAvailability;
+  gameplay::BmsResourceImageAvailabilityProbe backBmpAvailability;
   std::optional<ResultPreviousBestData> activeReplayPacemakerPreviousBest;
   std::jthread bestReplayLoadThread;
   std::shared_ptr<std::atomic_bool> bestReplayLoadCancelled =

@@ -167,7 +167,16 @@ void testZipIndexPreservesFilenameBeyondEmbeddedStatBuffer() {
   assert(entries.front().path.generic_string() == entryPath);
 }
 
-void testGameplayBmsResourceAvailabilityDoesNotDecodeMetadataImages() {
+bool waitForBmsResourceProbe(
+    const gameplay::BmsResourceImageAvailabilityProbe &probe) {
+  const auto deadline = std::chrono::steady_clock::now() + 2s;
+  while (!probe.complete() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::yield();
+  }
+  return probe.complete();
+}
+
+void testGameplayBmsResourceAvailabilityPublishesLoaderResult() {
   TempDirectory temporary;
   const auto chartPath = temporary.path() / "chart.bms";
   const auto stageFilePath = temporary.path() / "stage.webp";
@@ -176,9 +185,24 @@ void testGameplayBmsResourceAvailabilityDoesNotDecodeMetadataImages() {
   bms_parser::ChartMeta meta;
   meta.BmsPath = chartPath;
 
-  assert(gameplay::bmsResourceImagePresent(meta, "stage.webp"));
-  assert(!gameplay::bmsResourceImagePresent(meta, "missing.webp"));
-  assert(!gameplay::bmsResourceImagePresent(meta, {}));
+  const auto exists = [](const std::filesystem::path &path, std::stop_token) {
+    return archive_file::exists(path);
+  };
+  gameplay::BmsResourceImageAvailabilityProbe existing;
+  existing.start(meta, "stage.webp", exists);
+  gameplay::BmsResourceImageAvailabilityProbe missing;
+  missing.start(meta, "missing.webp", exists);
+  std::atomic_bool emptyLoaderCalled{false};
+  gameplay::BmsResourceImageAvailabilityProbe empty;
+  empty.start(meta, {}, [&](const std::filesystem::path &, std::stop_token) {
+    emptyLoaderCalled.store(true, std::memory_order_release);
+    return true;
+  });
+
+  assert(waitForBmsResourceProbe(existing) && existing.available());
+  assert(waitForBmsResourceProbe(missing) && !missing.available());
+  assert(empty.complete() && !empty.available() &&
+         !emptyLoaderCalled.load(std::memory_order_acquire));
 }
 
 void testGameplayBmsResourceAvailabilityResolvesVirtualChartNeighbors() {
@@ -191,9 +215,19 @@ void testGameplayBmsResourceAvailabilityResolvesVirtualChartNeighbors() {
   meta.BmsPath =
       archive_file::makeVirtualPath(archivePath, "folder/chart.bms");
 
-  assert(gameplay::bmsResourceImagePresent(meta, "stage.webp"));
-  assert(gameplay::bmsResourceImagePresent(meta, "back.bmp"));
-  assert(!gameplay::bmsResourceImagePresent(meta, "missing.png"));
+  const auto exists = [](const std::filesystem::path &path, std::stop_token) {
+    return archive_file::exists(path);
+  };
+  gameplay::BmsResourceImageAvailabilityProbe stage;
+  stage.start(meta, "stage.webp", exists);
+  gameplay::BmsResourceImageAvailabilityProbe back;
+  back.start(meta, "back.bmp", exists);
+  gameplay::BmsResourceImageAvailabilityProbe missing;
+  missing.start(meta, "missing.png", exists);
+
+  assert(waitForBmsResourceProbe(stage) && stage.available());
+  assert(waitForBmsResourceProbe(back) && back.available());
+  assert(waitForBmsResourceProbe(missing) && !missing.available());
 }
 
 void testZipIndexRejectsEmbeddedNulInShortFilename() {
@@ -458,7 +492,7 @@ void testDebugLogRetainsNewestThousandLines() {
 int main() {
   testZipIndexAmortizesPausePolling();
   testZipIndexPreservesFilenameBeyondEmbeddedStatBuffer();
-  testGameplayBmsResourceAvailabilityDoesNotDecodeMetadataImages();
+  testGameplayBmsResourceAvailabilityPublishesLoaderResult();
   testGameplayBmsResourceAvailabilityResolvesVirtualChartNeighbors();
   testZipIndexRejectsEmbeddedNulInShortFilename();
   testZipIndexPausePollingStillCancelsDuringLargeDirectory();
