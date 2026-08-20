@@ -440,6 +440,7 @@ struct ActivationFixtureOptions {
   bool resourceBearing = false;
   bool requireConfiguredState = false;
   bool repeatedPomyu = false;
+  bool oversizedPomyuWithSibling = false;
 };
 
 class ActivationFixture final {
@@ -468,9 +469,17 @@ public:
                         "tests/fixtures/beatoraja_skin/resources/fixture.ttf",
                     source / "skin/resources/fixture.ttf");
     }
-    if (options.repeatedPomyu) {
-      writeText(source / "skin/characters/alpha.chp",
-                "#Anime\t100\n#Pattern\t1\t00\n");
+    if (options.repeatedPomyu || options.oversizedPomyuWithSibling) {
+      if (options.oversizedPomyuWithSibling) {
+        writeText(source / "skin/characters/alpha.chp",
+                  std::string(SkinResourcePolicy::maximumEncodedBytes + 1U,
+                              'x'));
+        writeText(source / "skin/characters/beta.chp",
+                  "#Anime\t100\n#Frame\t1\t40\n#Pattern\t1\t000102\n");
+      } else {
+        writeText(source / "skin/characters/alpha.chp",
+                  "#Anime\t100\n#Pattern\t1\t00\n");
+      }
     }
     std::string script = R"lua(
 local phase_count = (rawget(_G, "session_activation_phase_count") or 0) + 1
@@ -508,7 +517,7 @@ if skin_config then
     }
   }
 )lua";
-    } else if (options.repeatedPomyu) {
+    } else if (options.repeatedPomyu || options.oversizedPomyuWithSibling) {
       script += R"lua(
   return {
     type = 0, w = 1280, h = 720,
@@ -723,6 +732,19 @@ void testRepeatedPomyuObjectsShareCyclePreparation() {
              pomyuCycleFileReadsForTesting() == 1 &&
              pomyuCycleParsesForTesting() == 1,
          "repeated Pomyu objects share one bounded CHP read and parse");
+}
+
+void testExplicitOversizedPomyuDoesNotFallBackToSibling() {
+  ActivationFixture fixture({.oversizedPomyuWithSibling = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  resetPomyuCyclePreparationCountersForTesting();
+  (void)PlaySkinSession::create(fixture.takeActivation(), fixture.context());
+  expect(pomyuCycleFileReadsForTesting() == 1 &&
+             pomyuCycleParsesForTesting() == 0,
+         "an oversized explicit CHP does not silently borrow a sibling's "
+         "Pomyu timing metadata");
 }
 
 void testRequestedExternalGameplaySkinCreatesARealSession() {
@@ -2885,6 +2907,7 @@ int main() {
   testActivationCreatesAnOwningFreshStateSession();
   testConfiguredLoadUsesTheInitializedAuthoritativeState();
   testRepeatedPomyuObjectsShareCyclePreparation();
+  testExplicitOversizedPomyuDoesNotFallBackToSibling();
   testRequestedExternalGameplaySkinCreatesARealSession();
   testActivationRejectsAReconciledDigestMismatch();
   testResourceSessionOwnsUploadsAndExactRuntimeStringAtlas();

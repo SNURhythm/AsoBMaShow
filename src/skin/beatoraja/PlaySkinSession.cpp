@@ -130,6 +130,7 @@ bool hasChpExtension(const std::filesystem::path &path) {
 struct PomyuCharaFileCache {
   std::map<std::string, std::optional<std::string>> resolvedByConfiguredPath;
   std::map<std::string, std::optional<std::vector<std::byte>>> bytesByPath;
+  std::map<std::string, SkinFileError> failuresByPath;
   std::size_t encodedBytes = 0;
   bool budgetExceeded = false;
   bool cancelled = false;
@@ -181,6 +182,7 @@ const std::vector<std::byte> *readPomyuCharaFile(
     }
     if (read.failure) {
       cache.bytesByPath.emplace(path, std::nullopt);
+      cache.failuresByPath.emplace(path, read.failure->code);
       return nullptr;
     }
     if (read.bytes.size() > maximumSessionBytes -
@@ -210,6 +212,13 @@ const std::vector<std::byte> *readPomyuCharaFile(
       return bytes;
     }
     if (cache.cancelled || cache.budgetExceeded) {
+      return nullptr;
+    }
+    const auto failure = cache.failuresByPath.find(resolvedPath);
+    if (failure == cache.failuresByPath.end() ||
+        failure->second != SkinFileError::Missing) {
+      cache.resolvedByConfiguredPath.emplace(std::string(configuredPath),
+                                             std::nullopt);
       return nullptr;
     }
   }
