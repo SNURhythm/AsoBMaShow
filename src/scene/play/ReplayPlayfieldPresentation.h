@@ -89,6 +89,10 @@ public:
   lastFrameBuiltBuiltInPlanForTesting() const noexcept {
     return lastFrameBuiltBuiltInPlanForTesting_;
   }
+  [[nodiscard]] const PlayfieldProjectionResult &
+  lastProjectionForTesting() const noexcept {
+    return lastProjectionForTesting_;
+  }
 #endif
 
 private:
@@ -171,5 +175,6 @@ private:
 #if defined(ASOBMASHOW_REPLAY_PLAYFIELD_PRESENTATION_TESTING)
   std::function<void()> destructionObserverForTesting_;
   bool lastFrameBuiltBuiltInPlanForTesting_ = false;
+  PlayfieldProjectionResult lastProjectionForTesting_;
 #endif
 };

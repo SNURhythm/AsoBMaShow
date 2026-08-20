@@ -556,6 +556,11 @@ PresentationFrameResult ReplayPlayfieldPresentation::renderFrame(
       effectiveRequest.bpmGuideEnabled || configuration_.bpmGuideEnabled;
   effectiveRequest.showPastNormalNotes =
       effectiveRequest.showPastNormalNotes || configuration_.showPastNotes;
+  effectiveRequest.constantScroll = configuration_.constantScroll;
+  effectiveRequest.constantDurationMilliseconds =
+      configuration_.visibleTimeDurationMilliseconds;
+  effectiveRequest.constantFadeInMilliseconds =
+      configuration_.constantFadeInMilliseconds;
   // A selected skin consumes generic DTOs only. BMSRenderer's compatibility
   // plan remains necessary for built-in replay frames because parser note
   // state is intentionally immutable in this adapter.
@@ -576,6 +581,7 @@ PresentationFrameResult ReplayPlayfieldPresentation::renderFrame(
       projection_->project(*chartModel_, state, effectiveRequest);
 #if defined(ASOBMASHOW_REPLAY_PLAYFIELD_PRESENTATION_TESTING)
   lastFrameBuiltBuiltInPlanForTesting_ = !projection.builtInPlan.entries.empty();
+  lastProjectionForTesting_ = projection;
 #endif
   (void)coordinator_->prepareFrame(state, projection);
   return coordinator_->render(context);

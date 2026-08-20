@@ -512,6 +512,47 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
          "replay export configuration retains all gameplay presentation settings");
 }
 
+void testReplayFrameAppliesConstantScrollWindowAndFade() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.Bpm = 120.0;
+  chart.Meta.MinBpm = 120.0;
+  chart.Meta.MaxBpm = 120.0;
+  auto *measure = new bms_parser::Measure;
+  auto *timeline = new bms_parser::TimeLine(8, false);
+  timeline->Timing = 550'000;
+  timeline->Bpm = 120.0;
+  timeline->Scroll = 1.0;
+  timeline->SetNote(0, new bms_parser::Note(bms_parser::Parser::NoWav));
+  measure->TimeLines.push_back(timeline);
+  chart.Measures.push_back(measure);
+
+  AppSettings settings;
+  PlayfieldPresentationConfig configuration;
+  configuration.constantScroll = true;
+  configuration.visibleTimeDurationMilliseconds = 500;
+  configuration.constantFadeInMilliseconds = 100;
+  TestBga bga;
+  const auto created = ReplayPlayfieldPresentation::create(
+      createInfo(chart, settings, configuration, bga));
+  if (!created.presentation) {
+    expect(false, "Constant replay presentation is created");
+    return;
+  }
+
+  RenderContext context;
+  (void)created.presentation->renderFrame(
+      context, {.serial = 1, .visualTimeMicros = 0},
+      {.noteDisplayTimeMicros = 0,
+       .visibleScrollBefore = 10.0,
+       .visibleScrollAfter = 10.0});
+  const auto &projection = created.presentation->lastProjectionForTesting();
+  expect(projection.notes.size() == 1 &&
+             std::abs(projection.notes.front().opacity - 0.5) < 0.0001,
+         "every replay frame applies Constant mode's duration and fade to "
+         "the rendered projection");
+}
+
 void testReplayExportConfigCarriesBpmGuide() {
   AppSettings settings;
   bms_parser::Chart chart;
@@ -2171,6 +2212,7 @@ int main() {
   testReplayGhostVisibleScrollRangeSharesBuiltInOrdering();
   testExportPixelSizesMapToLogicalGameplayBounds();
   testReplayExportConfigPreservesGameplayPresentationSettings();
+  testReplayFrameAppliesConstantScrollWindowAndFade();
   testReplayExportConfigCarriesBpmGuide();
   testCourseNoSpeedReplayExportConfigOverridesProfileSettings();
   testReplayExportConfigUsesLaneRendererMainBpmTieRule();
