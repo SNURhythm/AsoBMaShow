@@ -1552,6 +1552,8 @@ void GamePlayScene::enterPracticeMenu() {
     if (playfieldVisualStateStore != nullptr) {
       playfieldVisualStateStore->resetModel(playfieldChartVisualModel);
     }
+    attemptProvenance = captureScoreProvenanceAtPlayStart(
+        options, chart->Meta, *rulesetPolicyBuild.policy);
     return;
   }
   practiceMenuActive = true;

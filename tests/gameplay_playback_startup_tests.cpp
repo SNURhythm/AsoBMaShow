@@ -172,6 +172,30 @@ bool testBuiltInPracticeAppliesConfiguredViewerModifiers() {
                 "built-in practice applies the viewer modifier before play");
 }
 
+bool testBuiltInPracticeCapturesGeneratedModifierSeed() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  auto *measure = new bms_parser::Measure;
+  auto *timeline = new bms_parser::TimeLine(8, false);
+  timeline->SetNote(0, new bms_parser::Note(1));
+  measure->TimeLines.push_back(timeline);
+  chart.Measures.push_back(measure);
+  StartOptions options;
+  options.playOption = "RANDOM";
+
+  if (!expect(applyPracticePlayOptions(chart, options, "practice fallback"),
+              "built-in practice applies a seeded random modifier") ||
+      !expect(options.playOptionSeed.has_value(),
+              "random practice modifier publishes its generated seed")) {
+    return false;
+  }
+  const ScoreProvenance captured = captureScoreProvenanceAtPlayStart(
+      options, chart.Meta,
+      std::map<Judgement, std::pair<long long, long long>>{});
+  return expect(captured.player1.seed == options.playOptionSeed,
+                "built-in practice provenance captures the generated seed");
+}
+
 bool testCourseRetrySameUsesValidatedSetupWithoutReplayInput() {
   auto session = std::make_shared<CoursePlaySession>();
   session->autoKeySound = true;
@@ -264,6 +288,7 @@ int main() {
       !testCompletionPersistenceRoutes() ||
       !testPracticeMenuSamePatternSeedSelection() ||
       !testBuiltInPracticeAppliesConfiguredViewerModifiers() ||
+      !testBuiltInPracticeCapturesGeneratedModifierSeed() ||
       !testCourseRetrySameUsesValidatedSetupWithoutReplayInput()) {
     return 1;
   }
