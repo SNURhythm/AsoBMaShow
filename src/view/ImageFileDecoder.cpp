@@ -1,6 +1,4 @@
 #include "ImageFileDecoder.h"
-#include "../path.h"
-
 #ifdef _WIN32
 #define STBI_WINDOWS_UTF8
 #endif
@@ -29,6 +27,7 @@ extern "C" {
 #include <climits>
 #include <limits>
 #include <memory>
+#include <utility>
 #include <vector>
 
 namespace image_decode {
@@ -362,14 +361,84 @@ bool isWebpEncoded(std::span<const std::byte> encoded) {
                     });
 }
 
+std::optional<std::pair<int, int>>
+webpEncodedDimensions(std::span<const std::byte> encoded) {
+  if (!isWebpEncoded(encoded)) return std::nullopt;
+  std::size_t offset = 12;
+  while (offset <= encoded.size() && encoded.size() - offset >= 8) {
+    const auto byteAt = [&encoded, offset](std::size_t index) {
+      return std::to_integer<unsigned char>(encoded[offset + index]);
+    };
+    const std::uint32_t chunkBytes = static_cast<std::uint32_t>(byteAt(4)) |
+                                     static_cast<std::uint32_t>(byteAt(5)) << 8U |
+                                     static_cast<std::uint32_t>(byteAt(6)) << 16U |
+                                     static_cast<std::uint32_t>(byteAt(7)) << 24U;
+    const std::size_t dataOffset = offset + 8;
+    if (chunkBytes > encoded.size() - dataOffset) return std::nullopt;
+    const auto data = encoded.subspan(dataOffset, chunkBytes);
+    const bool vp8x = byteAt(0) == 'V' && byteAt(1) == 'P' &&
+                      byteAt(2) == '8' && byteAt(3) == 'X';
+    if (vp8x && data.size() >= 10) {
+      const int width = 1 + std::to_integer<unsigned char>(data[4]) +
+                        (std::to_integer<unsigned char>(data[5]) << 8U) +
+                        (std::to_integer<unsigned char>(data[6]) << 16U);
+      const int height = 1 + std::to_integer<unsigned char>(data[7]) +
+                         (std::to_integer<unsigned char>(data[8]) << 8U) +
+                         (std::to_integer<unsigned char>(data[9]) << 16U);
+      return std::pair{width, height};
+    }
+    const bool vp8 = byteAt(0) == 'V' && byteAt(1) == 'P' &&
+                     byteAt(2) == '8' && byteAt(3) == ' ';
+    if (vp8 && data.size() >= 10 &&
+        std::to_integer<unsigned char>(data[3]) == 0x9d &&
+        std::to_integer<unsigned char>(data[4]) == 0x01 &&
+        std::to_integer<unsigned char>(data[5]) == 0x2a) {
+      const int width = (std::to_integer<unsigned char>(data[6]) |
+                         (std::to_integer<unsigned char>(data[7]) << 8U)) &
+                        0x3fff;
+      const int height = (std::to_integer<unsigned char>(data[8]) |
+                          (std::to_integer<unsigned char>(data[9]) << 8U)) &
+                         0x3fff;
+      return std::pair{width, height};
+    }
+    const bool vp8l = byteAt(0) == 'V' && byteAt(1) == 'P' &&
+                      byteAt(2) == '8' && byteAt(3) == 'L';
+    if (vp8l && data.size() >= 5 &&
+        std::to_integer<unsigned char>(data[0]) == 0x2f) {
+      const std::uint32_t bits =
+          static_cast<std::uint32_t>(std::to_integer<unsigned char>(data[1])) |
+          static_cast<std::uint32_t>(std::to_integer<unsigned char>(data[2])) <<
+              8U |
+          static_cast<std::uint32_t>(std::to_integer<unsigned char>(data[3])) <<
+              16U |
+          static_cast<std::uint32_t>(std::to_integer<unsigned char>(data[4])) <<
+              24U;
+      return std::pair{static_cast<int>(bits & 0x3fffU) + 1,
+                       static_cast<int>((bits >> 14U) & 0x3fffU) + 1};
+    }
+    const std::size_t paddedBytes =
+        static_cast<std::size_t>(chunkBytes) + (chunkBytes & 1U);
+    if (paddedBytes > encoded.size() - dataOffset) return std::nullopt;
+    offset = dataOffset + paddedBytes;
+  }
+  return std::nullopt;
+}
+
 std::optional<DecodedImageData>
-decodeWebpFormatWithFfmpeg(AVFormatContext *rawFormat,
+decodeWebpFormatWithFfmpeg(AVFormatContext *rawFormat, int encodedWidth,
+                           int encodedHeight,
                            const ImageDecodeOptions &options) {
   if (stopped(options)) return std::nullopt;
 
   const auto format = std::unique_ptr<AVFormatContext,
                                       void (*)(AVFormatContext *)>(
       rawFormat, [](AVFormatContext *value) { avformat_close_input(&value); });
+  std::size_t encodedDecodedBytes = 0;
+  if (!validDimensions(encodedWidth, encodedHeight,
+                       options.maximumDimension, options.maximumDecodedBytes,
+                       encodedDecodedBytes)) {
+    return std::nullopt;
+  }
   if (avformat_find_stream_info(format.get(), nullptr) < 0 ||
       stopped(options)) {
     return std::nullopt;
@@ -461,21 +530,10 @@ decodeWebpFormatWithFfmpeg(AVFormatContext *rawFormat,
 }
 
 std::optional<DecodedImageData>
-decodeWebpWithFfmpeg(const std::filesystem::path &path,
-                     const ImageDecodeOptions &options) {
-  if (stopped(options)) return std::nullopt;
-  const std::string encodedPath = fspath_to_utf8(path);
-  AVFormatContext *rawFormat = nullptr;
-  if (avformat_open_input(&rawFormat, encodedPath.c_str(), nullptr, nullptr) <
-      0) {
-    return std::nullopt;
-  }
-  return decodeWebpFormatWithFfmpeg(rawFormat, options);
-}
-
-std::optional<DecodedImageData>
 decodeWebpWithFfmpeg(std::span<const std::byte> encoded,
                      const ImageDecodeOptions &options) {
+  const auto dimensions = webpEncodedDimensions(encoded);
+  if (!dimensions) return std::nullopt;
   struct MemoryInput {
     std::span<const std::byte> encoded;
     std::size_t offset = 0;
@@ -537,7 +595,8 @@ decodeWebpWithFfmpeg(std::span<const std::byte> encoded,
     if (rawFormat != nullptr) avformat_free_context(rawFormat);
     return std::nullopt;
   }
-  return decodeWebpFormatWithFfmpeg(rawFormat, options);
+  return decodeWebpFormatWithFfmpeg(rawFormat, dimensions->first,
+                                    dimensions->second, options);
 }
 
 } // namespace
@@ -619,7 +678,7 @@ decodeImageFile(const std::filesystem::path &path,
   }
   // PixmapResourcePool takes this same FFmpeg fallback for .webp after the
   // native pixmap and ImageIO paths reject it.
-  return isWebpPath(path) ? decodeWebpWithFfmpeg(path, options)
+  return isWebpPath(path) ? decodeWebpWithFfmpeg(encoded, options)
                           : std::nullopt;
 }
 
