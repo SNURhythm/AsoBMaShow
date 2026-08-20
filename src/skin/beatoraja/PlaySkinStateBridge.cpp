@@ -1863,10 +1863,11 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
   }
   case 1046: {
     // BooleanPropertyFactory.gauge_ex accepts Beatoraja gauge indexes
-    // 0, 1, 4, 5, 7, and 8. Aso's authoritative gauge catalog contains the
-    // shared 0..5 entries; its indexes match those source entries exactly.
+    // 0, 1, 4, 5, 7, and 8. Aso's authoritative gauge catalog uses the
+    // same indexes for all of those source gauge entries.
     const int type = gaugeTypeIndex(snapshot->authority.gaugeType);
-    return {.value = type == 0 || type == 1 || type == 4 || type == 5,
+    return {.value = type == 0 || type == 1 || type == 4 || type == 5 ||
+                         type == 7 || type == 8,
             .supported = true};
   }
   case 172:

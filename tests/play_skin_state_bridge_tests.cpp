@@ -979,9 +979,20 @@ void testExistingGameplayStatePropertyWiring() {
          "skin name and author use the decoded active skin header");
   bridge.discardFrame();
 
-  state.clock.serial = 206;
+  for (const GaugeType gaugeType :
+       {GaugeType::ExGrade, GaugeType::ExHardGrade}) {
+    ++state.clock.serial;
+    state.authority.gaugeType = gaugeType;
+    bridge.beginFrame(state, projectionAt(state.clock.serial));
+    expect(bridge.booleanProperty({1046}).supported &&
+               bridge.booleanProperty({1046}).value,
+           "gauge_ex recognizes the pinned EX grade gauge indexes");
+    bridge.discardFrame();
+  }
+
+  state.clock.serial = 208;
   state.configuration.bgaEnabled = false;
-  bridge.beginFrame(state, projectionAt(206));
+  bridge.beginFrame(state, projectionAt(208));
   const auto bgaOff = bridge.booleanProperty({40});
   const auto bgaOn = bridge.booleanProperty({41});
   const auto bgaIndex = bridge.integerProperty(
