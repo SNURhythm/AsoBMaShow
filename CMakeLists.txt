@@ -4967,7 +4967,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(practice_session_tests
         tests/practice_session_tests.cpp
         src/ScoreProvenance.cpp
+        src/bms_parser.cpp
+        src/practice/PracticeConfiguration.cpp
         src/practice/PracticeSession.cpp
+        src/scene/play/GameplayGaugeRules.cpp
     )
     target_include_directories(practice_session_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
@@ -6601,4 +6604,36 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(sdl_display_backend_tests foundation_av_sdl_display)
     asobmashow_register_test(score_provenance_db_tests foundation_provenance_db)
     asobmashow_register_test(midi_input_tests foundation_input_midi)
+
+    get_property(asobmashow_directory_targets DIRECTORY
+        PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(asobmashow_target IN LISTS asobmashow_directory_targets)
+        get_target_property(asobmashow_target_sources
+            ${asobmashow_target} SOURCES)
+        if(asobmashow_target_sources)
+            # PracticeConfiguration owns chart mutations and therefore needs
+            # the parser implementation, including in standalone test targets.
+            list(FIND asobmashow_target_sources
+                "src/practice/PracticeConfiguration.cpp"
+                asobmashow_practice_source_index)
+            list(FIND asobmashow_target_sources "src/bms_parser.cpp"
+                asobmashow_parser_source_index)
+            if(NOT asobmashow_practice_source_index EQUAL -1 AND
+               asobmashow_parser_source_index EQUAL -1)
+                target_sources(${asobmashow_target} PRIVATE
+                    src/bms_parser.cpp)
+            endif()
+
+            # Utils.cpp uses CoreFoundation for exact MS932 decoding on Apple.
+            # Keep standalone consumers on the application/iOS link contract.
+            if(APPLE)
+                list(FIND asobmashow_target_sources "src/Utils.cpp"
+                    asobmashow_utils_source_index)
+                if(NOT asobmashow_utils_source_index EQUAL -1)
+                    target_link_libraries(${asobmashow_target} PRIVATE
+                        "-framework CoreFoundation")
+                endif()
+            endif()
+        endif()
+    endforeach()
 endif()
