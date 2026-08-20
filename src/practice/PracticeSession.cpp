@@ -75,6 +75,8 @@ void Session::beginSkinMenuAttempt(const SkinMenuAttemptPlan &attempt) {
   Configuration configuration = skinMenu_.has_value()
                                   ? skinMenu_->configuration()
                                   : configuration_;
+  configuration.startMicros = attempt.startMicros;
+  configuration.endMicros = attempt.endMicros;
   configuration.gaugeType = attempt.gaugeType;
   configuration.startingGaugePercent = attempt.startingGaugePercent;
   configuration.playback = attempt.playback;

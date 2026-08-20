@@ -365,28 +365,38 @@ void testSkinMenuShortChartDoesNotSelectNegativeStartTime() {
          "short-chart START TIME remains at the source zero minimum");
 }
 
-void testSessionRetainsRawMenuRangeDuringRateAdjustedAttempt() {
+void testSessionUsesScaledRangeDuringRateAdjustedAttempt() {
   practice::Session session(
       {.startMicros = 2'000'000,
        .endMicros = 9'000'000,
        .playback = {.percent = 200,
                     .mode = audio::PlaybackMode::PitchShift}});
-  session.configureSkinMenu({.lastTimelineMicros = 90'000'000,
-                             .judgeRank = 100,
-                             .chartTotal = 200.0,
-                             .keyMode = 7,
-                             .random1P = 0,
-                             .random2P = 0,
-                             .doublePlay = 0});
+  const practice::SkinMenuInputs inputs{
+      .lastTimelineMicros = 90'000'000,
+      .judgeRank = 100,
+      .chartTotal = 200.0,
+      .keyMode = 7,
+      .random1P = 0,
+      .random2P = 0,
+      .doublePlay = 0,
+  };
+  session.configureSkinMenu(inputs);
   const auto plan = session.beginSkinMenuAttempt();
   expect(plan.has_value() && plan->startMicros == 1'000'000 &&
              plan->endMicros == 4'500'000,
          "practice start returns the frequency-scaled chart range");
-  expect(session.configuration().startMicros == 2'000'000 &&
-             session.configuration().endMicros == 9'000'000 &&
+  expect(session.configuration().startMicros == 1'000'000 &&
+             session.configuration().endMicros == 4'500'000 &&
              session.configuration().playback.percent == 200,
-         "practice session retains source chart coordinates while Aso's "
-         "playback clock applies the selected frequency");
+         "active practice runtime uses the frequency-scaled chart range");
+
+  auto retry = session.freshForRetry();
+  retry.configureSkinMenu(inputs);
+  const auto retryPlan = retry.skinMenuAttemptPlan();
+  expect(retryPlan.has_value() && retryPlan->startMicros == 1'000'000 &&
+             retryPlan->endMicros == 4'500'000,
+         "fresh practice retry rebuilds the scaled range from the raw menu "
+         "coordinates without scaling twice");
 }
 
 void testFreshPracticeRetryRetainsSourceOnlyMenuChoices() {
@@ -607,7 +617,7 @@ int main() {
   testSkinMenuDoublePlayFlipSwapsSourcePlayerHalves();
   testSkinMenuDoublePlayFlipSwapsLandminePlayerHalves();
   testSkinMenuShortChartDoesNotSelectNegativeStartTime();
-  testSessionRetainsRawMenuRangeDuringRateAdjustedAttempt();
+  testSessionUsesScaledRangeDuringRateAdjustedAttempt();
   testFreshPracticeRetryRetainsSourceOnlyMenuChoices();
   testListenUsesPracticeStartInsteadOfCursorOrEndMarker();
   testConfigurationSanitization();
