@@ -65,6 +65,18 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
         self.assertIn("group: android-firebase-distribution", android_job)
         self.assertIn("cancel-in-progress: false", android_job)
 
+    def test_android_enables_libcxx_stop_token_support(self):
+        android_target = self.cmake.split(
+            "target_sources(main PRIVATE "
+            "$<TARGET_OBJECTS:asobmashow_build_identity>)",
+            1,
+        )[1].split(
+            "target_compile_definitions(main PRIVATE\n"
+            "    ASOBMASHOW_ENABLE_PERF_TELEMETRY",
+            1,
+        )[0]
+        self.assertIn("_LIBCPP_ENABLE_EXPERIMENTAL", android_target)
+
     def test_android_launcher_uses_the_approved_application_icon(self):
         self.assertIn('android:icon="@mipmap/ic_launcher"', self.android_manifest)
         icon = ROOT / "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png"

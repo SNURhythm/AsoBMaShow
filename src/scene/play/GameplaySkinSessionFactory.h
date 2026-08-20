@@ -9,11 +9,14 @@
 #include "../../skin/beatoraja/BeatorajaSkinConfiguration.h"
 #include "../../skin/beatoraja/SkinDiagnosticHistory.h"
 
+#include <cstdint>
+
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS ||                              \
     defined(ASOBMASHOW_GAMEPLAY_SKIN_SESSION_FACTORY_TESTING)
 #include "../../skin/beatoraja/PlaySkinSession.h"
 #else
 namespace skin {
+enum class SkinAudioVolumeWriterTarget : std::uint8_t;
 class PlaySkinSession;
 class SkinConfigurationWriteQueue;
 class SkinLiveResourceCounters;
@@ -21,7 +24,6 @@ class SkinResourcePreparationService;
 } // namespace skin
 #endif
 
-#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>

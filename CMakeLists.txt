@@ -357,7 +357,12 @@ asobmashow_configure_build_identity_refresh(asobmashow_build_identity
     "${CMAKE_SOURCE_DIR}")
 target_sources(main PRIVATE $<TARGET_OBJECTS:asobmashow_build_identity>)
 if (ANDROID)
-    target_compile_definitions(main PRIVATE PLATFORM_ANDROID=1)
+    # Android NDK libc++ keeps C++20 stop_token/jthread behind this opt-in.
+    # The application uses both for cancellable background work.
+    target_compile_definitions(main PRIVATE
+        PLATFORM_ANDROID=1
+        _LIBCPP_ENABLE_EXPERIMENTAL
+    )
 endif()
 target_compile_definitions(main PRIVATE
     ASOBMASHOW_ENABLE_PERF_TELEMETRY=$<BOOL:${ASOBMASHOW_ENABLE_PERF_TELEMETRY}>
