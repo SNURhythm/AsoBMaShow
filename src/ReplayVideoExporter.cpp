@@ -3069,7 +3069,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     preparedGameplay.presentation->releaseDueClassicLongNoteTails(
         frameTiming.gameplayTimeMicros);
 
-    preparedGameplay.presentation->applyAuthorityUpdate({
+    PlayfieldAuthorityUpdate frameAuthority{
         .currentBpm = currentExportBpm,
         .currentScrollRate = currentExportScrollRate,
         .currentSpeedMultiplier = currentExportSpeedMultiplier,
@@ -3083,9 +3083,6 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
         .playerScoreHistory = replayPlayerScoreHistory,
         .bestScore = bestScoreAuthority.bestScore,
         .bestScoreTarget = bestScoreAuthority.bestScoreTarget,
-        .gaugeType = replayGaugeType,
-        .gaugeAutoShift = replay.gaugeAutoShift,
-        .currentGauge = replayGauge,
         .gaugeRules = initialGaugeState.gaugeRules(),
         .pacemakerTarget = activePacemakerTarget,
         .pacemakerStatus =
@@ -3125,7 +3122,10 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
         .hiddenEnabled = settings.hiddenEnabled,
         .hiddenRatio = settings.hiddenRatio,
         .laneCoverChanged = false,
-    });
+    };
+    replay_video_export::applyReplayGameplayGaugeAuthority(
+        frameAuthority, replay, replayGaugeType, replayGauge);
+    preparedGameplay.presentation->applyAuthorityUpdate(frameAuthority);
 
     bool presentationFailed = false;
     if (!renderAndQueueFrame(frameIndex, videoTimeMicros, [&]() {
@@ -3849,7 +3849,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
       }
       presentation.releaseDueClassicLongNoteTails(
           frameTiming.gameplayTimeMicros);
-      presentation.applyAuthorityUpdate({
+      PlayfieldAuthorityUpdate frameAuthority{
           .currentBpm = currentExportBpm,
           .currentScrollRate = currentExportScrollRate,
           .currentSpeedMultiplier = currentExportSpeedMultiplier,
@@ -3887,9 +3887,6 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
           .chartReplicationMode = settings.skinChartReplicationMode,
           .skinTargetId = settings.skinTargetId,
           .skinTargetList = settings.skinTargetList,
-          .gaugeType = replayGaugeType,
-          .gaugeAutoShift = replay.gaugeAutoShift,
-          .currentGauge = replayGauge,
           .gaugeRules = stage.resultState.gaugeRules(),
           .playOptionLabel = replayExportPlayOptionLabel(stageReplay),
           .autoPlayMarkVisible = stageReplay.autoPlay,
@@ -3910,7 +3907,10 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
           .hiddenRatio = stage.constraints.noSpeed ? 0.0F
                                                    : settings.hiddenRatio,
           .laneCoverChanged = false,
-      });
+      };
+      replay_video_export::applyReplayGameplayGaugeAuthority(
+          frameAuthority, stageReplay, replayGaugeType, replayGauge);
+      presentation.applyAuthorityUpdate(frameAuthority);
 
       bool presentationFailed = false;
       if (!renderAndQueueFrame(globalFrameIndex, globalVideoTimeMicros,

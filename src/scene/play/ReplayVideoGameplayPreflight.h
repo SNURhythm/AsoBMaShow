@@ -67,6 +67,10 @@ struct ReplayGameplayFrameState {
 replayGameplayNoteDisplayTimeMicros(const ReplayGameplayFrameState &,
                                     const AppSettings &) noexcept;
 
+void applyReplayGameplayGaugeAuthority(PlayfieldAuthorityUpdate &,
+                                       const ReplayData &, GaugeType,
+                                       float currentGauge) noexcept;
+
 [[nodiscard]] ReplayGameplayFrameState replayGameplayFrameState(
     const preparation::Plan &, const bms_parser::Chart &, const ReplayData &,
     const AppSettings &, std::uint64_t serial,

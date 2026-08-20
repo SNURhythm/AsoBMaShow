@@ -766,6 +766,22 @@ void testReplayGameplayFrameStateMirrorsLiveTimerAndStartClocks() {
          "replay projection derives note display time from the shared settings");
 }
 
+void testReplayGameplayGaugeAuthorityPreservesRecordedLowerBound() {
+  ReplayData replay;
+  replay.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
+  replay.gaugeAutoShiftLowerBound = GaugeType::Easy;
+  PlayfieldAuthorityUpdate authority;
+
+  replay_video_export::applyReplayGameplayGaugeAuthority(
+      authority, replay, GaugeType::Hard, 37.5F);
+
+  expect(authority.gaugeType == GaugeType::Hard &&
+             authority.gaugeAutoShift == GaugeAutoShiftMode::BestClear &&
+             authority.gaugeAutoShiftLowerBound == GaugeType::Easy &&
+             authority.currentGauge == 37.5F,
+         "replay export authority retains the recorded gauge auto-shift lower bound");
+}
+
 void testReplayGameplayStatePlayDeadlineMatchesPinnedBmsPlayer() {
   bms_parser::Chart chart;
   chart.Meta.PlayLength = 10'000'000;
@@ -2109,6 +2125,7 @@ int main() {
   testReplayExportJudgementAuthorityRetainsFastSlowCounters();
   testFirstExportFrameRefreshesPreparedRendererGeometry();
   testReplayGameplayFrameStateMirrorsLiveTimerAndStartClocks();
+  testReplayGameplayGaugeAuthorityPreservesRecordedLowerBound();
   testReplayGameplayStatePlayDeadlineMatchesPinnedBmsPlayer();
   testReplayGameplayTransitionIgnoresChartTailAfterLastLaneNote();
   testReplayAudioTailDoesNotExtendGameplayFrames();

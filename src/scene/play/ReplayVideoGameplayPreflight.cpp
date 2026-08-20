@@ -229,6 +229,16 @@ long long replayGameplayNoteDisplayTimeMicros(
       frame.clock.visualTimeMicros, settings.notesDisplayTimingMilliseconds);
 }
 
+void applyReplayGameplayGaugeAuthority(PlayfieldAuthorityUpdate &authority,
+                                       const ReplayData &replay,
+                                       GaugeType currentGaugeType,
+                                       float currentGauge) noexcept {
+  authority.gaugeType = currentGaugeType;
+  authority.gaugeAutoShift = replay.gaugeAutoShift;
+  authority.gaugeAutoShiftLowerBound = replay.gaugeAutoShiftLowerBound;
+  authority.currentGauge = currentGauge;
+}
+
 long long replayGameplayDurationWithSelectedSkinAnimation(
     const bms_parser::Chart &chart, const ReplayData &replay,
     const preparation::Plan &plan, long long audioOffsetMicros, int fps,
