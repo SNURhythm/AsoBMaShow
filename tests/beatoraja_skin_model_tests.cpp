@@ -1436,6 +1436,37 @@ return {
          "Boolean schema fields retain LuaJ's non-nil, non-false truthiness");
 }
 
+void testPracticePositionSliderDecodesItsExecutableWriter() {
+  const auto decoded = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  source={{id='atlas',path='atlas.png'}},
+  slider={{id='practice-scroll',src='atlas',w=10,h=10,type=20,
+           changeable=true}},
+  destination={{id='practice-scroll',dst={{}}}}
+}
+)lua");
+  expect(decoded.model.has_value(), "practice-position slider model decodes");
+  if (!decoded.model) {
+    return;
+  }
+  const auto *definition = findObject(*decoded.model, "practice-scroll");
+  const auto *slider = definition != nullptr
+                           ? std::get_if<SkinSliderObject>(&definition->payload)
+                           : nullptr;
+  expect(slider != nullptr && slider->writer.has_value() &&
+             decoded.model->floatWriters.size() == 1,
+         "practice-position slider retains its executable float writer");
+  if (decoded.model->floatWriters.size() == 1) {
+    const auto *builtin = std::get_if<SkinBuiltinPropertySelector>(
+        &decoded.model->floatWriters.front().source);
+    const auto *selector =
+        builtin != nullptr ? std::get_if<int>(&builtin->value) : nullptr;
+    expect(selector != nullptr && *selector == 20,
+           "practice-position slider binds its authored type as writer source");
+  }
+}
+
 void testOptionalVisualsAndBuiltinImagesStayLiveAcrossRepeatedDestinations() {
   const auto decoded = decodeInlineModel(R"lua(
 return {
@@ -1597,6 +1628,7 @@ int main() {
   testLiveDestinationMouseRectAndCenterNormalization();
   testGameplayTypeMustBeSupported();
   testBooleanFieldsUseLuaTruthiness();
+  testPracticePositionSliderDecodesItsExecutableWriter();
   testOptionalVisualsAndBuiltinImagesStayLiveAcrossRepeatedDestinations();
   testPomyuCharaCycleExtractionFollowsPinnedLoaderOrder();
   testPomyuCharaDefinitionPreservesPinnedSourceFields();

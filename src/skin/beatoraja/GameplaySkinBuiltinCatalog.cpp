@@ -149,14 +149,15 @@ std::vector<SkinBuiltinBindingCatalogEntry> makeCatalog() {
     add(entries, rate, selector);
   }
 
-  // FloatPropertyFactory.RateType provides built-in writers only for these
-  // Config.AudioConfig fields. The lane-cover and practice-position writers
-  // stay absent until Aso has their source mutation authority.
+  // FloatPropertyFactory.RateType provides built-in writers for the three
+  // Config.AudioConfig fields and BMSPlayer's practice-menu viewport.
+  // Lane-cover mutation remains unavailable through this binding surface.
   const SkinBindingType floatWriter{.kind = SkinBindingKind::FloatWriter};
-  for (const int selector : {17, 18, 19}) {
+  for (const int selector : {17, 18, 19, 20}) {
     add(entries, floatWriter, selector);
   }
-  for (const char *selector : {"mastervolume", "keyvolume", "bgmvolume"}) {
+  for (const char *selector : {"mastervolume", "keyvolume", "bgmvolume",
+                               "practice_position"}) {
     add(entries, floatWriter, selector);
   }
 

@@ -295,6 +295,13 @@ void testAuthoritativeCatalogAdmitsCompatibilityIntegerFactoryDomain() {
                             SkinBuiltinPropertySelector{selector}),
            "catalog admits each executable Config.AudioConfig writer");
   }
+  expect(catalog.contains({.kind = SkinBindingKind::FloatWriter},
+                          SkinBuiltinPropertySelector{20}) &&
+             catalog.contains({.kind = SkinBindingKind::FloatWriter},
+                              SkinBuiltinPropertySelector{
+                                  "practice_position"}),
+         "catalog admits the executable practice viewport writer by numeric "
+         "and named selector");
   expect(catalog.contains({.kind = SkinBindingKind::FloatProperty,
                            .floatDomain = SkinFloatPropertyDomain::FloatValue},
                           SkinBuiltinPropertySelector{4}),
