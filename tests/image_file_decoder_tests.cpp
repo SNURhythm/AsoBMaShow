@@ -104,6 +104,10 @@ void testWebpFfmpegFallback() {
   expect(memoryResized && memoryResized->width == 1 &&
              memoryResized->height == 1,
          "WebP FFmpeg byte fallback applies the requested target-size fit");
+  expect(!image_decode::decodeImageMemory(
+             encoded, {.maximumDimension = 1, .maximumEncodedBytes = 1024,
+                       .maximumDecodedBytes = 1024}),
+         "WebP FFmpeg byte fallback rejects dimensions over the decode limit");
   const auto path = std::filesystem::temp_directory_path() /
                     "asobmashow-image-decoder-fallback.webp";
   {

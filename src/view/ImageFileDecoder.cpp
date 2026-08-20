@@ -382,6 +382,13 @@ decodeWebpFormatWithFfmpeg(AVFormatContext *rawFormat,
   }
   const AVCodecParameters *parameters =
       format->streams[streamIndex]->codecpar;
+  std::size_t decodedBytes = 0;
+  if (parameters == nullptr ||
+      !validDimensions(parameters->width, parameters->height,
+                       options.maximumDimension, options.maximumDecodedBytes,
+                       decodedBytes)) {
+    return std::nullopt;
+  }
   const AVCodec *codec = avcodec_find_decoder(parameters->codec_id);
   if (codec == nullptr) return std::nullopt;
 
