@@ -246,7 +246,7 @@ void applySkinMenuPracticeModifier(bms_parser::Chart &chart,
     }
   }
   recalculateEffectiveLongNoteCounts(chart, chart.Meta.LnMode);
-  if (gaugeTypeIndex(attempt.gaugeType) < 3) {
+  if (gaugeTypeIndex(attempt.gaugeType) < 3 && totalNotesBeforeModifier > 0) {
     chart.Meta.Total = chart.Meta.Total * static_cast<double>(chart.Meta.TotalNotes) /
                        static_cast<double>(totalNotesBeforeModifier);
   }

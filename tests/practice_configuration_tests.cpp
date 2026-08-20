@@ -317,6 +317,32 @@ void testSkinMenuAttemptPlanMovesOutOfRangeNotesToBackground() {
          "scales NORMAL TOTAL by its remaining note count");
 }
 
+void testSkinMenuPracticeModifierPreservesLandmineOnlyTotal() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 1;
+  chart.Meta.TotalNotes = 0;
+  chart.Meta.TotalLandmineNotes = 1;
+  chart.Meta.HasTotal = true;
+  chart.Meta.Total = 300.0;
+  auto *measure = new bms_parser::Measure();
+  auto *timeline = new bms_parser::TimeLine(1, false);
+  timeline->Timing = 1'000'000;
+  timeline->SetLandmineNote(0, new bms_parser::LandmineNote(24.0F));
+  measure->TimeLines.push_back(timeline);
+  chart.Measures.push_back(measure);
+
+  practice::applySkinMenuPracticeModifier(
+      chart, {.startMicros = 500'000,
+              .endMicros = 1'500'000,
+              .gaugeType = GaugeType::Normal,
+              .total = 300.0});
+
+  expect(chart.Meta.TotalNotes == 0 && chart.Meta.TotalLandmineNotes == 1 &&
+             chart.Meta.Total == 300.0,
+         "landmine-only practice keeps finite authored TOTAL when there are "
+         "no playable notes to scale");
+}
+
 void testSkinMenuDoublePlayFlipSwapsSourcePlayerHalves() {
   bms_parser::Chart chart;
   auto *measure = new bms_parser::Measure();
@@ -614,6 +640,7 @@ int main() {
   testPracticeSessionUsesRetainedSkinMenuController();
   testSkinMenuPropertyProducesPinnedAttemptPlan();
   testSkinMenuAttemptPlanMovesOutOfRangeNotesToBackground();
+  testSkinMenuPracticeModifierPreservesLandmineOnlyTotal();
   testSkinMenuDoublePlayFlipSwapsSourcePlayerHalves();
   testSkinMenuDoublePlayFlipSwapsLandminePlayerHalves();
   testSkinMenuShortChartDoesNotSelectNegativeStartTime();
