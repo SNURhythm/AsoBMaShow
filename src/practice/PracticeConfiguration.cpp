@@ -194,6 +194,10 @@ SkinMenuController::SkinMenuController(Configuration configuration,
   synchronizeConfiguration();
 }
 
+void SkinMenuController::refreshInputs(SkinMenuInputs inputs) noexcept {
+  inputs_ = std::move(inputs);
+}
+
 SkinMenuAttemptPlan
 skinMenuAttemptPlan(const SkinMenuProperty &property) noexcept {
   const long long scale = 100LL;

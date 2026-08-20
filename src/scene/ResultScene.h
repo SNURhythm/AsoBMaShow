@@ -53,7 +53,7 @@ freshPracticeSessionForRetry(
     const std::shared_ptr<practice::Session> &session) {
   return session == nullptr
              ? nullptr
-             : std::make_shared<practice::Session>(session->configuration());
+             : std::make_shared<practice::Session>(session->freshForRetry());
 }
 
 enum class ResultCourseMode {

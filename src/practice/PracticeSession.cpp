@@ -48,7 +48,11 @@ const Configuration &Session::configuration() const {
 
 void Session::configureSkinMenu(SkinMenuInputs inputs) {
   skinMenuAttemptConfiguration_.reset();
-  skinMenu_.emplace(configuration_, std::move(inputs));
+  if (skinMenu_.has_value()) {
+    skinMenu_->refreshInputs(std::move(inputs));
+  } else {
+    skinMenu_.emplace(configuration_, std::move(inputs));
+  }
   skinMenu_->setItemScrollPosition(skinItemScrollPosition_);
 }
 
@@ -98,6 +102,13 @@ SkinMenuState Session::skinMenuState(const SkinMenuInputs &inputs) const {
              ? skinMenu_->skinMenuState()
              : buildSkinMenuState(configuration_, inputs,
                                   skinItemScrollPosition_);
+}
+
+Session Session::freshForRetry() const {
+  Session result(configuration_);
+  result.skinMenu_ = skinMenu_;
+  result.skinItemScrollPosition_ = skinItemScrollPosition_;
+  return result;
 }
 
 const ReplayData *

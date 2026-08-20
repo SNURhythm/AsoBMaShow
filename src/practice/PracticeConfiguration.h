@@ -143,6 +143,7 @@ class SkinMenuController {
 public:
   SkinMenuController(Configuration, SkinMenuInputs);
 
+  void refreshInputs(SkinMenuInputs) noexcept;
   void setItemScrollPosition(float) noexcept;
   [[nodiscard]] float itemScrollPosition() const noexcept;
   [[nodiscard]] SkinMenuState skinMenuState() const;

@@ -389,6 +389,42 @@ void testSessionRetainsRawMenuRangeDuringRateAdjustedAttempt() {
          "playback clock applies the selected frequency");
 }
 
+void testFreshPracticeRetryRetainsSourceOnlyMenuChoices() {
+  practice::Session session(
+      {.startMicros = 2'000'000, .endMicros = 9'000'000});
+  const practice::SkinMenuInputs inputs{
+      .lastTimelineMicros = 90'000'000,
+      .judgeRank = 100,
+      .chartTotal = 200.0,
+      .keyMode = 14,
+      .random1P = 0,
+      .random2P = 0,
+      .doublePlay = 0,
+  };
+  session.configureSkinMenu(inputs);
+  expect(session.changeSkinMenuVisibleItem(3, true),
+         "practice gauge category accepts a source menu change");
+  expect(session.changeSkinMenuVisibleItem(5, true),
+         "practice judge rank accepts a source menu change");
+  expect(session.changeSkinMenuVisibleItem(6, true),
+         "practice total accepts a source menu change");
+  session.setSkinItemScrollPosition(1.0F);
+  expect(session.changeSkinMenuVisibleItem(9, true),
+         "practice DP option accepts a source menu change");
+  const auto before = session.beginSkinMenuAttempt();
+
+  auto retry = session.freshForRetry();
+  retry.configureSkinMenu(inputs);
+  const auto after = retry.skinMenuAttemptPlan();
+
+  expect(before.has_value() && after.has_value() &&
+             before->gaugeProfile == after->gaugeProfile &&
+             before->judgeRank == after->judgeRank &&
+             before->total == after->total &&
+             before->doublePlayFlip == after->doublePlayFlip,
+         "fresh practice retry retains source-only menu attempt choices");
+}
+
 void testListenUsesPracticeStartInsteadOfCursorOrEndMarker() {
   practice::Configuration configuration{
       .startMicros = 2'250'000,
@@ -572,6 +608,7 @@ int main() {
   testSkinMenuDoublePlayFlipSwapsLandminePlayerHalves();
   testSkinMenuShortChartDoesNotSelectNegativeStartTime();
   testSessionRetainsRawMenuRangeDuringRateAdjustedAttempt();
+  testFreshPracticeRetryRetainsSourceOnlyMenuChoices();
   testListenUsesPracticeStartInsteadOfCursorOrEndMarker();
   testConfigurationSanitization();
   testGaugeAutoShiftDropdownModel();

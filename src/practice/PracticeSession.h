@@ -33,6 +33,7 @@ public:
   [[nodiscard]] SkinMenuState skinMenuState() const;
   [[nodiscard]] SkinMenuState
   skinMenuState(const SkinMenuInputs &inputs) const;
+  [[nodiscard]] Session freshForRetry() const;
 
 private:
   Configuration configuration_;
