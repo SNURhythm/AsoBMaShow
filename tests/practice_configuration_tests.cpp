@@ -317,6 +317,61 @@ void testSkinMenuAttemptPlanMovesOutOfRangeNotesToBackground() {
          "scales NORMAL TOTAL by its remaining note count");
 }
 
+void testSkinMenuAttemptPlanMovesBothCrossingLongNoteEndpoints() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 2;
+  chart.Meta.LnMode = 1;
+  chart.Meta.TotalNotes = 2;
+  chart.Meta.TotalLongNotes = 2;
+  chart.Meta.HasTotal = true;
+  chart.Meta.Total = 200.0;
+  auto *measure = new bms_parser::Measure();
+  for (const long long timing : {0LL, 1'000'000LL, 2'000'000LL,
+                                 3'000'000LL}) {
+    auto *timeline = new bms_parser::TimeLine(2, false);
+    timeline->Timing = timing;
+    measure->TimeLines.push_back(timeline);
+  }
+
+  auto *crossingStartHead = new bms_parser::LongNote(
+      1, bms_parser::LongNoteType::LongNote);
+  auto *crossingStartTail = new bms_parser::LongNote(
+      1, bms_parser::LongNoteType::LongNote);
+  crossingStartHead->Tail = crossingStartTail;
+  crossingStartTail->Head = crossingStartHead;
+  measure->TimeLines[0]->SetNote(0, crossingStartHead);
+  measure->TimeLines[1]->SetNote(0, crossingStartTail);
+
+  auto *crossingEndHead = new bms_parser::LongNote(
+      2, bms_parser::LongNoteType::LongNote);
+  auto *crossingEndTail = new bms_parser::LongNote(
+      2, bms_parser::LongNoteType::LongNote);
+  crossingEndHead->Tail = crossingEndTail;
+  crossingEndTail->Head = crossingEndHead;
+  measure->TimeLines[2]->SetNote(1, crossingEndHead);
+  measure->TimeLines[3]->SetNote(1, crossingEndTail);
+  chart.Measures.push_back(measure);
+
+  practice::applySkinMenuPracticeModifier(
+      chart, {.startMicros = 500'000,
+              .endMicros = 2'500'000,
+              .gaugeType = GaugeType::Normal,
+              .total = 200.0});
+
+  expect(measure->TimeLines[0]->Notes[0] == nullptr &&
+             measure->TimeLines[1]->Notes[0] == nullptr &&
+             measure->TimeLines[2]->Notes[1] == nullptr &&
+             measure->TimeLines[3]->Notes[1] == nullptr &&
+             measure->TimeLines[0]->BackgroundNotes.size() == 1 &&
+             measure->TimeLines[1]->BackgroundNotes.size() == 1 &&
+             measure->TimeLines[2]->BackgroundNotes.size() == 1 &&
+             measure->TimeLines[3]->BackgroundNotes.size() == 1 &&
+             chart.Meta.TotalNotes == 0 && chart.Meta.TotalLongNotes == 0 &&
+             chart.Meta.Total == 0.0,
+         "source practice modifier removes both endpoints when a long note "
+         "crosses either range boundary");
+}
+
 void testSkinMenuPracticeModifierPreservesLandmineOnlyTotal() {
   bms_parser::Chart chart;
   chart.Meta.KeyMode = 1;
@@ -640,6 +695,7 @@ int main() {
   testPracticeSessionUsesRetainedSkinMenuController();
   testSkinMenuPropertyProducesPinnedAttemptPlan();
   testSkinMenuAttemptPlanMovesOutOfRangeNotesToBackground();
+  testSkinMenuAttemptPlanMovesBothCrossingLongNoteEndpoints();
   testSkinMenuPracticeModifierPreservesLandmineOnlyTotal();
   testSkinMenuDoublePlayFlipSwapsSourcePlayerHalves();
   testSkinMenuDoublePlayFlipSwapsLandminePlayerHalves();

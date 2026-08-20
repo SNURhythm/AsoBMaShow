@@ -226,6 +226,15 @@ void applySkinMenuPracticeModifier(bms_parser::Chart &chart,
   const int totalNotesBeforeModifier = chart.Meta.TotalNotes;
   chart.Meta.HasTotal = true;
   chart.Meta.Total = attempt.total;
+  const auto moveToBackground = [](bms_parser::Note *note) {
+    if (note == nullptr || note->Timeline == nullptr || note->Lane < 0 ||
+        static_cast<std::size_t>(note->Lane) >= note->Timeline->Notes.size() ||
+        note->Timeline->Notes[static_cast<std::size_t>(note->Lane)] != note) {
+      return;
+    }
+    note->Timeline->AddBackgroundNote(note);
+    note->Timeline->Notes[static_cast<std::size_t>(note->Lane)] = nullptr;
+  };
   for (auto *measure : chart.Measures) {
     if (measure == nullptr) {
       continue;
@@ -240,8 +249,12 @@ void applySkinMenuPracticeModifier(bms_parser::Chart &chart,
         if (note == nullptr) {
           continue;
         }
-        timeline->AddBackgroundNote(note);
-        note = nullptr;
+        if (note->IsLongNote()) {
+          auto *longNote = static_cast<bms_parser::LongNote *>(note);
+          moveToBackground(longNote->IsTail() ? longNote->Head
+                                              : longNote->Tail);
+        }
+        moveToBackground(note);
       }
     }
   }
