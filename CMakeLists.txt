@@ -5332,6 +5332,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         tests/practice_preset_store_tests.cpp
         src/AtomicFile.cpp
         src/VersionedJson.cpp
+        src/bms_parser.cpp
         src/practice/PracticeConfiguration.cpp
         src/scene/play/GameplayGaugeRules.cpp
         src/practice/PracticePresetStore.cpp
