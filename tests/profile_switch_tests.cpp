@@ -2093,6 +2093,11 @@ void testLegacyLongNoteScoreMigrationSurvivesUnavailableChartMetadata() {
                          "INSERT OR REPLACE INTO chart_meta_rebuild_state "
                          "(id, required) VALUES (1, 1);"),
              "rebuild fixture marks chart metadata unavailable");
+    } else {
+      expect(execute(chartDatabase.get(),
+                     "INSERT OR REPLACE INTO chart_meta_rebuild_state "
+                     "(id, required) VALUES (1, 0);"),
+             "empty fixture marks chart metadata rebuild complete");
     }
     chartDatabase.reset();
 
@@ -2137,15 +2142,20 @@ void testLegacyLongNoteScoreMigrationSurvivesUnavailableChartMetadata() {
            std::string(testCase.label) +
                " does not strand the legacy score migration");
     scoreDatabase = openDatabase(scorePath);
+    const int expectedSchemaVersion =
+        testCase.rebuildRequired
+            ? ScoreRepository::kCurrentSchemaVersion - 1
+            : ScoreRepository::kCurrentSchemaVersion;
     expect(scoreDatabase != nullptr &&
                queryInt(scoreDatabase.get(), "PRAGMA user_version") ==
-                   ScoreRepository::kCurrentSchemaVersion &&
+                   expectedSchemaVersion &&
                queryInt(scoreDatabase.get(), "SELECT COUNT(*) FROM scores") ==
                    1 &&
                queryInt(scoreDatabase.get(), "SELECT ln_mode FROM scores") ==
                    long_note_mode::kUnknownValue,
            std::string(testCase.label) +
-               " keeps the unclassified row and completes the schema");
+               " keeps the unclassified row and preserves the duration "
+               "migration state");
     scoreDatabase.reset();
 
     bms_parser::ChartMeta meta;
