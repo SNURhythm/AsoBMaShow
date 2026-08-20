@@ -36,6 +36,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 class Button;
@@ -97,8 +98,11 @@ private:
   void updateSkinResetLayoutVisibility();
   void acquireGameplaySkinForAttempt();
   [[nodiscard]] bool shouldEnterPracticeMenu() const noexcept;
-  void enterPracticeMenu();
+  [[nodiscard]] bool enterPracticeMenu();
   void consumePracticeMenuLaneInput(int lane, bool pressed);
+  [[nodiscard]] bool preparePracticeAttemptFromMenu(
+      const practice::SkinMenuAttemptPlan &attempt,
+      std::string_view logContext);
   void startPracticeAttemptFromMenu();
   [[nodiscard]] bool publishRealtimeTouchHitSnapshot();
   void updateRealtimeVisualTimeline(long long gameplayTimeMicros);

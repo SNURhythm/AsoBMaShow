@@ -81,6 +81,11 @@ void Session::beginSkinMenuAttempt(const SkinMenuAttemptPlan &attempt) {
   configuration.startingGaugePercent = attempt.startingGaugePercent;
   configuration.playback = attempt.playback;
   skinMenuAttemptConfiguration_ = std::move(configuration);
+  skinMenuAttemptActivated_ = true;
+}
+
+bool Session::hasActivatedSkinMenuAttempt() const noexcept {
+  return skinMenuAttemptActivated_;
 }
 
 void Session::setSkinItemScrollPosition(float position) noexcept {
@@ -108,8 +113,11 @@ SkinMenuState Session::skinMenuState(const SkinMenuInputs &inputs) const {
 
 Session Session::freshForRetry() const {
   Session result(configuration_);
-  result.skinMenu_ = skinMenu_;
-  result.skinItemScrollPosition_ = skinItemScrollPosition_;
+  result.skinMenuAttemptActivated_ = skinMenuAttemptActivated_;
+  if (skinMenuAttemptActivated_) {
+    result.skinMenu_ = skinMenu_;
+    result.skinItemScrollPosition_ = skinItemScrollPosition_;
+  }
   return result;
 }
 

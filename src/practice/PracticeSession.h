@@ -27,6 +27,7 @@ public:
   skinMenuAttemptPlan() const noexcept;
   [[nodiscard]] std::optional<SkinMenuAttemptPlan> beginSkinMenuAttempt();
   void beginSkinMenuAttempt(const SkinMenuAttemptPlan &);
+  [[nodiscard]] bool hasActivatedSkinMenuAttempt() const noexcept;
   void setSkinItemScrollPosition(float position) noexcept;
   [[nodiscard]] bool changeSkinMenuVisibleItem(std::size_t index,
                                                bool increment);
@@ -39,6 +40,7 @@ private:
   Configuration configuration_;
   std::optional<SkinMenuController> skinMenu_;
   std::optional<Configuration> skinMenuAttemptConfiguration_;
+  bool skinMenuAttemptActivated_ = false;
   std::vector<ReplayData> completedAttempts_;
   std::size_t abandonedAttemptCount_ = 0;
   bool attemptActive_ = false;

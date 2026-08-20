@@ -38,6 +38,8 @@ public:
 
   void configure(bool enabled, float y, float widthScale, bool hudMode,
                  int rangeMilliseconds);
+  void updateTimingWindows(
+      const std::map<Judgement, std::pair<long long, long long>> &windows);
   void record(const JudgeResult &judgeResult, long long displayTimeMicros);
   void clear();
   void render(rendering::SimpleBatchRenderer &batch, long long currentTimeMicros,
@@ -47,6 +49,8 @@ public:
   [[nodiscard]] bool isHudMode() const;
 #if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
   [[nodiscard]] std::size_t retainedSampleCountForTesting() const noexcept;
+  [[nodiscard]] std::pair<long long, long long>
+  timingWindowForTesting(Judgement judgement) const;
 #endif
 
 private:

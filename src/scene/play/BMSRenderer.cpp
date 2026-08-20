@@ -1083,6 +1083,12 @@ std::unique_ptr<TextView> BMSRenderer::createAutoPlayMarkText() {
   return text;
 }
 
+void BMSRenderer::updateJudgeTimingWindows(
+    const std::map<Judgement, std::pair<long long, long long>> &windows) {
+  judgementIndicator.updateTimingWindows(windows);
+  latePoorTiming = latePoorTimingFromWindows(windows);
+}
+
 void BMSRenderer::drawTitle(RenderContext &context) const {
   titleText->render(context);
 }

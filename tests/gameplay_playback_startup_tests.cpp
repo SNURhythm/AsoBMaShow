@@ -151,6 +151,46 @@ bool testPracticeMenuSamePatternSeedSelection() {
                 "new-pattern practice retries do not reuse random seeds");
 }
 
+bool testRetainedSkinMenuAttemptProjectsCompleteRetryOptions() {
+  StartOptions options;
+  options.playOption = "RANDOM";
+  options.playOptionSeed = 1234;
+  options.playOption2 = "MIRROR";
+  options.playOption2Seed = 5678;
+  options.practiceMenuPreservePlayOptionSeeds = true;
+  const practice::SkinMenuAttemptPlan attempt{
+      .startMicros = 1'250'000,
+      .endMicros = 4'750'000,
+      .gaugeType = GaugeType::Hard,
+      .gaugeProfile = GaugeProfile::Standard9Keys,
+      .startingGaugePercent = 42,
+      .judgeRank = 75,
+      .total = 320.0,
+      .playback = {.percent = 200,
+                   .mode = audio::PlaybackMode::PitchShift},
+      .random1P = 2,
+      .random2P = 1,
+      .doublePlayFlip = true,
+  };
+
+  applySkinMenuAttemptPlanToStartOptions(options, attempt);
+
+  return expect(options.startPosition == 1'250'000 &&
+                    options.gaugeType == GaugeType::Hard &&
+                    options.gaugeProfile == GaugeProfile::Standard9Keys &&
+                    options.gaugeAutoShift == GaugeAutoShiftMode::None &&
+                    options.startingGaugePercent == 42 &&
+                    options.playback == attempt.playback &&
+                    options.doublePlayFlip &&
+                    options.playOption == "RANDOM" &&
+                    options.playOptionSeed == 1234 &&
+                    options.playOption2 == "MIRROR" &&
+                    options.playOption2Seed == 5678,
+                "retained practice menu plan projects every runtime option") &&
+         expect(!options.practiceMenuPreservePlayOptionSeeds,
+                "attempt projection consumes the retry-only seed policy");
+}
+
 bool testBuiltInPracticeAppliesConfiguredViewerModifiers() {
   bms_parser::Chart chart;
   chart.Meta.KeyMode = 7;
@@ -287,6 +327,7 @@ int main() {
       !testSavedChartRandomBranchAuthority() ||
       !testCompletionPersistenceRoutes() ||
       !testPracticeMenuSamePatternSeedSelection() ||
+      !testRetainedSkinMenuAttemptProjectsCompleteRetryOptions() ||
       !testBuiltInPracticeAppliesConfiguredViewerModifiers() ||
       !testBuiltInPracticeCapturesGeneratedModifierSeed() ||
       !testCourseRetrySameUsesValidatedSetupWithoutReplayInput()) {

@@ -505,11 +505,15 @@ void testSessionUsesScaledRangeDuringRateAdjustedAttempt() {
 
   auto retry = session.freshForRetry();
   retry.configureSkinMenu(inputs);
-  const auto retryPlan = retry.skinMenuAttemptPlan();
+  const auto retryPlan = retry.beginSkinMenuAttempt();
   expect(retryPlan.has_value() && retryPlan->startMicros == 1'000'000 &&
              retryPlan->endMicros == 4'500'000,
          "fresh practice retry rebuilds the scaled range from the raw menu "
          "coordinates without scaling twice");
+  expect(retry.configuration().startMicros == 1'000'000 &&
+             retry.configuration().endMicros == 4'500'000,
+         "activating the retained retry plan publishes its scaled range to "
+         "built-in practice startup");
 }
 
 void testFreshPracticeRetryRetainsSourceOnlyMenuChoices() {
@@ -546,6 +550,34 @@ void testFreshPracticeRetryRetainsSourceOnlyMenuChoices() {
              before->total == after->total &&
              before->doublePlayFlip == after->doublePlayFlip,
          "fresh practice retry retains source-only menu attempt choices");
+  expect(retry.hasActivatedSkinMenuAttempt(),
+         "fresh practice retry remembers that its retained menu was accepted");
+}
+
+void testFreshPracticeRetryDistinguishesUnacceptedSkinMenu() {
+  const practice::Configuration configuration{
+      .startMicros = 2'000'000,
+      .endMicros = 9'000'000,
+      .gaugeAutoShift = GaugeAutoShiftMode::Continue,
+      .judge = {.kind = practice::JudgeOverrideKind::Scale,
+                .scalePercent = 75},
+      .playback = {.percent = 200,
+                   .mode = audio::PlaybackMode::PitchShift},
+  };
+  practice::Session session(configuration);
+  session.configureSkinMenu({.lastTimelineMicros = 90'000'000,
+                             .judgeRank = 100,
+                             .chartTotal = 200.0,
+                             .keyMode = 7});
+
+  auto retry = session.freshForRetry();
+
+  expect(!retry.hasActivatedSkinMenuAttempt(),
+         "an unaccepted synthesized menu does not become retained retry "
+         "authority");
+  expect(retry.configuration() == configuration,
+         "an unaccepted menu retry preserves panel range, judge, rate, and "
+         "gauge settings");
 }
 
 void testListenUsesPracticeStartInsteadOfCursorOrEndMarker() {
@@ -735,6 +767,7 @@ int main() {
   testSkinMenuShortChartDoesNotSelectNegativeStartTime();
   testSessionUsesScaledRangeDuringRateAdjustedAttempt();
   testFreshPracticeRetryRetainsSourceOnlyMenuChoices();
+  testFreshPracticeRetryDistinguishesUnacceptedSkinMenu();
   testListenUsesPracticeStartInsteadOfCursorOrEndMarker();
   testConfigurationSanitization();
   testGaugeAutoShiftDropdownModel();

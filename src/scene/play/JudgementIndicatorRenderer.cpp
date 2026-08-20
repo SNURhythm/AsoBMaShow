@@ -73,6 +73,11 @@ JudgementIndicatorRenderer::JudgementIndicatorRenderer(
     const std::map<Judgement, std::pair<long long, long long>> &timingWindows)
     : timingWindows(timingWindows) {}
 
+void JudgementIndicatorRenderer::updateTimingWindows(
+    const std::map<Judgement, std::pair<long long, long long>> &windows) {
+  timingWindows = windows;
+}
+
 void JudgementIndicatorRenderer::configure(bool enabled, float y,
                                            float widthScale, bool hudMode,
                                            int rangeMilliseconds) {
@@ -268,6 +273,13 @@ std::size_t JudgementIndicatorRenderer::retainedSampleCountForTesting() const
     }
   }
   return count;
+}
+
+std::pair<long long, long long>
+JudgementIndicatorRenderer::timingWindowForTesting(
+    Judgement judgement) const {
+  const auto found = timingWindows.find(judgement);
+  return found == timingWindows.end() ? std::pair{0LL, 0LL} : found->second;
 }
 #endif
 

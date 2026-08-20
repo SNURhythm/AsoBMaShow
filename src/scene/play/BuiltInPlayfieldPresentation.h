@@ -28,6 +28,8 @@ public:
   projectionTraversal() const = 0;
   [[nodiscard]] virtual long long
   projectionLatePoorTimingMicros() const noexcept = 0;
+  virtual void updateJudgeTimingWindows(
+      const std::map<Judgement, std::pair<long long, long long>> &windows) = 0;
   // Narrow legacy lane-cover drag seam retained for the scene's native touch
   // adapter. Gameplay state remains authoritative outside the presentation.
   [[nodiscard]] virtual std::optional<float>

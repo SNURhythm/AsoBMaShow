@@ -128,6 +128,31 @@ practiceMenuSelectedOptionSeed(
              : std::nullopt;
 }
 
+inline void applySkinMenuAttemptPlanToStartOptions(
+    StartOptions &options, const practice::SkinMenuAttemptPlan &attempt) {
+  options.startPosition =
+      static_cast<unsigned long long>(std::max(0LL, attempt.startMicros));
+  options.gaugeType = attempt.gaugeType;
+  options.gaugeProfile = attempt.gaugeProfile;
+  options.gaugeAutoShift = GaugeAutoShiftMode::None;
+  options.startingGaugePercent = attempt.startingGaugePercent;
+  options.playback = attempt.playback;
+  options.doublePlayFlip = attempt.doublePlayFlip;
+  const std::string selectedPlayOption = std::string(
+      replay::beatorajaReplayOptionName(attempt.random1P).value());
+  const std::string selectedPlayOption2 = std::string(
+      replay::beatorajaReplayOptionName(attempt.random2P).value());
+  options.playOptionSeed = practiceMenuSelectedOptionSeed(
+      options.practiceMenuPreservePlayOptionSeeds, options.playOption,
+      options.playOptionSeed, selectedPlayOption);
+  options.playOption2Seed = practiceMenuSelectedOptionSeed(
+      options.practiceMenuPreservePlayOptionSeeds, options.playOption2,
+      options.playOption2Seed, selectedPlayOption2);
+  options.playOption = selectedPlayOption;
+  options.playOption2 = selectedPlayOption2;
+  options.practiceMenuPreservePlayOptionSeeds = false;
+}
+
 inline bool applyPracticePlayOptions(bms_parser::Chart &chart,
                                      StartOptions &options,
                                      std::string_view logContext) {

@@ -1510,11 +1510,13 @@ bool GamePlayScene::shouldEnterPracticeMenu() const noexcept {
          !isReplayPlayback();
 }
 
-void GamePlayScene::enterPracticeMenu() {
+bool GamePlayScene::enterPracticeMenu() {
   if (!shouldEnterPracticeMenu() || chart == nullptr ||
       options.practiceSession == nullptr) {
-    return;
+    return false;
   }
+  const bool retainedSkinMenuAttempt =
+      options.practiceSession->hasActivatedSkinMenuAttempt();
   options.practiceSession->configureSkinMenu(
       {.lastTimelineMicros = playfieldChartVisualModel.timelines.empty()
                                  ? 0
@@ -1538,13 +1540,18 @@ void GamePlayScene::enterPracticeMenu() {
   capturePlayfieldVisualState(0, getVisualTimeMicros(0), false, false, true);
   acquireGameplaySkinForAttempt();
   if (presentation == nullptr) {
-    return;
+    return false;
   }
   if (presentation->activeMode() != PresentationMode::Skin) {
+    if (retainedSkinMenuAttempt) {
+      const auto attempt = options.practiceSession->beginSkinMenuAttempt();
+      return attempt.has_value() &&
+             preparePracticeAttemptFromMenu(*attempt, "practice fallback");
+    }
     if (!applyPracticePlayOptions(*chart, options, "practice fallback")) {
       showPlaybackInitializationFailure(
           "Practice play option could not be applied");
-      return;
+      return false;
     }
     playfieldChartVisualModel =
         buildPlayfieldChartVisualModel(*chart, options.longNoteMode);
@@ -1554,10 +1561,11 @@ void GamePlayScene::enterPracticeMenu() {
     }
     attemptProvenance = captureScoreProvenanceAtPlayStart(
         options, chart->Meta, *rulesetPolicyBuild.policy);
-    return;
+    return true;
   }
   practiceMenuActive = true;
   practiceMenuStartPressedMicros = 0;
+  return true;
 }
 
 void GamePlayScene::consumePracticeMenuLaneInput(int lane, bool pressed) {
@@ -1571,60 +1579,28 @@ void GamePlayScene::consumePracticeMenuLaneInput(int lane, bool pressed) {
   practiceMenuStartPressedMicros = pressed ? nowMicros() : 0;
 }
 
-void GamePlayScene::startPracticeAttemptFromMenu() {
-  if (!practiceMenuActive || chart == nullptr ||
-      options.practiceSession == nullptr) {
-    return;
-  }
-  const auto attempt = options.practiceSession->beginSkinMenuAttempt();
-  if (!attempt.has_value()) {
-    return;
-  }
-
-  options.startPosition =
-      static_cast<unsigned long long>(attempt->startMicros);
-  options.gaugeType = attempt->gaugeType;
-  options.gaugeProfile = attempt->gaugeProfile;
-  options.gaugeAutoShift = GaugeAutoShiftMode::None;
-  options.startingGaugePercent = attempt->startingGaugePercent;
-  options.playback = attempt->playback;
-  options.doublePlayFlip = attempt->doublePlayFlip;
-  const std::string selectedPlayOption = std::string(
-      replay::beatorajaReplayOptionName(attempt->random1P).value());
-  const std::string selectedPlayOption2 = std::string(
-      replay::beatorajaReplayOptionName(attempt->random2P).value());
-  const std::optional<long long> selectedPlayOptionSeed =
-      practiceMenuSelectedOptionSeed(
-          options.practiceMenuPreservePlayOptionSeeds, options.playOption,
-          options.playOptionSeed, selectedPlayOption);
-  const std::optional<long long> selectedPlayOption2Seed =
-      practiceMenuSelectedOptionSeed(
-          options.practiceMenuPreservePlayOptionSeeds, options.playOption2,
-          options.playOption2Seed, selectedPlayOption2);
-  options.playOption = selectedPlayOption;
-  options.playOptionSeed = selectedPlayOptionSeed;
-  options.playOption2 = selectedPlayOption2;
-  options.playOption2Seed = selectedPlayOption2Seed;
-
-  practice::applySkinMenuPracticeModifier(*chart, *attempt);
+bool GamePlayScene::preparePracticeAttemptFromMenu(
+    const practice::SkinMenuAttemptPlan &attempt,
+    std::string_view logContext) {
+  applySkinMenuAttemptPlanToStartOptions(options, attempt);
+  practice::applySkinMenuPracticeModifier(*chart, attempt);
   if (chart->Meta.IsDP && options.doublePlayFlip) {
     practice::applySkinMenuDoublePlayFlip(*chart);
   }
-  if (!applyPracticePlayOptions(*chart, options, "practice")) {
+  if (!applyPracticePlayOptions(*chart, options, logContext)) {
     showPlaybackInitializationFailure(
         "Practice play option could not be applied");
-    return;
+    return false;
   }
-  options.practiceMenuPreservePlayOptionSeeds = false;
 
   rulesetPolicyBuild = buildGameplayRulesetPolicyAtPlayStart(
       options, chart->Meta, context.settings.notePriorityMode);
   if (!rulesetPolicyBuild.built()) {
     showPlaybackInitializationFailure(rulesetPolicyBuild.diagnostic);
-    return;
+    return false;
   }
   auto sourceJudgeRules =
-      practice::sourcePracticeJudgeRules(chart->Meta.KeyMode, attempt->judgeRank);
+      practice::sourcePracticeJudgeRules(chart->Meta.KeyMode, attempt.judgeRank);
   const auto &existingJudgeRules = rulesetPolicyBuild.policy->judge.rules();
   sourceJudgeRules.candidateSelection = existingJudgeRules.candidateSelection;
   sourceJudgeRules.repeatedKpoor = existingJudgeRules.repeatedKpoor;
@@ -1646,6 +1622,9 @@ void GamePlayScene::startPracticeAttemptFromMenu() {
   }
   judge.setAllowedNoteRange(practiceAllowedNoteRange(options));
   latePoorTiming = rulesetPolicyBuild.policy->judge.automaticPoorLateMicros();
+  if (builtInPresentation != nullptr) {
+    builtInPresentation->updateJudgeTimingWindows(judge.timingWindows);
+  }
   playfieldChartVisualModel =
       buildPlayfieldChartVisualModel(*chart, options.longNoteMode);
   initializePlayfieldVisualNoteSources();
@@ -1658,6 +1637,19 @@ void GamePlayScene::startPracticeAttemptFromMenu() {
   laneInputController = ownedLaneInputController.get();
   attemptProvenance = captureScoreProvenanceAtPlayStart(
       options, chart->Meta, *rulesetPolicyBuild.policy);
+  return true;
+}
+
+void GamePlayScene::startPracticeAttemptFromMenu() {
+  if (!practiceMenuActive || chart == nullptr ||
+      options.practiceSession == nullptr) {
+    return;
+  }
+  const auto attempt = options.practiceSession->beginSkinMenuAttempt();
+  if (!attempt.has_value() ||
+      !preparePracticeAttemptFromMenu(*attempt, "practice")) {
+    return;
+  }
   practiceMenuActive = false;
   practiceMenuStartPressedMicros = 0;
   (void)reset();
@@ -2876,7 +2868,9 @@ void GamePlayScene::init() {
   context.musicPlayer.Stop(musicStopError);
   context.jukebox.stop();
   if (shouldEnterPracticeMenu()) {
-    enterPracticeMenu();
+    if (!enterPracticeMenu()) {
+      return;
+    }
   }
   if (!practiceMenuActive && !reset()) {
     return;
