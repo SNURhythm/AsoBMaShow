@@ -76,6 +76,7 @@ bool scoreImportedIrSchemaIsExact(sqlite3 *db);
 bool courseScoreProjectionSchemaIsExact(sqlite3 *db);
 bool currentScoreSchemaIsValid(sqlite3 *db);
 bool ensureScorePlayDurationColumn(sqlite3 *db);
+bool ensureScorePlayDurationInvariant(sqlite3 *db);
 bool attachChartDatabaseForScoreMigration(
     sqlite3 *db, const std::filesystem::path &chartPath);
 void detachChartDatabaseForScoreMigration(sqlite3 *db);
@@ -1229,7 +1230,9 @@ bool migrateScoreDatabaseToVersion12(
           matchPredicate + " AND " + betterMatchPredicate;
       const std::string updateQuery =
           "UPDATE scores SET play_duration_seconds = COALESCE((SELECT "
-          "CAST(cm.length / 1000000 AS INTEGER) FROM " +
+          "MIN(" +
+          std::to_string(ScoreStageProvenance::kMaximumPlayDurationSeconds) +
+          ", MAX(0, CAST(cm.length / 1000000 AS INTEGER))) FROM " +
           chartTable + " cm WHERE " + bestMatchPredicate +
           " ORDER BY cm.path LIMIT 1), 0) WHERE score_source = " +
           std::to_string(static_cast<int>(ScoreStorageSource::LocalGameplay)) +
@@ -1285,7 +1288,10 @@ std::string createScoreTableSql(std::string_view tableName) {
          "slow INTEGER NOT NULL,"
          "final_gauge REAL NOT NULL,"
          "clear_type INTEGER NOT NULL,"
-         "play_duration_seconds INTEGER NOT NULL DEFAULT 0,"
+         "play_duration_seconds INTEGER NOT NULL DEFAULT 0 CHECK("
+         "play_duration_seconds BETWEEN 0 AND " +
+         std::to_string(ScoreStageProvenance::kMaximumPlayDurationSeconds) +
+         "),"
          "score_source INTEGER NOT NULL DEFAULT 0,"
          "source_provider_id TEXT,"
          "source_server_origin TEXT,"
@@ -1327,12 +1333,44 @@ bool ensureScoreChartMetadataColumns(sqlite3 *db) {
 }
 
 bool ensureScorePlayDurationColumn(sqlite3 *db) {
+  const std::string alterQuery =
+      "ALTER TABLE scores ADD COLUMN play_duration_seconds INTEGER NOT NULL "
+      "DEFAULT 0 CHECK(play_duration_seconds BETWEEN 0 AND " +
+      std::to_string(ScoreStageProvenance::kMaximumPlayDurationSeconds) + ")";
   return ensureSqliteTableColumnLogged(
       db, "scores", "play_duration_seconds",
-      "ALTER TABLE scores ADD COLUMN play_duration_seconds INTEGER NOT NULL "
-      "DEFAULT 0",
+      alterQuery.c_str(),
       "reading score play-duration schema", "adding score play-duration column",
       logSqlErrorText);
+}
+
+bool ensureScorePlayDurationInvariant(sqlite3 *db) {
+  const std::string maximum =
+      std::to_string(ScoreStageProvenance::kMaximumPlayDurationSeconds);
+  const std::string normalize =
+      "UPDATE scores SET play_duration_seconds = 0 WHERE "
+      "play_duration_seconds < 0 OR play_duration_seconds > " +
+      maximum;
+  if (!execSql(db, normalize.c_str(),
+               "normalizing invalid score play durations")) {
+    return false;
+  }
+  const std::string insertTrigger =
+      "CREATE TRIGGER IF NOT EXISTS scores_play_duration_insert_guard "
+      "BEFORE INSERT ON scores WHEN NEW.play_duration_seconds < 0 OR "
+      "NEW.play_duration_seconds > " +
+      maximum +
+      " BEGIN SELECT RAISE(ABORT, 'invalid score play duration'); END";
+  const std::string updateTrigger =
+      "CREATE TRIGGER IF NOT EXISTS scores_play_duration_update_guard "
+      "BEFORE UPDATE OF play_duration_seconds ON scores WHEN "
+      "NEW.play_duration_seconds < 0 OR NEW.play_duration_seconds > " +
+      maximum +
+      " BEGIN SELECT RAISE(ABORT, 'invalid score play duration'); END";
+  return execSql(db, insertTrigger.c_str(),
+                 "creating score play-duration insert guard") &&
+         execSql(db, updateTrigger.c_str(),
+                 "creating score play-duration update guard");
 }
 
 bool normalizeScoreChartIdentityHashes(sqlite3 *db) {
@@ -1592,7 +1630,9 @@ bool migrateScoreDatabaseToVersion13(
           " AND cm_better.path < cm.path)))))))";
       const std::string updateQuery =
           "UPDATE scores SET play_duration_seconds = COALESCE((SELECT "
-          "CAST(cm.length / 1000000 AS INTEGER) FROM " +
+          "MIN(" +
+          std::to_string(ScoreStageProvenance::kMaximumPlayDurationSeconds) +
+          ", MAX(0, CAST(cm.length / 1000000 AS INTEGER))) FROM " +
           chartTable + " cm WHERE " + matchPredicate + " AND " +
           betterMatchPredicate +
           " ORDER BY cm.path LIMIT 1), 0) WHERE score_source = " +
@@ -2050,7 +2090,8 @@ bool score_repository_detail::EnsureSchemaOnConnection(
       !migrateScoreDatabaseToVersion10(db) ||
       !migrateScoreDatabaseToVersion11(db) ||
       !migrateScoreDatabaseToVersion12(db, chartDatabasePath) ||
-      !migrateScoreDatabaseToVersion13(db, chartDatabasePath)) {
+      !migrateScoreDatabaseToVersion13(db, chartDatabasePath) ||
+      !ensureScorePlayDurationInvariant(db)) {
     return false;
   }
   if (!transaction.commit(transactionError)) {

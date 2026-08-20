@@ -629,6 +629,12 @@ void validateStageProof(const ScoreStageProvenance &stage) {
     throw std::runtime_error(
         "Score provenance total note count must be positive.");
   }
+  if (stage.playDurationSeconds < 0 ||
+      stage.playDurationSeconds >
+          ScoreStageProvenance::kMaximumPlayDurationSeconds) {
+    throw std::runtime_error(
+        "Score provenance play duration is outside safe bounds.");
+  }
   if (stage.authoredGaugeTotal.has_value() &&
       !std::isfinite(*stage.authoredGaugeTotal)) {
     throw std::runtime_error(

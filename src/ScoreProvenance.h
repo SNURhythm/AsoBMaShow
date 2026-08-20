@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <array>
+#include <limits>
 #include <map>
 #include <optional>
 #include <span>
@@ -60,6 +61,8 @@ struct PlayerOptionProvenance {
 };
 
 struct ScoreStageProvenance {
+  static constexpr std::int64_t kMaximumPlayDurationSeconds =
+      std::numeric_limits<std::int32_t>::max();
   std::string chartMd5;
   std::string chartSha256;
   int longNoteMode = 0;

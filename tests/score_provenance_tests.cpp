@@ -226,6 +226,20 @@ void testPlaybackAndJudgeProvenanceValidation() {
                               .mode = audio::PlaybackMode::TimeStretch};
   assertValid(maximumPlayback);
 
+  auto maximumDuration = sampleVerifiedProvenance();
+  maximumDuration.stages.front().playDurationSeconds =
+      ScoreStageProvenance::kMaximumPlayDurationSeconds;
+  assertValid(maximumDuration);
+
+  auto negativeDuration = sampleVerifiedProvenance();
+  negativeDuration.stages.front().playDurationSeconds = -1;
+  assertInvalid(negativeDuration);
+
+  auto excessiveDuration = sampleVerifiedProvenance();
+  excessiveDuration.stages.front().playDurationSeconds =
+      ScoreStageProvenance::kMaximumPlayDurationSeconds + 1;
+  assertInvalid(excessiveDuration);
+
   auto invalidPlayback = sampleVerifiedProvenance();
   invalidPlayback.playback.percent = 49;
   assertInvalid(invalidPlayback);

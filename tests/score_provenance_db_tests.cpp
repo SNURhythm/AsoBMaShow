@@ -57,6 +57,13 @@ void execOrAbort(sqlite3 *db, const std::string &sql) {
   }
 }
 
+bool execFailsConstraint(sqlite3 *db, const std::string &sql) {
+  char *error = nullptr;
+  const int result = sqlite3_exec(db, sql.c_str(), nullptr, nullptr, &error);
+  sqlite3_free(error);
+  return result == SQLITE_CONSTRAINT;
+}
+
 SqliteConnectionHandle openDatabase(const std::filesystem::path &path) {
   std::filesystem::create_directories(path.parent_path());
   sqlite3 *db = nullptr;
@@ -1145,6 +1152,14 @@ void testChartScoreHistoryMatchesPinnedScoreDataUpdateRules(
               "UPDATE scores SET play_duration_seconds=61 WHERE id=2");
   execOrAbort(db.get(), prefix + "200" + suffix +
                             "1, '2026-01-01 00:00:00')");
+  assert(execFailsConstraint(
+      db.get(), "UPDATE scores SET play_duration_seconds=-1 WHERE id=1"));
+  assert(execFailsConstraint(
+      db.get(),
+      "UPDATE scores SET play_duration_seconds=" +
+          std::to_string(
+              ScoreStageProvenance::kMaximumPlayDurationSeconds + 1) +
+          " WHERE id=1"));
   const int expectedLastPlayed = queryInt(
       db.get(), "SELECT CAST(strftime('%s', '2025-06-07 08:09:10') AS INTEGER)");
   db.reset();
