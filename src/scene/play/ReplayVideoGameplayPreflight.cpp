@@ -5,6 +5,7 @@
 #include "../../ChartPlaybackDuration.h"
 #include "Judge.h"
 #include "GamePlayTiming.h"
+#include "../../repositories/ChartStorageIdentity.h"
 #include "../../skin/beatoraja/GameplaySkinEndAnimation.h"
 #include "../../rendering/common.h"
 
@@ -104,7 +105,7 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
 ReplayChartMetadataAuthority projectReplayChartMetadataAuthority(
     const bms_parser::ChartMeta &chartMeta,
     const ChartMetaPathBatchReadOutcome &records, bool stageFileAvailable,
-    bool backBmpAvailable) noexcept {
+    bool backBmpAvailable) {
   ReplayChartMetadataAuthority authority{
       .stageFileAvailable = stageFileAvailable,
       .backBmpAvailable = backBmpAvailable,
@@ -113,10 +114,14 @@ ReplayChartMetadataAuthority projectReplayChartMetadataAuthority(
       records.status != ChartMetaPathBatchReadStatus::Loaded) {
     return authority;
   }
+  const std::string chartPath =
+      chart_storage_identity::StoredPathText(chartMeta.BmsPath);
+  if (chartPath.empty()) return authority;
   const auto record = std::find_if(
       records.records.begin(), records.records.end(),
-      [&chartMeta](const ChartMetaRecord &candidate) {
-        return candidate.meta.BmsPath == chartMeta.BmsPath;
+      [&chartPath](const ChartMetaRecord &candidate) {
+        return chart_storage_identity::StoredPathText(candidate.meta.BmsPath) ==
+               chartPath;
       });
   if (record != records.records.end()) {
     authority.songReviewFavorite = record->songReviewFavorite;

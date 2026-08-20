@@ -2028,14 +2028,14 @@ void testReplayExportPreparesSavedLongNoteScoreMetadata() {
 
 void testReplayChartMetadataAuthorityUsesMatchedLibraryRecord() {
   bms_parser::ChartMeta chartMeta;
-  chartMeta.BmsPath = "/library/replay-chart.bms";
+  chartMeta.BmsPath = "/library/set/../set/replay-chart.bms";
   ChartMetaPathBatchReadOutcome records;
   records.status = ChartMetaPathBatchReadStatus::Loaded;
   records.records = {
       {.meta = {.BmsPath = "/library/other-chart.bms"},
        .hasDocument = false,
        .songReviewFavorite = 1},
-      {.meta = {.BmsPath = chartMeta.BmsPath},
+      {.meta = {.BmsPath = "/library/set/replay-chart.bms"},
        .hasDocument = true,
        .songReviewFavorite = 9},
   };

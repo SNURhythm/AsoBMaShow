@@ -31,7 +31,7 @@ struct ReplayChartMetadataAuthority {
 projectReplayChartMetadataAuthority(const bms_parser::ChartMeta &,
                                     const ChartMetaPathBatchReadOutcome &,
                                     bool stageFileAvailable,
-                                    bool backBmpAvailable) noexcept;
+                                    bool backBmpAvailable);
 
 // Export callers may provide an already-parsed chart instead of going through
 // play_options::prepareReplayChart. Apply the replay's recorded long-note
