@@ -412,12 +412,26 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
   settings.laneBeamLengthPercent = 71;
   settings.noteStartPositionPercent = 40;
   settings.showInvisibleNotes = true;
+  settings.showPastNotes = true;
   settings.audioVideo.audio.masterVolume = 0.25F;
   settings.audioVideo.audio.keysoundVolume = 0.5F;
   settings.audioVideo.audio.bgmVolume = 0.75F;
   settings.bgaEnabled = false;
   settings.hispeedAutoAdjust = true;
   settings.markProcessedNotes = true;
+  settings.customJudge = true;
+  settings.showJudgeArea = true;
+  settings.notesDisplayTimingAutoAdjust = true;
+  settings.autoSaveReplay = {1, 2, 3, 4};
+  settings.guideSoundEffects = true;
+  settings.extraNoteDepth = 2;
+  settings.mineMode = 3;
+  settings.scrollMode = 4;
+  settings.longNoteModifierMode = 5;
+  settings.sevenToNinePattern = 6;
+  settings.sevenToNineType = 7;
+  settings.constantScroll = true;
+  settings.constantFadeInMilliseconds = 456;
   settings.judgementIndicatorEnabled = false;
   settings.judgementIndicatorY = 0.25F;
   settings.judgementIndicatorWidthScale = 0.75F;
@@ -458,12 +472,26 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
              configuration.laneBeamLengthPercent == 71 &&
              configuration.noteStartPositionPercent == 40 &&
              configuration.showInvisibleNotes &&
+             configuration.showPastNotes &&
              configuration.masterVolume == 0.25F &&
              configuration.keysoundVolume == 0.5F &&
              configuration.bgmVolume == 0.75F &&
              !configuration.bgaEnabled &&
              configuration.hispeedAutoAdjust &&
              configuration.markProcessedNotes &&
+             configuration.customJudge &&
+             configuration.showJudgeArea &&
+             configuration.notesDisplayTimingAutoAdjust &&
+             configuration.autoSaveReplay == std::array<int, 4>{1, 2, 3, 4} &&
+             configuration.guideSoundEffects &&
+             configuration.extraNoteDepth == 2 &&
+             configuration.mineMode == 3 &&
+             configuration.scrollMode == 4 &&
+             configuration.longNoteModifierMode == 5 &&
+             configuration.sevenToNinePattern == 6 &&
+             configuration.sevenToNineType == 7 &&
+             configuration.constantScroll &&
+             configuration.constantFadeInMilliseconds == 456 &&
              !configuration.judgementIndicatorEnabled &&
              configuration.judgementIndicatorY == 0.25F &&
              configuration.judgementIndicatorWidthScale == 0.75F &&
