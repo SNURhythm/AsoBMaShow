@@ -1369,15 +1369,16 @@ void testVersion13RetriesDurationBackfillAfterEmptyChartLibrary(
   {
     auto charts = openDatabase(chartPath);
     execOrAbort(charts.get(),
-                "INSERT INTO chart_meta VALUES ('chart.bms','" + meta.MD5 +
-                    "','" + meta.SHA256 + "',12999999,0,0)");
+                "CREATE TABLE chart_meta_rebuild_state(required INTEGER)");
+    execOrAbort(charts.get(),
+                "INSERT INTO chart_meta_rebuild_state VALUES (0)");
   }
   assert(migrated.EnsureSchema());
   scores = openDatabase(scorePath);
   assert(queryInt(scores.get(), "PRAGMA user_version") ==
          ScoreRepository::kCurrentSchemaVersion);
   assert(queryInt(scores.get(), "SELECT play_duration_seconds FROM scores") ==
-         12);
+         0);
 }
 
 void testVersion13RetriesDurationBackfillAfterChartAttachFailure(

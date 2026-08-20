@@ -1479,18 +1479,20 @@ bool chartDatabaseHasRowsForScoreMigration(sqlite3 *db) {
   return selectScalarInt(db, query, 0) > 0;
 }
 
-bool chartDatabaseRebuildRequiredForScoreMigration(sqlite3 *db) {
+// -1 means an older/unknown chart database, 0 means a completed scan (which
+// may legitimately contain no charts), and 1 means a rebuild is pending.
+int chartDatabaseRebuildStateForScoreMigration(sqlite3 *db) {
   const std::string tableExistsQuery =
       std::string("SELECT 1 FROM ") + kScoreMigrationChartSchema +
       ".sqlite_master WHERE type = 'table' AND "
       "name = 'chart_meta_rebuild_state' LIMIT 1";
   if (selectScalarInt(db, tableExistsQuery, 0) <= 0) {
-    return false;
+    return -1;
   }
   const std::string requiredQuery =
-      std::string("SELECT COALESCE(MAX(required), 0) FROM ") +
+      std::string("SELECT COALESCE(MAX(required), -1) FROM ") +
       kScoreMigrationChartSchema + ".chart_meta_rebuild_state";
-  return selectScalarInt(db, requiredQuery, 0) > 0;
+  return selectScalarInt(db, requiredQuery, -1);
 }
 
 bool scoreMigrationChartDatabaseIsAttached(sqlite3 *db) {
@@ -1538,7 +1540,9 @@ bool migrateScoreDatabaseToVersion13(
     return true;
   }
   {
-    if (chartDatabaseRebuildRequiredForScoreMigration(db)) {
+    const int chartDatabaseRebuildState =
+        chartDatabaseRebuildStateForScoreMigration(db);
+    if (chartDatabaseRebuildState > 0) {
       if (attachedHere) {
         detachChartDatabaseForScoreMigration(db);
       }
@@ -1553,7 +1557,8 @@ bool migrateScoreDatabaseToVersion13(
           "SELECT COUNT(*) FROM scores WHERE score_source = " +
           std::to_string(static_cast<int>(ScoreStorageSource::LocalGameplay)) +
           " AND play_duration_seconds = 0";
-      if (selectScalarInt(db, pendingDurationQuery, 0) > 0) {
+      if (chartDatabaseRebuildState != 0 &&
+          selectScalarInt(db, pendingDurationQuery, 0) > 0) {
         if (attachedHere) {
           detachChartDatabaseForScoreMigration(db);
         }
@@ -1665,7 +1670,8 @@ bool migrateLegacyScoreLongNoteModes(
   }
 
   const int scoreCount = selectScalarInt(db, "SELECT COUNT(*) FROM scores", 0);
-  if (scoreCount > 0 && chartDatabaseRebuildRequiredForScoreMigration(db)) {
+  if (scoreCount > 0 &&
+      chartDatabaseRebuildStateForScoreMigration(db) > 0) {
     detachChartDatabaseForScoreMigration(db);
     SDL_Log("Preserving unclassified legacy score ln_mode values because "
             "chart metadata is scheduled for rebuild");
