@@ -14,6 +14,43 @@
 
 namespace ir {
 
+template <typename CredentialLookup, typename AccountLookup>
+[[nodiscard]] inline std::string lookupFirstEnabledIrAccountName(
+    const IrActiveProfileConfig &config, std::stop_token stopToken,
+    CredentialLookup &&credentialLookup,
+    AccountLookup &&accountLookup) noexcept {
+  if (stopToken.stop_requested()) {
+    return {};
+  }
+  try {
+    for (const auto &[providerId, provider] : config.providers) {
+      if (stopToken.stop_requested()) {
+        return {};
+      }
+      if (!provider.enabled) {
+        continue;
+      }
+      const std::string apiKey =
+          credentialLookup(config.profileId, providerId);
+      if (apiKey.empty()) {
+        continue;
+      }
+      const auto account = accountLookup(
+          providerId,
+          {.profileId = config.profileId,
+           .serverOrigin = provider.serverOrigin,
+           .apiKey = apiKey},
+          stopToken);
+      if (account.status == IrAuthenticatedAccountStatus::Succeeded &&
+          account.account) {
+        return account.account->name;
+      }
+    }
+  } catch (...) {
+  }
+  return {};
+}
+
 // Serializes account lookups onto a background worker. Replacing a request
 // cancels the in-flight HTTP operation and only the newest request may publish
 // its result, so profile activation never waits for an unreachable provider.

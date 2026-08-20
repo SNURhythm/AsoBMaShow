@@ -68,6 +68,53 @@ bool testLatestRequestCancelsAndPublishesOnlyLatestAccount() {
   return true;
 }
 
+bool testDisabledProvidersAreSkippedBeforeCredentialLookup() {
+  ir::IrActiveProfileConfig config{
+      .profileId = "profile",
+      .providers =
+          {{"disabled",
+            ir::IrProviderSettings{.enabled = false,
+                                   .serverOrigin = "https://disabled.test"}},
+           {"enabled",
+            ir::IrProviderSettings{.enabled = true,
+                                   .serverOrigin = "https://enabled.test"}}},
+  };
+  std::vector<std::string> credentialLookups;
+  std::vector<std::string> accountLookups;
+  const std::string accountName = ir::lookupFirstEnabledIrAccountName(
+      config, {},
+      [&](std::string_view profileId, std::string_view providerId) {
+        if (profileId != "profile") {
+          return std::string{};
+        }
+        credentialLookups.emplace_back(providerId);
+        return std::string("secret");
+      },
+      [&](std::string_view providerId,
+          const ir::IrProviderRuntimeConfig &runtime, std::stop_token) {
+        accountLookups.emplace_back(providerId);
+        if (runtime.serverOrigin != "https://enabled.test" ||
+            runtime.apiKey != "secret") {
+          return ir::IrAuthenticatedAccountOutcome{};
+        }
+        return ir::IrAuthenticatedAccountOutcome{
+            .status = ir::IrAuthenticatedAccountStatus::Succeeded,
+            .account = ir::IrAuthenticatedAccount{.name = "enabled-user"}};
+      });
+  if (accountName != "enabled-user" ||
+      credentialLookups != std::vector<std::string>{"enabled"} ||
+      accountLookups != std::vector<std::string>{"enabled"}) {
+    std::cerr << "disabled IR providers must not participate in account lookup\n";
+    return false;
+  }
+  return true;
+}
+
 } // namespace
 
-int main() { return testLatestRequestCancelsAndPublishesOnlyLatestAccount() ? 0 : 1; }
+int main() {
+  return testLatestRequestCancelsAndPublishesOnlyLatestAccount() &&
+                 testDisabledProvidersAreSkippedBeforeCredentialLookup()
+             ? 0
+             : 1;
+}

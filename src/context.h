@@ -844,31 +844,17 @@ public:
     if (!irHttpClient || stopToken.stop_requested()) {
       return {};
     }
-    try {
-      for (const auto &[providerId, provider] : config.providers) {
-        if (stopToken.stop_requested()) {
-          return {};
-        }
-        const std::string apiKey =
-            lookupActiveIrCredential(config.profileId, providerId);
-        if (apiKey.empty()) {
-          continue;
-        }
-        const auto account = irDrivers.fetchAuthenticatedAccount(
-            providerId,
-            {.profileId = config.profileId,
-             .serverOrigin = provider.serverOrigin,
-             .apiKey = apiKey},
-            *irHttpClient, stopToken);
-        if (account.status == ir::IrAuthenticatedAccountStatus::Succeeded &&
-            account.account) {
-          return account.account->name;
-        }
-      }
-    } catch (...) {
-      return {};
-    }
-    return {};
+    return ir::lookupFirstEnabledIrAccountName(
+        config, stopToken,
+        [this](std::string_view profileId, std::string_view providerId) {
+          return lookupActiveIrCredential(profileId, providerId);
+        },
+        [this](std::string_view providerId,
+               const ir::IrProviderRuntimeConfig &runtime,
+               std::stop_token requestStop) {
+          return irDrivers.fetchAuthenticatedAccount(
+              providerId, runtime, *irHttpClient, requestStop);
+        });
   }
 
   void refreshIrAccountName(const ir::IrActiveProfileConfig &config) noexcept {
