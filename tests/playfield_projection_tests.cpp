@@ -155,7 +155,8 @@ bool testPmsDst2ProjectsSourceLatePoorDescent() {
   // Removing the dedicated PMS path, treating its late-BAD hold as moving
   // time, or reusing a processed-note visual must all make this fail.
   // LaneRenderer holds a note for the BAD late window, then drops it at
-  // no-speed velocity: 500,000us * 120 BPM / 240,000,000 * 100px = 25px.
+  // no-speed velocity across the Lift-shortened 75px lane:
+  // 500,000us * 120 BPM / 240,000,000 * 75px = 18.75px.
   PlayfieldChartVisualModel model;
   model.laneOrder = {0};
   model.timelines = {
@@ -181,6 +182,8 @@ bool testPmsDst2ProjectsSourceLatePoorDescent() {
   };
   PlayfieldVisualState state;
   state.clock = {.serial = 1, .visualTimeMicros = 1'000'000};
+  state.authority.liftEnabled = true;
+  state.authority.liftRatio = 0.25F;
   state.notes = {
       {.id = 10},
       {.id = 11, .judged = true},
@@ -204,10 +207,10 @@ bool testPmsDst2ProjectsSourceLatePoorDescent() {
                                 : found->pmsPoorYDisplacement;
   };
   return skin.notes.size() == 2 && descent(skin.notes, 10).has_value() &&
-         closeTo(*descent(skin.notes, 10), -25.0) &&
+         closeTo(*descent(skin.notes, 10), -18.75) &&
          !descent(skin.notes, 11).has_value() &&
          descent(skin.notes, 12).has_value() &&
-         closeTo(*descent(skin.notes, 12), -25.0);
+         closeTo(*descent(skin.notes, 12), -18.75);
 }
 
 bool testPmsDst2DescentTraversesBeforeRetainedCursor() {

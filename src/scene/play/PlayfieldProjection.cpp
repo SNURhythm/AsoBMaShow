@@ -167,6 +167,11 @@ std::vector<PmsPoorTimelineDescent> pmsPoorTimelineDescents(
       geometry.laneOriginY +
       (liftEnabled ? geometry.laneHeight * static_cast<double>(liftRatio)
                    : 0.0);
+  // LaneRenderer's no-speed PMS descent uses hu - hl. Lift raises hl while
+  // hu stays at the authored lane top, so the fall velocity must use the
+  // remaining visible lane height rather than the full authored height.
+  const double descentHeight =
+      geometry.laneHeight - (originY - geometry.laneOriginY);
   double lowerY = geometry.secondaryDestinationY;
   if (lowerY < -geometry.laneHeight) {
     lowerY = -geometry.laneHeight;
@@ -204,7 +209,7 @@ std::vector<PmsPoorTimelineDescent> pmsPoorTimelineDescents(
           y -= (static_cast<double>(next->timeMicros) -
                 static_cast<double>(current->timeMicros) -
                 static_cast<double>(current->stopMicros) - stopTime) *
-               geometry.laneHeight * current->bpm / kQuarterNoteMicros;
+               descentHeight * current->bpm / kQuarterNoteMicros;
         }
         ++segment;
       }
@@ -218,7 +223,7 @@ std::vector<PmsPoorTimelineDescent> pmsPoorTimelineDescents(
         y -= (static_cast<double>(timeMicros) -
               static_cast<double>(current->timeMicros) -
               static_cast<double>(current->stopMicros) - stopTime) *
-             geometry.laneHeight * current->bpm / kQuarterNoteMicros;
+             descentHeight * current->bpm / kQuarterNoteMicros;
       }
     } else if (timeline->timeMicros + timeline->stopMicros < timeMicros &&
                static_cast<double>(timeMicros) > releaseTime) {
@@ -229,7 +234,7 @@ std::vector<PmsPoorTimelineDescent> pmsPoorTimelineDescents(
       y -= (static_cast<double>(timeMicros) -
             static_cast<double>(timeline->timeMicros) -
             static_cast<double>(timeline->stopMicros) - stopTime) *
-           geometry.laneHeight * timeline->bpm / kQuarterNoteMicros;
+           descentHeight * timeline->bpm / kQuarterNoteMicros;
     }
     if (y < lowerY) {
       break;
