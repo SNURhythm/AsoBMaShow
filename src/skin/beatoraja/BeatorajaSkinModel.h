@@ -292,6 +292,19 @@ struct SkinNoteDistributionGraphObject {
   bool noHorizontalGap = false;
 };
 
+struct SkinTimingVisualizerObject {
+  int width = 301;
+  int judgeWidthMillis = 150;
+  int lineWidth = 1;
+  std::array<std::uint32_t, 5> judgeRgba{0x000088ffU, 0x008800ffU,
+                                          0x888800ffU, 0x880000ffU,
+                                          0x000000ffU};
+  std::uint32_t lineRgba = 0x00ff00ffU;
+  std::uint32_t centerRgba = 0xffffffffU;
+  bool transparent = false;
+  bool drawDecay = true;
+};
+
 enum class SkinGaugeAnimationType : std::uint8_t {
   Random = 0,
   Increase = 1,
@@ -449,7 +462,8 @@ struct SkinBlankObject {};
 using SkinObjectPayload =
     std::variant<SkinImageObject, SkinNumberObject, SkinFloatObject,
                  SkinTextObject, SkinSliderObject, SkinGraphObject,
-                 SkinNoteDistributionGraphObject, SkinGaugeObject,
+                 SkinNoteDistributionGraphObject, SkinTimingVisualizerObject,
+                 SkinGaugeObject,
                  SkinNoteObject, SkinCoverObject, SkinJudgeObject,
                  SkinBgaObject, SkinBuiltinImageObject, SkinPmCharaObject,
                  SkinBlankObject>;

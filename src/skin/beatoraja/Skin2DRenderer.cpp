@@ -5,6 +5,7 @@
 #include "Skin2DRenderer.h"
 #include "SkinCoverNormalization.h"
 #include "SkinNoteDistributionGraphRenderer.h"
+#include "SkinTimingVisualizerRenderer.h"
 
 #include <algorithm>
 #include <array>
@@ -3125,6 +3126,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       const auto *graph = std::get_if<SkinGraphObject>(&object->payload);
       const auto *noteDistribution =
           std::get_if<SkinNoteDistributionGraphObject>(&object->payload);
+      const auto *timingVisualizer =
+          std::get_if<SkinTimingVisualizerObject>(&object->payload);
       const auto *gauge = std::get_if<SkinGaugeObject>(&object->payload);
       const auto *note = std::get_if<SkinNoteObject>(&object->payload);
       const auto *cover = std::get_if<SkinCoverObject>(&object->payload);
@@ -3134,8 +3137,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           std::get_if<SkinBuiltinImageObject>(&object->payload);
       const auto *blank = std::get_if<SkinBlankObject>(&object->payload);
       if (!image && !number && !floating && !text && !slider && !graph &&
-          !noteDistribution && !gauge && !note && !cover && !judge && !bga &&
-          !builtinImage && !blank) {
+          !noteDistribution && !timingVisualizer && !gauge && !note && !cover &&
+          !judge && !bga && !builtinImage && !blank) {
         if (reportObjectFailure(
                 result, *object,
                 diagnostic("skin.renderer.object.unsupported",
@@ -3428,6 +3431,34 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
              .pmsMode = inputs.model.model.header.type == 4,
              .elapsedMillis = inputs.visualTimeMicros / 1000,
              .currentMillis = currentMillis,
+             .maximumCommands =
+                 skinFrameMaximumCommands(inputs) - buffer.commands.size(),
+             .maximumPrimitiveVertices =
+                 skinFrameMaximumPrimitiveVertices(inputs) - primitiveVertices});
+        if (lowered.failure) {
+          if (reportObjectFailure(result, *object, *lowered.failure)) {
+            return result;
+          }
+          continue;
+        }
+        primitiveVertices += lowered.primitiveVertices;
+        buffer.commands.insert(buffer.commands.end(),
+                               std::make_move_iterator(lowered.commands.begin()),
+                               std::make_move_iterator(lowered.commands.end()));
+        continue;
+      }
+
+      if (timingVisualizer) {
+        if (evaluated.geometry->rgba[3] <= 0.0F) {
+          continue;
+        }
+        auto lowered = renderSkinTimingVisualizer(
+            {.sourceObject = object->id,
+             .authoredOrdinal = destination.presentation.authoredOrdinal,
+             .visualizer = *timingVisualizer,
+             .state = inputs.state.gameplayGraphState(),
+             .geometry = *evaluated.geometry,
+             .viewport = inputs.viewport,
              .maximumCommands =
                  skinFrameMaximumCommands(inputs) - buffer.commands.size(),
              .maximumPrimitiveVertices =

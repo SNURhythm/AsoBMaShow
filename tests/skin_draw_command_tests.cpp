@@ -1,5 +1,6 @@
 #include "skin/beatoraja/Skin2DRenderer.h"
 #include "skin/beatoraja/SkinNoteDistributionGraphRenderer.h"
+#include "skin/beatoraja/SkinTimingVisualizerRenderer.h"
 
 #include "FileChecksum.h"
 #include "skin/SkinStoragePaths.h"
@@ -4273,6 +4274,130 @@ void testNoteDistributionGraphDrawsPinnedBackgroundPmsColorAndCursor() {
          "an empty chart distribution emits no degenerate background, shape, or cursor commands");
 }
 
+void testTimingVisualizerUsesJudgeBandsAndRecentTimingRing() {
+  SkinTimingVisualizerObject visualizer;
+  visualizer.width = 301;
+  visualizer.judgeWidthMillis = 150;
+  visualizer.lineWidth = 1;
+  std::array<SkinJudgeWindow, 5> windows{{
+      {.minimumTimingMillis = -20, .maximumTimingMillis = 20},
+      {.minimumTimingMillis = -40, .maximumTimingMillis = 40},
+      {.minimumTimingMillis = -60, .maximumTimingMillis = 60},
+      {.minimumTimingMillis = -80, .maximumTimingMillis = 80},
+      {.minimumTimingMillis = -100, .maximumTimingMillis = 100},
+  }};
+  auto recent = emptySkinRecentJudgeTimings();
+  recent[0] = -20;
+  recent[49] = 20;
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 0.0, .y = 0.0, .width = 301.0, .height = 100.0};
+  const auto rendered = renderSkinTimingVisualizer(
+      {.sourceObject = 7,
+       .authoredOrdinal = 9,
+       .visualizer = visualizer,
+       .state = {.judgeWindows = windows,
+                 .recentJudgeTimingsMillis = recent,
+                 .recentJudgeTimingIndex = 49},
+       .geometry = geometry,
+       .viewport = viewport(),
+       .maximumCommands = 64,
+       .maximumPrimitiveVertices = 256});
+  expect(!rendered.failure && rendered.commands.size() == 44 &&
+             rendered.primitiveVertices == 114,
+         "timing visualizer emits pinned bands, centre/grid, and only in-range recent lines");
+  if (rendered.commands.size() != 44) {
+    return;
+  }
+  const auto &centre = std::get<SkinPrimitiveCommand>(rendered.commands[0].payload);
+  const auto &firstBand = std::get<SkinPrimitiveCommand>(rendered.commands[1].payload);
+  const auto &grid = std::get<SkinPrimitiveCommand>(rendered.commands[11].payload);
+  const auto &olderLine = std::get<SkinPrimitiveCommand>(rendered.commands[42].payload);
+  const auto &newestLine = std::get<SkinPrimitiveCommand>(rendered.commands[43].payload);
+  expect(centre.kind == SkinPrimitiveKind::SolidQuad &&
+             centre.vertices.front().x == 150.0F &&
+             centre.vertices.front().rgba == 0xffffffffU &&
+             firstBand.vertices.front().x == 130.0F &&
+             firstBand.vertices.front().rgba == 0xff880000U &&
+             grid.kind == SkinPrimitiveKind::LineStrip &&
+             grid.vertices.front().x == 0.0F &&
+             grid.vertices.front().rgba == 0x40000000U,
+         "timing visualizer draws its centre, expanding judge bands, and ten-millisecond grid in pinned order");
+  expect(olderLine.vertices.front().x == 130.0F &&
+             olderLine.vertices.front().y == 695.0F &&
+             olderLine.vertices.front().rgba == 0x8200ff00U &&
+             newestLine.vertices.front().x == 170.0F &&
+             newestLine.vertices.front().y == 719.5F &&
+             newestLine.vertices.front().rgba == 0xff00ff00U,
+         "timing visualizer traverses the source ring oldest-first with pinned decay geometry and alpha");
+
+  visualizer.drawDecay = false;
+  const auto fullLine = renderSkinTimingVisualizer(
+      {.sourceObject = 7,
+       .authoredOrdinal = 9,
+       .visualizer = visualizer,
+       .state = {.judgeWindows = windows,
+                 .recentJudgeTimingsMillis = recent,
+                 .recentJudgeTimingIndex = 49},
+       .geometry = geometry,
+       .viewport = viewport(),
+       .maximumCommands = 64,
+       .maximumPrimitiveVertices = 256});
+  const auto &nonDecaying =
+      std::get<SkinPrimitiveCommand>(fullLine.commands[42].payload);
+  expect(!fullLine.failure && nonDecaying.vertices.front().y == 720.0F &&
+             nonDecaying.vertices[2].y == 620.0F,
+         "timing visualizer keeps alpha ordering while non-decay lines span the destination height");
+
+  const auto bounded = renderSkinTimingVisualizer(
+      {.sourceObject = 7,
+       .authoredOrdinal = 9,
+       .visualizer = visualizer,
+       .state = {.judgeWindows = windows,
+                 .recentJudgeTimingsMillis = recent,
+                 .recentJudgeTimingIndex = 49},
+       .geometry = geometry,
+       .viewport = viewport(),
+       .maximumCommands = 43,
+       .maximumPrimitiveVertices = 256});
+  expect(bounded.failure && bounded.commands.empty() &&
+             bounded.primitiveVertices == 0,
+         "timing visualizer command limits discard every partially lowered primitive");
+
+  geometry.rgba[3] = 0.0F;
+  const auto transparent = renderSkinTimingVisualizer(
+      {.sourceObject = 7,
+       .authoredOrdinal = 9,
+       .visualizer = visualizer,
+       .state = {.judgeWindows = windows,
+                 .recentJudgeTimingsMillis = recent,
+                 .recentJudgeTimingIndex = 49},
+       .geometry = geometry,
+       .viewport = viewport(),
+       .maximumCommands = 0,
+       .maximumPrimitiveVertices = 0});
+  expect(!transparent.failure && transparent.commands.empty() &&
+             transparent.primitiveVertices == 0,
+         "transparent timing visualizers consume neither primitive nor command budgets");
+
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  state.graphResult.judgeWindows = windows;
+  state.graphResult.recentJudgeTimingsMillis = recent;
+  state.graphResult.recentJudgeTimingIndex = 49;
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects = {{.id = 1,
+                          .authoredName = "timing",
+                          .payload = visualizer,
+                          .authoredOrdinal = 1}};
+  model.model.destinations = {noteDistributionDestination(1, 301.0, 100.0)};
+  const auto integrated = evaluate(renderer, runtime, model, resources, state);
+  expect(integrated.submitReady && integrated.diagnostics.empty() &&
+             primitiveCommands(integrated).size() == 44,
+         "Skin2DRenderer lowers typed timing visualizers through the shared destination path");
+}
+
 std::int64_t fixtureFixed(double value) {
   // Floating-point to_chars implementations can choose different shortest
   // spellings for the same value. Store micro-units as integers so fixture
@@ -4812,6 +4937,7 @@ int main() {
   testNoteDistributionGraphAppliesCommonStretchBeforeRotation();
   testTransparentNoteDistributionSkipsCommandsAndBudgets();
   testNoteDistributionGraphDrawsPinnedBackgroundPmsColorAndCursor();
+  testTimingVisualizerUsesJudgeBandsAndRecentTimingRing();
   testDesktopAndIpadFitCommandFixtures();
   return failures == 0 ? 0 : 1;
 }

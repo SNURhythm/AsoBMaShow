@@ -1562,6 +1562,84 @@ return {
          "decoder rejects a judgegraph constructor mode absent from the pinned implementation");
 }
 
+void testTimingVisualizerDecodesPinnedPresentationFields() {
+  const auto decoded = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  timingvisualizer={
+    {id='default'},
+    {id='custom',width=401,judgeWidthMillis=200,lineWidth=9,
+     lineColor='11223344',centerColor='55667788',PGColor='01020304',
+     GRColor='11121314',GDColor='21222324',BDColor='31323334',
+     PRColor='41424344',transparent=1,drawDecay=0},
+    {id='invalid-colour',lineColor='not-a-colour'}
+  },
+  destination={
+    {id='default',dst={{x=0,y=0,w=100,h=50}}},
+    {id='custom',dst={{x=0,y=0,w=100,h=50}}},
+    {id='invalid-colour',dst={{x=0,y=0,w=100,h=50}}}
+  }
+}
+)lua");
+  expect(decoded.model && decoded.model->objects.size() == 3,
+         "timingvisualizer declarations create one live object per destination");
+  if (!decoded.model || decoded.model->objects.size() != 3) {
+    return;
+  }
+  const auto *defaults = findObject(*decoded.model, "default");
+  const auto *custom = findObject(*decoded.model, "custom");
+  const auto *invalid = findObject(*decoded.model, "invalid-colour");
+  const auto *defaultTiming = defaults != nullptr
+                                  ? std::get_if<SkinTimingVisualizerObject>(
+                                        &defaults->payload)
+                                  : nullptr;
+  const auto *customTiming = custom != nullptr
+                                 ? std::get_if<SkinTimingVisualizerObject>(
+                                       &custom->payload)
+                                 : nullptr;
+  const auto *invalidTiming = invalid != nullptr
+                                  ? std::get_if<SkinTimingVisualizerObject>(
+                                        &invalid->payload)
+                                  : nullptr;
+  expect(defaultTiming != nullptr && defaultTiming->width == 301 &&
+             defaultTiming->judgeWidthMillis == 150 &&
+             defaultTiming->lineWidth == 1 &&
+             defaultTiming->lineRgba == 0x00ff00ffU &&
+             defaultTiming->centerRgba == 0xffffffffU &&
+             defaultTiming->judgeRgba ==
+                 std::array<std::uint32_t, 5>{0x000088ffU, 0x008800ffU,
+                                               0x888800ffU, 0x880000ffU,
+                                               0x000000ffU} &&
+             !defaultTiming->transparent && defaultTiming->drawDecay,
+         "timingvisualizer defaults retain the pinned constructor values");
+  expect(customTiming != nullptr && customTiming->width == 401 &&
+             customTiming->judgeWidthMillis == 200 &&
+             customTiming->lineWidth == 4 &&
+             customTiming->lineRgba == 0x11223344U &&
+             customTiming->centerRgba == 0x55667788U &&
+             customTiming->judgeRgba ==
+                 std::array<std::uint32_t, 5>{0x01020304U, 0x11121314U,
+                                               0x21222324U, 0x31323334U,
+                                               0x41424344U} &&
+             customTiming->transparent && !customTiming->drawDecay,
+         "timingvisualizer clamps its line width and preserves custom colours and flags");
+  expect(invalidTiming != nullptr && invalidTiming->lineRgba == 0xff0000ffU,
+         "timingvisualizer invalid colours use the pinned opaque-red fallback");
+  expect(std::ranges::none_of(decoded.diagnostics, [](const auto &entry) {
+           return entry.code == "skin_lua_model_timingvisualizer_unsupported";
+         }),
+         "supported timingvisualizers never emit the legacy unsupported diagnostic");
+
+  const auto validated = test_support::validateWithAuthoredBuiltins(*decoded.model);
+  expect(validated.model && !validated.criticalFailure &&
+             std::ranges::all_of(validated.model->model.objects,
+                                 [](const auto &object) {
+                                   return !std::holds_alternative<SkinBlankObject>(
+                                       object.payload);
+                                 }),
+         "valid timingvisualizers remain typed through model validation");
+}
+
 void testNegativeGenericDistributionGraphStaysOutsideGameplay() {
   const auto decoded = decodeInlineModel(R"lua(
 return {
@@ -1620,7 +1698,6 @@ return {
   const std::array expectedCodes{
       std::string_view("skin_lua_model_bpmgraph_unsupported"),
       std::string_view("skin_lua_model_hiterrorvisualizer_unsupported"),
-      std::string_view("skin_lua_model_timingvisualizer_unsupported"),
   };
   for (const auto code : expectedCodes) {
     expect(std::ranges::find_if(decoded.diagnostics, [&](const auto &entry) {
@@ -1645,10 +1722,13 @@ return {
            "pinned authored order");
     const auto validated = test_support::validateWithAuthoredBuiltins(
         *decoded.model);
+    const auto *timing = findObject(*decoded.model, "timing");
     expect(validated.model && !validated.criticalFailure &&
-               validated.model->disabledOptionalObjects.empty(),
-           "optional visual widgets validate as blank render objects instead "
-           "of disabling their destinations");
+               timing != nullptr &&
+               std::holds_alternative<SkinTimingVisualizerObject>(
+                   timing->payload),
+           "timingvisualizers validate as typed render objects instead of "
+           "blank optional destinations");
   }
 
   const auto oversized = decodeInlineModel(R"lua(
@@ -1783,6 +1863,7 @@ int main() {
   testBooleanFieldsUseLuaTruthiness();
   testPracticePositionSliderDecodesItsExecutableWriter();
   testJudgeGraphsDecodePinnedModesAndPresentationFlags();
+  testTimingVisualizerDecodesPinnedPresentationFields();
   testNegativeGenericDistributionGraphStaysOutsideGameplay();
   testOptionalVisualsAndBuiltinImagesStayLiveAcrossRepeatedDestinations();
   testPomyuCharaCycleExtractionFollowsPinnedLoaderOrder();

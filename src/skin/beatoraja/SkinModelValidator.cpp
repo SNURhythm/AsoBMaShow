@@ -206,6 +206,19 @@ SkinModelValidationResult SkinModelValidator::validate(
     return result;
   }
 
+  if (std::ranges::any_of(model.objects, [](const auto &object) {
+        const auto *visualizer =
+            std::get_if<SkinTimingVisualizerObject>(&object.payload);
+        return visualizer != nullptr &&
+               (visualizer->lineWidth < 1 || visualizer->lineWidth > 4);
+      })) {
+    result.criticalFailure = true;
+    result.diagnostics.push_back(validationDiagnostic(
+        "skin_lua_model_timingvisualizer_invalid",
+        "Lua skin timingvisualizer line width is outside the pinned range"));
+    return result;
+  }
+
   // The Java factories are deliberately nullable. JSONSkinLoader keeps the
   // object and passes the factory result to it, so built-in catalog matches
   // and individual callback liveness remain runtime concerns after the
