@@ -1,6 +1,7 @@
 #pragma once
 
 #include "GameplayScrollGeometry.h"
+#include "SkinGameplayGraphState.h"
 
 #include <cstdint>
 #include <limits>
@@ -175,6 +176,7 @@ struct PlayfieldChartVisualModel {
   std::optional<gameplay_scroll_geometry::ScrollPositionTimeline>
       terminalScrollAnchor;
   std::vector<ChartVisualBgaPoorSequence> bgaPoorSequences;
+  SkinGameplayChartGraphState skinGameplayGraph;
 
   [[nodiscard]] std::vector<std::string> runtimeStrings() const;
 

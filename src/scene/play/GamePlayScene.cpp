@@ -2378,6 +2378,8 @@ void GamePlayScene::syncRealtimeGameplaySnapshot() {
     return;
   }
   session.appliedSnapshotGeneration = snapshot->generation;
+  playfieldVisualStateStore->applyGameplayGraphState(
+      snapshot->skinGameplayGraph);
 
   const std::size_t noteCount =
       std::min(session.notes.size(), snapshot->noteStates.size());

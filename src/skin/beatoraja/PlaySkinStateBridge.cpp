@@ -3540,6 +3540,14 @@ PlaySkinStateBridge::projectedLines() const noexcept {
              : std::span<const SkinProjectedLineView>{};
 }
 
+SkinGameplayGraphStateView
+PlaySkinStateBridge::gameplayGraphState() const noexcept {
+  const auto *snapshot = state();
+  return snapshot == nullptr
+             ? SkinGameplayGraphStateView{}
+             : skinGameplayGraphStateView(snapshot->skinGameplayGraph);
+}
+
 SkinGaugeStateView PlaySkinStateBridge::gaugeState() const noexcept {
   const auto *snapshot = state();
   if (snapshot == nullptr || !snapshot->authority.gaugeRules.compiled) {

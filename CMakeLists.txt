@@ -623,6 +623,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/scene/play/PlayfieldChartVisualModel.cpp
             src/scene/play/PlayfieldProjection.cpp
             src/scene/play/PlayfieldVisualState.cpp
+            src/scene/play/SkinGameplayGraphState.cpp
             src/utils/SpriteLoader.cpp
             src/view/DecodedImageCache.cpp
             src/view/ImageFileDecoder.cpp
@@ -2949,6 +2950,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/play/GameplayNoteJudgeRole.cpp
         src/scene/play/GameplayRulesetPolicy.cpp
         src/scene/play/GameplaySimulation.cpp
+        src/scene/play/SkinGameplayGraphState.cpp
         src/scene/play/Judge.cpp
     )
     target_include_directories(course_replay_consumer_tests PRIVATE
@@ -2980,6 +2982,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/play/GameplayNoteJudgeRole.cpp
         src/scene/play/GameplayRulesetPolicy.cpp
         src/scene/play/GameplaySimulation.cpp
+        src/scene/play/SkinGameplayGraphState.cpp
         src/scene/play/Judge.cpp
     )
     target_include_directories(replay_playback_driver_tests PRIVATE
@@ -4423,6 +4426,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/play/Judge.cpp
         src/scene/play/PlayfieldChartVisualModel.cpp
         src/scene/play/PlayfieldVisualState.cpp
+        src/scene/play/SkinGameplayGraphState.cpp
     )
     target_include_directories(playfield_visual_state_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
@@ -4508,6 +4512,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/scene/play/GameplaySkinSessionFactory.cpp
             src/scene/play/PlayfieldChartVisualModel.cpp
             src/scene/play/PlayfieldProjection.cpp
+            src/scene/play/SkinGameplayGraphState.cpp
             src/skin/SkinConfigurationWriteQueue.cpp
             src/skin/SkinProfileSettings.cpp
             src/skin/SkinStoragePaths.cpp
@@ -4601,6 +4606,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/Utils.cpp
             src/path.cpp
             src/scene/play/PlayfieldProjection.cpp
+            src/scene/play/SkinGameplayGraphState.cpp
             src/skin/SkinProfileSettings.cpp
             src/skin/SkinStoragePaths.cpp
             src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
@@ -4655,6 +4661,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/rendering/UniformCache.cpp
             src/scene/play/PlayfieldChartVisualModel.cpp
             src/scene/play/PlayfieldProjection.cpp
+            src/scene/play/SkinGameplayGraphState.cpp
             src/skin/SkinConfigurationWriteQueue.cpp
             src/skin/SkinProfileSettings.cpp
             src/skin/SkinStoragePaths.cpp
@@ -4767,7 +4774,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/scene/play/BMSRenderer.cpp
             src/scene/play/BeatorajaHiSpeedChart.cpp
             src/scene/play/BuiltInPlayfieldPresentation.cpp
+            src/scene/play/CompiledGameplayJudge.cpp
+            src/scene/play/GameplayCandidateRules.cpp
+            src/scene/play/GameplayDefinition.cpp
             src/scene/play/GameplayGaugeRules.cpp
+            src/scene/play/GameplayJudgeRules.cpp
+            src/scene/play/GameplayNoteJudgeRole.cpp
+            src/scene/play/GameplaySimulation.cpp
             src/scene/play/GameplaySkinSessionFactory.cpp
             src/scene/play/Judge.cpp
             src/scene/play/JudgementIndicatorRenderer.cpp
@@ -4777,6 +4790,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/scene/play/PlayfieldVisualState.cpp
             src/scene/play/ReplayPlayfieldPresentation.cpp
             src/scene/play/ReplayVideoGameplayPreflight.cpp
+            src/scene/play/SkinGameplayGraphState.cpp
             src/skin/SkinConfigurationWriteQueue.cpp
             src/skin/SkinProfileSettings.cpp
             src/skin/SkinStoragePaths.cpp
@@ -5062,6 +5076,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/play/GameplayCandidateRules.cpp
         src/scene/play/GameplayDefinition.cpp
         src/scene/play/GameplaySimulation.cpp
+        src/scene/play/SkinGameplayGraphState.cpp
         src/scene/play/Judge.cpp
         src/scene/play/RhythmLaneInputController.cpp
     )
@@ -5086,6 +5101,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/play/GameplayCandidateRules.cpp
         src/scene/play/GameplayDefinition.cpp
         src/scene/play/GameplaySimulation.cpp
+        src/scene/play/SkinGameplayGraphState.cpp
         src/scene/play/Judge.cpp
     )
     target_include_directories(gameplay_automatic_authority_tests PRIVATE
@@ -5113,6 +5129,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/play/GameplayCandidateRules.cpp
         src/scene/play/GameplayDefinition.cpp
         src/scene/play/GameplaySimulation.cpp
+        src/scene/play/SkinGameplayGraphState.cpp
         src/scene/play/Judge.cpp
         src/scene/play/RealtimeGameplayInputBridge.cpp
         src/scene/play/RealtimeGameplayWorker.cpp

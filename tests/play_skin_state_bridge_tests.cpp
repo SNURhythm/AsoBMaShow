@@ -291,6 +291,51 @@ void testStaticBridgeFrameDoesNotRequireLuaRuntime() {
          "static bridge frame completes with built-in state and no Lua runtime");
 }
 
+void testGraphViewBorrowsTheCapturedImmutableStorage() {
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = nullptr,
+                              .mutationTable = mutations});
+  auto state = stateAt(211);
+  auto chartGraph = std::make_shared<SkinGameplayChartGraphState>();
+  chartGraph->normalDistribution = {{{1, 2, 3, 4, 5, 6, 7}}};
+  chartGraph->bpmSeries = {{.chartTimeMicros = 123,
+                            .sourceOrder = 4,
+                            .bpm = 150.0,
+                            .scroll = -1.0,
+                            .bpmTimesScroll = -150.0,
+                            .graphSpeed = -150.0}};
+  chartGraph->mainBpm = 150.0;
+  auto dynamicGraph = std::make_shared<SkinGameplayDynamicGraphState>();
+  dynamicGraph->judgementDistribution = {{{0, 1, 2, 3, 4, 5}}};
+  dynamicGraph->earlyLateDistribution = {
+      {{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}}};
+  dynamicGraph->gaugeHistory = {25.0F, 50.0F};
+  dynamicGraph->recentJudgeTimingsMillis[1] = -12;
+  dynamicGraph->recentJudgeTimingIndex = 1;
+  state.skinGameplayGraph = {.chart = chartGraph, .dynamic = dynamicGraph};
+
+  bridge.beginFrame(state, projectionAt(211));
+  const auto view = bridge.gameplayGraphState();
+  expect(view.normalDistribution.data() ==
+                 chartGraph->normalDistribution.data() &&
+             view.judgementDistribution.data() ==
+                 dynamicGraph->judgementDistribution.data() &&
+             view.earlyLateDistribution.data() ==
+                 dynamicGraph->earlyLateDistribution.data() &&
+             view.bpmSeries.data() == chartGraph->bpmSeries.data() &&
+             view.gaugeHistory.data() == dynamicGraph->gaugeHistory.data() &&
+             view.recentJudgeTimingsMillis.data() ==
+                 dynamicGraph->recentJudgeTimingsMillis.data() &&
+             view.recentJudgeTimingIndex == 1 && view.mainBpm == 150.0,
+         "graph view exposes spans into the captured immutable storage without copying");
+}
+
 void testDurationBindingsUsePinnedLaneRendererFormula() {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
@@ -3583,6 +3628,7 @@ void testFloatWritersResolveLocallyAndRollbackCallbackMutations() {
 int main() {
   testPinnedMutationTableMatchesFrozenFixtureExhaustively();
   testStaticBridgeFrameDoesNotRequireLuaRuntime();
+  testGraphViewBorrowsTheCapturedImmutableStorage();
   testDurationBindingsUsePinnedLaneRendererFormula();
   testZeroHispeedDurationBindingsFollowJavaCurrentDuration();
   testDurationBindingsUseFrameLocalSpeedObjectMultiplier();

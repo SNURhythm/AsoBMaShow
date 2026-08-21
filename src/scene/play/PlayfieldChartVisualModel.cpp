@@ -881,6 +881,135 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
     }
     result.notes.push_back(entry.value);
   }
+
+  auto &graph = result.skinGameplayGraph;
+  graph.mainBpm = result.staticMetadata.mainBpm;
+  graph.minimumBpm = result.staticMetadata.minimumBpm;
+  graph.maximumBpm = result.staticMetadata.maximumBpm;
+  const std::size_t distributionSeconds =
+      result.timelines.empty()
+          ? 0
+          : static_cast<std::size_t>(
+                std::max(0LL, result.timelines.back().timeMicros) /
+                1'000'000) +
+                2;
+  graph.normalDistribution.assign(distributionSeconds, {});
+  graph.judgementDistributionSeconds =
+      distributionSeconds == 0 ? 0 : distributionSeconds - 1;
+
+  std::unordered_map<ChartVisualId, long long> graphTimelineTimes;
+  graphTimelineTimes.reserve(result.timelines.size());
+  for (const auto &timeline : result.timelines) {
+    graphTimelineTimes.emplace(timeline.id, timeline.timeMicros);
+  }
+  const auto graphSecond = [&graphTimelineTimes](const ChartVisualNote &note) {
+    const auto timeline = graphTimelineTimes.find(note.timelineId);
+    return timeline == graphTimelineTimes.end()
+               ? -1
+               : static_cast<int>(timeline->second / 1'000'000);
+  };
+  const auto graphScratchLanes = chart.Meta.GetScratchLaneIndices();
+  graph.judgementNotes.reserve(result.notes.size());
+  for (const auto &note : result.notes) {
+    const int second = graphSecond(note);
+    const bool classicTail = note.source == ChartVisualNoteSource::Playable &&
+                             note.kind == ChartVisualNoteKind::LongTail &&
+                             note.longNoteMode == ChartLongNoteMode::LN;
+    const bool countsTowardJudgement =
+        note.source == ChartVisualNoteSource::Playable &&
+        note.kind != ChartVisualNoteKind::Mine && !classicTail;
+    graph.judgementNotes.push_back(
+        {.sourceId = note.id,
+         .second = second,
+         .countsTowardJudgement = countsTowardJudgement,
+         .redirectSourceId = classicTail ? note.pairId
+                                         : kInvalidSkinGameplayGraphSourceId});
+    if (second < 0 || static_cast<std::size_t>(second) >=
+                          graph.normalDistribution.size()) {
+      continue;
+    }
+    const bool scratch = std::ranges::find(graphScratchLanes, note.lane) !=
+                         graphScratchLanes.end();
+    if (note.kind == ChartVisualNoteKind::Mine) {
+      ++graph.normalDistribution[second][6];
+    } else if (note.source != ChartVisualNoteSource::Playable) {
+      continue;
+    } else if (note.kind == ChartVisualNoteKind::Normal) {
+      ++graph.normalDistribution[second][scratch ? 2 : 5];
+    } else if (note.kind == ChartVisualNoteKind::LongHead ||
+               note.kind == ChartVisualNoteKind::LongTail) {
+      if (note.kind == ChartVisualNoteKind::LongHead) {
+        const auto pair = std::ranges::find(result.notes, note.pairId,
+                                            &ChartVisualNote::id);
+        if (pair == result.notes.end()) {
+          continue;
+        }
+        const int tailSecond = graphSecond(*pair);
+        if (tailSecond < second || tailSecond < 0 ||
+            static_cast<std::size_t>(tailSecond) >=
+                graph.normalDistribution.size()) {
+          continue;
+        }
+        for (int index = second; index <= tailSecond; ++index) {
+          ++graph.normalDistribution[index][scratch ? 1 : 4];
+        }
+      }
+      if (!(note.kind == ChartVisualNoteKind::LongTail &&
+            note.longNoteMode == ChartLongNoteMode::LN)) {
+        ++graph.normalDistribution[second][scratch ? 0 : 3];
+        --graph.normalDistribution[second][scratch ? 1 : 4];
+      }
+    }
+  }
+
+  double graphSpeed = result.initialBpm;
+  long long lastGraphPointTime = 0;
+  graph.bpmSeries.reserve(result.timelines.size() + 2);
+  graph.bpmSeries.push_back({.chartTimeMicros = 0,
+                             .sourceOrder = 0,
+                             .bpm = result.initialBpm,
+                             .scroll = 1.0,
+                             .bpmTimesScroll = result.initialBpm,
+                             .graphSpeed = result.initialBpm,
+                             .emitsGraphPoint = true,
+                             .synthetic = true});
+  for (const auto &timeline : result.timelines) {
+    const double bpmTimesScroll = timeline.bpm * timeline.scrollRate;
+    bool emitsGraphPoint = false;
+    if (timeline.stopMicros > 0) {
+      if (graphSpeed != 0.0) {
+        graphSpeed = 0.0;
+        emitsGraphPoint = true;
+      }
+    } else if (graphSpeed != bpmTimesScroll) {
+      graphSpeed = bpmTimesScroll;
+      emitsGraphPoint = true;
+    }
+    if (emitsGraphPoint) {
+      lastGraphPointTime = timeline.timeMicros;
+    }
+    graph.bpmSeries.push_back({.chartTimeMicros = timeline.timeMicros,
+                               .sourceOrder = timeline.authoredOrdinal,
+                               .bpm = timeline.bpm,
+                               .scroll = timeline.scrollRate,
+                               .bpmTimesScroll = bpmTimesScroll,
+                               .stopMicros = timeline.stopMicros,
+                               .graphSpeed = graphSpeed,
+                               .emitsGraphPoint = emitsGraphPoint});
+  }
+  if (!result.timelines.empty() &&
+      lastGraphPointTime != result.timelines.back().timeMicros) {
+    const auto &last = result.timelines.back();
+    graph.bpmSeries.push_back({.chartTimeMicros = last.timeMicros,
+                               .sourceOrder = last.authoredOrdinal,
+                               .bpm = last.bpm,
+                               .scroll = last.scrollRate,
+                               .bpmTimesScroll = last.bpm * last.scrollRate,
+                               .stopMicros = last.stopMicros,
+                               .graphSpeed = graphSpeed,
+                               .emitsGraphPoint = true,
+                               .synthetic = true});
+  }
   return result;
 }
 

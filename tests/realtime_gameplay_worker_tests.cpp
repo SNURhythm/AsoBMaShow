@@ -244,6 +244,14 @@ void testRapidInputsCommitStateAndSoundWithoutFramePump() {
               snapshot->transactions[2].result.replayEvent.songTimeMicros ==
                   1'100'000,
           "catch-up judges retain each transaction source time instead of a frame timestamp");
+  require(snapshot->skinGameplayGraph.judgementDistribution.size() == 2 &&
+              snapshot->skinGameplayGraph.judgementDistribution[1][1] == 2 &&
+              snapshot->skinGameplayGraph.earlyLateDistribution[1][1] == 2 &&
+              snapshot->skinGameplayGraph.recentJudgeTimingIndex == 2 &&
+              snapshot->skinGameplayGraph.recentJudgeTimingsMillis[1] == 0 &&
+              snapshot->skinGameplayGraph.recentJudgeTimingsMillis[2] == 0 &&
+              snapshot->skinGameplayGraph.gaugeHistory.size() == 2,
+          "realtime snapshots transfer the producer-owned graph authority");
   require(worker.fault() == gameplay::RealtimeGameplayFault::None,
           "normal rapid input remains valid");
   worker.stop();

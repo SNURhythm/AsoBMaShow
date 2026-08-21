@@ -409,6 +409,7 @@ struct PlayfieldVisualState {
   std::shared_ptr<const std::unordered_map<ChartVisualId, std::size_t>>
       noteSnapshotIndices;
   std::vector<PresentationTouchPoint> touches;
+  SkinGameplayGraphState skinGameplayGraph;
   JudgeResult lastJudge = JudgeResult(None, 0);
   long long lastJudgeVisualMicros = kPlayfieldTimestampOff;
   std::array<PlayfieldJudgementIndicatorSample,
@@ -486,6 +487,7 @@ public:
   void resetModel(const PlayfieldChartVisualModel &model);
   void setConfiguration(const PlayfieldPresentationConfig &configuration);
   void applyAuthorityUpdate(const PlayfieldAuthorityUpdate &update);
+  void applyGameplayGraphState(const SkinGameplayDynamicGraphState &state);
   void setNoteState(NotePresentationState state);
   void setNoteStates(std::vector<NotePresentationState> states);
   void setSceneStartMicros(long long value) noexcept;
@@ -530,6 +532,9 @@ private:
   std::shared_ptr<std::vector<NotePresentationState>> notes_;
   std::shared_ptr<const std::unordered_map<ChartVisualId, std::size_t>>
       noteIndices_;
+  std::shared_ptr<const SkinGameplayChartGraphState> skinGameplayChartGraph_;
+  std::shared_ptr<const SkinGameplayDynamicGraphState>
+      skinGameplayDynamicGraph_;
   std::vector<ReplayTouchSample> replayTouchSamples_;
   mutable std::size_t replayTouchCursor_ = 0;
   mutable long long lastReplayTouchTimeMicros_ = -1;

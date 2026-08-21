@@ -189,6 +189,8 @@ public:
   projectedLongNotes() const noexcept override;
   [[nodiscard]] std::span<const SkinProjectedLineView>
   projectedLines() const noexcept override;
+  [[nodiscard]] SkinGameplayGraphStateView
+  gameplayGraphState() const noexcept override;
   [[nodiscard]] SkinGaugeStateView gaugeState() const noexcept override;
   [[nodiscard]] SkinJudgeStateView judgeState(int) const noexcept override;
   [[nodiscard]] SkinNoteExpansionStateView

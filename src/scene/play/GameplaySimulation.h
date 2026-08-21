@@ -4,6 +4,7 @@
 #include "GameplayCandidateRules.h"
 #include "GameplayDefinition.h"
 #include "GameplayScoreState.h"
+#include "SkinGameplayGraphState.h"
 #include "../../AppSettings.h"
 
 #include <array>
@@ -14,6 +15,9 @@
 #include <vector>
 
 namespace gameplay {
+
+[[nodiscard]] std::vector<SkinGameplayGraphNote>
+makeSkinGameplayGraphNotes(const GameplayDefinition &definition);
 
 struct NoteRuntimeState {
   bool played = false;
@@ -188,6 +192,8 @@ public:
   [[nodiscard]] GameplaySearchStats lastSearchStats() const noexcept;
   [[nodiscard]] GameplaySearchStats lastAdvanceStats() const noexcept;
   [[nodiscard]] const GameplayScoreState &scoreState() const noexcept;
+  [[nodiscard]] const SkinGameplayDynamicGraphState &
+  skinGameplayGraphState() const noexcept;
   [[nodiscard]] GameplayAttemptSnapshot snapshot() const noexcept;
   [[nodiscard]] std::span<const GameplayReplayEvent>
   replayEvents() const noexcept;
@@ -222,7 +228,7 @@ private:
                                std::int64_t inputTimeMicros) const;
   [[nodiscard]] NoteId selectReleaseCandidate(int lane,
                                               std::int64_t inputTimeMicros);
-  void commitJudge(const JudgeResult &judge);
+  void commitJudge(NoteId id, const JudgeResult &judge);
   void applyGaugeDelta(float delta);
   void applyGaugeJudgementRate(Judgement judgement, float rate);
   void observeGaugeMutation(bool wasSurvivalFailed,
@@ -260,6 +266,7 @@ private:
   const GameplayDefinition &definition_;
   GameplaySimulationConfig config_;
   GameplayScoreState scoreState_;
+  SkinGameplayGraphAccumulator skinGameplayGraph_;
   std::vector<NoteRuntimeState> noteStates_;
   std::vector<std::int64_t> hellChargeBalanceMicros_;
   std::vector<LaneRuntimeState> laneStates_;

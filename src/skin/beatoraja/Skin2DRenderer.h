@@ -6,6 +6,7 @@
 #include "SkinDrawCommand.h"
 #include "SyntheticReplayGhostOverlay.h"
 #include "../SkinSafetyPolicy.h"
+#include "../../scene/play/SkinGameplayGraphState.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -168,6 +169,10 @@ public:
   projectedLongNotes() const noexcept = 0;
   virtual std::span<const SkinProjectedLineView>
   projectedLines() const noexcept = 0;
+  [[nodiscard]] virtual SkinGameplayGraphStateView
+  gameplayGraphState() const noexcept {
+    return {};
+  }
   virtual SkinGaugeStateView gaugeState() const noexcept = 0;
   virtual SkinJudgeStateView judgeState(int player) const noexcept = 0;
   virtual SkinNoteExpansionStateView noteExpansionState() const noexcept = 0;

@@ -1617,6 +1617,75 @@ void testClassicLongHeadSuppressesJudgeHudAndBgaMissClock() {
          "classic long-note head remains lane-only and does not fan out a BGA miss");
 }
 
+void testReplayGraphAuthorityMatchesTheGameplayProducer() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 1;
+  auto *measure = new bms_parser::Measure;
+  chart.Measures.push_back(measure);
+  auto *timeline = new bms_parser::TimeLine(8, false);
+  timeline->Timing = 1'000'000;
+  timeline->Bpm = 120.0;
+  timeline->Scroll = 1.0;
+  timeline->SetNote(1, new bms_parser::Note(1));
+  measure->TimeLines.push_back(timeline);
+
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(
+      definition,
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(1))});
+  const auto judged = simulation.pressLane(
+      1, {.songTimeMicros = 1'025'000,
+          .laneBeamTimeMicros = 1'025'000});
+  expect(judged.hasJudge && judged.hasReplayEvent,
+         "replay graph fixture produces one authoritative replay event");
+  if (!judged.hasReplayEvent) {
+    return;
+  }
+
+  AppSettings settings;
+  PlayfieldPresentationConfig configuration;
+  TestBga bga;
+  auto info = createInfo(chart, settings, configuration, bga);
+  info.timingWindows = Judge(1).timingWindows;
+  const auto created = ReplayPlayfieldPresentation::create(std::move(info));
+  expect(created.presentation != nullptr,
+         "replay graph presentation is created");
+  if (!created.presentation) {
+    return;
+  }
+  PlayfieldAuthorityUpdate authority;
+  authority.gaugeRules = simulation.scoreState().gaugeRules();
+  authority.gaugeType = judged.replayEvent.gaugeType;
+  authority.currentGauge = judged.replayEvent.gauge;
+  created.presentation->applyAuthorityUpdate(authority);
+  const ReplayEvent replay{
+      .action = ReplayEventAction::Press,
+      .lane = judged.replayEvent.lane,
+      .noteTimeMicros = judged.replayEvent.noteTimeMicros,
+      .songTimeMicros = judged.replayEvent.songTimeMicros,
+      .judgeTimeMicros = judged.replayEvent.judgeTimeMicros,
+      .judgement = judged.replayEvent.judgement,
+      .diffMicros = judged.replayEvent.diffMicros,
+      .gauge = judged.replayEvent.gauge,
+      .gaugeType = judged.replayEvent.gaugeType,
+      .combo = judged.replayEvent.combo,
+      .score = judged.replayEvent.score,
+  };
+  (void)created.presentation->applyReplayEvent(
+      replay,
+      makePlayfieldJudgeEventClock(replay.songTimeMicros, 0), true);
+
+  const auto captured =
+      created.presentation->captureVisualStateForTesting({.serial = 90});
+  expect(captured.skinGameplayGraph.dynamic != nullptr &&
+             *captured.skinGameplayGraph.dynamic ==
+                 simulation.skinGameplayGraphState() &&
+             captured.skinGameplayGraph.chart != nullptr &&
+             captured.skinGameplayGraph.chart->normalDistribution[1][5] == 1,
+         "replay and live simulation publish identical dynamic graph authority with shared static chart data");
+}
+
 void testReplayDuplicateTimestampUsesLiveLongNoteIdentityForJudgementCount() {
   bms_parser::Chart chart;
   chart.Meta.KeyMode = 7;
@@ -2272,6 +2341,7 @@ int main() {
   testSelectedReadySkinReceivesOneInitialSnapshotAndSubmitsSkinFrame();
   testSelectedSkinRuntimeFailureDoesNotSubmitBuiltIn();
   testClassicLongHeadSuppressesJudgeHudAndBgaMissClock();
+  testReplayGraphAuthorityMatchesTheGameplayProducer();
   testReplayDuplicateTimestampUsesLiveLongNoteIdentityForJudgementCount();
   testBuiltInReplayPresentationPreprocessesGhostsAndMisses();
   testAppliedJudgeCarriesTheProvidedBgaClockIntoSnapshot();

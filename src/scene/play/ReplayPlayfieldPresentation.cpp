@@ -37,6 +37,27 @@ bool isClassicLongNote(const ChartVisualNote &note) noexcept {
   return note.longNoteMode == ChartLongNoteMode::LN;
 }
 
+std::array<SkinJudgeWindow, 5> replaySkinJudgeWindows(
+    const std::map<Judgement, std::pair<long long, long long>> &windows) {
+  constexpr std::array<Judgement, 5> order = {
+      PGreat, Great, Good, Bad, Kpoor};
+  std::array<SkinJudgeWindow, 5> result{};
+  for (std::size_t index = 0; index < order.size(); ++index) {
+    const Judgement judgement = order[index];
+    const auto found = windows.find(judgement);
+    result[index] =
+        found == windows.end()
+            ? SkinJudgeWindow{.judgement = judgement}
+            : SkinJudgeWindow{
+                  .judgement = judgement,
+                  .minimumTimingMillis =
+                      -static_cast<int>(found->second.second / 1000),
+                  .maximumTimingMillis =
+                      -static_cast<int>(found->second.first / 1000)};
+  }
+  return result;
+}
+
 } // namespace
 
 ReplayPlayfieldPresentation::ReplayPlayfieldPresentation(
@@ -47,7 +68,9 @@ ReplayPlayfieldPresentation::ReplayPlayfieldPresentation(
     BMSRenderer *builtIn, PlayfieldAuthorityUpdate authority,
     PlayfieldPresentationConfig configuration, gameplay_hispeed::State hispeed,
     std::optional<skin::RuntimeSkinConfigurationSelection>
-        runtimeSkinConfigurationSelection)
+        runtimeSkinConfigurationSelection,
+    std::array<SkinJudgeWindow, 5> judgeWindows,
+    std::size_t gaugeHistoryCapacity)
     : chartModel_(std::move(chartModel)), state_(std::move(state)),
       projection_(std::move(projection)), coordinator_(std::move(coordinator)),
       builtIn_(builtIn), authority_(std::move(authority)),
@@ -58,6 +81,11 @@ ReplayPlayfieldPresentation::ReplayPlayfieldPresentation(
     throw std::invalid_argument(
         "ReplayPlayfieldPresentation requires a coordinator and BMSRenderer");
   }
+  skinGameplayGraph_.reset(
+      chartModel_->skinGameplayGraph.judgementNotes,
+      chartModel_->skinGameplayGraph.judgementDistributionSeconds, judgeWindows,
+      gaugeHistoryCapacity);
+  state_->applyGameplayGraphState(skinGameplayGraph_.state());
   timelineTimeById_.reserve(chartModel_->timelines.size());
   for (const auto &timeline : chartModel_->timelines) {
     timelineTimeById_.emplace(timeline.id, timeline.timeMicros);
@@ -136,6 +164,11 @@ ReplayPlayfieldPresentationCreateResult ReplayPlayfieldPresentation::create(
   auto model = std::make_unique<PlayfieldChartVisualModel>(
       buildPlayfieldChartVisualModel(creation.chart, creation.chart.Meta.LnMode));
   auto state = std::make_unique<PlayfieldVisualStateStore>(*model);
+  const auto graphJudgeWindows =
+      replaySkinJudgeWindows(creation.timingWindows);
+  const std::size_t graphGaugeHistoryCapacity = std::max<std::size_t>(
+      4096, creation.replayData != nullptr ? creation.replayData->events.size()
+                                           : 0);
   state->setConfiguration(creation.configuration);
   state->setReplayTouchSamples(creation.replayTouchSamples);
   if (creation.skinInput.initialState != nullptr) {
@@ -230,7 +263,8 @@ ReplayPlayfieldPresentationCreateResult ReplayPlayfieldPresentation::create(
                            creation.settings.noteStartPositionPercent,
                        .laneCoverEnabled = creation.settings.laneCoverEnabled},
                       gameplay_hispeed::summarizeChartBpm(creation.chart)),
-                  std::move(runtimeSkinConfigurationSelection))),
+                  std::move(runtimeSkinConfigurationSelection),
+                  graphJudgeWindows, graphGaugeHistoryCapacity)),
           .failure = std::nullopt};
 }
 
@@ -264,6 +298,10 @@ void ReplayPlayfieldPresentation::applyAuthorityUpdate(
   authority_.stageCombo = stageCombo_;
   authority_.stagePassedNotes = stagePassedNotes_;
   state_->applyAuthorityUpdate(authority_);
+  skinGameplayGraphDirty_ =
+      skinGameplayGraph_.setGauge(authority_.gaugeType,
+                                  authority_.gaugeRules) ||
+      skinGameplayGraphDirty_;
 }
 
 const ChartVisualNote *
@@ -298,6 +336,18 @@ void ReplayPlayfieldPresentation::setReplayGauge(const ReplayEvent &event) {
   authority_.gaugeType = event.gaugeType;
   authority_.currentGauge = event.gauge;
   state_->applyAuthorityUpdate(authority_);
+  skinGameplayGraphDirty_ =
+      skinGameplayGraph_.recordGauge(event.gauge, event.gaugeType,
+                                     authority_.gaugeRules) ||
+      skinGameplayGraphDirty_;
+}
+
+void ReplayPlayfieldPresentation::publishGameplayGraphState() {
+  if (!skinGameplayGraphDirty_) {
+    return;
+  }
+  state_->applyGameplayGraphState(skinGameplayGraph_.state());
+  skinGameplayGraphDirty_ = false;
 }
 
 void ReplayPlayfieldPresentation::updateLongVisualState(
@@ -399,6 +449,7 @@ bool ReplayPlayfieldPresentation::applyReplayEvent(
     const ReplayEvent &event, const PlayfieldJudgeEventClock &clock,
     bool /*recordTimingSample*/) {
   const JudgeResult recordedJudge(event.judgement, event.diffMicros);
+  const ChartVisualNote *resolvedGraphNote = replayNote(event);
   const auto applyHud = [&]() -> bool {
     if (event.judgement == None) {
       return false;
@@ -411,6 +462,10 @@ bool ReplayPlayfieldPresentation::applyReplayEvent(
     }
     progressiveMaximumCombo_ =
         std::max(progressiveMaximumCombo_, event.combo);
+    if (resolvedGraphNote != nullptr) {
+      skinGameplayGraph_.applyJudge(resolvedGraphNote->id, recordedJudge);
+      skinGameplayGraphDirty_ = true;
+    }
     events_->onJudge(recordedJudge, event.combo, event.score, clock,
                      event.action != ReplayEventAction::Miss);
     setReplayGauge(event);
@@ -549,6 +604,7 @@ PresentationFrameResult ReplayPlayfieldPresentation::renderFrame(
     const PlayfieldProjectionRequest &request) {
   builtIn_->refreshGeometry();
   state_->applyAuthorityUpdate(authority_);
+  publishGameplayGraphState();
   updateHcnVisualStates(clock.visualTimeMicros);
   PlayfieldVisualState state = state_->captureForPresentation(clock);
   PlayfieldProjectionRequest effectiveRequest = request;
@@ -594,6 +650,7 @@ BMSRenderer &ReplayPlayfieldPresentation::builtInRenderer() noexcept {
 #if defined(ASOBMASHOW_REPLAY_PLAYFIELD_PRESENTATION_TESTING)
 PlayfieldVisualState ReplayPlayfieldPresentation::captureVisualStateForTesting(
     PlayfieldFrameClock clock) {
+  publishGameplayGraphState();
   updateHcnVisualStates(clock.visualTimeMicros);
   return state_->capture(clock);
 }

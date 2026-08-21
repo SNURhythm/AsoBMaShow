@@ -717,6 +717,7 @@ void RealtimeGameplayWorker::publishSnapshot() {
       snapshot.lanePressed[lane] = simulation_.lanePressed(lane);
     }
     snapshot.attempt = simulation_.snapshot();
+    snapshot.skinGameplayGraph = simulation_.skinGameplayGraphState();
     const auto &scoreState = simulation_.scoreState();
     snapshot.gaugeState = scoreState.gaugeSnapshot();
     snapshot.fastCount = scoreState.fastCount;

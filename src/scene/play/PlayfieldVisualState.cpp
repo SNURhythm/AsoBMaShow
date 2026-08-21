@@ -124,6 +124,13 @@ void PlayfieldVisualStateStore::resetModel(
     notes_->push_back({.id = note.id});
   }
   noteIndices_ = std::move(noteIndices);
+  skinGameplayChartGraph_ =
+      std::make_shared<SkinGameplayChartGraphState>(model.skinGameplayGraph);
+  SkinGameplayGraphAccumulator initialGraph(
+      model.skinGameplayGraph.judgementNotes,
+      model.skinGameplayGraph.judgementDistributionSeconds, {}, 0);
+  skinGameplayDynamicGraph_ =
+      std::make_shared<SkinGameplayDynamicGraphState>(initialGraph.state());
   replayTouchSamples_.clear();
   replayTouchCursor_ = 0;
   lastReplayTouchTimeMicros_ = -1;
@@ -151,6 +158,12 @@ void PlayfieldVisualStateStore::setConfiguration(
 void PlayfieldVisualStateStore::applyAuthorityUpdate(
     const PlayfieldAuthorityUpdate &update) {
   authority_ = update;
+}
+
+void PlayfieldVisualStateStore::applyGameplayGraphState(
+    const SkinGameplayDynamicGraphState &state) {
+  skinGameplayDynamicGraph_ =
+      std::make_shared<SkinGameplayDynamicGraphState>(state);
 }
 
 void PlayfieldVisualStateStore::setNoteState(NotePresentationState state) {
@@ -304,6 +317,9 @@ PlayfieldVisualStateStore::capture(PlayfieldFrameClock clock,
       .notes = includeNotes && notes_ ? *notes_
                                       : std::vector<NotePresentationState>{},
       .touches = touches_,
+      .skinGameplayGraph =
+          {.chart = skinGameplayChartGraph_,
+           .dynamic = skinGameplayDynamicGraph_},
       .lastJudge = lastJudge_,
       .lastJudgeVisualMicros = lastJudgeVisualMicros_,
       .bgaMiss = bgaMissTracker_.snapshot(),
