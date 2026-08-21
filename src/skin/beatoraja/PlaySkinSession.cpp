@@ -1431,7 +1431,8 @@ PlaySkinSession::hitTestUiControl(UiLogicalPoint point) const {
 
 bool PlaySkinSession::enqueueInteraction(QueuedInteractionPayload payload,
                                          std::size_t stringBytes) {
-  if (queuedInteractions_.size() >= maximumQueuedInteractions ||
+  if (pendingFrame_ ||
+      queuedInteractions_.size() >= maximumQueuedInteractions ||
       nextInteractionSequence_ == 0 ||
       stringBytes > maximumQueuedStringBytes -
                         std::min(queuedStringBytes_,

@@ -3330,7 +3330,7 @@ void testEditableTextBoundsFocusedAndQueuedUtf8() {
   if (!fixture.ready()) {
     return;
   }
-  fixture.addEditableText(84, "A", SkinStringWriterId{4}, 100.0);
+  fixture.addEditableText(84, "A", SkinStringWriterId{5}, 100.0);
   SessionBgaSubmitter bga;
   RenderContext context;
   expect(fixture.session().prepareFrame(stateAt(1), projectionAt(1)) ==
@@ -3386,13 +3386,18 @@ void testEditableTextBoundsFocusedAndQueuedUtf8() {
   expect(fixture.session().focusTextInput(point, 3'000) &&
              fixture.session().appendTextInput(queuedValue) &&
              fixture.session().commitTextInput(3'001) &&
+             fixture.session().prepareFrame(stateAt(2), projectionAt(2)) ==
+                 PresentationFrameOutcome::Ready &&
              fixture.session().focusTextInput(point, 4'000) &&
              fixture.session().appendTextInput(queuedValue) &&
              !fixture.session().commitTextInput(4'001) &&
              fixture.session().hasFocusedTextInput(),
-         "aggregate queued string bytes reject another commit without losing "
-         "the focused edit");
+         "aggregate queued string bytes include a prepared but unsubmitted "
+         "frame and reject another commit without losing the focused edit");
   fixture.session().cancelTextInput();
+  expect(fixture.session().render(context, bgaFrame(2), bga).outcome ==
+             PresentationFrameOutcome::Ready,
+         "the bounded pending string still completes after successful submit");
 }
 
 void testEditableTextCancellationTeardownAndNoneditableRejection() {
