@@ -28,6 +28,11 @@ def assert_unique_ids(features: list[dict], label: str) -> set[str]:
     return set(ids)
 
 
+def assert_sorted_ids(features: list[dict], label: str) -> None:
+    ids = [feature["id"] for feature in features]
+    assert ids == sorted(ids), f"{label} IDs must remain sorted"
+
+
 def feature_by_id(features: list[dict]) -> dict[str, dict]:
     return {feature["id"]: feature for feature in features}
 
@@ -53,6 +58,8 @@ def main() -> None:
 
     source_features = source_surface["features"]
     ledger_features = ledger["features"]
+    assert_sorted_ids(source_features, "source surface")
+    assert_sorted_ids(ledger_features, "ledger")
     source_ids = assert_unique_ids(source_features, "source surface")
     ledger_ids = assert_unique_ids(ledger_features, "ledger")
     assert source_ids == ledger_ids, "source-surface and ledger IDs must match exactly"
