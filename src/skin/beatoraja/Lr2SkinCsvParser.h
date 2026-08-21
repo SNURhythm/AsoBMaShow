@@ -4,6 +4,7 @@
 #include "../package/SkinPackageTypes.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <span>
 #include <stop_token>
 #include <string>
@@ -24,6 +25,7 @@ struct Lr2SkinParseResult {
   std::vector<Lr2SkinCommand> commands;
   std::vector<SkinDiagnostic> diagnostics;
   bool cancelled = false;
+  bool fatal = false;
 };
 
 struct Lr2SkinCsvParserLimits {
@@ -34,6 +36,17 @@ struct Lr2SkinCsvParserLimits {
   std::size_t maximumIncludeDepth = maxIncludeDepth;
 };
 
+enum class Lr2IncludeExpansionMode : std::uint8_t {
+  Eager,
+  Preserve,
+  ConditionAware,
+};
+
+struct Lr2SkinParseOptions {
+  Lr2IncludeExpansionMode includeExpansion = Lr2IncludeExpansionMode::Eager;
+  std::span<const int> enabledOptionIds;
+};
+
 class Lr2SkinCsvParser final {
 public:
   explicit Lr2SkinCsvParser(Lr2SkinCsvParserLimits limits = {}) noexcept
@@ -42,7 +55,7 @@ public:
   [[nodiscard]] Lr2SkinParseResult
   parse(LuaSkinFileSystem &, std::string_view entryPath,
         std::span<const std::byte> cp932Bytes,
-        std::stop_token stop = {}) const;
+        std::stop_token stop = {}, Lr2SkinParseOptions options = {}) const;
 
 private:
   Lr2SkinCsvParserLimits limits_;

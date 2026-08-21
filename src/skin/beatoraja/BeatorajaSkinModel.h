@@ -298,6 +298,10 @@ struct SkinSliderObject {
 
 struct SkinGraphObject {
   SkinSpriteFrames fill;
+  // LR2 SkinGraph accepts SkinSourceReference IDs (100+) in place of an
+  // authored sprite sheet. An unavailable system image suppresses the graph
+  // before its value property is read.
+  std::optional<int> builtinImageReference;
   std::variant<SkinFloatPropertyId, SkinSliderObject::IntegerRangeSource> value;
   int direction = 0;
 };

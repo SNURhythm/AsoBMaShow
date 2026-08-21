@@ -3,7 +3,10 @@
 #include "../../Utils.h"
 
 #include <algorithm>
+#include <charconv>
 #include <filesystem>
+#include <limits>
+#include <map>
 #include <sstream>
 #include <string_view>
 
@@ -81,26 +84,106 @@ std::string includeChainText(std::span<const std::string> chain) {
 }
 
 SkinDiagnostic parserDiagnostic(std::string code, std::string message,
-                                const SkinSourceLocation &source) {
+                                const SkinSourceLocation &source,
+                                DiagnosticSeverity severity =
+                                    DiagnosticSeverity::Error) {
   return {.code = std::move(code),
           .message = std::move(message),
           .virtualPath = source.virtualPath,
-          .severity = DiagnosticSeverity::Error,
+          .severity = severity,
           .source = source};
 }
+
+std::optional<int> conditionInteger(std::string_view field) {
+  std::string numeric;
+  numeric.reserve(field.size());
+  for (char character : field) {
+    if (character == '!') character = '-';
+    if ((character >= '0' && character <= '9') || character == '-') {
+      numeric.push_back(character);
+    }
+  }
+  if (numeric.empty()) return std::nullopt;
+  int result = 0;
+  const auto parsed = std::from_chars(
+      numeric.data(), numeric.data() + numeric.size(), result);
+  return parsed.ec == std::errc{} &&
+                 parsed.ptr == numeric.data() + numeric.size()
+             ? std::optional<int>(result)
+             : std::nullopt;
+}
+
+class IncludeControlState final {
+public:
+  explicit IncludeControlState(std::span<const int> enabled) {
+    for (const int option : enabled) options_.insert_or_assign(option, 1);
+  }
+
+  void process(const Lr2SkinCommand &command) {
+    if (command.name == "IF") {
+      ifs_ = evaluate(command);
+      skip_ = !ifs_;
+    } else if (command.name == "ELSEIF") {
+      if (ifs_) {
+        skip_ = true;
+      } else {
+        ifs_ = evaluate(command);
+        skip_ = !ifs_;
+      }
+    } else if (command.name == "ELSE") {
+      skip_ = ifs_;
+    } else if (command.name == "ENDIF") {
+      skip_ = false;
+      ifs_ = false;
+    } else if (command.name == "SETOPTION" && !skip_ &&
+               command.fields.size() >= 2) {
+      const auto id = conditionInteger(command.fields[0]);
+      const auto enabled = conditionInteger(command.fields[1]);
+      if (id && enabled) {
+        options_.insert_or_assign(*id, *enabled >= 1 ? 1 : 0);
+      }
+    }
+  }
+
+  [[nodiscard]] bool skipped() const noexcept { return skip_; }
+
+private:
+  [[nodiscard]] bool evaluate(const Lr2SkinCommand &command) const {
+    for (const auto &field : command.fields) {
+      if (field.empty()) continue;
+      const auto condition = conditionInteger(field);
+      if (!condition || *condition == std::numeric_limits<int>::min()) {
+        return false;
+      }
+      const int id = *condition < 0 ? -*condition : *condition;
+      const auto found = options_.find(id);
+      if (found == options_.end() ||
+          (*condition >= 0 ? found->second != 1 : found->second != 0)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  std::map<int, int> options_;
+  bool skip_ = false;
+  bool ifs_ = false;
+};
 
 class ParseSession final {
 public:
   ParseSession(LuaSkinFileSystem &fileSystem,
                const Lr2SkinCsvParserLimits &limits, std::stop_token stop,
-               Lr2SkinParseResult &result)
-      : fileSystem_(fileSystem), limits_(limits), stop_(stop), result_(result) {}
+               Lr2SkinParseOptions options, Lr2SkinParseResult &result)
+      : fileSystem_(fileSystem), limits_(limits), stop_(stop),
+        options_(options), control_(options.enabledOptionIds), result_(result) {}
 
   void parseRoot(std::string entryPath, std::span<const std::byte> bytes) {
     std::ranges::replace(entryPath, '\\', '/');
     entryPath = genericPath(fs::path(entryPath));
     if (cancelled()) return;
     if (limits_.maximumIncludeDepth == 0) {
+      result_.fatal = true;
       const SkinSourceLocation source{.virtualPath = entryPath,
                                       .line = 1,
                                       .column = 1};
@@ -110,6 +193,7 @@ public:
       return;
     }
     if (bytes.size() > limits_.maximumDocumentBytes) {
+      result_.fatal = true;
       const SkinSourceLocation source{.virtualPath = entryPath,
                                       .line = 1,
                                       .column = 1};
@@ -138,6 +222,7 @@ private:
         reinterpret_cast<const char *>(bytes.data()), bytes.size());
     const auto decoded = cp932_to_utf8(encoded);
     if (!decoded) {
+      result_.fatal = true;
       const SkinSourceLocation source{.virtualPath = sourcePath,
                                       .line = 1,
                                       .column = 1};
@@ -177,17 +262,32 @@ private:
     const SkinSourceLocation source{.virtualPath = sourcePath,
                                     .line = lineNumber,
                                     .column = 1};
+    Lr2SkinCommand command{.name = name,
+                           .fields = tokens,
+                           .source = source,
+                           .includeChain = chain};
+    if (options_.includeExpansion == Lr2IncludeExpansionMode::Preserve) {
+      result_.commands.push_back(std::move(command));
+      return;
+    }
+    if (options_.includeExpansion ==
+        Lr2IncludeExpansionMode::ConditionAware) {
+      control_.process(command);
+    }
     if (name != "INCLUDE") {
-      result_.commands.push_back({.name = std::move(name),
-                                  .fields = std::move(tokens),
-                                  .source = source,
-                                  .includeChain = chain});
+      result_.commands.push_back(std::move(command));
+      return;
+    }
+    if (options_.includeExpansion ==
+            Lr2IncludeExpansionMode::ConditionAware &&
+        control_.skipped()) {
       return;
     }
 
     if (tokens.empty() || tokens.front().empty()) {
       result_.diagnostics.push_back(parserDiagnostic(
-          "skin_lr2_include_invalid", "LR2 include path is empty", source));
+          "skin_lr2_include_invalid", "LR2 include path is empty", source,
+          DiagnosticSeverity::Warning));
       return;
     }
     const std::string readPath = includeReadPath(tokens.front());
@@ -196,12 +296,14 @@ private:
     std::vector<std::string> nextChain = chain;
     nextChain.push_back(includedPath);
     if (std::ranges::find(chain, includedPath) != chain.end()) {
+      result_.fatal = true;
       result_.diagnostics.push_back(parserDiagnostic(
           "skin_lr2_include_cycle",
           "LR2 include cycle: " + includeChainText(nextChain), source));
       return;
     }
     if (chain.size() >= limits_.maximumIncludeDepth) {
+      result_.fatal = true;
       result_.diagnostics.push_back(parserDiagnostic(
           "skin_lr2_include_depth",
           "LR2 include depth exceeded: " + includeChainText(nextChain), source));
@@ -215,11 +317,14 @@ private:
     if (cancelled()) return;
     if (read.failure) {
       const bool byteLimit = read.failure->code == SkinFileError::LimitExceeded;
+      const bool missing = read.failure->code == SkinFileError::Missing;
+      result_.fatal = result_.fatal || !missing;
       result_.diagnostics.push_back(parserDiagnostic(
           byteLimit ? "skin_lr2_byte_limit" : "skin_lr2_include_read",
           byteLimit ? "LR2 include exceeds the aggregate byte limit"
                     : "LR2 include could not be read: " + read.failure->message,
-          source));
+          source, missing ? DiagnosticSeverity::Warning
+                          : DiagnosticSeverity::Error));
       return;
     }
     consumedBytes_ += read.bytes.size();
@@ -229,6 +334,8 @@ private:
   LuaSkinFileSystem &fileSystem_;
   const Lr2SkinCsvParserLimits &limits_;
   std::stop_token stop_;
+  Lr2SkinParseOptions options_;
+  IncludeControlState control_;
   Lr2SkinParseResult &result_;
   std::size_t consumedBytes_ = 0;
 };
@@ -237,9 +344,10 @@ private:
 
 Lr2SkinParseResult Lr2SkinCsvParser::parse(
     LuaSkinFileSystem &fileSystem, std::string_view entryPath,
-    std::span<const std::byte> cp932Bytes, std::stop_token stop) const {
+    std::span<const std::byte> cp932Bytes, std::stop_token stop,
+    Lr2SkinParseOptions options) const {
   Lr2SkinParseResult result;
-  ParseSession session(fileSystem, limits_, stop, result);
+  ParseSession session(fileSystem, limits_, stop, options, result);
   session.parseRoot(std::string(entryPath), cp932Bytes);
   return result;
 }

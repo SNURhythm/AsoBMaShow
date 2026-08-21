@@ -213,7 +213,9 @@ CollectedResourceUses collectResourceUses(
         }
       }
       else if constexpr (std::is_same_v<T, SkinSliderObject>) addSprite(object.knob, critical);
-      else if constexpr (std::is_same_v<T, SkinGraphObject>) addSprite(object.fill, critical);
+      else if constexpr (std::is_same_v<T, SkinGraphObject>) {
+        if (!object.builtinImageReference) addSprite(object.fill, critical);
+      }
       else if constexpr (std::is_same_v<T, SkinGaugeObject>) for (const auto &s: object.orderedNodes) addSprite(s, critical);
       else if constexpr (std::is_same_v<T, SkinNoteObject>) { for (const auto &lane: object.lanes) for (const auto &[kind, visual]: lane.visuals) { (void)kind; if (const auto *s=std::get_if<SkinSpriteFrames>(&visual)) addSprite(*s, critical); } for (const auto &line: object.lines) if (line.sprite) addSprite(*line.sprite, critical); }
       else if constexpr (std::is_same_v<T, SkinCoverObject>) addSprite(object.sprite, critical);

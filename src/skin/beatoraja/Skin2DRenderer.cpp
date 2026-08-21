@@ -4477,23 +4477,42 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
 
       if (slider || graph) {
         const SkinSpriteFrames &sprite = slider ? slider->knob : graph->fill;
-        const auto selectedSprite =
-            selectSpriteFrame(inputs, lookupIndex, sprite);
-        if (selectedSprite.failure) {
-          if (reportObjectFailure(result, *object, *selectedSprite.failure)) {
-            return result;
+        SkinResourceId sourceResource = sprite.resource;
+        const PreparedSkinResource *resource = nullptr;
+        const SkinResolvedRegion *region = nullptr;
+        if (graph && graph->builtinImageReference) {
+          const auto resolved = inputs.resources.builtinImageResource(
+              *graph->builtinImageReference);
+          if (!resolved) {
+            // SkinSourceReference returns null for an unavailable system
+            // image, suppressing the graph before its value callback.
+            continue;
           }
-          continue;
-        }
-        if (selectedSprite.suppressed || !selectedSprite.frame) {
-          continue;
+          sourceResource = *resolved;
+          resource = inputs.resources.find(sourceResource);
+          if (resource != nullptr && !resource->regionMappings.empty()) {
+            region = &resource->regionMappings.front();
+          }
+        } else {
+          const auto selectedSprite =
+              selectSpriteFrame(inputs, lookupIndex, sprite);
+          if (selectedSprite.failure) {
+            if (reportObjectFailure(result, *object,
+                                    *selectedSprite.failure)) {
+              return result;
+            }
+            continue;
+          }
+          if (selectedSprite.suppressed || !selectedSprite.frame) {
+            continue;
+          }
+          resource = inputs.resources.find(sourceResource);
+          region = inputs.resources.findResolvedRegion(
+              sourceResource, *selectedSprite.frame);
         }
         // Pinned SkinSlider/SkinGraph obtain the source image before reading
         // their RateProperty. Preserve that callback order and do not invoke a
         // value callback when the prepared source is absent.
-        const auto *resource = inputs.resources.find(sprite.resource);
-        const auto *region = inputs.resources.findResolvedRegion(
-            sprite.resource, *selectedSprite.frame);
         if (!resource || !region || resource->width <= 0 ||
             resource->height <= 0 || region->resolved.w <= 0 ||
             region->resolved.h <= 0) {
@@ -4547,7 +4566,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
             }
             lowered = lowerPreparedQuad(
                 inputs, object->id, destination.presentation.authoredOrdinal,
-                geometry, sprite.resource, resource->width, resource->height,
+                geometry, sourceResource, resource->width, resource->height,
                 region->resolved);
           }
         } else if (graph->direction < 0 || graph->direction > 1) {
@@ -4585,7 +4604,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           if (!lowered.failure && cropped.w != 0 && cropped.h != 0) {
             lowered = lowerPreparedQuad(
                 inputs, object->id, destination.presentation.authoredOrdinal,
-                geometry, sprite.resource, resource->width, resource->height,
+                geometry, sourceResource, resource->width, resource->height,
                 cropped);
           }
         }

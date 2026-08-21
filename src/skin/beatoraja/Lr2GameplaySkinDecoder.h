@@ -16,7 +16,19 @@ struct Lr2GameplaySkinDecodeResult {
   std::optional<EntryProfileSettings> reconciledSettings;
   std::optional<BeatorajaSkinModel> model;
   std::vector<SkinDiagnostic> diagnostics;
+  bool fatal = false;
 };
+
+struct Lr2GameplaySkinConfigurationResult {
+  std::optional<BeatorajaSkinConfiguration> configuration;
+  std::optional<EntryProfileSettings> reconciledSettings;
+  std::vector<SkinDiagnostic> diagnostics;
+  bool fatal = false;
+};
+
+[[nodiscard]] Lr2GameplaySkinConfigurationResult
+reconcileLr2GameplaySkinConfiguration(const BeatorajaSkinHeader &,
+                                      const EntryProfileSettings *);
 
 class Lr2GameplaySkinDecoder final {
 public:

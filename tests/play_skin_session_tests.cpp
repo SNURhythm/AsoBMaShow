@@ -1118,6 +1118,37 @@ return skin
 #DST_TEXT,0,0,100,340,200,40,0,255,255,255,255,0,0,0,0,0,0,0,0,0
 )lr2");
 
+    writeText(source / "skin/recoverable.lr2skin", R"lr2(#INFORMATION,0,Recoverable LR2,fixture
+#RESOLUTION,0
+#IMAGE,resources/fixture.png
+#SRC_IMAGE,0,0,0,0,40,20,1,1,0,0
+#DST_IMAGE,0,0,10,360,40,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0
+#INCLUDE,missing-optional.inc
+#RESOLUTION,bad
+#IMAGE
+#SRC_IMAGE,0,0,0,0,40,20,1,1,0,0
+#DST_IMAGE,0,0,60,360,40,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0
+)lr2");
+    writeText(source / "skin/skipped.lr2skin", R"lr2(#INFORMATION,0,Skipped LR2,fixture
+#RESOLUTION,0
+#IF,9999
+#INCLUDE,missing-skipped.inc
+#INCLUDE,cycle-a.inc
+#ENDIF
+#IMAGE,resources/fixture.png
+#SRC_IMAGE,0,0,0,0,40,20,1,1,0,0
+#DST_IMAGE,0,0,10,360,40,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0
+)lr2");
+    writeText(source / "skin/cycle-a.inc", "#INCLUDE,cycle-b.inc\n");
+    writeText(source / "skin/cycle-b.inc", "#INCLUDE,cycle-a.inc\n");
+    writeText(source / "skin/unsafe.lr2skin", R"lr2(#INFORMATION,0,Unsafe LR2,fixture
+#RESOLUTION,0
+#INCLUDE,../../outside.inc
+#IMAGE,resources/fixture.png
+)lr2");
+    writeText(source / "skin/invalid-encoding.lr2skin",
+              std::string(1, static_cast<char>(0x81)));
+
     writeText(source / "config/settings.json",
               R"json({"application":"configuration"})json");
     writeText(source / "select/select.lr2skin",
@@ -1148,12 +1179,16 @@ return skin
     expect(importedPaths ==
                std::vector<std::string>{"config/settings.json",
                                         "select/select.lr2skin",
+                                        "skin/invalid-encoding.lr2skin",
                                         "skin/parity.json",
                                         "skin/parity.lr2skin",
-                                        "skin/parity.luaskin"} &&
-               selectable == 3 && unavailable == 2,
-           "header admission keeps exactly the three gameplay formats "
-           "selectable after mixed-package import");
+                                        "skin/parity.luaskin",
+                                        "skin/recoverable.lr2skin",
+                                        "skin/skipped.lr2skin",
+                                        "skin/unsafe.lr2skin"} &&
+               selectable == 5 && unavailable == 2,
+           "header admission keeps gameplay and recoverable LR2 entries "
+           "selectable while fatal documents remain invalid");
 
     fs::create_directories(roots_.visiblePackages);
     fs::copy(source, roots_.visiblePackages / package_.directoryName,
@@ -1278,6 +1313,43 @@ void testLuaJsonAndLr2SessionsEmitEquivalentSharedObjects() {
   expect(hasSharedObjects(luaOutput) && luaOutput == jsonOutput &&
              luaOutput == lr2Output,
          "Lua, JSON, and LR2 emit equivalent image, number, and text output");
+}
+
+void testLr2ProductionRecoveryAndFatalBoundaries() {
+  FormatParityFixture fixture;
+  auto recoverable = fixture.create("skin/recoverable.lr2skin", 106);
+  auto skipped = fixture.create("skin/skipped.lr2skin", 107);
+  auto unsafe = fixture.create("skin/unsafe.lr2skin", 108);
+  auto invalidEncoding =
+      fixture.create("skin/invalid-encoding.lr2skin", 109);
+  const auto hasCode = [](const auto &result, std::string_view code) {
+    return std::ranges::any_of(result.diagnostics, [&](const auto &diagnostic) {
+      return diagnostic.code == code;
+    });
+  };
+  expect(recoverable.session &&
+             hasCode(recoverable, "skin_lr2_include_read") &&
+             hasCode(recoverable, "skin_lr2_header_command_invalid") &&
+             hasCode(recoverable, "skin_lr2_gameplay_command_invalid"),
+         "missing optional include and malformed header/gameplay lines retain "
+         "a usable production session with diagnostics");
+  if (recoverable.session) {
+    const auto frame = recoverable.session->prepareFrame(
+        stateAt(2), projectionAt(2), {});
+    expect(frame.ready() && frame.evaluation.submitReady &&
+               frame.evaluation.submitReady->commands.size() == 2,
+           "valid LR2 commands before and after recoverable failures render");
+  }
+  expect(skipped.session &&
+             !hasCode(skipped, "skin_lr2_include_read") &&
+             !hasCode(skipped, "skin_lr2_include_cycle"),
+         "false IF skips missing and cyclic includes without production "
+         "diagnostics");
+  expect(!unsafe.session && hasCode(unsafe, "skin_lr2_include_read"),
+         "an unsafe active include remains fatal at production load");
+  expect(!invalidEncoding.session &&
+             hasCode(invalidEncoding, "skin_lr2_encoding_invalid"),
+         "invalid root encoding remains fatal at production load");
 }
 
 void testSessionOwnsDeduplicatedMoviesAndRollsBackBeforePublication() {
@@ -4250,6 +4322,7 @@ void testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin() {
 
 int main() {
   testLuaJsonAndLr2SessionsEmitEquivalentSharedObjects();
+  testLr2ProductionRecoveryAndFatalBoundaries();
   testSessionOwnsDeduplicatedMoviesAndRollsBackBeforePublication();
   testCallbackBindingWithoutRuntimeFailsValidation();
   testActivationCreatesAnOwningFreshStateSession();

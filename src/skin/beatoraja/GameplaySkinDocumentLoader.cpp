@@ -29,6 +29,7 @@ struct DecodedGameplaySkinDocument {
   std::optional<BeatorajaSkinModel> model;
   std::unique_ptr<LuaSkinRuntime> runtime;
   bool cancelled = false;
+  bool fatal = false;
   std::vector<SkinDiagnostic> diagnostics;
 };
 
@@ -259,17 +260,22 @@ DecodedGameplaySkinDocument decodeLr2(GameplaySkinDocumentRequest &request) {
     return result;
   }
   Lr2SkinCsvParser parser;
-  auto parsed = parser.parse(request.documentFileSystem,
-                             request.entry.packageRelativePath, bytes.bytes,
-                             request.stop);
-  appendMoved(result.diagnostics, parsed.diagnostics);
-  if (parsed.cancelled || cancellationRequested(request, result)) {
+  auto rootParsed = parser.parse(
+      request.documentFileSystem, request.entry.packageRelativePath,
+      bytes.bytes, request.stop,
+      {.includeExpansion = Lr2IncludeExpansionMode::Preserve});
+  appendMoved(result.diagnostics, rootParsed.diagnostics);
+  if (rootParsed.cancelled || cancellationRequested(request, result)) {
     result.cancelled = true;
+    return result;
+  }
+  if (rootParsed.fatal) {
+    result.fatal = true;
     return result;
   }
 
   Lr2SkinHeaderDecoder headerDecoder;
-  auto decodedHeader = headerDecoder.decode(parsed.commands);
+  auto decodedHeader = headerDecoder.decode(rootParsed.commands);
   appendMoved(result.diagnostics, decodedHeader.diagnostics);
   result.header = std::move(decodedHeader.header);
   if (!result.header || !gameplaySkinTraitForSkinType(result.header->type)) {
@@ -277,12 +283,37 @@ DecodedGameplaySkinDocument decodeLr2(GameplaySkinDocumentRequest &request) {
   }
 
   Lr2GameplaySkinDecoder gameplayDecoder;
+  auto reconciled = reconcileLr2GameplaySkinConfiguration(
+      *result.header, request.desiredSettings);
+  appendMoved(result.diagnostics, reconciled.diagnostics);
+  if (reconciled.fatal || !reconciled.configuration) {
+    result.fatal = true;
+    return result;
+  }
+  std::vector<int> enabledOptions(
+      reconciled.configuration->enabledOptionIds.begin(),
+      reconciled.configuration->enabledOptionIds.end());
+  auto parsed = parser.parse(
+      request.documentFileSystem, request.entry.packageRelativePath,
+      bytes.bytes, request.stop,
+      {.includeExpansion = Lr2IncludeExpansionMode::ConditionAware,
+       .enabledOptionIds = enabledOptions});
+  appendMoved(result.diagnostics, parsed.diagnostics);
+  if (parsed.cancelled || cancellationRequested(request, result)) {
+    result.cancelled = true;
+    return result;
+  }
+  if (parsed.fatal) {
+    result.fatal = true;
+    return result;
+  }
   auto decoded = gameplayDecoder.decode(
       *result.header, parsed.commands, request.desiredSettings,
       gameplaySkinBuiltinCatalog(), request.safetyPolicy);
   result.configuration = std::move(decoded.configuration);
   result.reconciledSettings = std::move(decoded.reconciledSettings);
   result.model = std::move(decoded.model);
+  result.fatal = decoded.fatal;
   appendMoved(result.diagnostics, decoded.diagnostics);
   (void)cancellationRequested(request, result);
   return result;
@@ -338,6 +369,11 @@ InspectedGameplaySkinDocument GameplaySkinDocumentLoader::inspect(
   try {
     DecodedGameplaySkinDocument decoded = decode(request, false);
     verifyConfigurationDigest(decoded, request.entry);
+    if (decoded.fatal) {
+      decoded.header.reset();
+      decoded.configuration.reset();
+      decoded.reconciledSettings.reset();
+    }
     result.header = std::move(decoded.header);
     result.configuration = std::move(decoded.configuration);
     result.reconciledSettings = std::move(decoded.reconciledSettings);
@@ -380,10 +416,13 @@ GameplaySkinDocumentLoadResult GameplaySkinDocumentLoader::load(
       result.diagnostics = std::move(decoded.diagnostics);
       return result;
     }
+    const bool diagnosticsAreFatal =
+        request.sourceFormat != GameplaySkinSourceFormat::Lr2 &&
+        hasErrors(decoded.diagnostics);
     if (!decoded.header || !decoded.configuration ||
         !decoded.reconciledSettings || !decoded.model ||
         !gameplaySkinTraitForSkinType(decoded.header->type) ||
-        hasErrors(decoded.diagnostics)) {
+        decoded.fatal || diagnosticsAreFatal) {
       result.diagnostics = std::move(decoded.diagnostics);
       if (result.diagnostics.empty()) {
         result.diagnostics.push_back(documentDiagnostic(
@@ -403,8 +442,9 @@ GameplaySkinDocumentLoadResult GameplaySkinDocumentLoader::load(
     auto validated = validator.validate(
         std::move(*decoded.model),
         {.builtins = gameplaySkinBuiltinCatalog(), .callbacks = callbacks});
+    const bool validationErrors = hasErrors(validated.diagnostics);
     appendMoved(decoded.diagnostics, validated.diagnostics);
-    if (!validated.model || hasErrors(decoded.diagnostics)) {
+    if (!validated.model || validationErrors) {
       result.diagnostics = std::move(decoded.diagnostics);
       return result;
     }

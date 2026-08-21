@@ -212,6 +212,21 @@ public:
     images_.emplace(id, std::move(resource));
   }
 
+  void addBuiltinImage(int reference, SkinResourceId resource,
+                       SkinSourceRect authored, int width = 100,
+                       int height = 100) {
+    addImage(resource, authored, width, height);
+    builtinImages_.insert_or_assign(reference, resource);
+  }
+
+  std::optional<SkinResourceId>
+  builtinImageResource(int reference) const noexcept override {
+    const auto found = builtinImages_.find(reference);
+    return found == builtinImages_.end()
+               ? std::nullopt
+               : std::optional<SkinResourceId>(found->second);
+  }
+
   const PreparedSkinResource *find(SkinResourceId id) const noexcept override {
     const auto found = images_.find(id);
     return found == images_.end() ? nullptr : &found->second;
@@ -268,6 +283,7 @@ public:
 
 private:
   std::map<SkinResourceId, PreparedSkinResource> images_;
+  std::map<int, SkinResourceId> builtinImages_;
   std::map<SkinTextAtlasId, PreparedSkinTextAtlas> atlases_;
   std::map<SkinObjectId, SkinTextAtlasId> textAtlasesByObject_;
   std::map<SkinObjectId, PreparedPomyuCharaResource> pomyuCharas_;
@@ -2533,6 +2549,46 @@ void testGraphCropsLeftOrBottomWithJavaTruncation() {
       vertical.vertices[2].y == 685.0F && vertical.vertices[0].v == 0.27F &&
           vertical.vertices[2].v == 0.24F,
       "vertical graph keeps the bottom three source pixels and halves height");
+}
+
+void testBuiltinReferenceGraphUsesPreparedSystemImageAndPinnedCrop() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  const SkinSourceRect region{.x = 10, .y = 20, .w = 9, .h = 7};
+  resources.addBuiltinImage(110, 31, region, 100, 100);
+  FakeState state;
+  state.floatResult = {.value = 0.5, .supported = true};
+  SkinGraphObject graph;
+  graph.builtinImageReference = 110;
+  graph.value = SkinFloatPropertyId{1};
+  graph.direction = 0;
+  ValidatedBeatorajaSkinModel model;
+  model.model.floatProperties.push_back(
+      {.id = SkinFloatPropertyId{1},
+       .domain = SkinFloatPropertyDomain::Rate,
+       .source = SkinBuiltinPropertySelector{.value = 92},
+       .authoredOrdinal = 1});
+  model.model.objects.push_back({.id = 1,
+                                 .authoredName = "builtin-graph",
+                                 .payload = std::move(graph),
+                                 .authoredOrdinal = 1,
+                                 .critical = true});
+  auto presented = destination(1, 119, 100.0);
+  presented.presentation.frames.front().width = 40.0;
+  presented.presentation.frames.front().height = 30.0;
+  model.model.destinations = {std::move(presented)};
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  expect(result.submitReady && result.submitReady->commands.size() == 1,
+         "an available built-in graph source emits one cropped quad");
+  if (result.submitReady && result.submitReady->commands.size() == 1) {
+    const auto &quad = std::get<SkinTexturedQuadCommand>(
+        result.submitReady->commands.front().payload);
+    expect(quad.resource == 31 && quad.vertices[1].x == 120.0F &&
+               quad.vertices[1].u == 0.14F,
+           "built-in graph resolves the system image before the pinned rate crop");
+  }
 }
 
 void testExplicitSliderAndGraphRatesRemainUnclamped() {
@@ -5802,6 +5858,7 @@ int main() {
   testSliderDirectionsMoveBeforeSharedProjection();
   testNonCardinalSliderDirectionDrawsWithoutMotion();
   testGraphCropsLeftOrBottomWithJavaTruncation();
+  testBuiltinReferenceGraphUsesPreparedSystemImageAndPinnedCrop();
   testExplicitSliderAndGraphRatesRemainUnclamped();
   testNegativeGraphsUseAbsoluteIntrinsicSizeForStretching();
   testExtremeFiniteSliderAndGraphRatesFailWithoutPublishing();

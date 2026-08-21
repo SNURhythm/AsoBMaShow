@@ -361,6 +361,13 @@ public:
   findTextAtlas(SkinTextAtlasId) const noexcept = 0;
   virtual const PreparedSkinTextAtlas *
   findTextAtlasForObject(SkinObjectId) const noexcept = 0;
+  // System/chart images are prepared outside the package resource plan. A
+  // host that owns one exposes the catalog resource which backs the pinned
+  // SkinSourceReference ID; unavailable references return nullopt.
+  virtual std::optional<SkinResourceId>
+  builtinImageResource(int) const noexcept {
+    return std::nullopt;
+  }
   virtual const PreparedPomyuCharaResource *
   findPomyuChara(SkinObjectId) const noexcept {
     return nullptr;

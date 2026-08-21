@@ -617,9 +617,53 @@ void testAllCommandsDecodeToTypedCanonicalModel() {
          "the complete LR2 document validates as a static canonical model");
 }
 
+void testBuiltinReferenceBarGraphsRetainTheirPinnedSource() {
+  const BeatorajaSkinHeader header{.type = 0, .width = 640, .height = 480};
+  const std::vector<Lr2SkinCommand> commands{
+      {.name = "SRC_BARGRAPH",
+       .fields = {"0", "110", "0", "0", "10", "10", "1", "1", "0",
+                  "0", "1", "0"},
+       .source = {.virtualPath = "builtin.lr2skin", .line = 1, .column = 1},
+       .includeChain = {"builtin.lr2skin"}},
+      {.name = "DST_BARGRAPH",
+       .fields = {"0", "0", "0", "0", "100", "20", "0", "255", "255",
+                  "255", "255", "0", "0", "0", "0", "0", "0", "0",
+                  "0", "0"},
+       .source = {.virtualPath = "builtin.lr2skin", .line = 2, .column = 1},
+       .includeChain = {"builtin.lr2skin"}},
+      {.name = "SRC_BARGRAPH_REFNUMBER",
+       .fields = {"0", "111", "0", "0", "10", "10", "1", "1", "0",
+                  "0", "14", "1", "0", "100"},
+       .source = {.virtualPath = "builtin.lr2skin", .line = 3, .column = 1},
+       .includeChain = {"builtin.lr2skin"}},
+      {.name = "DST_BARGRAPH",
+       .fields = {"0", "0", "0", "30", "100", "20", "0", "255", "255",
+                  "255", "255", "0", "0", "0", "0", "0", "0", "0",
+                  "0", "0"},
+       .source = {.virtualPath = "builtin.lr2skin", .line = 4, .column = 1},
+       .includeChain = {"builtin.lr2skin"}},
+  };
+  const auto decoded = Lr2GameplaySkinDecoder{}.decode(
+      header, commands, nullptr, gameplaySkinBuiltinCatalog());
+  const auto graphs = decoded.model ? objectsWith<SkinGraphObject>(*decoded.model)
+                                    : std::vector<const SkinObjectDefinition *>{};
+  const auto *ordinary = graphs.size() > 0
+                             ? std::get_if<SkinGraphObject>(&graphs[0]->payload)
+                             : nullptr;
+  const auto *refNumber = graphs.size() > 1
+                              ? std::get_if<SkinGraphObject>(&graphs[1]->payload)
+                              : nullptr;
+  expect(decoded.model && ordinary && refNumber &&
+             ordinary->builtinImageReference == 110 &&
+             refNumber->builtinImageReference == 111 &&
+             ordinary->fill.frames.empty() && refNumber->fill.frames.empty(),
+         "SRC_BARGRAPH and REFNUMBER retain gr>=100 as built-in image sources");
+}
+
 } // namespace
 
 int main() {
+  testBuiltinReferenceBarGraphsRetainTheirPinnedSource();
   testAllCommandsDecodeToTypedCanonicalModel();
   if (failures != 0) {
     std::cerr << failures << " LR2 gameplay skin decoder test(s) failed\n";

@@ -107,7 +107,7 @@ SkinDiagnostic headerDiagnostic(const Lr2SkinCommand &command) {
   return {.code = "skin_lr2_header_command_invalid",
           .message = "Invalid LR2 header command #" + command.name,
           .virtualPath = command.source.virtualPath,
-          .severity = DiagnosticSeverity::Error,
+          .severity = DiagnosticSeverity::Warning,
           .source = command.source};
 }
 

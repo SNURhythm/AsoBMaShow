@@ -305,6 +305,20 @@ void testDepthByteEncodingAndCancellationGuards() {
          "pre-requested cancellation is distinct from invalid input");
 }
 
+void testFalseConditionDoesNotReadOrDiagnoseIncludes() {
+  PackageFixture fixture("header/skipped-includes.lr2skin");
+  const auto bytes = fixture.readEntry();
+  const auto parsed = Lr2SkinCsvParser{}.parse(
+      *fixture.fileSystem, fixture.entry.packageRelativePath, bytes.bytes, {},
+      {.includeExpansion = Lr2IncludeExpansionMode::ConditionAware});
+  const auto images = commandsNamed(parsed, "IMAGE");
+  expect(!parsed.cancelled && parsed.diagnostics.empty() &&
+             images.size() == 1 && !images.front()->fields.empty() &&
+             images.front()->fields.front() == "after-skipped-includes.png",
+         "a false IF neither reads nor diagnoses missing/cyclic includes and "
+         "retains following commands");
+}
+
 } // namespace
 
 int main() {
@@ -312,6 +326,7 @@ int main() {
   testPinnedDefaults();
   testCycleGuardRetainsSafeSiblings();
   testDepthByteEncodingAndCancellationGuards();
+  testFalseConditionDoesNotReadOrDiagnoseIncludes();
 
   if (failures != 0) {
     std::cerr << failures << " LR2 skin parser test(s) failed\n";

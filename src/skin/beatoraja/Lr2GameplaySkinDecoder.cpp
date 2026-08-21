@@ -113,7 +113,7 @@ SkinDiagnostic commandDiagnostic(const Lr2SkinCommand &command,
   return {.code = std::move(code),
           .message = std::move(message),
           .virtualPath = command.source.virtualPath,
-          .severity = DiagnosticSeverity::Error,
+          .severity = DiagnosticSeverity::Warning,
           .source = command.source};
 }
 
@@ -134,9 +134,10 @@ ConfigOffset sanitizeOffset(ConfigOffset value,
   return value;
 }
 
+template <typename Result>
 bool reconcileConfiguration(const BeatorajaSkinHeader &header,
                             const EntryProfileSettings *desired,
-                            Lr2GameplaySkinDecodeResult &result) {
+                            Result &result) {
   BeatorajaSkinConfiguration configuration;
   EntryProfileSettings settings;
   if (desired != nullptr) settings.viewport = desired->viewport;
@@ -146,6 +147,7 @@ bool reconcileConfiguration(const BeatorajaSkinHeader &header,
       result.diagnostics.push_back(documentDiagnostic(
           "skin_lr2_configuration_invalid",
           "LR2 skin option has an empty name"));
+      result.fatal = true;
       return false;
     }
     int runtimeValue = -1;
@@ -183,6 +185,7 @@ bool reconcileConfiguration(const BeatorajaSkinHeader &header,
       result.diagnostics.push_back(documentDiagnostic(
           "skin_lr2_configuration_invalid",
           "LR2 skin file declaration has an empty name"));
+      result.fatal = true;
       return false;
     }
     std::string selected = file.defaultValue;
@@ -206,6 +209,7 @@ bool reconcileConfiguration(const BeatorajaSkinHeader &header,
       result.diagnostics.push_back(documentDiagnostic(
           "skin_lr2_configuration_invalid",
           "LR2 skin offset has an empty name"));
+      result.fatal = true;
       return false;
     }
     ConfigOffset value;
@@ -1018,16 +1022,16 @@ private:
     if (!integerRange && values[13] == 4) laneCover_ = activeSlider_;
   }
 
-  SkinSpriteFrames graphSprite(const std::array<int, 22> &values) {
-    if (values[2] >= 100) return {};
-    return sourceSprite(values).value_or(SkinSpriteFrames{});
-  }
-
   void sourceGraph(const Lr2SkinCommand &command, bool integerRange) {
     activeGraph_.reset();
     const auto values = commandValues(command);
-    SkinGraphObject graph{.fill = graphSprite(values),
-                          .direction = values[12]};
+    SkinGraphObject graph{
+        .fill = values[2] >= 100
+                    ? SkinSpriteFrames{}
+                    : sourceSprite(values).value_or(SkinSpriteFrames{}),
+        .builtinImageReference =
+            values[2] >= 100 ? std::optional<int>(values[2]) : std::nullopt,
+        .direction = values[12]};
     if (integerRange) {
       graph.value = SkinSliderObject::IntegerRangeSource{
           .value = bindings_
@@ -2253,6 +2257,14 @@ private:
 
 } // namespace
 
+Lr2GameplaySkinConfigurationResult reconcileLr2GameplaySkinConfiguration(
+    const BeatorajaSkinHeader &header,
+    const EntryProfileSettings *desired) {
+  Lr2GameplaySkinConfigurationResult result;
+  (void)reconcileConfiguration(header, desired, result);
+  return result;
+}
+
 Lr2GameplaySkinDecodeResult Lr2GameplaySkinDecoder::decode(
     const BeatorajaSkinHeader &header,
     std::span<const Lr2SkinCommand> commands,
@@ -2261,6 +2273,7 @@ Lr2GameplaySkinDecodeResult Lr2GameplaySkinDecoder::decode(
     SkinSafetyPolicy safetyPolicy) const {
   Lr2GameplaySkinDecodeResult result;
   if (!gameplaySkinTraitForSkinType(header.type)) {
+    result.fatal = true;
     result.diagnostics.push_back(documentDiagnostic(
         "skin_lr2_not_gameplay",
         "LR2 document header is not a gameplay skin type"));
@@ -2269,6 +2282,7 @@ Lr2GameplaySkinDecodeResult Lr2GameplaySkinDecoder::decode(
   const auto maximumCommands = static_cast<std::size_t>(safetyPolicy.limit(
       SkinSafetyGuard::LuaDecoderLimit, kMaximumCommands));
   if (commands.size() > maximumCommands) {
+    result.fatal = true;
     result.diagnostics.push_back(documentDiagnostic(
         "skin_lr2_gameplay_limit_exceeded",
         "LR2 gameplay command stream exceeds the fixed command limit"));
@@ -2284,6 +2298,7 @@ Lr2GameplaySkinDecodeResult Lr2GameplaySkinDecoder::decode(
     session.execute(commands);
     result.model = session.takeModel();
   } catch (...) {
+    result.fatal = true;
     result.model.reset();
     result.configuration.reset();
     result.reconciledSettings.reset();
