@@ -265,6 +265,11 @@ using RegionIdentityMap = std::map<SkinSourceRect, SkinSourceRect,
 std::atomic_size_t regionIdentityChecksForTesting{0};
 std::atomic_size_t regionLookupComparisonsForTesting{0};
 std::atomic_size_t fontAtlasRequestHighWaterForTesting{0};
+std::atomic_size_t maximumSessionEncodedBytesForTesting{
+    std::numeric_limits<std::size_t>::max()};
+std::atomic_size_t maximumAtlasSessionBytesForTesting{
+    std::numeric_limits<std::size_t>::max()};
+std::atomic_size_t committedEncodedBytesForTesting{0};
 
 void recordRegionIdentityCheck() noexcept {
   regionIdentityChecksForTesting.fetch_add(1, std::memory_order_relaxed);
@@ -282,10 +287,15 @@ void recordFontAtlasRequestCount(std::size_t count) noexcept {
              observed, count, std::memory_order_relaxed)) {
   }
 }
+
+void recordCommittedEncodedBytes(std::size_t bytes) noexcept {
+  committedEncodedBytesForTesting.store(bytes, std::memory_order_relaxed);
+}
 #else
 void recordRegionIdentityCheck() noexcept {}
 void recordRegionLookupComparison() noexcept {}
 void recordFontAtlasRequestCount(std::size_t) noexcept {}
+void recordCommittedEncodedBytes(std::size_t) noexcept {}
 #endif
 
 bool resolveRegions(const ResourceUse &use, int width, int height,
@@ -704,13 +714,30 @@ struct BitmapFontPreparationCache {
   std::set<std::string, std::less<>> accountedPages;
 };
 
+struct BitmapFontAccountingIdentities {
+  // Payloads may remain cached after a rejected optional atlas. These
+  // identities become globally accounted only with the outer session commit.
+  std::set<std::string, std::less<>> descriptors;
+  std::set<std::string, std::less<>> pages;
+};
+
+void commitBitmapFontAccounting(
+    BitmapFontPreparationCache &cache,
+    const BitmapFontAccountingIdentities &identities) {
+  cache.accountedDescriptors.insert(identities.descriptors.begin(),
+                                    identities.descriptors.end());
+  cache.accountedPages.insert(identities.pages.begin(),
+                              identities.pages.end());
+}
+
 std::optional<std::vector<SkinTextAtlasBitmapFace>> readBitmapFontFaces(
     const FontAtlasRequest &request, const LuaSkinFileSystem &files,
     SkinResourceSessionAccounting &session,
     std::vector<SkinDiagnostic> &diagnostics,
     const std::function<bool()> &cancellationRequested,
     const SkinSafetyPolicy &safetyPolicy, std::stop_token stop,
-    BitmapFontPreparationCache &cache) {
+    BitmapFontPreparationCache &cache,
+    BitmapFontAccountingIdentities &requestAccounting) {
   std::vector<SkinTextAtlasBitmapFace> result;
   result.reserve(request.resolvedFaces.size());
   for (std::size_t faceIndex = 0; faceIndex < request.resolvedFaces.size();
@@ -747,7 +774,8 @@ std::optional<std::vector<SkinTextAtlasBitmapFace>> readBitmapFontFaces(
       }
       encoded = cache.descriptors.emplace(face.path, read.bytes).first;
     }
-    if (!cache.accountedDescriptors.contains(face.path)) {
+    if (!cache.accountedDescriptors.contains(face.path) &&
+        !requestAccounting.descriptors.contains(face.path)) {
       if (!faceSession.addImage(/*physicalResources=*/0,
                                 /*logicalResources=*/0,
                                 encoded->second.size(), /*decodedBytes=*/0,
@@ -850,6 +878,8 @@ std::optional<std::vector<SkinTextAtlasBitmapFace>> readBitmapFontFaces(
                       .first;
       }
       if (!cache.accountedPages.contains(*candidate.normalizedVirtualPath) &&
+          !requestAccounting.pages.contains(
+              *candidate.normalizedVirtualPath) &&
           !newlyAccountedPages.contains(*candidate.normalizedVirtualPath)) {
         const auto encodedBytes =
             cache.pageEncodedBytes.find(*candidate.normalizedVirtualPath);
@@ -886,10 +916,10 @@ std::optional<std::vector<SkinTextAtlasBitmapFace>> readBitmapFontFaces(
       }
     }
     session = faceSession;
-    cache.accountedDescriptors.insert(newlyAccountedDescriptors.begin(),
-                                      newlyAccountedDescriptors.end());
-    cache.accountedPages.insert(newlyAccountedPages.begin(),
-                                newlyAccountedPages.end());
+    requestAccounting.descriptors.insert(newlyAccountedDescriptors.begin(),
+                                         newlyAccountedDescriptors.end());
+    requestAccounting.pages.insert(newlyAccountedPages.begin(),
+                                   newlyAccountedPages.end());
     result.push_back(std::move(prepared));
   }
   return result.empty() ? std::nullopt
@@ -902,12 +932,13 @@ std::optional<SkinTextAtlasBuildResult> prepareFontAtlas(
     std::vector<SkinDiagnostic> &diagnostics,
     const std::function<bool()> &cancellationRequested,
     const SkinSafetyPolicy &safetyPolicy, std::stop_token stop,
-    BitmapFontPreparationCache &cache) {
+    BitmapFontPreparationCache &cache,
+    BitmapFontAccountingIdentities &requestAccounting) {
   if (request.resolvedFaces.empty()) return std::nullopt;
   if (isBitmapFontFace(request.resolvedFaces.front().path)) {
     const auto faces = readBitmapFontFaces(
         request, files, session, diagnostics, cancellationRequested,
-        safetyPolicy, stop, cache);
+        safetyPolicy, stop, cache, requestAccounting);
     if (!faces) return std::nullopt;
     return buildSkinBitmapTextAtlas(id, request.key, *faces,
                                     request.codepoints, request.pairs,
@@ -983,6 +1014,28 @@ void resetSkinResourcePlatformAssetReadsForTesting() noexcept {
 std::size_t skinResourcePlatformAssetReadsForTesting() noexcept {
   return platformAssetReadsForTesting.load(std::memory_order_relaxed);
 }
+
+void setSkinResourceAccountingLimitsForTesting(
+    std::size_t maximumSessionEncodedBytes,
+    std::size_t maximumAtlasSessionBytes) noexcept {
+  maximumSessionEncodedBytesForTesting.store(maximumSessionEncodedBytes,
+                                              std::memory_order_relaxed);
+  maximumAtlasSessionBytesForTesting.store(maximumAtlasSessionBytes,
+                                            std::memory_order_relaxed);
+  committedEncodedBytesForTesting.store(0, std::memory_order_relaxed);
+}
+
+void resetSkinResourceAccountingLimitsForTesting() noexcept {
+  maximumSessionEncodedBytesForTesting.store(
+      std::numeric_limits<std::size_t>::max(), std::memory_order_relaxed);
+  maximumAtlasSessionBytesForTesting.store(
+      std::numeric_limits<std::size_t>::max(), std::memory_order_relaxed);
+  committedEncodedBytesForTesting.store(0, std::memory_order_relaxed);
+}
+
+std::size_t skinResourceCommittedEncodedBytesForTesting() noexcept {
+  return committedEncodedBytesForTesting.load(std::memory_order_relaxed);
+}
 #endif
 
 bool skinResourceDimensionsAllowed(int width, int height, std::size_t bytes,
@@ -1007,6 +1060,30 @@ bool addWithin(std::size_t &value, std::size_t increment,
   value += increment;
   return true;
 }
+
+std::size_t maximumSessionEncodedBytes(
+    const SkinSafetyPolicy &safetyPolicy) noexcept {
+  std::size_t maximum = skinResourceLimit(
+      safetyPolicy, SkinResourcePolicy::maximumSessionEncodedBytes);
+#if defined(ASOBMASHOW_SKIN_RESOURCE_TESTING)
+  maximum = std::min(
+      maximum,
+      maximumSessionEncodedBytesForTesting.load(std::memory_order_relaxed));
+#endif
+  return maximum;
+}
+
+std::size_t maximumAtlasSessionBytes(
+    const SkinSafetyPolicy &safetyPolicy) noexcept {
+  std::size_t maximum = skinResourceLimit(
+      safetyPolicy, SkinResourcePolicy::maximumAtlasSessionBytes);
+#if defined(ASOBMASHOW_SKIN_RESOURCE_TESTING)
+  maximum = std::min(
+      maximum,
+      maximumAtlasSessionBytesForTesting.load(std::memory_order_relaxed));
+#endif
+  return maximum;
+}
 }
 
 bool SkinResourceSessionAccounting::addImage(
@@ -1021,8 +1098,7 @@ bool SkinResourceSessionAccounting::addImage(
                  skinResourceLimit(safetyPolicy_,
                                    SkinResourcePolicy::maximumResources)) ||
       !addWithin(next.encodedBytes_, encodedBytes,
-                 skinResourceLimit(safetyPolicy_,
-                                   SkinResourcePolicy::maximumSessionEncodedBytes)) ||
+                 maximumSessionEncodedBytes(safetyPolicy_)) ||
       !addWithin(next.decodedBytes_, decodedBytes,
                  skinResourceLimit(safetyPolicy_,
                                    SkinResourcePolicy::maximumSessionDecodedBytes)) ||
@@ -1046,8 +1122,7 @@ bool SkinResourceSessionAccounting::addAtlas(
                  skinResourceLimit(safetyPolicy_,
                                    SkinResourcePolicy::maximumAtlases)) ||
       !addWithin(next.atlasBytes_, decodedBytes,
-                 skinResourceLimit(safetyPolicy_,
-                                   SkinResourcePolicy::maximumAtlasSessionBytes)) ||
+                 maximumAtlasSessionBytes(safetyPolicy_)) ||
       !addWithin(next.decodedBytes_, decodedBytes,
                  skinResourceLimit(safetyPolicy_,
                                    SkinResourcePolicy::maximumSessionDecodedBytes)) ||
@@ -1945,10 +2020,11 @@ SkinResourceValidationResult SkinResourcePreparationService::validateResources(
   for (const auto &request : fontRequests) {
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
     SkinResourceSessionAccounting fontSession = session;
+    BitmapFontAccountingIdentities requestAccounting;
     const auto built = prepareFontAtlas(
         atlasId, request, input.fileSystem, fontSession, result.diagnostics,
         [this, &input] { return cancellationRequested(input.stop); },
-        input.safetyPolicy, input.stop, bitmapFontCache);
+        input.safetyPolicy, input.stop, bitmapFontCache, requestAccounting);
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
     if (!built) continue;
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
@@ -1962,6 +2038,7 @@ SkinResourceValidationResult SkinResourcePreparationService::validateResources(
       result.diagnostics.push_back(fontDiagnostic(request.font, request.critical, "skin.resource.atlas_limit", "font atlas session aggregate exceeds policy"));
     else {
       session = fontSession;
+      commitBitmapFontAccounting(bitmapFontCache, requestAccounting);
       accountedBitmapPages.insert(delta->bitmapPageKeys.begin(),
                                     delta->bitmapPageKeys.end());
       ++atlasId;
@@ -1971,6 +2048,7 @@ SkinResourceValidationResult SkinResourcePreparationService::validateResources(
     std::lock_guard lock(serviceMutex_);
     if (state_ != State::Running || stop_.stop_requested() ||
         input.stop.stop_requested()) { result.cancelled = true; return result; }
+    recordCommittedEncodedBytes(session.encodedBytes());
     result.valid = std::ranges::none_of(result.diagnostics, [](const SkinDiagnostic &d) { return d.severity == DiagnosticSeverity::Error; });
   }
   return result;
@@ -2174,10 +2252,11 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
   for (const auto &request : fontRequests) {
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
     SkinResourceSessionAccounting fontSession = session;
+    BitmapFontAccountingIdentities requestAccounting;
     const auto built = prepareFontAtlas(
         atlasId, request, input.fileSystem, fontSession, result.diagnostics,
         [this, &input] { return cancellationRequested(input.stop); },
-        input.safetyPolicy, input.stop, bitmapFontCache);
+        input.safetyPolicy, input.stop, bitmapFontCache, requestAccounting);
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
     if (!built) continue;
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
@@ -2195,6 +2274,7 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
       continue;
     }
     session = fontSession;
+    commitBitmapFontAccounting(bitmapFontCache, requestAccounting);
     accountedBitmapPages.insert(delta->bitmapPageKeys.begin(),
                                   delta->bitmapPageKeys.end());
     plan.decodedBytes = session.decodedBytes();
@@ -2209,6 +2289,7 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
     std::lock_guard lock(serviceMutex_);
     if (state_ != State::Running || stop_.stop_requested() ||
         input.stop.stop_requested()) { result.cancelled = true; return result; }
+    recordCommittedEncodedBytes(session.encodedBytes());
     result.plan = std::move(plan);
   }
   return result;

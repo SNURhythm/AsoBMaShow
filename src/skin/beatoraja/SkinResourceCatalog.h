@@ -92,6 +92,9 @@ public:
   [[nodiscard]] std::size_t decodedBytes() const noexcept {
     return decodedBytes_;
   }
+  [[nodiscard]] std::size_t encodedBytes() const noexcept {
+    return encodedBytes_;
+  }
 
 private:
   SkinSafetyPolicy safetyPolicy_;
@@ -128,6 +131,12 @@ skinResourceFontAtlasRequestHighWaterForTesting() noexcept;
 void resetSkinResourcePlatformAssetReadsForTesting() noexcept;
 [[nodiscard]] std::size_t
 skinResourcePlatformAssetReadsForTesting() noexcept;
+void setSkinResourceAccountingLimitsForTesting(
+    std::size_t maximumSessionEncodedBytes,
+    std::size_t maximumAtlasSessionBytes) noexcept;
+void resetSkinResourceAccountingLimitsForTesting() noexcept;
+[[nodiscard]] std::size_t
+skinResourceCommittedEncodedBytesForTesting() noexcept;
 #endif
 
 // The authored rectangle is the stable command-side identity. Resolution is

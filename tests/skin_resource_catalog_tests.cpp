@@ -499,6 +499,156 @@ skin::ValidatedBeatorajaSkinModel singleFontModel(std::string virtualPath,
   return model;
 }
 
+void testBitmapFontEncodedAccountingCommitsWithAtlasTransaction() {
+  namespace fs = std::filesystem;
+  TemporaryDirectory temporary;
+  const fs::path source =
+      temporary.root / "visible" / "BitmapAccountingFixture";
+  const fs::path resources = source / "entry/resources";
+  fs::create_directories(resources);
+  std::ofstream(source / "entry/play.luaskin") << "return {}\n";
+
+  const fs::path fixturePage =
+      fs::path(ASOBMASHOW_SOURCE_DIR) /
+      "tests/fixtures/beatoraja_skin/resources/bitmap-font/page.png";
+  fs::copy_file(fixturePage, resources / "unique.png");
+  fs::copy_file(fixturePage, resources / "shared.png");
+  const std::string uniqueDescriptor =
+      "info face=Unique size=10 padding=0,0,0,0\n"
+      "common lineHeight=12 base=9 scaleW=40 scaleH=20 pages=1\n"
+      "page id=0 file=unique.png\n"
+      "chars count=1\n"
+      "char id=65 x=9 y=0 width=6 height=8 xoffset=1 yoffset=1 "
+      "xadvance=7 page=0 chnl=15\n";
+  const std::string sharedDescriptor =
+      "info face=Shared size=10 padding=0,0,0,0\n"
+      "common lineHeight=12 base=9 scaleW=40 scaleH=20 pages=1\n"
+      "page id=0 file=shared.png\n"
+      "chars count=1\n"
+      "char id=65 x=9 y=0 width=6 height=8 xoffset=1 yoffset=1 "
+      "xadvance=7 page=0 chnl=15\n";
+  std::ofstream(resources / "unique.fnt", std::ios::binary)
+      << uniqueDescriptor;
+  std::ofstream(resources / "shared.fnt", std::ios::binary)
+      << sharedDescriptor;
+
+  const auto package =
+      *skin::normalizePackageId("BitmapAccountingFixture").package;
+  const auto entry =
+      *skin::normalizeEntryPath(package, "entry/play.luaskin").entry;
+  skin::SkinStorageRoots roots{
+      .visiblePackages = temporary.root / "visible",
+      .privateRevisions = temporary.root / "revisions",
+      .privateCatalog = temporary.root / "catalog",
+      .profileOverlays = temporary.root / "overlays",
+      .liveSources = true};
+  auto aliases = skin::createPlatformSkinAliasDetector();
+  skin::SkinTreeSnapshotter snapshotter(roots, *aliases);
+  auto snapshot = snapshotter.snapshot(source, package, {}, {});
+  expect(snapshot.prepared.has_value(),
+         "bitmap accounting fixture creates a live revision");
+  if (!snapshot.prepared) {
+    return;
+  }
+  auto stagedFs = skin::LuaSkinFileSystem::create(
+      {.revision = snapshot.prepared->readView(),
+       .entry = entry,
+       .storageRoots = roots});
+  expect(stagedFs.fileSystem != nullptr,
+         "bitmap accounting fixture creates an entry-aware filesystem");
+  if (!stagedFs.fileSystem) {
+    return;
+  }
+
+  skin::ValidatedBeatorajaSkinModel model;
+  model.model.resources.emplace_back(skin::SkinFontResource{
+      .id = 1,
+      .authoredName = "optional-too-large-atlas",
+      .virtualPath = "resources/unique.fnt",
+      .type = 0,
+      .fallbacks = {{.virtualPath = "resources/shared.fnt", .type = 0}}});
+  model.model.resources.emplace_back(skin::SkinFontResource{
+      .id = 2,
+      .authoredName = "accepted-shared-atlas",
+      .virtualPath = "resources/shared.fnt",
+      .type = 0});
+  model.model.objects.push_back(
+      {.id = 1,
+       .authoredName = "optional-text",
+       .payload = skin::SkinTextObject{
+           .font = 1, .literal = "A", .pointSize = 16},
+       .critical = false});
+  model.model.objects.push_back(
+      {.id = 2,
+       .authoredName = "accepted-text",
+       .payload = skin::SkinTextObject{
+           .font = 2, .literal = "A", .pointSize = 16},
+       .critical = true});
+
+  const std::size_t encodedPageBytes = fs::file_size(fixturePage);
+  const std::size_t firstRequestEncodedBytes =
+      uniqueDescriptor.size() + sharedDescriptor.size() +
+      encodedPageBytes * 2U;
+  const std::size_t committedSharedEncodedBytes =
+      sharedDescriptor.size() + encodedPageBytes;
+  skin::setSkinResourceAccountingLimitsForTesting(
+      firstRequestEncodedBytes, /*maximumAtlasSessionBytes=*/3'200);
+  struct ResetAccountingLimits {
+    ~ResetAccountingLimits() {
+      skin::resetSkinResourceAccountingLimitsForTesting();
+    }
+  } resetAccountingLimits;
+
+  const auto hasAtlasLimit = [](const auto &diagnostics) {
+    return std::ranges::any_of(diagnostics, [](const auto &diagnostic) {
+      return diagnostic.code == "skin.resource.atlas_limit";
+    });
+  };
+  skin::BeatorajaSkinConfiguration configuration;
+  skin::SkinResourcePreparationService service;
+  const auto validation = service.validateResources(
+      {.revision = snapshot.prepared->readView(),
+       .entry = entry,
+       .fileSystem = *stagedFs.fileSystem,
+       .model = model,
+       .configuration = configuration});
+  expect(validation.valid && hasAtlasLimit(validation.diagnostics) &&
+             skin::skinResourceCommittedEncodedBytesForTesting() ==
+                 committedSharedEncodedBytes,
+         "validation discards optional atlas accounting identities and "
+         "charges the later accepted descriptor/page exactly once");
+
+  stagedFs.fileSystem.reset();
+  std::string publishError;
+  auto lease = std::move(*snapshot.prepared).publish(publishError);
+  expect(lease && publishError.empty(),
+         "bitmap accounting fixture publishes after validation");
+  if (!lease) {
+    return;
+  }
+  auto leasedFs = skin::LuaSkinFileSystem::create(
+      {.revision = lease->readView(), .entry = entry, .storageRoots = roots});
+  expect(leasedFs.fileSystem != nullptr,
+         "published bitmap accounting filesystem is available");
+  if (!leasedFs.fileSystem) {
+    return;
+  }
+  auto planned = service.decodeAndPlan(
+      {.revision = lease->clone(),
+       .entry = entry,
+       .fileSystem = *leasedFs.fileSystem,
+       .model = model,
+       .configuration = configuration});
+  expect(planned.plan && hasAtlasLimit(planned.diagnostics) &&
+             planned.plan->atlases.size() == 1 &&
+             !planned.plan->textAtlasesByObject.contains(1) &&
+             planned.plan->textAtlasesByObject.contains(2) &&
+             skin::skinResourceCommittedEncodedBytesForTesting() ==
+                 committedSharedEncodedBytes,
+         "planning publishes only the later aliased atlas and commits its "
+         "descriptor/page encoded bytes exactly once");
+}
+
 void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   namespace fs = std::filesystem;
   TemporaryDirectory temporary;
@@ -1897,6 +2047,7 @@ int main() {
   testSpriteBoundsAndNormalizedGridCells();
   testTextAtlasKeyRejectsNegativePaintExtents();
   testSharedSessionAccountingRejectsDistributedAggregateOverages();
+  testBitmapFontEncodedAccountingCommitsWithAtlasTransaction();
   testSecurePreparationLeaseAliasAndCatalogLifetime();
   if (failures) return 1;
   std::cout << "Skin resource catalog tests passed\n";
