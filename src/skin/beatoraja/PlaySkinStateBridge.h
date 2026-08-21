@@ -101,12 +101,16 @@ struct SetPracticeMenuItem {
   bool increment = true;
 };
 
+struct SetPracticeVisibleItems {
+  int count = 10;
+};
+
 using PersistedSkinConfigurationWrite =
     std::variant<SetSkinOption, SetSkinFilePath, SetSkinOffset>;
 using SkinFrameMutation =
     std::variant<SessionPresentationWrite, PersistedSkinConfigurationWrite,
                  SetSkinAudioVolume, SetPracticeItemScroll,
-                 SetPracticeMenuItem>;
+                 SetPracticeMenuItem, SetPracticeVisibleItems>;
 
 enum class SkinHostCallStatus : std::uint8_t {
   Completed,
@@ -195,6 +199,9 @@ public:
   [[nodiscard]] SkinJudgeStateView judgeState(int) const noexcept override;
   [[nodiscard]] SkinNoteExpansionStateView
   noteExpansionState() const noexcept override;
+  [[nodiscard]] SkinPracticeStateView
+  practiceState() const noexcept override;
+  bool stagePracticeVisibleItemCount(int) override;
   [[nodiscard]] std::span<const SkinDiagnostic> diagnostics() const noexcept;
 
 private:

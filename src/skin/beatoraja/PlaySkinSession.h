@@ -53,6 +53,7 @@ struct PlaySkinSessionContext {
   std::function<void(SkinAudioVolumeWriterTarget, float)> applyAudioVolume;
   std::function<void(float)> applyPracticeItemScroll;
   std::function<void(std::size_t, bool)> applyPracticeMenuItem;
+  std::function<void(int)> applyPracticeVisibleItems;
   std::optional<RuntimeSkinConfigurationSelection> pinnedRuntimeSelection;
   std::stop_token stop;
 };
@@ -86,6 +87,7 @@ struct PlaySkinSessionFrameContext {
   std::function<void(SkinAudioVolumeWriterTarget, float)> applyAudioVolume;
   std::function<void(float)> applyPracticeItemScroll;
   std::function<void(std::size_t, bool)> applyPracticeMenuItem;
+  std::function<void(int)> applyPracticeVisibleItems;
   ISkinGaugeRandomSource *gaugeRandomSource = nullptr;
 };
 

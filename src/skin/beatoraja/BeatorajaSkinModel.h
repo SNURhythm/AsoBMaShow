@@ -526,6 +526,10 @@ struct SkinJudgeObject {
 
 struct SkinBgaObject {};
 
+struct SkinPracticeObject {
+  int visibleItems = 10;
+};
+
 // JsonPlaySkinObjectLoader resolves each pmchara through its named `source`
 // entry and forwards these normalized fields to PomyuCharaLoader. Rendering
 // support is intentionally separate from its timer-cycle authority.
@@ -560,8 +564,8 @@ using SkinObjectPayload =
                  SkinHitErrorVisualizerObject,
                  SkinGaugeObject,
                  SkinNoteObject, SkinCoverObject, SkinJudgeObject,
-                 SkinBgaObject, SkinBuiltinImageObject, SkinPmCharaObject,
-                 SkinBlankObject>;
+                 SkinBgaObject, SkinPracticeObject, SkinBuiltinImageObject,
+                 SkinPmCharaObject, SkinBlankObject>;
 
 struct SkinObjectDefinition {
   SkinObjectId id = 0;

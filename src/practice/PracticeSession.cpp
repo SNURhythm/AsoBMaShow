@@ -95,6 +95,12 @@ void Session::setSkinItemScrollPosition(float position) noexcept {
   }
 }
 
+void Session::setSkinVisibleItemCount(int count) noexcept {
+  if (skinMenu_.has_value()) {
+    skinMenu_->setVisibleItemCount(count);
+  }
+}
+
 bool Session::changeSkinMenuVisibleItem(std::size_t index, bool increment) {
   return skinMenu_.has_value() &&
          skinMenu_->changeVisibleItem(index, increment);

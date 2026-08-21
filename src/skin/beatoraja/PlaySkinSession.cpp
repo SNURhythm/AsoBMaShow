@@ -213,6 +213,7 @@ struct PlaySkinSession::OwnedActivation final {
                   std::function<void(float)> applyPracticeItemScrollValue,
                   std::function<void(std::size_t, bool)>
                       applyPracticeMenuItemValue,
+                  std::function<void(int)> applyPracticeVisibleItemsValue,
                   ViewportSettings viewportSettingsValue,
                   UiLogicalRect safeUiBoundsValue,
                   PlaySkinViewport viewportValue,
@@ -230,6 +231,7 @@ struct PlaySkinSession::OwnedActivation final {
         applyAudioVolume(std::move(applyAudioVolumeValue)),
         applyPracticeItemScroll(std::move(applyPracticeItemScrollValue)),
         applyPracticeMenuItem(std::move(applyPracticeMenuItemValue)),
+        applyPracticeVisibleItems(std::move(applyPracticeVisibleItemsValue)),
         viewportSettings(viewportSettingsValue),
         safeUiBounds(safeUiBoundsValue), viewport(viewportValue),
         safetyPolicy(safetyPolicyValue),
@@ -263,6 +265,7 @@ struct PlaySkinSession::OwnedActivation final {
   std::function<void(SkinAudioVolumeWriterTarget, float)> applyAudioVolume;
   std::function<void(float)> applyPracticeItemScroll;
   std::function<void(std::size_t, bool)> applyPracticeMenuItem;
+  std::function<void(int)> applyPracticeVisibleItems;
   ViewportSettings viewportSettings;
   UiLogicalRect safeUiBounds;
   PlaySkinViewport viewport;
@@ -307,6 +310,7 @@ PlaySkinSession::PlaySkinSession(
                .applyAudioVolume = owned_->applyAudioVolume,
                .applyPracticeItemScroll = owned_->applyPracticeItemScroll,
                .applyPracticeMenuItem = owned_->applyPracticeMenuItem,
+               .applyPracticeVisibleItems = owned_->applyPracticeVisibleItems,
                .gaugeRandomSource = owned_->gaugeRandom.get()},
       touchLayoutRevision_(context_.sessionSerial == 0
                                ? 1
@@ -622,6 +626,7 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
         context.configurationWrites, std::move(context.applyAudioVolume),
         std::move(context.applyPracticeItemScroll),
         std::move(context.applyPracticeMenuItem),
+        std::move(context.applyPracticeVisibleItems),
         context.viewport, context.safeUiBounds, viewport,
         context.safetyPolicy, pomyuMotionCyclesMillis);
     result.session.reset(new PlaySkinSession(std::move(owned)));
@@ -1024,6 +1029,14 @@ PresentationFrameResult PlaySkinSession::render(
     for (const auto &mutation : transaction.committed.orderedMutations) {
       if (const auto *write = std::get_if<SetPracticeMenuItem>(&mutation)) {
         context_.applyPracticeMenuItem(write->visibleIndex, write->increment);
+      }
+    }
+  }
+  if (context_.applyPracticeVisibleItems) {
+    for (const auto &mutation : transaction.committed.orderedMutations) {
+      if (const auto *write =
+              std::get_if<SetPracticeVisibleItems>(&mutation)) {
+        context_.applyPracticeVisibleItems(write->count);
       }
     }
   }

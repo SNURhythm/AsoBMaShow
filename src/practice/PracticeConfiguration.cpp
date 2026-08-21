@@ -198,6 +198,27 @@ void SkinMenuController::refreshInputs(SkinMenuInputs inputs) noexcept {
   inputs_ = std::move(inputs);
 }
 
+void SkinMenuController::setVisibleItemCount(int count) noexcept {
+  visibleItemCount_ = static_cast<std::size_t>(std::clamp(count, 1, 12));
+  std::size_t selectedIndex = 0;
+  for (std::size_t element = 0; element < 12; ++element) {
+    if (!elementAvailable(element)) {
+      continue;
+    }
+    if (element == cursorPosition_) {
+      if (selectedIndex < itemOffset_) {
+        itemOffset_ = selectedIndex;
+      } else if (selectedIndex >= itemOffset_ + visibleItemCount_) {
+        itemOffset_ = selectedIndex - visibleItemCount_ + 1;
+      }
+      itemOffset_ = std::min(itemOffset_, maxItemOffset());
+      return;
+    }
+    ++selectedIndex;
+  }
+  itemOffset_ = std::min(itemOffset_, maxItemOffset());
+}
+
 SkinMenuAttemptPlan
 skinMenuAttemptPlan(const SkinMenuProperty &property) noexcept {
   const long long scale = 100LL;
@@ -324,9 +345,8 @@ float SkinMenuController::itemScrollPosition() const noexcept {
 
 SkinMenuState SkinMenuController::skinMenuState() const {
   SkinMenuState result;
-  const auto set = [&result](std::size_t index, std::string label,
-                             std::string value) {
-    auto &item = result.items[index];
+  const auto set = [](SkinMenuItem &item, std::string label,
+                      std::string value) {
     item.label = std::move(label);
     item.value = std::move(value);
     item.text = item.label + " : " + item.value;
@@ -378,12 +398,31 @@ SkinMenuState SkinMenuController::skinMenuState() const {
   };
 
   result.itemScrollPosition = itemScrollPosition();
-  for (std::size_t index = 0; index < 10; ++index) {
+  result.visibleItemCount = visibleItemCount_;
+  result.cursorPosition = cursorPosition_;
+  result.keyMode = inputs_.keyMode;
+  result.graphType = property_.graphType;
+  result.startTimeMillis = property_.startTimeMillis;
+  result.endTimeMillis = property_.endTimeMillis;
+  result.frequencyPercent = property_.frequencyPercent;
+  result.horizontalInputMode = inputs_.horizontalInputMode;
+  result.inputTurbo = inputs_.inputTurbo;
+  for (std::size_t element = 0; element < result.legacyItems.size(); ++element) {
+    if (!elementAvailable(element)) {
+      continue;
+    }
+    auto &item = result.legacyItems[element];
+    set(item, std::string(elementLabel(element)), elementValue(element));
+    item.available = true;
+    item.selected = element == cursorPosition_;
+  }
+  for (std::size_t index = 0; index < visibleItemCount_; ++index) {
     const auto element = visible(index);
     if (!element.has_value()) {
       continue;
     }
-    set(index, std::string(elementLabel(*element)), elementValue(*element));
+    set(result.items[index], std::string(elementLabel(*element)),
+        elementValue(*element));
     result.items[index].available = true;
     result.items[index].selected = *element == cursorPosition_;
   }
@@ -515,7 +554,7 @@ bool SkinMenuController::elementAvailable(std::size_t element) const noexcept {
 
 std::optional<std::size_t>
 SkinMenuController::visibleElement(std::size_t index) const noexcept {
-  if (index >= 10) {
+  if (index >= visibleItemCount_) {
     return std::nullopt;
   }
   std::size_t availableIndex = itemOffset_ + index;
@@ -532,7 +571,9 @@ std::size_t SkinMenuController::availableElementCount() const noexcept {
 }
 
 std::size_t SkinMenuController::maxItemOffset() const noexcept {
-  return availableElementCount() - 10;
+  return availableElementCount() > visibleItemCount_
+             ? availableElementCount() - visibleItemCount_
+             : 0;
 }
 
 void SkinMenuController::synchronizeConfiguration() noexcept {

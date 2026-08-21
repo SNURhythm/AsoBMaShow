@@ -81,11 +81,23 @@ struct SkinMenuInputs {
   int random1P = 0;
   int random2P = 0;
   int doublePlay = 0;
+  bool horizontalInputMode = false;
+  bool inputTurbo = false;
 };
 
 struct SkinMenuState {
   std::array<SkinMenuItem, 16> items;
   float itemScrollPosition = 0.0F;
+  std::size_t visibleItemCount = 10;
+  std::array<SkinMenuItem, 12> legacyItems;
+  std::size_t cursorPosition = 0;
+  int keyMode = 0;
+  int graphType = 0;
+  int startTimeMillis = 0;
+  int endTimeMillis = 10'000;
+  int frequencyPercent = 100;
+  bool horizontalInputMode = false;
+  bool inputTurbo = false;
 };
 
 // PracticeConfiguration.PracticeProperty retains values that are not present
@@ -144,6 +156,7 @@ public:
   SkinMenuController(Configuration, SkinMenuInputs);
 
   void refreshInputs(SkinMenuInputs) noexcept;
+  void setVisibleItemCount(int) noexcept;
   void setItemScrollPosition(float) noexcept;
   [[nodiscard]] float itemScrollPosition() const noexcept;
   [[nodiscard]] SkinMenuState skinMenuState() const;
@@ -166,6 +179,7 @@ private:
   SkinMenuProperty property_;
   std::size_t cursorPosition_ = 0;
   std::size_t itemOffset_ = 0;
+  std::size_t visibleItemCount_ = 10;
 };
 
 [[nodiscard]] SkinMenuState buildSkinMenuState(const Configuration &,

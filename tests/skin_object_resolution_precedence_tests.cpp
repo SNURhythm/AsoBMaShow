@@ -187,8 +187,9 @@ void testGameplaySpecialChainUsesPinnedOrder() {
       candidate(SkinObjectResolutionKind::Note, 1),
       candidate(SkinObjectResolutionKind::HiddenCover, 2),
       candidate(SkinObjectResolutionKind::LiftCover, 3),
-      candidate(SkinObjectResolutionKind::Bga, 4),
-      candidate(SkinObjectResolutionKind::Judge, 5),
+      candidate(SkinObjectResolutionKind::Practice, 4),
+      candidate(SkinObjectResolutionKind::Bga, 5),
+      candidate(SkinObjectResolutionKind::Judge, 6),
   };
   expectFound(resolveSkinObjectPrecedence(candidates),
               SkinObjectResolutionKind::Note, 1,
@@ -205,13 +206,12 @@ void testGameplaySpecialChainUsesPinnedOrder() {
   }
 }
 
-void testUnsupportedAndNotFoundStayDistinct() {
-  const std::array unsupported{candidate(SkinObjectResolutionKind::Practice, 7)};
-  const auto unsupportedResult = resolveSkinObjectPrecedence(unsupported);
-  expect(unsupportedResult.status == SkinObjectResolutionStatus::Unsupported &&
-             unsupportedResult.kind == SkinObjectResolutionKind::Practice &&
-             unsupportedResult.authoredIndex == 7,
-         "an unsupported pinned definition is distinct from no match");
+void testPracticeIsSupportedAndNotFoundStaysDistinct() {
+  const std::array practice{candidate(SkinObjectResolutionKind::Practice, 7)};
+  expectFound(resolveSkinObjectPrecedence(practice),
+              SkinObjectResolutionKind::Practice, 7,
+              "the pinned practice definition is a supported gameplay "
+              "special");
 
   const std::array<SkinObjectResolutionCandidate, 1> unmatched{{
       {.kind = SkinObjectResolutionKind::Image, .authoredIndex = 1, .matches = false},
@@ -253,7 +253,7 @@ int main() {
   testFirstAuthoredMatchWinsWithinPinnedLoops();
   testEveryGenericPreemptsEveryGameplaySpecial();
   testGameplaySpecialChainUsesPinnedOrder();
-  testUnsupportedAndNotFoundStayDistinct();
+  testPracticeIsSupportedAndNotFoundStaysDistinct();
   testGaugeGraphIsSupportedAndPreemptsLaterSpecial();
   testCandidateLimitFailsBeforeResolution();
   return failures == 0 ? 0 : 1;

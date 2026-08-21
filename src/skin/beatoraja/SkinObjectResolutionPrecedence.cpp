@@ -76,12 +76,11 @@ resultFor(const SkinObjectResolutionCandidate &candidate) {
     case Kind::Note:
     case Kind::HiddenCover:
     case Kind::LiftCover:
+    case Kind::Practice:
     case Kind::Bga:
     case Kind::Judge:
     case Kind::PmChara:
       return false;
-    case Kind::Practice:
-      return true;
     }
     return true;
   }();

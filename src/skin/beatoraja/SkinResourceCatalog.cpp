@@ -14,6 +14,7 @@
 #include <limits>
 #include <functional>
 #include <filesystem>
+#include <fstream>
 #include <set>
 #include <tuple>
 #include <type_traits>
@@ -35,6 +36,13 @@ bool skinResourcePathIsMovie(std::string_view path) noexcept {
 }
 
 namespace {
+constexpr SkinResourceId kPracticeSystemFontResource =
+    std::numeric_limits<SkinResourceId>::max();
+constexpr std::string_view kPracticeSystemFontVirtualPath =
+    "@asobmashow/practice-system-font";
+constexpr std::string_view kPracticeSystemFontPath =
+    "assets/fonts/notosanscjkjp.ttf";
+
 SkinDiagnostic diagnostic(std::string code, std::string message) { return {.code=std::move(code), .message=std::move(message), .severity=DiagnosticSeverity::Error}; }
 SkinDiagnostic warning(std::string code, std::string message) { return {.code=std::move(code), .message=std::move(message), .severity=DiagnosticSeverity::Warning}; }
 
@@ -106,11 +114,24 @@ CollectedResourceUses collectResourceUses(const ValidatedBeatorajaSkinModel &mod
   std::map<SkinObjectId, const SkinObjectDefinition *> objects;
   std::set<SkinObjectId> disabled(model.disabledOptionalObjects.begin(), model.disabledOptionalObjects.end());
   for (const auto &object : model.model.objects) objects.emplace(object.id, &object);
+  const bool modelHasPracticeObject = std::ranges::any_of(
+      model.model.objects, [](const SkinObjectDefinition &object) {
+        return std::holds_alternative<SkinPracticeObject>(object.payload);
+      });
   std::set<SkinObjectId> visited;
   const auto addSprite = [&](const SkinSpriteFrames &sprite, bool critical) {
     auto &use = result.images[sprite.resource];
     use.critical = use.critical || critical;
     use.regions.insert(use.regions.end(), sprite.frames.begin(), sprite.frames.end());
+  };
+  const auto addPracticeText = [&](SkinObjectId object) {
+    result.fonts[kPracticeSystemFontResource] = false;
+    result.texts.push_back(
+        {.object = object,
+         .key = {.font = kPracticeSystemFontResource, .pointSize = 18},
+         .literal = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789:#/=-,.+",
+         .receivesRuntimeStrings = false,
+         .critical = false});
   };
   std::function<void(SkinObjectId, bool)> visit = [&](SkinObjectId id, bool critical) {
     if (disabled.contains(id) || !visited.insert(id).second) return;
@@ -128,6 +149,14 @@ CollectedResourceUses collectResourceUses(const ValidatedBeatorajaSkinModel &mod
                                      .shadowRgba=object.shadowRgba, .shadowOffsetX=object.shadowOffsetX,
                                      .shadowOffsetY=object.shadowOffsetY, .shadowSmoothness=object.shadowSmoothness},
                                 .literal=object.literal, .receivesRuntimeStrings=object.value.has_value() || object.writer.has_value(), .critical=critical});
+      }
+      else if constexpr (std::is_same_v<T, SkinPracticeObject>) {
+        addPracticeText(found->second->id);
+      }
+      else if constexpr (std::is_same_v<T, SkinBgaObject>) {
+        if (!modelHasPracticeObject) {
+          addPracticeText(found->second->id);
+        }
       }
       else if constexpr (std::is_same_v<T, SkinSliderObject>) addSprite(object.knob, critical);
       else if constexpr (std::is_same_v<T, SkinGraphObject>) addSprite(object.fill, critical);
@@ -394,6 +423,16 @@ std::vector<FontAtlasRequest> collectFontAtlasRequests(
                            .fallbacks = font->fallbacks});
     }
   }
+  if (uses.fonts.contains(kPracticeSystemFontResource)) {
+    resources.emplace(
+        kPracticeSystemFontResource,
+        FontResourceView{.id = kPracticeSystemFontResource,
+                         .name = "practice-system-font",
+                         .virtualPath = kPracticeSystemFontVirtualPath,
+                         .type = 0,
+                         .authoredOrdinal =
+                             std::numeric_limits<std::uint32_t>::max()});
+  }
   std::map<SkinTextAtlasKey, FontAtlasRequest> requests;
   for (const auto &text : uses.texts) {
     const auto found = resources.find(text.key.font);
@@ -410,6 +449,17 @@ std::vector<FontAtlasRequest> collectFontAtlasRequests(
     const auto addResolved = [&](std::string_view path, int type,
                                  int originalSize = 0) {
       if (!digestWithinPolicy) return;
+      if (path == kPracticeSystemFontVirtualPath) {
+        digestWithinPolicy = appendStableFallbackChainEntry(
+            digest, kPracticeSystemFontVirtualPath, type, safetyPolicy);
+        if (digestWithinPolicy) {
+          resolvedFaces.push_back(
+              {.path = std::string(kPracticeSystemFontVirtualPath),
+               .type = type,
+               .originalSize = originalSize});
+        }
+        return;
+      }
       const auto configured = applyConfiguredFileSelection(
           path, configuration, safetyPolicy);
       if (!configured.path) { resolved = false; return; }
@@ -509,8 +559,13 @@ std::optional<std::vector<SkinTextAtlasFontBytes>> readFontFaces(
   std::vector<SkinTextAtlasFontBytes> faces;
   for (const auto &face : request.resolvedFaces) {
     if (cancellationRequested()) return std::nullopt;
-    const std::string extension =
-        std::filesystem::path(face.path).extension().string();
+    const bool practiceSystemFont =
+        face.path == kPracticeSystemFontVirtualPath;
+    const std::string extension = practiceSystemFont
+                                      ? ".ttf"
+                                      : std::filesystem::path(face.path)
+                                            .extension()
+                                            .string();
     std::string lowerExtension;
     lowerExtension.reserve(extension.size());
     for (const char character : extension) lowerExtension.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(character))));
@@ -519,21 +574,50 @@ std::optional<std::vector<SkinTextAtlasFontBytes>> readFontFaces(
       return std::nullopt;
     }
     if (cancellationRequested()) return std::nullopt;
-    const auto read = files.readResolvedResource(
-        face.path, skinResourceLimit(safetyPolicy,
-                                SkinResourcePolicy::maximumEncodedBytes));
-    if (cancellationRequested()) return std::nullopt;
-    if (read.failure) {
-      diagnostics.push_back(fontDiagnostic(request.font, request.critical, "skin.resource.font_missing", "font bytes are unavailable"));
-      return std::nullopt;
+    std::vector<std::byte> encoded;
+    if (practiceSystemFont) {
+      std::ifstream input(std::string(kPracticeSystemFontPath),
+                          std::ios::binary | std::ios::ate);
+      const auto size = input ? input.tellg() : std::streampos{-1};
+      if (size < 0 ||
+          static_cast<std::uint64_t>(size) >
+              skinResourceLimit(safetyPolicy,
+                                SkinResourcePolicy::maximumEncodedBytes)) {
+        diagnostics.push_back(fontDiagnostic(
+            request.font, request.critical, "skin.resource.font_missing",
+            "practice system-font bytes are unavailable"));
+        return std::nullopt;
+      }
+      encoded.resize(static_cast<std::size_t>(size));
+      input.seekg(0);
+      input.read(reinterpret_cast<char *>(encoded.data()),
+                 static_cast<std::streamsize>(encoded.size()));
+      if (!input) {
+        diagnostics.push_back(fontDiagnostic(
+            request.font, request.critical, "skin.resource.font_missing",
+            "practice system-font bytes are unavailable"));
+        return std::nullopt;
+      }
+    } else {
+      const auto read = files.readResolvedResource(
+          face.path, skinResourceLimit(safetyPolicy,
+                                  SkinResourcePolicy::maximumEncodedBytes));
+      if (read.failure) {
+        diagnostics.push_back(fontDiagnostic(request.font, request.critical,
+                                              "skin.resource.font_missing",
+                                              "font bytes are unavailable"));
+        return std::nullopt;
+      }
+      encoded = read.bytes;
     }
+    if (cancellationRequested()) return std::nullopt;
     if (!session.addImage(/*physicalResources=*/0, /*logicalResources=*/0,
-                          read.bytes.size(), /*decodedBytes=*/0,
+                          encoded.size(), /*decodedBytes=*/0,
                           /*regions=*/0)) {
       diagnostics.push_back(fontDiagnostic(request.font, request.critical, "skin.resource.encoded_limit", "font encoded bytes exceed session policy"));
       return std::nullopt;
     }
-    faces.push_back({.encoded=read.bytes});
+    faces.push_back({.encoded=std::move(encoded)});
   }
   return faces;
 }

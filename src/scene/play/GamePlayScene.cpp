@@ -326,6 +326,21 @@ std::string formatPracticeTime(long long micros) {
   return stream.str();
 }
 
+std::pair<bool, bool> practiceLegacyInputState(
+    const std::unordered_map<int, bool> &lanePressed, int keyMode) {
+  const auto pressed = [&lanePressed](int index) {
+    const auto found = lanePressed.find(index);
+    return found != lanePressed.end() && found->second;
+  };
+  if (keyMode == 9) {
+    return {false, pressed(4)};
+  }
+  const bool baseTurbo = pressed(3);
+  const bool turbo = baseTurbo || (keyMode == 14 && pressed(12)) ||
+                     ((keyMode == 24 || keyMode == 48) && pressed(8));
+  return {pressed(1) || baseTurbo, turbo};
+}
+
 void markPracticeSkippedNote(bms_parser::Note *note, long long startTime) {
   if (note == nullptr) {
     return;
@@ -1482,6 +1497,11 @@ void GamePlayScene::acquireGameplaySkinForAttempt() {
       (void)options.practiceSession->changeSkinMenuVisibleItem(index, increment);
     }
   };
+  services.applyPracticeVisibleItems = [this](int count) {
+    if (options.practiceSession != nullptr) {
+      options.practiceSession->setSkinVisibleItemCount(count);
+    }
+  };
   auto result = createGameplaySkinSession(std::move(services), {
       .keyMode = chart->Meta.KeyMode,
       .chartModel = &playfieldChartVisualModel,
@@ -1530,7 +1550,14 @@ bool GamePlayScene::enterPracticeMenu() {
        .keyMode = playfieldChartVisualModel.keyCount,
        .random1P = gameplayRandomOptionIndex(options.playOption),
        .random2P = gameplayRandomOptionIndex(options.playOption2),
-       .doublePlay = options.doublePlayFlip ? 1 : 0});
+       .doublePlay = options.doublePlayFlip ? 1 : 0,
+       .horizontalInputMode =
+           practiceLegacyInputState(lanePressed,
+                                    playfieldChartVisualModel.keyCount)
+               .first,
+       .inputTurbo = practiceLegacyInputState(
+                         lanePressed, playfieldChartVisualModel.keyCount)
+                         .second});
   ownedState = std::make_unique<RhythmState>(chart, false,
                                              rulesetPolicyBuild.policy->gauge);
   state = ownedState.get();
@@ -4969,7 +4996,15 @@ void GamePlayScene::capturePlayfieldVisualState(
                  .keyMode = playfieldChartVisualModel.keyCount,
                  .random1P = gameplayRandomOptionIndex(playOptions.option),
                  .random2P = gameplayRandomOptionIndex(playOptions.option2),
-                 .doublePlay = options.doublePlayFlip ? 1 : 0})};
+                 .doublePlay = options.doublePlayFlip ? 1 : 0,
+                 .horizontalInputMode =
+                     practiceLegacyInputState(
+                         lanePressed, playfieldChartVisualModel.keyCount)
+                         .first,
+                 .inputTurbo = practiceLegacyInputState(
+                                   lanePressed,
+                                   playfieldChartVisualModel.keyCount)
+                                   .second})};
       }(),
   };
   playfieldVisualStateStore->applyAuthorityUpdate(authority);

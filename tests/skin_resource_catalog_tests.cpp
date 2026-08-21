@@ -579,6 +579,28 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   auto leasedFs = skin::LuaSkinFileSystem::create({.revision=lease->readView(), .entry=entry, .storageRoots=roots});
   expect(leasedFs.fileSystem != nullptr, "published resource filesystem is available");
   if (!leasedFs.fileSystem) return;
+  skin::ValidatedBeatorajaSkinModel practiceModel;
+  practiceModel.model.objects.push_back(
+      {.id = 15,
+       .authoredName = "practice",
+       .payload = skin::SkinPracticeObject{.visibleItems = 0},
+       .critical = false});
+  auto practicePlan = service.decodeAndPlan(
+      {.revision = lease->clone(),
+       .entry = entry,
+       .fileSystem = *leasedFs.fileSystem,
+       .model = practiceModel,
+       .configuration = configuration});
+  expect(practicePlan.plan && practicePlan.plan->atlases.size() == 1 &&
+             practicePlan.plan->textAtlasesByObject.size() == 1 &&
+             practicePlan.plan->textAtlasesByObject.contains(15) &&
+             practicePlan.plan->atlases.front().key.pointSize == 18 &&
+             practicePlan.plan->atlases.front().glyphs.contains(U'A') &&
+             practicePlan.plan->atlases.front().glyphs.contains(U'0') &&
+             practicePlan.plan->atlases.front().glyphs.contains(U'#'),
+         "legacy SkinPractice prepares one fixed system-font atlas with its "
+         "complete source text domain before frame evaluation");
+  practicePlan.plan.reset();
   expect(skin::skinResourcePathIsMovie("skin/source.MP4") &&
              skin::skinResourcePathIsMovie("skin/source.m4v") &&
              skin::skinResourcePathIsMovie("skin/source.WMV") &&

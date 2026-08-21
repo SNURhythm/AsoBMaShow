@@ -2477,6 +2477,43 @@ return {
          "object path instead of rejecting the gameplay skin");
 }
 
+void testPracticeObjectClampsVisibleItemsAndKeepsItsDestination() {
+  const auto decode = [](int visibleItems) {
+    return decodeInlineModel(
+        "return {type=0,w=1280,h=720,practice={id='practice',visibleItems=" +
+        std::to_string(visibleItems) +
+        "},destination={{id='practice',dst={{x=80,y=40,w=800,h=640}}}}}");
+  };
+  const auto below = decode(-7);
+  const auto zero = decode(0);
+  const auto above = decode(99);
+  const auto defaults = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  practice={id='practice'},
+  destination={{id='practice',dst={{x=80,y=40,w=800,h=640}}}}
+}
+)lua");
+  const auto practice = [](const BeatorajaSkinModelDecodeResult &decoded) {
+    if (!decoded.model) {
+      return static_cast<const SkinPracticeObject *>(nullptr);
+    }
+    const auto *definition = findObject(*decoded.model, "practice");
+    return definition != nullptr
+               ? std::get_if<SkinPracticeObject>(&definition->payload)
+               : nullptr;
+  };
+  expect(practice(below) != nullptr && practice(below)->visibleItems == 0 &&
+             practice(zero) != nullptr && practice(zero)->visibleItems == 0 &&
+             practice(above) != nullptr &&
+             practice(above)->visibleItems == 16 &&
+             practice(defaults) != nullptr &&
+             practice(defaults)->visibleItems == 10 && above.model &&
+             above.model->destinations.size() == 1,
+         "SkinPractice clamps visibleItems to 0..16 and remains the typed "
+         "owner of its authored destination");
+}
+
 } // namespace
 
 int main() {
@@ -2518,6 +2555,7 @@ int main() {
   testPomyuCharaCycleExtractionFollowsPinnedLoaderOrder();
   testPomyuCharaCycleExtractionBoundsHostileFields();
   testPomyuCharaDefinitionPreservesPinnedSourceFields();
+  testPracticeObjectClampsVisibleItemsAndKeepsItsDestination();
   if (failures != 0) {
     std::cerr << failures << " assertion(s) failed\n";
     return 1;

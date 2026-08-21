@@ -3587,6 +3587,64 @@ PlaySkinStateBridge::noteExpansionState() const noexcept {
   return {};
 }
 
+SkinPracticeStateView PlaySkinStateBridge::practiceState() const noexcept {
+  const auto *snapshot = state();
+  if (snapshot == nullptr || !snapshot->authority.practiceMenu.has_value()) {
+    return {};
+  }
+  const auto &menu = *snapshot->authority.practiceMenu;
+  SkinPracticeStateView result{
+      .supported = true,
+      .active = snapshot->authority.practiceMenuActive,
+      .practiceMode = snapshot->authority.gameplayMode ==
+                      PlayfieldGameplayMode::Practice,
+      .mediaReady = snapshot->authority.loadingState ==
+                    PlayfieldLoadingState::Loaded,
+      .horizontalInputMode = menu.horizontalInputMode,
+      .inputTurbo = menu.inputTurbo,
+      .keyMode = context_.chartModel.keyCount,
+      .cursorPosition = menu.cursorPosition,
+      .graphType = menu.graphType,
+      .startTimeMillis = menu.startTimeMillis,
+      .endTimeMillis = menu.endTimeMillis,
+      .frequencyPercent = menu.frequencyPercent,
+  };
+  for (std::size_t index = 0; index < result.items.size(); ++index) {
+    const auto &item = menu.legacyItems[index];
+    result.items[index] = {.available = item.available,
+                           .label = item.label,
+                           .value = item.value};
+  }
+  constexpr std::array<Judgement, 6> judgements{
+      PGreat, Great, Good, Bad, Poor, Kpoor};
+  for (std::size_t index = 0; index < judgements.size(); ++index) {
+    result.judgeCounts[index] = {
+        .fast = capturedJudgeFastSlowCount(*snapshot, judgements[index], true),
+        .slow = capturedJudgeFastSlowCount(*snapshot, judgements[index], false)};
+  }
+  return result;
+}
+
+bool PlaySkinStateBridge::stagePracticeVisibleItemCount(int count) {
+  if (phase_ != FramePhase::Active || count < 1 || count > 16) {
+    return false;
+  }
+  const auto *snapshot = state();
+  if (snapshot == nullptr || !snapshot->authority.practiceMenu.has_value()) {
+    return true;
+  }
+  try {
+    staged_.orderedMutations.emplace_back(
+        SetPracticeVisibleItems{.count = count});
+  } catch (...) {
+    reportDiagnostic({.code = "skin.play_state.mutation_limit_exceeded",
+                      .message = "Practice visible-row count could not be "
+                                 "staged."});
+    return false;
+  }
+  return true;
+}
+
 std::span<const SkinDiagnostic>
 PlaySkinStateBridge::diagnostics() const noexcept {
   return diagnostics_;

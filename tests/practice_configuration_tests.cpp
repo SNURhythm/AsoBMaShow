@@ -246,6 +246,51 @@ void testPracticeSessionUsesRetainedSkinMenuController() {
          "practice session retains the controller's selected DP row");
 }
 
+void testSkinMenuVisibleCountRetainsAndClampsTheSourceViewport() {
+  practice::SkinMenuController menu(
+      {.startMicros = 0, .endMicros = 90'000'000},
+      {.lastTimelineMicros = 90'000'000,
+       .judgeRank = 100,
+       .chartTotal = 200.0,
+       .keyMode = 14,
+       .horizontalInputMode = true,
+       .inputTurbo = true});
+
+  menu.setVisibleItemCount(3);
+  auto state = menu.skinMenuState();
+  expect(state.visibleItemCount == 3 && state.items[0].available &&
+             state.items[2].available && !state.items[3].available &&
+             state.horizontalInputMode && state.inputTurbo,
+         "a positive SkinPractice count updates the retained three-row "
+         "viewport");
+
+  menu.setVisibleItemCount(10);
+  expect(menu.changeVisibleItem(9, true),
+         "the source cursor can select the last initial row");
+  menu.setVisibleItemCount(3);
+  state = menu.skinMenuState();
+  expect(state.items[0].label == "FREQUENCY" &&
+             state.items[2].label == "OPTION-1P" &&
+             state.items[2].selected,
+         "shrinking the practice viewport scrolls to retain the source "
+         "cursor instead of replacing its selection");
+
+  menu.setItemScrollPosition(1.0F);
+  state = menu.skinMenuState();
+  expect(state.items[0].label == "OPTION-1P" &&
+             state.items[2].label == "OPTION-DP",
+         "the smaller retained viewport recomputes its source maximum "
+         "offset");
+
+  menu.setVisibleItemCount(16);
+  state = menu.skinMenuState();
+  expect(state.visibleItemCount == 12 && state.items[0].label == "START TIME" &&
+             state.items[11].label == "OPTION-DP" &&
+             !state.items[12].available,
+         "PracticeConfiguration clamps a positive skin viewport to its "
+         "twelve source elements and keeps the selected row visible");
+}
+
 void testSkinMenuPropertyProducesPinnedAttemptPlan() {
   practice::Configuration configuration{
       .startMicros = 2'000'000,
@@ -757,6 +802,7 @@ int main() {
   testSkinMenuControllerRetainsSourceRowsAndActions();
   testSkinMenuControllerUsesPinnedRowDomains();
   testPracticeSessionUsesRetainedSkinMenuController();
+  testSkinMenuVisibleCountRetainsAndClampsTheSourceViewport();
   testSkinMenuPropertyProducesPinnedAttemptPlan();
   testSkinMenuAttemptPlanMovesOutOfRangeNotesToBackground();
   testSkinMenuAttemptPlanMovesBothCrossingLongNoteEndpoints();

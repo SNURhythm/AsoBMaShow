@@ -144,6 +144,34 @@ struct SkinNoteExpansionStateView {
   std::int64_t elapsedSinceQuarterNoteMillis = 0;
 };
 
+struct SkinPracticeMenuItemView {
+  bool available = false;
+  std::string_view label;
+  std::string_view value;
+};
+
+struct SkinPracticeJudgeCountView {
+  std::int64_t fast = 0;
+  std::int64_t slow = 0;
+};
+
+struct SkinPracticeStateView {
+  bool supported = false;
+  bool active = false;
+  bool practiceMode = false;
+  bool mediaReady = false;
+  bool horizontalInputMode = false;
+  bool inputTurbo = false;
+  int keyMode = 0;
+  std::array<SkinPracticeMenuItemView, 12> items;
+  std::size_t cursorPosition = 0;
+  int graphType = 0;
+  int startTimeMillis = 0;
+  int endTimeMillis = 10'000;
+  int frequencyPercent = 100;
+  std::array<SkinPracticeJudgeCountView, 6> judgeCounts;
+};
+
 class ISkinFrameState {
 public:
   virtual ~ISkinFrameState() = default;
@@ -178,6 +206,11 @@ public:
   virtual SkinGaugeStateView gaugeState() const noexcept = 0;
   virtual SkinJudgeStateView judgeState(int player) const noexcept = 0;
   virtual SkinNoteExpansionStateView noteExpansionState() const noexcept = 0;
+  [[nodiscard]] virtual SkinPracticeStateView
+  practiceState() const noexcept {
+    return {};
+  }
+  virtual bool stagePracticeVisibleItemCount(int) { return false; }
 };
 
 class ISkinGaugeRandomSource {

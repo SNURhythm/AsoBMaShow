@@ -39,6 +39,7 @@ struct GameplaySkinSessionServices {
       applyAudioVolume;
   std::function<void(float)> applyPracticeItemScroll;
   std::function<void(std::size_t, bool)> applyPracticeMenuItem;
+  std::function<void(int)> applyPracticeVisibleItems;
 
 #if defined(ASOBMASHOW_GAMEPLAY_SKIN_SESSION_FACTORY_TESTING)
   std::function<skin::PlaySkinSessionCreateResult(skin::ValidatedSkinActivation,

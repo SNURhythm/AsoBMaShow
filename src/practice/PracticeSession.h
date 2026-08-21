@@ -29,6 +29,7 @@ public:
   void beginSkinMenuAttempt(const SkinMenuAttemptPlan &);
   [[nodiscard]] bool hasActivatedSkinMenuAttempt() const noexcept;
   void setSkinItemScrollPosition(float position) noexcept;
+  void setSkinVisibleItemCount(int count) noexcept;
   [[nodiscard]] bool changeSkinMenuVisibleItem(std::size_t index,
                                                bool increment);
   [[nodiscard]] SkinMenuState skinMenuState() const;

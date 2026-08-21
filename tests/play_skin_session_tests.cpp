@@ -1552,6 +1552,9 @@ return {
         },
         .applyPracticeMenuItem = [this](std::size_t index, bool increment) {
           practiceMenuItemWrites_.emplace_back(index, increment);
+        },
+        .applyPracticeVisibleItems = [this](int count) {
+          practiceVisibleItemWrites_.push_back(count);
         }});
   }
 
@@ -1580,6 +1583,9 @@ return {
   const std::vector<std::pair<std::size_t, bool>> &practiceMenuItemWrites()
       const {
     return practiceMenuItemWrites_;
+  }
+  const std::vector<int> &practiceVisibleItemWrites() const {
+    return practiceVisibleItemWrites_;
   }
 
   void addBgaMarker(std::uint32_t ordinal = 90) {
@@ -1770,6 +1776,7 @@ private:
       audioVolumeWrites_;
   std::vector<float> practiceItemScrollWrites_;
   std::vector<std::pair<std::size_t, bool>> practiceMenuItemWrites_;
+  std::vector<int> practiceVisibleItemWrites_;
   std::unique_ptr<PlaySkinStateBridge> bridge_;
   std::unique_ptr<PlaySkinSession> session_;
 };
@@ -2690,6 +2697,31 @@ void testPracticeMenuItemMutationAppliesOnlyAfterSkinSubmission() {
          "once");
 }
 
+void testPracticeVisibleItemsMutationAppliesOnlyAfterSkinSubmission() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addBgaMarker();
+  const std::vector<SkinFrameMutation> writes{
+      SetPracticeVisibleItems{.count = 7},
+  };
+  expect(fixture.session().prepareFrameForTesting(
+             stateAt(1), projectionAt(1), {}, writes) ==
+             PresentationFrameOutcome::Ready &&
+             fixture.practiceVisibleItemWrites().empty(),
+         "practice visible-row count remains staged until the skin frame "
+         "submits");
+
+  SessionBgaSubmitter bga;
+  RenderContext context;
+  const auto result = fixture.session().render(context, bgaFrame(85), bga);
+  expect(result.outcome == PresentationFrameOutcome::Ready &&
+             fixture.practiceVisibleItemWrites() == std::vector<int>{7},
+         "submitted skin frame applies the SkinPractice visible-row count "
+         "exactly once");
+}
+
 void testPersistenceRequestIsFullyAllocatedBeforeSkinSubmission() {
   SessionFixture fixture;
   if (!fixture.ready()) {
@@ -3328,6 +3360,7 @@ int main() {
   testAudioVolumeMutationAppliesOnlyAfterSkinSubmission();
   testPracticeScrollMutationAppliesOnlyAfterSkinSubmission();
   testPracticeMenuItemMutationAppliesOnlyAfterSkinSubmission();
+  testPracticeVisibleItemsMutationAppliesOnlyAfterSkinSubmission();
   testPersistenceRequestIsFullyAllocatedBeforeSkinSubmission();
   testQueueFullAndClosedAreRecoverableOnlyAfterSuccessfulSkinDraw();
   testTouchCaptureLifecycleFailsClosedAndQueuesOnlyDown();

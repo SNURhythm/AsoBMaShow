@@ -374,6 +374,13 @@ public:
     ++noteExpansionCalls;
     return noteExpansionResult;
   }
+  SkinPracticeStateView practiceState() const noexcept override {
+    return practiceResult;
+  }
+  bool stagePracticeVisibleItemCount(int count) override {
+    stagedPracticeVisibleItemCount = count;
+    return stagePracticeVisibleItemCountResult;
+  }
   std::uint64_t frameSerial() const noexcept override { return capturedSerial; }
 
   std::vector<SkinProjectedNoteView> notes;
@@ -383,6 +390,7 @@ public:
   SkinGaugeStateView gaugeResult;
   SkinJudgeStateView judgeResult;
   SkinNoteExpansionStateView noteExpansionResult;
+  SkinPracticeStateView practiceResult;
   SkinLaneCoverStateView laneCoverResult;
   SkinPropertyLookup<bool> booleanResult;
   SkinPropertyLookup<std::int64_t> integerResult;
@@ -398,6 +406,8 @@ public:
   std::map<int, SkinPropertyLookup<SkinRuntimeOffset>> offsets;
   std::vector<int> accessOrder;
   std::uint64_t capturedSerial = 1;
+  std::optional<int> stagedPracticeVisibleItemCount;
+  bool stagePracticeVisibleItemCountResult = true;
 };
 
 class FakeGaugeRandom final : public ISkinGaugeRandomSource {
@@ -1505,6 +1515,226 @@ PreparedSkinTextAtlas bitmapAtlas(int type) {
   atlas.pageWidth = 100;
   atlas.pageHeight = 50;
   return atlas;
+}
+
+PreparedSkinTextAtlas practiceAsciiAtlas() {
+  PreparedSkinTextAtlas atlas;
+  atlas.id = 99;
+  atlas.width = 16;
+  atlas.height = 108;
+  atlas.key.pointSize = 18;
+  atlas.ascent = 14;
+  atlas.capHeight = 13;
+  atlas.descent = -4;
+  atlas.lineHeight = 18;
+  for (char32_t codepoint = 32; codepoint <= 126; ++codepoint) {
+    const int ordinal = static_cast<int>(codepoint - 32);
+    atlas.glyphs.emplace(
+        codepoint,
+        SkinPreparedGlyphMetrics{
+            .region = {.x = ordinal % 16,
+                       .y = (ordinal / 16) * 18,
+                       .w = 1,
+                       .h = 18},
+            .bearingX = 0,
+            .bearingY = 14,
+            .advance = 1,
+            .layoutOffsetY = -18});
+  }
+  return atlas;
+}
+
+std::string glyphRunText(const SkinDrawCommand &command) {
+  const auto *run = std::get_if<SkinGlyphRunCommand>(&command.payload);
+  if (run == nullptr) {
+    return {};
+  }
+  std::string result;
+  result.reserve(run->glyphs.size());
+  for (const auto &glyph : run->glyphs) {
+    if (glyph.codepoint > 0x7f) {
+      return {};
+    }
+    result.push_back(static_cast<char>(glyph.codepoint));
+  }
+  return result;
+}
+
+void testPracticePositiveViewportStagesMutationAndDrawsNothing() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  state.practiceResult.supported = true;
+  state.practiceResult.active = true;
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects.push_back(
+      {.id = 1,
+       .authoredName = "practice",
+       .payload = SkinPracticeObject{.visibleItems = 7},
+       .authoredOrdinal = 1,
+       .critical = true});
+  auto presented = destination(1, 10, 80.0);
+  presented.presentation.loop = 0;
+  presented.presentation.frames.front() =
+      {.timeMillis = 0, .x = 80.0, .y = 40.0, .width = 800.0, .height = 640.0};
+  model.model.destinations.push_back(std::move(presented));
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  expect(result.submitReady && result.submitReady->commands.empty() &&
+             result.diagnostics.empty() &&
+             state.stagedPracticeVisibleItemCount == 7,
+         "positive SkinPractice stages its retained viewport update and "
+         "emits no draw command");
+}
+
+void testPracticeZeroRendersPinnedLegacyFallbackAndSelectedGraph() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  resources.addTextAtlas(1, practiceAsciiAtlas());
+  FakeState state;
+  state.timerResults.emplace(41, 500'000);
+  state.practiceResult.supported = true;
+  state.practiceResult.active = true;
+  state.practiceResult.mediaReady = true;
+  state.practiceResult.horizontalInputMode = true;
+  state.practiceResult.inputTurbo = true;
+  state.practiceResult.keyMode = 24;
+  state.practiceResult.cursorPosition = 1;
+  state.practiceResult.items[0] =
+      {.available = true, .label = "START TIME", .value = " 0:01.0"};
+  state.practiceResult.items[1] =
+      {.available = true, .label = "END TIME", .value = " 0:05.0"};
+  state.practiceResult.graphType = 2;
+  state.practiceResult.startTimeMillis = 1'000;
+  state.practiceResult.endTimeMillis = 5'000;
+  state.practiceResult.frequencyPercent = 150;
+  for (std::size_t index = 0; index < state.practiceResult.judgeCounts.size();
+       ++index) {
+    state.practiceResult.judgeCounts[index] =
+        {.fast = static_cast<std::int64_t>(index + 1),
+         .slow = static_cast<std::int64_t>((index + 1) * 10)};
+  }
+  std::array<SkinEarlyLateDistribution, 10> buckets{};
+  buckets[0][0] = 1;
+  state.graphResult.earlyLateDistribution = buckets;
+
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects.push_back(
+      {.id = 1,
+       .authoredName = "practice",
+       .payload = SkinPracticeObject{.visibleItems = 0},
+       .authoredOrdinal = 1,
+       .critical = true});
+  auto presented = destination(1, 10, 80.0);
+  presented.presentation.loop = 0;
+  presented.presentation.frames.front() =
+      {.timeMillis = 0, .x = 80.0, .y = 40.0, .width = 800.0, .height = 640.0};
+  model.model.destinations.push_back(std::move(presented));
+
+  const auto result =
+      evaluate(renderer, runtime, model, resources, state, 1, 2'000'000);
+  expect(result.submitReady.has_value() && result.diagnostics.empty(),
+         "zero-item SkinPractice evaluates from prepared glyphs and captured "
+         "practice state");
+  if (!result.submitReady) {
+    return;
+  }
+  std::vector<std::string> text;
+  std::vector<const SkinGlyphRunCommand *> runs;
+  const SkinGeneratedTexturedQuadCommand *graphBackground = nullptr;
+  std::size_t generated = 0;
+  for (const auto &command : result.submitReady->commands) {
+    if (const auto *run = std::get_if<SkinGlyphRunCommand>(&command.payload)) {
+      text.push_back(glyphRunText(command));
+      runs.push_back(run);
+    } else if (std::holds_alternative<SkinGeneratedTexturedQuadCommand>(
+                   command.payload)) {
+      ++generated;
+      if (graphBackground == nullptr) {
+        graphBackground =
+            &std::get<SkinGeneratedTexturedQuadCommand>(command.payload);
+      }
+    }
+  }
+  const std::vector<std::string> expected{
+      "START TIME", " 0:01.0", "END TIME", " 0:05.0",
+      "KEYS: F#1/A#1=UP, G1/A1=DOWN, F1=LEFT,",
+      "B1=RIGHT, D#1/G#1=TURBO. PRESS C1 TO PLAY",
+      "PGREAT : 11 1 10", "GREAT  : 22 2 20", "GOOD   : 33 3 30",
+      "BAD    : 44 4 40", "POOR   : 55 5 50", "KPOOR  : 66 6 60"};
+  expect(text == expected,
+         "legacy fallback keeps exact source labels, values, 24K help/play "
+         "text, and total-fast-slow judge rows");
+  expect(runs.size() == expected.size() && !runs[0]->glyphs.empty() &&
+             !runs[2]->glyphs.empty() &&
+             runs[0]->glyphs.front().vertices.front().rgba == 0xff7f7f7fU &&
+             runs[2]->glyphs.front().vertices.front().rgba == 0xff007fffU,
+         "legacy fallback uses horizontal gray for unfocused rows and turbo "
+         "orange for the focused row");
+  expect(runs.size() == expected.size() &&
+             runs[0]->glyphs.front().vertices.front().x == 180.0F &&
+             runs[0]->glyphs.front().vertices.front().y == 138.0F &&
+             runs[1]->glyphs.front().vertices.front().x == 330.0F &&
+             runs[2]->glyphs.front().vertices.front().y == 160.0F &&
+             runs[6]->glyphs.front().vertices.front().x == 430.0F,
+         "legacy text uses the exact region eighth, value/judge offsets, "
+         "seven-eighths origin, and twenty-two-pixel row spacing");
+  expect(generated == 3,
+         "legacy fallback selects exactly the early/late note graph in the "
+         "bottom quarter of the practice destination");
+  expect(graphBackground != nullptr &&
+             graphBackground->vertices[0].x == 80.0F &&
+             graphBackground->vertices[0].y == 520.0F &&
+             graphBackground->vertices[2].x == 880.0F &&
+             graphBackground->vertices[2].y == 680.0F,
+         "legacy note graph occupies the exact bottom quarter of the BGA "
+         "destination region");
+  expect(!state.stagedPracticeVisibleItemCount.has_value(),
+         "legacy fallback does not mutate the retained modern viewport");
+}
+
+void testPracticeWithoutAuthoredObjectUsesBgaLegacyFallback() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  resources.addTextAtlas(1, practiceAsciiAtlas());
+  FakeState state;
+  state.practiceResult.supported = true;
+  state.practiceResult.practiceMode = true;
+  state.practiceResult.items[0] =
+      {.available = true, .label = "START TIME", .value = " 0:00.0"};
+  std::array<SkinNormalDistribution, 10> buckets{};
+  buckets[0][0] = 1;
+  state.graphResult.normalDistribution = buckets;
+
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects.push_back({.id = 1,
+                                 .authoredName = "bga",
+                                 .payload = SkinBgaObject{},
+                                 .authoredOrdinal = 1,
+                                 .critical = true});
+  auto presented = destination(1, 10, 80.0);
+  presented.presentation.loop = 0;
+  presented.presentation.frames.front() =
+      {.timeMillis = 0, .x = 80.0, .y = 40.0, .width = 800.0, .height = 640.0};
+  model.model.destinations.push_back(std::move(presented));
+
+  const auto result =
+      evaluate(renderer, runtime, model, resources, state, 1, 1'000'000);
+  bool hasStartLabel = false;
+  bool hasBga = false;
+  if (result.submitReady) {
+    for (const auto &command : result.submitReady->commands) {
+      hasStartLabel = hasStartLabel || glyphRunText(command) == "START TIME";
+      hasBga = hasBga || std::holds_alternative<SkinBgaCommand>(command.payload);
+    }
+  }
+  expect(result.submitReady && result.diagnostics.empty() && hasStartLabel &&
+             !hasBga,
+         "practice mode without an authored Practice object renders the "
+         "legacy fallback in the BGA destination instead of BGA media");
 }
 
 SkinObjectDefinition textObject(SkinObjectId id, bool critical,
@@ -5425,6 +5655,9 @@ int main() {
   testLuaFractionalNumberUsesPinnedIntegerCoercion();
   testTextUsesPreparedMetricsKerningAndAtlasUvs();
   testBitmapTextUsesPinnedScaleShadowAndDistanceFieldState();
+  testPracticePositiveViewportStagesMutationAndDrawsNothing();
+  testPracticeZeroRendersPinnedLegacyFallbackAndSelectedGraph();
+  testPracticeWithoutAuthoredObjectUsesBgaLegacyFallback();
   testTextVerticalPlacementMatchesPinnedBitmapFontBaseline();
   testMissingTextGlyphHonorsCriticalityWithoutPartialCommands();
   testFalseDestinationSkipsTextValueCallback();

@@ -948,6 +948,11 @@ struct RawSkinIdentity {
   std::string id;
 };
 
+struct RawSkinPractice {
+  std::string id;
+  int visibleItems = 10;
+};
+
 struct RawSkinGaugeGraph {
   std::string id;
   std::optional<std::vector<std::optional<std::string>>> colors;
@@ -1111,6 +1116,7 @@ struct GameplayDecodeRequest {
   std::map<std::string, RawSkinPmChara, std::less<>> pmCharas;
   std::optional<RawSkinGauge> gauge;
   std::optional<RawSkinIdentity> bga;
+  std::optional<RawSkinPractice> practice;
   std::vector<RawSkinSource> rawSources;
   std::vector<RawSkinFont> rawFonts;
   std::vector<SkinFontResource> fonts;
@@ -1801,6 +1807,16 @@ bool decodeRawIdentity(lua_State *state, int index, std::size_t depth,
          stringField(state, index, "id", output.id,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, false,
                      request);
+}
+
+bool decodeRawPractice(lua_State *state, int index, std::size_t depth,
+                       RawSkinPractice &output, DecodeRequest &request) {
+  return requireObject(state, index, depth, request) &&
+         stringField(state, index, "id", output.id,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, false,
+                     request) &&
+         integerField(state, index, "visibleItems", output.visibleItems,
+                      request);
 }
 
 bool gaugeGraphColorArrayField(lua_State *state, int index,
@@ -3003,6 +3019,7 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
   const auto judge = request.judges.find(name);
   const bool isNote = request.note && request.note->id == name;
   const bool isGauge = request.gauge && request.gauge->id == name;
+  const bool isPractice = request.practice && request.practice->id == name;
   const bool isBga = request.bga && request.bga->id == name;
   const std::array candidates{
       SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::Image,
@@ -3050,6 +3067,8 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
       SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::LiftCover,
                                     .matches =
                                         liftCover != request.liftCovers.end()},
+      SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::Practice,
+                                    .matches = isPractice},
       SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::Bga,
                                     .matches = isBga},
       SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::Judge,
@@ -3316,6 +3335,11 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
       return false;
     }
     output = std::move(object);
+    return true;
+  }
+  if (isPractice) {
+    output = SkinPracticeObject{
+        .visibleItems = std::clamp(request.practice->visibleItems, 0, 16)};
     return true;
   }
   if (isBga) {
@@ -3884,6 +3908,24 @@ void decodeGameplayProtected(lua_State *state, int index,
       }
     } else {
       request->bga.reset();
+    }
+    lua_pop(state, 1);
+
+    request->practice.emplace();
+    if (!rawGetField(state, index, "practice", request->decoding)) {
+      transferDecodeDiagnostics(*request);
+      request->result.model.reset();
+      return;
+    }
+    if (!lua_isnil(state, -1)) {
+      if (!decodeRawPractice(state, -1, 2, *request->practice,
+                             request->decoding)) {
+        transferDecodeDiagnostics(*request);
+        request->result.model.reset();
+        return;
+      }
+    } else {
+      request->practice.reset();
     }
     lua_pop(state, 1);
 
