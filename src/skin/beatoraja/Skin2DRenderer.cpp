@@ -1502,6 +1502,23 @@ TextLoweringResult lowerText(const SkinFrameInputs &inputs,
   if (run.glyphs.empty()) {
     return result;
   }
+  if (atlas.bitmapFont &&
+      (atlas.bitmapFontType == 1 || atlas.bitmapFontType == 2)) {
+    const std::uint32_t fallbackColor =
+        packAbgr({1.0F, 1.0F, 1.0F, base.rgba[3]});
+    for (const auto &glyph : run.glyphs) {
+      const auto metrics = atlas.glyphs.find(glyph.codepoint);
+      if (metrics == atlas.glyphs.end() ||
+          metrics->second.bitmapFontType != 0) {
+        continue;
+      }
+      auto overlay = glyph;
+      for (auto &vertex : overlay.vertices) {
+        vertex.rgba = fallbackColor;
+      }
+      run.fallbackColorOverlays.push_back(std::move(overlay));
+    }
+  }
   if (atlas.bitmapFont && atlas.bitmapFontType == 0 &&
       (text.shadowOffsetX != 0.0 || text.shadowOffsetY != 0.0)) {
     const double authoredShadowX = text.shadowOffsetX;

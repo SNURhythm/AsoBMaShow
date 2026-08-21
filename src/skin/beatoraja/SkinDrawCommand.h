@@ -70,6 +70,10 @@ struct SkinGlyphInstance {
 struct SkinGlyphRunCommand {
   SkinTextAtlasId atlas = 0;
   std::vector<SkinGlyphInstance> glyphs;
+  // Beatoraja first submits the complete distance-field layout, then redraws
+  // standard fallback-face glyphs bilinearly in white. Keeping that overlay
+  // in the same value-owned command preserves its post-layout ordering.
+  std::vector<SkinGlyphInstance> fallbackColorOverlays;
   SkinRenderState state;
 };
 

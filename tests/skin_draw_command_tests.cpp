@@ -1885,6 +1885,43 @@ void testBitmapTextUsesPinnedScaleShadowAndDistanceFieldState() {
          "colored distance-field bitmap text preserves its distinct source type in draw state");
 }
 
+void testDistanceFieldTextAddsStandardFallbackColorOverlay() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  auto atlas = bitmapAtlas(1);
+  atlas.glyphs.at(U'A').bitmapFontType = 1;
+  atlas.glyphs.at(U'V').bitmapFontType = 0;
+  resources.addTextAtlas(1, std::move(atlas));
+  FakeState state;
+  ValidatedBeatorajaSkinModel model;
+  auto text = textObject(1, true);
+  auto &definition = std::get<SkinTextObject>(text.payload);
+  definition.literal = "AV";
+  definition.pointSize = 20;
+  model.model.objects.push_back(std::move(text));
+  auto presented = destination(1, 10, 100.0);
+  presented.presentation.frames.front().width = 100.0;
+  presented.presentation.frames.front().height = 20.0;
+  presented.presentation.frames.front().rgba = {64, 128, 191, 128};
+  model.model.destinations.push_back(std::move(presented));
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  expect(result.submitReady && result.submitReady->commands.size() == 1,
+         "mixed distance-field text lowers as one ordered glyph command");
+  if (!result.submitReady || result.submitReady->commands.size() != 1) {
+    return;
+  }
+  const auto &run = std::get<SkinGlyphRunCommand>(
+      result.submitReady->commands.front().payload);
+  expect(run.glyphs.size() == 2 && run.fallbackColorOverlays.size() == 1 &&
+             run.fallbackColorOverlays.front().codepoint == U'V' &&
+             run.fallbackColorOverlays.front().vertices.front().rgba ==
+                 0x80ffffffU,
+         "a standard fallback under a distance-field primary is redrawn "
+         "bilinearly in white with the authored alpha");
+}
+
 void testTextVerticalPlacementMatchesPinnedBitmapFontBaseline() {
   RuntimeHarness runtime;
   Skin2DRenderer renderer;
@@ -5655,6 +5692,7 @@ int main() {
   testLuaFractionalNumberUsesPinnedIntegerCoercion();
   testTextUsesPreparedMetricsKerningAndAtlasUvs();
   testBitmapTextUsesPinnedScaleShadowAndDistanceFieldState();
+  testDistanceFieldTextAddsStandardFallbackColorOverlay();
   testPracticePositiveViewportStagesMutationAndDrawsNothing();
   testPracticeZeroRendersPinnedLegacyFallbackAndSelectedGraph();
   testPracticeWithoutAuthoredObjectUsesBgaLegacyFallback();

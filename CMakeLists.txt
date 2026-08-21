@@ -520,6 +520,7 @@ if (WIN32 AND ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
     set(WINDOWS_GAMEPLAY_SKIN_SHADERS
         shaders/dx11/vs_skin_quad.bin
         shaders/dx11/fs_skin_quad.bin
+        shaders/dx11/fs_skin_distance_field.bin
         shaders/dx11/vs_skin_yuvrgb.bin
         shaders/dx11/fs_skin_yuvrgb.bin
     )

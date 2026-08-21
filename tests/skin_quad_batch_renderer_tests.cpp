@@ -120,6 +120,8 @@ struct CapturedBatch {
   std::uint64_t bgfxState = 0;
   std::uint32_t samplerFlags = 0;
   bool textured = false;
+  rendering::SkinBatchProgram program = rendering::SkinBatchProgram::Primitive;
+  std::optional<skin::SkinRenderState::DistanceField> distanceField;
 };
 
 struct FakeBackend final : rendering::SkinQuadBatchBackend {
@@ -170,6 +172,8 @@ struct FakeBackend final : rendering::SkinQuadBatchBackend {
     captured.bgfxState = batch.bgfxState;
     captured.samplerFlags = batch.samplerFlags;
     captured.textured = batch.textured;
+    captured.program = batch.program;
+    captured.distanceField = batch.distanceField;
     batches.push_back(std::move(captured));
     if (submissionOrder != nullptr) {
       submissionOrder->push_back("quad:" + std::to_string(batch.texture.idx));
@@ -416,6 +420,80 @@ void testWholeBufferPreflightUsesExactCatalogIds() {
   expect(
       !renderer.submit(commands),
       "renderer never substitutes a different point-size atlas sharing a font");
+}
+
+void testDistanceFieldGlyphSubmissionSelectsProgramAndUniforms() {
+  auto prepared = resources();
+  auto &atlas = prepared.atlases.at(21);
+  atlas.bitmapFont = true;
+  atlas.bitmapFontType = 1;
+  atlas.originalSize = 20;
+  atlas.pageWidth = 128;
+  atlas.pageHeight = 64;
+  atlas.glyphs.at(U'A').bitmapFontType = 1;
+  atlas.glyphs.emplace(
+      U'V', skin::SkinPreparedGlyphMetrics{
+                .region = {.x = 8, .y = 0, .w = 8, .h = 12},
+                .bitmapFontType = 0});
+
+  skin::SkinGlyphRunCommand glyphs;
+  glyphs.atlas = 21;
+  glyphs.state = {
+      .blend = skin::SkinBlendMode::Normal,
+      .filter = skin::SkinFilterMode::Linear,
+      .distanceField = skin::SkinRenderState::DistanceField{
+          .colored = true,
+          .outlineDistance = 0.25,
+          .outlineRgba = {1, 2, 3, 4},
+          .shadowRgba = {5, 6, 7, 8},
+          .shadowSmoothing = 0.2,
+          .shadowOffsetU = 0.125,
+          .shadowOffsetV = -0.25}};
+  glyphs.glyphs.push_back({.codepoint = U'A',
+                           .vertices = quad(11, skin::SkinBlendMode::Normal,
+                                            skin::SkinFilterMode::Linear)
+                                           .vertices});
+  auto fallback = quad(11, skin::SkinBlendMode::Normal,
+                       skin::SkinFilterMode::Linear, std::nullopt, 20.0F)
+                      .vertices;
+  glyphs.glyphs.push_back({.codepoint = U'V', .vertices = fallback});
+  for (auto &vertex : fallback) {
+    vertex.rgba = 0x80ffffffU;
+  }
+  glyphs.fallbackColorOverlays.push_back(
+      {.codepoint = U'V', .vertices = fallback});
+
+  RenderContext context;
+  FakeBackend backend;
+  rendering::SkinQuadBatchRenderer renderer(backend);
+  const std::array commands{command(1, std::move(glyphs))};
+  renderer.begin(context, prepared);
+  expect(renderer.submit(commands),
+         "distance-field glyph state passes whole-span preflight");
+  renderer.flush();
+
+  const skin::SkinRenderState::DistanceField expected{
+      .colored = true,
+      .outlineDistance = 0.25,
+      .outlineRgba = {1, 2, 3, 4},
+      .shadowRgba = {5, 6, 7, 8},
+      .shadowSmoothing = 0.2,
+      .shadowOffsetU = 0.125,
+      .shadowOffsetV = -0.25};
+  expect(backend.batches.size() == 2 &&
+             backend.batches.front().program ==
+                 rendering::SkinBatchProgram::DistanceField &&
+             backend.batches.front().distanceField == expected &&
+             backend.batches.front().vertices.size() == 8 &&
+             backend.batches.back().program ==
+                 rendering::SkinBatchProgram::Textured &&
+             !backend.batches.back().distanceField &&
+             backend.batches.back().filter == skin::SkinFilterMode::Linear &&
+             backend.batches.back().vertices.size() == 4 &&
+             backend.batches.back().vertices.front().abgr == 0x80ffffffU,
+         "submission selects the distance-field program and forwards every "
+         "uploaded uniform value before the standard fallback's white "
+         "bilinear overlay");
 }
 
 void testVerticesStatesScissorsAndSequentialFlushes() {
@@ -1083,6 +1161,7 @@ void testGeneratedTextureCommandsMaterializeBeforeAtomicSubmission() {
 
 int main() {
   testWholeBufferPreflightUsesExactCatalogIds();
+  testDistanceFieldGlyphSubmissionSelectsProgramAndUniforms();
   testVerticesStatesScissorsAndSequentialFlushes();
   testExactBackendStateMapping();
   testPrimitiveTopologyAndBgaRequiresFallbackUntilIntegrated();
