@@ -2984,9 +2984,11 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       gaugeAnimationStates_.clear();
       gaugeAnimationSessionSerial_ = inputs.sessionSerial;
     }
-    if (hitErrorVisualizerSessionSerial_ != inputs.sessionSerial) {
+    if (hitErrorVisualizerSessionSerial_ != inputs.sessionSerial ||
+        hitErrorVisualizerModelIdentity_ != &inputs.model) {
       hitErrorVisualizerStates_.clear();
       hitErrorVisualizerSessionSerial_ = inputs.sessionSerial;
+      hitErrorVisualizerModelIdentity_ = &inputs.model;
     }
 
     std::vector<ProjectionElement> mergedProjectionElements;

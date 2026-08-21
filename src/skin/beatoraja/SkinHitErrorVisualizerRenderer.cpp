@@ -100,6 +100,7 @@ public:
 
   bool appendQuad(double x, double y, double width, double height,
                   std::uint32_t color) {
+    color = modulatedColor(color, geometry_.rgba);
     if (clippedOut_ || width == 0.0 || height == 0.0 ||
         color >> 24U == 0U) {
       return true;
@@ -128,6 +129,7 @@ public:
 
   bool appendTriangle(Point first, Point second, Point third,
                       std::uint32_t color) {
+    color = modulatedColor(color, geometry_.rgba);
     if (clippedOut_ || color >> 24U == 0U) {
       return true;
     }
@@ -198,7 +200,7 @@ private:
     primitive.vertices.push_back(
         {.x = static_cast<float>(projected[0]),
          .y = static_cast<float>(projected[1]),
-         .rgba = modulatedColor(currentColor_, geometry_.rgba)});
+         .rgba = currentColor_});
     return true;
   }
 

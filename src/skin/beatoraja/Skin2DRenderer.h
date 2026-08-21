@@ -350,6 +350,7 @@ private:
   std::uint64_t gaugeAnimationSessionSerial_ = 0;
   std::map<SkinObjectId, GaugeAnimationState> gaugeAnimationStates_;
   std::uint64_t hitErrorVisualizerSessionSerial_ = 0;
+  const ValidatedBeatorajaSkinModel *hitErrorVisualizerModelIdentity_ = nullptr;
   std::map<SkinObjectId, SkinHitErrorVisualizerPresentationState>
       hitErrorVisualizerStates_;
   std::uint64_t externalOwnershipSessionSerial_ = 0;

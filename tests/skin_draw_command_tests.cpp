@@ -4503,6 +4503,43 @@ void testHitErrorVisualizerSingleColourDecayTransparencyAndBudgets() {
              bounded.primitiveVertices == 0,
          "hiterrorvisualizer discards every partial primitive when a fixed budget is exceeded");
 
+  visualizer.hitErrorMode = false;
+  visualizer.emaMode = 0;
+  visualizer.centerRgba = 0xffffff01U;
+  geometry.rgba[3] = 0.5F;
+  const auto quantizedTransparent = renderSkinHitErrorVisualizer(
+      {.sourceObject = 3,
+       .authoredOrdinal = 4,
+       .visualizer = visualizer,
+       .state = {},
+       .emaMillis = 0,
+       .geometry = geometry,
+       .viewport = viewport(),
+       .maximumCommands = 0,
+       .maximumPrimitiveVertices = 0});
+  expect(!quantizedTransparent.failure &&
+             quantizedTransparent.commands.empty() &&
+             quantizedTransparent.primitiveVertices == 0,
+         "post-tint alpha quantization to zero omits a primitive before budget admission");
+
+  visualizer.centerRgba = 0xffffff80U;
+  const auto quantizedVisible = renderSkinHitErrorVisualizer(
+      {.sourceObject = 3,
+       .authoredOrdinal = 4,
+       .visualizer = visualizer,
+       .state = {},
+       .emaMillis = 0,
+       .geometry = geometry,
+       .viewport = viewport(),
+       .maximumCommands = 1,
+       .maximumPrimitiveVertices = 4});
+  expect(!quantizedVisible.failure && quantizedVisible.commands.size() == 1 &&
+             std::get<SkinPrimitiveCommand>(
+                 quantizedVisible.commands.front().payload)
+                     .vertices.front()
+                     .rgba == 0x40ffffffU,
+         "ordinary post-tint semi-transparent primitives remain visible");
+
   geometry.rgba[3] = 0.0F;
   const auto invisible = renderSkinHitErrorVisualizer(
       {.sourceObject = 3,
@@ -4519,6 +4556,46 @@ void testHitErrorVisualizerSingleColourDecayTransparencyAndBudgets() {
   expect(!invisible.failure && invisible.commands.empty() &&
              invisible.primitiveVertices == 0,
          "zero destination alpha consumes no hiterrorvisualizer budget");
+}
+
+void testHitErrorVisualizerPostTintZeroAlphaUsesNoIntegratedBudget() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  resources.addImage(1, {.x = 0, .y = 0, .w = 10, .h = 10});
+  FakeState state;
+  SkinHitErrorVisualizerObject visualizer;
+  visualizer.width = 101;
+  visualizer.judgeWidthMillis = 50;
+  visualizer.windowLength = 3;
+  visualizer.hitErrorMode = false;
+  visualizer.emaMode = 0;
+  visualizer.centerRgba = 0xffffff01U;
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects = {
+      imageObject(1, 1, false),
+      {.id = 2,
+       .authoredName = "quantized-transparent-hit-error",
+       .payload = visualizer,
+       .authoredOrdinal = 2}};
+  model.model.destinations.reserve(SkinCommandPolicy::maximumCommands + 1U);
+  for (std::size_t index = 0; index < SkinCommandPolicy::maximumCommands;
+       ++index) {
+    auto imageDestination =
+        destination(1, static_cast<std::uint32_t>(index + 1U), 0.0);
+    imageDestination.presentation.loop = 0;
+    model.model.destinations.push_back(std::move(imageDestination));
+  }
+  auto hitDestination = noteDistributionDestination(2, 101.0, 6.0);
+  hitDestination.presentation.frames.front().rgba[3] = 128;
+  model.model.destinations.push_back(std::move(hitDestination));
+
+  const auto evaluated =
+      evaluate(renderer, runtime, model, resources, state, 1);
+  expect(evaluated.submitReady && evaluated.diagnostics.empty() &&
+             evaluated.submitReady->commands.size() ==
+                 SkinCommandPolicy::maximumCommands,
+         "integrated post-tint zero alpha consumes no exhausted command budget and emits no diagnostic");
 }
 
 void testHitErrorVisualizerEmaIsPerObjectExactOnceAndSessionBounded() {
@@ -4554,27 +4631,38 @@ void testHitErrorVisualizerEmaIsPerObjectExactOnceAndSessionBounded() {
   state.graphResult.recentJudgeTimingsMillis = recent;
   state.graphResult.recentJudgeTimingIndex = 2;
   const auto advanced = evaluate(renderer, runtime, model, resources, state, 3);
-  const auto reset =
-      evaluate(renderer, runtime, model, resources, state, 4, 0, nullptr,
-               std::nullopt, nullptr, 2);
+  ValidatedBeatorajaSkinModel replacementModel;
+  replacementModel.model.objects = {
+      {.id = 1,
+       .authoredName = "replacement",
+       .payload = first,
+       .authoredOrdinal = 1}};
+  replacementModel.model.destinations = {
+      noteDistributionDestination(1, 101.0, 6.0)};
+  const auto modelReset =
+      evaluate(renderer, runtime, replacementModel, resources, state, 4);
+  const auto reset = evaluate(renderer, runtime, replacementModel, resources,
+                              state, 5, 0, nullptr, std::nullopt, nullptr, 2);
   const auto initialCommands = primitiveCommands(initial);
   const auto repeatedCommands = primitiveCommands(repeated);
   const auto advancedCommands = primitiveCommands(advanced);
+  const auto modelResetCommands = primitiveCommands(modelReset);
   const auto resetCommands = primitiveCommands(reset);
   const auto emaX = [](const auto &commands, std::size_t object) {
     return commands[object * 2U + 1U]->vertices.front().x;
   };
   expect(initialCommands.size() == 4 && repeatedCommands.size() == 4 &&
-             advancedCommands.size() == 4 && resetCommands.size() == 4 &&
+             advancedCommands.size() == 4 && modelResetCommands.size() == 2 &&
+             resetCommands.size() == 2 &&
              emaX(initialCommands, 0) == 40.0F &&
              emaX(initialCommands, 1) == 45.0F &&
              emaX(repeatedCommands, 0) == 40.0F &&
              emaX(repeatedCommands, 1) == 45.0F &&
              emaX(advancedCommands, 0) == 35.0F &&
              emaX(advancedCommands, 1) == 42.0F &&
-             emaX(resetCommands, 0) == 40.0F &&
-             emaX(resetCommands, 1) == 45.0F,
-         "EMA advances once per changed source index, preserves authored alpha per object, and resets with the renderer session");
+             emaX(modelResetCommands, 0) == 40.0F &&
+             emaX(resetCommands, 0) == 40.0F,
+         "EMA advances once per changed source index, preserves same-model state, and resets with both model and session identity");
 
   SkinHitErrorVisualizerPresentationState presentation;
   state.graphResult.recentJudgeTimingIndex = 1;
@@ -5396,6 +5484,7 @@ int main() {
   testNoteDistributionGraphDrawsPinnedBackgroundPmsColorAndCursor();
   testHitErrorVisualizerUsesPinnedModesWindowAndGeometry();
   testHitErrorVisualizerSingleColourDecayTransparencyAndBudgets();
+  testHitErrorVisualizerPostTintZeroAlphaUsesNoIntegratedBudget();
   testHitErrorVisualizerEmaIsPerObjectExactOnceAndSessionBounded();
   testHitErrorVisualizerAppliesDestinationPresentationState();
   testTimingVisualizerUsesJudgeBandsAndRecentTimingRing();
