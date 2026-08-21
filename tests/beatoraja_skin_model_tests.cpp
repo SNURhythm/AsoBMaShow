@@ -1705,6 +1705,93 @@ return {
          "opaque timingvisualizers keep the pinned direct PRColor load-failure boundary");
 }
 
+void testTimingDistributionGraphRetainsPinnedConstructionFields() {
+  const auto decoded = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  timingdistributiongraph={
+    {id='default'},
+    {id='custom',width=401,lineWidth=3,graphColor='11223344',
+     averageColor='55667788',devColor='99AABBCC',PGColor='01020304',
+     GRColor='11121314',GDColor='21222324',BDColor='31323334',
+     PRColor='41424344',drawAverage=0,drawDev=2}
+  },
+  destination={
+    {id='default',dst={{x=0,y=0,w=301,h=60}}},
+    {id='custom',dst={{x=0,y=0,w=401,h=60}}}
+  }
+}
+)lua");
+  expect(decoded.model && decoded.model->objects.size() == 2,
+         "timingdistributiongraph declarations create one typed gameplay object per destination");
+  if (!decoded.model || decoded.model->objects.size() != 2) {
+    return;
+  }
+  const auto payload = [&](std::string_view id) {
+    const auto *definition = findObject(*decoded.model, id);
+    return definition != nullptr
+               ? std::get_if<SkinTimingDistributionGraphObject>(
+                     &definition->payload)
+               : nullptr;
+  };
+  const auto *defaults = payload("default");
+  const auto *custom = payload("custom");
+  if (defaults == nullptr || custom == nullptr) {
+    expect(false,
+           "timingdistributiongraph destinations retain their typed payloads");
+    return;
+  }
+  expect(defaults != nullptr && defaults->width == 301 &&
+             defaults->lineWidth == 1 &&
+             defaults->graphRgba == 0x00ff00ffU &&
+             defaults->averageRgba == 0xffffffffU &&
+             defaults->devRgba == 0xffffffffU &&
+             defaults->judgeRgba ==
+                 std::array<std::uint32_t, 5>{0x000088ffU, 0x008800ffU,
+                                               0x888800ffU, 0x880000ffU,
+                                               0x000000ffU} &&
+             defaults->drawAverage && defaults->drawDev,
+         "timingdistributiongraph defaults retain the pinned constructor values");
+  expect(custom != nullptr && custom->width == 401 &&
+             custom->lineWidth == 3 && custom->graphRgba == 0x11223344U &&
+             custom->averageRgba == 0x55667788U &&
+             custom->devRgba == 0x99aabbccU &&
+             custom->judgeRgba ==
+                 std::array<std::uint32_t, 5>{0x01020304U, 0x11121314U,
+                                               0x21222324U, 0x31323334U,
+                                               0x41424344U} &&
+             !custom->drawAverage && !custom->drawDev,
+         "timingdistributiongraph retains each authored colour and exact integer flags");
+  expect(std::ranges::none_of(decoded.diagnostics, [](const auto &entry) {
+           return entry.code ==
+                  "skin_lua_model_timingdistributiongraph_unsupported";
+         }),
+         "timingdistributiongraph is not reported as an unsupported gameplay widget");
+
+  const auto validated = test_support::validateWithAuthoredBuiltins(
+      *decoded.model);
+  expect(validated.model && !validated.criticalFailure &&
+             std::ranges::all_of(validated.model->model.objects,
+                                 [](const auto &object) {
+                                   return !std::holds_alternative<
+                                       SkinBlankObject>(object.payload);
+                                 }),
+         "valid timingdistributiongraphs remain typed through model validation");
+
+  auto invalidModel = *decoded.model;
+  std::get<SkinTimingDistributionGraphObject>(
+      invalidModel.objects.front().payload)
+      .lineWidth = 0;
+  const auto invalid = test_support::validateWithAuthoredBuiltins(
+      std::move(invalidModel));
+  expect(invalid.criticalFailure && !invalid.model &&
+             std::ranges::find_if(invalid.diagnostics, [](const auto &entry) {
+               return entry.code ==
+                      "skin_lua_model_timingdistributiongraph_invalid";
+             }) != invalid.diagnostics.end(),
+         "model validation rejects timingdistributiongraph geometry the pinned constructor cannot use");
+}
+
 void testHitErrorVisualizerIsTypedInsteadOfBlank() {
   const auto decoded = decodeInlineModel(R"lua(
 return {
@@ -2110,6 +2197,7 @@ int main() {
   testJudgeGraphsDecodePinnedModesAndPresentationFlags();
   testTimingVisualizerDecodesPinnedPresentationFields();
   testTimingVisualizerParsesPoorColourOnlyWhenOpaque();
+  testTimingDistributionGraphRetainsPinnedConstructionFields();
   testHitErrorVisualizerIsTypedInsteadOfBlank();
   testHitErrorVisualizerDecodesPinnedConstructorFields();
   testHitErrorVisualizerParsesPoorColourOnlyWhenOpaque();

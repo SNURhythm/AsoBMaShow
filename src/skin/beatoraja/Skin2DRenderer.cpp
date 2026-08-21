@@ -3084,6 +3084,13 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       if (disabledOptionalObject(lookupIndex, object->id)) {
         continue;
       }
+      // SkinTimingDistributionGraph.prepare() returns before SkinObject's
+      // preparation unless its state is MusicResult. Gameplay therefore skips
+      // destination conditions, timers, offsets, and command budgets.
+      if (std::holds_alternative<SkinTimingDistributionGraphObject>(
+              object->payload)) {
+        continue;
+      }
       // JsonSkinLoader removes ordinary empty-dst SkinObjects during
       // validation. JsonPlaySkinObjectLoader has two exceptions: SkinNote
       // owns independent per-lane note.dst geometry, while SkinJudge keeps

@@ -676,6 +676,39 @@ void testEmptyDestinationIsDroppedBeforeObjectStateResolution() {
          "matching Beatoraja Skin.prepare");
 }
 
+void testTimingDistributionGraphSkipsGameplayDestinationCallbacks() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  ValidatedBeatorajaSkinModel model;
+  model.model.booleanProperties.push_back({
+      .id = SkinBooleanPropertyId{1},
+      .source = runtime.failCallback(),
+      .authoredOrdinal = 1,
+  });
+  model.model.timerProperties.push_back({
+      .id = SkinTimerPropertyId{1},
+      .source = runtime.forbiddenTimerCallback(),
+      .authoredOrdinal = 2,
+  });
+  model.model.objects.push_back(
+      {.id = 1,
+       .authoredName = "timing-distribution",
+       .payload = SkinTimingDistributionGraphObject{},
+       .authoredOrdinal = 1,
+       .critical = true});
+  auto presented = destination(1, 10, 10.0);
+  presented.presentation.conditions.push_back(SkinBooleanPropertyId{1});
+  presented.presentation.timer = SkinTimerPropertyId{1};
+  model.model.destinations.push_back(std::move(presented));
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  expect(result.submitReady && result.submitReady->commands.empty() &&
+             result.diagnostics.empty(),
+         "gameplay timingdistributiongraph returns before destination callbacks and emits no commands");
+}
+
 bool hasDiagnostic(const SkinFrameEvaluationResult &result,
                    std::string_view code) {
   return std::ranges::any_of(result.diagnostics, [&](const auto &diagnostic) {
@@ -5423,6 +5456,7 @@ int main() {
   testBuiltinImageStateAndOutOfRangeFallback();
   testHiddenImageStillSelectsSourceAfterRuntimeSuppression();
   testEmptyDestinationIsDroppedBeforeObjectStateResolution();
+  testTimingDistributionGraphSkipsGameplayDestinationCallbacks();
   testProjectionOrdinalIrregularitiesNeverDiscardAGameplayFrame();
   testLargeProjectionDoesNotHitAnAppSpecificFrameLimit();
   testBindingAndDisabledLookupsStayLogarithmicAtModelLimits();

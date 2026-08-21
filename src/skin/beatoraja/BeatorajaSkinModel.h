@@ -305,6 +305,21 @@ struct SkinTimingVisualizerObject {
   bool drawDecay = true;
 };
 
+// The pinned SkinTimingDistributionGraph is constructed by common loading,
+// then prepare() exits before destination preparation outside MusicResult.
+struct SkinTimingDistributionGraphObject {
+  int width = 301;
+  int lineWidth = 1;
+  std::uint32_t graphRgba = 0x00ff00ffU;
+  std::uint32_t averageRgba = 0xffffffffU;
+  std::uint32_t devRgba = 0xffffffffU;
+  std::array<std::uint32_t, 5> judgeRgba{0x000088ffU, 0x008800ffU,
+                                          0x888800ffU, 0x880000ffU,
+                                          0x000000ffU};
+  bool drawAverage = true;
+  bool drawDev = true;
+};
+
 struct SkinHitErrorVisualizerObject {
   int width = 301;
   int judgeWidthMillis = 150;
@@ -482,6 +497,7 @@ using SkinObjectPayload =
     std::variant<SkinImageObject, SkinNumberObject, SkinFloatObject,
                  SkinTextObject, SkinSliderObject, SkinGraphObject,
                  SkinNoteDistributionGraphObject, SkinTimingVisualizerObject,
+                 SkinTimingDistributionGraphObject,
                  SkinHitErrorVisualizerObject,
                  SkinGaugeObject,
                  SkinNoteObject, SkinCoverObject, SkinJudgeObject,

@@ -963,6 +963,22 @@ struct RawSkinTimingVisualizer {
   int drawDecay = 1;
 };
 
+struct RawSkinTimingDistributionGraph {
+  std::string id;
+  int width = 301;
+  int lineWidth = 1;
+  std::string graphColor = "00FF00FF";
+  std::string averageColor = "FFFFFFFF";
+  std::string devColor = "FFFFFFFF";
+  std::string pgColor = "000088FF";
+  std::string grColor = "008800FF";
+  std::string gdColor = "888800FF";
+  std::string bdColor = "880000FF";
+  std::string prColor = "000000FF";
+  int drawAverage = 1;
+  int drawDev = 1;
+};
+
 struct RawSkinHitErrorVisualizer {
   std::string id;
   int width = 301;
@@ -1048,7 +1064,8 @@ struct GameplayDecodeRequest {
       judgeGraphs;
   std::map<std::string, RawSkinTimingVisualizer, std::less<>>
       timingVisualizers;
-  std::map<std::string, RawSkinIdentity, std::less<>> timingDistributionGraphs;
+  std::map<std::string, RawSkinTimingDistributionGraph, std::less<>>
+      timingDistributionGraphs;
   std::map<std::string, RawSkinPmChara, std::less<>> pmCharas;
   std::optional<RawSkinGauge> gauge;
   std::optional<RawSkinIdentity> bga;
@@ -1070,7 +1087,7 @@ struct GameplayDecodeRequest {
   std::vector<RawSkinHitErrorVisualizer> rawHitErrorVisualizers;
   std::vector<RawSkinNoteDistributionGraph> rawJudgeGraphs;
   std::vector<RawSkinTimingVisualizer> rawTimingVisualizers;
-  std::vector<RawSkinIdentity> rawTimingDistributionGraphs;
+  std::vector<RawSkinTimingDistributionGraph> rawTimingDistributionGraphs;
   std::vector<RawSkinPmChara> rawPmCharas;
   std::vector<RawDestination> rawDestinations;
   std::vector<RawCustomTimer> rawCustomTimers;
@@ -1800,6 +1817,44 @@ bool decodeRawTimingVisualizer(lua_State *state, int index, std::size_t depth,
          integerField(state, index, "drawDecay", output.drawDecay, request);
 }
 
+bool decodeRawTimingDistributionGraph(
+    lua_State *state, int index, std::size_t depth,
+    RawSkinTimingDistributionGraph &output, DecodeRequest &request) {
+  return requireObject(state, index, depth, request) &&
+         stringField(state, index, "id", output.id,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, false,
+                     request) &&
+         integerField(state, index, "width", output.width, request) &&
+         integerField(state, index, "lineWidth", output.lineWidth, request) &&
+         stringField(state, index, "graphColor", output.graphColor,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         stringField(state, index, "averageColor", output.averageColor,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         stringField(state, index, "devColor", output.devColor,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         stringField(state, index, "PGColor", output.pgColor,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         stringField(state, index, "GRColor", output.grColor,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         stringField(state, index, "GDColor", output.gdColor,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         stringField(state, index, "BDColor", output.bdColor,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         stringField(state, index, "PRColor", output.prColor,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         integerField(state, index, "drawAverage", output.drawAverage,
+                      request) &&
+         integerField(state, index, "drawDev", output.drawDev, request);
+}
+
 bool decodeRawHitErrorVisualizer(lua_State *state, int index,
                                  std::size_t depth,
                                  RawSkinHitErrorVisualizer &output,
@@ -2468,6 +2523,34 @@ bool makeTimingVisualizerObject(GameplayDecodeRequest &request,
   return true;
 }
 
+bool makeTimingDistributionGraphObject(
+    GameplayDecodeRequest &request,
+    const RawSkinTimingDistributionGraph &definition,
+    SkinTimingDistributionGraphObject &output) {
+  // The pinned constructor divides by its clamped line width, so a
+  // non-positive width is outside the constructible source domain.
+  if (definition.width < 1) {
+    return fail(request.decoding, "skin_lua_model_timingdistributiongraph_invalid",
+                "Lua skin timingdistributiongraph width is outside the "
+                "pinned constructor domain");
+  }
+  output = {
+      .width = definition.width,
+      .lineWidth = std::clamp(definition.lineWidth, 1, definition.width),
+      .graphRgba = timingVisualizerColor(definition.graphColor),
+      .averageRgba = timingVisualizerColor(definition.averageColor),
+      .devRgba = timingVisualizerColor(definition.devColor),
+      .judgeRgba = {timingVisualizerColor(definition.pgColor),
+                    timingVisualizerColor(definition.grColor),
+                    timingVisualizerColor(definition.gdColor),
+                    timingVisualizerColor(definition.bdColor),
+                    timingVisualizerColor(definition.prColor)},
+      .drawAverage = definition.drawAverage == 1,
+      .drawDev = definition.drawDev == 1,
+  };
+  return true;
+}
+
 bool makeHitErrorVisualizerObject(
     GameplayDecodeRequest &request,
     const RawSkinHitErrorVisualizer &definition,
@@ -2849,6 +2932,18 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
       timingVisualizer != request.timingVisualizers.end()) {
     SkinTimingVisualizerObject object;
     if (!makeTimingVisualizerObject(request, timingVisualizer->second, object)) {
+      return false;
+    }
+    output = object;
+    return true;
+  }
+
+  if (resolved.kind == SkinObjectResolutionKind::TimingDistributionGraph &&
+      timingDistributionGraph != request.timingDistributionGraphs.end()) {
+    SkinTimingDistributionGraphObject object;
+    if (!makeTimingDistributionGraphObject(request,
+                                           timingDistributionGraph->second,
+                                           object)) {
       return false;
     }
     output = object;
@@ -3385,7 +3480,8 @@ void decodeGameplayProtected(lua_State *state, int index,
         !decodeObjectArrayField(state, index, "timingdistributiongraph", 1,
                                 LuaSkinTableDecoderPolicy::maxDecodedObjects,
                                 request->rawTimingDistributionGraphs,
-                                request->decoding, decodeRawIdentity) ||
+                                request->decoding,
+                                decodeRawTimingDistributionGraph) ||
         !decodeObjectArrayField(state, index, "pmchara", 1,
                                 LuaSkinTableDecoderPolicy::maxDecodedObjects,
                                 request->rawPmCharas, request->decoding,
@@ -3400,11 +3496,6 @@ void decodeGameplayProtected(lua_State *state, int index,
     recordUnsupportedDefinitions(*request, request->rawBpmGraphs,
                                  "skin_lua_model_bpmgraph_unsupported",
                                  "bpmgraph");
-    recordUnsupportedDefinitions(
-        *request, request->rawTimingDistributionGraphs,
-        "skin_lua_model_timingdistributiongraph_unsupported",
-        "timingdistributiongraph");
-
     if (!decodeObjectArrayField(state, index, "hiddenCover", 1,
                                 LuaSkinTableDecoderPolicy::maxDecodedObjects,
                                 request->rawHiddenCovers, request->decoding,
@@ -4258,8 +4349,8 @@ bool materializeGameplay(GameplayDecodeRequest &request,
       });
   moveFirstDefinitions(
       request.rawTimingDistributionGraphs, request.timingDistributionGraphs,
-      [](const RawSkinIdentity &identity) -> const std::string & {
-        return identity.id;
+      [](const RawSkinTimingDistributionGraph &graph) -> const std::string & {
+        return graph.id;
       });
   moveFirstDefinitions(
       request.rawPmCharas, request.pmCharas,
