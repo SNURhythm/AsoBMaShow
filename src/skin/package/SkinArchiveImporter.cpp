@@ -1,6 +1,7 @@
 #include "SkinArchiveImporter.h"
 
 #include "../../FileChecksum.h"
+#include "../beatoraja/GameplaySkinSourceFormat.h"
 #include "SkinPathPolicy.h"
 
 #include <archive.h>
@@ -2830,7 +2831,7 @@ discoverEntries(const SkinRevisionReadView &view, std::stop_token stop,
     if (!iterator->is_regular_file(error)) {
       continue;
     }
-    if (relative.extension() != ".luaskin") {
+    if (!gameplaySkinSourceFormatForPath(relativeUtf8)) {
       continue;
     }
     const auto normalized =

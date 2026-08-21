@@ -3735,6 +3735,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/package/SkinPathPolicy.cpp
             src/skin/package/SkinTreeSnapshotter.cpp
             src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
+            src/skin/beatoraja/GameplaySkinDocumentLoader.cpp
+            src/skin/beatoraja/GameplaySkinSourceFormat.cpp
+            src/skin/beatoraja/JsonGameplaySkinDecoder.cpp
+            src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp
+            src/skin/beatoraja/Lr2SkinCsvParser.cpp
+            src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp
             src/skin/beatoraja/GameplaySkinValidator.cpp
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
@@ -4637,6 +4643,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/SkinStoragePaths.cpp
             src/skin/beatoraja/BgfxSkinTextureDevice.cpp
             src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
+            src/skin/beatoraja/GameplaySkinDocumentLoader.cpp
+            src/skin/beatoraja/GameplaySkinSourceFormat.cpp
+            src/skin/beatoraja/JsonGameplaySkinDecoder.cpp
+            src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp
+            src/skin/beatoraja/Lr2SkinCsvParser.cpp
+            src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp
             src/skin/beatoraja/GameplaySkinValidator.cpp
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
@@ -4794,6 +4806,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/SkinProfileSettings.cpp
             src/skin/SkinStoragePaths.cpp
             src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
+            src/skin/beatoraja/GameplaySkinDocumentLoader.cpp
+            src/skin/beatoraja/GameplaySkinSourceFormat.cpp
+            src/skin/beatoraja/JsonGameplaySkinDecoder.cpp
+            src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp
+            src/skin/beatoraja/Lr2SkinCsvParser.cpp
+            src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp
             src/skin/beatoraja/GameplaySkinValidator.cpp
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
@@ -4831,6 +4849,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinTextAtlas.cpp
             src/skin/beatoraja/SkinTextGraphNormalization.cpp
             src/skin/package/SkinAliasDetector.cpp
+            src/skin/package/SkinArchiveImporter.cpp
             src/skin/package/SkinPathPolicy.cpp
             src/skin/package/SkinTreeSnapshotter.cpp
             src/view/DecodedImageCache.cpp
@@ -4933,6 +4952,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/SkinStoragePaths.cpp
             src/skin/beatoraja/BgfxSkinTextureDevice.cpp
             src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
+            src/skin/beatoraja/GameplaySkinDocumentLoader.cpp
+            src/skin/beatoraja/GameplaySkinSourceFormat.cpp
+            src/skin/beatoraja/JsonGameplaySkinDecoder.cpp
+            src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp
+            src/skin/beatoraja/Lr2SkinCsvParser.cpp
+            src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp
             src/skin/beatoraja/GameplaySkinValidator.cpp
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
@@ -5966,6 +5991,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/skin/SkinCommitCoordinator.cpp
         src/skin/SkinProfileSettings.cpp
         src/skin/SkinStoragePaths.cpp
+        src/skin/beatoraja/GameplaySkinSourceFormat.cpp
         src/skin/beatoraja/SkinDiagnosticHistory.cpp
         src/skin/package/SkinAliasDetector.cpp
         src/skin/package/SkinArchiveImporter.cpp
@@ -6047,6 +6073,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/FileChecksum.cpp
         src/skin/SkinProfileSettings.cpp
         src/skin/SkinStoragePaths.cpp
+        src/skin/beatoraja/GameplaySkinSourceFormat.cpp
         src/skin/package/SkinAliasDetector.cpp
         src/skin/package/SkinPathPolicy.cpp
         src/skin/package/SkinTreeSnapshotter.cpp
@@ -6111,6 +6138,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/VersionedJson.cpp
         src/skin/SkinProfileSettings.cpp
         src/skin/SkinStoragePaths.cpp
+        src/skin/beatoraja/GameplaySkinSourceFormat.cpp
         src/skin/package/SkinAliasDetector.cpp
         src/skin/package/SkinArchiveImporter.cpp
         src/skin/package/SkinPackageCatalog.cpp
@@ -6165,6 +6193,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/skin/SkinCommitCoordinator.cpp
         src/skin/SkinProfileSettings.cpp
         src/skin/SkinStoragePaths.cpp
+        src/skin/beatoraja/GameplaySkinSourceFormat.cpp
         src/skin/package/SkinAliasDetector.cpp
         src/skin/package/SkinArchiveImporter.cpp
         src/skin/package/SkinPackageCatalog.cpp
@@ -6224,6 +6253,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/skin/SkinCommitCoordinator.cpp
         src/skin/SkinProfileSettings.cpp
         src/skin/SkinStoragePaths.cpp
+        src/skin/beatoraja/GameplaySkinSourceFormat.cpp
         src/skin/package/SkinAliasDetector.cpp
         src/skin/package/SkinArchiveImporter.cpp
         src/skin/package/SkinPackageCatalog.cpp

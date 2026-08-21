@@ -514,6 +514,42 @@ void testZipFolderAndManualTreeHaveOneIdentity() {
   }
 }
 
+void testCandidateInventoryRecognizesEveryGameplayDocumentExtension() {
+  TempDirectory temp;
+  const auto roots = rootsBelow(temp.root());
+  const std::vector<ZipMember> members{
+      {"Wrapper/play/main.LUASKIN", "return {type = 0}\n"},
+      {"Wrapper/play/main.JSON", R"json({"type":0})json"},
+      {"Wrapper/play/main.LR2SKIN", "#INFORMATION,0,LR2,fixture\n"},
+      {"Wrapper/config/settings.json", R"json({"application":"config"})json"},
+      {"Wrapper/select/select.lr2skin", "#INFORMATION,5,Select,fixture\n"},
+      {"Wrapper/play/not-an-entry.json.bak", "{}"},
+      {"Wrapper/play/module.lua", "return {}\n"},
+  };
+  const fs::path folder = temp.root() / "folder";
+  for (const auto &member : members) {
+    const std::string_view relative =
+        std::string_view(member.path).substr(std::string_view("Wrapper/").size());
+    writeBytes(folder / fs::path(relative), member.bytes);
+  }
+
+  auto archive = prepareZip(makeZip(temp.root() / "formats.zip", members), roots);
+  auto directory = prepareFolder(folder, roots);
+  expect(archive.prepared && directory.prepared,
+         "mixed-format archive and folder candidates both prepare");
+  if (!archive.prepared || !directory.prepared) {
+    return;
+  }
+  std::vector<std::string> expected{
+      "config/settings.json", "play/main.JSON", "play/main.LR2SKIN",
+      "play/main.LUASKIN", "select/select.lr2skin"};
+  std::ranges::sort(expected);
+  expect(entryPaths(*archive.prepared) == expected &&
+             entryPaths(*directory.prepared) == expected,
+         "candidate inventory admits Lua, JSON, and LR2 case-insensitively "
+         "without suffix-like or module files");
+}
+
 void testCanonicalWrapperAndExplicitDirectoryRules() {
   TempDirectory temp;
   const auto roots = rootsBelow(temp.root());
@@ -1583,6 +1619,7 @@ void testCancellationAndPreparedDestructionCleanAllStaging() {
 int main() {
   testMoveOnlyPreparationContract();
   testZipFolderAndManualTreeHaveOneIdentity();
+  testCandidateInventoryRecognizesEveryGameplayDocumentExtension();
   testCanonicalWrapperAndExplicitDirectoryRules();
   testExplicitEmptyDirectoriesAreMaterialized();
   testUnsafeNamesAndCollisionsRejectWholePackage();

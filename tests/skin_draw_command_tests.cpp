@@ -1979,7 +1979,7 @@ void testLr2ImageTextUsesHeightMarginAlignmentShrinkAndMissingNoDraw() {
   auto text = textObject(1, true);
   auto &definition = std::get<SkinTextObject>(text.payload);
   definition.literal = "AXB";
-  definition.pointSize = 3;
+  definition.pointSize = 0;
   definition.alignment = 2;
   definition.overflow = 0;
   definition.wrapping = true;
@@ -2012,7 +2012,8 @@ void testLr2ImageTextUsesHeightMarginAlignmentShrinkAndMissingNoDraw() {
                       run.glyphs[0].vertices[0].y) == 20.0F,
          "LR2 layout scales from destination height, includes one scaled "
          "margin after each available glyph in measured right alignment, "
-         "and always shrinks the complete run to destination width");
+         "always shrinks the complete run to destination width, and does not "
+         "require the unused point-size field");
 }
 
 void testTextVerticalPlacementMatchesPinnedBitmapFontBaseline() {

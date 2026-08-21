@@ -1,10 +1,9 @@
 #include "GameplaySkinValidator.h"
 
-#include "GameplaySkinBuiltinCatalog.h"
+#include "GameplaySkinDocumentLoader.h"
+#include "GameplaySkinSourceFormat.h"
 #include "../GameplaySkinTraits.h"
 #include "LuaSkinFileSystem.h"
-#include "LuaSkinRuntime.h"
-#include "LuaSkinTableDecoder.h"
 
 #include <algorithm>
 #include <iterator>
@@ -20,18 +19,6 @@ SkinDiagnostic validationDiagnostic(std::string code, std::string message,
           .message = std::move(message),
           .virtualPath = std::move(virtualPath),
           .severity = DiagnosticSeverity::Error};
-}
-
-void appendFailure(std::vector<SkinDiagnostic> &diagnostics,
-                   std::optional<SkinDiagnostic> failure,
-                   std::string_view fallbackCode,
-                   std::string_view fallbackMessage) {
-  if (failure) {
-    diagnostics.push_back(std::move(*failure));
-  } else {
-    diagnostics.push_back(validationDiagnostic(std::string(fallbackCode),
-                                               std::string(fallbackMessage)));
-  }
 }
 
 SkinEntryMetadataSnapshot
@@ -91,10 +78,24 @@ bool cancelled(std::stop_token stop, SkinValidationResult &result) {
   return true;
 }
 
-bool hasErrors(std::span<const SkinDiagnostic> diagnostics) {
-  return std::ranges::any_of(diagnostics, [](const SkinDiagnostic &diagnostic) {
-    return diagnostic.severity == DiagnosticSeverity::Error;
-  });
+std::pair<std::string, std::string>
+unavailableTypeDiagnostic(GameplaySkinSourceFormat format) {
+  switch (format) {
+  case GameplaySkinSourceFormat::Lua:
+    return {"skin_lua_type_unavailable",
+            "Lua skin declares a supported Beatoraja type that is not a "
+            "gameplay keymode in this build"};
+  case GameplaySkinSourceFormat::Json:
+    return {"skin_json_type_unavailable",
+            "JSON document does not declare a gameplay skin type available "
+            "in this build"};
+  case GameplaySkinSourceFormat::Lr2:
+    return {"skin_lr2_type_unavailable",
+            "LR2 skin declares a Beatoraja type that is not a gameplay "
+            "keymode in this build"};
+  }
+  return {"skin.document.type_unavailable",
+          "Gameplay skin document type is unavailable"};
 }
 
 } // namespace
@@ -119,110 +120,90 @@ SkinValidationResult GameplaySkinValidator::validate(
     return result;
   }
   try {
-    auto runtimeFiles = LuaSkinFileSystem::create(
-        {.revision = revision, .entry = entry, .safetyPolicy = safetyPolicy});
-    if (!runtimeFiles.fileSystem) {
-      const std::string message =
-          runtimeFiles.failure ? runtimeFiles.failure->message
-                               : "Lua skin filesystem could not be created";
+    const auto sourceFormat =
+        gameplaySkinSourceFormatForPath(entry.packageRelativePath);
+    if (!sourceFormat) {
       result.diagnostics.push_back(validationDiagnostic(
-          "skin_lua_filesystem_create_failed", message,
-          runtimeFiles.failure ? runtimeFiles.failure->virtualPath : ""));
+          "skin.document.source_unsupported",
+          "Gameplay skin entry has an unsupported source extension.",
+          entry.packageRelativePath));
+      return result;
+    }
+
+    auto documentFiles = LuaSkinFileSystem::create(
+        {.revision = revision, .entry = entry, .safetyPolicy = safetyPolicy});
+    if (!documentFiles.fileSystem) {
+      const std::string message =
+          documentFiles.failure
+              ? documentFiles.failure->message
+              : "Gameplay skin document filesystem could not be created";
+      result.diagnostics.push_back(validationDiagnostic(
+          "skin.document.filesystem_create_failed", message,
+          documentFiles.failure ? documentFiles.failure->virtualPath : ""));
       return result;
     }
     if (cancelled(stop, result)) {
       return result;
     }
 
-    auto runtime = LuaSkinRuntime::create(
-        {.purpose = LuaRuntimePurpose::Validation,
-         .fileSystem = std::move(runtimeFiles.fileSystem),
-         .safetyPolicy = safetyPolicy});
-    if (!runtime.runtime) {
-      appendFailure(result.diagnostics, std::move(runtime.failure),
-                    "skin_lua_runtime_create_failed",
-                    "Lua validation runtime could not be created");
+    std::unique_ptr<LuaSkinFileSystem> luaFiles;
+    if (*sourceFormat == GameplaySkinSourceFormat::Lua) {
+      auto created = LuaSkinFileSystem::create(
+          {.revision = revision, .entry = entry, .safetyPolicy = safetyPolicy});
+      if (!created.fileSystem) {
+        result.diagnostics.push_back(validationDiagnostic(
+            "skin_lua_filesystem_create_failed",
+            created.failure
+                ? created.failure->message
+                : "Lua validation filesystem could not be created",
+            created.failure ? created.failure->virtualPath : ""));
+        return result;
+      }
+      luaFiles = std::move(created.fileSystem);
+    }
+
+    GameplaySkinDocumentLoader loader;
+    auto inspected = loader.inspect(
+        {.sourceFormat = *sourceFormat,
+         .entry = entry,
+         .documentFileSystem = *documentFiles.fileSystem,
+         .luaFileSystem = std::move(luaFiles),
+         .desiredSettings = desiredSettings,
+         .luaPurpose = LuaRuntimePurpose::Validation,
+         .safetyPolicy = safetyPolicy,
+         .stop = stop});
+    result.diagnostics = std::move(inspected.diagnostics);
+    if (inspected.cancelled || cancelled(stop, result)) {
+      result.cancelled = true;
+      return result;
+    }
+    if (!inspected.header) {
       return result;
     }
 
-    LuaSkinTableDecoder decoder(safetyPolicy);
-    auto headerValue = runtime.runtime->loadHeader();
-    if (!headerValue.value) {
-      appendFailure(result.diagnostics, std::move(headerValue.failure),
-                    "skin_lua_header_load_failed",
-                    "Lua skin header could not be loaded");
-      return result;
-    }
-    auto decodedHeader = decoder.decodeHeader(*headerValue.value);
-    result.diagnostics.insert(
-        result.diagnostics.end(),
-        std::make_move_iterator(decodedHeader.diagnostics.begin()),
-        std::make_move_iterator(decodedHeader.diagnostics.end()));
-    if (!decodedHeader.header || hasErrors(result.diagnostics) ||
-        cancelled(stop, result)) {
-      return result;
-    }
-
-    // The configuration reconciliation uses a fresh, equivalent package
-    // filesystem. The Lua runtime exclusively owns the first filesystem for
-    // both loader phases, matching LuaSkinLoader.load's single-state flow.
-    auto configurationFiles = LuaSkinFileSystem::create(
-        {.revision = revision, .entry = entry, .safetyPolicy = safetyPolicy});
-    if (!configurationFiles.fileSystem) {
-      const std::string message =
-          configurationFiles.failure
-              ? configurationFiles.failure->message
-              : "Lua skin configuration filesystem could not be created";
-      result.diagnostics.push_back(validationDiagnostic(
-          "skin_lua_filesystem_create_failed", message,
-          configurationFiles.failure ? configurationFiles.failure->virtualPath
-                                     : ""));
-      return result;
-    }
-    auto reconciliation = reconcileSkinConfiguration(
-        *decodedHeader.header, desiredSettings, *configurationFiles.fileSystem);
-    result.diagnostics.insert(
-        result.diagnostics.end(),
-        std::make_move_iterator(reconciliation.diagnostics.begin()),
-        std::make_move_iterator(reconciliation.diagnostics.end()));
-    if (!reconciliation.configuration || hasErrors(result.diagnostics) ||
-        cancelled(stop, result)) {
-      return result;
-    }
-    BeatorajaSkinConfiguration configuration =
-        std::move(*reconciliation.configuration);
-    const std::string reconciledConfigurationDigest =
-        skinConfigurationDigest(reconciliation.reconciledSettings);
-    if (configuration.lowercaseSha256.empty() ||
-        configuration.lowercaseSha256 != reconciledConfigurationDigest) {
-      result.diagnostics.push_back(validationDiagnostic(
-          "skin_lua_configuration_digest_invalid",
-          "reconciled Lua skin configuration has an inconsistent digest"));
-      return result;
-    }
-    if (cancelled(stop, result)) {
-      return result;
-    }
-
-    result.metadata = metadataFor(*decodedHeader.header, configuration);
+    result.metadata = metadataFor(
+        *inspected.header,
+        inspected.configuration.value_or(BeatorajaSkinConfiguration{}));
     if (!gameplaySkinTraitForSkinType(result.metadata->skinType)) {
       result.disposition = SkinValidationDisposition::UnavailableType;
+      const auto [code, message] = unavailableTypeDiagnostic(*sourceFormat);
       result.diagnostics.push_back(validationDiagnostic(
-          "skin_lua_type_unavailable",
-          "Lua skin declares a supported Beatoraja type that is not a "
-          "gameplay keymode in this build"));
+          code, message, entry.packageRelativePath));
+      return result;
+    }
+    if (!inspected.configuration || !inspected.reconciledSettings) {
       return result;
     }
 
     result.disposition = SkinValidationDisposition::SelectableGameplay;
-    result.reconciledSettings = std::move(reconciliation.reconciledSettings);
-    result.configurationDigest = reconciledConfigurationDigest;
+    result.reconciledSettings = std::move(inspected.reconciledSettings);
+    result.configurationDigest = inspected.configuration->lowercaseSha256;
     return result;
   } catch (...) {
     result = {};
     result.diagnostics.push_back(
-        validationDiagnostic("skin_lua_validation_failed",
-                             "Lua gameplay skin validation failed closed"));
+        validationDiagnostic("skin.document.validation_failed",
+                             "Gameplay skin validation failed closed"));
     return result;
   }
 }

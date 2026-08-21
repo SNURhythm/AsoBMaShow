@@ -322,6 +322,38 @@ public:
   std::function<void()> beforeFirstValidation;
 };
 
+class FormatAdmissionValidator final : public SkinEntryValidator {
+public:
+  SkinValidationResult validate(SkinRevisionReadView, const SkinEntryId &entry,
+                                const EntryProfileSettings *,
+                                std::stop_token) override {
+    validatedPaths.push_back(entry.packageRelativePath);
+    int skinType = 0;
+    if (entry.packageRelativePath == "config/settings.json") {
+      skinType = -1;
+    } else if (entry.packageRelativePath == "select/select.lr2skin") {
+      skinType = 5;
+    }
+    SkinEntryMetadataSnapshot metadata{
+        .displayName = entry.packageRelativePath,
+        .author = "format fixture",
+        .skinType = skinType,
+        .authoredWidth = 640,
+        .authoredHeight = 480};
+    if (metadata.skinType != 0) {
+      return {.disposition = SkinValidationDisposition::UnavailableType,
+              .metadata = std::move(metadata)};
+    }
+    EntryProfileSettings reconciled;
+    return {.disposition = SkinValidationDisposition::SelectableGameplay,
+            .reconciledSettings = reconciled,
+            .metadata = std::move(metadata),
+            .configurationDigest = skinConfigurationDigest(reconciled)};
+  }
+
+  std::vector<std::string> validatedPaths;
+};
+
 class OneShotThrowingObserver final : public SkinImportIoObserver {
 public:
   explicit OneShotThrowingObserver(std::function<void()> beforeThrow = {})
@@ -1328,6 +1360,68 @@ void testInventoryFenceAndDescendantEditReturnPreparedWithoutMutation() {
                !fs::exists(roots.privateRevisions / revision),
            "inventory race performs zero journal/catalog/revision mutation");
   }
+}
+
+void testMixedFormatCandidatesPublishOnlyValidatedGameplayHeaders() {
+  TempDirectory temp;
+  const SkinStorageRoots roots = rootsBelow(temp.root());
+  const auto package = normalizePackageId("FormatPackage");
+  expect(package.package.has_value(), "format package ID is valid");
+  if (!package.package) {
+    return;
+  }
+  const fs::path source = temp.root() / "format-package";
+  writeText(source / "play/lua.luaskin", "return {type = 0}\n");
+  writeText(source / "play/json.json", R"json({"type":0})json");
+  writeText(source / "play/lr2.lr2skin", "#INFORMATION,0,LR2,fixture\n");
+  writeText(source / "config/settings.json",
+            R"json({"application":"configuration"})json");
+  writeText(source / "select/select.lr2skin",
+            "#INFORMATION,5,Select,fixture\n");
+  writeText(source / "play/readme.txt", "not a skin entry\n");
+
+  NoAliases aliases;
+  SkinArchiveImporter importer(roots, aliases);
+  auto prepared =
+      importer.prepareFolder(source, *package.package, {}, {});
+  expect(prepared.prepared.has_value(),
+         "mixed-format package prepares before header admission");
+  if (!prepared.prepared) {
+    return;
+  }
+
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  FakeProfileSnapshots profiles;
+  FormatAdmissionValidator validator;
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  expect(store.recoverBeforeServiceStart().disposition ==
+             SkinRecoveryDisposition::Recovered,
+         "mixed-format store bootstraps");
+  const auto published = store.publish(
+      std::move(*prepared.prepared), PackageCollisionPolicy::Reject,
+      ProfileInventorySnapshot{.inventoryGeneration = 1}, validator, {}, {});
+
+  const auto snapshot = catalog.snapshot();
+  const std::size_t selectable = static_cast<std::size_t>(std::ranges::count_if(
+      snapshot->entries, [](const SkinCatalogEntrySnapshot &entry) {
+        return entry.validation ==
+               SkinValidationDisposition::SelectableGameplay;
+      }));
+  const std::size_t unavailable =
+      static_cast<std::size_t>(std::ranges::count_if(
+          snapshot->entries, [](const SkinCatalogEntrySnapshot &entry) {
+            return entry.validation == SkinValidationDisposition::UnavailableType;
+          }));
+  const std::size_t invalid = static_cast<std::size_t>(std::ranges::count_if(
+      snapshot->entries, [](const SkinCatalogEntrySnapshot &entry) {
+        return entry.validation == SkinValidationDisposition::Invalid;
+      }));
+  expect(published.published && published.entries.size() == 5 &&
+             validator.validatedPaths.size() == 5 &&
+             snapshot->entries.size() == 5 && selectable == 3 &&
+             unavailable == 2 && invalid == 0,
+         "header admission publishes exactly three gameplay formats while "
+         "generic JSON and non-gameplay LR2 remain nonfatal and unavailable");
 }
 
 void testNormalizedPhysicalCollisionsRejectOrReplaceAsOnePackage() {
@@ -2699,6 +2793,7 @@ int main(int argc, char **argv) {
   testOperationNamesDoNotReusePreseededPriorProcessArtifacts();
   testBootstrapCleansOnlyBoundedRecognizableOwnedArtifacts();
   testInventoryFenceAndDescendantEditReturnPreparedWithoutMutation();
+  testMixedFormatCandidatesPublishOnlyValidatedGameplayHeaders();
   testNormalizedPhysicalCollisionsRejectOrReplaceAsOnePackage();
   testAmbiguousPhysicalCollisionCannotPersistDuplicateCatalogIdentity();
   testRescanIgnoresLegacyRuntimeDirectory();

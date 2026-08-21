@@ -22,6 +22,7 @@ if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
     target_sources(main PRIVATE
         GameplaySkinLifecycle.cpp
         beatoraja/GameplaySkinBuiltinCatalog.cpp
+        beatoraja/GameplaySkinDocumentLoader.cpp
         beatoraja/JsonGameplaySkinDecoder.cpp
         beatoraja/Lr2GameplaySkinDecoder.cpp
         beatoraja/Lr2SkinCsvParser.cpp

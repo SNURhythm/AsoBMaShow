@@ -1,9 +1,9 @@
 #include "PlaySkinSession.h"
 
+#include "GameplaySkinDocumentLoader.h"
 #include "GameplaySkinBuiltinCatalog.h"
+#include "GameplaySkinSourceFormat.h"
 #include "LuaSkinFileSystem.h"
-#include "LuaSkinTableDecoder.h"
-#include "SkinModelValidator.h"
 #include "../../scene/play/StartLaneIndicatorGeometry.h"
 #include "../../rendering/SkinQuadBatchRenderer.h"
 #include "../../rendering/common.h"
@@ -351,6 +351,12 @@ PlaySkinSession::runtimeConfigurationSelection() const {
   return runtimeSkinConfigurationSelection(context_.configuration);
 }
 
+#if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
+bool PlaySkinSession::hasLuaRuntimeForTesting() const noexcept {
+  return owned_ != nullptr && owned_->runtime != nullptr;
+}
+#endif
+
 PlaySkinSessionCreateResult
 PlaySkinSession::create(ValidatedSkinActivation activation,
                         PlaySkinSessionContext context) {
@@ -399,56 +405,19 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
 
   try {
     const SkinRevisionReadView revision = activation.revision.readView();
-    auto runtimeFiles = LuaSkinFileSystem::create(
-        {.revision = revision,
-         .entry = activation.entry,
-         .storageRoots = context.storageRoots,
-         .profileId = context.profileId,
-         .allowDataWrites = true,
-         .safetyPolicy = context.safetyPolicy});
-    if (!runtimeFiles.fileSystem) {
+    const auto sourceFormat =
+        gameplaySkinSourceFormatForPath(activation.entry.packageRelativePath);
+    if (!sourceFormat) {
       result.diagnostics.push_back(sessionDiagnostic(
-          "skin_lua_filesystem_create_failed",
-          runtimeFiles.failure
-              ? runtimeFiles.failure->message
-              : "Lua gameplay skin filesystem could not be created",
-          runtimeFiles.failure ? runtimeFiles.failure->virtualPath : ""));
-      return result;
-    }
-    if (cancelled(context.stop, result)) {
+          "skin.document.source_unsupported",
+          "Gameplay skin activation has an unsupported source extension.",
+          activation.entry.packageRelativePath));
       return result;
     }
 
-    auto runtime = LuaSkinRuntime::create(
-        {.purpose = LuaRuntimePurpose::Gameplay,
-         .fileSystem = std::move(runtimeFiles.fileSystem),
-         .safetyPolicy = context.safetyPolicy});
-    if (!runtime.runtime) {
-      appendFailure(result.diagnostics, std::move(runtime.failure),
-                    "skin_lua_runtime_create_failed",
-                    "Lua gameplay runtime could not be created");
-      return result;
-    }
-
-    LuaSkinTableDecoder decoder(context.safetyPolicy);
-    auto headerValue = runtime.runtime->loadHeader();
-    if (!headerValue.value) {
-      appendFailure(result.diagnostics, std::move(headerValue.failure),
-                    "skin_lua_header_load_failed",
-                    "Lua gameplay skin header could not be loaded");
-      return result;
-    }
-    auto decodedHeader = decoder.decodeHeader(*headerValue.value);
-    appendMovedDiagnostics(result.diagnostics, decodedHeader.diagnostics);
-    headerValue.value.reset();
-    if (!decodedHeader.header || hasErrors(result.diagnostics) ||
-        cancelled(context.stop, result)) {
-      return result;
-    }
-
-    // Reconciliation/resource reads use an equivalent non-writing view while
-    // the gameplay runtime exclusively owns its filesystem for both Lua load
-    // phases and later profile-isolated data access.
+    // Decode, configuration, and resource reads share this exact retained
+    // revision/live-source view. Only Lua receives the distinct writable
+    // runtime filesystem below.
     auto resourceFiles = LuaSkinFileSystem::create(
         {.revision = revision,
          .entry = activation.entry,
@@ -457,104 +426,95 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
          .safetyPolicy = context.safetyPolicy});
     if (!resourceFiles.fileSystem) {
       result.diagnostics.push_back(sessionDiagnostic(
-          "skin_lua_filesystem_create_failed",
+          "skin.document.filesystem_create_failed",
           resourceFiles.failure
               ? resourceFiles.failure->message
-              : "Lua gameplay skin resource filesystem could not be created",
+              : "Gameplay skin resource filesystem could not be created",
           resourceFiles.failure ? resourceFiles.failure->virtualPath : ""));
-      return result;
-    }
-
-    auto reconciliation = reconcileSkinConfiguration(
-        *decodedHeader.header, &activation.reconciledSettings,
-        *resourceFiles.fileSystem,
-        context.pinnedRuntimeSelection
-            ? &*context.pinnedRuntimeSelection
-            : nullptr);
-    appendMovedDiagnostics(result.diagnostics, reconciliation.diagnostics);
-    if (!reconciliation.configuration || hasErrors(result.diagnostics) ||
-        cancelled(context.stop, result)) {
-      return result;
-    }
-    result.reconciledSettings = reconciliation.reconciledSettings;
-    BeatorajaSkinConfiguration configuration =
-        std::move(*reconciliation.configuration);
-    result.configurationDigest = configuration.lowercaseSha256;
-    if (result.configurationDigest.empty() ||
-        result.configurationDigest != skinConfigurationDigest(configuration)) {
-      result.diagnostics.push_back(sessionDiagnostic(
-          "skin_lua_configuration_digest_invalid",
-          "Reconciled Lua gameplay skin configuration has an inconsistent "
-          "digest."));
-      return result;
-    }
-    if (result.configurationDigest != activation.configurationDigest) {
-      result.diagnostics.push_back(sessionDiagnostic(
-          "skin.session.configuration_digest_mismatch",
-          "Fresh gameplay skin configuration does not match the validated "
-          "activation digest."));
-      return result;
-    }
-
-    SkinEventMutationTable configuredMutationTable =
-        makePinnedSkinEventMutationTableV1();
-    PlaySkinStateBridge configuredStateBridge({
-        .chartModel = context.chartModel,
-        .model = nullptr,
-        .configuration = configuration,
-        .runtime = runtime.runtime.get(),
-        .mutationTable = configuredMutationTable,
-    });
-    configuredStateBridge.beginFrame(*context.initialState,
-                                     *context.initialProjection);
-    if (configuredStateBridge.frameSerial() !=
-        context.initialState->clock.serial) {
-      appendDiagnostics(result.diagnostics, configuredStateBridge.diagnostics());
-      configuredStateBridge.discardFrame();
-      if (!hasErrors(result.diagnostics)) {
-        result.diagnostics.push_back(sessionDiagnostic(
-            "skin.session.initial_state_invalid",
-            "Gameplay skin configuration could not bind its initialized "
-            "authoritative state."));
-      }
-      return result;
-    }
-    auto configuredValue = runtime.runtime->loadConfigured(configuration);
-    appendDiagnostics(result.diagnostics, configuredStateBridge.diagnostics());
-    configuredStateBridge.discardFrame();
-    if (!configuredValue.value) {
-      appendFailure(result.diagnostics, std::move(configuredValue.failure),
-                    "skin_lua_configured_load_failed",
-                    "Lua gameplay skin configured phase could not be loaded");
       return result;
     }
     if (cancelled(context.stop, result)) {
       return result;
     }
-    const SkinBuiltinBindingCatalogView builtins =
-        gameplaySkinBuiltinCatalog();
-    auto decodedModel = decoder.decodeGameplay(
-        *configuredValue.value,
-        {.runtime = *runtime.runtime,
-         .builtins = builtins,
-         .safetyPolicy = context.safetyPolicy});
-    appendMovedDiagnostics(result.diagnostics, decodedModel.diagnostics);
-    configuredValue.value.reset();
-    if (!decodedModel.model || hasErrors(result.diagnostics) ||
-        cancelled(context.stop, result)) {
-      return result;
+
+    std::unique_ptr<LuaSkinFileSystem> luaFiles;
+    if (*sourceFormat == GameplaySkinSourceFormat::Lua) {
+      auto created = LuaSkinFileSystem::create(
+          {.revision = revision,
+           .entry = activation.entry,
+           .storageRoots = context.storageRoots,
+           .profileId = context.profileId,
+           .allowDataWrites = true,
+           .safetyPolicy = context.safetyPolicy});
+      if (!created.fileSystem) {
+        result.diagnostics.push_back(sessionDiagnostic(
+            "skin_lua_filesystem_create_failed",
+            created.failure
+                ? created.failure->message
+                : "Lua gameplay skin filesystem could not be created",
+            created.failure ? created.failure->virtualPath : ""));
+        return result;
+      }
+      luaFiles = std::move(created.fileSystem);
     }
 
-    SkinModelValidator modelValidator;
-    auto validatedModel = modelValidator.validate(
-        std::move(*decodedModel.model),
-        {.builtins = builtins,
-         .callbacks = runtime.runtime->callbackLiveness()});
-    appendMovedDiagnostics(result.diagnostics, validatedModel.diagnostics);
-    if (!validatedModel.model || hasErrors(result.diagnostics) ||
-        cancelled(context.stop, result)) {
+    GameplaySkinDocumentLoader documentLoader;
+    auto loaded = documentLoader.load(
+        {.sourceFormat = *sourceFormat,
+         .entry = activation.entry,
+         .documentFileSystem = *resourceFiles.fileSystem,
+         .luaFileSystem = std::move(luaFiles),
+         .desiredSettings = &activation.reconciledSettings,
+         .pinnedRuntimeSelection =
+             context.pinnedRuntimeSelection
+                 ? &*context.pinnedRuntimeSelection
+                 : nullptr,
+         .expectedConfigurationDigest = activation.configurationDigest,
+         .luaPurpose = LuaRuntimePurpose::Gameplay,
+         .loadConfiguredLua =
+             [&context](LuaSkinRuntime &runtime,
+                        const BeatorajaSkinConfiguration &configuration,
+                        std::vector<SkinDiagnostic> &diagnostics) {
+               SkinEventMutationTable mutationTable =
+                   makePinnedSkinEventMutationTableV1();
+               PlaySkinStateBridge bridge({
+                   .chartModel = context.chartModel,
+                   .model = nullptr,
+                   .configuration = configuration,
+                   .runtime = &runtime,
+                   .mutationTable = mutationTable,
+               });
+               bridge.beginFrame(*context.initialState,
+                                 *context.initialProjection);
+               if (bridge.frameSerial() !=
+                   context.initialState->clock.serial) {
+                 appendDiagnostics(diagnostics, bridge.diagnostics());
+                 bridge.discardFrame();
+                 return LuaValueResult{
+                     .failure = sessionDiagnostic(
+                         "skin.session.initial_state_invalid",
+                         "Gameplay skin configuration could not bind its "
+                         "initialized authoritative state.")};
+               }
+               auto value = runtime.loadConfigured(configuration);
+               appendDiagnostics(diagnostics, bridge.diagnostics());
+               bridge.discardFrame();
+               return value;
+             },
+         .safetyPolicy = context.safetyPolicy,
+         .stop = context.stop});
+    result.reconciledSettings = std::move(loaded.reconciledSettings);
+    result.configurationDigest = std::move(loaded.configurationDigest);
+    appendMovedDiagnostics(result.diagnostics, loaded.diagnostics);
+    if (loaded.cancelled || cancelled(context.stop, result)) {
+      result.cancelled = true;
       return result;
     }
+    if (!loaded.document || hasErrors(result.diagnostics)) {
+      return result;
+    }
+    LoadedGameplaySkinDocument document = std::move(*loaded.document);
+    appendMovedDiagnostics(result.diagnostics, document.diagnostics);
 
     const std::vector<std::string> runtimeStrings =
         context.chartModel.runtimeStrings();
@@ -562,8 +522,8 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
         {.revision = activation.revision.clone(),
          .entry = activation.entry,
          .fileSystem = *resourceFiles.fileSystem,
-         .model = *validatedModel.model,
-         .configuration = configuration,
+         .model = document.model,
+         .configuration = document.configuration,
          .requiredRuntimeStrings = runtimeStrings,
          .practiceMode = context.initialState->authority.gameplayMode ==
                          PlayfieldGameplayMode::Practice,
@@ -586,8 +546,8 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
 #endif
     auto preparedMovies = SkinMovieCatalog::prepare(
         {.fileSystem = *resourceFiles.fileSystem,
-         .model = *validatedModel.model,
-         .configuration = configuration,
+         .model = document.model,
+         .configuration = document.configuration,
          .device = std::move(movieDevice),
          .safetyPolicy = context.safetyPolicy,
          .stop = context.stop,
@@ -614,16 +574,18 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
     const auto pomyuMotionCyclesMillis =
         uploaded.catalog->pomyuMotionCyclesMillis();
 
-    auto renderPhase = runtime.runtime->enterRenderPhase();
-    if (!renderPhase.ok) {
-      appendFailure(result.diagnostics, std::move(renderPhase.failure),
-                    "skin_lua_render_phase_failed",
-                    "Lua gameplay skin could not enter render phase");
-      return result;
+    if (document.luaRuntime) {
+      auto renderPhase = document.luaRuntime->enterRenderPhase();
+      if (!renderPhase.ok) {
+        appendFailure(result.diagnostics, std::move(renderPhase.failure),
+                      "skin_lua_render_phase_failed",
+                      "Lua gameplay skin could not enter render phase");
+        return result;
+      }
     }
     uploaded.catalog->enterRenderPhase();
 
-    const auto &header = validatedModel.model->model.header;
+    const auto &header = document.model.model.header;
     const PlaySkinViewport viewport = evaluatePlaySkinViewport(
         {.width = static_cast<double>(header.width),
          .height = static_cast<double>(header.height)},
@@ -648,8 +610,8 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
     auto owned = std::make_unique<OwnedActivation>(
         std::move(activation.revision), std::move(identity),
         context.chartModel, result.reconciledSettings,
-        std::move(*validatedModel.model), std::move(configuration),
-        std::move(runtime.runtime), std::move(uploaded.catalog),
+        std::move(document.model), std::move(document.configuration),
+        std::move(document.luaRuntime), std::move(uploaded.catalog),
         std::move(preparedMovies.catalog),
         context.configurationWrites, std::move(context.applyAudioVolume),
         std::move(context.applyPracticeItemScroll),
@@ -663,7 +625,7 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
     result.session.reset();
     result.diagnostics.push_back(sessionDiagnostic(
         "skin.session.create_failed",
-        "Lua gameplay skin session creation failed closed."));
+        "Gameplay skin session creation failed closed."));
     return result;
   }
 }

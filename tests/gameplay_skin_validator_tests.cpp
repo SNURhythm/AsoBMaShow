@@ -201,6 +201,37 @@ validateScript(std::string_view script,
                             desiredSettings, stop);
 }
 
+SkinValidationResult validateDocument(std::string_view entryPath,
+                                      std::string_view contents) {
+  TempDirectory temp;
+  const auto package = normalizePackageId("FormatFixture");
+  expect(package.package.has_value(), "format fixture package ID is valid");
+  if (!package.package) {
+    return {};
+  }
+  const auto entry = normalizeEntryPath(*package.package, entryPath);
+  expect(entry.entry.has_value(), "format fixture entry ID is valid");
+  if (!entry.entry) {
+    return {};
+  }
+
+  const fs::path source = temp.root() / "source";
+  writeText(source / fs::path(entryPath), contents);
+  NoAliases aliases;
+  SkinTreeSnapshotter snapshotter(rootsBelow(temp.root()), aliases);
+  const auto snapshot = snapshotter.snapshot(source, *package.package, {}, {});
+  expect(snapshot.prepared.has_value(),
+         "format fixture revision snapshot is prepared");
+  if (!snapshot.prepared) {
+    return {};
+  }
+
+  SkinResourcePreparationService resources;
+  GameplaySkinValidator validator(resources);
+  return validator.validate(snapshot.prepared->readView(), *entry.entry,
+                            nullptr, {});
+}
+
 void testAuthoritativeCatalogAdmitsCompatibilityIntegerFactoryDomain() {
   const SkinBuiltinBindingCatalogView catalog = gameplaySkinBuiltinCatalog();
   expect(catalog.contains({.kind = SkinBindingKind::BooleanProperty},
@@ -496,6 +527,47 @@ return {
          "non-gameplay Beatoraja skin types cannot appear in gameplay tabs");
 }
 
+void testCatalogAdmitsOnlyGameplayHeadersAcrossStaticFormats() {
+  const auto json = validateDocument(
+      "play/parity.json",
+      R"json({"type":0,"name":"JSON gameplay","author":"fixture","w":640,"h":480})json");
+  expect(json.disposition == SkinValidationDisposition::SelectableGameplay &&
+             json.metadata && json.metadata->displayName == "JSON gameplay" &&
+             json.metadata->skinType == 0 && json.reconciledSettings &&
+             json.configurationDigest ==
+                 skinConfigurationDigest(*json.reconciledSettings),
+         "a decoded JSON gameplay header is selectable with reconciled settings");
+
+  const auto lr2 = validateDocument(
+      "play/parity.lr2skin",
+      "#INFORMATION,0,LR2 gameplay,fixture\n#RESOLUTION,0\n");
+  expect(lr2.disposition == SkinValidationDisposition::SelectableGameplay &&
+             lr2.metadata && lr2.metadata->displayName == "LR2 gameplay" &&
+             lr2.metadata->skinType == 0 && lr2.reconciledSettings &&
+             lr2.configurationDigest ==
+                 skinConfigurationDigest(*lr2.reconciledSettings),
+         "a decoded LR2 gameplay header is selectable with reconciled settings");
+
+  const auto genericJson = validateDocument(
+      "config/settings.json", R"json({"application":"configuration"})json");
+  expect(genericJson.disposition == SkinValidationDisposition::UnavailableType &&
+             genericJson.metadata && genericJson.metadata->skinType == -1 &&
+             !genericJson.reconciledSettings &&
+             genericJson.configurationDigest.empty(),
+         "generic JSON remains unavailable rather than becoming gameplay");
+
+  const auto nonGameplayLr2 = validateDocument(
+      "select/select.lr2skin",
+      "#INFORMATION,5,Music select,fixture\n#RESOLUTION,0\n");
+  expect(nonGameplayLr2.disposition ==
+                 SkinValidationDisposition::UnavailableType &&
+             nonGameplayLr2.metadata &&
+             nonGameplayLr2.metadata->skinType == 5 &&
+             !nonGameplayLr2.reconciledSettings &&
+             nonGameplayLr2.configurationDigest.empty(),
+         "a decoded non-gameplay LR2 header remains unavailable");
+}
+
 void testCatalogDefersGameplayBindingFailureToGameplayLoading() {
   const SkinValidationResult result = validateScript(R"lua(
 return {
@@ -646,6 +718,7 @@ int main() {
   testCatalogDoesNotExecuteConfiguredLuaOrFabricateMainState();
   testCatalogKeepsBeatorajaEmptyOptionDeclarationsSelectable();
   testCatalogRejectsNonGameplayBeatorajaSkinTypes();
+  testCatalogAdmitsOnlyGameplayHeadersAcrossStaticFormats();
   testCatalogDefersGameplayBindingFailureToGameplayLoading();
   testCatalogDefersGameplayResourceFailureToGameplayLoading();
   testRequestedExternalGameplaySkinAvoidsConfiguredStateErrors();

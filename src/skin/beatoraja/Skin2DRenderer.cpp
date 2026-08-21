@@ -1174,7 +1174,8 @@ TextLayoutInput prepareTextLayout(const SkinFrameInputs &inputs,
   result.atlas = inputs.resources.findTextAtlasForObject(object.id);
   if (!result.atlas || result.atlas->id == 0 ||
       result.atlas->lineHeight <= 0 ||
-      text.pointSize <= 0 ||
+      (result.atlas->layoutKind != SkinTextLayoutKind::Lr2Image &&
+       text.pointSize <= 0) ||
       (result.atlas->bitmapFont &&
        (result.atlas->originalSize <= 0 || result.atlas->pageWidth <= 0 ||
         result.atlas->pageHeight <= 0 || result.atlas->bitmapFontType < 0 ||

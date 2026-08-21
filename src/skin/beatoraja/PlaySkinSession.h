@@ -199,6 +199,7 @@ public:
                bool recordTimingSample) override;
 
 #if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
+  [[nodiscard]] bool hasLuaRuntimeForTesting() const noexcept;
   // Focused transaction-core seam. Application code cannot supply an
   // external writer span or observe an unpublished bridge commit.
   [[nodiscard]] PlaySkinFrameTransactionResult prepareFrame(

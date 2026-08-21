@@ -12,6 +12,7 @@
 #include "skin/beatoraja/SyntheticReplayGhostOverlay.h"
 #include "skin/beatoraja/SkinResourceCatalog.h"
 #include "skin/package/SkinAliasDetector.h"
+#include "skin/package/SkinArchiveImporter.h"
 #include "skin/package/SkinPathPolicy.h"
 #include "skin/package/SkinTreeSnapshotter.h"
 #include "view/View.h"
@@ -977,6 +978,307 @@ private:
   std::optional<SkinRevisionLease> lease_;
   SkinValidationResult validation_;
 };
+
+struct ParityQuadOutput {
+  SkinObjectId object = 0;
+  SkinResourceId resource = 0;
+  std::array<std::array<float, 4>, 4> vertices{};
+  std::array<std::uint32_t, 4> colors{};
+  bool operator==(const ParityQuadOutput &) const = default;
+};
+
+struct ParityTextOutput {
+  SkinObjectId object = 0;
+  std::vector<char32_t> glyphs;
+  std::vector<char32_t> fallbackGlyphs;
+  bool operator==(const ParityTextOutput &) const = default;
+};
+
+struct ParityCommandOutput {
+  std::vector<ParityQuadOutput> quads;
+  std::vector<ParityTextOutput> texts;
+  std::size_t otherCommands = 0;
+  bool operator==(const ParityCommandOutput &) const = default;
+};
+
+ParityCommandOutput parityCommandOutput(const SkinCommandBuffer &commands) {
+  ParityCommandOutput output;
+  for (const auto &command : commands.commands) {
+    if (const auto *quad =
+            std::get_if<SkinTexturedQuadCommand>(&command.payload);
+        quad != nullptr &&
+        (command.sourceObject == 1 || command.sourceObject == 2)) {
+      ParityQuadOutput normalized{.object = command.sourceObject,
+                                  .resource = quad->resource};
+      for (std::size_t index = 0; index < quad->vertices.size(); ++index) {
+        const auto &vertex = quad->vertices[index];
+        normalized.vertices[index] = {vertex.x, vertex.y, vertex.u, vertex.v};
+        normalized.colors[index] = vertex.rgba;
+      }
+      output.quads.push_back(std::move(normalized));
+      continue;
+    }
+    if (const auto *text = std::get_if<SkinGlyphRunCommand>(&command.payload);
+        text != nullptr && command.sourceObject == 3) {
+      ParityTextOutput normalized{.object = command.sourceObject};
+      for (const auto &glyph : text->glyphs) {
+        normalized.glyphs.push_back(glyph.codepoint);
+      }
+      for (const auto &glyph : text->fallbackColorOverlays) {
+        normalized.fallbackGlyphs.push_back(glyph.codepoint);
+      }
+      output.texts.push_back(std::move(normalized));
+      continue;
+    }
+    ++output.otherCommands;
+  }
+  return output;
+}
+
+class FormatParityFixture final {
+public:
+  FormatParityFixture()
+      : roots_{.visiblePackages = temp_.root() / "visible",
+               .privateRevisions = temp_.root() / "revisions",
+               .privateCatalog = temp_.root() / "catalog",
+               .profileOverlays = temp_.root() / "overlays"},
+        package_(*normalizePackageId("GameplayFormats").package),
+        profile_(*makeSkinProfileId(
+            "88888888-8888-4888-8888-888888888888")) {
+    chart_.keyCount = 7;
+    chart_.text.title = "AV";
+    chart_.text.artist = "format fixture";
+    chart_.text.fullArtist = "format fixture";
+
+    const fs::path source = temp_.root() / "source";
+    fs::create_directories(source / "skin/resources");
+    fs::create_directories(source / "skin/fonts");
+    fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
+                      "tests/fixtures/beatoraja_skin/resources/fixture.png",
+                  source / "skin/resources/fixture.png");
+    fs::copy_file(
+        fs::path(ASOBMASHOW_SOURCE_DIR) /
+            "tests/fixtures/beatoraja_skin/resources/bitmap-font/fixture.fnt",
+        source / "skin/fonts/fixture.fnt");
+    fs::copy_file(
+        fs::path(ASOBMASHOW_SOURCE_DIR) /
+            "tests/fixtures/beatoraja_skin/resources/bitmap-font/page.png",
+        source / "skin/fonts/page.png");
+    writeText(source / "skin/fonts/fixture.lr2font",
+              "#S,10\n#M,0\n#T,0,page.png\n"
+              "#R,65,0,9,0,6,8\n#R,86,0,15,0,7,8\n");
+
+    writeText(source / "skin/parity.luaskin", R"lua(
+local skin = {
+  type = 0, name = "Lua parity", author = "fixture", w = 640, h = 480
+}
+if skin_config then
+  skin.source = {{id = "atlas", path = "resources/fixture.png"}}
+  skin.font = {{id = "font", path = "fonts/fixture.fnt", type = 0}}
+  skin.image = {{id = "image", src = "atlas", x = 0, y = 0,
+                 w = 40, h = 20, divx = 1, divy = 1}}
+  skin.value = {{id = "number", src = "atlas", x = 0, y = 0,
+                 w = 40, h = 20, divx = 10, divy = 1,
+                 ref = 10, align = 0, digit = 3, padding = 0,
+                 zeropadding = 0, space = 0}}
+  skin.text = {{id = "text", font = "font", size = 10,
+                align = 0, ref = 10}}
+  skin.destination = {
+    {id = "image", dst = {{time = 0, x = 10, y = 100, w = 40, h = 20}}},
+    {id = "number", dst = {{time = 0, x = 60, y = 100, w = 4, h = 20}}},
+    {id = "text", dst = {{time = 0, x = 100, y = 100, w = 200, h = 40}}}
+  }
+end
+return skin
+)lua");
+
+    writeText(source / "skin/parity.json", R"json({
+  "type": 0, "name": "JSON parity", "author": "fixture", "w": 640, "h": 480,
+  "source": [{"id":"atlas","path":"resources/fixture.png"}],
+  "font": [{"id":"font","path":"fonts/fixture.fnt","type":0}],
+  "image": [{"id":"image","src":"atlas","x":0,"y":0,"w":40,"h":20,"divx":1,"divy":1}],
+  "value": [{"id":"number","src":"atlas","x":0,"y":0,"w":40,"h":20,"divx":10,"divy":1,"ref":10,"align":0,"digit":3,"padding":0,"zeropadding":0,"space":0}],
+  "text": [{"id":"text","font":"font","size":10,"align":0,"ref":10}],
+  "destination": [
+    {"id":"image","dst":[{"time":0,"x":10,"y":100,"w":40,"h":20}]},
+    {"id":"number","dst":[{"time":0,"x":60,"y":100,"w":4,"h":20}]},
+    {"id":"text","dst":[{"time":0,"x":100,"y":100,"w":200,"h":40}]}
+  ]
+})json");
+
+    writeText(source / "skin/parity.lr2skin", R"lr2(#INFORMATION,0,LR2 parity,fixture
+#RESOLUTION,0
+#IMAGE,resources/fixture.png
+#LR2FONT,fonts/fixture.lr2font
+#SRC_IMAGE,0,0,0,0,40,20,1,1,0,0
+#DST_IMAGE,0,0,10,360,40,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0
+#SRC_NUMBER,0,0,0,0,40,20,10,1,0,0,10,0,3,0,0
+#DST_NUMBER,0,0,60,360,4,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0
+#SRC_TEXT,0,0,10,0,0,0
+#DST_TEXT,0,0,100,340,200,40,0,255,255,255,255,0,0,0,0,0,0,0,0,0
+)lr2");
+
+    writeText(source / "config/settings.json",
+              R"json({"application":"configuration"})json");
+    writeText(source / "select/select.lr2skin",
+              "#INFORMATION,5,Music select,fixture\n#RESOLUTION,0\n");
+    writeText(source / "notes/readme.txt", "not a gameplay document\n");
+
+    SkinArchiveImporter importer(roots_, aliases_);
+    auto imported = importer.prepareFolder(source, package_, {}, {});
+    expect(imported.prepared.has_value(),
+           "mixed-format gameplay package imports as one candidate revision");
+    if (!imported.prepared) {
+      return;
+    }
+    std::vector<std::string> importedPaths;
+    std::size_t selectable = 0;
+    std::size_t unavailable = 0;
+    GameplaySkinValidator validator(resources_);
+    for (const auto &entry : imported.prepared->entries()) {
+      importedPaths.push_back(entry.packageRelativePath);
+      const auto validation = validator.validate(
+          imported.prepared->readView(), entry, nullptr, {});
+      selectable += validation.disposition ==
+                    SkinValidationDisposition::SelectableGameplay;
+      unavailable += validation.disposition ==
+                     SkinValidationDisposition::UnavailableType;
+    }
+    std::ranges::sort(importedPaths);
+    expect(importedPaths ==
+               std::vector<std::string>{"config/settings.json",
+                                        "select/select.lr2skin",
+                                        "skin/parity.json",
+                                        "skin/parity.lr2skin",
+                                        "skin/parity.luaskin"} &&
+               selectable == 3 && unavailable == 2,
+           "header admission keeps exactly the three gameplay formats "
+           "selectable after mixed-package import");
+
+    fs::create_directories(roots_.visiblePackages);
+    fs::copy(source, roots_.visiblePackages / package_.directoryName,
+             fs::copy_options::recursive | fs::copy_options::overwrite_existing);
+    SkinTreeSnapshotter snapshotter(roots_, aliases_);
+    auto snapshot = snapshotter.snapshot(source, package_, {}, {});
+    expect(snapshot.prepared.has_value(),
+           "multi-format parity package snapshots");
+    if (!snapshot.prepared) {
+      return;
+    }
+    std::string error;
+    lease_ = std::move(*snapshot.prepared).publish(error);
+    expect(lease_.has_value() && error.empty(),
+           "multi-format parity revision publishes");
+  }
+
+  PlaySkinSessionCreateResult create(std::string_view path,
+                                     std::uint64_t sessionSerial) {
+    PlaySkinSessionCreateResult failed;
+    if (!lease_) {
+      return failed;
+    }
+    const auto entry = normalizeEntryPath(package_, path).entry;
+    expect(entry.has_value(), "multi-format parity entry ID is valid");
+    if (!entry) {
+      return failed;
+    }
+    GameplaySkinValidator validator(resources_);
+    auto validation =
+        validator.validate(lease_->readView(), *entry, nullptr, {});
+    if (validation.disposition !=
+            SkinValidationDisposition::SelectableGameplay ||
+        !validation.reconciledSettings ||
+        validation.configurationDigest.empty()) {
+      failed.diagnostics = std::move(validation.diagnostics);
+      return failed;
+    }
+
+    PlayfieldVisualState initialState = stateAt(1);
+    initialState.authority.loadingState = PlayfieldLoadingState::Loaded;
+    const PlayfieldProjectionResult initialProjection = projectionAt(1);
+    return PlaySkinSession::create(
+        {.revision = lease_->clone(),
+         .entry = *entry,
+         .reconciledSettings = *validation.reconciledSettings,
+         .configurationDigest = validation.configurationDigest},
+        {.sessionSerial = sessionSerial,
+         .profileId = profile_,
+         .chartModel = chart_,
+         .initialState = &initialState,
+         .initialProjection = &initialProjection,
+         .safeUiBounds = {.x = 0.0, .y = 0.0, .width = 640.0, .height = 480.0},
+         .storageRoots = roots_,
+         .resourcePreparation = resources_,
+         .textureDevice = std::make_shared<SessionTextureDevice>(),
+         .liveResourceCounters = std::make_shared<SkinLiveResourceCounters>(),
+         .configurationWrites = configurationWrites_});
+  }
+
+private:
+  TempDirectory temp_;
+  SkinStorageRoots roots_;
+  SkinPackageId package_;
+  SkinProfileId profile_;
+  AcceptFiles aliases_;
+  PlayfieldChartVisualModel chart_;
+  SkinResourcePreparationService resources_;
+  SkinConfigurationWriteQueue configurationWrites_;
+  std::optional<SkinRevisionLease> lease_;
+};
+
+void testLuaJsonAndLr2SessionsEmitEquivalentSharedObjects() {
+  FormatParityFixture fixture;
+  auto lua = fixture.create("skin/parity.luaskin", 101);
+  auto json = fixture.create("skin/parity.json", 102);
+  auto lr2 = fixture.create("skin/parity.lr2skin", 103);
+  auto genericJson = fixture.create("config/settings.json", 104);
+  auto nonGameplayLr2 = fixture.create("select/select.lr2skin", 105);
+  expect(lua.session && json.session && lr2.session,
+         "Lua, JSON, and LR2 gameplay documents all create owning sessions");
+  expect(!genericJson.session && !nonGameplayLr2.session,
+         "generic JSON and non-gameplay LR2 entries are not session-capable");
+  if (!lua.session || !json.session || !lr2.session) {
+    return;
+  }
+  expect(lua.session->hasLuaRuntimeForTesting() &&
+             !json.session->hasLuaRuntimeForTesting() &&
+             !lr2.session->hasLuaRuntimeForTesting(),
+         "only the Lua gameplay session owns a Lua VM");
+
+  const auto luaFrame =
+      lua.session->prepareFrame(stateAt(2), projectionAt(2), {});
+  const auto jsonFrame =
+      json.session->prepareFrame(stateAt(2), projectionAt(2), {});
+  const auto lr2Frame =
+      lr2.session->prepareFrame(stateAt(2), projectionAt(2), {});
+  expect(luaFrame.ready() && jsonFrame.ready() && lr2Frame.ready() &&
+             luaFrame.evaluation.submitReady &&
+             jsonFrame.evaluation.submitReady &&
+             lr2Frame.evaluation.submitReady,
+         "all three gameplay formats prepare a renderable frame");
+  if (!luaFrame.evaluation.submitReady ||
+      !jsonFrame.evaluation.submitReady || !lr2Frame.evaluation.submitReady) {
+    return;
+  }
+
+  const auto luaOutput = parityCommandOutput(*luaFrame.evaluation.submitReady);
+  const auto jsonOutput = parityCommandOutput(*jsonFrame.evaluation.submitReady);
+  const auto lr2Output = parityCommandOutput(*lr2Frame.evaluation.submitReady);
+  const auto hasSharedObjects = [](const ParityCommandOutput &output) {
+    return output.otherCommands == 0 && output.quads.size() >= 2 &&
+           std::ranges::any_of(output.quads, [](const auto &quad) {
+             return quad.object == 1;
+           }) &&
+           std::ranges::any_of(output.quads, [](const auto &quad) {
+             return quad.object == 2;
+           }) &&
+           output.texts.size() == 1 && output.texts.front().object == 3 &&
+           output.texts.front().glyphs == std::vector<char32_t>{U'A', U'V'};
+  };
+  expect(hasSharedObjects(luaOutput) && luaOutput == jsonOutput &&
+             luaOutput == lr2Output,
+         "Lua, JSON, and LR2 emit equivalent image, number, and text output");
+}
 
 void testSessionOwnsDeduplicatedMoviesAndRollsBackBeforePublication() {
   {
@@ -3947,6 +4249,7 @@ void testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin() {
 } // namespace
 
 int main() {
+  testLuaJsonAndLr2SessionsEmitEquivalentSharedObjects();
   testSessionOwnsDeduplicatedMoviesAndRollsBackBeforePublication();
   testCallbackBindingWithoutRuntimeFailsValidation();
   testActivationCreatesAnOwningFreshStateSession();
