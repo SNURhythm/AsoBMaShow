@@ -557,6 +557,17 @@ private:
   std::stop_source *stopAfterLoad_ = nullptr;
 };
 
+enum class MalformedPomyuNumeric {
+  None,
+  Anime,
+  Frame,
+  Size,
+  Coordinate,
+  Motion,
+  Loop,
+  FaceRectangle,
+};
+
 struct ActivationFixtureOptions {
   bool resourceBearing = false;
   bool movieBearing = false;
@@ -570,6 +581,7 @@ struct ActivationFixtureOptions {
   bool pomyuLeadingBackslashPath = false;
   bool pomyuSecondPlayerTextures = false;
   bool pomyuSecondPlayerTextureFallback = false;
+  MalformedPomyuNumeric malformedPomyuNumeric = MalformedPomyuNumeric::None;
 };
 
 class ActivationFixture final {
@@ -613,7 +625,9 @@ public:
                           options.pomyuRootedResourcePath ||
                           options.pomyuLeadingBackslashPath ||
                           options.pomyuSecondPlayerTextures ||
-                          options.pomyuSecondPlayerTextureFallback;
+                          options.pomyuSecondPlayerTextureFallback ||
+                          options.malformedPomyuNumeric !=
+                              MalformedPomyuNumeric::None;
     if (hasPomyu) {
       fs::create_directories(source / "skin/characters");
       if (options.pomyuSecondPlayerTextures ||
@@ -640,6 +654,42 @@ public:
             "#Size\t40\t20\n#00\t0\t0\t10\t10\n"
             "#01\t10\t0\t10\t10\n#Frame\t1\t40\n"
             "#Pattern\t1\t0001\n#Texture\t1\t0001\n";
+        writeText(source / "skin/characters/alpha.chp", chp);
+      } else if (options.malformedPomyuNumeric !=
+                 MalformedPomyuNumeric::None) {
+        fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
+                          "tests/fixtures/beatoraja_skin/resources/fixture.png",
+                      source / "skin/characters/fixture.png");
+        std::string chp =
+            "#CharBMP\tfixture.png\n#Size\t40\t20\n"
+            "#00\t0\t0\t10\t10\n#Anime\t100\n"
+            "#Frame\t1\t40\n#Loop\t1\t-1\n#Pattern\t1\t00\n"
+            "#Comment\t\x83\x65\x83\x58\x83\x67\n";
+        switch (options.malformedPomyuNumeric) {
+        case MalformedPomyuNumeric::Anime:
+          chp += "#Anime\toops\n";
+          break;
+        case MalformedPomyuNumeric::Frame:
+          chp += "#Frame\t1\toops\n";
+          break;
+        case MalformedPomyuNumeric::Size:
+          chp += "#Size\toops\t20\n";
+          break;
+        case MalformedPomyuNumeric::Coordinate:
+          chp += "#00\toops\t0\t10\t10\n";
+          break;
+        case MalformedPomyuNumeric::Motion:
+          chp += "#Pattern\toops\t00\n";
+          break;
+        case MalformedPomyuNumeric::Loop:
+          chp += "#Loop\t1\toops\n";
+          break;
+        case MalformedPomyuNumeric::FaceRectangle:
+          chp += "#CharFaceUpperSize\toops\t0\t10\t10\n";
+          break;
+        case MalformedPomyuNumeric::None:
+          break;
+        }
         writeText(source / "skin/characters/alpha.chp", chp);
       } else if (options.oversizedPomyuWithSibling) {
         writeText(source / "skin/characters/alpha.chp",
@@ -1086,6 +1136,43 @@ void testRepeatedPomyuObjectsShareCyclePreparation() {
              pomyuCycleParsesForTesting() == 1,
          "repeated Pomyu objects share one bounded CHP read, prerequisite "
          "scan, and cycle parse");
+}
+
+void testMalformedPomyuNumericDirectivesAbortTheCp932Character() {
+  for (const auto malformed : {
+           MalformedPomyuNumeric::Anime,
+           MalformedPomyuNumeric::Frame,
+           MalformedPomyuNumeric::Size,
+           MalformedPomyuNumeric::Coordinate,
+           MalformedPomyuNumeric::Motion,
+           MalformedPomyuNumeric::Loop,
+           MalformedPomyuNumeric::FaceRectangle,
+       }) {
+    ActivationFixture fixture({.malformedPomyuNumeric = malformed});
+    if (!fixture.ready()) {
+      continue;
+    }
+    resetPomyuCyclePreparationCountersForTesting();
+    auto created =
+        PlaySkinSession::create(fixture.takeActivation(), fixture.context());
+    if (!created.session) {
+      expect(false, "malformed optional Pomyu metadata preserves the session");
+      continue;
+    }
+    const auto frame = created.session->prepareFrame(
+        stateAt(1), projectionAt(1), {});
+    const bool drewPomyu =
+        frame.evaluation.submitReady &&
+        std::ranges::any_of(frame.evaluation.submitReady->commands,
+                            [](const SkinDrawCommand &command) {
+                              return std::holds_alternative<
+                                  SkinTexturedQuadCommand>(command.payload);
+                            });
+    expect(frame.ready() && !drewPomyu &&
+               pomyuCycleParsesForTesting() == 0,
+           "a malformed numeric Anime/Frame/Size/coordinate/motion/loop/face "
+           "field aborts the CP932 CHP before it prepares or draws");
+  }
 }
 
 void testExplicitOversizedPomyuDoesNotFallBackToSibling() {
@@ -3614,6 +3701,7 @@ int main() {
   testActivationCreatesAnOwningFreshStateSession();
   testConfiguredLoadUsesTheInitializedAuthoritativeState();
   testRepeatedPomyuObjectsShareCyclePreparation();
+  testMalformedPomyuNumericDirectivesAbortTheCp932Character();
   testExplicitOversizedPomyuDoesNotFallBackToSibling();
   testIncompletePomyuResourcesKeepDefaultCycles();
   testPomyuResourcesUseMs932AndWindowsSeparators();

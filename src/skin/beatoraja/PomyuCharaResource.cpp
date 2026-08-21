@@ -54,6 +54,7 @@ struct ChpModel {
   std::array<int, 20> loops{};
   int anime = 100;
   bool hasTextureDefinitions = false;
+  bool malformedAnimationNumeric = false;
   std::vector<ChpDirective> directives;
 };
 
@@ -373,7 +374,11 @@ std::optional<ChpModel> parseChp(std::string_view contents,
       if (fields.size > 1) {
         const auto motion =
             pomyu_chara_cycles_detail::parseDecimal(fields[1]);
-        if (!motion || *motion < 0 || *motion >= 20) {
+        if (!motion) {
+          result.malformedAnimationNumeric = true;
+          return true;
+        }
+        if (*motion < 0 || *motion >= 20) {
           return true;
         }
         ChpDirective directive;
@@ -405,9 +410,15 @@ std::optional<ChpModel> parseChp(std::string_view contents,
       if (fields.size > 2) {
         const auto index =
             pomyu_chara_cycles_detail::parseDecimal(fields[1]);
-        const auto value =
-            pomyu_chara_cycles_detail::parseDecimal(fields[2]);
-        if (index && value && *index >= 0 && *index < 20) {
+        if (!index) {
+          return false;
+        }
+        if (*index >= 0 && *index < 20) {
+          const auto value =
+              pomyu_chara_cycles_detail::parseDecimal(fields[2]);
+          if (!value) {
+            return false;
+          }
           result.frames[static_cast<std::size_t>(*index)] = *value;
         }
       }
@@ -417,6 +428,8 @@ std::optional<ChpModel> parseChp(std::string_view contents,
         if (const auto value =
                 pomyu_chara_cycles_detail::parseDecimal(fields[1])) {
           result.anime = *value;
+        } else {
+          return false;
         }
       }
     } else if (pomyu_chara_cycles_detail::equalsIgnoreCase(command,
@@ -424,9 +437,15 @@ std::optional<ChpModel> parseChp(std::string_view contents,
       if (fields.size > 2) {
         const auto index =
             pomyu_chara_cycles_detail::parseDecimal(fields[1]);
-        const auto value =
-            pomyu_chara_cycles_detail::parseDecimal(fields[2]);
-        if (index && value && *index >= 0 && *index < 20) {
+        if (!index) {
+          return false;
+        }
+        if (*index >= 0 && *index < 20) {
+          const auto value =
+              pomyu_chara_cycles_detail::parseDecimal(fields[2]);
+          if (!value) {
+            return false;
+          }
           result.loops[static_cast<std::size_t>(*index)] = *value;
         }
       }
@@ -437,9 +456,10 @@ std::optional<ChpModel> parseChp(std::string_view contents,
             pomyu_chara_cycles_detail::parseDecimal(fields[1]);
         const auto height =
             pomyu_chara_cycles_detail::parseDecimal(fields[2]);
-        if (width && height) {
-          result.size = {*width, *height};
+        if (!width || !height) {
+          return false;
         }
+        result.size = {*width, *height};
       }
     } else if (pomyu_chara_cycles_detail::equalsIgnoreCase(
                    command, "#CharFaceUpperSize") ||
@@ -454,17 +474,18 @@ std::optional<ChpModel> parseChp(std::string_view contents,
           valid = valid && value.has_value();
           values[index] = value.value_or(0);
         }
-        if (valid) {
-          SkinSourceRect &destination =
-              pomyu_chara_cycles_detail::equalsIgnoreCase(
-                  command, "#CharFaceUpperSize")
-                  ? result.faceUpper
-                  : result.faceAll;
-          destination = {.x = values[0],
-                         .y = values[1],
-                         .w = values[2],
-                         .h = values[3]};
+        if (!valid) {
+          return false;
         }
+        SkinSourceRect &destination =
+            pomyu_chara_cycles_detail::equalsIgnoreCase(
+                command, "#CharFaceUpperSize")
+                ? result.faceUpper
+                : result.faceAll;
+        destination = {.x = values[0],
+                       .y = values[1],
+                       .w = values[2],
+                       .h = values[3]};
       }
     } else if (command.size() == 3) {
       const auto index = parseBase36(command.substr(1));
@@ -477,10 +498,11 @@ std::optional<ChpModel> parseChp(std::string_view contents,
           valid = valid && value.has_value();
           values[field] = value.value_or(0);
         }
-        if (valid) {
-          result.coordinates[static_cast<std::size_t>(*index)] = {
-              .x = values[0], .y = values[1], .w = values[2], .h = values[3]};
+        if (!valid) {
+          return false;
         }
+        result.coordinates[static_cast<std::size_t>(*index)] = {
+            .x = values[0], .y = values[1], .w = values[2], .h = values[3]};
       }
     }
     return true;
@@ -1061,6 +1083,9 @@ PomyuCharaPreparationResult preparePomyuCharaResources(
         }
       }
     } else {
+      if (chp.malformedAnimationNumeric) {
+        continue;
+      }
       const bool firstCycleParse = cache.parsedCycleKeys
                                        .emplace(chpPath, object->type,
                                                 object->side)
