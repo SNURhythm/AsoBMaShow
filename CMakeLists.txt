@@ -1519,6 +1519,41 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 "-framework Foundation"
             )
         endif()
+
+        add_executable(json_gameplay_skin_decoder_tests
+            tests/json_gameplay_skin_decoder_tests.cpp
+            src/FileChecksum.cpp
+            src/skin/SkinProfileSettings.cpp
+            src/skin/package/SkinPathPolicy.cpp
+            src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
+            src/skin/beatoraja/JsonGameplaySkinDecoder.cpp
+            src/skin/beatoraja/NumericGlyphAtlas.cpp
+            src/skin/beatoraja/SkinCoverNormalization.cpp
+            src/skin/beatoraja/SkinGaugeNodeExpansion.cpp
+            src/skin/beatoraja/SkinJudgeNormalization.cpp
+            src/skin/beatoraja/SkinJudgeNumberNormalization.cpp
+            src/skin/beatoraja/SkinNoteLaneGeometryNormalization.cpp
+            src/skin/beatoraja/SkinNoteLineNormalization.cpp
+            src/skin/beatoraja/SkinNoteNormalization.cpp
+            src/skin/beatoraja/SkinObjectResolutionPrecedence.cpp
+            src/skin/beatoraja/SkinModelValidator.cpp
+            src/skin/beatoraja/SkinTextGraphNormalization.cpp
+        )
+        target_include_directories(json_gameplay_skin_decoder_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        set_target_properties(json_gameplay_skin_decoder_tests PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+        )
+        target_compile_definitions(json_gameplay_skin_decoder_tests PRIVATE
+            ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
+            ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        )
+        target_link_libraries(json_gameplay_skin_decoder_tests PRIVATE
+            utf8proc::utf8proc
+        )
     endif()
 
     add_test(NAME beatoraja_skin_reference_contract
@@ -6488,6 +6523,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if (TARGET beatoraja_skin_model_tests)
         asobmashow_register_test(beatoraja_skin_model_tests)
+    endif()
+    if (TARGET json_gameplay_skin_decoder_tests)
+        asobmashow_register_test(json_gameplay_skin_decoder_tests)
     endif()
     if (TARGET play_skin_viewport_tests)
         asobmashow_register_test(play_skin_viewport_tests)

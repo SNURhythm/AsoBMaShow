@@ -1,0 +1,487 @@
+{
+  "type": 0,
+  "name": "JSON gameplay field contract",
+  "author": "AsoBMaShow tests",
+  "w": 1280,
+  "h": 720,
+  "fadeout": 901,
+  "input": 902,
+  "scene": 903,
+  "close": 904,
+  "loadend": 905,
+  "playstart": 906,
+  "judgetimer": 907,
+  "finishmargin": 908,
+  "category": [
+    {"name": "Visuals", "item": ["Lane style", "Atlas choice", "Custom move"]}
+  ],
+  "property": [
+    {
+      "category": "Lane style",
+      "name": "Lane style",
+      "item": [
+        {"name": "Blue", "op": 901},
+        {"name": "Red", "op": 902}
+      ],
+      "def": "Red"
+    }
+  ],
+  "filepath": [
+    {
+      "category": "Atlas choice",
+      "name": "Atlas choice",
+      "path": "assets/*.png",
+      "def": "default"
+    }
+  ],
+  "offset": [
+    {
+      "category": "Custom move",
+      "name": "Custom move",
+      "id": 77,
+      "x": true,
+      "y": false,
+      "w": true,
+      "h": false,
+      "r": true,
+      "a": false
+    }
+  ],
+  "source": [
+    {"id": "atlas", "path": "assets/all-fields.png"},
+    {"id": "character", "path": "assets/character.chp"},
+    {"id": "atlas", "path": "assets/last-atlas.png"}
+  ],
+  "font": [
+    {
+      "id": "font-main",
+      "path": "fonts/main.fnt",
+      "fallback": [
+        "fonts/fallback.ttf",
+        {"path": "fonts/fallback.fnt", "type": 2}
+      ],
+      "type": 1
+    }
+  ],
+  "image": [
+    {
+      "id": "image-all",
+      "src": "atlas",
+      "x": 1,
+      "y": 2,
+      "w": 240,
+      "h": 40,
+      "divx": 6,
+      "divy": 2,
+      "timer": 42,
+      "cycle": 120,
+      "len": 2,
+      "ref": 10,
+      "act": 1,
+      "click": 2
+    },
+    {"id": "state-a", "src": "atlas", "x": 0, "y": 0, "w": 10, "h": 10},
+    {"id": "state-b", "src": "atlas", "x": 10, "y": 0, "w": 10, "h": 10},
+    {"id": "digits", "src": "atlas", "x": 0, "y": 40, "w": 240, "h": 10, "divx": 24, "divy": 1},
+    {"id": "float-digits", "src": "atlas", "x": 0, "y": 50, "w": 260, "h": 10, "divx": 26, "divy": 1},
+    {"id": "note-frame", "src": "atlas", "x": 0, "y": 60, "w": 10, "h": 10},
+    {"id": "gauge-a", "src": "atlas", "x": 0, "y": 70, "w": 10, "h": 10},
+    {"id": "gauge-b", "src": "atlas", "x": 10, "y": 70, "w": 10, "h": 10},
+    {"id": "gauge-c", "src": "atlas", "x": 20, "y": 70, "w": 10, "h": 10},
+    {"id": "gauge-d", "src": "atlas", "x": 30, "y": 70, "w": 10, "h": 10},
+    {"id": "judge-image", "src": "atlas", "x": 0, "y": 80, "w": 10, "h": 10},
+    {"id": "line-image", "src": "atlas", "x": 0, "y": 90, "w": 10, "h": 10},
+    {"id": "collision", "src": "atlas", "x": 0, "y": 100, "w": 10, "h": 10}
+  ],
+  "imageset": [
+    {
+      "id": "imageset-all",
+      "ref": 11,
+      "value": 12,
+      "images": ["state-a", "state-b"],
+      "act": 2,
+      "click": 3
+    }
+  ],
+  "value": [
+    {
+      "id": "value-all",
+      "src": "atlas",
+      "x": 0,
+      "y": 40,
+      "w": 240,
+      "h": 10,
+      "divx": 24,
+      "divy": 1,
+      "timer": 43,
+      "cycle": 121,
+      "align": 2,
+      "digit": 6,
+      "padding": 1,
+      "zeropadding": 1,
+      "space": 3,
+      "ref": 10,
+      "value": 14,
+      "offset": [
+        {"x": 1, "y": 2, "w": 3, "h": 4}
+      ]
+    },
+    {
+      "id": "judge-number",
+      "src": "atlas",
+      "x": 0,
+      "y": 40,
+      "w": 240,
+      "h": 10,
+      "divx": 24,
+      "divy": 1,
+      "digit": 4,
+      "space": 1,
+      "ref": 14
+    }
+  ],
+  "floatvalue": [
+    {
+      "id": "float-all",
+      "src": "atlas",
+      "x": 0,
+      "y": 50,
+      "w": 260,
+      "h": 10,
+      "divx": 26,
+      "divy": 1,
+      "timer": 44,
+      "cycle": 122,
+      "align": 1,
+      "fketa": 3,
+      "iketa": 2,
+      "gain": 1.5,
+      "isSignvisible": true,
+      "padding": 2,
+      "zeropadding": 1,
+      "space": 4,
+      "ref": 85,
+      "value": "score_rate",
+      "offset": [
+        {"x": 5, "y": 6, "w": 7, "h": 8}
+      ]
+    }
+  ],
+  "text": [
+    {
+      "id": "text-all",
+      "font": "font-main",
+      "size": 24,
+      "align": 1,
+      "ref": 10,
+      "value": "title",
+      "event": null,
+      "constantText": "constant",
+      "editable": true,
+      "wrapping": true,
+      "overflow": 2,
+      "outlineColor": "11223344",
+      "outlineWidth": 1.25,
+      "shadowColor": "55667788",
+      "shadowOffsetX": 2.5,
+      "shadowOffsetY": 3.5,
+      "shadowSmoothness": 0.75
+    }
+  ],
+  "slider": [
+    {
+      "id": "slider-all",
+      "src": "atlas",
+      "x": 0,
+      "y": 0,
+      "w": 10,
+      "h": 10,
+      "divx": 1,
+      "divy": 1,
+      "timer": 45,
+      "cycle": 123,
+      "angle": 3,
+      "range": 120,
+      "type": 17,
+      "changeable": false,
+      "value": "mastervolume",
+      "event": "mastervolume",
+      "isRefNum": false,
+      "min": 4,
+      "max": 9
+    }
+  ],
+  "graph": [
+    {
+      "id": "graph-all",
+      "src": "atlas",
+      "x": 0,
+      "y": 0,
+      "w": 10,
+      "h": 10,
+      "divx": 1,
+      "divy": 1,
+      "timer": 46,
+      "cycle": 124,
+      "angle": 2,
+      "type": 17,
+      "value": "music_progress",
+      "isRefNum": false,
+      "min": 5,
+      "max": 10
+    }
+  ],
+  "gaugegraph": [
+    {
+      "id": "gaugegraph-all",
+      "color": [
+        "01020304", "11121314", "21222324", "31323334",
+        "41424344", "51525354", "61626364", "71727374",
+        "81828384", "91929394", "a1a2a3a4", "b1b2b3b4",
+        "c1c2c3c4", "d1d2d3d4", "e1e2e3e4", "f1f2f3f4",
+        "10203040", "20304050", "30405060", "40506070",
+        "50607080", "60708090", "708090a0", "8090a0b0"
+      ],
+      "assistClearBGColor": "440044",
+      "assistAndEasyFailBGColor": "004444",
+      "grooveFailBGColor": "004400",
+      "grooveClearAndHardBGColor": "440000",
+      "exHardBGColor": "444400",
+      "hazardBGColor": "444444",
+      "assistClearLineColor": "ff00ff",
+      "assistAndEasyFailLineColor": "00ffff",
+      "grooveFailLineColor": "00ff00",
+      "grooveClearAndHardLineColor": "ff0000",
+      "exHardLineColor": "ffff00",
+      "hazardLineColor": "cccccc",
+      "borderlineColor": "ff0000",
+      "borderColor": "440000"
+    }
+  ],
+  "judgegraph": [
+    {
+      "id": "judgegraph-all",
+      "type": 2,
+      "backTexOff": 1,
+      "delay": 750,
+      "orderReverse": 1,
+      "noGap": 1,
+      "noGapX": 1
+    },
+    {"id": "collision", "type": 1}
+  ],
+  "bpmgraph": [
+    {
+      "id": "bpmgraph-all",
+      "delay": 30,
+      "lineWidth": 3,
+      "mainBPMColor": "010203",
+      "minBPMColor": "111213",
+      "maxBPMColor": "212223",
+      "otherBPMColor": "313233",
+      "stopLineColor": "414243",
+      "transitionLineColor": "515253"
+    }
+  ],
+  "hiterrorvisualizer": [
+    {
+      "id": "hiterror-all",
+      "width": 401,
+      "judgeWidthMillis": 160,
+      "lineWidth": 3,
+      "colorMode": 0,
+      "hiterrorMode": 0,
+      "emaMode": 2,
+      "lineColor": "01020304",
+      "centerColor": "11121314",
+      "PGColor": "21222324",
+      "GRColor": "31323334",
+      "GDColor": "41424344",
+      "BDColor": "51525354",
+      "PRColor": "61626364",
+      "emaColor": "71727374",
+      "alpha": 0.25,
+      "windowLength": 40,
+      "transparent": 0,
+      "drawDecay": 0
+    }
+  ],
+  "timingvisualizer": [
+    {
+      "id": "timing-all",
+      "width": 402,
+      "judgeWidthMillis": 170,
+      "lineWidth": 4,
+      "lineColor": "01020304",
+      "centerColor": "11121314",
+      "PGColor": "21222324",
+      "GRColor": "31323334",
+      "GDColor": "41424344",
+      "BDColor": "51525354",
+      "PRColor": "61626364",
+      "transparent": 0,
+      "drawDecay": 0
+    }
+  ],
+  "timingdistributiongraph": [
+    {
+      "id": "timing-distribution-all",
+      "width": 403,
+      "lineWidth": 3,
+      "graphColor": "01020304",
+      "averageColor": "11121314",
+      "devColor": "21222324",
+      "PGColor": "31323334",
+      "GRColor": "41424344",
+      "GDColor": "51525354",
+      "BDColor": "61626364",
+      "PRColor": "71727374",
+      "drawAverage": 0,
+      "drawDev": 0
+    }
+  ],
+  "note": {
+    "id": "note-all",
+    "note": ["note-frame"],
+    "lnstart": ["note-frame"],
+    "lnend": ["note-frame"],
+    "lnbody": ["note-frame"],
+    "lnbodyActive": ["note-frame"],
+    "lnactive": ["note-frame"],
+    "hcnstart": ["note-frame"],
+    "hcnend": ["note-frame"],
+    "hcnbody": ["note-frame"],
+    "hcnactive": ["note-frame"],
+    "hcnbodyActive": ["note-frame"],
+    "hcndamage": ["note-frame"],
+    "hcnbodyMiss": ["note-frame"],
+    "hcnreactive": ["note-frame"],
+    "hcnbodyReactive": ["note-frame"],
+    "mine": ["note-frame"],
+    "hidden": ["note-frame"],
+    "processed": ["note-frame"],
+    "dst": [
+      {"time": 123, "x": 100, "y": 50, "w": 40, "h": 500, "clip_x": 1, "clip_y": 2, "clip_w": 3, "clip_h": 4, "acc": 2, "a": 200, "r": 10, "g": 20, "b": 30, "angle": 15}
+    ],
+    "dst2": -2147483648,
+    "expansionrate": [110, 120],
+    "size": [11.5],
+    "group": [
+      {"id": "line-image", "blend": 1, "filter": 1, "timer": 47, "loop": -1, "center": 2, "offset": 3, "offsets": [4], "stretch": 1, "op": [901], "draw": 1, "dst": [{"x": 100, "y": 50, "w": 40, "h": 500}], "mouseRect": {"x": 1, "y": 2, "w": 3, "h": 4}}
+    ],
+    "bpm": [
+      {"id": "line-image", "dst": [{"x": 100, "y": 50, "w": 40, "h": 500}]}
+    ],
+    "stop": [
+      {"id": "line-image", "dst": [{"x": 100, "y": 50, "w": 40, "h": 500}]}
+    ],
+    "time": [
+      {"id": "line-image", "dst": [{"x": 100, "y": 50, "w": 40, "h": 500}]}
+    ]
+  },
+  "gauge": {
+    "id": "gauge-all",
+    "nodes": ["gauge-a", "gauge-b", "gauge-c", "gauge-d"],
+    "parts": 60,
+    "type": 2,
+    "range": 4,
+    "cycle": 44,
+    "starttime": 100,
+    "endtime": 600
+  },
+  "hiddenCover": [
+    {"id": "hidden-all", "src": "atlas", "x": 1, "y": 2, "w": 3, "h": 4, "divx": 1, "divy": 1, "timer": 48, "cycle": 125, "disapearLine": 300, "isDisapearLineLinkLift": false}
+  ],
+  "liftCover": [
+    {"id": "lift-all", "src": "atlas", "x": 5, "y": 6, "w": 7, "h": 8, "divx": 1, "divy": 1, "timer": 49, "cycle": 126, "disapearLine": 301, "isDisapearLineLinkLift": true}
+  ],
+  "bga": {"id": "bga-all"},
+  "skinpreview": {"id": "skin-preview-ignored"},
+  "practice": {"id": "practice-all", "visibleItems": 12},
+  "judge": [
+    {
+      "id": "judge-all",
+      "index": 1,
+      "images": [
+        {"id": "judge-image", "blend": 2, "filter": 1, "timer": 50, "loop": -1, "center": 4, "offset": 5, "offsets": [6], "stretch": 2, "op": [901], "draw": 1, "dst": [{"time": 0, "x": 1, "y": 2, "w": 3, "h": 4}], "mouseRect": {"x": 1, "y": 2, "w": 3, "h": 4}}
+      ],
+      "numbers": [
+        {"id": "judge-number", "blend": 3, "filter": 0, "timer": 51, "loop": 0, "center": 5, "offset": 7, "offsets": [8], "stretch": 3, "op": [902], "draw": 2, "dst": [{"time": 0, "x": 5, "y": 6, "w": 7, "h": 8}], "mouseRect": {"x": 5, "y": 6, "w": 7, "h": 8}}
+      ],
+      "shift": true
+    }
+  ],
+  "songlist": {
+    "id": "song-list-ignored",
+    "center": 1,
+    "clickable": [1],
+    "listoff": [],
+    "liston": [],
+    "text": [],
+    "level": [],
+    "lamp": [],
+    "playerlamp": [],
+    "rivallamp": [],
+    "trophy": [],
+    "label": [],
+    "graph": null
+  },
+  "pmchara": [
+    {"id": "pmchara-all", "src": "character", "color": 2, "type": 7, "side": 2}
+  ],
+  "skinSelect": {
+    "customBMS": ["fixture.bms"],
+    "defaultCategory": 1,
+    "customPropertyCount": 2,
+    "customOffsetStyle": 3
+  },
+  "customEvents": [
+    {"id": 1001, "action": 12345, "condition": "judge_1p_perfect", "minInterval": 60}
+  ],
+  "customTimers": [
+    {"id": 1002, "timer": 52}
+  ],
+  "destination": [
+    {
+      "id": "image-all",
+      "blend": 4,
+      "filter": 1,
+      "timer": 53,
+      "loop": -1,
+      "center": 9,
+      "offset": 77,
+      "offsets": [30, 31],
+      "stretch": 10,
+      "op": [901, "judge_1p_early", 0],
+      "draw": "judge_1p_late",
+      "dst": [
+        {"time": 200, "x": 10, "y": 20, "w": 30, "h": 40, "clip_x": 1, "clip_y": 2, "clip_w": 3, "clip_h": 4, "acc": 2, "a": 200, "r": 10, "g": 20, "b": 30, "angle": 15},
+        {"time": 100, "x": 11},
+        {"time": -2147483648, "x": -2147483648, "y": -2147483648, "w": -2147483648, "h": -2147483648, "clip_x": -2147483648, "clip_y": -2147483648, "clip_w": -2147483648, "clip_h": -2147483648, "acc": -2147483648, "a": -2147483648, "r": -2147483648, "g": -2147483648, "b": -2147483648, "angle": -2147483648}
+      ],
+      "mouseRect": {"x": 4, "y": 5, "w": 6, "h": 7}
+    },
+    {"id": "imageset-all", "dst": [{}]},
+    {"id": "value-all", "dst": [{}]},
+    {"id": "float-all", "dst": [{}]},
+    {"id": "text-all", "dst": [{}]},
+    {"id": "slider-all", "dst": [{}]},
+    {"id": "graph-all", "dst": [{}]},
+    {"id": "gaugegraph-all", "dst": [{}]},
+    {"id": "judgegraph-all", "dst": [{}]},
+    {"id": "bpmgraph-all", "dst": [{}]},
+    {"id": "hiterror-all", "dst": [{}]},
+    {"id": "timing-all", "dst": [{}]},
+    {"id": "timing-distribution-all", "dst": [{}]},
+    {"id": "gauge-all", "dst": [{}]},
+    {"id": "note-all", "dst": [{}]},
+    {"id": "hidden-all", "dst": [{}]},
+    {"id": "lift-all", "dst": [{}]},
+    {"id": "practice-all", "dst": [{}]},
+    {"id": "bga-all", "dst": [{}]},
+    {"id": "judge-all", "dst": [{}]},
+    {"id": "pmchara-all", "dst": [{}]},
+    {"id": "collision", "dst": [{}]},
+    {"id": "-10", "dst": [{}]}
+  ]
+}

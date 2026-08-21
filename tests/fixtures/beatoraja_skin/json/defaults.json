@@ -1,0 +1,50 @@
+{
+  "type": 0,
+  "source": [
+    {"id": "atlas", "path": "assets/defaults.png"}
+  ],
+  "image": [
+    {"id": "image-defaults", "src": "atlas"}
+  ],
+  "gaugegraph": [
+    {"id": "gaugegraph-defaults"}
+  ],
+  "judgegraph": [
+    {"id": "judgegraph-defaults"}
+  ],
+  "bpmgraph": [
+    {"id": "bpmgraph-defaults"}
+  ],
+  "hiterrorvisualizer": [
+    {"id": "hiterror-defaults"}
+  ],
+  "timingvisualizer": [
+    {"id": "timing-defaults"}
+  ],
+  "timingdistributiongraph": [
+    {"id": "timing-distribution-defaults"}
+  ],
+  "hiddenCover": [
+    {"id": "hidden-defaults", "src": "atlas"}
+  ],
+  "liftCover": [
+    {"id": "lift-defaults", "src": "atlas"}
+  ],
+  "practice": {"id": "practice-defaults"},
+  "pmchara": [
+    {"id": "pmchara-defaults", "src": "atlas"}
+  ],
+  "destination": [
+    {"id": "image-defaults", "dst": [{}]},
+    {"id": "gaugegraph-defaults", "dst": [{}]},
+    {"id": "judgegraph-defaults", "dst": [{}]},
+    {"id": "bpmgraph-defaults", "dst": [{}]},
+    {"id": "hiterror-defaults", "dst": [{}]},
+    {"id": "timing-defaults", "dst": [{}]},
+    {"id": "timing-distribution-defaults", "dst": [{}]},
+    {"id": "hidden-defaults", "dst": [{}]},
+    {"id": "lift-defaults", "dst": [{}]},
+    {"id": "practice-defaults", "dst": [{}]},
+    {"id": "pmchara-defaults", "dst": [{}]}
+  ]
+}

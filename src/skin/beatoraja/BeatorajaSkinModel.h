@@ -573,11 +573,13 @@ struct SkinObjectDefinition {
   SkinObjectPayload payload;
   std::uint32_t authoredOrdinal = 0;
   bool critical = false;
+  SkinSourceLocation source;
 };
 
 struct SkinDestination {
   SkinObjectId object = 0;
   SkinDestinationBody presentation;
+  SkinSourceLocation source;
 };
 
 struct SkinCustomTimer {
