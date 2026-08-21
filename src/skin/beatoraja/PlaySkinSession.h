@@ -45,6 +45,7 @@ struct PlaySkinSessionContext {
   SkinStorageRoots storageRoots;
   SkinResourcePreparationService &resourcePreparation;
   std::shared_ptr<SkinTextureDevice> textureDevice;
+  std::shared_ptr<SkinMovieDevice> movieDevice;
   std::shared_ptr<SkinLiveResourceCounters> liveResourceCounters;
   SkinConfigurationWriteQueue &configurationWrites;
   // Config.AudioConfig FloatWriter IDs 17-19 apply only after an authored
@@ -74,6 +75,7 @@ struct PlaySkinSessionFrameContext {
   const ValidatedBeatorajaSkinModel &model;
   const BeatorajaSkinConfiguration &configuration;
   const SkinPreparedResourceView &resources;
+  SkinMovieCatalog *movies = nullptr;
   ViewportSettings viewportSettings;
   PlaySkinViewport viewport;
   LuaSkinRuntime *runtime = nullptr;

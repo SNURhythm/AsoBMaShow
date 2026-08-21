@@ -455,8 +455,67 @@ private:
   std::stop_source *stopSource = nullptr;
 };
 
+class SessionMovieDevice final : public SkinMovieDevice {
+public:
+  std::optional<SkinMovieLoadResult>
+  load(const fs::path &path, std::stop_token) override {
+    ++loadCalls;
+    loadedPaths.push_back(path);
+    pathExistedDuringLoad = pathExistedDuringLoad && fs::is_regular_file(path);
+    const auto handle = SkinMoviePlayerHandle{++nextHandle_};
+    live.push_back(handle);
+    if (stopAfterLoad_ != nullptr) {
+      stopAfterLoad_->request_stop();
+    }
+    return SkinMovieLoadResult{
+        .handle = handle, .width = 80, .height = 40, .durationMillis = 1'000};
+  }
+
+  void destroy(SkinMoviePlayerHandle handle) noexcept override {
+    ++destroyCalls;
+    const auto found = std::ranges::find(live, handle);
+    if (found != live.end()) {
+      live.erase(found);
+    }
+  }
+
+  bool ownsCurrentThread() const noexcept override { return true; }
+  void beginFrame() noexcept override { ++beginFrameCalls; }
+  SkinMovieFramePreparationResult
+  prepareFrame(SkinMoviePlayerHandle, const SkinMovieCommand &command,
+               const PlaySkinViewport &) override {
+    preparedTimes.push_back(command.sourceTimeMillis);
+    return {.ready = true, .drawable = true};
+  }
+  void discardFrame() noexcept override { ++discardFrameCalls; }
+  void commitFrame() noexcept override { ++commitFrameCalls; }
+  void submitPrepared(std::size_t index) noexcept override {
+    submittedIndices.push_back(index);
+  }
+
+  void stopAfterLoad(std::stop_source &source) noexcept {
+    stopAfterLoad_ = &source;
+  }
+
+  std::size_t loadCalls = 0;
+  std::size_t destroyCalls = 0;
+  std::size_t beginFrameCalls = 0;
+  std::size_t discardFrameCalls = 0;
+  std::size_t commitFrameCalls = 0;
+  bool pathExistedDuringLoad = true;
+  std::vector<fs::path> loadedPaths;
+  std::vector<SkinMoviePlayerHandle> live;
+  std::vector<std::int64_t> preparedTimes;
+  std::vector<std::size_t> submittedIndices;
+
+private:
+  std::uint64_t nextHandle_ = 0;
+  std::stop_source *stopAfterLoad_ = nullptr;
+};
+
 struct ActivationFixtureOptions {
   bool resourceBearing = false;
+  bool movieBearing = false;
   bool requireConfiguredState = false;
   bool repeatedPomyu = false;
   bool oversizedPomyuWithSibling = false;
@@ -478,7 +537,8 @@ public:
         entry_(*normalizeEntryPath(package_, "skin/main.luaskin").entry),
         profile_(*makeSkinProfileId(
             "66666666-6666-4666-8666-666666666666")),
-        device_(std::make_shared<SessionTextureDevice>()) {
+        device_(std::make_shared<SessionTextureDevice>()),
+        movieDevice_(std::make_shared<SessionMovieDevice>()) {
     chart_.text.title = "Artist 日本 42";
     chart_.text.subtitle = "Session subtitle";
     chart_.text.artist = "Session artist";
@@ -492,6 +552,12 @@ public:
       fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
                         "tests/fixtures/beatoraja_skin/resources/fixture.ttf",
                     source / "skin/resources/fixture.ttf");
+    }
+    if (options.movieBearing) {
+      fs::create_directories(source / "skin/resources");
+      fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
+                        "tests/fixtures/beatoraja_skin/resources/fixture.png",
+                    source / "skin/resources/source.MP4");
     }
     const bool hasPomyu = options.repeatedPomyu ||
                           options.oversizedPomyuWithSibling ||
@@ -573,7 +639,25 @@ if skin_config then
     marker:close()
   end
 )lua";
-    if (options.resourceBearing) {
+    if (options.movieBearing) {
+      script += R"lua(
+  return {
+    type = 0, w = 1280, h = 720,
+    source = {
+      {id = "movie-one", path = "resources/source.MP4"},
+      {id = "movie-two", path = "resources/source.MP4"}
+    },
+    image = {
+      {id = "movie-object-one", src = "movie-one", x = 0, y = 0, w = 80, h = 40},
+      {id = "movie-object-two", src = "movie-two", x = 0, y = 0, w = 80, h = 40}
+    },
+    destination = {
+      {id = "movie-object-one", dst = {{x = 0, y = 0, w = 80, h = 40}}},
+      {id = "movie-object-two", dst = {{x = 80, y = 0, w = 80, h = 40}}}
+    }
+  }
+)lua";
+    } else if (options.resourceBearing) {
       script += R"lua(
   return {
     type = 0, w = 1280, h = 720,
@@ -678,6 +762,7 @@ return { type = 0, name = "activation shell", w = 1280, h = 720 }
             .storageRoots = roots_,
             .resourcePreparation = resources_,
             .textureDevice = device_,
+            .movieDevice = movieDevice_,
             .liveResourceCounters = liveResourceCounters_,
             .configurationWrites = configurationWrites_,
             .stop = stop};
@@ -695,6 +780,9 @@ return { type = 0, name = "activation shell", w = 1280, h = 720 }
   }
   const std::shared_ptr<SessionTextureDevice> &device() const noexcept {
     return device_;
+  }
+  const std::shared_ptr<SessionMovieDevice> &movieDevice() const noexcept {
+    return movieDevice_;
   }
   const std::shared_ptr<SkinLiveResourceCounters> &liveCounters() const
       noexcept {
@@ -714,12 +802,73 @@ private:
   EntryProfileSettings desired_;
   SkinResourcePreparationService resources_;
   std::shared_ptr<SessionTextureDevice> device_;
+  std::shared_ptr<SessionMovieDevice> movieDevice_;
   std::shared_ptr<SkinLiveResourceCounters> liveResourceCounters_ =
       std::make_shared<SkinLiveResourceCounters>();
   SkinConfigurationWriteQueue configurationWrites_;
   std::optional<SkinRevisionLease> lease_;
   SkinValidationResult validation_;
 };
+
+void testSessionOwnsDeduplicatedMoviesAndRollsBackBeforePublication() {
+  {
+    ActivationFixture fixture({.movieBearing = true});
+    if (!fixture.ready()) {
+      return;
+    }
+    auto created =
+        PlaySkinSession::create(fixture.takeActivation(), fixture.context());
+    expect(created.session && fixture.movieDevice()->loadCalls == 1 &&
+               fixture.movieDevice()->destroyCalls == 0 &&
+               fixture.movieDevice()->live.size() == 1 &&
+               fixture.movieDevice()->pathExistedDuringLoad,
+           "session creation materializes and owns one player for duplicate movie source paths");
+    if (!created.session) {
+      return;
+    }
+    const fs::path materialized = fixture.movieDevice()->loadedPaths.front();
+    expect(fs::is_regular_file(materialized),
+           "the session retains its stable materialized movie while active");
+    created.session.reset();
+    expect(fixture.movieDevice()->destroyCalls == 1 &&
+               fixture.movieDevice()->live.empty() &&
+               !fs::exists(materialized),
+           "session destruction releases its movie player and materialized source exactly once");
+  }
+
+  {
+    ActivationFixture fixture({.movieBearing = true});
+    if (!fixture.ready()) {
+      return;
+    }
+    std::stop_source stop;
+    fixture.movieDevice()->stopAfterLoad(stop);
+    auto created = PlaySkinSession::create(fixture.takeActivation(),
+                                           fixture.context({}, stop.get_token()));
+    expect(!created.session && created.cancelled &&
+               fixture.movieDevice()->loadCalls == 1 &&
+               fixture.movieDevice()->destroyCalls == 1 &&
+               fixture.movieDevice()->live.empty() &&
+               !fs::exists(fixture.movieDevice()->loadedPaths.front()),
+           "cancellation after movie load prevents session publication and rolls ownership back exactly once");
+  }
+
+  {
+    ActivationFixture fixture({.movieBearing = true});
+    if (!fixture.ready()) {
+      return;
+    }
+    auto context = fixture.context();
+    context.safeUiBounds.width = 0.0;
+    auto created = PlaySkinSession::create(fixture.takeActivation(),
+                                           std::move(context));
+    expect(!created.session && fixture.movieDevice()->loadCalls == 1 &&
+               fixture.movieDevice()->destroyCalls == 1 &&
+               fixture.movieDevice()->live.empty() &&
+               !fs::exists(fixture.movieDevice()->loadedPaths.front()),
+           "a post-load session creation failure tears down the movie graph exactly once");
+  }
+}
 
 void testActivationCreatesAnOwningFreshStateSession() {
   ActivationFixture fixture;
@@ -3034,6 +3183,7 @@ void testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin() {
 } // namespace
 
 int main() {
+  testSessionOwnsDeduplicatedMoviesAndRollsBackBeforePublication();
   testCallbackBindingWithoutRuntimeFailsValidation();
   testActivationCreatesAnOwningFreshStateSession();
   testConfiguredLoadUsesTheInitializedAuthoritativeState();

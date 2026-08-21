@@ -3699,6 +3699,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/package/SkinPathPolicy.cpp
             src/skin/package/SkinTreeSnapshotter.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
+            src/skin/beatoraja/SkinMovieCatalog.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
             src/skin/beatoraja/SkinBitmapFontParser.cpp
             src/skin/beatoraja/SkinTextAtlas.cpp
@@ -4560,6 +4561,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinNoteLineNormalization.cpp
             src/skin/beatoraja/SkinNoteNormalization.cpp
             src/skin/beatoraja/SkinObjectResolutionPrecedence.cpp
+            src/skin/beatoraja/SkinMovieCatalog.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
             src/skin/beatoraja/SkinBitmapFontParser.cpp
             src/skin/beatoraja/SkinTextAtlas.cpp
@@ -4713,6 +4715,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinNoteLineNormalization.cpp
             src/skin/beatoraja/SkinNoteNormalization.cpp
             src/skin/beatoraja/SkinObjectResolutionPrecedence.cpp
+            src/skin/beatoraja/SkinMovieCatalog.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
             src/skin/beatoraja/SkinBitmapFontParser.cpp
             src/skin/beatoraja/SkinTextAtlas.cpp
@@ -4850,6 +4853,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinNoteLineNormalization.cpp
             src/skin/beatoraja/SkinNoteNormalization.cpp
             src/skin/beatoraja/SkinObjectResolutionPrecedence.cpp
+            src/skin/beatoraja/SkinMovieCatalog.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
             src/skin/beatoraja/SkinBitmapFontParser.cpp
             src/skin/beatoraja/SkinTextAtlas.cpp

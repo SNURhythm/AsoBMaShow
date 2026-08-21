@@ -159,6 +159,13 @@ struct SkinImageResource {
   std::uint32_t authoredOrdinal = 0;
 };
 
+struct SkinMovieResource {
+  SkinResourceId id = 0;
+  std::string virtualPath;
+  std::optional<SkinTimerPropertyId> timer;
+  std::uint32_t authoredOrdinal = 0;
+};
+
 struct SkinFontFallbackResource {
   std::string virtualPath;
   int type = 0;
@@ -192,7 +199,7 @@ struct SkinFontResource {
 };
 
 using SkinResourceDefinition =
-    std::variant<SkinImageResource, SkinFontResource>;
+    std::variant<SkinImageResource, SkinFontResource, SkinMovieResource>;
 
 struct SkinSpriteFrames {
   SkinResourceId resource = 0;

@@ -45,6 +45,13 @@ struct SkinTexturedQuadCommand {
   SkinRenderState state;
 };
 
+struct SkinMovieCommand {
+  SkinResourceId resource = 0;
+  std::int64_t sourceTimeMillis = 0;
+  AuthoredDestinationGeometry geometry;
+  SkinRenderState state;
+};
+
 // Pixmap-backed Beatoraja widgets own a source texture independently from the
 // destination which samples it. Pixels remain value-owned by the immutable
 // command buffer until whole-frame texture preflight completes.
@@ -85,7 +92,8 @@ struct SkinBgaCommand {
 };
 
 using SkinDrawPayload =
-    std::variant<SkinTexturedQuadCommand, SkinGeneratedTexturedQuadCommand,
+    std::variant<SkinTexturedQuadCommand, SkinMovieCommand,
+                 SkinGeneratedTexturedQuadCommand,
                  SkinGlyphRunCommand, SkinPrimitiveCommand, SkinBgaCommand>;
 
 struct SkinDrawCommand {

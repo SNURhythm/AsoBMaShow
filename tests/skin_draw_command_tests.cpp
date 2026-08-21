@@ -262,6 +262,33 @@ private:
   std::map<SkinObjectId, SkinTextAtlasId> textAtlasesByObject_;
 };
 
+class FakeMovies final : public SkinPreparedMovieView {
+public:
+  void addMovie(SkinMovieResource resource, int width, int height,
+                std::int64_t durationMillis) {
+    PreparedSkinMovie prepared{
+        .resource = std::move(resource),
+        .handle = SkinMoviePlayerHandle{++nextHandle_},
+        .width = width,
+        .height = height,
+        .durationMillis = durationMillis};
+    movies_.emplace(prepared.resource.id, std::move(prepared));
+  }
+
+  const PreparedSkinMovie *
+  findMovie(SkinResourceId id) const noexcept override {
+    ++findCalls;
+    const auto found = movies_.find(id);
+    return found == movies_.end() ? nullptr : &found->second;
+  }
+
+  mutable std::size_t findCalls = 0;
+
+private:
+  std::uint64_t nextHandle_ = 0;
+  std::map<SkinResourceId, PreparedSkinMovie> movies_;
+};
+
 class FakeState final : public ISkinFrameState {
 public:
   SkinPropertyLookup<bool>
@@ -431,7 +458,8 @@ evaluate(Skin2DRenderer &renderer, RuntimeHarness &runtime,
          ISkinGaugeRandomSource *gaugeRandomSource = nullptr,
          std::uint64_t sessionSerial = 1,
          bool markProcessedNotes = false,
-         const PlaySkinViewport *requestedViewport = nullptr) {
+         const PlaySkinViewport *requestedViewport = nullptr,
+         const SkinPreparedMovieView *movies = nullptr) {
   static const BeatorajaSkinConfiguration emptyConfiguration;
   const auto &configuration = configured ? *configured : emptyConfiguration;
   const auto defaultViewport = viewport();
@@ -444,11 +472,107 @@ evaluate(Skin2DRenderer &renderer, RuntimeHarness &runtime,
                                  .model = model,
                                  .configuration = configuration,
                                  .resources = resources,
+                                 .movies = movies,
                                  .viewport = playViewport,
                                  .runtime = &runtime.runtime(),
                                  .state = state,
                                  .markProcessedNotes = markProcessedNotes,
                                  .gaugeRandomSource = gaugeRandomSource});
+}
+
+void testMovieCommandsPreserveTimingDestinationStateAndMixedOrdering() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  resources.addImage(1, {.x = 0, .y = 0, .w = 10, .h = 10});
+  resources.addImage(3, {.x = 0, .y = 0, .w = 10, .h = 10});
+  FakeMovies movies;
+  movies.addMovie(SkinMovieResource{
+                      .id = 2,
+                      .virtualPath = "movie.MP4",
+                      .timer = SkinTimerPropertyId{1},
+                      .authoredOrdinal = 2},
+                  80, 40, 1'000);
+
+  FakeState state;
+  state.timerSequence = {1'200'000, 1'200'000};
+  ValidatedBeatorajaSkinModel model;
+  model.model.resources = {
+      SkinImageResource{.id = 1, .authoredName = "before"},
+      SkinMovieResource{.id = 2,
+                        .virtualPath = "movie.MP4",
+                        .timer = SkinTimerPropertyId{1},
+                        .authoredOrdinal = 2},
+      SkinImageResource{.id = 3, .authoredName = "after"}};
+  model.model.timerProperties.push_back(
+      {.id = SkinTimerPropertyId{1},
+       .source = SkinBuiltinPropertySelector{.value = 90},
+       .authoredOrdinal = 1});
+  model.model.objects = {imageObject(1, 1, true), imageObject(2, 2, true),
+                         imageObject(3, 3, true)};
+  auto before = destination(1, 10, 10.0);
+  auto movie = destination(2, 20, 60.0);
+  auto after = destination(3, 30, 110.0);
+  before.presentation.loop = 10'000;
+  movie.presentation.loop = 10'000;
+  after.presentation.loop = 10'000;
+  auto &movieBody = movie.presentation;
+  movieBody.blend = SkinBlendMode::Additive;
+  movieBody.filter = SkinFilterMode::Linear;
+  movieBody.stretch = SkinStretchMode::KeepAspectRatioFitInner;
+  movieBody.frames.front().rgba = {10, 20, 30, 40};
+  movieBody.frames.front().clip =
+      SkinSourceRect{.x = 3, .y = 4, .w = 20, .h = 10};
+  std::get<SkinImageObject>(model.model.objects[1].payload)
+      .orderedStates.front()
+      .cycleMillis = 1'000;
+  model.model.destinations = {std::move(before), std::move(movie),
+                              std::move(after)};
+
+  const auto result = evaluate(renderer, runtime, model, resources, state, 1,
+                               2'500'000, nullptr, std::nullopt, nullptr, 1,
+                               false, nullptr, &movies);
+  expect(result.submitReady && result.submitReady->commands.size() == 3 &&
+             std::holds_alternative<SkinTexturedQuadCommand>(
+                 result.submitReady->commands[0].payload) &&
+             std::holds_alternative<SkinMovieCommand>(
+                 result.submitReady->commands[1].payload) &&
+             std::holds_alternative<SkinTexturedQuadCommand>(
+                 result.submitReady->commands[2].payload),
+         "adjacent image and movie commands preserve exact authored ordering");
+  if (!result.submitReady || result.submitReady->commands.size() != 3 ||
+      !std::holds_alternative<SkinMovieCommand>(
+          result.submitReady->commands[1].payload)) {
+    return;
+  }
+  const auto &command =
+      std::get<SkinMovieCommand>(result.submitReady->commands[1].payload);
+  expect(command.resource == 2 && command.sourceTimeMillis == 300 &&
+             command.geometry.clip && command.geometry.clip->x == 3.0 &&
+             command.geometry.clip->y == 4.0 &&
+             command.geometry.clip->width == 20.0 &&
+             command.geometry.clip->height == 10.0 &&
+             command.geometry.rgba[0] == 10.0F / 255.0F &&
+             command.geometry.rgba[3] == 40.0F / 255.0F &&
+             command.geometry.blend == SkinBlendMode::Additive &&
+             command.geometry.filter == SkinFilterMode::Linear &&
+             command.geometry.stretch ==
+                 SkinStretchMode::KeepAspectRatioFitInner &&
+             command.state.blend == SkinBlendMode::Additive &&
+             command.state.filter == SkinFilterMode::Linear,
+         "movie commands retain timer-relative cyclic time and destination crop, tint, blend, filter, and stretch");
+
+  state.timerSequenceIndex = 0;
+  state.timerSequence = {2'400'000, 2'400'000};
+  const auto reset = evaluate(renderer, runtime, model, resources, state, 2,
+                              2'500'000, nullptr, std::nullopt, nullptr, 1,
+                              false, nullptr, &movies);
+  expect(reset.submitReady && reset.submitReady->commands.size() == 3 &&
+             std::get<SkinMovieCommand>(reset.submitReady->commands[1].payload)
+                     .sourceTimeMillis == 100,
+         "a restarted source timer seeks movie command time back to the new epoch");
+  expect(movies.findCalls > 0,
+         "frame evaluation performs only prepared movie identity lookups and cannot load or decode sources");
 }
 
 void testStaticBuiltinFrameDoesNotRequireLuaRuntime() {
@@ -5122,6 +5246,7 @@ void testDesktopAndIpadFitCommandFixtures() {
 } // namespace
 
 int main() {
+  testMovieCommandsPreserveTimingDestinationStateAndMixedOrdering();
   testStaticBuiltinFrameDoesNotRequireLuaRuntime();
   testCapturedFrameSerialMustMatchCallbacksAndProjection();
   testOffsetSentinelAndSourceAwarePrecedence();

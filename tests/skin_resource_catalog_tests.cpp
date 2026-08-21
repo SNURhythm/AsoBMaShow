@@ -1,4 +1,5 @@
 #include "skin/beatoraja/SkinResourceCatalog.h"
+#include "skin/beatoraja/SkinMovieCatalog.h"
 #include "skin/beatoraja/SkinBitmapFontParser.h"
 #include "skin/beatoraja/SkinTextAtlas.h"
 #include "skin/package/SkinAliasDetector.h"
@@ -304,6 +305,64 @@ struct FakeTextureDevice final : skin::SkinTextureDevice {
   int maximumDimension = skin::SkinResourcePolicy::maximumDimension;
 };
 
+struct FakeMovieDevice final : skin::SkinMovieDevice {
+  std::optional<skin::SkinMovieLoadResult>
+  load(const std::filesystem::path &path, std::stop_token) override {
+    ++loads;
+    loadedPaths.push_back(path);
+    pathExistedDuringLoad = pathExistedDuringLoad &&
+                            std::filesystem::is_regular_file(path);
+    if (failAt != 0 && loads == failAt) {
+      return std::nullopt;
+    }
+    const auto handle = skin::SkinMoviePlayerHandle{
+        static_cast<std::uint64_t>(loads)};
+    live.push_back(handle);
+    if (stopAfterLoad != nullptr) {
+      stopAfterLoad->request_stop();
+    }
+    return skin::SkinMovieLoadResult{
+        .handle = handle, .width = 80, .height = 40, .durationMillis = 1'000};
+  }
+
+  void destroy(skin::SkinMoviePlayerHandle handle) noexcept override {
+    ++destroys;
+    const auto found = std::ranges::find(live, handle);
+    if (found != live.end()) {
+      live.erase(found);
+    }
+  }
+
+  bool ownsCurrentThread() const noexcept override { return true; }
+  void beginFrame() noexcept override { ++begins; }
+  skin::SkinMovieFramePreparationResult prepareFrame(
+      skin::SkinMoviePlayerHandle, const skin::SkinMovieCommand &command,
+      const skin::PlaySkinViewport &) override {
+    ++prepares;
+    preparedTimes.push_back(command.sourceTimeMillis);
+    return {.ready = true, .drawable = true};
+  }
+  void discardFrame() noexcept override { ++discards; }
+  void commitFrame() noexcept override { ++commits; }
+  void submitPrepared(std::size_t index) noexcept override {
+    submitted.push_back(index);
+  }
+
+  int loads = 0;
+  int destroys = 0;
+  int begins = 0;
+  int prepares = 0;
+  int discards = 0;
+  int commits = 0;
+  int failAt = 0;
+  bool pathExistedDuringLoad = true;
+  std::stop_source *stopAfterLoad = nullptr;
+  std::vector<std::filesystem::path> loadedPaths;
+  std::vector<skin::SkinMoviePlayerHandle> live;
+  std::vector<std::int64_t> preparedTimes;
+  std::vector<std::size_t> submitted;
+};
+
 skin::ValidatedBeatorajaSkinModel singleImageModel(std::string virtualPath) {
   skin::ValidatedBeatorajaSkinModel model;
   model.model.resources.emplace_back(skin::SkinImageResource{
@@ -349,6 +408,12 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
                     "tests/fixtures/beatoraja_skin/resources/fixture.ttf",
                 source / "entry/resources/fixture.ttf");
+  fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
+                    "tests/fixtures/beatoraja_skin/resources/fixture.png",
+                source / "entry/resources/movie.MP4");
+  fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
+                    "tests/fixtures/beatoraja_skin/resources/fixture.jpg",
+                source / "entry/resources/second.webm");
   const auto writePpm = [](const fs::path &path, int width) {
     std::ofstream stream(path, std::ios::binary);
     stream << "P6\n" << width << " 1\n255\n";
@@ -514,6 +579,109 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   auto leasedFs = skin::LuaSkinFileSystem::create({.revision=lease->readView(), .entry=entry, .storageRoots=roots});
   expect(leasedFs.fileSystem != nullptr, "published resource filesystem is available");
   if (!leasedFs.fileSystem) return;
+  expect(skin::skinResourcePathIsMovie("skin/source.MP4") &&
+             skin::skinResourcePathIsMovie("skin/source.m4v") &&
+             skin::skinResourcePathIsMovie("skin/source.WMV") &&
+             skin::skinResourcePathIsMovie("skin/source.webm") &&
+             skin::skinResourcePathIsMovie("skin/source.mpg") &&
+             skin::skinResourcePathIsMovie("skin/source.MPEG") &&
+             skin::skinResourcePathIsMovie("skin/source.m1v") &&
+             skin::skinResourcePathIsMovie("skin/source.M2V") &&
+             skin::skinResourcePathIsMovie("skin/source.avi") &&
+             !skin::skinResourcePathIsMovie("skin/source.png") &&
+             !skin::skinResourcePathIsMovie("skin/source.avi.png"),
+         "movie classification exactly matches pinned VideoFormat extensions case-insensitively");
+
+  skin::ValidatedBeatorajaSkinModel movieModel;
+  movieModel.model.resources.emplace_back(skin::SkinMovieResource{
+      .id = 21, .virtualPath = "resources/movie.MP4", .authoredOrdinal = 1});
+  movieModel.model.resources.emplace_back(skin::SkinMovieResource{
+      .id = 22, .virtualPath = "resources/movie.MP4", .authoredOrdinal = 2});
+  movieModel.model.objects.push_back(
+      {.id = 21,
+       .authoredName = "movie-one",
+       .payload = skin::SkinImageObject{.orderedStates = {{.resource = 21}}},
+       .critical = true});
+  movieModel.model.objects.push_back(
+      {.id = 22,
+       .authoredName = "movie-two",
+       .payload = skin::SkinImageObject{.orderedStates = {{.resource = 22}}},
+       .critical = true});
+  auto movieDevice = std::make_shared<FakeMovieDevice>();
+  auto movies = skin::SkinMovieCatalog::prepare(
+      {.fileSystem = *leasedFs.fileSystem,
+       .model = movieModel,
+       .configuration = configuration,
+       .device = movieDevice});
+  expect(movies.catalog && !movies.cancelled && movies.diagnostics.empty() &&
+             movieDevice->loads == 1 && movieDevice->live.size() == 1 &&
+             movieDevice->pathExistedDuringLoad &&
+             movies.catalog->findMovie(21) && movies.catalog->findMovie(22) &&
+             movies.catalog->findMovie(21)->handle ==
+                 movies.catalog->findMovie(22)->handle,
+         "deduplicated movie paths materialize and load exactly once while retaining typed aliases");
+  skin::SkinMovieCommand movieCommand{.resource = 21,
+                                      .sourceTimeMillis = 375};
+  const std::array<const skin::SkinMovieCommand *, 1> movieCommands{
+      &movieCommand};
+  const skin::PlaySkinViewport movieViewport{.valid = true};
+  const auto preparedMovieFrame =
+      movies.catalog->prepareFrame(movieCommands, movieViewport);
+  movies.catalog->commitFrame();
+  movies.catalog->submitPrepared(0);
+  movies.catalog->discardFrame();
+  expect(preparedMovieFrame.ready && movieDevice->loads == 1 &&
+             movieDevice->begins == 1 && movieDevice->prepares == 1 &&
+             movieDevice->preparedTimes == std::vector<std::int64_t>{375} &&
+             movieDevice->commits == 1 &&
+             movieDevice->submitted == std::vector<std::size_t>{0},
+         "frame preparation seeks and submits an already-owned player without loading or opening another source");
+  const auto materializedMovie = movieDevice->loadedPaths.front();
+  movies.catalog.reset();
+  expect(movieDevice->destroys == 1 && movieDevice->live.empty() &&
+             !fs::exists(materializedMovie),
+         "movie catalog teardown destroys the shared player and materialized source exactly once");
+
+  skin::ValidatedBeatorajaSkinModel twoMovieModel = movieModel;
+  twoMovieModel.model.resources.emplace_back(skin::SkinMovieResource{
+      .id = 23, .virtualPath = "resources/second.webm", .authoredOrdinal = 3});
+  twoMovieModel.model.objects.push_back(
+      {.id = 23,
+       .authoredName = "movie-three",
+       .payload = skin::SkinImageObject{.orderedStates = {{.resource = 23}}},
+       .critical = true});
+  auto failingMovieDevice = std::make_shared<FakeMovieDevice>();
+  failingMovieDevice->failAt = 2;
+  auto failedMovies = skin::SkinMovieCatalog::prepare(
+      {.fileSystem = *leasedFs.fileSystem,
+       .model = twoMovieModel,
+       .configuration = configuration,
+       .device = failingMovieDevice});
+  expect(!failedMovies.catalog && !failedMovies.cancelled &&
+             failingMovieDevice->loads == 2 &&
+             failingMovieDevice->destroys == 1 &&
+             failingMovieDevice->live.empty() &&
+             std::ranges::all_of(failingMovieDevice->loadedPaths,
+                                 [](const auto &path) {
+                                   return !std::filesystem::exists(path);
+                                 }),
+         "a failed movie creation rolls back every prior player and materialized source exactly once");
+
+  std::stop_source movieStop;
+  auto cancelledMovieDevice = std::make_shared<FakeMovieDevice>();
+  cancelledMovieDevice->stopAfterLoad = &movieStop;
+  auto cancelledMovies = skin::SkinMovieCatalog::prepare(
+      {.fileSystem = *leasedFs.fileSystem,
+       .model = movieModel,
+       .configuration = configuration,
+       .device = cancelledMovieDevice,
+       .stop = movieStop.get_token()});
+  expect(!cancelledMovies.catalog && cancelledMovies.cancelled &&
+             cancelledMovieDevice->loads == 1 &&
+             cancelledMovieDevice->destroys == 1 &&
+             cancelledMovieDevice->live.empty() &&
+             !fs::exists(cancelledMovieDevice->loadedPaths.front()),
+         "cancellation after movie load prevents publication and tears down the player and file");
   skin::ValidatedBeatorajaSkinModel emptyModel;
   std::stop_source preStoppedCaller;
   preStoppedCaller.request_stop();

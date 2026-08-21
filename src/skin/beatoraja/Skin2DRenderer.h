@@ -5,6 +5,7 @@
 #include "LuaSkinRuntime.h"
 #include "SkinHitErrorVisualizerRenderer.h"
 #include "SkinDrawCommand.h"
+#include "SkinMovieCatalog.h"
 #include "SyntheticReplayGhostOverlay.h"
 #include "../SkinSafetyPolicy.h"
 #include "../../scene/play/SkinGameplayGraphState.h"
@@ -201,6 +202,7 @@ struct SkinFrameInputs {
   const ValidatedBeatorajaSkinModel &model;
   const BeatorajaSkinConfiguration &configuration;
   const SkinPreparedResourceView &resources;
+  const SkinPreparedMovieView *movies = nullptr;
   const PlaySkinViewport &viewport;
   LuaSkinRuntime *runtime = nullptr;
   ISkinFrameState &state;
@@ -334,6 +336,7 @@ public:
   [[nodiscard]] bool submit(
       const SkinCommandBuffer &, const SkinPreparedResourceView &,
       RenderContext &, rendering::SkinQuadBatchRenderer &,
+      SkinMovieCatalog *, const PlaySkinViewport &,
       const PreparedGameplayBgaFrame &, IGameplayBgaSubmitter &) const
       noexcept;
 

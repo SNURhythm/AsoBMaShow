@@ -18,12 +18,15 @@
 #include <optional>
 #include <span>
 #include <stop_token>
+#include <string_view>
 #include <thread>
 #include <vector>
 
 #include <bgfx/bgfx.h>
 
 namespace skin {
+
+[[nodiscard]] bool skinResourcePathIsMovie(std::string_view) noexcept;
 
 // One fixed policy is shared by staged validation and planning. Values are
 // deliberately far below package-import limits: resources are frame-critical.

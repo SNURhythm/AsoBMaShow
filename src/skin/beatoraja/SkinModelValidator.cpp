@@ -151,20 +151,26 @@ SkinModelValidationResult SkinModelValidator::validate(
     const bool valid = std::visit(
         [&](const auto &resource) {
           using T = std::decay_t<decltype(resource)>;
-          if (resource.id == 0 || resource.authoredName.empty() ||
-              !resourceIds.insert(resource.id).second) {
+          if (resource.id == 0 || !resourceIds.insert(resource.id).second) {
             return false;
           }
-          // JSONSkinLoader's sourceMap is populated with Map.put(), so a
-          // later authored source declaration intentionally replaces an
-          // earlier declaration with the same name. Keep that effective
-          // lookup while still requiring our internal resource IDs to be
-          // unique.
-          resourceNames.insert_or_assign(resource.authoredName, resource.id);
-          if constexpr (std::is_same_v<T, SkinImageResource>) {
+          if constexpr (std::is_same_v<T, SkinMovieResource>) {
             return imageResourceIds.insert(resource.id).second;
           } else {
-            return fontResourceIds.insert(resource.id).second;
+            if (resource.authoredName.empty()) {
+              return false;
+            }
+            // JSONSkinLoader's sourceMap is populated with Map.put(), so a
+            // later authored source declaration intentionally replaces an
+            // earlier declaration with the same name. Keep that effective
+            // lookup while still requiring our internal resource IDs to be
+            // unique.
+            resourceNames.insert_or_assign(resource.authoredName, resource.id);
+            if constexpr (std::is_same_v<T, SkinImageResource>) {
+              return imageResourceIds.insert(resource.id).second;
+            } else {
+              return fontResourceIds.insert(resource.id).second;
+            }
           }
         },
         definition);

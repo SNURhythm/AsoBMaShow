@@ -19,6 +19,21 @@
 #include <type_traits>
 
 namespace skin {
+
+bool skinResourcePathIsMovie(std::string_view path) noexcept {
+  constexpr std::array<std::string_view, 9> extensions{
+      ".mp4", ".m4v", ".wmv", ".webm", ".mpg",
+      ".mpeg", ".m1v", ".m2v", ".avi"};
+  const auto extension = std::filesystem::path(path).extension().string();
+  return std::ranges::any_of(extensions, [&](std::string_view candidate) {
+    return extension.size() == candidate.size() &&
+           std::ranges::equal(extension, candidate, [](char left, char right) {
+             return static_cast<char>(std::tolower(
+                        static_cast<unsigned char>(left))) == right;
+           });
+  });
+}
+
 namespace {
 SkinDiagnostic diagnostic(std::string code, std::string message) { return {.code=std::move(code), .message=std::move(message), .severity=DiagnosticSeverity::Error}; }
 SkinDiagnostic warning(std::string code, std::string message) { return {.code=std::move(code), .message=std::move(message), .severity=DiagnosticSeverity::Warning}; }
@@ -1367,6 +1382,9 @@ SkinResourceValidationResult SkinResourcePreparationService::validateResources(
       result.diagnostics.push_back(fileDiagnostic(*resource, candidate.failure ? &*candidate.failure : nullptr, use->second.critical));
       continue;
     }
+    if (skinResourcePathIsMovie(*candidate.normalizedVirtualPath)) {
+      continue;
+    }
     auto decoded = decodedByPath.find(*candidate.normalizedVirtualPath);
     if (decoded == decodedByPath.end()) {
       const auto read = input.fileSystem.readResolvedResource(
@@ -1498,6 +1516,7 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
     const auto candidate = input.fileSystem.resolveResourceCandidates(
         *configured.path, *configured.path);
     if (!candidate.normalizedVirtualPath) { result.diagnostics.push_back(fileDiagnostic(*resource, candidate.failure ? &*candidate.failure : nullptr, use->second.critical)); continue; }
+    if (skinResourcePathIsMovie(*candidate.normalizedVirtualPath)) continue;
     if (const auto found = unique.find(*candidate.normalizedVirtualPath); found != unique.end()) {
       auto &image=plan.images[found->second];
       std::vector<SkinSourceRect> regions;

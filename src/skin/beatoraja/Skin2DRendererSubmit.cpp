@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <numbers>
 #include <optional>
 #include <ranges>
@@ -20,7 +21,11 @@
 namespace skin {
 namespace {
 
-enum class SubmissionStepKind : std::uint8_t { QuadSegment, BgaTarget };
+enum class SubmissionStepKind : std::uint8_t {
+  QuadSegment,
+  MovieTarget,
+  BgaTarget,
+};
 
 struct SubmissionStep {
   SubmissionStepKind kind = SubmissionStepKind::QuadSegment;
@@ -153,9 +158,11 @@ bool Skin2DRenderer::submit(
     const SkinCommandBuffer &buffer,
     const SkinPreparedResourceView &resources, RenderContext &context,
     rendering::SkinQuadBatchRenderer &renderer,
+    SkinMovieCatalog *movies, const PlaySkinViewport &viewport,
     const PreparedGameplayBgaFrame &bgaFrame,
     IGameplayBgaSubmitter &bgaSubmitter) const noexcept {
   std::vector<std::span<const SkinDrawCommand>> quadSegments;
+  std::vector<const SkinMovieCommand *> movieCommands;
   std::vector<BgaDrawTarget> bgaTargets;
   std::vector<SubmissionStep> steps;
   bool hasBgaMarker = false;
@@ -163,6 +170,7 @@ bool Skin2DRenderer::submit(
   try {
     quadSegments.reserve(buffer.commands.size() / 2U + 1U);
     bgaTargets.reserve(buffer.commands.size() * 2U);
+    movieCommands.reserve(buffer.commands.size());
     steps.reserve(buffer.commands.size() * 2U);
     std::size_t quadStart = 0;
     const auto appendQuadSegment = [&](std::size_t end) {
@@ -188,6 +196,15 @@ bool Skin2DRenderer::submit(
 
     for (std::size_t commandIndex = 0; commandIndex < buffer.commands.size();
          ++commandIndex) {
+      if (const auto *movie = std::get_if<SkinMovieCommand>(
+              &buffer.commands[commandIndex].payload)) {
+        appendQuadSegment(commandIndex);
+        movieCommands.push_back(movie);
+        steps.push_back({.kind = SubmissionStepKind::MovieTarget,
+                         .index = movieCommands.size() - 1U});
+        quadStart = commandIndex + 1U;
+        continue;
+      }
       const auto *bga =
           std::get_if<SkinBgaCommand>(&buffer.commands[commandIndex].payload);
       if (bga == nullptr) {
@@ -234,14 +251,44 @@ bool Skin2DRenderer::submit(
   }
 
   renderer.begin(context, resources);
+  SkinMovieCatalogFrameResult moviePlan;
+  try {
+    moviePlan = movies != nullptr
+                    ? movies->prepareFrame(movieCommands, viewport)
+                    : SkinMovieCatalogFrameResult{
+                          .ready = movieCommands.empty()};
+  } catch (...) {
+    if (movies != nullptr) {
+      movies->discardFrame();
+    }
+    return false;
+  }
+  if (!moviePlan.ready) {
+    if (movies != nullptr) {
+      movies->discardFrame();
+    }
+    return false;
+  }
   bool bgaReady = true;
-  GameplayBgaTransientRequirements bgaRequirements;
+  GameplayBgaTransientRequirements bgaRequirements = moviePlan.requirements;
   if (hasBgaMarker) {
     try {
       const auto result = bgaSubmitter.preflight(bgaFrame, bgaTargets);
       bgaReady = result.ready;
       if (bgaReady) {
-        bgaRequirements = result.requirements;
+        const auto add = [](std::uint64_t &target, std::uint64_t amount) {
+          if (amount > std::numeric_limits<std::uint64_t>::max() - target) {
+            return false;
+          }
+          target += amount;
+          return true;
+        };
+        bgaReady = add(bgaRequirements.vertexBytes,
+                       result.requirements.vertexBytes) &&
+                   add(bgaRequirements.vertexAlignmentPadding,
+                       result.requirements.vertexAlignmentPadding) &&
+                   add(bgaRequirements.indexCount,
+                       result.requirements.indexCount);
       }
     } catch (...) {
       bgaReady = false;
@@ -263,7 +310,13 @@ bool Skin2DRenderer::submit(
       renderer.prepare(quadSegments, quadPlan, bgaRequirements);
   if (!quadsReady) {
     renderer.discardPrepared(quadPlan);
+    if (movies != nullptr) {
+      movies->discardFrame();
+    }
     return false;
+  }
+  if (movies != nullptr) {
+    movies->commitFrame();
   }
   if (hasBgaMarker) {
     bgaSubmitter.commitPrepared(bgaFrame);
@@ -273,6 +326,8 @@ bool Skin2DRenderer::submit(
     if (step.kind == SubmissionStepKind::QuadSegment) {
       renderer.submitPrepared(quadPlan, step.index);
       renderer.flush();
+    } else if (step.kind == SubmissionStepKind::MovieTarget) {
+      movies->submitPrepared(step.index);
     } else {
       bgaSubmitter.submitPrepared(bgaFrame, bgaTargets[step.index]);
     }
@@ -284,6 +339,9 @@ bool Skin2DRenderer::submit(
   // A failed BGA preflight owns no committed target plan, but its prepared
   // frame can still hold a media lease and must be released.
   bgaSubmitter.finalizePrepared(bgaFrame);
+  if (movies != nullptr) {
+    movies->discardFrame();
+  }
   return true;
 }
 

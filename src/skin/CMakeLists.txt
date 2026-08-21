@@ -17,6 +17,8 @@ target_sources(main PRIVATE
 )
 
 if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
+    target_compile_definitions(main PRIVATE
+        ASOBMASHOW_ENABLE_SKIN_MOVIE_DEVICE=1)
     target_sources(main PRIVATE
         GameplaySkinLifecycle.cpp
         beatoraja/GameplaySkinBuiltinCatalog.cpp
@@ -55,6 +57,7 @@ if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
         beatoraja/SkinOverlayDigestProvider.cpp
         beatoraja/SkinProcessResidentMemory.cpp
         beatoraja/SkinModelValidator.cpp
+        beatoraja/SkinMovieCatalog.cpp
         beatoraja/SkinResourceCatalog.cpp
         beatoraja/SkinTextAtlas.cpp
     )

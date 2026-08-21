@@ -666,6 +666,34 @@ struct SpriteSelection {
   std::optional<SkinDiagnostic> failure;
 };
 
+struct MovieTimeSelection {
+  std::int64_t sourceTimeMillis = 0;
+  std::optional<SkinDiagnostic> failure;
+};
+
+MovieTimeSelection selectMovieTime(
+    const SkinFrameInputs &inputs, const FrameLookupIndex &index,
+    const PreparedSkinMovie &movie, const SkinSpriteFrames &sprite) {
+  std::int64_t elapsedMillis = std::max<std::int64_t>(
+      0, inputs.visualTimeMicros / 1000);
+  const auto timer = movie.resource.timer ? movie.resource.timer : sprite.timer;
+  if (timer) {
+    const auto resolved = resolveTimerUse(inputs, index, *timer);
+    if (resolved.failure) {
+      return {.failure = *resolved.failure};
+    }
+    if (resolved.off) {
+      return {};
+    }
+    elapsedMillis = std::max<std::int64_t>(
+        0, inputs.visualTimeMicros / 1000 - resolved.value / 1000);
+  }
+  if (sprite.cycleMillis > 0) {
+    elapsedMillis %= sprite.cycleMillis;
+  }
+  return {.sourceTimeMillis = elapsedMillis};
+}
+
 struct AnimationSelection {
   std::size_t frame = 0;
   bool suppressed = false;
@@ -3265,6 +3293,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
 
       std::size_t stateIndex = 0;
       SpriteSelection selected;
+      const PreparedSkinMovie *preparedMovie = nullptr;
+      MovieTimeSelection movieTime;
       std::optional<NumericLayout> numericLayout;
       std::optional<TextLayoutInput> textLayout;
       if (image) {
@@ -3293,6 +3323,10 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           if (stateIndex >= image->orderedStates.size()) {
             stateIndex = 0;
           }
+        }
+        if (inputs.movies != nullptr) {
+          preparedMovie = inputs.movies->findMovie(
+              image->orderedStates[stateIndex].resource);
         }
       } else if (number || floating) {
         numericLayout =
@@ -4145,16 +4179,28 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       }
 
       if (image) {
-        selected = selectSpriteFrame(inputs, lookupIndex,
-                                     image->orderedStates[stateIndex]);
-        if (selected.failure) {
-          if (reportObjectFailure(result, *object, *selected.failure)) {
+        if (preparedMovie != nullptr) {
+          movieTime = selectMovieTime(inputs, lookupIndex, *preparedMovie,
+                                      image->orderedStates[stateIndex]);
+          if (movieTime.failure &&
+              reportObjectFailure(result, *object, *movieTime.failure)) {
             return result;
           }
-          continue;
-        }
-        if (selected.suppressed) {
-          continue;
+          if (movieTime.failure) {
+            continue;
+          }
+        } else {
+          selected = selectSpriteFrame(inputs, lookupIndex,
+                                       image->orderedStates[stateIndex]);
+          if (selected.failure) {
+            if (reportObjectFailure(result, *object, *selected.failure)) {
+              return result;
+            }
+            continue;
+          }
+          if (selected.suppressed) {
+            continue;
+          }
         }
       } else if (numericLayout) {
         if (!selectNumericAnimation(inputs, lookupIndex, *numericLayout)) {
@@ -4182,6 +4228,29 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
         continue;
       }
       if (evaluated.geometry->rgba[3] <= 0.0F) {
+        continue;
+      }
+
+      if (preparedMovie != nullptr) {
+        if (buffer.commands.size() >= skinFrameMaximumCommands(inputs)) {
+          if (reportObjectFailure(
+                  result, *object,
+                  diagnostic("skin.renderer.command.limit",
+                             "Movie command exceeds the fixed frame limit."))) {
+            return result;
+          }
+          continue;
+        }
+        SkinMovieCommand command{
+            .resource = preparedMovie->resource.id,
+            .sourceTimeMillis = movieTime.sourceTimeMillis,
+            .geometry = *evaluated.geometry,
+            .state = {.blend = evaluated.geometry->blend,
+                      .filter = evaluated.geometry->filter}};
+        buffer.commands.push_back(
+            {.authoredOrdinal = destination.presentation.authoredOrdinal,
+             .sourceObject = object->id,
+             .payload = std::move(command)});
         continue;
       }
 

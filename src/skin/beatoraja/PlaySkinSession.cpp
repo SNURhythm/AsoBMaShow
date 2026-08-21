@@ -660,6 +660,7 @@ struct PlaySkinSession::OwnedActivation final {
                   BeatorajaSkinConfiguration configurationValue,
                   std::unique_ptr<LuaSkinRuntime> runtimeValue,
                   std::unique_ptr<SkinResourceCatalog> resourcesValue,
+                  std::unique_ptr<SkinMovieCatalog> moviesValue,
                   SkinConfigurationWriteQueue &configurationWritesValue,
                   std::function<void(SkinAudioVolumeWriterTarget, float)>
                       applyAudioVolumeValue,
@@ -678,6 +679,7 @@ struct PlaySkinSession::OwnedActivation final {
         configuration(std::move(configurationValue)),
         mutationTable(makePinnedSkinEventMutationTableV1()),
         runtime(std::move(runtimeValue)), resources(std::move(resourcesValue)),
+        movies(std::move(moviesValue)),
         configurationWrites(&configurationWritesValue),
         applyAudioVolume(std::move(applyAudioVolumeValue)),
         applyPracticeItemScroll(std::move(applyPracticeItemScrollValue)),
@@ -710,6 +712,7 @@ struct PlaySkinSession::OwnedActivation final {
   SkinEventMutationTable mutationTable;
   std::unique_ptr<LuaSkinRuntime> runtime;
   std::unique_ptr<SkinResourceCatalog> resources;
+  std::unique_ptr<SkinMovieCatalog> movies;
   SkinConfigurationWriteQueue *configurationWrites = nullptr;
   std::function<void(SkinAudioVolumeWriterTarget, float)> applyAudioVolume;
   std::function<void(float)> applyPracticeItemScroll;
@@ -747,6 +750,7 @@ PlaySkinSession::PlaySkinSession(
                .model = owned_->model,
                .configuration = owned_->configuration,
                .resources = *owned_->resources,
+               .movies = owned_->movies.get(),
                .viewportSettings = owned_->viewportSettings,
                .viewport = owned_->viewport,
                .runtime = owned_->runtime.get(),
@@ -993,6 +997,28 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
            .severity = DiagnosticSeverity::Warning});
     }
 
+    auto movieDevice = std::move(context.movieDevice);
+#if ASOBMASHOW_ENABLE_SKIN_MOVIE_DEVICE
+    if (!movieDevice) {
+      movieDevice = createSkinMovieDevice();
+    }
+#endif
+    auto preparedMovies = SkinMovieCatalog::prepare(
+        {.fileSystem = *resourceFiles.fileSystem,
+         .model = *validatedModel.model,
+         .configuration = configuration,
+         .device = std::move(movieDevice),
+         .safetyPolicy = context.safetyPolicy,
+         .stop = context.stop});
+    appendMovedDiagnostics(result.diagnostics, preparedMovies.diagnostics);
+    if (preparedMovies.cancelled || cancelled(context.stop, result)) {
+      result.cancelled = true;
+      return result;
+    }
+    if (!preparedMovies.catalog || hasErrors(result.diagnostics)) {
+      return result;
+    }
+
     const std::vector<std::string> runtimeStrings =
         context.chartModel.runtimeStrings();
     auto planned = context.resourcePreparation.decodeAndPlan(
@@ -1060,6 +1086,7 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
         context.chartModel, result.reconciledSettings,
         std::move(*validatedModel.model), std::move(configuration),
         std::move(runtime.runtime), std::move(uploaded.catalog),
+        std::move(preparedMovies.catalog),
         context.configurationWrites, std::move(context.applyAudioVolume),
         std::move(context.applyPracticeItemScroll),
         std::move(context.applyPracticeMenuItem),
@@ -1176,6 +1203,7 @@ PlaySkinFrameTransactionResult PlaySkinSession::runFrameTransaction(
        .model = context_.model,
        .configuration = context_.configuration,
        .resources = context_.resources,
+       .movies = context_.movies,
        .viewport = context_.viewport,
        .runtime = context_.runtime,
        .state = context_.bridge,
@@ -1425,7 +1453,8 @@ PresentationFrameResult PlaySkinSession::render(
   // into built-in fallback; the renderer boundary prevents one escaping.
   const bool submitted = context_.renderer.submit(
       *transaction.evaluation.submitReady, context_.resources,
-      renderContext, context_.quadRenderer, preparedBga, bgaSubmitter);
+      renderContext, context_.quadRenderer, context_.movies,
+      context_.viewport, preparedBga, bgaSubmitter);
   if (!submitted) {
     clearPublishedGeometry(true);
     result.failure = presentationFailure(
