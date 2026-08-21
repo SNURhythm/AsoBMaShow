@@ -496,9 +496,11 @@ public:
   DecodeSession(const BeatorajaSkinHeader &header,
                 const BeatorajaSkinConfiguration &configuration,
                 SkinBuiltinBindingCatalogView builtins,
-                SkinSafetyPolicy safetyPolicy,
+                SkinSafetyPolicy safetyPolicy, std::stop_token stop,
+                StaticSkinDecodeCheckpoint checkpoint,
                 Lr2GameplaySkinDecodeResult &result)
       : header_(header), bindings_(builtins), result_(result),
+        stop_(stop), checkpoint_(checkpoint),
         mode_(modeForSkinType(header.type)),
         maximumObjects_(static_cast<std::size_t>(safetyPolicy.limit(
             SkinSafetyGuard::LuaDecoderLimit, kMaximumObjects))),
@@ -529,6 +531,7 @@ public:
 
   void execute(std::span<const Lr2SkinCommand> commands) {
     for (std::size_t index = 0; index < commands.size(); ++index) {
+      if (cancelled()) return;
       ordinal_ = static_cast<std::uint32_t>(index);
       const auto &command = commands[index];
       try {
@@ -541,6 +544,7 @@ public:
             "Invalid LR2 gameplay command #" + command.name));
       }
     }
+    if (cancelled()) return;
     finalizeNote();
     bindings_.moveInto(model_);
   }
@@ -548,6 +552,17 @@ public:
   BeatorajaSkinModel takeModel() { return std::move(model_); }
 
 private:
+  [[nodiscard]] bool cancelled() {
+    ++workItem_;
+    if (checkpoint_.notify != nullptr) {
+      checkpoint_.notify(StaticSkinDecodePhase::Lr2Model, workItem_,
+                         checkpoint_.context);
+    }
+    if (!stop_.stop_requested()) return false;
+    result_.cancelled = true;
+    return true;
+  }
+
   bool processControl(const Lr2SkinCommand &command) {
     if (command.name == "IF") {
       ifs_ = evaluateCondition(command);
@@ -2192,6 +2207,9 @@ private:
   const BeatorajaSkinHeader &header_;
   BindingRegistry bindings_;
   Lr2GameplaySkinDecodeResult &result_;
+  std::stop_token stop_;
+  StaticSkinDecodeCheckpoint checkpoint_;
+  std::size_t workItem_ = 0;
   BeatorajaSkinModel model_;
   std::optional<ModeInfo> mode_;
   std::map<int, int> options_;
@@ -2270,8 +2288,13 @@ Lr2GameplaySkinDecodeResult Lr2GameplaySkinDecoder::decode(
     std::span<const Lr2SkinCommand> commands,
     const EntryProfileSettings *desired,
     SkinBuiltinBindingCatalogView builtins,
-    SkinSafetyPolicy safetyPolicy) const {
+    SkinSafetyPolicy safetyPolicy, std::stop_token stop,
+    StaticSkinDecodeCheckpoint checkpoint) const {
   Lr2GameplaySkinDecodeResult result;
+  if (stop.stop_requested()) {
+    result.cancelled = true;
+    return result;
+  }
   if (!gameplaySkinTraitForSkinType(header.type)) {
     result.fatal = true;
     result.diagnostics.push_back(documentDiagnostic(
@@ -2294,8 +2317,9 @@ Lr2GameplaySkinDecodeResult Lr2GameplaySkinDecoder::decode(
       return result;
     }
     DecodeSession session(header, *result.configuration, builtins,
-                          safetyPolicy, result);
+                          safetyPolicy, stop, checkpoint, result);
     session.execute(commands);
+    if (result.cancelled) return result;
     result.model = session.takeModel();
   } catch (...) {
     result.fatal = true;

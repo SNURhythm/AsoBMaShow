@@ -3,10 +3,12 @@
 #include "BeatorajaSkinModel.h"
 #include "Lr2SkinCsvParser.h"
 #include "LuaSkinBindingDecoder.h"
+#include "StaticSkinDecodeControl.h"
 #include "../SkinSafetyPolicy.h"
 
 #include <optional>
 #include <span>
+#include <stop_token>
 #include <vector>
 
 namespace skin {
@@ -17,6 +19,7 @@ struct Lr2GameplaySkinDecodeResult {
   std::optional<BeatorajaSkinModel> model;
   std::vector<SkinDiagnostic> diagnostics;
   bool fatal = false;
+  bool cancelled = false;
 };
 
 struct Lr2GameplaySkinConfigurationResult {
@@ -35,7 +38,9 @@ public:
   [[nodiscard]] Lr2GameplaySkinDecodeResult decode(
       const BeatorajaSkinHeader &, std::span<const Lr2SkinCommand>,
       const EntryProfileSettings *, SkinBuiltinBindingCatalogView,
-      SkinSafetyPolicy safetyPolicy = SkinSafetyPolicy{}) const;
+      SkinSafetyPolicy safetyPolicy = SkinSafetyPolicy{},
+      std::stop_token stop = {},
+      StaticSkinDecodeCheckpoint checkpoint = {}) const;
 };
 
 } // namespace skin

@@ -2,11 +2,13 @@
 
 #include "BeatorajaSkinModel.h"
 #include "LuaSkinBindingDecoder.h"
+#include "StaticSkinDecodeControl.h"
 #include "../SkinSafetyPolicy.h"
 
 #include <cstddef>
 #include <optional>
 #include <span>
+#include <stop_token>
 #include <vector>
 
 namespace skin {
@@ -24,6 +26,7 @@ struct JsonGameplaySkinDecodeResult {
   std::optional<EntryProfileSettings> reconciledSettings;
   std::optional<BeatorajaSkinModel> model;
   std::vector<SkinDiagnostic> diagnostics;
+  bool cancelled = false;
 };
 
 class JsonGameplaySkinDecoder final {
@@ -32,7 +35,9 @@ public:
       std::span<const std::byte> bytes, const SkinEntryId &entry,
       const EntryProfileSettings *desired,
       SkinBuiltinBindingCatalogView builtins,
-      SkinSafetyPolicy safetyPolicy = SkinSafetyPolicy{}) const;
+      SkinSafetyPolicy safetyPolicy = SkinSafetyPolicy{},
+      std::stop_token stop = {},
+      StaticSkinDecodeCheckpoint checkpoint = {}) const;
 };
 
 } // namespace skin

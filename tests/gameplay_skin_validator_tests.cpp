@@ -202,7 +202,11 @@ validateScript(std::string_view script,
 }
 
 SkinValidationResult validateDocument(std::string_view entryPath,
-                                      std::string_view contents) {
+                                      std::string_view contents,
+                                      const std::map<std::string, std::string> &
+                                          additionalFiles = {},
+                                      SkinSafetyPolicy safetyPolicy =
+                                          SkinSafetyPolicy{}) {
   TempDirectory temp;
   const auto package = normalizePackageId("FormatFixture");
   expect(package.package.has_value(), "format fixture package ID is valid");
@@ -217,6 +221,9 @@ SkinValidationResult validateDocument(std::string_view entryPath,
 
   const fs::path source = temp.root() / "source";
   writeText(source / fs::path(entryPath), contents);
+  for (const auto &[path, fileContents] : additionalFiles) {
+    writeText(source / fs::path(path), fileContents);
+  }
   NoAliases aliases;
   SkinTreeSnapshotter snapshotter(rootsBelow(temp.root()), aliases);
   const auto snapshot = snapshotter.snapshot(source, *package.package, {}, {});
@@ -229,7 +236,25 @@ SkinValidationResult validateDocument(std::string_view entryPath,
   SkinResourcePreparationService resources;
   GameplaySkinValidator validator(resources);
   return validator.validate(snapshot.prepared->readView(), *entry.entry,
-                            nullptr, {});
+                            nullptr, {}, safetyPolicy);
+}
+
+void testLr2CallerBytePolicyIsSharedAcrossRootAndIncludes() {
+  const std::string root =
+      "#INFORMATION,0,Aggregate,fixture\n#RESOLUTION,0\n"
+      "#INCLUDE,included.inc\n";
+  const std::string included =
+      "#IMAGE,resource.png\n#STARTINPUT,123\n";
+  const std::uint64_t aggregateLimit = root.size() + included.size() - 1;
+  const auto validation = validateDocument(
+      "skin/aggregate.lr2skin", root,
+      {{"skin/included.inc", included}},
+      SkinSafetyPolicy(SkinSafetyLevel::Standard, aggregateLimit));
+  expect(validation.disposition !=
+                 SkinValidationDisposition::SelectableGameplay &&
+             hasDiagnostic(validation, "skin_lr2_byte_limit"),
+         "a caller-restricted byte policy caps LR2 root and includes as one "
+         "aggregate");
 }
 
 void testAuthoritativeCatalogAdmitsCompatibilityIntegerFactoryDomain() {
@@ -719,6 +744,7 @@ int main() {
   testCatalogKeepsBeatorajaEmptyOptionDeclarationsSelectable();
   testCatalogRejectsNonGameplayBeatorajaSkinTypes();
   testCatalogAdmitsOnlyGameplayHeadersAcrossStaticFormats();
+  testLr2CallerBytePolicyIsSharedAcrossRootAndIncludes();
   testCatalogDefersGameplayBindingFailureToGameplayLoading();
   testCatalogDefersGameplayResourceFailureToGameplayLoading();
   testRequestedExternalGameplaySkinAvoidsConfiguredStateErrors();

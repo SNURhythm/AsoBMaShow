@@ -14,6 +14,7 @@
 #include <optional>
 #include <set>
 #include <span>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -183,6 +184,21 @@ bool hasCode(const Lr2GameplaySkinDecodeResult &decoded,
   return std::ranges::any_of(decoded.diagnostics, [&](const auto &diagnostic) {
     return diagnostic.code.find(fragment) != std::string::npos;
   });
+}
+
+struct CancellationCheckpoint {
+  std::stop_source *source = nullptr;
+  std::size_t stopAt = 0;
+};
+
+void requestCancellationAtCheckpoint(StaticSkinDecodePhase phase,
+                                     std::size_t workItem,
+                                     void *context) noexcept {
+  auto &checkpoint = *static_cast<CancellationCheckpoint *>(context);
+  if (phase == StaticSkinDecodePhase::Lr2Model &&
+      workItem == checkpoint.stopAt) {
+    checkpoint.source->request_stop();
+  }
 }
 
 bool rectEquals(const SkinAuthoredRect &left, const SkinAuthoredRect &right) {
@@ -660,10 +676,31 @@ void testBuiltinReferenceBarGraphsRetainTheirPinnedSource() {
          "SRC_BARGRAPH and REFNUMBER retain gr>=100 as built-in image sources");
 }
 
+void testCancellationStopsMidLr2ModelFold() {
+  const BeatorajaSkinHeader header{.type = 0, .width = 640, .height = 480};
+  std::vector<Lr2SkinCommand> commands;
+  for (std::uint32_t line = 1; line <= 100; ++line) {
+    commands.push_back(
+        {.name = "STARTINPUT",
+         .fields = {std::to_string(line)},
+         .source = {.virtualPath = "cancel.lr2skin", .line = line, .column = 1},
+         .includeChain = {"cancel.lr2skin"}});
+  }
+  std::stop_source source;
+  CancellationCheckpoint checkpoint{.source = &source, .stopAt = 7};
+  const auto decoded = Lr2GameplaySkinDecoder{}.decode(
+      header, commands, nullptr, gameplaySkinBuiltinCatalog(),
+      SkinSafetyPolicy{}, source.get_token(),
+      {.notify = requestCancellationAtCheckpoint, .context = &checkpoint});
+  expect(decoded.cancelled && !decoded.model && decoded.diagnostics.empty(),
+         "LR2 cancellation is observed deterministically during command folding");
+}
+
 } // namespace
 
 int main() {
   testBuiltinReferenceBarGraphsRetainTheirPinnedSource();
+  testCancellationStopsMidLr2ModelFold();
   testAllCommandsDecodeToTypedCanonicalModel();
   if (failures != 0) {
     std::cerr << failures << " LR2 gameplay skin decoder test(s) failed\n";

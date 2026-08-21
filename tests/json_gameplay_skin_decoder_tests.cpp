@@ -16,6 +16,7 @@
 #include <optional>
 #include <span>
 #include <set>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -103,6 +104,21 @@ bool hasDiagnostic(const JsonGameplaySkinDecodeResult &decoded,
   return std::ranges::any_of(decoded.diagnostics, [&](const auto &diagnostic) {
     return diagnostic.code == code;
   });
+}
+
+struct CancellationCheckpoint {
+  std::stop_source *source = nullptr;
+  StaticSkinDecodePhase phase = StaticSkinDecodePhase::JsonModel;
+  std::size_t stopAt = 0;
+};
+
+void requestCancellationAtCheckpoint(StaticSkinDecodePhase phase,
+                                     std::size_t workItem,
+                                     void *context) noexcept {
+  auto &checkpoint = *static_cast<CancellationCheckpoint *>(context);
+  if (phase == checkpoint.phase && workItem == checkpoint.stopAt) {
+    checkpoint.source->request_stop();
+  }
 }
 
 Json parseJsonFile(const fs::path &path) {
@@ -830,6 +846,29 @@ void testJsonObjectDestinationAndMalformedFieldProvenance() {
          "a malformed nested field diagnostic points at its exact JSON value");
 }
 
+void testCancellationStopsMidJsonModelFold() {
+  Json document{{"type", 0}, {"source", Json::array()},
+                {"image", Json::array()}, {"destination", Json::array()}};
+  document["source"].push_back({{"id", "atlas"}, {"path", "atlas.png"}});
+  for (int index = 0; index < 100; ++index) {
+    const std::string id = "image-" + std::to_string(index);
+    document["image"].push_back(
+        {{"id", id}, {"src", "atlas"}, {"w", 1}, {"h", 1}});
+    document["destination"].push_back({{"id", id}, {"dst", Json::array({Json::object()})}});
+  }
+  const std::string encoded = document.dump();
+  std::stop_source source;
+  CancellationCheckpoint checkpoint{.source = &source,
+                                    .phase = StaticSkinDecodePhase::JsonModel,
+                                    .stopAt = 12};
+  const auto decoded = JsonGameplaySkinDecoder{}.decode(
+      std::as_bytes(std::span(encoded)), fixtureEntry("cancel.json"), nullptr,
+      gameplaySkinBuiltinCatalog(), SkinSafetyPolicy{}, source.get_token(),
+      {.notify = requestCancellationAtCheckpoint, .context = &checkpoint});
+  expect(decoded.cancelled && !decoded.model && decoded.diagnostics.empty(),
+         "JSON cancellation is observed deterministically during model folding");
+}
+
 } // namespace
 
 int main() {
@@ -840,6 +879,7 @@ int main() {
   testNegativeGenericGraphsKeepTheSelectOnlyGameplayBoundary();
   testTextRefWriterFallbackAndExplicitEventPrecedence();
   testJsonObjectDestinationAndMalformedFieldProvenance();
+  testCancellationStopsMidJsonModelFold();
 
   if (failures != 0) {
     std::cerr << failures << " JSON gameplay skin decoder test(s) failed\n";

@@ -104,8 +104,8 @@ bool requestMatchesEntry(const GameplaySkinDocumentRequest &request,
 
 std::uint64_t documentByteLimit(const GameplaySkinDocumentRequest &request,
                                 std::size_t standard) {
-  return request.safetyPolicy.limit(SkinSafetyGuard::LuaDecoderLimit,
-                                    static_cast<std::uint64_t>(standard));
+  return request.safetyPolicy.documentByteLimit(
+      static_cast<std::uint64_t>(standard));
 }
 
 DecodedGameplaySkinDocument decodeLua(GameplaySkinDocumentRequest &request,
@@ -239,11 +239,12 @@ DecodedGameplaySkinDocument decodeJson(GameplaySkinDocumentRequest &request) {
   auto decoded = decoder.decode(bytes.bytes, request.entry,
                                 request.desiredSettings,
                                 gameplaySkinBuiltinCatalog(),
-                                request.safetyPolicy);
+                                request.safetyPolicy, request.stop);
   result.header = std::move(decoded.header);
   result.configuration = std::move(decoded.configuration);
   result.reconciledSettings = std::move(decoded.reconciledSettings);
   result.model = std::move(decoded.model);
+  result.cancelled = decoded.cancelled;
   result.diagnostics = std::move(decoded.diagnostics);
   (void)cancellationRequested(request, result);
   return result;
@@ -259,7 +260,14 @@ DecodedGameplaySkinDocument decodeLr2(GameplaySkinDocumentRequest &request) {
                       "LR2 gameplay document could not be read", request.entry);
     return result;
   }
-  Lr2SkinCsvParser parser;
+  const std::uint64_t requestedLimit = documentByteLimit(
+      request, Lr2SkinCsvParserLimits::maxDocumentBytes);
+  const std::size_t aggregateLimit = static_cast<std::size_t>(
+      std::min<std::uint64_t>(requestedLimit,
+                              std::numeric_limits<std::size_t>::max()));
+  Lr2SkinCsvParser parser(
+      {.maximumDocumentBytes = aggregateLimit,
+       .maximumIncludeDepth = Lr2SkinCsvParserLimits::maxIncludeDepth});
   auto rootParsed = parser.parse(
       request.documentFileSystem, request.entry.packageRelativePath,
       bytes.bytes, request.stop,
@@ -309,11 +317,12 @@ DecodedGameplaySkinDocument decodeLr2(GameplaySkinDocumentRequest &request) {
   }
   auto decoded = gameplayDecoder.decode(
       *result.header, parsed.commands, request.desiredSettings,
-      gameplaySkinBuiltinCatalog(), request.safetyPolicy);
+      gameplaySkinBuiltinCatalog(), request.safetyPolicy, request.stop);
   result.configuration = std::move(decoded.configuration);
   result.reconciledSettings = std::move(decoded.reconciledSettings);
   result.model = std::move(decoded.model);
   result.fatal = decoded.fatal;
+  result.cancelled = decoded.cancelled;
   appendMoved(result.diagnostics, decoded.diagnostics);
   (void)cancellationRequested(request, result);
   return result;

@@ -53,11 +53,29 @@ struct DecodeContext {
   SkinBuiltinBindingCatalogView builtins;
   SkinSafetyPolicy safetyPolicy;
   JsonGameplaySkinDecodeResult &result;
+  std::stop_token stop;
+  StaticSkinDecodeCheckpoint decodeCheckpoint;
   const JsonSourceIndex *sources = nullptr;
   bool failed = false;
+  StaticSkinDecodePhase phase = StaticSkinDecodePhase::JsonStructure;
+  std::array<std::size_t, 3> workItems{};
 
   [[nodiscard]] std::optional<SkinSourceLocation>
   source(const Json *value) const;
+
+  [[nodiscard]] bool checkpoint(
+      std::optional<StaticSkinDecodePhase> requestedPhase = std::nullopt) {
+    const StaticSkinDecodePhase observed = requestedPhase.value_or(phase);
+    auto &workItem = workItems[static_cast<std::size_t>(observed)];
+    ++workItem;
+    if (decodeCheckpoint.notify != nullptr) {
+      decodeCheckpoint.notify(observed, workItem, decodeCheckpoint.context);
+    }
+    if (!stop.stop_requested()) return false;
+    result.cancelled = true;
+    failed = true;
+    return true;
+  }
 
   void error(std::string code, std::string message,
              std::optional<SkinSourceLocation> source = {}) {
@@ -309,6 +327,7 @@ void checkFields(const Json &object,
     return;
   }
   for (auto field = object.begin(); field != object.end(); ++field) {
+    if (context.checkpoint()) return;
     if (std::ranges::find(allowed, std::string_view(field.key())) ==
         allowed.end()) {
       context.warning("skin_json_field_unclassified",
@@ -341,6 +360,7 @@ void visitObjectArray(const Json &root, std::string_view name,
     return;
   }
   for (std::size_t index = 0; index < array->size(); ++index) {
+    if (context.checkpoint()) return;
     visitor((*array)[index], index);
   }
 }
@@ -643,8 +663,10 @@ std::string jsonPointerToken(std::string_view value) {
 
 class JsonSourceIndex final {
 public:
-  JsonSourceIndex(std::string_view text, std::string virtualPath)
-      : text_(text), virtualPath_(std::move(virtualPath)), lineStarts_{0} {
+  JsonSourceIndex(std::string_view text, std::string virtualPath,
+                  DecodeContext &context)
+      : text_(text), virtualPath_(std::move(virtualPath)), context_(context),
+        lineStarts_{0} {
     for (std::size_t index = 0; index < text_.size(); ++index) {
       if (text_[index] == '\n') lineStarts_.push_back(index + 1);
     }
@@ -656,8 +678,7 @@ public:
     if (!indexValue(offset, "", 1, values)) return false;
     skipWhitespace(offset);
     if (offset != text_.size()) return false;
-    bind(root, "");
-    return true;
+    return bind(root, "");
   }
 
   [[nodiscard]] std::optional<SkinSourceLocation>
@@ -709,6 +730,9 @@ private:
 
   [[nodiscard]] bool indexValue(std::size_t &offset, std::string pointer,
                                 std::size_t depth, std::size_t &values) {
+    if (context_.checkpoint(StaticSkinDecodePhase::JsonStructure)) {
+      return false;
+    }
     skipWhitespace(offset);
     if (offset >= text_.size() ||
         depth > JsonGameplaySkinDecoderPolicy::maxDepth ||
@@ -793,24 +817,32 @@ private:
     return offset != start;
   }
 
-  void bind(const Json &value, const std::string &pointer) {
+  [[nodiscard]] bool bind(const Json &value, const std::string &pointer) {
+    if (context_.checkpoint(StaticSkinDecodePhase::JsonStructure)) return false;
     if (const auto found = locations_.find(pointer);
         found != locations_.end()) {
       nodeSources_.insert_or_assign(&value, found->second);
     }
     if (value.is_object()) {
       for (auto field = value.begin(); field != value.end(); ++field) {
-        bind(field.value(), pointer + "/" + jsonPointerToken(field.key()));
+        if (!bind(field.value(),
+                  pointer + "/" + jsonPointerToken(field.key()))) {
+          return false;
+        }
       }
     } else if (value.is_array()) {
       for (std::size_t index = 0; index < value.size(); ++index) {
-        bind(value[index], pointer + "/" + std::to_string(index));
+        if (!bind(value[index], pointer + "/" + std::to_string(index))) {
+          return false;
+        }
       }
     }
+    return true;
   }
 
   std::string_view text_;
   std::string virtualPath_;
+  DecodeContext &context_;
   std::vector<std::size_t> lineStarts_;
   std::map<std::string, SkinSourceLocation, std::less<>> locations_;
   std::map<const Json *, SkinSourceLocation> nodeSources_;
@@ -829,6 +861,7 @@ bool validateBudget(const Json &root, DecodeContext &context) {
   std::vector<Work> pending{{&root, 1}};
   std::size_t values = 0;
   while (!pending.empty()) {
+    if (context.checkpoint(StaticSkinDecodePhase::JsonStructure)) return false;
     const auto current = pending.back();
     pending.pop_back();
     if (++values > JsonGameplaySkinDecoderPolicy::maxValues ||
@@ -2900,6 +2933,7 @@ void decodeDestinations(BuildState &state) {
   state.nextSyntheticObjectId =
       static_cast<SkinObjectId>(destinations->size() + 1);
   for (std::size_t ordinal = 0; ordinal < destinations->size(); ++ordinal) {
+    if (state.context.checkpoint(StaticSkinDecodePhase::JsonModel)) return;
     const Json &destination = (*destinations)[ordinal];
     const std::string name = stringField(destination, "id", {}, state.context,
                                          "JsonSkin.Destination");
@@ -3007,14 +3041,17 @@ void buildGameplayModel(const Json &root, const BeatorajaSkinHeader &header,
 JsonGameplaySkinDecodeResult JsonGameplaySkinDecoder::decode(
     std::span<const std::byte> bytes, const SkinEntryId &entry,
     const EntryProfileSettings *desired, SkinBuiltinBindingCatalogView builtins,
-    SkinSafetyPolicy safetyPolicy) const {
+    SkinSafetyPolicy safetyPolicy, std::stop_token stop,
+    StaticSkinDecodeCheckpoint checkpoint) const {
   JsonGameplaySkinDecodeResult result;
   DecodeContext context{.entry = entry,
                         .builtins = builtins,
                         .safetyPolicy = safetyPolicy,
-                        .result = result};
-  const std::uint64_t byteLimit = safetyPolicy.limit(
-      SkinSafetyGuard::LuaDecoderLimit,
+                        .result = result,
+                        .stop = stop,
+                        .decodeCheckpoint = checkpoint};
+  if (context.checkpoint(StaticSkinDecodePhase::JsonStructure)) return result;
+  const std::uint64_t byteLimit = safetyPolicy.documentByteLimit(
       JsonGameplaySkinDecoderPolicy::maxDocumentBytes);
   if (bytes.size() > byteLimit) {
     context.error("skin_json_limit_exceeded",
@@ -3046,23 +3083,32 @@ JsonGameplaySkinDecodeResult JsonGameplaySkinDecoder::decode(
     if (!validateBudget(root, context)) {
       return result;
     }
-    JsonSourceIndex sourceIndex(text, entry.packageRelativePath);
+    JsonSourceIndex sourceIndex(text, entry.packageRelativePath, context);
     if (!sourceIndex.build(root)) {
+      if (result.cancelled) return result;
       context.error("skin_json_source_index_failed",
                     "JSON gameplay provenance index could not be built");
       return result;
     }
     context.sources = &sourceIndex;
     classifyDocumentFields(root, context);
+    if (result.cancelled) return result;
+    context.phase = StaticSkinDecodePhase::JsonModel;
     BeatorajaSkinHeader header = decodeHeader(root, context);
+    if (result.cancelled) return result;
     result.header = header;
     reconcileConfiguration(header, desired, result, context);
+    if (result.cancelled) return result;
     if (!gameplaySkinTraitForSkinType(header.type)) {
       context.error("skin_json_model_type_unsupported",
                     "JSON gameplay document does not declare a gameplay type");
       return result;
     }
     buildGameplayModel(root, header, context);
+    if (result.cancelled) {
+      result.model.reset();
+      return result;
+    }
     if (context.failed) {
       // Header and reconciled configuration remain useful for diagnostics and
       // catalog metadata. Only the unsafe/incomplete canonical model fails.
