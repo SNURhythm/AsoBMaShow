@@ -1554,6 +1554,44 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(json_gameplay_skin_decoder_tests PRIVATE
             utf8proc::utf8proc
         )
+
+        add_executable(lr2_skin_csv_parser_tests
+            tests/lr2_skin_csv_parser_tests.cpp
+            src/FileChecksum.cpp
+            src/Utils.cpp
+            src/path.cpp
+            src/skin/SkinProfileSettings.cpp
+            src/skin/SkinStoragePaths.cpp
+            src/skin/beatoraja/Lr2SkinCsvParser.cpp
+            src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp
+            src/skin/beatoraja/LuaSkinFileSystem.cpp
+            src/skin/package/SkinAliasDetector.cpp
+            src/skin/package/SkinPathPolicy.cpp
+            src/skin/package/SkinTreeSnapshotter.cpp
+        )
+        target_include_directories(lr2_skin_csv_parser_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(lr2_skin_csv_parser_tests PRIVATE cxx_std_23)
+        target_compile_definitions(lr2_skin_csv_parser_tests PRIVATE
+            ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
+            ASOBMASHOW_SKIN_STORAGE_PATHS_NO_PLATFORM_DEFAULTS
+            ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        )
+        target_link_libraries(lr2_skin_csv_parser_tests PRIVATE
+            utf8proc::utf8proc
+        )
+        if(WIN32)
+            target_link_libraries(lr2_skin_csv_parser_tests PRIVATE advapi32)
+        endif()
+        if(APPLE)
+            target_sources(lr2_skin_csv_parser_tests PRIVATE
+                src/skin/package/SkinAliasDetectorApple.mm
+            )
+            target_link_libraries(lr2_skin_csv_parser_tests PRIVATE
+                "-framework Foundation"
+            )
+        endif()
     endif()
 
     add_test(NAME beatoraja_skin_reference_contract
@@ -6526,6 +6564,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if (TARGET json_gameplay_skin_decoder_tests)
         asobmashow_register_test(json_gameplay_skin_decoder_tests)
+    endif()
+    if (TARGET lr2_skin_csv_parser_tests)
+        asobmashow_register_test(lr2_skin_csv_parser_tests)
     endif()
     if (TARGET play_skin_viewport_tests)
         asobmashow_register_test(play_skin_viewport_tests)

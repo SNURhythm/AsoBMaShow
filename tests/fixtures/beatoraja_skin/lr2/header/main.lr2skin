@@ -1,0 +1,15 @@
+; ordinary comment
+ #IMAGE,ignored-leading-space.png
+#information,0,日本語スキン,作者
+#RESOLUTION,1
+#CUSTOMOPTION,表示,900,標準,,拡張,
+#CUSTOMFILE,画像,LR2files\Theme\FixtureSkin\header\*.png,既定.png
+#CUSTOMOFFSET,移動,77,1,0
+#CUSTOMOPTION,重複,100,A
+#CUSTOMOPTION,重複,200,B
+#CUSTOMOPTION_ADDITION_SETTING,0,1,0,1
+#IMAGE,root-before.png
+#include,LR2files\Theme\FixtureSkin\header\included.lr2skin
+#IMAGE,root-after.png,,
+#IMAGE,"quoted,comma.png",tail
+// another ordinary comment
