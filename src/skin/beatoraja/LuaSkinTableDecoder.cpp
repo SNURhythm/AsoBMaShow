@@ -2528,18 +2528,20 @@ bool applyPinnedDirectColor(std::string_view value, std::uint32_t &color) {
   if (!value.empty() && value.front() == '#') {
     value.remove_prefix(1);
   }
-  if (value.size() != 6 && value.size() != 8) {
+  if (value.size() < 6) {
     return false;
   }
   std::uint32_t rgba = 0;
-  for (const char character : value) {
+  const std::size_t parsedSize = value.size() == 8 ? 8 : 6;
+  for (std::size_t index = 0; index < parsedSize; ++index) {
+    const char character = value[index];
     const int nibble = hexNibble(character);
     if (nibble < 0) {
       return false;
     }
     rgba = rgba * 16U + static_cast<std::uint32_t>(nibble);
   }
-  color = value.size() == 6 ? (rgba << 8U) | 0xffU : rgba;
+  color = parsedSize == 6 ? (rgba << 8U) | 0xffU : rgba;
   return true;
 }
 

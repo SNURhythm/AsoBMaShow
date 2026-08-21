@@ -28,6 +28,7 @@ struct SkinGeneratedTextureRasterRequest {
   int revealMillis = 0;
   std::size_t maximumCommands = 0;
   std::size_t maximumPrimitiveVertices = 0;
+  std::optional<float> sourceRevealWidth;
   std::string_view diagnosticObject;
 };
 
@@ -74,8 +75,10 @@ public:
                              ? 1.0F
                              : static_cast<float>(request.elapsedMillis) /
                                    static_cast<float>(request.revealMillis);
+    const float sourceRevealWidth = request.sourceRevealWidth.value_or(
+        static_cast<float>(textureWidth_));
     const int visibleWidth = skinGeneratedTextureJavaInt(
-        static_cast<double>(static_cast<float>(textureWidth_) * reveal));
+        static_cast<double>(sourceRevealWidth * reveal));
     const int drawWidth = skinGeneratedTextureJavaInt(
         static_cast<double>(static_cast<float>(request.geometry.rect.width) *
                             reveal));

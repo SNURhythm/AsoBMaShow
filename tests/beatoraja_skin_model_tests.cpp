@@ -1764,18 +1764,22 @@ return {
   gaugegraph={
     {id='gauge-history'},
     {id='custom',color={
-      '#01020304','000002','000003','000004',
-      '000005','000006','000007','000008',
+      'aBcDeF','1234567','01020304','#89AbCdEf',
+      'fedcba987','#0A1b2C345678','000007','000008',
       '000009','00000a','00000b','00000c',
       '00000d','00000e','00000f','000010',
       '000011','000012','000013','000014',
       '000015','000016','000017','000018'}},
-    {id='short',color={[1]='112233',[4]='445566'}}
+    {id='short',color={[1]='112233',[4]='445566'}},
+    {id='legacy-lengths',assistClearBGColor='1234567',
+     assistClearLineColor='01020304',borderlineColor='#AaBbCcDd',
+     borderColor='fedcba987'}
   },
   destination={
     {id='gauge-history',dst={{x=0,y=0,w=100,h=50}}},
     {id='custom',dst={{x=100,y=0,w=100,h=50}}},
-    {id='short',dst={{x=200,y=0,w=100,h=50}}}
+    {id='short',dst={{x=200,y=0,w=100,h=50}}},
+    {id='legacy-lengths',dst={{x=300,y=0,w=100,h=50}}}
   }
 }
 )lua");
@@ -1785,6 +1789,8 @@ return {
       decoded.model ? findObject(*decoded.model, "custom") : nullptr;
   const auto *shortDefinition =
       decoded.model ? findObject(*decoded.model, "short") : nullptr;
+  const auto *legacyDefinition =
+      decoded.model ? findObject(*decoded.model, "legacy-lengths") : nullptr;
   const auto *defaults =
       definition ? std::get_if<SkinGaugeGraphObject>(&definition->payload)
                  : nullptr;
@@ -1796,6 +1802,10 @@ return {
       shortDefinition ? std::get_if<SkinGaugeGraphObject>(
                             &shortDefinition->payload)
                       : nullptr;
+  const auto *legacyPalette =
+      legacyDefinition ? std::get_if<SkinGaugeGraphObject>(
+                             &legacyDefinition->payload)
+                       : nullptr;
   expect(definition != nullptr &&
              !std::holds_alternative<SkinBlankObject>(definition->payload),
          "valid gaugegraph destinations decode as live typed objects");
@@ -1815,10 +1825,15 @@ return {
                      std::array<std::uint32_t, 4>{0xccccccffU, 0x444444ffU,
                                                    0xccccccffU, 0x444444ffU}},
          "gaugegraph defaults reproduce the pinned six-category legacy palette");
-  expect(custom != nullptr && custom->rgba[0][0] == 0x01020304U &&
+  expect(custom != nullptr &&
+             custom->rgba[0] ==
+                 std::array<std::uint32_t, 4>{0xabcdefffU, 0x123456ffU,
+                                               0x01020304U, 0x89abcdefU} &&
+             custom->rgba[1][0] == 0xfedcbaffU &&
+             custom->rgba[1][1] == 0x0a1b2cffU &&
              custom->rgba[2][3] == 0x00000cffU &&
              custom->rgba[5][3] == 0x000018ffU,
-         "gaugegraph custom colours map all 24 entries row-major");
+         "gaugegraph custom colours preserve pinned 6/7/8/9+ digit and hash parsing");
   const std::array<std::uint32_t, 4> blackRow{
       0x000000ffU, 0x000000ffU, 0x000000ffU, 0x000000ffU};
   expect(shortPalette != nullptr &&
@@ -1828,6 +1843,11 @@ return {
              shortPalette->rgba[1] == blackRow &&
              shortPalette->rgba[5] == blackRow,
          "a custom gaugegraph palette maps null and absent entries to black");
+  expect(legacyPalette != nullptr &&
+             legacyPalette->rgba[0] ==
+                 std::array<std::uint32_t, 4>{0xaabbccddU, 0xfedcbaffU,
+                                               0x01020304U, 0x123456ffU},
+         "legacy gaugegraph fields use the same mixed-case direct colour parser as custom slots");
   expect(std::ranges::none_of(decoded.diagnostics, [](const auto &entry) {
            return entry.code == "skin_lua_model_gaugegraph_unsupported";
          }),
@@ -1840,6 +1860,27 @@ return {
   expect(validated.model && !validated.criticalFailure &&
              validated.model->disabledOptionalObjects.empty(),
          "valid gaugegraphs remain enabled through model validation");
+
+  const auto shortColor = decodeInlineModel(R"lua(
+return {type=0,w=1280,h=720,
+ gaugegraph={{id='short-color',color={'12345'}}},
+ destination={{id='short-color',dst={{x=0,y=0,w=10,h=10}}}}}
+)lua");
+  const auto nonhexLegacy = decodeInlineModel(R"lua(
+return {type=0,w=1280,h=720,
+ gaugegraph={{id='nonhex',borderColor='12zz56'}},
+ destination={{id='nonhex',dst={{x=0,y=0,w=10,h=10}}}}}
+)lua");
+  const auto invalidGaugeColor = [](const auto &entry) {
+    return entry.code == "skin_lua_model_gaugegraph_invalid";
+  };
+  expect(!shortColor.model &&
+             std::ranges::any_of(shortColor.diagnostics,
+                                 invalidGaugeColor) &&
+             !nonhexLegacy.model &&
+             std::ranges::any_of(nonhexLegacy.diagnostics,
+                                 invalidGaugeColor),
+         "direct gaugegraph colours reject fewer than six digits and nonhex parsed channels");
 }
 
 void testTimingVisualizerParsesPoorColourOnlyWhenOpaque() {

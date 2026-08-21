@@ -4618,6 +4618,48 @@ void testGaugeGraphRevealEmptyPartialAndAtomicBudgets() {
            "half reveal preserves the left half instead of stretching it");
   }
 
+  geometry.rect.width = 1.9;
+  const auto onePixelReveal = renderSkinGaugeGraph(
+      {.sourceObject = 7,
+       .authoredOrdinal = 9,
+       .graph = graph,
+       .state = gaugeGraphState(two, 0),
+       .geometry = geometry,
+       .viewport = viewport(),
+       .elapsedMillis = 1125,
+       .maximumCommands = 5,
+       .maximumPrimitiveVertices = 20});
+  expect(!onePixelReveal.failure && onePixelReveal.commands.size() == 5 &&
+             gaugeGraphPrimitive(onePixelReveal, 2).vertices[1].x == 1.0F,
+         "a 1.9px GaugeGraph reveals one source pixel at 75 percent over its background");
+
+  geometry.rect.width = 10.9;
+  const auto divergentReveal = renderSkinGaugeGraph(
+      {.sourceObject = 7,
+       .authoredOrdinal = 9,
+       .graph = graph,
+       .state = gaugeGraphState(two, 0),
+       .geometry = geometry,
+       .viewport = viewport(),
+       .elapsedMillis = 1125,
+       .maximumCommands = 6,
+       .maximumPrimitiveVertices = 24});
+  float divergentGraphMaximumX = 0.0F;
+  for (std::size_t index = 2; index < divergentReveal.commands.size();
+       ++index) {
+    const auto &primitive = gaugeGraphPrimitive(divergentReveal, index);
+    divergentGraphMaximumX = std::max(
+        divergentGraphMaximumX,
+        std::ranges::max(primitive.vertices, {},
+                         [](const SkinVertex &vertex) { return vertex.x; })
+            .x);
+  }
+  expect(!divergentReveal.failure && divergentReveal.commands.size() == 6 &&
+             gaugeGraphPrimitive(divergentReveal, 5).vertices[0].x == 5.0F &&
+             divergentGraphMaximumX == 8.0F,
+         "GaugeGraph reveal uses authored 10.9px width instead of the truncated 10px texture basis");
+  geometry.rect.width = 100.0;
+
   const auto bounded = renderSkinGaugeGraph(
       {.sourceObject = 7,
        .authoredOrdinal = 9,

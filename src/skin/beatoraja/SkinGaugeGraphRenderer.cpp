@@ -8,6 +8,7 @@
 #include <array>
 #include <cmath>
 #include <iterator>
+#include <optional>
 
 namespace skin {
 namespace {
@@ -38,6 +39,11 @@ SkinGeneratedTextureRaster rasterFor(
        .revealMillis = revealMillis,
        .maximumCommands = maximumCommands,
        .maximumPrimitiveVertices = maximumPrimitiveVertices,
+       .sourceRevealWidth =
+           revealMillis == kRevealMillis
+               ? std::optional<float>{
+                     static_cast<float>(request.geometry.rect.width)}
+               : std::nullopt,
        .diagnosticObject = "Gauge graph"});
 }
 
