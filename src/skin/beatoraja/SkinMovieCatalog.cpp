@@ -10,7 +10,6 @@
 #include <atomic>
 #include <chrono>
 #include <fstream>
-#include <limits>
 #include <ranges>
 #include <set>
 #include <string_view>
@@ -142,20 +141,6 @@ std::vector<ResolvedMovieDefinition> resolveMovies(
          .path = std::move(*candidate.normalizedVirtualPath)});
   }
   return result;
-}
-
-bool addRequirements(GameplayBgaTransientRequirements &total,
-                     const GameplayBgaTransientRequirements &value) {
-  const auto add = [](std::uint64_t &target, std::uint64_t amount) {
-    if (amount > std::numeric_limits<std::uint64_t>::max() - target) {
-      return false;
-    }
-    target += amount;
-    return true;
-  };
-  return add(total.vertexBytes, value.vertexBytes) &&
-         add(total.vertexAlignmentPadding, value.vertexAlignmentPadding) &&
-         add(total.indexCount, value.indexCount);
 }
 
 } // namespace
@@ -312,64 +297,6 @@ SkinMovieCatalog::prepare(SkinMoviePreparationInputs input) {
   }
   result.catalog = std::move(catalog);
   return result;
-}
-
-const PreparedSkinMovie *
-SkinMovieCatalog::findMovie(SkinResourceId id) const noexcept {
-  const auto found = movies_.find(id);
-  return found == movies_.end() ? nullptr : &found->second;
-}
-
-SkinMovieCatalogFrameResult SkinMovieCatalog::prepareFrame(
-    std::span<const SkinMovieCommand *const> commands,
-    const PlaySkinViewport &viewport) {
-  SkinMovieCatalogFrameResult result;
-  if (commands.empty()) {
-    result.ready = true;
-    return result;
-  }
-  if (!device_ || !device_->ownsCurrentThread()) {
-    return result;
-  }
-  device_->beginFrame();
-  preparedCount_ = 0;
-  for (const auto *command : commands) {
-    const auto *movie = command != nullptr ? findMovie(command->resource)
-                                            : nullptr;
-    if (movie == nullptr) {
-      discardFrame();
-      return result;
-    }
-    const auto prepared =
-        device_->prepareFrame(movie->handle, *command, viewport);
-    if (!prepared.ready ||
-        !addRequirements(result.requirements, prepared.requirements)) {
-      discardFrame();
-      return result;
-    }
-    ++preparedCount_;
-  }
-  result.ready = true;
-  return result;
-}
-
-void SkinMovieCatalog::discardFrame() noexcept {
-  preparedCount_ = 0;
-  if (device_) {
-    device_->discardFrame();
-  }
-}
-
-void SkinMovieCatalog::commitFrame() noexcept {
-  if (device_ && preparedCount_ != 0) {
-    device_->commitFrame();
-  }
-}
-
-void SkinMovieCatalog::submitPrepared(std::size_t index) noexcept {
-  if (device_ && index < preparedCount_) {
-    device_->submitPrepared(index);
-  }
 }
 
 #if ASOBMASHOW_ENABLE_SKIN_MOVIE_DEVICE

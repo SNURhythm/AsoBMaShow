@@ -5,9 +5,10 @@
 #include "skin/beatoraja/Skin2DRenderer.h"
 #include "view/View.h"
 
-// This target deliberately compiles the narrow production adapter directly:
-// Task 19 keeps build-system edits out of scope while exercising the actual
-// two-phase integration rather than a test copy of its orchestration.
+// This target deliberately compiles the narrow production adapter directly
+// and links the frame-only movie catalog unit. That exercises the actual
+// two-phase integration without pulling preparation-time filesystem code into
+// this renderer test.
 #include "skin/beatoraja/Skin2DRendererSubmit.cpp"
 
 #include <array>
@@ -592,7 +593,8 @@ void testTwoPhaseSkinSubmissionPreservesMixedAuthoredOrder() {
                            skin::SkinFilterMode::Nearest)),
       }};
 
-  expect(skinRenderer.submit(buffer, prepared, context, quadRenderer, frame,
+  expect(skinRenderer.submit(buffer, prepared, context, quadRenderer,
+                             nullptr, skin::PlaySkinViewport{}, frame,
                              bgaSubmitter),
          "two-phase skin submission accepts mixed quad/BGA authored slots");
   expect(submissionOrder ==
@@ -686,7 +688,8 @@ void testCommittedSubmissionCannotReturnFallbackSignal() {
   };
 
   const bool submitted = skinRenderer.submit(
-      buffer, prepared, context, quadRenderer, frame, submitter);
+      buffer, prepared, context, quadRenderer, nullptr,
+      skin::PlaySkinViewport{}, frame, submitter);
 
   expect(submitted && invalidatedAfterFirstDraw && submitter.commitCalls == 1 &&
              submitter.finalizeCalls == 1 &&
@@ -708,7 +711,8 @@ void testBgaCompositionExpandsPlaceholdersAndMissingRolesExactly() {
     const skin::SkinCommandBuffer buffer{
         .frameSerial = 3, .commands = {command(77, bga(77))}};
     const bool submitted = skinRenderer.submit(
-        buffer, prepared, context, quadRenderer, frame, submitter);
+        buffer, prepared, context, quadRenderer, nullptr,
+        skin::PlaySkinViewport{}, frame, submitter);
     bool rolesMatch = submitter.preflightTargets.size() == expectedRoles.size();
     for (std::size_t index = 0;
          rolesMatch && index < expectedRoles.size(); ++index) {
@@ -792,7 +796,8 @@ void testTwoPhaseSubmissionFailuresAreZeroDrawAtomic() {
             command(3, quad(12, skin::SkinBlendMode::Normal,
                             skin::SkinFilterMode::Nearest)),
         }};
-    expect(skinRenderer.submit(buffer, prepared, context, quadRenderer, frame,
+    expect(skinRenderer.submit(buffer, prepared, context, quadRenderer,
+                               nullptr, skin::PlaySkinViewport{}, frame,
                                submitter) &&
                backend.reserveCalls == 1 && backend.batches.size() == 2 &&
                submitter.preflightCalls == 1 &&
@@ -817,7 +822,8 @@ void testTwoPhaseSubmissionFailuresAreZeroDrawAtomic() {
                             skin::SkinFilterMode::Nearest)),
             command(2, bga(2)),
         }};
-    expect(!skinRenderer.submit(buffer, prepared, context, quadRenderer, frame,
+    expect(!skinRenderer.submit(buffer, prepared, context, quadRenderer,
+                                nullptr, skin::PlaySkinViewport{}, frame,
                                 submitter) &&
                backend.reserveCalls == 0 && backend.batches.empty() &&
                submitter.preflightCalls == 1 &&

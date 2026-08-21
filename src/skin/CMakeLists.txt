@@ -59,6 +59,7 @@ if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
         beatoraja/SkinProcessResidentMemory.cpp
         beatoraja/SkinModelValidator.cpp
         beatoraja/SkinMovieCatalog.cpp
+        beatoraja/SkinMovieCatalogFrame.cpp
         beatoraja/SkinResourceCatalog.cpp
         beatoraja/SkinTextAtlas.cpp
     )
