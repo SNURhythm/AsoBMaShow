@@ -108,13 +108,6 @@
       }
     },
     {
-      "id": "json.field.bga-id",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.BGA.id"
-      }
-    },
-    {
       "id": "json.field.bpmgraph-delay",
       "source": {
         "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
@@ -175,62 +168,6 @@
       "source": {
         "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
         "symbol": "JsonSkin.BPMGraph.transitionLineColor"
-      }
-    },
-    {
-      "id": "json.field.category-item",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.Category.item"
-      }
-    },
-    {
-      "id": "json.field.category-name",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.Category.name"
-      }
-    },
-    {
-      "id": "json.field.custom-event-action",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.CustomEvent.action"
-      }
-    },
-    {
-      "id": "json.field.custom-event-condition",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.CustomEvent.condition"
-      }
-    },
-    {
-      "id": "json.field.custom-event-id",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.CustomEvent.id"
-      }
-    },
-    {
-      "id": "json.field.custom-event-min-interval",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.CustomEvent.minInterval"
-      }
-    },
-    {
-      "id": "json.field.custom-timer-id",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.CustomTimer.id"
-      }
-    },
-    {
-      "id": "json.field.custom-timer-timer",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.CustomTimer.timer"
       }
     },
     {
@@ -336,34 +273,6 @@
       "source": {
         "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
         "symbol": "JsonSkin.Destination.timer"
-      }
-    },
-    {
-      "id": "json.field.filepath-category",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.Filepath.category"
-      }
-    },
-    {
-      "id": "json.field.filepath-def",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.Filepath.def"
-      }
-    },
-    {
-      "id": "json.field.filepath-name",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.Filepath.name"
-      }
-    },
-    {
-      "id": "json.field.filepath-path",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.Filepath.path"
       }
     },
     {
@@ -556,20 +465,6 @@
       }
     },
     {
-      "id": "json.field.gauge-cycle",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.Gauge.cycle"
-      }
-    },
-    {
-      "id": "json.field.gauge-endtime",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.Gauge.endtime"
-      }
-    },
-    {
       "id": "json.field.gauge-graph-assist-and-easy-fail-bgcolor",
       "source": {
         "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
@@ -679,48 +574,6 @@
       "source": {
         "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
         "symbol": "JsonSkin.GaugeGraph.id"
-      }
-    },
-    {
-      "id": "json.field.gauge-id",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.Gauge.id"
-      }
-    },
-    {
-      "id": "json.field.gauge-nodes",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.Gauge.nodes"
-      }
-    },
-    {
-      "id": "json.field.gauge-parts",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.Gauge.parts"
-      }
-    },
-    {
-      "id": "json.field.gauge-range",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.Gauge.range"
-      }
-    },
-    {
-      "id": "json.field.gauge-starttime",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.Gauge.starttime"
-      }
-    },
-    {
-      "id": "json.field.gauge-type",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.Gauge.type"
       }
     },
     {
@@ -1361,258 +1214,6 @@
       }
     },
     {
-      "id": "json.field.note-set-bpm",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.NoteSet.bpm"
-      }
-    },
-    {
-      "id": "json.field.note-set-dst",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.NoteSet.dst"
-      }
-    },
-    {
-      "id": "json.field.note-set-dst2",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.NoteSet.dst2"
-      }
-    },
-    {
-      "id": "json.field.note-set-expansionrate",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.NoteSet.expansionrate"
-      }
-    },
-    {
-      "id": "json.field.note-set-group",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.NoteSet.group"
-      }
-    },
-    {
-      "id": "json.field.note-set-hcnactive",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.NoteSet.hcnactive"
-      }
-    },
-    {
-      "id": "json.field.note-set-hcnbody",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.NoteSet.hcnbody"
-      }
-    },
-    {
-      "id": "json.field.note-set-hcnbody-active",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.NoteSet.hcnbodyActive"
-      }
-    },
-    {
-      "id": "json.field.note-set-hcnbody-miss",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.NoteSet.hcnbodyMiss"
-      }
-    },
-    {
-      "id": "json.field.note-set-hcnbody-reactive",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.NoteSet.hcnbodyReactive"
-      }
-    },
-    {
-      "id": "json.field.note-set-hcndamage",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.NoteSet.hcndamage"
-      }
-    },
-    {
-      "id": "json.field.note-set-hcnend",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.NoteSet.hcnend"
-      }
-    },
-    {
-      "id": "json.field.note-set-hcnreactive",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.NoteSet.hcnreactive"
-      }
-    },
-    {
-      "id": "json.field.note-set-hcnstart",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.NoteSet.hcnstart"
-      }
-    },
-    {
-      "id": "json.field.note-set-hidden",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.NoteSet.hidden"
-      }
-    },
-    {
-      "id": "json.field.note-set-id",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.NoteSet.id"
-      }
-    },
-    {
-      "id": "json.field.note-set-lnactive",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.NoteSet.lnactive"
-      }
-    },
-    {
-      "id": "json.field.note-set-lnbody",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.NoteSet.lnbody"
-      }
-    },
-    {
-      "id": "json.field.note-set-lnbody-active",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.NoteSet.lnbodyActive"
-      }
-    },
-    {
-      "id": "json.field.note-set-lnend",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.NoteSet.lnend"
-      }
-    },
-    {
-      "id": "json.field.note-set-lnstart",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.NoteSet.lnstart"
-      }
-    },
-    {
-      "id": "json.field.note-set-mine",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.NoteSet.mine"
-      }
-    },
-    {
-      "id": "json.field.note-set-note",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.NoteSet.note"
-      }
-    },
-    {
-      "id": "json.field.note-set-processed",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.NoteSet.processed"
-      }
-    },
-    {
-      "id": "json.field.note-set-size",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.NoteSet.size"
-      }
-    },
-    {
-      "id": "json.field.note-set-stop",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.NoteSet.stop"
-      }
-    },
-    {
-      "id": "json.field.note-set-time",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.NoteSet.time"
-      }
-    },
-    {
-      "id": "json.field.offset-a",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.Offset.a"
-      }
-    },
-    {
-      "id": "json.field.offset-category",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.Offset.category"
-      }
-    },
-    {
-      "id": "json.field.offset-h",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.Offset.h"
-      }
-    },
-    {
-      "id": "json.field.offset-id",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.Offset.id"
-      }
-    },
-    {
-      "id": "json.field.offset-name",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.Offset.name"
-      }
-    },
-    {
-      "id": "json.field.offset-r",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.Offset.r"
-      }
-    },
-    {
-      "id": "json.field.offset-w",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.Offset.w"
-      }
-    },
-    {
-      "id": "json.field.offset-x",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.Offset.x"
-      }
-    },
-    {
-      "id": "json.field.offset-y",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.Offset.y"
-      }
-    },
-    {
       "id": "json.field.pmchara-color",
       "source": {
         "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
@@ -1645,62 +1246,6 @@
       "source": {
         "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
         "symbol": "JsonSkin.PMchara.type"
-      }
-    },
-    {
-      "id": "json.field.practice-id",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.Practice.id"
-      }
-    },
-    {
-      "id": "json.field.practice-visible-items",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.Practice.visibleItems"
-      }
-    },
-    {
-      "id": "json.field.property-category",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.Property.category"
-      }
-    },
-    {
-      "id": "json.field.property-def",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.Property.def"
-      }
-    },
-    {
-      "id": "json.field.property-item",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.Property.item"
-      }
-    },
-    {
-      "id": "json.field.property-item-name",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.PropertyItem.name"
-      }
-    },
-    {
-      "id": "json.field.property-item-op",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.PropertyItem.op"
-      }
-    },
-    {
-      "id": "json.field.property-name",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.Property.name"
       }
     },
     {
@@ -1764,34 +1309,6 @@
       "source": {
         "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
         "symbol": "JsonSkin.Skin.close"
-      }
-    },
-    {
-      "id": "json.field.skin-configuration-property-custom-bms",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.SkinConfigurationProperty.customBMS"
-      }
-    },
-    {
-      "id": "json.field.skin-configuration-property-custom-offset-style",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.SkinConfigurationProperty.customOffsetStyle"
-      }
-    },
-    {
-      "id": "json.field.skin-configuration-property-custom-property-count",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.SkinConfigurationProperty.customPropertyCount"
-      }
-    },
-    {
-      "id": "json.field.skin-configuration-property-default-category",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.SkinConfigurationProperty.defaultCategory"
       }
     },
     {
@@ -1988,13 +1505,6 @@
       "source": {
         "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
         "symbol": "JsonSkin.Skin.practice"
-      }
-    },
-    {
-      "id": "json.field.skin-preview-id",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.SkinPreview.id"
       }
     },
     {
@@ -2219,111 +1729,6 @@
       "source": {
         "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
         "symbol": "JsonSkin.Slider.y"
-      }
-    },
-    {
-      "id": "json.field.song-list-center",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.SongList.center"
-      }
-    },
-    {
-      "id": "json.field.song-list-clickable",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.SongList.clickable"
-      }
-    },
-    {
-      "id": "json.field.song-list-graph",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.SongList.graph"
-      }
-    },
-    {
-      "id": "json.field.song-list-id",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.SongList.id"
-      }
-    },
-    {
-      "id": "json.field.song-list-label",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.SongList.label"
-      }
-    },
-    {
-      "id": "json.field.song-list-lamp",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.SongList.lamp"
-      }
-    },
-    {
-      "id": "json.field.song-list-level",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.SongList.level"
-      }
-    },
-    {
-      "id": "json.field.song-list-listoff",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.SongList.listoff"
-      }
-    },
-    {
-      "id": "json.field.song-list-liston",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.SongList.liston"
-      }
-    },
-    {
-      "id": "json.field.song-list-playerlamp",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.SongList.playerlamp"
-      }
-    },
-    {
-      "id": "json.field.song-list-rivallamp",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.SongList.rivallamp"
-      }
-    },
-    {
-      "id": "json.field.song-list-text",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.SongList.text"
-      }
-    },
-    {
-      "id": "json.field.song-list-trophy",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.SongList.trophy"
-      }
-    },
-    {
-      "id": "json.field.source-id",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.Source.id"
-      }
-    },
-    {
-      "id": "json.field.source-path",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
-        "symbol": "JsonSkin.Source.path"
       }
     },
     {
@@ -3398,6 +2803,13 @@
       }
     },
     {
+      "id": "lua.export.a",
+      "source": {
+        "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
+        "symbol": "SkinLuaAccessor.export(a)"
+      }
+    },
+    {
       "id": "lua.export.audio-dispose",
       "source": {
         "path": "src/bms/player/beatoraja/skin/lua/SkinAudioLuaApiExporter.java",
@@ -3444,6 +2856,13 @@
       "source": {
         "path": "src/bms/player/beatoraja/skin/lua/LegacySkinLuaApi.java",
         "symbol": "LegacySkinLuaApi.export(connect)"
+      }
+    },
+    {
+      "id": "lua.export.cpath",
+      "source": {
+        "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
+        "symbol": "SkinLuaAccessor.export(cpath)"
       }
     },
     {
@@ -3517,6 +2936,13 @@
       }
     },
     {
+      "id": "lua.export.first",
+      "source": {
+        "path": "src/bms/player/beatoraja/skin/lua/LegacySkinLuaApi.java",
+        "symbol": "LegacySkinLuaApi.export(first)"
+      }
+    },
+    {
       "id": "lua.export.get-button",
       "source": {
         "path": "src/bms/player/beatoraja/skin/lua/LegacySkinLuaApi.java",
@@ -3528,6 +2954,13 @@
       "source": {
         "path": "src/bms/player/beatoraja/skin/lua/LegacySkinLuaApi.java",
         "symbol": "LegacySkinLuaApi.export(getControllers)"
+      }
+    },
+    {
+      "id": "lua.export.get-height",
+      "source": {
+        "path": "src/bms/player/beatoraja/skin/lua/LegacySkinLuaApi.java",
+        "symbol": "LegacySkinLuaApi.export(getHeight)"
       }
     },
     {
@@ -3559,6 +2992,13 @@
       }
     },
     {
+      "id": "lua.export.get-width",
+      "source": {
+        "path": "src/bms/player/beatoraja/skin/lua/LegacySkinLuaApi.java",
+        "symbol": "LegacySkinLuaApi.export(getWidth)"
+      }
+    },
+    {
       "id": "lua.export.getmetatable",
       "source": {
         "path": "src/bms/player/beatoraja/skin/lua/LegacySkinLuaApi.java",
@@ -3570,6 +3010,13 @@
       "source": {
         "path": "src/bms/player/beatoraja/skin/lua/LegacySkinLuaApi.java",
         "symbol": "LegacySkinLuaApi.export(graphics)"
+      }
+    },
+    {
+      "id": "lua.export.h",
+      "source": {
+        "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
+        "symbol": "SkinLuaAccessor.export(h)"
       }
     },
     {
@@ -3587,10 +3034,24 @@
       }
     },
     {
+      "id": "lua.export.index",
+      "source": {
+        "path": "src/bms/player/beatoraja/skin/lua/LegacySkinLuaApi.java",
+        "symbol": "LegacySkinLuaApi.export(__index)"
+      }
+    },
+    {
       "id": "lua.export.input",
       "source": {
         "path": "src/bms/player/beatoraja/skin/lua/LegacySkinLuaApi.java",
         "symbol": "LegacySkinLuaApi.export(input)"
+      }
+    },
+    {
+      "id": "lua.export.is-key-pressed",
+      "source": {
+        "path": "src/bms/player/beatoraja/skin/lua/LegacySkinLuaApi.java",
+        "symbol": "LegacySkinLuaApi.export(isKeyPressed)"
       }
     },
     {
@@ -3605,6 +3066,13 @@
       "source": {
         "path": "src/bms/player/beatoraja/skin/lua/LegacySkinLuaApi.java",
         "symbol": "LegacySkinLuaApi.export(listFiles)"
+      }
+    },
+    {
+      "id": "lua.export.loadlib",
+      "source": {
+        "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
+        "symbol": "SkinLuaAccessor.export(loadlib)"
       }
     },
     {
@@ -3650,6 +3118,20 @@
       }
     },
     {
+      "id": "lua.export.path",
+      "source": {
+        "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
+        "symbol": "SkinLuaAccessor.export(path)"
+      }
+    },
+    {
+      "id": "lua.export.r",
+      "source": {
+        "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
+        "symbol": "SkinLuaAccessor.export(r)"
+      }
+    },
+    {
       "id": "lua.export.read-line",
       "source": {
         "path": "src/bms/player/beatoraja/skin/lua/LegacySkinLuaApi.java",
@@ -3671,10 +3153,38 @@
       }
     },
     {
+      "id": "lua.export.size",
+      "source": {
+        "path": "src/bms/player/beatoraja/skin/lua/LegacySkinLuaApi.java",
+        "symbol": "LegacySkinLuaApi.export(size)"
+      }
+    },
+    {
       "id": "lua.export.skin-config",
       "source": {
         "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
         "symbol": "SkinLuaAccessor.export(skin_config)"
+      }
+    },
+    {
+      "id": "lua.export.w",
+      "source": {
+        "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
+        "symbol": "SkinLuaAccessor.export(w)"
+      }
+    },
+    {
+      "id": "lua.export.x",
+      "source": {
+        "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
+        "symbol": "SkinLuaAccessor.export(x)"
+      }
+    },
+    {
+      "id": "lua.export.y",
+      "source": {
+        "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
+        "symbol": "SkinLuaAccessor.export(y)"
       }
     },
     {
@@ -3783,13 +3293,6 @@
       }
     },
     {
-      "id": "lua.object-field.bga-id",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.BGA.id)"
-      }
-    },
-    {
       "id": "lua.object-field.bpmgraph-delay",
       "source": {
         "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
@@ -3850,62 +3353,6 @@
       "source": {
         "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
         "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.BPMGraph.transitionLineColor)"
-      }
-    },
-    {
-      "id": "lua.object-field.category-item",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Category.item)"
-      }
-    },
-    {
-      "id": "lua.object-field.category-name",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Category.name)"
-      }
-    },
-    {
-      "id": "lua.object-field.custom-event-action",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.CustomEvent.action)"
-      }
-    },
-    {
-      "id": "lua.object-field.custom-event-condition",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.CustomEvent.condition)"
-      }
-    },
-    {
-      "id": "lua.object-field.custom-event-id",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.CustomEvent.id)"
-      }
-    },
-    {
-      "id": "lua.object-field.custom-event-min-interval",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.CustomEvent.minInterval)"
-      }
-    },
-    {
-      "id": "lua.object-field.custom-timer-id",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.CustomTimer.id)"
-      }
-    },
-    {
-      "id": "lua.object-field.custom-timer-timer",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.CustomTimer.timer)"
       }
     },
     {
@@ -4011,34 +3458,6 @@
       "source": {
         "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
         "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Destination.timer)"
-      }
-    },
-    {
-      "id": "lua.object-field.filepath-category",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Filepath.category)"
-      }
-    },
-    {
-      "id": "lua.object-field.filepath-def",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Filepath.def)"
-      }
-    },
-    {
-      "id": "lua.object-field.filepath-name",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Filepath.name)"
-      }
-    },
-    {
-      "id": "lua.object-field.filepath-path",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Filepath.path)"
       }
     },
     {
@@ -4231,20 +3650,6 @@
       }
     },
     {
-      "id": "lua.object-field.gauge-cycle",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Gauge.cycle)"
-      }
-    },
-    {
-      "id": "lua.object-field.gauge-endtime",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Gauge.endtime)"
-      }
-    },
-    {
       "id": "lua.object-field.gauge-graph-assist-and-easy-fail-bgcolor",
       "source": {
         "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
@@ -4354,48 +3759,6 @@
       "source": {
         "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
         "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.GaugeGraph.id)"
-      }
-    },
-    {
-      "id": "lua.object-field.gauge-id",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Gauge.id)"
-      }
-    },
-    {
-      "id": "lua.object-field.gauge-nodes",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Gauge.nodes)"
-      }
-    },
-    {
-      "id": "lua.object-field.gauge-parts",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Gauge.parts)"
-      }
-    },
-    {
-      "id": "lua.object-field.gauge-range",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Gauge.range)"
-      }
-    },
-    {
-      "id": "lua.object-field.gauge-starttime",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Gauge.starttime)"
-      }
-    },
-    {
-      "id": "lua.object-field.gauge-type",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Gauge.type)"
       }
     },
     {
@@ -5036,258 +4399,6 @@
       }
     },
     {
-      "id": "lua.object-field.note-set-bpm",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.NoteSet.bpm)"
-      }
-    },
-    {
-      "id": "lua.object-field.note-set-dst",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.NoteSet.dst)"
-      }
-    },
-    {
-      "id": "lua.object-field.note-set-dst2",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.NoteSet.dst2)"
-      }
-    },
-    {
-      "id": "lua.object-field.note-set-expansionrate",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.NoteSet.expansionrate)"
-      }
-    },
-    {
-      "id": "lua.object-field.note-set-group",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.NoteSet.group)"
-      }
-    },
-    {
-      "id": "lua.object-field.note-set-hcnactive",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.NoteSet.hcnactive)"
-      }
-    },
-    {
-      "id": "lua.object-field.note-set-hcnbody",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.NoteSet.hcnbody)"
-      }
-    },
-    {
-      "id": "lua.object-field.note-set-hcnbody-active",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.NoteSet.hcnbodyActive)"
-      }
-    },
-    {
-      "id": "lua.object-field.note-set-hcnbody-miss",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.NoteSet.hcnbodyMiss)"
-      }
-    },
-    {
-      "id": "lua.object-field.note-set-hcnbody-reactive",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.NoteSet.hcnbodyReactive)"
-      }
-    },
-    {
-      "id": "lua.object-field.note-set-hcndamage",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.NoteSet.hcndamage)"
-      }
-    },
-    {
-      "id": "lua.object-field.note-set-hcnend",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.NoteSet.hcnend)"
-      }
-    },
-    {
-      "id": "lua.object-field.note-set-hcnreactive",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.NoteSet.hcnreactive)"
-      }
-    },
-    {
-      "id": "lua.object-field.note-set-hcnstart",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.NoteSet.hcnstart)"
-      }
-    },
-    {
-      "id": "lua.object-field.note-set-hidden",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.NoteSet.hidden)"
-      }
-    },
-    {
-      "id": "lua.object-field.note-set-id",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.NoteSet.id)"
-      }
-    },
-    {
-      "id": "lua.object-field.note-set-lnactive",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.NoteSet.lnactive)"
-      }
-    },
-    {
-      "id": "lua.object-field.note-set-lnbody",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.NoteSet.lnbody)"
-      }
-    },
-    {
-      "id": "lua.object-field.note-set-lnbody-active",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.NoteSet.lnbodyActive)"
-      }
-    },
-    {
-      "id": "lua.object-field.note-set-lnend",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.NoteSet.lnend)"
-      }
-    },
-    {
-      "id": "lua.object-field.note-set-lnstart",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.NoteSet.lnstart)"
-      }
-    },
-    {
-      "id": "lua.object-field.note-set-mine",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.NoteSet.mine)"
-      }
-    },
-    {
-      "id": "lua.object-field.note-set-note",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.NoteSet.note)"
-      }
-    },
-    {
-      "id": "lua.object-field.note-set-processed",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.NoteSet.processed)"
-      }
-    },
-    {
-      "id": "lua.object-field.note-set-size",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.NoteSet.size)"
-      }
-    },
-    {
-      "id": "lua.object-field.note-set-stop",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.NoteSet.stop)"
-      }
-    },
-    {
-      "id": "lua.object-field.note-set-time",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.NoteSet.time)"
-      }
-    },
-    {
-      "id": "lua.object-field.offset-a",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Offset.a)"
-      }
-    },
-    {
-      "id": "lua.object-field.offset-category",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Offset.category)"
-      }
-    },
-    {
-      "id": "lua.object-field.offset-h",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Offset.h)"
-      }
-    },
-    {
-      "id": "lua.object-field.offset-id",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Offset.id)"
-      }
-    },
-    {
-      "id": "lua.object-field.offset-name",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Offset.name)"
-      }
-    },
-    {
-      "id": "lua.object-field.offset-r",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Offset.r)"
-      }
-    },
-    {
-      "id": "lua.object-field.offset-w",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Offset.w)"
-      }
-    },
-    {
-      "id": "lua.object-field.offset-x",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Offset.x)"
-      }
-    },
-    {
-      "id": "lua.object-field.offset-y",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Offset.y)"
-      }
-    },
-    {
       "id": "lua.object-field.pmchara-color",
       "source": {
         "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
@@ -5320,62 +4431,6 @@
       "source": {
         "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
         "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.PMchara.type)"
-      }
-    },
-    {
-      "id": "lua.object-field.practice-id",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Practice.id)"
-      }
-    },
-    {
-      "id": "lua.object-field.practice-visible-items",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Practice.visibleItems)"
-      }
-    },
-    {
-      "id": "lua.object-field.property-category",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Property.category)"
-      }
-    },
-    {
-      "id": "lua.object-field.property-def",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Property.def)"
-      }
-    },
-    {
-      "id": "lua.object-field.property-item",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Property.item)"
-      }
-    },
-    {
-      "id": "lua.object-field.property-item-name",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.PropertyItem.name)"
-      }
-    },
-    {
-      "id": "lua.object-field.property-item-op",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.PropertyItem.op)"
-      }
-    },
-    {
-      "id": "lua.object-field.property-name",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Property.name)"
       }
     },
     {
@@ -5439,34 +4494,6 @@
       "source": {
         "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
         "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Skin.close)"
-      }
-    },
-    {
-      "id": "lua.object-field.skin-configuration-property-custom-bms",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.SkinConfigurationProperty.customBMS)"
-      }
-    },
-    {
-      "id": "lua.object-field.skin-configuration-property-custom-offset-style",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.SkinConfigurationProperty.customOffsetStyle)"
-      }
-    },
-    {
-      "id": "lua.object-field.skin-configuration-property-custom-property-count",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.SkinConfigurationProperty.customPropertyCount)"
-      }
-    },
-    {
-      "id": "lua.object-field.skin-configuration-property-default-category",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.SkinConfigurationProperty.defaultCategory)"
       }
     },
     {
@@ -5663,13 +4690,6 @@
       "source": {
         "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
         "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Skin.practice)"
-      }
-    },
-    {
-      "id": "lua.object-field.skin-preview-id",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.SkinPreview.id)"
       }
     },
     {
@@ -5894,111 +4914,6 @@
       "source": {
         "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
         "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Slider.y)"
-      }
-    },
-    {
-      "id": "lua.object-field.song-list-center",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.SongList.center)"
-      }
-    },
-    {
-      "id": "lua.object-field.song-list-clickable",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.SongList.clickable)"
-      }
-    },
-    {
-      "id": "lua.object-field.song-list-graph",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.SongList.graph)"
-      }
-    },
-    {
-      "id": "lua.object-field.song-list-id",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.SongList.id)"
-      }
-    },
-    {
-      "id": "lua.object-field.song-list-label",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.SongList.label)"
-      }
-    },
-    {
-      "id": "lua.object-field.song-list-lamp",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.SongList.lamp)"
-      }
-    },
-    {
-      "id": "lua.object-field.song-list-level",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.SongList.level)"
-      }
-    },
-    {
-      "id": "lua.object-field.song-list-listoff",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.SongList.listoff)"
-      }
-    },
-    {
-      "id": "lua.object-field.song-list-liston",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.SongList.liston)"
-      }
-    },
-    {
-      "id": "lua.object-field.song-list-playerlamp",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.SongList.playerlamp)"
-      }
-    },
-    {
-      "id": "lua.object-field.song-list-rivallamp",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.SongList.rivallamp)"
-      }
-    },
-    {
-      "id": "lua.object-field.song-list-text",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.SongList.text)"
-      }
-    },
-    {
-      "id": "lua.object-field.song-list-trophy",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.SongList.trophy)"
-      }
-    },
-    {
-      "id": "lua.object-field.source-id",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Source.id)"
-      }
-    },
-    {
-      "id": "lua.object-field.source-path",
-      "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Source.path)"
       }
     },
     {

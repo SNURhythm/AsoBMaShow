@@ -28,6 +28,10 @@ def assert_unique_ids(features: list[dict], label: str) -> set[str]:
     return set(ids)
 
 
+def feature_by_id(features: list[dict]) -> dict[str, dict]:
+    return {feature["id"]: feature for feature in features}
+
+
 def main() -> None:
     # This catches a missing, added, or reclassified source feature before a
     # format implementation can accidentally leave it without an owner.
@@ -52,6 +56,64 @@ def main() -> None:
     source_ids = assert_unique_ids(source_features, "source surface")
     ledger_ids = assert_unique_ids(ledger_features, "ledger")
     assert source_ids == ledger_ids, "source-surface and ledger IDs must match exactly"
+    source_by_id = feature_by_id(source_features)
+    ledger_by_id = feature_by_id(ledger_features)
+
+    # These finite nested tables are part of the pinned legacy facade. A
+    # shallow table.set() scan would omit their callable members.
+    for identifier in {
+        "lua.export.get-width",
+        "lua.export.get-height",
+        "lua.export.is-key-pressed",
+        "lua.export.size",
+        "lua.export.first",
+        "lua.export.get-button",
+        "lua.export.get-name",
+    }:
+        assert identifier in source_by_id, f"missing pinned Lua export {identifier}"
+
+    # JSON Skin retains these root declarations, but the associated select and
+    # configuration child object fields are not gameplay-loader surfaces.
+    for identifier in {
+        "json.field.skin-songlist",
+        "json.field.skin-skin-select",
+    }:
+        assert identifier in source_by_id, f"missing gameplay root declaration {identifier}"
+    for identifier in {
+        "json.field.song-list-id",
+        "json.field.skin-configuration-property-custom-bms",
+        "lua.object-field.song-list-id",
+        "lua.object-field.skin-configuration-property-custom-bms",
+    }:
+        assert identifier not in source_by_id, f"non-gameplay child leaked into source surface: {identifier}"
+
+    # These current Aso paths deliberately fail closed or are deferred; a
+    # default implemented classification would hide a source-defined gap.
+    expected_gaps = {
+        "lua.export.new-instance": "Task 7: Bounded HTTP and legacy URL/reader facade",
+        "lua.object-field.bpmgraph-id": "Task 6: BPM/scroll/stop graph",
+        "lua.object-field.judge-graph-id": "Task 2: Judgement and note-distribution graph",
+        "lua.object-field.timing-visualizer-id": "Task 3: Timing visualizer",
+    }
+    for identifier, task in expected_gaps.items():
+        row = ledger_by_id[identifier]
+        assert row["status"] == "missing", f"{identifier} must not default to implemented"
+        assert row["task"] == task, f"{identifier} must retain its owning task"
+
+    timing_distribution_rows = [
+        row
+        for row in ledger_features
+        if row["id"].startswith("lua.object-field.timing-distribution-graph-")
+    ]
+    assert timing_distribution_rows, "timing-distribution graph must be inventoried"
+    for row in timing_distribution_rows:
+        assert row["status"] == "source-defined-noop", (
+            f"{row['id']} must retain its gameplay source no-op"
+        )
+        assert row["source"] == {
+            "path": "src/bms/player/beatoraja/skin/SkinTimingDistributionGraph.java",
+            "symbol": "SkinTimingDistributionGraph.prepare",
+        }, f"{row['id']} must cite the gameplay-disabled draw behavior"
 
     for feature in source_features:
         source = feature["source"]

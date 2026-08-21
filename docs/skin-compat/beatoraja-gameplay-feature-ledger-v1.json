@@ -93,12 +93,6 @@
       "task": "Task 4: JSON gameplay document decoder"
     },
     {
-      "id": "json.field.bga-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
       "id": "json.field.bpmgraph-delay",
       "status": "missing",
       "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
@@ -148,54 +142,6 @@
     },
     {
       "id": "json.field.bpmgraph-transition-line-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.category-item",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.category-name",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.custom-event-action",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.custom-event-condition",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.custom-event-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.custom-event-min-interval",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.custom-timer-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.custom-timer-timer",
       "status": "missing",
       "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
       "task": "Task 4: JSON gameplay document decoder"
@@ -286,30 +232,6 @@
     },
     {
       "id": "json.field.destination-timer",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.filepath-category",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.filepath-def",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.filepath-name",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.filepath-path",
       "status": "missing",
       "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
       "task": "Task 4: JSON gameplay document decoder"
@@ -477,18 +399,6 @@
       "task": "Task 4: JSON gameplay document decoder"
     },
     {
-      "id": "json.field.gauge-cycle",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.gauge-endtime",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
       "id": "json.field.gauge-graph-assist-and-easy-fail-bgcolor",
       "status": "missing",
       "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
@@ -580,42 +490,6 @@
     },
     {
       "id": "json.field.gauge-graph-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.gauge-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.gauge-nodes",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.gauge-parts",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.gauge-range",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.gauge-starttime",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.gauge-type",
       "status": "missing",
       "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
       "task": "Task 4: JSON gameplay document decoder"
@@ -1167,222 +1041,6 @@
       "task": "Task 4: JSON gameplay document decoder"
     },
     {
-      "id": "json.field.note-set-bpm",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.note-set-dst",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.note-set-dst2",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.note-set-expansionrate",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.note-set-group",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.note-set-hcnactive",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.note-set-hcnbody",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.note-set-hcnbody-active",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.note-set-hcnbody-miss",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.note-set-hcnbody-reactive",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.note-set-hcndamage",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.note-set-hcnend",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.note-set-hcnreactive",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.note-set-hcnstart",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.note-set-hidden",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.note-set-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.note-set-lnactive",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.note-set-lnbody",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.note-set-lnbody-active",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.note-set-lnend",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.note-set-lnstart",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.note-set-mine",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.note-set-note",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.note-set-processed",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.note-set-size",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.note-set-stop",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.note-set-time",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.offset-a",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.offset-category",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.offset-h",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.offset-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.offset-name",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.offset-r",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.offset-w",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.offset-x",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.offset-y",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
       "id": "json.field.pmchara-color",
       "status": "missing",
       "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
@@ -1408,54 +1066,6 @@
     },
     {
       "id": "json.field.pmchara-type",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.practice-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.practice-visible-items",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.property-category",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.property-def",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.property-item",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.property-item-name",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.property-item-op",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.property-name",
       "status": "missing",
       "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
       "task": "Task 4: JSON gameplay document decoder"
@@ -1510,30 +1120,6 @@
     },
     {
       "id": "json.field.skin-close",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.skin-configuration-property-custom-bms",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.skin-configuration-property-custom-offset-style",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.skin-configuration-property-custom-property-count",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.skin-configuration-property-default-category",
       "status": "missing",
       "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
       "task": "Task 4: JSON gameplay document decoder"
@@ -1702,12 +1288,6 @@
     },
     {
       "id": "json.field.skin-practice",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.skin-preview-id",
       "status": "missing",
       "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
       "task": "Task 4: JSON gameplay document decoder"
@@ -1900,96 +1480,6 @@
     },
     {
       "id": "json.field.slider-y",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.song-list-center",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.song-list-clickable",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.song-list-graph",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.song-list-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.song-list-label",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.song-list-lamp",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.song-list-level",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.song-list-listoff",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.song-list-liston",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.song-list-playerlamp",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.song-list-rivallamp",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.song-list-text",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.song-list-trophy",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.source-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
-    },
-    {
-      "id": "json.field.source-path",
       "status": "missing",
       "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
       "task": "Task 4: JSON gameplay document decoder"
@@ -2913,6 +2403,12 @@
       "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
+      "id": "lua.export.a",
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
+      "task": "Task 9: Gdx input and controller legacy facade"
+    },
+    {
       "id": "lua.export.audio-dispose",
       "status": "missing",
       "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
@@ -2944,15 +2440,21 @@
     },
     {
       "id": "lua.export.bind-class",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
+      "task": "Task 7: Bounded HTTP and legacy URL/reader facade"
     },
     {
       "id": "lua.export.connect",
       "status": "missing",
       "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
       "task": "Task 7: Bounded HTTP and legacy URL/reader facade"
+    },
+    {
+      "id": "lua.export.cpath",
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
+      "task": "Task 9: Gdx input and controller legacy facade"
     },
     {
       "id": "lua.export.enabled-options",
@@ -2998,9 +2500,9 @@
     },
     {
       "id": "lua.export.file-path",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 6: main_state file functions and legacy File facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.export.file-read-lines",
@@ -3015,6 +2517,12 @@
       "task": "Task 6: main_state file functions and legacy File facade"
     },
     {
+      "id": "lua.export.first",
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
+      "task": "Task 9: Gdx input and controller legacy facade"
+    },
+    {
       "id": "lua.export.get-button",
       "status": "missing",
       "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
@@ -3022,6 +2530,12 @@
     },
     {
       "id": "lua.export.get-controllers",
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
+      "task": "Task 9: Gdx input and controller legacy facade"
+    },
+    {
+      "id": "lua.export.get-height",
       "status": "missing",
       "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
       "task": "Task 9: Gdx input and controller legacy facade"
@@ -3051,13 +2565,25 @@
       "task": "Task 7: Bounded HTTP and legacy URL/reader facade"
     },
     {
+      "id": "lua.export.get-width",
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
+      "task": "Task 9: Gdx input and controller legacy facade"
+    },
+    {
       "id": "lua.export.getmetatable",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
+      "task": "Task 9: Gdx input and controller legacy facade"
     },
     {
       "id": "lua.export.graphics",
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
+      "task": "Task 9: Gdx input and controller legacy facade"
+    },
+    {
+      "id": "lua.export.h",
       "status": "missing",
       "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
       "task": "Task 9: Gdx input and controller legacy facade"
@@ -3075,7 +2601,19 @@
       "task": "Task 7: Bounded HTTP and legacy URL/reader facade"
     },
     {
+      "id": "lua.export.index",
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
+      "task": "Task 9: Gdx input and controller legacy facade"
+    },
+    {
       "id": "lua.export.input",
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
+      "task": "Task 9: Gdx input and controller legacy facade"
+    },
+    {
+      "id": "lua.export.is-key-pressed",
       "status": "missing",
       "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
       "task": "Task 9: Gdx input and controller legacy facade"
@@ -3093,6 +2631,12 @@
       "task": "Task 6: main_state file functions and legacy File facade"
     },
     {
+      "id": "lua.export.loadlib",
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
+      "task": "Task 9: Gdx input and controller legacy facade"
+    },
+    {
       "id": "lua.export.mkdir",
       "status": "missing",
       "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
@@ -3100,15 +2644,15 @@
     },
     {
       "id": "lua.export.new",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
+      "task": "Task 7: Bounded HTTP and legacy URL/reader facade"
     },
     {
       "id": "lua.export.new-instance",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
+      "task": "Task 7: Bounded HTTP and legacy URL/reader facade"
     },
     {
       "id": "lua.export.offset",
@@ -3129,6 +2673,18 @@
       "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
+      "id": "lua.export.path",
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
+      "task": "Task 9: Gdx input and controller legacy facade"
+    },
+    {
+      "id": "lua.export.r",
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
+      "task": "Task 9: Gdx input and controller legacy facade"
+    },
+    {
       "id": "lua.export.read-line",
       "status": "missing",
       "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
@@ -3136,9 +2692,9 @@
     },
     {
       "id": "lua.export.set-connect-timeout",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
+      "task": "Task 7: Bounded HTTP and legacy URL/reader facade"
     },
     {
       "id": "lua.export.set-request-method",
@@ -3147,10 +2703,34 @@
       "task": "Task 7: Bounded HTTP and legacy URL/reader facade"
     },
     {
+      "id": "lua.export.size",
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
+      "task": "Task 9: Gdx input and controller legacy facade"
+    },
+    {
       "id": "lua.export.skin-config",
       "status": "implemented",
       "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
       "tests": "tests/beatoraja_skin_model_tests.cpp"
+    },
+    {
+      "id": "lua.export.w",
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
+      "task": "Task 9: Gdx input and controller legacy facade"
+    },
+    {
+      "id": "lua.export.x",
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
+      "task": "Task 9: Gdx input and controller legacy facade"
+    },
+    {
+      "id": "lua.export.y",
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
+      "task": "Task 9: Gdx input and controller legacy facade"
     },
     {
       "id": "lua.object-field.animation-a",
@@ -3243,112 +2823,58 @@
       "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
-      "id": "lua.object-field.bga-id",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
       "id": "lua.object-field.bpmgraph-delay",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
+      "task": "Task 6: BPM/scroll/stop graph"
     },
     {
       "id": "lua.object-field.bpmgraph-id",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
+      "task": "Task 6: BPM/scroll/stop graph"
     },
     {
       "id": "lua.object-field.bpmgraph-line-width",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
+      "task": "Task 6: BPM/scroll/stop graph"
     },
     {
       "id": "lua.object-field.bpmgraph-main-bpmcolor",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
+      "task": "Task 6: BPM/scroll/stop graph"
     },
     {
       "id": "lua.object-field.bpmgraph-max-bpmcolor",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
+      "task": "Task 6: BPM/scroll/stop graph"
     },
     {
       "id": "lua.object-field.bpmgraph-min-bpmcolor",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
+      "task": "Task 6: BPM/scroll/stop graph"
     },
     {
       "id": "lua.object-field.bpmgraph-other-bpmcolor",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
+      "task": "Task 6: BPM/scroll/stop graph"
     },
     {
       "id": "lua.object-field.bpmgraph-stop-line-color",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
+      "task": "Task 6: BPM/scroll/stop graph"
     },
     {
       "id": "lua.object-field.bpmgraph-transition-line-color",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.category-item",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.category-name",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.custom-event-action",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.custom-event-condition",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.custom-event-id",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.custom-event-min-interval",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.custom-timer-id",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.custom-timer-timer",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
+      "task": "Task 6: BPM/scroll/stop graph"
     },
     {
       "id": "lua.object-field.destination-blend",
@@ -3436,30 +2962,6 @@
     },
     {
       "id": "lua.object-field.destination-timer",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.filepath-category",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.filepath-def",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.filepath-name",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.filepath-path",
       "status": "implemented",
       "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
       "tests": "tests/beatoraja_skin_model_tests.cpp"
@@ -3627,18 +3129,6 @@
       "task": "Task 1: Bitmap .fnt and LR2FONT resources"
     },
     {
-      "id": "lua.object-field.gauge-cycle",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.gauge-endtime",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
       "id": "lua.object-field.gauge-graph-assist-and-easy-fail-bgcolor",
       "status": "missing",
       "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
@@ -3733,42 +3223,6 @@
       "status": "missing",
       "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
       "task": "Task 7: Gauge-history graph"
-    },
-    {
-      "id": "lua.object-field.gauge-id",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.gauge-nodes",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.gauge-parts",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.gauge-range",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.gauge-starttime",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.gauge-type",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.graph-angle",
@@ -4317,222 +3771,6 @@
       "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
-      "id": "lua.object-field.note-set-bpm",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.note-set-dst",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.note-set-dst2",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.note-set-expansionrate",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.note-set-group",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.note-set-hcnactive",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.note-set-hcnbody",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.note-set-hcnbody-active",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.note-set-hcnbody-miss",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.note-set-hcnbody-reactive",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.note-set-hcndamage",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.note-set-hcnend",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.note-set-hcnreactive",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.note-set-hcnstart",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.note-set-hidden",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.note-set-id",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.note-set-lnactive",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.note-set-lnbody",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.note-set-lnbody-active",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.note-set-lnend",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.note-set-lnstart",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.note-set-mine",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.note-set-note",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.note-set-processed",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.note-set-size",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.note-set-stop",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.note-set-time",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.offset-a",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.offset-category",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.offset-h",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.offset-id",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.offset-name",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.offset-r",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.offset-w",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.offset-x",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.offset-y",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
       "id": "lua.object-field.pmchara-color",
       "status": "missing",
       "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
@@ -4561,54 +3799,6 @@
       "status": "missing",
       "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
       "task": "Task 3: Complete Pomyu/PM-character rendering"
-    },
-    {
-      "id": "lua.object-field.practice-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 4: SkinPractice object"
-    },
-    {
-      "id": "lua.object-field.practice-visible-items",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 4: SkinPractice object"
-    },
-    {
-      "id": "lua.object-field.property-category",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.property-def",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.property-item",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.property-item-name",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.property-item-op",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.property-name",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.rect-h",
@@ -4648,9 +3838,9 @@
     },
     {
       "id": "lua.object-field.skin-bpmgraph",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
+      "task": "Task 6: BPM/scroll/stop graph"
     },
     {
       "id": "lua.object-field.skin-category",
@@ -4660,30 +3850,6 @@
     },
     {
       "id": "lua.object-field.skin-close",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.skin-configuration-property-custom-bms",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.skin-configuration-property-custom-offset-style",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.skin-configuration-property-custom-property-count",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.skin-configuration-property-default-category",
       "status": "implemented",
       "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
       "tests": "tests/beatoraja_skin_model_tests.cpp"
@@ -4744,9 +3910,9 @@
     },
     {
       "id": "lua.object-field.skin-gaugegraph",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
+      "task": "Task 7: Gauge-history graph"
     },
     {
       "id": "lua.object-field.skin-graph",
@@ -4768,9 +3934,9 @@
     },
     {
       "id": "lua.object-field.skin-hiterrorvisualizer",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
+      "task": "Task 4: Hit-error visualizer"
     },
     {
       "id": "lua.object-field.skin-image",
@@ -4798,9 +3964,9 @@
     },
     {
       "id": "lua.object-field.skin-judgegraph",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
+      "task": "Task 2: Judgement and note-distribution graph"
     },
     {
       "id": "lua.object-field.skin-judgetimer",
@@ -4857,12 +4023,6 @@
       "task": "Task 4: SkinPractice object"
     },
     {
-      "id": "lua.object-field.skin-preview-id",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
       "id": "lua.object-field.skin-property",
       "status": "implemented",
       "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
@@ -4876,9 +4036,11 @@
     },
     {
       "id": "lua.object-field.skin-skin-select",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
+      "status": "source-defined-noop",
+      "source": {
+        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
+        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Skin.skinSelect)"
+      }
     },
     {
       "id": "lua.object-field.skin-skinpreview",
@@ -4894,15 +4056,17 @@
     },
     {
       "id": "lua.object-field.skin-songlist",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
+      "status": "source-defined-noop",
+      "source": {
+        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
+        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.Skin.songlist)"
+      }
     },
     {
       "id": "lua.object-field.skin-source",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
+      "task": "Task 2: Skin source movies"
     },
     {
       "id": "lua.object-field.skin-text",
@@ -4912,15 +4076,17 @@
     },
     {
       "id": "lua.object-field.skin-timingdistributiongraph",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
+      "status": "source-defined-noop",
+      "source": {
+        "path": "src/bms/player/beatoraja/skin/SkinTimingDistributionGraph.java",
+        "symbol": "SkinTimingDistributionGraph.prepare"
+      }
     },
     {
       "id": "lua.object-field.skin-timingvisualizer",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
+      "task": "Task 3: Timing visualizer"
     },
     {
       "id": "lua.object-field.skin-type",
@@ -5055,96 +4221,6 @@
       "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
-      "id": "lua.object-field.song-list-center",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.song-list-clickable",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.song-list-graph",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.song-list-id",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.song-list-label",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.song-list-lamp",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.song-list-level",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.song-list-listoff",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.song-list-liston",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.song-list-playerlamp",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.song-list-rivallamp",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.song-list-text",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.song-list-trophy",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.source-id",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
-      "id": "lua.object-field.source-path",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
-    },
-    {
       "id": "lua.object-field.text-align",
       "status": "implemented",
       "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
@@ -5164,9 +4240,9 @@
     },
     {
       "id": "lua.object-field.text-event",
-      "status": "implemented",
-      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
-      "tests": "tests/beatoraja_skin_model_tests.cpp"
+      "status": "missing",
+      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
+      "task": "Task 5: Editable skin text"
     },
     {
       "id": "lua.object-field.text-font",
@@ -5250,104 +4326,104 @@
       "id": "lua.object-field.timing-distribution-graph-average-color",
       "status": "source-defined-noop",
       "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.TimingDistributionGraph.averageColor)"
+        "path": "src/bms/player/beatoraja/skin/SkinTimingDistributionGraph.java",
+        "symbol": "SkinTimingDistributionGraph.prepare"
       }
     },
     {
       "id": "lua.object-field.timing-distribution-graph-bdcolor",
       "status": "source-defined-noop",
       "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.TimingDistributionGraph.BDColor)"
+        "path": "src/bms/player/beatoraja/skin/SkinTimingDistributionGraph.java",
+        "symbol": "SkinTimingDistributionGraph.prepare"
       }
     },
     {
       "id": "lua.object-field.timing-distribution-graph-dev-color",
       "status": "source-defined-noop",
       "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.TimingDistributionGraph.devColor)"
+        "path": "src/bms/player/beatoraja/skin/SkinTimingDistributionGraph.java",
+        "symbol": "SkinTimingDistributionGraph.prepare"
       }
     },
     {
       "id": "lua.object-field.timing-distribution-graph-draw-average",
       "status": "source-defined-noop",
       "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.TimingDistributionGraph.drawAverage)"
+        "path": "src/bms/player/beatoraja/skin/SkinTimingDistributionGraph.java",
+        "symbol": "SkinTimingDistributionGraph.prepare"
       }
     },
     {
       "id": "lua.object-field.timing-distribution-graph-draw-dev",
       "status": "source-defined-noop",
       "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.TimingDistributionGraph.drawDev)"
+        "path": "src/bms/player/beatoraja/skin/SkinTimingDistributionGraph.java",
+        "symbol": "SkinTimingDistributionGraph.prepare"
       }
     },
     {
       "id": "lua.object-field.timing-distribution-graph-gdcolor",
       "status": "source-defined-noop",
       "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.TimingDistributionGraph.GDColor)"
+        "path": "src/bms/player/beatoraja/skin/SkinTimingDistributionGraph.java",
+        "symbol": "SkinTimingDistributionGraph.prepare"
       }
     },
     {
       "id": "lua.object-field.timing-distribution-graph-graph-color",
       "status": "source-defined-noop",
       "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.TimingDistributionGraph.graphColor)"
+        "path": "src/bms/player/beatoraja/skin/SkinTimingDistributionGraph.java",
+        "symbol": "SkinTimingDistributionGraph.prepare"
       }
     },
     {
       "id": "lua.object-field.timing-distribution-graph-grcolor",
       "status": "source-defined-noop",
       "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.TimingDistributionGraph.GRColor)"
+        "path": "src/bms/player/beatoraja/skin/SkinTimingDistributionGraph.java",
+        "symbol": "SkinTimingDistributionGraph.prepare"
       }
     },
     {
       "id": "lua.object-field.timing-distribution-graph-id",
       "status": "source-defined-noop",
       "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.TimingDistributionGraph.id)"
+        "path": "src/bms/player/beatoraja/skin/SkinTimingDistributionGraph.java",
+        "symbol": "SkinTimingDistributionGraph.prepare"
       }
     },
     {
       "id": "lua.object-field.timing-distribution-graph-line-width",
       "status": "source-defined-noop",
       "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.TimingDistributionGraph.lineWidth)"
+        "path": "src/bms/player/beatoraja/skin/SkinTimingDistributionGraph.java",
+        "symbol": "SkinTimingDistributionGraph.prepare"
       }
     },
     {
       "id": "lua.object-field.timing-distribution-graph-pgcolor",
       "status": "source-defined-noop",
       "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.TimingDistributionGraph.PGColor)"
+        "path": "src/bms/player/beatoraja/skin/SkinTimingDistributionGraph.java",
+        "symbol": "SkinTimingDistributionGraph.prepare"
       }
     },
     {
       "id": "lua.object-field.timing-distribution-graph-prcolor",
       "status": "source-defined-noop",
       "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.TimingDistributionGraph.PRColor)"
+        "path": "src/bms/player/beatoraja/skin/SkinTimingDistributionGraph.java",
+        "symbol": "SkinTimingDistributionGraph.prepare"
       }
     },
     {
       "id": "lua.object-field.timing-distribution-graph-width",
       "status": "source-defined-noop",
       "source": {
-        "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-        "symbol": "LuaSkinLoader.fromLuaValue(JsonSkin.TimingDistributionGraph.width)"
+        "path": "src/bms/player/beatoraja/skin/SkinTimingDistributionGraph.java",
+        "symbol": "SkinTimingDistributionGraph.prepare"
       }
     },
     {

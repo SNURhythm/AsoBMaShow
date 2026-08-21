@@ -97,10 +97,16 @@ def reachable_json_classes(json_skin: str, *play_loaders: str) -> tuple[dict[str
     if "Skin" not in classes:
         raise RuntimeError("JsonSkin.Skin was not found")
     known = set(classes)
+    # JsonSkin.Skin is the gameplay document root, so retain its fields even
+    # when a field names a select/configuration-only child. Only classes named
+    # by the actual gameplay object loaders can expand into child fields.
     reachable = {"Skin"}
+    pending = []
     for loader in play_loaders:
-        reachable.update(re.findall(r"JsonSkin\.(\w+)", loader))
-    pending = list(reachable)
+        for class_name in re.findall(r"JsonSkin\.(\w+)", loader):
+            if class_name in known and class_name not in reachable:
+                reachable.add(class_name)
+                pending.append(class_name)
     while pending:
         name = pending.pop()
         java_class = classes.get(name)
@@ -213,8 +219,13 @@ def add_lua_exports(features: dict[str, dict], root: Path) -> None:
         relative = SKIN_ROOT / "lua" / name
         source = read_source(root, relative)
         class_name = relative.stem
-        export_targets = r"(?:table|facade|luajava|debug)"
-        exports = re.findall(rf'\b{export_targets}\.set\("([^"]+)"', source)
+        # The legacy facade builds several nested LuaTable instances. Include
+        # every named table assignment, not only its top-level facade, so the
+        # finite graphics/input/controller members are source-surface entries.
+        export_targets = {"table", "facade", "luajava", "debug"}
+        export_targets.update(re.findall(r"\bLuaTable\s+(\w+)\s*=", source))
+        target_pattern = "|".join(sorted(map(re.escape, export_targets)))
+        exports = re.findall(rf'\b(?:{target_pattern})\.set\("([^"]+)"', source)
         if class_name == "SkinLuaAccessor":
             exports.extend(re.findall(r'\bglobals\.set\("(skin_config)"', source))
         for export in exports:
@@ -272,6 +283,48 @@ PLAN_FORMATS = "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contra
 PLAN_VISUALIZERS = "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md"
 PLAN_ASSETS = "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md"
 
+TIMING_DISTRIBUTION_NOOP_SOURCE = {
+    "path": "src/bms/player/beatoraja/skin/SkinTimingDistributionGraph.java",
+    "symbol": "SkinTimingDistributionGraph.prepare",
+}
+
+IMPLEMENTED_LUA_OBJECT_PREFIXES = (
+    "lua.object-field.animation-",
+    "lua.object-field.bga-",
+    "lua.object-field.destination-",
+    "lua.object-field.float-value-",
+    "lua.object-field.gauge-",
+    "lua.object-field.graph-",
+    "lua.object-field.hidden-cover-",
+    "lua.object-field.image-",
+    "lua.object-field.image-set-",
+    "lua.object-field.judge-",
+    "lua.object-field.lift-cover-",
+    "lua.object-field.note-set-",
+    "lua.object-field.rect-",
+    "lua.object-field.slider-",
+    "lua.object-field.text-",
+    "lua.object-field.value-",
+)
+
+IMPLEMENTED_LUA_IDS = {
+    "lua.event.event",
+    "lua.export.enabled-options",
+    "lua.export.file-path",
+    "lua.export.get-path",
+    "lua.export.offset",
+    "lua.export.option",
+    "lua.export.skin-config",
+    "lua.offset.destination-offset",
+    "lua.property.boolean-property",
+    "lua.property.float-property",
+    "lua.property.integer-property",
+    "lua.property.string-property",
+    "lua.timer.timer-property",
+    "lua.writer.float-writer",
+    "lua.writer.string-writer",
+}
+
 
 def missing(identifier: str, plan: str, task: str) -> dict:
     return {"id": identifier, "status": "missing", "plan": plan, "task": task}
@@ -286,6 +339,34 @@ def implemented(identifier: str) -> dict:
     }
 
 
+def source_defined_noop(identifier: str, source: dict) -> dict:
+    return {"id": identifier, "status": "source-defined-noop", "source": source}
+
+
+def missing_legacy_export(identifier: str) -> dict:
+    if identifier.startswith("lua.export.file-") or identifier in {
+        "lua.export.mkdir",
+        "lua.export.list-files",
+    }:
+        return missing(identifier, PLAN_ASSETS, "Task 6: main_state file functions and legacy File facade")
+    if identifier.startswith("lua.export.http-") or identifier in {
+        "lua.export.bind-class",
+        "lua.export.new",
+        "lua.export.new-instance",
+        "lua.export.open-connection",
+        "lua.export.set-request-method",
+        "lua.export.set-connect-timeout",
+        "lua.export.connect",
+        "lua.export.get-response-code",
+        "lua.export.get-input-stream",
+        "lua.export.read-line",
+    }:
+        return missing(identifier, PLAN_ASSETS, "Task 7: Bounded HTTP and legacy URL/reader facade")
+    if identifier.startswith("lua.export.audio-"):
+        return missing(identifier, PLAN_ASSETS, "Task 8: Skin audio host lifecycle")
+    return missing(identifier, PLAN_ASSETS, "Task 9: Gdx input and controller legacy facade")
+
+
 def ledger_feature(feature: dict) -> dict:
     identifier = feature["id"]
     if identifier.startswith("json.field."):
@@ -294,41 +375,51 @@ def ledger_feature(feature: dict) -> dict:
         return missing(identifier, PLAN_FORMATS, "Task 5: LR2 syntax, encoding, header, and include engine")
     if identifier.startswith("lr2.play-command."):
         return missing(identifier, PLAN_FORMATS, "Task 6: LR2 gameplay commands to canonical model")
-    if identifier.startswith("lua.export.file-"):
-        return missing(identifier, PLAN_ASSETS, "Task 6: main_state file functions and legacy File facade")
-    if identifier.startswith("lua.export.http-"):
-        return missing(identifier, PLAN_ASSETS, "Task 7: Bounded HTTP and legacy URL/reader facade")
-    if identifier.startswith("lua.export.audio-"):
-        return missing(identifier, PLAN_ASSETS, "Task 8: Skin audio host lifecycle")
-    if identifier.startswith("lua.export.graphics") or identifier.startswith("lua.export.input") or identifier.startswith("lua.export.keys") or identifier.startswith("lua.export.get-controllers") or identifier.startswith("lua.export.get-button") or identifier.startswith("lua.export.get-name"):
-        return missing(identifier, PLAN_ASSETS, "Task 9: Gdx input and controller legacy facade")
-    if identifier.startswith("lua.export.open-connection") or identifier.startswith("lua.export.set-request") or identifier.startswith("lua.export.get-response") or identifier.startswith("lua.export.get-input") or identifier.startswith("lua.export.connect") or identifier.startswith("lua.export.read-line"):
-        return missing(identifier, PLAN_ASSETS, "Task 7: Bounded HTTP and legacy URL/reader facade")
-    if identifier.startswith("lua.export.mkdir") or identifier.startswith("lua.export.list-files"):
-        return missing(identifier, PLAN_ASSETS, "Task 6: main_state file functions and legacy File facade")
+    if identifier in IMPLEMENTED_LUA_IDS:
+        return implemented(identifier)
+    if identifier.startswith("lua.export."):
+        return missing_legacy_export(identifier)
     if "font" in identifier:
         return missing(identifier, PLAN_ASSETS, "Task 1: Bitmap .fnt and LR2FONT resources")
     if "pmchara" in identifier:
         return missing(identifier, PLAN_ASSETS, "Task 3: Complete Pomyu/PM-character rendering")
     if "practice" in identifier:
         return missing(identifier, PLAN_ASSETS, "Task 4: SkinPractice object")
-    if "timing-visualizer" in identifier:
+    if identifier == "lua.object-field.skin-source":
+        return missing(identifier, PLAN_ASSETS, "Task 2: Skin source movies")
+    if identifier == "lua.object-field.text-event":
+        return missing(identifier, PLAN_ASSETS, "Task 5: Editable skin text")
+    if "timing-visualizer" in identifier or "timingvisualizer" in identifier:
         return missing(identifier, PLAN_VISUALIZERS, "Task 3: Timing visualizer")
-    if "hit-error" in identifier:
+    if "hit-error" in identifier or "hiterrorvisualizer" in identifier:
         return missing(identifier, PLAN_VISUALIZERS, "Task 4: Hit-error visualizer")
-    if "judge-graph" in identifier or "note-distribution" in identifier:
+    if "judge-graph" in identifier or "judgegraph" in identifier or "note-distribution" in identifier:
         return missing(identifier, PLAN_VISUALIZERS, "Task 2: Judgement and note-distribution graph")
-    if "bpm-graph" in identifier:
+    if "bpm-graph" in identifier or "bpmgraph" in identifier:
         return missing(identifier, PLAN_VISUALIZERS, "Task 6: BPM/scroll/stop graph")
-    if "gauge-graph" in identifier:
+    if "gauge-graph" in identifier or "gaugegraph" in identifier:
         return missing(identifier, PLAN_VISUALIZERS, "Task 7: Gauge-history graph")
-    if "timing-distribution" in identifier:
-        return {
-            "id": identifier,
-            "status": "source-defined-noop",
-            "source": feature["source"],
+    if "timing-distribution" in identifier or "timingdistributiongraph" in identifier:
+        return source_defined_noop(identifier, TIMING_DISTRIBUTION_NOOP_SOURCE)
+    if identifier in {
+        "lua.object-field.skin-songlist",
+        "lua.object-field.skin-skin-select",
+    }:
+        return source_defined_noop(identifier, feature["source"])
+    if identifier.startswith("lua.object-field.skin-"):
+        root_fields = {
+            "type", "name", "author", "w", "h", "fadeout", "input", "scene",
+            "close", "loadend", "playstart", "judgetimer", "finishmargin", "category",
+            "property", "filepath", "offset", "image", "imageset", "value", "floatvalue",
+            "text", "slider", "graph", "gauge", "hidden-cover", "lift-cover", "bga",
+            "skinpreview", "judge", "note", "custom-events", "custom-timers", "destination",
         }
-    return implemented(identifier)
+        field_name = identifier.removeprefix("lua.object-field.skin-")
+        if field_name in root_fields:
+            return implemented(identifier)
+    if identifier.startswith(IMPLEMENTED_LUA_OBJECT_PREFIXES):
+        return implemented(identifier)
+    raise RuntimeError(f"no evidence-based ledger classification for {identifier}")
 
 
 def make_ledger(surface: dict) -> dict:
