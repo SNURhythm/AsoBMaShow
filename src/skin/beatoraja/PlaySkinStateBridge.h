@@ -169,6 +169,7 @@ public:
                                         std::span<const int> arguments);
   SkinHostCallResult invokeWriter(SkinFloatWriterId, double normalizedValue);
   SkinHostCallResult invokeWriter(SkinStringWriterId, std::string_view value);
+  [[nodiscard]] PlaySkinFrameCommit takeFrameCommitForContinuation();
   [[nodiscard]] PlaySkinFrameCommit commitFrame();
   void discardFrame() noexcept;
 

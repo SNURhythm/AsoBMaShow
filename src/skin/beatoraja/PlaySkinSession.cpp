@@ -184,19 +184,22 @@ bool finiteRect(const AuthoredRect &rect) noexcept {
          rect.width > 0.0 && rect.height > 0.0;
 }
 
-bool validUtf8(std::string_view value) noexcept {
+std::optional<std::size_t>
+utf8CodepointCount(std::string_view value) noexcept {
   std::size_t offset = 0;
+  std::size_t count = 0;
   while (offset < value.size()) {
     utf8proc_int32_t codepoint = 0;
     const auto consumed = utf8proc_iterate(
         reinterpret_cast<const utf8proc_uint8_t *>(value.data() + offset),
         static_cast<utf8proc_ssize_t>(value.size() - offset), &codepoint);
     if (consumed <= 0) {
-      return false;
+      return std::nullopt;
     }
     offset += static_cast<std::size_t>(consumed);
+    ++count;
   }
-  return true;
+  return count;
 }
 
 std::array<float, 4>
@@ -334,11 +337,13 @@ PlaySkinSession::PlaySkinSession(
                                : context_.sessionSerial),
       touchHitRegionsRevision_(touchLayoutRevision_) {
   context_.identity.sessionSerial = context_.sessionSerial;
+  queuedInteractions_.reserve(maximumQueuedInteractions);
 }
 
 PlaySkinSession::~PlaySkinSession() {
+  discardPendingFrame();
   cancelTextInput();
-  queuedStringWriters_.clear();
+  clearQueuedInteractions();
 }
 
 RuntimeSkinConfigurationSelection
@@ -692,12 +697,32 @@ PlaySkinSession::pmsPoorDestinationGeometry() const {
           static_cast<double>(*lanes.front().secondaryDestinationY)};
 }
 
+SkinHostCallResult
+PlaySkinSession::invokeInteraction(const QueuedInteraction &interaction) {
+  return std::visit(
+      [&](const auto &payload) -> SkinHostCallResult {
+        using T = std::decay_t<decltype(payload)>;
+        if constexpr (std::is_same_v<T, SkinEventInvocation>) {
+          const std::array<int, 1> arguments{payload.argument};
+          return context_.bridge.invokeEventBinding(
+              SkinEventBindingId{payload.eventBinding}, arguments);
+        } else if constexpr (std::is_same_v<T, SkinWriterInvocation>) {
+          (void)payload.eventMicros;
+          return context_.bridge.invokeWriter(payload.writer,
+                                              payload.normalizedValue);
+        } else {
+          (void)payload.eventMicros;
+          return context_.bridge.invokeWriter(payload.writer, payload.value);
+        }
+      },
+      interaction.payload);
+}
+
 PlaySkinFrameTransactionResult PlaySkinSession::runFrameTransaction(
     const PlayfieldVisualState &state,
     const PlayfieldProjectionResult &projection,
-    std::span<const SkinWriterInvocation> queuedWriters,
-    std::span<const SkinEventInvocation> queuedEvents,
-    std::span<const QueuedStringWriter> queuedStringWriters) {
+    std::span<const QueuedInteraction> interactions,
+    bool retainBridgeForContinuation) {
   PlaySkinFrameTransactionResult result{.frameSerial = state.clock.serial};
   if (context_.sessionSerial == 0) {
     result.diagnostics.push_back(transactionDiagnostic(
@@ -725,37 +750,12 @@ PlaySkinFrameTransactionResult PlaySkinSession::runFrameTransaction(
   SkinExternalFrameOwnership ownership(state.clock.serial,
                                        context_.sessionSerial);
 
-  for (const auto &event : queuedEvents) {
-    // SkinObject.mousePressed dispatches the image event on primary pointer
-    // down. Touch delivery is frame-bound here, so preserve its single signed
-    // argument at the next valid transaction boundary.
-    const std::array<int, 1> arguments{event.argument};
-    const auto invoked = context_.bridge.invokeEventBinding(
-        SkinEventBindingId{event.eventBinding}, arguments);
-    if (!invoked.ok()) {
-      appendDiagnostics(result.diagnostics, invoked.diagnostics);
-      return result;
-    }
-  }
-
-  for (const auto &writer : queuedWriters) {
-    // Pinned FloatWriter receives only the normalized value. eventMicros is
-    // retained at this transaction boundary for later diagnostic/persistence
-    // integration and never changes callback ordering.
-    (void)writer.eventMicros;
-    const auto invoked =
-        context_.bridge.invokeWriter(writer.writer, writer.normalizedValue);
-    if (invoked.status != SkinHostCallStatus::Completed) {
-      appendDiagnostics(result.diagnostics, invoked.diagnostics);
-      return result;
-    }
-  }
-
-  for (const auto &writer : queuedStringWriters) {
-    (void)writer.eventMicros;
-    const auto invoked = context_.bridge.invokeWriter(writer.writer,
-                                                      writer.value);
-    if (invoked.status != SkinHostCallStatus::Completed) {
+  for (const auto &interaction : interactions) {
+    const auto invoked = invokeInteraction(interaction);
+    const bool event =
+        std::holds_alternative<SkinEventInvocation>(interaction.payload);
+    if (event ? !invoked.ok()
+              : invoked.status != SkinHostCallStatus::Completed) {
       appendDiagnostics(result.diagnostics, invoked.diagnostics);
       return result;
     }
@@ -787,9 +787,14 @@ PlaySkinFrameTransactionResult PlaySkinSession::runFrameTransaction(
     return result;
   }
 
-  result.committed = context_.bridge.commitFrame();
+  result.committed = retainBridgeForContinuation
+                         ? context_.bridge.takeFrameCommitForContinuation()
+                         : context_.bridge.commitFrame();
   discard.release();
   if (result.committed.frameSerial != state.clock.serial) {
+    if (retainBridgeForContinuation) {
+      context_.bridge.discardFrame();
+    }
     result.committed = {};
     result.evaluation.submitReady.reset();
     result.evaluation.interactionLayout.reset();
@@ -805,16 +810,23 @@ PlaySkinFrameTransactionResult PlaySkinSession::runFrameTransaction(
 PresentationFrameOutcome PlaySkinSession::preparePendingFrame(
     const PlayfieldVisualState &state,
     const PlayfieldProjectionResult &projection,
-    std::span<const SkinWriterInvocation> queuedWriters,
-    std::span<const SkinEventInvocation> queuedEvents,
-    std::span<const QueuedStringWriter> queuedStringWriters,
+    std::vector<QueuedInteraction> interactions,
     std::span<const SkinFrameMutation> extraMutations) {
   if (pendingFrame_) {
     return PresentationFrameOutcome::CriticalFailure;
   }
 
-  auto transaction = runFrameTransaction(state, projection, queuedWriters,
-                                         queuedEvents, queuedStringWriters);
+  const auto firstString = std::ranges::find_if(
+      interactions, [](const QueuedInteraction &interaction) {
+        return std::holds_alternative<QueuedStringWriter>(interaction.payload);
+      });
+  const std::size_t deferredBegin = static_cast<std::size_t>(
+      std::distance(interactions.begin(), firstString));
+  const bool hasDeferred = deferredBegin < interactions.size();
+  auto transaction = runFrameTransaction(
+      state, projection,
+      std::span<const QueuedInteraction>{interactions.data(), deferredBegin},
+      hasDeferred);
   if (transaction.ready() && !extraMutations.empty()) {
     try {
       transaction.committed.orderedMutations.insert(
@@ -831,7 +843,17 @@ PresentationFrameOutcome PlaySkinSession::preparePendingFrame(
     }
   }
   const bool ready = transaction.ready();
-  pendingFrame_.emplace(PendingFrame{.transaction = std::move(transaction)});
+  try {
+    pendingFrame_.emplace(
+        PendingFrame{.transaction = std::move(transaction),
+                     .interactions = std::move(interactions),
+                     .deferredBegin = deferredBegin});
+  } catch (...) {
+    if (hasDeferred) {
+      context_.bridge.discardFrame();
+    }
+    return PresentationFrameOutcome::CriticalFailure;
+  }
   return ready ? PresentationFrameOutcome::Ready
                : PresentationFrameOutcome::CriticalFailure;
 }
@@ -842,18 +864,10 @@ PresentationFrameOutcome PlaySkinSession::prepareFrame(
   if (pendingFrame_) {
     return PresentationFrameOutcome::CriticalFailure;
   }
-  const std::size_t writerCount = queuedWriterCount_;
-  const std::size_t eventCount = queuedEventCount_;
-  std::vector<QueuedStringWriter> queuedStringWriters =
-      std::move(queuedStringWriters_);
-  queuedWriterCount_ = 0;
-  queuedEventCount_ = 0;
-  return preparePendingFrame(
-      state, projection,
-      std::span<const SkinWriterInvocation>{queuedWriters_.data(),
-                                            writerCount},
-      std::span<const SkinEventInvocation>{queuedEvents_.data(), eventCount},
-      queuedStringWriters);
+  std::vector<QueuedInteraction> interactions;
+  interactions.swap(queuedInteractions_);
+  queuedStringBytes_ = 0;
+  return preparePendingFrame(state, projection, std::move(interactions));
 }
 
 #if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
@@ -861,7 +875,14 @@ PlaySkinFrameTransactionResult PlaySkinSession::prepareFrame(
     const PlayfieldVisualState &state,
     const PlayfieldProjectionResult &projection,
     std::span<const SkinWriterInvocation> queuedWriters) {
-  return runFrameTransaction(state, projection, queuedWriters);
+  std::vector<QueuedInteraction> interactions;
+  interactions.reserve(queuedWriters.size());
+  std::uint64_t sequence = 1;
+  for (const auto &writer : queuedWriters) {
+    interactions.push_back(
+        {.sequence = sequence++, .payload = writer});
+  }
+  return runFrameTransaction(state, projection, interactions, false);
 }
 
 PresentationFrameOutcome PlaySkinSession::prepareFrameForTesting(
@@ -869,10 +890,43 @@ PresentationFrameOutcome PlaySkinSession::prepareFrameForTesting(
     const PlayfieldProjectionResult &projection,
     std::span<const SkinWriterInvocation> queuedWriters,
     std::span<const SkinFrameMutation> extraMutations) {
-  return preparePendingFrame(state, projection, queuedWriters,
-                             {}, {}, extraMutations);
+  std::vector<QueuedInteraction> interactions;
+  interactions.reserve(queuedWriters.size());
+  std::uint64_t sequence = 1;
+  for (const auto &writer : queuedWriters) {
+    interactions.push_back(
+        {.sequence = sequence++, .payload = writer});
+  }
+  return preparePendingFrame(state, projection, std::move(interactions),
+                             extraMutations);
 }
 #endif
+
+void PlaySkinSession::applyFrameMutations(
+    std::span<const SkinFrameMutation> mutations) const {
+  for (const auto &mutation : mutations) {
+    if (const auto *write = std::get_if<SetSkinAudioVolume>(&mutation)) {
+      if (context_.applyAudioVolume) {
+        context_.applyAudioVolume(write->target, write->value);
+      }
+    } else if (const auto *write =
+                   std::get_if<SetPracticeItemScroll>(&mutation)) {
+      if (context_.applyPracticeItemScroll) {
+        context_.applyPracticeItemScroll(write->position);
+      }
+    } else if (const auto *write =
+                   std::get_if<SetPracticeMenuItem>(&mutation)) {
+      if (context_.applyPracticeMenuItem) {
+        context_.applyPracticeMenuItem(write->visibleIndex, write->increment);
+      }
+    } else if (const auto *write =
+                   std::get_if<SetPracticeVisibleItems>(&mutation)) {
+      if (context_.applyPracticeVisibleItems) {
+        context_.applyPracticeVisibleItems(write->count);
+      }
+    }
+  }
+}
 
 PresentationFrameResult PlaySkinSession::render(
     RenderContext &renderContext, const PreparedGameplayBgaFrame &preparedBga,
@@ -892,6 +946,10 @@ PresentationFrameResult PlaySkinSession::render(
   // render can therefore never submit or enqueue this frame again.
   PendingFrame pending = std::move(*pendingFrame_);
   pendingFrame_.reset();
+  FrameDiscardGuard continuationDiscard(context_.bridge);
+  if (!pending.hasDeferredInteractions()) {
+    continuationDiscard.release();
+  }
   auto &transaction = pending.transaction;
   PresentationFrameResult result{
       .frameSerial = transaction.frameSerial,
@@ -1061,33 +1119,56 @@ PresentationFrameResult PlaySkinSession::render(
   result.submittedMode = PresentationMode::Skin;
   result.bgaCompositeMode = GameplayBgaCompositeMode::EmbeddedSkin;
 
-  if (context_.applyAudioVolume) {
-    for (const auto &mutation : transaction.committed.orderedMutations) {
-      if (const auto *write = std::get_if<SetSkinAudioVolume>(&mutation)) {
-        context_.applyAudioVolume(write->target, write->value);
+  applyFrameMutations(transaction.committed.orderedMutations);
+
+  std::optional<SkinDiagnostic> deferredInteractionFailure;
+  if (pending.hasDeferredInteractions()) {
+    for (std::size_t index = pending.deferredBegin;
+         index < pending.interactions.size(); ++index) {
+      const auto &interaction = pending.interactions[index];
+      const auto invoked = invokeInteraction(interaction);
+      const bool event =
+          std::holds_alternative<SkinEventInvocation>(interaction.payload);
+      if (event ? !invoked.ok()
+                : invoked.status != SkinHostCallStatus::Completed) {
+        const auto error = std::ranges::find_if(
+            invoked.diagnostics, [](const SkinDiagnostic &diagnostic) {
+              return diagnostic.severity == DiagnosticSeverity::Error;
+            });
+        deferredInteractionFailure =
+            error != invoked.diagnostics.end()
+                ? *error
+                : transactionDiagnostic(
+                      "skin.session.interaction.post_submit_failed",
+                      "A deferred skin interaction failed after submission.");
+        break;
       }
     }
-  }
-  if (context_.applyPracticeItemScroll) {
-    for (const auto &mutation : transaction.committed.orderedMutations) {
-      if (const auto *write = std::get_if<SetPracticeItemScroll>(&mutation)) {
-        context_.applyPracticeItemScroll(write->position);
+    if (!deferredInteractionFailure) {
+      auto committed = context_.bridge.commitFrame();
+      continuationDiscard.release();
+      if (committed.frameSerial != transaction.frameSerial) {
+        deferredInteractionFailure = transactionDiagnostic(
+            "skin.session.interaction.post_submit_commit_failed",
+            "Deferred skin interactions could not commit their frame.");
+      } else {
+        applyFrameMutations(committed.orderedMutations);
+        try {
+          transaction.committed.orderedMutations.insert(
+              transaction.committed.orderedMutations.end(),
+              std::make_move_iterator(committed.orderedMutations.begin()),
+              std::make_move_iterator(committed.orderedMutations.end()));
+        } catch (...) {
+          deferredInteractionFailure = transactionDiagnostic(
+              "skin.session.interaction.post_submit_retain_failed",
+              "Deferred skin interaction writes could not be retained.");
+        }
       }
     }
-  }
-  if (context_.applyPracticeMenuItem) {
-    for (const auto &mutation : transaction.committed.orderedMutations) {
-      if (const auto *write = std::get_if<SetPracticeMenuItem>(&mutation)) {
-        context_.applyPracticeMenuItem(write->visibleIndex, write->increment);
-      }
-    }
-  }
-  if (context_.applyPracticeVisibleItems) {
-    for (const auto &mutation : transaction.committed.orderedMutations) {
-      if (const auto *write =
-              std::get_if<SetPracticeVisibleItems>(&mutation)) {
-        context_.applyPracticeVisibleItems(write->count);
-      }
+    if (deferredInteractionFailure) {
+      result.outcome = PresentationFrameOutcome::RecoverableFailure;
+      result.failure = presentationFailure(
+          identity(), transaction.frameSerial, *deferredInteractionFailure);
     }
   }
 
@@ -1204,10 +1285,8 @@ void PlaySkinSession::clearPublishedGeometry(bool advanceTopology) noexcept {
   captures_.fill({});
   publishedLayout_.reset();
   publishedReplayGhostGeometry_.reset();
-  queuedWriterCount_ = 0;
-  queuedEventCount_ = 0;
   cancelTextInput();
-  queuedStringWriters_.clear();
+  clearQueuedInteractions();
   if (advanceTopology) {
     advanceRevision(touchLayoutRevision_);
   }
@@ -1223,7 +1302,7 @@ void PlaySkinSession::setViewport(ViewportSettings settings) {
 }
 
 void PlaySkinSession::updateViewportGeometry(UiLogicalRect safeUiBounds) {
-  pendingFrame_.reset();
+  discardPendingFrame();
   const auto &header = context_.model.model.header;
   context_.viewport = evaluatePlaySkinViewport(
       {.width = static_cast<double>(header.width),
@@ -1350,6 +1429,41 @@ PlaySkinSession::hitTestUiControl(UiLogicalPoint point) const {
                           : PresentationUiHit{};
 }
 
+bool PlaySkinSession::enqueueInteraction(QueuedInteractionPayload payload,
+                                         std::size_t stringBytes) {
+  if (queuedInteractions_.size() >= maximumQueuedInteractions ||
+      nextInteractionSequence_ == 0 ||
+      stringBytes > maximumQueuedStringBytes -
+                        std::min(queuedStringBytes_,
+                                 maximumQueuedStringBytes)) {
+    return false;
+  }
+  try {
+    queuedInteractions_.push_back(
+        {.sequence = nextInteractionSequence_, .payload = std::move(payload)});
+  } catch (...) {
+    return false;
+  }
+  queuedStringBytes_ += stringBytes;
+  nextInteractionSequence_ =
+      nextInteractionSequence_ == std::numeric_limits<std::uint64_t>::max()
+          ? 0
+          : nextInteractionSequence_ + 1;
+  return true;
+}
+
+void PlaySkinSession::clearQueuedInteractions() noexcept {
+  queuedInteractions_.clear();
+  queuedStringBytes_ = 0;
+}
+
+void PlaySkinSession::discardPendingFrame() noexcept {
+  if (pendingFrame_ && pendingFrame_->hasDeferredInteractions()) {
+    context_.bridge.discardFrame();
+  }
+  pendingFrame_.reset();
+}
+
 PresentationTouchResult PlaySkinSession::beginPresentationTouch(
     const PresentationTouchEvent &event) {
   if (!publishedLayout_ ||
@@ -1380,17 +1494,15 @@ PresentationTouchResult PlaySkinSession::beginPresentationTouch(
   }
   if (const auto eventInvocation = publishedLayout_->eventInvocationFor(
           event.hit, event.uiPoint, event.eventMicros)) {
-    if (queuedEventCount_ == queuedEvents_.size()) {
+    if (!enqueueInteraction(*eventInvocation)) {
       return {};
     }
-    queuedEvents_[queuedEventCount_++] = *eventInvocation;
   } else {
     const auto writerInvocation = publishedLayout_->writerInvocationFor(
         event.hit, event.uiPoint, event.eventMicros);
-    if (!writerInvocation || queuedWriterCount_ == queuedWriters_.size()) {
+    if (!writerInvocation || !enqueueInteraction(*writerInvocation)) {
       return {};
     }
-    queuedWriters_[queuedWriterCount_++] = *writerInvocation;
   }
   *capture = {.pointerId = event.pointerId,
               .active = true,
@@ -1441,6 +1553,15 @@ bool PlaySkinSession::focusTextInput(UiLogicalPoint point,
                                      long long eventMicros) {
   const SkinTextInteractionGeometry *target =
       publishedLayout_ ? publishedLayout_->editableTextAtUi(point) : nullptr;
+  const auto targetCodepoints = [&]() -> std::optional<std::size_t> {
+    if (target == nullptr || target->currentValue.size() >
+                                 maximumFocusedTextBytes) {
+      return std::nullopt;
+    }
+    const auto count = utf8CodepointCount(target->currentValue);
+    return count && *count <= maximumFocusedTextCodepoints ? count
+                                                           : std::nullopt;
+  };
   if (focusedTextInput_) {
     const bool sameTarget =
         target != nullptr &&
@@ -1448,8 +1569,13 @@ bool PlaySkinSession::focusTextInput(UiLogicalPoint point,
         target->authoredOrdinal == focusedTextInput_->authoredOrdinal &&
         target->writer == focusedTextInput_->writer;
     if (sameTarget) {
+      const auto codepoints = targetCodepoints();
+      if (!codepoints) {
+        return false;
+      }
       try {
         focusedTextInput_->value = target->currentValue;
+        focusedTextInput_->codepoints = *codepoints;
       } catch (...) {
         return false;
       }
@@ -1462,12 +1588,17 @@ bool PlaySkinSession::focusTextInput(UiLogicalPoint point,
   if (target == nullptr) {
     return false;
   }
+  const auto codepoints = targetCodepoints();
+  if (!codepoints) {
+    return false;
+  }
   try {
     focusedTextInput_.emplace(
         FocusedTextInput{.sourceObject = target->sourceObject,
                          .authoredOrdinal = target->authoredOrdinal,
                          .writer = target->writer,
-                         .value = target->currentValue});
+                         .value = target->currentValue,
+                         .codepoints = *codepoints});
   } catch (...) {
     focusedTextInput_.reset();
     return false;
@@ -1480,11 +1611,22 @@ bool PlaySkinSession::hasFocusedTextInput() const noexcept {
 }
 
 bool PlaySkinSession::appendTextInput(std::string_view utf8) {
-  if (!focusedTextInput_ || utf8.empty() || !validUtf8(utf8)) {
+  if (!focusedTextInput_ || utf8.empty()) {
+    return false;
+  }
+  const auto codepoints = utf8CodepointCount(utf8);
+  if (!codepoints ||
+      utf8.size() > maximumFocusedTextBytes -
+                        std::min(focusedTextInput_->value.size(),
+                                 maximumFocusedTextBytes) ||
+      *codepoints > maximumFocusedTextCodepoints -
+                        std::min(focusedTextInput_->codepoints,
+                                 maximumFocusedTextCodepoints)) {
     return false;
   }
   try {
     focusedTextInput_->value.append(utf8);
+    focusedTextInput_->codepoints += *codepoints;
   } catch (...) {
     return false;
   }
@@ -1502,19 +1644,28 @@ bool PlaySkinSession::backspaceTextInput() {
     --offset;
   }
   focusedTextInput_->value.erase(offset);
+  if (focusedTextInput_->codepoints > 0) {
+    --focusedTextInput_->codepoints;
+  }
   return true;
 }
 
 bool PlaySkinSession::commitTextInput(long long eventMicros) {
   if (!focusedTextInput_ ||
-      queuedStringWriters_.size() >= maximumQueuedInteractions) {
+      queuedInteractions_.size() >= maximumQueuedInteractions ||
+      focusedTextInput_->value.size() >
+          maximumQueuedStringBytes -
+              std::min(queuedStringBytes_, maximumQueuedStringBytes)) {
     return false;
   }
   try {
-    queuedStringWriters_.push_back(
-        {.writer = focusedTextInput_->writer,
-         .value = focusedTextInput_->value,
-         .eventMicros = eventMicros});
+    QueuedStringWriter writer{.writer = focusedTextInput_->writer,
+                              .value = focusedTextInput_->value,
+                              .eventMicros = eventMicros};
+    const std::size_t bytes = writer.value.size();
+    if (!enqueueInteraction(std::move(writer), bytes)) {
+      return false;
+    }
   } catch (...) {
     return false;
   }

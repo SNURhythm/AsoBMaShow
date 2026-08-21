@@ -1874,6 +1874,18 @@ SkinHostCallResult PlaySkinStateBridge::invokeWriter(
   return {.callbacksInvoked = 1, .diagnostics = diagnostics_};
 }
 
+PlaySkinFrameCommit PlaySkinStateBridge::takeFrameCommitForContinuation() {
+  if (phase_ != FramePhase::Active) {
+    reportDiagnostic({.code = "skin.play_state.frame_already_closed",
+                      .message = "A play-skin frame continuation requires an "
+                                 "active frame."});
+    return {};
+  }
+  auto result = std::move(staged_);
+  staged_ = {.frameSerial = frameSerial_};
+  return result;
+}
+
 PlaySkinFrameCommit PlaySkinStateBridge::commitFrame() {
   if (phase_ != FramePhase::Active) {
     reportDiagnostic({.code = "skin.play_state.frame_already_closed",

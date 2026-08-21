@@ -18,6 +18,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 namespace skin {
@@ -214,9 +215,6 @@ public:
 
 private:
   struct OwnedActivation;
-  struct PendingFrame {
-    PlaySkinFrameTransactionResult transaction;
-  };
   struct TouchCapture {
     long long pointerId = 0;
     bool active = false;
@@ -227,25 +225,45 @@ private:
     std::uint32_t authoredOrdinal = 0;
     SkinStringWriterId writer{};
     std::string value;
+    std::size_t codepoints = 0;
   };
   struct QueuedStringWriter {
     SkinStringWriterId writer{};
     std::string value;
     long long eventMicros = 0;
   };
+  using QueuedInteractionPayload =
+      std::variant<SkinEventInvocation, SkinWriterInvocation,
+                   QueuedStringWriter>;
+  struct QueuedInteraction {
+    std::uint64_t sequence = 0;
+    QueuedInteractionPayload payload;
+  };
+  struct PendingFrame {
+    PlaySkinFrameTransactionResult transaction;
+    std::vector<QueuedInteraction> interactions;
+    std::size_t deferredBegin = 0;
+
+    [[nodiscard]] bool hasDeferredInteractions() const noexcept {
+      return deferredBegin < interactions.size();
+    }
+  };
 
   explicit PlaySkinSession(std::unique_ptr<OwnedActivation>);
   [[nodiscard]] PlaySkinFrameTransactionResult runFrameTransaction(
       const PlayfieldVisualState &, const PlayfieldProjectionResult &,
-      std::span<const SkinWriterInvocation>,
-      std::span<const SkinEventInvocation> = {},
-      std::span<const QueuedStringWriter> = {});
+      std::span<const QueuedInteraction>, bool retainBridgeForContinuation);
   [[nodiscard]] PresentationFrameOutcome preparePendingFrame(
       const PlayfieldVisualState &, const PlayfieldProjectionResult &,
-      std::span<const SkinWriterInvocation>,
-      std::span<const SkinEventInvocation> = {},
-      std::span<const QueuedStringWriter> = {},
+      std::vector<QueuedInteraction> = {},
       std::span<const SkinFrameMutation> extraMutations = {});
+  [[nodiscard]] bool enqueueInteraction(QueuedInteractionPayload,
+                                        std::size_t stringBytes = 0);
+  [[nodiscard]] SkinHostCallResult
+  invokeInteraction(const QueuedInteraction &);
+  void applyFrameMutations(std::span<const SkinFrameMutation>) const;
+  void clearQueuedInteractions() noexcept;
+  void discardPendingFrame() noexcept;
   void clearPublishedGeometry(bool advanceTopology) noexcept;
 
   // Declared before the borrowed frame context so every non-owning reference
@@ -260,12 +278,16 @@ private:
   std::optional<SkinInteractionLayout> publishedLayout_;
   std::optional<SyntheticReplayGhostGeometry> publishedReplayGhostGeometry_;
   static constexpr std::size_t maximumQueuedInteractions = 256;
-  std::array<SkinWriterInvocation, maximumQueuedInteractions> queuedWriters_{};
-  std::size_t queuedWriterCount_ = 0;
-  std::array<SkinEventInvocation, maximumQueuedInteractions> queuedEvents_{};
-  std::size_t queuedEventCount_ = 0;
+  static constexpr std::size_t maximumFocusedTextBytes =
+      SkinResourcePolicy::maximumRuntimeStringBytes;
+  static constexpr std::size_t maximumFocusedTextCodepoints =
+      SkinResourcePolicy::maximumRuntimeStringBytes / 2U;
+  static constexpr std::size_t maximumQueuedStringBytes =
+      SkinResourcePolicy::maximumRuntimeStringBytes;
+  std::vector<QueuedInteraction> queuedInteractions_;
+  std::size_t queuedStringBytes_ = 0;
+  std::uint64_t nextInteractionSequence_ = 1;
   std::optional<FocusedTextInput> focusedTextInput_;
-  std::vector<QueuedStringWriter> queuedStringWriters_;
   std::uint64_t touchLayoutRevision_ = 1;
   std::uint64_t touchHitRegionsRevision_ = 1;
 };

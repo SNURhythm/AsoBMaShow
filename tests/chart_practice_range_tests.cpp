@@ -1,5 +1,6 @@
 #include "practice/PracticeConfiguration.h"
 #include "scene/SceneEventRouting.h"
+#include "scene/play/SkinTextInputLifecycle.h"
 
 #include <cassert>
 #include <vector>
@@ -68,4 +69,44 @@ int main() {
   directTouch.tfinger.type = SDL_FINGERDOWN;
   directTouch.tfinger.touchId = 42;
   assert(scene_event_routing::shouldDispatchToScene(directTouch));
+
+  SDL_Event lifecycle{};
+  lifecycle.type = SDL_WINDOWEVENT;
+  for (const Uint8 windowEvent : {SDL_WINDOWEVENT_FOCUS_LOST,
+                                  SDL_WINDOWEVENT_MINIMIZED,
+                                  SDL_WINDOWEVENT_HIDDEN}) {
+    lifecycle.window.event = windowEvent;
+    assert(skin_text_input_lifecycle::shouldCommit(lifecycle, true));
+    assert(!skin_text_input_lifecycle::shouldCommit(lifecycle, false));
+    int commits = 0;
+    assert(skin_text_input_lifecycle::route(
+               lifecycle, true, [&] {
+                 ++commits;
+                 return true;
+               }) ==
+           skin_text_input_lifecycle::CommitResult::Committed);
+    assert(commits == 1);
+  }
+  for (const Uint32 appEvent : {SDL_APP_WILLENTERBACKGROUND,
+                                SDL_APP_DIDENTERBACKGROUND}) {
+    lifecycle.type = appEvent;
+    assert(skin_text_input_lifecycle::shouldCommit(lifecycle, true));
+  }
+  lifecycle.type = SDL_WINDOWEVENT;
+  lifecycle.window.event = SDL_WINDOWEVENT_FOCUS_GAINED;
+  assert(!skin_text_input_lifecycle::shouldCommit(lifecycle, true));
+  int commits = 0;
+  assert(skin_text_input_lifecycle::route(
+             lifecycle, true, [&] {
+               ++commits;
+               return true;
+             }) == skin_text_input_lifecycle::CommitResult::NotRequested);
+  assert(commits == 0);
+  lifecycle.window.event = SDL_WINDOWEVENT_FOCUS_LOST;
+  assert(skin_text_input_lifecycle::route(
+             lifecycle, true, [&] {
+               ++commits;
+               return false;
+             }) == skin_text_input_lifecycle::CommitResult::Retained);
+  assert(commits == 1);
 }

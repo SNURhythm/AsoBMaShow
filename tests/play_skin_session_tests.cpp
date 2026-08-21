@@ -1654,6 +1654,27 @@ return {
     end
     return true
   end,
+  text_utf8_count = function()
+    return rawget(_G, "session_text_utf8_count") or 0
+  end,
+  interaction_string = function(value)
+    _G.session_interaction_order =
+      (rawget(_G, "session_interaction_order") or "") .. "string,"
+    captured_main_state.event_exec(900, 11)
+  end,
+  interaction_event = function()
+    _G.session_interaction_order =
+      (rawget(_G, "session_interaction_order") or "") .. "event,"
+    captured_main_state.event_exec(900, 22)
+  end,
+  interaction_float = function()
+    _G.session_interaction_order =
+      (rawget(_G, "session_interaction_order") or "") .. "float,"
+    captured_main_state.event_exec(900, 33)
+  end,
+  interaction_order = function()
+    return rawget(_G, "session_interaction_order") or ""
+  end,
 }
 )lua");
     SkinTreeSnapshotter snapshotter(roots_, aliases_);
@@ -1696,9 +1717,16 @@ return {
     textWriterSecond_ = header.value->callbackNamed("text_writer_second");
     textWriterCancel_ = header.value->callbackNamed("text_writer_cancel");
     textCancelVerify_ = header.value->callbackNamed("text_cancel_verify");
+    textUtf8Count_ = header.value->callbackNamed("text_utf8_count");
+    interactionString_ = header.value->callbackNamed("interaction_string");
+    interactionEvent_ = header.value->callbackNamed("interaction_event");
+    interactionFloat_ = header.value->callbackNamed("interaction_float");
+    interactionOrder_ = header.value->callbackNamed("interaction_order");
     expect(writerA_ && writerB_ && writerFail_ && writerOnce_ &&
                writerOnceVerify_ && textWriterUtf8_ && textWriterFirst_ &&
-               textWriterSecond_ && textWriterCancel_ && textCancelVerify_,
+               textWriterSecond_ && textWriterCancel_ && textCancelVerify_ &&
+               textUtf8Count_ && interactionString_ && interactionEvent_ &&
+               interactionFloat_ && interactionOrder_,
            "session writer callbacks are retained");
     header.value.reset();
     expect(runtime_->loadConfigured({}).value.has_value(),
@@ -1711,12 +1739,14 @@ return {
         {.id = SkinFloatWriterId{2}, .source = *writerB_},
         {.id = SkinFloatWriterId{3}, .source = *writerFail_},
         {.id = SkinFloatWriterId{4}, .source = *writerOnce_},
+        {.id = SkinFloatWriterId{5}, .source = *interactionFloat_},
     };
     model_.model.stringWriters = {
         {.id = SkinStringWriterId{1}, .source = *textWriterUtf8_},
         {.id = SkinStringWriterId{2}, .source = *textWriterFirst_},
         {.id = SkinStringWriterId{3}, .source = *textWriterSecond_},
         {.id = SkinStringWriterId{4}, .source = *textWriterCancel_},
+        {.id = SkinStringWriterId{5}, .source = *interactionString_},
     };
     model_.model.header.width = 1280;
     model_.model.header.height = 720;
@@ -1820,7 +1850,8 @@ return {
 
   void addTouchGeometry(
       SkinFloatWriterId writer = SkinFloatWriterId{1},
-      std::optional<double> firstLaneSecondaryDestinationY = std::nullopt) {
+      std::optional<double> firstLaneSecondaryDestinationY = std::nullopt,
+      double destinationX = 100.0) {
     resources_.addImage(80);
     const SkinFloatPropertyId valueProperty{
         writer == SkinFloatWriterId{4} ? 2U : 1U};
@@ -1873,7 +1904,7 @@ return {
          .presentation =
              {.loop = 0,
               .frames = {{.timeMillis = 0,
-                          .x = 100.0,
+                          .x = destinationX,
                           .y = 100.0,
                           .width = 20.0,
                           .height = 20.0}},
@@ -1957,6 +1988,34 @@ return {
                           .authoredOrdinal = 820}});
   }
 
+  void addOrderedClickableImage(double destinationX) {
+    resources_.addImage(86);
+    model_.model.events.push_back(
+        {.id = SkinEventBindingId{2},
+         .source = *interactionEvent_,
+         .authoredOrdinal = 2});
+    SkinImageObject image;
+    image.orderedStates = {{.resource = 86,
+                            .frames = {{.x = 0, .y = 0, .w = 10, .h = 10}}}};
+    image.clickEvent = SkinEventBindingId{2};
+    image.clickMode = 2;
+    model_.model.objects.push_back(
+        {.id = 86,
+         .authoredName = "session-ordered-click-image",
+         .payload = std::move(image),
+         .authoredOrdinal = 86,
+         .critical = true});
+    model_.model.destinations.push_back(
+        {.object = 86,
+         .presentation = {.loop = 0,
+                          .frames = {{.timeMillis = 0,
+                                      .x = destinationX,
+                                      .y = 100.0,
+                                      .width = 40.0,
+                                      .height = 20.0}},
+                          .authoredOrdinal = 860}});
+  }
+
   void addEditableText(SkinObjectId id, std::string value,
                        SkinStringWriterId writer, double x,
                        bool editable = true) {
@@ -1991,6 +2050,36 @@ return {
     return !runtime_->invoke(*textCancelVerify_, {}).failure;
   }
 
+  std::optional<std::int64_t> textUtf8Count(std::uint64_t frameSerial) {
+    const auto begun = runtime_->beginFrame(frameSerial);
+    if (!begun.ok) {
+      return std::nullopt;
+    }
+    const auto result = runtime_->invoke(*textUtf8Count_, {});
+    if (result.failure || !result.value) {
+      return std::nullopt;
+    }
+    if (const auto *value = std::get_if<std::int64_t>(&*result.value)) {
+      return *value;
+    }
+    return std::nullopt;
+  }
+
+  std::optional<std::string> interactionOrder(std::uint64_t frameSerial) {
+    const auto begun = runtime_->beginFrame(frameSerial);
+    if (!begun.ok) {
+      return std::nullopt;
+    }
+    const auto result = runtime_->invoke(*interactionOrder_, {});
+    if (result.failure || !result.value) {
+      return std::nullopt;
+    }
+    if (const auto *value = std::get_if<std::string>(&*result.value)) {
+      return *value;
+    }
+    return std::nullopt;
+  }
+
   void destroySession() { session_.reset(); }
 
 private:
@@ -2012,6 +2101,11 @@ private:
   std::optional<LuaCallbackId> textWriterSecond_;
   std::optional<LuaCallbackId> textWriterCancel_;
   std::optional<LuaCallbackId> textCancelVerify_;
+  std::optional<LuaCallbackId> textUtf8Count_;
+  std::optional<LuaCallbackId> interactionString_;
+  std::optional<LuaCallbackId> interactionEvent_;
+  std::optional<LuaCallbackId> interactionFloat_;
+  std::optional<LuaCallbackId> interactionOrder_;
   PlayfieldChartVisualModel chart_;
   ValidatedBeatorajaSkinModel model_;
   BeatorajaSkinConfiguration configuration_;
@@ -3149,6 +3243,158 @@ void testEditableTextOutsideClickCommitsAndFocusTransferIsOrdered() {
          "ordered focus-transfer commits submit with the matching frame");
 }
 
+void testEditableTextOutsideClickPreservesGlobalInteractionOrder() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addEditableText(84, "A", SkinStringWriterId{5}, 100.0);
+  fixture.addOrderedClickableImage(300.0);
+  fixture.addTouchGeometry(SkinFloatWriterId{5}, std::nullopt, 500.0);
+  SessionBgaSubmitter bga;
+  RenderContext context;
+  expect(fixture.session().prepareFrame(stateAt(1), projectionAt(1)) ==
+                 PresentationFrameOutcome::Ready &&
+             fixture.session().render(context, bgaFrame(1), bga).outcome ==
+                 PresentationFrameOutcome::Ready,
+         "heterogeneous interaction fixture publishes all three controls");
+
+  expect(fixture.session().focusTextInput({.x = 110.0F, .y = 610.0F},
+                                          1'000) &&
+             fixture.session().appendTextInput("1") &&
+             !fixture.session().focusTextInput({.x = 320.0F, .y = 610.0F},
+                                               2'000),
+         "outside click queues the focused text commit before hit dispatch");
+  const UiLogicalPoint imagePoint{.x = 320.0F, .y = 610.0F};
+  const auto imageHit = fixture.session().hitTestUiControl(imagePoint);
+  const UiLogicalPoint sliderPoint{.x = 550.0F, .y = 610.0F};
+  const auto sliderHit = fixture.session().hitTestUiControl(sliderPoint);
+  expect(imageHit.kind == PresentationUiControlKind::Image &&
+             fixture.session().beginPresentationTouch(
+                 {.pointerId = 1,
+                  .uiPoint = imagePoint,
+                  .eventMicros = 2'001,
+                  .hit = imageHit}) ==
+                 PresentationTouchResult{.consumed = true,
+                                         .excludeFromGameplay = true} &&
+             (sliderHit.kind == PresentationUiControlKind::Slider ||
+              sliderHit.kind == PresentationUiControlKind::LaneCover) &&
+             fixture.session().beginPresentationTouch(
+                 {.pointerId = 2,
+                  .uiPoint = sliderPoint,
+                  .eventMicros = 2'002,
+                  .hit = sliderHit}) ==
+                 PresentationTouchResult{.consumed = true,
+                                         .excludeFromGameplay = true},
+         "the following image event and float writer join the same queue");
+  expect(fixture.session().prepareFrame(stateAt(2), projectionAt(2)) ==
+                 PresentationFrameOutcome::Ready &&
+             fixture.session().render(context, bgaFrame(2), bga).outcome ==
+                 PresentationFrameOutcome::Ready &&
+             fixture.interactionOrder(3) ==
+                 std::optional<std::string>{"string,event,float,"},
+         "string, image-event, and float callbacks retain pointer order "
+         "across successful submission");
+}
+
+void testEditableStringWriterDoesNotRunWhenSubmissionPreflightFails() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addEditableText(84, "A", SkinStringWriterId{1}, 100.0);
+  SessionBgaSubmitter bga;
+  RenderContext context;
+  expect(fixture.session().prepareFrame(stateAt(1), projectionAt(1)) ==
+                 PresentationFrameOutcome::Ready &&
+             fixture.session().render(context, bgaFrame(1), bga).outcome ==
+                 PresentationFrameOutcome::Ready &&
+             fixture.session().focusTextInput(
+                 {.x = 110.0F, .y = 610.0F}, 1'000) &&
+             fixture.session().appendTextInput("한") &&
+             fixture.session().commitTextInput(2'000),
+         "failed-submit fixture queues one exact UTF-8 string commit");
+  expect(fixture.session().prepareFrame(stateAt(2), projectionAt(2)) ==
+             PresentationFrameOutcome::Ready,
+         "string callback remains pending while the visual frame prepares");
+  fixture.quadBackend().preflightReady = false;
+  const auto failed = fixture.session().render(context, bgaFrame(2), bga);
+  expect(failed.outcome == PresentationFrameOutcome::CriticalFailure &&
+             fixture.textUtf8Count(3) == std::optional<std::int64_t>{0},
+         "renderer preflight failure cancels the queued string without any "
+         "global Lua side effect");
+}
+
+void testEditableTextBoundsFocusedAndQueuedUtf8() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addEditableText(84, "A", SkinStringWriterId{4}, 100.0);
+  SessionBgaSubmitter bga;
+  RenderContext context;
+  expect(fixture.session().prepareFrame(stateAt(1), projectionAt(1)) ==
+                 PresentationFrameOutcome::Ready &&
+             fixture.session().render(context, bgaFrame(1), bga).outcome ==
+                 PresentationFrameOutcome::Ready,
+         "bounded editable fixture publishes its field");
+  const UiLogicalPoint point{.x = 110.0F, .y = 610.0F};
+
+  expect(fixture.session().focusTextInput(point, 500) &&
+             fixture.session().appendTextInput(std::string(32'767, 'x')) &&
+             !fixture.session().appendTextInput("x") &&
+             fixture.session().hasFocusedTextInput(),
+         "focused text accepts its exact codepoint bound and rejects the "
+         "next complete codepoint");
+  fixture.session().cancelTextInput();
+
+  std::string exactBytes(3, 'x');
+  exactBytes.reserve(65'535);
+  for (std::size_t index = 0; index < 16'383; ++index) {
+    exactBytes.append("\xF4\x8F\xBF\xBF");
+  }
+  expect(fixture.session().focusTextInput(point, 750) &&
+             fixture.session().appendTextInput(exactBytes) &&
+             !fixture.session().appendTextInput("x") &&
+             fixture.session().hasFocusedTextInput(),
+         "focused text accepts its exact byte bound and rejects the next "
+         "complete codepoint");
+  fixture.session().cancelTextInput();
+
+  expect(fixture.session().focusTextInput(point, 1'000) &&
+             !fixture.session().appendTextInput(std::string(32'768, 'x')) &&
+             fixture.session().hasFocusedTextInput(),
+         "focused text rejects a codepoint count beyond its fixed bound");
+  fixture.session().cancelTextInput();
+
+  std::string fourByteText;
+  fourByteText.reserve(65'540);
+  for (std::size_t index = 0; index < 16'385; ++index) {
+    fourByteText.append("\xF4\x8F\xBF\xBF");
+  }
+  expect(fixture.session().focusTextInput(point, 2'000) &&
+             !fixture.session().appendTextInput(fourByteText) &&
+             fixture.session().hasFocusedTextInput(),
+         "focused text rejects valid UTF-8 bytes beyond its fixed byte bound");
+  fixture.session().cancelTextInput();
+
+  std::string queuedValue;
+  queuedValue.reserve(40'000);
+  for (std::size_t index = 0; index < 10'000; ++index) {
+    queuedValue.append("\xF4\x8F\xBF\xBF");
+  }
+  expect(fixture.session().focusTextInput(point, 3'000) &&
+             fixture.session().appendTextInput(queuedValue) &&
+             fixture.session().commitTextInput(3'001) &&
+             fixture.session().focusTextInput(point, 4'000) &&
+             fixture.session().appendTextInput(queuedValue) &&
+             !fixture.session().commitTextInput(4'001) &&
+             fixture.session().hasFocusedTextInput(),
+         "aggregate queued string bytes reject another commit without losing "
+         "the focused edit");
+  fixture.session().cancelTextInput();
+}
+
 void testEditableTextCancellationTeardownAndNoneditableRejection() {
   SessionFixture fixture;
   if (!fixture.ready()) {
@@ -3744,6 +3990,9 @@ int main() {
   testQueueFullAndClosedAreRecoverableOnlyAfterSuccessfulSkinDraw();
   testEditableTextUsesEndCursorUtf8BackspaceAndReturnCommit();
   testEditableTextOutsideClickCommitsAndFocusTransferIsOrdered();
+  testEditableTextOutsideClickPreservesGlobalInteractionOrder();
+  testEditableStringWriterDoesNotRunWhenSubmissionPreflightFails();
+  testEditableTextBoundsFocusedAndQueuedUtf8();
   testEditableTextCancellationTeardownAndNoneditableRejection();
   testTouchCaptureLifecycleFailsClosedAndQueuesOnlyDown();
   testImageActTouchQueuesPinnedEventOnDown();

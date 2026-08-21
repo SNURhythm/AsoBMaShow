@@ -35,6 +35,7 @@
 #include "ReplayKeysoundSchedule.h"
 #include "RealtimeTouchInputRouter.h"
 #include "RealtimeTouchPresentation.h"
+#include "SkinTextInputLifecycle.h"
 #include "VirtualControllerLayout.h"
 #include "../../input/RhythmInputHandler.h"
 #include "../../input/RealtimePhysicalInputRouter.h"
@@ -5737,6 +5738,19 @@ bool GamePlayScene::handleSkinTextInputEvent(SDL_Event &event) {
   auto *coordinator =
       dynamic_cast<PlayfieldPresentationCoordinator *>(presentation);
   if (coordinator == nullptr) {
+    return false;
+  }
+  const auto lifecycleCommit = skin_text_input_lifecycle::route(
+      event, coordinator->hasFocusedTextInput(),
+      [&] { return coordinator->commitTextInput(nowMicros()); });
+  if (lifecycleCommit !=
+      skin_text_input_lifecycle::CommitResult::NotRequested) {
+    if (lifecycleCommit ==
+        skin_text_input_lifecycle::CommitResult::Committed) {
+      SDL_StopTextInput();
+    }
+    // Lifecycle delivery must still reach Scene; a failed bounded queue keeps
+    // both editor focus and SDL text mode active for a later commit.
     return false;
   }
   const auto focusAt = [&](UiLogicalPoint point) {
