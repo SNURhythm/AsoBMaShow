@@ -39,6 +39,8 @@ bool testStaticChartMetadata() {
   chart.Meta.TotalNotes = 987;
   chart.Meta.TotalLandmineNotes = 8;
   chart.Meta.RandomValues = {2};
+  chart.Meta.BmsPath = "/charts/song/chart.bms";
+  chart.Meta.Banner = "banner.png";
   chart.Meta.StageFile = "stage.png";
   chart.Meta.BackBmp = "back.png";
   chart.ReferencedBmpTable.emplace(1, "bga.png");
@@ -58,7 +60,10 @@ bool testStaticChartMetadata() {
       metadata.totalLandmineNotes != 8 || !metadata.hasBga ||
       !metadata.hasRandomSequence || !metadata.hasBpmStop ||
       metadata.stageFilePath != "stage.png" ||
-      metadata.backBmpPath != "back.png") {
+      metadata.backBmpPath != "back.png" ||
+      metadata.stageFileResourcePath != "/charts/song/stage.png" ||
+      metadata.backBmpResourcePath != "/charts/song/back.png" ||
+      metadata.bannerResourcePath != "/charts/song/banner.png") {
     std::cerr << "chart visual model static metadata conversion failed\n";
     return false;
   }

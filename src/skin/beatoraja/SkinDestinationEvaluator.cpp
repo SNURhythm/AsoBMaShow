@@ -398,14 +398,16 @@ evaluateSkinDestinationAuthored(const SkinDestinationBody &destination,
 UiDestinationGeometry
 projectSkinDestinationToUi(const AuthoredDestinationGeometry &destination,
                            const SkinSourceRegionGeometry &source,
-                           const PlaySkinViewport &viewport) {
+                           const PlaySkinViewport &viewport,
+                           bool allowCollapsedSource) {
   UiDestinationGeometry result;
   result.rgba = destination.rgba;
   result.blend = destination.blend;
   result.filter = destination.filter;
   if (!viewport.valid || source.textureWidth <= 0 ||
-      source.textureHeight <= 0 || source.region.w == 0 ||
-      source.region.h == 0) {
+      source.textureHeight <= 0 ||
+      (!allowCollapsedSource &&
+       (source.region.w == 0 || source.region.h == 0))) {
     return result;
   }
 

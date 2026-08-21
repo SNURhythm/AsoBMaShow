@@ -4,6 +4,7 @@
 #include "SkinGameplayGraphState.h"
 
 #include <cstdint>
+#include <filesystem>
 #include <limits>
 #include <map>
 #include <optional>
@@ -144,6 +145,11 @@ struct PlayfieldChartStaticMetadata {
   bool hasBpmStop = false;
   std::string stageFilePath;
   std::string backBmpPath;
+  // Session preparation needs the resolved chart-owned files rather than the
+  // authored header strings exposed to skin properties.
+  std::filesystem::path stageFileResourcePath;
+  std::filesystem::path backBmpResourcePath;
+  std::filesystem::path bannerResourcePath;
   std::optional<PlayfieldSongInformation> songInformation;
 
   bool operator==(const PlayfieldChartStaticMetadata &) const = default;

@@ -334,6 +334,7 @@ public:
   SkinPropertyLookup<double>
   floatProperty(const SkinBuiltinPropertySelector &,
                 SkinFloatPropertyDomain) override {
+    ++floatCalls;
     return floatResult;
   }
   SkinPropertyLookup<std::string_view>
@@ -418,6 +419,7 @@ public:
   std::size_t timerSequenceIndex = 0;
   std::size_t booleanCalls = 0;
   std::size_t timerCalls = 0;
+  std::size_t floatCalls = 0;
   mutable std::size_t noteExpansionCalls = 0;
   std::map<int, SkinPropertyLookup<SkinRuntimeOffset>> offsets;
   std::vector<int> accessOrder;
@@ -2589,6 +2591,75 @@ void testBuiltinReferenceGraphUsesPreparedSystemImageAndPinnedCrop() {
                quad.vertices[1].u == 0.14F,
            "built-in graph resolves the system image before the pinned rate crop");
   }
+}
+
+void testBuiltinReferenceGraphKeepsCollapsedOnePixelCropDrawable() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  resources.addBuiltinImage(
+      110, 31, {.x = 0, .y = 0, .w = 1, .h = 1}, 2, 1);
+  FakeState state;
+  state.floatResult = {.value = 0.5, .supported = true};
+  SkinGraphObject graph;
+  graph.builtinImageReference = 110;
+  graph.value = SkinFloatPropertyId{1};
+  graph.direction = 0;
+  ValidatedBeatorajaSkinModel model;
+  model.model.floatProperties.push_back(
+      {.id = SkinFloatPropertyId{1},
+       .domain = SkinFloatPropertyDomain::Rate,
+       .source = SkinBuiltinPropertySelector{.value = 92},
+       .authoredOrdinal = 1});
+  model.model.objects.push_back({.id = 1,
+                                 .authoredName = "builtin-one-pixel-graph",
+                                 .payload = std::move(graph),
+                                 .authoredOrdinal = 1,
+                                 .critical = true});
+  auto presented = destination(1, 120, 100.0);
+  presented.presentation.frames.front().width = 40.0;
+  presented.presentation.frames.front().height = 30.0;
+  model.model.destinations = {std::move(presented)};
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  expect(result.submitReady && result.submitReady->commands.size() == 1,
+         "a partial pinned 1x1 built-in graph still emits its scaled quad");
+  if (result.submitReady && result.submitReady->commands.size() == 1) {
+    const auto &quad = std::get<SkinTexturedQuadCommand>(
+        result.submitReady->commands.front().payload);
+    expect(quad.vertices[1].x == 120.0F && quad.vertices[0].u == 0.0F &&
+               quad.vertices[1].u == 0.0F,
+           "Java integer crop keeps nonzero destination width with collapsed "
+           "source UVs");
+  }
+}
+
+void testUnavailableBuiltinReferenceSkipsRateLookup() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  state.floatResult = {.value = 0.5, .supported = true};
+  SkinGraphObject graph;
+  graph.builtinImageReference = 100;
+  graph.value = SkinFloatPropertyId{1};
+  ValidatedBeatorajaSkinModel model;
+  model.model.floatProperties.push_back(
+      {.id = SkinFloatPropertyId{1},
+       .domain = SkinFloatPropertyDomain::Rate,
+       .source = SkinBuiltinPropertySelector{.value = 102},
+       .authoredOrdinal = 1});
+  model.model.objects.push_back({.id = 1,
+                                 .authoredName = "missing-stage-graph",
+                                 .payload = std::move(graph),
+                                 .authoredOrdinal = 1,
+                                 .critical = true});
+  model.model.destinations = {destination(1, 121, 100.0)};
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  expect(result.submitReady && result.submitReady->commands.empty() &&
+             result.diagnostics.empty() && state.floatCalls == 0,
+         "an unavailable chart reference suppresses before its rate lookup");
 }
 
 void testExplicitSliderAndGraphRatesRemainUnclamped() {
@@ -5859,6 +5930,8 @@ int main() {
   testNonCardinalSliderDirectionDrawsWithoutMotion();
   testGraphCropsLeftOrBottomWithJavaTruncation();
   testBuiltinReferenceGraphUsesPreparedSystemImageAndPinnedCrop();
+  testBuiltinReferenceGraphKeepsCollapsedOnePixelCropDrawable();
+  testUnavailableBuiltinReferenceSkipsRateLookup();
   testExplicitSliderAndGraphRatesRemainUnclamped();
   testNegativeGraphsUseAbsoluteIntrinsicSizeForStretching();
   testExtremeFiniteSliderAndGraphRatesFailWithoutPublishing();

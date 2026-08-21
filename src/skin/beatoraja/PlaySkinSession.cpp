@@ -518,6 +518,17 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
 
     const std::vector<std::string> runtimeStrings =
         context.chartModel.runtimeStrings();
+    std::map<int, std::filesystem::path> builtinImagePaths;
+    const auto addBuiltinPath = [&](int reference,
+                                    const std::filesystem::path &path) {
+      if (!path.empty()) builtinImagePaths.emplace(reference, path);
+    };
+    addBuiltinPath(100,
+                   context.chartModel.staticMetadata.stageFileResourcePath);
+    addBuiltinPath(101,
+                   context.chartModel.staticMetadata.backBmpResourcePath);
+    addBuiltinPath(102,
+                   context.chartModel.staticMetadata.bannerResourcePath);
     auto planned = context.resourcePreparation.decodeAndPlan(
         {.revision = activation.revision.clone(),
          .entry = activation.entry,
@@ -527,6 +538,7 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
          .requiredRuntimeStrings = runtimeStrings,
          .practiceMode = context.initialState->authority.gameplayMode ==
                          PlayfieldGameplayMode::Practice,
+         .builtinImagePaths = std::move(builtinImagePaths),
          .safetyPolicy = context.safetyPolicy,
          .stop = context.stop});
     appendMovedDiagnostics(result.diagnostics, planned.diagnostics);

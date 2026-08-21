@@ -19,6 +19,16 @@
 
 namespace {
 
+std::filesystem::path chartResourcePath(
+    const bms_parser::ChartMeta &metadata,
+    const std::filesystem::path &declared) {
+  if (declared.empty()) return {};
+  const std::filesystem::path directory =
+      !metadata.BmsPath.empty() ? metadata.BmsPath.parent_path()
+                                : metadata.Folder;
+  return (directory / declared).lexically_normal();
+}
+
 std::optional<std::uint32_t> nextUtf8CodePoint(std::string_view value,
                                                std::size_t &index) {
   if (index >= value.size()) {
@@ -647,6 +657,10 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
       .hasBpmStop = hasBpmStop,
       .stageFilePath = chart.Meta.StageFile.generic_string(),
       .backBmpPath = chart.Meta.BackBmp.generic_string(),
+      .stageFileResourcePath =
+          chartResourcePath(chart.Meta, chart.Meta.StageFile),
+      .backBmpResourcePath = chartResourcePath(chart.Meta, chart.Meta.BackBmp),
+      .bannerResourcePath = chartResourcePath(chart.Meta, chart.Meta.Banner),
       .songInformation = beatorajaSongInformation(chart, longNoteModeOverride),
   };
   result.laneOrder = chart.Meta.GetTotalLaneIndices();

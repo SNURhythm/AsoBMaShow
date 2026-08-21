@@ -213,6 +213,7 @@ struct SkinResourceUploadPlan {
   SkinRevisionLease revision;
   SkinSafetyPolicy safetyPolicy{};
   std::vector<SkinDecodedImage> images;
+  std::map<int, SkinResourceId> builtinImageResources;
   std::vector<SkinPreparedGlyphAtlas> atlases;
   // Render-time text lookup must not reconstruct the configured and securely
   // resolved fallback-chain identity used to key an atlas.
@@ -242,6 +243,7 @@ struct SkinResourcePreparationInputs {
   const BeatorajaSkinConfiguration &configuration;
   std::span<const std::string> requiredRuntimeStrings;
   bool practiceMode = false;
+  std::map<int, std::filesystem::path> builtinImagePaths;
   SkinSafetyPolicy safetyPolicy{};
   std::stop_token stop;
 };
@@ -399,6 +401,8 @@ public:
   const PreparedSkinTextAtlas *findTextAtlas(const SkinTextAtlasKey &) const noexcept;
   const PreparedSkinTextAtlas *
   findTextAtlasForObject(SkinObjectId) const noexcept override;
+  std::optional<SkinResourceId>
+  builtinImageResource(int) const noexcept override;
   const PreparedPomyuCharaResource *
   findPomyuChara(SkinObjectId) const noexcept override;
   [[nodiscard]] const std::array<int, 8> &
@@ -425,6 +429,7 @@ private:
   bool liveResourceCounted_ = false;
   mutable std::vector<OwnedTexture> owned_;
   std::map<SkinResourceId, PreparedSkinResource> resources_;
+  std::map<int, SkinResourceId> builtinImageResources_;
   std::map<SkinTextAtlasId, PreparedSkinTextAtlas> atlases_;
   std::map<SkinTextAtlasKey, SkinTextAtlasId> atlasKeys_;
   std::map<SkinObjectId, SkinTextAtlasId> textAtlasesByObject_;

@@ -442,8 +442,15 @@ public:
   SessionTextureDevice() : owner_(std::this_thread::get_id()) {}
 
   bgfx::TextureHandle
-  create(const image_decode::DecodedImageData &) override {
+  create(const image_decode::DecodedImageData &image) override {
     ++createCalls;
+    CreatedImage created{.width = image.width, .height = image.height};
+    if (image.rgba) {
+      const std::size_t retained = std::min<std::size_t>(8, image.rgba->size());
+      created.firstPixels.assign(image.rgba->begin(),
+                                 image.rgba->begin() + retained);
+    }
+    createdImages.push_back(std::move(created));
     if (!ownsCurrentThread()) {
       ++wrongThreadOperations;
     }
@@ -480,6 +487,12 @@ public:
   std::size_t destroyCalls = 0;
   std::size_t wrongThreadOperations = 0;
   bool revisionLiveDuringDestroy = true;
+  struct CreatedImage {
+    int width = 0;
+    int height = 0;
+    std::vector<std::uint8_t> firstPixels;
+  };
+  std::vector<CreatedImage> createdImages;
 
 private:
   std::thread::id owner_;
@@ -1051,11 +1064,25 @@ public:
     chart_.text.fullArtist = "format fixture";
 
     const fs::path source = temp_.root() / "source";
+    const fs::path chartResources = temp_.root() / "chart-resources";
+    fs::create_directories(chartResources);
     fs::create_directories(source / "skin/resources");
     fs::create_directories(source / "skin/fonts");
     fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
                       "tests/fixtures/beatoraja_skin/resources/fixture.png",
                   source / "skin/resources/fixture.png");
+    for (const std::string_view name : {"stage.png", "back.png", "banner.png"}) {
+      fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
+                        "tests/fixtures/beatoraja_skin/resources/fixture.png",
+                    chartResources / name);
+    }
+    chart_.staticMetadata.stageFileResourcePath = chartResources / "stage.png";
+    chart_.staticMetadata.backBmpResourcePath = chartResources / "back.png";
+    chart_.staticMetadata.bannerResourcePath = chartResources / "banner.png";
+    unavailableChart_ = chart_;
+    unavailableChart_.staticMetadata.stageFileResourcePath.clear();
+    unavailableChart_.staticMetadata.backBmpResourcePath.clear();
+    unavailableChart_.staticMetadata.bannerResourcePath.clear();
     fs::copy_file(
         fs::path(ASOBMASHOW_SOURCE_DIR) /
             "tests/fixtures/beatoraja_skin/resources/bitmap-font/fixture.fnt",
@@ -1116,6 +1143,29 @@ return skin
 #DST_NUMBER,0,0,60,360,4,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0
 #SRC_TEXT,0,0,10,0,0,0
 #DST_TEXT,0,0,100,340,200,40,0,255,255,255,255,0,0,0,0,0,0,0,0,0
+)lr2");
+
+    writeText(source / "skin/builtin-graphs.lr2skin", R"lr2(#INFORMATION,0,Builtin graphs,fixture
+#RESOLUTION,0
+#SRC_BARGRAPH,0,110,0,0,1,1,1,1,0,0,2,0
+#DST_BARGRAPH,0,0,10,400,40,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0
+#SRC_BARGRAPH,0,111,0,0,1,1,1,1,0,0,2,0
+#DST_BARGRAPH,0,0,60,400,40,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0
+#SRC_BARGRAPH,0,100,0,0,1,1,1,1,0,0,2,0
+#DST_BARGRAPH,0,0,110,400,40,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0
+#SRC_BARGRAPH,0,101,0,0,1,1,1,1,0,0,2,0
+#DST_BARGRAPH,0,0,160,400,40,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0
+#SRC_BARGRAPH,0,102,0,0,1,1,1,1,0,0,2,0
+#DST_BARGRAPH,0,0,210,400,40,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0
+)lr2");
+    writeText(source / "skin/unavailable-builtin-graphs.lr2skin", R"lr2(#INFORMATION,0,Unavailable builtin graphs,fixture
+#RESOLUTION,0
+#SRC_BARGRAPH,0,100,0,0,1,1,1,1,0,0,2,0
+#DST_BARGRAPH,0,0,10,400,40,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0
+#SRC_BARGRAPH,0,101,0,0,1,1,1,1,0,0,2,0
+#DST_BARGRAPH,0,0,60,400,40,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0
+#SRC_BARGRAPH,0,102,0,0,1,1,1,1,0,0,2,0
+#DST_BARGRAPH,0,0,110,400,40,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0
 )lr2");
 
     writeText(source / "skin/recoverable.lr2skin", R"lr2(#INFORMATION,0,Recoverable LR2,fixture
@@ -1179,14 +1229,16 @@ return skin
     expect(importedPaths ==
                std::vector<std::string>{"config/settings.json",
                                         "select/select.lr2skin",
+                                        "skin/builtin-graphs.lr2skin",
                                         "skin/invalid-encoding.lr2skin",
                                         "skin/parity.json",
                                         "skin/parity.lr2skin",
                                         "skin/parity.luaskin",
                                         "skin/recoverable.lr2skin",
                                         "skin/skipped.lr2skin",
+                                        "skin/unavailable-builtin-graphs.lr2skin",
                                         "skin/unsafe.lr2skin"} &&
-               selectable == 5 && unavailable == 2,
+               selectable == 7 && unavailable == 2,
            "header admission keeps gameplay and recoverable LR2 entries "
            "selectable while fatal documents remain invalid");
 
@@ -1207,7 +1259,10 @@ return skin
   }
 
   PlaySkinSessionCreateResult create(std::string_view path,
-                                     std::uint64_t sessionSerial) {
+                                     std::uint64_t sessionSerial,
+                                     bool chartImagesAvailable = true,
+                                     std::shared_ptr<SessionTextureDevice>
+                                         textureDevice = {}) {
     PlaySkinSessionCreateResult failed;
     if (!lease_) {
       return failed;
@@ -1231,6 +1286,11 @@ return skin
     PlayfieldVisualState initialState = stateAt(1);
     initialState.authority.loadingState = PlayfieldLoadingState::Loaded;
     const PlayfieldProjectionResult initialProjection = projectionAt(1);
+    const PlayfieldChartVisualModel &chartModel =
+        chartImagesAvailable ? chart_ : unavailableChart_;
+    if (!textureDevice) {
+      textureDevice = std::make_shared<SessionTextureDevice>();
+    }
     return PlaySkinSession::create(
         {.revision = lease_->clone(),
          .entry = *entry,
@@ -1238,13 +1298,13 @@ return skin
          .configurationDigest = validation.configurationDigest},
         {.sessionSerial = sessionSerial,
          .profileId = profile_,
-         .chartModel = chart_,
+         .chartModel = chartModel,
          .initialState = &initialState,
          .initialProjection = &initialProjection,
          .safeUiBounds = {.x = 0.0, .y = 0.0, .width = 640.0, .height = 480.0},
          .storageRoots = roots_,
          .resourcePreparation = resources_,
-         .textureDevice = std::make_shared<SessionTextureDevice>(),
+         .textureDevice = std::move(textureDevice),
          .liveResourceCounters = std::make_shared<SkinLiveResourceCounters>(),
          .configurationWrites = configurationWrites_});
   }
@@ -1256,6 +1316,7 @@ private:
   SkinProfileId profile_;
   AcceptFiles aliases_;
   PlayfieldChartVisualModel chart_;
+  PlayfieldChartVisualModel unavailableChart_;
   SkinResourcePreparationService resources_;
   SkinConfigurationWriteQueue configurationWrites_;
   std::optional<SkinRevisionLease> lease_;
@@ -1350,6 +1411,64 @@ void testLr2ProductionRecoveryAndFatalBoundaries() {
   expect(!invalidEncoding.session &&
              hasCode(invalidEncoding, "skin_lr2_encoding_invalid"),
          "invalid root encoding remains fatal at production load");
+}
+
+void testLr2ProductionBuiltInGraphsOwnChartAndPlainImages() {
+  FormatParityFixture fixture;
+  auto device = std::make_shared<SessionTextureDevice>();
+  auto available =
+      fixture.create("skin/builtin-graphs.lr2skin", 110, true, device);
+  expect(available.session != nullptr,
+         "LR2 built-in graphs create a production owning session");
+  if (!available.session) {
+    return;
+  }
+  auto graphState = stateAt(2);
+  graphState.authority.loadingState = PlayfieldLoadingState::Loaded;
+  const auto frame = available.session->prepareFrame(
+      graphState, projectionAt(2), {});
+  expect(frame.ready() && frame.evaluation.submitReady &&
+             frame.evaluation.submitReady->commands.size() == 5,
+         "production resolves black, white, stage, back, and banner graphs");
+  if (frame.evaluation.submitReady &&
+      frame.evaluation.submitReady->commands.size() == 5) {
+    const auto &black = std::get<SkinTexturedQuadCommand>(
+        frame.evaluation.submitReady->commands[0].payload);
+    const auto &white = std::get<SkinTexturedQuadCommand>(
+        frame.evaluation.submitReady->commands[1].payload);
+    expect(black.resource != white.resource && black.vertices[0].u == 0.0F &&
+               black.vertices[1].u == 0.5F && white.vertices[0].u == 0.5F &&
+               white.vertices[1].u == 1.0F,
+           "production keeps exact black/white region identities on one "
+           "owned 2x1 texture");
+  }
+  const auto plain = std::ranges::find_if(
+      device->createdImages, [](const auto &created) {
+        return created.width == 2 && created.height == 1;
+      });
+  expect(plain != device->createdImages.end() &&
+             plain->firstPixels ==
+                 std::vector<std::uint8_t>{0, 0, 0, 255, 255, 255, 255, 255},
+         "production uploads the pinned opaque black and white pixels once");
+  const std::size_t created = device->createCalls;
+  available.session.reset();
+  expect(device->destroyCalls == created,
+         "session teardown destroys every built-in and chart texture exactly "
+         "once");
+
+  auto unavailable = fixture.create("skin/unavailable-builtin-graphs.lr2skin",
+                                    111, false);
+  expect(unavailable.session != nullptr,
+         "unavailable chart references do not reject the production session");
+  if (unavailable.session) {
+    const auto missingFrame = unavailable.session->prepareFrame(
+        graphState, projectionAt(2), {});
+    expect(missingFrame.ready() && missingFrame.evaluation.submitReady &&
+               missingFrame.evaluation.submitReady->commands.empty() &&
+               missingFrame.evaluation.diagnostics.empty(),
+           "unavailable stage, back, and banner references suppress before "
+           "their rate property");
+  }
 }
 
 void testSessionOwnsDeduplicatedMoviesAndRollsBackBeforePublication() {
@@ -4323,6 +4442,7 @@ void testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin() {
 int main() {
   testLuaJsonAndLr2SessionsEmitEquivalentSharedObjects();
   testLr2ProductionRecoveryAndFatalBoundaries();
+  testLr2ProductionBuiltInGraphsOwnChartAndPlainImages();
   testSessionOwnsDeduplicatedMoviesAndRollsBackBeforePublication();
   testCallbackBindingWithoutRuntimeFailsValidation();
   testActivationCreatesAnOwningFreshStateSession();

@@ -110,6 +110,7 @@ stretchSkinDestinationAuthored(const AuthoredDestinationGeometry &destination,
 UiDestinationGeometry
 projectSkinDestinationToUi(const AuthoredDestinationGeometry &destination,
                            const SkinSourceRegionGeometry &source,
-                           const PlaySkinViewport &viewport);
+                           const PlaySkinViewport &viewport,
+                           bool allowCollapsedSource = false);
 
 } // namespace skin

@@ -40,6 +40,16 @@ bool skinResourcePathIsMovie(std::string_view path) noexcept {
 namespace {
 constexpr SkinResourceId kPracticeSystemFontResource =
     std::numeric_limits<SkinResourceId>::max();
+constexpr SkinResourceId kBuiltinBlackResource =
+    std::numeric_limits<SkinResourceId>::max() - 1U;
+constexpr SkinResourceId kBuiltinWhiteResource =
+    std::numeric_limits<SkinResourceId>::max() - 2U;
+constexpr SkinResourceId kBuiltinStageResource =
+    std::numeric_limits<SkinResourceId>::max() - 3U;
+constexpr SkinResourceId kBuiltinBackResource =
+    std::numeric_limits<SkinResourceId>::max() - 4U;
+constexpr SkinResourceId kBuiltinBannerResource =
+    std::numeric_limits<SkinResourceId>::max() - 5U;
 constexpr std::string_view kPracticeSystemFontVirtualPath =
     "@asobmashow/practice-system-font";
 constexpr std::string_view kPracticeSystemFontPath =
@@ -103,6 +113,7 @@ struct ResourceUse {
 };
 struct CollectedResourceUses {
   std::map<SkinResourceId, ResourceUse> images;
+  std::set<int> builtinImages;
   std::map<SkinResourceId, bool> fonts;
   struct TextUse {
     SkinObjectId object = 0;
@@ -214,7 +225,11 @@ CollectedResourceUses collectResourceUses(
       }
       else if constexpr (std::is_same_v<T, SkinSliderObject>) addSprite(object.knob, critical);
       else if constexpr (std::is_same_v<T, SkinGraphObject>) {
-        if (!object.builtinImageReference) addSprite(object.fill, critical);
+        if (object.builtinImageReference) {
+          result.builtinImages.insert(*object.builtinImageReference);
+        } else {
+          addSprite(object.fill, critical);
+        }
       }
       else if constexpr (std::is_same_v<T, SkinGaugeObject>) for (const auto &s: object.orderedNodes) addSprite(s, critical);
       else if constexpr (std::is_same_v<T, SkinNoteObject>) { for (const auto &lane: object.lanes) for (const auto &[kind, visual]: lane.visuals) { (void)kind; if (const auto *s=std::get_if<SkinSpriteFrames>(&visual)) addSprite(*s, critical); } for (const auto &line: object.lines) if (line.sprite) addSprite(*line.sprite, critical); }
@@ -1307,6 +1322,17 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
       result.diagnostics.push_back(diagnostic("skin.resource.session_limit", "resource upload plan exceeds fixed aggregate limits")); return result;
     }
   }
+  for (const auto &[reference, resource] : plan.builtinImageResources) {
+    const bool recognized = reference == 100 || reference == 101 ||
+                            reference == 102 || reference == 110 ||
+                            reference == 111;
+    if (!recognized || !imageIds.contains(resource)) {
+      result.diagnostics.push_back(diagnostic(
+          "skin.resource.texture_create_failed",
+          "resource upload plan has an invalid built-in image mapping"));
+      return result;
+    }
+  }
   std::map<std::string, const image_decode::DecodedImageData *, std::less<>>
       bitmapPhysicalPages;
   for (const auto &atlas : plan.atlases) {
@@ -1668,6 +1694,8 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
     catalog->atlasKeys_.emplace(atlas.key, atlas.id);
   }
   catalog->textAtlasesByObject_ = std::move(plan.textAtlasesByObject);
+  catalog->builtinImageResources_ =
+      std::move(plan.builtinImageResources);
   for (auto &pomyu : plan.pomyuCharas) {
     catalog->pomyuCharas_.emplace(pomyu.object, std::move(pomyu));
   }
@@ -1683,6 +1711,13 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
   }
 }
 const PreparedSkinResource *SkinResourceCatalog::find(SkinResourceId id) const noexcept { const auto it=resources_.find(id); return it==resources_.end()?nullptr:&it->second; }
+std::optional<SkinResourceId>
+SkinResourceCatalog::builtinImageResource(int reference) const noexcept {
+  const auto found = builtinImageResources_.find(reference);
+  return found == builtinImageResources_.end()
+             ? std::nullopt
+             : std::optional<SkinResourceId>(found->second);
+}
 const SkinResolvedRegion *SkinResourceCatalog::findResolvedRegion(SkinResourceId id, const SkinSourceRect &authored) const noexcept {
   const auto *resource = find(id);
   if (!resource) return nullptr;
@@ -2114,6 +2149,148 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
       plan.images.push_back(std::move(decoded));
     }
   }
+
+  const auto resourceForBuiltin = [](int reference) -> SkinResourceId {
+    switch (reference) {
+    case 100:
+      return kBuiltinStageResource;
+    case 101:
+      return kBuiltinBackResource;
+    case 102:
+      return kBuiltinBannerResource;
+    case 110:
+      return kBuiltinBlackResource;
+    case 111:
+      return kBuiltinWhiteResource;
+    default:
+      return 0;
+    }
+  };
+  std::vector<int> plainReferences;
+  for (const int reference : {110, 111}) {
+    if (uses.builtinImages.contains(reference)) {
+      plainReferences.push_back(reference);
+    }
+  }
+  if (!plainReferences.empty()) {
+    SkinResourceSessionAccounting candidateSession = session;
+    if (!candidateSession.addImage(
+            /*physicalResources=*/1,
+            /*logicalResources=*/plainReferences.size(),
+            /*encodedBytes=*/0, /*decodedBytes=*/8,
+            /*regions=*/plainReferences.size())) {
+      result.diagnostics.push_back(diagnostic(
+          "skin.resource.session_limit",
+          "built-in black/white images exceed the session resource policy"));
+      return result;
+    }
+    image_decode::DecodedImageData pixels{
+        .width = 2,
+        .height = 1,
+        .rgba = std::make_shared<std::vector<unsigned char>>(
+            std::initializer_list<unsigned char>{0, 0, 0, 255, 255, 255,
+                                                 255, 255})};
+    const auto regionForReference = [](int reference) {
+      return SkinSourceRect{.x = reference == 111 ? 1 : 0,
+                            .y = 0,
+                            .w = 1,
+                            .h = 1};
+    };
+    const int primaryReference = plainReferences.front();
+    const SkinSourceRect primaryRegion =
+        regionForReference(primaryReference);
+    SkinDecodedImage image{
+        .id = resourceForBuiltin(primaryReference),
+        .pixels = std::move(pixels),
+        .regions = {primaryRegion},
+        .regionMappings = {{.authored = primaryRegion,
+                            .resolved = primaryRegion}}};
+    plan.builtinImageResources.emplace(primaryReference, image.id);
+    for (std::size_t index = 1; index < plainReferences.size(); ++index) {
+      const int reference = plainReferences[index];
+      const SkinResourceId alias = resourceForBuiltin(reference);
+      const SkinSourceRect region = regionForReference(reference);
+      image.aliases.push_back(alias);
+      image.aliasRegions.emplace(alias, std::vector<SkinSourceRect>{region});
+      image.aliasRegionMappings.emplace(
+          alias,
+          std::vector<SkinResolvedRegion>{{.authored = region,
+                                           .resolved = region}});
+      plan.builtinImageResources.emplace(reference, alias);
+    }
+    session = candidateSession;
+    plan.decodedBytes = session.decodedBytes();
+    plan.images.push_back(std::move(image));
+  }
+
+  const auto prepareChartBuiltinImages = [&]() -> bool {
+    for (const int reference : {100, 101, 102}) {
+      if (!uses.builtinImages.contains(reference)) continue;
+      const auto path = input.builtinImagePaths.find(reference);
+      if (path == input.builtinImagePaths.end() || path->second.empty()) {
+        continue;
+      }
+      std::error_code fileError;
+      const std::uintmax_t reportedSize =
+          std::filesystem::file_size(path->second, fileError);
+      if (fileError ||
+          reportedSize > skinResourceLimit(
+                             input.safetyPolicy,
+                             SkinResourcePolicy::maximumEncodedBytes) ||
+          reportedSize > std::numeric_limits<std::size_t>::max()) {
+        continue;
+      }
+      SkinResourceSessionAccounting candidateSession = session;
+      if (!candidateSession.addImage(
+              /*physicalResources=*/1, /*logicalResources=*/1,
+              static_cast<std::size_t>(reportedSize), /*decodedBytes=*/0,
+              /*regions=*/0)) {
+        result.diagnostics.push_back(warning(
+            "skin.resource.builtin_image_unavailable",
+            "chart built-in image exceeds the session resource policy"));
+        continue;
+      }
+      auto decoded = image_decode::decodeImageFile(
+          path->second,
+          {.maximumDimension = skinResourceDimensionLimit(input.safetyPolicy),
+           .maximumEncodedBytes = skinResourceLimit(
+               input.safetyPolicy, SkinResourcePolicy::maximumEncodedBytes),
+           .maximumDecodedBytes = skinResourceLimit(
+               input.safetyPolicy, SkinResourcePolicy::maximumImageBytes),
+           .stop = input.stop});
+      if (cancellationRequested(input.stop)) {
+        result.cancelled = true;
+        return false;
+      }
+      if (!decoded ||
+          !skinResourceDimensionsAllowed(decoded->width, decoded->height,
+                                         decoded->byteSize(),
+                                         input.safetyPolicy)) {
+        continue;
+      }
+      const SkinSourceRect region{
+          .x = 0, .y = 0, .w = decoded->width, .h = decoded->height};
+      if (!candidateSession.addImage(
+              /*physicalResources=*/0, /*logicalResources=*/0,
+              /*encodedBytes=*/0, decoded->byteSize(), /*regions=*/1)) {
+        result.diagnostics.push_back(warning(
+            "skin.resource.builtin_image_unavailable",
+            "chart built-in image exceeds the session resource policy"));
+        continue;
+      }
+      const SkinResourceId resource = resourceForBuiltin(reference);
+      plan.images.push_back(
+          {.id = resource,
+           .pixels = std::move(*decoded),
+           .regions = {region},
+           .regionMappings = {{.authored = region, .resolved = region}}});
+      plan.builtinImageResources.emplace(reference, resource);
+      session = candidateSession;
+      plan.decodedBytes = session.decodedBytes();
+    }
+    return true;
+  };
+
   for (const SkinResourceDefinition &definition : input.model.model.resources) {
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
     const auto *resource = std::get_if<SkinImageResource>(&definition);
@@ -2286,6 +2463,10 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
     }
     ++atlasId;
   }
+  // Chart-owned images are optional SkinSourceReference inputs. Prepare them
+  // only from the budget left after package-critical images/fonts so an
+  // oversized stage file cannot starve the authored skin resources.
+  if (!prepareChartBuiltinImages()) return result;
   if (std::ranges::any_of(result.diagnostics, [](const SkinDiagnostic &d) { return d.severity == DiagnosticSeverity::Error; })) return result;
   {
     std::lock_guard lock(serviceMutex_);

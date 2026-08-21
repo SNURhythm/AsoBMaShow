@@ -2063,13 +2063,14 @@ lowerPreparedQuad(const SkinFrameInputs &inputs, SkinObjectId sourceObject,
                   std::uint32_t authoredOrdinal,
                   const AuthoredDestinationGeometry &geometry,
                   SkinResourceId resourceId, int textureWidth,
-                  int textureHeight, const SkinSourceRect &region) {
+                  int textureHeight, const SkinSourceRect &region,
+                  bool allowCollapsedSource = false) {
   QuadLoweringResult result;
   if (geometry.rgba[3] <= 0.0F) {
     return result;
   }
   if (resourceId == 0 || textureWidth <= 0 || textureHeight <= 0 ||
-      region.w == 0 || region.h == 0) {
+      (!allowCollapsedSource && (region.w == 0 || region.h == 0))) {
     result.failure = diagnostic("skin.renderer.resource.missing",
                                 "Prepared image resource or region is absent.");
     return result;
@@ -2079,7 +2080,7 @@ lowerPreparedQuad(const SkinFrameInputs &inputs, SkinObjectId sourceObject,
                                  {.textureWidth = textureWidth,
                                   .textureHeight = textureHeight,
                                   .region = region},
-                                 inputs.viewport);
+                                 inputs.viewport, allowCollapsedSource);
   if (!projectedQuadFitsUpload(projected)) {
     result.failure = diagnostic(
         "skin.renderer.geometry.invalid",
@@ -4601,11 +4602,11 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
             geometry.rect.width =
                 static_cast<float>(geometry.rect.width) * objectRate;
           }
-          if (!lowered.failure && cropped.w != 0 && cropped.h != 0) {
+          if (!lowered.failure) {
             lowered = lowerPreparedQuad(
                 inputs, object->id, destination.presentation.authoredOrdinal,
                 geometry, sourceResource, resource->width, resource->height,
-                cropped);
+                cropped, true);
           }
         }
         if (lowered.failure) {
