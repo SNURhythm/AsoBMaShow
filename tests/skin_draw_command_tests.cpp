@@ -1,4 +1,5 @@
 #include "skin/beatoraja/Skin2DRenderer.h"
+#include "skin/beatoraja/SkinBpmGraphRenderer.h"
 #include "skin/beatoraja/SkinHitErrorVisualizerRenderer.h"
 #include "skin/beatoraja/SkinNoteDistributionGraphRenderer.h"
 #include "skin/beatoraja/SkinTimingVisualizerRenderer.h"
@@ -4044,6 +4045,345 @@ void testNoteDistributionGraphUsesPinnedBucketsRevealOrderAndGaps() {
   }
 }
 
+std::vector<SkinBpmGraphPoint> bpmGraphGimmickSeries() {
+  return {
+      {.chartTimeMicros = 0,
+       .sourceOrder = 0,
+       .bpm = 120.0,
+       .scroll = 1.0,
+       .bpmTimesScroll = 120.0,
+       .graphSpeed = 120.0,
+       .emitsGraphPoint = true,
+       .synthetic = true},
+      {.chartTimeMicros = 1'000'000,
+       .sourceOrder = 1,
+       .bpm = 15.0,
+       .scroll = 0.5,
+       .bpmTimesScroll = 7.5,
+       .graphSpeed = 7.5,
+       .emitsGraphPoint = true},
+      {.chartTimeMicros = 2'000'000,
+       .sourceOrder = 2,
+       .bpm = 240.0,
+       .scroll = 8.0,
+       .bpmTimesScroll = 1920.0,
+       .graphSpeed = 1920.0,
+       .emitsGraphPoint = true},
+      {.chartTimeMicros = 3'000'000,
+       .sourceOrder = 3,
+       .bpm = 120.0,
+       .scroll = 2.0,
+       .bpmTimesScroll = 240.0,
+       .graphSpeed = 240.0,
+       .emitsGraphPoint = true},
+      {.chartTimeMicros = 3'500'000,
+       .sourceOrder = 4,
+       .bpm = 120.0,
+       .scroll = 2.0,
+       .bpmTimesScroll = 240.0,
+       .graphSpeed = 240.0},
+      {.chartTimeMicros = 4'000'000,
+       .sourceOrder = 5,
+       .bpm = 120.0,
+       .scroll = 1.0,
+       .bpmTimesScroll = 120.0,
+       .stopMicros = 500'000,
+       .graphSpeed = 0.0,
+       .emitsGraphPoint = true},
+      {.chartTimeMicros = 5'000'000,
+       .sourceOrder = 6,
+       .bpm = 120.0,
+       .scroll = 1.0,
+       .bpmTimesScroll = 120.0,
+       .graphSpeed = 120.0,
+       .emitsGraphPoint = true,
+       .synthetic = true},
+  };
+}
+
+const SkinPrimitiveCommand &bpmPrimitive(
+    const SkinBpmGraphRenderResult &result, std::size_t index) {
+  return std::get<SkinPrimitiveCommand>(result.commands[index].payload);
+}
+
+void testBpmGraphUsesPinnedLogRasterColoursStopsAndTransitions() {
+  SkinBpmGraphObject graph;
+  const auto series = bpmGraphGimmickSeries();
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 0.0, .y = 0.0, .width = 80.0, .height = 80.0};
+  const auto rendered = renderSkinBpmGraph(
+      {.sourceObject = 7,
+       .authoredOrdinal = 9,
+       .graph = graph,
+       .state = {.bpmSeries = series,
+                 .mainBpm = 120.0,
+                 .minimumBpm = 7.5,
+                 .maximumBpm = 1920.0},
+       .geometry = geometry,
+       .viewport = viewport(),
+       .elapsedMillis = 0,
+       .maximumCommands = 11,
+       .maximumPrimitiveVertices = 44});
+  expect(!rendered.failure && rendered.commands.size() == 11 &&
+             rendered.primitiveVertices == 44,
+         "BPM graph emits each pinned transition and horizontal raster rectangle");
+  if (rendered.commands.size() != 11) {
+    return;
+  }
+  const auto &firstTransition = bpmPrimitive(rendered, 0);
+  const auto &main = bpmPrimitive(rendered, 1);
+  const auto &minimum = bpmPrimitive(rendered, 3);
+  const auto &maximum = bpmPrimitive(rendered, 5);
+  const auto &other = bpmPrimitive(rendered, 7);
+  const auto &stop = bpmPrimitive(rendered, 9);
+  const auto &finalMain = bpmPrimitive(rendered, 10);
+  expect(firstTransition.vertices[0].x == 13.0F &&
+             firstTransition.vertices[0].y == 718.0F &&
+             firstTransition.vertices[2].x == 15.0F &&
+             firstTransition.vertices[2].y == 681.0F &&
+             firstTransition.vertices[0].rgba == 0xff7f7f7fU,
+         "BPM transition rectangles use the strict thickness condition and pinned grey");
+  expect(main.vertices[0].x == 0.0F && main.vertices[2].x == 15.0F &&
+             main.vertices[0].y == 681.0F && main.vertices[2].y == 679.0F &&
+             main.vertices[0].rgba == 0xff00ff00U &&
+             minimum.vertices[0].y == 720.0F &&
+             minimum.vertices[0].rgba == 0xffff0000U &&
+             maximum.vertices[0].y == 642.0F &&
+             maximum.vertices[0].rgba == 0xff0000ffU &&
+             other.vertices[0].y == 668.0F &&
+             other.vertices[0].rgba == 0xff00ffffU &&
+             stop.vertices[0].y == 720.0F &&
+             stop.vertices[0].rgba == 0xffff00ffU,
+         "BPM speed ratios clamp to 1/8..8 and use main/min/max/other/stop comparison priority");
+  expect(finalMain.vertices[0].x == 66.0F &&
+             finalMain.vertices[2].x == 80.0F &&
+             finalMain.vertices[0].rgba == 0xff00ff00U,
+         "the final horizontal raster segment clips its line-width overrun at the generated texture edge");
+}
+
+void testBpmGraphDelayEmptyInputsAndAtomicBudgets() {
+  SkinBpmGraphObject graph;
+  graph.delayMillis = 1000;
+  const auto series = bpmGraphGimmickSeries();
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 0.0, .y = 0.0, .width = 80.0, .height = 80.0};
+  const auto half = renderSkinBpmGraph(
+      {.sourceObject = 7,
+       .authoredOrdinal = 9,
+       .graph = graph,
+       .state = {.bpmSeries = series,
+                 .mainBpm = 120.0,
+                 .minimumBpm = 7.5,
+                 .maximumBpm = 1920.0},
+       .geometry = geometry,
+       .viewport = viewport(),
+       .elapsedMillis = 500,
+       .maximumCommands = 8,
+       .maximumPrimitiveVertices = 32});
+  expect(!half.failure && half.commands.size() == 5,
+         "positive BPM graph delay reveals only the generated texture's left half");
+  if (!half.commands.empty()) {
+    float maximumX = 0.0F;
+    for (const auto &command : half.commands) {
+      const auto &primitive = std::get<SkinPrimitiveCommand>(command.payload);
+      maximumX = std::max(
+          maximumX,
+          std::ranges::max(primitive.vertices, {},
+                           [](const SkinVertex &vertex) { return vertex.x; })
+              .x);
+    }
+    expect(maximumX == 40.0F,
+           "delay crop maps the visible source prefix left-to-right without stretching it across the full destination");
+  }
+
+  const auto bounded = renderSkinBpmGraph(
+      {.sourceObject = 7,
+       .authoredOrdinal = 9,
+       .graph = graph,
+       .state = {.bpmSeries = series,
+                 .mainBpm = 120.0,
+                 .minimumBpm = 7.5,
+                 .maximumBpm = 1920.0},
+       .geometry = geometry,
+       .viewport = viewport(),
+       .elapsedMillis = 1000,
+       .maximumCommands = 10,
+       .maximumPrimitiveVertices = 44});
+  expect(bounded.failure && bounded.commands.empty() &&
+             bounded.primitiveVertices == 0,
+         "BPM graph command overflow publishes no partial geometry");
+
+  geometry.rgba[3] = 0.0F;
+  const auto transparent = renderSkinBpmGraph(
+      {.sourceObject = 7,
+       .authoredOrdinal = 9,
+       .graph = graph,
+       .state = {.bpmSeries = series,
+                 .mainBpm = 120.0,
+                 .minimumBpm = 7.5,
+                 .maximumBpm = 1920.0},
+       .geometry = geometry,
+       .viewport = viewport(),
+       .elapsedMillis = 1000,
+       .maximumCommands = 0,
+       .maximumPrimitiveVertices = 0});
+  expect(!transparent.failure && transparent.commands.empty(),
+         "zero-alpha BPM graph consumes neither command nor vertex budget");
+
+  geometry.rgba[3] = 0.001F;
+  const auto quantizedTransparent = renderSkinBpmGraph(
+      {.sourceObject = 7,
+       .authoredOrdinal = 9,
+       .graph = graph,
+       .state = {.bpmSeries = series,
+                 .mainBpm = 120.0,
+                 .minimumBpm = 7.5,
+                 .maximumBpm = 1920.0},
+       .geometry = geometry,
+       .viewport = viewport(),
+       .elapsedMillis = 1000,
+       .maximumCommands = 0,
+       .maximumPrimitiveVertices = 0});
+  expect(!quantizedTransparent.failure &&
+             quantizedTransparent.commands.empty(),
+         "post-tint zero-alpha BPM raster consumes no integrated budget");
+
+  geometry.rgba[3] = 1.0F;
+  const std::array onePoint{series.front()};
+  const std::array twoPoints{series[0], series[1]};
+  const auto one = renderSkinBpmGraph(
+      {.sourceObject = 7,
+       .authoredOrdinal = 9,
+       .graph = graph,
+       .state = {.bpmSeries = onePoint, .mainBpm = 120.0},
+       .geometry = geometry,
+       .viewport = viewport(),
+       .elapsedMillis = 1000,
+       .maximumCommands = 0,
+       .maximumPrimitiveVertices = 0});
+  const auto noMain = renderSkinBpmGraph(
+      {.sourceObject = 7,
+       .authoredOrdinal = 9,
+       .graph = graph,
+       .state = {.bpmSeries = twoPoints, .mainBpm = 0.0},
+       .geometry = geometry,
+       .viewport = viewport(),
+       .elapsedMillis = 1000,
+       .maximumCommands = 0,
+       .maximumPrimitiveVertices = 0});
+  expect(!one.failure && one.commands.empty() && !noMain.failure &&
+             noMain.commands.empty(),
+         "fewer than two emitted speeds or nonpositive main BPM matches the pinned blank texture path");
+
+  const std::array constantSeries{
+      SkinBpmGraphPoint{.chartTimeMicros = 0,
+                        .bpm = 120.0,
+                        .scroll = 1.0,
+                        .bpmTimesScroll = 120.0,
+                        .graphSpeed = 120.0,
+                        .emitsGraphPoint = true,
+                        .synthetic = true},
+      SkinBpmGraphPoint{.chartTimeMicros = 5'000'000,
+                        .sourceOrder = 1,
+                        .bpm = 120.0,
+                        .scroll = 1.0,
+                        .bpmTimesScroll = 120.0,
+                        .graphSpeed = 120.0,
+                        .emitsGraphPoint = true,
+                        .synthetic = true}};
+  const auto constant = renderSkinBpmGraph(
+      {.sourceObject = 7,
+       .authoredOrdinal = 9,
+       .graph = graph,
+       .state = {.bpmSeries = constantSeries,
+                 .mainBpm = 120.0,
+                 .minimumBpm = 120.0,
+                 .maximumBpm = 120.0},
+       .geometry = geometry,
+       .viewport = viewport(),
+       .elapsedMillis = 1000,
+       .maximumCommands = 2,
+       .maximumPrimitiveVertices = 8});
+  expect(!constant.failure && constant.commands.size() == 2 &&
+             bpmPrimitive(constant, 0).vertices[0].rgba == 0xff00ff00U &&
+             bpmPrimitive(constant, 1).vertices[0].rgba == 0xff00ff00U,
+         "constant BPM emits only its initial and final main-colour horizontal segments without a transition");
+}
+
+void testBpmGraphGeneratedTextureStretchOrientationAndDestinationState() {
+  SkinBpmGraphObject graph;
+  const auto series = bpmGraphGimmickSeries();
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 10.0, .y = 20.0, .width = 80.0, .height = 40.0};
+  geometry.clip = AuthoredRect{.x = 0.0,
+                               .y = 0.0,
+                               .width = 100.0,
+                               .height = 100.0};
+  geometry.centerX = 0.5;
+  geometry.centerY = 0.5;
+  geometry.angleDegrees = 90.0;
+  geometry.rgba = {0.5F, 1.0F, 1.0F, 0.5F};
+  geometry.blend = SkinBlendMode::Additive;
+  geometry.filter = SkinFilterMode::Linear;
+  geometry.stretch = SkinStretchMode::KeepAspectRatioFitInner;
+  const auto rendered = renderSkinBpmGraph(
+      {.sourceObject = 7,
+       .authoredOrdinal = 9,
+       .graph = graph,
+       .state = {.bpmSeries = series,
+                 .mainBpm = 120.0,
+                 .minimumBpm = 7.5,
+                 .maximumBpm = 1920.0},
+       .geometry = geometry,
+       .viewport = viewport(),
+       .elapsedMillis = 0,
+       .maximumCommands = 11,
+       .maximumPrimitiveVertices = 44});
+  expect(!rendered.failure && rendered.commands.size() == 11,
+         "generated BPM texture applies destination state to every raster primitive");
+  if (rendered.commands.size() != 11) {
+    return;
+  }
+  const auto &main = bpmPrimitive(rendered, 1);
+  expect(main.vertices[0].x == 51.0F && main.vertices[0].y == 640.0F &&
+             main.vertices[1].x == 51.0F && main.vertices[1].y == 655.0F &&
+             main.vertices[2].x == 49.0F && main.vertices[2].y == 655.0F &&
+             main.vertices[3].x == 49.0F && main.vertices[3].y == 640.0F,
+         "fit-inner observes the generated draw's negative height before rotating around its stretched pivot");
+  expect(main.vertices[0].rgba == 0x7f00ff00U &&
+             main.state.blend == SkinBlendMode::Additive &&
+             main.state.filter == SkinFilterMode::Linear &&
+             main.state.scissor && main.state.scissor->x == 0.0 &&
+             main.state.scissor->y == 620.0 &&
+             main.state.scissor->width == 100.0 &&
+             main.state.scissor->height == 100.0,
+         "BPM graph applies tint, blend, filter, and destination scissor after raster colouring");
+}
+
+void testBpmGraphLowersThroughSkin2DRenderer() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  const auto series = bpmGraphGimmickSeries();
+  state.graphResult = {.bpmSeries = series,
+                       .mainBpm = 120.0,
+                       .minimumBpm = 7.5,
+                       .maximumBpm = 1920.0};
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects = {{.id = 1,
+                          .authoredName = "bpm",
+                          .payload = SkinBpmGraphObject{},
+                          .authoredOrdinal = 1}};
+  model.model.destinations = {noteDistributionDestination(1, 80.0, 80.0)};
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  const auto primitives = primitiveCommands(result);
+  expect(result.submitReady && result.diagnostics.empty() &&
+             primitives.size() == 11 &&
+             primitives.front()->vertices.front().rgba == 0xff7f7f7fU,
+         "Skin2DRenderer routes typed BPM graphs through immutable gameplay authority without a blank fallback");
+}
+
 void testNoteDistributionGraphAppliesCommonStretchBeforeRotation() {
   RuntimeHarness runtime;
   Skin2DRenderer renderer;
@@ -5513,6 +5853,10 @@ int main() {
   testNoteLineCallbacksRunAfterTopLevelPreparationAndOnlyWhenDrawable();
   testHiddenNoteStillPreparesEveryLaneSourceInPinnedOrder();
   testNoteDistributionGraphUsesPinnedBucketsRevealOrderAndGaps();
+  testBpmGraphUsesPinnedLogRasterColoursStopsAndTransitions();
+  testBpmGraphDelayEmptyInputsAndAtomicBudgets();
+  testBpmGraphGeneratedTextureStretchOrientationAndDestinationState();
+  testBpmGraphLowersThroughSkin2DRenderer();
   testNoteDistributionGraphAppliesCommonStretchBeforeRotation();
   testTransparentNoteDistributionSkipsCommandsAndBudgets();
   testNoteDistributionGraphDrawsPinnedBackgroundPmsColorAndCursor();

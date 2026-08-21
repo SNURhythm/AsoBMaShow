@@ -629,12 +629,14 @@ return {type=0,w=1280,h=720,
          "validator retains the unsupported distribution Graph placeholder");
 }
 
-void testGaugeGraphRemainsUnsupportedWhileTimingDistributionIsTypedNoOp() {
+void testGraphVisualizersRetainTypedAndDeferredBoundaries() {
   const auto decoded = decodeInline(R"lua(
 return {type=0,w=1280,h=720,
  gaugegraph={{id='gauge-history'}},
+ bpmgraph={{id='bpm'}},
  timingdistributiongraph={{id='timing-distribution'}},
  destination={{id='gauge-history',dst={{}}},
+              {id='bpm',dst={{}}},
               {id='timing-distribution',dst={{}}}}}
 )lua");
   const auto hasDiagnostic = [&](std::string_view code) {
@@ -644,27 +646,29 @@ return {type=0,w=1280,h=720,
   };
   expect(decoded.model &&
              hasDiagnostic("skin_lua_model_gaugegraph_unsupported") &&
+             !hasDiagnostic("skin_lua_model_bpmgraph_unsupported") &&
              !hasDiagnostic(
                  "skin_lua_model_timingdistributiongraph_unsupported"),
-         "GaugeGraph remains unsupported while TimingDistributionGraph is "
-         "accepted without a compatibility warning");
+         "GaugeGraph remains deferred while BPMGraph and "
+         "TimingDistributionGraph are accepted without compatibility warnings");
   if (!decoded.model) {
     return;
   }
   const auto &objects = decoded.model->objects;
-  expect(objects.size() == 2 && objects[0].authoredName == "gauge-history" &&
-             objects[1].authoredName == "timing-distribution" &&
+  expect(objects.size() == 3 && objects[0].authoredName == "gauge-history" &&
+             objects[1].authoredName == "bpm" &&
+             objects[2].authoredName == "timing-distribution" &&
              std::holds_alternative<SkinBlankObject>(objects[0].payload) &&
+             std::holds_alternative<SkinBpmGraphObject>(objects[1].payload) &&
              std::holds_alternative<SkinTimingDistributionGraphObject>(
-                 objects[1].payload),
-         "GaugeGraph and TimingDistributionGraph preserve authored order "
-         "while only the latter is a typed source no-op");
+                 objects[2].payload),
+         "deferred gauge, typed BPM, and typed timing no-op objects preserve "
+         "authored destination order");
   const auto validated =
       test_support::validateWithAuthoredBuiltins(*decoded.model);
   expect(validated.model && !validated.criticalFailure &&
              validated.model->disabledOptionalObjects.empty(),
-         "the unsupported GaugeGraph placeholder and typed timing source "
-         "no-op remain selectable");
+         "the deferred GaugeGraph placeholder and typed graph objects remain selectable");
 }
 
 void testValidatorPreservesUpstreamOptionalDependencies() {
@@ -808,7 +812,7 @@ int main() {
   testSliderRetainsAnyAuthoredAngle();
   testLiveGraphPrecedenceAndAuthoredOrder();
   testDistributionGraphIsDiagnosedAndRetainedAsBlank();
-  testGaugeGraphRemainsUnsupportedWhileTimingDistributionIsTypedNoOp();
+  testGraphVisualizersRetainTypedAndDeferredBoundaries();
   testValidatorPreservesUpstreamOptionalDependencies();
   if (failures != 0) {
     std::cerr << failures << " assertion(s) failed\n";

@@ -1640,6 +1640,123 @@ return {
          "valid timingvisualizers remain typed through model validation");
 }
 
+void testBpmGraphsDecodePinnedDefaultsNormalizationAndValidation() {
+  const auto decoded = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  bpmgraph={
+    {id='default'},
+    {id='fallbacks',delay=-5,lineWidth=0,
+     mainBPMColor='ghijkl',minBPMColor='---',maxBPMColor=' ',
+     otherBPMColor='?',stopLineColor='xyz',transitionLineColor=''},
+    {id='custom',delay=750,lineWidth=3,
+     mainBPMColor='##12-34-56-78',minBPMColor='aaBBcc',
+     maxBPMColor='DEADBE-EF',otherBPMColor='010203',
+     stopLineColor='f0-e1-d2',transitionLineColor='ABCDEF'}
+  },
+  destination={
+    {id='default',dst={{x=0,y=0,w=100,h=50}}},
+    {id='fallbacks',dst={{x=100,y=0,w=100,h=50}}},
+    {id='custom',dst={{x=200,y=0,w=100,h=50}}}
+  }
+}
+)lua");
+  expect(decoded.model && decoded.model->objects.size() == 3,
+         "bpmgraph declarations create one typed object per destination");
+  if (!decoded.model || decoded.model->objects.size() != 3) {
+    return;
+  }
+  const auto payload = [&](std::string_view id) {
+    const auto *definition = findObject(*decoded.model, id);
+    return definition != nullptr
+               ? std::get_if<SkinBpmGraphObject>(&definition->payload)
+               : nullptr;
+  };
+  const auto *defaults = payload("default");
+  const auto *fallbacks = payload("fallbacks");
+  const auto *custom = payload("custom");
+  expect(defaults != nullptr && defaults->delayMillis == 0 &&
+             defaults->lineWidth == 2 &&
+             defaults->mainRgba == 0x00ff00ffU &&
+             defaults->minimumRgba == 0x0000ffffU &&
+             defaults->maximumRgba == 0xff0000ffU &&
+             defaults->otherRgba == 0xffff00ffU &&
+             defaults->stopRgba == 0xff00ffffU &&
+             defaults->transitionRgba == 0x7f7f7fffU,
+         "bpmgraph defaults match the pinned constructor palette and timing");
+  expect(fallbacks != nullptr && fallbacks->delayMillis == 0 &&
+             fallbacks->lineWidth == 2 &&
+             fallbacks->mainRgba == 0x00ff00ffU &&
+             fallbacks->minimumRgba == 0x0000ffffU &&
+             fallbacks->maximumRgba == 0xff0000ffU &&
+             fallbacks->otherRgba == 0xffff00ffU &&
+             fallbacks->stopRgba == 0xff00ffffU &&
+             fallbacks->transitionRgba == 0x7f7f7fffU,
+         "nonpositive geometry and empty normalized colours retain pinned defaults");
+  expect(custom != nullptr && custom->delayMillis == 750 &&
+             custom->lineWidth == 3 && custom->mainRgba == 0x123456ffU &&
+             custom->minimumRgba == 0xaabbccffU &&
+             custom->maximumRgba == 0xdeadbeffU &&
+             custom->otherRgba == 0x010203ffU &&
+             custom->stopRgba == 0xf0e1d2ffU &&
+             custom->transitionRgba == 0xabcdefffU,
+         "bpmgraph strips nonhex characters and truncates normalized colours to six digits");
+  expect(std::ranges::none_of(decoded.diagnostics, [](const auto &entry) {
+           return entry.code == "skin_lua_model_bpmgraph_unsupported";
+         }),
+         "typed bpmgraphs emit no legacy unsupported diagnostic");
+
+  const auto validated =
+      test_support::validateWithAuthoredBuiltins(*decoded.model);
+  expect(validated.model && !validated.criticalFailure &&
+             std::ranges::all_of(validated.model->model.objects,
+                                 [](const auto &object) {
+                                   return !std::holds_alternative<
+                                       SkinBlankObject>(object.payload);
+                                 }),
+         "valid bpmgraphs remain typed through model validation");
+
+  auto invalidModel = *decoded.model;
+  std::get<SkinBpmGraphObject>(invalidModel.objects.front().payload)
+      .lineWidth = 0;
+  const auto invalid = test_support::validateWithAuthoredBuiltins(
+      std::move(invalidModel));
+  expect(invalid.criticalFailure && !invalid.model &&
+             std::ranges::find_if(invalid.diagnostics, [](const auto &entry) {
+               return entry.code == "skin_lua_model_bpmgraph_invalid";
+             }) != invalid.diagnostics.end(),
+         "model validation rejects a BPM graph outside its normalized constructor domain");
+
+  const auto shortColor = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  bpmgraph={{id='short',mainBPMColor='1-2-3'}},
+  destination={{id='short',dst={{x=0,y=0,w=10,h=10}}}}
+}
+)lua");
+  expect(!shortColor.model &&
+             std::ranges::find_if(shortColor.diagnostics,
+                                  [](const auto &entry) {
+                                    return entry.code ==
+                                           "skin_lua_model_bpmgraph_invalid";
+                                  }) != shortColor.diagnostics.end(),
+         "a nonempty normalized BPM colour shorter than six digits preserves Color.valueOf's construction failure");
+
+  const auto sharedGauge = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  bpmgraph={{id='shared'}},
+  gauge={id='shared',nodes={}},
+  destination={{id='shared',dst={{x=0,y=0,w=10,h=10}}}}
+}
+)lua");
+  const auto *shared =
+      sharedGauge.model ? findObject(*sharedGauge.model, "shared") : nullptr;
+  expect(shared != nullptr &&
+             std::holds_alternative<SkinBpmGraphObject>(shared->payload),
+         "BPM graph retains its pinned generic precedence over a same-ID gameplay Gauge");
+}
+
 void testTimingVisualizerParsesPoorColourOnlyWhenOpaque() {
   const auto opaqueHashes = decodeInlineModel(R"lua(
 return {
@@ -2067,19 +2184,11 @@ return {
              decoded.model->destinations.size() == 10,
          "every authored destination, including repeated names and negative "
          "built-in image IDs, remains a live model object");
-  const std::array expectedCodes{
-      std::string_view("skin_lua_model_bpmgraph_unsupported"),
-  };
-  for (const auto code : expectedCodes) {
-    expect(std::ranges::find_if(decoded.diagnostics, [&](const auto &entry) {
-      return entry.code == code;
-    }) != decoded.diagnostics.end(),
-           "each authored optional unsupported array emits its exact diagnostic");
-  }
   expect(std::ranges::none_of(decoded.diagnostics, [](const auto &entry) {
-           return entry.code == "skin_lua_model_judgegraph_unsupported";
+           return entry.code == "skin_lua_model_bpmgraph_unsupported" ||
+                  entry.code == "skin_lua_model_judgegraph_unsupported";
          }),
-         "the now-supported judgegraph array emits no unsupported diagnostic");
+         "supported BPM and judge graph arrays emit no unsupported diagnostic");
   if (decoded.model && decoded.model->objects.size() == 10) {
     const auto repeatedNames = static_cast<std::size_t>(std::count_if(
         decoded.model->objects.begin(), decoded.model->objects.end(),
@@ -2234,6 +2343,7 @@ int main() {
   testBooleanFieldsUseLuaTruthiness();
   testPracticePositionSliderDecodesItsExecutableWriter();
   testJudgeGraphsDecodePinnedModesAndPresentationFlags();
+  testBpmGraphsDecodePinnedDefaultsNormalizationAndValidation();
   testTimingVisualizerDecodesPinnedPresentationFields();
   testTimingVisualizerParsesPoorColourOnlyWhenOpaque();
   testTimingDistributionGraphRetainsPinnedConstructionFields();

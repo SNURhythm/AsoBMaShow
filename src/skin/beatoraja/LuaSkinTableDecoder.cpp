@@ -937,6 +937,18 @@ struct RawSkinIdentity {
   std::string id;
 };
 
+struct RawSkinBpmGraph {
+  std::string id;
+  int delayMillis = 0;
+  int lineWidth = 2;
+  std::string mainBpmColor = "00ff00";
+  std::string minimumBpmColor = "0000ff";
+  std::string maximumBpmColor = "ff0000";
+  std::string otherBpmColor = "ffff00";
+  std::string stopLineColor = "ff00ff";
+  std::string transitionLineColor = "7f7f7f";
+};
+
 struct RawSkinNoteDistributionGraph {
   std::string id;
   int type = 0;
@@ -1057,7 +1069,7 @@ struct GameplayDecodeRequest {
   std::map<std::string, RawSkinCover, std::less<>> hiddenCovers;
   std::map<std::string, RawSkinCover, std::less<>> liftCovers;
   std::map<std::string, RawSkinJudge, std::less<>> judges;
-  std::map<std::string, RawSkinIdentity, std::less<>> bpmGraphs;
+  std::map<std::string, RawSkinBpmGraph, std::less<>> bpmGraphs;
   std::map<std::string, RawSkinHitErrorVisualizer, std::less<>>
       hitErrorVisualizers;
   std::map<std::string, RawSkinNoteDistributionGraph, std::less<>>
@@ -1083,7 +1095,7 @@ struct GameplayDecodeRequest {
   std::vector<RawSkinCover> rawHiddenCovers;
   std::vector<RawSkinCover> rawLiftCovers;
   std::vector<RawSkinJudge> rawJudges;
-  std::vector<RawSkinIdentity> rawBpmGraphs;
+  std::vector<RawSkinBpmGraph> rawBpmGraphs;
   std::vector<RawSkinHitErrorVisualizer> rawHitErrorVisualizers;
   std::vector<RawSkinNoteDistributionGraph> rawJudgeGraphs;
   std::vector<RawSkinTimingVisualizer> rawTimingVisualizers;
@@ -1758,6 +1770,35 @@ bool decodeRawIdentity(lua_State *state, int index, std::size_t depth,
   return requireObject(state, index, depth, request) &&
          stringField(state, index, "id", output.id,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, false,
+                     request);
+}
+
+bool decodeRawBpmGraph(lua_State *state, int index, std::size_t depth,
+                       RawSkinBpmGraph &output, DecodeRequest &request) {
+  return requireObject(state, index, depth, request) &&
+         stringField(state, index, "id", output.id,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, false,
+                     request) &&
+         integerField(state, index, "delay", output.delayMillis, request) &&
+         integerField(state, index, "lineWidth", output.lineWidth, request) &&
+         stringField(state, index, "mainBPMColor", output.mainBpmColor,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         stringField(state, index, "minBPMColor", output.minimumBpmColor,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         stringField(state, index, "maxBPMColor", output.maximumBpmColor,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         stringField(state, index, "otherBPMColor", output.otherBpmColor,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         stringField(state, index, "stopLineColor", output.stopLineColor,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         stringField(state, index, "transitionLineColor",
+                     output.transitionLineColor,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
                      request);
 }
 
@@ -2450,6 +2491,48 @@ bool makeNoteDistributionGraphObject(
   return true;
 }
 
+bool makeBpmGraphObject(GameplayDecodeRequest &request,
+                        const RawSkinBpmGraph &definition,
+                        SkinBpmGraphObject &output) {
+  output.delayMillis = definition.delayMillis > 0 ? definition.delayMillis : 0;
+  output.lineWidth = definition.lineWidth > 0 ? definition.lineWidth : 2;
+  const auto applyColor = [&](std::string_view value, std::uint32_t &color) {
+    std::array<char, 6> normalized{};
+    std::size_t size = 0;
+    for (const char character : value) {
+      if (hexNibble(character) < 0) {
+        continue;
+      }
+      if (size < normalized.size()) {
+        normalized[size++] = character;
+      }
+    }
+    if (size == 0) {
+      return true;
+    }
+    if (size < normalized.size()) {
+      return false;
+    }
+    std::uint32_t rgb = 0;
+    for (const char character : normalized) {
+      rgb = rgb * 16U + static_cast<std::uint32_t>(hexNibble(character));
+    }
+    color = (rgb << 8U) | 0xffU;
+    return true;
+  };
+  if (!applyColor(definition.mainBpmColor, output.mainRgba) ||
+      !applyColor(definition.minimumBpmColor, output.minimumRgba) ||
+      !applyColor(definition.maximumBpmColor, output.maximumRgba) ||
+      !applyColor(definition.otherBpmColor, output.otherRgba) ||
+      !applyColor(definition.stopLineColor, output.stopRgba) ||
+      !applyColor(definition.transitionLineColor, output.transitionRgba)) {
+    return fail(request.decoding, "skin_lua_model_bpmgraph_invalid",
+                "Lua skin bpmgraph has a nonempty normalized colour shorter "
+                "than six hexadecimal digits");
+  }
+  return true;
+}
+
 std::uint32_t timingVisualizerColor(std::string_view value) {
   if (value.size() < 6 ||
       std::ranges::any_of(value, [](char character) {
@@ -2916,6 +2999,16 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
   // JsonSkinObjectLoader resolves generic definitions before the PlaySkin
   // special branches. Preserve that behavior even when an authored ID is
   // shared across categories.
+  if (resolved.kind == SkinObjectResolutionKind::BpmGraph &&
+      bpmGraph != request.bpmGraphs.end()) {
+    SkinBpmGraphObject object;
+    if (!makeBpmGraphObject(request, bpmGraph->second, object)) {
+      return false;
+    }
+    output = object;
+    return true;
+  }
+
   if (isGauge) {
     SkinGaugeObject object;
     if (!makeGaugeObject(request, *request.gauge, object)) {
@@ -3470,7 +3563,7 @@ void decodeGameplayProtected(lua_State *state, int index,
         !decodeObjectArrayField(state, index, "bpmgraph", 1,
                                 LuaSkinTableDecoderPolicy::maxDecodedObjects,
                                 request->rawBpmGraphs, request->decoding,
-                                decodeRawIdentity) ||
+                                decodeRawBpmGraph) ||
         !decodeObjectArrayField(state, index, "hiterrorvisualizer", 1,
                                 LuaSkinTableDecoderPolicy::maxDecodedObjects,
                                 request->rawHitErrorVisualizers,
@@ -3500,9 +3593,6 @@ void decodeGameplayProtected(lua_State *state, int index,
     recordUnsupportedDefinitions(*request, request->rawGaugeGraphs,
                                  "skin_lua_model_gaugegraph_unsupported",
                                  "gaugegraph");
-    recordUnsupportedDefinitions(*request, request->rawBpmGraphs,
-                                 "skin_lua_model_bpmgraph_unsupported",
-                                 "bpmgraph");
     if (!decodeObjectArrayField(state, index, "hiddenCover", 1,
                                 LuaSkinTableDecoderPolicy::maxDecodedObjects,
                                 request->rawHiddenCovers, request->decoding,
@@ -4336,8 +4426,8 @@ bool materializeGameplay(GameplayDecodeRequest &request,
       });
   moveFirstDefinitions(
       request.rawBpmGraphs, request.bpmGraphs,
-      [](const RawSkinIdentity &identity) -> const std::string & {
-        return identity.id;
+      [](const RawSkinBpmGraph &graph) -> const std::string & {
+        return graph.id;
       });
   moveFirstDefinitions(
       request.rawHitErrorVisualizers, request.hitErrorVisualizers,

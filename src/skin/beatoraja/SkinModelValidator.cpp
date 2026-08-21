@@ -220,6 +220,18 @@ SkinModelValidationResult SkinModelValidator::validate(
   }
 
   if (std::ranges::any_of(model.objects, [](const auto &object) {
+        const auto *graph = std::get_if<SkinBpmGraphObject>(&object.payload);
+        return graph != nullptr &&
+               (graph->delayMillis < 0 || graph->lineWidth <= 0);
+      })) {
+    result.criticalFailure = true;
+    result.diagnostics.push_back(validationDiagnostic(
+        "skin_lua_model_bpmgraph_invalid",
+        "Lua skin bpmgraph normalized timing or line width is invalid"));
+    return result;
+  }
+
+  if (std::ranges::any_of(model.objects, [](const auto &object) {
         const auto *graph =
             std::get_if<SkinTimingDistributionGraphObject>(&object.payload);
         return graph != nullptr && graph->lineWidth == 0;

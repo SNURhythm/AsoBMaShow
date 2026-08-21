@@ -42,6 +42,7 @@ SkinObjectResolutionStatus expectedStatus(SkinObjectResolutionKind kind) {
   case SkinObjectResolutionKind::Slider:
   case SkinObjectResolutionKind::Graph:
   case SkinObjectResolutionKind::JudgeGraph:
+  case SkinObjectResolutionKind::BpmGraph:
   case SkinObjectResolutionKind::HitErrorVisualizer:
   case SkinObjectResolutionKind::TimingVisualizer:
   case SkinObjectResolutionKind::TimingDistributionGraph:

@@ -292,6 +292,17 @@ struct SkinNoteDistributionGraphObject {
   bool noHorizontalGap = false;
 };
 
+struct SkinBpmGraphObject {
+  int delayMillis = 0;
+  int lineWidth = 2;
+  std::uint32_t mainRgba = 0x00ff00ffU;
+  std::uint32_t minimumRgba = 0x0000ffffU;
+  std::uint32_t maximumRgba = 0xff0000ffU;
+  std::uint32_t otherRgba = 0xffff00ffU;
+  std::uint32_t stopRgba = 0xff00ffffU;
+  std::uint32_t transitionRgba = 0x7f7f7fffU;
+};
+
 struct SkinTimingVisualizerObject {
   int width = 301;
   int judgeWidthMillis = 150;
@@ -496,7 +507,8 @@ struct SkinBlankObject {};
 using SkinObjectPayload =
     std::variant<SkinImageObject, SkinNumberObject, SkinFloatObject,
                  SkinTextObject, SkinSliderObject, SkinGraphObject,
-                 SkinNoteDistributionGraphObject, SkinTimingVisualizerObject,
+                 SkinNoteDistributionGraphObject, SkinBpmGraphObject,
+                 SkinTimingVisualizerObject,
                  SkinTimingDistributionGraphObject,
                  SkinHitErrorVisualizerObject,
                  SkinGaugeObject,
