@@ -4009,6 +4009,117 @@ void testNoteDistributionGraphUsesPinnedBucketsRevealOrderAndGaps() {
   }
 }
 
+void testNoteDistributionGraphAppliesCommonStretchBeforeRotation() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  std::vector<SkinNormalDistribution> normal(2);
+  normal[0][0] = 1;
+  state.graphResult.normalDistribution = normal;
+
+  ValidatedBeatorajaSkinModel model;
+  model.model.header.type = 0;
+  model.model.objects = {{.id = 1,
+                          .authoredName = "stretched-distribution",
+                          .payload = SkinNoteDistributionGraphObject{
+                              .type = SkinNoteDistributionGraphType::Normal,
+                              .backgroundTextureOff = true,
+                              .delayMillis = 0},
+                          .authoredOrdinal = 1}};
+  auto presented = noteDistributionDestination(1);
+  presented.presentation.center = 1;
+  presented.presentation.stretch = SkinStretchMode::KeepAspectRatioFitInner;
+  presented.presentation.frames.front().angleDegrees = 90.0;
+  model.model.destinations = {std::move(presented)};
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  const auto primitives = primitiveCommands(result);
+  expect(result.submitReady && result.diagnostics.empty() &&
+             primitives.size() == 1,
+         "stretched note distribution emits its one authored cell");
+  if (primitives.size() == 1) {
+    const auto &vertices = primitives.front()->vertices;
+    expect(vertices.size() == 4 && vertices[0].x == 45.0F &&
+               vertices[0].y == 720.0F && vertices[1].x == 45.0F &&
+               vertices[1].y == 716.0F && vertices[2].x == 41.0F &&
+               vertices[2].y == 716.0F && vertices[3].x == 41.0F &&
+               vertices[3].y == 720.0F,
+           "fit-inner centers the 10x100 graph at x=45 before rotating its 4x4 cell around the stretched lower-left pivot");
+  }
+
+  normal[0][0] = 11;
+  presented = noteDistributionDestination(1);
+  presented.presentation.stretch =
+      SkinStretchMode::KeepAspectRatioFitOuterTrimmed;
+  model.model.destinations = {std::move(presented)};
+  const auto trimmed = evaluate(renderer, runtime, model, resources, state, 2);
+  const auto trimmedPrimitives = primitiveCommands(trimmed);
+  expect(trimmed.submitReady && trimmed.diagnostics.empty() &&
+             trimmedPrimitives.size() == 2,
+         "fit-outer-trimmed discards cells outside its centered source crop");
+  if (trimmedPrimitives.size() == 2) {
+    const auto &lower = trimmedPrimitives[0]->vertices;
+    const auto &upper = trimmedPrimitives[1]->vertices;
+    expect(lower[0].x == 0.0F && lower[1].x == 40.0F &&
+               lower[0].y == 720.0F && lower[2].y == 680.0F &&
+               upper[0].y == 670.0F && upper[2].y == 630.0F,
+           "fit-outer-trimmed maps the literal y=45..55 source crop across the 100px destination");
+  }
+}
+
+void testTransparentNoteDistributionSkipsCommandsAndBudgets() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  std::vector<SkinNormalDistribution> normal(1);
+  normal[0][0] = 1;
+  state.graphResult.normalDistribution = normal;
+
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects = {{.id = 1,
+                          .authoredName = "transparent-distribution",
+                          .payload = SkinNoteDistributionGraphObject{
+                              .type = SkinNoteDistributionGraphType::Normal,
+                              .backgroundTextureOff = true,
+                              .delayMillis = 0},
+                          .authoredOrdinal = 1}};
+  auto presented = noteDistributionDestination(1);
+  presented.presentation.frames.front().rgba = {255, 255, 255, 0};
+  model.model.destinations = {std::move(presented)};
+
+  const auto frame = evaluate(renderer, runtime, model, resources, state);
+  expect(frame.submitReady && frame.submitReady->commands.empty() &&
+             frame.diagnostics.empty(),
+         "zero-alpha note distribution emits no frame commands or diagnostics");
+
+  SkinNoteDistributionGraphObject graph;
+  graph.backgroundTextureOff = true;
+  graph.delayMillis = 0;
+  SkinGameplayGraphStateView graphState;
+  graphState.normalDistribution = normal;
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 0.0,
+                   .y = 0.0,
+                   .width = 100.0,
+                   .height = 100.0};
+  geometry.rgba[3] = 0.0F;
+  const auto bounded = renderSkinNoteDistributionGraph(
+      {.sourceObject = 1,
+       .authoredOrdinal = 1,
+       .graph = graph,
+       .state = graphState,
+       .geometry = geometry,
+       .viewport = viewport(),
+       .elapsedMillis = 0,
+       .maximumCommands = 0,
+       .maximumPrimitiveVertices = 0});
+  expect(!bounded.failure && bounded.commands.empty() &&
+             bounded.primitiveVertices == 0,
+         "zero-alpha graph consumes neither a deliberately exhausted command budget nor a vertex budget");
+}
+
 void testNoteDistributionGraphDrawsPinnedBackgroundPmsColorAndCursor() {
   RuntimeHarness runtime;
   Skin2DRenderer renderer;
@@ -4698,6 +4809,8 @@ int main() {
   testNoteLineCallbacksRunAfterTopLevelPreparationAndOnlyWhenDrawable();
   testHiddenNoteStillPreparesEveryLaneSourceInPinnedOrder();
   testNoteDistributionGraphUsesPinnedBucketsRevealOrderAndGaps();
+  testNoteDistributionGraphAppliesCommonStretchBeforeRotation();
+  testTransparentNoteDistributionSkipsCommandsAndBudgets();
   testNoteDistributionGraphDrawsPinnedBackgroundPmsColorAndCursor();
   testDesktopAndIpadFitCommandFixtures();
   return failures == 0 ? 0 : 1;

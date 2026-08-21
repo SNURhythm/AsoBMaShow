@@ -409,9 +409,9 @@ projectSkinDestinationToUi(const AuthoredDestinationGeometry &destination,
     return result;
   }
 
-  auto rect = destination.rect;
-  auto region = source.region;
-  applyStretch(rect, region, destination.stretch);
+  auto stretched = stretchSkinDestinationAuthored(destination, source);
+  const auto &rect = stretched.rect;
+  const auto &region = stretched.region;
   const double radians = destination.angleDegrees * std::numbers::pi / 180.0;
   const double cosine = std::cos(radians);
   const double sine = std::sin(radians);
@@ -456,6 +456,15 @@ projectSkinDestinationToUi(const AuthoredDestinationGeometry &destination,
                       .width = std::abs(bottomRight[0] - topLeft[0]),
                       .height = std::abs(bottomRight[1] - topLeft[1])};
   }
+  return result;
+}
+
+SkinStretchedDestinationGeometry
+stretchSkinDestinationAuthored(const AuthoredDestinationGeometry &destination,
+                               const SkinSourceRegionGeometry &source) {
+  SkinStretchedDestinationGeometry result{.rect = destination.rect,
+                                          .region = source.region};
+  applyStretch(result.rect, result.region, destination.stretch);
   return result;
 }
 

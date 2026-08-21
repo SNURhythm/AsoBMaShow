@@ -84,26 +84,30 @@ std::uint32_t modulatedColor(std::uint32_t abgr,
 class PrimitiveBuilder {
 public:
   explicit PrimitiveBuilder(
-      const SkinNoteDistributionGraphRenderRequest &request)
+      const SkinNoteDistributionGraphRenderRequest &request,
+      AuthoredDestinationGeometry geometry)
       : request_(request) {
+    setGeometry(std::move(geometry));
+  }
+
+  void setGeometry(AuthoredDestinationGeometry geometry) {
+    geometry_ = std::move(geometry);
     const auto projected = projectSkinDestinationToUi(
-        request.geometry,
+        geometry_,
         {.textureWidth = 1,
          .textureHeight = 1,
          .region = {.x = 0, .y = 0, .w = 1, .h = 1}},
-        request.viewport);
+        request_.viewport);
     bool empty = false;
     clip_ = intersect(projected.clip,
-                      projectedSkinScissorBounds(request.viewport), empty);
+                      projectedSkinScissorBounds(request_.viewport), empty);
     clippedOut_ = empty;
     const double radians =
-        request.geometry.angleDegrees * std::numbers::pi / 180.0;
+        geometry_.angleDegrees * std::numbers::pi / 180.0;
     cosine_ = std::cos(radians);
     sine_ = std::sin(radians);
-    pivotX_ = request.geometry.rect.x +
-              request.geometry.centerX * request.geometry.rect.width;
-    pivotY_ = request.geometry.rect.y +
-              request.geometry.centerY * request.geometry.rect.height;
+    pivotX_ = geometry_.rect.x + geometry_.centerX * geometry_.rect.width;
+    pivotY_ = geometry_.rect.y + geometry_.centerY * geometry_.rect.height;
   }
 
   bool appendQuad(double x, double y, double width, double height,
@@ -117,8 +121,8 @@ public:
     }
     SkinPrimitiveCommand primitive;
     primitive.kind = SkinPrimitiveKind::SolidQuad;
-    primitive.state = {.blend = request_.geometry.blend,
-                       .filter = request_.geometry.filter,
+    primitive.state = {.blend = geometry_.blend,
+                       .filter = geometry_.filter,
                        .scissor = clip_};
     primitive.vertices.reserve(vertexCount);
     const std::array<std::array<double, 2>, 4> points{{
@@ -136,7 +140,7 @@ public:
       primitive.vertices.push_back(
           {.x = static_cast<float>(projected[0]),
            .y = static_cast<float>(projected[1]),
-           .rgba = modulatedColor(color, request_.geometry.rgba)});
+           .rgba = modulatedColor(color, geometry_.rgba)});
     }
     append(std::move(primitive));
     return true;
@@ -153,8 +157,8 @@ public:
     }
     SkinPrimitiveCommand primitive;
     primitive.kind = SkinPrimitiveKind::LineStrip;
-    primitive.state = {.blend = request_.geometry.blend,
-                       .filter = request_.geometry.filter,
+    primitive.state = {.blend = geometry_.blend,
+                       .filter = geometry_.filter,
                        .scissor = clip_};
     primitive.vertices.reserve(vertexCount);
     for (const auto point :
@@ -167,7 +171,7 @@ public:
       primitive.vertices.push_back(
           {.x = static_cast<float>(projected[0]),
            .y = static_cast<float>(projected[1]),
-           .rgba = modulatedColor(color, request_.geometry.rgba)});
+           .rgba = modulatedColor(color, geometry_.rgba)});
     }
     append(std::move(primitive));
     return true;
@@ -233,6 +237,7 @@ private:
   }
 
   const SkinNoteDistributionGraphRenderRequest &request_;
+  AuthoredDestinationGeometry geometry_;
   SkinNoteDistributionGraphRenderResult result_;
   std::optional<UiLogicalRect> clip_;
   bool clippedOut_ = false;
@@ -278,33 +283,71 @@ template <typename Distribution>
 SkinNoteDistributionGraphRenderResult renderDistribution(
     const SkinNoteDistributionGraphRenderRequest &request,
     std::span<const Distribution> data) {
-  PrimitiveBuilder builder(request);
   if (data.empty() || request.geometry.rect.width == 0.0 ||
       request.geometry.rect.height == 0.0) {
-    return builder.take();
+    return {};
   }
 
   const int maximum = maximumHeight(data);
   if (data.size() >
       static_cast<std::size_t>(std::numeric_limits<int>::max()) / 5U) {
-    auto result = builder.take();
-    result.failure = diagnostic(
-        "skin.renderer.geometry.invalid",
-        "Note distribution graph duration exceeds the fixed geometry range.");
-    return result;
+    return {.failure = diagnostic(
+                "skin.renderer.geometry.invalid",
+                "Note distribution graph duration exceeds the fixed geometry "
+                "range.")};
   }
   const std::size_t pixelWidthSize = data.size() * 5U;
   const int pixelWidth = static_cast<int>(pixelWidthSize);
   const int pixelHeight = maximum * 5;
-  const double backgroundScaleX =
-      request.geometry.rect.width / static_cast<double>(pixelWidth);
+  const auto stretched = stretchSkinDestinationAuthored(
+      request.geometry,
+      {.textureWidth = pixelWidth,
+       .textureHeight = pixelHeight,
+       .region = {.x = 0,
+                  .y = 0,
+                  .w = pixelWidth,
+                  .h = pixelHeight}});
+  if (stretched.rect.width == 0.0 || stretched.rect.height == 0.0 ||
+      stretched.region.w <= 0 || stretched.region.h <= 0) {
+    return {};
+  }
+  auto effectiveGeometry = request.geometry;
+  effectiveGeometry.rect = stretched.rect;
+  effectiveGeometry.stretch = SkinStretchMode::Stretch;
+  PrimitiveBuilder builder(request, effectiveGeometry);
+
+  const double cropLeft = stretched.region.x;
+  const double cropBottom = stretched.region.y;
+  const double cropRight = cropLeft + stretched.region.w;
+  const double cropTop = cropBottom + stretched.region.h;
+  const double scaleX =
+      stretched.rect.width / static_cast<double>(stretched.region.w);
   const double scaleY =
-      request.geometry.rect.height / static_cast<double>(pixelHeight);
+      stretched.rect.height / static_cast<double>(stretched.region.h);
+  const auto destinationX = [&](double sourceX) {
+    return stretched.rect.x + (sourceX - cropLeft) * scaleX;
+  };
+  const auto destinationY = [&](double sourceY) {
+    return stretched.rect.y + (sourceY - cropBottom) * scaleY;
+  };
+  const auto appendSourceQuad = [&](double x, double y, double width,
+                                    double height, std::uint32_t color) {
+    const double left = std::max(x, cropLeft);
+    const double bottom = std::max(y, cropBottom);
+    const double right = std::min(x + width, cropRight);
+    const double top = std::min(y + height, cropTop);
+    if (right <= left || top <= bottom) {
+      return true;
+    }
+    return builder.appendQuad(destinationX(left), destinationY(bottom),
+                              (right - left) * scaleX,
+                              (top - bottom) * scaleY, color);
+  };
 
   if (!request.graph.backgroundTextureOff) {
-    if (!builder.appendQuad(request.geometry.rect.x, request.geometry.rect.y,
-                            request.geometry.rect.width,
-                            request.geometry.rect.height, 0xcc000000U)) {
+    if (!builder.appendQuad(stretched.rect.x, stretched.rect.y,
+                            stretched.rect.width, stretched.rect.height,
+                            0xcc000000U)) {
       return builder.take();
     }
     for (int row = 10; row < maximum; row += 10) {
@@ -312,21 +355,20 @@ SkinNoteDistributionGraphRenderResult renderDistribution(
       const std::uint32_t color = 0xff000000U |
                                   (static_cast<std::uint32_t>(component) << 8U) |
                                   static_cast<std::uint32_t>(component);
-      if (!builder.appendQuad(
-              request.geometry.rect.x,
-              request.geometry.rect.y + row * 5.0 * scaleY,
-              request.geometry.rect.width, 50.0 * scaleY, color)) {
+      if (!appendSourceQuad(0.0, row * 5.0, pixelWidth, 50.0, color)) {
         return builder.take();
       }
     }
     for (std::size_t second = 0; second < data.size(); second += 10) {
       const bool minute = second % 60 == 0;
       const std::uint32_t color = minute ? 0xff3f3f3fU : 0xff1f1f1fU;
-      const double x = request.geometry.rect.x +
-                       static_cast<double>(second * 5U) * backgroundScaleX;
-      if (!builder.appendLine(x, request.geometry.rect.y, x,
-                              request.geometry.rect.y +
-                                  request.geometry.rect.height,
+      const double sourceX = static_cast<double>(second * 5U);
+      if (sourceX < cropLeft || sourceX > cropRight) {
+        continue;
+      }
+      const double x = destinationX(sourceX);
+      if (!builder.appendLine(x, stretched.rect.y, x,
+                              stretched.rect.y + stretched.rect.height,
                               color)) {
         return builder.take();
       }
@@ -343,10 +385,42 @@ SkinNoteDistributionGraphRenderResult renderDistribution(
   const int revealedPixels = static_cast<int>(
       static_cast<float>(pixelWidth) * reveal);
   if (revealedPixels > 0) {
-    const double revealedWidth =
-        request.geometry.rect.width * static_cast<double>(reveal);
-    const double shapeScaleX =
-        revealedWidth / static_cast<double>(revealedPixels);
+    auto shapeGeometry = request.geometry;
+    shapeGeometry.rect.width *= static_cast<double>(reveal);
+    const auto shapeStretched = stretchSkinDestinationAuthored(
+        shapeGeometry,
+        {.textureWidth = pixelWidth,
+         .textureHeight = pixelHeight,
+         .region = {.x = 0,
+                    .y = 0,
+                    .w = revealedPixels,
+                    .h = pixelHeight}});
+    auto effectiveShapeGeometry = shapeGeometry;
+    effectiveShapeGeometry.rect = shapeStretched.rect;
+    effectiveShapeGeometry.stretch = SkinStretchMode::Stretch;
+    builder.setGeometry(effectiveShapeGeometry);
+    const double shapeCropLeft = shapeStretched.region.x;
+    const double shapeCropBottom = shapeStretched.region.y;
+    const double shapeCropRight = shapeCropLeft + shapeStretched.region.w;
+    const double shapeCropTop = shapeCropBottom + shapeStretched.region.h;
+    const double shapeScaleX = shapeStretched.rect.width /
+                               static_cast<double>(shapeStretched.region.w);
+    const double shapeScaleY = shapeStretched.rect.height /
+                               static_cast<double>(shapeStretched.region.h);
+    const auto appendShapeQuad = [&](double x, double y, double width,
+                                     double height, std::uint32_t color) {
+      const double left = std::max(x, shapeCropLeft);
+      const double bottom = std::max(y, shapeCropBottom);
+      const double right = std::min(x + width, shapeCropRight);
+      const double top = std::min(y + height, shapeCropTop);
+      if (right <= left || top <= bottom) {
+        return true;
+      }
+      return builder.appendQuad(
+          shapeStretched.rect.x + (left - shapeCropLeft) * shapeScaleX,
+          shapeStretched.rect.y + (bottom - shapeCropBottom) * shapeScaleY,
+          (right - left) * shapeScaleX, (top - bottom) * shapeScaleY, color);
+    };
     const auto typeIndex = static_cast<std::size_t>(request.graph.type);
     const auto &palette = request.pmsMode ? kPmsGraphColors[typeIndex]
                                          : kGraphColors[typeIndex];
@@ -363,11 +437,8 @@ SkinNoteDistributionGraphRenderResult renderDistribution(
       const auto emitBucket = [&](std::size_t bucket) {
         int count = std::max(data[second][bucket], 0);
         while (count-- > 0 && stack < maximum) {
-          if (!builder.appendQuad(
-                  request.geometry.rect.x + cellX * shapeScaleX,
-                  request.geometry.rect.y + stack * 5.0 * scaleY,
-                  visibleCellWidth * shapeScaleX,
-                  authoredCellHeight * scaleY, palette[bucket])) {
+          if (!appendShapeQuad(cellX, stack * 5.0, visibleCellWidth,
+                               authoredCellHeight, palette[bucket])) {
             return false;
           }
           ++stack;
@@ -388,6 +459,7 @@ SkinNoteDistributionGraphRenderResult renderDistribution(
         }
       }
     }
+    builder.setGeometry(effectiveGeometry);
   }
 
   const auto appendCursor = [&](std::optional<std::int64_t> millis,
@@ -405,11 +477,9 @@ SkinNoteDistributionGraphRenderResult renderDistribution(
     if (last <= first) {
       return true;
     }
-    return builder.appendQuad(
-        request.geometry.rect.x + static_cast<double>(first) * backgroundScaleX,
-        request.geometry.rect.y,
-        static_cast<double>(last - first) * backgroundScaleX,
-        request.geometry.rect.height, color);
+    return appendSourceQuad(static_cast<double>(first), 0.0,
+                            static_cast<double>(last - first), pixelHeight,
+                            color);
   };
   if (!appendCursor(request.startMillis, 0x80ff80ffU) ||
       !appendCursor(request.endMillis, 0xff8080ffU) ||
@@ -423,6 +493,9 @@ SkinNoteDistributionGraphRenderResult renderDistribution(
 
 SkinNoteDistributionGraphRenderResult renderSkinNoteDistributionGraph(
     const SkinNoteDistributionGraphRenderRequest &request) {
+  if (request.geometry.rgba[3] <= 0.0F) {
+    return {};
+  }
   switch (request.graph.type) {
   case SkinNoteDistributionGraphType::Normal:
     return renderDistribution(request, request.state.normalDistribution);

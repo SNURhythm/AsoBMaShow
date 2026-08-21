@@ -3408,6 +3408,9 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       }
 
       if (noteDistribution) {
+        if (evaluated.geometry->rgba[3] <= 0.0F) {
+          continue;
+        }
         std::optional<std::int64_t> currentMillis;
         const std::int64_t playTimerStart =
             inputs.state.timerProperty(SkinBuiltinPropertySelector{41});

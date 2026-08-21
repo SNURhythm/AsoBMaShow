@@ -94,9 +94,18 @@ struct UiDestinationGeometry {
   SkinFilterMode filter = SkinFilterMode::Nearest;
 };
 
+struct SkinStretchedDestinationGeometry {
+  AuthoredRect rect;
+  SkinSourceRect region;
+};
+
 SkinDestinationEvaluationResult
 evaluateSkinDestinationAuthored(const SkinDestinationBody &destination,
                                 const SkinDestinationEvaluationInputs &inputs);
+
+[[nodiscard]] SkinStretchedDestinationGeometry
+stretchSkinDestinationAuthored(const AuthoredDestinationGeometry &destination,
+                               const SkinSourceRegionGeometry &source);
 
 UiDestinationGeometry
 projectSkinDestinationToUi(const AuthoredDestinationGeometry &destination,
