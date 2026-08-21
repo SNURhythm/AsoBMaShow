@@ -103,7 +103,7 @@ struct SkinBindingCatalogView {
 
 struct SkinBindingValidationContext {
   SkinBuiltinBindingCatalogView builtins;
-  LuaCallbackLivenessView callbacks;
+  std::optional<LuaCallbackLivenessView> callbacks;
 };
 
 using SkinDecodedBindingId =

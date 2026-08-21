@@ -138,7 +138,7 @@ struct PlaySkinStateBridgeContext {
   // has completed.
   const ValidatedBeatorajaSkinModel *model = nullptr;
   const BeatorajaSkinConfiguration &configuration;
-  LuaSkinRuntime &runtime;
+  LuaSkinRuntime *runtime = nullptr;
   const SkinEventMutationTable &mutationTable;
   // PomyuCharaProcessor initializes all eight motion cycles to one
   // millisecond. A decoded PLAY pmchara definition replaces individual

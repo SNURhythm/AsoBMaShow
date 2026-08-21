@@ -76,7 +76,7 @@ struct PlaySkinSessionFrameContext {
   const SkinPreparedResourceView &resources;
   ViewportSettings viewportSettings;
   PlaySkinViewport viewport;
-  LuaSkinRuntime &runtime;
+  LuaSkinRuntime *runtime = nullptr;
   PlaySkinStateBridge &bridge;
   Skin2DRenderer &renderer;
   rendering::SkinQuadBatchRenderer &quadRenderer;

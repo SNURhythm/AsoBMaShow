@@ -436,10 +436,43 @@ evaluate(Skin2DRenderer &renderer, RuntimeHarness &runtime,
                                  .configuration = configuration,
                                  .resources = resources,
                                  .viewport = playViewport,
-                                 .runtime = runtime.runtime(),
+                                 .runtime = &runtime.runtime(),
                                  .state = state,
                                  .markProcessedNotes = markProcessedNotes,
                                  .gaugeRandomSource = gaugeRandomSource});
+}
+
+void testStaticBuiltinFrameDoesNotRequireLuaRuntime() {
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  resources.addImage(1, {.x = 0, .y = 0, .w = 10, .h = 10});
+  FakeState state;
+  state.integerResult = {.value = 0, .supported = true};
+  state.capturedSerial = 1;
+  ValidatedBeatorajaSkinModel model;
+  auto object = imageObject(1, 1, true);
+  std::get<SkinImageObject>(object.payload).stateIndex =
+      SkinIntegerPropertyId{1};
+  model.model.integerProperties.push_back(
+      {.id = SkinIntegerPropertyId{1},
+       .domain = SkinIntegerPropertyDomain::ImageIndex,
+       .source = SkinBuiltinPropertySelector{.value = 42},
+       .authoredOrdinal = 1});
+  model.model.objects.push_back(std::move(object));
+  model.model.destinations.push_back(destination(1, 1, 10.0));
+  static const BeatorajaSkinConfiguration configuration;
+  const auto result = renderer.evaluateFrame(
+      {.frameSerial = 1,
+       .sessionSerial = 1,
+       .model = model,
+       .configuration = configuration,
+       .resources = resources,
+       .viewport = viewport(),
+       .runtime = nullptr,
+       .state = state});
+  expect(result.submitReady && result.submitReady->commands.size() == 1 &&
+             result.diagnostics.empty() && state.integerResult.supported,
+         "static built-in frame evaluates without constructing a Lua runtime");
 }
 
 bool hasDiagnostic(const SkinFrameEvaluationResult &result,
@@ -4253,7 +4286,7 @@ evaluateAllV1Fixture(const PlaySkinViewport &viewport) {
                                  .configuration = configuration,
                                  .resources = resources,
                                  .viewport = viewport,
-                                 .runtime = runtime.runtime(),
+                                 .runtime = &runtime.runtime(),
                                  .state = state});
 }
 
@@ -4345,6 +4378,7 @@ void testDesktopAndIpadFitCommandFixtures() {
 } // namespace
 
 int main() {
+  testStaticBuiltinFrameDoesNotRequireLuaRuntime();
   testCapturedFrameSerialMustMatchCallbacksAndProjection();
   testOffsetSentinelAndSourceAwarePrecedence();
   testCriticalFailureCannotExposePartialBuffer();

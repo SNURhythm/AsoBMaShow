@@ -313,7 +313,7 @@ public:
                                    .configuration = configuration,
                                    .resources = resources,
                                    .viewport = viewport,
-                                   .runtime = runtime.runtime(),
+                                   .runtime = &runtime.runtime(),
                                    .state = state});
   }
 

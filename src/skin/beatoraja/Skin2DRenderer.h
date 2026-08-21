@@ -196,7 +196,7 @@ struct SkinFrameInputs {
   const BeatorajaSkinConfiguration &configuration;
   const SkinPreparedResourceView &resources;
   const PlaySkinViewport &viewport;
-  LuaSkinRuntime &runtime;
+  LuaSkinRuntime *runtime = nullptr;
   ISkinFrameState &state;
   // Pinned PlayerConfig.markprocessednote; false by Beatoraja default.
   bool markProcessedNotes = false;

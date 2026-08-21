@@ -5,8 +5,10 @@
 #include "skin/SkinStoragePaths.h"
 #include "skin/SkinConfigurationWriteQueue.h"
 #include "skin/beatoraja/GameplaySkinValidator.h"
+#include "skin/beatoraja/GameplaySkinBuiltinCatalog.h"
 #include "skin/beatoraja/LuaSkinFileSystem.h"
 #include "skin/beatoraja/PlaySkinViewport.h"
+#include "skin/beatoraja/SkinModelValidator.h"
 #include "skin/beatoraja/SyntheticReplayGhostOverlay.h"
 #include "skin/beatoraja/SkinResourceCatalog.h"
 #include "skin/package/SkinAliasDetector.h"
@@ -367,6 +369,23 @@ bool hasDiagnostic(const PlaySkinFrameTransactionResult &result,
                    std::string_view code) {
   return hasDiagnostic(result.diagnostics, code) ||
          hasDiagnostic(result.evaluation.diagnostics, code);
+}
+
+void testCallbackBindingWithoutRuntimeFailsValidation() {
+  BeatorajaSkinModel model;
+  model.header.type = 0;
+  model.booleanProperties.push_back(
+      {.id = SkinBooleanPropertyId{1},
+       .source = LuaCallbackId{.slot = 1, .generation = 1},
+       .authoredOrdinal = 1});
+  SkinModelValidator validator;
+  const auto result = validator.validate(
+      std::move(model),
+      {.builtins = gameplaySkinBuiltinCatalog(), .callbacks = std::nullopt});
+  expect(!result.model && result.criticalFailure &&
+             hasDiagnostic(result.diagnostics,
+                           "skin.model.callback_runtime_missing"),
+         "callback binding without a live Lua runtime fails closed");
 }
 
 PreparedGameplayBgaFrame bgaFrame(std::uint64_t sequence) {
@@ -1252,7 +1271,7 @@ return {
         .chartModel = chart_,
         .model = &model_,
         .configuration = configuration_,
-        .runtime = *runtime_,
+        .runtime = runtime_.get(),
         .mutationTable = mutations_});
     session_ = std::make_unique<PlaySkinSession>(PlaySkinSessionFrameContext{
         .sessionSerial = sessionSerial,
@@ -1267,7 +1286,7 @@ return {
         .resources = resources_,
         .viewportSettings = {},
         .viewport = viewport_,
-        .runtime = *runtime_,
+        .runtime = runtime_.get(),
         .bridge = *bridge_,
         .renderer = renderer_,
         .quadRenderer = quadRenderer_,
@@ -2002,7 +2021,7 @@ void testInvalidSessionSerialDoesNotConsumeFrameOwners() {
       .configuration = fixture.configuration(),
       .resources = fixture.resources(),
       .viewport = fixture.viewport(),
-      .runtime = fixture.runtime(),
+      .runtime = &fixture.runtime(),
       .state = state,
   });
   expect(evaluation.submitReady.has_value(),
@@ -2989,7 +3008,7 @@ void testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin() {
       .configuration = fixture.configuration(),
       .resources = fixture.resources(),
       .viewport = fixture.viewport(),
-      .runtime = fixture.runtime(),
+      .runtime = &fixture.runtime(),
       .state = state};
   auto unrestrictedInputs = inputs;
   unrestrictedInputs.safetyPolicy = SkinSafetyPolicy(
@@ -3015,6 +3034,7 @@ void testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin() {
 } // namespace
 
 int main() {
+  testCallbackBindingWithoutRuntimeFailsValidation();
   testActivationCreatesAnOwningFreshStateSession();
   testConfiguredLoadUsesTheInitializedAuthoritativeState();
   testRepeatedPomyuObjectsShareCyclePreparation();

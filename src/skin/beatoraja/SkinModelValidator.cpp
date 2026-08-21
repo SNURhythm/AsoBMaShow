@@ -119,6 +119,27 @@ SkinModelValidationResult SkinModelValidator::validate(
     return result;
   }
 
+  const auto containsLuaCallback = [](const auto &bindings) {
+    return std::ranges::any_of(bindings, [](const auto &binding) {
+      return std::holds_alternative<LuaCallbackId>(binding.source);
+    });
+  };
+  if (!bindingContext.callbacks &&
+      (containsLuaCallback(model.booleanProperties) ||
+       containsLuaCallback(model.integerProperties) ||
+       containsLuaCallback(model.floatProperties) ||
+       containsLuaCallback(model.stringProperties) ||
+       containsLuaCallback(model.timerProperties) ||
+       containsLuaCallback(model.floatWriters) ||
+       containsLuaCallback(model.stringWriters) ||
+       containsLuaCallback(model.events))) {
+    result.criticalFailure = true;
+    result.diagnostics.push_back(validationDiagnostic(
+        "skin.model.callback_runtime_missing",
+        "Lua callback bindings require a live gameplay runtime."));
+    return result;
+  }
+
   std::set<SkinResourceId> resourceIds;
   std::set<SkinResourceId> imageResourceIds;
   std::set<SkinResourceId> fontResourceIds;
@@ -172,9 +193,10 @@ SkinModelValidationResult SkinModelValidator::validate(
   }
 
   // The Java factories are deliberately nullable. JSONSkinLoader keeps the
-  // object and passes the factory result to it, so catalog/callback lookup is
-  // a runtime concern rather than a skin-admission condition.
-  (void)bindingContext;
+  // object and passes the factory result to it, so built-in catalog matches
+  // and individual callback liveness remain runtime concerns after the
+  // callback-bearing model has proved that a runtime exists.
+  (void)bindingContext.builtins;
   const auto validBooleanIds = booleanIds;
   const auto validIntegerIds = integerIds;
   const auto validFloatIds = floatIds;

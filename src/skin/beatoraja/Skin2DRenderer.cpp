@@ -385,6 +385,17 @@ bool disabledOptionalObject(const FrameLookupIndex &index,
   return found != index.disabledOptionalObjects.end() && *found == id;
 }
 
+LuaCallbackResult invokeCallback(const SkinFrameInputs &inputs,
+                                 LuaCallbackId callback,
+                                 std::span<const LuaScalar> arguments = {}) {
+  if (inputs.runtime == nullptr) {
+    return {.failure = diagnostic(
+                "skin.model.callback_runtime_missing",
+                "Lua callback binding has no live gameplay runtime.")};
+  }
+  return inputs.runtime->invoke(callback, arguments);
+}
+
 ResolvedValue<bool> resolveBoolean(const SkinFrameInputs &inputs,
                                    const FrameLookupIndex &index,
                                    SkinBooleanPropertyId id) {
@@ -405,7 +416,7 @@ ResolvedValue<bool> resolveBoolean(const SkinFrameInputs &inputs,
     return {.value = found.value};
   }
   const auto invoked =
-      inputs.runtime.invoke(std::get<LuaCallbackId>(binding->source), {});
+      invokeCallback(inputs, std::get<LuaCallbackId>(binding->source));
   if (invoked.failure) {
     return {.failure = *invoked.failure};
   }
@@ -437,7 +448,7 @@ ResolvedValue<std::int64_t> resolveInteger(const SkinFrameInputs &inputs,
     return {.value = found.value};
   }
   const auto invoked =
-      inputs.runtime.invoke(std::get<LuaCallbackId>(binding->source), {});
+      invokeCallback(inputs, std::get<LuaCallbackId>(binding->source));
   if (invoked.failure) {
     return {.failure = *invoked.failure};
   }
@@ -477,7 +488,7 @@ ResolvedValue<double> resolveFloat(const SkinFrameInputs &inputs,
     return {.value = found.value};
   }
   const auto invoked =
-      inputs.runtime.invoke(std::get<LuaCallbackId>(binding->source), {});
+      invokeCallback(inputs, std::get<LuaCallbackId>(binding->source));
   if (invoked.failure) {
     return {.failure = *invoked.failure};
   }
@@ -570,7 +581,7 @@ ResolvedValue<std::string> resolveString(const SkinFrameInputs &inputs,
     return {.value = std::string(found.value)};
   }
   const auto invoked =
-      inputs.runtime.invoke(std::get<LuaCallbackId>(binding->source), {});
+      invokeCallback(inputs, std::get<LuaCallbackId>(binding->source));
   if (invoked.failure) {
     return {.failure = *invoked.failure};
   }
@@ -596,7 +607,7 @@ ResolvedValue<std::int64_t> resolveTimer(const SkinFrameInputs &inputs,
     return {.value = inputs.state.timerProperty(*builtin)};
   }
   const auto invoked =
-      inputs.runtime.invoke(std::get<LuaCallbackId>(binding->source), {});
+      invokeCallback(inputs, std::get<LuaCallbackId>(binding->source));
   if (invoked.failure) {
     return {.failure = *invoked.failure};
   }
@@ -2951,8 +2962,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
                      "Gameplay skin session serial must be nonzero."));
       return result;
     }
-    if (beginRuntimeFrame) {
-      const auto begun = inputs.runtime.beginFrame(inputs.frameSerial);
+    if (beginRuntimeFrame && inputs.runtime != nullptr) {
+      const auto begun = inputs.runtime->beginFrame(inputs.frameSerial);
       if (!begun.ok) {
         result.diagnostics.push_back(begun.failure.value_or(
             diagnostic("skin.renderer.frame.begin",

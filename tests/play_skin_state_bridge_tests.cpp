@@ -272,6 +272,25 @@ PlayfieldProjectionResult projectionAt(std::uint64_t serial) {
 
 bool hasDiagnostic(const PlaySkinStateBridge &bridge, std::string_view code);
 
+void testStaticBridgeFrameDoesNotRequireLuaRuntime() {
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = nullptr,
+                              .mutationTable = mutations});
+  bridge.beginFrame(stateAt(201), projectionAt(201));
+  const auto property = bridge.integerProperty({10});
+  const auto customObjects = bridge.updateCustomObjects();
+  const auto committed = bridge.commitFrame();
+  expect(property.supported && customObjects.ok() &&
+             committed.frameSerial == 201 && bridge.diagnostics().empty(),
+         "static bridge frame completes with built-in state and no Lua runtime");
+}
+
 void testDurationBindingsUsePinnedLaneRendererFormula() {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
@@ -287,7 +306,7 @@ void testDurationBindingsUsePinnedLaneRendererFormula() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto state = stateAt(202);
@@ -329,7 +348,7 @@ void testZeroHispeedDurationBindingsFollowJavaCurrentDuration() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto state = stateAt(202);
@@ -362,7 +381,7 @@ void testDurationBindingsUseFrameLocalSpeedObjectMultiplier() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto state = stateAt(202);
@@ -391,7 +410,7 @@ void testHispeedBindingsUsePinnedIntegerAndFloatProperties() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto state = stateAt(203);
@@ -441,7 +460,7 @@ void testIntegerPropertyFactoryDomainNeverRejectsGameplaySkins() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto state = stateAt(231);
@@ -482,7 +501,7 @@ void testMarkProcessedNoteImageIndexTracksPlayerConfiguration() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto state = stateAt(232);
@@ -517,7 +536,7 @@ void testUndefinedLongNoteImageIndexMatchesBeatorajaPlayerConfig() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
   bridge.beginFrame(stateAt(234), projectionAt(234));
 
@@ -614,7 +633,7 @@ void testBridgeOwnsSnapshotAndClosesEachFrameExactlyOnce() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto state = stateAt(71);
@@ -711,7 +730,7 @@ void testFramePropertiesUseAuthoritativeGaugeAndTimerRules() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
   auto state = stateAt(81);
   bridge.beginFrame(state, projectionAt(81));
@@ -785,7 +804,7 @@ void testGameplayModeAndLoadingBooleanProperties() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto state = stateAt(201);
@@ -871,7 +890,7 @@ void testExistingGameplayStatePropertyWiring() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto state = stateAt(205);
@@ -1047,7 +1066,7 @@ void testPracticeMenuSelectorsAndEventsRequireCapturedMenuState() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto state = stateAt(206);
@@ -1124,7 +1143,7 @@ void testLiftHiddenOffsetsFollowPinnedLaneRenderer() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto state = stateAt(208);
@@ -1188,7 +1207,7 @@ void testRemainingDirectGameplayStatePropertyWiring() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto state = stateAt(207);
@@ -1411,7 +1430,7 @@ void testLongNoteHoldTimersUseCapturedLaneState() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto state = stateAt(212);
@@ -1478,7 +1497,7 @@ void testExtendedPlayerOneLaneTimersUsePinnedSkinOffsets() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto state = stateAt(214);
@@ -1523,7 +1542,7 @@ void testPomyuTimersFollowPinnedDefaultProcessorCycles() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto state = stateAt(215);
@@ -1586,7 +1605,7 @@ void testPomyuTimersUseAuthoredMotionCycles() {
       .chartModel = chart,
       .model = &model,
       .configuration = configuration,
-      .runtime = runtime.runtime(),
+      .runtime = &runtime.runtime(),
       .mutationTable = mutations,
       .pomyuMotionCyclesMillis = {100, 250, 250, 250, 250, 100, 250, 250},
   });
@@ -1655,7 +1674,7 @@ void testIrProviderStringUsesCapturedProfileConfiguration() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
   auto state = stateAt(215);
   state.authority.irProviderName = "tachi";
@@ -1679,7 +1698,7 @@ void testIrAccountStringUsesCapturedConnectedAccount() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
   auto state = stateAt(216);
   state.authority.irAccountName = "source-account";
@@ -1713,7 +1732,7 @@ void testSongInformationPropertiesUseImmutableSourceAnalysis() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
   auto state = stateAt(216);
   bridge.beginFrame(state, projectionAt(216));
@@ -1759,7 +1778,7 @@ void testPersistedScorePropertiesUseScoreDataRatherThanLiveJudgements() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
   auto state = stateAt(217);
   state.authority.judgementCounters = {{PGreat, 1}, {Great, 2}};
@@ -1818,7 +1837,7 @@ void testRivalScorePropertiesRequireCapturedTargetScoreData() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
   auto state = stateAt(225);
   bridge.beginFrame(state, projectionAt(225));
@@ -1867,7 +1886,7 @@ void testWallClockPropertiesUseTheLocalCalendar() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
   auto state = stateAt(218);
   bridge.beginFrame(state, projectionAt(218));
@@ -1900,7 +1919,7 @@ void testRuntimeFpsAndUptimePropertiesUseCapturedApplicationAuthority() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
   auto state = stateAt(224);
   state.authority.currentFramesPerSecond = 144;
@@ -1930,7 +1949,7 @@ void testStartInputTimerUsesPinnedSkinTiming() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto state = stateAt(217);
@@ -1964,7 +1983,7 @@ void testFailureTimerUsesCapturedSurvivalFailureEvent() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
   auto state = stateAt(219);
   state.sceneStartMicros = 0;
@@ -1998,7 +2017,7 @@ void testRhythmTimerUsesPinnedSectionAndBpmAccumulator() {
   const auto mutations = makePinnedSkinEventMutationTableV1();
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto state = stateAt(230);
@@ -2051,7 +2070,7 @@ void testFavoriteChartImageIndexUsesCapturedRepositoryState() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
   auto state = stateAt(221);
   state.authority.songReviewFavorite = 2;
@@ -2079,7 +2098,7 @@ void testSongReviewImageIndexesUsePinnedBitmaskStates() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
   auto state = stateAt(222);
   state.authority.songReviewFavorite = 3;
@@ -2115,7 +2134,7 @@ void testDifficultyTableStringsUseCapturedSelectionContext() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
   auto state = stateAt(224);
   state.authority.tableName = "Example Difficulty Table";
@@ -2147,7 +2166,7 @@ void testPlayerConfigurationStringsUseCapturedSourceValues() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
   auto state = stateAt(233);
   state.authority.modeFilterName = "14KEY";
@@ -2181,7 +2200,7 @@ void testConfiguredTargetNameNeighborsFollowPinnedTargetRing() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
   auto state = stateAt(234);
   state.authority.skinTargetId = "RANK_NEXT";
@@ -2225,7 +2244,7 @@ void testTargetScoreStringsFollowPinnedTargetSource() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
   auto state = stateAt(236);
   state.authority.gameplayMode = PlayfieldGameplayMode::Play;
@@ -2277,7 +2296,7 @@ void testChartDocumentBooleansUseCapturedLibraryMetadata() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
   auto state = stateAt(222);
   state.authority.chartHasDocument = true;
@@ -2312,7 +2331,7 @@ void testScoreAndComboTimersUseCapturedGameplayState() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto state = stateAt(208);
@@ -2385,7 +2404,7 @@ void testPlayTimerPropertiesMatchPinnedJavaConversions() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto state = stateAt(211);
@@ -2575,7 +2594,7 @@ void testReadyAndLiveTimersUseTheSharedSkinStateClock() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto beforeReady = stateAt(218);
@@ -2621,7 +2640,7 @@ void testClearAndFullComboTimersFollowPinnedBmsPlayerState() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   // BMSPlayer switches TIMER_ENDOFNOTE_1P only after its integer play clock
@@ -2726,7 +2745,7 @@ void testPlayTimerVisualRebaseSaturatesWithoutLosingCancellation() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   const auto timer = [&](std::uint64_t serial, std::int64_t start,
@@ -2791,7 +2810,7 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto state = stateAt(101);
@@ -3165,7 +3184,7 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   PlaySkinStateBridge unaudited({.chartModel = unauditedChart,
                                  .model = &model,
                                  .configuration = configuration,
-                                 .runtime = runtime.runtime(),
+                                 .runtime = &runtime.runtime(),
                                  .mutationTable = mutations});
   unaudited.beginFrame(stateAt(108), projectionAt(108));
   expect(!unaudited.stringProperty({12}).supported,
@@ -3185,7 +3204,7 @@ void testEmptyCustomObjectsStayZeroCost() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
   bridge.beginFrame(stateAt(91), projectionAt(91));
   const auto update = bridge.updateCustomObjects();
@@ -3238,7 +3257,7 @@ void testCustomTimersPrecedeAutomaticEventsInAuthoredOrder() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
   bridge.beginFrame(stateAt(111), projectionAt(111));
   expect(runtime.runtime().beginFrame(111).ok,
@@ -3291,7 +3310,7 @@ void testCustomEventsAcceptManualAritiesAndRollbackCriticalFrames() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
   bridge.beginFrame(stateAt(112), projectionAt(112));
   expect(runtime.runtime().beginFrame(112).ok,
@@ -3345,7 +3364,7 @@ void testAutomaticCustomEventUsesTheCapturedFrameClockForMinimumInterval() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
   auto runFrame = [&](std::uint64_t serial, std::int64_t visualMicros) {
     auto state = stateAt(serial);
@@ -3411,7 +3430,7 @@ void testCustomObjectBudgetStopsLaterEventsAndRollsBackWrites() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
   bridge.beginFrame(stateAt(113), projectionAt(113));
   expect(runtime.runtime().beginFrame(113).ok,
@@ -3466,7 +3485,7 @@ void testFloatWritersResolveLocallyAndRollbackCallbackMutations() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
   auto state = stateAt(121);
   state.authority.practiceMenu = practice::SkinMenuState{};
@@ -3563,6 +3582,7 @@ void testFloatWritersResolveLocallyAndRollbackCallbackMutations() {
 
 int main() {
   testPinnedMutationTableMatchesFrozenFixtureExhaustively();
+  testStaticBridgeFrameDoesNotRequireLuaRuntime();
   testDurationBindingsUsePinnedLaneRendererFormula();
   testZeroHispeedDurationBindingsFollowJavaCurrentDuration();
   testDurationBindingsUseFrameLocalSpeedObjectMultiplier();

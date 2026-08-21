@@ -1196,10 +1196,12 @@ void PlaySkinStateBridge::beginFrame(
   updatePinnedLaneCoverOffsets();
   updatePinnedPlayTimers();
 
-  context_.runtime.setFrameState(this);
-  context_.runtime.setEventExecutor(
-      {.context = this, .execute = &PlaySkinStateBridge::executeHostEvent});
-  runtimeBound_ = true;
+  if (context_.runtime != nullptr) {
+    context_.runtime->setFrameState(this);
+    context_.runtime->setEventExecutor(
+        {.context = this, .execute = &PlaySkinStateBridge::executeHostEvent});
+    runtimeBound_ = true;
+  }
   lastAcceptedFrameSerial_ = frameSerial_;
 }
 
@@ -1462,9 +1464,16 @@ SkinHostCallResult PlaySkinStateBridge::invokeEventBinding(
   for (std::size_t index = 0; index < arguments.size(); ++index) {
     luaArguments[index] = static_cast<std::int64_t>(arguments[index]);
   }
+  if (context_.runtime == nullptr) {
+    reportDiagnostic({.code = "skin.model.callback_runtime_missing",
+                      .message = "Lua callback binding has no live gameplay "
+                                 "runtime."});
+    return {.status = SkinHostCallStatus::CriticalFailure,
+            .diagnostics = diagnostics_};
+  }
   LuaCallbackResult callback;
   try {
-    callback = context_.runtime.invoke(
+    callback = context_.runtime->invoke(
         std::get<LuaCallbackId>(binding->source),
         std::span<const LuaScalar>{luaArguments.data(), arguments.size()});
   } catch (...) {
@@ -1510,9 +1519,17 @@ SkinHostCallResult PlaySkinStateBridge::evaluateCustomCondition(
     condition = value.value;
     return {.diagnostics = diagnostics_};
   }
+  if (context_.runtime == nullptr) {
+    reportDiagnostic({.code = "skin.model.callback_runtime_missing",
+                      .message = "Lua callback binding has no live gameplay "
+                                 "runtime."});
+    return {.status = SkinHostCallStatus::CriticalFailure,
+            .diagnostics = diagnostics_};
+  }
   LuaCallbackResult callback;
   try {
-    callback = context_.runtime.invoke(std::get<LuaCallbackId>(binding->source), {});
+    callback = context_.runtime->invoke(
+        std::get<LuaCallbackId>(binding->source), {});
   } catch (...) {
     reportDiagnostic({.code = "skin.play_state.custom_event_condition_failed",
                       .message = "Custom event condition failed within host limits."});
@@ -1557,9 +1574,17 @@ SkinHostCallResult PlaySkinStateBridge::evaluateCustomTimer(
     value = timerProperty(*builtin);
     return {.diagnostics = diagnostics_};
   }
+  if (context_.runtime == nullptr) {
+    reportDiagnostic({.code = "skin.model.callback_runtime_missing",
+                      .message = "Lua callback binding has no live gameplay "
+                                 "runtime."});
+    return {.status = SkinHostCallStatus::CriticalFailure,
+            .diagnostics = diagnostics_};
+  }
   LuaCallbackResult callback;
   try {
-    callback = context_.runtime.invoke(std::get<LuaCallbackId>(binding->source), {});
+    callback = context_.runtime->invoke(
+        std::get<LuaCallbackId>(binding->source), {});
   } catch (...) {
     reportDiagnostic({.code = "skin.play_state.custom_timer_callback_failed",
                       .message = "Custom timer callback failed within host limits."});
@@ -1722,12 +1747,19 @@ SkinHostCallResult PlaySkinStateBridge::invokeWriter(
   }
 
   const std::size_t savepoint = staged_.orderedMutations.size();
+  if (context_.runtime == nullptr) {
+    reportDiagnostic({.code = "skin.model.callback_runtime_missing",
+                      .message = "Lua callback binding has no live gameplay "
+                                 "runtime."});
+    return {.status = SkinHostCallStatus::CriticalFailure,
+            .diagnostics = diagnostics_};
+  }
   writerInvocationActive_ = true;
   LuaCallbackResult callback;
   try {
     const std::array<LuaScalar, 1> arguments{
         LuaScalar{std::clamp(normalizedValue, 0.0, 1.0)}};
-    callback = context_.runtime.invoke(
+    callback = context_.runtime->invoke(
         std::get<LuaCallbackId>(binding->source), arguments);
   } catch (...) {
     writerInvocationActive_ = false;
@@ -3554,8 +3586,8 @@ PlaySkinStateBridge::diagnostics() const noexcept {
 
 void PlaySkinStateBridge::closeFrame() noexcept {
   if (runtimeBound_) {
-    context_.runtime.setEventExecutor({});
-    context_.runtime.setFrameState(nullptr);
+    context_.runtime->setEventExecutor({});
+    context_.runtime->setFrameState(nullptr);
     runtimeBound_ = false;
   }
   phase_ = FramePhase::Closed;

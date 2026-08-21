@@ -692,7 +692,7 @@ struct PlaySkinSession::OwnedActivation final {
             .chartModel = *chartModel,
             .model = &model,
             .configuration = configuration,
-            .runtime = *runtime,
+            .runtime = runtime.get(),
             .mutationTable = mutationTable,
             .pomyuMotionCyclesMillis = pomyuMotionCyclesMillis})) {}
 
@@ -749,7 +749,7 @@ PlaySkinSession::PlaySkinSession(
                .resources = *owned_->resources,
                .viewportSettings = owned_->viewportSettings,
                .viewport = owned_->viewport,
-               .runtime = *owned_->runtime,
+               .runtime = owned_->runtime.get(),
                .bridge = *owned_->bridge,
                .renderer = owned_->renderer,
                .quadRenderer = owned_->quadRenderer,
@@ -923,7 +923,7 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
         .chartModel = context.chartModel,
         .model = nullptr,
         .configuration = configuration,
-        .runtime = *runtime.runtime,
+        .runtime = runtime.runtime.get(),
         .mutationTable = configuredMutationTable,
     });
     configuredStateBridge.beginFrame(*context.initialState,
@@ -1125,12 +1125,14 @@ PlaySkinFrameTransactionResult PlaySkinSession::runFrameTransaction(
     return result;
   }
 
-  const auto begun = context_.runtime.beginFrame(state.clock.serial);
-  if (!begun.ok) {
-    result.diagnostics.push_back(begun.failure.value_or(
-        transactionDiagnostic("skin.session.frame.begin",
-                              "Lua runtime rejected the session frame.")));
-    return result;
+  if (context_.runtime != nullptr) {
+    const auto begun = context_.runtime->beginFrame(state.clock.serial);
+    if (!begun.ok) {
+      result.diagnostics.push_back(begun.failure.value_or(
+          transactionDiagnostic("skin.session.frame.begin",
+                                "Lua runtime rejected the session frame.")));
+      return result;
+    }
   }
   SkinExternalFrameOwnership ownership(state.clock.serial,
                                        context_.sessionSerial);
