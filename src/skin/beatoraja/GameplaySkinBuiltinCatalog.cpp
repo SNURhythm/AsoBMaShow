@@ -241,9 +241,14 @@ std::vector<SkinBuiltinBindingCatalogEntry> makeCatalog() {
     add(entries, string, "practice_item_value" + std::to_string(index));
   }
 
+  // StringPropertyFactory.StringType.searchword is the only pinned numeric
+  // StringWriter. In BMSPlayer its MusicSelector-only body is an intentional
+  // no-op, but the non-null writer still makes implicit Text fields editable.
+  add(entries, SkinBindingType{.kind = SkinBindingKind::StringWriter}, 30);
+
   // Timers are not a gap: TimerPropertyFactory and PlaySkinStateBridge both
   // define every nonnegative ID, including an exact inactive fallback. No
-  // built-in float or string writer is executable yet.
+  // other built-in string writer is executable in the pinned factory.
   return entries;
 }
 

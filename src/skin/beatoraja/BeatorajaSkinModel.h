@@ -511,6 +511,7 @@ struct SkinCoverObject {
 struct SkinNestedObjectPresentation {
   SkinObjectId object = 0;
   SkinDestinationBody destination;
+  SkinSourceLocation source;
 };
 
 struct SkinJudgeGradePresentation {
@@ -549,6 +550,19 @@ struct SkinBuiltinImageObject {
   int referenceId = 0;
 };
 
+enum class SkinInvalidInGameplayKind : std::uint8_t {
+  SelectDistributionGraph,
+};
+
+// JsonSkinObjectLoader constructs the select-screen SkinDistributionGraph for
+// a negative generic Graph.type even when JsonPlaySkinObjectLoader is active.
+// Its prepare method hard-casts MainState to MusicSelector, so the construct
+// is source-defined invalid in BMSPlayer rather than a note-distribution graph.
+struct SkinInvalidInGameplayObject {
+  SkinInvalidInGameplayKind kind =
+      SkinInvalidInGameplayKind::SelectDistributionGraph;
+};
+
 // These gameplay widgets are accepted by the pinned loader.  Their rendering
 // is intentionally deferred, but they remain live objects so their authored
 // destinations do not turn into a validation failure.
@@ -565,7 +579,8 @@ using SkinObjectPayload =
                  SkinGaugeObject,
                  SkinNoteObject, SkinCoverObject, SkinJudgeObject,
                  SkinBgaObject, SkinPracticeObject, SkinBuiltinImageObject,
-                 SkinPmCharaObject, SkinBlankObject>;
+                 SkinPmCharaObject, SkinInvalidInGameplayObject,
+                 SkinBlankObject>;
 
 struct SkinObjectDefinition {
   SkinObjectId id = 0;

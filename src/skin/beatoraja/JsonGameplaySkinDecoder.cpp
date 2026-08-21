@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <iterator>
@@ -33,6 +34,8 @@ namespace {
 using Json = nlohmann::json;
 constexpr int kJavaIntegerMinimum = std::numeric_limits<int>::min();
 
+class JsonSourceIndex;
+
 SkinDiagnostic makeDiagnostic(std::string code, std::string message,
                               const SkinEntryId &entry,
                               DiagnosticSeverity severity =
@@ -50,7 +53,11 @@ struct DecodeContext {
   SkinBuiltinBindingCatalogView builtins;
   SkinSafetyPolicy safetyPolicy;
   JsonGameplaySkinDecodeResult &result;
+  const JsonSourceIndex *sources = nullptr;
   bool failed = false;
+
+  [[nodiscard]] std::optional<SkinSourceLocation>
+  source(const Json *value) const;
 
   void error(std::string code, std::string message,
              std::optional<SkinSourceLocation> source = {}) {
@@ -135,7 +142,8 @@ int integerField(const Json &object, std::string_view name, int fallback,
   if (!decoded) {
     context.error("skin_json_model_invalid",
                   std::string(surface) + "." + std::string(name) +
-                      " is not a bounded integer");
+                      " is not a bounded integer",
+                  context.source(value));
     return fallback;
   }
   return *decoded;
@@ -153,7 +161,8 @@ std::optional<int> inheritedIntegerField(const Json &object,
   if (!decoded) {
     context.error("skin_json_model_invalid",
                   std::string(surface) + "." + std::string(name) +
-                      " is not a bounded integer");
+                      " is not a bounded integer",
+                  context.source(value));
     return std::nullopt;
   }
   return *decoded == kJavaIntegerMinimum ? std::nullopt : decoded;
@@ -173,7 +182,8 @@ double numberField(const Json &object, std::string_view name, double fallback,
   }
   context.error("skin_json_model_invalid",
                 std::string(surface) + "." + std::string(name) +
-                    " is not a finite number");
+                    " is not a finite number",
+                context.source(value));
   return fallback;
 }
 
@@ -200,7 +210,8 @@ bool booleanField(const Json &object, std::string_view name, bool fallback,
   }
   context.error("skin_json_model_invalid",
                 std::string(surface) + "." + std::string(name) +
-                    " is not a boolean");
+                    " is not a boolean",
+                context.source(value));
   return fallback;
 }
 
@@ -216,7 +227,8 @@ std::string stringField(const Json &object, std::string_view name,
   }
   context.error("skin_json_model_invalid",
                 std::string(surface) + "." + std::string(name) +
-                    " is not a string");
+                    " is not a string",
+                context.source(value));
   return fallback;
 }
 
@@ -232,13 +244,15 @@ std::vector<std::string> stringArrayField(const Json &object,
   if (!value->is_array()) {
     context.error("skin_json_model_invalid",
                   std::string(surface) + "." + std::string(name) +
-                      " is not an array");
+                      " is not an array",
+                  context.source(value));
     return result;
   }
   if (value->size() > JsonGameplaySkinDecoderPolicy::maxArrayEntries) {
     context.error("skin_json_limit_exceeded",
                   std::string(surface) + "." + std::string(name) +
-                      " exceeds the fixed array limit");
+                      " exceeds the fixed array limit",
+                  context.source(value));
     return result;
   }
   result.reserve(value->size());
@@ -246,7 +260,8 @@ std::vector<std::string> stringArrayField(const Json &object,
     if (!item.is_string()) {
       context.error("skin_json_model_invalid",
                     std::string(surface) + "." + std::string(name) +
-                        " contains a non-string");
+                        " contains a non-string",
+                    context.source(&item));
       continue;
     }
     result.push_back(item.get<std::string>());
@@ -266,7 +281,8 @@ std::vector<int> integerArrayField(const Json &object, std::string_view name,
       value->size() > JsonGameplaySkinDecoderPolicy::maxArrayEntries) {
     context.error("skin_json_model_invalid",
                   std::string(surface) + "." + std::string(name) +
-                      " is not a bounded integer array");
+                      " is not a bounded integer array",
+                  context.source(value));
     return result;
   }
   result.reserve(value->size());
@@ -276,7 +292,8 @@ std::vector<int> integerArrayField(const Json &object, std::string_view name,
     } else {
       context.error("skin_json_model_invalid",
                     std::string(surface) + "." + std::string(name) +
-                        " contains a non-integer");
+                        " contains a non-integer",
+                    context.source(&item));
     }
   }
   return result;
@@ -287,7 +304,8 @@ void checkFields(const Json &object,
                  std::string_view surface, DecodeContext &context) {
   if (!object.is_object()) {
     context.error("skin_json_model_invalid",
-                  std::string(surface) + " is not an object");
+                  std::string(surface) + " is not an object",
+                  context.source(&object));
     return;
   }
   for (auto field = object.begin(); field != object.end(); ++field) {
@@ -295,7 +313,8 @@ void checkFields(const Json &object,
         allowed.end()) {
       context.warning("skin_json_field_unclassified",
                       std::string(surface) + "." + field.key() +
-                          " is not a pinned JsonSkin field");
+                          " is not a pinned JsonSkin field",
+                      context.source(&field.value()));
     }
   }
 }
@@ -310,13 +329,15 @@ void visitObjectArray(const Json &root, std::string_view name,
   if (!array->is_array()) {
     context.error("skin_json_model_invalid",
                   std::string("JsonSkin.Skin.") + std::string(name) +
-                      " is not an array");
+                      " is not an array",
+                  context.source(array));
     return;
   }
   if (array->size() > JsonGameplaySkinDecoderPolicy::maxArrayEntries) {
     context.error("skin_json_limit_exceeded",
                   std::string("JsonSkin.Skin.") + std::string(name) +
-                      " exceeds the fixed array limit");
+                      " exceeds the fixed array limit",
+                  context.source(array));
     return;
   }
   for (std::size_t index = 0; index < array->size(); ++index) {
@@ -605,84 +626,199 @@ std::size_t skipJsonString(std::string_view text, std::size_t quote) {
   return text.size();
 }
 
-std::vector<SkinSourceLocation>
-topLevelArrayObjectLocations(std::string_view text, std::string_view key,
-                             std::string_view virtualPath) {
-  std::vector<SkinSourceLocation> result;
-  std::vector<std::size_t> lineStarts{0};
-  for (std::size_t index = 0; index < text.size(); ++index) {
-    if (text[index] == '\n') lineStarts.push_back(index + 1);
-  }
-  const auto sourceAt = [&](std::size_t offset) {
-    const auto next = std::upper_bound(lineStarts.begin(), lineStarts.end(),
-                                       offset);
-    const std::size_t lineIndex =
-        static_cast<std::size_t>(next - lineStarts.begin() - 1);
-    return SkinSourceLocation{
-        .virtualPath = std::string(virtualPath),
-        .line = static_cast<std::uint32_t>(lineIndex + 1),
-        .column = static_cast<std::uint32_t>(offset - lineStarts[lineIndex] + 1)};
-  };
-  std::vector<char> stack;
-  std::size_t arrayStart = std::string_view::npos;
-  for (std::size_t index = 0; index < text.size();) {
-    const char value = text[index];
-    if (value == '"') {
-      const std::size_t end = skipJsonString(text, index);
-      if (stack.size() == 1 && stack.back() == '{' &&
-          end == index + key.size() + 2 &&
-          text.substr(index + 1, key.size()) == key) {
-        std::size_t next = end;
-        while (next < text.size() &&
-               std::isspace(static_cast<unsigned char>(text[next]))) {
-          ++next;
-        }
-        if (next < text.size() && text[next] == ':') {
-          ++next;
-          while (next < text.size() &&
-                 std::isspace(static_cast<unsigned char>(text[next]))) {
-            ++next;
-          }
-          if (next < text.size() && text[next] == '[') {
-            arrayStart = next;
-            break;
-          }
-        }
-      }
-      index = end;
-      continue;
+std::string jsonPointerToken(std::string_view value) {
+  std::string result;
+  result.reserve(value.size());
+  for (const char character : value) {
+    if (character == '~') {
+      result += "~0";
+    } else if (character == '/') {
+      result += "~1";
+    } else {
+      result.push_back(character);
     }
-    if (value == '{' || value == '[') {
-      stack.push_back(value);
-    } else if ((value == '}' || value == ']') && !stack.empty()) {
-      stack.pop_back();
-    }
-    ++index;
-  }
-  if (arrayStart == std::string_view::npos) {
-    return result;
-  }
-  int depth = 0;
-  for (std::size_t index = arrayStart + 1; index < text.size();) {
-    const char value = text[index];
-    if (value == '"') {
-      index = skipJsonString(text, index);
-      continue;
-    }
-    if (value == '{' || value == '[') {
-      if (depth == 0 && value == '{') {
-        result.push_back(sourceAt(index));
-      }
-      ++depth;
-    } else if (value == '}' || value == ']') {
-      if (depth == 0 && value == ']') {
-        break;
-      }
-      --depth;
-    }
-    ++index;
   }
   return result;
+}
+
+class JsonSourceIndex final {
+public:
+  JsonSourceIndex(std::string_view text, std::string virtualPath)
+      : text_(text), virtualPath_(std::move(virtualPath)), lineStarts_{0} {
+    for (std::size_t index = 0; index < text_.size(); ++index) {
+      if (text_[index] == '\n') lineStarts_.push_back(index + 1);
+    }
+  }
+
+  [[nodiscard]] bool build(const Json &root) {
+    std::size_t offset = 0;
+    std::size_t values = 0;
+    if (!indexValue(offset, "", 1, values)) return false;
+    skipWhitespace(offset);
+    if (offset != text_.size()) return false;
+    bind(root, "");
+    return true;
+  }
+
+  [[nodiscard]] std::optional<SkinSourceLocation>
+  source(const Json *value) const {
+    if (value == nullptr) return std::nullopt;
+    const auto found = nodeSources_.find(value);
+    return found == nodeSources_.end()
+               ? std::nullopt
+               : std::optional<SkinSourceLocation>(found->second);
+  }
+
+private:
+  [[nodiscard]] SkinSourceLocation sourceAt(std::size_t offset) const {
+    const auto next =
+        std::upper_bound(lineStarts_.begin(), lineStarts_.end(), offset);
+    const std::size_t lineIndex =
+        static_cast<std::size_t>(next - lineStarts_.begin() - 1);
+    return {.virtualPath = virtualPath_,
+            .line = static_cast<std::uint32_t>(lineIndex + 1),
+            .column = static_cast<std::uint32_t>(
+                offset - lineStarts_[lineIndex] + 1)};
+  }
+
+  void skipWhitespace(std::size_t &offset) const {
+    while (offset < text_.size() &&
+           std::isspace(static_cast<unsigned char>(text_[offset]))) {
+      ++offset;
+    }
+  }
+
+  [[nodiscard]] std::optional<std::string>
+  decodeString(std::size_t &offset) const {
+    if (offset >= text_.size() || text_[offset] != '"') return std::nullopt;
+    const std::size_t end = skipJsonString(text_, offset);
+    if (end > text_.size() || end == 0 || text_[end - 1] != '"') {
+      return std::nullopt;
+    }
+    try {
+      Json decoded = Json::parse(text_.begin() +
+                                     static_cast<std::ptrdiff_t>(offset),
+                                 text_.begin() +
+                                     static_cast<std::ptrdiff_t>(end));
+      offset = end;
+      return decoded.get<std::string>();
+    } catch (...) {
+      return std::nullopt;
+    }
+  }
+
+  [[nodiscard]] bool indexValue(std::size_t &offset, std::string pointer,
+                                std::size_t depth, std::size_t &values) {
+    skipWhitespace(offset);
+    if (offset >= text_.size() ||
+        depth > JsonGameplaySkinDecoderPolicy::maxDepth ||
+        ++values > JsonGameplaySkinDecoderPolicy::maxValues) {
+      return false;
+    }
+    locations_.insert_or_assign(pointer, sourceAt(offset));
+    const char leading = text_[offset];
+    if (leading == '"') {
+      const std::size_t end = skipJsonString(text_, offset);
+      if (end > text_.size() || end == 0 || text_[end - 1] != '"') {
+        return false;
+      }
+      offset = end;
+      return true;
+    }
+    if (leading == '{') {
+      ++offset;
+      skipWhitespace(offset);
+      if (offset < text_.size() && text_[offset] == '}') {
+        ++offset;
+        return true;
+      }
+      std::size_t members = 0;
+      while (offset < text_.size()) {
+        if (++members > JsonGameplaySkinDecoderPolicy::maxArrayEntries) {
+          return false;
+        }
+        auto key = decodeString(offset);
+        if (!key) return false;
+        skipWhitespace(offset);
+        if (offset >= text_.size() || text_[offset] != ':') return false;
+        ++offset;
+        if (!indexValue(offset,
+                        pointer + "/" + jsonPointerToken(*key), depth + 1,
+                        values)) {
+          return false;
+        }
+        skipWhitespace(offset);
+        if (offset < text_.size() && text_[offset] == '}') {
+          ++offset;
+          return true;
+        }
+        if (offset >= text_.size() || text_[offset] != ',') return false;
+        ++offset;
+        skipWhitespace(offset);
+      }
+      return false;
+    }
+    if (leading == '[') {
+      ++offset;
+      skipWhitespace(offset);
+      if (offset < text_.size() && text_[offset] == ']') {
+        ++offset;
+        return true;
+      }
+      std::size_t index = 0;
+      while (offset < text_.size()) {
+        if (index >= JsonGameplaySkinDecoderPolicy::maxArrayEntries ||
+            !indexValue(offset, pointer + "/" + std::to_string(index),
+                        depth + 1, values)) {
+          return false;
+        }
+        ++index;
+        skipWhitespace(offset);
+        if (offset < text_.size() && text_[offset] == ']') {
+          ++offset;
+          return true;
+        }
+        if (offset >= text_.size() || text_[offset] != ',') return false;
+        ++offset;
+        skipWhitespace(offset);
+      }
+      return false;
+    }
+    const std::size_t start = offset;
+    while (offset < text_.size() && text_[offset] != ',' &&
+           text_[offset] != '}' && text_[offset] != ']' &&
+           !std::isspace(static_cast<unsigned char>(text_[offset]))) {
+      ++offset;
+    }
+    return offset != start;
+  }
+
+  void bind(const Json &value, const std::string &pointer) {
+    if (const auto found = locations_.find(pointer);
+        found != locations_.end()) {
+      nodeSources_.insert_or_assign(&value, found->second);
+    }
+    if (value.is_object()) {
+      for (auto field = value.begin(); field != value.end(); ++field) {
+        bind(field.value(), pointer + "/" + jsonPointerToken(field.key()));
+      }
+    } else if (value.is_array()) {
+      for (std::size_t index = 0; index < value.size(); ++index) {
+        bind(value[index], pointer + "/" + std::to_string(index));
+      }
+    }
+  }
+
+  std::string_view text_;
+  std::string virtualPath_;
+  std::vector<std::size_t> lineStarts_;
+  std::map<std::string, SkinSourceLocation, std::less<>> locations_;
+  std::map<const Json *, SkinSourceLocation> nodeSources_;
+};
+
+std::optional<SkinSourceLocation>
+DecodeContext::source(const Json *value) const {
+  return sources == nullptr ? std::nullopt : sources->source(value);
 }
 
 bool validateBudget(const Json &root, DecodeContext &context) {
@@ -758,7 +894,8 @@ struct StaticBindingRegistry {
       if (std::holds_alternative<std::string>(result->value)) {
         context.warning("skin_json_callback_unsupported",
                         "JSON binding '" + std::string(path) +
-                            "' requires Lua and was left static/unbound");
+                            "' requires Lua and was left static/unbound",
+                        context.source(authored));
       }
       return std::nullopt;
     }
@@ -861,10 +998,10 @@ struct StaticBindingRegistry {
   }
 
   std::optional<SkinStringWriterId>
-  stringWriter(const Json *authored, std::uint32_t ordinal,
-               std::string_view path) {
+  stringWriter(const Json *authored, std::optional<int> fallback,
+               std::uint32_t ordinal, std::string_view path) {
     const SkinBindingType type{.kind = SkinBindingKind::StringWriter};
-    auto selected = selector(authored, type, std::nullopt, path);
+    auto selected = selector(authored, type, fallback, path);
     if (!selected) return std::nullopt;
     if (const auto found = stringWriterIds.find(selected->value);
         found != stringWriterIds.end()) return found->second;
@@ -1313,7 +1450,8 @@ SkinSpriteFrames spriteForImage(BuildState &state,
       JsonGameplaySkinDecoderPolicy::maxValues /
           static_cast<std::size_t>(divisionsY)) {
     state.context.error("skin_json_limit_exceeded",
-                        "JSON image divisions exceed the frame limit");
+                        "JSON image divisions exceed the frame limit",
+                        state.context.source(member(image, "divx")));
     return {};
   }
   SkinSpriteFrames result{
@@ -1364,7 +1502,8 @@ std::vector<SkinDigitOffset> digitOffsets(const Json &definition,
   if (!offsets->is_array() ||
       offsets->size() > JsonGameplaySkinDecoderPolicy::maxArrayEntries) {
     context.error("skin_json_model_invalid",
-                  std::string(surface) + ".offset is not a bounded array");
+                  std::string(surface) + ".offset is not a bounded array",
+                  context.source(offsets));
     return result;
   }
   result.reserve(offsets->size());
@@ -1447,7 +1586,8 @@ SkinDestinationBody decodeDestinationBody(BuildState &state,
   const auto mappedBlend = blendMode(blend);
   if (!mappedBlend) {
     state.context.error("skin_json_model_invalid",
-                        "JsonSkin.Destination.blend is outside the pinned set");
+                        "JsonSkin.Destination.blend is outside the pinned set",
+                        state.context.source(member(destination, "blend")));
   } else {
     output.blend = *mappedBlend;
   }
@@ -1455,7 +1595,8 @@ SkinDestinationBody decodeDestinationBody(BuildState &state,
                                   "JsonSkin.Destination");
   if (filter < 0 || filter > 1) {
     state.context.error("skin_json_model_invalid",
-                        "JsonSkin.Destination.filter is outside the pinned set");
+                        "JsonSkin.Destination.filter is outside the pinned set",
+                        state.context.source(member(destination, "filter")));
   } else {
     output.filter = static_cast<SkinFilterMode>(filter);
   }
@@ -1463,7 +1604,8 @@ SkinDestinationBody decodeDestinationBody(BuildState &state,
                                    "JsonSkin.Destination");
   if (stretch < -1 || stretch > 10) {
     state.context.error("skin_json_model_invalid",
-                        "JsonSkin.Destination.stretch is outside the pinned set");
+                        "JsonSkin.Destination.stretch is outside the pinned set",
+                        state.context.source(member(destination, "stretch")));
   } else if (stretch >= 0) {
     output.stretch = static_cast<SkinStretchMode>(stretch);
   }
@@ -1550,7 +1692,8 @@ SkinDestinationBody decodeDestinationBody(BuildState &state,
       if (std::ranges::any_of(rgba,
                               [](int value) { return value < 0 || value > 255; })) {
         state.context.error("skin_json_model_invalid",
-                            "JsonSkin.Animation color is outside byte range");
+                            "JsonSkin.Animation color is outside byte range",
+                            state.context.source(&frame));
       } else {
         current.rgba = {static_cast<std::uint8_t>(rgba[0]),
                         static_cast<std::uint8_t>(rgba[1]),
@@ -1626,7 +1769,8 @@ numericAtlas(BuildState &state, NumericGlyphAtlasKind kind,
       {.kind = kind, .source = std::move(source), .format = std::move(format)});
   if (!partitioned.atlas) {
     state.context.error("skin_json_model_invalid",
-                        "JSON numeric glyph atlas cannot be normalized");
+                        "JSON numeric glyph atlas cannot be normalized",
+                        state.context.source(&definition));
     return std::nullopt;
   }
   return std::move(partitioned.atlas);
@@ -1643,7 +1787,8 @@ SkinObjectPayload buildImage(BuildState &state,
                                   static_cast<std::size_t>(stateCount) !=
                               0) {
     state.context.error("skin_json_model_invalid",
-                        "JsonSkin.Image.len does not partition its frames");
+                        "JsonSkin.Image.len does not partition its frames",
+                        state.context.source(member(definition, "len")));
     return SkinImageObject{};
   }
   SkinImageObject output;
@@ -1806,13 +1951,17 @@ SkinObjectPayload buildText(BuildState &state,
       .editable = booleanField(definition, "editable", false, state.context,
                                "JsonSkin.Text"),
   };
-  if (member(definition, "event") != nullptr) {
-    output.writer = state.bindings.stringWriter(
-        member(definition, "event"),
-        static_cast<std::uint32_t>(reference.authoredIndex),
-        bindingPath("text", reference.authoredIndex, "event"));
-  }
-  if (member(definition, "event") == nullptr && output.writer) {
+  const Json *event = member(definition, "event");
+  const bool implicitWriter = event == nullptr || event->is_null();
+  output.writer = state.bindings.stringWriter(
+      event,
+      implicitWriter
+          ? std::optional<int>(integerField(definition, "ref", 0,
+                                            state.context, "JsonSkin.Text"))
+          : std::nullopt,
+      static_cast<std::uint32_t>(reference.authoredIndex),
+      bindingPath("text", reference.authoredIndex, "event"));
+  if (implicitWriter && output.writer) {
     output.editable = true;
   }
   return output;
@@ -1882,15 +2031,20 @@ SkinObjectPayload buildSlider(BuildState &state,
 SkinObjectPayload buildGraph(BuildState &state,
                              const DefinitionReference &reference) {
   const Json &definition = *reference.value;
-  SkinGraphObject output;
-  output.fill = spriteForImage(state, reference, "graph");
   const int type = integerField(definition, "type", 0, state.context,
                                 "JsonSkin.Graph");
   if (type < 0) {
-    state.context.warning("skin_json_distribution_graph_static",
-                          "negative Graph type is retained as a static typed graph");
-    output.value = SkinFloatPropertyId{};
-  } else if (member(definition, "value") != nullptr &&
+    state.context.warning(
+        "skin_json_distribution_graph_invalid_in_gameplay",
+        "negative generic Graph creates a select-only distribution object "
+        "that is invalid in BMSPlayer",
+        state.context.source(member(definition, "type")));
+    return SkinInvalidInGameplayObject{
+        .kind = SkinInvalidInGameplayKind::SelectDistributionGraph};
+  }
+  SkinGraphObject output;
+  output.fill = spriteForImage(state, reference, "graph");
+  if (member(definition, "value") != nullptr &&
              !member(definition, "value")->is_null()) {
     output.value = state.bindings
                        .floating(member(definition, "value"), std::nullopt,
@@ -1935,7 +2089,8 @@ SkinObjectPayload buildGaugeGraph(BuildState &state,
     for (auto &row : output.rgba) row.fill(0x000000ffU);
     if (!colors->is_array()) {
       state.context.error("skin_json_model_invalid",
-                          "JsonSkin.GaugeGraph.color is not an array");
+                          "JsonSkin.GaugeGraph.color is not an array",
+                          state.context.source(colors));
       return output;
     }
     const std::size_t count = std::min<std::size_t>(24, colors->size());
@@ -1945,7 +2100,8 @@ SkinObjectPayload buildGaugeGraph(BuildState &state,
           directColor((*colors)[index].get_ref<const std::string &>());
       if (!decoded) {
         state.context.error("skin_json_model_invalid",
-                            "JsonSkin.GaugeGraph.color contains invalid color");
+                            "JsonSkin.GaugeGraph.color contains invalid color",
+                            state.context.source(&(*colors)[index]));
       } else {
         output.rgba[index / 4][index % 4] = *decoded;
       }
@@ -1987,7 +2143,8 @@ SkinObjectPayload buildJudgeGraph(BuildState &state,
                                    "JsonSkin.JudgeGraph");
   if (rawType < 0 || rawType > 2) {
     state.context.error("skin_json_model_invalid",
-                        "JsonSkin.JudgeGraph.type is outside the pinned range");
+                        "JsonSkin.JudgeGraph.type is outside the pinned range",
+                        state.context.source(member(definition, "type")));
   }
   return SkinNoteDistributionGraphObject{
       .type = static_cast<SkinNoteDistributionGraphType>(
@@ -2199,7 +2356,8 @@ SkinObjectPayload buildGauge(BuildState &state,
   auto expanded = expandSkinGaugeNodes(input);
   if (!expanded.gauge) {
     state.context.error("skin_json_model_invalid",
-                        "JsonSkin.Gauge nodes cannot be expanded");
+                        "JsonSkin.Gauge nodes cannot be expanded",
+                        state.context.source(&definition));
     return SkinGaugeObject{};
   }
   return std::move(*expanded.gauge);
@@ -2266,7 +2424,8 @@ SkinObjectPayload buildNote(BuildState &state,
   auto normalized = normalizeSkinNote(input);
   if (!normalized.note) {
     state.context.error("skin_json_model_invalid",
-                        "JsonSkin.NoteSet visual arrays cannot be normalized");
+                        "JsonSkin.NoteSet visual arrays cannot be normalized",
+                        state.context.source(&note));
     return SkinNoteObject{};
   }
   SkinNoteObject output;
@@ -2390,7 +2549,8 @@ SkinObjectPayload buildCover(BuildState &state,
        .lineScale = 1.0});
   if (!normalized.cover) {
     state.context.error("skin_json_model_invalid",
-                        "JSON cover object cannot be normalized");
+                        "JSON cover object cannot be normalized",
+                        state.context.source(&definition));
     return SkinCoverObject{.kind = kind};
   }
   return *normalized.cover;
@@ -2461,12 +2621,18 @@ SkinObjectPayload buildJudge(BuildState &state,
                              "/image/" + std::to_string(grade),
              .payload = std::move(childImage),
              .authoredOrdinal = static_cast<std::uint32_t>(grade),
-             .critical = false});
+             .critical = false,
+             .source = state.context.source(found->second.value).value_or(
+                 SkinSourceLocation{.virtualPath =
+                                        state.context.entry.packageRelativePath})});
         output.grades[grade].image = SkinNestedObjectPresentation{
             .object = id,
             .destination = decodeDestinationBody(
                 state, child, static_cast<std::uint32_t>(grade),
-                "judge.images[" + std::to_string(grade + 1) + "]")};
+                "judge.images[" + std::to_string(grade + 1) + "]"),
+            .source = state.context.source(&child).value_or(
+                SkinSourceLocation{.virtualPath =
+                                       state.context.entry.packageRelativePath})};
       }
     }
     if (numbers != nullptr && numbers->is_array() && grade < numbers->size()) {
@@ -2494,9 +2660,16 @@ SkinObjectPayload buildJudge(BuildState &state,
                              "/number/" + std::to_string(grade),
              .payload = std::move(childNumber),
              .authoredOrdinal = static_cast<std::uint32_t>(grade),
-             .critical = false});
+             .critical = false,
+             .source = state.context.source(found->second.value).value_or(
+                 SkinSourceLocation{.virtualPath =
+                                        state.context.entry.packageRelativePath})});
         output.grades[grade].detailNumber = SkinNestedObjectPresentation{
-            .object = id, .destination = std::move(destination)};
+            .object = id,
+            .destination = std::move(destination),
+            .source = state.context.source(&child).value_or(
+                SkinSourceLocation{.virtualPath =
+                                       state.context.entry.packageRelativePath})};
       }
     }
   }
@@ -2634,6 +2807,59 @@ SkinObjectPayload buildPayload(BuildState &state,
   return SkinImageObject{};
 }
 
+const DefinitionReference *definitionForKind(
+    BuildState &state, SkinObjectResolutionKind kind, std::string_view name) {
+  const auto mapped = [&](DefinitionMap &definitions) {
+    const auto found = definitions.find(name);
+    return found == definitions.end() ? nullptr : &found->second;
+  };
+  switch (kind) {
+  case SkinObjectResolutionKind::Image:
+    return mapped(state.images);
+  case SkinObjectResolutionKind::ImageSet:
+    return mapped(state.imageSets);
+  case SkinObjectResolutionKind::Value:
+    return mapped(state.values);
+  case SkinObjectResolutionKind::FloatValue:
+    return mapped(state.floatValues);
+  case SkinObjectResolutionKind::Text:
+    return mapped(state.texts);
+  case SkinObjectResolutionKind::Slider:
+    return mapped(state.sliders);
+  case SkinObjectResolutionKind::Graph:
+    return mapped(state.graphs);
+  case SkinObjectResolutionKind::GaugeGraph:
+    return mapped(state.gaugeGraphs);
+  case SkinObjectResolutionKind::JudgeGraph:
+    return mapped(state.judgeGraphs);
+  case SkinObjectResolutionKind::BpmGraph:
+    return mapped(state.bpmGraphs);
+  case SkinObjectResolutionKind::HitErrorVisualizer:
+    return mapped(state.hitErrorVisualizers);
+  case SkinObjectResolutionKind::TimingVisualizer:
+    return mapped(state.timingVisualizers);
+  case SkinObjectResolutionKind::TimingDistributionGraph:
+    return mapped(state.timingDistributionGraphs);
+  case SkinObjectResolutionKind::Gauge:
+    return state.gauge ? &*state.gauge : nullptr;
+  case SkinObjectResolutionKind::Note:
+    return state.note ? &*state.note : nullptr;
+  case SkinObjectResolutionKind::HiddenCover:
+    return mapped(state.hiddenCovers);
+  case SkinObjectResolutionKind::LiftCover:
+    return mapped(state.liftCovers);
+  case SkinObjectResolutionKind::Practice:
+    return state.practice ? &*state.practice : nullptr;
+  case SkinObjectResolutionKind::Bga:
+    return state.bga ? &*state.bga : nullptr;
+  case SkinObjectResolutionKind::Judge:
+    return mapped(state.judges);
+  case SkinObjectResolutionKind::PmChara:
+    return mapped(state.pmCharas);
+  }
+  return nullptr;
+}
+
 void decodeCustomBindings(BuildState &state) {
   visitObjectArray(state.root, "customEvents", state.context,
                    [&](const Json &event, std::size_t index) {
@@ -2642,7 +2868,8 @@ void decodeCustomBindings(BuildState &state) {
         bindingPath("customEvents", index, "action"));
     if (!action) {
       state.context.warning("skin_json_binding_missing",
-                            "JSON custom event has no static action binding");
+                            "JSON custom event has no static action binding",
+                            state.context.source(member(event, "action")));
     }
     state.model.customEvents.push_back(
         {.id = integerField(event, "id", 0, state.context,
@@ -2667,8 +2894,7 @@ void decodeCustomBindings(BuildState &state) {
   });
 }
 
-void decodeDestinations(BuildState &state,
-                        std::span<const SkinSourceLocation> locations) {
+void decodeDestinations(BuildState &state) {
   const Json *destinations = member(state.root, "destination");
   if (destinations == nullptr || !destinations->is_array()) return;
   state.nextSyntheticObjectId =
@@ -2677,6 +2903,11 @@ void decodeDestinations(BuildState &state,
     const Json &destination = (*destinations)[ordinal];
     const std::string name = stringField(destination, "id", {}, state.context,
                                          "JsonSkin.Destination");
+    const SkinSourceLocation destinationSource =
+        state.context.source(&destination).value_or(
+            SkinSourceLocation{.virtualPath =
+                                   state.context.entry.packageRelativePath});
+    SkinSourceLocation objectSource = destinationSource;
     SkinObjectPayload payload;
     bool critical = false;
     if (const auto numeric = destinationInteger(name); numeric && *numeric < 0) {
@@ -2688,6 +2919,10 @@ void decodeDestinations(BuildState &state,
       const auto kind = resolvedKind(state, name);
       if (!kind) {
         continue;
+      }
+      if (const auto *definition = definitionForKind(state, *kind, name)) {
+        objectSource =
+            state.context.source(definition->value).value_or(objectSource);
       }
       if (*kind == SkinObjectResolutionKind::PmChara) {
         const Json &definition = *state.pmCharas.at(std::string(name)).value;
@@ -2718,11 +2953,6 @@ void decodeDestinations(BuildState &state,
         presentation.offsetIds = normalized.destinationOffsetIds;
       }
     }
-    const SkinSourceLocation source =
-        ordinal < locations.size()
-            ? locations[ordinal]
-            : SkinSourceLocation{.virtualPath =
-                                     state.context.entry.packageRelativePath};
     const SkinObjectId objectId{
         static_cast<std::uint32_t>(state.model.destinations.size() + 1)};
     state.model.objects.push_back(
@@ -2731,11 +2961,11 @@ void decodeDestinations(BuildState &state,
          .payload = std::move(payload),
          .authoredOrdinal = static_cast<std::uint32_t>(ordinal),
          .critical = critical,
-         .source = source});
+         .source = std::move(objectSource)});
     state.model.destinations.push_back(
         {.object = objectId,
          .presentation = std::move(presentation),
-         .source = source});
+         .source = destinationSource});
   }
   state.model.objects.insert(state.model.objects.end(),
                              std::make_move_iterator(state.nestedObjects.begin()),
@@ -2743,7 +2973,6 @@ void decodeDestinations(BuildState &state,
 }
 
 void buildGameplayModel(const Json &root, const BeatorajaSkinHeader &header,
-                        std::span<const SkinSourceLocation> locations,
                         DecodeContext &context) {
   BeatorajaSkinModel model;
   model.header = header;
@@ -2768,7 +2997,7 @@ void buildGameplayModel(const Json &root, const BeatorajaSkinHeader &header,
   decodeResources(state);
   indexGameplayDefinitions(state);
   decodeCustomBindings(state);
-  decodeDestinations(state, locations);
+  decodeDestinations(state);
   state.bindings.moveInto(model);
   context.result.model = std::move(model);
 }
@@ -2817,6 +3046,13 @@ JsonGameplaySkinDecodeResult JsonGameplaySkinDecoder::decode(
     if (!validateBudget(root, context)) {
       return result;
     }
+    JsonSourceIndex sourceIndex(text, entry.packageRelativePath);
+    if (!sourceIndex.build(root)) {
+      context.error("skin_json_source_index_failed",
+                    "JSON gameplay provenance index could not be built");
+      return result;
+    }
+    context.sources = &sourceIndex;
     classifyDocumentFields(root, context);
     BeatorajaSkinHeader header = decodeHeader(root, context);
     result.header = header;
@@ -2826,9 +3062,7 @@ JsonGameplaySkinDecodeResult JsonGameplaySkinDecoder::decode(
                     "JSON gameplay document does not declare a gameplay type");
       return result;
     }
-    const auto locations = topLevelArrayObjectLocations(
-        text, "destination", entry.packageRelativePath);
-    buildGameplayModel(root, header, locations, context);
+    buildGameplayModel(root, header, context);
     if (context.failed) {
       // Header and reconciled configuration remain useful for diagnostics and
       // catalog metadata. Only the unsafe/incomplete canonical model fails.

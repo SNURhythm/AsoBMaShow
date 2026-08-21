@@ -3522,6 +3522,10 @@ void testFloatWritersResolveLocallyAndRollbackCallbackMutations() {
       {.id = SkinFloatWriterId{11},
        .source = SkinBuiltinPropertySelector{.value = 20}},
   };
+  model.model.stringWriters = {
+      {.id = SkinStringWriterId{1},
+       .source = SkinBuiltinPropertySelector{.value = 30}},
+  };
   BeatorajaSkinConfiguration configuration;
   auto rules = makePinnedSkinEventMutationTableV1();
   std::vector<SkinEventMutationRule> testRules(rules.rules().begin(),
@@ -3566,6 +3570,9 @@ void testFloatWritersResolveLocallyAndRollbackCallbackMutations() {
   expect(bridge.invokeWriter(SkinFloatWriterId{11}, 0.5).status ==
              SkinHostCallStatus::Completed,
          "practice-position writer stages the source viewport mutation");
+  expect(bridge.invokeWriter(SkinStringWriterId{1}, "query").status ==
+             SkinHostCallStatus::Completed,
+         "searchword StringWriter is an accepted no-op outside MusicSelector");
 
   for (const double value : {-2.0, 2.0, 0.25}) {
     const auto result = bridge.invokeWriter(SkinFloatWriterId{1}, value);

@@ -66,6 +66,12 @@ decodeFixture(std::string_view name,
                                           gameplaySkinBuiltinCatalog());
 }
 
+JsonGameplaySkinDecodeResult decodeInline(std::string_view text) {
+  return JsonGameplaySkinDecoder{}.decode(
+      std::as_bytes(std::span(text)), fixtureEntry("inline.json"), nullptr,
+      gameplaySkinBuiltinCatalog());
+}
+
 const SkinObjectDefinition *findObject(const BeatorajaSkinModel &model,
                                        std::string_view name) {
   const auto found = std::ranges::find_if(
@@ -671,6 +677,159 @@ void testMalformedUnboundedAndCallbackJsonFailAtDecoderBoundary() {
          "a JSON Lua-script binding is diagnosed without creating a callback");
 }
 
+void testNegativeGenericGraphsKeepTheSelectOnlyGameplayBoundary() {
+  const auto decoded = decodeInline(R"json({
+    "type": 0,
+    "source": [{"id":"atlas","path":"atlas.png"}],
+    "graph": [
+      {"id":"lamp-distribution","src":"atlas","w":11,"h":1,"divx":11,"type":-1},
+      {"id":"rank-distribution","src":"atlas","w":28,"h":1,"divx":28,"type":-2}
+    ],
+    "destination": [
+      {"id":"lamp-distribution","dst":[{}]},
+      {"id":"rank-distribution","dst":[{}]}
+    ]
+  })json");
+  const auto *lamp = decoded.model
+                         ? findObject(*decoded.model, "lamp-distribution")
+                         : nullptr;
+  const auto *rank = decoded.model
+                         ? findObject(*decoded.model, "rank-distribution")
+                         : nullptr;
+  expect(decoded.model && lamp && rank &&
+             std::holds_alternative<SkinInvalidInGameplayObject>(
+                 lamp->payload) &&
+             std::holds_alternative<SkinInvalidInGameplayObject>(
+                 rank->payload) &&
+             !std::holds_alternative<SkinGraphObject>(lamp->payload) &&
+             !std::holds_alternative<SkinGraphObject>(rank->payload) &&
+             !std::holds_alternative<SkinNoteDistributionGraphObject>(
+                 lamp->payload) &&
+             !std::holds_alternative<SkinNoteDistributionGraphObject>(
+                 rank->payload) &&
+             hasDiagnostic(decoded,
+                           "skin_json_distribution_graph_invalid_in_gameplay"),
+         "negative generic Graph stays a diagnosed select-only object rather "
+         "than becoming a gameplay graph");
+}
+
+void testTextRefWriterFallbackAndExplicitEventPrecedence() {
+  const auto decoded = decodeInline(R"json({
+    "type": 0,
+    "font": [{"id":"font","path":"font.ttf"}],
+    "text": [
+      {"id":"omitted","font":"font","ref":30},
+      {"id":"null","font":"font","ref":30,"event":null},
+      {"id":"explicit","font":"font","ref":10,"event":30},
+      {"id":"script","font":"font","ref":30,"event":"return value"}
+    ],
+    "destination": [
+      {"id":"omitted","dst":[{}]},
+      {"id":"null","dst":[{}]},
+      {"id":"explicit","dst":[{}]},
+      {"id":"script","dst":[{}]}
+    ]
+  })json");
+  const auto *omitted = decoded.model
+                            ? payload<SkinTextObject>(*decoded.model, "omitted")
+                            : nullptr;
+  const auto *nullEvent = decoded.model
+                              ? payload<SkinTextObject>(*decoded.model, "null")
+                              : nullptr;
+  const auto *explicitEvent =
+      decoded.model ? payload<SkinTextObject>(*decoded.model, "explicit")
+                    : nullptr;
+  const auto *script = decoded.model
+                           ? payload<SkinTextObject>(*decoded.model, "script")
+                           : nullptr;
+  const auto writerSelector = [&](const SkinTextObject *text) {
+    if (!decoded.model || text == nullptr || !text->writer ||
+        text->writer->value == 0 ||
+        text->writer->value > decoded.model->stringWriters.size()) {
+      return std::optional<int>{};
+    }
+    const auto *builtin = std::get_if<SkinBuiltinPropertySelector>(
+        &decoded.model->stringWriters[text->writer->value - 1].source);
+    if (builtin == nullptr) return std::optional<int>{};
+    const auto *numeric = std::get_if<int>(&builtin->value);
+    return numeric == nullptr ? std::optional<int>{}
+                              : std::optional<int>(*numeric);
+  };
+  expect(omitted && nullEvent && explicitEvent && script &&
+             writerSelector(omitted) == 30 && omitted->editable &&
+             writerSelector(nullEvent) == 30 && nullEvent->editable &&
+             writerSelector(explicitEvent) == 30 && !explicitEvent->editable &&
+             !script->writer && !script->editable &&
+             hasDiagnostic(decoded, "skin_json_callback_unsupported"),
+         "Text uses ref writer only for absent/null event and marks only the "
+         "implicit writer editable");
+}
+
+void testJsonObjectDestinationAndMalformedFieldProvenance() {
+  const auto decoded = decodeFixture("all_gameplay_fields.json");
+  const auto *image = decoded.model
+                          ? findObject(*decoded.model, "image-all")
+                          : nullptr;
+  const auto *destination =
+      decoded.model && image ? findDestination(*decoded.model, image->id)
+                             : nullptr;
+  const auto nestedImage =
+      decoded.model
+          ? std::ranges::find_if(decoded.model->objects, [](const auto &object) {
+              return object.authoredName == "__judge/judge-all/image/0";
+            })
+          : std::vector<SkinObjectDefinition>::const_iterator{};
+  const auto nestedNumber =
+      decoded.model
+          ? std::ranges::find_if(decoded.model->objects, [](const auto &object) {
+              return object.authoredName == "__judge/judge-all/number/0";
+            })
+          : std::vector<SkinObjectDefinition>::const_iterator{};
+  const auto *judge = decoded.model
+                          ? payload<SkinJudgeObject>(*decoded.model, "judge-all")
+                          : nullptr;
+  expect(image && destination && image->source.line == 67 &&
+             image->source.column == 5 && destination->source.line == 445 &&
+             destination->source.column == 5 &&
+             image->source.line != destination->source.line,
+         "object definitions and authored destinations retain independent "
+         "exact JSON locations");
+  expect(decoded.model && nestedImage != decoded.model->objects.end() &&
+             nestedNumber != decoded.model->objects.end() &&
+             nestedImage->source.line == 92 && nestedImage->source.column == 5 &&
+             nestedNumber->source.line == 129 &&
+             nestedNumber->source.column == 5 && judge &&
+             judge->grades.front().image &&
+             judge->grades.front().image->source.line == 406 &&
+             judge->grades.front().image->source.column == 9 &&
+             judge->grades.front().detailNumber &&
+             judge->grades.front().detailNumber->source.line == 409 &&
+             judge->grades.front().detailNumber->source.column == 9,
+         "nested judge children retain independent definition and destination "
+         "provenance");
+
+  const auto malformed = decodeInline(R"json({
+  "type": 0,
+  "judge": [
+    {
+      "id": "judge",
+      "index": "bad"
+    }
+  ],
+  "destination": [{"id":"judge","dst":[]}]
+})json");
+  const auto found = std::ranges::find_if(
+      malformed.diagnostics, [](const SkinDiagnostic &diagnostic) {
+        return diagnostic.code == "skin_json_model_invalid" &&
+               diagnostic.message.find("JsonSkin.Judge.index") !=
+                   std::string::npos;
+      });
+  expect(found != malformed.diagnostics.end() && found->source &&
+             found->source->virtualPath == "skin/inline.json" &&
+             found->source->line == 6 && found->source->column == 16,
+         "a malformed nested field diagnostic points at its exact JSON value");
+}
+
 } // namespace
 
 int main() {
@@ -678,6 +837,9 @@ int main() {
   testPinnedDefaultsProduceTypedStaticModel();
   testAllGameplayFieldsPreserveOrderProvenanceAndPayloads();
   testMalformedUnboundedAndCallbackJsonFailAtDecoderBoundary();
+  testNegativeGenericGraphsKeepTheSelectOnlyGameplayBoundary();
+  testTextRefWriterFallbackAndExplicitEventPrecedence();
+  testJsonObjectDestinationAndMalformedFieldProvenance();
 
   if (failures != 0) {
     std::cerr << failures << " JSON gameplay skin decoder test(s) failed\n";

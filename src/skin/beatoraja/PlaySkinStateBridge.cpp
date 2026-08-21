@@ -1823,7 +1823,14 @@ SkinHostCallResult PlaySkinStateBridge::invokeWriter(
     return {.status = SkinHostCallStatus::Unsupported,
             .diagnostics = diagnostics_};
   }
-  if (std::holds_alternative<SkinBuiltinPropertySelector>(binding->source)) {
+  if (const auto *builtin =
+          std::get_if<SkinBuiltinPropertySelector>(&binding->source)) {
+    if (numericSelector(*builtin) == 30) {
+      // StringPropertyFactory.searchword writes only when MainState is a
+      // MusicSelector. BMSPlayer therefore accepts the writer invocation but
+      // performs no mutation.
+      return {.diagnostics = diagnostics_};
+    }
     reportDiagnostic(
         {.code = "skin.play_state.writer_builtin_unsupported",
          .message = "No built-in gameplay string writer is allowlisted for "

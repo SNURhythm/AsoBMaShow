@@ -3658,13 +3658,15 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           std::get_if<SkinBuiltinImageObject>(&object->payload);
       const auto *pmChara =
           std::get_if<SkinPmCharaObject>(&object->payload);
+      const auto *invalidInGameplay =
+          std::get_if<SkinInvalidInGameplayObject>(&object->payload);
       const auto *blank = std::get_if<SkinBlankObject>(&object->payload);
       if (!image && !number && !floating && !text && !slider && !graph &&
           !noteDistribution && !gaugeGraph && !bpmGraph &&
           !timingVisualizer &&
           !hitErrorVisualizer &&
           !gauge && !note && !cover && !judge && !bga && !builtinImage &&
-          !practice && !pmChara && !blank) {
+          !practice && !pmChara && !invalidInGameplay && !blank) {
         if (reportObjectFailure(
                 result, *object,
                 diagnostic("skin.renderer.object.unsupported",
@@ -3678,7 +3680,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       // optional v1 widgets deliberately have no renderer yet.  Both are
       // valid authored objects that prepare as an empty draw, never a frame
       // failure or a built-in gameplay fallback trigger.
-      if (builtinImage || blank) {
+      if (builtinImage || invalidInGameplay || blank) {
         continue;
       }
 
