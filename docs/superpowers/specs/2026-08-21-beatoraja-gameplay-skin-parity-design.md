@@ -29,8 +29,10 @@ Known missing visual families include judgement/note distribution graphs, BPM
 graphs, timing visualizers, hit-error visualizers, gauge graphs, timing
 distribution graphs, negative-type distribution graphs, complete PM-character
 rendering, the practice object, bitmap fonts, LR2 fonts, LR2 source movies, and
-editable text behavior. This list is illustrative; the source-derived ledger
-is authoritative.
+editable text behavior. Timing-distribution declarations are also currently
+rejected, although pinned `SkinTimingDistributionGraph.prepare()` makes them
+an explicit no-op in gameplay and renders them only for `MusicResult`. This
+list is illustrative; the source-derived ledger is authoritative.
 
 Non-gameplay skin screens and unrelated Beatoraja application systems are out
 of scope. A dependency needed to reproduce gameplay-skin behavior remains in
