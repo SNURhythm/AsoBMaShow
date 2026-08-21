@@ -1132,6 +1132,22 @@ return skin
     {"id":"text","dst":[{"time":0,"x":100,"y":100,"w":200,"h":40}]}
   ]
 })json");
+    writeText(source / "skin/commented.json", R"json(/* production comment */
+{
+  "type": 0,
+  // resource declaration
+  "source": [{"id":"atlas","path":"resources/fixture.png"}],
+  "image": [
+    /* object comment */
+    {"id":"image","src":"atlas","x":0,"y":0,"w":40,"h":20}
+  ],
+  "destination": [
+    // presentation comment
+    {"id":"image","dst":[{"x":10,"y":100,"w":40,"h":20}]}
+  ]
+}
+// accepted trailing comment
+)json");
 
     writeText(source / "skin/parity.lr2skin", R"lr2(#INFORMATION,0,LR2 parity,fixture
 #RESOLUTION,0
@@ -1247,6 +1263,7 @@ return skin
                std::vector<std::string>{"config/settings.json",
                                         "select/select.lr2skin",
                                         "skin/builtin-graphs.lr2skin",
+                                        "skin/commented.json",
                                         "skin/invalid-encoding.lr2skin",
                                         "skin/option-state.lr2skin",
                                         "skin/parity.json",
@@ -1256,7 +1273,7 @@ return skin
                                         "skin/skipped.lr2skin",
                                         "skin/unavailable-builtin-graphs.lr2skin",
                                         "skin/unsafe.lr2skin"} &&
-               selectable == 8 && unavailable == 2,
+               selectable == 9 && unavailable == 2,
            "header admission keeps gameplay and recoverable LR2 entries "
            "selectable while fatal documents remain invalid");
 
@@ -1506,6 +1523,26 @@ void testLr2DeclaredFalseOptionActivatesNegatedInclude() {
     expect(frame.ready() && frame.evaluation.submitReady &&
                frame.evaluation.submitReady->commands.size() == 1,
            "a negated unselected declared choice executes its included image");
+  }
+}
+
+void testCommentedJsonCreatesProductionSession() {
+  FormatParityFixture fixture;
+  auto created = fixture.create("skin/commented.json", 113);
+  expect(created.session &&
+             std::ranges::none_of(created.diagnostics,
+                                  [](const auto &diagnostic) {
+                                    return diagnostic.code ==
+                                           "skin_json_source_index_failed";
+                                  }),
+         "commented JSON remains selectable and session-capable in production");
+  if (created.session) {
+    const auto frame = created.session->prepareFrame(
+        stateAt(2), projectionAt(2), {});
+    expect(frame.ready() && frame.evaluation.submitReady &&
+               frame.evaluation.submitReady->commands.size() == 1,
+           "commented JSON retains its decoded image through production "
+           "rendering");
   }
 }
 
@@ -4482,6 +4519,7 @@ int main() {
   testLr2ProductionRecoveryAndFatalBoundaries();
   testLr2ProductionBuiltInGraphsOwnChartAndPlainImages();
   testLr2DeclaredFalseOptionActivatesNegatedInclude();
+  testCommentedJsonCreatesProductionSession();
   testSessionOwnsDeduplicatedMoviesAndRollsBackBeforePublication();
   testCallbackBindingWithoutRuntimeFailsValidation();
   testActivationCreatesAnOwningFreshStateSession();

@@ -846,6 +846,64 @@ void testJsonObjectDestinationAndMalformedFieldProvenance() {
          "a malformed nested field diagnostic points at its exact JSON value");
 }
 
+void testCommentedJsonKeepsExactPostCommentProvenanceAndCancellation() {
+  const auto decoded = decodeInline(R"json(/* leading document comment */
+{
+  // header member comment
+  "type": 0, // accepted trailing line comment
+  "source": [
+    /* source member comment */ {"id":"atlas","path":"atlas.png"}
+  ],
+  "image": [
+    // object definition follows
+    {"id":"image","src":"atlas","x":0,"y":0,"w":1,"h":1}
+  ],
+  "destination": [
+    /* destination definition follows */
+    {"id":"image","dst":[
+      // destination frame follows
+      {"x":1,"y":2,"w":3,"h":4}
+    ]}
+  ]
+}
+// trailing document comment
+)json");
+  const auto *image = decoded.model ? findObject(*decoded.model, "image")
+                                    : nullptr;
+  const auto *destination =
+      decoded.model && image ? findDestination(*decoded.model, image->id)
+                             : nullptr;
+  expect(decoded.model && image && destination &&
+             !hasDiagnostic(decoded, "skin_json_source_index_failed") &&
+             image->source.line == 10 && image->source.column == 5 &&
+             destination->source.line == 14 &&
+             destination->source.column == 5,
+         "line/block comments retain exact following object and destination "
+         "provenance");
+
+  const auto unterminated = decodeInline("{\"type\":0,/* unterminated");
+  expect(!unterminated.model &&
+             hasDiagnostic(unterminated, "skin_json_parse_failed"),
+         "an unterminated block comment fails within the bounded JSON parser");
+
+  const std::string longComment =
+      "{/*" + std::string(8U * 1024U, 'x') + "*/\"type\":0}";
+  std::stop_source source;
+  CancellationCheckpoint checkpoint{
+      .source = &source,
+      .phase = StaticSkinDecodePhase::JsonStructure,
+      .stopAt = 6};
+  const auto cancelled = JsonGameplaySkinDecoder{}.decode(
+      std::as_bytes(std::span(longComment)), fixtureEntry("commented.json"),
+      nullptr, gameplaySkinBuiltinCatalog(), SkinSafetyPolicy{},
+      source.get_token(),
+      {.notify = requestCancellationAtCheckpoint, .context = &checkpoint});
+  expect(cancelled.cancelled && !cancelled.model &&
+             cancelled.diagnostics.empty(),
+         "long block-comment indexing observes deterministic mid-comment "
+         "cancellation");
+}
+
 void testCancellationStopsMidJsonModelFold() {
   Json document{{"type", 0}, {"source", Json::array()},
                 {"image", Json::array()}, {"destination", Json::array()}};
@@ -879,6 +937,7 @@ int main() {
   testNegativeGenericGraphsKeepTheSelectOnlyGameplayBoundary();
   testTextRefWriterFallbackAndExplicitEventPrecedence();
   testJsonObjectDestinationAndMalformedFieldProvenance();
+  testCommentedJsonKeepsExactPostCommentProvenanceAndCancellation();
   testCancellationStopsMidJsonModelFold();
 
   if (failures != 0) {

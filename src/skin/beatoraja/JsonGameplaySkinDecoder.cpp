@@ -676,7 +676,7 @@ public:
     std::size_t offset = 0;
     std::size_t values = 0;
     if (!indexValue(offset, "", 1, values)) return false;
-    skipWhitespace(offset);
+    if (!skipInsignificant(offset)) return false;
     if (offset != text_.size()) return false;
     return bind(root, "");
   }
@@ -702,10 +702,50 @@ private:
                 offset - lineStarts_[lineIndex] + 1)};
   }
 
-  void skipWhitespace(std::size_t &offset) const {
-    while (offset < text_.size() &&
-           std::isspace(static_cast<unsigned char>(text_[offset]))) {
-      ++offset;
+  [[nodiscard]] bool commentStart(std::size_t offset) const noexcept {
+    return offset + 1 < text_.size() && text_[offset] == '/' &&
+           (text_[offset + 1] == '/' || text_[offset + 1] == '*');
+  }
+
+  [[nodiscard]] bool skipInsignificant(std::size_t &offset) {
+    std::size_t uncheckedBytes = 0;
+    const auto advanced = [&]() {
+      ++uncheckedBytes;
+      if (uncheckedBytes < 1024) return true;
+      uncheckedBytes = 0;
+      return !context_.checkpoint(StaticSkinDecodePhase::JsonStructure);
+    };
+    for (;;) {
+      while (offset < text_.size() &&
+             std::isspace(static_cast<unsigned char>(text_[offset]))) {
+        ++offset;
+        if (!advanced()) return false;
+      }
+      if (!commentStart(offset)) return true;
+      if (context_.checkpoint(StaticSkinDecodePhase::JsonStructure)) {
+        return false;
+      }
+      const bool lineComment = text_[offset + 1] == '/';
+      offset += 2;
+      if (lineComment) {
+        while (offset < text_.size() && text_[offset] != '\n') {
+          ++offset;
+          if (!advanced()) return false;
+        }
+        continue;
+      }
+      bool terminated = false;
+      while (offset < text_.size()) {
+        if (offset + 1 < text_.size() && text_[offset] == '*' &&
+            text_[offset + 1] == '/') {
+          offset += 2;
+          terminated = true;
+          break;
+        }
+        ++offset;
+        if (!advanced()) return false;
+      }
+      if (!terminated) return false;
     }
   }
 
@@ -733,7 +773,7 @@ private:
     if (context_.checkpoint(StaticSkinDecodePhase::JsonStructure)) {
       return false;
     }
-    skipWhitespace(offset);
+    if (!skipInsignificant(offset)) return false;
     if (offset >= text_.size() ||
         depth > JsonGameplaySkinDecoderPolicy::maxDepth ||
         ++values > JsonGameplaySkinDecoderPolicy::maxValues) {
@@ -751,7 +791,7 @@ private:
     }
     if (leading == '{') {
       ++offset;
-      skipWhitespace(offset);
+      if (!skipInsignificant(offset)) return false;
       if (offset < text_.size() && text_[offset] == '}') {
         ++offset;
         return true;
@@ -763,7 +803,7 @@ private:
         }
         auto key = decodeString(offset);
         if (!key) return false;
-        skipWhitespace(offset);
+        if (!skipInsignificant(offset)) return false;
         if (offset >= text_.size() || text_[offset] != ':') return false;
         ++offset;
         if (!indexValue(offset,
@@ -771,20 +811,20 @@ private:
                         values)) {
           return false;
         }
-        skipWhitespace(offset);
+        if (!skipInsignificant(offset)) return false;
         if (offset < text_.size() && text_[offset] == '}') {
           ++offset;
           return true;
         }
         if (offset >= text_.size() || text_[offset] != ',') return false;
         ++offset;
-        skipWhitespace(offset);
+        if (!skipInsignificant(offset)) return false;
       }
       return false;
     }
     if (leading == '[') {
       ++offset;
-      skipWhitespace(offset);
+      if (!skipInsignificant(offset)) return false;
       if (offset < text_.size() && text_[offset] == ']') {
         ++offset;
         return true;
@@ -797,21 +837,22 @@ private:
           return false;
         }
         ++index;
-        skipWhitespace(offset);
+        if (!skipInsignificant(offset)) return false;
         if (offset < text_.size() && text_[offset] == ']') {
           ++offset;
           return true;
         }
         if (offset >= text_.size() || text_[offset] != ',') return false;
         ++offset;
-        skipWhitespace(offset);
+        if (!skipInsignificant(offset)) return false;
       }
       return false;
     }
     const std::size_t start = offset;
     while (offset < text_.size() && text_[offset] != ',' &&
            text_[offset] != '}' && text_[offset] != ']' &&
-           !std::isspace(static_cast<unsigned char>(text_[offset]))) {
+           !std::isspace(static_cast<unsigned char>(text_[offset])) &&
+           !commentStart(offset)) {
       ++offset;
     }
     return offset != start;
