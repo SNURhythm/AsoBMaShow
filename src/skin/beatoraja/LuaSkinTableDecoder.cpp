@@ -2527,16 +2527,23 @@ bool makeTimingDistributionGraphObject(
     GameplayDecodeRequest &request,
     const RawSkinTimingDistributionGraph &definition,
     SkinTimingDistributionGraphObject &output) {
-  // The pinned constructor divides by its clamped line width, so a
-  // non-positive width is outside the constructible source domain.
-  if (definition.width < 1) {
+  // MathUtils.clamp checks value < min before value > max even when its
+  // bounds are reversed. Preserve that order before the constructor's only
+  // failing operation, its integer division by lw.
+  const int width = definition.width > 1 ? definition.width : 1;
+  const int lineWidth = definition.lineWidth < 1
+                            ? 1
+                            : definition.lineWidth > definition.width
+                                  ? definition.width
+                                  : definition.lineWidth;
+  if (lineWidth == 0) {
     return fail(request.decoding, "skin_lua_model_timingdistributiongraph_invalid",
-                "Lua skin timingdistributiongraph width is outside the "
-                "pinned constructor domain");
+                "Lua skin timingdistributiongraph constructor divides by "
+                "zero after its pinned line-width clamp");
   }
   output = {
-      .width = definition.width,
-      .lineWidth = std::clamp(definition.lineWidth, 1, definition.width),
+      .width = width,
+      .lineWidth = lineWidth,
       .graphRgba = timingVisualizerColor(definition.graphColor),
       .averageRgba = timingVisualizerColor(definition.averageColor),
       .devRgba = timingVisualizerColor(definition.devColor),

@@ -1714,17 +1714,27 @@ return {
     {id='custom',width=401,lineWidth=3,graphColor='11223344',
      averageColor='55667788',devColor='99AABBCC',PGColor='01020304',
      GRColor='11121314',GDColor='21222324',BDColor='31323334',
-     PRColor='41424344',drawAverage=0,drawDev=2}
+     PRColor='41424344',drawAverage=0,drawDev=2},
+    {id='ordinary-lower',width=10,lineWidth=0},
+    {id='ordinary-upper',width=10,lineWidth=99},
+    {id='negative-lower',width=-5,lineWidth=0},
+    {id='negative-upper',width=-5,lineWidth=1},
+    {id='zero-constructs',width=0,lineWidth=0}
   },
   destination={
     {id='default',dst={{x=0,y=0,w=301,h=60}}},
-    {id='custom',dst={{x=0,y=0,w=401,h=60}}}
+    {id='custom',dst={{x=0,y=0,w=401,h=60}}},
+    {id='ordinary-lower',dst={{x=0,y=0,w=10,h=60}}},
+    {id='ordinary-upper',dst={{x=0,y=0,w=10,h=60}}},
+    {id='negative-lower',dst={{x=0,y=0,w=1,h=60}}},
+    {id='negative-upper',dst={{x=0,y=0,w=1,h=60}}},
+    {id='zero-constructs',dst={{x=0,y=0,w=1,h=60}}}
   }
 }
 )lua");
-  expect(decoded.model && decoded.model->objects.size() == 2,
+  expect(decoded.model && decoded.model->objects.size() == 7,
          "timingdistributiongraph declarations create one typed gameplay object per destination");
-  if (!decoded.model || decoded.model->objects.size() != 2) {
+  if (!decoded.model || decoded.model->objects.size() != 7) {
     return;
   }
   const auto payload = [&](std::string_view id) {
@@ -1736,7 +1746,14 @@ return {
   };
   const auto *defaults = payload("default");
   const auto *custom = payload("custom");
-  if (defaults == nullptr || custom == nullptr) {
+  const auto *ordinaryLower = payload("ordinary-lower");
+  const auto *ordinaryUpper = payload("ordinary-upper");
+  const auto *negativeLower = payload("negative-lower");
+  const auto *negativeUpper = payload("negative-upper");
+  const auto *zeroConstructs = payload("zero-constructs");
+  if (defaults == nullptr || custom == nullptr || ordinaryLower == nullptr ||
+      ordinaryUpper == nullptr || negativeLower == nullptr ||
+      negativeUpper == nullptr || zeroConstructs == nullptr) {
     expect(false,
            "timingdistributiongraph destinations retain their typed payloads");
     return;
@@ -1762,6 +1779,13 @@ return {
                                                0x41424344U} &&
              !custom->drawAverage && !custom->drawDev,
          "timingdistributiongraph retains each authored colour and exact integer flags");
+  expect(ordinaryLower->width == 10 && ordinaryLower->lineWidth == 1 &&
+             ordinaryUpper->width == 10 && ordinaryUpper->lineWidth == 10,
+         "timingdistributiongraph preserves the pinned ordinary lower and upper line-width clamps");
+  expect(negativeLower->width == 1 && negativeLower->lineWidth == 1 &&
+             negativeUpper->width == 1 && negativeUpper->lineWidth == -5 &&
+             zeroConstructs->width == 1 && zeroConstructs->lineWidth == 1,
+         "timingdistributiongraph preserves reversed-bound clamp branches that still construct");
   expect(std::ranges::none_of(decoded.diagnostics, [](const auto &entry) {
            return entry.code ==
                   "skin_lua_model_timingdistributiongraph_unsupported";
@@ -1790,6 +1814,21 @@ return {
                       "skin_lua_model_timingdistributiongraph_invalid";
              }) != invalid.diagnostics.end(),
          "model validation rejects timingdistributiongraph geometry the pinned constructor cannot use");
+
+  const auto divideByZero = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  timingdistributiongraph={{id='divide-by-zero',width=0,lineWidth=1}},
+  destination={{id='divide-by-zero',dst={{x=0,y=0,w=1,h=60}}}}
+}
+)lua");
+  expect(!divideByZero.model &&
+             std::ranges::find_if(divideByZero.diagnostics,
+                                  [](const auto &entry) {
+                                    return entry.code ==
+                                           "skin_lua_model_timingdistributiongraph_invalid";
+                                  }) != divideByZero.diagnostics.end(),
+         "timingdistributiongraph rejects only the zero-width clamp branch that divides by zero");
 }
 
 void testHitErrorVisualizerIsTypedInsteadOfBlank() {

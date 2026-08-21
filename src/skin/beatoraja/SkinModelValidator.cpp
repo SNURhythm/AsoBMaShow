@@ -222,15 +222,13 @@ SkinModelValidationResult SkinModelValidator::validate(
   if (std::ranges::any_of(model.objects, [](const auto &object) {
         const auto *graph =
             std::get_if<SkinTimingDistributionGraphObject>(&object.payload);
-        return graph != nullptr &&
-               (graph->width < 1 || graph->lineWidth < 1 ||
-                graph->lineWidth > graph->width);
+        return graph != nullptr && graph->lineWidth == 0;
       })) {
     result.criticalFailure = true;
     result.diagnostics.push_back(validationDiagnostic(
         "skin_lua_model_timingdistributiongraph_invalid",
-        "Lua skin timingdistributiongraph geometry is outside the pinned "
-        "constructor domain"));
+        "Lua skin timingdistributiongraph has the pinned constructor's "
+        "zero line-width divide failure"));
     return result;
   }
 
