@@ -164,6 +164,23 @@ struct SkinFontFallbackResource {
   int type = 0;
 };
 
+struct SkinBitmapFontResource {
+  SkinResourceId id = 0;
+  std::string virtualPath;
+  int type = 0;
+  int originalSize = 0;
+  std::uint32_t authoredOrdinal = 0;
+};
+
+struct SkinBitmapGlyph {
+  char32_t codepoint = 0;
+  int page = 0;
+  SkinSourceRect region;
+  int xOffset = 0;
+  int yOffset = 0;
+  int xAdvance = 0;
+};
+
 struct SkinFontResource {
   SkinResourceId id = 0;
   std::string authoredName;
@@ -171,6 +188,7 @@ struct SkinFontResource {
   int type = 0;
   std::vector<SkinFontFallbackResource> fallbacks;
   std::uint32_t authoredOrdinal = 0;
+  std::optional<SkinBitmapFontResource> bitmap;
 };
 
 using SkinResourceDefinition =

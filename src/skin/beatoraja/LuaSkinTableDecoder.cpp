@@ -30,6 +30,7 @@ extern "C" {
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -48,6 +49,16 @@ namespace {
 
 constexpr int kPlay7KeysType = 0;
 constexpr int kMaximumPinnedSkinType = 18;
+
+bool isBitmapFontPath(std::string_view path) {
+  constexpr std::string_view extension = ".fnt";
+  if (path.size() < extension.size()) return false;
+  const auto suffix = path.substr(path.size() - extension.size());
+  return std::ranges::equal(suffix, extension, [](char left, char right) {
+    return std::tolower(static_cast<unsigned char>(left)) ==
+           std::tolower(static_cast<unsigned char>(right));
+  });
+}
 
 SkinDiagnostic diagnostic(std::string code, std::string message,
                           std::string virtualPath = {}) {
@@ -3645,6 +3656,13 @@ void decodeGameplayProtected(lua_State *state, int index,
           .type = font.type,
           .authoredOrdinal = ordinal,
       };
+      if (isBitmapFontPath(resource.virtualPath)) {
+        resource.bitmap = SkinBitmapFontResource{
+            .id = resource.id,
+            .virtualPath = resource.virtualPath,
+            .type = resource.type,
+            .authoredOrdinal = resource.authoredOrdinal};
+      }
       resource.fallbacks.reserve(font.fallbacks.size());
       for (auto &fallback : font.fallbacks) {
         resource.fallbacks.push_back(

@@ -1216,6 +1216,17 @@ PreparedSkinTextAtlas verticalAtlas() {
   return atlas;
 }
 
+PreparedSkinTextAtlas bitmapAtlas(int type) {
+  auto atlas = avAtlas();
+  atlas.id = static_cast<SkinTextAtlasId>(70 + type);
+  atlas.bitmapFont = true;
+  atlas.bitmapFontType = type;
+  atlas.originalSize = 20;
+  atlas.pageWidth = 100;
+  atlas.pageHeight = 50;
+  return atlas;
+}
+
 SkinObjectDefinition textObject(SkinObjectId id, bool critical,
                                 SkinStringPropertyId value = {}) {
   SkinTextObject text;
@@ -1275,6 +1286,93 @@ void testTextUsesPreparedMetricsKerningAndAtlasUvs() {
   expect(run.glyphs[1].codepoint == U'V' &&
              run.glyphs[1].vertices[0].x == 111.0F,
          "AV placement consumes the prepared negative pair kerning");
+}
+
+void testBitmapTextUsesPinnedScaleShadowAndDistanceFieldState() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  resources.addTextAtlas(1, bitmapAtlas(0));
+  resources.addTextAtlas(2, bitmapAtlas(1));
+  resources.addTextAtlas(3, bitmapAtlas(2));
+  FakeState state;
+  ValidatedBeatorajaSkinModel model;
+
+  auto ordinary = textObject(1, true);
+  auto &ordinaryText = std::get<SkinTextObject>(ordinary.payload);
+  ordinaryText.literal = "A";
+  ordinaryText.pointSize = 10;
+  ordinaryText.shadowRgba = {255, 255, 255, 255};
+  ordinaryText.shadowOffsetX = 4.0;
+  ordinaryText.shadowOffsetY = 2.0;
+  auto distance = textObject(2, true);
+  auto &distanceText = std::get<SkinTextObject>(distance.payload);
+  distanceText.literal = "A";
+  distanceText.pointSize = 10;
+  distanceText.outlineRgba = {1, 2, 3, 4};
+  distanceText.outlineWidth = 0.5;
+  distanceText.shadowRgba = {5, 6, 7, 8};
+  distanceText.shadowOffsetX = 4.0;
+  distanceText.shadowOffsetY = 2.0;
+  distanceText.shadowSmoothness = 0.4;
+  auto colored = textObject(3, true);
+  auto &coloredText = std::get<SkinTextObject>(colored.payload);
+  coloredText.literal = "A";
+  coloredText.pointSize = 10;
+  model.model.objects = {std::move(ordinary), std::move(distance),
+                         std::move(colored)};
+
+  auto ordinaryDestination = destination(1, 10, 100.0);
+  ordinaryDestination.presentation.frames.front().width = 100.0;
+  ordinaryDestination.presentation.frames.front().height = 40.0;
+  auto distanceDestination = destination(2, 20, 200.0);
+  distanceDestination.presentation.frames.front().width = 100.0;
+  distanceDestination.presentation.frames.front().height = 40.0;
+  auto coloredDestination = destination(3, 30, 300.0);
+  coloredDestination.presentation.frames.front().width = 100.0;
+  coloredDestination.presentation.frames.front().height = 40.0;
+  model.model.destinations = {std::move(ordinaryDestination),
+                              std::move(distanceDestination),
+                              std::move(coloredDestination)};
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  expect(result.submitReady && result.submitReady->commands.size() == 3,
+         "ordinary and both distance-field bitmap-font types lower from prepared resources");
+  if (!result.submitReady || result.submitReady->commands.size() != 3) {
+    return;
+  }
+  const auto &ordinaryRun =
+      std::get<SkinGlyphRunCommand>(result.submitReady->commands[0].payload);
+  const auto &distanceRun =
+      std::get<SkinGlyphRunCommand>(result.submitReady->commands[1].payload);
+  const auto &coloredRun =
+      std::get<SkinGlyphRunCommand>(result.submitReady->commands[2].payload);
+  expect(ordinaryRun.glyphs.size() == 2 &&
+             ordinaryRun.glyphs[0].vertices[0].x == 104.0F &&
+             ordinaryRun.glyphs[1].vertices[0].x == 100.0F &&
+             ordinaryRun.glyphs[1].vertices[1].x -
+                     ordinaryRun.glyphs[1].vertices[0].x ==
+                 5.0F &&
+             ordinaryRun.glyphs[0].vertices[0].rgba == 0xff7f7f7fU &&
+             ordinaryRun.glyphs[1].vertices[0].rgba == 0xffffffffU &&
+             ordinaryRun.state.filter == SkinFilterMode::Linear &&
+             !ordinaryRun.state.distanceField,
+         "ordinary bitmap text scales by text size over descriptor size and emits its half-tint shadow before the main glyph");
+  expect(distanceRun.state.filter == SkinFilterMode::Linear &&
+             distanceRun.state.distanceField &&
+             !distanceRun.state.distanceField->colored &&
+             distanceRun.state.distanceField->outlineDistance == 0.25 &&
+             distanceRun.state.distanceField->outlineRgba ==
+                 std::array<std::uint8_t, 4>{1, 2, 3, 4} &&
+             distanceRun.state.distanceField->shadowRgba ==
+                 std::array<std::uint8_t, 4>{5, 6, 7, 8} &&
+             distanceRun.state.distanceField->shadowSmoothing == 0.2 &&
+             distanceRun.state.distanceField->shadowOffsetU == 0.04 &&
+             distanceRun.state.distanceField->shadowOffsetV == 0.04,
+         "distance-field bitmap text carries pinned outline and normalized shadow uniforms in immutable draw state");
+  expect(coloredRun.state.distanceField &&
+             coloredRun.state.distanceField->colored,
+         "colored distance-field bitmap text preserves its distinct source type in draw state");
 }
 
 void testTextVerticalPlacementMatchesPinnedBitmapFontBaseline() {
@@ -5044,6 +5142,7 @@ int main() {
   testFalseDestinationSkipsNumericSourceTimerAfterValueLookup();
   testLuaFractionalNumberUsesPinnedIntegerCoercion();
   testTextUsesPreparedMetricsKerningAndAtlasUvs();
+  testBitmapTextUsesPinnedScaleShadowAndDistanceFieldState();
   testTextVerticalPlacementMatchesPinnedBitmapFontBaseline();
   testMissingTextGlyphHonorsCriticalityWithoutPartialCommands();
   testFalseDestinationSkipsTextValueCallback();

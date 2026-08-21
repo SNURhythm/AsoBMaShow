@@ -163,12 +163,20 @@ struct SkinPreparedGlyphMetrics {
   // It includes the primary layout ascent, the selected face's yoffset, and
   // any bounded atlas padding, so fallback glyphs need no font access later.
   int layoutOffsetY = 0;
+  // Bitmap fallback faces retain their own source type so a colored
+  // distance-field primary can identify ordinary color glyphs.
+  int bitmapFontType = -1;
 };
 struct SkinPreparedGlyphAtlas {
   SkinTextAtlasId id = 0; SkinTextAtlasKey key; image_decode::DecodedImageData pixels;
   std::map<char32_t, SkinPreparedGlyphMetrics> glyphs;
   std::map<std::pair<char32_t,char32_t>, int> kerning;
   int ascent = 0; int capHeight = 0; int descent = 0; int lineHeight = 0;
+  bool bitmapFont = false;
+  int bitmapFontType = 0;
+  int originalSize = 0;
+  int pageWidth = 0;
+  int pageHeight = 0;
 };
 struct SkinResourceUploadPlan {
   SkinRevisionLease revision;
@@ -257,6 +265,11 @@ struct PreparedSkinTextAtlas {
   int capHeight = 0;
   int descent = 0;
   int lineHeight = 0;
+  bool bitmapFont = false;
+  int bitmapFontType = 0;
+  int originalSize = 0;
+  int pageWidth = 0;
+  int pageHeight = 0;
 };
 
 struct PreparedSkinGeneratedTexture {

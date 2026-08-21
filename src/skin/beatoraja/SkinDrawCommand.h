@@ -23,9 +23,20 @@ struct SkinVertex {
 };
 
 struct SkinRenderState {
+  struct DistanceField {
+    bool colored = false;
+    double outlineDistance = 0.5;
+    std::array<std::uint8_t, 4> outlineRgba{255, 255, 255, 0};
+    std::array<std::uint8_t, 4> shadowRgba{255, 255, 255, 0};
+    double shadowSmoothing = 0.0;
+    double shadowOffsetU = 0.0;
+    double shadowOffsetV = 0.0;
+    auto operator<=>(const DistanceField &) const = default;
+  };
   SkinBlendMode blend = SkinBlendMode::Normal;
   SkinFilterMode filter = SkinFilterMode::Nearest;
   std::optional<UiLogicalRect> scissor;
+  std::optional<DistanceField> distanceField;
 };
 
 struct SkinTexturedQuadCommand {

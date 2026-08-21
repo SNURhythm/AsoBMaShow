@@ -218,7 +218,8 @@ bool laneCoverRateProperty(const ValidatedBeatorajaSkinModel &model,
 bool sameState(const SkinRenderState &left,
                const SkinRenderState &right) noexcept {
   if (left.blend != right.blend || left.filter != right.filter ||
-      left.scissor.has_value() != right.scissor.has_value()) {
+      left.scissor.has_value() != right.scissor.has_value() ||
+      left.distanceField != right.distanceField) {
     return false;
   }
   return !left.scissor || sameRect(*left.scissor, *right.scissor);
@@ -1151,7 +1152,11 @@ TextLayoutInput prepareTextLayout(const SkinFrameInputs &inputs,
   result.atlas = inputs.resources.findTextAtlasForObject(object.id);
   if (!result.atlas || result.atlas->id == 0 || result.atlas->width <= 0 ||
       result.atlas->height <= 0 || result.atlas->lineHeight <= 0 ||
-      text.pointSize <= 0) {
+      text.pointSize <= 0 ||
+      (result.atlas->bitmapFont &&
+       (result.atlas->originalSize <= 0 || result.atlas->pageWidth <= 0 ||
+        result.atlas->pageHeight <= 0 || result.atlas->bitmapFontType < 0 ||
+        result.atlas->bitmapFontType > 2))) {
     result.failure =
         diagnostic("skin.renderer.text.atlas",
                    "Prepared text atlas or its fixed metrics are absent.");
@@ -1342,7 +1347,10 @@ TextLoweringResult lowerText(const SkinFrameInputs &inputs,
                              const TextLayoutInput &prepared) {
   TextLoweringResult result;
   const auto &atlas = *prepared.atlas;
-  const double scaleY = base.rect.height / text.pointSize;
+  const double scaleY = atlas.bitmapFont
+                            ? static_cast<double>(text.pointSize) /
+                                  atlas.originalSize
+                            : base.rect.height / text.pointSize;
   if (!std::isfinite(scaleY) || scaleY <= 0.0) {
     result.failure = diagnostic("skin.renderer.text.geometry",
                                 "Text destination scale is invalid.");
@@ -1446,6 +1454,33 @@ TextLoweringResult lowerText(const SkinFrameInputs &inputs,
   if (run.glyphs.empty()) {
     return result;
   }
+  if (atlas.bitmapFont && atlas.bitmapFontType == 0 &&
+      (text.shadowOffsetX != 0.0 || text.shadowOffsetY != 0.0)) {
+    const double authoredShadowX = text.shadowOffsetX;
+    const double authoredShadowY = -text.shadowOffsetY;
+    const float shadowX = static_cast<float>(
+        inputs.viewport.authoredToUi.m00 * authoredShadowX +
+        inputs.viewport.authoredToUi.m01 * authoredShadowY);
+    const float shadowY = static_cast<float>(
+        inputs.viewport.authoredToUi.m10 * authoredShadowX +
+        inputs.viewport.authoredToUi.m11 * authoredShadowY);
+    auto shadow = run.glyphs;
+    auto shadowColor = base.rgba;
+    shadowColor[0] *= 0.5F;
+    shadowColor[1] *= 0.5F;
+    shadowColor[2] *= 0.5F;
+    const std::uint32_t packedShadow = packAbgr(shadowColor);
+    for (auto &glyph : shadow) {
+      for (auto &vertex : glyph.vertices) {
+        vertex.x += shadowX;
+        vertex.y += shadowY;
+        vertex.rgba = packedShadow;
+      }
+    }
+    shadow.insert(shadow.end(), std::make_move_iterator(run.glyphs.begin()),
+                  std::make_move_iterator(run.glyphs.end()));
+    run.glyphs = std::move(shadow);
+  }
   bool emptyClip = false;
   const auto projectedClip = projectSkinDestinationToUi(
       base,
@@ -1459,7 +1494,21 @@ TextLoweringResult lowerText(const SkinFrameInputs &inputs,
   if (emptyClip) {
     return result;
   }
-  run.state = {.blend = base.blend, .filter = base.filter, .scissor = clip};
+  run.state = {.blend = base.blend,
+               .filter = atlas.bitmapFont ? SkinFilterMode::Linear
+                                          : base.filter,
+               .scissor = clip};
+  if (atlas.bitmapFont &&
+      (atlas.bitmapFontType == 1 || atlas.bitmapFontType == 2)) {
+    run.state.distanceField = SkinRenderState::DistanceField{
+        .colored = atlas.bitmapFontType == 2,
+        .outlineDistance = std::max(0.1, 0.5 - text.outlineWidth / 2.0),
+        .outlineRgba = text.outlineRgba,
+        .shadowRgba = text.shadowRgba,
+        .shadowSmoothing = text.shadowSmoothness / 2.0,
+        .shadowOffsetU = text.shadowOffsetX / atlas.pageWidth,
+        .shadowOffsetV = text.shadowOffsetY / atlas.pageHeight};
+  }
   result.glyphCount = run.glyphs.size();
   result.command = SkinDrawCommand{.authoredOrdinal =
                                        destination.presentation.authoredOrdinal,

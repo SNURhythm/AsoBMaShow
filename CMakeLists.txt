@@ -3653,6 +3653,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinObjectResolutionPrecedence.cpp
             src/skin/beatoraja/SkinModelValidator.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
+            src/skin/beatoraja/SkinBitmapFontParser.cpp
             src/skin/beatoraja/SkinTextAtlas.cpp
             src/skin/beatoraja/SkinTextGraphNormalization.cpp
         )
@@ -3699,6 +3700,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/package/SkinTreeSnapshotter.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
+            src/skin/beatoraja/SkinBitmapFontParser.cpp
             src/skin/beatoraja/SkinTextAtlas.cpp
         )
         if(APPLE)
@@ -4559,6 +4561,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinNoteNormalization.cpp
             src/skin/beatoraja/SkinObjectResolutionPrecedence.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
+            src/skin/beatoraja/SkinBitmapFontParser.cpp
             src/skin/beatoraja/SkinTextAtlas.cpp
             src/skin/beatoraja/SkinTextGraphNormalization.cpp
             src/skin/package/SkinAliasDetector.cpp
@@ -4711,6 +4714,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinNoteNormalization.cpp
             src/skin/beatoraja/SkinObjectResolutionPrecedence.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
+            src/skin/beatoraja/SkinBitmapFontParser.cpp
             src/skin/beatoraja/SkinTextAtlas.cpp
             src/skin/beatoraja/SkinTextGraphNormalization.cpp
             src/skin/package/SkinAliasDetector.cpp
@@ -4847,6 +4851,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinNoteNormalization.cpp
             src/skin/beatoraja/SkinObjectResolutionPrecedence.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
+            src/skin/beatoraja/SkinBitmapFontParser.cpp
             src/skin/beatoraja/SkinTextAtlas.cpp
             src/skin/beatoraja/SkinTextGraphNormalization.cpp
             src/skin/package/SkinAliasDetector.cpp

@@ -365,5 +365,226 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
       .lineHeight=TTF_FontHeight(opened.front().font)};
   return result;
 }
+
+SkinTextAtlasBuildResult buildSkinBitmapTextAtlas(
+    SkinTextAtlasId id, SkinTextAtlasKey key,
+    const std::vector<SkinTextAtlasBitmapFace> &faces,
+    const std::set<char32_t> &codepoints,
+    const std::set<std::pair<char32_t, char32_t>> &pairs,
+    SkinSafetyPolicy safetyPolicy) {
+  SkinTextAtlasBuildResult result;
+  if (id == 0 || !canonicalizeSkinTextAtlasKey(key, safetyPolicy) ||
+      faces.empty() || codepoints.size() > skinResourceLimit(
+                                             safetyPolicy,
+                                             SkinResourcePolicy::maximumGlyphs) ||
+      pairs.size() > skinResourceLimit(
+                         safetyPolicy,
+                         SkinResourcePolicy::maximumKerningPairs)) {
+    result.error = "bitmap font atlas key or limits are invalid";
+    return result;
+  }
+
+  struct PagePlacement {
+    int x = 0;
+    int y = 0;
+  };
+  std::vector<std::vector<PagePlacement>> placements(faces.size());
+  int atlasWidth = 0;
+  int atlasHeight = 0;
+  std::size_t pageBytes = 0;
+  for (std::size_t faceIndex = 0; faceIndex < faces.size(); ++faceIndex) {
+    const auto &face = faces[faceIndex];
+    if (face.font.pagePaths.size() != face.pages.size() ||
+        face.font.resource.originalSize <= 0 || face.font.lineHeight <= 0 ||
+        face.font.pageWidth <= 0 || face.font.pageHeight <= 0) {
+      result.error = "bitmap font face or page count is invalid";
+      return result;
+    }
+    placements[faceIndex].reserve(face.pages.size());
+    for (const auto &page : face.pages) {
+      if (!page.rgba || page.width <= 0 || page.height <= 0 ||
+          page.rgba->size() != page.byteSize() ||
+          page.width > skinResourceDimensionLimit(safetyPolicy) ||
+          page.height > skinResourceDimensionLimit(safetyPolicy) ||
+          atlasWidth > skinResourceDimensionLimit(safetyPolicy) - page.width ||
+          page.byteSize() > skinResourceLimit(
+                                safetyPolicy,
+                                SkinResourcePolicy::maximumAtlasBytes) -
+                                pageBytes) {
+        result.error = "bitmap font page exceeds atlas limits";
+        return result;
+      }
+      placements[faceIndex].push_back({.x = atlasWidth});
+      atlasWidth += page.width;
+      atlasHeight = std::max(atlasHeight, page.height);
+      pageBytes += page.byteSize();
+    }
+  }
+  const std::uint64_t byteCount64 = static_cast<std::uint64_t>(atlasWidth) *
+                                    static_cast<std::uint64_t>(atlasHeight) * 4U;
+  if (atlasWidth <= 0 || atlasHeight <= 0 ||
+      atlasWidth > skinResourceDimensionLimit(safetyPolicy) ||
+      atlasHeight > skinResourceDimensionLimit(safetyPolicy) ||
+      byteCount64 > skinResourceLimit(
+                        safetyPolicy, SkinResourcePolicy::maximumAtlasBytes)) {
+    result.error = "bitmap font composite atlas exceeds limits";
+    return result;
+  }
+  auto rgba = std::make_shared<std::vector<unsigned char>>(
+      static_cast<std::size_t>(byteCount64), 0);
+  for (std::size_t faceIndex = 0; faceIndex < faces.size(); ++faceIndex) {
+    for (std::size_t pageIndex = 0; pageIndex < faces[faceIndex].pages.size();
+         ++pageIndex) {
+      const auto &page = faces[faceIndex].pages[pageIndex];
+      const int targetX = placements[faceIndex][pageIndex].x;
+      for (int y = 0; y < page.height; ++y) {
+        std::copy_n(
+            page.rgba->data() + static_cast<std::size_t>(y) * page.width * 4U,
+            static_cast<std::size_t>(page.width) * 4U,
+            rgba->data() +
+                (static_cast<std::size_t>(y) * atlasWidth + targetX) * 4U);
+      }
+    }
+  }
+
+  const auto representativeYOffset = [](const SkinParsedBitmapFont &font) {
+    constexpr std::u32string_view preferred = U"SPANOTHER[]M0";
+    for (const char32_t codepoint : preferred) {
+      const auto found = font.glyphs.find(codepoint);
+      if (found != font.glyphs.end() && found->second.region.h > 0) {
+        return found->second.yOffset;
+      }
+    }
+    for (const auto &[codepoint, glyph] : font.glyphs) {
+      (void)codepoint;
+      if (glyph.region.h > 0) return glyph.yOffset;
+    }
+    return 0;
+  };
+  const int primaryYOffset = representativeYOffset(faces.front().font);
+  struct SelectedGlyph {
+    const SkinBitmapGlyph *glyph = nullptr;
+    std::size_t face = 0;
+    char32_t sourceCodepoint = 0;
+  };
+  const auto exact = [&](char32_t codepoint) -> SelectedGlyph {
+    for (std::size_t faceIndex = 0; faceIndex < faces.size(); ++faceIndex) {
+      const auto found = faces[faceIndex].font.glyphs.find(codepoint);
+      if (found != faces[faceIndex].font.glyphs.end()) {
+        return {.glyph = &found->second,
+                .face = faceIndex,
+                .sourceCodepoint = codepoint};
+      }
+    }
+    return {};
+  };
+  const auto select = [&](char32_t codepoint) {
+    auto selected = exact(codepoint);
+    if (selected.glyph) return selected;
+    if (codepoint == U'\u301c') selected = exact(U'\uff5e');
+    else if (codepoint == U'\uff5e') selected = exact(U'\u301c');
+    if (selected.glyph) return selected;
+    constexpr std::u32string_view missing = U"\u25a1\u25a2\u2610\u25a0?";
+    for (std::size_t faceIndex = 0; faceIndex < faces.size(); ++faceIndex) {
+      for (const char32_t candidate : missing) {
+        const auto found = faces[faceIndex].font.glyphs.find(candidate);
+        if (found != faces[faceIndex].font.glyphs.end()) {
+          return SelectedGlyph{.glyph = &found->second,
+                               .face = faceIndex,
+                               .sourceCodepoint = candidate};
+        }
+      }
+    }
+    return SelectedGlyph{};
+  };
+
+  std::map<char32_t, SkinPreparedGlyphMetrics> metrics;
+  std::map<char32_t, SelectedGlyph> selections;
+  for (const char32_t codepoint : codepoints) {
+    if (codepoint == U'\r' || codepoint == U'\n') continue;
+    const auto selected = select(codepoint);
+    if (!selected.glyph || selected.glyph->page < 0 ||
+        static_cast<std::size_t>(selected.glyph->page) >=
+            placements[selected.face].size()) {
+      result.error = "bitmap font atlas has an unsupported glyph";
+      return result;
+    }
+    const auto &glyph = *selected.glyph;
+    const auto &page = faces[selected.face].pages[static_cast<std::size_t>(glyph.page)];
+    if (glyph.region.x < 0 || glyph.region.y < 0 || glyph.region.w < 0 ||
+        glyph.region.h < 0 || glyph.region.x > page.width - glyph.region.w ||
+        glyph.region.y > page.height - glyph.region.h) {
+      result.error = "bitmap font glyph rectangle exceeds its page";
+      return result;
+    }
+    const int yOffsetAdjust =
+        representativeYOffset(faces[selected.face].font) - primaryYOffset;
+    metrics.emplace(
+        codepoint,
+        SkinPreparedGlyphMetrics{
+            .region = {.x = placements[selected.face]
+                                  [static_cast<std::size_t>(glyph.page)]
+                                      .x +
+                              glyph.region.x,
+                       .y = glyph.region.y,
+                       .w = glyph.region.w,
+                       .h = glyph.region.h},
+            .bearingX = glyph.xOffset,
+            .bearingY = -glyph.yOffset,
+            .advance = glyph.xAdvance,
+            .layoutOffsetY = faces.front().font.base -
+                             faces.front().font.lineHeight - glyph.region.h -
+                             glyph.yOffset + yOffsetAdjust,
+            .bitmapFontType = faces[selected.face].font.resource.type});
+    selections.emplace(codepoint, selected);
+  }
+
+  std::map<std::pair<char32_t, char32_t>, int> kerning;
+  for (const auto &[left, right] : pairs) {
+    int amount = 0;
+    const auto leftSelection = selections.find(left);
+    const auto rightSelection = selections.find(right);
+    if (leftSelection != selections.end() && rightSelection != selections.end() &&
+        leftSelection->second.face == rightSelection->second.face &&
+        leftSelection->second.sourceCodepoint == left &&
+        rightSelection->second.sourceCodepoint == right) {
+      const auto found = faces[leftSelection->second.face].font.kerning.find(
+          {left, right});
+      if (found != faces[leftSelection->second.face].font.kerning.end()) {
+        amount = found->second;
+      }
+    }
+    kerning.emplace(std::pair{left, right}, amount);
+  }
+
+  int capHeight = 0;
+  constexpr std::u32string_view caps = U"MNBDCEFKAGHIJLOPQRSTUVWXYZ";
+  for (const char32_t codepoint : caps) {
+    const auto found = faces.front().font.glyphs.find(codepoint);
+    if (found != faces.front().font.glyphs.end()) {
+      capHeight = found->second.region.h;
+      break;
+    }
+  }
+  if (capHeight <= 0) capHeight = faces.front().font.lineHeight;
+  result.atlas = SkinPreparedGlyphAtlas{
+      .id = id,
+      .key = std::move(key),
+      .pixels = {.width = atlasWidth,
+                 .height = atlasHeight,
+                 .rgba = std::move(rgba)},
+      .glyphs = std::move(metrics),
+      .kerning = std::move(kerning),
+      .ascent = faces.front().font.base - faces.front().font.lineHeight,
+      .capHeight = capHeight,
+      .descent = faces.front().font.base - faces.front().font.lineHeight,
+      .lineHeight = faces.front().font.lineHeight,
+      .bitmapFont = true,
+      .bitmapFontType = faces.front().font.resource.type,
+      .originalSize = faces.front().font.resource.originalSize,
+      .pageWidth = faces.front().font.pageWidth,
+      .pageHeight = faces.front().font.pageHeight};
+  return result;
+}
 } // namespace skin
 #endif

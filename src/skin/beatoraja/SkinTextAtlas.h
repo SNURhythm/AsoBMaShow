@@ -1,5 +1,6 @@
 #pragma once
 
+#include "SkinBitmapFontParser.h"
 #include "SkinResourceCatalog.h"
 
 #include <map>
@@ -24,6 +25,11 @@ struct SkinTextAtlasFontBytes {
   std::vector<std::byte> encoded;
 };
 
+struct SkinTextAtlasBitmapFace {
+  SkinParsedBitmapFont font;
+  std::vector<image_decode::DecodedImageData> pages;
+};
+
 struct SkinTextAtlasBuildResult {
   std::optional<SkinPreparedGlyphAtlas> atlas;
   std::string error;
@@ -35,6 +41,13 @@ struct SkinTextAtlasBuildResult {
 [[nodiscard]] SkinTextAtlasBuildResult buildSkinTextAtlas(
     SkinTextAtlasId id, SkinTextAtlasKey key,
     const std::vector<SkinTextAtlasFontBytes> &faces,
+    const std::set<char32_t> &codepoints,
+    const std::set<std::pair<char32_t, char32_t>> &pairs,
+    SkinSafetyPolicy safetyPolicy = SkinSafetyPolicy{});
+
+[[nodiscard]] SkinTextAtlasBuildResult buildSkinBitmapTextAtlas(
+    SkinTextAtlasId id, SkinTextAtlasKey key,
+    const std::vector<SkinTextAtlasBitmapFace> &faces,
     const std::set<char32_t> &codepoints,
     const std::set<std::pair<char32_t, char32_t>> &pairs,
     SkinSafetyPolicy safetyPolicy = SkinSafetyPolicy{});

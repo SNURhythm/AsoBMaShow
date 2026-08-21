@@ -1,4 +1,5 @@
 #include "skin/beatoraja/SkinResourceCatalog.h"
+#include "skin/beatoraja/SkinBitmapFontParser.h"
 #include "skin/beatoraja/SkinTextAtlas.h"
 #include "skin/package/SkinAliasDetector.h"
 #include "skin/package/SkinPathPolicy.h"
@@ -25,6 +26,79 @@
 namespace {
 int failures = 0;
 void expect(bool value, std::string_view message) { if (!value) { std::cerr << "FAIL: " << message << '\n'; ++failures; } }
+
+void testBitmapFontDescriptorParsingMatchesPinnedSources() {
+  const auto fixture = std::filesystem::path(ASOBMASHOW_SOURCE_DIR) /
+                       "tests/fixtures/beatoraja_skin/resources/bitmap-font/fixture.fnt";
+  std::ifstream input(fixture, std::ios::binary);
+  const std::string encoded((std::istreambuf_iterator<char>(input)),
+                            std::istreambuf_iterator<char>());
+  const auto bytes = std::as_bytes(std::span(encoded));
+  const auto parsed = skin::parseSkinBitmapFont(
+      skin::SkinBitmapFontResource{.id=7,
+                                   .virtualPath="resources/bitmap-font/fixture.fnt",
+                                   .type=2,
+                                   .originalSize=0,
+                                   .authoredOrdinal=4},
+      bytes, skin::SkinBitmapFontSourceFormat::BmFont);
+  expect(parsed.font && parsed.error.empty() &&
+             parsed.font->resource.id == 7 &&
+             parsed.font->resource.type == 2 &&
+             parsed.font->resource.originalSize == 10 &&
+             parsed.font->pageWidth == 40 && parsed.font->pageHeight == 20 &&
+             parsed.font->lineHeight == 12 && parsed.font->base == 9 &&
+             parsed.font->pagePaths ==
+                 std::vector<std::string>{"page.png", "page.png"},
+         "text BMFont info/common/page records retain original size, metrics, type, and ordered pages");
+  if (parsed.font) {
+    const auto a = parsed.font->glyphs.find(U'A');
+    const auto supplementary = parsed.font->glyphs.find(U'\U0001f642');
+    expect(a != parsed.font->glyphs.end() &&
+               a->second.page == 0 && a->second.region.x == 9 &&
+               a->second.region.y == 0 && a->second.region.w == 6 &&
+               a->second.region.h == 8 &&
+               a->second.xOffset == 1 && a->second.yOffset == 1 &&
+               a->second.xAdvance == 7 &&
+               supplementary != parsed.font->glyphs.end() &&
+               supplementary->second.page == 1 &&
+               parsed.font->kerning.at({U'A', U'V'}) == -2,
+           "BMFont glyph rectangles, supplementary code points, pages, advances, and kerning are typed values");
+  }
+
+  const std::array<std::byte, 8> binary{
+      std::byte{'B'}, std::byte{'M'}, std::byte{'F'}, std::byte{3},
+      std::byte{0}, std::byte{0}, std::byte{0}, std::byte{0}};
+  const auto rejected = skin::parseSkinBitmapFont(
+      skin::SkinBitmapFontResource{.id=1, .virtualPath="binary.fnt"},
+      binary, skin::SkinBitmapFontSourceFormat::BmFont);
+  expect(!rejected.font &&
+             rejected.error == "binary BMFont descriptors are unsupported",
+         "the pinned text-only Beatoraja path rejects binary BMFont bytes");
+
+  constexpr std::string_view lr2 =
+      "#S,10\r\n"
+      "#M,2\r\n"
+      "#T,0,page.png\r\n"
+      "#R,65,0,1,2,6,8\r\n"
+      "#R,288,0,9,2,7,8\r\n";
+  const auto lr2Parsed = skin::parseSkinBitmapFont(
+      skin::SkinBitmapFontResource{.id=9,
+                                   .virtualPath="font/fixture.lr2font",
+                                   .type=0,
+                                   .authoredOrdinal=8},
+      std::as_bytes(std::span(lr2)),
+      skin::SkinBitmapFontSourceFormat::Lr2Font);
+  expect(lr2Parsed.font && lr2Parsed.font->resource.originalSize == 10 &&
+             lr2Parsed.font->margin == 2 &&
+             lr2Parsed.font->pagePaths == std::vector<std::string>{"page.png"} &&
+             lr2Parsed.font->glyphs.at(U'A').region.x == 1 &&
+             lr2Parsed.font->glyphs.at(U'A').region.y == 2 &&
+             lr2Parsed.font->glyphs.at(U'A').region.w == 6 &&
+             lr2Parsed.font->glyphs.at(U'A').region.h == 8 &&
+             lr2Parsed.font->glyphs.at(U'\u301c').region.x == 9 &&
+             lr2Parsed.font->glyphs.at(U'\uff5e').region.x == 9,
+         "LR2FONT S/M/T/R records share typed pages and glyphs while code 288 maps to both wave-dash forms");
+}
 
 void testBoundedPngAndJpegDecodeBeforeAllocation() {
   const std::filesystem::path resources =
@@ -300,9 +374,27 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
                       "tests/fixtures/beatoraja_skin/resources/fixture.ttf",
                   source / "entry/resources" / name);
   }
+  fs::create_directories(source / "entry/resources/bitmap-font");
   fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
-                    "tests/fixtures/beatoraja_skin/resources/fixture.ttf",
-                source / "entry/resources/unsupported.fnt");
+                    "tests/fixtures/beatoraja_skin/resources/bitmap-font/fixture.fnt",
+                source / "entry/resources/bitmap-font/fixture.fnt");
+  fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
+                    "tests/fixtures/beatoraja_skin/resources/bitmap-font/page.png",
+                source / "entry/resources/bitmap-font/page.png");
+  std::ofstream(source / "entry/resources/bitmap-font/missing-page.fnt")
+      << "info face=Missing size=10 padding=0,0,0,0\n"
+         "common lineHeight=12 base=9 scaleW=40 scaleH=20 pages=1\n"
+         "page id=0 file=absent.png\n"
+         "chars count=1\n"
+         "char id=65 x=0 y=0 width=6 height=8 xoffset=1 yoffset=1 "
+         "xadvance=7 page=0 chnl=15\n";
+  std::ofstream(source / "entry/resources/bitmap-font/primary.fnt")
+      << "info face=Primary size=10 padding=0,0,0,0\n"
+         "common lineHeight=12 base=9 scaleW=40 scaleH=20 pages=1\n"
+         "page id=0 file=page.png\n"
+         "chars count=1\n"
+         "char id=65 x=9 y=0 width=6 height=8 xoffset=1 yoffset=1 "
+         "xadvance=7 page=0 chnl=15\n";
   fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) / "assets/fonts/fa-solid-900.ttf",
                 source / "entry/resources/icons.ttf");
   fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) / "bgfx/bgfx/examples/runtime/font/signika-regular.ttf",
@@ -332,6 +424,10 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   model.model.resources.emplace_back(skin::SkinFontResource{.id=7, .authoredName="fixture-font", .virtualPath="resources/fixture.ttf", .type=0});
   model.model.resources.emplace_back(skin::SkinFontResource{.id=8, .authoredName="fallback-font", .virtualPath="resources/icons.ttf", .type=0, .fallbacks={{.virtualPath="resources/fixture.ttf", .type=0}}});
   model.model.resources.emplace_back(skin::SkinFontResource{.id=9, .authoredName="kerning-font", .virtualPath="resources/signika.ttf", .type=0});
+  model.model.resources.emplace_back(skin::SkinFontResource{.id=10, .authoredName="bitmap-font", .virtualPath="resources/bitmap-font/fixture.fnt", .type=0});
+  model.model.resources.emplace_back(skin::SkinFontResource{.id=11, .authoredName="distance-font", .virtualPath="resources/bitmap-font/fixture.fnt", .type=1});
+  model.model.resources.emplace_back(skin::SkinFontResource{.id=12, .authoredName="colored-distance-font", .virtualPath="resources/bitmap-font/fixture.fnt", .type=2});
+  model.model.resources.emplace_back(skin::SkinFontResource{.id=13, .authoredName="bitmap-fallback-font", .virtualPath="resources/bitmap-font/primary.fnt", .type=0, .fallbacks={{.virtualPath="resources/bitmap-font/fixture.fnt", .type=0}}});
   model.model.objects.push_back({.id=1, .authoredName="primary", .payload=skin::SkinImageObject{.orderedStates={{.resource=1, .frames={{.x=0,.y=0,.w=40,.h=20,.gridColumns=4,.gridRows=2}}}}}, .critical=true});
   model.model.objects.push_back({.id=2, .authoredName="alias", .payload=skin::SkinImageObject{.orderedStates={{.resource=2, .frames={{.x=2,.y=3,.w=20,.h=10,.gridColumns=2,.gridRows=1}}}}}, .critical=true});
   model.model.objects.push_back({.id=3, .authoredName="jpeg", .payload=skin::SkinImageObject{.orderedStates={{.resource=3, .frames={{.x=0,.y=0,.w=40,.h=20}}}}}, .critical=true});
@@ -341,6 +437,11 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   model.model.objects.push_back({.id=7, .authoredName="styled-caption", .payload=skin::SkinTextObject{.font=7, .literal="AV", .pointSize=24, .outlineRgba={255,0,0,255}, .outlineWidth=1.0, .shadowRgba={0,0,255,128}, .shadowOffsetX=1.0, .shadowOffsetY=2.0, .shadowSmoothness=0.5}, .critical=true});
   model.model.objects.push_back({.id=8, .authoredName="fallback-caption", .payload=skin::SkinTextObject{.font=8, .literal="日本", .pointSize=16}, .critical=true});
   model.model.objects.push_back({.id=9, .authoredName="kerning-caption", .payload=skin::SkinTextObject{.font=9, .literal="AV", .pointSize=16}, .critical=true});
+  model.model.objects.push_back({.id=10, .authoredName="bitmap-caption", .payload=skin::SkinTextObject{.font=10, .literal="AV\xF0\x9F\x99\x82", .pointSize=20}, .critical=true});
+  model.model.objects.push_back({.id=11, .authoredName="distance-caption", .payload=skin::SkinTextObject{.font=11, .literal="A", .pointSize=20, .outlineRgba={1,2,3,4}, .outlineWidth=0.5, .shadowRgba={5,6,7,8}, .shadowOffsetX=4.0, .shadowOffsetY=2.0, .shadowSmoothness=0.4}, .critical=true});
+  model.model.objects.push_back({.id=12, .authoredName="colored-distance-caption", .payload=skin::SkinTextObject{.font=12, .literal="A", .pointSize=20}, .critical=true});
+  model.model.objects.push_back({.id=13, .authoredName="bitmap-fallback-caption", .payload=skin::SkinTextObject{.font=13, .literal="\xE3\x80\x9C", .pointSize=20}, .critical=true});
+  model.model.objects.push_back({.id=14, .authoredName="bitmap-style-caption", .payload=skin::SkinTextObject{.font=10, .literal="V", .pointSize=20, .outlineRgba={9,8,7,6}, .outlineWidth=2.0, .shadowRgba={5,4,3,2}, .shadowOffsetX=3.0, .shadowOffsetY=4.0, .shadowSmoothness=0.75}, .critical=true});
   model.disabledOptionalObjects.push_back(5);
   skin::BeatorajaSkinConfiguration configuration;
   const std::array<std::string, 1> runtimeStrings{"Artist 日本 42"};
@@ -375,16 +476,26 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   const auto invalidCrop = service.validateResources({.revision=snapshot.prepared->readView(), .entry=entry, .fileSystem=*stagedFs.fileSystem, .model=invalidCropModel, .configuration=configuration});
   expect(invalidCrop.valid && !hasDiagnostic(invalidCrop.diagnostics, "skin.resource.sprite_bounds"),
          "Beatoraja-compatible source crops outside an image remain selectable");
-  const auto unsupportedFontModel =
-      singleFontModel("resources/unsupported.fnt", true, "A");
-  const auto unsupportedFont = service.validateResources({.revision=snapshot.prepared->readView(), .entry=entry, .fileSystem=*stagedFs.fileSystem, .model=unsupportedFontModel, .configuration=configuration, .requiredRuntimeStrings=runtimeStrings});
-  expect(!unsupportedFont.valid && hasDiagnostic(unsupportedFont.diagnostics, "skin.resource.font_format_unsupported"),
-         "a critical bitmap font declaration is explicitly unsupported");
-  const auto optionalUnsupportedFontModel =
-      singleFontModel("resources/unsupported.fnt", false, "A");
-  const auto optionalUnsupportedFont = service.validateResources({.revision=snapshot.prepared->readView(), .entry=entry, .fileSystem=*stagedFs.fileSystem, .model=optionalUnsupportedFontModel, .configuration=configuration, .requiredRuntimeStrings=runtimeStrings});
-  expect(optionalUnsupportedFont.valid && hasDiagnostic(optionalUnsupportedFont.diagnostics, "skin.resource.font_format_unsupported"),
-         "an optional bitmap font declaration reports a non-blocking diagnostic");
+  const auto bitmapFontModel = singleFontModel(
+      "resources/bitmap-font/fixture.fnt", true, "AV\xF0\x9F\x99\x82");
+  const auto bitmapFont = service.validateResources(
+      {.revision=snapshot.prepared->readView(), .entry=entry,
+       .fileSystem=*stagedFs.fileSystem, .model=bitmapFontModel,
+       .configuration=configuration, .requiredRuntimeStrings=runtimeStrings});
+  expect(bitmapFont.valid &&
+             !hasDiagnostic(bitmapFont.diagnostics,
+                            "skin.resource.font_format_unsupported"),
+         "a text BMFont descriptor with two pages and a supplementary glyph validates");
+  const auto optionalMissingPageModel = singleFontModel(
+      "resources/bitmap-font/missing-page.fnt", false, "A");
+  const auto optionalMissingPage = service.validateResources(
+      {.revision=snapshot.prepared->readView(), .entry=entry,
+       .fileSystem=*stagedFs.fileSystem, .model=optionalMissingPageModel,
+       .configuration=configuration, .requiredRuntimeStrings=runtimeStrings});
+  expect(optionalMissingPage.valid &&
+             hasDiagnostic(optionalMissingPage.diagnostics,
+                           "skin.resource.font_missing"),
+         "an optional bitmap-font page failure is a non-blocking diagnostic");
   const auto unknownGlyphModel =
       singleFontModel("resources/fixture.ttf", true, "\xF4\x8F\xBF\xBF");
   const auto unknownGlyph = service.validateResources({.revision=snapshot.prepared->readView(), .entry=entry, .fileSystem=*stagedFs.fileSystem, .model=unknownGlyphModel, .configuration=configuration, .requiredRuntimeStrings=runtimeStrings});
@@ -659,16 +770,21 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
          "the optional rejected atlas request is not retained and performs no ID allocation, preserving compact key-order atlas IDs");
   compactAtlasPlan.plan.reset();
   auto planned = service.decodeAndPlan({.revision=std::move(*lease), .entry=entry, .fileSystem=*leasedFs.fileSystem, .model=model, .configuration=configuration, .requiredRuntimeStrings=runtimeStrings});
-  expect(planned.plan && planned.plan->images.size() == 2 && planned.plan->atlases.size() == 4 &&
-             planned.plan->textAtlasesByObject.size() == 4 &&
+  expect(planned.plan && planned.plan->images.size() == 2 && planned.plan->atlases.size() == 8 &&
+             planned.plan->textAtlasesByObject.size() == 9 &&
              planned.plan->textAtlasesByObject.contains(6) &&
              planned.plan->textAtlasesByObject.contains(7) &&
              planned.plan->textAtlasesByObject.contains(8) &&
              planned.plan->textAtlasesByObject.contains(9) &&
+             planned.plan->textAtlasesByObject.contains(10) &&
+             planned.plan->textAtlasesByObject.contains(11) &&
+             planned.plan->textAtlasesByObject.contains(12) &&
+             planned.plan->textAtlasesByObject.contains(13) &&
+             planned.plan->textAtlasesByObject.contains(14) &&
              planned.plan->images.front().aliases == std::vector<skin::SkinResourceId>{2},
          "duplicate image locators reuse one texture while every live text object publishes its prepared atlas identity");
   std::optional<skin::SkinTextAtlasKey> firstAtlasKey;
-  if (planned.plan && planned.plan->atlases.size() == 4) {
+  if (planned.plan && planned.plan->atlases.size() == 8) {
     const auto &firstAtlas = planned.plan->atlases[0];
     const auto &secondAtlas = planned.plan->atlases[1];
     firstAtlasKey = firstAtlas.key;
@@ -677,6 +793,14 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
       if (component != 0 && component != 255) { styledColor = true; break; }
     const auto signikaAtlas = std::find_if(planned.plan->atlases.begin(), planned.plan->atlases.end(),
         [](const skin::SkinPreparedGlyphAtlas &atlas) { return atlas.key.font == 9; });
+    const auto bitmapAtlas = std::find_if(planned.plan->atlases.begin(), planned.plan->atlases.end(),
+        [](const skin::SkinPreparedGlyphAtlas &atlas) { return atlas.key.font == 10; });
+    const auto distanceAtlas = std::find_if(planned.plan->atlases.begin(), planned.plan->atlases.end(),
+        [](const skin::SkinPreparedGlyphAtlas &atlas) { return atlas.key.font == 11; });
+    const auto coloredDistanceAtlas = std::find_if(planned.plan->atlases.begin(), planned.plan->atlases.end(),
+        [](const skin::SkinPreparedGlyphAtlas &atlas) { return atlas.key.font == 12; });
+    const auto bitmapFallbackAtlas = std::find_if(planned.plan->atlases.begin(), planned.plan->atlases.end(),
+        [](const skin::SkinPreparedGlyphAtlas &atlas) { return atlas.key.font == 13; });
     const auto &firstAGlyph = firstAtlas.glyphs.at(U'A');
     expect(firstAtlas.id == 1 && secondAtlas.id == 2 && firstAtlas.key.pointSize == 16 &&
                secondAtlas.key.pointSize == 24 && firstAtlas.glyphs.contains(U'日') &&
@@ -688,7 +812,18 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
                static_cast<double>(firstAtlas.glyphs.at(U'A').region.x) / firstAtlas.pixels.width > 0.0 &&
                static_cast<double>(firstAtlas.glyphs.at(U'A').region.x) / firstAtlas.pixels.width < 1.0 && styledColor &&
                signikaAtlas != planned.plan->atlases.end() && signikaAtlas->kerning.contains({U'A', U'V'}) &&
-               signikaAtlas->kerning.at({U'A', U'V'}) != 0,
+               signikaAtlas->kerning.at({U'A', U'V'}) != 0 &&
+               bitmapAtlas != planned.plan->atlases.end() && bitmapAtlas->bitmapFont &&
+               bitmapAtlas->bitmapFontType == 0 && bitmapAtlas->originalSize == 10 &&
+               bitmapAtlas->glyphs.contains(U'\U0001f642') &&
+               bitmapAtlas->glyphs.at(U'V').region.x >= 40 &&
+               bitmapAtlas->kerning.at({U'A', U'V'}) == -2 &&
+               distanceAtlas != planned.plan->atlases.end() &&
+               distanceAtlas->bitmapFontType == 1 &&
+               coloredDistanceAtlas != planned.plan->atlases.end() &&
+               coloredDistanceAtlas->bitmapFontType == 2 &&
+               bitmapFallbackAtlas != planned.plan->atlases.end() &&
+               bitmapFallbackAtlas->glyphs.contains(U'\u301c'),
            "prepared font atlases have stable keys, normalized UV regions, styled pixels, Japanese/runtime glyphs, fallback selection, and real AV kerning");
   }
   if (!planned.plan) return;
@@ -1149,19 +1284,23 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   auto uploaded = skin::SkinResourceCatalog::upload(
       std::move(*planned.plan), device, counters);
   planned.plan.reset();
-  expect(uploaded.catalog && device->creates == 6 && device->live == 6 &&
+  expect(uploaded.catalog && device->creates == 10 && device->live == 10 &&
              uploaded.catalog->find(1) && uploaded.catalog->find(2) && uploaded.catalog->find(3) &&
              uploaded.catalog->findTextAtlas(1) && uploaded.catalog->findTextAtlas(2) && uploaded.catalog->findTextAtlas(3) && uploaded.catalog->findTextAtlas(4) &&
              uploaded.catalog->findTextAtlasForObject(6) &&
              uploaded.catalog->findTextAtlasForObject(7) &&
              uploaded.catalog->findTextAtlasForObject(8) &&
              uploaded.catalog->findTextAtlasForObject(9) &&
+             uploaded.catalog->findTextAtlasForObject(10) &&
+             uploaded.catalog->findTextAtlasForObject(11) &&
+             uploaded.catalog->findTextAtlasForObject(12) &&
+             uploaded.catalog->findTextAtlasForObject(13) &&
              !uploaded.catalog->findTextAtlasForObject(5) &&
              firstAtlasKey && uploaded.catalog->findTextAtlas(*firstAtlasKey) &&
              uploaded.catalog->find(1)->regions.front().x == 0 &&
              uploaded.catalog->find(2)->regions.front().x == 2 &&
              counters->snapshot() ==
-                 skin::SkinLiveResourceSnapshot{.liveTextures = 6,
+                 skin::SkinLiveResourceSnapshot{.liveTextures = 10,
                                                  .liveResources = 1},
          "upload owns unique physical textures while preserving per-alias sprite regions");
   if (!uploaded.catalog) return;
@@ -1260,6 +1399,7 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
 }
 
 int main() {
+  testBitmapFontDescriptorParsingMatchesPinnedSources();
   testBoundedPngAndJpegDecodeBeforeAllocation();
   testSharedSdlTtfRuntimeFinalRelease();
   testSpriteBoundsAndNormalizedGridCells();
