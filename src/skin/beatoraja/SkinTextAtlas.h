@@ -25,9 +25,14 @@ struct SkinTextAtlasFontBytes {
   std::vector<std::byte> encoded;
 };
 
+struct SkinTextAtlasBitmapPage {
+  std::string physicalKey;
+  std::optional<image_decode::DecodedImageData> pixels;
+};
+
 struct SkinTextAtlasBitmapFace {
   SkinParsedBitmapFont font;
-  std::vector<image_decode::DecodedImageData> pages;
+  std::vector<SkinTextAtlasBitmapPage> pages;
 };
 
 struct SkinTextAtlasBuildResult {

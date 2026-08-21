@@ -28,6 +28,7 @@ struct SkinParsedBitmapFont {
   int pageHeight = 0;
   int margin = 0;
   bool lr2Font = false;
+  bool auxiliaryMetricsComplete = false;
 };
 
 struct SkinBitmapFontParseResult {

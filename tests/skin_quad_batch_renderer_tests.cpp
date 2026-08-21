@@ -496,6 +496,60 @@ void testDistanceFieldGlyphSubmissionSelectsProgramAndUniforms() {
          "bilinear overlay");
 }
 
+void testGlyphSubmissionSplitsAdjacentBitmapPages() {
+  auto prepared = resources();
+  auto &atlas = prepared.atlases.at(21);
+  atlas.texture = BGFX_INVALID_HANDLE;
+  atlas.width = 8;
+  atlas.height = 8;
+  atlas.bitmapFont = true;
+  atlas.bitmapFontType = 0;
+  atlas.originalSize = 8;
+  atlas.pageWidth = 8;
+  atlas.pageHeight = 8;
+  atlas.pages = {{.texture = {.idx = 201},
+                  .width = 8,
+                  .height = 8,
+                  .bitmapFontType = 0,
+                  .available = true},
+                 {.texture = {.idx = 202},
+                  .width = 8,
+                  .height = 8,
+                  .bitmapFontType = 0,
+                  .available = true}};
+  atlas.glyphs.at(U'A').page = 0;
+  atlas.glyphs.emplace(
+      U'B', skin::SkinPreparedGlyphMetrics{
+                .region = {.x = 0, .y = 0, .w = 8, .h = 8},
+                .page = 1,
+                .bitmapFontType = 0});
+
+  skin::SkinGlyphRunCommand glyphs;
+  glyphs.atlas = 21;
+  glyphs.state = {.blend = skin::SkinBlendMode::Normal,
+                  .filter = skin::SkinFilterMode::Linear};
+  const auto vertices = quad(11, skin::SkinBlendMode::Normal,
+                             skin::SkinFilterMode::Linear)
+                            .vertices;
+  glyphs.glyphs = {{.codepoint = U'A', .vertices = vertices},
+                   {.codepoint = U'B', .vertices = vertices},
+                   {.codepoint = U'A', .vertices = vertices}};
+
+  RenderContext context;
+  FakeBackend backend;
+  rendering::SkinQuadBatchRenderer renderer(backend);
+  const std::array commands{command(1, std::move(glyphs))};
+  renderer.begin(context, prepared);
+  expect(renderer.submit(commands), "separate bitmap pages pass preflight");
+  renderer.flush();
+  expect(backend.batches.size() == 3 &&
+             backend.batches[0].texture.idx == 201 &&
+             backend.batches[1].texture.idx == 202 &&
+             backend.batches[2].texture.idx == 201,
+         "adjacent glyphs select their own page texture and split only when "
+         "that physical texture changes");
+}
+
 void testVerticesStatesScissorsAndSequentialFlushes() {
   auto prepared = resources();
   RenderContext context;
@@ -1162,6 +1216,7 @@ void testGeneratedTextureCommandsMaterializeBeforeAtomicSubmission() {
 int main() {
   testWholeBufferPreflightUsesExactCatalogIds();
   testDistanceFieldGlyphSubmissionSelectsProgramAndUniforms();
+  testGlyphSubmissionSplitsAdjacentBitmapPages();
   testVerticesStatesScissorsAndSequentialFlushes();
   testExactBackendStateMapping();
   testPrimitiveTopologyAndBgaRequiresFallbackUntilIntegrated();

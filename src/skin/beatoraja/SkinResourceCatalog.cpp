@@ -447,7 +447,7 @@ std::vector<FontAtlasRequest> collectFontAtlasRequests(
     bool digestWithinPolicy = true;
     std::vector<FontAtlasRequest::ResolvedFace> resolvedFaces;
     const auto addResolved = [&](std::string_view path, int type,
-                                 int originalSize = 0) {
+                                 int originalSize, bool primary) {
       if (!digestWithinPolicy) return;
       if (path == kPracticeSystemFontVirtualPath) {
         digestWithinPolicy = appendStableFallbackChainEntry(
@@ -462,10 +462,28 @@ std::vector<FontAtlasRequest> collectFontAtlasRequests(
       }
       const auto configured = applyConfiguredFileSelection(
           path, configuration, safetyPolicy);
-      if (!configured.path) { resolved = false; return; }
+      if (!configured.path) {
+        if (primary) {
+          resolved = false;
+        } else {
+          diagnostics.push_back(fontDiagnostic(
+              found->second, false, "skin.resource.font_path_ambiguous",
+              "bitmap fallback path is invalid or ambiguous"));
+        }
+        return;
+      }
       const auto candidate = files.resolveResourceCandidates(
           *configured.path, *configured.path);
-      if (!candidate.normalizedVirtualPath) { resolved = false; return; }
+      if (!candidate.normalizedVirtualPath) {
+        if (primary) {
+          resolved = false;
+        } else {
+          diagnostics.push_back(fontDiagnostic(
+              found->second, false, "skin.resource.font_missing",
+              "bitmap fallback path is unavailable"));
+        }
+        return;
+      }
       digestWithinPolicy = appendStableFallbackChainEntry(
           digest, *candidate.normalizedVirtualPath, type, safetyPolicy);
       if (digestWithinPolicy) {
@@ -475,10 +493,10 @@ std::vector<FontAtlasRequest> collectFontAtlasRequests(
       }
     };
     addResolved(found->second.virtualPath, found->second.type,
-                found->second.originalSize);
+                found->second.originalSize, true);
     for (const auto &fallback : found->second.fallbacks) {
       if (!fallback.virtualPath.empty()) {
-        addResolved(fallback.virtualPath, fallback.type);
+        addResolved(fallback.virtualPath, fallback.type, 0, false);
       }
     }
     if (!resolved) {
@@ -638,6 +656,9 @@ bool isBitmapFontFace(std::string_view path) {
 struct BitmapFontPreparationCache {
   std::map<std::string, std::vector<std::byte>, std::less<>> descriptors;
   std::map<std::string, image_decode::DecodedImageData, std::less<>> pages;
+  std::map<std::string, std::size_t, std::less<>> pageEncodedBytes;
+  std::set<std::string, std::less<>> accountedDescriptors;
+  std::set<std::string, std::less<>> accountedPages;
 };
 
 std::optional<std::vector<SkinTextAtlasBitmapFace>> readBitmapFontFaces(
@@ -649,15 +670,26 @@ std::optional<std::vector<SkinTextAtlasBitmapFace>> readBitmapFontFaces(
     BitmapFontPreparationCache &cache) {
   std::vector<SkinTextAtlasBitmapFace> result;
   result.reserve(request.resolvedFaces.size());
-  for (const auto &face : request.resolvedFaces) {
+  for (std::size_t faceIndex = 0; faceIndex < request.resolvedFaces.size();
+       ++faceIndex) {
+    const auto &face = request.resolvedFaces[faceIndex];
+    const bool primary = faceIndex == 0;
+    const auto rejectFace = [&](std::string code, std::string message) {
+      diagnostics.push_back(fontDiagnostic(
+          request.font, primary && request.critical, std::move(code),
+          std::move(message)));
+    };
     if (cancellationRequested()) return std::nullopt;
     const std::string extension = lowercaseExtension(face.path);
     if (extension != ".fnt" && extension != ".lr2font") {
-      diagnostics.push_back(fontDiagnostic(
-          request.font, request.critical, "skin.resource.font_format_unsupported",
-          "bitmap fallback extension must be FNT or LR2FONT"));
-      return std::nullopt;
+      rejectFace("skin.resource.font_format_unsupported",
+                 "bitmap fallback extension must be FNT or LR2FONT");
+      if (primary) return std::nullopt;
+      continue;
     }
+    SkinResourceSessionAccounting faceSession = session;
+    std::set<std::string, std::less<>> newlyAccountedDescriptors;
+    std::set<std::string, std::less<>> newlyAccountedPages;
     auto encoded = cache.descriptors.find(face.path);
     if (encoded == cache.descriptors.end()) {
       const auto read = files.readResolvedResource(
@@ -665,20 +697,24 @@ std::optional<std::vector<SkinTextAtlasBitmapFace>> readBitmapFontFaces(
                                        SkinResourcePolicy::maximumEncodedBytes));
       if (cancellationRequested()) return std::nullopt;
       if (read.failure) {
-        diagnostics.push_back(fontDiagnostic(
-            request.font, request.critical, "skin.resource.font_missing",
-            "bitmap-font descriptor bytes are unavailable"));
-        return std::nullopt;
-      }
-      if (!session.addImage(/*physicalResources=*/0, /*logicalResources=*/0,
-                            read.bytes.size(), /*decodedBytes=*/0,
-                            /*regions=*/0)) {
-        diagnostics.push_back(fontDiagnostic(
-            request.font, request.critical, "skin.resource.encoded_limit",
-            "bitmap-font descriptor bytes exceed session policy"));
-        return std::nullopt;
+        rejectFace("skin.resource.font_missing",
+                   "bitmap-font descriptor bytes are unavailable");
+        if (primary) return std::nullopt;
+        continue;
       }
       encoded = cache.descriptors.emplace(face.path, read.bytes).first;
+    }
+    if (!cache.accountedDescriptors.contains(face.path)) {
+      if (!faceSession.addImage(/*physicalResources=*/0,
+                                /*logicalResources=*/0,
+                                encoded->second.size(), /*decodedBytes=*/0,
+                                /*regions=*/0)) {
+        rejectFace("skin.resource.encoded_limit",
+                   "bitmap-font descriptor bytes exceed session policy");
+        if (primary) return std::nullopt;
+        continue;
+      }
+      newlyAccountedDescriptors.insert(face.path);
     }
     auto parsed = parseSkinBitmapFont(
         SkinBitmapFontResource{.id = request.font.id,
@@ -691,14 +727,24 @@ std::optional<std::vector<SkinTextAtlasBitmapFace>> readBitmapFontFaces(
                             : SkinBitmapFontSourceFormat::Lr2Font,
         safetyPolicy);
     if (!parsed.font) {
-      diagnostics.push_back(fontDiagnostic(
-          request.font, request.critical,
-          "skin.resource.font_format_unsupported", parsed.error));
-      return std::nullopt;
+      rejectFace("skin.resource.font_format_unsupported", parsed.error);
+      if (primary) return std::nullopt;
+      continue;
     }
     SkinTextAtlasBitmapFace prepared{.font = std::move(*parsed.font)};
+    const auto rejectPage = [&](std::string code, std::string message) {
+      diagnostics.push_back(fontDiagnostic(
+          request.font,
+          primary && request.critical && !prepared.font.lr2Font,
+          std::move(code), std::move(message)));
+    };
     prepared.pages.reserve(prepared.font.pagePaths.size());
+    bool usableFace = true;
     for (std::string pagePath : prepared.font.pagePaths) {
+      if (pagePath.empty() && prepared.font.lr2Font) {
+        prepared.pages.push_back({});
+        continue;
+      }
       std::ranges::replace(pagePath, '\\', '/');
       const auto combined =
           (std::filesystem::path(face.path).parent_path() / pagePath)
@@ -707,10 +753,14 @@ std::optional<std::vector<SkinTextAtlasBitmapFace>> readBitmapFontFaces(
       const auto candidate =
           files.resolveResourceCandidates(combined, combined);
       if (!candidate.normalizedVirtualPath) {
-        diagnostics.push_back(fontDiagnostic(
-            request.font, request.critical, "skin.resource.font_missing",
-            "bitmap-font page path is invalid"));
-        return std::nullopt;
+        rejectPage("skin.resource.font_missing",
+                   "bitmap-font page path is invalid");
+        if (prepared.font.lr2Font) {
+          prepared.pages.push_back({});
+          continue;
+        }
+        usableFace = false;
+        break;
       }
       auto decoded = cache.pages.find(*candidate.normalizedVirtualPath);
       if (decoded == cache.pages.end()) {
@@ -720,20 +770,18 @@ std::optional<std::vector<SkinTextAtlasBitmapFace>> readBitmapFontFaces(
                               SkinResourcePolicy::maximumEncodedBytes));
         if (cancellationRequested()) return std::nullopt;
         if (read.failure) {
-          diagnostics.push_back(fontDiagnostic(
-              request.font, request.critical, "skin.resource.font_missing",
-              "bitmap-font page image is unavailable"));
-          return std::nullopt;
+          rejectPage("skin.resource.font_missing",
+                     "bitmap-font page image is unavailable");
+          if (prepared.font.lr2Font) {
+            prepared.pages.push_back(
+                {.physicalKey = *candidate.normalizedVirtualPath});
+            continue;
+          }
+          usableFace = false;
+          break;
         }
-        SkinResourceSessionAccounting candidateSession = session;
-        if (!candidateSession.addImage(
-                /*physicalResources=*/0, /*logicalResources=*/0,
-                read.bytes.size(), /*decodedBytes=*/0, /*regions=*/0)) {
-          diagnostics.push_back(fontDiagnostic(
-              request.font, request.critical, "skin.resource.encoded_limit",
-              "bitmap-font page bytes exceed session policy"));
-          return std::nullopt;
-        }
+        cache.pageEncodedBytes.insert_or_assign(
+            *candidate.normalizedVirtualPath, read.bytes.size());
         const auto image = image_decode::decodeImageMemory(
             read.bytes,
             {.maximumDimension = skinResourceDimensionLimit(safetyPolicy),
@@ -744,26 +792,65 @@ std::optional<std::vector<SkinTextAtlasBitmapFace>> readBitmapFontFaces(
              .stop = stop});
         if (cancellationRequested()) return std::nullopt;
         if (!image) {
-          diagnostics.push_back(fontDiagnostic(
-              request.font, request.critical,
-              "skin.resource.image_decode_failed",
-              "bitmap-font page image cannot be decoded within policy"));
-          return std::nullopt;
+          rejectPage("skin.resource.image_decode_failed",
+                     "bitmap-font page image cannot be decoded within policy");
+          if (prepared.font.lr2Font) {
+            prepared.pages.push_back(
+                {.physicalKey = *candidate.normalizedVirtualPath});
+            continue;
+          }
+          usableFace = false;
+          break;
         }
-        session = candidateSession;
         decoded = cache.pages
                       .emplace(*candidate.normalizedVirtualPath, *image)
                       .first;
       }
-      prepared.pages.push_back(decoded->second);
+      if (!cache.accountedPages.contains(*candidate.normalizedVirtualPath) &&
+          !newlyAccountedPages.contains(*candidate.normalizedVirtualPath)) {
+        const auto encodedBytes =
+            cache.pageEncodedBytes.find(*candidate.normalizedVirtualPath);
+        if (encodedBytes == cache.pageEncodedBytes.end() ||
+            !faceSession.addImage(/*physicalResources=*/0,
+                                  /*logicalResources=*/0,
+                                  encodedBytes->second, /*decodedBytes=*/0,
+                                  /*regions=*/0)) {
+          rejectFace("skin.resource.encoded_limit",
+                     "bitmap-font page bytes exceed session policy");
+          usableFace = false;
+          break;
+        }
+        newlyAccountedPages.insert(*candidate.normalizedVirtualPath);
+      }
+      prepared.pages.push_back({.physicalKey = *candidate.normalizedVirtualPath,
+                                .pixels = decoded->second});
     }
-    if (prepared.font.lr2Font && !prepared.pages.empty()) {
-      prepared.font.pageWidth = prepared.pages.front().width;
-      prepared.font.pageHeight = prepared.pages.front().height;
+    if (!usableFace) {
+      if (primary) return std::nullopt;
+      continue;
     }
+    if ((prepared.font.lr2Font ||
+         !prepared.font.auxiliaryMetricsComplete) &&
+        !prepared.pages.empty()) {
+      const auto available = std::ranges::find_if(
+          prepared.pages,
+          [](const SkinTextAtlasBitmapPage &page) {
+            return page.pixels.has_value();
+          });
+      if (available != prepared.pages.end()) {
+        prepared.font.pageWidth = available->pixels->width;
+        prepared.font.pageHeight = available->pixels->height;
+      }
+    }
+    session = faceSession;
+    cache.accountedDescriptors.insert(newlyAccountedDescriptors.begin(),
+                                      newlyAccountedDescriptors.end());
+    cache.accountedPages.insert(newlyAccountedPages.begin(),
+                                newlyAccountedPages.end());
     result.push_back(std::move(prepared));
   }
-  return result;
+  return result.empty() ? std::nullopt
+                        : std::optional{std::move(result)};
 }
 
 std::optional<SkinTextAtlasBuildResult> prepareFontAtlas(
@@ -788,6 +875,37 @@ std::optional<SkinTextAtlasBuildResult> prepareFontAtlas(
   if (!faces) return std::nullopt;
   return buildSkinTextAtlas(id, request.key, *faces, request.codepoints,
                             request.pairs, safetyPolicy);
+}
+
+struct AtlasAccountingDelta {
+  std::size_t decodedBytes = 0;
+  std::size_t physicalResources = 0;
+  std::vector<std::string> bitmapPageKeys;
+};
+
+std::optional<AtlasAccountingDelta> atlasAccountingDelta(
+    const SkinPreparedGlyphAtlas &atlas,
+    const std::set<std::string, std::less<>> &accountedBitmapPages) {
+  if (!atlas.bitmapFont) {
+    return AtlasAccountingDelta{.decodedBytes = atlas.pixels.byteSize(),
+                                .physicalResources = 1};
+  }
+  AtlasAccountingDelta result;
+  std::set<std::string, std::less<>> local;
+  for (const auto &page : atlas.pages) {
+    if (!page.pixels || accountedBitmapPages.contains(page.physicalKey) ||
+        !local.insert(page.physicalKey).second) {
+      continue;
+    }
+    if (page.pixels->byteSize() >
+        std::numeric_limits<std::size_t>::max() - result.decodedBytes) {
+      return std::nullopt;
+    }
+    result.decodedBytes += page.pixels->byteSize();
+    ++result.physicalResources;
+    result.bitmapPageKeys.push_back(page.physicalKey);
+  }
+  return result;
 }
 }
 #if defined(ASOBMASHOW_SKIN_RESOURCE_TESTING)
@@ -868,9 +986,12 @@ bool SkinResourceSessionAccounting::addImage(
 
 bool SkinResourceSessionAccounting::addAtlas(
     std::size_t decodedBytes, std::size_t glyphs,
-    std::size_t kerningPairs) noexcept {
+    std::size_t kerningPairs, std::size_t physicalResources) noexcept {
   SkinResourceSessionAccounting next = *this;
-  if (!addWithin(next.atlases_, 1,
+  if (!addWithin(next.physicalResources_, physicalResources,
+                 skinResourceLimit(safetyPolicy_,
+                                   SkinResourcePolicy::maximumResources)) ||
+      !addWithin(next.atlases_, 1,
                  skinResourceLimit(safetyPolicy_,
                                    SkinResourcePolicy::maximumAtlases)) ||
       !addWithin(next.atlasBytes_, decodedBytes,
@@ -1058,6 +1179,8 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
       result.diagnostics.push_back(diagnostic("skin.resource.session_limit", "resource upload plan exceeds fixed aggregate limits")); return result;
     }
   }
+  std::map<std::string, const image_decode::DecodedImageData *, std::less<>>
+      bitmapPhysicalPages;
   for (const auto &atlas : plan.atlases) {
     const auto finite = [safetyPolicy](double value) {
       return std::isfinite(value) &&
@@ -1067,12 +1190,6 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
     if (atlas.id == 0 || !finite(atlas.key.outlineWidth) || !finite(atlas.key.shadowOffsetX) ||
         !finite(atlas.key.shadowOffsetY) || !finite(atlas.key.shadowSmoothness) ||
         !atlasIds.insert(atlas.id).second || !atlasKeys.insert(atlas.key).second ||
-        !skinResourceDimensionsAllowed(atlas.pixels.width, atlas.pixels.height,
-                                       atlas.pixels.byteSize(), safetyPolicy) ||
-        atlas.pixels.width > deviceMaximumDimension || atlas.pixels.height > deviceMaximumDimension ||
-        atlas.pixels.byteSize() > skinResourceLimit(
-                                      safetyPolicy,
-                                      SkinResourcePolicy::maximumAtlasBytes) ||
         atlas.glyphs.size() > skinResourceLimit(
                                  safetyPolicy,
                                  SkinResourcePolicy::maximumGlyphs) ||
@@ -1080,6 +1197,84 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
                                  safetyPolicy,
                                  SkinResourcePolicy::maximumKerningPairs)) {
       result.diagnostics.push_back(diagnostic("skin.resource.atlas_limit", "resource upload plan has invalid or duplicate atlas data")); return result;
+    }
+    std::size_t atlasDecodedBytes = 0;
+    std::size_t atlasPhysicalResources = 0;
+    if (!atlas.bitmapFont) {
+      if (!skinResourceDimensionsAllowed(atlas.pixels.width,
+                                         atlas.pixels.height,
+                                         atlas.pixels.byteSize(),
+                                         safetyPolicy) ||
+          atlas.pixels.width > deviceMaximumDimension ||
+          atlas.pixels.height > deviceMaximumDimension ||
+          atlas.pixels.byteSize() > skinResourceLimit(
+                                        safetyPolicy,
+                                        SkinResourcePolicy::maximumAtlasBytes) ||
+          !atlas.pages.empty()) {
+        result.diagnostics.push_back(diagnostic(
+            "skin.resource.atlas_limit",
+            "resource upload plan has invalid scalable atlas pixels"));
+        return result;
+      }
+      atlasDecodedBytes = atlas.pixels.byteSize();
+      atlasPhysicalResources = 1;
+    } else {
+      if (atlas.pixels.width != 0 || atlas.pixels.height != 0 ||
+          atlas.pixels.rgba ||
+          atlas.pages.size() > skinResourceLimit(
+                                   safetyPolicy,
+                                   SkinResourcePolicy::maximumResources)) {
+        result.diagnostics.push_back(diagnostic(
+            "skin.resource.atlas_limit",
+            "bitmap atlas must retain bounded separate pages"));
+        return result;
+      }
+      for (const auto &page : atlas.pages) {
+        if (page.bitmapFontType < 0 || page.bitmapFontType > 2) {
+          result.diagnostics.push_back(diagnostic(
+              "skin.resource.atlas_limit",
+              "bitmap atlas page has an invalid face type"));
+          return result;
+        }
+        if (!page.pixels) {
+          continue;
+        }
+        if (page.physicalKey.empty() ||
+            !skinResourceDimensionsAllowed(page.pixels->width,
+                                           page.pixels->height,
+                                           page.pixels->byteSize(),
+                                           safetyPolicy) ||
+            page.pixels->width > deviceMaximumDimension ||
+            page.pixels->height > deviceMaximumDimension) {
+          result.diagnostics.push_back(diagnostic(
+              "skin.resource.atlas_limit",
+              "bitmap atlas page exceeds texture policy"));
+          return result;
+        }
+        const auto [existing, inserted] =
+            bitmapPhysicalPages.emplace(page.physicalKey, &*page.pixels);
+        if (!inserted) {
+          const auto &prior = *existing->second;
+          if (prior.width != page.pixels->width ||
+              prior.height != page.pixels->height ||
+              prior.rgba != page.pixels->rgba) {
+            result.diagnostics.push_back(diagnostic(
+                "skin.resource.atlas_limit",
+                "aliased bitmap pages have conflicting pixels"));
+            return result;
+          }
+          continue;
+        }
+        if (page.pixels->byteSize() >
+            std::numeric_limits<std::size_t>::max() - atlasDecodedBytes) {
+          result.diagnostics.push_back(diagnostic(
+              "skin.resource.atlas_limit",
+              "bitmap atlas page bytes overflow accounting"));
+          return result;
+        }
+        atlasDecodedBytes += page.pixels->byteSize();
+        ++atlasPhysicalResources;
+      }
     }
     SkinTextAtlasKey canonicalKey = atlas.key;
     if (!canonicalizeSkinTextAtlasKey(canonicalKey, safetyPolicy) || canonicalKey != atlas.key ||
@@ -1094,15 +1289,33 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
           atlas.pageHeight <= 0 ||
           atlas.originalSize > skinResourceDimensionLimit(safetyPolicy) ||
           atlas.pageWidth > skinResourceDimensionLimit(safetyPolicy) ||
-          atlas.pageHeight > skinResourceDimensionLimit(safetyPolicy))) ||
+          atlas.pageHeight > skinResourceDimensionLimit(safetyPolicy) ||
+          (atlas.layoutKind != SkinTextLayoutKind::Bitmap &&
+           atlas.layoutKind != SkinTextLayoutKind::Lr2Image) ||
+          std::llabs(static_cast<long long>(atlas.margin)) >
+              skinResourceDimensionLimit(safetyPolicy))) ||
         (!atlas.bitmapFont &&
          (atlas.bitmapFontType != 0 || atlas.originalSize != 0 ||
-          atlas.pageWidth != 0 || atlas.pageHeight != 0))) {
+          atlas.pageWidth != 0 || atlas.pageHeight != 0 ||
+          atlas.layoutKind != SkinTextLayoutKind::Scalable ||
+          atlas.margin != 0))) {
       result.diagnostics.push_back(diagnostic("skin.resource.atlas_limit", "resource upload plan has noncanonical atlas data")); return result;
     }
     for (const auto &[codepoint, metric] : atlas.glyphs) {
       (void)codepoint;
-      if (!canonicalRegion(metric.region, atlas.pixels.width, atlas.pixels.height) ||
+      bool validRegion = false;
+      if (atlas.bitmapFont) {
+        validRegion = metric.page < atlas.pages.size() &&
+                      atlas.pages[metric.page].pixels &&
+                      canonicalRegion(metric.region,
+                                      atlas.pages[metric.page].pixels->width,
+                                      atlas.pages[metric.page].pixels->height);
+      } else {
+        validRegion = metric.page == 0 &&
+                      canonicalRegion(metric.region, atlas.pixels.width,
+                                      atlas.pixels.height);
+      }
+      if (!validRegion ||
           std::llabs(static_cast<long long>(metric.bearingX)) > skinResourceDimensionLimit(safetyPolicy) ||
           std::llabs(static_cast<long long>(metric.bearingY)) > skinResourceDimensionLimit(safetyPolicy) ||
           std::llabs(static_cast<long long>(metric.advance)) > skinResourceDimensionLimit(safetyPolicy) ||
@@ -1115,8 +1328,8 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
       if (!atlas.glyphs.contains(pair.first) || !atlas.glyphs.contains(pair.second) ||
           std::llabs(static_cast<long long>(amount)) > skinResourceDimensionLimit(safetyPolicy)) { result.diagnostics.push_back(diagnostic("skin.resource.atlas_limit", "resource upload plan has invalid kerning pair")); return result; }
     }
-    if (!session.addAtlas(atlas.pixels.byteSize(), atlas.glyphs.size(),
-                          atlas.kerning.size())) {
+    if (!session.addAtlas(atlasDecodedBytes, atlas.glyphs.size(),
+                          atlas.kerning.size(), atlasPhysicalResources)) {
       result.diagnostics.push_back(diagnostic("skin.resource.session_limit", "resource upload plan exceeds fixed aggregate limits")); return result;
     }
   }
@@ -1241,7 +1454,91 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
     if (catalog->liveCounters_) catalog->liveCounters_->textureCreated();
     pending.release();
   }
-  for (const auto &atlas : plan.atlases) { const auto handle=catalog->device_->create(atlas.pixels, safetyPolicy); if(!bgfx::isValid(handle)){result.diagnostics.push_back(diagnostic("skin.resource.texture_create_failed","texture creation failed")); rollback(); return result;} PendingHandle pending{*catalog->device_, handle}; catalog->atlases_.emplace(atlas.id,PreparedSkinTextAtlas{.id=atlas.id,.key=atlas.key,.texture=handle,.width=atlas.pixels.width,.height=atlas.pixels.height,.glyphs=atlas.glyphs,.kerning=atlas.kerning,.ascent=atlas.ascent,.capHeight=atlas.capHeight,.descent=atlas.descent,.lineHeight=atlas.lineHeight,.bitmapFont=atlas.bitmapFont,.bitmapFontType=atlas.bitmapFontType,.originalSize=atlas.originalSize,.pageWidth=atlas.pageWidth,.pageHeight=atlas.pageHeight}); catalog->atlasKeys_.emplace(atlas.key,atlas.id); catalog->owned_.push_back({handle}); if(catalog->liveCounters_) catalog->liveCounters_->textureCreated(); pending.release(); }
+  struct UploadedBitmapPage {
+    bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
+    int width = 0;
+    int height = 0;
+  };
+  std::map<std::string, UploadedBitmapPage, std::less<>> uploadedBitmapPages;
+  for (const auto &atlas : plan.atlases) {
+    PreparedSkinTextAtlas prepared{
+        .id = atlas.id,
+        .key = atlas.key,
+        .glyphs = atlas.glyphs,
+        .kerning = atlas.kerning,
+        .ascent = atlas.ascent,
+        .capHeight = atlas.capHeight,
+        .descent = atlas.descent,
+        .lineHeight = atlas.lineHeight,
+        .bitmapFont = atlas.bitmapFont,
+        .bitmapFontType = atlas.bitmapFontType,
+        .originalSize = atlas.originalSize,
+        .pageWidth = atlas.pageWidth,
+        .pageHeight = atlas.pageHeight,
+        .layoutKind = atlas.layoutKind,
+        .margin = atlas.margin};
+    if (!atlas.bitmapFont) {
+      const auto handle = catalog->device_->create(atlas.pixels, safetyPolicy);
+      if (!bgfx::isValid(handle)) {
+        result.diagnostics.push_back(diagnostic(
+            "skin.resource.texture_create_failed", "texture creation failed"));
+        rollback();
+        return result;
+      }
+      PendingHandle pending{*catalog->device_, handle};
+      prepared.texture = handle;
+      prepared.width = atlas.pixels.width;
+      prepared.height = atlas.pixels.height;
+      catalog->owned_.push_back({handle});
+      if (catalog->liveCounters_) catalog->liveCounters_->textureCreated();
+      pending.release();
+    } else {
+      prepared.pages.reserve(atlas.pages.size());
+      for (const auto &page : atlas.pages) {
+        PreparedSkinTextAtlas::Page preparedPage{
+            .bitmapFontType = page.bitmapFontType};
+        if (page.pixels) {
+          auto uploaded = uploadedBitmapPages.find(page.physicalKey);
+          if (uploaded == uploadedBitmapPages.end()) {
+            const auto handle =
+                catalog->device_->create(*page.pixels, safetyPolicy);
+            if (!bgfx::isValid(handle)) {
+              result.diagnostics.push_back(diagnostic(
+                  "skin.resource.texture_create_failed",
+                  "bitmap-font page texture creation failed"));
+              rollback();
+              return result;
+            }
+            PendingHandle pending{*catalog->device_, handle};
+            uploaded = uploadedBitmapPages
+                           .emplace(page.physicalKey,
+                                    UploadedBitmapPage{
+                                        .texture = handle,
+                                        .width = page.pixels->width,
+                                        .height = page.pixels->height})
+                           .first;
+            catalog->owned_.push_back({handle});
+            if (catalog->liveCounters_) {
+              catalog->liveCounters_->textureCreated();
+            }
+            pending.release();
+          }
+          preparedPage.texture = uploaded->second.texture;
+          preparedPage.width = uploaded->second.width;
+          preparedPage.height = uploaded->second.height;
+          preparedPage.available = true;
+          if (!bgfx::isValid(prepared.texture)) {
+            prepared.texture = preparedPage.texture;
+            prepared.width = preparedPage.width;
+            prepared.height = preparedPage.height;
+          }
+        }
+        prepared.pages.push_back(preparedPage);
+      }
+    }
+    catalog->atlases_.emplace(atlas.id, std::move(prepared));
+    catalog->atlasKeys_.emplace(atlas.key, atlas.id);
+  }
   catalog->textAtlasesByObject_ = std::move(plan.textAtlasesByObject);
   for (auto &pomyu : plan.pomyuCharas) {
     catalog->pomyuCharas_.emplace(pomyu.object, std::move(pomyu));
@@ -1592,6 +1889,7 @@ SkinResourceValidationResult SkinResourcePreparationService::validateResources(
       input.requiredRuntimeStrings, result.diagnostics, input.safetyPolicy);
   SkinTextAtlasId atlasId = 1;
   BitmapFontPreparationCache bitmapFontCache;
+  std::set<std::string, std::less<>> accountedBitmapPages;
   for (const auto &request : fontRequests) {
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
     SkinResourceSessionAccounting fontSession = session;
@@ -1603,12 +1901,17 @@ SkinResourceValidationResult SkinResourcePreparationService::validateResources(
     if (!built) continue;
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
     if (!built->atlas) result.diagnostics.push_back(fontDiagnostic(request.font, request.critical, "skin.resource.glyph_missing", built->error));
-    else if (!fontSession.addAtlas(built->atlas->pixels.byteSize(),
-                                   built->atlas->glyphs.size(),
-                                   built->atlas->kerning.size()))
+    else if (const auto delta = atlasAccountingDelta(
+                 *built->atlas, accountedBitmapPages);
+             !delta || !fontSession.addAtlas(
+                           delta->decodedBytes, built->atlas->glyphs.size(),
+                           built->atlas->kerning.size(),
+                           delta->physicalResources))
       result.diagnostics.push_back(fontDiagnostic(request.font, request.critical, "skin.resource.atlas_limit", "font atlas session aggregate exceeds policy"));
     else {
       session = fontSession;
+      accountedBitmapPages.insert(delta->bitmapPageKeys.begin(),
+                                    delta->bitmapPageKeys.end());
       ++atlasId;
     }
   }
@@ -1814,6 +2117,7 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
       input.requiredRuntimeStrings, result.diagnostics, input.safetyPolicy);
   SkinTextAtlasId atlasId = 1;
   BitmapFontPreparationCache bitmapFontCache;
+  std::set<std::string, std::less<>> accountedBitmapPages;
   for (const auto &request : fontRequests) {
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
     SkinResourceSessionAccounting fontSession = session;
@@ -1828,13 +2132,18 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
       result.diagnostics.push_back(fontDiagnostic(request.font, request.critical, "skin.resource.glyph_missing", built->error));
       continue;
     }
-    if (!fontSession.addAtlas(built->atlas->pixels.byteSize(),
-                              built->atlas->glyphs.size(),
-                              built->atlas->kerning.size())) {
+    const auto delta = atlasAccountingDelta(*built->atlas,
+                                            accountedBitmapPages);
+    if (!delta || !fontSession.addAtlas(delta->decodedBytes,
+                                        built->atlas->glyphs.size(),
+                                        built->atlas->kerning.size(),
+                                        delta->physicalResources)) {
       result.diagnostics.push_back(fontDiagnostic(request.font, request.critical, "skin.resource.atlas_limit", "font atlas session aggregate exceeds policy"));
       continue;
     }
     session = fontSession;
+    accountedBitmapPages.insert(delta->bitmapPageKeys.begin(),
+                                  delta->bitmapPageKeys.end());
     plan.decodedBytes = session.decodedBytes();
     plan.atlases.push_back(*built->atlas);
     for (const SkinObjectId object : request.objects) {

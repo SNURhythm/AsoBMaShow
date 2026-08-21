@@ -87,7 +87,8 @@ public:
                               std::size_t decodedBytes,
                               std::size_t regions) noexcept;
   [[nodiscard]] bool addAtlas(std::size_t decodedBytes, std::size_t glyphs,
-                              std::size_t kerningPairs) noexcept;
+                              std::size_t kerningPairs,
+                              std::size_t physicalResources = 1) noexcept;
   [[nodiscard]] std::size_t decodedBytes() const noexcept {
     return decodedBytes_;
   }
@@ -146,6 +147,11 @@ struct SkinDecodedImage {
   std::map<SkinResourceId, std::vector<SkinResolvedRegion>> aliasRegionMappings;
 };
 using SkinTextAtlasId = std::uint32_t;
+enum class SkinTextLayoutKind : std::uint8_t {
+  Scalable,
+  Bitmap,
+  Lr2Image,
+};
 struct SkinTextAtlasKey {
   SkinResourceId font = 0;
   int pointSize = 0;
@@ -167,12 +173,19 @@ struct SkinPreparedGlyphMetrics {
   // It includes the primary layout ascent, the selected face's yoffset, and
   // any bounded atlas padding, so fallback glyphs need no font access later.
   int layoutOffsetY = 0;
+  std::size_t page = 0;
   // Bitmap fallback faces retain their own source type so a colored
   // distance-field primary can identify ordinary color glyphs.
   int bitmapFontType = -1;
 };
+struct SkinPreparedGlyphPage {
+  std::string physicalKey;
+  std::optional<image_decode::DecodedImageData> pixels;
+  int bitmapFontType = 0;
+};
 struct SkinPreparedGlyphAtlas {
   SkinTextAtlasId id = 0; SkinTextAtlasKey key; image_decode::DecodedImageData pixels;
+  std::vector<SkinPreparedGlyphPage> pages;
   std::map<char32_t, SkinPreparedGlyphMetrics> glyphs;
   std::map<std::pair<char32_t,char32_t>, int> kerning;
   int ascent = 0; int capHeight = 0; int descent = 0; int lineHeight = 0;
@@ -181,6 +194,8 @@ struct SkinPreparedGlyphAtlas {
   int originalSize = 0;
   int pageWidth = 0;
   int pageHeight = 0;
+  SkinTextLayoutKind layoutKind = SkinTextLayoutKind::Scalable;
+  int margin = 0;
 };
 struct SkinResourceUploadPlan {
   SkinRevisionLease revision;
@@ -265,6 +280,14 @@ struct PreparedSkinTextAtlas {
   bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
   int width = 0;
   int height = 0;
+  struct Page {
+    bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
+    int width = 0;
+    int height = 0;
+    int bitmapFontType = 0;
+    bool available = false;
+  };
+  std::vector<Page> pages;
   std::map<char32_t, SkinPreparedGlyphMetrics> glyphs;
   std::map<std::pair<char32_t, char32_t>, int> kerning;
   int ascent = 0;
@@ -276,6 +299,8 @@ struct PreparedSkinTextAtlas {
   int originalSize = 0;
   int pageWidth = 0;
   int pageHeight = 0;
+  SkinTextLayoutKind layoutKind = SkinTextLayoutKind::Scalable;
+  int margin = 0;
 };
 
 struct PreparedSkinGeneratedTexture {

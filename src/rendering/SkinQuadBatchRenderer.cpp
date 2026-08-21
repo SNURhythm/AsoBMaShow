@@ -518,24 +518,45 @@ bool SkinQuadBatchRenderer::preflightSegment(
     if (const auto *glyphs =
             std::get_if<skin::SkinGlyphRunCommand>(&command.payload)) {
       const auto *atlas = resources_->findTextAtlas(glyphs->atlas);
-      if (!atlas || !bgfx::isValid(atlas->texture) ||
-          !resolveScissor(glyphs->state)) {
+      if (!atlas || !resolveScissor(glyphs->state)) {
         return false;
       }
-      prepared.texture = atlas->texture;
+      const auto glyphTexture = [&](char32_t codepoint) {
+        const auto metric = atlas->glyphs.find(codepoint);
+        if (metric == atlas->glyphs.end()) {
+          return bgfx::TextureHandle{bgfx::kInvalidHandle};
+        }
+        if (atlas->pages.empty()) {
+          return metric->second.page == 0 ? atlas->texture
+                                          : bgfx::TextureHandle{
+                                                bgfx::kInvalidHandle};
+        }
+        if (metric->second.page >= atlas->pages.size()) {
+          return bgfx::TextureHandle{bgfx::kInvalidHandle};
+        }
+        const auto &page = atlas->pages[metric->second.page];
+        return page.available ? page.texture
+                              : bgfx::TextureHandle{bgfx::kInvalidHandle};
+      };
+      prepared.glyphTextures.reserve(glyphs->glyphs.size() +
+                                     glyphs->fallbackColorOverlays.size());
       for (const auto &glyph : glyphs->glyphs) {
-        if (!atlas->glyphs.contains(glyph.codepoint) ||
+        const auto texture = glyphTexture(glyph.codepoint);
+        if (!bgfx::isValid(texture) ||
             !std::ranges::all_of(glyph.vertices, validVertex)) {
           return false;
         }
+        prepared.glyphTextures.push_back(texture);
       }
       for (const auto &glyph : glyphs->fallbackColorOverlays) {
         const auto metric = atlas->glyphs.find(glyph.codepoint);
+        const auto texture = glyphTexture(glyph.codepoint);
         if (!glyphs->state.distanceField || metric == atlas->glyphs.end() ||
-            metric->second.bitmapFontType != 0 ||
+            metric->second.bitmapFontType != 0 || !bgfx::isValid(texture) ||
             !std::ranges::all_of(glyph.vertices, validVertex)) {
           return false;
         }
+        prepared.glyphTextures.push_back(texture);
       }
       const std::size_t glyphCount =
           glyphs->glyphs.size() + glyphs->fallbackColorOverlays.size();
@@ -676,10 +697,12 @@ bool SkinQuadBatchRenderer::preflightSegment(
                          .distanceField = glyphs->state.distanceField};
       for (std::size_t glyphIndex = 0; glyphIndex < glyphs->glyphs.size();
            ++glyphIndex) {
-        appendQuad(key);
+        auto glyphKey = key;
+        glyphKey.texture =
+            resolved[commandIndex].glyphTextures[glyphIndex];
+        appendQuad(glyphKey);
       }
       const BatchKey overlayKey{
-          .texture = resolved[commandIndex].texture,
           .topology = SkinBatchTopology::Triangles,
           .blend = glyphs->state.blend,
           .filter = skin::SkinFilterMode::Linear,
@@ -687,7 +710,11 @@ bool SkinQuadBatchRenderer::preflightSegment(
           .textured = true};
       for (std::size_t glyphIndex = 0;
            glyphIndex < glyphs->fallbackColorOverlays.size(); ++glyphIndex) {
-        appendQuad(overlayKey);
+        auto glyphKey = overlayKey;
+        glyphKey.texture = resolved[commandIndex]
+                               .glyphTextures[glyphs->glyphs.size() +
+                                              glyphIndex];
+        appendQuad(glyphKey);
       }
       continue;
     }
@@ -841,18 +868,27 @@ void SkinQuadBatchRenderer::submitPrepared(SkinQuadSubmissionPlan &plan,
                          .scissor = resolved[commandIndex].scissor,
                          .textured = true,
                          .distanceField = glyphs->state.distanceField};
-      for (const auto &glyph : glyphs->glyphs) {
-        appendQuad(glyph.vertices, key);
+      for (std::size_t glyphIndex = 0; glyphIndex < glyphs->glyphs.size();
+           ++glyphIndex) {
+        auto glyphKey = key;
+        glyphKey.texture =
+            resolved[commandIndex].glyphTextures[glyphIndex];
+        appendQuad(glyphs->glyphs[glyphIndex].vertices, glyphKey);
       }
       const BatchKey overlayKey{
-          .texture = resolved[commandIndex].texture,
           .topology = SkinBatchTopology::Triangles,
           .blend = glyphs->state.blend,
           .filter = skin::SkinFilterMode::Linear,
           .scissor = resolved[commandIndex].scissor,
           .textured = true};
-      for (const auto &glyph : glyphs->fallbackColorOverlays) {
-        appendQuad(glyph.vertices, overlayKey);
+      for (std::size_t glyphIndex = 0;
+           glyphIndex < glyphs->fallbackColorOverlays.size(); ++glyphIndex) {
+        auto glyphKey = overlayKey;
+        glyphKey.texture = resolved[commandIndex]
+                               .glyphTextures[glyphs->glyphs.size() +
+                                              glyphIndex];
+        appendQuad(glyphs->fallbackColorOverlays[glyphIndex].vertices,
+                   glyphKey);
       }
       continue;
     }

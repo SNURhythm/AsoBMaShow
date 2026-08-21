@@ -129,6 +129,7 @@ SkinBitmapFontParseResult parseBmFont(SkinBitmapFontResource resource,
   std::size_t parsedGlyphs = 0;
   std::size_t parsedKernings = 0;
   bool sawCommon = false;
+  bool auxiliaryMetricsComplete = font.resource.originalSize > 0;
   for (const auto line : lines(text)) {
     if (line.empty()) continue;
     const auto values = attributes(line);
@@ -138,6 +139,7 @@ SkinBitmapFontParseResult parseBmFont(SkinBitmapFontResource resource,
           size != std::numeric_limits<int>::min() &&
           font.resource.originalSize == 0) {
         font.resource.originalSize = std::abs(size);
+        auxiliaryMetricsComplete = true;
       }
     } else if (line.starts_with("common ")) {
       if (!getInteger(values, "lineHeight", font.lineHeight) ||
@@ -218,7 +220,7 @@ SkinBitmapFontParseResult parseBmFont(SkinBitmapFontResource resource,
       }
     }
   }
-  if (!sawCommon || font.resource.originalSize <= 0 ||
+  if (!sawCommon ||
       std::ranges::any_of(font.pagePaths,
                           [](const std::string &path) { return path.empty(); }) ||
       (declaredGlyphs >= 0 &&
@@ -227,6 +229,29 @@ SkinBitmapFontParseResult parseBmFont(SkinBitmapFontResource resource,
        parsedKernings != static_cast<std::size_t>(declaredKernings))) {
     return fail("BMFont descriptor is incomplete");
   }
+  if (!auxiliaryMetricsComplete) {
+    // SkinTextBitmap keeps a libGDX-valid face when its independent first-line
+    // size/common scan fails. BitmapFontData uses lineHeight for the source
+    // size and base-capHeight for its unflipped ascent.
+    font.resource.originalSize = font.lineHeight;
+    int capHeight = 0;
+    constexpr std::u32string_view caps = U"MNBDCEFKAGHIJLOPQRSTUVWXYZ";
+    for (const char32_t codepoint : caps) {
+      const auto found = font.glyphs.find(codepoint);
+      if (found != font.glyphs.end() && found->second.region.h > 0) {
+        capHeight = found->second.region.h;
+        break;
+      }
+    }
+    if (capHeight <= 0) {
+      for (const auto &[codepoint, glyph] : font.glyphs) {
+        (void)codepoint;
+        capHeight = std::max(capHeight, glyph.region.h);
+      }
+    }
+    font.base -= capHeight;
+  }
+  font.auxiliaryMetricsComplete = auxiliaryMetricsComplete;
   return {.font = std::move(font)};
 }
 
@@ -289,6 +314,7 @@ SkinBitmapFontParseResult parseLr2Font(SkinBitmapFontResource resource,
   const auto utf8 = cp932_to_utf8(encoded);
   if (!utf8) return fail("LR2FONT descriptor is not valid MS932");
   SkinParsedBitmapFont font{.resource = std::move(resource), .lr2Font = true};
+  font.auxiliaryMetricsComplete = true;
   for (const auto line : lines(*utf8)) {
     if (!line.starts_with('#')) continue;
     const auto fields = splitCsv(line);

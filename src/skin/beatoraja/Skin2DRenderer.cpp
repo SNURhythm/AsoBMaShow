@@ -1196,13 +1196,18 @@ TextLayoutInput prepareTextLayout(const SkinFrameInputs &inputs,
     return result;
   }
   result.atlas = inputs.resources.findTextAtlasForObject(object.id);
-  if (!result.atlas || result.atlas->id == 0 || result.atlas->width <= 0 ||
-      result.atlas->height <= 0 || result.atlas->lineHeight <= 0 ||
+  if (!result.atlas || result.atlas->id == 0 ||
+      result.atlas->lineHeight <= 0 ||
       text.pointSize <= 0 ||
       (result.atlas->bitmapFont &&
        (result.atlas->originalSize <= 0 || result.atlas->pageWidth <= 0 ||
         result.atlas->pageHeight <= 0 || result.atlas->bitmapFontType < 0 ||
-        result.atlas->bitmapFontType > 2))) {
+        result.atlas->bitmapFontType > 2 ||
+        (result.atlas->layoutKind != SkinTextLayoutKind::Bitmap &&
+         result.atlas->layoutKind != SkinTextLayoutKind::Lr2Image))) ||
+      (!result.atlas->bitmapFont &&
+       (result.atlas->width <= 0 || result.atlas->height <= 0 ||
+        result.atlas->layoutKind != SkinTextLayoutKind::Scalable))) {
     result.failure =
         diagnostic("skin.renderer.text.atlas",
                    "Prepared text atlas or its fixed metrics are absent.");
@@ -1228,6 +1233,9 @@ TextLayoutInput prepareTextLayout(const SkinFrameInputs &inputs,
     const auto scalar = static_cast<char32_t>(codepoint);
     if (scalar != U'\n' && scalar != U'\r' &&
         !result.atlas->glyphs.contains(scalar)) {
+      if (result.atlas->bitmapFont) {
+        continue;
+      }
       result.failure = diagnostic(
           "skin.renderer.text.glyph",
           "Text property contains a glyph absent from the prepared atlas.");
@@ -1252,6 +1260,31 @@ int pairKerning(const PreparedSkinTextAtlas &atlas, char32_t left,
                 char32_t right) noexcept {
   const auto found = atlas.kerning.find({left, right});
   return found == atlas.kerning.end() ? 0 : found->second;
+}
+
+struct PreparedGlyphPageView {
+  int width = 0;
+  int height = 0;
+};
+
+std::optional<PreparedGlyphPageView>
+preparedGlyphPage(const PreparedSkinTextAtlas &atlas,
+                  const SkinPreparedGlyphMetrics &metrics) {
+  if (atlas.pages.empty()) {
+    if (metrics.page != 0 || atlas.width <= 0 || atlas.height <= 0) {
+      return std::nullopt;
+    }
+    return PreparedGlyphPageView{.width = atlas.width,
+                                 .height = atlas.height};
+  }
+  if (metrics.page >= atlas.pages.size()) {
+    return std::nullopt;
+  }
+  const auto &page = atlas.pages[metrics.page];
+  if (!page.available || page.width <= 0 || page.height <= 0) {
+    return std::nullopt;
+  }
+  return PreparedGlyphPageView{.width = page.width, .height = page.height};
 }
 
 double lineLayoutWidth(const PreparedSkinTextAtlas &atlas,
@@ -1395,6 +1428,95 @@ TextLoweringResult lowerText(const SkinFrameInputs &inputs,
                              const TextLayoutInput &prepared) {
   TextLoweringResult result;
   const auto &atlas = *prepared.atlas;
+  if (atlas.layoutKind == SkinTextLayoutKind::Lr2Image) {
+    std::vector<char32_t> glyphs;
+    glyphs.reserve(prepared.codepoints.size());
+    double measuredWidth = 0.0;
+    const double heightScale = base.rect.height / atlas.originalSize;
+    if (!std::isfinite(heightScale) || heightScale <= 0.0) {
+      result.failure = diagnostic("skin.renderer.text.geometry",
+                                  "LR2 text destination scale is invalid.");
+      return result;
+    }
+    for (const char32_t codepoint : prepared.codepoints) {
+      const auto metric = atlas.glyphs.find(codepoint);
+      if (metric == atlas.glyphs.end() ||
+          !preparedGlyphPage(atlas, metric->second)) {
+        continue;
+      }
+      glyphs.push_back(codepoint);
+      measuredWidth += metric->second.region.w * heightScale + atlas.margin;
+    }
+    if (glyphs.empty()) {
+      return result;
+    }
+    const double shrink = base.rect.width < measuredWidth && measuredWidth > 0.0
+                              ? base.rect.width / measuredWidth
+                              : 1.0;
+    const double drawnWidth = measuredWidth * shrink;
+    const double startX = text.alignment == 2   ? base.rect.x - drawnWidth
+                          : text.alignment == 1 ? base.rect.x - drawnWidth * 0.5
+                                                : base.rect.x;
+    SkinGlyphRunCommand run;
+    run.atlas = atlas.id;
+    run.glyphs.reserve(glyphs.size());
+    double dx = 0.0;
+    for (const char32_t codepoint : glyphs) {
+      const auto &metrics = atlas.glyphs.at(codepoint);
+      const auto page = preparedGlyphPage(atlas, metrics);
+      if (!page) {
+        continue;
+      }
+      const double width = metrics.region.w * heightScale * shrink;
+      auto geometry = base;
+      geometry.stretch = SkinStretchMode::Stretch;
+      geometry.angleDegrees = 0.0;
+      geometry.rect = {.x = startX + dx,
+                       .y = base.rect.y,
+                       .width = width,
+                       .height = base.rect.height};
+      const auto projected = projectSkinDestinationToUi(
+          geometry,
+          {.textureWidth = page->width,
+           .textureHeight = page->height,
+           .region = metrics.region},
+          inputs.viewport);
+      SkinGlyphInstance glyph{.codepoint = codepoint};
+      const std::uint32_t color = packAbgr(projected.rgba);
+      for (std::size_t vertex = 0; vertex < glyph.vertices.size(); ++vertex) {
+        glyph.vertices[vertex] = {
+            .x = static_cast<float>(projected.vertices[vertex][0]),
+            .y = static_cast<float>(projected.vertices[vertex][1]),
+            .u = static_cast<float>(projected.normalizedUvs[vertex][0]),
+            .v = static_cast<float>(projected.normalizedUvs[vertex][1]),
+            .rgba = color};
+      }
+      run.glyphs.push_back(std::move(glyph));
+      dx += width + atlas.margin * shrink;
+    }
+    bool emptyClip = false;
+    const auto projectedClip = projectSkinDestinationToUi(
+        base,
+        {.textureWidth = atlas.width,
+         .textureHeight = atlas.height,
+         .region = {.x = 0, .y = 0, .w = atlas.width, .h = atlas.height}},
+        inputs.viewport);
+    const auto clip = intersectClip(projectedClip.clip,
+                                    projectedSkinScissorBounds(inputs.viewport),
+                                    emptyClip);
+    if (emptyClip) {
+      return result;
+    }
+    run.state = {.blend = base.blend,
+                 .filter = SkinFilterMode::Linear,
+                 .scissor = clip};
+    result.glyphCount = run.glyphs.size();
+    result.command = SkinDrawCommand{
+        .authoredOrdinal = destination.presentation.authoredOrdinal,
+        .sourceObject = object.id,
+        .payload = std::move(run)};
+    return result;
+  }
   const double scaleY = atlas.bitmapFont
                             ? static_cast<double>(text.pointSize) /
                                   atlas.originalSize
@@ -1468,6 +1590,10 @@ TextLoweringResult lowerText(const SkinFrameInputs &inputs,
         pen += pairKerning(atlas, *previous, codepoint) * scaleX;
       }
       const auto &metrics = atlas.glyphs.at(codepoint);
+      const auto page = preparedGlyphPage(atlas, metrics);
+      if (!page) {
+        continue;
+      }
       auto geometry = base;
       geometry.stretch = SkinStretchMode::Stretch;
       // SkinTextFont draws BitmapFont layouts directly and does not route
@@ -1479,8 +1605,8 @@ TextLoweringResult lowerText(const SkinFrameInputs &inputs,
                        .height = metrics.region.h * scaleY};
       const auto projected =
           projectSkinDestinationToUi(geometry,
-                                     {.textureWidth = atlas.width,
-                                      .textureHeight = atlas.height,
+                                     {.textureWidth = page->width,
+                                      .textureHeight = page->height,
                                       .region = metrics.region},
                                      inputs.viewport);
       SkinGlyphInstance glyph;

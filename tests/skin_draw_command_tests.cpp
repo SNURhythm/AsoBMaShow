@@ -1511,9 +1511,42 @@ PreparedSkinTextAtlas bitmapAtlas(int type) {
   atlas.id = static_cast<SkinTextAtlasId>(70 + type);
   atlas.bitmapFont = true;
   atlas.bitmapFontType = type;
+  atlas.layoutKind = SkinTextLayoutKind::Bitmap;
   atlas.originalSize = 20;
   atlas.pageWidth = 100;
   atlas.pageHeight = 50;
+  return atlas;
+}
+
+PreparedSkinTextAtlas lr2ImageAtlas() {
+  PreparedSkinTextAtlas atlas;
+  atlas.id = 88;
+  atlas.width = 16;
+  atlas.height = 10;
+  atlas.bitmapFont = true;
+  atlas.bitmapFontType = 0;
+  atlas.originalSize = 10;
+  atlas.pageWidth = 16;
+  atlas.pageHeight = 10;
+  atlas.lineHeight = 10;
+  atlas.capHeight = 10;
+  atlas.layoutKind = SkinTextLayoutKind::Lr2Image;
+  atlas.margin = 2;
+  atlas.pages.push_back({.texture = {.idx = 880},
+                         .width = 16,
+                         .height = 10,
+                         .bitmapFontType = 0,
+                         .available = true});
+  atlas.glyphs.emplace(
+      U'A', SkinPreparedGlyphMetrics{.region = {.x = 0, .y = 0, .w = 4, .h = 8},
+                                     .advance = 99,
+                                     .page = 0,
+                                     .bitmapFontType = 0});
+  atlas.glyphs.emplace(
+      U'B', SkinPreparedGlyphMetrics{.region = {.x = 4, .y = 0, .w = 6, .h = 8},
+                                     .advance = 99,
+                                     .page = 0,
+                                     .bitmapFontType = 0});
   return atlas;
 }
 
@@ -1920,6 +1953,52 @@ void testDistanceFieldTextAddsStandardFallbackColorOverlay() {
                  0x80ffffffU,
          "a standard fallback under a distance-field primary is redrawn "
          "bilinearly in white with the authored alpha");
+}
+
+void testLr2ImageTextUsesHeightMarginAlignmentShrinkAndMissingNoDraw() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  resources.addTextAtlas(1, lr2ImageAtlas());
+  FakeState state;
+  ValidatedBeatorajaSkinModel model;
+  auto text = textObject(1, true);
+  auto &definition = std::get<SkinTextObject>(text.payload);
+  definition.literal = "AXB";
+  definition.pointSize = 3;
+  definition.alignment = 2;
+  definition.overflow = 0;
+  definition.wrapping = true;
+  model.model.objects.push_back(std::move(text));
+  auto presented = destination(1, 10, 100.0);
+  presented.presentation.frames.front().width = 12.0;
+  presented.presentation.frames.front().height = 20.0;
+  model.model.destinations.push_back(std::move(presented));
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  expect(result.submitReady && result.diagnostics.empty() &&
+             result.submitReady->commands.size() == 1,
+         "LR2 image text skips an absent glyph without rejecting its atlas");
+  if (!result.submitReady || result.submitReady->commands.size() != 1) {
+    return;
+  }
+  const auto &run = std::get<SkinGlyphRunCommand>(
+      result.submitReady->commands.front().payload);
+  expect(run.glyphs.size() == 2 && run.glyphs[0].codepoint == U'A' &&
+             run.glyphs[1].codepoint == U'B' &&
+             run.glyphs[0].vertices[0].x == 88.0F &&
+             run.glyphs[1].vertices[0].x == 93.0F &&
+             run.glyphs[0].vertices[1].x -
+                     run.glyphs[0].vertices[0].x ==
+                 4.0F &&
+             run.glyphs[1].vertices[1].x -
+                     run.glyphs[1].vertices[0].x ==
+                 6.0F &&
+             std::abs(run.glyphs[0].vertices[3].y -
+                      run.glyphs[0].vertices[0].y) == 20.0F,
+         "LR2 layout scales from destination height, includes one scaled "
+         "margin after each available glyph in measured right alignment, "
+         "and always shrinks the complete run to destination width");
 }
 
 void testTextVerticalPlacementMatchesPinnedBitmapFontBaseline() {
@@ -5693,6 +5772,7 @@ int main() {
   testTextUsesPreparedMetricsKerningAndAtlasUvs();
   testBitmapTextUsesPinnedScaleShadowAndDistanceFieldState();
   testDistanceFieldTextAddsStandardFallbackColorOverlay();
+  testLr2ImageTextUsesHeightMarginAlignmentShrinkAndMissingNoDraw();
   testPracticePositiveViewportStagesMutationAndDrawsNothing();
   testPracticeZeroRendersPinnedLegacyFallbackAndSelectedGraph();
   testPracticeWithoutAuthoredObjectUsesBgaLegacyFallback();

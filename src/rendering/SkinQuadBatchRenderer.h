@@ -204,6 +204,7 @@ public:
 private:
   struct ResolvedCommand {
     bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
+    std::vector<bgfx::TextureHandle> glyphTextures;
     std::optional<skin::UiLogicalRect> scissor;
     bool suppressed = false;
   };
