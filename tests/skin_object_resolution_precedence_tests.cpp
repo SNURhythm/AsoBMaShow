@@ -41,6 +41,7 @@ SkinObjectResolutionStatus expectedStatus(SkinObjectResolutionKind kind) {
   case SkinObjectResolutionKind::Text:
   case SkinObjectResolutionKind::Slider:
   case SkinObjectResolutionKind::Graph:
+  case SkinObjectResolutionKind::GaugeGraph:
   case SkinObjectResolutionKind::JudgeGraph:
   case SkinObjectResolutionKind::BpmGraph:
   case SkinObjectResolutionKind::HitErrorVisualizer:
@@ -221,16 +222,16 @@ void testUnsupportedAndNotFoundStayDistinct() {
          "no matching candidate reports NotFound without a winner");
 }
 
-void testUnsupportedGenericStillPreemptsLaterSupportedSpecial() {
+void testGaugeGraphIsSupportedAndPreemptsLaterSpecial() {
   const std::array candidates{
       candidate(SkinObjectResolutionKind::Note, 4),
       candidate(SkinObjectResolutionKind::GaugeGraph, 2),
   };
   const auto result = resolveSkinObjectPrecedence(candidates);
-  expect(result.status == SkinObjectResolutionStatus::Unsupported &&
+  expect(result.status == SkinObjectResolutionStatus::Found &&
              result.kind == SkinObjectResolutionKind::GaugeGraph &&
              result.authoredIndex == 2,
-         "an unsupported generic wins before a later supported gameplay special");
+         "a supported GaugeGraph wins before a later gameplay special");
 }
 
 void testCandidateLimitFailsBeforeResolution() {
@@ -253,7 +254,7 @@ int main() {
   testEveryGenericPreemptsEveryGameplaySpecial();
   testGameplaySpecialChainUsesPinnedOrder();
   testUnsupportedAndNotFoundStayDistinct();
-  testUnsupportedGenericStillPreemptsLaterSupportedSpecial();
+  testGaugeGraphIsSupportedAndPreemptsLaterSpecial();
   testCandidateLimitFailsBeforeResolution();
   return failures == 0 ? 0 : 1;
 }

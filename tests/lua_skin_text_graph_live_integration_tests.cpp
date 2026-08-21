@@ -645,12 +645,12 @@ return {type=0,w=1280,h=720,
     });
   };
   expect(decoded.model &&
-             hasDiagnostic("skin_lua_model_gaugegraph_unsupported") &&
+             !hasDiagnostic("skin_lua_model_gaugegraph_unsupported") &&
              !hasDiagnostic("skin_lua_model_bpmgraph_unsupported") &&
              !hasDiagnostic(
                  "skin_lua_model_timingdistributiongraph_unsupported"),
-         "GaugeGraph remains deferred while BPMGraph and "
-         "TimingDistributionGraph are accepted without compatibility warnings");
+         "GaugeGraph, BPMGraph, and TimingDistributionGraph are accepted "
+         "without compatibility warnings");
   if (!decoded.model) {
     return;
   }
@@ -658,17 +658,18 @@ return {type=0,w=1280,h=720,
   expect(objects.size() == 3 && objects[0].authoredName == "gauge-history" &&
              objects[1].authoredName == "bpm" &&
              objects[2].authoredName == "timing-distribution" &&
-             std::holds_alternative<SkinBlankObject>(objects[0].payload) &&
+             std::holds_alternative<SkinGaugeGraphObject>(
+                 objects[0].payload) &&
              std::holds_alternative<SkinBpmGraphObject>(objects[1].payload) &&
              std::holds_alternative<SkinTimingDistributionGraphObject>(
                  objects[2].payload),
-         "deferred gauge, typed BPM, and typed timing no-op objects preserve "
+         "typed gauge, BPM, and timing no-op objects preserve "
          "authored destination order");
   const auto validated =
       test_support::validateWithAuthoredBuiltins(*decoded.model);
   expect(validated.model && !validated.criticalFailure &&
              validated.model->disabledOptionalObjects.empty(),
-         "the deferred GaugeGraph placeholder and typed graph objects remain selectable");
+         "typed GaugeGraph and graph objects remain selectable");
 }
 
 void testValidatorPreservesUpstreamOptionalDependencies() {

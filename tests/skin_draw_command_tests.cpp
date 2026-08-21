@@ -1,5 +1,6 @@
 #include "skin/beatoraja/Skin2DRenderer.h"
 #include "skin/beatoraja/SkinBpmGraphRenderer.h"
+#include "skin/beatoraja/SkinGaugeGraphRenderer.h"
 #include "skin/beatoraja/SkinHitErrorVisualizerRenderer.h"
 #include "skin/beatoraja/SkinNoteDistributionGraphRenderer.h"
 #include "skin/beatoraja/SkinTimingVisualizerRenderer.h"
@@ -4384,6 +4385,331 @@ void testBpmGraphLowersThroughSkin2DRenderer() {
          "Skin2DRenderer routes typed BPM graphs through immutable gameplay authority without a blank fallback");
 }
 
+const SkinPrimitiveCommand &gaugeGraphPrimitive(
+    const SkinGaugeGraphRenderResult &result, std::size_t index) {
+  return std::get<SkinPrimitiveCommand>(result.commands[index].payload);
+}
+
+SkinGameplayGraphStateView gaugeGraphState(std::span<const float> history,
+                                           int type) {
+  return {.gaugeHistory = history,
+          .gaugeType = type,
+          .gaugeMinimum = 2.0F,
+          .gaugeMaximum = 100.0F,
+          .gaugeBorder = 80.0F,
+          .gaugeSupported = true};
+}
+
+void testGaugeGraphUsesPinnedCategoriesBackgroundAndCrossingOrder() {
+  SkinGaugeGraphObject graph;
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 0.0, .y = 0.0, .width = 100.0, .height = 100.0};
+  const std::array<float, 2> rising{20.0F, 90.0F};
+  constexpr std::array categories{0, 1, 2, 3, 4, 5, 3, 4, 5};
+  constexpr std::array aboveLineAbgr{0xff0000ffU, 0xff0000ffU,
+                                      0xff0000ffU, 0xff0000ffU,
+                                      0xff00ffffU, 0xffccccccU};
+  constexpr std::array aboveBackgroundAbgr{
+      0xff000044U, 0xff000044U, 0xff000044U,
+      0xff000044U, 0xff004444U, 0xff444444U};
+  constexpr std::array belowLineAbgr{0xffff00ffU, 0xffffff00U,
+                                      0xff00ff00U, 0xff0000ffU,
+                                      0xff00ffffU, 0xffccccccU};
+  constexpr std::array belowBackgroundAbgr{
+      0xff440044U, 0xff444400U, 0xff004400U,
+      0xff000044U, 0xff004444U, 0xff444444U};
+  for (int type = 0; type < static_cast<int>(categories.size()); ++type) {
+    const auto rendered = renderSkinGaugeGraph(
+        {.sourceObject = 7,
+         .authoredOrdinal = 9,
+         .graph = graph,
+         .state = gaugeGraphState(rising, type),
+         .geometry = geometry,
+         .viewport = viewport(),
+         .elapsedMillis = 1500,
+         .maximumCommands = 6,
+         .maximumPrimitiveVertices = 24});
+    expect(!rendered.failure && rendered.commands.size() == 6 &&
+               rendered.primitiveVertices == 24,
+           "each reachable gauge type emits the complete pinned graph");
+    if (rendered.commands.size() != 6) {
+      continue;
+    }
+    expect(gaugeGraphPrimitive(rendered, 0).vertices[0].rgba ==
+                   belowBackgroundAbgr[categories[type]] &&
+               gaugeGraphPrimitive(rendered, 1).vertices[0].rgba ==
+                   aboveBackgroundAbgr[categories[type]] &&
+               gaugeGraphPrimitive(rendered, 2).vertices[0].rgba ==
+                   belowLineAbgr[categories[type]] &&
+               gaugeGraphPrimitive(rendered, 3).vertices[0].rgba ==
+                   aboveLineAbgr[categories[type]],
+           "the pinned type table selects exact below/above background and line colours");
+  }
+
+  const auto rendered = renderSkinGaugeGraph(
+      {.sourceObject = 7,
+       .authoredOrdinal = 9,
+       .graph = graph,
+       .state = gaugeGraphState(rising, 0),
+       .geometry = geometry,
+       .viewport = viewport(),
+       .elapsedMillis = 1500,
+       .maximumCommands = 6,
+       .maximumPrimitiveVertices = 24});
+  if (rendered.commands.size() == 6) {
+    const auto &belowVertical = gaugeGraphPrimitive(rendered, 2);
+    const auto &aboveVertical = gaugeGraphPrimitive(rendered, 3);
+    const auto &aboveHorizontal = gaugeGraphPrimitive(rendered, 4);
+    const auto &extension = gaugeGraphPrimitive(rendered, 5);
+    expect(belowVertical.vertices[0].x == 0.0F &&
+               belowVertical.vertices[0].y == 701.0F &&
+               belowVertical.vertices[2].x == 2.0F &&
+               belowVertical.vertices[2].y == 642.0F &&
+               aboveVertical.vertices[0].y == 642.0F &&
+               aboveVertical.vertices[2].y == 630.0F &&
+               aboveHorizontal.vertices[0].y == 632.0F &&
+               aboveHorizontal.vertices[2].x == 50.0F &&
+               extension.vertices[0].x == 50.0F &&
+               extension.vertices[2].x == 100.0F,
+           "crossing segments quantize y, use 2px rectangles, and extend the final horizontal line");
+  }
+
+  const std::array<float, 2> falling{90.0F, 20.0F};
+  const auto downward = renderSkinGaugeGraph(
+      {.sourceObject = 7,
+       .authoredOrdinal = 9,
+       .graph = graph,
+       .state = gaugeGraphState(falling, 0),
+       .geometry = geometry,
+       .viewport = viewport(),
+       .elapsedMillis = 1500,
+       .maximumCommands = 6,
+       .maximumPrimitiveVertices = 24});
+  expect(!downward.failure && downward.commands.size() == 6 &&
+             gaugeGraphPrimitive(downward, 2).vertices[0].rgba == 0xff0000ffU &&
+             gaugeGraphPrimitive(downward, 3).vertices[0].rgba == 0xffff00ffU &&
+             gaugeGraphPrimitive(downward, 4).vertices[0].rgba == 0xffff00ffU &&
+             gaugeGraphPrimitive(downward, 5).vertices[0].rgba == 0xffff00ffU,
+         "above-to-below crossings emit above then below rectangles before the below extension");
+}
+
+void testGaugeGraphRevealEmptyPartialAndAtomicBudgets() {
+  SkinGaugeGraphObject graph;
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 0.0, .y = 0.0, .width = 100.0, .height = 100.0};
+  const std::array<float, 0> empty{};
+  const std::array<float, 1> one{20.0F};
+  const std::array<float, 2> two{20.0F, 90.0F};
+  const std::array<float, 3> partial{20.0F, 40.0F, 90.0F};
+  const auto emptyRendered = renderSkinGaugeGraph(
+      {.sourceObject = 7,
+       .authoredOrdinal = 9,
+       .graph = graph,
+       .state = gaugeGraphState(empty, 0),
+       .geometry = geometry,
+       .viewport = viewport(),
+       .elapsedMillis = 1500,
+       .maximumCommands = 2,
+       .maximumPrimitiveVertices = 8});
+  const auto oneRendered = renderSkinGaugeGraph(
+      {.sourceObject = 7,
+       .authoredOrdinal = 9,
+       .graph = graph,
+       .state = gaugeGraphState(one, 0),
+       .geometry = geometry,
+       .viewport = viewport(),
+       .elapsedMillis = 1500,
+       .maximumCommands = 2,
+       .maximumPrimitiveVertices = 8});
+  expect(!emptyRendered.failure && emptyRendered.commands.size() == 2 &&
+             !oneRendered.failure && oneRendered.commands.size() == 2,
+         "empty and one-sample histories retain the full split background without a shape");
+
+  const auto partialRendered = renderSkinGaugeGraph(
+      {.sourceObject = 7,
+       .authoredOrdinal = 9,
+       .graph = graph,
+       .state = gaugeGraphState(partial, 0),
+       .geometry = geometry,
+       .viewport = viewport(),
+       .elapsedMillis = 1500,
+       .maximumCommands = 8,
+       .maximumPrimitiveVertices = 32});
+  expect(!partialRendered.failure && partialRendered.commands.size() == 8 &&
+             gaugeGraphPrimitive(partialRendered, 2).vertices[0].rgba ==
+                 0xffff00ffU &&
+             gaugeGraphPrimitive(partialRendered, 3).vertices[2].x == 33.0F &&
+             gaugeGraphPrimitive(partialRendered, 7).vertices[0].x == 66.0F &&
+             gaugeGraphPrimitive(partialRendered, 7).vertices[2].x == 100.0F,
+         "partial histories quantize by current sample count and preserve same-side below segments");
+
+  geometry.rect.width = 100.9;
+  geometry.rect.height = 100.9;
+  const auto fractional = renderSkinGaugeGraph(
+      {.sourceObject = 7,
+       .authoredOrdinal = 9,
+       .graph = graph,
+       .state = gaugeGraphState(partial, 0),
+       .geometry = geometry,
+       .viewport = viewport(),
+       .elapsedMillis = 1500,
+       .maximumCommands = 8,
+       .maximumPrimitiveVertices = 32});
+  expect(!fractional.failure && fractional.commands.size() == 8 &&
+             gaugeGraphPrimitive(fractional, 7).vertices[0].x == 67.0F,
+         "gauge segments quantize from authored float width before clipping to the truncated texture");
+  geometry.rect.width = 100.0;
+  geometry.rect.height = 100.0;
+
+  const std::array<float, 2> above{90.0F, 85.0F};
+  const auto aboveRendered = renderSkinGaugeGraph(
+      {.sourceObject = 7,
+       .authoredOrdinal = 9,
+       .graph = graph,
+       .state = gaugeGraphState(above, 0),
+       .geometry = geometry,
+       .viewport = viewport(),
+       .elapsedMillis = 1500,
+       .maximumCommands = 5,
+       .maximumPrimitiveVertices = 20});
+  expect(!aboveRendered.failure && aboveRendered.commands.size() == 5 &&
+             gaugeGraphPrimitive(aboveRendered, 2).vertices[0].rgba ==
+                 0xff0000ffU &&
+             gaugeGraphPrimitive(aboveRendered, 3).vertices[0].rgba ==
+                 0xff0000ffU &&
+             gaugeGraphPrimitive(aboveRendered, 4).vertices[0].rgba ==
+                 0xff0000ffU,
+         "same-side above histories use above-line colour for vertical, horizontal, and extension rectangles");
+
+  const auto start = renderSkinGaugeGraph(
+      {.sourceObject = 7,
+       .authoredOrdinal = 9,
+       .graph = graph,
+       .state = gaugeGraphState(two, 0),
+       .geometry = geometry,
+       .viewport = viewport(),
+       .elapsedMillis = 0,
+       .maximumCommands = 2,
+       .maximumPrimitiveVertices = 8});
+  const auto half = renderSkinGaugeGraph(
+      {.sourceObject = 7,
+       .authoredOrdinal = 9,
+       .graph = graph,
+       .state = gaugeGraphState(two, 0),
+       .geometry = geometry,
+       .viewport = viewport(),
+       .elapsedMillis = 750,
+       .maximumCommands = 5,
+       .maximumPrimitiveVertices = 20});
+  expect(!start.failure && start.commands.size() == 2 && !half.failure &&
+             half.commands.size() == 5,
+         "the fixed 1500ms reveal crops only the shape over a full background");
+  if (half.commands.size() == 5) {
+    float graphMaximumX = 0.0F;
+    for (std::size_t index = 2; index < half.commands.size(); ++index) {
+      const auto &primitive = gaugeGraphPrimitive(half, index);
+      graphMaximumX = std::max(
+          graphMaximumX,
+          std::ranges::max(primitive.vertices, {},
+                           [](const SkinVertex &vertex) { return vertex.x; })
+              .x);
+    }
+    expect(graphMaximumX == 50.0F,
+           "half reveal preserves the left half instead of stretching it");
+  }
+
+  const auto bounded = renderSkinGaugeGraph(
+      {.sourceObject = 7,
+       .authoredOrdinal = 9,
+       .graph = graph,
+       .state = gaugeGraphState(two, 0),
+       .geometry = geometry,
+       .viewport = viewport(),
+       .elapsedMillis = 1500,
+       .maximumCommands = 5,
+       .maximumPrimitiveVertices = 24});
+  expect(bounded.failure && bounded.commands.empty() &&
+             bounded.primitiveVertices == 0,
+         "gaugegraph command overflow publishes neither background nor partial shape");
+
+  geometry.rgba[3] = 0.001F;
+  const auto transparent = renderSkinGaugeGraph(
+      {.sourceObject = 7,
+       .authoredOrdinal = 9,
+       .graph = graph,
+       .state = gaugeGraphState(two, 0),
+       .geometry = geometry,
+       .viewport = viewport(),
+       .elapsedMillis = 1500,
+       .maximumCommands = 0,
+       .maximumPrimitiveVertices = 0});
+  expect(!transparent.failure && transparent.commands.empty(),
+         "post-tint zero-alpha gaugegraph consumes no command or vertex budget");
+}
+
+void testGaugeGraphGeneratedTextureStateAndIntegratedLowering() {
+  SkinGaugeGraphObject graph;
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 10.0, .y = 20.0, .width = 100.0, .height = 50.0};
+  geometry.clip = AuthoredRect{.x = 0.0,
+                               .y = 0.0,
+                               .width = 100.0,
+                               .height = 100.0};
+  geometry.centerX = 0.5;
+  geometry.centerY = 0.5;
+  geometry.angleDegrees = 90.0;
+  geometry.rgba = {0.5F, 1.0F, 1.0F, 0.5F};
+  geometry.blend = SkinBlendMode::Additive;
+  geometry.filter = SkinFilterMode::Linear;
+  const std::array<float, 1> one{20.0F};
+  const auto rendered = renderSkinGaugeGraph(
+      {.sourceObject = 7,
+       .authoredOrdinal = 9,
+       .graph = graph,
+       .state = gaugeGraphState(one, 0),
+       .geometry = geometry,
+       .viewport = viewport(),
+       .elapsedMillis = 1500,
+       .maximumCommands = 2,
+       .maximumPrimitiveVertices = 8});
+  expect(!rendered.failure && rendered.commands.size() == 2,
+         "generated gauge background applies the authored destination state");
+  if (rendered.commands.size() == 2) {
+    const auto &background = gaugeGraphPrimitive(rendered, 0);
+    expect(background.vertices[0].x == 85.0F &&
+               background.vertices[0].y == 725.0F &&
+               background.vertices[1].x == 85.0F &&
+               background.vertices[1].y == 625.0F &&
+               background.vertices[2].x == 35.0F &&
+               background.vertices[2].y == 625.0F &&
+               background.vertices[3].x == 35.0F &&
+               background.vertices[3].y == 725.0F &&
+               background.vertices[0].rgba == 0x7f440022U &&
+               background.state.blend == SkinBlendMode::Additive &&
+               background.state.filter == SkinFilterMode::Linear &&
+               background.state.scissor &&
+               background.state.scissor->x == 0.0 &&
+               background.state.scissor->y == 620.0,
+           "gauge texture y-flip precedes rotation, tint, blend, filter, and scissor");
+  }
+
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  state.graphResult = gaugeGraphState(one, 0);
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects = {{.id = 1,
+                          .authoredName = "gauge-history",
+                          .payload = SkinGaugeGraphObject{},
+                          .authoredOrdinal = 1}};
+  model.model.destinations = {noteDistributionDestination(1, 100.0, 100.0)};
+  const auto integrated = evaluate(renderer, runtime, model, resources, state);
+  expect(integrated.submitReady && integrated.diagnostics.empty() &&
+             primitiveCommands(integrated).size() == 2,
+         "Skin2DRenderer lowers typed gaugegraphs from immutable gameplay authority");
+}
+
 void testNoteDistributionGraphAppliesCommonStretchBeforeRotation() {
   RuntimeHarness runtime;
   Skin2DRenderer renderer;
@@ -5857,6 +6183,9 @@ int main() {
   testBpmGraphDelayEmptyInputsAndAtomicBudgets();
   testBpmGraphGeneratedTextureStretchOrientationAndDestinationState();
   testBpmGraphLowersThroughSkin2DRenderer();
+  testGaugeGraphUsesPinnedCategoriesBackgroundAndCrossingOrder();
+  testGaugeGraphRevealEmptyPartialAndAtomicBudgets();
+  testGaugeGraphGeneratedTextureStateAndIntegratedLowering();
   testNoteDistributionGraphAppliesCommonStretchBeforeRotation();
   testTransparentNoteDistributionSkipsCommandsAndBudgets();
   testNoteDistributionGraphDrawsPinnedBackgroundPmsColorAndCursor();

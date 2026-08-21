@@ -5,6 +5,7 @@
 #include "Skin2DRenderer.h"
 #include "SkinBpmGraphRenderer.h"
 #include "SkinCoverNormalization.h"
+#include "SkinGaugeGraphRenderer.h"
 #include "SkinNoteDistributionGraphRenderer.h"
 #include "SkinHitErrorVisualizerRenderer.h"
 #include "SkinTimingVisualizerRenderer.h"
@@ -3141,6 +3142,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       const auto *graph = std::get_if<SkinGraphObject>(&object->payload);
       const auto *noteDistribution =
           std::get_if<SkinNoteDistributionGraphObject>(&object->payload);
+      const auto *gaugeGraph =
+          std::get_if<SkinGaugeGraphObject>(&object->payload);
       const auto *bpmGraph =
           std::get_if<SkinBpmGraphObject>(&object->payload);
       const auto *timingVisualizer =
@@ -3156,7 +3159,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           std::get_if<SkinBuiltinImageObject>(&object->payload);
       const auto *blank = std::get_if<SkinBlankObject>(&object->payload);
       if (!image && !number && !floating && !text && !slider && !graph &&
-          !noteDistribution && !bpmGraph && !timingVisualizer &&
+          !noteDistribution && !gaugeGraph && !bpmGraph &&
+          !timingVisualizer &&
           !hitErrorVisualizer &&
           !gauge && !note && !cover && !judge && !bga && !builtinImage &&
           !blank) {
@@ -3452,6 +3456,35 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
              .pmsMode = inputs.model.model.header.type == 4,
              .elapsedMillis = inputs.visualTimeMicros / 1000,
              .currentMillis = currentMillis,
+             .maximumCommands =
+                 skinFrameMaximumCommands(inputs) - buffer.commands.size(),
+             .maximumPrimitiveVertices =
+                 skinFrameMaximumPrimitiveVertices(inputs) - primitiveVertices});
+        if (lowered.failure) {
+          if (reportObjectFailure(result, *object, *lowered.failure)) {
+            return result;
+          }
+          continue;
+        }
+        primitiveVertices += lowered.primitiveVertices;
+        buffer.commands.insert(buffer.commands.end(),
+                               std::make_move_iterator(lowered.commands.begin()),
+                               std::make_move_iterator(lowered.commands.end()));
+        continue;
+      }
+
+      if (gaugeGraph) {
+        if (evaluated.geometry->rgba[3] <= 0.0F) {
+          continue;
+        }
+        auto lowered = renderSkinGaugeGraph(
+            {.sourceObject = object->id,
+             .authoredOrdinal = destination.presentation.authoredOrdinal,
+             .graph = *gaugeGraph,
+             .state = inputs.state.gameplayGraphState(),
+             .geometry = *evaluated.geometry,
+             .viewport = inputs.viewport,
+             .elapsedMillis = inputs.visualTimeMicros / 1000,
              .maximumCommands =
                  skinFrameMaximumCommands(inputs) - buffer.commands.size(),
              .maximumPrimitiveVertices =

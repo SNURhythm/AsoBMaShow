@@ -937,6 +937,25 @@ struct RawSkinIdentity {
   std::string id;
 };
 
+struct RawSkinGaugeGraph {
+  std::string id;
+  std::optional<std::vector<std::optional<std::string>>> colors;
+  std::string assistClearBackground = "440044";
+  std::string assistEasyFailBackground = "004444";
+  std::string grooveFailBackground = "004400";
+  std::string grooveClearHardBackground = "440000";
+  std::string exHardBackground = "444400";
+  std::string hazardBackground = "444444";
+  std::string assistClearLine = "ff00ff";
+  std::string assistEasyFailLine = "00ffff";
+  std::string grooveFailLine = "00ff00";
+  std::string grooveClearHardLine = "ff0000";
+  std::string exHardLine = "ffff00";
+  std::string hazardLine = "cccccc";
+  std::string borderLine = "ff0000";
+  std::string borderBackground = "440000";
+};
+
 struct RawSkinBpmGraph {
   std::string id;
   int delayMillis = 0;
@@ -1065,7 +1084,7 @@ struct GameplayDecodeRequest {
   std::map<std::string, RawSkinSlider, std::less<>> sliders;
   std::map<std::string, RawSkinText, std::less<>> texts;
   std::map<std::string, RawSkinGraph, std::less<>> graphs;
-  std::map<std::string, RawSkinIdentity, std::less<>> gaugeGraphs;
+  std::map<std::string, RawSkinGaugeGraph, std::less<>> gaugeGraphs;
   std::map<std::string, RawSkinCover, std::less<>> hiddenCovers;
   std::map<std::string, RawSkinCover, std::less<>> liftCovers;
   std::map<std::string, RawSkinJudge, std::less<>> judges;
@@ -1091,7 +1110,7 @@ struct GameplayDecodeRequest {
   std::vector<RawSkinSlider> rawSliders;
   std::vector<RawSkinText> rawTexts;
   std::vector<RawSkinGraph> rawGraphs;
-  std::vector<RawSkinIdentity> rawGaugeGraphs;
+  std::vector<RawSkinGaugeGraph> rawGaugeGraphs;
   std::vector<RawSkinCover> rawHiddenCovers;
   std::vector<RawSkinCover> rawLiftCovers;
   std::vector<RawSkinJudge> rawJudges;
@@ -1773,6 +1792,116 @@ bool decodeRawIdentity(lua_State *state, int index, std::size_t depth,
                      request);
 }
 
+bool gaugeGraphColorArrayField(lua_State *state, int index,
+                               RawSkinGaugeGraph &output,
+                               DecodeRequest &request) {
+  if (!rawGetField(state, index, "color", request)) {
+    return false;
+  }
+  if (lua_isnil(state, -1)) {
+    lua_pop(state, 1);
+    return true;
+  }
+  if (!lua_istable(state, -1) || !lua_checkstack(state, 3)) {
+    lua_pop(state, 1);
+    return fail(request, "skin_lua_model_invalid",
+                "Lua skin gaugegraph color field is not a bounded array");
+  }
+  output.colors.emplace();
+  const int tableIndex = absoluteIndex(state, -1);
+  lua_pushnil(state);
+  while (lua_next(state, tableIndex) != 0) {
+    ++request.entries;
+    const double numeric = lua_type(state, -2) == LUA_TNUMBER
+                               ? static_cast<double>(lua_tonumber(state, -2))
+                               : 0.0;
+    if ((request.enforceGameplayLimits &&
+         request.entries > LuaSkinTableDecoderPolicy::maxEntries) ||
+        !std::isfinite(numeric) || std::trunc(numeric) != numeric ||
+        numeric < 1.0 ||
+        numeric >
+            static_cast<double>(LuaSkinTableDecoderPolicy::maxDecodedObjects)) {
+      lua_pop(state, 3);
+      return fail(request, "skin_lua_model_invalid",
+                  "Lua skin gaugegraph color array has an invalid key");
+    }
+    const std::size_t position = static_cast<std::size_t>(numeric);
+    if (output.colors->size() < position) {
+      output.colors->resize(position);
+    }
+    std::string value;
+    if (!copyString(state, -1, value,
+                    LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                    request)) {
+      lua_pop(state, 3);
+      return false;
+    }
+    (*output.colors)[position - 1] = std::move(value);
+    lua_pop(state, 1);
+  }
+  lua_pop(state, 1);
+  return true;
+}
+
+bool decodeRawGaugeGraph(lua_State *state, int index, std::size_t depth,
+                         RawSkinGaugeGraph &output, DecodeRequest &request) {
+  return requireObject(state, index, depth, request) &&
+         stringField(state, index, "id", output.id,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, false,
+                     request) &&
+         gaugeGraphColorArrayField(state, index, output, request) &&
+         stringField(state, index, "assistClearBGColor",
+                     output.assistClearBackground,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         stringField(state, index, "assistAndEasyFailBGColor",
+                     output.assistEasyFailBackground,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         stringField(state, index, "grooveFailBGColor",
+                     output.grooveFailBackground,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         stringField(state, index, "grooveClearAndHardBGColor",
+                     output.grooveClearHardBackground,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         stringField(state, index, "exHardBGColor", output.exHardBackground,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         stringField(state, index, "hazardBGColor", output.hazardBackground,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         stringField(state, index, "assistClearLineColor",
+                     output.assistClearLine,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         stringField(state, index, "assistAndEasyFailLineColor",
+                     output.assistEasyFailLine,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         stringField(state, index, "grooveFailLineColor",
+                     output.grooveFailLine,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         stringField(state, index, "grooveClearAndHardLineColor",
+                     output.grooveClearHardLine,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         stringField(state, index, "exHardLineColor", output.exHardLine,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         stringField(state, index, "hazardLineColor", output.hazardLine,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         stringField(state, index, "borderlineColor", output.borderLine,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         stringField(state, index, "borderColor", output.borderBackground,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request);
+}
+
 bool decodeRawBpmGraph(lua_State *state, int index, std::size_t depth,
                        RawSkinBpmGraph &output, DecodeRequest &request) {
   return requireObject(state, index, depth, request) &&
@@ -2370,6 +2499,50 @@ int hexNibble(char value) {
   return -1;
 }
 
+bool applyPinnedRgbColor(std::string_view value, std::uint32_t &color) {
+  std::array<char, 6> normalized{};
+  std::size_t size = 0;
+  for (const char character : value) {
+    if (hexNibble(character) < 0) {
+      continue;
+    }
+    if (size < normalized.size()) {
+      normalized[size++] = character;
+    }
+  }
+  if (size == 0) {
+    return true;
+  }
+  if (size < normalized.size()) {
+    return false;
+  }
+  std::uint32_t rgb = 0;
+  for (const char character : normalized) {
+    rgb = rgb * 16U + static_cast<std::uint32_t>(hexNibble(character));
+  }
+  color = (rgb << 8U) | 0xffU;
+  return true;
+}
+
+bool applyPinnedDirectColor(std::string_view value, std::uint32_t &color) {
+  if (!value.empty() && value.front() == '#') {
+    value.remove_prefix(1);
+  }
+  if (value.size() != 6 && value.size() != 8) {
+    return false;
+  }
+  std::uint32_t rgba = 0;
+  for (const char character : value) {
+    const int nibble = hexNibble(character);
+    if (nibble < 0) {
+      return false;
+    }
+    rgba = rgba * 16U + static_cast<std::uint32_t>(nibble);
+  }
+  color = value.size() == 6 ? (rgba << 8U) | 0xffU : rgba;
+  return true;
+}
+
 std::array<std::uint8_t, 4> parseTextColor(std::string_view value) {
   if (value.size() != 6 && value.size() != 8) {
     return {255, 255, 255, 255};
@@ -2491,41 +2664,78 @@ bool makeNoteDistributionGraphObject(
   return true;
 }
 
+bool makeGaugeGraphObject(GameplayDecodeRequest &request,
+                          const RawSkinGaugeGraph &definition,
+                          SkinGaugeGraphObject &output) {
+  if (definition.colors) {
+    for (auto &row : output.rgba) {
+      row.fill(0x000000ffU);
+    }
+    const std::size_t count =
+        std::min<std::size_t>(24, definition.colors->size());
+    for (std::size_t index = 0; index < count; ++index) {
+      if (!(*definition.colors)[index]) {
+        continue;
+      }
+      if (!applyPinnedDirectColor(*(*definition.colors)[index],
+                                  output.rgba[index / 4][index % 4])) {
+        return fail(request.decoding, "skin_lua_model_gaugegraph_invalid",
+                    "Lua skin gaugegraph has an invalid direct colour");
+      }
+    }
+    return true;
+  }
+
+  const std::array<std::array<std::string_view, 4>, 6> colors{
+      std::array<std::string_view, 4>{definition.borderLine,
+                                      definition.borderBackground,
+                                      definition.assistClearLine,
+                                      definition.assistClearBackground},
+      std::array<std::string_view, 4>{definition.borderLine,
+                                      definition.borderBackground,
+                                      definition.assistEasyFailLine,
+                                      definition.assistEasyFailBackground},
+      std::array<std::string_view, 4>{definition.borderLine,
+                                      definition.borderBackground,
+                                      definition.grooveFailLine,
+                                      definition.grooveFailBackground},
+      std::array<std::string_view, 4>{definition.grooveClearHardLine,
+                                      definition.grooveClearHardBackground,
+                                      definition.grooveClearHardLine,
+                                      definition.grooveClearHardBackground},
+      std::array<std::string_view, 4>{definition.exHardLine,
+                                      definition.exHardBackground,
+                                      definition.exHardLine,
+                                      definition.exHardBackground},
+      std::array<std::string_view, 4>{definition.hazardLine,
+                                      definition.hazardBackground,
+                                      definition.hazardLine,
+                                      definition.hazardBackground},
+  };
+  for (std::size_t row = 0; row < colors.size(); ++row) {
+    for (std::size_t column = 0; column < colors[row].size(); ++column) {
+      if (!applyPinnedDirectColor(colors[row][column],
+                                  output.rgba[row][column])) {
+        return fail(request.decoding, "skin_lua_model_gaugegraph_invalid",
+                    "Lua skin gaugegraph has an invalid direct colour");
+      }
+    }
+  }
+  return true;
+}
+
 bool makeBpmGraphObject(GameplayDecodeRequest &request,
                         const RawSkinBpmGraph &definition,
                         SkinBpmGraphObject &output) {
   output.delayMillis = definition.delayMillis > 0 ? definition.delayMillis : 0;
   output.lineWidth = definition.lineWidth > 0 ? definition.lineWidth : 2;
-  const auto applyColor = [&](std::string_view value, std::uint32_t &color) {
-    std::array<char, 6> normalized{};
-    std::size_t size = 0;
-    for (const char character : value) {
-      if (hexNibble(character) < 0) {
-        continue;
-      }
-      if (size < normalized.size()) {
-        normalized[size++] = character;
-      }
-    }
-    if (size == 0) {
-      return true;
-    }
-    if (size < normalized.size()) {
-      return false;
-    }
-    std::uint32_t rgb = 0;
-    for (const char character : normalized) {
-      rgb = rgb * 16U + static_cast<std::uint32_t>(hexNibble(character));
-    }
-    color = (rgb << 8U) | 0xffU;
-    return true;
-  };
-  if (!applyColor(definition.mainBpmColor, output.mainRgba) ||
-      !applyColor(definition.minimumBpmColor, output.minimumRgba) ||
-      !applyColor(definition.maximumBpmColor, output.maximumRgba) ||
-      !applyColor(definition.otherBpmColor, output.otherRgba) ||
-      !applyColor(definition.stopLineColor, output.stopRgba) ||
-      !applyColor(definition.transitionLineColor, output.transitionRgba)) {
+  if (!applyPinnedRgbColor(definition.mainBpmColor, output.mainRgba) ||
+      !applyPinnedRgbColor(definition.minimumBpmColor, output.minimumRgba) ||
+      !applyPinnedRgbColor(definition.maximumBpmColor, output.maximumRgba) ||
+      !applyPinnedRgbColor(definition.otherBpmColor, output.otherRgba) ||
+      !applyPinnedRgbColor(definition.stopLineColor, output.stopRgba) ||
+      !applyPinnedRgbColor(definition.transitionLineColor,
+                           output.transitionRgba)) {
     return fail(request.decoding, "skin_lua_model_bpmgraph_invalid",
                 "Lua skin bpmgraph has a nonempty normalized colour shorter "
                 "than six hexadecimal digits");
@@ -2999,6 +3209,15 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
   // JsonSkinObjectLoader resolves generic definitions before the PlaySkin
   // special branches. Preserve that behavior even when an authored ID is
   // shared across categories.
+  if (resolved.kind == SkinObjectResolutionKind::GaugeGraph &&
+      gaugeGraph != request.gaugeGraphs.end()) {
+    SkinGaugeGraphObject object;
+    if (!makeGaugeGraphObject(request, gaugeGraph->second, object)) {
+      return false;
+    }
+    output = object;
+    return true;
+  }
   if (resolved.kind == SkinObjectResolutionKind::BpmGraph &&
       bpmGraph != request.bpmGraphs.end()) {
     SkinBpmGraphObject object;
@@ -3559,7 +3778,7 @@ void decodeGameplayProtected(lua_State *state, int index,
     if (!decodeObjectArrayField(state, index, "gaugegraph", 1,
                                 LuaSkinTableDecoderPolicy::maxDecodedObjects,
                                 request->rawGaugeGraphs, request->decoding,
-                                decodeRawIdentity) ||
+                                decodeRawGaugeGraph) ||
         !decodeObjectArrayField(state, index, "bpmgraph", 1,
                                 LuaSkinTableDecoderPolicy::maxDecodedObjects,
                                 request->rawBpmGraphs, request->decoding,
@@ -3590,9 +3809,6 @@ void decodeGameplayProtected(lua_State *state, int index,
       request->result.model.reset();
       return;
     }
-    recordUnsupportedDefinitions(*request, request->rawGaugeGraphs,
-                                 "skin_lua_model_gaugegraph_unsupported",
-                                 "gaugegraph");
     if (!decodeObjectArrayField(state, index, "hiddenCover", 1,
                                 LuaSkinTableDecoderPolicy::maxDecodedObjects,
                                 request->rawHiddenCovers, request->decoding,
@@ -4421,8 +4637,8 @@ bool materializeGameplay(GameplayDecodeRequest &request,
                        });
   moveFirstDefinitions(
       request.rawGaugeGraphs, request.gaugeGraphs,
-      [](const RawSkinIdentity &identity) -> const std::string & {
-        return identity.id;
+      [](const RawSkinGaugeGraph &graph) -> const std::string & {
+        return graph.id;
       });
   moveFirstDefinitions(
       request.rawBpmGraphs, request.bpmGraphs,

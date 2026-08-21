@@ -1757,6 +1757,91 @@ return {
          "BPM graph retains its pinned generic precedence over a same-ID gameplay Gauge");
 }
 
+void testGaugeGraphsAreTypedSupportedGameplayObjects() {
+  const auto decoded = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  gaugegraph={
+    {id='gauge-history'},
+    {id='custom',color={
+      '#01020304','000002','000003','000004',
+      '000005','000006','000007','000008',
+      '000009','00000a','00000b','00000c',
+      '00000d','00000e','00000f','000010',
+      '000011','000012','000013','000014',
+      '000015','000016','000017','000018'}},
+    {id='short',color={[1]='112233',[4]='445566'}}
+  },
+  destination={
+    {id='gauge-history',dst={{x=0,y=0,w=100,h=50}}},
+    {id='custom',dst={{x=100,y=0,w=100,h=50}}},
+    {id='short',dst={{x=200,y=0,w=100,h=50}}}
+  }
+}
+)lua");
+  const auto *definition =
+      decoded.model ? findObject(*decoded.model, "gauge-history") : nullptr;
+  const auto *customDefinition =
+      decoded.model ? findObject(*decoded.model, "custom") : nullptr;
+  const auto *shortDefinition =
+      decoded.model ? findObject(*decoded.model, "short") : nullptr;
+  const auto *defaults =
+      definition ? std::get_if<SkinGaugeGraphObject>(&definition->payload)
+                 : nullptr;
+  const auto *custom = customDefinition
+                           ? std::get_if<SkinGaugeGraphObject>(
+                                 &customDefinition->payload)
+                           : nullptr;
+  const auto *shortPalette =
+      shortDefinition ? std::get_if<SkinGaugeGraphObject>(
+                            &shortDefinition->payload)
+                      : nullptr;
+  expect(definition != nullptr &&
+             !std::holds_alternative<SkinBlankObject>(definition->payload),
+         "valid gaugegraph destinations decode as live typed objects");
+  expect(defaults != nullptr &&
+             defaults->rgba ==
+                 std::array<std::array<std::uint32_t, 4>, 6>{
+                     std::array<std::uint32_t, 4>{0xff0000ffU, 0x440000ffU,
+                                                   0xff00ffffU, 0x440044ffU},
+                     std::array<std::uint32_t, 4>{0xff0000ffU, 0x440000ffU,
+                                                   0x00ffffffU, 0x004444ffU},
+                     std::array<std::uint32_t, 4>{0xff0000ffU, 0x440000ffU,
+                                                   0x00ff00ffU, 0x004400ffU},
+                     std::array<std::uint32_t, 4>{0xff0000ffU, 0x440000ffU,
+                                                   0xff0000ffU, 0x440000ffU},
+                     std::array<std::uint32_t, 4>{0xffff00ffU, 0x444400ffU,
+                                                   0xffff00ffU, 0x444400ffU},
+                     std::array<std::uint32_t, 4>{0xccccccffU, 0x444444ffU,
+                                                   0xccccccffU, 0x444444ffU}},
+         "gaugegraph defaults reproduce the pinned six-category legacy palette");
+  expect(custom != nullptr && custom->rgba[0][0] == 0x01020304U &&
+             custom->rgba[2][3] == 0x00000cffU &&
+             custom->rgba[5][3] == 0x000018ffU,
+         "gaugegraph custom colours map all 24 entries row-major");
+  const std::array<std::uint32_t, 4> blackRow{
+      0x000000ffU, 0x000000ffU, 0x000000ffU, 0x000000ffU};
+  expect(shortPalette != nullptr &&
+             shortPalette->rgba[0] ==
+                 std::array<std::uint32_t, 4>{0x112233ffU, 0x000000ffU,
+                                               0x000000ffU, 0x445566ffU} &&
+             shortPalette->rgba[1] == blackRow &&
+             shortPalette->rgba[5] == blackRow,
+         "a custom gaugegraph palette maps null and absent entries to black");
+  expect(std::ranges::none_of(decoded.diagnostics, [](const auto &entry) {
+           return entry.code == "skin_lua_model_gaugegraph_unsupported";
+         }),
+         "valid gaugegraphs emit no legacy unsupported diagnostic");
+  if (!decoded.model) {
+    return;
+  }
+  const auto validated =
+      test_support::validateWithAuthoredBuiltins(*decoded.model);
+  expect(validated.model && !validated.criticalFailure &&
+             validated.model->disabledOptionalObjects.empty(),
+         "valid gaugegraphs remain enabled through model validation");
+}
+
 void testTimingVisualizerParsesPoorColourOnlyWhenOpaque() {
   const auto opaqueHashes = decodeInlineModel(R"lua(
 return {
@@ -2343,6 +2428,7 @@ int main() {
   testBooleanFieldsUseLuaTruthiness();
   testPracticePositionSliderDecodesItsExecutableWriter();
   testJudgeGraphsDecodePinnedModesAndPresentationFlags();
+  testGaugeGraphsAreTypedSupportedGameplayObjects();
   testBpmGraphsDecodePinnedDefaultsNormalizationAndValidation();
   testTimingVisualizerDecodesPinnedPresentationFields();
   testTimingVisualizerParsesPoorColourOnlyWhenOpaque();

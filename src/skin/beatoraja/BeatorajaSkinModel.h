@@ -303,6 +303,25 @@ struct SkinBpmGraphObject {
   std::uint32_t transitionRgba = 0x7f7f7fffU;
 };
 
+struct SkinGaugeGraphObject {
+  // Rows hold {above-line, above-background, below-line, below-background}
+  // for the six pinned gauge colour categories.
+  std::array<std::array<std::uint32_t, 4>, 6> rgba{
+      std::array<std::uint32_t, 4>{0xff0000ffU, 0x440000ffU, 0xff00ffffU,
+                                    0x440044ffU},
+      std::array<std::uint32_t, 4>{0xff0000ffU, 0x440000ffU, 0x00ffffffU,
+                                    0x004444ffU},
+      std::array<std::uint32_t, 4>{0xff0000ffU, 0x440000ffU, 0x00ff00ffU,
+                                    0x004400ffU},
+      std::array<std::uint32_t, 4>{0xff0000ffU, 0x440000ffU, 0xff0000ffU,
+                                    0x440000ffU},
+      std::array<std::uint32_t, 4>{0xffff00ffU, 0x444400ffU, 0xffff00ffU,
+                                    0x444400ffU},
+      std::array<std::uint32_t, 4>{0xccccccffU, 0x444444ffU, 0xccccccffU,
+                                    0x444444ffU},
+  };
+};
+
 struct SkinTimingVisualizerObject {
   int width = 301;
   int judgeWidthMillis = 150;
@@ -507,7 +526,8 @@ struct SkinBlankObject {};
 using SkinObjectPayload =
     std::variant<SkinImageObject, SkinNumberObject, SkinFloatObject,
                  SkinTextObject, SkinSliderObject, SkinGraphObject,
-                 SkinNoteDistributionGraphObject, SkinBpmGraphObject,
+                 SkinNoteDistributionGraphObject, SkinGaugeGraphObject,
+                 SkinBpmGraphObject,
                  SkinTimingVisualizerObject,
                  SkinTimingDistributionGraphObject,
                  SkinHitErrorVisualizerObject,
