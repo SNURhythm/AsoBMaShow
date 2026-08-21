@@ -1641,6 +1641,38 @@ return {
 }
 
 void testTimingVisualizerParsesPoorColourOnlyWhenOpaque() {
+  const auto opaqueHashes = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  timingvisualizer={
+    {id='opaque-rgb',PRColor='#000000'},
+    {id='opaque-rgba',PRColor='#1234567F'}
+  },
+  destination={
+    {id='opaque-rgb',dst={{x=0,y=0,w=100,h=50}}},
+    {id='opaque-rgba',dst={{x=0,y=0,w=100,h=50}}}
+  }
+}
+)lua");
+  const auto *opaqueRgbDefinition =
+      opaqueHashes.model ? findObject(*opaqueHashes.model, "opaque-rgb")
+                         : nullptr;
+  const auto *opaqueRgbaDefinition =
+      opaqueHashes.model ? findObject(*opaqueHashes.model, "opaque-rgba")
+                         : nullptr;
+  const auto *opaqueRgb = opaqueRgbDefinition != nullptr
+                              ? std::get_if<SkinTimingVisualizerObject>(
+                                    &opaqueRgbDefinition->payload)
+                              : nullptr;
+  const auto *opaqueRgba = opaqueRgbaDefinition != nullptr
+                               ? std::get_if<SkinTimingVisualizerObject>(
+                                     &opaqueRgbaDefinition->payload)
+                               : nullptr;
+  expect(opaqueRgb != nullptr && opaqueRgba != nullptr &&
+             opaqueRgb->judgeRgba[4] == 0x000000ffU &&
+             opaqueRgba->judgeRgba[4] == 0x1234567fU,
+         "opaque timingvisualizers parse libGDX leading-hash RGB and RGBA PRColors");
+
   const auto transparent = decodeInlineModel(R"lua(
 return {
   type=0,w=1280,h=720,

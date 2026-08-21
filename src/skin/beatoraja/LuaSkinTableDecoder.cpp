@@ -2342,19 +2342,30 @@ std::uint32_t timingVisualizerColor(std::string_view value) {
 
 std::optional<std::uint32_t>
 opaqueTimingVisualizerPoorColor(std::string_view value) {
-  if (value.size() < 6 ||
-      std::ranges::any_of(value, [](char character) {
-        return hexNibble(character) < 0;
-      })) {
+  if (!value.empty() && value.front() == '#') {
+    value.remove_prefix(1);
+  }
+  if (value.size() < 6) {
     return std::nullopt;
   }
-  const auto component = [&](std::size_t offset) {
-    return static_cast<std::uint32_t>(hexNibble(value[offset]) * 16 +
-                                      hexNibble(value[offset + 1]));
+  const auto component = [&](std::size_t offset)
+      -> std::optional<std::uint32_t> {
+    const int high = hexNibble(value[offset]);
+    const int low = hexNibble(value[offset + 1]);
+    if (high < 0 || low < 0) {
+      return std::nullopt;
+    }
+    return static_cast<std::uint32_t>(high * 16 + low);
   };
-  const std::uint32_t alpha = value.size() == 8 ? component(6) : 0xffU;
-  return (component(0) << 24U) | (component(2) << 16U) |
-         (component(4) << 8U) | alpha;
+  const auto red = component(0);
+  const auto green = component(2);
+  const auto blue = component(4);
+  const auto alpha = value.size() == 8 ? component(6)
+                                       : std::optional<std::uint32_t>{0xffU};
+  if (!red || !green || !blue || !alpha) {
+    return std::nullopt;
+  }
+  return (*red << 24U) | (*green << 16U) | (*blue << 8U) | *alpha;
 }
 
 bool makeTimingVisualizerObject(GameplayDecodeRequest &request,
