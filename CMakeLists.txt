@@ -3653,6 +3653,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinObjectResolutionPrecedence.cpp
             src/skin/beatoraja/SkinModelValidator.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
+            src/skin/beatoraja/PomyuCharaResource.cpp
             src/skin/beatoraja/SkinBitmapFontParser.cpp
             src/skin/beatoraja/SkinTextAtlas.cpp
             src/skin/beatoraja/SkinTextGraphNormalization.cpp
@@ -3701,6 +3702,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/SkinMovieCatalog.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
+            src/skin/beatoraja/PomyuCharaResource.cpp
             src/skin/beatoraja/SkinBitmapFontParser.cpp
             src/skin/beatoraja/SkinTextAtlas.cpp
         )
@@ -4563,6 +4565,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinObjectResolutionPrecedence.cpp
             src/skin/beatoraja/SkinMovieCatalog.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
+            src/skin/beatoraja/PomyuCharaResource.cpp
             src/skin/beatoraja/SkinBitmapFontParser.cpp
             src/skin/beatoraja/SkinTextAtlas.cpp
             src/skin/beatoraja/SkinTextGraphNormalization.cpp
@@ -4717,6 +4720,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinObjectResolutionPrecedence.cpp
             src/skin/beatoraja/SkinMovieCatalog.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
+            src/skin/beatoraja/PomyuCharaResource.cpp
             src/skin/beatoraja/SkinBitmapFontParser.cpp
             src/skin/beatoraja/SkinTextAtlas.cpp
             src/skin/beatoraja/SkinTextGraphNormalization.cpp
@@ -4855,6 +4859,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinObjectResolutionPrecedence.cpp
             src/skin/beatoraja/SkinMovieCatalog.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
+            src/skin/beatoraja/PomyuCharaResource.cpp
             src/skin/beatoraja/SkinBitmapFontParser.cpp
             src/skin/beatoraja/SkinTextAtlas.cpp
             src/skin/beatoraja/SkinTextGraphNormalization.cpp

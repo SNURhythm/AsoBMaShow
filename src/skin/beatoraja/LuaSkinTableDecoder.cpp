@@ -3118,6 +3118,10 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
     }
     output = SkinPmCharaObject{
         .source = source->second,
+        .sourceName = definition.source,
+        .sourcePath = request.rawSources[static_cast<std::size_t>(
+                            source->second - SkinResourceId{1})]
+                          .path,
         .color = definition.color == 2 ? 2 : 1,
         .type = definition.type,
         .side = definition.side == 2 ? 2 : 1,

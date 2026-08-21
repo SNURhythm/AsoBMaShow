@@ -524,6 +524,8 @@ struct ActivationFixtureOptions {
   bool pomyuCp932BackslashPath = false;
   bool pomyuRootedResourcePath = false;
   bool pomyuLeadingBackslashPath = false;
+  bool pomyuSecondPlayerTextures = false;
+  bool pomyuSecondPlayerTextureFallback = false;
 };
 
 class ActivationFixture final {
@@ -565,10 +567,37 @@ public:
                           options.pomyuTextureMissingCharTex ||
                           options.pomyuCp932BackslashPath ||
                           options.pomyuRootedResourcePath ||
-                          options.pomyuLeadingBackslashPath;
+                          options.pomyuLeadingBackslashPath ||
+                          options.pomyuSecondPlayerTextures ||
+                          options.pomyuSecondPlayerTextureFallback;
     if (hasPomyu) {
       fs::create_directories(source / "skin/characters");
-      if (options.oversizedPomyuWithSibling) {
+      if (options.pomyuSecondPlayerTextures ||
+          options.pomyuSecondPlayerTextureFallback) {
+        for (const std::string_view name : {
+                 "primary.png", "second.png", "texture.png", "face.png",
+                 "select.png"}) {
+          fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
+                            "tests/fixtures/beatoraja_skin/resources/fixture.png",
+                        source / "skin/characters" / name);
+        }
+        std::string chp =
+            "#CharBMP\tprimary.png\n#CharBMP2P\tsecond.png\n"
+            "#CharTex\ttexture.png\n";
+        if (options.pomyuSecondPlayerTextures) {
+          fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
+                            "tests/fixtures/beatoraja_skin/resources/fixture.png",
+                        source / "skin/characters/texture2p.png");
+          chp += "#CharTex2P\ttexture2p.png\n";
+        }
+        chp +=
+            "#CharFace\tface.png\n#SelectCG\tselect.png\n"
+            "#CharFaceUpperSize\t0\t0\t10\t10\n"
+            "#Size\t40\t20\n#00\t0\t0\t10\t10\n"
+            "#01\t10\t0\t10\t10\n#Frame\t1\t40\n"
+            "#Pattern\t1\t0001\n#Texture\t1\t0001\n";
+        writeText(source / "skin/characters/alpha.chp", chp);
+      } else if (options.oversizedPomyuWithSibling) {
         writeText(source / "skin/characters/alpha.chp",
                   std::string(SkinResourcePolicy::maximumEncodedBytes + 1U,
                               'x'));
@@ -614,7 +643,9 @@ public:
                           "tests/fixtures/beatoraja_skin/resources/fixture.png",
                       source / "skin/characters/fixture.png");
         writeText(source / "skin/characters/alpha.chp",
-                  "#CharBMP\tfixture.png\n#Anime\t100\n#Pattern\t1\t00\n");
+                  "#CharBMP\tfixture.png\n#Size\t40\t20\n"
+                  "#00\t0\t0\t10\t10\n#Anime\t100\n"
+                  "#Pattern\t1\t00\n");
       }
     }
     std::string script = R"lua(
@@ -668,6 +699,28 @@ if skin_config then
     destination = {
       {id = "fixture-object", dst = {{x = 0, y = 0, w = 40, h = 20}}},
       {id = "runtime-title", dst = {{x = 50, y = 50, w = 500, h = 30}}}
+    }
+  }
+)lua";
+    } else if (options.pomyuSecondPlayerTextures ||
+               options.pomyuSecondPlayerTextureFallback) {
+      script += R"lua(
+  return {
+    type = 0, w = 1280, h = 720,
+    source = {{id = "shared-chara", path = "characters/alpha.chp"}},
+    pmchara = {
+      {id = "pomyu-play", src = "shared-chara", color = 2, type = 0},
+      {id = "pomyu-face", src = "shared-chara", color = 2, type = 3},
+      {id = "pomyu-select", src = "shared-chara", color = 2, type = 5},
+      {id = "pomyu-background", src = "shared-chara", color = 2, type = 1},
+      {id = "pomyu-default-type", src = "shared-chara"}
+    },
+    destination = {
+      {id = "pomyu-play", loop = 0, dst = {{x = 0, y = 0, w = 80, h = 40}}},
+      {id = "pomyu-face", loop = 0, dst = {{x = 100, y = 0, w = 80, h = 40}}},
+      {id = "pomyu-select", loop = 0, dst = {{x = 200, y = 0, w = 80, h = 40}}},
+      {id = "pomyu-background", loop = 0, dst = {{x = 300, y = 0, w = 80, h = 40}}},
+      {id = "pomyu-default-type", loop = 0, dst = {{x = 400, y = 0, w = 80, h = 40}}}
     }
   }
 )lua";
@@ -1024,6 +1077,56 @@ void testPomyuLeadingBackslashPathRemainsCharacterRelative() {
   expect(created.session != nullptr && pomyuCycleParsesForTesting() == 1,
          "a leading CHP backslash stays relative to the Pomyu character "
          "directory like the pinned loader");
+}
+
+void testPomyuPreparationSelectsSecondPlayerTexturesAndStaticFallbacks() {
+  for (const bool hasSecondPlayerTexture : {true, false}) {
+    ActivationFixture fixture(
+        hasSecondPlayerTexture
+            ? ActivationFixtureOptions{.pomyuSecondPlayerTextures = true}
+            : ActivationFixtureOptions{
+                  .pomyuSecondPlayerTextureFallback = true});
+    if (!fixture.ready()) {
+      continue;
+    }
+    const auto created =
+        PlaySkinSession::create(fixture.takeActivation(), fixture.context());
+    expect(created.session != nullptr,
+           "Pomyu primary/2P/Texture fixture creates a session");
+    if (!created.session) {
+      continue;
+    }
+    auto state = stateAt(1);
+    state.sceneStartMicros = 0;
+    state.clock.playTimer = {.active = true,
+                             .startMicros = 0,
+                             .elapsedMillisExact = true};
+    const auto frame =
+        created.session->prepareFrame(state, projectionAt(1), {});
+    expect(frame.ready(),
+           "prepared Pomyu resources render without frame file access");
+    if (!frame.evaluation.submitReady) {
+      continue;
+    }
+    std::vector<SkinResourceId> resources;
+    for (const auto &command : frame.evaluation.submitReady->commands) {
+      if (const auto *quad =
+              std::get_if<SkinTexturedQuadCommand>(&command.payload)) {
+        resources.push_back(quad->resource);
+        expect(quad->vertices[0].x != quad->vertices[1].x &&
+                   quad->vertices[0].y != quad->vertices[3].y,
+               "animated and static Pomyu frames retain non-empty "
+               "destination geometry");
+      }
+    }
+    const std::vector<SkinResourceId> expected =
+        hasSecondPlayerTexture
+            ? std::vector<SkinResourceId>{3, 5, 6, 7, 3}
+            : std::vector<SkinResourceId>{2, 4, 5, 6, 2};
+    expect(resources == expected,
+           "Pomyu uses 2P BMP+Texture only as a complete pair and falls "
+           "missing 2P face/select images back to primary resources");
+  }
 }
 
 void testRequestedExternalGameplaySkinCreatesARealSession() {
@@ -3193,6 +3296,7 @@ int main() {
   testPomyuResourcesUseMs932AndWindowsSeparators();
   testPomyuRootedResourcePathIsRejected();
   testPomyuLeadingBackslashPathRemainsCharacterRelative();
+  testPomyuPreparationSelectsSecondPlayerTexturesAndStaticFallbacks();
   testRequestedExternalGameplaySkinCreatesARealSession();
   testActivationRejectsAReconciledDigestMismatch();
   testResourceSessionOwnsUploadsAndExactRuntimeStringAtlas();

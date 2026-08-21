@@ -531,6 +531,8 @@ struct SkinBgaObject {};
 // support is intentionally separate from its timer-cycle authority.
 struct SkinPmCharaObject {
   SkinResourceId source = 0;
+  std::string sourceName;
+  std::string sourcePath;
   int color = 1;
   int type = 0;
   int side = 1;

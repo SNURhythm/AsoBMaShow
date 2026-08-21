@@ -1052,6 +1052,51 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
       return result;
     }
   }
+  std::set<SkinObjectId> pomyuObjects;
+  for (const auto &pomyu : plan.pomyuCharas) {
+    if (pomyu.object == 0 || !pomyuObjects.insert(pomyu.object).second ||
+        pomyu.animations.empty() ||
+        (pomyu.relativePlacement &&
+         (pomyu.coordinateWidth <= 0 || pomyu.coordinateHeight <= 0)) ||
+        (!pomyu.relativePlacement &&
+         (pomyu.coordinateWidth != 0 || pomyu.coordinateHeight != 0))) {
+      result.diagnostics.push_back(diagnostic(
+          "skin.resource.pomyu_invalid",
+          "resource upload plan has invalid Pomyu character metadata"));
+      return result;
+    }
+    for (const auto &animation : pomyu.animations) {
+      if (animation.frames.empty() ||
+          animation.loopStartFrame >= animation.frames.size() ||
+          ((animation.frameMillis == 0 || animation.cycleMillis == 0) &&
+           (animation.frameMillis != 0 || animation.cycleMillis != 0 ||
+            animation.frames.size() != 1)) ||
+          animation.frameMillis < 0 || animation.cycleMillis < 0 ||
+          (animation.builtinTimerId &&
+           (*animation.builtinTimerId < 900 ||
+            *animation.builtinTimerId > 909))) {
+        result.diagnostics.push_back(diagnostic(
+            "skin.resource.pomyu_invalid",
+            "resource upload plan has invalid Pomyu animation metadata"));
+        return result;
+      }
+      for (const auto &frame : animation.frames) {
+        if (frame.resource != 0 && !imageIds.contains(frame.resource)) {
+          result.diagnostics.push_back(diagnostic(
+              "skin.resource.pomyu_invalid",
+              "Pomyu animation references an absent prepared image"));
+          return result;
+        }
+      }
+    }
+  }
+  if (std::ranges::any_of(plan.pomyuMotionCyclesMillis,
+                          [](int cycle) { return cycle < 1; })) {
+    result.diagnostics.push_back(diagnostic(
+        "skin.resource.pomyu_invalid",
+        "resource upload plan has invalid Pomyu motion cycles"));
+    return result;
+  }
   if (session.decodedBytes() != plan.decodedBytes) {
     result.diagnostics.push_back(diagnostic("skin.resource.session_limit", "resource upload plan decoded byte total is inconsistent")); return result;
   }
@@ -1114,6 +1159,10 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
   }
   for (const auto &atlas : plan.atlases) { const auto handle=catalog->device_->create(atlas.pixels, safetyPolicy); if(!bgfx::isValid(handle)){result.diagnostics.push_back(diagnostic("skin.resource.texture_create_failed","texture creation failed")); rollback(); return result;} PendingHandle pending{*catalog->device_, handle}; catalog->atlases_.emplace(atlas.id,PreparedSkinTextAtlas{.id=atlas.id,.key=atlas.key,.texture=handle,.width=atlas.pixels.width,.height=atlas.pixels.height,.glyphs=atlas.glyphs,.kerning=atlas.kerning,.ascent=atlas.ascent,.capHeight=atlas.capHeight,.descent=atlas.descent,.lineHeight=atlas.lineHeight,.bitmapFont=atlas.bitmapFont,.bitmapFontType=atlas.bitmapFontType,.originalSize=atlas.originalSize,.pageWidth=atlas.pageWidth,.pageHeight=atlas.pageHeight}); catalog->atlasKeys_.emplace(atlas.key,atlas.id); catalog->owned_.push_back({handle}); if(catalog->liveCounters_) catalog->liveCounters_->textureCreated(); pending.release(); }
   catalog->textAtlasesByObject_ = std::move(plan.textAtlasesByObject);
+  for (auto &pomyu : plan.pomyuCharas) {
+    catalog->pomyuCharas_.emplace(pomyu.object, std::move(pomyu));
+  }
+  catalog->pomyuMotionCyclesMillis_ = plan.pomyuMotionCyclesMillis;
   if (catalog->liveCounters_) {
     catalog->liveCounters_->resourceCreated();
     catalog->liveResourceCounted_ = true;
@@ -1145,6 +1194,12 @@ const PreparedSkinTextAtlas *SkinResourceCatalog::findTextAtlasForObject(
   const auto found = textAtlasesByObject_.find(object);
   return found == textAtlasesByObject_.end() ? nullptr
                                              : findTextAtlas(found->second);
+}
+
+const PreparedPomyuCharaResource *
+SkinResourceCatalog::findPomyuChara(SkinObjectId object) const noexcept {
+  const auto found = pomyuCharas_.find(object);
+  return found == pomyuCharas_.end() ? nullptr : &found->second;
 }
 
 const PreparedSkinGeneratedTexture *
@@ -1498,6 +1553,47 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
                               .safetyPolicy = input.safetyPolicy};
   std::map<std::string, std::size_t, std::less<>> unique;
   SkinResourceSessionAccounting session(input.safetyPolicy);
+  auto pomyu = preparePomyuCharaResources(
+      input.fileSystem, input.model, input.configuration, input.safetyPolicy,
+      input.stop);
+  if (pomyu.cancelled || cancellationRequested(input.stop)) {
+    result.cancelled = true;
+    return result;
+  }
+  bool pomyuAccepted = !pomyu.budgetExceeded;
+  SkinResourceSessionAccounting pomyuSession = session;
+  for (std::size_t index = 0; index < pomyu.images.size() && pomyuAccepted;
+       ++index) {
+    const auto &image = pomyu.images[index];
+    pomyuAccepted = pomyuSession.addImage(
+        /*physicalResources=*/1, /*logicalResources=*/1,
+        index == 0 ? pomyu.encodedBytes : 0, image.pixels.byteSize(),
+        image.regions.size());
+  }
+  if (!pomyuAccepted) {
+    result.diagnostics.push_back(warning(
+        "skin.resource.pomyu_limit",
+        "Pomyu character resources exceed the bounded session resource "
+        "policy and were ignored"));
+  } else {
+    session = pomyuSession;
+    plan.decodedBytes = session.decodedBytes();
+    plan.pomyuCharas = std::move(pomyu.resources);
+    plan.pomyuMotionCyclesMillis = pomyu.motionCyclesMillis;
+    plan.images.reserve(plan.images.size() + pomyu.images.size());
+    for (auto &image : pomyu.images) {
+      SkinDecodedImage decoded{
+          .id = image.id,
+          .pixels = std::move(image.pixels),
+          .regions = std::move(image.regions)};
+      decoded.regionMappings.reserve(decoded.regions.size());
+      for (const SkinSourceRect &region : decoded.regions) {
+        decoded.regionMappings.push_back(
+            {.authored = region, .resolved = region});
+      }
+      plan.images.push_back(std::move(decoded));
+    }
+  }
   for (const SkinResourceDefinition &definition : input.model.model.resources) {
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
     const auto *resource = std::get_if<SkinImageResource>(&definition);

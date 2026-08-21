@@ -3239,13 +3239,15 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       const auto *bga = std::get_if<SkinBgaObject>(&object->payload);
       const auto *builtinImage =
           std::get_if<SkinBuiltinImageObject>(&object->payload);
+      const auto *pmChara =
+          std::get_if<SkinPmCharaObject>(&object->payload);
       const auto *blank = std::get_if<SkinBlankObject>(&object->payload);
       if (!image && !number && !floating && !text && !slider && !graph &&
           !noteDistribution && !gaugeGraph && !bpmGraph &&
           !timingVisualizer &&
           !hitErrorVisualizer &&
           !gauge && !note && !cover && !judge && !bga && !builtinImage &&
-          !blank) {
+          !pmChara && !blank) {
         if (reportObjectFailure(
                 result, *object,
                 diagnostic("skin.renderer.object.unsupported",
@@ -3404,7 +3406,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       }
 
       if (!destinationVisible && !image && !gauge && !note && !cover &&
-          !judge) {
+          !judge && !pmChara) {
         continue;
       }
 
@@ -3448,7 +3450,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
         destinationVisible = evaluated.geometry.has_value();
       }
       if (!destinationVisible && !image && !gauge && !note && !cover &&
-          !judge) {
+          !judge && !pmChara) {
         continue;
       }
 
@@ -3519,7 +3521,156 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
         continue;
       }
       if (!evaluated.geometry && !image && !gauge && !note && !cover &&
-          !judge) {
+          !judge && !pmChara) {
+        continue;
+      }
+
+      if (pmChara) {
+        const auto *prepared = inputs.resources.findPomyuChara(object->id);
+        if (prepared == nullptr || !evaluated.geometry) {
+          continue;
+        }
+        for (const auto &animation : prepared->animations) {
+          bool optionsMatch = true;
+          for (const int option : animation.options) {
+            if (option == 0) {
+              continue;
+            }
+            const auto resolved = inputs.state.booleanProperty(
+                SkinBuiltinPropertySelector{std::abs(option)});
+            if (!resolved.supported ||
+                resolved.value != (option > 0)) {
+              optionsMatch = false;
+              break;
+            }
+          }
+          if (!optionsMatch || animation.frames.empty()) {
+            continue;
+          }
+          std::int64_t elapsedMillis = 0;
+          if (animation.builtinTimerId) {
+            const std::int64_t start = inputs.state.timerProperty(
+                SkinBuiltinPropertySelector{*animation.builtinTimerId});
+            if (start == INT64_MIN) {
+              continue;
+            }
+            elapsedMillis = std::max<std::int64_t>(
+                0, inputs.visualTimeMicros / 1'000 - start / 1'000);
+          } else if (animation.frameMillis > 0) {
+            if (!destination.presentation.timer || timerOff) {
+              continue;
+            }
+            elapsedMillis = std::max<std::int64_t>(
+                0, inputs.visualTimeMicros / 1'000 -
+                       timerStartMicros / 1'000);
+          }
+          std::size_t frameIndex = 0;
+          if (animation.frameMillis > 0 && animation.cycleMillis > 0 &&
+              animation.frames.size() > 1) {
+            const std::size_t loopStart = std::min(
+                animation.loopStartFrame, animation.frames.size() - 1);
+            const std::int64_t introMillis =
+                static_cast<std::int64_t>(loopStart) *
+                animation.frameMillis;
+            if (loopStart != 0 && elapsedMillis < introMillis) {
+              frameIndex = std::min<std::size_t>(
+                  static_cast<std::size_t>(elapsedMillis /
+                                           animation.frameMillis),
+                  loopStart - 1);
+            } else {
+              const std::size_t repeatingFrames =
+                  animation.frames.size() - loopStart;
+              const std::int64_t repeatingMillis =
+                  static_cast<std::int64_t>(repeatingFrames) *
+                  animation.frameMillis;
+              if (repeatingMillis <= 0) {
+                continue;
+              }
+              frameIndex = loopStart + static_cast<std::size_t>(
+                  ((elapsedMillis - introMillis) % repeatingMillis) /
+                  animation.frameMillis);
+            }
+          }
+          const auto &frame = animation.frames[frameIndex];
+          if (frame.resource == 0 || frame.region.w <= 0 ||
+              frame.region.h <= 0) {
+            continue;
+          }
+          const auto *resource = inputs.resources.find(frame.resource);
+          const auto *region = inputs.resources.findResolvedRegion(
+              frame.resource, frame.region);
+          if (!resource || !region || resource->width <= 0 ||
+              resource->height <= 0) {
+            if (reportObjectFailure(
+                    result, *object,
+                    diagnostic("skin.renderer.resource.missing",
+                               "Prepared Pomyu character resource is absent."))) {
+              return result;
+            }
+            continue;
+          }
+          AuthoredDestinationGeometry geometry = *evaluated.geometry;
+          if (prepared->relativePlacement) {
+            const AuthoredRect base = geometry.rect;
+            geometry.rect = {
+                .x = base.x + frame.x * base.width /
+                                  prepared->coordinateWidth,
+                .y = base.y + base.height -
+                     (frame.y + frame.height) * base.height /
+                         prepared->coordinateHeight,
+                .width = frame.width * base.width /
+                         prepared->coordinateWidth,
+                .height = frame.height * base.height /
+                          prepared->coordinateHeight};
+            geometry.angleDegrees = frame.angleDegrees;
+            geometry.rgba = {1.0F, 1.0F, 1.0F,
+                             static_cast<float>(frame.alpha) / 255.0F};
+            geometry.blend = SkinBlendMode::Subtractive;
+            geometry.filter = SkinFilterMode::Linear;
+            geometry.stretch = SkinStretchMode::Stretch;
+          }
+          const auto projected = projectSkinDestinationToUi(
+              geometry,
+              {.textureWidth = resource->width,
+               .textureHeight = resource->height,
+               .region = region->resolved},
+              inputs.viewport);
+          bool emptyClip = false;
+          const auto clip = intersectClip(
+              projected.clip, projectedSkinScissorBounds(inputs.viewport),
+              emptyClip);
+          if (emptyClip) {
+            continue;
+          }
+          if (buffer.commands.size() >= skinFrameMaximumCommands(inputs)) {
+            if (reportObjectFailure(
+                    result, *object,
+                    diagnostic("skin.renderer.command.limit",
+                               "Pomyu commands exceed the fixed frame limit."))) {
+              return result;
+            }
+            continue;
+          }
+          SkinTexturedQuadCommand command;
+          command.resource = frame.resource;
+          command.state = {.blend = projected.blend,
+                           .filter = projected.filter,
+                           .scissor = clip};
+          const std::uint32_t color = packAbgr(projected.rgba);
+          for (std::size_t index = 0; index < command.vertices.size();
+               ++index) {
+            command.vertices[index] = {
+                .x = static_cast<float>(projected.vertices[index][0]),
+                .y = static_cast<float>(projected.vertices[index][1]),
+                .u = static_cast<float>(projected.normalizedUvs[index][0]),
+                .v = static_cast<float>(projected.normalizedUvs[index][1]),
+                .rgba = color};
+          }
+          buffer.commands.push_back(
+              {.authoredOrdinal = destination.presentation.authoredOrdinal,
+               .sourceObject = object->id,
+               .payload = std::move(command)});
+        }
         continue;
       }
 
@@ -4210,7 +4361,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           }
           continue;
         }
-      } else {
+      } else if (!pmChara) {
         textLayout = prepareTextLayout(
             inputs, lookupIndex, *object, *text,
             skinFrameMaximumGlyphInstances(inputs) - glyphInstances);

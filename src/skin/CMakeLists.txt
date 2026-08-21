@@ -28,6 +28,7 @@ if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
         SkinConfigurationWriteQueue.cpp
         beatoraja/PlaySkinSession.cpp
         beatoraja/PlaySkinStateBridge.cpp
+        beatoraja/PomyuCharaResource.cpp
         beatoraja/LuaSkinHostModules.cpp
         beatoraja/LuaSkinBindingDecoder.cpp
         beatoraja/LuaSkinRuntime.cpp

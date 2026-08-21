@@ -2,6 +2,7 @@
 
 #include "BeatorajaSkinModel.h"
 #include "LuaSkinFileSystem.h"
+#include "PomyuCharaResource.h"
 #include "SkinGeneratedTexture.h"
 #include "SkinLiveResourceCounters.h"
 #include "../SkinSafetyPolicy.h"
@@ -189,6 +190,8 @@ struct SkinResourceUploadPlan {
   // Render-time text lookup must not reconstruct the configured and securely
   // resolved fallback-chain identity used to key an atlas.
   std::map<SkinObjectId, SkinTextAtlasId> textAtlasesByObject;
+  std::vector<PreparedPomyuCharaResource> pomyuCharas;
+  std::array<int, 8> pomyuMotionCyclesMillis = {1, 1, 1, 1, 1, 1, 1, 1};
   std::size_t decodedBytes = 0;
 };
 
@@ -319,6 +322,10 @@ public:
   findTextAtlas(SkinTextAtlasId) const noexcept = 0;
   virtual const PreparedSkinTextAtlas *
   findTextAtlasForObject(SkinObjectId) const noexcept = 0;
+  virtual const PreparedPomyuCharaResource *
+  findPomyuChara(SkinObjectId) const noexcept {
+    return nullptr;
+  }
   virtual const PreparedSkinGeneratedTexture *prepareGeneratedTexture(
       const SkinGeneratedTextureKey &,
       const SkinGeneratedTextureData &) const noexcept {
@@ -346,6 +353,12 @@ public:
   const PreparedSkinTextAtlas *findTextAtlas(const SkinTextAtlasKey &) const noexcept;
   const PreparedSkinTextAtlas *
   findTextAtlasForObject(SkinObjectId) const noexcept override;
+  const PreparedPomyuCharaResource *
+  findPomyuChara(SkinObjectId) const noexcept override;
+  [[nodiscard]] const std::array<int, 8> &
+  pomyuMotionCyclesMillis() const noexcept {
+    return pomyuMotionCyclesMillis_;
+  }
   const PreparedSkinGeneratedTexture *prepareGeneratedTexture(
       const SkinGeneratedTextureKey &,
       const SkinGeneratedTextureData &) const noexcept override;
@@ -369,6 +382,9 @@ private:
   std::map<SkinTextAtlasId, PreparedSkinTextAtlas> atlases_;
   std::map<SkinTextAtlasKey, SkinTextAtlasId> atlasKeys_;
   std::map<SkinObjectId, SkinTextAtlasId> textAtlasesByObject_;
+  std::map<SkinObjectId, PreparedPomyuCharaResource> pomyuCharas_;
+  std::array<int, 8> pomyuMotionCyclesMillis_ = {1, 1, 1, 1,
+                                                 1, 1, 1, 1};
   struct GeneratedTextureEntry {
     PreparedSkinGeneratedTexture prepared;
     std::shared_ptr<const std::vector<std::uint8_t>> pixels;

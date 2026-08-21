@@ -256,10 +256,21 @@ public:
     atlases_.emplace(atlas.id, std::move(atlas));
   }
 
+  void addPomyuChara(PreparedPomyuCharaResource resource) {
+    pomyuCharas_.emplace(resource.object, std::move(resource));
+  }
+
+  const PreparedPomyuCharaResource *
+  findPomyuChara(SkinObjectId object) const noexcept override {
+    const auto found = pomyuCharas_.find(object);
+    return found == pomyuCharas_.end() ? nullptr : &found->second;
+  }
+
 private:
   std::map<SkinResourceId, PreparedSkinResource> images_;
   std::map<SkinTextAtlasId, PreparedSkinTextAtlas> atlases_;
   std::map<SkinObjectId, SkinTextAtlasId> textAtlasesByObject_;
+  std::map<SkinObjectId, PreparedPomyuCharaResource> pomyuCharas_;
 };
 
 class FakeMovies final : public SkinPreparedMovieView {
@@ -326,11 +337,15 @@ public:
   std::int64_t
   timerProperty(const SkinBuiltinPropertySelector &selector) override {
     ++timerCalls;
-    accessOrder.push_back(2'000 + (std::holds_alternative<int>(selector.value)
-                                       ? std::get<int>(selector.value)
-                                       : -1));
+    const int id = std::holds_alternative<int>(selector.value)
+                       ? std::get<int>(selector.value)
+                       : -1;
+    accessOrder.push_back(2'000 + id);
     if (timerSequenceIndex < timerSequence.size()) {
       return timerSequence[timerSequenceIndex++];
+    }
+    if (const auto found = timerResults.find(id); found != timerResults.end()) {
+      return found->second;
     }
     return timerResult;
   }
@@ -374,6 +389,7 @@ public:
   SkinPropertyLookup<double> floatResult;
   SkinPropertyLookup<std::string_view> stringResult;
   std::int64_t timerResult = INT64_MIN;
+  std::map<int, std::int64_t> timerResults;
   std::vector<std::int64_t> timerSequence;
   std::size_t timerSequenceIndex = 0;
   std::size_t booleanCalls = 0;
@@ -478,6 +494,146 @@ evaluate(Skin2DRenderer &renderer, RuntimeHarness &runtime,
                                  .state = state,
                                  .markProcessedNotes = markProcessedNotes,
                                  .gaugeRandomSource = gaugeRandomSource});
+}
+
+void testPomyuCharaSelectsPreparedTimersFramesAndOrderedLayers() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  const SkinSourceRect ordinaryRegion{.x = 0, .y = 0, .w = 10, .h = 10};
+  resources.addImage(1, ordinaryRegion);
+  resources.addImage(3, ordinaryRegion);
+
+  PreparedPomyuCharaResource pomyu;
+  pomyu.object = 2;
+  pomyu.relativePlacement = true;
+  pomyu.coordinateWidth = 100;
+  pomyu.coordinateHeight = 100;
+  for (int timer = 0; timer < 8; ++timer) {
+    const int frameMillis = (timer + 1) * 10;
+    const SkinResourceId resource = static_cast<SkinResourceId>(100 + timer);
+    resources.addImageAtlas(
+        resource,
+        {{.x = 0, .y = timer, .w = 10, .h = 10},
+         {.x = 10, .y = timer, .w = 10, .h = 10}},
+        40, 20);
+    pomyu.animations.push_back(
+        {.motion = timer,
+         .builtinTimerId = 900 + timer,
+         .frameMillis = frameMillis,
+         .cycleMillis = frameMillis * 2,
+         .loopStartFrame = 0,
+         .frames = {{.resource = resource,
+                     .region = {.x = 0, .y = timer, .w = 10, .h = 10},
+                     .x = 10,
+                     .y = 20,
+                     .width = 30,
+                     .height = 40},
+                    {.resource = resource,
+                     .region = {.x = 10, .y = timer, .w = 10, .h = 10},
+                     .x = 10,
+                     .y = 20,
+                     .width = 30,
+                     .height = 40}}});
+  }
+  resources.addImageAtlas(
+      200,
+      {{.x = 0, .y = 10, .w = 20, .h = 10},
+       {.x = 20, .y = 10, .w = 20, .h = 10}},
+      40, 20);
+  pomyu.animations.insert(
+      pomyu.animations.begin() + 1,
+      {.motion = 0,
+       .builtinTimerId = 900,
+       .frameMillis = 10,
+       .cycleMillis = 20,
+       .loopStartFrame = 0,
+       .frames = {{.resource = 200,
+                   .region = {.x = 0, .y = 10, .w = 20, .h = 10},
+                   .x = 10,
+                   .y = 20,
+                   .width = 30,
+                   .height = 40},
+                  {.resource = 200,
+                   .region = {.x = 20, .y = 10, .w = 20, .h = 10},
+                   .x = 10,
+                   .y = 20,
+                   .width = 30,
+                   .height = 40}}});
+  resources.addPomyuChara(std::move(pomyu));
+
+  ValidatedBeatorajaSkinModel model;
+  model.model.resources = {
+      SkinImageResource{.id = 1, .authoredName = "before"},
+      SkinImageResource{.id = 3, .authoredName = "after"}};
+  model.model.objects = {
+      imageObject(1, 1, true),
+      {.id = 2,
+       .authoredName = "pomyu",
+       .payload = SkinPmCharaObject{.source = 99, .type = 0},
+       .authoredOrdinal = 2,
+       .critical = true},
+      imageObject(3, 3, true)};
+  model.model.destinations = {destination(1, 10, 10.0),
+                              destination(2, 20, 100.0),
+                              destination(3, 30, 350.0)};
+  for (auto &presented : model.model.destinations) {
+    presented.presentation.loop = 0;
+  }
+  model.model.destinations[1].presentation.frames.front().y = 100.0;
+  model.model.destinations[1].presentation.frames.front().width = 200.0;
+  model.model.destinations[1].presentation.frames.front().height = 100.0;
+
+  FakeState state;
+  for (int timer = 0; timer < 8; ++timer) {
+    state.timerResults.clear();
+    for (int id = 900; id <= 907; ++id) {
+      state.timerResults.emplace(id, INT64_MIN);
+    }
+    state.timerResults[900 + timer] = 0;
+    const int frameMillis = (timer + 1) * 10;
+    const auto result = evaluate(renderer, runtime, model, resources, state,
+                                 static_cast<std::uint64_t>(timer + 1),
+                                 static_cast<std::int64_t>(frameMillis + 1) *
+                                     1'000);
+    expect(result.submitReady.has_value(),
+           "Pomyu timer selection prepares a complete command buffer");
+    if (!result.submitReady) {
+      continue;
+    }
+    const auto &commands = result.submitReady->commands;
+    const std::size_t pomyuCommandCount = timer == 0 ? 2U : 1U;
+    expect(commands.size() == pomyuCommandCount + 2 &&
+               std::get<SkinTexturedQuadCommand>(commands.front().payload)
+                       .resource == 1 &&
+               std::get<SkinTexturedQuadCommand>(commands.back().payload)
+                       .resource == 3,
+           "Pomyu layers remain between surrounding authored destinations");
+    if (commands.size() != pomyuCommandCount + 2) {
+      continue;
+    }
+    const auto &firstPomyu =
+        std::get<SkinTexturedQuadCommand>(commands[1].payload);
+    expect(firstPomyu.resource == static_cast<SkinResourceId>(100 + timer),
+           "each pinned Pomyu timer selects its own prepared resource");
+    expect(firstPomyu.vertices[0].u < firstPomyu.vertices[1].u &&
+               firstPomyu.vertices[3].u < firstPomyu.vertices[2].u,
+           "Pomyu source rectangles preserve left-to-right orientation");
+    expect(std::abs(firstPomyu.vertices[1].x -
+                    firstPomyu.vertices[0].x - 60.0F) < 0.0001F &&
+               std::abs(std::abs(firstPomyu.vertices[3].y -
+                                 firstPomyu.vertices[0].y) -
+                        40.0F) < 0.0001F,
+           "Pomyu CHP placement scales inside the authored base rectangle");
+    expect(std::abs(firstPomyu.vertices[0].u - 0.25F) < 0.0001F &&
+               std::abs(firstPomyu.vertices[1].u - 0.5F) < 0.0001F,
+           "timer progress advances to the second prepared Pomyu frame");
+    if (timer == 0) {
+      expect(std::get<SkinTexturedQuadCommand>(commands[2].payload).resource ==
+                 200,
+             "Pattern and Texture Pomyu layers retain CHP draw order");
+    }
+  }
 }
 
 void testMovieCommandsPreserveTimingDestinationStateAndMixedOrdering() {
@@ -5246,6 +5402,7 @@ void testDesktopAndIpadFitCommandFixtures() {
 } // namespace
 
 int main() {
+  testPomyuCharaSelectsPreparedTimersFramesAndOrderedLayers();
   testMovieCommandsPreserveTimingDestinationStateAndMixedOrdering();
   testStaticBuiltinFrameDoesNotRequireLuaRuntime();
   testCapturedFrameSerialMustMatchCallbacksAndProjection();
