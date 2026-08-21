@@ -2,8 +2,14 @@
 
 ## Gameplay-skin compatibility gaps
 
-This is the source-audited inventory for the pinned Beatoraja checkout ~/workspace/SNURhythm/beatoraja
-`c2ed5db1a46145ed10790c3872f717e95b59db9d`. It lists a property only when
+The complete pinned-source gameplay-skin inventory and its current ownership
+classification live in the machine-readable
+[`beatoraja-gameplay-feature-ledger-v1.json`](skin-compat/beatoraja-gameplay-feature-ledger-v1.json).
+This page retains property-bridge notes rather than claiming complete
+gameplay-skin parity.
+
+The historical notes below are from the pinned Beatoraja checkout
+`c2ed5db1a46145ed10790c3872f717e95b59db9d`. They list a property only when
 Beatoraja's `BMSPlayer` path can provide non-default data and the gameplay-skin
 bridge currently returns a hard-coded default, a sentinel, or no value.
 

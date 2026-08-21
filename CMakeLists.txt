@@ -1505,6 +1505,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(beatoraja_skin_reference_contract PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
+    add_test(NAME beatoraja_gameplay_skin_ledger
+        COMMAND ${Python3_EXECUTABLE}
+                tests/beatoraja_gameplay_skin_ledger_tests.py)
+    set_tests_properties(beatoraja_gameplay_skin_ledger PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
     add_test(NAME build_identity_refresh_contract
         COMMAND ${Python3_EXECUTABLE}
                 -m unittest tests/build_identity_refresh_tests.py -v)
