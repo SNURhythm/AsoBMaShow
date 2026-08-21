@@ -137,6 +137,34 @@ public:
     resources_.emplace(id, std::move(resource));
   }
 
+  void addTextAtlas(SkinObjectId object, SkinTextAtlasId id) {
+    PreparedSkinTextAtlas atlas;
+    atlas.id = id;
+    atlas.texture = bgfx::TextureHandle{static_cast<std::uint16_t>(id)};
+    atlas.width = 32;
+    atlas.height = 16;
+    atlas.key.pointSize = 10;
+    atlas.ascent = 8;
+    atlas.capHeight = 8;
+    atlas.descent = -2;
+    atlas.lineHeight = 10;
+    for (const auto [codepoint, x] :
+         std::array<std::pair<char32_t, int>, 2>{{{U'A', 0}, {U'B', 8}}}) {
+      atlas.glyphs.emplace(
+          codepoint,
+          SkinPreparedGlyphMetrics{.region = {.x = x,
+                                               .y = 0,
+                                               .w = 8,
+                                               .h = 10},
+                                   .bearingX = 0,
+                                   .bearingY = 8,
+                                   .advance = 8,
+                                   .layoutOffsetY = -10});
+    }
+    textAtlasesByObject_.emplace(object, id);
+    atlases_.emplace(id, std::move(atlas));
+  }
+
   const PreparedSkinResource *find(SkinResourceId id) const noexcept override {
     const auto found = resources_.find(id);
     return found == resources_.end() ? nullptr : &found->second;
@@ -156,16 +184,21 @@ public:
                : nullptr;
   }
   const PreparedSkinTextAtlas *
-  findTextAtlas(SkinTextAtlasId) const noexcept override {
-    return nullptr;
+  findTextAtlas(SkinTextAtlasId id) const noexcept override {
+    const auto found = atlases_.find(id);
+    return found == atlases_.end() ? nullptr : &found->second;
   }
   const PreparedSkinTextAtlas *
-  findTextAtlasForObject(SkinObjectId) const noexcept override {
-    return nullptr;
+  findTextAtlasForObject(SkinObjectId object) const noexcept override {
+    const auto found = textAtlasesByObject_.find(object);
+    return found == textAtlasesByObject_.end() ? nullptr
+                                               : findTextAtlas(found->second);
   }
 
 private:
   std::map<SkinResourceId, PreparedSkinResource> resources_;
+  std::map<SkinTextAtlasId, PreparedSkinTextAtlas> atlases_;
+  std::map<SkinObjectId, SkinTextAtlasId> textAtlasesByObject_;
 };
 
 class SessionQuadBackend final : public rendering::SkinQuadBatchBackend {
@@ -1455,6 +1488,38 @@ return {
     end
     return 0.5
   end,
+  text_writer_utf8 = function(value)
+    _G.session_text_utf8_count =
+      (rawget(_G, "session_text_utf8_count") or 0) + 1
+    if _G.session_text_utf8_count ~= 1 or value ~= "A한" then
+      error("UTF-8 text writer received the wrong exact-once value")
+    end
+  end,
+  text_writer_first = function(value)
+    if (rawget(_G, "session_text_transfer_order") or 0) ~= 0 or
+       value ~= "A1" then
+      error("first transferred text writer was not ordered")
+    end
+    _G.session_text_transfer_order = 1
+  end,
+  text_writer_second = function(value)
+    if (rawget(_G, "session_text_transfer_order") or 0) ~= 1 or
+       value ~= "B2" then
+      error("second transferred text writer was not ordered")
+    end
+    _G.session_text_transfer_order = 2
+  end,
+  text_writer_cancel = function()
+    _G.session_text_cancel_count =
+      (rawget(_G, "session_text_cancel_count") or 0) + 1
+    error("cancelled text writer was invoked")
+  end,
+  text_cancel_verify = function()
+    if (rawget(_G, "session_text_cancel_count") or 0) ~= 0 then
+      error("cancelled text edit escaped teardown")
+    end
+    return true
+  end,
 }
 )lua");
     SkinTreeSnapshotter snapshotter(roots_, aliases_);
@@ -1492,8 +1557,14 @@ return {
     writerFail_ = header.value->callbackNamed("writer_fail");
     writerOnce_ = header.value->callbackNamed("writer_once");
     writerOnceVerify_ = header.value->callbackNamed("writer_once_verify");
+    textWriterUtf8_ = header.value->callbackNamed("text_writer_utf8");
+    textWriterFirst_ = header.value->callbackNamed("text_writer_first");
+    textWriterSecond_ = header.value->callbackNamed("text_writer_second");
+    textWriterCancel_ = header.value->callbackNamed("text_writer_cancel");
+    textCancelVerify_ = header.value->callbackNamed("text_cancel_verify");
     expect(writerA_ && writerB_ && writerFail_ && writerOnce_ &&
-               writerOnceVerify_,
+               writerOnceVerify_ && textWriterUtf8_ && textWriterFirst_ &&
+               textWriterSecond_ && textWriterCancel_ && textCancelVerify_,
            "session writer callbacks are retained");
     header.value.reset();
     expect(runtime_->loadConfigured({}).value.has_value(),
@@ -1506,6 +1577,12 @@ return {
         {.id = SkinFloatWriterId{2}, .source = *writerB_},
         {.id = SkinFloatWriterId{3}, .source = *writerFail_},
         {.id = SkinFloatWriterId{4}, .source = *writerOnce_},
+    };
+    model_.model.stringWriters = {
+        {.id = SkinStringWriterId{1}, .source = *textWriterUtf8_},
+        {.id = SkinStringWriterId{2}, .source = *textWriterFirst_},
+        {.id = SkinStringWriterId{3}, .source = *textWriterSecond_},
+        {.id = SkinStringWriterId{4}, .source = *textWriterCancel_},
     };
     model_.model.header.width = 1280;
     model_.model.header.height = 720;
@@ -1746,6 +1823,40 @@ return {
                           .authoredOrdinal = 820}});
   }
 
+  void addEditableText(SkinObjectId id, std::string value,
+                       SkinStringWriterId writer, double x,
+                       bool editable = true) {
+    resources_.addTextAtlas(id, id);
+    SkinTextObject text;
+    text.literal = std::move(value);
+    text.writer = writer;
+    text.pointSize = 10;
+    text.editable = editable;
+    model_.model.objects.push_back(
+        {.id = id,
+         .authoredName = "session-text-" + std::to_string(id),
+         .payload = std::move(text),
+         .authoredOrdinal = id,
+         .critical = true});
+    model_.model.destinations.push_back(
+        {.object = id,
+         .presentation = {.loop = 0,
+                          .frames = {{.timeMillis = 0,
+                                      .x = x,
+                                      .y = 100.0,
+                                      .width = 80.0,
+                                      .height = 20.0}},
+                          .authoredOrdinal = id}});
+  }
+
+  bool verifyTextCancellation(std::uint64_t frameSerial) {
+    const auto begun = runtime_->beginFrame(frameSerial);
+    if (!begun.ok) {
+      return false;
+    }
+    return !runtime_->invoke(*textCancelVerify_, {}).failure;
+  }
+
   void destroySession() { session_.reset(); }
 
 private:
@@ -1762,6 +1873,11 @@ private:
   std::optional<LuaCallbackId> writerFail_;
   std::optional<LuaCallbackId> writerOnce_;
   std::optional<LuaCallbackId> writerOnceVerify_;
+  std::optional<LuaCallbackId> textWriterUtf8_;
+  std::optional<LuaCallbackId> textWriterFirst_;
+  std::optional<LuaCallbackId> textWriterSecond_;
+  std::optional<LuaCallbackId> textWriterCancel_;
+  std::optional<LuaCallbackId> textCancelVerify_;
   PlayfieldChartVisualModel chart_;
   ValidatedBeatorajaSkinModel model_;
   BeatorajaSkinConfiguration configuration_;
@@ -2822,6 +2938,134 @@ void testQueueFullAndClosedAreRecoverableOnlyAfterSuccessfulSkinDraw() {
   exercise(true);
 }
 
+void testEditableTextUsesEndCursorUtf8BackspaceAndReturnCommit() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addEditableText(84, "A", SkinStringWriterId{1}, 100.0);
+  SessionBgaSubmitter bga;
+  RenderContext context;
+  const UiLogicalPoint inside{.x = 110.0F, .y = 610.0F};
+
+  expect(!fixture.session().focusTextInput(inside, 1'000),
+         "text cannot focus before its matching skin frame submits");
+  expect(fixture.session().prepareFrame(stateAt(1), projectionAt(1)) ==
+             PresentationFrameOutcome::Ready,
+         "editable text frame prepares");
+  const auto first = fixture.session().render(context, bgaFrame(1), bga);
+  expect(first.outcome == PresentationFrameOutcome::Ready &&
+             fixture.session().focusTextInput(inside, 2'000) &&
+             fixture.session().hasFocusedTextInput(),
+         "submitted editable text takes the one session focus");
+  expect(fixture.session().appendTextInput("é") &&
+             fixture.session().backspaceTextInput() &&
+             fixture.session().appendTextInput("한") &&
+             fixture.session().commitTextInput(3'000) &&
+             !fixture.session().hasFocusedTextInput() &&
+             !fixture.session().commitTextInput(3'001),
+         "text editing starts at the end, removes one UTF-8 codepoint, and "
+         "Return queues one commit");
+
+  expect(fixture.session().prepareFrame(stateAt(2), projectionAt(2)) ==
+             PresentationFrameOutcome::Ready,
+         "the queued UTF-8 value reaches its typed string writer");
+  const auto second = fixture.session().render(context, bgaFrame(2), bga);
+  expect(second.outcome == PresentationFrameOutcome::Ready &&
+             fixture.session().prepareFrame(stateAt(3), projectionAt(3)) ==
+                 PresentationFrameOutcome::Ready,
+         "a submitted commit is exact once and is not queued again");
+  const auto third = fixture.session().render(context, bgaFrame(3), bga);
+  expect(third.outcome == PresentationFrameOutcome::Ready,
+         "the post-commit frame remains renderable");
+}
+
+void testEditableTextOutsideClickCommitsAndFocusTransferIsOrdered() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addEditableText(84, "A", SkinStringWriterId{2}, 100.0);
+  fixture.addEditableText(85, "B", SkinStringWriterId{3}, 220.0);
+  SessionBgaSubmitter bga;
+  RenderContext context;
+  expect(fixture.session().prepareFrame(stateAt(1), projectionAt(1)) ==
+             PresentationFrameOutcome::Ready,
+         "focus-transfer text frame prepares");
+  const auto first = fixture.session().render(context, bgaFrame(1), bga);
+  expect(first.outcome == PresentationFrameOutcome::Ready,
+         "focus-transfer text frame submits");
+
+  expect(fixture.session().focusTextInput({.x = 110.0F, .y = 610.0F},
+                                          2'000) &&
+             fixture.session().appendTextInput("1") &&
+             fixture.session().focusTextInput({.x = 230.0F, .y = 610.0F},
+                                              3'000) &&
+             fixture.session().appendTextInput("2") &&
+             !fixture.session().focusTextInput({.x = 400.0F, .y = 300.0F},
+                                               4'000) &&
+             !fixture.session().hasFocusedTextInput(),
+         "focus transfer commits the first editor and an outside click "
+         "commits the second");
+  expect(fixture.session().prepareFrame(stateAt(2), projectionAt(2)) ==
+             PresentationFrameOutcome::Ready,
+         "focus-transfer commits invoke typed writers in pointer order");
+  const auto second = fixture.session().render(context, bgaFrame(2), bga);
+  expect(second.outcome == PresentationFrameOutcome::Ready,
+         "ordered focus-transfer commits submit with the matching frame");
+}
+
+void testEditableTextCancellationTeardownAndNoneditableRejection() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addEditableText(84, "A", SkinStringWriterId{4}, 100.0);
+  fixture.addEditableText(85, "B", SkinStringWriterId{4}, 220.0, false);
+  SessionBgaSubmitter bga;
+  RenderContext context;
+  expect(fixture.session().prepareFrame(stateAt(1), projectionAt(1)) ==
+             PresentationFrameOutcome::Ready,
+         "cancellable text frame prepares");
+  const auto first = fixture.session().render(context, bgaFrame(1), bga);
+  const UiLogicalPoint editablePoint{.x = 110.0F, .y = 610.0F};
+  const auto textHit = fixture.session().hitTestUiControl(editablePoint);
+  expect(first.outcome == PresentationFrameOutcome::Ready &&
+             !fixture.session().focusTextInput({.x = 230.0F, .y = 610.0F},
+                                              2'000) &&
+             textHit.kind == PresentationUiControlKind::Text &&
+             fixture.session().beginPresentationTouch(
+                 {.pointerId = 77,
+                  .uiPoint = editablePoint,
+                  .eventMicros = 3'000,
+                  .hit = textHit}) ==
+                 PresentationTouchResult{.consumed = true,
+                                         .excludeFromGameplay = true} &&
+             fixture.session().appendTextInput("x"),
+         "noneditable text rejects focus while a semantic pointer captures "
+         "editable text without exposing SDL ownership");
+  (void)fixture.session().endPresentationTouch(
+      {.pointerId = 77,
+       .uiPoint = editablePoint,
+       .eventMicros = 3'001,
+       .hit = textHit},
+      false);
+  fixture.session().cancelTextInput();
+  expect(!fixture.session().hasFocusedTextInput() &&
+             fixture.session().prepareFrame(stateAt(2), projectionAt(2)) ==
+                 PresentationFrameOutcome::Ready,
+         "explicit cancellation discards the uncommitted writer");
+  const auto second = fixture.session().render(context, bgaFrame(2), bga);
+  expect(second.outcome == PresentationFrameOutcome::Ready &&
+             fixture.session().focusTextInput({.x = 110.0F, .y = 610.0F},
+                                              4'000) &&
+             fixture.session().appendTextInput("y"),
+         "a later editor can focus before session teardown");
+  fixture.destroySession();
+  expect(fixture.verifyTextCancellation(3),
+         "session teardown cancels focused text without invoking its writer");
+}
+
 void testTouchCaptureLifecycleFailsClosedAndQueuesOnlyDown() {
   SessionFixture fixture;
   if (!fixture.ready()) {
@@ -3363,6 +3607,9 @@ int main() {
   testPracticeVisibleItemsMutationAppliesOnlyAfterSkinSubmission();
   testPersistenceRequestIsFullyAllocatedBeforeSkinSubmission();
   testQueueFullAndClosedAreRecoverableOnlyAfterSuccessfulSkinDraw();
+  testEditableTextUsesEndCursorUtf8BackspaceAndReturnCommit();
+  testEditableTextOutsideClickCommitsAndFocusTransferIsOrdered();
+  testEditableTextCancellationTeardownAndNoneditableRejection();
   testTouchCaptureLifecycleFailsClosedAndQueuesOnlyDown();
   testImageActTouchQueuesPinnedEventOnDown();
   testViewportChangeCancelsCapturesAndInvalidatesPublishedGeometry();

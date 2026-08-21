@@ -160,6 +160,7 @@ private:
   bool startCourseReplayChartAtCurrentIndex();
   bool startCourseChartAtCurrentIndex();
   bool startNextCourseChart();
+  bool handleSkinTextInputEvent(SDL_Event &event);
   bool handleCoursePauseButtonEvent(SDL_Event &event);
   void beginCoursePauseHold(bool touch, SDL_FingerID fingerId);
   void cancelCoursePauseHold();

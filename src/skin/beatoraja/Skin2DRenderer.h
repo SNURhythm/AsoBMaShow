@@ -15,6 +15,7 @@
 #include <map>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <variant>
 #include <vector>
@@ -291,8 +292,17 @@ struct SkinImageInteractionGeometry {
   int clickMode = 0;
 };
 
+struct SkinTextInteractionGeometry {
+  SkinObjectId sourceObject = 0;
+  std::uint32_t authoredOrdinal = 0;
+  AuthoredRect authoredRegion;
+  SkinStringWriterId writer{};
+  std::string currentValue;
+};
+
 using SkinInteractionControl =
-    std::variant<SkinSliderInteractionGeometry, SkinImageInteractionGeometry>;
+    std::variant<SkinSliderInteractionGeometry, SkinImageInteractionGeometry,
+                 SkinTextInteractionGeometry>;
 
 struct SkinLaneInteractionRegion {
   SkinObjectId sourceObject = 0;
@@ -318,6 +328,7 @@ struct SkinInteractionLayout {
   UiLogicalRect safeUiBounds;
   std::vector<SkinSliderInteractionGeometry> slidersTopmostFirst;
   std::vector<SkinImageInteractionGeometry> imagesTopmostFirst;
+  std::vector<SkinTextInteractionGeometry> textsTopmostFirst;
   // Pinned Skin.mousePressed walks every visible SkinObject in reverse draw
   // order. This heterogeneous sequence retains that cross-object ordering.
   std::vector<SkinInteractionControl> controlsTopmostFirst;
@@ -328,6 +339,8 @@ struct SkinInteractionLayout {
   authoredPointForUi(double x, double y) const noexcept;
   [[nodiscard]] PresentationUiHit
   hitTestUiControl(UiLogicalPoint point) const noexcept;
+  [[nodiscard]] const SkinTextInteractionGeometry *
+  editableTextAtUi(UiLogicalPoint point) const noexcept;
   [[nodiscard]] std::vector<PresentationUiHitRegion>
   uiHitRegions() const;
   [[nodiscard]] std::optional<SkinWriterInvocation>

@@ -178,6 +178,23 @@ SkinImageInteractionGeometry imageInteraction(
           .clickMode = image.clickMode};
 }
 
+SkinTextInteractionGeometry textInteraction(
+    SkinObjectId sourceObject, std::uint32_t authoredOrdinal,
+    const AuthoredDestinationGeometry &geometry, const SkinTextObject &text,
+    std::string currentValue) {
+  AuthoredRect region = geometry.rect;
+  if (text.alignment == 2) {
+    region.x -= region.width;
+  } else if (text.alignment == 1) {
+    region.x -= region.width / 2.0;
+  }
+  return {.sourceObject = sourceObject,
+          .authoredOrdinal = authoredOrdinal,
+          .authoredRegion = region,
+          .writer = *text.writer,
+          .currentValue = std::move(currentValue)};
+}
+
 bool laneCoverRateSelector(const SkinBuiltinPropertySelector &builtin) {
   if (const auto *selector = std::get_if<int>(&builtin.value)) {
     return *selector == 4 || *selector == 5;
@@ -1153,6 +1170,7 @@ NumericLoweringResult lowerNumeric(const SkinFrameInputs &inputs,
 
 struct TextLayoutInput {
   const PreparedSkinTextAtlas *atlas = nullptr;
+  std::string value;
   std::vector<char32_t> codepoints;
   bool suppressed = false;
   std::optional<SkinDiagnostic> failure;
@@ -1164,16 +1182,16 @@ TextLayoutInput prepareTextLayout(const SkinFrameInputs &inputs,
                                   const SkinTextObject &text,
                                   std::size_t maximumCodepoints) {
   TextLayoutInput result;
-  std::string value = text.literal;
+  result.value = text.literal;
   if (text.value) {
     auto resolved = resolveString(inputs, index, *text.value);
     if (resolved.failure) {
       result.failure = *resolved.failure;
       return result;
     }
-    value = std::move(*resolved.value);
+    result.value = std::move(*resolved.value);
   }
-  if (value.empty()) {
+  if (result.value.empty() && !(text.editable && text.writer)) {
     result.suppressed = true;
     return result;
   }
@@ -1191,13 +1209,15 @@ TextLayoutInput prepareTextLayout(const SkinFrameInputs &inputs,
     return result;
   }
 
-  result.codepoints.reserve(std::min(value.size(), maximumCodepoints));
+  result.codepoints.reserve(std::min(result.value.size(), maximumCodepoints));
   std::size_t offset = 0;
-  while (offset < value.size()) {
+  while (offset < result.value.size()) {
     utf8proc_int32_t codepoint = 0;
     const auto consumed = utf8proc_iterate(
-        reinterpret_cast<const utf8proc_uint8_t *>(value.data() + offset),
-        static_cast<utf8proc_ssize_t>(value.size() - offset), &codepoint);
+        reinterpret_cast<const utf8proc_uint8_t *>(result.value.data() +
+                                                   offset),
+        static_cast<utf8proc_ssize_t>(result.value.size() - offset),
+        &codepoint);
     if (consumed <= 0) {
       result.failure = diagnostic("skin.renderer.text.utf8",
                                   "Text property contains invalid UTF-8.");
@@ -2945,7 +2965,8 @@ SkinInteractionLayout::hitTestUiControl(UiLogicalPoint point) const noexcept {
                 .sourceObject = candidate.sourceObject,
                 .authoredOrdinal = candidate.authoredOrdinal,
                 .writer = candidate.writer};
-          } else {
+          } else if constexpr (std::is_same_v<
+                                   T, SkinImageInteractionGeometry>) {
             if (!candidate.event || candidate.clickMode < 0 ||
                 candidate.clickMode > 3 ||
                 !contains(authored->x, authored->y, candidate.authoredRegion)) {
@@ -2957,6 +2978,17 @@ SkinInteractionLayout::hitTestUiControl(UiLogicalPoint point) const noexcept {
                 .sourceObject = candidate.sourceObject,
                 .authoredOrdinal = candidate.authoredOrdinal,
                 .eventBinding = candidate.event.value};
+          } else {
+            if (!candidate.writer ||
+                !contains(authored->x, authored->y,
+                          candidate.authoredRegion)) {
+              return std::nullopt;
+            }
+            return PresentationUiHit{
+                .kind = PresentationUiControlKind::Text,
+                .layoutRevision = revision,
+                .sourceObject = candidate.sourceObject,
+                .authoredOrdinal = candidate.authoredOrdinal};
           }
         },
         control);
@@ -2965,6 +2997,50 @@ SkinInteractionLayout::hitTestUiControl(UiLogicalPoint point) const noexcept {
     }
   }
   return {};
+}
+
+const SkinTextInteractionGeometry *
+SkinInteractionLayout::editableTextAtUi(UiLogicalPoint point) const noexcept {
+  const auto authored = authoredPointForUi(point.x, point.y);
+  if (!authored) {
+    return nullptr;
+  }
+  const auto contains = [&](const AuthoredRect &rect) {
+    return std::isfinite(rect.x) && std::isfinite(rect.y) &&
+           std::isfinite(rect.width) && std::isfinite(rect.height) &&
+           rect.width >= 0.0 && rect.height >= 0.0 && authored->x >= rect.x &&
+           authored->x <= rect.x + rect.width && authored->y >= rect.y &&
+           authored->y <= rect.y + rect.height;
+  };
+  for (const auto &control : controlsTopmostFirst) {
+    const auto match = std::visit(
+        [&](const auto &candidate)
+            -> std::pair<bool, const SkinTextInteractionGeometry *> {
+          using T = std::decay_t<decltype(candidate)>;
+          if constexpr (std::is_same_v<T, SkinSliderInteractionGeometry>) {
+            return {candidate.writer && candidate.range > 0.0 &&
+                        std::isfinite(candidate.range) &&
+                        candidate.direction >= 0 && candidate.direction <= 3 &&
+                        contains(candidate.authoredHitRegion),
+                    nullptr};
+          } else if constexpr (std::is_same_v<T,
+                                              SkinImageInteractionGeometry>) {
+            return {candidate.event && candidate.clickMode >= 0 &&
+                        candidate.clickMode <= 3 &&
+                        contains(candidate.authoredRegion),
+                    nullptr};
+          } else {
+            const bool hit = candidate.writer &&
+                             contains(candidate.authoredRegion);
+            return {hit, hit ? &candidate : nullptr};
+          }
+        },
+        control);
+    if (match.first) {
+      return match.second;
+    }
+  }
+  return nullptr;
 }
 
 std::vector<PresentationUiHitRegion>
@@ -3011,7 +3087,8 @@ SkinInteractionLayout::uiHitRegions() const {
                                  .authoredOrdinal = candidate.authoredOrdinal,
                                  .writer = candidate.writer},
                              candidate.authoredHitRegion};
-          } else {
+          } else if constexpr (std::is_same_v<
+                                   T, SkinImageInteractionGeometry>) {
             if (!candidate.event || candidate.clickMode < 0 ||
                 candidate.clickMode > 3) {
               return std::nullopt;
@@ -3022,6 +3099,16 @@ SkinInteractionLayout::uiHitRegions() const {
                                  .sourceObject = candidate.sourceObject,
                                  .authoredOrdinal = candidate.authoredOrdinal,
                                  .eventBinding = candidate.event.value},
+                             candidate.authoredRegion};
+          } else {
+            if (!candidate.writer) {
+              return std::nullopt;
+            }
+            return std::pair{PresentationUiHit{
+                                 .kind = PresentationUiControlKind::Text,
+                                 .layoutRevision = revision,
+                                 .sourceObject = candidate.sourceObject,
+                                 .authoredOrdinal = candidate.authoredOrdinal},
                              candidate.authoredRegion};
           }
         },
@@ -4696,12 +4783,10 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           }
           continue;
         }
-        if (!lowered.command) {
-          continue;
-        }
-        if (buffer.commands.size() >= skinFrameMaximumCommands(inputs) ||
+        if (lowered.command &&
+            (buffer.commands.size() >= skinFrameMaximumCommands(inputs) ||
             lowered.glyphCount >
-                skinFrameMaximumGlyphInstances(inputs) - glyphInstances) {
+                skinFrameMaximumGlyphInstances(inputs) - glyphInstances)) {
           if (reportObjectFailure(
                   result, *object,
                   diagnostic("skin.renderer.command.limit",
@@ -4710,8 +4795,17 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           }
           continue;
         }
-        glyphInstances += lowered.glyphCount;
-        buffer.commands.push_back(std::move(*lowered.command));
+        if (text->editable && text->writer) {
+          interactionLayout.textsTopmostFirst.push_back(textInteraction(
+              object->id, destination.presentation.authoredOrdinal,
+              *evaluated.geometry, *text, textLayout->value));
+          interactionLayout.controlsTopmostFirst.push_back(
+              interactionLayout.textsTopmostFirst.back());
+        }
+        if (lowered.command) {
+          glyphInstances += lowered.glyphCount;
+          buffer.commands.push_back(std::move(*lowered.command));
+        }
         continue;
       }
 
@@ -4884,6 +4978,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
     buildAdjacentBatches(buffer);
     std::ranges::reverse(interactionLayout.slidersTopmostFirst);
     std::ranges::reverse(interactionLayout.imagesTopmostFirst);
+    std::ranges::reverse(interactionLayout.textsTopmostFirst);
     std::ranges::reverse(interactionLayout.controlsTopmostFirst);
     result.submitReady = std::move(buffer);
     result.interactionLayout = std::move(interactionLayout);

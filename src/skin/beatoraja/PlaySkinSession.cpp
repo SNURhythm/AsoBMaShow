@@ -24,6 +24,8 @@
 #include <utility>
 #include <vector>
 
+#include <utf8proc.h>
+
 namespace skin {
 namespace {
 
@@ -182,6 +184,21 @@ bool finiteRect(const AuthoredRect &rect) noexcept {
          rect.width > 0.0 && rect.height > 0.0;
 }
 
+bool validUtf8(std::string_view value) noexcept {
+  std::size_t offset = 0;
+  while (offset < value.size()) {
+    utf8proc_int32_t codepoint = 0;
+    const auto consumed = utf8proc_iterate(
+        reinterpret_cast<const utf8proc_uint8_t *>(value.data() + offset),
+        static_cast<utf8proc_ssize_t>(value.size() - offset), &codepoint);
+    if (consumed <= 0) {
+      return false;
+    }
+    offset += static_cast<std::size_t>(consumed);
+  }
+  return true;
+}
+
 std::array<float, 4>
 startLaneIndicatorColor(start_lane_indicator::ColorRole role) noexcept {
   switch (role) {
@@ -319,7 +336,10 @@ PlaySkinSession::PlaySkinSession(
   context_.identity.sessionSerial = context_.sessionSerial;
 }
 
-PlaySkinSession::~PlaySkinSession() = default;
+PlaySkinSession::~PlaySkinSession() {
+  cancelTextInput();
+  queuedStringWriters_.clear();
+}
 
 RuntimeSkinConfigurationSelection
 PlaySkinSession::runtimeConfigurationSelection() const {
@@ -673,7 +693,8 @@ PlaySkinFrameTransactionResult PlaySkinSession::runFrameTransaction(
     const PlayfieldVisualState &state,
     const PlayfieldProjectionResult &projection,
     std::span<const SkinWriterInvocation> queuedWriters,
-    std::span<const SkinEventInvocation> queuedEvents) {
+    std::span<const SkinEventInvocation> queuedEvents,
+    std::span<const QueuedStringWriter> queuedStringWriters) {
   PlaySkinFrameTransactionResult result{.frameSerial = state.clock.serial};
   if (context_.sessionSerial == 0) {
     result.diagnostics.push_back(transactionDiagnostic(
@@ -727,6 +748,16 @@ PlaySkinFrameTransactionResult PlaySkinSession::runFrameTransaction(
     }
   }
 
+  for (const auto &writer : queuedStringWriters) {
+    (void)writer.eventMicros;
+    const auto invoked = context_.bridge.invokeWriter(writer.writer,
+                                                      writer.value);
+    if (invoked.status != SkinHostCallStatus::Completed) {
+      appendDiagnostics(result.diagnostics, invoked.diagnostics);
+      return result;
+    }
+  }
+
   const auto customObjects = context_.bridge.updateCustomObjects();
   if (customObjects.status != SkinHostCallStatus::Completed) {
     appendDiagnostics(result.diagnostics, customObjects.diagnostics);
@@ -773,13 +804,14 @@ PresentationFrameOutcome PlaySkinSession::preparePendingFrame(
     const PlayfieldProjectionResult &projection,
     std::span<const SkinWriterInvocation> queuedWriters,
     std::span<const SkinEventInvocation> queuedEvents,
+    std::span<const QueuedStringWriter> queuedStringWriters,
     std::span<const SkinFrameMutation> extraMutations) {
   if (pendingFrame_) {
     return PresentationFrameOutcome::CriticalFailure;
   }
 
   auto transaction = runFrameTransaction(state, projection, queuedWriters,
-                                         queuedEvents);
+                                         queuedEvents, queuedStringWriters);
   if (transaction.ready() && !extraMutations.empty()) {
     try {
       transaction.committed.orderedMutations.insert(
@@ -809,13 +841,16 @@ PresentationFrameOutcome PlaySkinSession::prepareFrame(
   }
   const std::size_t writerCount = queuedWriterCount_;
   const std::size_t eventCount = queuedEventCount_;
+  std::vector<QueuedStringWriter> queuedStringWriters =
+      std::move(queuedStringWriters_);
   queuedWriterCount_ = 0;
   queuedEventCount_ = 0;
   return preparePendingFrame(
       state, projection,
       std::span<const SkinWriterInvocation>{queuedWriters_.data(),
                                             writerCount},
-      std::span<const SkinEventInvocation>{queuedEvents_.data(), eventCount});
+      std::span<const SkinEventInvocation>{queuedEvents_.data(), eventCount},
+      queuedStringWriters);
 }
 
 #if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
@@ -832,7 +867,7 @@ PresentationFrameOutcome PlaySkinSession::prepareFrameForTesting(
     std::span<const SkinWriterInvocation> queuedWriters,
     std::span<const SkinFrameMutation> extraMutations) {
   return preparePendingFrame(state, projection, queuedWriters,
-                             {}, extraMutations);
+                             {}, {}, extraMutations);
 }
 #endif
 
@@ -980,9 +1015,21 @@ PresentationFrameResult PlaySkinSession::render(
         touchLayoutRevision_;
     publishedLayout_ =
         std::move(transaction.evaluation.interactionLayout);
+    if (focusedTextInput_ &&
+        std::ranges::none_of(
+            publishedLayout_->textsTopmostFirst,
+            [&](const SkinTextInteractionGeometry &text) {
+              return text.sourceObject == focusedTextInput_->sourceObject &&
+                     text.authoredOrdinal ==
+                         focusedTextInput_->authoredOrdinal &&
+                     text.writer == focusedTextInput_->writer;
+            })) {
+      cancelTextInput();
+    }
   } else {
     publishedLayout_.reset();
     captures_.fill({});
+    cancelTextInput();
   }
 
   // The prepared-BGA overload is noexcept and returns false only before its
@@ -1156,6 +1203,8 @@ void PlaySkinSession::clearPublishedGeometry(bool advanceTopology) noexcept {
   publishedReplayGhostGeometry_.reset();
   queuedWriterCount_ = 0;
   queuedEventCount_ = 0;
+  cancelTextInput();
+  queuedStringWriters_.clear();
   if (advanceTopology) {
     advanceRevision(touchLayoutRevision_);
   }
@@ -1314,6 +1363,18 @@ PresentationTouchResult PlaySkinSession::beginPresentationTouch(
       publishedLayout_->hitTestUiControl(event.uiPoint) != event.hit) {
     return {};
   }
+  if (event.hit.kind == PresentationUiControlKind::Text) {
+    const auto *text = publishedLayout_->editableTextAtUi(event.uiPoint);
+    if (text == nullptr || text->sourceObject != event.hit.sourceObject ||
+        text->authoredOrdinal != event.hit.authoredOrdinal ||
+        !focusTextInput(event.uiPoint, event.eventMicros)) {
+      return {};
+    }
+    *capture = {.pointerId = event.pointerId,
+                .active = true,
+                .hit = event.hit};
+    return {.consumed = true, .excludeFromGameplay = true};
+  }
   if (const auto eventInvocation = publishedLayout_->eventInvocationFor(
           event.hit, event.uiPoint, event.eventMicros)) {
     if (queuedEventCount_ == queuedEvents_.size()) {
@@ -1371,6 +1432,95 @@ PresentationTouchResult PlaySkinSession::endPresentationTouch(
 void PlaySkinSession::cancelPresentationTouches(long long eventMicros) {
   (void)eventMicros;
   captures_.fill({});
+}
+
+bool PlaySkinSession::focusTextInput(UiLogicalPoint point,
+                                     long long eventMicros) {
+  const SkinTextInteractionGeometry *target =
+      publishedLayout_ ? publishedLayout_->editableTextAtUi(point) : nullptr;
+  if (focusedTextInput_) {
+    const bool sameTarget =
+        target != nullptr &&
+        target->sourceObject == focusedTextInput_->sourceObject &&
+        target->authoredOrdinal == focusedTextInput_->authoredOrdinal &&
+        target->writer == focusedTextInput_->writer;
+    if (sameTarget) {
+      try {
+        focusedTextInput_->value = target->currentValue;
+      } catch (...) {
+        return false;
+      }
+      return true;
+    }
+    if (!commitTextInput(eventMicros)) {
+      return false;
+    }
+  }
+  if (target == nullptr) {
+    return false;
+  }
+  try {
+    focusedTextInput_.emplace(
+        FocusedTextInput{.sourceObject = target->sourceObject,
+                         .authoredOrdinal = target->authoredOrdinal,
+                         .writer = target->writer,
+                         .value = target->currentValue});
+  } catch (...) {
+    focusedTextInput_.reset();
+    return false;
+  }
+  return true;
+}
+
+bool PlaySkinSession::hasFocusedTextInput() const noexcept {
+  return focusedTextInput_.has_value();
+}
+
+bool PlaySkinSession::appendTextInput(std::string_view utf8) {
+  if (!focusedTextInput_ || utf8.empty() || !validUtf8(utf8)) {
+    return false;
+  }
+  try {
+    focusedTextInput_->value.append(utf8);
+  } catch (...) {
+    return false;
+  }
+  return true;
+}
+
+bool PlaySkinSession::backspaceTextInput() {
+  if (!focusedTextInput_ || focusedTextInput_->value.empty()) {
+    return false;
+  }
+  std::size_t offset = focusedTextInput_->value.size() - 1;
+  while (offset > 0 &&
+         (static_cast<unsigned char>(focusedTextInput_->value[offset]) &
+          0xc0U) == 0x80U) {
+    --offset;
+  }
+  focusedTextInput_->value.erase(offset);
+  return true;
+}
+
+bool PlaySkinSession::commitTextInput(long long eventMicros) {
+  if (!focusedTextInput_ ||
+      queuedStringWriters_.size() >= maximumQueuedInteractions) {
+    return false;
+  }
+  try {
+    queuedStringWriters_.push_back(
+        {.writer = focusedTextInput_->writer,
+         .value = focusedTextInput_->value,
+         .eventMicros = eventMicros});
+  } catch (...) {
+    return false;
+  }
+  focusedTextInput_.reset();
+  return true;
+}
+
+void PlaySkinSession::cancelTextInput() noexcept {
+  focusedTextInput_.reset();
 }
 
 void PlaySkinSession::onLanePressed(int lane, JudgeResult judge,

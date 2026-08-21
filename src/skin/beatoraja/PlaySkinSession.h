@@ -17,6 +17,7 @@
 #include <span>
 #include <stop_token>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace skin {
@@ -177,6 +178,12 @@ public:
   endPresentationTouch(const PresentationTouchEvent &event,
                        bool cancelled) override;
   void cancelPresentationTouches(long long eventMicros) override;
+  bool focusTextInput(UiLogicalPoint, long long eventMicros) override;
+  [[nodiscard]] bool hasFocusedTextInput() const noexcept override;
+  bool appendTextInput(std::string_view utf8) override;
+  bool backspaceTextInput() override;
+  bool commitTextInput(long long eventMicros) override;
+  void cancelTextInput() noexcept override;
   // Task 20's bounded Down queue and next-frame transactional drain supersede
   // the earlier immediate invokeWriter/SkinWriterResult plan surface. Touch
   // callbacks never mutate gameplay authority in the input callback itself.
@@ -215,16 +222,29 @@ private:
     bool active = false;
     PresentationUiHit hit;
   };
+  struct FocusedTextInput {
+    SkinObjectId sourceObject = 0;
+    std::uint32_t authoredOrdinal = 0;
+    SkinStringWriterId writer{};
+    std::string value;
+  };
+  struct QueuedStringWriter {
+    SkinStringWriterId writer{};
+    std::string value;
+    long long eventMicros = 0;
+  };
 
   explicit PlaySkinSession(std::unique_ptr<OwnedActivation>);
   [[nodiscard]] PlaySkinFrameTransactionResult runFrameTransaction(
       const PlayfieldVisualState &, const PlayfieldProjectionResult &,
       std::span<const SkinWriterInvocation>,
-      std::span<const SkinEventInvocation> = {});
+      std::span<const SkinEventInvocation> = {},
+      std::span<const QueuedStringWriter> = {});
   [[nodiscard]] PresentationFrameOutcome preparePendingFrame(
       const PlayfieldVisualState &, const PlayfieldProjectionResult &,
       std::span<const SkinWriterInvocation>,
       std::span<const SkinEventInvocation> = {},
+      std::span<const QueuedStringWriter> = {},
       std::span<const SkinFrameMutation> extraMutations = {});
   void clearPublishedGeometry(bool advanceTopology) noexcept;
 
@@ -244,6 +264,8 @@ private:
   std::size_t queuedWriterCount_ = 0;
   std::array<SkinEventInvocation, maximumQueuedInteractions> queuedEvents_{};
   std::size_t queuedEventCount_ = 0;
+  std::optional<FocusedTextInput> focusedTextInput_;
+  std::vector<QueuedStringWriter> queuedStringWriters_;
   std::uint64_t touchLayoutRevision_ = 1;
   std::uint64_t touchHitRegionsRevision_ = 1;
 };

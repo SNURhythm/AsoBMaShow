@@ -1788,6 +1788,92 @@ SkinHostCallResult PlaySkinStateBridge::invokeWriter(
   return {.callbacksInvoked = 1, .diagnostics = diagnostics_};
 }
 
+SkinHostCallResult PlaySkinStateBridge::invokeWriter(
+    SkinStringWriterId writerId, std::string_view value) {
+  if (phase_ != FramePhase::Active) {
+    reportDiagnostic({.code = "skin.play_state.frame_inactive",
+                      .message = "Skin writers require an active frame."});
+    return {.status = SkinHostCallStatus::CriticalFailure,
+            .diagnostics = diagnostics_};
+  }
+  if (writerInvocationActive_) {
+    reportDiagnostic(
+        {.code = "skin.play_state.writer_reentrant",
+         .message = "A skin writer callback is already active."});
+    return {.status = SkinHostCallStatus::CriticalFailure,
+            .diagnostics = diagnostics_};
+  }
+  if (context_.model == nullptr) {
+    reportDiagnostic({.code = "skin.play_state.model_unavailable",
+                      .message = "Skin writers require the decoded gameplay "
+                                 "skin model."});
+    return {.status = SkinHostCallStatus::Unsupported,
+            .diagnostics = diagnostics_};
+  }
+  const auto binding = std::ranges::find_if(
+      context_.model->model.stringWriters,
+      [writerId](const SkinStringWriterBinding &candidate) {
+        return candidate.id == writerId;
+      });
+  if (binding == context_.model->model.stringWriters.end()) {
+    reportDiagnostic(
+        {.code = "skin.play_state.writer_missing",
+         .message = "Skin writer ID is not present in the validated model.",
+         .virtualPath = std::to_string(writerId.value)});
+    return {.status = SkinHostCallStatus::Unsupported,
+            .diagnostics = diagnostics_};
+  }
+  if (std::holds_alternative<SkinBuiltinPropertySelector>(binding->source)) {
+    reportDiagnostic(
+        {.code = "skin.play_state.writer_builtin_unsupported",
+         .message = "No built-in gameplay string writer is allowlisted for "
+                    "this skin surface.",
+         .virtualPath = std::to_string(writerId.value)});
+    return {.status = SkinHostCallStatus::Unsupported,
+            .diagnostics = diagnostics_};
+  }
+  if (context_.runtime == nullptr) {
+    reportDiagnostic({.code = "skin.model.callback_runtime_missing",
+                      .message = "Lua callback binding has no live gameplay "
+                                 "runtime."});
+    return {.status = SkinHostCallStatus::CriticalFailure,
+            .diagnostics = diagnostics_};
+  }
+
+  const std::size_t savepoint = staged_.orderedMutations.size();
+  writerInvocationActive_ = true;
+  LuaCallbackResult callback;
+  try {
+    const std::array<LuaScalar, 1> arguments{LuaScalar{std::string(value)}};
+    callback = context_.runtime->invoke(
+        std::get<LuaCallbackId>(binding->source), arguments);
+  } catch (...) {
+    writerInvocationActive_ = false;
+    staged_.orderedMutations.resize(savepoint);
+    reportDiagnostic({.code = "skin.play_state.writer_callback_failed",
+                      .message = "Skin writer callback failed within host "
+                                 "limits."});
+    return {.status = SkinHostCallStatus::CriticalFailure,
+            .callbacksInvoked = 1,
+            .diagnostics = diagnostics_};
+  }
+  writerInvocationActive_ = false;
+  if (callback.failure) {
+    staged_.orderedMutations.resize(savepoint);
+    const std::string code = callback.failure->code;
+    reportDiagnostic(std::move(*callback.failure));
+    const bool budgetExceeded =
+        code == "skin_lua_frame_budget_exceeded" ||
+        code == "skin_lua_instruction_limit_exceeded" ||
+        code == "skin_lua_wall_time_limit_exceeded";
+    return {.status = budgetExceeded ? SkinHostCallStatus::BudgetExceeded
+                                     : SkinHostCallStatus::CriticalFailure,
+            .callbacksInvoked = 1,
+            .diagnostics = diagnostics_};
+  }
+  return {.callbacksInvoked = 1, .diagnostics = diagnostics_};
+}
+
 PlaySkinFrameCommit PlaySkinStateBridge::commitFrame() {
   if (phase_ != FramePhase::Active) {
     reportDiagnostic({.code = "skin.play_state.frame_already_closed",

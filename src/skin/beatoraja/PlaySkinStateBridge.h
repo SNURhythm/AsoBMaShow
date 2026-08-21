@@ -168,6 +168,7 @@ public:
   SkinHostCallResult invokeEventBinding(SkinEventBindingId,
                                         std::span<const int> arguments);
   SkinHostCallResult invokeWriter(SkinFloatWriterId, double normalizedValue);
+  SkinHostCallResult invokeWriter(SkinStringWriterId, std::string_view value);
   [[nodiscard]] PlaySkinFrameCommit commitFrame();
   void discardFrame() noexcept;
 

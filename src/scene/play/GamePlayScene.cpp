@@ -1252,6 +1252,15 @@ struct GamePlayScene::RealtimeGameplaySession {
         session.physicalInputRouter == nullptr) {
       return 0;
     }
+    if ((event->type == SDL_KEYDOWN || event->type == SDL_KEYUP) &&
+        session.scene != nullptr) {
+      const auto *coordinator =
+          dynamic_cast<const PlayfieldPresentationCoordinator *>(
+              session.scene->presentation);
+      if (coordinator != nullptr && coordinator->hasFocusedTextInput()) {
+        return 0;
+      }
+    }
     if (const auto disconnected =
             session.inputRegistry->realtimeDisconnectedSdlDevice(*event);
         disconnected.has_value()) {
@@ -2155,8 +2164,26 @@ void GamePlayScene::drainRealtimeTouchSamples(
   const auto consumeSample = [&](const gameplay::RealtimeTouchSample &sample) {
     const auto gameplayTime = RealtimeGameplaySession::mapSteadyToSong(
         &session, sample.steadyTimestampMicros);
-    (void)session.presentationTouches.consume(
-        sample, gameplayTime.value_or(sample.steadyTimestampMicros));
+    const long long eventMicros =
+        gameplayTime.value_or(sample.steadyTimestampMicros);
+    auto *coordinator =
+        dynamic_cast<PlayfieldPresentationCoordinator *>(presentation);
+    if (sample.phase == gameplay::RealtimeTouchPhase::Down &&
+        coordinator != nullptr && coordinator->hasFocusedTextInput() &&
+        sample.presentationHit.kind != PresentationUiControlKind::Text &&
+        sample.presentationUiPoint) {
+      (void)coordinator->focusTextInput(*sample.presentationUiPoint,
+                                        eventMicros);
+      if (!coordinator->hasFocusedTextInput()) {
+        SDL_StopTextInput();
+      }
+    }
+    const auto presentationResult =
+        session.presentationTouches.consume(sample, eventMicros);
+    if (presentationResult.consumed && coordinator != nullptr &&
+        coordinator->hasFocusedTextInput()) {
+      SDL_StartTextInput();
+    }
     if (!gameplayTime.has_value()) {
       return;
     }
@@ -2669,6 +2696,12 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
 }
 
 GamePlayScene::~GamePlayScene() {
+  if (auto *coordinator =
+          dynamic_cast<PlayfieldPresentationCoordinator *>(presentation);
+      coordinator != nullptr && coordinator->hasFocusedTextInput()) {
+    coordinator->cancelTextInput();
+    SDL_StopTextInput();
+  }
   persistAutoAdjustedNotesDisplayTiming();
   persistSkinAudioSettings();
   stopBestReplayLoad();
@@ -5700,6 +5733,83 @@ bool GamePlayScene::renderViewBeforeScene(const View *view) const {
          view != practiceHudText && view != playbackFailureLayout;
 }
 
+bool GamePlayScene::handleSkinTextInputEvent(SDL_Event &event) {
+  auto *coordinator =
+      dynamic_cast<PlayfieldPresentationCoordinator *>(presentation);
+  if (coordinator == nullptr) {
+    return false;
+  }
+  const auto focusAt = [&](UiLogicalPoint point) {
+    const bool wasFocused = coordinator->hasFocusedTextInput();
+    const bool focused = coordinator->focusTextInput(point, nowMicros());
+    if (focused) {
+      SDL_StartTextInput();
+      return true;
+    }
+    if (wasFocused && coordinator->hasFocusedTextInput()) {
+      return true;
+    }
+    if (wasFocused && !coordinator->hasFocusedTextInput()) {
+      SDL_StopTextInput();
+    }
+    return false;
+  };
+
+  switch (event.type) {
+  case SDL_MOUSEBUTTONDOWN: {
+    if (event.button.button != SDL_BUTTON_LEFT ||
+        event.button.which == SDL_TOUCH_MOUSEID) {
+      return false;
+    }
+    float uiX = 0.0F;
+    float uiY = 0.0F;
+    mouseEventToUi(event.button, uiX, uiY);
+    return focusAt({.x = uiX, .y = uiY});
+  }
+  case SDL_FINGERDOWN: {
+    float uiX = 0.0F;
+    float uiY = 0.0F;
+    fingerEventToUi(event.tfinger, uiX, uiY);
+    return focusAt({.x = uiX, .y = uiY});
+  }
+  case SDL_TEXTINPUT:
+    if (!coordinator->hasFocusedTextInput()) {
+      return false;
+    }
+    (void)coordinator->appendTextInput(event.text.text);
+    return true;
+  case SDL_TEXTEDITING:
+  case SDL_TEXTEDITING_EXT:
+    return coordinator->hasFocusedTextInput();
+  case SDL_KEYDOWN:
+    if (!coordinator->hasFocusedTextInput()) {
+      return false;
+    }
+    switch (event.key.keysym.sym) {
+    case SDLK_RETURN:
+    case SDLK_KP_ENTER:
+      if (coordinator->commitTextInput(nowMicros())) {
+        SDL_StopTextInput();
+      }
+      break;
+    case SDLK_BACKSPACE:
+      (void)coordinator->backspaceTextInput();
+      break;
+    case SDLK_ESCAPE:
+      coordinator->cancelTextInput();
+      SDL_StopTextInput();
+      break;
+    default:
+      break;
+    }
+    return true;
+  case SDL_KEYUP:
+    return coordinator->hasFocusedTextInput();
+  default:
+    return false;
+  }
+}
+
 bool GamePlayScene::handleCoursePauseButtonEvent(SDL_Event &event) {
   if (!isCoursePlayback() || pauseButton == nullptr ||
       !pauseButton->getVisible()) {
@@ -7023,6 +7133,9 @@ JudgeResult GamePlayScene::releaseNote(bms_parser::Note *Note,
 EventHandleResult GamePlayScene::handleEvents(SDL_Event &event) {
   if (playbackInitializationFailed) {
     Scene::handleEvents(event);
+    return {};
+  }
+  if (handleSkinTextInputEvent(event)) {
     return {};
   }
   if (handleCoursePauseButtonEvent(event)) {
