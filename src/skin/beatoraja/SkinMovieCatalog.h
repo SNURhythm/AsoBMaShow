@@ -5,6 +5,7 @@
 #include "LuaSkinFileSystem.h"
 #include "PlaySkinViewport.h"
 #include "SkinDrawCommand.h"
+#include "SkinResourceCatalog.h"
 #include "../../audio/GameplayBgaFrame.h"
 
 #include <compare>
@@ -27,11 +28,29 @@ struct SkinMoviePlayerHandle {
   auto operator<=>(const SkinMoviePlayerHandle &) const = default;
 };
 
+struct SkinMovieLoadLimits {
+  int maximumDimension = SkinResourcePolicy::maximumDimension;
+  std::size_t maximumRgbaBytes = SkinResourcePolicy::maximumImageBytes;
+  std::size_t maximumDecodedBytes =
+      SkinResourcePolicy::maximumSessionDecodedBytes;
+};
+
+struct SkinMovieDecodedLayout {
+  std::size_t rgbaBytes = 0;
+  std::size_t packedYuvBytes = 0;
+  std::size_t residentBytes = 0;
+};
+
+[[nodiscard]] std::optional<SkinMovieDecodedLayout>
+skinMovieDecodedLayout(int width, int height,
+                       const SkinMovieLoadLimits &) noexcept;
+
 struct SkinMovieLoadResult {
   SkinMoviePlayerHandle handle;
   int width = 0;
   int height = 0;
   std::int64_t durationMillis = 0;
+  std::size_t decodedBytes = 0;
 };
 
 struct SkinMovieFramePreparationResult {
@@ -44,7 +63,8 @@ class SkinMovieDevice {
 public:
   virtual ~SkinMovieDevice() = default;
   virtual std::optional<SkinMovieLoadResult>
-  load(const std::filesystem::path &, std::stop_token) = 0;
+  load(const std::filesystem::path &, const SkinMovieLoadLimits &,
+       std::stop_token) = 0;
   virtual void destroy(SkinMoviePlayerHandle) noexcept = 0;
   virtual bool ownsCurrentThread() const noexcept = 0;
   virtual void beginFrame() noexcept = 0;
@@ -78,6 +98,7 @@ struct SkinMoviePreparationInputs {
   std::shared_ptr<SkinMovieDevice> device;
   SkinSafetyPolicy safetyPolicy{};
   std::stop_token stop;
+  std::size_t sessionDecodedBytes = 0;
 };
 
 class SkinMovieCatalog;
@@ -108,6 +129,9 @@ public:
   void discardFrame() noexcept;
   void commitFrame() noexcept;
   void submitPrepared(std::size_t) noexcept;
+  [[nodiscard]] std::size_t decodedBytes() const noexcept {
+    return decodedBytes_;
+  }
 
 private:
   explicit SkinMovieCatalog(std::shared_ptr<SkinMovieDevice>);
@@ -118,6 +142,7 @@ private:
   std::map<SkinResourceId, PreparedSkinMovie> movies_;
   std::vector<SkinMoviePlayerHandle> ownedPlayers_;
   std::size_t preparedCount_ = 0;
+  std::size_t decodedBytes_ = 0;
 };
 
 [[nodiscard]] std::shared_ptr<SkinMovieDevice> createSkinMovieDevice();

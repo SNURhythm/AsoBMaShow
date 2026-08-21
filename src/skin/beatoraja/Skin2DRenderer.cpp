@@ -683,32 +683,8 @@ struct SpriteSelection {
   std::optional<SkinDiagnostic> failure;
 };
 
-struct MovieTimeSelection {
-  std::int64_t sourceTimeMillis = 0;
-  std::optional<SkinDiagnostic> failure;
-};
-
-MovieTimeSelection selectMovieTime(
-    const SkinFrameInputs &inputs, const FrameLookupIndex &index,
-    const PreparedSkinMovie &movie, const SkinSpriteFrames &sprite) {
-  std::int64_t elapsedMillis = std::max<std::int64_t>(
-      0, inputs.visualTimeMicros / 1000);
-  const auto timer = movie.resource.timer ? movie.resource.timer : sprite.timer;
-  if (timer) {
-    const auto resolved = resolveTimerUse(inputs, index, *timer);
-    if (resolved.failure) {
-      return {.failure = *resolved.failure};
-    }
-    if (resolved.off) {
-      return {};
-    }
-    elapsedMillis = std::max<std::int64_t>(
-        0, inputs.visualTimeMicros / 1000 - resolved.value / 1000);
-  }
-  if (sprite.cycleMillis > 0) {
-    elapsedMillis %= sprite.cycleMillis;
-  }
-  return {.sourceTimeMillis = elapsedMillis};
+std::int64_t selectMovieTime(const SkinFrameInputs &inputs) noexcept {
+  return std::max<std::int64_t>(0, inputs.visualTimeMicros / 1000);
 }
 
 struct AnimationSelection {
@@ -3736,7 +3712,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       std::size_t stateIndex = 0;
       SpriteSelection selected;
       const PreparedSkinMovie *preparedMovie = nullptr;
-      MovieTimeSelection movieTime;
+      std::int64_t movieTimeMillis = 0;
       std::optional<NumericLayout> numericLayout;
       std::optional<TextLayoutInput> textLayout;
       if (image) {
@@ -4817,15 +4793,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
 
       if (image) {
         if (preparedMovie != nullptr) {
-          movieTime = selectMovieTime(inputs, lookupIndex, *preparedMovie,
-                                      image->orderedStates[stateIndex]);
-          if (movieTime.failure &&
-              reportObjectFailure(result, *object, *movieTime.failure)) {
-            return result;
-          }
-          if (movieTime.failure) {
-            continue;
-          }
+          movieTimeMillis = selectMovieTime(inputs);
         } else {
           selected = selectSpriteFrame(inputs, lookupIndex,
                                        image->orderedStates[stateIndex]);
@@ -4880,7 +4848,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
         }
         SkinMovieCommand command{
             .resource = preparedMovie->resource.id,
-            .sourceTimeMillis = movieTime.sourceTimeMillis,
+            .sourceTimeMillis = movieTimeMillis,
             .geometry = *evaluated.geometry,
             .state = {.blend = evaluated.geometry->blend,
                       .filter = evaluated.geometry->filter}};

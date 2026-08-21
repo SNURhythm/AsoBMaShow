@@ -4,6 +4,7 @@
 #include "../../rendering/RenderPlan.h"
 #include "../../rendering/SkinQuadBatchRenderer.h"
 #include "../../rendering/common.h"
+#include "../../video/VideoMemoryBudget.h"
 
 #include <algorithm>
 #include <array>
@@ -22,6 +23,22 @@
 #endif
 
 namespace skin {
+
+std::optional<SkinMovieDecodedLayout>
+skinMovieDecodedLayout(int width, int height,
+                       const SkinMovieLoadLimits &limits) noexcept {
+  const auto layout = video::videoDecodedMemoryLayout(width, height);
+  if (!layout || limits.maximumDimension <= 0 || width > limits.maximumDimension ||
+      height > limits.maximumDimension ||
+      layout->rgbaBytes > limits.maximumRgbaBytes ||
+      layout->residentBytes > limits.maximumDecodedBytes) {
+    return std::nullopt;
+  }
+  return SkinMovieDecodedLayout{.rgbaBytes = layout->rgbaBytes,
+                                .packedYuvBytes = layout->packedYuvBytes,
+                                .residentBytes = layout->residentBytes};
+}
+
 namespace {
 
 std::atomic_uint64_t nextMaterializedMovieRoot{
@@ -196,6 +213,14 @@ SkinMovieCatalog::prepare(SkinMoviePreparationInputs input) {
         "movie preparation requires an owner-thread movie device"));
     return result;
   }
+  const std::size_t maximumSessionDecodedBytes = skinResourceLimit(
+      input.safetyPolicy, SkinResourcePolicy::maximumSessionDecodedBytes);
+  if (input.sessionDecodedBytes > maximumSessionDecodedBytes) {
+    result.diagnostics.push_back(movieDiagnostic(
+        "skin.movie.session_limit",
+        "existing decoded resources exceed the session resource budget"));
+    return result;
+  }
   catalog->materializedRoot_ =
       std::filesystem::temp_directory_path() /
       ("asobmashow-skin-movies-" +
@@ -274,14 +299,29 @@ SkinMovieCatalog::prepare(SkinMoviePreparationInputs input) {
         return result;
       }
     }
-    auto loaded = catalog->device_->load(materialized, input.stop);
-    if (!loaded || !loaded->handle || loaded->width <= 0 ||
-        loaded->height <= 0 || loaded->durationMillis < 0) {
+    const SkinMovieLoadLimits loadLimits{
+        .maximumDimension = skinResourceDimensionLimit(input.safetyPolicy),
+        .maximumRgbaBytes = skinResourceLimit(
+            input.safetyPolicy, SkinResourcePolicy::maximumImageBytes),
+        .maximumDecodedBytes = maximumSessionDecodedBytes -
+                               input.sessionDecodedBytes -
+                               catalog->decodedBytes_};
+    auto loaded = catalog->device_->load(materialized, loadLimits, input.stop);
+    if (loaded && loaded->handle) {
+      catalog->ownedPlayers_.push_back(loaded->handle);
+    }
+    const auto decodedLayout =
+        loaded ? skinMovieDecodedLayout(loaded->width, loaded->height,
+                                        loadLimits)
+               : std::nullopt;
+    if (!loaded || !loaded->handle || !decodedLayout ||
+        loaded->decodedBytes != decodedLayout->residentBytes ||
+        loaded->durationMillis < 0) {
       result.diagnostics.push_back(movieDiagnostic(
           "skin.movie.load_failed", "movie source could not be opened"));
       return result;
     }
-    catalog->ownedPlayers_.push_back(loaded->handle);
+    catalog->decodedBytes_ += loaded->decodedBytes;
     if (input.stop.stop_requested()) {
       result.cancelled = true;
       result.diagnostics.clear();
@@ -307,7 +347,8 @@ public:
   VideoPlayerSkinMovieDevice() : owner_(std::this_thread::get_id()) {}
 
   std::optional<SkinMovieLoadResult>
-  load(const std::filesystem::path &path, std::stop_token stop) override {
+  load(const std::filesystem::path &path, const SkinMovieLoadLimits &limits,
+       std::stop_token stop) override {
     if (!ownsCurrentThread() || stop.stop_requested()) {
       return std::nullopt;
     }
@@ -318,7 +359,13 @@ public:
     std::stop_callback cancellation(stop, [&] {
       cancelled.store(true, std::memory_order_relaxed);
     });
-    if (!entry->player->loadVideo(path.string(), cancelled) || cancelled) {
+    if (!entry->player->loadVideo(
+            path.string(), cancelled,
+            {.maximumDimension = limits.maximumDimension,
+             .maximumRgbaBytes = limits.maximumRgbaBytes,
+             .maximumDecodedBytes = limits.maximumDecodedBytes,
+             .requirePreallocationBounds = true}) ||
+        cancelled) {
       return std::nullopt;
     }
     entry->width = entry->player->getFrameWidth();
@@ -333,7 +380,10 @@ public:
                                             .width = entry->width,
                                             .height = entry->height,
                                             .durationMillis =
-                                                entry->durationMillis};
+                                                entry->durationMillis,
+                                            .decodedBytes =
+                                                entry->player
+                                                    ->getReservedDecodedBytes()};
     players_.emplace(handle, std::move(entry));
     return result;
   }

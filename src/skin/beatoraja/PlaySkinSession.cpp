@@ -551,28 +551,6 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
       return result;
     }
 
-    auto movieDevice = std::move(context.movieDevice);
-#if ASOBMASHOW_ENABLE_SKIN_MOVIE_DEVICE
-    if (!movieDevice) {
-      movieDevice = createSkinMovieDevice();
-    }
-#endif
-    auto preparedMovies = SkinMovieCatalog::prepare(
-        {.fileSystem = *resourceFiles.fileSystem,
-         .model = *validatedModel.model,
-         .configuration = configuration,
-         .device = std::move(movieDevice),
-         .safetyPolicy = context.safetyPolicy,
-         .stop = context.stop});
-    appendMovedDiagnostics(result.diagnostics, preparedMovies.diagnostics);
-    if (preparedMovies.cancelled || cancelled(context.stop, result)) {
-      result.cancelled = true;
-      return result;
-    }
-    if (!preparedMovies.catalog || hasErrors(result.diagnostics)) {
-      return result;
-    }
-
     const std::vector<std::string> runtimeStrings =
         context.chartModel.runtimeStrings();
     auto planned = context.resourcePreparation.decodeAndPlan(
@@ -590,6 +568,29 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
       return result;
     }
     if (!planned.plan || hasErrors(result.diagnostics)) {
+      return result;
+    }
+
+    auto movieDevice = std::move(context.movieDevice);
+#if ASOBMASHOW_ENABLE_SKIN_MOVIE_DEVICE
+    if (!movieDevice) {
+      movieDevice = createSkinMovieDevice();
+    }
+#endif
+    auto preparedMovies = SkinMovieCatalog::prepare(
+        {.fileSystem = *resourceFiles.fileSystem,
+         .model = *validatedModel.model,
+         .configuration = configuration,
+         .device = std::move(movieDevice),
+         .safetyPolicy = context.safetyPolicy,
+         .stop = context.stop,
+         .sessionDecodedBytes = planned.plan->decodedBytes});
+    appendMovedDiagnostics(result.diagnostics, preparedMovies.diagnostics);
+    if (preparedMovies.cancelled || cancelled(context.stop, result)) {
+      result.cancelled = true;
+      return result;
+    }
+    if (!preparedMovies.catalog || hasErrors(result.diagnostics)) {
       return result;
     }
 

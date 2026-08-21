@@ -692,6 +692,14 @@ void testMovieCommandsPreserveTimingDestinationStateAndMixedOrdering() {
   std::get<SkinImageObject>(model.model.objects[1].payload)
       .orderedStates.front()
       .cycleMillis = 1'000;
+  std::get<SkinImageObject>(model.model.objects[1].payload)
+      .orderedStates.front()
+      .timer = SkinTimerPropertyId{1};
+  auto &ordinaryState =
+      std::get<SkinImageObject>(model.model.objects[0].payload)
+          .orderedStates.front();
+  ordinaryState.cycleMillis = 1'000;
+  ordinaryState.timer = SkinTimerPropertyId{1};
   model.model.destinations = {std::move(before), std::move(movie),
                               std::move(after)};
 
@@ -704,8 +712,10 @@ void testMovieCommandsPreserveTimingDestinationStateAndMixedOrdering() {
              std::holds_alternative<SkinMovieCommand>(
                  result.submitReady->commands[1].payload) &&
              std::holds_alternative<SkinTexturedQuadCommand>(
-                 result.submitReady->commands[2].payload),
-         "adjacent image and movie commands preserve exact authored ordering");
+                 result.submitReady->commands[2].payload) &&
+             state.timerSequenceIndex == 2,
+         "adjacent image and movie commands preserve exact authored ordering "
+         "while only the ordinary image consumes its timer");
   if (!result.submitReady || result.submitReady->commands.size() != 3 ||
       !std::holds_alternative<SkinMovieCommand>(
           result.submitReady->commands[1].payload)) {
@@ -713,7 +723,7 @@ void testMovieCommandsPreserveTimingDestinationStateAndMixedOrdering() {
   }
   const auto &command =
       std::get<SkinMovieCommand>(result.submitReady->commands[1].payload);
-  expect(command.resource == 2 && command.sourceTimeMillis == 300 &&
+  expect(command.resource == 2 && command.sourceTimeMillis == 2'500 &&
              command.geometry.clip && command.geometry.clip->x == 3.0 &&
              command.geometry.clip->y == 4.0 &&
              command.geometry.clip->width == 20.0 &&
@@ -726,7 +736,8 @@ void testMovieCommandsPreserveTimingDestinationStateAndMixedOrdering() {
                  SkinStretchMode::KeepAspectRatioFitInner &&
              command.state.blend == SkinBlendMode::Additive &&
              command.state.filter == SkinFilterMode::Linear,
-         "movie commands retain timer-relative cyclic time and destination crop, tint, blend, filter, and stretch");
+         "movie commands ignore image timer/cycle metadata while retaining "
+         "destination crop, tint, blend, filter, and stretch");
 
   state.timerSequenceIndex = 0;
   state.timerSequence = {2'400'000, 2'400'000};
@@ -735,8 +746,11 @@ void testMovieCommandsPreserveTimingDestinationStateAndMixedOrdering() {
                               false, nullptr, &movies);
   expect(reset.submitReady && reset.submitReady->commands.size() == 3 &&
              std::get<SkinMovieCommand>(reset.submitReady->commands[1].payload)
-                     .sourceTimeMillis == 100,
-         "a restarted source timer seeks movie command time back to the new epoch");
+                     .sourceTimeMillis == 2'500 &&
+             state.timerSequenceIndex == 2,
+         "JSON/LR2-shaped movie timer declarations are never read and the "
+         "player alone applies its own duration loop while ordinary image "
+         "timers remain active");
   expect(movies.findCalls > 0,
          "frame evaluation performs only prepared movie identity lookups and cannot load or decode sources");
 }

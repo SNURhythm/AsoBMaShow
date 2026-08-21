@@ -116,6 +116,7 @@ void VideoPlayer::unloadVideo() {
     videoStreamIndex = -1;
   }
   destroyVideoTextures();
+  reservedDecodedBytes = 0;
   {
     std::lock_guard<std::mutex> lock(recycleMutex);
     for (auto *f : recyclePool) {
@@ -127,6 +128,12 @@ void VideoPlayer::unloadVideo() {
 
 bool VideoPlayer::loadVideo(const std::string &videoPath,
                             std::atomic<bool> &isCancelled) {
+  return loadVideo(videoPath, isCancelled, LoadLimits{});
+}
+
+bool VideoPlayer::loadVideo(const std::string &videoPath,
+                            std::atomic<bool> &isCancelled,
+                            const LoadLimits &limits) {
   unloadVideo();
   if (isCancelled.load(std::memory_order_relaxed)) {
     return false;
@@ -151,6 +158,7 @@ bool VideoPlayer::loadVideo(const std::string &videoPath,
         avformat_close_input(&tempFormatContext);
       }
       destroyVideoTextures();
+      reservedDecodedBytes = 0;
       videoStreamIndex = -1;
       return false;
     };
@@ -176,6 +184,22 @@ bool VideoPlayer::loadVideo(const std::string &videoPath,
       return fail();
     }
     auto videoStream = tempFormatContext->streams[videoStreamIndex];
+    const auto boundedLayout = [&](int width, int height) {
+      const auto layout = video::videoDecodedMemoryLayout(width, height);
+      if (!layout || limits.maximumDimension <= 0 || width <= 0 ||
+          height <= 0 || width > limits.maximumDimension ||
+          height > limits.maximumDimension ||
+          layout->rgbaBytes > limits.maximumRgbaBytes ||
+          layout->residentBytes > limits.maximumDecodedBytes) {
+        return std::optional<video::VideoDecodedMemoryLayout>{};
+      }
+      return layout;
+    };
+    if (limits.requirePreallocationBounds &&
+        !boundedLayout(videoStream->codecpar->width,
+                       videoStream->codecpar->height)) {
+      return fail();
+    }
     const AVCodec *codec =
         avcodec_find_decoder(videoStream->codecpar->codec_id);
     if (!codec) {
@@ -185,6 +209,10 @@ bool VideoPlayer::loadVideo(const std::string &videoPath,
     if (codecContext == nullptr ||
         avcodec_parameters_to_context(codecContext, videoStream->codecpar) <
             0) {
+      return fail();
+    }
+    if (limits.requirePreallocationBounds &&
+        !boundedLayout(codecContext->width, codecContext->height)) {
       return fail();
     }
 
@@ -206,6 +234,12 @@ bool VideoPlayer::loadVideo(const std::string &videoPath,
     if (avcodec_open2(codecContext, codec, nullptr) < 0) {
       return fail();
     }
+    const auto decodedLayout =
+        boundedLayout(codecContext->width, codecContext->height);
+    if (!decodedLayout) {
+      return fail();
+    }
+    reservedDecodedBytes = decodedLayout->residentBytes;
     startPTS = videoStream->start_time;
     if (startPTS == AV_NOPTS_VALUE) {
       startPTS = 0; // Default to 0 if start_time is not available

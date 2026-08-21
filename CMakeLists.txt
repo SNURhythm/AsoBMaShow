@@ -4478,6 +4478,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(gameplay_bga_target_tests PRIVATE cxx_std_23)
+    target_compile_definitions(gameplay_bga_target_tests PRIVATE
+        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    )
     target_link_libraries(gameplay_bga_target_tests PRIVATE ${COMMON_LIBS} bgfx)
     if(APPLE)
         target_link_libraries(gameplay_bga_target_tests PRIVATE iconv)

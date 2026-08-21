@@ -491,17 +491,27 @@ private:
 class SessionMovieDevice final : public SkinMovieDevice {
 public:
   std::optional<SkinMovieLoadResult>
-  load(const fs::path &path, std::stop_token) override {
+  load(const fs::path &path, const SkinMovieLoadLimits &limits,
+       std::stop_token) override {
     ++loadCalls;
+    lastLimits = limits;
     loadedPaths.push_back(path);
     pathExistedDuringLoad = pathExistedDuringLoad && fs::is_regular_file(path);
+    const auto layout = skinMovieDecodedLayout(80, 40, limits);
+    if (!layout) {
+      return std::nullopt;
+    }
     const auto handle = SkinMoviePlayerHandle{++nextHandle_};
     live.push_back(handle);
     if (stopAfterLoad_ != nullptr) {
       stopAfterLoad_->request_stop();
     }
     return SkinMovieLoadResult{
-        .handle = handle, .width = 80, .height = 40, .durationMillis = 1'000};
+        .handle = handle,
+        .width = 80,
+        .height = 40,
+        .durationMillis = 1'000,
+        .decodedBytes = layout->residentBytes};
   }
 
   void destroy(SkinMoviePlayerHandle handle) noexcept override {
@@ -535,6 +545,7 @@ public:
   std::size_t beginFrameCalls = 0;
   std::size_t discardFrameCalls = 0;
   std::size_t commitFrameCalls = 0;
+  SkinMovieLoadLimits lastLimits;
   bool pathExistedDuringLoad = true;
   std::vector<fs::path> loadedPaths;
   std::vector<SkinMoviePlayerHandle> live;
@@ -703,7 +714,28 @@ if skin_config then
     marker:close()
   end
 )lua";
-    if (options.movieBearing) {
+    if (options.movieBearing && options.resourceBearing) {
+      script += R"lua(
+  return {
+    type = 0, w = 1280, h = 720,
+    source = {
+      {id = "fixture-image", path = "resources/fixture.png"},
+      {id = "movie-one", path = "resources/source.MP4"}
+    },
+    font = {{id = "fixture-font", path = "resources/fixture.ttf", type = 0}},
+    image = {
+      {id = "fixture-object", src = "fixture-image", x = 0, y = 0, w = 40, h = 20},
+      {id = "movie-object", src = "movie-one", x = 0, y = 0, w = 80, h = 40}
+    },
+    text = {{id = "runtime-title", font = "fixture-font", size = 16, ref = 10}},
+    destination = {
+      {id = "fixture-object", dst = {{x = 0, y = 0, w = 40, h = 20}}},
+      {id = "movie-object", dst = {{x = 40, y = 0, w = 80, h = 40}}},
+      {id = "runtime-title", dst = {{x = 50, y = 50, w = 500, h = 30}}}
+    }
+  }
+)lua";
+    } else if (options.movieBearing) {
       script += R"lua(
   return {
     type = 0, w = 1280, h = 720,
@@ -897,6 +929,21 @@ private:
 };
 
 void testSessionOwnsDeduplicatedMoviesAndRollsBackBeforePublication() {
+  {
+    ActivationFixture fixture(
+        {.resourceBearing = true, .movieBearing = true});
+    if (!fixture.ready()) {
+      return;
+    }
+    auto created =
+        PlaySkinSession::create(fixture.takeActivation(), fixture.context());
+    expect(created.session && fixture.movieDevice()->loadCalls == 1 &&
+               fixture.movieDevice()->lastLimits.maximumDecodedBytes <
+                   SkinResourcePolicy::maximumSessionDecodedBytes,
+           "session resource planning debits ordinary images and text atlases "
+           "before the skin movie adapter receives its allocation budget");
+  }
+
   {
     ActivationFixture fixture({.movieBearing = true});
     if (!fixture.ready()) {

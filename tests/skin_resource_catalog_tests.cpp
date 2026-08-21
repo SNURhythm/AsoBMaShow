@@ -397,14 +397,22 @@ struct FakeTextureDevice final : skin::SkinTextureDevice {
 
 struct FakeMovieDevice final : skin::SkinMovieDevice {
   std::optional<skin::SkinMovieLoadResult>
-  load(const std::filesystem::path &path, std::stop_token) override {
+  load(const std::filesystem::path &path,
+       const skin::SkinMovieLoadLimits &limits, std::stop_token) override {
     ++loads;
+    lastLimits = limits;
     loadedPaths.push_back(path);
     pathExistedDuringLoad = pathExistedDuringLoad &&
                             std::filesystem::is_regular_file(path);
     if (failAt != 0 && loads == failAt) {
       return std::nullopt;
     }
+    const auto layout =
+        skin::skinMovieDecodedLayout(resultWidth, resultHeight, limits);
+    if (!layout) {
+      return std::nullopt;
+    }
+    ++expensiveAllocations;
     const auto handle = skin::SkinMoviePlayerHandle{
         static_cast<std::uint64_t>(loads)};
     live.push_back(handle);
@@ -412,7 +420,11 @@ struct FakeMovieDevice final : skin::SkinMovieDevice {
       stopAfterLoad->request_stop();
     }
     return skin::SkinMovieLoadResult{
-        .handle = handle, .width = 80, .height = 40, .durationMillis = 1'000};
+        .handle = handle,
+        .width = resultWidth,
+        .height = resultHeight,
+        .durationMillis = 1'000,
+        .decodedBytes = layout->residentBytes};
   }
 
   void destroy(skin::SkinMoviePlayerHandle handle) noexcept override {
@@ -445,6 +457,10 @@ struct FakeMovieDevice final : skin::SkinMovieDevice {
   int discards = 0;
   int commits = 0;
   int failAt = 0;
+  int expensiveAllocations = 0;
+  int resultWidth = 80;
+  int resultHeight = 40;
+  skin::SkinMovieLoadLimits lastLimits;
   bool pathExistedDuringLoad = true;
   std::stop_source *stopAfterLoad = nullptr;
   std::vector<std::filesystem::path> loadedPaths;
@@ -758,6 +774,17 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
              movies.catalog->findMovie(21)->handle ==
                  movies.catalog->findMovie(22)->handle,
          "deduplicated movie paths materialize and load exactly once while retaining typed aliases");
+  const auto defaultMovieLayout = skin::skinMovieDecodedLayout(
+      80, 40,
+      {.maximumDimension = skin::SkinResourcePolicy::maximumDimension,
+       .maximumRgbaBytes = skin::SkinResourcePolicy::maximumImageBytes,
+       .maximumDecodedBytes =
+           skin::SkinResourcePolicy::maximumSessionDecodedBytes});
+  expect(defaultMovieLayout && movies.catalog->decodedBytes() ==
+                                   defaultMovieLayout->residentBytes &&
+             movieDevice->lastLimits.maximumDimension ==
+                 skin::SkinResourcePolicy::maximumDimension,
+         "movie preparation publishes its bounded live decoded working set");
   skin::SkinMovieCommand movieCommand{.resource = 21,
                                       .sourceTimeMillis = 375};
   const std::array<const skin::SkinMovieCommand *, 1> movieCommands{
@@ -780,6 +807,53 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
              !fs::exists(materializedMovie),
          "movie catalog teardown destroys the shared player and materialized source exactly once");
 
+  auto oversizedMovieDevice = std::make_shared<FakeMovieDevice>();
+  oversizedMovieDevice->resultWidth =
+      skin::SkinResourcePolicy::maximumDimension + 1;
+  auto oversizedMovie = skin::SkinMovieCatalog::prepare(
+      {.fileSystem = *leasedFs.fileSystem,
+       .model = movieModel,
+       .configuration = configuration,
+       .device = oversizedMovieDevice});
+  expect(!oversizedMovie.catalog && oversizedMovieDevice->loads == 1 &&
+             oversizedMovieDevice->expensiveAllocations == 0 &&
+             oversizedMovieDevice->live.empty(),
+         "oversized codec metadata is rejected inside the load contract "
+         "before costly allocation or decoder-thread start");
+
+  auto oversizedDecodedMovieDevice = std::make_shared<FakeMovieDevice>();
+  oversizedDecodedMovieDevice->resultWidth =
+      skin::SkinResourcePolicy::maximumDimension;
+  oversizedDecodedMovieDevice->resultHeight =
+      skin::SkinResourcePolicy::maximumDimension;
+  auto oversizedDecodedMovie = skin::SkinMovieCatalog::prepare(
+      {.fileSystem = *leasedFs.fileSystem,
+       .model = movieModel,
+       .configuration = configuration,
+       .device = oversizedDecodedMovieDevice});
+  expect(!oversizedDecodedMovie.catalog &&
+             oversizedDecodedMovieDevice->loads == 1 &&
+             oversizedDecodedMovieDevice->expensiveAllocations == 0 &&
+             oversizedDecodedMovieDevice->live.empty(),
+         "in-range dimensions whose RGBA frame exceeds the per-image decoded "
+         "budget are rejected before costly allocation");
+
+  auto sharedBudgetMovieDevice = std::make_shared<FakeMovieDevice>();
+  const std::size_t sharedInitialBytes =
+      skin::SkinResourcePolicy::maximumSessionDecodedBytes -
+      defaultMovieLayout->residentBytes + 1U;
+  auto sharedBudgetMovie = skin::SkinMovieCatalog::prepare(
+      {.fileSystem = *leasedFs.fileSystem,
+       .model = movieModel,
+       .configuration = configuration,
+       .device = sharedBudgetMovieDevice,
+       .sessionDecodedBytes = sharedInitialBytes});
+  expect(!sharedBudgetMovie.catalog && sharedBudgetMovieDevice->loads == 1 &&
+             sharedBudgetMovieDevice->expensiveAllocations == 0 &&
+             sharedBudgetMovieDevice->live.empty(),
+         "ordinary skin decoded bytes reduce the movie load allowance before "
+         "any codec allocation");
+
   skin::ValidatedBeatorajaSkinModel twoMovieModel = movieModel;
   twoMovieModel.model.resources.emplace_back(skin::SkinMovieResource{
       .id = 23, .virtualPath = "resources/second.webm", .authoredOrdinal = 3});
@@ -788,6 +862,24 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
        .authoredName = "movie-three",
        .payload = skin::SkinImageObject{.orderedStates = {{.resource = 23}}},
        .critical = true});
+  auto aggregateBudgetMovieDevice = std::make_shared<FakeMovieDevice>();
+  const std::size_t oneMovieShortInitialBytes =
+      skin::SkinResourcePolicy::maximumSessionDecodedBytes -
+      defaultMovieLayout->residentBytes * 2U + 1U;
+  auto aggregateBudgetMovies = skin::SkinMovieCatalog::prepare(
+      {.fileSystem = *leasedFs.fileSystem,
+       .model = twoMovieModel,
+       .configuration = configuration,
+       .device = aggregateBudgetMovieDevice,
+       .sessionDecodedBytes = oneMovieShortInitialBytes});
+  expect(!aggregateBudgetMovies.catalog &&
+             aggregateBudgetMovieDevice->loads == 2 &&
+             aggregateBudgetMovieDevice->expensiveAllocations == 1 &&
+             aggregateBudgetMovieDevice->destroys == 1 &&
+             aggregateBudgetMovieDevice->live.empty(),
+         "each unique live movie consumes the shared decoded budget and a "
+         "later rejection rolls back the earlier player");
+
   auto failingMovieDevice = std::make_shared<FakeMovieDevice>();
   failingMovieDevice->failAt = 2;
   auto failedMovies = skin::SkinMovieCatalog::prepare(
