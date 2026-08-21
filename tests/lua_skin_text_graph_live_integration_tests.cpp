@@ -629,7 +629,7 @@ return {type=0,w=1280,h=720,
          "validator retains the unsupported distribution Graph placeholder");
 }
 
-void testUnsupportedGraphWidgetsRetainDestinationOrder() {
+void testGaugeGraphRemainsUnsupportedWhileTimingDistributionIsTypedNoOp() {
   const auto decoded = decodeInline(R"lua(
 return {type=0,w=1280,h=720,
  gaugegraph={{id='gauge-history'}},
@@ -644,10 +644,10 @@ return {type=0,w=1280,h=720,
   };
   expect(decoded.model &&
              hasDiagnostic("skin_lua_model_gaugegraph_unsupported") &&
-             hasDiagnostic(
+             !hasDiagnostic(
                  "skin_lua_model_timingdistributiongraph_unsupported"),
-         "GaugeGraph and TimingDistributionGraph definitions are decoded "
-         "with explicit v1 compatibility warnings");
+         "GaugeGraph remains unsupported while TimingDistributionGraph is "
+         "accepted without a compatibility warning");
   if (!decoded.model) {
     return;
   }
@@ -655,14 +655,16 @@ return {type=0,w=1280,h=720,
   expect(objects.size() == 2 && objects[0].authoredName == "gauge-history" &&
              objects[1].authoredName == "timing-distribution" &&
              std::holds_alternative<SkinBlankObject>(objects[0].payload) &&
-             std::holds_alternative<SkinBlankObject>(objects[1].payload),
-         "unsupported graph widgets retain their authored destination order "
-         "as blank objects");
+             std::holds_alternative<SkinTimingDistributionGraphObject>(
+                 objects[1].payload),
+         "GaugeGraph and TimingDistributionGraph preserve authored order "
+         "while only the latter is a typed source no-op");
   const auto validated =
       test_support::validateWithAuthoredBuiltins(*decoded.model);
   expect(validated.model && !validated.criticalFailure &&
              validated.model->disabledOptionalObjects.empty(),
-         "unsupported graph widget placeholders remain selectable");
+         "the unsupported GaugeGraph placeholder and typed timing source "
+         "no-op remain selectable");
 }
 
 void testValidatorPreservesUpstreamOptionalDependencies() {
@@ -806,7 +808,7 @@ int main() {
   testSliderRetainsAnyAuthoredAngle();
   testLiveGraphPrecedenceAndAuthoredOrder();
   testDistributionGraphIsDiagnosedAndRetainedAsBlank();
-  testUnsupportedGraphWidgetsRetainDestinationOrder();
+  testGaugeGraphRemainsUnsupportedWhileTimingDistributionIsTypedNoOp();
   testValidatorPreservesUpstreamOptionalDependencies();
   if (failures != 0) {
     std::cerr << failures << " assertion(s) failed\n";
