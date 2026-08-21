@@ -50,6 +50,10 @@ struct BeatorajaSkinConfiguration {
   std::vector<ConfiguredOption> orderedOptions;
   std::map<std::string, int> options;
   std::set<int> enabledOptionIds;
+  // LR2SkinHeaderLoader seeds every declared choice into one shared 0/1 map;
+  // negative conditions distinguish a known false choice from an unknown
+  // runtime-only MainState property through this complete state.
+  std::map<int, int> optionStates;
   std::vector<ConfiguredFile> orderedFiles;
   std::map<std::string, std::string> filePaths;
   std::map<std::string, ConfigOffset> offsets;

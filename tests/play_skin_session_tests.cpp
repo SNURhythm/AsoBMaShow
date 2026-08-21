@@ -1167,6 +1167,23 @@ return skin
 #SRC_BARGRAPH,0,102,0,0,1,1,1,1,0,0,2,0
 #DST_BARGRAPH,0,0,110,400,40,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0
 )lr2");
+    writeText(source / "skin/option-state.lr2skin", R"lr2(#INFORMATION,0,Option state,fixture
+#RESOLUTION,0
+#CUSTOMOPTION,Mode,900,Selected,Unselected
+#IF,!901
+#INCLUDE,active-option.inc
+#ENDIF
+#IF,!900
+#INCLUDE,missing-selected-sibling.inc
+#ENDIF
+#IF,!9999
+#INCLUDE,missing-runtime-only.inc
+#ENDIF
+)lr2");
+    writeText(source / "skin/active-option.inc", R"lr2(#IMAGE,resources/fixture.png
+#SRC_IMAGE,0,0,0,0,40,20,1,1,0,0
+#DST_IMAGE,0,0,10,360,40,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0
+)lr2");
 
     writeText(source / "skin/recoverable.lr2skin", R"lr2(#INFORMATION,0,Recoverable LR2,fixture
 #RESOLUTION,0
@@ -1231,6 +1248,7 @@ return skin
                                         "select/select.lr2skin",
                                         "skin/builtin-graphs.lr2skin",
                                         "skin/invalid-encoding.lr2skin",
+                                        "skin/option-state.lr2skin",
                                         "skin/parity.json",
                                         "skin/parity.lr2skin",
                                         "skin/parity.luaskin",
@@ -1238,7 +1256,7 @@ return skin
                                         "skin/skipped.lr2skin",
                                         "skin/unavailable-builtin-graphs.lr2skin",
                                         "skin/unsafe.lr2skin"} &&
-               selectable == 7 && unavailable == 2,
+               selectable == 8 && unavailable == 2,
            "header admission keeps gameplay and recoverable LR2 entries "
            "selectable while fatal documents remain invalid");
 
@@ -1468,6 +1486,26 @@ void testLr2ProductionBuiltInGraphsOwnChartAndPlainImages() {
                missingFrame.evaluation.diagnostics.empty(),
            "unavailable stage, back, and banner references suppress before "
            "their rate property");
+  }
+}
+
+void testLr2DeclaredFalseOptionActivatesNegatedInclude() {
+  FormatParityFixture fixture;
+  auto created = fixture.create("skin/option-state.lr2skin", 112);
+  const auto hasCode = [&](std::string_view code) {
+    return std::ranges::any_of(created.diagnostics, [&](const auto &diagnostic) {
+      return diagnostic.code == code;
+    });
+  };
+  expect(created.session && !hasCode("skin_lr2_include_read"),
+         "declared option conditions retain a usable production session and "
+         "skip selected/unknown negated include paths");
+  if (created.session) {
+    const auto frame = created.session->prepareFrame(
+        stateAt(2), projectionAt(2), {});
+    expect(frame.ready() && frame.evaluation.submitReady &&
+               frame.evaluation.submitReady->commands.size() == 1,
+           "a negated unselected declared choice executes its included image");
   }
 }
 
@@ -4443,6 +4481,7 @@ int main() {
   testLuaJsonAndLr2SessionsEmitEquivalentSharedObjects();
   testLr2ProductionRecoveryAndFatalBoundaries();
   testLr2ProductionBuiltInGraphsOwnChartAndPlainImages();
+  testLr2DeclaredFalseOptionActivatesNegatedInclude();
   testSessionOwnsDeduplicatedMoviesAndRollsBackBeforePublication();
   testCallbackBindingWithoutRuntimeFailsValidation();
   testActivationCreatesAnOwningFreshStateSession();

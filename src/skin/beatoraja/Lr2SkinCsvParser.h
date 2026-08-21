@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <span>
 #include <stop_token>
 #include <string>
@@ -44,7 +45,7 @@ enum class Lr2IncludeExpansionMode : std::uint8_t {
 
 struct Lr2SkinParseOptions {
   Lr2IncludeExpansionMode includeExpansion = Lr2IncludeExpansionMode::Eager;
-  std::span<const int> enabledOptionIds;
+  std::map<int, int> optionStates;
 };
 
 class Lr2SkinCsvParser final {

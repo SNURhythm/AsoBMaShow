@@ -176,8 +176,14 @@ bool reconcileConfiguration(const BeatorajaSkinHeader &header,
     configuration.orderedOptions.push_back(
         {.name = option.name, .value = runtimeValue});
     configuration.options.insert_or_assign(option.name, persistedValue);
-    if (runtimeValue != -1) configuration.enabledOptionIds.insert(runtimeValue);
+    for (const auto &choice : option.choices) {
+      configuration.optionStates.insert_or_assign(
+          choice.value, choice.value == runtimeValue ? 1 : 0);
+    }
     settings.options.insert_or_assign(option.name, persistedValue);
+  }
+  for (const auto &[option, enabled] : configuration.optionStates) {
+    if (enabled == 1) configuration.enabledOptionIds.insert(option);
   }
 
   for (const auto &file : header.files) {
@@ -498,6 +504,7 @@ public:
                 SkinBuiltinBindingCatalogView builtins,
                 SkinSafetyPolicy safetyPolicy, std::stop_token stop,
                 StaticSkinDecodeCheckpoint checkpoint,
+                const std::map<int, int> *initialOptionStates,
                 Lr2GameplaySkinDecodeResult &result)
       : header_(header), bindings_(builtins), result_(result),
         stop_(stop), checkpoint_(checkpoint),
@@ -507,9 +514,8 @@ public:
         maximumFrames_(static_cast<std::size_t>(safetyPolicy.limit(
             SkinSafetyGuard::LuaDecoderLimit, kMaximumFrames))) {
     model_.header = header;
-    for (const int option : configuration.enabledOptionIds) {
-      options_.insert_or_assign(option, 1);
-    }
+    options_ = initialOptionStates != nullptr ? *initialOptionStates
+                                              : configuration.optionStates;
     if (mode_) {
       const auto size = static_cast<std::size_t>(mode_->lanes);
       note_.resize(size);
@@ -2289,7 +2295,8 @@ Lr2GameplaySkinDecodeResult Lr2GameplaySkinDecoder::decode(
     const EntryProfileSettings *desired,
     SkinBuiltinBindingCatalogView builtins,
     SkinSafetyPolicy safetyPolicy, std::stop_token stop,
-    StaticSkinDecodeCheckpoint checkpoint) const {
+    StaticSkinDecodeCheckpoint checkpoint,
+    const std::map<int, int> *initialOptionStates) const {
   Lr2GameplaySkinDecodeResult result;
   if (stop.stop_requested()) {
     result.cancelled = true;
@@ -2317,7 +2324,8 @@ Lr2GameplaySkinDecodeResult Lr2GameplaySkinDecoder::decode(
       return result;
     }
     DecodeSession session(header, *result.configuration, builtins,
-                          safetyPolicy, stop, checkpoint, result);
+                          safetyPolicy, stop, checkpoint, initialOptionStates,
+                          result);
     session.execute(commands);
     if (result.cancelled) return result;
     result.model = session.takeModel();

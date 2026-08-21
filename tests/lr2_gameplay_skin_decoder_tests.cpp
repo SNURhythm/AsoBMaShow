@@ -241,6 +241,8 @@ void testAllCommandsDecodeToTypedCanonicalModel() {
 
   expect(configuration.options.at("Theme") == 901 &&
              configuration.enabledOptionIds.contains(901) &&
+             configuration.optionStates.at(900) == 0 &&
+             configuration.optionStates.at(901) == 1 &&
              configuration.filePaths.at("Files") == "selected.png" &&
              configuration.offsetsById.at(77) ==
                  ConfigOffset{.x = 7, .y = 8, .w = 9, .h = 10, .r = 11,

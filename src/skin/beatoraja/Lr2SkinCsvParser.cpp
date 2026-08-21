@@ -115,9 +115,8 @@ std::optional<int> conditionInteger(std::string_view field) {
 
 class IncludeControlState final {
 public:
-  explicit IncludeControlState(std::span<const int> enabled) {
-    for (const int option : enabled) options_.insert_or_assign(option, 1);
-  }
+  explicit IncludeControlState(std::map<int, int> options)
+      : options_(std::move(options)) {}
 
   void process(const Lr2SkinCommand &command) {
     if (command.name == "IF") {
@@ -176,7 +175,8 @@ public:
                const Lr2SkinCsvParserLimits &limits, std::stop_token stop,
                Lr2SkinParseOptions options, Lr2SkinParseResult &result)
       : fileSystem_(fileSystem), limits_(limits), stop_(stop),
-        options_(options), control_(options.enabledOptionIds), result_(result) {}
+        options_(std::move(options)), control_(options_.optionStates),
+        result_(result) {}
 
   void parseRoot(std::string entryPath, std::span<const std::byte> bytes) {
     std::ranges::replace(entryPath, '\\', '/');

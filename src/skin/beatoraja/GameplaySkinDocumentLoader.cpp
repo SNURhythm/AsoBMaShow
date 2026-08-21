@@ -298,14 +298,11 @@ DecodedGameplaySkinDocument decodeLr2(GameplaySkinDocumentRequest &request) {
     result.fatal = true;
     return result;
   }
-  std::vector<int> enabledOptions(
-      reconciled.configuration->enabledOptionIds.begin(),
-      reconciled.configuration->enabledOptionIds.end());
   auto parsed = parser.parse(
       request.documentFileSystem, request.entry.packageRelativePath,
       bytes.bytes, request.stop,
       {.includeExpansion = Lr2IncludeExpansionMode::ConditionAware,
-       .enabledOptionIds = enabledOptions});
+       .optionStates = reconciled.configuration->optionStates});
   appendMoved(result.diagnostics, parsed.diagnostics);
   if (parsed.cancelled || cancellationRequested(request, result)) {
     result.cancelled = true;
@@ -317,7 +314,8 @@ DecodedGameplaySkinDocument decodeLr2(GameplaySkinDocumentRequest &request) {
   }
   auto decoded = gameplayDecoder.decode(
       *result.header, parsed.commands, request.desiredSettings,
-      gameplaySkinBuiltinCatalog(), request.safetyPolicy, request.stop);
+      gameplaySkinBuiltinCatalog(), request.safetyPolicy, request.stop, {},
+      &reconciled.configuration->optionStates);
   result.configuration = std::move(decoded.configuration);
   result.reconciledSettings = std::move(decoded.reconciledSettings);
   result.model = std::move(decoded.model);

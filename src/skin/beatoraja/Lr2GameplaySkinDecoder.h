@@ -40,7 +40,8 @@ public:
       const EntryProfileSettings *, SkinBuiltinBindingCatalogView,
       SkinSafetyPolicy safetyPolicy = SkinSafetyPolicy{},
       std::stop_token stop = {},
-      StaticSkinDecodeCheckpoint checkpoint = {}) const;
+      StaticSkinDecodeCheckpoint checkpoint = {},
+      const std::map<int, int> *initialOptionStates = nullptr) const;
 };
 
 } // namespace skin
