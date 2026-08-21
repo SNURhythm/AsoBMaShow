@@ -3,7 +3,10 @@
 #include "../LuaGameplaySkinFeature.h"
 #include "../package/SkinPackageTypes.h"
 #include "../../FileChecksum.h"
+#include "../../RAII.h"
 #include "../../view/ImageFileDecoder.h"
+
+#include <SDL2/SDL.h>
 
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 #include <algorithm>
@@ -14,7 +17,6 @@
 #include <limits>
 #include <functional>
 #include <filesystem>
-#include <fstream>
 #include <set>
 #include <tuple>
 #include <type_traits>
@@ -42,6 +44,55 @@ constexpr std::string_view kPracticeSystemFontVirtualPath =
     "@asobmashow/practice-system-font";
 constexpr std::string_view kPracticeSystemFontPath =
     "assets/fonts/notosanscjkjp.ttf";
+
+#if defined(ASOBMASHOW_SKIN_RESOURCE_TESTING)
+std::atomic_size_t platformAssetReadsForTesting{0};
+#endif
+
+void recordPlatformAssetRead() noexcept {
+#if defined(ASOBMASHOW_SKIN_RESOURCE_TESTING)
+  platformAssetReadsForTesting.fetch_add(1, std::memory_order_relaxed);
+#endif
+}
+
+std::optional<std::vector<std::byte>>
+readPlatformAsset(std::string_view path, std::size_t maximumBytes) {
+  recordPlatformAssetRead();
+  const std::string ownedPath(path);
+  UniqueResource<SDL_RWops, SDL_RWclose> input(
+      SDL_RWFromFile(ownedPath.c_str(), "rb"));
+  if (!input) {
+    return std::nullopt;
+  }
+  const Sint64 reportedSize = SDL_RWsize(input.get());
+  if (reportedSize >= 0) {
+    const auto size = static_cast<std::uint64_t>(reportedSize);
+    if (size > maximumBytes) {
+      return std::nullopt;
+    }
+    std::vector<std::byte> result(static_cast<std::size_t>(size));
+    if (!result.empty() &&
+        SDL_RWread(input.get(), result.data(), 1, result.size()) !=
+            result.size()) {
+      return std::nullopt;
+    }
+    return result;
+  }
+
+  std::vector<std::byte> result;
+  std::array<std::byte, 64U * 1024U> buffer{};
+  for (;;) {
+    const std::size_t read =
+        SDL_RWread(input.get(), buffer.data(), 1, buffer.size());
+    if (read > maximumBytes - std::min(result.size(), maximumBytes)) {
+      return std::nullopt;
+    }
+    result.insert(result.end(), buffer.begin(), buffer.begin() + read);
+    if (read < buffer.size()) {
+      return result;
+    }
+  }
+}
 
 SkinDiagnostic diagnostic(std::string code, std::string message) { return {.code=std::move(code), .message=std::move(message), .severity=DiagnosticSeverity::Error}; }
 SkinDiagnostic warning(std::string code, std::string message) { return {.code=std::move(code), .message=std::move(message), .severity=DiagnosticSeverity::Warning}; }
@@ -109,7 +160,8 @@ ConfiguredResourcePath applyConfiguredFileSelection(
   return {.path=std::move(selected)};
 }
 
-CollectedResourceUses collectResourceUses(const ValidatedBeatorajaSkinModel &model) {
+CollectedResourceUses collectResourceUses(
+    const ValidatedBeatorajaSkinModel &model, bool practiceMode) {
   CollectedResourceUses result;
   std::map<SkinObjectId, const SkinObjectDefinition *> objects;
   std::set<SkinObjectId> disabled(model.disabledOptionalObjects.begin(), model.disabledOptionalObjects.end());
@@ -151,10 +203,12 @@ CollectedResourceUses collectResourceUses(const ValidatedBeatorajaSkinModel &mod
                                 .literal=object.literal, .receivesRuntimeStrings=object.value.has_value() || object.writer.has_value(), .critical=critical});
       }
       else if constexpr (std::is_same_v<T, SkinPracticeObject>) {
-        addPracticeText(found->second->id);
+        if (object.visibleItems == 0) {
+          addPracticeText(found->second->id);
+        }
       }
       else if constexpr (std::is_same_v<T, SkinBgaObject>) {
-        if (!modelHasPracticeObject) {
+        if (practiceMode && !modelHasPracticeObject) {
           addPracticeText(found->second->id);
         }
       }
@@ -594,28 +648,17 @@ std::optional<std::vector<SkinTextAtlasFontBytes>> readFontFaces(
     if (cancellationRequested()) return std::nullopt;
     std::vector<std::byte> encoded;
     if (practiceSystemFont) {
-      std::ifstream input(std::string(kPracticeSystemFontPath),
-                          std::ios::binary | std::ios::ate);
-      const auto size = input ? input.tellg() : std::streampos{-1};
-      if (size < 0 ||
-          static_cast<std::uint64_t>(size) >
-              skinResourceLimit(safetyPolicy,
-                                SkinResourcePolicy::maximumEncodedBytes)) {
+      auto read = readPlatformAsset(
+          kPracticeSystemFontPath,
+          skinResourceLimit(safetyPolicy,
+                            SkinResourcePolicy::maximumEncodedBytes));
+      if (!read) {
         diagnostics.push_back(fontDiagnostic(
             request.font, request.critical, "skin.resource.font_missing",
             "practice system-font bytes are unavailable"));
         return std::nullopt;
       }
-      encoded.resize(static_cast<std::size_t>(size));
-      input.seekg(0);
-      input.read(reinterpret_cast<char *>(encoded.data()),
-                 static_cast<std::streamsize>(encoded.size()));
-      if (!input) {
-        diagnostics.push_back(fontDiagnostic(
-            request.font, request.critical, "skin.resource.font_missing",
-            "practice system-font bytes are unavailable"));
-        return std::nullopt;
-      }
+      encoded = std::move(*read);
     } else {
       const auto read = files.readResolvedResource(
           face.path, skinResourceLimit(safetyPolicy,
@@ -931,6 +974,14 @@ void resetSkinResourceFontAtlasRequestHighWaterForTesting() noexcept {
 
 std::size_t skinResourceFontAtlasRequestHighWaterForTesting() noexcept {
   return fontAtlasRequestHighWaterForTesting.load(std::memory_order_relaxed);
+}
+
+void resetSkinResourcePlatformAssetReadsForTesting() noexcept {
+  platformAssetReadsForTesting.store(0, std::memory_order_relaxed);
+}
+
+std::size_t skinResourcePlatformAssetReadsForTesting() noexcept {
+  return platformAssetReadsForTesting.load(std::memory_order_relaxed);
 }
 #endif
 
@@ -1793,7 +1844,8 @@ SkinResourceValidationResult SkinResourcePreparationService::validateResources(
                                   input.safetyPolicy)) {
     return result;
   }
-  const CollectedResourceUses uses = collectResourceUses(input.model);
+  const CollectedResourceUses uses =
+      collectResourceUses(input.model, input.practiceMode);
   struct ValidatedImage { int width = 0; int height = 0; };
   std::map<std::string, ValidatedImage, std::less<>> decodedByPath;
   SkinResourceSessionAccounting session(input.safetyPolicy);
@@ -1935,7 +1987,8 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
                                   input.safetyPolicy)) {
     return result;
   }
-  const CollectedResourceUses uses = collectResourceUses(input.model);
+  const CollectedResourceUses uses =
+      collectResourceUses(input.model, input.practiceMode);
   SkinResourceUploadPlan plan{.revision = std::move(input.revision),
                               .safetyPolicy = input.safetyPolicy};
   std::map<std::string, std::size_t, std::less<>> unique;

@@ -125,6 +125,9 @@ skinResourceRegionLookupComparisonsForTesting() noexcept;
 void resetSkinResourceFontAtlasRequestHighWaterForTesting() noexcept;
 [[nodiscard]] std::size_t
 skinResourceFontAtlasRequestHighWaterForTesting() noexcept;
+void resetSkinResourcePlatformAssetReadsForTesting() noexcept;
+[[nodiscard]] std::size_t
+skinResourcePlatformAssetReadsForTesting() noexcept;
 #endif
 
 // The authored rectangle is the stable command-side identity. Resolution is
@@ -217,6 +220,7 @@ struct SkinResourceValidationInputs {
   const ValidatedBeatorajaSkinModel &model;
   const BeatorajaSkinConfiguration &configuration;
   std::span<const std::string> requiredRuntimeStrings;
+  bool practiceMode = false;
   SkinSafetyPolicy safetyPolicy{};
   std::stop_token stop;
 };
@@ -228,6 +232,7 @@ struct SkinResourcePreparationInputs {
   const ValidatedBeatorajaSkinModel &model;
   const BeatorajaSkinConfiguration &configuration;
   std::span<const std::string> requiredRuntimeStrings;
+  bool practiceMode = false;
   SkinSafetyPolicy safetyPolicy{};
   std::stop_token stop;
 };

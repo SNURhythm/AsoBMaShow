@@ -560,6 +560,8 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
          .model = *validatedModel.model,
          .configuration = configuration,
          .requiredRuntimeStrings = runtimeStrings,
+         .practiceMode = context.initialState->authority.gameplayMode ==
+                         PlayfieldGameplayMode::Practice,
          .safetyPolicy = context.safetyPolicy,
          .stop = context.stop});
     appendMovedDiagnostics(result.diagnostics, planned.diagnostics);

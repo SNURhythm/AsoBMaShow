@@ -717,6 +717,7 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
        .authoredName = "practice",
        .payload = skin::SkinPracticeObject{.visibleItems = 0},
        .critical = false});
+  skin::resetSkinResourcePlatformAssetReadsForTesting();
   auto practicePlan = service.decodeAndPlan(
       {.revision = lease->clone(),
        .entry = entry,
@@ -729,10 +730,87 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
              practicePlan.plan->atlases.front().key.pointSize == 18 &&
              practicePlan.plan->atlases.front().glyphs.contains(U'A') &&
              practicePlan.plan->atlases.front().glyphs.contains(U'0') &&
-             practicePlan.plan->atlases.front().glyphs.contains(U'#'),
+             practicePlan.plan->atlases.front().glyphs.contains(U'#') &&
+             skin::skinResourcePlatformAssetReadsForTesting() == 1,
          "legacy SkinPractice prepares one fixed system-font atlas with its "
-         "complete source text domain before frame evaluation");
+         "complete source text domain through the platform asset bridge");
   practicePlan.plan.reset();
+
+  skin::ValidatedBeatorajaSkinModel positivePracticeModel;
+  positivePracticeModel.model.objects.push_back(
+      {.id = 16,
+       .authoredName = "positive-practice",
+       .payload = skin::SkinPracticeObject{.visibleItems = 10},
+       .critical = false});
+  auto positivePracticePlan = service.decodeAndPlan(
+      {.revision = lease->clone(),
+       .entry = entry,
+       .fileSystem = *leasedFs.fileSystem,
+       .model = positivePracticeModel,
+       .configuration = configuration,
+       .practiceMode = true});
+  expect(positivePracticePlan.plan &&
+             positivePracticePlan.plan->atlases.empty() &&
+             positivePracticePlan.plan->textAtlasesByObject.empty() &&
+             skin::skinResourcePlatformAssetReadsForTesting() == 1,
+         "positive-visible-item SkinPractice uses the authored menu and does "
+         "not allocate the legacy fallback font");
+
+  skin::ValidatedBeatorajaSkinModel bgaOnlyModel;
+  bgaOnlyModel.model.objects.push_back(
+      {.id = 17,
+       .authoredName = "bga",
+       .payload = skin::SkinBgaObject{},
+       .critical = false});
+  auto normalBgaPlan = service.decodeAndPlan(
+      {.revision = lease->clone(),
+       .entry = entry,
+       .fileSystem = *leasedFs.fileSystem,
+       .model = bgaOnlyModel,
+       .configuration = configuration,
+       .practiceMode = false});
+  expect(normalBgaPlan.plan && normalBgaPlan.plan->atlases.empty() &&
+             normalBgaPlan.plan->textAtlasesByObject.empty() &&
+             skin::skinResourcePlatformAssetReadsForTesting() == 1,
+         "an ordinary-play BGA does not eagerly allocate the Practice "
+         "fallback font");
+
+  auto practiceBgaPlan = service.decodeAndPlan(
+      {.revision = lease->clone(),
+       .entry = entry,
+       .fileSystem = *leasedFs.fileSystem,
+       .model = bgaOnlyModel,
+       .configuration = configuration,
+       .practiceMode = true});
+  expect(practiceBgaPlan.plan && practiceBgaPlan.plan->atlases.size() == 1 &&
+             practiceBgaPlan.plan->textAtlasesByObject.contains(17) &&
+             skin::skinResourcePlatformAssetReadsForTesting() == 2,
+         "a BGA with no Practice object prepares the legacy fallback font "
+         "only for a fixed Practice-mode session");
+
+  positivePracticeModel.model.objects.push_back(
+      {.id = 18,
+       .authoredName = "practice-bga",
+       .payload = skin::SkinBgaObject{},
+       .critical = false});
+  auto authoredPracticeBgaPlan = service.decodeAndPlan(
+      {.revision = lease->clone(),
+       .entry = entry,
+       .fileSystem = *leasedFs.fileSystem,
+       .model = positivePracticeModel,
+       .configuration = configuration,
+       .practiceMode = true});
+  expect(authoredPracticeBgaPlan.plan &&
+             authoredPracticeBgaPlan.plan->atlases.empty() &&
+             authoredPracticeBgaPlan.plan->textAtlasesByObject.empty() &&
+             skin::skinResourcePlatformAssetReadsForTesting() == 2,
+         "an authored positive-item Practice object suppresses the BGA "
+         "legacy fallback plan");
+  positivePracticePlan.plan.reset();
+  normalBgaPlan.plan.reset();
+  practiceBgaPlan.plan.reset();
+  authoredPracticeBgaPlan.plan.reset();
+
   expect(skin::skinResourcePathIsMovie("skin/source.MP4") &&
              skin::skinResourcePathIsMovie("skin/source.m4v") &&
              skin::skinResourcePathIsMovie("skin/source.WMV") &&
