@@ -1620,9 +1620,9 @@ return {
              customTiming->judgeRgba ==
                  std::array<std::uint32_t, 5>{0x01020304U, 0x11121314U,
                                                0x21222324U, 0x31323334U,
-                                               0x41424344U} &&
+                                               0U} &&
              customTiming->transparent && !customTiming->drawDecay,
-         "timingvisualizer clamps its line width and preserves custom colours and flags");
+         "timingvisualizer clamps line width, preserves custom non-poor colours, and applies flags");
   expect(invalidTiming != nullptr && invalidTiming->lineRgba == 0xff0000ffU,
          "timingvisualizer invalid colours use the pinned opaque-red fallback");
   expect(std::ranges::none_of(decoded.diagnostics, [](const auto &entry) {
@@ -1638,6 +1638,39 @@ return {
                                        object.payload);
                                  }),
          "valid timingvisualizers remain typed through model validation");
+}
+
+void testTimingVisualizerParsesPoorColourOnlyWhenOpaque() {
+  const auto transparent = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  timingvisualizer={{id='transparent',transparent=1,PRColor='not-a-colour'}},
+  destination={{id='transparent',dst={{x=0,y=0,w=100,h=50}}}}
+}
+)lua");
+  const auto *transparentDefinition =
+      transparent.model ? findObject(*transparent.model, "transparent")
+                        : nullptr;
+  const auto *transparentTiming = transparentDefinition != nullptr
+                                      ? std::get_if<SkinTimingVisualizerObject>(
+                                            &transparentDefinition->payload)
+                                      : nullptr;
+  expect(transparentTiming != nullptr && transparentTiming->transparent &&
+             transparentTiming->judgeRgba[4] == 0U,
+         "transparent timingvisualizers ignore an invalid PRColor and retain a clear poor band");
+
+  const auto opaque = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  timingvisualizer={{id='opaque',transparent=0,PRColor='not-a-colour'}},
+  destination={{id='opaque',dst={{x=0,y=0,w=100,h=50}}}}
+}
+)lua");
+  expect(!opaque.model &&
+             std::ranges::find_if(opaque.diagnostics, [](const auto &entry) {
+               return entry.code == "skin_lua_model_timingvisualizer_invalid";
+             }) != opaque.diagnostics.end(),
+         "opaque timingvisualizers keep the pinned direct PRColor load-failure boundary");
 }
 
 void testNegativeGenericDistributionGraphStaysOutsideGameplay() {
@@ -1864,6 +1897,7 @@ int main() {
   testPracticePositionSliderDecodesItsExecutableWriter();
   testJudgeGraphsDecodePinnedModesAndPresentationFlags();
   testTimingVisualizerDecodesPinnedPresentationFields();
+  testTimingVisualizerParsesPoorColourOnlyWhenOpaque();
   testNegativeGenericDistributionGraphStaysOutsideGameplay();
   testOptionalVisualsAndBuiltinImagesStayLiveAcrossRepeatedDestinations();
   testPomyuCharaCycleExtractionFollowsPinnedLoaderOrder();

@@ -2340,8 +2340,35 @@ std::uint32_t timingVisualizerColor(std::string_view value) {
          (component(4) << 8U) | alpha;
 }
 
-bool makeTimingVisualizerObject(const RawSkinTimingVisualizer &definition,
+std::optional<std::uint32_t>
+opaqueTimingVisualizerPoorColor(std::string_view value) {
+  if (value.size() < 6 ||
+      std::ranges::any_of(value, [](char character) {
+        return hexNibble(character) < 0;
+      })) {
+    return std::nullopt;
+  }
+  const auto component = [&](std::size_t offset) {
+    return static_cast<std::uint32_t>(hexNibble(value[offset]) * 16 +
+                                      hexNibble(value[offset + 1]));
+  };
+  const std::uint32_t alpha = value.size() == 8 ? component(6) : 0xffU;
+  return (component(0) << 24U) | (component(2) << 16U) |
+         (component(4) << 8U) | alpha;
+}
+
+bool makeTimingVisualizerObject(GameplayDecodeRequest &request,
+                                const RawSkinTimingVisualizer &definition,
                                 SkinTimingVisualizerObject &output) {
+  const bool transparent = definition.transparent == 1;
+  const auto poorColor = transparent
+                             ? std::optional<std::uint32_t>{0U}
+                             : opaqueTimingVisualizerPoorColor(
+                                   definition.prColor);
+  if (!poorColor) {
+    return fail(request.decoding, "skin_lua_model_timingvisualizer_invalid",
+                "Lua skin timingvisualizer opaque PRColor is invalid");
+  }
   output = {
       .width = definition.width,
       .judgeWidthMillis = definition.judgeWidthMillis,
@@ -2350,10 +2377,10 @@ bool makeTimingVisualizerObject(const RawSkinTimingVisualizer &definition,
                     timingVisualizerColor(definition.grColor),
                     timingVisualizerColor(definition.gdColor),
                     timingVisualizerColor(definition.bdColor),
-                    timingVisualizerColor(definition.prColor)},
+                    *poorColor},
       .lineRgba = timingVisualizerColor(definition.lineColor),
       .centerRgba = timingVisualizerColor(definition.centerColor),
-      .transparent = definition.transparent == 1,
+      .transparent = transparent,
       .drawDecay = definition.drawDecay == 1,
   };
   return true;
@@ -2704,7 +2731,7 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
   if (resolved.kind == SkinObjectResolutionKind::TimingVisualizer &&
       timingVisualizer != request.timingVisualizers.end()) {
     SkinTimingVisualizerObject object;
-    if (!makeTimingVisualizerObject(timingVisualizer->second, object)) {
+    if (!makeTimingVisualizerObject(request, timingVisualizer->second, object)) {
       return false;
     }
     output = object;

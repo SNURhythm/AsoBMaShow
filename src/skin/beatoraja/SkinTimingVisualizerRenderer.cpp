@@ -73,7 +73,12 @@ class PrimitiveBuilder {
 public:
   PrimitiveBuilder(const SkinTimingVisualizerRenderRequest &request,
                    AuthoredDestinationGeometry geometry, int sourceWidth)
-      : request_(request), geometry_(std::move(geometry)) {
+      : request_(request) {
+    setGeometry(std::move(geometry), sourceWidth);
+  }
+
+  void setGeometry(AuthoredDestinationGeometry geometry, int sourceWidth) {
+    geometry_ = std::move(geometry);
     const SkinSourceRegionGeometry source{
         .textureWidth = sourceWidth,
         .textureHeight = 1,
@@ -236,7 +241,7 @@ renderSkinTimingVisualizer(const SkinTimingVisualizerRenderRequest &request) {
       request.geometry.rect.height == 0.0) {
     return {};
   }
-  if (request.visualizer.width <= 0 || request.visualizer.judgeWidthMillis < 0 ||
+  if (request.visualizer.judgeWidthMillis < 0 ||
       request.visualizer.lineWidth < 1 || request.visualizer.lineWidth > 4) {
     return {.failure = diagnostic(
         "skin.renderer.timingvisualizer.invalid",
@@ -253,9 +258,9 @@ renderSkinTimingVisualizer(const SkinTimingVisualizerRenderRequest &request) {
   const int pixelWidth = static_cast<int>(pixelWidth64);
   const auto stretched = stretchSkinDestinationAuthored(
       request.geometry,
-      {.textureWidth = request.visualizer.width,
+      {.textureWidth = pixelWidth,
        .textureHeight = 1,
-       .region = {.x = 0, .y = 0, .w = request.visualizer.width, .h = 1}});
+       .region = {.x = 0, .y = 0, .w = pixelWidth, .h = 1}});
   if (stretched.rect.width == 0.0 || stretched.rect.height == 0.0 ||
       stretched.region.w <= 0 || stretched.region.h <= 0) {
     return {};
@@ -263,7 +268,7 @@ renderSkinTimingVisualizer(const SkinTimingVisualizerRenderRequest &request) {
   auto geometry = request.geometry;
   geometry.rect = stretched.rect;
   geometry.stretch = SkinStretchMode::Stretch;
-  PrimitiveBuilder builder(request, geometry, request.visualizer.width);
+  PrimitiveBuilder builder(request, geometry, pixelWidth);
   const double cropLeft = stretched.region.x;
   const double cropRight = cropLeft + stretched.region.w;
   const double cropBottom = stretched.region.y;
@@ -299,13 +304,11 @@ renderSkinTimingVisualizer(const SkinTimingVisualizerRenderRequest &request) {
                               destinationX(x),
                               stretched.rect.y + stretched.rect.height, color);
   };
-  const double pixelScale = static_cast<double>(request.visualizer.width) /
-                            static_cast<double>(pixelWidth);
   const auto pixelX = [&](std::int64_t pixel) {
-    return static_cast<double>(pixel) * pixelScale;
+    return static_cast<double>(pixel);
   };
   const std::int64_t center = request.visualizer.judgeWidthMillis;
-  if (!appendQuad(pixelX(center), 0.0, pixelScale, 1.0,
+  if (!appendQuad(pixelX(center), 0.0, 1.0, 1.0,
                   rgbaToAbgr(request.visualizer.centerRgba))) {
     return builder.take();
   }
@@ -364,6 +367,10 @@ renderSkinTimingVisualizer(const SkinTimingVisualizerRenderRequest &request) {
   const std::uint32_t baseLineColor = rgbaToAbgr(request.visualizer.lineRgba);
   const std::uint8_t baseAlpha =
       static_cast<std::uint8_t>(baseLineColor >> 24U);
+  builder.setGeometry(request.geometry, pixelWidth);
+  const double judgeWidthRate =
+      static_cast<double>(request.visualizer.width) /
+      static_cast<double>(pixelWidth);
   for (std::size_t i = 0; i < recent.size(); ++i) {
     const std::size_t sampleIndex = (index + i + 1) % recent.size();
     const std::int64_t timing = recent[sampleIndex];
@@ -375,19 +382,23 @@ renderSkinTimingVisualizer(const SkinTimingVisualizerRenderRequest &request) {
         static_cast<unsigned int>(baseAlpha) * (i + 1U) / 100U);
     const std::uint32_t color = (baseLineColor & 0x00ffffffU) |
                                 (static_cast<std::uint32_t>(alpha) << 24U);
-    const double x = (static_cast<double>(request.visualizer.width -
-                                          request.visualizer.lineWidth) /
-                          2.0) +
-                     static_cast<double>(timing) * pixelScale;
+    const double x = request.geometry.rect.x +
+                     (request.geometry.rect.width -
+                      request.visualizer.lineWidth) /
+                         2.0 +
+                     static_cast<double>(timing) * judgeWidthRate;
     const double y = request.visualizer.drawDecay
-                         ? static_cast<double>(recent.size() - i) /
+                         ? request.geometry.rect.y + request.geometry.rect.height *
+                               static_cast<double>(recent.size() - i) /
                                static_cast<double>(recent.size()) / 2.0
-                         : 0.0;
+                         : request.geometry.rect.y;
     const double height = request.visualizer.drawDecay
-                              ? static_cast<double>(i) /
+                              ? request.geometry.rect.height *
+                                    static_cast<double>(i) /
                                     static_cast<double>(recent.size())
-                              : 1.0;
-    if (!appendQuad(x, y, request.visualizer.lineWidth, height, color)) {
+                              : request.geometry.rect.height;
+    if (!builder.appendQuad(x, y, request.visualizer.lineWidth, height,
+                            color)) {
       return builder.take();
     }
   }

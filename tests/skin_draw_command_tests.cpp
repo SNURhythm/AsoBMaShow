@@ -4398,6 +4398,88 @@ void testTimingVisualizerUsesJudgeBandsAndRecentTimingRing() {
          "Skin2DRenderer lowers typed timing visualizers through the shared destination path");
 }
 
+void testTimingVisualizerKeepsConstructorTimingScaleIndependentOfDestination() {
+  SkinTimingVisualizerObject visualizer;
+  visualizer.width = 301;
+  visualizer.judgeWidthMillis = 150;
+  visualizer.lineWidth = 2;
+  visualizer.drawDecay = false;
+  auto recent = emptySkinRecentJudgeTimings();
+  recent[99] = 10;
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 10.0, .y = 20.0, .width = 100.0, .height = 40.0};
+  geometry.angleDegrees = 90.0;
+  geometry.stretch = SkinStretchMode::KeepAspectRatioFitInner;
+  const auto rendered = renderSkinTimingVisualizer(
+      {.sourceObject = 3,
+       .authoredOrdinal = 4,
+       .visualizer = visualizer,
+       .state = {.recentJudgeTimingsMillis = recent,
+                 .recentJudgeTimingIndex = 98},
+       .geometry = geometry,
+       .viewport = viewport(),
+       .maximumCommands = 64,
+       .maximumPrimitiveVertices = 256});
+  expect(!rendered.failure && !rendered.commands.empty(),
+         "timing visualizer draws a recent sample with a destination narrower than its constructor width");
+  if (rendered.commands.empty()) {
+    return;
+  }
+  const auto &line =
+      std::get<SkinPrimitiveCommand>(rendered.commands.back().payload);
+  expect(line.vertices.size() == 4 && line.vertices[0].x == 10.0F &&
+             line.vertices[0].y == 641.0F && line.vertices[1].x == 10.0F &&
+             line.vertices[1].y == 639.0F && line.vertices[2].x == -30.0F &&
+             line.vertices[2].y == 639.0F && line.vertices[3].x == -30.0F &&
+             line.vertices[3].y == 641.0F,
+         "timing lines keep their two-pixel width and constructor 10ms offset before destination rotation");
+
+  visualizer.width = 0;
+  geometry.angleDegrees = 0.0;
+  const auto zero = renderSkinTimingVisualizer(
+      {.sourceObject = 3,
+       .authoredOrdinal = 4,
+       .visualizer = visualizer,
+       .state = {.recentJudgeTimingsMillis = recent,
+                 .recentJudgeTimingIndex = 98},
+       .geometry = geometry,
+       .viewport = viewport(),
+       .maximumCommands = 64,
+       .maximumPrimitiveVertices = 256});
+  expect(!zero.failure && !zero.commands.empty(),
+         "zero constructor width remains a typed, renderable timing visualizer");
+  if (zero.commands.empty()) {
+    return;
+  }
+  const auto &zeroLine =
+      std::get<SkinPrimitiveCommand>(zero.commands.back().payload);
+  expect(zeroLine.vertices.front().x == 59.0F &&
+             zeroLine.vertices[1].x == 61.0F,
+         "zero constructor width remains renderable and centres every timing offset");
+
+  visualizer.width = -301;
+  const auto negative = renderSkinTimingVisualizer(
+      {.sourceObject = 3,
+       .authoredOrdinal = 4,
+       .visualizer = visualizer,
+       .state = {.recentJudgeTimingsMillis = recent,
+                 .recentJudgeTimingIndex = 98},
+       .geometry = geometry,
+       .viewport = viewport(),
+       .maximumCommands = 64,
+       .maximumPrimitiveVertices = 256});
+  expect(!negative.failure && !negative.commands.empty(),
+         "negative constructor width remains a typed, renderable timing visualizer");
+  if (negative.commands.empty()) {
+    return;
+  }
+  const auto &negativeLine =
+      std::get<SkinPrimitiveCommand>(negative.commands.back().payload);
+  expect(negativeLine.vertices.front().x == 49.0F &&
+             negativeLine.vertices[1].x == 51.0F,
+         "negative constructor width remains renderable and reverses the timing offset direction");
+}
+
 std::int64_t fixtureFixed(double value) {
   // Floating-point to_chars implementations can choose different shortest
   // spellings for the same value. Store micro-units as integers so fixture
@@ -4938,6 +5020,7 @@ int main() {
   testTransparentNoteDistributionSkipsCommandsAndBudgets();
   testNoteDistributionGraphDrawsPinnedBackgroundPmsColorAndCursor();
   testTimingVisualizerUsesJudgeBandsAndRecentTimingRing();
+  testTimingVisualizerKeepsConstructorTimingScaleIndependentOfDestination();
   testDesktopAndIpadFitCommandFixtures();
   return failures == 0 ? 0 : 1;
 }
