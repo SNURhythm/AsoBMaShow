@@ -3,6 +3,7 @@
 #include "BeatorajaSkinConfiguration.h"
 #include "BeatorajaSkinModel.h"
 #include "LuaSkinRuntime.h"
+#include "SkinHitErrorVisualizerRenderer.h"
 #include "SkinDrawCommand.h"
 #include "SyntheticReplayGhostOverlay.h"
 #include "../SkinSafetyPolicy.h"
@@ -348,6 +349,9 @@ private:
 
   std::uint64_t gaugeAnimationSessionSerial_ = 0;
   std::map<SkinObjectId, GaugeAnimationState> gaugeAnimationStates_;
+  std::uint64_t hitErrorVisualizerSessionSerial_ = 0;
+  std::map<SkinObjectId, SkinHitErrorVisualizerPresentationState>
+      hitErrorVisualizerStates_;
   std::uint64_t externalOwnershipSessionSerial_ = 0;
   std::uint64_t lastExternalOwnershipFrameSerial_ = 0;
 };

@@ -1705,6 +1705,187 @@ return {
          "opaque timingvisualizers keep the pinned direct PRColor load-failure boundary");
 }
 
+void testHitErrorVisualizerIsTypedInsteadOfBlank() {
+  const auto decoded = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  hiterrorvisualizer={{id='hiterror'}},
+  destination={{id='hiterror',dst={{x=0,y=0,w=301,h=60}}}}
+}
+)lua");
+  const auto *definition =
+      decoded.model ? findObject(*decoded.model, "hiterror") : nullptr;
+  expect(definition != nullptr &&
+             !std::holds_alternative<SkinBlankObject>(definition->payload) &&
+             std::ranges::none_of(decoded.diagnostics, [](const auto &entry) {
+               return entry.code ==
+                      "skin_lua_model_hiterrorvisualizer_unsupported";
+             }),
+         "valid hiterrorvisualizers decode as typed objects without the legacy unsupported diagnostic");
+  if (!decoded.model) {
+    return;
+  }
+  const auto validated =
+      test_support::validateWithAuthoredBuiltins(*decoded.model);
+  expect(validated.model && !validated.criticalFailure &&
+             std::ranges::none_of(validated.model->model.objects,
+                                  [](const auto &object) {
+                                    return std::holds_alternative<
+                                        SkinBlankObject>(object.payload);
+                                  }),
+         "valid hiterrorvisualizers remain typed through model validation");
+}
+
+void testHitErrorVisualizerDecodesPinnedConstructorFields() {
+  const auto decoded = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  hiterrorvisualizer={
+    {id='default'},
+    {id='custom',width=401,judgeWidthMillis=200,lineWidth=9,
+     colorMode=2,hiterrorMode=1,emaMode=3,lineColor='11223344',
+     centerColor='55667788',PGColor='01020304',GRColor='11121314',
+     GDColor='21222324',BDColor='31323334',PRColor='not-a-colour',
+     emaColor='51525354',alpha=0.25,windowLength=500,transparent=1,
+     drawDecay=0},
+    {id='invalid',lineWidth=-9,windowLength=-3,lineColor='invalid',
+     centerColor='invalid',PGColor='invalid',GRColor='invalid',
+     GDColor='invalid',BDColor='invalid',emaColor='invalid'}
+  },
+  destination={
+    {id='default',dst={{x=0,y=0,w=301,h=60}}},
+    {id='custom',dst={{x=0,y=0,w=401,h=200}}},
+    {id='invalid',dst={{x=0,y=0,w=301,h=60}}}
+  }
+}
+)lua");
+  const auto payload = [&](std::string_view id) {
+    const auto *definition = decoded.model ? findObject(*decoded.model, id)
+                                           : nullptr;
+    return definition != nullptr
+               ? std::get_if<SkinHitErrorVisualizerObject>(
+                     &definition->payload)
+               : nullptr;
+  };
+  const auto *defaults = payload("default");
+  const auto *custom = payload("custom");
+  const auto *invalid = payload("invalid");
+  expect(defaults != nullptr && defaults->width == 301 &&
+             defaults->judgeWidthMillis == 150 && defaults->lineWidth == 1 &&
+             defaults->colorMode == 1 && defaults->hitErrorMode == 1 &&
+             defaults->emaMode == 1 &&
+             defaults->lineRgba == 0x99ccff80U &&
+             defaults->centerRgba == 0xffffffffU &&
+             defaults->judgeRgba ==
+                 std::array<std::uint32_t, 5>{0x99ccff80U, 0xf2cb3080U,
+                                               0x14cc8f80U, 0xff1ab380U,
+                                               0xcc292980U} &&
+             defaults->emaRgba == 0xff0000ffU && defaults->alpha == 0.1F &&
+             defaults->windowLength == 30 && !defaults->transparent &&
+             defaults->drawDecay,
+         "hiterrorvisualizer defaults retain every pinned constructor value");
+  expect(custom != nullptr && custom->width == 401 &&
+             custom->judgeWidthMillis == 200 && custom->lineWidth == 4 &&
+             custom->colorMode == 0 && custom->hitErrorMode == 1 &&
+             custom->emaMode == 3 && custom->lineRgba == 0x11223344U &&
+             custom->centerRgba == 0x55667788U &&
+             custom->judgeRgba ==
+                 std::array<std::uint32_t, 5>{0x01020304U, 0x11121314U,
+                                               0x21222324U, 0x31323334U, 0U} &&
+             custom->emaRgba == 0x51525354U && custom->alpha == 0.25F &&
+             custom->windowLength == 100 && custom->transparent &&
+             !custom->drawDecay,
+         "hiterrorvisualizer clamps dimensions and applies exact integer flag and custom-colour semantics");
+  expect(invalid != nullptr && invalid->lineWidth == 1 &&
+             invalid->windowLength == 1 &&
+             invalid->lineRgba == 0xff0000ffU &&
+             invalid->centerRgba == 0xff0000ffU &&
+             invalid->judgeRgba[0] == 0xff0000ffU &&
+             invalid->judgeRgba[1] == 0xff0000ffU &&
+             invalid->judgeRgba[2] == 0xff0000ffU &&
+             invalid->judgeRgba[3] == 0xff0000ffU &&
+             invalid->emaRgba == 0xff0000ffU,
+         "validated hiterrorvisualizer colours fall back to opaque red and bounded lengths clamp");
+
+  if (!decoded.model) {
+    return;
+  }
+  auto invalidLineModel = *decoded.model;
+  if (!invalidLineModel.objects.empty()) {
+    std::get<SkinHitErrorVisualizerObject>(
+        invalidLineModel.objects.front().payload)
+        .lineWidth = 0;
+  }
+  const auto invalidLine = test_support::validateWithAuthoredBuiltins(
+      std::move(invalidLineModel));
+  expect(invalidLine.criticalFailure && !invalidLine.model &&
+             std::ranges::find_if(invalidLine.diagnostics,
+                                  [](const auto &entry) {
+                                    return entry.code ==
+                                           "skin_lua_model_hiterrorvisualizer_invalid";
+                                  }) != invalidLine.diagnostics.end(),
+         "model validation rejects hiterrorvisualizer line widths outside the constructor clamp");
+
+  auto invalidWindowModel = *decoded.model;
+  if (!invalidWindowModel.objects.empty()) {
+    std::get<SkinHitErrorVisualizerObject>(
+        invalidWindowModel.objects.front().payload)
+        .windowLength = 101;
+  }
+  const auto invalidWindow = test_support::validateWithAuthoredBuiltins(
+      std::move(invalidWindowModel));
+  expect(invalidWindow.criticalFailure && !invalidWindow.model,
+         "model validation rejects hiterrorvisualizer windows outside the constructor clamp");
+}
+
+void testHitErrorVisualizerParsesPoorColourOnlyWhenOpaque() {
+  const auto hashes = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  hiterrorvisualizer={
+    {id='rgb',PRColor='#000000'},
+    {id='rgba',PRColor='#1234567F'},
+    {id='transparent',transparent=1,PRColor='not-a-colour'}
+  },
+  destination={
+    {id='rgb',dst={{x=0,y=0,w=301,h=60}}},
+    {id='rgba',dst={{x=0,y=0,w=301,h=60}}},
+    {id='transparent',dst={{x=0,y=0,w=301,h=60}}}
+  }
+}
+)lua");
+  const auto payload = [&](std::string_view id) {
+    const auto *definition = hashes.model ? findObject(*hashes.model, id)
+                                          : nullptr;
+    return definition != nullptr
+               ? std::get_if<SkinHitErrorVisualizerObject>(
+                     &definition->payload)
+               : nullptr;
+  };
+  const auto *rgb = payload("rgb");
+  const auto *rgba = payload("rgba");
+  const auto *transparent = payload("transparent");
+  expect(rgb != nullptr && rgba != nullptr && transparent != nullptr &&
+             rgb->judgeRgba[4] == 0x000000ffU &&
+             rgba->judgeRgba[4] == 0x1234567fU &&
+             transparent->judgeRgba[4] == 0U,
+         "hiterrorvisualizer keeps direct libGDX PR parsing only for opaque poor marks");
+
+  const auto invalid = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  hiterrorvisualizer={{id='invalid',transparent=0,PRColor='not-a-colour'}},
+  destination={{id='invalid',dst={{x=0,y=0,w=301,h=60}}}}
+}
+)lua");
+  expect(!invalid.model &&
+             std::ranges::find_if(invalid.diagnostics, [](const auto &entry) {
+               return entry.code ==
+                      "skin_lua_model_hiterrorvisualizer_invalid";
+             }) != invalid.diagnostics.end(),
+         "opaque hiterrorvisualizer retains the pinned direct PRColor load-failure boundary");
+}
+
 void testNegativeGenericDistributionGraphStaysOutsideGameplay() {
   const auto decoded = decodeInlineModel(R"lua(
 return {
@@ -1762,7 +1943,6 @@ return {
          "built-in image IDs, remains a live model object");
   const std::array expectedCodes{
       std::string_view("skin_lua_model_bpmgraph_unsupported"),
-      std::string_view("skin_lua_model_hiterrorvisualizer_unsupported"),
   };
   for (const auto code : expectedCodes) {
     expect(std::ranges::find_if(decoded.diagnostics, [&](const auto &entry) {
@@ -1930,6 +2110,9 @@ int main() {
   testJudgeGraphsDecodePinnedModesAndPresentationFlags();
   testTimingVisualizerDecodesPinnedPresentationFields();
   testTimingVisualizerParsesPoorColourOnlyWhenOpaque();
+  testHitErrorVisualizerIsTypedInsteadOfBlank();
+  testHitErrorVisualizerDecodesPinnedConstructorFields();
+  testHitErrorVisualizerParsesPoorColourOnlyWhenOpaque();
   testNegativeGenericDistributionGraphStaysOutsideGameplay();
   testOptionalVisualsAndBuiltinImagesStayLiveAcrossRepeatedDestinations();
   testPomyuCharaCycleExtractionFollowsPinnedLoaderOrder();

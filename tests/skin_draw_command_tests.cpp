@@ -1,4 +1,5 @@
 #include "skin/beatoraja/Skin2DRenderer.h"
+#include "skin/beatoraja/SkinHitErrorVisualizerRenderer.h"
 #include "skin/beatoraja/SkinNoteDistributionGraphRenderer.h"
 #include "skin/beatoraja/SkinTimingVisualizerRenderer.h"
 
@@ -4274,6 +4275,380 @@ void testNoteDistributionGraphDrawsPinnedBackgroundPmsColorAndCursor() {
          "an empty chart distribution emits no degenerate background, shape, or cursor commands");
 }
 
+std::array<SkinJudgeWindow, 5> hitErrorJudgeWindows() {
+  return {{{.minimumTimingMillis = -5, .maximumTimingMillis = 5},
+           {.minimumTimingMillis = -10, .maximumTimingMillis = 10},
+           {.minimumTimingMillis = -20, .maximumTimingMillis = 20},
+           {.minimumTimingMillis = -30, .maximumTimingMillis = 30},
+           {.minimumTimingMillis = -50, .maximumTimingMillis = 50}}};
+}
+
+void testHitErrorVisualizerUsesPinnedModesWindowAndGeometry() {
+  SkinHitErrorVisualizerObject visualizer;
+  visualizer.width = 101;
+  visualizer.judgeWidthMillis = 50;
+  visualizer.lineWidth = 1;
+  visualizer.windowLength = 3;
+  visualizer.colorMode = true;
+  visualizer.hitErrorMode = true;
+  visualizer.emaMode = 3;
+  visualizer.judgeRgba = {0x11223344U, 0x22334455U, 0x33445566U,
+                          0x44556677U, 0x55667788U};
+  visualizer.centerRgba = 0x99aabbccU;
+  visualizer.emaRgba = 0xabcdef80U;
+  auto recent = emptySkinRecentJudgeTimings();
+  recent[10] = 0;
+  recent[9] = 10;
+  recent[8] = 100;
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 0.0, .y = 0.0, .width = 101.0, .height = 6.0};
+  const auto rendered = renderSkinHitErrorVisualizer(
+      {.sourceObject = 7,
+       .authoredOrdinal = 9,
+       .visualizer = visualizer,
+       .state = {.judgeWindows = hitErrorJudgeWindows(),
+                 .recentJudgeTimingsMillis = recent,
+                 .recentJudgeTimingIndex = 10},
+       .emaMillis = 5,
+       .geometry = geometry,
+       .viewport = viewport(),
+       .maximumCommands = 16,
+       .maximumPrimitiveVertices = 64});
+  expect(!rendered.failure && rendered.commands.size() == 6 &&
+             rendered.primitiveVertices == 23,
+         "hiterrorvisualizer emits hit, centre, EMA line, and EMA triangle primitives in pinned order");
+  if (rendered.commands.size() != 6) {
+    return;
+  }
+  const auto &newest =
+      std::get<SkinPrimitiveCommand>(rendered.commands[0].payload);
+  const auto &boundary =
+      std::get<SkinPrimitiveCommand>(rendered.commands[1].payload);
+  const auto &clamped =
+      std::get<SkinPrimitiveCommand>(rendered.commands[2].payload);
+  const auto &centre =
+      std::get<SkinPrimitiveCommand>(rendered.commands[3].payload);
+  const auto &emaLine =
+      std::get<SkinPrimitiveCommand>(rendered.commands[4].payload);
+  const auto &triangle =
+      std::get<SkinPrimitiveCommand>(rendered.commands[5].payload);
+  expect(newest.vertices[0].x == 50.0F && newest.vertices[0].y == 720.0F &&
+             newest.vertices[2].y == 714.0F &&
+             newest.vertices[0].rgba == 0x44332211U &&
+             boundary.vertices[0].x == 40.0F &&
+             boundary.vertices[0].y == 719.0F &&
+             boundary.vertices[2].y == 715.0F &&
+             boundary.vertices[0].rgba == 0x66554433U &&
+             clamped.vertices[0].x == 0.0F &&
+             clamped.vertices[0].y == 718.0F &&
+             clamped.vertices[2].y == 716.0F &&
+             clamped.vertices[0].rgba == 0x88776655U,
+         "hiterrorvisualizer traverses newest-to-oldest source ages, uses strict judge windows, clamps misses, and reverses positive timing");
+  expect(centre.vertices[0].x == 50.0F &&
+             centre.vertices[0].rgba == 0xccbbaa99U &&
+             emaLine.vertices[0].x == 45.0F &&
+             emaLine.vertices[0].rgba == 0x80efcdabU &&
+             triangle.kind == SkinPrimitiveKind::TriangleStrip &&
+             triangle.vertices.size() == 3 &&
+             triangle.vertices[0].x == 45.0F &&
+             triangle.vertices[0].y == 718.0F &&
+             triangle.vertices[1].x == 47.0F &&
+             triangle.vertices[1].y == 720.0F &&
+             triangle.vertices[2].x == 43.0F &&
+             triangle.vertices[2].y == 720.0F,
+         "hiterrorvisualizer centre and EMA line/triangle use pinned integer source geometry");
+
+  visualizer.hitErrorMode = false;
+  for (int mode = 0; mode <= 4; ++mode) {
+    visualizer.emaMode = mode;
+    const auto styled = renderSkinHitErrorVisualizer(
+        {.sourceObject = 7,
+         .authoredOrdinal = 9,
+         .visualizer = visualizer,
+         .state = {.judgeWindows = hitErrorJudgeWindows(),
+                   .recentJudgeTimingsMillis = recent,
+                   .recentJudgeTimingIndex = 10},
+         .emaMillis = 5,
+         .geometry = geometry,
+         .viewport = viewport(),
+         .maximumCommands = 8,
+         .maximumPrimitiveVertices = 32});
+    const std::size_t expected =
+        mode == 1 || mode == 2 ? 2U : mode == 3 ? 3U : 1U;
+    expect(!styled.failure && styled.commands.size() == expected,
+           "each integer emaMode emits only its pinned line/triangle style");
+  }
+
+  visualizer.emaMode = 2;
+  visualizer.windowLength = 4;
+  geometry.rect.height = 8.0;
+  const auto integerApex = renderSkinHitErrorVisualizer(
+      {.sourceObject = 7,
+       .authoredOrdinal = 9,
+       .visualizer = visualizer,
+       .state = {},
+       .emaMillis = 5,
+       .geometry = geometry,
+       .viewport = viewport(),
+       .maximumCommands = 2,
+       .maximumPrimitiveVertices = 7});
+  const auto &integerTriangle =
+      std::get<SkinPrimitiveCommand>(integerApex.commands.back().payload);
+  expect(!integerApex.failure && integerTriangle.vertices[0].y == 718.0F,
+         "EMA triangle apex uses Java integer division of the source canvas height");
+}
+
+void testHitErrorVisualizerSingleColourDecayTransparencyAndBudgets() {
+  SkinHitErrorVisualizerObject visualizer;
+  visualizer.width = 101;
+  visualizer.judgeWidthMillis = 50;
+  visualizer.lineWidth = 1;
+  visualizer.windowLength = 4;
+  visualizer.colorMode = false;
+  visualizer.hitErrorMode = true;
+  visualizer.emaMode = 0;
+  visualizer.lineRgba = 0x11223380U;
+  auto recent = emptySkinRecentJudgeTimings();
+  recent[10] = 0;
+  recent[9] = 1;
+  recent[8] = 2;
+  recent[7] = 3;
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 10.0, .y = 20.0, .width = 101.0, .height = 8.0};
+  const auto decaying = renderSkinHitErrorVisualizer(
+      {.sourceObject = 3,
+       .authoredOrdinal = 4,
+       .visualizer = visualizer,
+       .state = {.judgeWindows = hitErrorJudgeWindows(),
+                 .recentJudgeTimingsMillis = recent,
+                 .recentJudgeTimingIndex = 10},
+       .emaMillis = 0,
+       .geometry = geometry,
+       .viewport = viewport(),
+       .maximumCommands = 8,
+       .maximumPrimitiveVertices = 32});
+  expect(!decaying.failure && decaying.commands.size() == 4,
+         "single-colour hit marks apply Java alpha packing and skip its zero-alpha newest mark");
+  if (decaying.commands.size() == 4) {
+    const auto &ageOne =
+        std::get<SkinPrimitiveCommand>(decaying.commands[0].payload);
+    const auto &ageTwo =
+        std::get<SkinPrimitiveCommand>(decaying.commands[1].payload);
+    const auto &ageThree =
+        std::get<SkinPrimitiveCommand>(decaying.commands[2].payload);
+    expect(ageOne.vertices[0].y == 699.0F &&
+               ageOne.vertices[2].y == 693.0F &&
+               ageOne.vertices[0].rgba == 0xc0332211U &&
+               ageTwo.vertices[0].y == 698.0F &&
+               ageTwo.vertices[2].y == 694.0F &&
+               ageTwo.vertices[0].rgba == 0x80332211U &&
+               ageThree.vertices[0].y == 697.0F &&
+               ageThree.vertices[2].y == 695.0F &&
+               ageThree.vertices[0].rgba == 0x40332211U,
+           "single-colour hit marks fade and shorten at exact pinned source ages");
+  }
+
+  visualizer.drawDecay = false;
+  const auto full = renderSkinHitErrorVisualizer(
+      {.sourceObject = 3,
+       .authoredOrdinal = 4,
+       .visualizer = visualizer,
+       .state = {.judgeWindows = hitErrorJudgeWindows(),
+                 .recentJudgeTimingsMillis = recent,
+                 .recentJudgeTimingIndex = 10},
+       .emaMillis = 0,
+       .geometry = geometry,
+       .viewport = viewport(),
+       .maximumCommands = 8,
+       .maximumPrimitiveVertices = 32});
+  const auto &fullMark =
+      std::get<SkinPrimitiveCommand>(full.commands.front().payload);
+  expect(!full.failure && fullMark.vertices[0].y == 700.0F &&
+             fullMark.vertices[2].y == 692.0F,
+         "non-decaying hit marks span the full window canvas");
+
+  visualizer.colorMode = true;
+  visualizer.judgeRgba[4] = 0U;
+  recent = emptySkinRecentJudgeTimings();
+  recent[10] = 50;
+  const auto transparentPoor = renderSkinHitErrorVisualizer(
+      {.sourceObject = 3,
+       .authoredOrdinal = 4,
+       .visualizer = visualizer,
+       .state = {.judgeWindows = hitErrorJudgeWindows(),
+                 .recentJudgeTimingsMillis = recent,
+                 .recentJudgeTimingIndex = 10},
+       .emaMillis = 0,
+       .geometry = geometry,
+       .viewport = viewport(),
+       .maximumCommands = 1,
+       .maximumPrimitiveVertices = 4});
+  expect(!transparentPoor.failure && transparentPoor.commands.size() == 1,
+         "transparent poor marks consume no budget while the centre remains drawable");
+
+  visualizer.judgeRgba[4] = 0xffffffffU;
+  const auto bounded = renderSkinHitErrorVisualizer(
+      {.sourceObject = 3,
+       .authoredOrdinal = 4,
+       .visualizer = visualizer,
+       .state = {.judgeWindows = hitErrorJudgeWindows(),
+                 .recentJudgeTimingsMillis = recent,
+                 .recentJudgeTimingIndex = 10},
+       .emaMillis = 0,
+       .geometry = geometry,
+       .viewport = viewport(),
+       .maximumCommands = 1,
+       .maximumPrimitiveVertices = 8});
+  expect(bounded.failure && bounded.commands.empty() &&
+             bounded.primitiveVertices == 0,
+         "hiterrorvisualizer discards every partial primitive when a fixed budget is exceeded");
+
+  geometry.rgba[3] = 0.0F;
+  const auto invisible = renderSkinHitErrorVisualizer(
+      {.sourceObject = 3,
+       .authoredOrdinal = 4,
+       .visualizer = visualizer,
+       .state = {.judgeWindows = hitErrorJudgeWindows(),
+                 .recentJudgeTimingsMillis = recent,
+                 .recentJudgeTimingIndex = 10},
+       .emaMillis = 0,
+       .geometry = geometry,
+       .viewport = viewport(),
+       .maximumCommands = 0,
+       .maximumPrimitiveVertices = 0});
+  expect(!invisible.failure && invisible.commands.empty() &&
+             invisible.primitiveVertices == 0,
+         "zero destination alpha consumes no hiterrorvisualizer budget");
+}
+
+void testHitErrorVisualizerEmaIsPerObjectExactOnceAndSessionBounded() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  auto recent = emptySkinRecentJudgeTimings();
+  recent[1] = 20;
+  const auto windows = hitErrorJudgeWindows();
+  state.graphResult = {.judgeWindows = windows,
+                       .recentJudgeTimingsMillis = recent,
+                       .recentJudgeTimingIndex = 1};
+  SkinHitErrorVisualizerObject first;
+  first.width = 101;
+  first.judgeWidthMillis = 50;
+  first.windowLength = 3;
+  first.hitErrorMode = false;
+  first.emaMode = 1;
+  first.alpha = 0.5F;
+  auto second = first;
+  second.alpha = 0.25F;
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects = {
+      {.id = 1, .authoredName = "first", .payload = first, .authoredOrdinal = 1},
+      {.id = 2, .authoredName = "second", .payload = second, .authoredOrdinal = 2}};
+  model.model.destinations = {noteDistributionDestination(1, 101.0, 6.0),
+                              noteDistributionDestination(2, 101.0, 6.0)};
+
+  const auto initial = evaluate(renderer, runtime, model, resources, state, 1);
+  const auto repeated = evaluate(renderer, runtime, model, resources, state, 2);
+  recent[2] = 20;
+  state.graphResult.recentJudgeTimingsMillis = recent;
+  state.graphResult.recentJudgeTimingIndex = 2;
+  const auto advanced = evaluate(renderer, runtime, model, resources, state, 3);
+  const auto reset =
+      evaluate(renderer, runtime, model, resources, state, 4, 0, nullptr,
+               std::nullopt, nullptr, 2);
+  const auto initialCommands = primitiveCommands(initial);
+  const auto repeatedCommands = primitiveCommands(repeated);
+  const auto advancedCommands = primitiveCommands(advanced);
+  const auto resetCommands = primitiveCommands(reset);
+  const auto emaX = [](const auto &commands, std::size_t object) {
+    return commands[object * 2U + 1U]->vertices.front().x;
+  };
+  expect(initialCommands.size() == 4 && repeatedCommands.size() == 4 &&
+             advancedCommands.size() == 4 && resetCommands.size() == 4 &&
+             emaX(initialCommands, 0) == 40.0F &&
+             emaX(initialCommands, 1) == 45.0F &&
+             emaX(repeatedCommands, 0) == 40.0F &&
+             emaX(repeatedCommands, 1) == 45.0F &&
+             emaX(advancedCommands, 0) == 35.0F &&
+             emaX(advancedCommands, 1) == 42.0F &&
+             emaX(resetCommands, 0) == 40.0F &&
+             emaX(resetCommands, 1) == 45.0F,
+         "EMA advances once per changed source index, preserves authored alpha per object, and resets with the renderer session");
+
+  SkinHitErrorVisualizerPresentationState presentation;
+  state.graphResult.recentJudgeTimingIndex = 1;
+  const auto initialAdvance = advanceSkinHitErrorVisualizerEma(
+      first, state.graphResult, presentation);
+  state.graphResult.recentJudgeTimingIndex = 2;
+  recent[2] = kSkinEmptyJudgeTimingMillis;
+  state.graphResult.recentJudgeTimingsMillis = recent;
+  const auto emptyAdvance = advanceSkinHitErrorVisualizerEma(
+      first, state.graphResult, presentation);
+  recent[3] = 30;
+  state.graphResult.recentJudgeTimingsMillis = recent;
+  state.graphResult.recentJudgeTimingIndex = 3;
+  const auto boundaryAdvance = advanceSkinHitErrorVisualizerEma(
+      first, state.graphResult, presentation);
+  expect(initialAdvance && emptyAdvance && boundaryAdvance &&
+             presentation.emaMillis == 10,
+         "EMA seeds from zero and ignores empty samples and strict bad-window endpoints while consuming their indices");
+}
+
+void testHitErrorVisualizerAppliesDestinationPresentationState() {
+  SkinHitErrorVisualizerObject visualizer;
+  visualizer.width = 101;
+  visualizer.judgeWidthMillis = 50;
+  visualizer.windowLength = 3;
+  visualizer.hitErrorMode = false;
+  visualizer.emaMode = 0;
+  visualizer.centerRgba = 0x20406080U;
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 10.0, .y = 20.0, .width = 202.0, .height = 12.0};
+  geometry.clip = AuthoredRect{.x = 0.0,
+                               .y = 0.0,
+                               .width = 200.0,
+                               .height = 100.0};
+  geometry.centerX = 0.5;
+  geometry.centerY = 0.5;
+  geometry.angleDegrees = 90.0;
+  geometry.rgba = {0.5F, 0.5F, 0.5F, 0.5F};
+  geometry.blend = SkinBlendMode::Additive;
+  geometry.filter = SkinFilterMode::Linear;
+  geometry.stretch = SkinStretchMode::KeepAspectRatioFitInner;
+  const auto rendered = renderSkinHitErrorVisualizer(
+      {.sourceObject = 8,
+       .authoredOrdinal = 10,
+       .visualizer = visualizer,
+       .state = {},
+       .emaMillis = 0,
+       .geometry = geometry,
+       .viewport = viewport(),
+       .maximumCommands = 1,
+       .maximumPrimitiveVertices = 4});
+  expect(!rendered.failure && rendered.commands.size() == 1,
+         "destination state leaves one visible transformed hiterrorvisualizer centre primitive");
+  if (rendered.commands.size() != 1) {
+    return;
+  }
+  const auto &centre =
+      std::get<SkinPrimitiveCommand>(rendered.commands.front().payload);
+  expect(centre.vertices[0].x == 117.0F &&
+             centre.vertices[0].y == 695.0F &&
+             centre.vertices[1].x == 117.0F &&
+             centre.vertices[1].y == 693.0F &&
+             centre.vertices[2].x == 105.0F &&
+             centre.vertices[2].y == 693.0F &&
+             centre.vertices[0].rgba == 0x40302010U &&
+             centre.state.blend == SkinBlendMode::Additive &&
+             centre.state.filter == SkinFilterMode::Linear &&
+             centre.state.scissor && centre.state.scissor->x == 0.0 &&
+             centre.state.scissor->y == 620.0 &&
+             centre.state.scissor->width == 200.0 &&
+             centre.state.scissor->height == 100.0,
+         "hiterrorvisualizer applies stretch, pivot rotation, tint, blend, filter, and scissor through the common destination path");
+}
+
 void testTimingVisualizerUsesJudgeBandsAndRecentTimingRing() {
   SkinTimingVisualizerObject visualizer;
   visualizer.width = 301;
@@ -5019,6 +5394,10 @@ int main() {
   testNoteDistributionGraphAppliesCommonStretchBeforeRotation();
   testTransparentNoteDistributionSkipsCommandsAndBudgets();
   testNoteDistributionGraphDrawsPinnedBackgroundPmsColorAndCursor();
+  testHitErrorVisualizerUsesPinnedModesWindowAndGeometry();
+  testHitErrorVisualizerSingleColourDecayTransparencyAndBudgets();
+  testHitErrorVisualizerEmaIsPerObjectExactOnceAndSessionBounded();
+  testHitErrorVisualizerAppliesDestinationPresentationState();
   testTimingVisualizerUsesJudgeBandsAndRecentTimingRing();
   testTimingVisualizerKeepsConstructorTimingScaleIndependentOfDestination();
   testDesktopAndIpadFitCommandFixtures();

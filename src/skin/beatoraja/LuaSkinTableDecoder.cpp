@@ -963,6 +963,28 @@ struct RawSkinTimingVisualizer {
   int drawDecay = 1;
 };
 
+struct RawSkinHitErrorVisualizer {
+  std::string id;
+  int width = 301;
+  int judgeWidthMillis = 150;
+  int lineWidth = 1;
+  int colorMode = 1;
+  int hitErrorMode = 1;
+  int emaMode = 1;
+  std::string lineColor = "99CCFF80";
+  std::string centerColor = "FFFFFFFF";
+  std::string pgColor = "99CCFF80";
+  std::string grColor = "F2CB3080";
+  std::string gdColor = "14CC8f80";
+  std::string bdColor = "FF1AB380";
+  std::string prColor = "CC292980";
+  std::string emaColor = "FF0000FF";
+  double alpha = 0.1;
+  int windowLength = 30;
+  int transparent = 0;
+  int drawDecay = 1;
+};
+
 struct RawSkinPmChara {
   std::string id;
   std::string source;
@@ -1020,7 +1042,8 @@ struct GameplayDecodeRequest {
   std::map<std::string, RawSkinCover, std::less<>> liftCovers;
   std::map<std::string, RawSkinJudge, std::less<>> judges;
   std::map<std::string, RawSkinIdentity, std::less<>> bpmGraphs;
-  std::map<std::string, RawSkinIdentity, std::less<>> hitErrorVisualizers;
+  std::map<std::string, RawSkinHitErrorVisualizer, std::less<>>
+      hitErrorVisualizers;
   std::map<std::string, RawSkinNoteDistributionGraph, std::less<>>
       judgeGraphs;
   std::map<std::string, RawSkinTimingVisualizer, std::less<>>
@@ -1044,7 +1067,7 @@ struct GameplayDecodeRequest {
   std::vector<RawSkinCover> rawLiftCovers;
   std::vector<RawSkinJudge> rawJudges;
   std::vector<RawSkinIdentity> rawBpmGraphs;
-  std::vector<RawSkinIdentity> rawHitErrorVisualizers;
+  std::vector<RawSkinHitErrorVisualizer> rawHitErrorVisualizers;
   std::vector<RawSkinNoteDistributionGraph> rawJudgeGraphs;
   std::vector<RawSkinTimingVisualizer> rawTimingVisualizers;
   std::vector<RawSkinIdentity> rawTimingDistributionGraphs;
@@ -1777,6 +1800,54 @@ bool decodeRawTimingVisualizer(lua_State *state, int index, std::size_t depth,
          integerField(state, index, "drawDecay", output.drawDecay, request);
 }
 
+bool decodeRawHitErrorVisualizer(lua_State *state, int index,
+                                 std::size_t depth,
+                                 RawSkinHitErrorVisualizer &output,
+                                 DecodeRequest &request) {
+  return requireObject(state, index, depth, request) &&
+         stringField(state, index, "id", output.id,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, false,
+                     request) &&
+         integerField(state, index, "width", output.width, request) &&
+         integerField(state, index, "judgeWidthMillis", output.judgeWidthMillis,
+                      request) &&
+         integerField(state, index, "lineWidth", output.lineWidth, request) &&
+         integerField(state, index, "colorMode", output.colorMode, request) &&
+         integerField(state, index, "hiterrorMode", output.hitErrorMode,
+                      request) &&
+         integerField(state, index, "emaMode", output.emaMode, request) &&
+         stringField(state, index, "lineColor", output.lineColor,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         stringField(state, index, "centerColor", output.centerColor,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         stringField(state, index, "PGColor", output.pgColor,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         stringField(state, index, "GRColor", output.grColor,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         stringField(state, index, "GDColor", output.gdColor,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         stringField(state, index, "BDColor", output.bdColor,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         stringField(state, index, "PRColor", output.prColor,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         stringField(state, index, "emaColor", output.emaColor,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
+         numberField(state, index, "alpha", output.alpha, request) &&
+         integerField(state, index, "windowLength", output.windowLength,
+                      request) &&
+         integerField(state, index, "transparent", output.transparent,
+                      request) &&
+         integerField(state, index, "drawDecay", output.drawDecay, request);
+}
+
 bool decodeRawPmChara(lua_State *state, int index, std::size_t depth,
                       RawSkinPmChara &output, DecodeRequest &request) {
   return requireObject(state, index, depth, request) &&
@@ -2397,6 +2468,41 @@ bool makeTimingVisualizerObject(GameplayDecodeRequest &request,
   return true;
 }
 
+bool makeHitErrorVisualizerObject(
+    GameplayDecodeRequest &request,
+    const RawSkinHitErrorVisualizer &definition,
+    SkinHitErrorVisualizerObject &output) {
+  const bool transparent = definition.transparent == 1;
+  const auto poorColor = transparent
+                             ? std::optional<std::uint32_t>{0U}
+                             : opaqueTimingVisualizerPoorColor(
+                                   definition.prColor);
+  if (!poorColor) {
+    return fail(request.decoding, "skin_lua_model_hiterrorvisualizer_invalid",
+                "Lua skin hiterrorvisualizer opaque PRColor is invalid");
+  }
+  output = {
+      .width = definition.width,
+      .judgeWidthMillis = definition.judgeWidthMillis,
+      .lineWidth = std::clamp(definition.lineWidth, 1, 4),
+      .colorMode = definition.colorMode == 1,
+      .hitErrorMode = definition.hitErrorMode == 1,
+      .emaMode = definition.emaMode,
+      .judgeRgba = {timingVisualizerColor(definition.pgColor),
+                    timingVisualizerColor(definition.grColor),
+                    timingVisualizerColor(definition.gdColor),
+                    timingVisualizerColor(definition.bdColor), *poorColor},
+      .lineRgba = timingVisualizerColor(definition.lineColor),
+      .centerRgba = timingVisualizerColor(definition.centerColor),
+      .emaRgba = timingVisualizerColor(definition.emaColor),
+      .alpha = static_cast<float>(definition.alpha),
+      .windowLength = std::clamp(definition.windowLength, 1, 100),
+      .transparent = transparent,
+      .drawDecay = definition.drawDecay == 1,
+  };
+  return true;
+}
+
 std::optional<SkinBlendMode> blendMode(int value) {
   switch (value) {
   case 0:
@@ -2743,6 +2849,17 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
       timingVisualizer != request.timingVisualizers.end()) {
     SkinTimingVisualizerObject object;
     if (!makeTimingVisualizerObject(request, timingVisualizer->second, object)) {
+      return false;
+    }
+    output = object;
+    return true;
+  }
+
+  if (resolved.kind == SkinObjectResolutionKind::HitErrorVisualizer &&
+      hitErrorVisualizer != request.hitErrorVisualizers.end()) {
+    SkinHitErrorVisualizerObject object;
+    if (!makeHitErrorVisualizerObject(request, hitErrorVisualizer->second,
+                                      object)) {
       return false;
     }
     output = object;
@@ -3255,7 +3372,8 @@ void decodeGameplayProtected(lua_State *state, int index,
         !decodeObjectArrayField(state, index, "hiterrorvisualizer", 1,
                                 LuaSkinTableDecoderPolicy::maxDecodedObjects,
                                 request->rawHitErrorVisualizers,
-                                request->decoding, decodeRawIdentity) ||
+                                request->decoding,
+                                decodeRawHitErrorVisualizer) ||
         !decodeObjectArrayField(state, index, "judgegraph", 1,
                                 LuaSkinTableDecoderPolicy::maxDecodedObjects,
                                 request->rawJudgeGraphs, request->decoding,
@@ -3282,9 +3400,6 @@ void decodeGameplayProtected(lua_State *state, int index,
     recordUnsupportedDefinitions(*request, request->rawBpmGraphs,
                                  "skin_lua_model_bpmgraph_unsupported",
                                  "bpmgraph");
-    recordUnsupportedDefinitions(
-        *request, request->rawHitErrorVisualizers,
-        "skin_lua_model_hiterrorvisualizer_unsupported", "hiterrorvisualizer");
     recordUnsupportedDefinitions(
         *request, request->rawTimingDistributionGraphs,
         "skin_lua_model_timingdistributiongraph_unsupported",
@@ -4128,8 +4243,8 @@ bool materializeGameplay(GameplayDecodeRequest &request,
       });
   moveFirstDefinitions(
       request.rawHitErrorVisualizers, request.hitErrorVisualizers,
-      [](const RawSkinIdentity &identity) -> const std::string & {
-        return identity.id;
+      [](const RawSkinHitErrorVisualizer &visualizer) -> const std::string & {
+        return visualizer.id;
       });
   moveFirstDefinitions(
       request.rawJudgeGraphs, request.judgeGraphs,

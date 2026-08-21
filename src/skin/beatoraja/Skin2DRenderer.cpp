@@ -5,6 +5,7 @@
 #include "Skin2DRenderer.h"
 #include "SkinCoverNormalization.h"
 #include "SkinNoteDistributionGraphRenderer.h"
+#include "SkinHitErrorVisualizerRenderer.h"
 #include "SkinTimingVisualizerRenderer.h"
 
 #include <algorithm>
@@ -2983,6 +2984,10 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       gaugeAnimationStates_.clear();
       gaugeAnimationSessionSerial_ = inputs.sessionSerial;
     }
+    if (hitErrorVisualizerSessionSerial_ != inputs.sessionSerial) {
+      hitErrorVisualizerStates_.clear();
+      hitErrorVisualizerSessionSerial_ = inputs.sessionSerial;
+    }
 
     std::vector<ProjectionElement> mergedProjectionElements;
     validateAndMergeProjection(inputs.state, mergedProjectionElements);
@@ -3128,6 +3133,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           std::get_if<SkinNoteDistributionGraphObject>(&object->payload);
       const auto *timingVisualizer =
           std::get_if<SkinTimingVisualizerObject>(&object->payload);
+      const auto *hitErrorVisualizer =
+          std::get_if<SkinHitErrorVisualizerObject>(&object->payload);
       const auto *gauge = std::get_if<SkinGaugeObject>(&object->payload);
       const auto *note = std::get_if<SkinNoteObject>(&object->payload);
       const auto *cover = std::get_if<SkinCoverObject>(&object->payload);
@@ -3137,8 +3144,9 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           std::get_if<SkinBuiltinImageObject>(&object->payload);
       const auto *blank = std::get_if<SkinBlankObject>(&object->payload);
       if (!image && !number && !floating && !text && !slider && !graph &&
-          !noteDistribution && !timingVisualizer && !gauge && !note && !cover &&
-          !judge && !bga && !builtinImage && !blank) {
+          !noteDistribution && !timingVisualizer && !hitErrorVisualizer &&
+          !gauge && !note && !cover && !judge && !bga && !builtinImage &&
+          !blank) {
         if (reportObjectFailure(
                 result, *object,
                 diagnostic("skin.renderer.object.unsupported",
@@ -3457,6 +3465,40 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
              .authoredOrdinal = destination.presentation.authoredOrdinal,
              .visualizer = *timingVisualizer,
              .state = inputs.state.gameplayGraphState(),
+             .geometry = *evaluated.geometry,
+             .viewport = inputs.viewport,
+             .maximumCommands =
+                 skinFrameMaximumCommands(inputs) - buffer.commands.size(),
+             .maximumPrimitiveVertices =
+                 skinFrameMaximumPrimitiveVertices(inputs) - primitiveVertices});
+        if (lowered.failure) {
+          if (reportObjectFailure(result, *object, *lowered.failure)) {
+            return result;
+          }
+          continue;
+        }
+        primitiveVertices += lowered.primitiveVertices;
+        buffer.commands.insert(buffer.commands.end(),
+                               std::make_move_iterator(lowered.commands.begin()),
+                               std::make_move_iterator(lowered.commands.end()));
+        continue;
+      }
+
+      if (hitErrorVisualizer) {
+        if (evaluated.geometry->rgba[3] <= 0.0F) {
+          continue;
+        }
+        auto &presentation = hitErrorVisualizerStates_[object->id];
+        const auto graphState = inputs.state.gameplayGraphState();
+        const bool indexAdvanced = advanceSkinHitErrorVisualizerEma(
+            *hitErrorVisualizer, graphState, presentation);
+        (void)indexAdvanced;
+        auto lowered = renderSkinHitErrorVisualizer(
+            {.sourceObject = object->id,
+             .authoredOrdinal = destination.presentation.authoredOrdinal,
+             .visualizer = *hitErrorVisualizer,
+             .state = graphState,
+             .emaMillis = presentation.emaMillis,
              .geometry = *evaluated.geometry,
              .viewport = inputs.viewport,
              .maximumCommands =

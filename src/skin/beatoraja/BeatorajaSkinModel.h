@@ -305,6 +305,25 @@ struct SkinTimingVisualizerObject {
   bool drawDecay = true;
 };
 
+struct SkinHitErrorVisualizerObject {
+  int width = 301;
+  int judgeWidthMillis = 150;
+  int lineWidth = 1;
+  bool colorMode = true;
+  bool hitErrorMode = true;
+  int emaMode = 1;
+  std::array<std::uint32_t, 5> judgeRgba{0x99ccff80U, 0xf2cb3080U,
+                                         0x14cc8f80U, 0xff1ab380U,
+                                         0xcc292980U};
+  std::uint32_t lineRgba = 0x99ccff80U;
+  std::uint32_t centerRgba = 0xffffffffU;
+  std::uint32_t emaRgba = 0xff0000ffU;
+  float alpha = 0.1F;
+  int windowLength = 30;
+  bool transparent = false;
+  bool drawDecay = true;
+};
+
 enum class SkinGaugeAnimationType : std::uint8_t {
   Random = 0,
   Increase = 1,
@@ -463,6 +482,7 @@ using SkinObjectPayload =
     std::variant<SkinImageObject, SkinNumberObject, SkinFloatObject,
                  SkinTextObject, SkinSliderObject, SkinGraphObject,
                  SkinNoteDistributionGraphObject, SkinTimingVisualizerObject,
+                 SkinHitErrorVisualizerObject,
                  SkinGaugeObject,
                  SkinNoteObject, SkinCoverObject, SkinJudgeObject,
                  SkinBgaObject, SkinBuiltinImageObject, SkinPmCharaObject,
