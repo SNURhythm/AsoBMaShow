@@ -1820,6 +1820,12 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
 
   const std::size_t automaticCapacity =
       std::max<std::size_t>(4096, definition.noteCount() * 3 + 1024);
+  const std::size_t gaugeHistoryCapacity = std::max(
+      automaticCapacity,
+      static_cast<std::size_t>(std::max<std::int64_t>(
+          0, definition.metadata().finalTimelineTimeMicros) /
+                               500'000) +
+          2);
   const std::size_t replayCapacity = gameplay::realtimeGameplayReplayCapacity(
       definition.noteCount(), definition.metadata().finalTimelineTimeMicros);
   gameplay::GameplaySimulationConfig simulationConfig{
@@ -1840,7 +1846,7 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
               .autoPlay = options.autoPlay,
               .replayCapacity = replayCapacity,
               .automaticResultCapacity = automaticCapacity,
-              .gaugeHistoryCapacity = automaticCapacity,
+              .gaugeHistoryCapacity = gaugeHistoryCapacity,
           },
   };
   simulationConfig.allowedNoteRange = policy.allowedNoteRange;
@@ -4883,6 +4889,7 @@ void GamePlayScene::capturePlayfieldVisualState(
       .gaugeAutoShiftLowerBound = options.gaugeAutoShiftLowerBound,
       .currentGauge = state->currentGauge,
       .gaugeRules = state->gaugeRules(),
+      .graphGaugeState = state->gaugeSnapshot(),
       .pacemakerTarget = activePacemakerTarget,
       .pacemakerStatus =
           pacemaker::snapshotForState(activePacemakerTarget, *state),

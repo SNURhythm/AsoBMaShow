@@ -224,6 +224,19 @@ preflightReplayGameplayPresentation(
           : replayExportChartMetadataAuthority(context, chart.Meta);
   PlayfieldAuthorityUpdate authority =
       initialAuthority != nullptr ? *initialAuthority : fallbackInitialAuthority;
+  if (!authority.graphGaugeState.has_value()) {
+    const GaugeProfile gaugeProfile =
+        resolveGaugeProfile(GaugeProfile::Standard, chart.Meta.KeyMode);
+    const RhythmState initialGaugeState =
+        replay_result::BuildInitialGaugeState(chart, replay, gaugeProfile);
+    authority.gaugeType = initialGaugeState.gaugeType;
+    authority.gaugeAutoShift = initialGaugeState.gaugeAutoShift;
+    authority.gaugeAutoShiftLowerBound =
+        initialGaugeState.gaugeAutoShiftLowerBound;
+    authority.currentGauge = initialGaugeState.currentGauge;
+    authority.gaugeRules = initialGaugeState.gaugeRules();
+    authority.graphGaugeState = initialGaugeState.gaugeSnapshot();
+  }
   authority.songReviewFavorite = resolvedChartMetadata.songReviewFavorite;
   authority.chartHasDocument = resolvedChartMetadata.chartHasDocument;
   authority.stageFileAvailable = resolvedChartMetadata.stageFileAvailable;
@@ -3648,6 +3661,13 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
         .courseStageCount = static_cast<int>(stages.size()),
         .courseStageTitles = courseStageTitles,
     };
+    initialAuthority.gaugeType = stage.initialGaugeState.gaugeType;
+    initialAuthority.gaugeAutoShift = stage.initialGaugeState.gaugeAutoShift;
+    initialAuthority.gaugeAutoShiftLowerBound =
+        stage.initialGaugeState.gaugeAutoShiftLowerBound;
+    initialAuthority.currentGauge = stage.initialGaugeState.currentGauge;
+    initialAuthority.gaugeRules = stage.resultState.gaugeRules();
+    initialAuthority.graphGaugeState = stage.initialGaugeState;
     if (const auto failure = preflightReplayGameplayPresentation(
             context, chart, stageReplay, settings, stage.preparationPlan,
             resolvedOptions, *stage.gameplayPresentation, log,

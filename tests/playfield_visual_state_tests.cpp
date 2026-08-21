@@ -217,8 +217,8 @@ void testChartModelPublishesPinnedGraphSourceShapes() {
   stop->StopLength = 144.0;
   stop->SetNote(7, new bms_parser::Note(2));
   addTimeline(*measure, 1'500'000, 1.5, 180.0, -0.5);
-  auto *headTimeline = addTimeline(*measure, 2'000'000, 2.0, 60.0, 2.0);
-  auto *tailTimeline = addTimeline(*measure, 4'000'000, 4.0, 60.0, 2.0);
+  auto *headTimeline = addTimeline(*measure, 2'000'000, 2.0, 60.0, 4.0);
+  auto *tailTimeline = addTimeline(*measure, 4'000'000, 4.0, 60.0, 4.0);
   auto *head = new bms_parser::LongNote(
       3, bms_parser::LongNoteType::LongNote);
   auto *tail = new bms_parser::LongNote(
@@ -227,7 +227,7 @@ void testChartModelPublishesPinnedGraphSourceShapes() {
   tail->Head = head;
   headTimeline->SetNote(2, head);
   tailTimeline->SetNote(2, tail);
-  auto *mine = addTimeline(*measure, 5'000'000, 5.0, 60.0, 2.0);
+  auto *mine = addTimeline(*measure, 5'000'000, 5.0, 60.0, 4.0);
   mine->SetLandmineNote(3, new bms_parser::LandmineNote(5.0F));
   chart.Measures.push_back(measure);
 
@@ -243,9 +243,10 @@ void testChartModelPublishesPinnedGraphSourceShapes() {
               graph.normalDistribution[5][6] == 1 &&
               graph.normalDistribution[6] == SkinNormalDistribution{},
           "normal distribution retains the pinned seven source buckets");
-  require(graph.mainBpm == 120.0 && graph.minimumBpm == 60.0 &&
-              graph.maximumBpm == 180.0,
-          "BPM graph retains its main, minimum, and maximum authorities");
+  require(graph.mainBpm == 120.0 && graph.minimumBpm == 120.0 &&
+              graph.maximumBpm == 240.0,
+          "BPM graph derives extrema from emitted BPM-scroll speeds and "
+          "ignores non-positive speeds for its minimum");
   require(graph.bpmSeries.size() == 8 &&
               graph.bpmSeries[0].synthetic &&
               graph.bpmSeries[0].graphSpeed == 120.0 &&
@@ -258,7 +259,7 @@ void testChartModelPublishesPinnedGraphSourceShapes() {
               graph.bpmSeries[3].chartTimeMicros == 1'500'000 &&
               graph.bpmSeries[3].graphSpeed == -90.0 &&
               graph.bpmSeries[4].chartTimeMicros == 2'000'000 &&
-              graph.bpmSeries[4].graphSpeed == 120.0 &&
+              graph.bpmSeries[4].graphSpeed == 240.0 &&
               graph.bpmSeries.back().synthetic &&
               graph.bpmSeries.back().chartTimeMicros == 5'000'000,
           "BPM graph retains source order, negative scroll, stop, transitions, and terminal point");
@@ -274,20 +275,23 @@ void testVisualStateGraphSnapshotsDetachAtProducerUpdates() {
   dynamic.earlyLateDistribution.assign(
       model.skinGameplayGraph.judgementDistributionSeconds, {});
   dynamic.judgementDistribution[0][1] = 3;
-  dynamic.gaugeHistory = {20.0F, 44.0F};
+  const auto normalIndex =
+      static_cast<std::size_t>(gaugeTypeIndex(GaugeType::Normal));
+  dynamic.gaugeHistories[normalIndex] = {20.0F, 44.0F};
   store.applyGameplayGraphState(dynamic);
 
   const auto captured = store.capture({.serial = 1});
   dynamic.judgementDistribution[0][1] = 9;
-  dynamic.gaugeHistory.back() = 99.0F;
+  dynamic.gaugeHistories[normalIndex].back() = 99.0F;
   store.applyGameplayGraphState(dynamic);
 
   require(captured.skinGameplayGraph.chart != nullptr &&
               captured.skinGameplayGraph.dynamic != nullptr &&
               captured.skinGameplayGraph.dynamic
                       ->judgementDistribution[0][1] == 3 &&
-              captured.skinGameplayGraph.dynamic->gaugeHistory.back() ==
-                  44.0F,
+              captured.skinGameplayGraph.dynamic
+                      ->gaugeHistories[normalIndex]
+                      .back() == 44.0F,
           "captured graph state remains immutable after a later producer update");
 }
 

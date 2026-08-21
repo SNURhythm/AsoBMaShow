@@ -884,8 +884,6 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
 
   auto &graph = result.skinGameplayGraph;
   graph.mainBpm = result.staticMetadata.mainBpm;
-  graph.minimumBpm = result.staticMetadata.minimumBpm;
-  graph.maximumBpm = result.staticMetadata.maximumBpm;
   const std::size_t distributionSeconds =
       result.timelines.empty()
           ? 0
@@ -1009,6 +1007,23 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
                                .graphSpeed = graphSpeed,
                                .emitsGraphPoint = true,
                                .synthetic = true});
+  }
+  graph.minimumBpm = std::numeric_limits<double>::max();
+  graph.maximumBpm = std::numeric_limits<double>::lowest();
+  for (const auto &point : graph.bpmSeries) {
+    if (!point.emitsGraphPoint) {
+      continue;
+    }
+    if (point.graphSpeed > 0.0) {
+      graph.minimumBpm = std::min(graph.minimumBpm, point.graphSpeed);
+    }
+    graph.maximumBpm = std::max(graph.maximumBpm, point.graphSpeed);
+  }
+  if (graph.minimumBpm == std::numeric_limits<double>::max()) {
+    graph.minimumBpm = 0.0;
+  }
+  if (graph.maximumBpm == std::numeric_limits<double>::lowest()) {
+    graph.maximumBpm = 0.0;
   }
   return result;
 }

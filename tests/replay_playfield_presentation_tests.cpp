@@ -1633,10 +1633,14 @@ void testReplayGraphAuthorityMatchesTheGameplayProducer() {
   const auto definition = gameplay::buildGameplayDefinition(chart, 0);
   gameplay::GameplaySimulation simulation(
       definition,
-      {.judge = gameplay::CompiledGameplayJudge::from(Judge(1))});
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(3)),
+       .attempt = {.gaugeAutoShift = GaugeAutoShiftMode::BestClear}});
+  const GaugeStateSnapshot initialGaugeState =
+      simulation.scoreState().gaugeSnapshot();
+  (void)simulation.advanceTo(1'200'000, 1'200'000);
   const auto judged = simulation.pressLane(
-      1, {.songTimeMicros = 1'025'000,
-          .laneBeamTimeMicros = 1'025'000});
+      1, {.songTimeMicros = 1'200'000,
+          .laneBeamTimeMicros = 1'200'000});
   expect(judged.hasJudge && judged.hasReplayEvent,
          "replay graph fixture produces one authoritative replay event");
   if (!judged.hasReplayEvent) {
@@ -1646,19 +1650,25 @@ void testReplayGraphAuthorityMatchesTheGameplayProducer() {
   AppSettings settings;
   PlayfieldPresentationConfig configuration;
   TestBga bga;
+  PlayfieldAuthorityUpdate authority;
+  authority.gaugeRules = simulation.scoreState().gaugeRules();
+  authority.gaugeType = initialGaugeState.gaugeType;
+  authority.gaugeAutoShift = initialGaugeState.gaugeAutoShift;
+  authority.gaugeAutoShiftLowerBound =
+      initialGaugeState.gaugeAutoShiftLowerBound;
+  authority.currentGauge = initialGaugeState.currentGauge;
+  authority.graphGaugeState = initialGaugeState;
+  PlayfieldVisualState initialVisualState;
+  initialVisualState.authority = authority;
   auto info = createInfo(chart, settings, configuration, bga);
-  info.timingWindows = Judge(1).timingWindows;
+  info.timingWindows = Judge(3).timingWindows;
+  info.skinInput.initialState = &initialVisualState;
   const auto created = ReplayPlayfieldPresentation::create(std::move(info));
   expect(created.presentation != nullptr,
          "replay graph presentation is created");
   if (!created.presentation) {
     return;
   }
-  PlayfieldAuthorityUpdate authority;
-  authority.gaugeRules = simulation.scoreState().gaugeRules();
-  authority.gaugeType = judged.replayEvent.gaugeType;
-  authority.currentGauge = judged.replayEvent.gauge;
-  created.presentation->applyAuthorityUpdate(authority);
   const ReplayEvent replay{
       .action = ReplayEventAction::Press,
       .lane = judged.replayEvent.lane,
@@ -1675,9 +1685,11 @@ void testReplayGraphAuthorityMatchesTheGameplayProducer() {
   (void)created.presentation->applyReplayEvent(
       replay,
       makePlayfieldJudgeEventClock(replay.songTimeMicros, 0), true);
+  (void)simulation.advanceTo(1'600'000, 1'600'000);
 
   const auto captured =
-      created.presentation->captureVisualStateForTesting({.serial = 90});
+      created.presentation->captureVisualStateForTesting(
+          {.serial = 90, .gameplayTimeMicros = 1'600'000});
   expect(captured.skinGameplayGraph.dynamic != nullptr &&
              *captured.skinGameplayGraph.dynamic ==
                  simulation.skinGameplayGraphState() &&

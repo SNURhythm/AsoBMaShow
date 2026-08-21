@@ -169,8 +169,9 @@ GameplaySimulation::GameplaySimulation(const GameplayDefinition &definition,
   skinGameplayGraph_.reset(
       makeSkinGameplayGraphNotes(definition_), graphSecondCount,
       skinJudgeWindows(config_.judge), config_.attempt.gaugeHistoryCapacity);
-  (void)skinGameplayGraph_.setGauge(scoreState_.gaugeType,
-                                    scoreState_.gaugeRules());
+  (void)skinGameplayGraph_.updateGaugeState(
+      scoreState_.gaugeValues, scoreState_.gaugeType,
+      scoreState_.gaugeRules());
   laneStates_.reserve(definition.lanes().size());
   for (const auto &lane : definition.lanes()) {
     laneStates_.push_back({.lane = lane.lane});
@@ -289,9 +290,9 @@ void GameplaySimulation::commitJudge(NoteId id, const JudgeResult &judge) {
       scoreState_.gaugeHistoryOverflowed();
   scoreState_.commitJudge(judge);
   skinGameplayGraph_.applyJudge(id, judge);
-  (void)skinGameplayGraph_.recordGauge(scoreState_.currentGauge,
-                                       scoreState_.gaugeType,
-                                       scoreState_.gaugeRules());
+  (void)skinGameplayGraph_.updateGaugeState(
+      scoreState_.gaugeValues, scoreState_.gaugeType,
+      scoreState_.gaugeRules());
   observeGaugeMutation(wasSurvivalFailed, wasGaugeHistoryOverflowed);
 }
 
@@ -300,9 +301,9 @@ void GameplaySimulation::applyGaugeDelta(float delta) {
   const bool wasGaugeHistoryOverflowed =
       scoreState_.gaugeHistoryOverflowed();
   scoreState_.applyGaugeDelta(delta);
-  (void)skinGameplayGraph_.recordGauge(scoreState_.currentGauge,
-                                       scoreState_.gaugeType,
-                                       scoreState_.gaugeRules());
+  (void)skinGameplayGraph_.updateGaugeState(
+      scoreState_.gaugeValues, scoreState_.gaugeType,
+      scoreState_.gaugeRules());
   observeGaugeMutation(wasSurvivalFailed, wasGaugeHistoryOverflowed);
 }
 
@@ -312,9 +313,9 @@ void GameplaySimulation::applyGaugeJudgementRate(Judgement judgement,
   const bool wasGaugeHistoryOverflowed =
       scoreState_.gaugeHistoryOverflowed();
   scoreState_.applyGaugeJudgementRate(judgement, rate);
-  (void)skinGameplayGraph_.recordGauge(scoreState_.currentGauge,
-                                       scoreState_.gaugeType,
-                                       scoreState_.gaugeRules());
+  (void)skinGameplayGraph_.updateGaugeState(
+      scoreState_.gaugeValues, scoreState_.gaugeType,
+      scoreState_.gaugeRules());
   observeGaugeMutation(wasSurvivalFailed, wasGaugeHistoryOverflowed);
 }
 
@@ -820,6 +821,7 @@ void GameplaySimulation::integrateHellChargeInterval(
           gaining ? activeDelta : -activeDelta;
     }
     currentMicros = intervalEnd;
+    (void)skinGameplayGraph_.advanceGaugeHistoryTo(currentMicros);
 
     while (true) {
       NoteId nextHeadId = kInvalidNoteId;

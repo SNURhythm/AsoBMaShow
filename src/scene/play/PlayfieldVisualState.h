@@ -5,6 +5,7 @@
 #include "../../ReplayData.h"
 #include "../../audio/GameplayBgaMissStateTracker.h"
 #include "GameplayGaugeRules.h"
+#include "GameplayScoreState.h"
 #include "Pacemaker.h"
 #include "PlayfieldChartVisualModel.h"
 #include "PlayfieldPresentationEvents.h"
@@ -232,6 +233,10 @@ struct PlayfieldAuthorityUpdate {
   GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
   float currentGauge = 0.0F;
   GameplayGaugeRules gaugeRules;
+  // Replay/export owns the exact initial state of every gauge type. The
+  // presentation consumes this once, then advances the same source-neutral
+  // graph accumulator from replay events without mixing auto-shift streams.
+  std::optional<GaugeStateSnapshot> graphGaugeState;
   pacemaker::Target pacemakerTarget;
   pacemaker::Snapshot pacemakerStatus;
   // IndexType.option_1p/option_2p/option_dp values. These retain the raw

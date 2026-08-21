@@ -27,6 +27,8 @@ using SkinJudgeDistribution =
     std::array<int, kSkinJudgeDistributionBucketCount>;
 using SkinEarlyLateDistribution =
     std::array<int, kSkinEarlyLateDistributionBucketCount>;
+using SkinGaugeHistoryCollection =
+    std::array<std::vector<float>, kGaugeTypeCount>;
 
 struct SkinBpmGraphPoint {
   std::int64_t chartTimeMicros = 0;
@@ -88,7 +90,7 @@ struct SkinGameplayDynamicGraphState {
   // this exact source index rather than a reordered oldest-first window.
   std::size_t recentJudgeTimingIndex = 0;
   std::array<SkinJudgeWindow, 5> judgeWindows{};
-  std::vector<float> gaugeHistory;
+  SkinGaugeHistoryCollection gaugeHistories;
   GaugeType gaugeType = GaugeType::Normal;
   float gaugeMinimum = 0.0F;
   float gaugeMaximum = 100.0F;
@@ -140,8 +142,10 @@ public:
   void applyJudge(std::uint32_t sourceId, const JudgeResult &judge);
   [[nodiscard]] bool setGauge(GaugeType type,
                               const GameplayGaugeRules &rules) noexcept;
-  [[nodiscard]] bool recordGauge(float value, GaugeType type,
-                                 const GameplayGaugeRules &rules);
+  [[nodiscard]] bool updateGaugeState(
+      const std::array<float, kGaugeTypeCount> &values, GaugeType type,
+      const GameplayGaugeRules &rules);
+  [[nodiscard]] bool advanceGaugeHistoryTo(std::int64_t playTimeMicros);
 
   [[nodiscard]] const SkinGameplayDynamicGraphState &state() const noexcept {
     return state_;
@@ -162,5 +166,8 @@ private:
   SkinGameplayDynamicGraphState state_;
   std::vector<NoteState> notes_;
   std::unordered_map<std::uint32_t, std::size_t> noteIndices_;
+  std::array<float, kGaugeTypeCount> gaugeValues_{};
   std::size_t gaugeHistoryCapacity_ = 0;
+  std::int64_t nextGaugeSampleMicros_ = 0;
+  bool gaugeValuesInitialized_ = false;
 };

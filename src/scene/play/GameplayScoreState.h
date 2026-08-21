@@ -557,6 +557,8 @@ struct GaugeStateSnapshot {
   float currentGauge = 0.0f;
   std::array<float, kGaugeTypeCount> gaugeValues{};
   std::array<bool, kGaugeTypeCount> gaugeSurvivalFailed{};
+
+  bool operator==(const GaugeStateSnapshot &) const = default;
 };
 
 struct GameplayScoreConfig {

@@ -19,8 +19,14 @@ skinGameplayGraphStateView(const SkinGameplayGraphState &state) noexcept {
     view.judgeWindows = state.dynamic->judgeWindows;
     view.recentJudgeTimingsMillis = state.dynamic->recentJudgeTimingsMillis;
     view.recentJudgeTimingIndex = state.dynamic->recentJudgeTimingIndex;
-    view.gaugeHistory = state.dynamic->gaugeHistory;
-    view.gaugeType = gaugeTypeIndex(state.dynamic->gaugeType);
+    const int gaugeIndex = gaugeTypeIndex(state.dynamic->gaugeType);
+    if (gaugeIndex >= 0 &&
+        static_cast<std::size_t>(gaugeIndex) <
+            state.dynamic->gaugeHistories.size()) {
+      view.gaugeHistory =
+          state.dynamic->gaugeHistories[static_cast<std::size_t>(gaugeIndex)];
+    }
+    view.gaugeType = gaugeIndex;
     view.gaugeMinimum = state.dynamic->gaugeMinimum;
     view.gaugeMaximum = state.dynamic->gaugeMaximum;
     view.gaugeBorder = state.dynamic->gaugeBorder;
@@ -44,8 +50,13 @@ void SkinGameplayGraphAccumulator::reset(
   state_.judgeWindows = judgeWindows;
   state_.judgementDistribution.assign(secondCount, {});
   state_.earlyLateDistribution.assign(secondCount, {});
-  state_.gaugeHistory.reserve(gaugeHistoryCapacity);
+  for (auto &history : state_.gaugeHistories) {
+    history.reserve(gaugeHistoryCapacity);
+  }
   gaugeHistoryCapacity_ = gaugeHistoryCapacity;
+  gaugeValues_ = {};
+  nextGaugeSampleMicros_ = 0;
+  gaugeValuesInitialized_ = false;
 
   notes_.clear();
   notes_.reserve(notes.size());
@@ -172,12 +183,45 @@ bool SkinGameplayGraphAccumulator::setGauge(
                               state_.gaugeBorder};
 }
 
-bool SkinGameplayGraphAccumulator::recordGauge(
-    float value, GaugeType type, const GameplayGaugeRules &rules) {
+bool SkinGameplayGraphAccumulator::updateGaugeState(
+    const std::array<float, kGaugeTypeCount> &values, GaugeType type,
+    const GameplayGaugeRules &rules) {
   bool changed = setGauge(type, rules);
-  if (state_.gaugeHistory.size() < gaugeHistoryCapacity_) {
-    state_.gaugeHistory.push_back(value);
-    changed = true;
+  changed = changed || !gaugeValuesInitialized_ || gaugeValues_ != values;
+  gaugeValues_ = values;
+  if (!gaugeValuesInitialized_) {
+    gaugeValuesInitialized_ = true;
+    changed = advanceGaugeHistoryTo(0) || changed;
   }
   return changed;
+}
+
+bool SkinGameplayGraphAccumulator::advanceGaugeHistoryTo(
+    std::int64_t playTimeMicros) {
+  constexpr std::int64_t sampleIntervalMicros = 500'000;
+  if (!gaugeValuesInitialized_ || playTimeMicros < nextGaugeSampleMicros_) {
+    return false;
+  }
+
+  const std::uint64_t due = static_cast<std::uint64_t>(
+      (playTimeMicros - nextGaugeSampleMicros_) / sampleIntervalMicros + 1);
+  const std::size_t existing = state_.gaugeHistories.front().size();
+  const std::size_t available =
+      existing < gaugeHistoryCapacity_ ? gaugeHistoryCapacity_ - existing : 0;
+  const std::size_t appended = static_cast<std::size_t>(
+      std::min<std::uint64_t>(due, available));
+  for (std::size_t type = 0; type < state_.gaugeHistories.size(); ++type) {
+    auto &history = state_.gaugeHistories[type];
+    history.insert(history.end(), appended, gaugeValues_[type]);
+  }
+
+  const auto remaining =
+      std::numeric_limits<std::int64_t>::max() - nextGaugeSampleMicros_;
+  if (due > static_cast<std::uint64_t>(remaining / sampleIntervalMicros)) {
+    nextGaugeSampleMicros_ = std::numeric_limits<std::int64_t>::max();
+  } else {
+    nextGaugeSampleMicros_ +=
+        static_cast<std::int64_t>(due) * sampleIntervalMicros;
+  }
+  return appended != 0;
 }

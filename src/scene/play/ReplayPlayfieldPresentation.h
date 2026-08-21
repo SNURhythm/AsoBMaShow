@@ -142,7 +142,9 @@ private:
   [[nodiscard]] const ChartVisualNote *replayNote(const ReplayEvent &) const;
   [[nodiscard]] NotePresentationState *noteState(ChartVisualId) noexcept;
   void publishNoteState(ChartVisualId);
-  void setReplayGauge(const ReplayEvent &);
+  void setReplayGauge(const ReplayEvent &, const ChartVisualNote *);
+  void initializeReplayGraphGaugeState();
+  void advanceGameplayGraphTo(long long gameplayTimeMicros);
   void publishGameplayGraphState();
   void markReplayMissedNote(const ChartVisualNote &, long long);
   void updateLongVisualState(const ChartVisualNote &);
@@ -162,6 +164,7 @@ private:
   std::optional<skin::RuntimeSkinConfigurationSelection>
       runtimeSkinConfigurationSelection_;
   SkinGameplayGraphAccumulator skinGameplayGraph_;
+  std::optional<GameplayScoreState> replayGraphGaugeState_;
   bool skinGameplayGraphDirty_ = false;
   std::unordered_map<ChartVisualId, long long> timelineTimeById_;
   std::unordered_map<ChartVisualId, const ChartVisualNote *> notesById_;

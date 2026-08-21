@@ -85,7 +85,9 @@ ReplayPlayfieldPresentation::ReplayPlayfieldPresentation(
       chartModel_->skinGameplayGraph.judgementNotes,
       chartModel_->skinGameplayGraph.judgementDistributionSeconds, judgeWindows,
       gaugeHistoryCapacity);
+  initializeReplayGraphGaugeState();
   state_->applyGameplayGraphState(skinGameplayGraph_.state());
+  skinGameplayGraphDirty_ = false;
   timelineTimeById_.reserve(chartModel_->timelines.size());
   for (const auto &timeline : chartModel_->timelines) {
     timelineTimeById_.emplace(timeline.id, timeline.timeMicros);
@@ -166,9 +168,14 @@ ReplayPlayfieldPresentationCreateResult ReplayPlayfieldPresentation::create(
   auto state = std::make_unique<PlayfieldVisualStateStore>(*model);
   const auto graphJudgeWindows =
       replaySkinJudgeWindows(creation.timingWindows);
-  const std::size_t graphGaugeHistoryCapacity = std::max<std::size_t>(
-      4096, creation.replayData != nullptr ? creation.replayData->events.size()
-                                           : 0);
+  const auto lastGraphTime =
+      model->timelines.empty()
+          ? 0LL
+          : std::max(0LL, model->timelines.back().timeMicros);
+  const std::size_t graphGaugeHistoryCapacity = std::max({
+      std::size_t{4096},
+      creation.replayData != nullptr ? creation.replayData->events.size() : 0,
+      static_cast<std::size_t>(lastGraphTime / 500'000) + 2});
   state->setConfiguration(creation.configuration);
   state->setReplayTouchSamples(creation.replayTouchSamples);
   if (creation.skinInput.initialState != nullptr) {
@@ -251,7 +258,8 @@ ReplayPlayfieldPresentationCreateResult ReplayPlayfieldPresentation::create(
   return {.presentation = std::unique_ptr<ReplayPlayfieldPresentation>(
               new ReplayPlayfieldPresentation(
                   std::move(model), std::move(state), std::move(projection),
-                  std::move(coordinator), renderer, {}, creation.configuration,
+                  std::move(coordinator), renderer, initialState.authority,
+                  creation.configuration,
                   gameplay_hispeed::State(
                       {.mode = gameplay_hispeed::fixModeFromEncoded(
                            static_cast<int>(creation.settings.hispeedFixMode)),
@@ -302,6 +310,39 @@ void ReplayPlayfieldPresentation::applyAuthorityUpdate(
       skinGameplayGraph_.setGauge(authority_.gaugeType,
                                   authority_.gaugeRules) ||
       skinGameplayGraphDirty_;
+  initializeReplayGraphGaugeState();
+}
+
+void ReplayPlayfieldPresentation::initializeReplayGraphGaugeState() {
+  if (replayGraphGaugeState_.has_value() || !authority_.gaugeRules.compiled) {
+    return;
+  }
+  replayGraphGaugeState_.emplace(
+      GameplayScoreConfig{.gaugeRules = authority_.gaugeRules,
+                          .keyMode = chartModel_->keyCount});
+  replayGraphGaugeState_->configureBoundedGaugeHistory(0);
+  if (authority_.graphGaugeState.has_value()) {
+    replayGraphGaugeState_->restoreGaugeState(*authority_.graphGaugeState);
+  } else {
+    replayGraphGaugeState_->configureGauge(
+        authority_.gaugeType, authority_.gaugeAutoShift,
+        authority_.gaugeRules.resolvedProfile,
+        authority_.gaugeAutoShiftLowerBound);
+    const int index = gaugeTypeIndex(authority_.gaugeType);
+    replayGraphGaugeState_->gaugeType = authority_.gaugeType;
+    replayGraphGaugeState_->currentGauge = authority_.currentGauge;
+    if (index >= 0 &&
+        static_cast<std::size_t>(index) <
+            replayGraphGaugeState_->gaugeValues.size()) {
+      replayGraphGaugeState_->gaugeValues[static_cast<std::size_t>(index)] =
+          authority_.currentGauge;
+    }
+  }
+  skinGameplayGraphDirty_ =
+      skinGameplayGraph_.updateGaugeState(
+          replayGraphGaugeState_->gaugeValues,
+          replayGraphGaugeState_->gaugeType, authority_.gaugeRules) ||
+      skinGameplayGraphDirty_;
 }
 
 const ChartVisualNote *
@@ -332,13 +373,51 @@ void ReplayPlayfieldPresentation::publishNoteState(ChartVisualId id) {
   }
 }
 
-void ReplayPlayfieldPresentation::setReplayGauge(const ReplayEvent &event) {
+void ReplayPlayfieldPresentation::setReplayGauge(
+    const ReplayEvent &event, const ChartVisualNote *resolvedNote) {
+  initializeReplayGraphGaugeState();
+  advanceGameplayGraphTo(event.songTimeMicros);
+  if (replayGraphGaugeState_.has_value()) {
+    if (event.action == ReplayEventAction::Mine && resolvedNote != nullptr) {
+      replayGraphGaugeState_->applyGaugeDelta(
+          -static_cast<float>(resolvedNote->mineDamage));
+    } else if (event.action == ReplayEventAction::Gauge &&
+               (event.judgement == Great || event.judgement == Bad)) {
+      replayGraphGaugeState_->applyGaugeJudgementRate(event.judgement, 0.5F);
+    } else if (event.action != ReplayEventAction::Gauge &&
+               event.judgement != None) {
+      replayGraphGaugeState_->applyGaugeJudgement(event.judgement);
+    }
+    replayGraphGaugeState_->gaugeType = event.gaugeType;
+    replayGraphGaugeState_->currentGauge = event.gauge;
+    const int index = gaugeTypeIndex(event.gaugeType);
+    if (index >= 0 &&
+        static_cast<std::size_t>(index) <
+            replayGraphGaugeState_->gaugeValues.size()) {
+      replayGraphGaugeState_->gaugeValues[static_cast<std::size_t>(index)] =
+          event.gauge;
+      if (gaugeIsSurvival(event.gaugeType,
+                          replayGraphGaugeState_->gaugeProfile) &&
+          event.gauge <= 0.0F) {
+        replayGraphGaugeState_
+            ->gaugeSurvivalFailed[static_cast<std::size_t>(index)] = true;
+      }
+    }
+    skinGameplayGraphDirty_ =
+        skinGameplayGraph_.updateGaugeState(
+            replayGraphGaugeState_->gaugeValues, event.gaugeType,
+            authority_.gaugeRules) ||
+        skinGameplayGraphDirty_;
+  }
   authority_.gaugeType = event.gaugeType;
   authority_.currentGauge = event.gauge;
   state_->applyAuthorityUpdate(authority_);
+}
+
+void ReplayPlayfieldPresentation::advanceGameplayGraphTo(
+    long long gameplayTimeMicros) {
   skinGameplayGraphDirty_ =
-      skinGameplayGraph_.recordGauge(event.gauge, event.gaugeType,
-                                     authority_.gaugeRules) ||
+      skinGameplayGraph_.advanceGaugeHistoryTo(gameplayTimeMicros) ||
       skinGameplayGraphDirty_;
 }
 
@@ -468,7 +547,7 @@ bool ReplayPlayfieldPresentation::applyReplayEvent(
     }
     events_->onJudge(recordedJudge, event.combo, event.score, clock,
                      event.action != ReplayEventAction::Miss);
-    setReplayGauge(event);
+    setReplayGauge(event, resolvedGraphNote);
     return true;
   };
 
@@ -563,10 +642,10 @@ bool ReplayPlayfieldPresentation::applyReplayEvent(
         publishNoteState(note->id);
       }
     }
-    setReplayGauge(event);
+    setReplayGauge(event, resolvedGraphNote);
     return false;
   case ReplayEventAction::Gauge:
-    setReplayGauge(event);
+    setReplayGauge(event, resolvedGraphNote);
     return false;
   }
   return false;
@@ -604,6 +683,7 @@ PresentationFrameResult ReplayPlayfieldPresentation::renderFrame(
     const PlayfieldProjectionRequest &request) {
   builtIn_->refreshGeometry();
   state_->applyAuthorityUpdate(authority_);
+  advanceGameplayGraphTo(clock.gameplayTimeMicros);
   publishGameplayGraphState();
   updateHcnVisualStates(clock.visualTimeMicros);
   PlayfieldVisualState state = state_->captureForPresentation(clock);
@@ -650,6 +730,7 @@ BMSRenderer &ReplayPlayfieldPresentation::builtInRenderer() noexcept {
 #if defined(ASOBMASHOW_REPLAY_PLAYFIELD_PRESENTATION_TESTING)
 PlayfieldVisualState ReplayPlayfieldPresentation::captureVisualStateForTesting(
     PlayfieldFrameClock clock) {
+  advanceGameplayGraphTo(clock.gameplayTimeMicros);
   publishGameplayGraphState();
   updateHcnVisualStates(clock.visualTimeMicros);
   return state_->capture(clock);

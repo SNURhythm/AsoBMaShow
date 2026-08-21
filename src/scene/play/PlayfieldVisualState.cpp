@@ -52,6 +52,7 @@ bool PlayfieldAuthorityUpdate::operator==(
          gaugeAutoShift == other.gaugeAutoShift &&
          gaugeAutoShiftLowerBound == other.gaugeAutoShiftLowerBound &&
          currentGauge == other.currentGauge && gaugeRules == other.gaugeRules &&
+         graphGaugeState == other.graphGaugeState &&
          sameTarget(pacemakerTarget, other.pacemakerTarget) &&
          sameSnapshot(pacemakerStatus, other.pacemakerStatus) &&
          player1RandomOption == other.player1RandomOption &&

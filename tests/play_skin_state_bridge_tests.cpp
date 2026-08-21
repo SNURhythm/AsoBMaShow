@@ -315,7 +315,9 @@ void testGraphViewBorrowsTheCapturedImmutableStorage() {
   dynamicGraph->judgementDistribution = {{{0, 1, 2, 3, 4, 5}}};
   dynamicGraph->earlyLateDistribution = {
       {{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}}};
-  dynamicGraph->gaugeHistory = {25.0F, 50.0F};
+  const auto normalGaugeIndex =
+      static_cast<std::size_t>(gaugeTypeIndex(GaugeType::Normal));
+  dynamicGraph->gaugeHistories[normalGaugeIndex] = {25.0F, 50.0F};
   dynamicGraph->recentJudgeTimingsMillis[1] = -12;
   dynamicGraph->recentJudgeTimingIndex = 1;
   state.skinGameplayGraph = {.chart = chartGraph, .dynamic = dynamicGraph};
@@ -329,7 +331,8 @@ void testGraphViewBorrowsTheCapturedImmutableStorage() {
              view.earlyLateDistribution.data() ==
                  dynamicGraph->earlyLateDistribution.data() &&
              view.bpmSeries.data() == chartGraph->bpmSeries.data() &&
-             view.gaugeHistory.data() == dynamicGraph->gaugeHistory.data() &&
+             view.gaugeHistory.data() ==
+                 dynamicGraph->gaugeHistories[normalGaugeIndex].data() &&
              view.recentJudgeTimingsMillis.data() ==
                  dynamicGraph->recentJudgeTimingsMillis.data() &&
              view.recentJudgeTimingIndex == 1 && view.mainBpm == 150.0,
