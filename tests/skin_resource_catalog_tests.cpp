@@ -210,12 +210,21 @@ struct FakeTextureDevice final : skin::SkinTextureDevice {
   void destroy(bgfx::TextureHandle handle) noexcept override {
     if (bgfx::isValid(handle)) { ++destroys; --live; }
   }
+  bool update(bgfx::TextureHandle handle,
+              const image_decode::DecodedImageData &image) override {
+    if (!bgfx::isValid(handle) || image.rgba == nullptr) {
+      return false;
+    }
+    ++updates;
+    return true;
+  }
   bool ownsCurrentThread() const noexcept override { return true; }
   int maximumTextureDimension() const noexcept override {
     return maximumDimension;
   }
   int creates = 0;
   int destroys = 0;
+  int updates = 0;
   int live = 0;
   int failAt = 0;
   int maximumDimension = skin::SkinResourcePolicy::maximumDimension;
@@ -1163,8 +1172,70 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   expect(firstMapped && aliasMapped && firstMapped->resolved.x == 0 && firstMapped->resolved.w == 10 &&
              aliasMapped->resolved.x == 2 && aliasMapped->resolved.w == 10,
          "immutable resource lookup preserves each authored frame identity through resolution and alias reuse");
-  const int readsBefore = device->creates;
   uploaded.catalog->enterRenderPhase();
+  const skin::SkinGeneratedTextureKey generatedKey{
+      .sourceObject = 71,
+      .authoredOrdinal = 19,
+      .layer = skin::SkinGeneratedTextureLayer::Shape};
+  const auto firstPixels =
+      std::make_shared<const std::vector<std::uint8_t>>(16U, 0x11U);
+  const auto equalPixels =
+      std::make_shared<const std::vector<std::uint8_t>>(16U, 0x11U);
+  const auto changedPixels =
+      std::make_shared<const std::vector<std::uint8_t>>(16U, 0x22U);
+  const auto resizedPixels =
+      std::make_shared<const std::vector<std::uint8_t>>(32U, 0x33U);
+  const int generatedCreatesBefore = device->creates;
+  const int generatedDestroysBefore = device->destroys;
+  const auto *createdGenerated = uploaded.catalog->prepareGeneratedTexture(
+      generatedKey,
+      {.width = 2, .height = 2, .rgba = firstPixels});
+  const auto *cachedGenerated = uploaded.catalog->prepareGeneratedTexture(
+      generatedKey,
+      {.width = 2, .height = 2, .rgba = equalPixels});
+  const auto *updatedGenerated = uploaded.catalog->prepareGeneratedTexture(
+      generatedKey,
+      {.width = 2, .height = 2, .rgba = changedPixels});
+  const auto *resizedGenerated = uploaded.catalog->prepareGeneratedTexture(
+      generatedKey,
+      {.width = 4, .height = 2, .rgba = resizedPixels});
+  expect(createdGenerated != nullptr && cachedGenerated != nullptr &&
+             updatedGenerated != nullptr && resizedGenerated != nullptr &&
+             createdGenerated->key == generatedKey &&
+             resizedGenerated->width == 4 && resizedGenerated->height == 2 &&
+             device->creates == generatedCreatesBefore + 2 &&
+             device->updates == 1 &&
+             device->destroys == generatedDestroysBefore + 1,
+         "session-generated textures create once, skip byte-identical frames, "
+         "update dirty pixels, and replace only on dimension changes");
+  const auto onePixel =
+      std::make_shared<const std::vector<std::uint8_t>>(4U, 0xffU);
+  const int boundedCreatesBefore = device->creates;
+  std::size_t acceptedGenerated = 0;
+  for (std::size_t index = 1;
+       index < skin::SkinResourcePolicy::maximumGeneratedTextures; ++index) {
+    if (uploaded.catalog->prepareGeneratedTexture(
+            {.sourceObject = static_cast<skin::SkinObjectId>(100 + index),
+             .authoredOrdinal = static_cast<std::uint32_t>(index),
+             .layer = skin::SkinGeneratedTextureLayer::Primary},
+            {.width = 1, .height = 1, .rgba = onePixel}) != nullptr) {
+      ++acceptedGenerated;
+    }
+  }
+  const auto *overLimit = uploaded.catalog->prepareGeneratedTexture(
+      {.sourceObject = 9999,
+       .authoredOrdinal = 9999,
+       .layer = skin::SkinGeneratedTextureLayer::Primary},
+      {.width = 1, .height = 1, .rgba = onePixel});
+  expect(acceptedGenerated ==
+                 skin::SkinResourcePolicy::maximumGeneratedTextures - 1U &&
+             overLimit == nullptr &&
+             device->creates ==
+                 boundedCreatesBefore +
+                     static_cast<int>(acceptedGenerated),
+         "generated texture count stops exactly at the fixed session budget "
+         "without attempting an over-limit upload");
+  const int readsBefore = device->creates;
   for (int frame = 0; frame != 120; ++frame) {
     (void)uploaded.catalog->find(1);
     (void)uploaded.catalog->find(2);

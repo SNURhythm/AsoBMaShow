@@ -77,8 +77,34 @@ struct FakeResources final : skin::SkinPreparedResourceView {
     return nullptr;
   }
 
+  const skin::PreparedSkinGeneratedTexture *prepareGeneratedTexture(
+      const skin::SkinGeneratedTextureKey &key,
+      const skin::SkinGeneratedTextureData &data) const noexcept override {
+    ++generatedPreflights;
+    if (data.width <= 0 || data.height <= 0 || data.rgba == nullptr ||
+        data.rgba->size() !=
+            static_cast<std::size_t>(data.width * data.height * 4)) {
+      return nullptr;
+    }
+    auto [found, inserted] = generated.emplace(
+        key, skin::PreparedSkinGeneratedTexture{
+                 .key = key,
+                 .texture = bgfx::TextureHandle{777},
+                 .width = data.width,
+                 .height = data.height});
+    if (!inserted && (found->second.width != data.width ||
+                      found->second.height != data.height)) {
+      return nullptr;
+    }
+    return &found->second;
+  }
+
   std::map<skin::SkinResourceId, skin::PreparedSkinResource> images;
   std::map<skin::SkinTextAtlasId, skin::PreparedSkinTextAtlas> atlases;
+  mutable std::map<skin::SkinGeneratedTextureKey,
+                   skin::PreparedSkinGeneratedTexture>
+      generated;
+  mutable int generatedPreflights = 0;
 };
 
 struct CapturedBatch {
@@ -1010,6 +1036,43 @@ void testLargeStripsSplitWithoutUint16IndexCorruption() {
          "triangle-strip split repeats two vertices without index wrap");
 }
 
+void testGeneratedTextureCommandsMaterializeBeforeAtomicSubmission() {
+  FakeResources prepared;
+  RenderContext context;
+  FakeBackend backend;
+  rendering::SkinQuadBatchRenderer renderer(backend);
+
+  skin::SkinGeneratedTexturedQuadCommand generated;
+  generated.key = {.sourceObject = 9,
+                   .authoredOrdinal = 4,
+                   .layer = skin::SkinGeneratedTextureLayer::Shape};
+  generated.texture = {
+      .width = 2,
+      .height = 2,
+      .rgba = std::make_shared<const std::vector<std::uint8_t>>(
+          16U, 0xffU)};
+  generated.vertices = {{{.x = 1.0F, .y = 2.0F, .u = 0.0F, .v = 0.0F},
+                         {.x = 5.0F, .y = 2.0F, .u = 1.0F, .v = 0.0F},
+                         {.x = 5.0F, .y = 6.0F, .u = 1.0F, .v = 1.0F},
+                         {.x = 1.0F, .y = 6.0F, .u = 0.0F, .v = 1.0F}}};
+  generated.state = {.blend = skin::SkinBlendMode::Additive,
+                     .filter = skin::SkinFilterMode::Linear};
+  const std::array commands{command(4, std::move(generated))};
+
+  renderer.begin(context, prepared);
+  expect(renderer.submit(commands),
+         "generated texture command passes whole-span preflight");
+  renderer.flush();
+  expect(prepared.generatedPreflights == 1 && backend.reserveCalls == 1 &&
+             backend.batches.size() == 1 && backend.batches[0].textured &&
+             backend.batches[0].texture.idx == 777 &&
+             backend.batches[0].blend == skin::SkinBlendMode::Additive &&
+             backend.batches[0].filter == skin::SkinFilterMode::Linear &&
+             backend.batches[0].vertices.size() == 4,
+         "generated pixels materialize before reserve and submit as one "
+         "ordinary textured quad");
+}
+
 } // namespace
 
 int main() {
@@ -1029,6 +1092,7 @@ int main() {
   testVertexLayoutRegistrationRetainsAndReleasesExactHandles();
   testInvalidLaterSamplerPreventsEveryBackendSubmission();
   testLargeStripsSplitWithoutUint16IndexCorruption();
+  testGeneratedTextureCommandsMaterializeBeforeAtomicSubmission();
   if (failures != 0) {
     return 1;
   }

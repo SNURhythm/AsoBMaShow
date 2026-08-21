@@ -4,6 +4,7 @@
 #include "PlaySkinViewport.h"
 #include "SkinDestinationEvaluator.h"
 #include "SkinDrawCommand.h"
+#include "SkinGeneratedTextureRaster.h"
 #include "../../scene/play/SkinGameplayGraphState.h"
 
 #include <cstddef>
@@ -35,11 +36,7 @@ struct SkinHitErrorVisualizerRenderRequest {
   std::size_t maximumPrimitiveVertices = 0;
 };
 
-struct SkinHitErrorVisualizerRenderResult {
-  std::vector<SkinDrawCommand> commands;
-  std::size_t primitiveVertices = 0;
-  std::optional<SkinDiagnostic> failure;
-};
+using SkinHitErrorVisualizerRenderResult = SkinGeneratedTextureRasterResult;
 
 [[nodiscard]] SkinHitErrorVisualizerRenderResult
 renderSkinHitErrorVisualizer(

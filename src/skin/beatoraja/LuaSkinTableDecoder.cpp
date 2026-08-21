@@ -3230,7 +3230,7 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
     return true;
   }
 
-  if (isGauge) {
+  if (resolved.kind == SkinObjectResolutionKind::Gauge && isGauge) {
     SkinGaugeObject object;
     if (!makeGaugeObject(request, *request.gauge, object)) {
       return false;

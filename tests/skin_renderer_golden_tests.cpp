@@ -5,6 +5,7 @@
 #include "rendering/common.h"
 #include "skin/beatoraja/PlaySkinViewport.h"
 #include "skin/beatoraja/SkinDestinationEvaluator.h"
+#include "skin/beatoraja/SkinGeneratedTextureRaster.h"
 #include "view/View.h"
 
 #include <bgfx/bgfx.h>
@@ -18,6 +19,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <optional>
@@ -90,8 +92,50 @@ struct FakeResources final : skin::SkinPreparedResourceView {
     return nullptr;
   }
 
+  const skin::PreparedSkinGeneratedTexture *prepareGeneratedTexture(
+      const skin::SkinGeneratedTextureKey &key,
+      const skin::SkinGeneratedTextureData &data) const noexcept override {
+    const auto existing = generated.find(key);
+    if (existing != generated.end()) return &existing->second;
+    if (data.width <= 0 || data.height <= 0 || data.rgba == nullptr ||
+        data.width > std::numeric_limits<std::uint16_t>::max() ||
+        data.height > std::numeric_limits<std::uint16_t>::max() ||
+        data.rgba->size() !=
+            static_cast<std::size_t>(data.width * data.height * 4))
+      return nullptr;
+    const auto *memory = bgfx::copy(
+        data.rgba->data(), static_cast<std::uint32_t>(data.rgba->size()));
+    if (memory == nullptr) return nullptr;
+    const auto texture = bgfx::createTexture2D(
+        static_cast<std::uint16_t>(data.width),
+        static_cast<std::uint16_t>(data.height), false, 1,
+        bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_NONE, memory);
+    if (!bgfx::isValid(texture)) return nullptr;
+    try {
+      const auto [inserted, accepted] = generated.emplace(
+          key, skin::PreparedSkinGeneratedTexture{
+                   .key = key, .texture = texture,
+                   .width = data.width, .height = data.height});
+      if (!accepted) bgfx::destroy(texture);
+      return accepted ? &inserted->second : nullptr;
+    } catch (...) {
+      bgfx::destroy(texture);
+      return nullptr;
+    }
+  }
+
+  void destroyGenerated() {
+    for (const auto &[key, resource] : generated) {
+      (void)key;
+      if (bgfx::isValid(resource.texture)) bgfx::destroy(resource.texture);
+    }
+    generated.clear();
+  }
+
   std::map<skin::SkinResourceId, skin::PreparedSkinResource> images;
   std::map<skin::SkinTextAtlasId, skin::PreparedSkinTextAtlas> atlases;
+  mutable std::map<skin::SkinGeneratedTextureKey,
+                   skin::PreparedSkinGeneratedTexture> generated;
 };
 
 std::uint32_t pack(const std::array<float, 4> &rgba) {
@@ -277,6 +321,72 @@ buildScene(const skin::PlaySkinViewport &viewport) {
   };
   line.vertices = {point(8, 82), point(80, 76), point(152, 84)};
   commands.push_back(draw(6, std::move(line)));
+
+  const auto appendGenerated = [&](std::uint32_t ordinal,
+                                   skin::AuthoredDestinationGeometry geometry,
+                                   skin::SkinGeneratedTextureLayer layer,
+                                   std::int64_t elapsedMillis,
+                                   int revealMillis) {
+    skin::SkinGeneratedTextureRaster raster(
+        {.sourceObject = 100U + ordinal,
+         .authoredOrdinal = ordinal,
+         .layer = layer,
+         .geometry = geometry,
+         .viewport = viewport,
+         .elapsedMillis = elapsedMillis,
+         .revealMillis = revealMillis,
+         .maximumCommands = 1,
+         .maximumPrimitiveVertices = 0,
+         .sourceWidth = 4,
+         .sourceHeight = 4,
+         .verticalFlip = false,
+         .diagnosticObject = "generated golden"});
+    if (auto *pixmap = raster.pixmap(); pixmap != nullptr) {
+      pixmap->clear(0U);
+      pixmap->fillRectangle(0, 0, 4, 4, 0xe8385080U);
+      pixmap->fillRectangle(1, 1, 3, 2, 0x38a8f0a0U);
+      pixmap->drawLine(0, 3, 3, 0, 0xffe060c0U);
+    }
+    auto lowered = raster.take();
+    expect(!lowered.failure && lowered.commands.size() == 1,
+           "generated golden Pixmap lowers to one texture command");
+    commands.insert(commands.end(),
+                    std::make_move_iterator(lowered.commands.begin()),
+                    std::make_move_iterator(lowered.commands.end()));
+  };
+
+  appendGenerated(
+      7,
+      {.rect = {.x = 7, .y = 5, .width = 34, .height = 24},
+       .rgba = {0.85F, 1.0F, 0.75F, 0.58F},
+       .blend = skin::SkinBlendMode::Normal,
+       .filter = skin::SkinFilterMode::Nearest,
+       .stretch = skin::SkinStretchMode::Stretch},
+      skin::SkinGeneratedTextureLayer::Primary, 1, 0);
+  appendGenerated(
+      8,
+      {.rect = {.x = 52, .y = 8, .width = 46, .height = 27},
+       .clip = skin::AuthoredRect{.x = 48, .y = 4, .width = 56, .height = 35},
+       .centerX = 0.5,
+       .centerY = 0.5,
+       .angleDegrees = 17.0,
+       .rgba = {0.7F, 0.8F, 1.0F, 0.62F},
+       .blend = skin::SkinBlendMode::Additive,
+       .filter = skin::SkinFilterMode::Linear,
+       .stretch = skin::SkinStretchMode::KeepAspectRatioFitInner},
+      skin::SkinGeneratedTextureLayer::Shape, 1, 0);
+  appendGenerated(
+      9,
+      {.rect = {.x = 94, .y = 39, .width = 54, .height = 27},
+       .clip = skin::AuthoredRect{.x = 100, .y = 40, .width = 38, .height = 22},
+       .centerX = 0.25,
+       .centerY = 0.75,
+       .angleDegrees = -11.0,
+       .rgba = {1.0F, 0.72F, 0.65F, 0.76F},
+       .blend = skin::SkinBlendMode::Subtractive,
+       .filter = skin::SkinFilterMode::Linear,
+       .stretch = skin::SkinStretchMode::KeepAspectRatioFitOuterTrimmed},
+      skin::SkinGeneratedTextureLayer::Shape, 50, 100);
   return commands;
 }
 
@@ -399,6 +509,7 @@ std::vector<std::uint8_t> renderGolden(const GoldenCase &fixture) {
   expect(currentFrame >= expectedFrame, "real Metal readback completes");
 
   bgfx::setViewFrameBuffer(rendering::ui_view, BGFX_INVALID_HANDLE);
+  resources.destroyGenerated();
   bgfx::destroy(framebuffer);
   bgfx::destroy(readback);
   bgfx::destroy(output);

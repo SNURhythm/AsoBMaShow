@@ -4,6 +4,7 @@
 #include "PlaySkinViewport.h"
 #include "SkinDestinationEvaluator.h"
 #include "SkinDrawCommand.h"
+#include "SkinGeneratedTextureRaster.h"
 #include "../../scene/play/SkinGameplayGraphState.h"
 
 #include <cstddef>
@@ -29,11 +30,7 @@ struct SkinNoteDistributionGraphRenderRequest {
   std::size_t maximumPrimitiveVertices = 0;
 };
 
-struct SkinNoteDistributionGraphRenderResult {
-  std::vector<SkinDrawCommand> commands;
-  std::size_t primitiveVertices = 0;
-  std::optional<SkinDiagnostic> failure;
-};
+using SkinNoteDistributionGraphRenderResult = SkinGeneratedTextureRasterResult;
 
 [[nodiscard]] SkinNoteDistributionGraphRenderResult
 renderSkinNoteDistributionGraph(

@@ -2119,12 +2119,14 @@ return {
      drawDecay=0},
     {id='invalid',lineWidth=-9,windowLength=-3,lineColor='invalid',
      centerColor='invalid',PGColor='invalid',GRColor='invalid',
-     GDColor='invalid',BDColor='invalid',emaColor='invalid'}
+     GDColor='invalid',BDColor='invalid',emaColor='invalid'},
+    {id='negative',width=11,judgeWidthMillis=-1}
   },
   destination={
     {id='default',dst={{x=0,y=0,w=301,h=60}}},
     {id='custom',dst={{x=0,y=0,w=401,h=200}}},
-    {id='invalid',dst={{x=0,y=0,w=301,h=60}}}
+    {id='invalid',dst={{x=0,y=0,w=301,h=60}}},
+    {id='negative',dst={{x=0,y=0,w=11,h=60}}}
   }
 }
 )lua");
@@ -2139,6 +2141,7 @@ return {
   const auto *defaults = payload("default");
   const auto *custom = payload("custom");
   const auto *invalid = payload("invalid");
+  const auto *negative = payload("negative");
   expect(defaults != nullptr && defaults->width == 301 &&
              defaults->judgeWidthMillis == 150 && defaults->lineWidth == 1 &&
              defaults->colorMode == 1 && defaults->hitErrorMode == 1 &&
@@ -2175,6 +2178,10 @@ return {
              invalid->judgeRgba[3] == 0xff0000ffU &&
              invalid->emaRgba == 0xff0000ffU,
          "validated hiterrorvisualizer colours fall back to opaque red and bounded lengths clamp");
+  expect(negative != nullptr && negative->width == 11 &&
+             negative->judgeWidthMillis == -1,
+         "hiterrorvisualizer decode preserves a source-constructible negative "
+         "judge width for the renderer's ordered reversed-bound clamp");
 
   if (!decoded.model) {
     return;
@@ -2253,6 +2260,34 @@ return {
                       "skin_lua_model_hiterrorvisualizer_invalid";
              }) != invalid.diagnostics.end(),
          "opaque hiterrorvisualizer retains the pinned direct PRColor load-failure boundary");
+}
+
+void testGameplayGaugeDoesNotPreemptLaterGenericVisualizerKinds() {
+  const auto verify = [](std::string_view declaration, auto payloadTag,
+                         std::string_view message) {
+    const auto decoded = decodeInlineModel(
+        "return {type=0,w=1280,h=720," + std::string(declaration) +
+        ",gauge={id='shared',nodes={}},"
+        "destination={{id='shared',dst={{x=0,y=0,w=301,h=60}}}}}");
+    const auto *definition =
+        decoded.model ? findObject(*decoded.model, "shared") : nullptr;
+    expect(definition != nullptr &&
+               std::holds_alternative<decltype(payloadTag)>(
+                   definition->payload),
+           message);
+  };
+
+  verify("hiterrorvisualizer={{id='shared'}}",
+         SkinHitErrorVisualizerObject{},
+         "same-ID HitErrorVisualizer keeps the pinned generic precedence "
+         "over gameplay Gauge");
+  verify("timingvisualizer={{id='shared'}}", SkinTimingVisualizerObject{},
+         "same-ID TimingVisualizer keeps the pinned generic precedence over "
+         "gameplay Gauge");
+  verify("timingdistributiongraph={{id='shared'}}",
+         SkinTimingDistributionGraphObject{},
+         "same-ID TimingDistributionGraph keeps the pinned generic "
+         "precedence over gameplay Gauge");
 }
 
 void testNegativeGenericDistributionGraphStaysOutsideGameplay() {
@@ -2477,6 +2512,7 @@ int main() {
   testHitErrorVisualizerIsTypedInsteadOfBlank();
   testHitErrorVisualizerDecodesPinnedConstructorFields();
   testHitErrorVisualizerParsesPoorColourOnlyWhenOpaque();
+  testGameplayGaugeDoesNotPreemptLaterGenericVisualizerKinds();
   testNegativeGenericDistributionGraphStaysOutsideGameplay();
   testOptionalVisualsAndBuiltinImagesStayLiveAcrossRepeatedDestinations();
   testPomyuCharaCycleExtractionFollowsPinnedLoaderOrder();

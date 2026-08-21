@@ -2,6 +2,7 @@
 
 #include "BeatorajaSkinModel.h"
 #include "LuaSkinFileSystem.h"
+#include "SkinGeneratedTexture.h"
 #include "SkinLiveResourceCounters.h"
 #include "../SkinSafetyPolicy.h"
 #include "../package/SkinTreeSnapshotter.h"
@@ -38,6 +39,9 @@ struct SkinResourcePolicy {
   static constexpr std::size_t maximumTextAtlasUses = 8'192;
   static constexpr std::size_t maximumAtlasBytes = 32U * 1024U * 1024U;
   static constexpr std::size_t maximumAtlasSessionBytes = 128U * 1024U * 1024U;
+  static constexpr std::size_t maximumGeneratedTextures = 512;
+  static constexpr std::size_t maximumGeneratedSessionBytes =
+      128U * 1024U * 1024U;
   static constexpr std::size_t maximumRuntimeStrings = 64;
   static constexpr std::size_t maximumRuntimeStringBytes = 64U * 1024U;
   static constexpr std::size_t maximumGlyphs = 8192;
@@ -255,6 +259,13 @@ struct PreparedSkinTextAtlas {
   int lineHeight = 0;
 };
 
+struct PreparedSkinGeneratedTexture {
+  SkinGeneratedTextureKey key;
+  bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
+  int width = 0;
+  int height = 0;
+};
+
 class SkinTextureDevice {
 public:
   virtual ~SkinTextureDevice() = default;
@@ -265,6 +276,10 @@ public:
     return create(image);
   }
   virtual void destroy(bgfx::TextureHandle) noexcept = 0;
+  virtual bool update(bgfx::TextureHandle,
+                      const image_decode::DecodedImageData &) {
+    return false;
+  }
   virtual bool ownsCurrentThread() const noexcept = 0;
   virtual int maximumTextureDimension() const noexcept {
     return SkinResourcePolicy::maximumDimension;
@@ -288,6 +303,11 @@ public:
   findTextAtlas(SkinTextAtlasId) const noexcept = 0;
   virtual const PreparedSkinTextAtlas *
   findTextAtlasForObject(SkinObjectId) const noexcept = 0;
+  virtual const PreparedSkinGeneratedTexture *prepareGeneratedTexture(
+      const SkinGeneratedTextureKey &,
+      const SkinGeneratedTextureData &) const noexcept {
+    return nullptr;
+  }
 };
 
 class SkinResourceCatalog;
@@ -310,6 +330,9 @@ public:
   const PreparedSkinTextAtlas *findTextAtlas(const SkinTextAtlasKey &) const noexcept;
   const PreparedSkinTextAtlas *
   findTextAtlasForObject(SkinObjectId) const noexcept override;
+  const PreparedSkinGeneratedTexture *prepareGeneratedTexture(
+      const SkinGeneratedTextureKey &,
+      const SkinGeneratedTextureData &) const noexcept override;
   void enterRenderPhase() noexcept { renderPhase_ = true; }
 private:
   struct OwnedTexture { bgfx::TextureHandle handle = BGFX_INVALID_HANDLE; };
@@ -325,11 +348,20 @@ private:
   std::thread::id owner_;
   bool renderPhase_ = false;
   bool liveResourceCounted_ = false;
-  std::vector<OwnedTexture> owned_;
+  mutable std::vector<OwnedTexture> owned_;
   std::map<SkinResourceId, PreparedSkinResource> resources_;
   std::map<SkinTextAtlasId, PreparedSkinTextAtlas> atlases_;
   std::map<SkinTextAtlasKey, SkinTextAtlasId> atlasKeys_;
   std::map<SkinObjectId, SkinTextAtlasId> textAtlasesByObject_;
+  struct GeneratedTextureEntry {
+    PreparedSkinGeneratedTexture prepared;
+    std::shared_ptr<const std::vector<std::uint8_t>> pixels;
+    std::size_t ownedIndex = 0;
+  };
+  mutable std::map<SkinGeneratedTextureKey, GeneratedTextureEntry>
+      generatedTextures_;
+  mutable std::size_t generatedDecodedBytes_ = 0;
+  SkinSafetyPolicy safetyPolicy_{};
 };
 
 } // namespace skin

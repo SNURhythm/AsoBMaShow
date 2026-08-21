@@ -240,6 +240,11 @@ bool batchCompatible(const SkinDrawCommand &left,
         if constexpr (std::is_same_v<Payload, SkinTexturedQuadCommand>) {
           return leftPayload.resource == rightPayload->resource &&
                  sameState(leftPayload.state, rightPayload->state);
+        } else if constexpr (std::is_same_v<
+                                 Payload,
+                                 SkinGeneratedTexturedQuadCommand>) {
+          return leftPayload.key == rightPayload->key &&
+                 sameState(leftPayload.state, rightPayload->state);
         } else if constexpr (std::is_same_v<Payload, SkinGlyphRunCommand>) {
           return leftPayload.atlas == rightPayload->atlas &&
                  sameState(leftPayload.state, rightPayload->state);

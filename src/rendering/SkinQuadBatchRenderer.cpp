@@ -415,6 +415,26 @@ bool SkinQuadBatchRenderer::preflightSegment(
       }
       continue;
     }
+    if (const auto *quad = std::get_if<skin::SkinGeneratedTexturedQuadCommand>(
+            &command.payload)) {
+      const auto *resource =
+          resources_->prepareGeneratedTexture(quad->key, quad->texture);
+      if (!resource || !bgfx::isValid(resource->texture) ||
+          resource->width != quad->texture.width ||
+          resource->height != quad->texture.height ||
+          !std::ranges::all_of(quad->vertices, validVertex) ||
+          !resolveScissor(quad->state)) {
+        return false;
+      }
+      prepared.texture = resource->texture;
+      if (!prepared.suppressed && !addCounts(4, 6)) {
+        return false;
+      }
+      if (!prepared.suppressed) {
+        addSampler(quad->state.filter);
+      }
+      continue;
+    }
     if (const auto *glyphs =
             std::get_if<skin::SkinGlyphRunCommand>(&command.payload)) {
       const auto *atlas = resources_->findTextAtlas(glyphs->atlas);
@@ -531,6 +551,16 @@ bool SkinQuadBatchRenderer::preflightSegment(
     const auto &command = commands[commandIndex];
     if (const auto *quad =
             std::get_if<skin::SkinTexturedQuadCommand>(&command.payload)) {
+      appendQuad({.texture = resolved[commandIndex].texture,
+                  .topology = SkinBatchTopology::Triangles,
+                  .blend = quad->state.blend,
+                  .filter = quad->state.filter,
+                  .scissor = resolved[commandIndex].scissor,
+                  .textured = true});
+      continue;
+    }
+    if (const auto *quad = std::get_if<skin::SkinGeneratedTexturedQuadCommand>(
+            &command.payload)) {
       appendQuad({.texture = resolved[commandIndex].texture,
                   .topology = SkinBatchTopology::Triangles,
                   .blend = quad->state.blend,
@@ -671,6 +701,16 @@ void SkinQuadBatchRenderer::submitPrepared(SkinQuadSubmissionPlan &plan,
     const auto &command = commands[commandIndex];
     if (const auto *quad =
             std::get_if<skin::SkinTexturedQuadCommand>(&command.payload)) {
+      appendQuad(quad->vertices, {.texture = resolved[commandIndex].texture,
+                                  .topology = SkinBatchTopology::Triangles,
+                                  .blend = quad->state.blend,
+                                  .filter = quad->state.filter,
+                                  .scissor = resolved[commandIndex].scissor,
+                                  .textured = true});
+      continue;
+    }
+    if (const auto *quad = std::get_if<skin::SkinGeneratedTexturedQuadCommand>(
+            &command.payload)) {
       appendQuad(quad->vertices, {.texture = resolved[commandIndex].texture,
                                   .topology = SkinBatchTopology::Triangles,
                                   .blend = quad->state.blend,

@@ -2,6 +2,7 @@
 
 #include "PlaySkinViewport.h"
 #include "SkinDestinationEvaluator.h"
+#include "SkinGeneratedTexture.h"
 #include "SkinResourceCatalog.h"
 
 #include <array>
@@ -29,6 +30,16 @@ struct SkinRenderState {
 
 struct SkinTexturedQuadCommand {
   SkinResourceId resource = 0;
+  std::array<SkinVertex, 4> vertices{};
+  SkinRenderState state;
+};
+
+// Pixmap-backed Beatoraja widgets own a source texture independently from the
+// destination which samples it. Pixels remain value-owned by the immutable
+// command buffer until whole-frame texture preflight completes.
+struct SkinGeneratedTexturedQuadCommand {
+  SkinGeneratedTextureKey key;
+  SkinGeneratedTextureData texture;
   std::array<SkinVertex, 4> vertices{};
   SkinRenderState state;
 };
@@ -63,8 +74,8 @@ struct SkinBgaCommand {
 };
 
 using SkinDrawPayload =
-    std::variant<SkinTexturedQuadCommand, SkinGlyphRunCommand,
-                 SkinPrimitiveCommand, SkinBgaCommand>;
+    std::variant<SkinTexturedQuadCommand, SkinGeneratedTexturedQuadCommand,
+                 SkinGlyphRunCommand, SkinPrimitiveCommand, SkinBgaCommand>;
 
 struct SkinDrawCommand {
   std::uint32_t authoredOrdinal = 0;

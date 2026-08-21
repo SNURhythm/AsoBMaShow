@@ -33,6 +33,8 @@ SkinGeneratedTextureRaster rasterFor(
   return SkinGeneratedTextureRaster(
       {.sourceObject = request.sourceObject,
        .authoredOrdinal = request.authoredOrdinal,
+       .layer = revealMillis == 0 ? SkinGeneratedTextureLayer::Background
+                                  : SkinGeneratedTextureLayer::Shape,
        .geometry = request.geometry,
        .viewport = request.viewport,
        .elapsedMillis = request.elapsedMillis,

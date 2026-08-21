@@ -3960,1729 +3960,21 @@ SkinDestination noteDistributionDestination(SkinObjectId object,
   return value;
 }
 
-std::vector<const SkinPrimitiveCommand *>
-primitiveCommands(const SkinFrameEvaluationResult &result) {
-  std::vector<const SkinPrimitiveCommand *> primitives;
+std::vector<const SkinGeneratedTexturedQuadCommand *>
+generatedCommands(const SkinFrameEvaluationResult &result) {
+  std::vector<const SkinGeneratedTexturedQuadCommand *> generated;
   if (!result.submitReady) {
-    return primitives;
+    return generated;
   }
   for (const auto &command : result.submitReady->commands) {
-    if (const auto *primitive =
-            std::get_if<SkinPrimitiveCommand>(&command.payload)) {
-      primitives.push_back(primitive);
+    if (const auto *texture =
+            std::get_if<SkinGeneratedTexturedQuadCommand>(&command.payload)) {
+      generated.push_back(texture);
     }
   }
-  return primitives;
+  return generated;
 }
 
-void testNoteDistributionGraphUsesPinnedBucketsRevealOrderAndGaps() {
-  RuntimeHarness runtime;
-  Skin2DRenderer renderer;
-  FakeResources resources;
-  FakeState state;
-  std::vector<SkinNormalDistribution> normal(2);
-  normal[0][0] = 1;
-  normal[0][1] = 1;
-  normal[1][6] = 1;
-  state.graphResult.normalDistribution = normal;
-
-  ValidatedBeatorajaSkinModel model;
-  model.model.header.type = 0;
-  model.model.objects = {{.id = 1,
-                          .authoredName = "normal-distribution",
-                          .payload = SkinNoteDistributionGraphObject{
-                              .type = SkinNoteDistributionGraphType::Normal,
-                              .backgroundTextureOff = true,
-                              .delayMillis = 1000},
-                          .authoredOrdinal = 1}};
-  model.model.destinations = {noteDistributionDestination(1)};
-
-  const auto half =
-      evaluate(renderer, runtime, model, resources, state, 1, 500'000);
-  const auto halfPrimitives = primitiveCommands(half);
-  expect(half.submitReady && halfPrimitives.size() == 2,
-         "positive delay reveals only the source-shaped leading graph half");
-  if (halfPrimitives.size() == 2) {
-    const auto &first = *halfPrimitives[0];
-    const auto &second = *halfPrimitives[1];
-    expect(first.vertices.front().rgba == 0xff44ff44U &&
-               second.vertices.front().rgba == 0xff228822U,
-           "normal distribution buckets use pinned color and stack order");
-    const auto firstMaxX = std::ranges::max(
-        first.vertices, {}, [](const SkinVertex &vertex) { return vertex.x; });
-    const auto firstMinY = std::ranges::min(
-        first.vertices, {}, [](const SkinVertex &vertex) { return vertex.y; });
-    const auto secondMaxY = std::ranges::max(
-        second.vertices, {}, [](const SkinVertex &vertex) { return vertex.y; });
-    expect(firstMaxX.x == 40.0F && firstMinY.y == 716.0F &&
-               secondMaxY.y == 715.0F,
-           "default 5px cells retain the pinned one-pixel horizontal and vertical gaps");
-  }
-
-  const auto full =
-      evaluate(renderer, runtime, model, resources, state, 2, 1'000'000);
-  expect(full.submitReady && primitiveCommands(full).size() == 3,
-         "delay deadline reveals the complete note distribution");
-
-  auto &graph = std::get<SkinNoteDistributionGraphObject>(
-      model.model.objects.front().payload);
-  graph.reverseOrder = true;
-  graph.noGap = true;
-  graph.noHorizontalGap = true;
-  const auto reversed =
-      evaluate(renderer, runtime, model, resources, state, 3, 1'000'000);
-  const auto reversedPrimitives = primitiveCommands(reversed);
-  expect(reversed.submitReady && reversedPrimitives.size() == 3,
-         "reverse and no-gap flags preserve every graph bucket");
-  if (reversedPrimitives.size() == 3) {
-    const auto &first = *reversedPrimitives.front();
-    const auto maxX = std::ranges::max(
-        first.vertices, {}, [](const SkinVertex &vertex) { return vertex.x; });
-    const auto minY = std::ranges::min(
-        first.vertices, {}, [](const SkinVertex &vertex) { return vertex.y; });
-    expect(first.vertices.front().rgba == 0xff228822U && maxX.x == 50.0F &&
-               minY.y == 715.0F,
-           "reverse order changes the bottom bucket while noGap/noGapX fill each 5px cell");
-  }
-}
-
-std::vector<SkinBpmGraphPoint> bpmGraphGimmickSeries() {
-  return {
-      {.chartTimeMicros = 0,
-       .sourceOrder = 0,
-       .bpm = 120.0,
-       .scroll = 1.0,
-       .bpmTimesScroll = 120.0,
-       .graphSpeed = 120.0,
-       .emitsGraphPoint = true,
-       .synthetic = true},
-      {.chartTimeMicros = 1'000'000,
-       .sourceOrder = 1,
-       .bpm = 15.0,
-       .scroll = 0.5,
-       .bpmTimesScroll = 7.5,
-       .graphSpeed = 7.5,
-       .emitsGraphPoint = true},
-      {.chartTimeMicros = 2'000'000,
-       .sourceOrder = 2,
-       .bpm = 240.0,
-       .scroll = 8.0,
-       .bpmTimesScroll = 1920.0,
-       .graphSpeed = 1920.0,
-       .emitsGraphPoint = true},
-      {.chartTimeMicros = 3'000'000,
-       .sourceOrder = 3,
-       .bpm = 120.0,
-       .scroll = 2.0,
-       .bpmTimesScroll = 240.0,
-       .graphSpeed = 240.0,
-       .emitsGraphPoint = true},
-      {.chartTimeMicros = 3'500'000,
-       .sourceOrder = 4,
-       .bpm = 120.0,
-       .scroll = 2.0,
-       .bpmTimesScroll = 240.0,
-       .graphSpeed = 240.0},
-      {.chartTimeMicros = 4'000'000,
-       .sourceOrder = 5,
-       .bpm = 120.0,
-       .scroll = 1.0,
-       .bpmTimesScroll = 120.0,
-       .stopMicros = 500'000,
-       .graphSpeed = 0.0,
-       .emitsGraphPoint = true},
-      {.chartTimeMicros = 5'000'000,
-       .sourceOrder = 6,
-       .bpm = 120.0,
-       .scroll = 1.0,
-       .bpmTimesScroll = 120.0,
-       .graphSpeed = 120.0,
-       .emitsGraphPoint = true,
-       .synthetic = true},
-  };
-}
-
-const SkinPrimitiveCommand &bpmPrimitive(
-    const SkinBpmGraphRenderResult &result, std::size_t index) {
-  return std::get<SkinPrimitiveCommand>(result.commands[index].payload);
-}
-
-void testBpmGraphUsesPinnedLogRasterColoursStopsAndTransitions() {
-  SkinBpmGraphObject graph;
-  const auto series = bpmGraphGimmickSeries();
-  AuthoredDestinationGeometry geometry;
-  geometry.rect = {.x = 0.0, .y = 0.0, .width = 80.0, .height = 80.0};
-  const auto rendered = renderSkinBpmGraph(
-      {.sourceObject = 7,
-       .authoredOrdinal = 9,
-       .graph = graph,
-       .state = {.bpmSeries = series,
-                 .mainBpm = 120.0,
-                 .minimumBpm = 7.5,
-                 .maximumBpm = 1920.0},
-       .geometry = geometry,
-       .viewport = viewport(),
-       .elapsedMillis = 0,
-       .maximumCommands = 11,
-       .maximumPrimitiveVertices = 44});
-  expect(!rendered.failure && rendered.commands.size() == 11 &&
-             rendered.primitiveVertices == 44,
-         "BPM graph emits each pinned transition and horizontal raster rectangle");
-  if (rendered.commands.size() != 11) {
-    return;
-  }
-  const auto &firstTransition = bpmPrimitive(rendered, 0);
-  const auto &main = bpmPrimitive(rendered, 1);
-  const auto &minimum = bpmPrimitive(rendered, 3);
-  const auto &maximum = bpmPrimitive(rendered, 5);
-  const auto &other = bpmPrimitive(rendered, 7);
-  const auto &stop = bpmPrimitive(rendered, 9);
-  const auto &finalMain = bpmPrimitive(rendered, 10);
-  expect(firstTransition.vertices[0].x == 13.0F &&
-             firstTransition.vertices[0].y == 718.0F &&
-             firstTransition.vertices[2].x == 15.0F &&
-             firstTransition.vertices[2].y == 681.0F &&
-             firstTransition.vertices[0].rgba == 0xff7f7f7fU,
-         "BPM transition rectangles use the strict thickness condition and pinned grey");
-  expect(main.vertices[0].x == 0.0F && main.vertices[2].x == 15.0F &&
-             main.vertices[0].y == 681.0F && main.vertices[2].y == 679.0F &&
-             main.vertices[0].rgba == 0xff00ff00U &&
-             minimum.vertices[0].y == 720.0F &&
-             minimum.vertices[0].rgba == 0xffff0000U &&
-             maximum.vertices[0].y == 642.0F &&
-             maximum.vertices[0].rgba == 0xff0000ffU &&
-             other.vertices[0].y == 668.0F &&
-             other.vertices[0].rgba == 0xff00ffffU &&
-             stop.vertices[0].y == 720.0F &&
-             stop.vertices[0].rgba == 0xffff00ffU,
-         "BPM speed ratios clamp to 1/8..8 and use main/min/max/other/stop comparison priority");
-  expect(finalMain.vertices[0].x == 66.0F &&
-             finalMain.vertices[2].x == 80.0F &&
-             finalMain.vertices[0].rgba == 0xff00ff00U,
-         "the final horizontal raster segment clips its line-width overrun at the generated texture edge");
-}
-
-void testBpmGraphDelayEmptyInputsAndAtomicBudgets() {
-  SkinBpmGraphObject graph;
-  graph.delayMillis = 1000;
-  const auto series = bpmGraphGimmickSeries();
-  AuthoredDestinationGeometry geometry;
-  geometry.rect = {.x = 0.0, .y = 0.0, .width = 80.0, .height = 80.0};
-  const auto half = renderSkinBpmGraph(
-      {.sourceObject = 7,
-       .authoredOrdinal = 9,
-       .graph = graph,
-       .state = {.bpmSeries = series,
-                 .mainBpm = 120.0,
-                 .minimumBpm = 7.5,
-                 .maximumBpm = 1920.0},
-       .geometry = geometry,
-       .viewport = viewport(),
-       .elapsedMillis = 500,
-       .maximumCommands = 8,
-       .maximumPrimitiveVertices = 32});
-  expect(!half.failure && half.commands.size() == 5,
-         "positive BPM graph delay reveals only the generated texture's left half");
-  if (!half.commands.empty()) {
-    float maximumX = 0.0F;
-    for (const auto &command : half.commands) {
-      const auto &primitive = std::get<SkinPrimitiveCommand>(command.payload);
-      maximumX = std::max(
-          maximumX,
-          std::ranges::max(primitive.vertices, {},
-                           [](const SkinVertex &vertex) { return vertex.x; })
-              .x);
-    }
-    expect(maximumX == 40.0F,
-           "delay crop maps the visible source prefix left-to-right without stretching it across the full destination");
-  }
-
-  const auto bounded = renderSkinBpmGraph(
-      {.sourceObject = 7,
-       .authoredOrdinal = 9,
-       .graph = graph,
-       .state = {.bpmSeries = series,
-                 .mainBpm = 120.0,
-                 .minimumBpm = 7.5,
-                 .maximumBpm = 1920.0},
-       .geometry = geometry,
-       .viewport = viewport(),
-       .elapsedMillis = 1000,
-       .maximumCommands = 10,
-       .maximumPrimitiveVertices = 44});
-  expect(bounded.failure && bounded.commands.empty() &&
-             bounded.primitiveVertices == 0,
-         "BPM graph command overflow publishes no partial geometry");
-
-  geometry.rgba[3] = 0.0F;
-  const auto transparent = renderSkinBpmGraph(
-      {.sourceObject = 7,
-       .authoredOrdinal = 9,
-       .graph = graph,
-       .state = {.bpmSeries = series,
-                 .mainBpm = 120.0,
-                 .minimumBpm = 7.5,
-                 .maximumBpm = 1920.0},
-       .geometry = geometry,
-       .viewport = viewport(),
-       .elapsedMillis = 1000,
-       .maximumCommands = 0,
-       .maximumPrimitiveVertices = 0});
-  expect(!transparent.failure && transparent.commands.empty(),
-         "zero-alpha BPM graph consumes neither command nor vertex budget");
-
-  geometry.rgba[3] = 0.001F;
-  const auto quantizedTransparent = renderSkinBpmGraph(
-      {.sourceObject = 7,
-       .authoredOrdinal = 9,
-       .graph = graph,
-       .state = {.bpmSeries = series,
-                 .mainBpm = 120.0,
-                 .minimumBpm = 7.5,
-                 .maximumBpm = 1920.0},
-       .geometry = geometry,
-       .viewport = viewport(),
-       .elapsedMillis = 1000,
-       .maximumCommands = 0,
-       .maximumPrimitiveVertices = 0});
-  expect(!quantizedTransparent.failure &&
-             quantizedTransparent.commands.empty(),
-         "post-tint zero-alpha BPM raster consumes no integrated budget");
-
-  geometry.rgba[3] = 1.0F;
-  const std::array onePoint{series.front()};
-  const std::array twoPoints{series[0], series[1]};
-  const auto one = renderSkinBpmGraph(
-      {.sourceObject = 7,
-       .authoredOrdinal = 9,
-       .graph = graph,
-       .state = {.bpmSeries = onePoint, .mainBpm = 120.0},
-       .geometry = geometry,
-       .viewport = viewport(),
-       .elapsedMillis = 1000,
-       .maximumCommands = 0,
-       .maximumPrimitiveVertices = 0});
-  const auto noMain = renderSkinBpmGraph(
-      {.sourceObject = 7,
-       .authoredOrdinal = 9,
-       .graph = graph,
-       .state = {.bpmSeries = twoPoints, .mainBpm = 0.0},
-       .geometry = geometry,
-       .viewport = viewport(),
-       .elapsedMillis = 1000,
-       .maximumCommands = 0,
-       .maximumPrimitiveVertices = 0});
-  expect(!one.failure && one.commands.empty() && !noMain.failure &&
-             noMain.commands.empty(),
-         "fewer than two emitted speeds or nonpositive main BPM matches the pinned blank texture path");
-
-  const std::array constantSeries{
-      SkinBpmGraphPoint{.chartTimeMicros = 0,
-                        .bpm = 120.0,
-                        .scroll = 1.0,
-                        .bpmTimesScroll = 120.0,
-                        .graphSpeed = 120.0,
-                        .emitsGraphPoint = true,
-                        .synthetic = true},
-      SkinBpmGraphPoint{.chartTimeMicros = 5'000'000,
-                        .sourceOrder = 1,
-                        .bpm = 120.0,
-                        .scroll = 1.0,
-                        .bpmTimesScroll = 120.0,
-                        .graphSpeed = 120.0,
-                        .emitsGraphPoint = true,
-                        .synthetic = true}};
-  const auto constant = renderSkinBpmGraph(
-      {.sourceObject = 7,
-       .authoredOrdinal = 9,
-       .graph = graph,
-       .state = {.bpmSeries = constantSeries,
-                 .mainBpm = 120.0,
-                 .minimumBpm = 120.0,
-                 .maximumBpm = 120.0},
-       .geometry = geometry,
-       .viewport = viewport(),
-       .elapsedMillis = 1000,
-       .maximumCommands = 2,
-       .maximumPrimitiveVertices = 8});
-  expect(!constant.failure && constant.commands.size() == 2 &&
-             bpmPrimitive(constant, 0).vertices[0].rgba == 0xff00ff00U &&
-             bpmPrimitive(constant, 1).vertices[0].rgba == 0xff00ff00U,
-         "constant BPM emits only its initial and final main-colour horizontal segments without a transition");
-}
-
-void testBpmGraphGeneratedTextureStretchOrientationAndDestinationState() {
-  SkinBpmGraphObject graph;
-  const auto series = bpmGraphGimmickSeries();
-  AuthoredDestinationGeometry geometry;
-  geometry.rect = {.x = 10.0, .y = 20.0, .width = 80.0, .height = 40.0};
-  geometry.clip = AuthoredRect{.x = 0.0,
-                               .y = 0.0,
-                               .width = 100.0,
-                               .height = 100.0};
-  geometry.centerX = 0.5;
-  geometry.centerY = 0.5;
-  geometry.angleDegrees = 90.0;
-  geometry.rgba = {0.5F, 1.0F, 1.0F, 0.5F};
-  geometry.blend = SkinBlendMode::Additive;
-  geometry.filter = SkinFilterMode::Linear;
-  geometry.stretch = SkinStretchMode::KeepAspectRatioFitInner;
-  const auto rendered = renderSkinBpmGraph(
-      {.sourceObject = 7,
-       .authoredOrdinal = 9,
-       .graph = graph,
-       .state = {.bpmSeries = series,
-                 .mainBpm = 120.0,
-                 .minimumBpm = 7.5,
-                 .maximumBpm = 1920.0},
-       .geometry = geometry,
-       .viewport = viewport(),
-       .elapsedMillis = 0,
-       .maximumCommands = 11,
-       .maximumPrimitiveVertices = 44});
-  expect(!rendered.failure && rendered.commands.size() == 11,
-         "generated BPM texture applies destination state to every raster primitive");
-  if (rendered.commands.size() != 11) {
-    return;
-  }
-  const auto &main = bpmPrimitive(rendered, 1);
-  expect(main.vertices[0].x == 51.0F && main.vertices[0].y == 640.0F &&
-             main.vertices[1].x == 51.0F && main.vertices[1].y == 655.0F &&
-             main.vertices[2].x == 49.0F && main.vertices[2].y == 655.0F &&
-             main.vertices[3].x == 49.0F && main.vertices[3].y == 640.0F,
-         "fit-inner observes the generated draw's negative height before rotating around its stretched pivot");
-  expect(main.vertices[0].rgba == 0x7f00ff00U &&
-             main.state.blend == SkinBlendMode::Additive &&
-             main.state.filter == SkinFilterMode::Linear &&
-             main.state.scissor && main.state.scissor->x == 0.0 &&
-             main.state.scissor->y == 620.0 &&
-             main.state.scissor->width == 100.0 &&
-             main.state.scissor->height == 100.0,
-         "BPM graph applies tint, blend, filter, and destination scissor after raster colouring");
-}
-
-void testBpmGraphLowersThroughSkin2DRenderer() {
-  RuntimeHarness runtime;
-  Skin2DRenderer renderer;
-  FakeResources resources;
-  FakeState state;
-  const auto series = bpmGraphGimmickSeries();
-  state.graphResult = {.bpmSeries = series,
-                       .mainBpm = 120.0,
-                       .minimumBpm = 7.5,
-                       .maximumBpm = 1920.0};
-  ValidatedBeatorajaSkinModel model;
-  model.model.objects = {{.id = 1,
-                          .authoredName = "bpm",
-                          .payload = SkinBpmGraphObject{},
-                          .authoredOrdinal = 1}};
-  model.model.destinations = {noteDistributionDestination(1, 80.0, 80.0)};
-  const auto result = evaluate(renderer, runtime, model, resources, state);
-  const auto primitives = primitiveCommands(result);
-  expect(result.submitReady && result.diagnostics.empty() &&
-             primitives.size() == 11 &&
-             primitives.front()->vertices.front().rgba == 0xff7f7f7fU,
-         "Skin2DRenderer routes typed BPM graphs through immutable gameplay authority without a blank fallback");
-}
-
-const SkinPrimitiveCommand &gaugeGraphPrimitive(
-    const SkinGaugeGraphRenderResult &result, std::size_t index) {
-  return std::get<SkinPrimitiveCommand>(result.commands[index].payload);
-}
-
-SkinGameplayGraphStateView gaugeGraphState(std::span<const float> history,
-                                           int type) {
-  return {.gaugeHistory = history,
-          .gaugeType = type,
-          .gaugeMinimum = 2.0F,
-          .gaugeMaximum = 100.0F,
-          .gaugeBorder = 80.0F,
-          .gaugeSupported = true};
-}
-
-void testGaugeGraphUsesPinnedCategoriesBackgroundAndCrossingOrder() {
-  SkinGaugeGraphObject graph;
-  AuthoredDestinationGeometry geometry;
-  geometry.rect = {.x = 0.0, .y = 0.0, .width = 100.0, .height = 100.0};
-  const std::array<float, 2> rising{20.0F, 90.0F};
-  constexpr std::array categories{0, 1, 2, 3, 4, 5, 3, 4, 5};
-  constexpr std::array aboveLineAbgr{0xff0000ffU, 0xff0000ffU,
-                                      0xff0000ffU, 0xff0000ffU,
-                                      0xff00ffffU, 0xffccccccU};
-  constexpr std::array aboveBackgroundAbgr{
-      0xff000044U, 0xff000044U, 0xff000044U,
-      0xff000044U, 0xff004444U, 0xff444444U};
-  constexpr std::array belowLineAbgr{0xffff00ffU, 0xffffff00U,
-                                      0xff00ff00U, 0xff0000ffU,
-                                      0xff00ffffU, 0xffccccccU};
-  constexpr std::array belowBackgroundAbgr{
-      0xff440044U, 0xff444400U, 0xff004400U,
-      0xff000044U, 0xff004444U, 0xff444444U};
-  for (int type = 0; type < static_cast<int>(categories.size()); ++type) {
-    const auto rendered = renderSkinGaugeGraph(
-        {.sourceObject = 7,
-         .authoredOrdinal = 9,
-         .graph = graph,
-         .state = gaugeGraphState(rising, type),
-         .geometry = geometry,
-         .viewport = viewport(),
-         .elapsedMillis = 1500,
-         .maximumCommands = 6,
-         .maximumPrimitiveVertices = 24});
-    expect(!rendered.failure && rendered.commands.size() == 6 &&
-               rendered.primitiveVertices == 24,
-           "each reachable gauge type emits the complete pinned graph");
-    if (rendered.commands.size() != 6) {
-      continue;
-    }
-    expect(gaugeGraphPrimitive(rendered, 0).vertices[0].rgba ==
-                   belowBackgroundAbgr[categories[type]] &&
-               gaugeGraphPrimitive(rendered, 1).vertices[0].rgba ==
-                   aboveBackgroundAbgr[categories[type]] &&
-               gaugeGraphPrimitive(rendered, 2).vertices[0].rgba ==
-                   belowLineAbgr[categories[type]] &&
-               gaugeGraphPrimitive(rendered, 3).vertices[0].rgba ==
-                   aboveLineAbgr[categories[type]],
-           "the pinned type table selects exact below/above background and line colours");
-  }
-
-  const auto rendered = renderSkinGaugeGraph(
-      {.sourceObject = 7,
-       .authoredOrdinal = 9,
-       .graph = graph,
-       .state = gaugeGraphState(rising, 0),
-       .geometry = geometry,
-       .viewport = viewport(),
-       .elapsedMillis = 1500,
-       .maximumCommands = 6,
-       .maximumPrimitiveVertices = 24});
-  if (rendered.commands.size() == 6) {
-    const auto &belowVertical = gaugeGraphPrimitive(rendered, 2);
-    const auto &aboveVertical = gaugeGraphPrimitive(rendered, 3);
-    const auto &aboveHorizontal = gaugeGraphPrimitive(rendered, 4);
-    const auto &extension = gaugeGraphPrimitive(rendered, 5);
-    expect(belowVertical.vertices[0].x == 0.0F &&
-               belowVertical.vertices[0].y == 701.0F &&
-               belowVertical.vertices[2].x == 2.0F &&
-               belowVertical.vertices[2].y == 642.0F &&
-               aboveVertical.vertices[0].y == 642.0F &&
-               aboveVertical.vertices[2].y == 630.0F &&
-               aboveHorizontal.vertices[0].y == 632.0F &&
-               aboveHorizontal.vertices[2].x == 50.0F &&
-               extension.vertices[0].x == 50.0F &&
-               extension.vertices[2].x == 100.0F,
-           "crossing segments quantize y, use 2px rectangles, and extend the final horizontal line");
-  }
-
-  const std::array<float, 2> falling{90.0F, 20.0F};
-  const auto downward = renderSkinGaugeGraph(
-      {.sourceObject = 7,
-       .authoredOrdinal = 9,
-       .graph = graph,
-       .state = gaugeGraphState(falling, 0),
-       .geometry = geometry,
-       .viewport = viewport(),
-       .elapsedMillis = 1500,
-       .maximumCommands = 6,
-       .maximumPrimitiveVertices = 24});
-  expect(!downward.failure && downward.commands.size() == 6 &&
-             gaugeGraphPrimitive(downward, 2).vertices[0].rgba == 0xff0000ffU &&
-             gaugeGraphPrimitive(downward, 3).vertices[0].rgba == 0xffff00ffU &&
-             gaugeGraphPrimitive(downward, 4).vertices[0].rgba == 0xffff00ffU &&
-             gaugeGraphPrimitive(downward, 5).vertices[0].rgba == 0xffff00ffU,
-         "above-to-below crossings emit above then below rectangles before the below extension");
-}
-
-void testGaugeGraphRevealEmptyPartialAndAtomicBudgets() {
-  SkinGaugeGraphObject graph;
-  AuthoredDestinationGeometry geometry;
-  geometry.rect = {.x = 0.0, .y = 0.0, .width = 100.0, .height = 100.0};
-  const std::array<float, 0> empty{};
-  const std::array<float, 1> one{20.0F};
-  const std::array<float, 2> two{20.0F, 90.0F};
-  const std::array<float, 3> partial{20.0F, 40.0F, 90.0F};
-  const auto emptyRendered = renderSkinGaugeGraph(
-      {.sourceObject = 7,
-       .authoredOrdinal = 9,
-       .graph = graph,
-       .state = gaugeGraphState(empty, 0),
-       .geometry = geometry,
-       .viewport = viewport(),
-       .elapsedMillis = 1500,
-       .maximumCommands = 2,
-       .maximumPrimitiveVertices = 8});
-  const auto oneRendered = renderSkinGaugeGraph(
-      {.sourceObject = 7,
-       .authoredOrdinal = 9,
-       .graph = graph,
-       .state = gaugeGraphState(one, 0),
-       .geometry = geometry,
-       .viewport = viewport(),
-       .elapsedMillis = 1500,
-       .maximumCommands = 2,
-       .maximumPrimitiveVertices = 8});
-  expect(!emptyRendered.failure && emptyRendered.commands.size() == 2 &&
-             !oneRendered.failure && oneRendered.commands.size() == 2,
-         "empty and one-sample histories retain the full split background without a shape");
-
-  const auto partialRendered = renderSkinGaugeGraph(
-      {.sourceObject = 7,
-       .authoredOrdinal = 9,
-       .graph = graph,
-       .state = gaugeGraphState(partial, 0),
-       .geometry = geometry,
-       .viewport = viewport(),
-       .elapsedMillis = 1500,
-       .maximumCommands = 8,
-       .maximumPrimitiveVertices = 32});
-  expect(!partialRendered.failure && partialRendered.commands.size() == 8 &&
-             gaugeGraphPrimitive(partialRendered, 2).vertices[0].rgba ==
-                 0xffff00ffU &&
-             gaugeGraphPrimitive(partialRendered, 3).vertices[2].x == 33.0F &&
-             gaugeGraphPrimitive(partialRendered, 7).vertices[0].x == 66.0F &&
-             gaugeGraphPrimitive(partialRendered, 7).vertices[2].x == 100.0F,
-         "partial histories quantize by current sample count and preserve same-side below segments");
-
-  geometry.rect.width = 100.9;
-  geometry.rect.height = 100.9;
-  const auto fractional = renderSkinGaugeGraph(
-      {.sourceObject = 7,
-       .authoredOrdinal = 9,
-       .graph = graph,
-       .state = gaugeGraphState(partial, 0),
-       .geometry = geometry,
-       .viewport = viewport(),
-       .elapsedMillis = 1500,
-       .maximumCommands = 8,
-       .maximumPrimitiveVertices = 32});
-  expect(!fractional.failure && fractional.commands.size() == 8 &&
-             gaugeGraphPrimitive(fractional, 7).vertices[0].x == 67.0F,
-         "gauge segments quantize from authored float width before clipping to the truncated texture");
-  geometry.rect.width = 100.0;
-  geometry.rect.height = 100.0;
-
-  const std::array<float, 2> above{90.0F, 85.0F};
-  const auto aboveRendered = renderSkinGaugeGraph(
-      {.sourceObject = 7,
-       .authoredOrdinal = 9,
-       .graph = graph,
-       .state = gaugeGraphState(above, 0),
-       .geometry = geometry,
-       .viewport = viewport(),
-       .elapsedMillis = 1500,
-       .maximumCommands = 5,
-       .maximumPrimitiveVertices = 20});
-  expect(!aboveRendered.failure && aboveRendered.commands.size() == 5 &&
-             gaugeGraphPrimitive(aboveRendered, 2).vertices[0].rgba ==
-                 0xff0000ffU &&
-             gaugeGraphPrimitive(aboveRendered, 3).vertices[0].rgba ==
-                 0xff0000ffU &&
-             gaugeGraphPrimitive(aboveRendered, 4).vertices[0].rgba ==
-                 0xff0000ffU,
-         "same-side above histories use above-line colour for vertical, horizontal, and extension rectangles");
-
-  const auto start = renderSkinGaugeGraph(
-      {.sourceObject = 7,
-       .authoredOrdinal = 9,
-       .graph = graph,
-       .state = gaugeGraphState(two, 0),
-       .geometry = geometry,
-       .viewport = viewport(),
-       .elapsedMillis = 0,
-       .maximumCommands = 2,
-       .maximumPrimitiveVertices = 8});
-  const auto half = renderSkinGaugeGraph(
-      {.sourceObject = 7,
-       .authoredOrdinal = 9,
-       .graph = graph,
-       .state = gaugeGraphState(two, 0),
-       .geometry = geometry,
-       .viewport = viewport(),
-       .elapsedMillis = 750,
-       .maximumCommands = 5,
-       .maximumPrimitiveVertices = 20});
-  expect(!start.failure && start.commands.size() == 2 && !half.failure &&
-             half.commands.size() == 5,
-         "the fixed 1500ms reveal crops only the shape over a full background");
-  if (half.commands.size() == 5) {
-    float graphMaximumX = 0.0F;
-    for (std::size_t index = 2; index < half.commands.size(); ++index) {
-      const auto &primitive = gaugeGraphPrimitive(half, index);
-      graphMaximumX = std::max(
-          graphMaximumX,
-          std::ranges::max(primitive.vertices, {},
-                           [](const SkinVertex &vertex) { return vertex.x; })
-              .x);
-    }
-    expect(graphMaximumX == 50.0F,
-           "half reveal preserves the left half instead of stretching it");
-  }
-
-  geometry.rect.width = 1.9;
-  const auto onePixelReveal = renderSkinGaugeGraph(
-      {.sourceObject = 7,
-       .authoredOrdinal = 9,
-       .graph = graph,
-       .state = gaugeGraphState(two, 0),
-       .geometry = geometry,
-       .viewport = viewport(),
-       .elapsedMillis = 1125,
-       .maximumCommands = 5,
-       .maximumPrimitiveVertices = 20});
-  expect(!onePixelReveal.failure && onePixelReveal.commands.size() == 5 &&
-             gaugeGraphPrimitive(onePixelReveal, 2).vertices[1].x == 1.0F,
-         "a 1.9px GaugeGraph reveals one source pixel at 75 percent over its background");
-
-  geometry.rect.width = 10.9;
-  const auto divergentReveal = renderSkinGaugeGraph(
-      {.sourceObject = 7,
-       .authoredOrdinal = 9,
-       .graph = graph,
-       .state = gaugeGraphState(two, 0),
-       .geometry = geometry,
-       .viewport = viewport(),
-       .elapsedMillis = 1125,
-       .maximumCommands = 6,
-       .maximumPrimitiveVertices = 24});
-  float divergentGraphMaximumX = 0.0F;
-  for (std::size_t index = 2; index < divergentReveal.commands.size();
-       ++index) {
-    const auto &primitive = gaugeGraphPrimitive(divergentReveal, index);
-    divergentGraphMaximumX = std::max(
-        divergentGraphMaximumX,
-        std::ranges::max(primitive.vertices, {},
-                         [](const SkinVertex &vertex) { return vertex.x; })
-            .x);
-  }
-  expect(!divergentReveal.failure && divergentReveal.commands.size() == 6 &&
-             gaugeGraphPrimitive(divergentReveal, 5).vertices[0].x == 5.0F &&
-             divergentGraphMaximumX == 8.0F,
-         "GaugeGraph reveal uses authored 10.9px width instead of the truncated 10px texture basis");
-  geometry.rect.width = 100.0;
-
-  const auto bounded = renderSkinGaugeGraph(
-      {.sourceObject = 7,
-       .authoredOrdinal = 9,
-       .graph = graph,
-       .state = gaugeGraphState(two, 0),
-       .geometry = geometry,
-       .viewport = viewport(),
-       .elapsedMillis = 1500,
-       .maximumCommands = 5,
-       .maximumPrimitiveVertices = 24});
-  expect(bounded.failure && bounded.commands.empty() &&
-             bounded.primitiveVertices == 0,
-         "gaugegraph command overflow publishes neither background nor partial shape");
-
-  geometry.rgba[3] = 0.001F;
-  const auto transparent = renderSkinGaugeGraph(
-      {.sourceObject = 7,
-       .authoredOrdinal = 9,
-       .graph = graph,
-       .state = gaugeGraphState(two, 0),
-       .geometry = geometry,
-       .viewport = viewport(),
-       .elapsedMillis = 1500,
-       .maximumCommands = 0,
-       .maximumPrimitiveVertices = 0});
-  expect(!transparent.failure && transparent.commands.empty(),
-         "post-tint zero-alpha gaugegraph consumes no command or vertex budget");
-}
-
-void testGaugeGraphGeneratedTextureStateAndIntegratedLowering() {
-  SkinGaugeGraphObject graph;
-  AuthoredDestinationGeometry geometry;
-  geometry.rect = {.x = 10.0, .y = 20.0, .width = 100.0, .height = 50.0};
-  geometry.clip = AuthoredRect{.x = 0.0,
-                               .y = 0.0,
-                               .width = 100.0,
-                               .height = 100.0};
-  geometry.centerX = 0.5;
-  geometry.centerY = 0.5;
-  geometry.angleDegrees = 90.0;
-  geometry.rgba = {0.5F, 1.0F, 1.0F, 0.5F};
-  geometry.blend = SkinBlendMode::Additive;
-  geometry.filter = SkinFilterMode::Linear;
-  const std::array<float, 1> one{20.0F};
-  const auto rendered = renderSkinGaugeGraph(
-      {.sourceObject = 7,
-       .authoredOrdinal = 9,
-       .graph = graph,
-       .state = gaugeGraphState(one, 0),
-       .geometry = geometry,
-       .viewport = viewport(),
-       .elapsedMillis = 1500,
-       .maximumCommands = 2,
-       .maximumPrimitiveVertices = 8});
-  expect(!rendered.failure && rendered.commands.size() == 2,
-         "generated gauge background applies the authored destination state");
-  if (rendered.commands.size() == 2) {
-    const auto &background = gaugeGraphPrimitive(rendered, 0);
-    expect(background.vertices[0].x == 85.0F &&
-               background.vertices[0].y == 725.0F &&
-               background.vertices[1].x == 85.0F &&
-               background.vertices[1].y == 625.0F &&
-               background.vertices[2].x == 35.0F &&
-               background.vertices[2].y == 625.0F &&
-               background.vertices[3].x == 35.0F &&
-               background.vertices[3].y == 725.0F &&
-               background.vertices[0].rgba == 0x7f440022U &&
-               background.state.blend == SkinBlendMode::Additive &&
-               background.state.filter == SkinFilterMode::Linear &&
-               background.state.scissor &&
-               background.state.scissor->x == 0.0 &&
-               background.state.scissor->y == 620.0,
-           "gauge texture y-flip precedes rotation, tint, blend, filter, and scissor");
-  }
-
-  RuntimeHarness runtime;
-  Skin2DRenderer renderer;
-  FakeResources resources;
-  FakeState state;
-  state.graphResult = gaugeGraphState(one, 0);
-  ValidatedBeatorajaSkinModel model;
-  model.model.objects = {{.id = 1,
-                          .authoredName = "gauge-history",
-                          .payload = SkinGaugeGraphObject{},
-                          .authoredOrdinal = 1}};
-  model.model.destinations = {noteDistributionDestination(1, 100.0, 100.0)};
-  const auto integrated = evaluate(renderer, runtime, model, resources, state);
-  expect(integrated.submitReady && integrated.diagnostics.empty() &&
-             primitiveCommands(integrated).size() == 2,
-         "Skin2DRenderer lowers typed gaugegraphs from immutable gameplay authority");
-}
-
-void testNoteDistributionGraphAppliesCommonStretchBeforeRotation() {
-  RuntimeHarness runtime;
-  Skin2DRenderer renderer;
-  FakeResources resources;
-  FakeState state;
-  std::vector<SkinNormalDistribution> normal(2);
-  normal[0][0] = 1;
-  state.graphResult.normalDistribution = normal;
-
-  ValidatedBeatorajaSkinModel model;
-  model.model.header.type = 0;
-  model.model.objects = {{.id = 1,
-                          .authoredName = "stretched-distribution",
-                          .payload = SkinNoteDistributionGraphObject{
-                              .type = SkinNoteDistributionGraphType::Normal,
-                              .backgroundTextureOff = true,
-                              .delayMillis = 0},
-                          .authoredOrdinal = 1}};
-  auto presented = noteDistributionDestination(1);
-  presented.presentation.center = 1;
-  presented.presentation.stretch = SkinStretchMode::KeepAspectRatioFitInner;
-  presented.presentation.frames.front().angleDegrees = 90.0;
-  model.model.destinations = {std::move(presented)};
-
-  const auto result = evaluate(renderer, runtime, model, resources, state);
-  const auto primitives = primitiveCommands(result);
-  expect(result.submitReady && result.diagnostics.empty() &&
-             primitives.size() == 1,
-         "stretched note distribution emits its one authored cell");
-  if (primitives.size() == 1) {
-    const auto &vertices = primitives.front()->vertices;
-    expect(vertices.size() == 4 && vertices[0].x == 45.0F &&
-               vertices[0].y == 720.0F && vertices[1].x == 45.0F &&
-               vertices[1].y == 716.0F && vertices[2].x == 41.0F &&
-               vertices[2].y == 716.0F && vertices[3].x == 41.0F &&
-               vertices[3].y == 720.0F,
-           "fit-inner centers the 10x100 graph at x=45 before rotating its 4x4 cell around the stretched lower-left pivot");
-  }
-
-  normal[0][0] = 11;
-  presented = noteDistributionDestination(1);
-  presented.presentation.stretch =
-      SkinStretchMode::KeepAspectRatioFitOuterTrimmed;
-  model.model.destinations = {std::move(presented)};
-  const auto trimmed = evaluate(renderer, runtime, model, resources, state, 2);
-  const auto trimmedPrimitives = primitiveCommands(trimmed);
-  expect(trimmed.submitReady && trimmed.diagnostics.empty() &&
-             trimmedPrimitives.size() == 2,
-         "fit-outer-trimmed discards cells outside its centered source crop");
-  if (trimmedPrimitives.size() == 2) {
-    const auto &lower = trimmedPrimitives[0]->vertices;
-    const auto &upper = trimmedPrimitives[1]->vertices;
-    expect(lower[0].x == 0.0F && lower[1].x == 40.0F &&
-               lower[0].y == 720.0F && lower[2].y == 680.0F &&
-               upper[0].y == 670.0F && upper[2].y == 630.0F,
-           "fit-outer-trimmed maps the literal y=45..55 source crop across the 100px destination");
-  }
-}
-
-void testTransparentNoteDistributionSkipsCommandsAndBudgets() {
-  RuntimeHarness runtime;
-  Skin2DRenderer renderer;
-  FakeResources resources;
-  FakeState state;
-  std::vector<SkinNormalDistribution> normal(1);
-  normal[0][0] = 1;
-  state.graphResult.normalDistribution = normal;
-
-  ValidatedBeatorajaSkinModel model;
-  model.model.objects = {{.id = 1,
-                          .authoredName = "transparent-distribution",
-                          .payload = SkinNoteDistributionGraphObject{
-                              .type = SkinNoteDistributionGraphType::Normal,
-                              .backgroundTextureOff = true,
-                              .delayMillis = 0},
-                          .authoredOrdinal = 1}};
-  auto presented = noteDistributionDestination(1);
-  presented.presentation.frames.front().rgba = {255, 255, 255, 0};
-  model.model.destinations = {std::move(presented)};
-
-  const auto frame = evaluate(renderer, runtime, model, resources, state);
-  expect(frame.submitReady && frame.submitReady->commands.empty() &&
-             frame.diagnostics.empty(),
-         "zero-alpha note distribution emits no frame commands or diagnostics");
-
-  SkinNoteDistributionGraphObject graph;
-  graph.backgroundTextureOff = true;
-  graph.delayMillis = 0;
-  SkinGameplayGraphStateView graphState;
-  graphState.normalDistribution = normal;
-  AuthoredDestinationGeometry geometry;
-  geometry.rect = {.x = 0.0,
-                   .y = 0.0,
-                   .width = 100.0,
-                   .height = 100.0};
-  geometry.rgba[3] = 0.0F;
-  const auto bounded = renderSkinNoteDistributionGraph(
-      {.sourceObject = 1,
-       .authoredOrdinal = 1,
-       .graph = graph,
-       .state = graphState,
-       .geometry = geometry,
-       .viewport = viewport(),
-       .elapsedMillis = 0,
-       .maximumCommands = 0,
-       .maximumPrimitiveVertices = 0});
-  expect(!bounded.failure && bounded.commands.empty() &&
-             bounded.primitiveVertices == 0,
-         "zero-alpha graph consumes neither a deliberately exhausted command budget nor a vertex budget");
-}
-
-void testNoteDistributionGraphDrawsPinnedBackgroundPmsColorAndCursor() {
-  RuntimeHarness runtime;
-  Skin2DRenderer renderer;
-  FakeResources resources;
-  FakeState state;
-
-  std::vector<SkinNormalDistribution> gridData(61);
-  state.graphResult.normalDistribution = gridData;
-  ValidatedBeatorajaSkinModel gridModel;
-  gridModel.model.header.type = 0;
-  gridModel.model.objects = {{.id = 1,
-                              .authoredName = "grid",
-                              .payload = SkinNoteDistributionGraphObject{},
-                              .authoredOrdinal = 1}};
-  gridModel.model.destinations = {
-      noteDistributionDestination(1, 610.0, 100.0)};
-  const auto grid =
-      evaluate(renderer, runtime, gridModel, resources, state, 1, 500'000);
-  const auto gridPrimitives = primitiveCommands(grid);
-  expect(grid.submitReady && gridPrimitives.size() == 9,
-         "background emits black fill, one ten-row band, and seven ten-second grid lines");
-  if (gridPrimitives.size() == 9) {
-    expect(gridPrimitives[0]->kind == SkinPrimitiveKind::SolidQuad &&
-               gridPrimitives[0]->vertices.front().rgba == 0xcc000000U &&
-               gridPrimitives[1]->vertices.front().rgba == 0xff001111U &&
-               gridPrimitives[2]->kind == SkinPrimitiveKind::LineStrip &&
-               gridPrimitives[2]->vertices.front().rgba == 0xff3f3f3fU &&
-               gridPrimitives.back()->vertices.front().x == 600.0F,
-           "background/grid draw order, colors, and sixty-second placement match the pixmap source");
-  }
-
-  std::vector<SkinNormalDistribution> cursorData(2);
-  SkinNoteDistributionGraphObject cursorGraph;
-  cursorGraph.backgroundTextureOff = true;
-  AuthoredDestinationGeometry cursorGeometry;
-  cursorGeometry.rect = {.x = 0.0,
-                         .y = 0.0,
-                         .width = 100.0,
-                         .height = 100.0};
-  SkinGameplayGraphStateView cursorState;
-  cursorState.normalDistribution = cursorData;
-  const auto cursors = renderSkinNoteDistributionGraph(
-      {.sourceObject = 7,
-       .authoredOrdinal = 9,
-       .graph = cursorGraph,
-       .state = cursorState,
-       .geometry = cursorGeometry,
-       .viewport = viewport(),
-       .elapsedMillis = 500,
-       .startMillis = 250,
-       .endMillis = 750,
-       .currentMillis = 500,
-       .maximumCommands = 10,
-       .maximumPrimitiveVertices = 40});
-  expect(!cursors.failure && cursors.commands.size() == 3,
-         "start, end, and current cursors draw after an empty shape layer");
-  if (cursors.commands.size() == 3) {
-    const auto &start =
-        std::get<SkinPrimitiveCommand>(cursors.commands[0].payload);
-    const auto &end = std::get<SkinPrimitiveCommand>(cursors.commands[1].payload);
-    const auto &current =
-        std::get<SkinPrimitiveCommand>(cursors.commands[2].payload);
-    const auto startMinX = std::ranges::min(
-        start.vertices, {}, [](const SkinVertex &vertex) { return vertex.x; });
-    const auto endMinX = std::ranges::min(
-        end.vertices, {}, [](const SkinVertex &vertex) { return vertex.x; });
-    const auto currentMinX = std::ranges::min(
-        current.vertices, {}, [](const SkinVertex &vertex) { return vertex.x; });
-    expect(startMinX.x == 10.0F && endMinX.x == 30.0F &&
-               currentMinX.x == 20.0F &&
-               current.vertices.front().rgba == 0xffffffffU,
-           "cursor positions use source integer pixels and retain start/end/current draw order");
-  }
-  const auto boundedCursors = renderSkinNoteDistributionGraph(
-      {.sourceObject = 7,
-       .authoredOrdinal = 9,
-       .graph = cursorGraph,
-       .state = cursorState,
-       .geometry = cursorGeometry,
-       .viewport = viewport(),
-       .elapsedMillis = 500,
-       .startMillis = 250,
-       .endMillis = 750,
-       .currentMillis = 500,
-       .maximumCommands = 2,
-       .maximumPrimitiveVertices = 40});
-  expect(boundedCursors.failure && boundedCursors.commands.empty() &&
-             boundedCursors.primitiveVertices == 0,
-         "note distribution lowering publishes no partial commands when the frame bound is exceeded");
-
-  std::vector<SkinJudgeDistribution> judge(2);
-  judge[0][1] = 1;
-  state.graphResult = {};
-  state.graphResult.judgementDistribution = judge;
-  state.timerResult = 0;
-  ValidatedBeatorajaSkinModel pmsModel;
-  pmsModel.model.header.type = 4;
-  pmsModel.model.objects = {{.id = 1,
-                             .authoredName = "pms-judge",
-                             .payload = SkinNoteDistributionGraphObject{
-                                 .type = SkinNoteDistributionGraphType::Judge,
-                                 .backgroundTextureOff = true,
-                                 .delayMillis = 0},
-                             .authoredOrdinal = 1}};
-  pmsModel.model.destinations = {noteDistributionDestination(1)};
-  const auto pms =
-      evaluate(renderer, runtime, pmsModel, resources, state, 2, 500'000);
-  const auto pmsPrimitives = primitiveCommands(pms);
-  expect(pms.submitReady && pmsPrimitives.size() == 2,
-         "live judge graph draws its updated bucket followed by the current cursor");
-  if (pmsPrimitives.size() == 2) {
-    const auto &cursor = *pmsPrimitives.back();
-    const auto cursorMinX = std::ranges::min(
-        cursor.vertices, {}, [](const SkinVertex &vertex) { return vertex.x; });
-    const auto cursorMaxX = std::ranges::max(
-        cursor.vertices, {}, [](const SkinVertex &vertex) { return vertex.x; });
-    expect(pmsPrimitives.front()->vertices.front().rgba == 0xffb05effU &&
-               cursor.vertices.front().rgba == 0xffffffffU &&
-               cursorMinX.x == 20.0F && cursorMaxX.x == 50.0F,
-           "PMS judge palette and the source integer current-time cursor geometry are pinned");
-  }
-
-  judge[0][1] = 0;
-  judge[1][4] = 1;
-  const auto updated =
-      evaluate(renderer, runtime, pmsModel, resources, state, 3, 500'000);
-  const auto updatedPrimitives = primitiveCommands(updated);
-  expect(updated.submitReady && updatedPrimitives.size() == 2 &&
-             updatedPrimitives.front()->vertices.front().rgba == 0xffffc66cU,
-         "each frame consumes the latest immutable judgement distribution without scanning chart files");
-
-  std::vector<SkinEarlyLateDistribution> earlyLate(1);
-  earlyLate[0][9] = 101;
-  state.graphResult = {};
-  state.graphResult.earlyLateDistribution = earlyLate;
-  state.timerResult = INT64_MIN;
-  std::get<SkinNoteDistributionGraphObject>(
-      pmsModel.model.objects.front().payload)
-      .type = SkinNoteDistributionGraphType::EarlyLate;
-  const auto capped =
-      evaluate(renderer, runtime, pmsModel, resources, state, 4, 500'000);
-  const auto cappedPrimitives = primitiveCommands(capped);
-  expect(capped.submitReady && cappedPrimitives.size() == 100 &&
-             cappedPrimitives.back()->vertices.front().rgba == 0xff002244U,
-         "early-late mode uses its PMS palette and caps the pinned maximum graph height at 100");
-
-  state.graphResult.earlyLateDistribution = {};
-  const auto empty =
-      evaluate(renderer, runtime, pmsModel, resources, state, 5, 500'000);
-  expect(empty.submitReady && empty.submitReady->commands.empty(),
-         "an empty chart distribution emits no degenerate background, shape, or cursor commands");
-}
-
-std::array<SkinJudgeWindow, 5> hitErrorJudgeWindows() {
-  return {{{.minimumTimingMillis = -5, .maximumTimingMillis = 5},
-           {.minimumTimingMillis = -10, .maximumTimingMillis = 10},
-           {.minimumTimingMillis = -20, .maximumTimingMillis = 20},
-           {.minimumTimingMillis = -30, .maximumTimingMillis = 30},
-           {.minimumTimingMillis = -50, .maximumTimingMillis = 50}}};
-}
-
-void testHitErrorVisualizerUsesPinnedModesWindowAndGeometry() {
-  SkinHitErrorVisualizerObject visualizer;
-  visualizer.width = 101;
-  visualizer.judgeWidthMillis = 50;
-  visualizer.lineWidth = 1;
-  visualizer.windowLength = 3;
-  visualizer.colorMode = true;
-  visualizer.hitErrorMode = true;
-  visualizer.emaMode = 3;
-  visualizer.judgeRgba = {0x11223344U, 0x22334455U, 0x33445566U,
-                          0x44556677U, 0x55667788U};
-  visualizer.centerRgba = 0x99aabbccU;
-  visualizer.emaRgba = 0xabcdef80U;
-  auto recent = emptySkinRecentJudgeTimings();
-  recent[10] = 0;
-  recent[9] = 10;
-  recent[8] = 100;
-  AuthoredDestinationGeometry geometry;
-  geometry.rect = {.x = 0.0, .y = 0.0, .width = 101.0, .height = 6.0};
-  const auto rendered = renderSkinHitErrorVisualizer(
-      {.sourceObject = 7,
-       .authoredOrdinal = 9,
-       .visualizer = visualizer,
-       .state = {.judgeWindows = hitErrorJudgeWindows(),
-                 .recentJudgeTimingsMillis = recent,
-                 .recentJudgeTimingIndex = 10},
-       .emaMillis = 5,
-       .geometry = geometry,
-       .viewport = viewport(),
-       .maximumCommands = 16,
-       .maximumPrimitiveVertices = 64});
-  expect(!rendered.failure && rendered.commands.size() == 6 &&
-             rendered.primitiveVertices == 23,
-         "hiterrorvisualizer emits hit, centre, EMA line, and EMA triangle primitives in pinned order");
-  if (rendered.commands.size() != 6) {
-    return;
-  }
-  const auto &newest =
-      std::get<SkinPrimitiveCommand>(rendered.commands[0].payload);
-  const auto &boundary =
-      std::get<SkinPrimitiveCommand>(rendered.commands[1].payload);
-  const auto &clamped =
-      std::get<SkinPrimitiveCommand>(rendered.commands[2].payload);
-  const auto &centre =
-      std::get<SkinPrimitiveCommand>(rendered.commands[3].payload);
-  const auto &emaLine =
-      std::get<SkinPrimitiveCommand>(rendered.commands[4].payload);
-  const auto &triangle =
-      std::get<SkinPrimitiveCommand>(rendered.commands[5].payload);
-  expect(newest.vertices[0].x == 50.0F && newest.vertices[0].y == 720.0F &&
-             newest.vertices[2].y == 714.0F &&
-             newest.vertices[0].rgba == 0x44332211U &&
-             boundary.vertices[0].x == 40.0F &&
-             boundary.vertices[0].y == 719.0F &&
-             boundary.vertices[2].y == 715.0F &&
-             boundary.vertices[0].rgba == 0x66554433U &&
-             clamped.vertices[0].x == 0.0F &&
-             clamped.vertices[0].y == 718.0F &&
-             clamped.vertices[2].y == 716.0F &&
-             clamped.vertices[0].rgba == 0x88776655U,
-         "hiterrorvisualizer traverses newest-to-oldest source ages, uses strict judge windows, clamps misses, and reverses positive timing");
-  expect(centre.vertices[0].x == 50.0F &&
-             centre.vertices[0].rgba == 0xccbbaa99U &&
-             emaLine.vertices[0].x == 45.0F &&
-             emaLine.vertices[0].rgba == 0x80efcdabU &&
-             triangle.kind == SkinPrimitiveKind::TriangleStrip &&
-             triangle.vertices.size() == 3 &&
-             triangle.vertices[0].x == 45.0F &&
-             triangle.vertices[0].y == 718.0F &&
-             triangle.vertices[1].x == 47.0F &&
-             triangle.vertices[1].y == 720.0F &&
-             triangle.vertices[2].x == 43.0F &&
-             triangle.vertices[2].y == 720.0F,
-         "hiterrorvisualizer centre and EMA line/triangle use pinned integer source geometry");
-
-  visualizer.hitErrorMode = false;
-  for (int mode = 0; mode <= 4; ++mode) {
-    visualizer.emaMode = mode;
-    const auto styled = renderSkinHitErrorVisualizer(
-        {.sourceObject = 7,
-         .authoredOrdinal = 9,
-         .visualizer = visualizer,
-         .state = {.judgeWindows = hitErrorJudgeWindows(),
-                   .recentJudgeTimingsMillis = recent,
-                   .recentJudgeTimingIndex = 10},
-         .emaMillis = 5,
-         .geometry = geometry,
-         .viewport = viewport(),
-         .maximumCommands = 8,
-         .maximumPrimitiveVertices = 32});
-    const std::size_t expected =
-        mode == 1 || mode == 2 ? 2U : mode == 3 ? 3U : 1U;
-    expect(!styled.failure && styled.commands.size() == expected,
-           "each integer emaMode emits only its pinned line/triangle style");
-  }
-
-  visualizer.emaMode = 2;
-  visualizer.windowLength = 4;
-  geometry.rect.height = 8.0;
-  const auto integerApex = renderSkinHitErrorVisualizer(
-      {.sourceObject = 7,
-       .authoredOrdinal = 9,
-       .visualizer = visualizer,
-       .state = {},
-       .emaMillis = 5,
-       .geometry = geometry,
-       .viewport = viewport(),
-       .maximumCommands = 2,
-       .maximumPrimitiveVertices = 7});
-  const auto &integerTriangle =
-      std::get<SkinPrimitiveCommand>(integerApex.commands.back().payload);
-  expect(!integerApex.failure && integerTriangle.vertices[0].y == 718.0F,
-         "EMA triangle apex uses Java integer division of the source canvas height");
-}
-
-void testHitErrorVisualizerSingleColourDecayTransparencyAndBudgets() {
-  SkinHitErrorVisualizerObject visualizer;
-  visualizer.width = 101;
-  visualizer.judgeWidthMillis = 50;
-  visualizer.lineWidth = 1;
-  visualizer.windowLength = 4;
-  visualizer.colorMode = false;
-  visualizer.hitErrorMode = true;
-  visualizer.emaMode = 0;
-  visualizer.lineRgba = 0x11223380U;
-  auto recent = emptySkinRecentJudgeTimings();
-  recent[10] = 0;
-  recent[9] = 1;
-  recent[8] = 2;
-  recent[7] = 3;
-  AuthoredDestinationGeometry geometry;
-  geometry.rect = {.x = 10.0, .y = 20.0, .width = 101.0, .height = 8.0};
-  const auto decaying = renderSkinHitErrorVisualizer(
-      {.sourceObject = 3,
-       .authoredOrdinal = 4,
-       .visualizer = visualizer,
-       .state = {.judgeWindows = hitErrorJudgeWindows(),
-                 .recentJudgeTimingsMillis = recent,
-                 .recentJudgeTimingIndex = 10},
-       .emaMillis = 0,
-       .geometry = geometry,
-       .viewport = viewport(),
-       .maximumCommands = 8,
-       .maximumPrimitiveVertices = 32});
-  expect(!decaying.failure && decaying.commands.size() == 4,
-         "single-colour hit marks apply Java alpha packing and skip its zero-alpha newest mark");
-  if (decaying.commands.size() == 4) {
-    const auto &ageOne =
-        std::get<SkinPrimitiveCommand>(decaying.commands[0].payload);
-    const auto &ageTwo =
-        std::get<SkinPrimitiveCommand>(decaying.commands[1].payload);
-    const auto &ageThree =
-        std::get<SkinPrimitiveCommand>(decaying.commands[2].payload);
-    expect(ageOne.vertices[0].y == 699.0F &&
-               ageOne.vertices[2].y == 693.0F &&
-               ageOne.vertices[0].rgba == 0xc0332211U &&
-               ageTwo.vertices[0].y == 698.0F &&
-               ageTwo.vertices[2].y == 694.0F &&
-               ageTwo.vertices[0].rgba == 0x80332211U &&
-               ageThree.vertices[0].y == 697.0F &&
-               ageThree.vertices[2].y == 695.0F &&
-               ageThree.vertices[0].rgba == 0x40332211U,
-           "single-colour hit marks fade and shorten at exact pinned source ages");
-  }
-
-  visualizer.drawDecay = false;
-  const auto full = renderSkinHitErrorVisualizer(
-      {.sourceObject = 3,
-       .authoredOrdinal = 4,
-       .visualizer = visualizer,
-       .state = {.judgeWindows = hitErrorJudgeWindows(),
-                 .recentJudgeTimingsMillis = recent,
-                 .recentJudgeTimingIndex = 10},
-       .emaMillis = 0,
-       .geometry = geometry,
-       .viewport = viewport(),
-       .maximumCommands = 8,
-       .maximumPrimitiveVertices = 32});
-  const auto &fullMark =
-      std::get<SkinPrimitiveCommand>(full.commands.front().payload);
-  expect(!full.failure && fullMark.vertices[0].y == 700.0F &&
-             fullMark.vertices[2].y == 692.0F,
-         "non-decaying hit marks span the full window canvas");
-
-  visualizer.colorMode = true;
-  visualizer.judgeRgba[4] = 0U;
-  recent = emptySkinRecentJudgeTimings();
-  recent[10] = 50;
-  const auto transparentPoor = renderSkinHitErrorVisualizer(
-      {.sourceObject = 3,
-       .authoredOrdinal = 4,
-       .visualizer = visualizer,
-       .state = {.judgeWindows = hitErrorJudgeWindows(),
-                 .recentJudgeTimingsMillis = recent,
-                 .recentJudgeTimingIndex = 10},
-       .emaMillis = 0,
-       .geometry = geometry,
-       .viewport = viewport(),
-       .maximumCommands = 1,
-       .maximumPrimitiveVertices = 4});
-  expect(!transparentPoor.failure && transparentPoor.commands.size() == 1,
-         "transparent poor marks consume no budget while the centre remains drawable");
-
-  visualizer.judgeRgba[4] = 0xffffffffU;
-  const auto bounded = renderSkinHitErrorVisualizer(
-      {.sourceObject = 3,
-       .authoredOrdinal = 4,
-       .visualizer = visualizer,
-       .state = {.judgeWindows = hitErrorJudgeWindows(),
-                 .recentJudgeTimingsMillis = recent,
-                 .recentJudgeTimingIndex = 10},
-       .emaMillis = 0,
-       .geometry = geometry,
-       .viewport = viewport(),
-       .maximumCommands = 1,
-       .maximumPrimitiveVertices = 8});
-  expect(bounded.failure && bounded.commands.empty() &&
-             bounded.primitiveVertices == 0,
-         "hiterrorvisualizer discards every partial primitive when a fixed budget is exceeded");
-
-  visualizer.hitErrorMode = false;
-  visualizer.emaMode = 0;
-  visualizer.centerRgba = 0xffffff01U;
-  geometry.rgba[3] = 0.5F;
-  const auto quantizedTransparent = renderSkinHitErrorVisualizer(
-      {.sourceObject = 3,
-       .authoredOrdinal = 4,
-       .visualizer = visualizer,
-       .state = {},
-       .emaMillis = 0,
-       .geometry = geometry,
-       .viewport = viewport(),
-       .maximumCommands = 0,
-       .maximumPrimitiveVertices = 0});
-  expect(!quantizedTransparent.failure &&
-             quantizedTransparent.commands.empty() &&
-             quantizedTransparent.primitiveVertices == 0,
-         "post-tint alpha quantization to zero omits a primitive before budget admission");
-
-  visualizer.centerRgba = 0xffffff80U;
-  const auto quantizedVisible = renderSkinHitErrorVisualizer(
-      {.sourceObject = 3,
-       .authoredOrdinal = 4,
-       .visualizer = visualizer,
-       .state = {},
-       .emaMillis = 0,
-       .geometry = geometry,
-       .viewport = viewport(),
-       .maximumCommands = 1,
-       .maximumPrimitiveVertices = 4});
-  expect(!quantizedVisible.failure && quantizedVisible.commands.size() == 1 &&
-             std::get<SkinPrimitiveCommand>(
-                 quantizedVisible.commands.front().payload)
-                     .vertices.front()
-                     .rgba == 0x40ffffffU,
-         "ordinary post-tint semi-transparent primitives remain visible");
-
-  geometry.rgba[3] = 0.0F;
-  const auto invisible = renderSkinHitErrorVisualizer(
-      {.sourceObject = 3,
-       .authoredOrdinal = 4,
-       .visualizer = visualizer,
-       .state = {.judgeWindows = hitErrorJudgeWindows(),
-                 .recentJudgeTimingsMillis = recent,
-                 .recentJudgeTimingIndex = 10},
-       .emaMillis = 0,
-       .geometry = geometry,
-       .viewport = viewport(),
-       .maximumCommands = 0,
-       .maximumPrimitiveVertices = 0});
-  expect(!invisible.failure && invisible.commands.empty() &&
-             invisible.primitiveVertices == 0,
-         "zero destination alpha consumes no hiterrorvisualizer budget");
-}
-
-void testHitErrorVisualizerPostTintZeroAlphaUsesNoIntegratedBudget() {
-  RuntimeHarness runtime;
-  Skin2DRenderer renderer;
-  FakeResources resources;
-  resources.addImage(1, {.x = 0, .y = 0, .w = 10, .h = 10});
-  FakeState state;
-  SkinHitErrorVisualizerObject visualizer;
-  visualizer.width = 101;
-  visualizer.judgeWidthMillis = 50;
-  visualizer.windowLength = 3;
-  visualizer.hitErrorMode = false;
-  visualizer.emaMode = 0;
-  visualizer.centerRgba = 0xffffff01U;
-  ValidatedBeatorajaSkinModel model;
-  model.model.objects = {
-      imageObject(1, 1, false),
-      {.id = 2,
-       .authoredName = "quantized-transparent-hit-error",
-       .payload = visualizer,
-       .authoredOrdinal = 2}};
-  model.model.destinations.reserve(SkinCommandPolicy::maximumCommands + 1U);
-  for (std::size_t index = 0; index < SkinCommandPolicy::maximumCommands;
-       ++index) {
-    auto imageDestination =
-        destination(1, static_cast<std::uint32_t>(index + 1U), 0.0);
-    imageDestination.presentation.loop = 0;
-    model.model.destinations.push_back(std::move(imageDestination));
-  }
-  auto hitDestination = noteDistributionDestination(2, 101.0, 6.0);
-  hitDestination.presentation.frames.front().rgba[3] = 128;
-  model.model.destinations.push_back(std::move(hitDestination));
-
-  const auto evaluated =
-      evaluate(renderer, runtime, model, resources, state, 1);
-  expect(evaluated.submitReady && evaluated.diagnostics.empty() &&
-             evaluated.submitReady->commands.size() ==
-                 SkinCommandPolicy::maximumCommands,
-         "integrated post-tint zero alpha consumes no exhausted command budget and emits no diagnostic");
-}
-
-void testHitErrorVisualizerEmaIsPerObjectExactOnceAndSessionBounded() {
-  RuntimeHarness runtime;
-  Skin2DRenderer renderer;
-  FakeResources resources;
-  FakeState state;
-  auto recent = emptySkinRecentJudgeTimings();
-  recent[1] = 20;
-  const auto windows = hitErrorJudgeWindows();
-  state.graphResult = {.judgeWindows = windows,
-                       .recentJudgeTimingsMillis = recent,
-                       .recentJudgeTimingIndex = 1};
-  SkinHitErrorVisualizerObject first;
-  first.width = 101;
-  first.judgeWidthMillis = 50;
-  first.windowLength = 3;
-  first.hitErrorMode = false;
-  first.emaMode = 1;
-  first.alpha = 0.5F;
-  auto second = first;
-  second.alpha = 0.25F;
-  ValidatedBeatorajaSkinModel model;
-  model.model.objects = {
-      {.id = 1, .authoredName = "first", .payload = first, .authoredOrdinal = 1},
-      {.id = 2, .authoredName = "second", .payload = second, .authoredOrdinal = 2}};
-  model.model.destinations = {noteDistributionDestination(1, 101.0, 6.0),
-                              noteDistributionDestination(2, 101.0, 6.0)};
-
-  const auto initial = evaluate(renderer, runtime, model, resources, state, 1);
-  const auto repeated = evaluate(renderer, runtime, model, resources, state, 2);
-  recent[2] = 20;
-  state.graphResult.recentJudgeTimingsMillis = recent;
-  state.graphResult.recentJudgeTimingIndex = 2;
-  const auto advanced = evaluate(renderer, runtime, model, resources, state, 3);
-  ValidatedBeatorajaSkinModel replacementModel;
-  replacementModel.model.objects = {
-      {.id = 1,
-       .authoredName = "replacement",
-       .payload = first,
-       .authoredOrdinal = 1}};
-  replacementModel.model.destinations = {
-      noteDistributionDestination(1, 101.0, 6.0)};
-  const auto modelReset =
-      evaluate(renderer, runtime, replacementModel, resources, state, 4);
-  const auto reset = evaluate(renderer, runtime, replacementModel, resources,
-                              state, 5, 0, nullptr, std::nullopt, nullptr, 2);
-  const auto initialCommands = primitiveCommands(initial);
-  const auto repeatedCommands = primitiveCommands(repeated);
-  const auto advancedCommands = primitiveCommands(advanced);
-  const auto modelResetCommands = primitiveCommands(modelReset);
-  const auto resetCommands = primitiveCommands(reset);
-  const auto emaX = [](const auto &commands, std::size_t object) {
-    return commands[object * 2U + 1U]->vertices.front().x;
-  };
-  expect(initialCommands.size() == 4 && repeatedCommands.size() == 4 &&
-             advancedCommands.size() == 4 && modelResetCommands.size() == 2 &&
-             resetCommands.size() == 2 &&
-             emaX(initialCommands, 0) == 40.0F &&
-             emaX(initialCommands, 1) == 45.0F &&
-             emaX(repeatedCommands, 0) == 40.0F &&
-             emaX(repeatedCommands, 1) == 45.0F &&
-             emaX(advancedCommands, 0) == 35.0F &&
-             emaX(advancedCommands, 1) == 42.0F &&
-             emaX(modelResetCommands, 0) == 40.0F &&
-             emaX(resetCommands, 0) == 40.0F,
-         "EMA advances once per changed source index, preserves same-model state, and resets with both model and session identity");
-
-  SkinHitErrorVisualizerPresentationState presentation;
-  state.graphResult.recentJudgeTimingIndex = 1;
-  const auto initialAdvance = advanceSkinHitErrorVisualizerEma(
-      first, state.graphResult, presentation);
-  state.graphResult.recentJudgeTimingIndex = 2;
-  recent[2] = kSkinEmptyJudgeTimingMillis;
-  state.graphResult.recentJudgeTimingsMillis = recent;
-  const auto emptyAdvance = advanceSkinHitErrorVisualizerEma(
-      first, state.graphResult, presentation);
-  recent[3] = 30;
-  state.graphResult.recentJudgeTimingsMillis = recent;
-  state.graphResult.recentJudgeTimingIndex = 3;
-  const auto boundaryAdvance = advanceSkinHitErrorVisualizerEma(
-      first, state.graphResult, presentation);
-  expect(initialAdvance && emptyAdvance && boundaryAdvance &&
-             presentation.emaMillis == 10,
-         "EMA seeds from zero and ignores empty samples and strict bad-window endpoints while consuming their indices");
-}
-
-void testHitErrorVisualizerAppliesDestinationPresentationState() {
-  SkinHitErrorVisualizerObject visualizer;
-  visualizer.width = 101;
-  visualizer.judgeWidthMillis = 50;
-  visualizer.windowLength = 3;
-  visualizer.hitErrorMode = false;
-  visualizer.emaMode = 0;
-  visualizer.centerRgba = 0x20406080U;
-  AuthoredDestinationGeometry geometry;
-  geometry.rect = {.x = 10.0, .y = 20.0, .width = 202.0, .height = 12.0};
-  geometry.clip = AuthoredRect{.x = 0.0,
-                               .y = 0.0,
-                               .width = 200.0,
-                               .height = 100.0};
-  geometry.centerX = 0.5;
-  geometry.centerY = 0.5;
-  geometry.angleDegrees = 90.0;
-  geometry.rgba = {0.5F, 0.5F, 0.5F, 0.5F};
-  geometry.blend = SkinBlendMode::Additive;
-  geometry.filter = SkinFilterMode::Linear;
-  geometry.stretch = SkinStretchMode::KeepAspectRatioFitInner;
-  const auto rendered = renderSkinHitErrorVisualizer(
-      {.sourceObject = 8,
-       .authoredOrdinal = 10,
-       .visualizer = visualizer,
-       .state = {},
-       .emaMillis = 0,
-       .geometry = geometry,
-       .viewport = viewport(),
-       .maximumCommands = 1,
-       .maximumPrimitiveVertices = 4});
-  expect(!rendered.failure && rendered.commands.size() == 1,
-         "destination state leaves one visible transformed hiterrorvisualizer centre primitive");
-  if (rendered.commands.size() != 1) {
-    return;
-  }
-  const auto &centre =
-      std::get<SkinPrimitiveCommand>(rendered.commands.front().payload);
-  expect(centre.vertices[0].x == 117.0F &&
-             centre.vertices[0].y == 695.0F &&
-             centre.vertices[1].x == 117.0F &&
-             centre.vertices[1].y == 693.0F &&
-             centre.vertices[2].x == 105.0F &&
-             centre.vertices[2].y == 693.0F &&
-             centre.vertices[0].rgba == 0x40302010U &&
-             centre.state.blend == SkinBlendMode::Additive &&
-             centre.state.filter == SkinFilterMode::Linear &&
-             centre.state.scissor && centre.state.scissor->x == 0.0 &&
-             centre.state.scissor->y == 620.0 &&
-             centre.state.scissor->width == 200.0 &&
-             centre.state.scissor->height == 100.0,
-         "hiterrorvisualizer applies stretch, pivot rotation, tint, blend, filter, and scissor through the common destination path");
-}
-
-void testTimingVisualizerUsesJudgeBandsAndRecentTimingRing() {
-  SkinTimingVisualizerObject visualizer;
-  visualizer.width = 301;
-  visualizer.judgeWidthMillis = 150;
-  visualizer.lineWidth = 1;
-  std::array<SkinJudgeWindow, 5> windows{{
-      {.minimumTimingMillis = -20, .maximumTimingMillis = 20},
-      {.minimumTimingMillis = -40, .maximumTimingMillis = 40},
-      {.minimumTimingMillis = -60, .maximumTimingMillis = 60},
-      {.minimumTimingMillis = -80, .maximumTimingMillis = 80},
-      {.minimumTimingMillis = -100, .maximumTimingMillis = 100},
-  }};
-  auto recent = emptySkinRecentJudgeTimings();
-  recent[0] = -20;
-  recent[49] = 20;
-  AuthoredDestinationGeometry geometry;
-  geometry.rect = {.x = 0.0, .y = 0.0, .width = 301.0, .height = 100.0};
-  const auto rendered = renderSkinTimingVisualizer(
-      {.sourceObject = 7,
-       .authoredOrdinal = 9,
-       .visualizer = visualizer,
-       .state = {.judgeWindows = windows,
-                 .recentJudgeTimingsMillis = recent,
-                 .recentJudgeTimingIndex = 49},
-       .geometry = geometry,
-       .viewport = viewport(),
-       .maximumCommands = 64,
-       .maximumPrimitiveVertices = 256});
-  expect(!rendered.failure && rendered.commands.size() == 44 &&
-             rendered.primitiveVertices == 114,
-         "timing visualizer emits pinned bands, centre/grid, and only in-range recent lines");
-  if (rendered.commands.size() != 44) {
-    return;
-  }
-  const auto &centre = std::get<SkinPrimitiveCommand>(rendered.commands[0].payload);
-  const auto &firstBand = std::get<SkinPrimitiveCommand>(rendered.commands[1].payload);
-  const auto &grid = std::get<SkinPrimitiveCommand>(rendered.commands[11].payload);
-  const auto &olderLine = std::get<SkinPrimitiveCommand>(rendered.commands[42].payload);
-  const auto &newestLine = std::get<SkinPrimitiveCommand>(rendered.commands[43].payload);
-  expect(centre.kind == SkinPrimitiveKind::SolidQuad &&
-             centre.vertices.front().x == 150.0F &&
-             centre.vertices.front().rgba == 0xffffffffU &&
-             firstBand.vertices.front().x == 130.0F &&
-             firstBand.vertices.front().rgba == 0xff880000U &&
-             grid.kind == SkinPrimitiveKind::LineStrip &&
-             grid.vertices.front().x == 0.0F &&
-             grid.vertices.front().rgba == 0x40000000U,
-         "timing visualizer draws its centre, expanding judge bands, and ten-millisecond grid in pinned order");
-  expect(olderLine.vertices.front().x == 130.0F &&
-             olderLine.vertices.front().y == 695.0F &&
-             olderLine.vertices.front().rgba == 0x8200ff00U &&
-             newestLine.vertices.front().x == 170.0F &&
-             newestLine.vertices.front().y == 719.5F &&
-             newestLine.vertices.front().rgba == 0xff00ff00U,
-         "timing visualizer traverses the source ring oldest-first with pinned decay geometry and alpha");
-
-  visualizer.drawDecay = false;
-  const auto fullLine = renderSkinTimingVisualizer(
-      {.sourceObject = 7,
-       .authoredOrdinal = 9,
-       .visualizer = visualizer,
-       .state = {.judgeWindows = windows,
-                 .recentJudgeTimingsMillis = recent,
-                 .recentJudgeTimingIndex = 49},
-       .geometry = geometry,
-       .viewport = viewport(),
-       .maximumCommands = 64,
-       .maximumPrimitiveVertices = 256});
-  const auto &nonDecaying =
-      std::get<SkinPrimitiveCommand>(fullLine.commands[42].payload);
-  expect(!fullLine.failure && nonDecaying.vertices.front().y == 720.0F &&
-             nonDecaying.vertices[2].y == 620.0F,
-         "timing visualizer keeps alpha ordering while non-decay lines span the destination height");
-
-  const auto bounded = renderSkinTimingVisualizer(
-      {.sourceObject = 7,
-       .authoredOrdinal = 9,
-       .visualizer = visualizer,
-       .state = {.judgeWindows = windows,
-                 .recentJudgeTimingsMillis = recent,
-                 .recentJudgeTimingIndex = 49},
-       .geometry = geometry,
-       .viewport = viewport(),
-       .maximumCommands = 43,
-       .maximumPrimitiveVertices = 256});
-  expect(bounded.failure && bounded.commands.empty() &&
-             bounded.primitiveVertices == 0,
-         "timing visualizer command limits discard every partially lowered primitive");
-
-  geometry.rgba[3] = 0.0F;
-  const auto transparent = renderSkinTimingVisualizer(
-      {.sourceObject = 7,
-       .authoredOrdinal = 9,
-       .visualizer = visualizer,
-       .state = {.judgeWindows = windows,
-                 .recentJudgeTimingsMillis = recent,
-                 .recentJudgeTimingIndex = 49},
-       .geometry = geometry,
-       .viewport = viewport(),
-       .maximumCommands = 0,
-       .maximumPrimitiveVertices = 0});
-  expect(!transparent.failure && transparent.commands.empty() &&
-             transparent.primitiveVertices == 0,
-         "transparent timing visualizers consume neither primitive nor command budgets");
-
-  RuntimeHarness runtime;
-  Skin2DRenderer renderer;
-  FakeResources resources;
-  FakeState state;
-  state.graphResult.judgeWindows = windows;
-  state.graphResult.recentJudgeTimingsMillis = recent;
-  state.graphResult.recentJudgeTimingIndex = 49;
-  ValidatedBeatorajaSkinModel model;
-  model.model.objects = {{.id = 1,
-                          .authoredName = "timing",
-                          .payload = visualizer,
-                          .authoredOrdinal = 1}};
-  model.model.destinations = {noteDistributionDestination(1, 301.0, 100.0)};
-  const auto integrated = evaluate(renderer, runtime, model, resources, state);
-  expect(integrated.submitReady && integrated.diagnostics.empty() &&
-             primitiveCommands(integrated).size() == 44,
-         "Skin2DRenderer lowers typed timing visualizers through the shared destination path");
-}
-
-void testTimingVisualizerKeepsConstructorTimingScaleIndependentOfDestination() {
-  SkinTimingVisualizerObject visualizer;
-  visualizer.width = 301;
-  visualizer.judgeWidthMillis = 150;
-  visualizer.lineWidth = 2;
-  visualizer.drawDecay = false;
-  auto recent = emptySkinRecentJudgeTimings();
-  recent[99] = 10;
-  AuthoredDestinationGeometry geometry;
-  geometry.rect = {.x = 10.0, .y = 20.0, .width = 100.0, .height = 40.0};
-  geometry.angleDegrees = 90.0;
-  geometry.stretch = SkinStretchMode::KeepAspectRatioFitInner;
-  const auto rendered = renderSkinTimingVisualizer(
-      {.sourceObject = 3,
-       .authoredOrdinal = 4,
-       .visualizer = visualizer,
-       .state = {.recentJudgeTimingsMillis = recent,
-                 .recentJudgeTimingIndex = 98},
-       .geometry = geometry,
-       .viewport = viewport(),
-       .maximumCommands = 64,
-       .maximumPrimitiveVertices = 256});
-  expect(!rendered.failure && !rendered.commands.empty(),
-         "timing visualizer draws a recent sample with a destination narrower than its constructor width");
-  if (rendered.commands.empty()) {
-    return;
-  }
-  const auto &line =
-      std::get<SkinPrimitiveCommand>(rendered.commands.back().payload);
-  expect(line.vertices.size() == 4 && line.vertices[0].x == 10.0F &&
-             line.vertices[0].y == 641.0F && line.vertices[1].x == 10.0F &&
-             line.vertices[1].y == 639.0F && line.vertices[2].x == -30.0F &&
-             line.vertices[2].y == 639.0F && line.vertices[3].x == -30.0F &&
-             line.vertices[3].y == 641.0F,
-         "timing lines keep their two-pixel width and constructor 10ms offset before destination rotation");
-
-  visualizer.width = 0;
-  geometry.angleDegrees = 0.0;
-  const auto zero = renderSkinTimingVisualizer(
-      {.sourceObject = 3,
-       .authoredOrdinal = 4,
-       .visualizer = visualizer,
-       .state = {.recentJudgeTimingsMillis = recent,
-                 .recentJudgeTimingIndex = 98},
-       .geometry = geometry,
-       .viewport = viewport(),
-       .maximumCommands = 64,
-       .maximumPrimitiveVertices = 256});
-  expect(!zero.failure && !zero.commands.empty(),
-         "zero constructor width remains a typed, renderable timing visualizer");
-  if (zero.commands.empty()) {
-    return;
-  }
-  const auto &zeroLine =
-      std::get<SkinPrimitiveCommand>(zero.commands.back().payload);
-  expect(zeroLine.vertices.front().x == 59.0F &&
-             zeroLine.vertices[1].x == 61.0F,
-         "zero constructor width remains renderable and centres every timing offset");
-
-  visualizer.width = -301;
-  const auto negative = renderSkinTimingVisualizer(
-      {.sourceObject = 3,
-       .authoredOrdinal = 4,
-       .visualizer = visualizer,
-       .state = {.recentJudgeTimingsMillis = recent,
-                 .recentJudgeTimingIndex = 98},
-       .geometry = geometry,
-       .viewport = viewport(),
-       .maximumCommands = 64,
-       .maximumPrimitiveVertices = 256});
-  expect(!negative.failure && !negative.commands.empty(),
-         "negative constructor width remains a typed, renderable timing visualizer");
-  if (negative.commands.empty()) {
-    return;
-  }
-  const auto &negativeLine =
-      std::get<SkinPrimitiveCommand>(negative.commands.back().payload);
-  expect(negativeLine.vertices.front().x == 49.0F &&
-             negativeLine.vertices[1].x == 51.0F,
-         "negative constructor width remains renderable and reverses the timing offset direction");
-}
 
 std::int64_t fixtureFixed(double value) {
   // Floating-point to_chars implementations can choose different shortest
@@ -6067,6 +4359,583 @@ evaluateAllV1Fixture(const PlaySkinViewport &viewport) {
                                  .state = state});
 }
 
+const SkinGeneratedTexturedQuadCommand *generatedTexture(
+    const SkinDrawCommand &command) {
+  return std::get_if<SkinGeneratedTexturedQuadCommand>(&command.payload);
+}
+
+std::uint32_t generatedRgba(const SkinGeneratedTexturedQuadCommand &command,
+                            int x, int y) {
+  if (command.texture.rgba == nullptr || x < 0 || y < 0 ||
+      x >= command.texture.width || y >= command.texture.height) return 0;
+  const std::size_t offset =
+      (static_cast<std::size_t>(y) * command.texture.width + x) * 4U;
+  const auto &pixels = *command.texture.rgba;
+  return (static_cast<std::uint32_t>(pixels[offset]) << 24U) |
+         (static_cast<std::uint32_t>(pixels[offset + 1U]) << 16U) |
+         (static_cast<std::uint32_t>(pixels[offset + 2U]) << 8U) |
+         pixels[offset + 3U];
+}
+
+float generatedMinimumX(const SkinGeneratedTexturedQuadCommand &command) {
+  return std::ranges::min(command.vertices, {}, &SkinVertex::x).x;
+}
+
+float generatedMaximumX(const SkinGeneratedTexturedQuadCommand &command) {
+  return std::ranges::max(command.vertices, {}, &SkinVertex::x).x;
+}
+
+std::array<SkinJudgeWindow, 5> generatedJudgeWindows();
+
+void testSoftwarePixmapMatchesPinnedGdx2dCompositing() {
+  expect(!SkinSoftwarePixmap::create(
+              SkinResourcePolicy::maximumDimension + 1, 1),
+         "software Pixmap rejects oversized dimensions before allocation");
+  auto pixmap = SkinSoftwarePixmap::create(5, 5);
+  expect(pixmap.has_value(), "bounded software Pixmap allocates");
+  if (!pixmap) return;
+  pixmap->fillRectangle(0, 0, 3, 3, 0xff000080U);
+  pixmap->fillRectangle(1, 1, 3, 3, 0x00ff0080U);
+  pixmap->drawLine(0, 4, 4, 0, 0x0000ff80U);
+  pixmap->fillTriangle(2, 0, 4, 4, 0, 4, 0xffffff80U);
+  const SkinGeneratedTexturedQuadCommand command{
+      .texture = {.width = 5, .height = 5, .rgba = pixmap->pixels()}};
+  expect(generatedRgba(command, 0, 0) == 0x80000080U &&
+             generatedRgba(command, 1, 1) == 0x408000bfU &&
+             pixmap->maximumAlpha() >= 0xbfU,
+         "software Pixmap uses gdx2d RGBA8888 SourceOver for overlapping "
+         "primitives rather than independently blending them at destination");
+  auto linePixmap = SkinSoftwarePixmap::create(5, 5);
+  auto trianglePixmap = SkinSoftwarePixmap::create(5, 5);
+  if (!linePixmap || !trianglePixmap) return;
+  linePixmap->drawLine(0, 4, 4, 0, 0x0000ff80U);
+  trianglePixmap->fillTriangle(2, 0, 4, 4, 0, 4, 0xffffff80U);
+  const SkinGeneratedTexturedQuadCommand lineCommand{
+      .texture = {.width = 5, .height = 5, .rgba = linePixmap->pixels()}};
+  const SkinGeneratedTexturedQuadCommand triangleCommand{
+      .texture = {.width = 5,
+                  .height = 5,
+                  .rgba = trianglePixmap->pixels()}};
+  expect(generatedRgba(lineCommand, 2, 2) == 0x00008080U &&
+             generatedRgba(lineCommand, 2, 1) == 0U &&
+             generatedRgba(triangleCommand, 2, 2) == 0x80808080U,
+         "software Pixmap matches pinned Bresenham line and scanline triangle "
+         "coverage before texture upload");
+  trianglePixmap->clear(0U);
+  trianglePixmap->fillTriangle(std::numeric_limits<int>::min(), 0,
+                               std::numeric_limits<int>::max(), 4, 0, 2,
+                               0xffffffffU);
+  expect(trianglePixmap->maximumAlpha() == 0xffU,
+         "software Pixmap bounds extreme triangle arithmetic without signed "
+         "overflow before clipping it to the canvas");
+}
+
+std::vector<SkinBpmGraphPoint> generatedBpmGimmickSeries() {
+  return {
+      {.chartTimeMicros = 0,
+       .bpm = 120.0,
+       .scroll = 1.0,
+       .bpmTimesScroll = 120.0,
+       .graphSpeed = 120.0,
+       .emitsGraphPoint = true,
+       .synthetic = true},
+      {.chartTimeMicros = 1'000'000,
+       .bpm = 15.0,
+       .scroll = 0.5,
+       .bpmTimesScroll = 7.5,
+       .graphSpeed = 7.5,
+       .emitsGraphPoint = true},
+      {.chartTimeMicros = 2'000'000,
+       .bpm = 240.0,
+       .scroll = 8.0,
+       .bpmTimesScroll = 1920.0,
+       .graphSpeed = 1920.0,
+       .emitsGraphPoint = true},
+      {.chartTimeMicros = 3'000'000,
+       .bpm = 120.0,
+       .scroll = 2.0,
+       .bpmTimesScroll = 240.0,
+       .graphSpeed = 240.0,
+       .emitsGraphPoint = true},
+      {.chartTimeMicros = 4'000'000,
+       .bpm = 120.0,
+       .scroll = 1.0,
+       .bpmTimesScroll = 120.0,
+       .stopMicros = 500'000,
+       .graphSpeed = 0.0,
+       .emitsGraphPoint = true},
+      {.chartTimeMicros = 5'000'000,
+       .bpm = 120.0,
+       .scroll = 1.0,
+       .bpmTimesScroll = 120.0,
+       .graphSpeed = 120.0,
+       .emitsGraphPoint = true,
+       .synthetic = true},
+  };
+}
+
+void testGeneratedBpmPixmapPreservesSourceRasterRevealAndIntegration() {
+  SkinBpmGraphObject graph;
+  graph.delayMillis = 1'000;
+  const auto series = generatedBpmGimmickSeries();
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 0.0, .y = 0.0, .width = 80.0, .height = 80.0};
+  geometry.rgba = {0.5F, 1.0F, 1.0F, 0.5F};
+  geometry.blend = SkinBlendMode::Additive;
+  geometry.filter = SkinFilterMode::Linear;
+  const auto rendered = renderSkinBpmGraph(
+      {.sourceObject = 7,
+       .authoredOrdinal = 9,
+       .graph = graph,
+       .state = {.bpmSeries = series,
+                 .mainBpm = 120.0,
+                 .minimumBpm = 7.5,
+                 .maximumBpm = 1920.0},
+       .geometry = geometry,
+       .viewport = viewport(),
+       .elapsedMillis = 500,
+       .maximumCommands = 1,
+       .maximumPrimitiveVertices = 0});
+  const auto *texture = rendered.commands.size() == 1
+                            ? generatedTexture(rendered.commands.front())
+                            : nullptr;
+  expect(!rendered.failure && texture != nullptr &&
+             texture->texture.width == 80 && texture->texture.height == 80 &&
+             generatedRgba(*texture, 13, 2) == graph.transitionRgba &&
+             generatedRgba(*texture, 0, 39) == graph.mainRgba &&
+             generatedRgba(*texture, 14, 0) == graph.minimumRgba &&
+             generatedRgba(*texture, 27, 78) == graph.maximumRgba &&
+             generatedRgba(*texture, 53, 0) == graph.stopRgba &&
+             generatedMinimumX(*texture) == 0.0F &&
+             generatedMaximumX(*texture) == 40.0F &&
+             texture->state.blend == SkinBlendMode::Additive &&
+             texture->state.filter == SkinFilterMode::Linear &&
+             texture->vertices.front().rgba == 0x7fffff7fU,
+         "BPM Pixmap precomposes pinned log bands and transition overlap, "
+         "then reveals and destination-modulates one texture command");
+
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  state.graphResult = {.bpmSeries = series,
+                       .mainBpm = 120.0,
+                       .minimumBpm = 7.5,
+                       .maximumBpm = 1920.0};
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects = {{.id = 1,
+                          .authoredName = "bpm",
+                          .payload = SkinBpmGraphObject{},
+                          .authoredOrdinal = 1}};
+  model.model.destinations = {noteDistributionDestination(1, 80.0, 80.0)};
+  const auto integrated = evaluate(renderer, runtime, model, resources, state);
+  expect(integrated.submitReady && integrated.diagnostics.empty() &&
+             generatedCommands(integrated).size() == 1,
+         "Skin2DRenderer publishes the BPM graph as one generated texture");
+}
+
+SkinGameplayGraphStateView generatedGaugeState(std::span<const float> history,
+                                                int type = 0) {
+  return {.gaugeHistory = history,
+          .gaugeType = type,
+          .gaugeMinimum = 2.0F,
+          .gaugeMaximum = 100.0F,
+          .gaugeBorder = 80.0F,
+          .gaugeSupported = true};
+}
+
+void testGeneratedGaugePixmapPreservesLayersCrossingAndBudget() {
+  SkinGaugeGraphObject graph;
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 0.0, .y = 0.0, .width = 100.0, .height = 100.0};
+  const std::array<float, 2> rising{20.0F, 90.0F};
+  const auto rendered = renderSkinGaugeGraph(
+      {.sourceObject = 8,
+       .authoredOrdinal = 10,
+       .graph = graph,
+       .state = generatedGaugeState(rising),
+       .geometry = geometry,
+       .viewport = viewport(),
+       .elapsedMillis = 750,
+       .maximumCommands = 2,
+       .maximumPrimitiveVertices = 0});
+  const auto *background = rendered.commands.size() == 2
+                               ? generatedTexture(rendered.commands[0])
+                               : nullptr;
+  const auto *shape = rendered.commands.size() == 2
+                          ? generatedTexture(rendered.commands[1])
+                          : nullptr;
+  expect(!rendered.failure && background != nullptr && shape != nullptr &&
+             generatedRgba(*background, 10, 10) == graph.rgba[0][3] &&
+             generatedRgba(*background, 10, 90) == graph.rgba[0][1] &&
+             generatedRgba(*shape, 0, 20) == graph.rgba[0][2] &&
+             generatedRgba(*shape, 0, 80) == graph.rgba[0][0] &&
+             generatedRgba(*shape, 20, 88) == graph.rgba[0][0] &&
+             generatedMaximumX(*shape) == 50.0F &&
+             shape->vertices[1].u == 0.5F,
+         "gauge background and crossing shape retain separate source Pixmaps "
+         "and the 1500ms reveal crops rather than stretches the shape");
+  const auto bounded = renderSkinGaugeGraph(
+      {.sourceObject = 8,
+       .authoredOrdinal = 10,
+       .graph = graph,
+       .state = generatedGaugeState(rising),
+       .geometry = geometry,
+       .viewport = viewport(),
+       .elapsedMillis = 1'500,
+       .maximumCommands = 1,
+       .maximumPrimitiveVertices = 0});
+  expect(bounded.failure && bounded.commands.empty(),
+         "gauge generated-layer command overflow remains atomic");
+}
+
+void testGeneratedNotePixmapPreservesPmsOrderGapsCursorAndFloatReveal() {
+  std::array<SkinJudgeDistribution, 2> distribution{};
+  distribution[0][0] = 1;
+  distribution[0][1] = 1;
+  SkinGameplayGraphStateView state;
+  state.judgementDistribution = distribution;
+  SkinNoteDistributionGraphObject graph;
+  graph.type = SkinNoteDistributionGraphType::Judge;
+  graph.backgroundTextureOff = true;
+  graph.delayMillis = 1'000;
+  graph.reverseOrder = true;
+  graph.noGap = true;
+  graph.noHorizontalGap = true;
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 0.0, .y = 0.0, .width = 100.5, .height = 100.0};
+  const auto rendered = renderSkinNoteDistributionGraph(
+      {.sourceObject = 9,
+       .authoredOrdinal = 11,
+       .graph = graph,
+       .state = state,
+       .geometry = geometry,
+       .viewport = viewport(),
+       .pmsMode = true,
+       .elapsedMillis = 500,
+       .startMillis = 0,
+       .maximumCommands = 3,
+       .maximumPrimitiveVertices = 0});
+  const auto *shape = rendered.commands.size() == 2
+                          ? generatedTexture(rendered.commands[0])
+                          : nullptr;
+  const auto *cursor = rendered.commands.size() == 2
+                           ? generatedTexture(rendered.commands[1])
+                           : nullptr;
+  expect(!rendered.failure && rendered.commands.size() == 2 &&
+             shape != nullptr && cursor != nullptr &&
+             generatedRgba(*shape, 0, 0) == 0xff5eb0ffU &&
+             generatedRgba(*shape, 4, 4) == 0xff5eb0ffU &&
+             generatedRgba(*shape, 0, 5) == 0x555555ffU &&
+             generatedRgba(*cursor, 0, 0) == 0x80ff80ffU &&
+             generatedMaximumX(*shape) == 50.25F &&
+             shape->vertices[1].u == 0.5F,
+         "note distribution precomposes PMS reverse order and no-gap cells, "
+         "keeps cursor separate, and preserves its float destination reveal");
+}
+
+void testGeneratedHitErrorPixmapPreservesEmaAndDestinationState() {
+  SkinHitErrorVisualizerObject visualizer;
+  visualizer.width = 101;
+  visualizer.judgeWidthMillis = 50;
+  visualizer.lineWidth = 1;
+  visualizer.windowLength = 3;
+  visualizer.hitErrorMode = false;
+  visualizer.emaMode = 3;
+  visualizer.centerRgba = 0x20406080U;
+  visualizer.emaRgba = 0xff0000ffU;
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 10.0, .y = 20.0, .width = 202.0, .height = 12.0};
+  geometry.clip = AuthoredRect{.x = 0.0,
+                               .y = 0.0,
+                               .width = 200.0,
+                               .height = 100.0};
+  geometry.rgba = {0.5F, 0.5F, 0.5F, 0.5F};
+  geometry.blend = SkinBlendMode::Additive;
+  geometry.filter = SkinFilterMode::Linear;
+  const auto rendered = renderSkinHitErrorVisualizer(
+      {.sourceObject = 10,
+       .authoredOrdinal = 12,
+       .visualizer = visualizer,
+       .state = {},
+       .emaMillis = 10,
+       .geometry = geometry,
+       .viewport = viewport(),
+       .maximumCommands = 1,
+       .maximumPrimitiveVertices = 0});
+  const auto *texture = rendered.commands.size() == 1
+                            ? generatedTexture(rendered.commands.front())
+                            : nullptr;
+  expect(!rendered.failure && texture != nullptr &&
+             generatedRgba(*texture, 40, 5) == visualizer.emaRgba &&
+             generatedRgba(*texture, 50, 5) == 0x10203080U &&
+             texture->state.blend == SkinBlendMode::Additive &&
+             texture->state.filter == SkinFilterMode::Linear &&
+             texture->state.scissor.has_value() &&
+             texture->vertices.front().rgba == 0x7f7f7f7fU,
+         "hit-error line, triangle, and centre overlap in one Pixmap before "
+         "destination tint, filtering, blend, and clip");
+
+  SkinHitErrorVisualizerPresentationState presentation;
+  auto recent = emptySkinRecentJudgeTimings();
+  recent[1] = 20;
+  const auto windows = generatedJudgeWindows();
+  SkinGameplayGraphStateView state{.judgeWindows = windows,
+                                   .recentJudgeTimingsMillis = recent,
+                                   .recentJudgeTimingIndex = 1};
+  visualizer.alpha = 0.5F;
+  expect(advanceSkinHitErrorVisualizerEma(visualizer, state, presentation) &&
+             presentation.emaMillis == 10 &&
+             !advanceSkinHitErrorVisualizerEma(visualizer, state,
+                                               presentation),
+         "hit-error EMA advances exactly once for each recent-index change");
+}
+
+void testGeneratedTimingPixmapPreservesBandsLinesAndZeroAlphaBudget() {
+  SkinTimingVisualizerObject visualizer;
+  visualizer.centerRgba = 0xffffffffU;
+  visualizer.drawDecay = false;
+  const auto windows = generatedJudgeWindows();
+  auto recent = emptySkinRecentJudgeTimings();
+  recent[1] = 0;
+  recent[2] = 10;
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 0.0, .y = 0.0, .width = 301.0, .height = 100.0};
+  const auto rendered = renderSkinTimingVisualizer(
+      {.sourceObject = 11,
+       .authoredOrdinal = 13,
+       .visualizer = visualizer,
+       .state = {.judgeWindows = windows,
+                 .recentJudgeTimingsMillis = recent,
+                 .recentJudgeTimingIndex = 0},
+       .geometry = geometry,
+       .viewport = viewport(),
+       .maximumCommands = 3,
+       .maximumPrimitiveVertices = 8});
+  const auto *background = !rendered.commands.empty()
+                               ? generatedTexture(rendered.commands.front())
+                               : nullptr;
+  expect(!rendered.failure && background != nullptr &&
+             rendered.commands.size() == 3 &&
+             rendered.primitiveVertices == 8 &&
+             generatedRgba(*background, 147, 0) ==
+                 visualizer.judgeRgba[0] &&
+             generatedRgba(*background, 142, 0) ==
+                 visualizer.judgeRgba[1] &&
+             generatedRgba(*background, 132, 0) ==
+                 visualizer.judgeRgba[2] &&
+             generatedRgba(*background, 122, 0) ==
+                 visualizer.judgeRgba[3] &&
+             generatedRgba(*background, 102, 0) ==
+                 visualizer.judgeRgba[4] &&
+             std::holds_alternative<SkinPrimitiveCommand>(
+                 rendered.commands[1].payload) &&
+             std::holds_alternative<SkinPrimitiveCommand>(
+                 rendered.commands[2].payload),
+         "timing background bands precompose once while recent white-source "
+         "line draws retain their independent destination blending");
+
+  geometry.rgba[3] = 0.001F;
+  const auto invisible = renderSkinTimingVisualizer(
+      {.sourceObject = 11,
+       .authoredOrdinal = 13,
+       .visualizer = visualizer,
+       .state = {.judgeWindows = windows,
+                 .recentJudgeTimingsMillis = recent,
+                 .recentJudgeTimingIndex = 0},
+       .geometry = geometry,
+       .viewport = viewport(),
+       .maximumCommands = 0,
+       .maximumPrimitiveVertices = 0});
+  expect(!invisible.failure && invisible.commands.empty() &&
+             invisible.primitiveVertices == 0,
+         "timing background and recent lines suppress post-tint alpha zero "
+         "before command and primitive budget admission");
+}
+
+std::array<SkinJudgeWindow, 5> generatedJudgeWindows() {
+  return {{{.minimumTimingMillis = -5, .maximumTimingMillis = 5},
+           {.minimumTimingMillis = -10, .maximumTimingMillis = 10},
+           {.minimumTimingMillis = -20, .maximumTimingMillis = 20},
+           {.minimumTimingMillis = -30, .maximumTimingMillis = 30},
+           {.minimumTimingMillis = -50, .maximumTimingMillis = 50}}};
+}
+
+void testGeneratedPixmapWidgetsMatchSourceLayersAndPixels() {
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 0.0, .y = 0.0, .width = 100.0, .height = 50.0};
+
+  SkinBpmGraphObject bpm;
+  const std::array<SkinBpmGraphPoint, 2> bpmSeries{{
+      {.chartTimeMicros = 0, .graphSpeed = 120.0, .emitsGraphPoint = true},
+      {.chartTimeMicros = 1'000'000,
+       .graphSpeed = 180.0,
+       .emitsGraphPoint = true}}};
+  const auto bpmResult = renderSkinBpmGraph(
+      {.sourceObject = 1, .authoredOrdinal = 2, .graph = bpm,
+       .state = {.bpmSeries = bpmSeries, .mainBpm = 120.0},
+       .geometry = geometry, .viewport = viewport(), .elapsedMillis = 1'000,
+       .maximumCommands = 1, .maximumPrimitiveVertices = 0});
+  const auto *bpmTexture = bpmResult.commands.size() == 1
+                               ? generatedTexture(bpmResult.commands[0])
+                               : nullptr;
+  expect(!bpmResult.failure && bpmTexture != nullptr &&
+             bpmResult.primitiveVertices == 0 &&
+             bpmTexture->key.layer == SkinGeneratedTextureLayer::Primary,
+         "BPM Pixmap is one cached generated texture command");
+
+  SkinGaugeGraphObject gauge;
+  const std::array<float, 3> history{20.0F, 60.0F, 40.0F};
+  const auto gaugeResult = renderSkinGaugeGraph(
+      {.sourceObject = 2, .authoredOrdinal = 3, .graph = gauge,
+       .state = {.gaugeHistory = history, .gaugeType = 0,
+                 .gaugeMaximum = 100.0F, .gaugeBorder = 50.0F,
+                 .gaugeSupported = true},
+       .geometry = geometry, .viewport = viewport(), .elapsedMillis = 1'500,
+       .maximumCommands = 2, .maximumPrimitiveVertices = 0});
+  expect(!gaugeResult.failure && gaugeResult.commands.size() == 2 &&
+             generatedTexture(gaugeResult.commands[0]) != nullptr &&
+             generatedTexture(gaugeResult.commands[1]) != nullptr &&
+             generatedTexture(gaugeResult.commands[0])->key.layer ==
+                 SkinGeneratedTextureLayer::Background &&
+             generatedTexture(gaugeResult.commands[1])->key.layer ==
+                 SkinGeneratedTextureLayer::Shape,
+         "Gauge preserves separate cached background and shape Pixmaps");
+
+  const std::array<SkinNormalDistribution, 1> distribution{{
+      SkinNormalDistribution{1, 1, 0, 0, 0, 0, 0}}};
+  SkinGameplayGraphStateView noteState;
+  noteState.normalDistribution = distribution;
+  SkinNoteDistributionGraphObject graph;
+  geometry.rect = {.x = 0.0, .y = 0.0, .width = 5.0, .height = 100.0};
+  const auto note = renderSkinNoteDistributionGraph(
+      {.sourceObject = 3, .authoredOrdinal = 4, .graph = graph,
+       .state = noteState, .geometry = geometry, .viewport = viewport(),
+       .elapsedMillis = 500, .maximumCommands = 3,
+       .maximumPrimitiveVertices = 0});
+  expect(!note.failure && note.commands.size() == 2 &&
+             generatedTexture(note.commands[0]) != nullptr &&
+             generatedTexture(note.commands[1]) != nullptr &&
+             generatedRgba(*generatedTexture(note.commands[1]), 0, 0) ==
+                 0x44ff44ffU &&
+             generatedRgba(*generatedTexture(note.commands[1]), 0, 5) ==
+                 0x228822ffU,
+         "Note distribution precomposes ordered chips into its shape Pixmap");
+}
+
+void testGeneratedPixmapHitErrorTimingAndZeroAlphaContracts() {
+  SkinHitErrorVisualizerObject hit;
+  hit.width = 11;
+  hit.judgeWidthMillis = -1;
+  hit.lineWidth = 1;
+  hit.windowLength = 1;
+  hit.hitErrorMode = true;
+  hit.emaMode = 0;
+  hit.centerRgba = 0xffffff80U;
+  hit.judgeRgba.fill(0xff000080U);
+  auto recent = emptySkinRecentJudgeTimings();
+  recent[0] = 0;
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 0.0, .y = 0.0, .width = 11.0, .height = 2.0};
+  const auto rendered = renderSkinHitErrorVisualizer(
+      {.sourceObject = 4, .authoredOrdinal = 5, .visualizer = hit,
+       .state = {.judgeWindows = generatedJudgeWindows(),
+                 .recentJudgeTimingsMillis = recent,
+                 .recentJudgeTimingIndex = 0},
+       .geometry = geometry, .viewport = viewport(),
+       .maximumCommands = 1, .maximumPrimitiveVertices = 0});
+  const auto *hitTexture = rendered.commands.size() == 1
+                               ? generatedTexture(rendered.commands[0])
+                               : nullptr;
+  expect(!rendered.failure && hitTexture != nullptr &&
+             generatedRgba(*hitTexture, 5, 0) == 0x80808080U,
+         "negative judge width remains drawable and uses the ordered reversed "
+         "clamp before Pixmap clipping");
+
+  SkinTimingVisualizerObject timing;
+  timing.centerRgba = 0U;
+  timing.judgeRgba.fill(0U);
+  geometry.rect = {.x = 0.0, .y = 0.0, .width = 301.0, .height = 20.0};
+  const auto timingResult = renderSkinTimingVisualizer(
+      {.sourceObject = 5, .authoredOrdinal = 6, .visualizer = timing,
+       .state = {}, .geometry = geometry, .viewport = viewport(),
+       .maximumCommands = 1, .maximumPrimitiveVertices = 0});
+  const auto *timingTexture = timingResult.commands.size() == 1
+                                  ? generatedTexture(timingResult.commands[0])
+                                  : nullptr;
+  expect(!timingResult.failure && timingTexture != nullptr &&
+             generatedRgba(*timingTexture, 0, 0) == 0x0000003eU,
+         "timing grid uses the pinned 0x3f input alpha and gdx2d SourceOver "
+         "stores its exact transparent-canvas result");
+
+  SkinNormalDistribution emptyDistribution{};
+  const std::array<SkinNormalDistribution, 1> emptyData{emptyDistribution};
+  SkinGameplayGraphStateView noteState;
+  noteState.normalDistribution = emptyData;
+  SkinNoteDistributionGraphObject transparentGraph;
+  transparentGraph.backgroundTextureOff = true;
+  geometry.rect = {.x = 0.0, .y = 0.0, .width = 5.0, .height = 100.0};
+  geometry.rgba[3] = 0.5F / 255.0F;
+  const auto invisible = renderSkinNoteDistributionGraph(
+      {.sourceObject = 6, .authoredOrdinal = 7, .graph = transparentGraph,
+       .state = noteState, .geometry = geometry, .viewport = viewport(),
+       .elapsedMillis = 500, .startMillis = 0, .maximumCommands = 0,
+       .maximumPrimitiveVertices = 0});
+  expect(!invisible.failure && invisible.commands.empty(),
+         "post-modulation alpha-zero generated layers consume no command budget");
+
+  geometry.rgba[3] = 0.001F;
+  geometry.rect = {.x = 0.0, .y = 0.0, .width = 20.0, .height = 20.0};
+  const std::array<SkinBpmGraphPoint, 2> bpmSeries{{
+      {.chartTimeMicros = 0,
+       .graphSpeed = 120.0,
+       .emitsGraphPoint = true},
+      {.chartTimeMicros = 1'000'000,
+       .graphSpeed = 120.0,
+       .emitsGraphPoint = true}}};
+  const auto invisibleBpm = renderSkinBpmGraph(
+      {.sourceObject = 7,
+       .authoredOrdinal = 8,
+       .graph = SkinBpmGraphObject{},
+       .state = {.bpmSeries = bpmSeries, .mainBpm = 120.0},
+       .geometry = geometry,
+       .viewport = viewport(),
+       .maximumCommands = 0,
+       .maximumPrimitiveVertices = 0});
+  const std::array<float, 2> gaugeHistory{20.0F, 90.0F};
+  const auto invisibleGauge = renderSkinGaugeGraph(
+      {.sourceObject = 8,
+       .authoredOrdinal = 9,
+       .graph = SkinGaugeGraphObject{},
+       .state = generatedGaugeState(gaugeHistory),
+       .geometry = geometry,
+       .viewport = viewport(),
+       .elapsedMillis = 1'500,
+       .maximumCommands = 0,
+       .maximumPrimitiveVertices = 0});
+  SkinHitErrorVisualizerObject faintHit;
+  faintHit.width = 11;
+  faintHit.windowLength = 1;
+  faintHit.hitErrorMode = false;
+  faintHit.emaMode = 0;
+  faintHit.centerRgba = 0xffffff01U;
+  geometry.rgba[3] = 0.5F;
+  const auto invisibleHit = renderSkinHitErrorVisualizer(
+      {.sourceObject = 9,
+       .authoredOrdinal = 10,
+       .visualizer = faintHit,
+       .state = {},
+       .geometry = geometry,
+       .viewport = viewport(),
+       .maximumCommands = 0,
+       .maximumPrimitiveVertices = 0});
+  expect(!invisibleBpm.failure && invisibleBpm.commands.empty() &&
+             !invisibleGauge.failure && invisibleGauge.commands.empty() &&
+             !invisibleHit.failure && invisibleHit.commands.empty(),
+         "BPM, gauge, and hit-error generated Pixmaps also suppress packed "
+         "post-tint alpha zero before budget admission");
+}
+
 void testDesktopAndIpadFitCommandFixtures() {
   const nlohmann::json requiredCoverage = {"Image",
                                            "Number",
@@ -6220,24 +5089,14 @@ int main() {
   testNoteExpansionUsesCapturedQuarterNotePhase();
   testNoteLineCallbacksRunAfterTopLevelPreparationAndOnlyWhenDrawable();
   testHiddenNoteStillPreparesEveryLaneSourceInPinnedOrder();
-  testNoteDistributionGraphUsesPinnedBucketsRevealOrderAndGaps();
-  testBpmGraphUsesPinnedLogRasterColoursStopsAndTransitions();
-  testBpmGraphDelayEmptyInputsAndAtomicBudgets();
-  testBpmGraphGeneratedTextureStretchOrientationAndDestinationState();
-  testBpmGraphLowersThroughSkin2DRenderer();
-  testGaugeGraphUsesPinnedCategoriesBackgroundAndCrossingOrder();
-  testGaugeGraphRevealEmptyPartialAndAtomicBudgets();
-  testGaugeGraphGeneratedTextureStateAndIntegratedLowering();
-  testNoteDistributionGraphAppliesCommonStretchBeforeRotation();
-  testTransparentNoteDistributionSkipsCommandsAndBudgets();
-  testNoteDistributionGraphDrawsPinnedBackgroundPmsColorAndCursor();
-  testHitErrorVisualizerUsesPinnedModesWindowAndGeometry();
-  testHitErrorVisualizerSingleColourDecayTransparencyAndBudgets();
-  testHitErrorVisualizerPostTintZeroAlphaUsesNoIntegratedBudget();
-  testHitErrorVisualizerEmaIsPerObjectExactOnceAndSessionBounded();
-  testHitErrorVisualizerAppliesDestinationPresentationState();
-  testTimingVisualizerUsesJudgeBandsAndRecentTimingRing();
-  testTimingVisualizerKeepsConstructorTimingScaleIndependentOfDestination();
+  testSoftwarePixmapMatchesPinnedGdx2dCompositing();
+  testGeneratedBpmPixmapPreservesSourceRasterRevealAndIntegration();
+  testGeneratedGaugePixmapPreservesLayersCrossingAndBudget();
+  testGeneratedNotePixmapPreservesPmsOrderGapsCursorAndFloatReveal();
+  testGeneratedHitErrorPixmapPreservesEmaAndDestinationState();
+  testGeneratedTimingPixmapPreservesBandsLinesAndZeroAlphaBudget();
+  testGeneratedPixmapWidgetsMatchSourceLayersAndPixels();
+  testGeneratedPixmapHitErrorTimingAndZeroAlphaContracts();
   testDesktopAndIpadFitCommandFixtures();
   return failures == 0 ? 0 : 1;
 }

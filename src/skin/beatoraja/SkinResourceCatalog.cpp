@@ -816,6 +816,7 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
   }
   try {
   auto catalog=std::unique_ptr<SkinResourceCatalog>(new SkinResourceCatalog(std::move(plan.revision), std::move(device), std::move(liveCounters)));
+  catalog->safetyPolicy_ = safetyPolicy;
   catalog->owned_.reserve(plan.images.size() + plan.atlases.size());
   auto rollback=[&]{ catalog.reset(); };
   struct PendingHandle { SkinTextureDevice &device; bgfx::TextureHandle handle = BGFX_INVALID_HANDLE; ~PendingHandle() { if (bgfx::isValid(handle)) device.destroy(handle); } void release() noexcept { handle = BGFX_INVALID_HANDLE; } };
@@ -903,6 +904,137 @@ const PreparedSkinTextAtlas *SkinResourceCatalog::findTextAtlasForObject(
   const auto found = textAtlasesByObject_.find(object);
   return found == textAtlasesByObject_.end() ? nullptr
                                              : findTextAtlas(found->second);
+}
+
+const PreparedSkinGeneratedTexture *
+SkinResourceCatalog::prepareGeneratedTexture(
+    const SkinGeneratedTextureKey &key,
+    const SkinGeneratedTextureData &data) const noexcept {
+  if (!renderPhase_ || !device_ || !device_->ownsCurrentThread() ||
+      std::this_thread::get_id() != owner_ || key.sourceObject == 0 ||
+      data.width <= 0 || data.height <= 0 || data.rgba == nullptr) {
+    return nullptr;
+  }
+  const auto pixelCount = static_cast<std::uint64_t>(data.width) *
+                          static_cast<std::uint64_t>(data.height);
+  const auto byteCount64 = pixelCount * 4U;
+  if (byteCount64 > std::numeric_limits<std::size_t>::max() ||
+      byteCount64 > std::numeric_limits<std::uint32_t>::max()) {
+    return nullptr;
+  }
+  const std::size_t byteCount = static_cast<std::size_t>(byteCount64);
+  if (data.rgba->size() != byteCount ||
+      !skinResourceDimensionsAllowed(data.width, data.height, byteCount,
+                                     safetyPolicy_) ||
+      data.width > device_->maximumTextureDimension(safetyPolicy_) ||
+      data.height > device_->maximumTextureDimension(safetyPolicy_) ||
+      byteCount > skinResourceLimit(
+                      safetyPolicy_,
+                      SkinResourcePolicy::maximumGeneratedSessionBytes)) {
+    return nullptr;
+  }
+
+  auto existing = generatedTextures_.find(key);
+  const std::size_t oldBytes =
+      existing == generatedTextures_.end()
+          ? 0U
+          : static_cast<std::size_t>(existing->second.prepared.width) *
+                static_cast<std::size_t>(existing->second.prepared.height) *
+                4U;
+  const std::size_t generatedLimit = skinResourceLimit(
+      safetyPolicy_, SkinResourcePolicy::maximumGeneratedSessionBytes);
+  if (generatedDecodedBytes_ < oldBytes ||
+      byteCount > generatedLimit - (generatedDecodedBytes_ - oldBytes) ||
+      (existing == generatedTextures_.end() &&
+       generatedTextures_.size() >=
+           skinResourceLimit(
+               safetyPolicy_,
+               SkinResourcePolicy::maximumGeneratedTextures))) {
+    return nullptr;
+  }
+
+  image_decode::DecodedImageData image{
+      .width = data.width,
+      .height = data.height,
+      .rgba = std::const_pointer_cast<std::vector<unsigned char>>(data.rgba)};
+  if (existing != generatedTextures_.end() &&
+      existing->second.prepared.width == data.width &&
+      existing->second.prepared.height == data.height) {
+    if (existing->second.pixels != nullptr &&
+        *existing->second.pixels == *data.rgba) {
+      return &existing->second.prepared;
+    }
+    bool updated = false;
+    try {
+      updated = device_->update(existing->second.prepared.texture, image);
+    } catch (...) {
+      return nullptr;
+    }
+    if (!updated) {
+      return nullptr;
+    }
+    existing->second.pixels = data.rgba;
+    return &existing->second.prepared;
+  }
+
+  bgfx::TextureHandle handle = BGFX_INVALID_HANDLE;
+  try {
+    handle = device_->create(image, safetyPolicy_);
+  } catch (...) {
+    return nullptr;
+  }
+  if (!bgfx::isValid(handle)) {
+    return nullptr;
+  }
+  if (existing != generatedTextures_.end()) {
+    const auto oldHandle = existing->second.prepared.texture;
+    device_->destroy(oldHandle);
+    if (liveCounters_) {
+      liveCounters_->textureDestroyed();
+    }
+    owned_[existing->second.ownedIndex].handle = handle;
+    existing->second.prepared = {.key = key,
+                                 .texture = handle,
+                                 .width = data.width,
+                                 .height = data.height};
+    existing->second.pixels = data.rgba;
+    generatedDecodedBytes_ = generatedDecodedBytes_ - oldBytes + byteCount;
+    if (liveCounters_) {
+      liveCounters_->textureCreated();
+    }
+    return &existing->second.prepared;
+  }
+
+  try {
+    const std::size_t ownedIndex = owned_.size();
+    owned_.push_back({handle});
+    try {
+      const auto [inserted, accepted] = generatedTextures_.emplace(
+          key, GeneratedTextureEntry{
+                   .prepared = {.key = key,
+                                .texture = handle,
+                                .width = data.width,
+                                .height = data.height},
+                   .pixels = data.rgba,
+                   .ownedIndex = ownedIndex});
+      if (!accepted) {
+        owned_.pop_back();
+        device_->destroy(handle);
+        return nullptr;
+      }
+      generatedDecodedBytes_ += byteCount;
+      if (liveCounters_) {
+        liveCounters_->textureCreated();
+      }
+      return &inserted->second.prepared;
+    } catch (...) {
+      owned_.pop_back();
+      throw;
+    }
+  } catch (...) {
+    device_->destroy(handle);
+    return nullptr;
+  }
 }
 
 SkinResourcePreparationService::SkinResourcePreparationService()

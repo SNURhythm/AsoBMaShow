@@ -906,10 +906,15 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
                ? -1
                : static_cast<int>(timeline->second / 1'000'000);
   };
+  std::unordered_map<ChartVisualId, int> graphSecondsByNoteId;
+  graphSecondsByNoteId.reserve(result.notes.size());
+  for (const auto &note : result.notes) {
+    graphSecondsByNoteId.emplace(note.id, graphSecond(note));
+  }
   const auto graphScratchLanes = chart.Meta.GetScratchLaneIndices();
   graph.judgementNotes.reserve(result.notes.size());
   for (const auto &note : result.notes) {
-    const int second = graphSecond(note);
+    const int second = graphSecondsByNoteId.at(note.id);
     const bool classicTail = note.source == ChartVisualNoteSource::Playable &&
                              note.kind == ChartVisualNoteKind::LongTail &&
                              note.longNoteMode == ChartLongNoteMode::LN;
@@ -937,12 +942,11 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
     } else if (note.kind == ChartVisualNoteKind::LongHead ||
                note.kind == ChartVisualNoteKind::LongTail) {
       if (note.kind == ChartVisualNoteKind::LongHead) {
-        const auto pair = std::ranges::find(result.notes, note.pairId,
-                                            &ChartVisualNote::id);
-        if (pair == result.notes.end()) {
+        const auto pair = graphSecondsByNoteId.find(note.pairId);
+        if (pair == graphSecondsByNoteId.end()) {
           continue;
         }
-        const int tailSecond = graphSecond(*pair);
+        const int tailSecond = pair->second;
         if (tailSecond < second || tailSecond < 0 ||
             static_cast<std::size_t>(tailSecond) >=
                 graph.normalDistribution.size()) {

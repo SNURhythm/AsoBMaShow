@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <iterator>
 #include <limits>
 #include <numbers>
 #include <utility>
@@ -98,6 +99,7 @@ public:
 
   bool appendQuad(double x, double y, double width, double height,
                   std::uint32_t color) {
+    color = modulatedColor(color, geometry_.rgba);
     if (clippedOut_ || width == 0.0 || height == 0.0 || color >> 24U == 0U) {
       return true;
     }
@@ -126,7 +128,7 @@ public:
       primitive.vertices.push_back(
           {.x = static_cast<float>(projected[0]),
            .y = static_cast<float>(projected[1]),
-           .rgba = modulatedColor(color, geometry_.rgba)});
+           .rgba = color});
     }
     append(std::move(primitive));
     return true;
@@ -134,6 +136,7 @@ public:
 
   bool appendLine(double x0, double y0, double x1, double y1,
                   std::uint32_t color) {
+    color = modulatedColor(color, geometry_.rgba);
     if (clippedOut_ || color >> 24U == 0U) {
       return true;
     }
@@ -157,7 +160,7 @@ public:
       primitive.vertices.push_back(
           {.x = static_cast<float>(projected[0]),
            .y = static_cast<float>(projected[1]),
-           .rgba = modulatedColor(color, geometry_.rgba)});
+           .rgba = color});
     }
     append(std::move(primitive));
     return true;
@@ -256,62 +259,22 @@ renderSkinTimingVisualizer(const SkinTimingVisualizerRenderRequest &request) {
         "Timing visualizer judge width is outside the fixed geometry range.")};
   }
   const int pixelWidth = static_cast<int>(pixelWidth64);
-  const auto stretched = stretchSkinDestinationAuthored(
-      request.geometry,
-      {.textureWidth = pixelWidth,
-       .textureHeight = 1,
-       .region = {.x = 0, .y = 0, .w = pixelWidth, .h = 1}});
-  if (stretched.rect.width == 0.0 || stretched.rect.height == 0.0 ||
-      stretched.region.w <= 0 || stretched.region.h <= 0) {
-    return {};
-  }
-  auto geometry = request.geometry;
-  geometry.rect = stretched.rect;
-  geometry.stretch = SkinStretchMode::Stretch;
-  PrimitiveBuilder builder(request, geometry, pixelWidth);
-  const double cropLeft = stretched.region.x;
-  const double cropRight = cropLeft + stretched.region.w;
-  const double cropBottom = stretched.region.y;
-  const double cropTop = cropBottom + stretched.region.h;
-  const double scaleX =
-      stretched.rect.width / static_cast<double>(stretched.region.w);
-  const double scaleY =
-      stretched.rect.height / static_cast<double>(stretched.region.h);
-  const auto destinationX = [&](double sourceX) {
-    return stretched.rect.x + (sourceX - cropLeft) * scaleX;
-  };
-  const auto destinationY = [&](double sourceY) {
-    return stretched.rect.y + (sourceY - cropBottom) * scaleY;
-  };
-  const auto appendQuad = [&](double x, double y, double width, double height,
-                              std::uint32_t color) {
-    const double left = std::max(x, cropLeft);
-    const double bottom = std::max(y, cropBottom);
-    const double right = std::min(x + width, cropRight);
-    const double top = std::min(y + height, cropTop);
-    if (right <= left || top <= bottom) {
-      return true;
-    }
-    return builder.appendQuad(destinationX(left), destinationY(bottom),
-                              (right - left) * scaleX,
-                              (top - bottom) * scaleY, color);
-  };
-  const auto appendLine = [&](double x, std::uint32_t color) {
-    if (x < cropLeft || x > cropRight) {
-      return true;
-    }
-    return builder.appendLine(destinationX(x), stretched.rect.y,
-                              destinationX(x),
-                              stretched.rect.y + stretched.rect.height, color);
-  };
-  const auto pixelX = [&](std::int64_t pixel) {
-    return static_cast<double>(pixel);
-  };
+  SkinGeneratedTextureRaster background(
+      {.sourceObject = request.sourceObject,
+       .authoredOrdinal = request.authoredOrdinal,
+       .layer = SkinGeneratedTextureLayer::Background,
+       .geometry = request.geometry,
+       .viewport = request.viewport,
+       .maximumCommands = request.maximumCommands,
+       .maximumPrimitiveVertices = request.maximumPrimitiveVertices,
+       .sourceWidth = pixelWidth,
+       .sourceHeight = 1,
+       .verticalFlip = false,
+       .diagnosticObject = "Timing visualizer background"});
+  if (!background.drawable()) return background.take();
   const std::int64_t center = request.visualizer.judgeWidthMillis;
-  if (!appendQuad(pixelX(center), 0.0, 1.0, 1.0,
-                  rgbaToAbgr(request.visualizer.centerRgba))) {
-    return builder.take();
-  }
+  background.appendRectangle(static_cast<int>(center), 0, 1, 1,
+                             request.visualizer.centerRgba);
   std::int64_t beforeX1 = center;
   std::int64_t beforeX2 = center + 1;
   const auto windows = request.state.judgeWindows;
@@ -326,48 +289,49 @@ renderSkinTimingVisualizer(const SkinTimingVisualizerRenderRequest &request) {
                                           window.maximumTimingMillis, -center,
                                           center) +
                             1;
-    std::uint32_t color = rgbaToAbgr(request.visualizer.judgeRgba[i]);
+    std::uint32_t color = request.visualizer.judgeRgba[i];
     if (i == request.visualizer.judgeRgba.size() - 1 &&
         request.visualizer.transparent) {
       color = 0U;
     }
-    if (beforeX1 > x1 &&
-        !appendQuad(pixelX(x1), 0.0, pixelX(beforeX1) - pixelX(x1), 1.0,
-                    color)) {
-      return builder.take();
-    }
+    if (beforeX1 > x1)
+      background.appendRectangle(static_cast<int>(x1), 0,
+                                 static_cast<int>(beforeX1 - x1), 1, color);
     if (beforeX1 > x1) {
       beforeX1 = x1;
     }
-    if (x2 > beforeX2 &&
-        !appendQuad(pixelX(beforeX2), 0.0, pixelX(x2) - pixelX(beforeX2),
-                    1.0, color)) {
-      return builder.take();
-    }
+    if (x2 > beforeX2)
+      background.appendRectangle(static_cast<int>(beforeX2), 0,
+                                 static_cast<int>(x2 - beforeX2), 1, color);
     if (x2 > beforeX2) {
       beforeX2 = x2;
     }
   }
-  constexpr std::uint32_t gridColor = 0x40000000U;
+  constexpr std::uint32_t gridColor = 0x0000003fU;
   const std::int64_t firstGrid = center % 10;
   for (std::int64_t pixel = firstGrid; pixel < pixelWidth;) {
-    if (pixel >= 0 && !appendLine(pixelX(pixel), gridColor)) {
-      return builder.take();
-    }
+    if (pixel >= 0)
+      background.appendLine(static_cast<int>(pixel), 0,
+                            static_cast<int>(pixel), 1, gridColor);
     if (pixel > std::numeric_limits<std::int64_t>::max() - 10) {
       break;
     }
     pixel += 10;
   }
+  auto result = background.take();
+  if (result.failure) return result;
   const auto recent = request.state.recentJudgeTimingsMillis;
   if (recent.empty()) {
-    return builder.take();
+    return result;
   }
   const std::size_t index = request.state.recentJudgeTimingIndex % recent.size();
   const std::uint32_t baseLineColor = rgbaToAbgr(request.visualizer.lineRgba);
   const std::uint8_t baseAlpha =
       static_cast<std::uint8_t>(baseLineColor >> 24U);
-  builder.setGeometry(request.geometry, pixelWidth);
+  auto lineRequest = request;
+  lineRequest.maximumCommands -=
+      std::min(lineRequest.maximumCommands, result.commands.size());
+  PrimitiveBuilder builder(lineRequest, request.geometry, pixelWidth);
   const double judgeWidthRate =
       static_cast<double>(request.visualizer.width) /
       static_cast<double>(pixelWidth);
@@ -399,10 +363,18 @@ renderSkinTimingVisualizer(const SkinTimingVisualizerRenderRequest &request) {
                               : request.geometry.rect.height;
     if (!builder.appendQuad(x, y, request.visualizer.lineWidth, height,
                             color)) {
-      return builder.take();
+      auto failed = builder.take();
+      if (failed.failure) return failed;
+      return result;
     }
   }
-  return builder.take();
+  auto lines = builder.take();
+  if (lines.failure) return lines;
+  result.primitiveVertices = lines.primitiveVertices;
+  result.commands.insert(result.commands.end(),
+                         std::make_move_iterator(lines.commands.begin()),
+                         std::make_move_iterator(lines.commands.end()));
+  return result;
 }
 
 } // namespace skin
