@@ -601,6 +601,7 @@ struct SkinGameplayTiming {
   int inputMillis = 0;
   int sceneMillis = 0;
   int closeMillis = 0;
+  int loadStartMillis = 0;
   int loadEndMillis = 0;
   int playStartMillis = 0;
   int judgeTimerMillis = 1;

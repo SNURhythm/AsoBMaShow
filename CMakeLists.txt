@@ -1592,6 +1592,31 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 "-framework Foundation"
             )
         endif()
+
+        add_executable(lr2_gameplay_skin_decoder_tests
+            tests/lr2_gameplay_skin_decoder_tests.cpp
+            src/FileChecksum.cpp
+            src/skin/SkinProfileSettings.cpp
+            src/skin/package/SkinPathPolicy.cpp
+            src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
+            src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp
+            src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp
+            src/skin/beatoraja/SkinModelValidator.cpp
+            src/skin/beatoraja/SkinNoteNormalization.cpp
+        )
+        target_include_directories(lr2_gameplay_skin_decoder_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(lr2_gameplay_skin_decoder_tests PRIVATE
+            cxx_std_23
+        )
+        target_compile_definitions(lr2_gameplay_skin_decoder_tests PRIVATE
+            ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
+            ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        )
+        target_link_libraries(lr2_gameplay_skin_decoder_tests PRIVATE
+            utf8proc::utf8proc
+        )
     endif()
 
     add_test(NAME beatoraja_skin_reference_contract
@@ -6567,6 +6592,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if (TARGET lr2_skin_csv_parser_tests)
         asobmashow_register_test(lr2_skin_csv_parser_tests)
+    endif()
+    if (TARGET lr2_gameplay_skin_decoder_tests)
+        asobmashow_register_test(lr2_gameplay_skin_decoder_tests)
     endif()
     if (TARGET play_skin_viewport_tests)
         asobmashow_register_test(play_skin_viewport_tests)
