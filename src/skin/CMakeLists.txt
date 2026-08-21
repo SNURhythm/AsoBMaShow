@@ -6,6 +6,7 @@ target_sources(main PRIVATE
     beatoraja/LuaSkinFileSystem.cpp
     beatoraja/SkinCompatibilityDiagnostics.cpp
     beatoraja/SkinDiagnosticHistory.cpp
+    beatoraja/GameplaySkinSourceFormat.cpp
     package/SkinAliasDetector.cpp
     package/SkinArchiveImporter.cpp
     package/SkinPackageCatalog.cpp

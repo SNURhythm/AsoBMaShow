@@ -658,6 +658,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(skin_path_policy_tests PRIVATE cxx_std_23)
     target_link_libraries(skin_path_policy_tests PRIVATE utf8proc::utf8proc)
 
+    add_executable(gameplay_skin_source_format_tests
+        tests/gameplay_skin_source_format_tests.cpp
+        src/skin/beatoraja/GameplaySkinSourceFormat.cpp
+    )
+    target_include_directories(gameplay_skin_source_format_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(gameplay_skin_source_format_tests PRIVATE cxx_std_23)
+
     if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
         add_executable(play_skin_viewport_tests
             tests/play_skin_viewport_tests.cpp
@@ -6250,6 +6259,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endforeach()
 
     asobmashow_register_test(skin_path_policy_tests)
+    asobmashow_register_test(gameplay_skin_source_format_tests)
     asobmashow_register_test(skin_tree_snapshotter_tests)
     asobmashow_register_test(gameplay_skin_lifecycle_tests)
     asobmashow_register_test(gameplay_skin_settings_tests)
