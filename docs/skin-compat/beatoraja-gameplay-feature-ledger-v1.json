@@ -4,2397 +4,2397 @@
   "features": [
     {
       "id": "json.field.animation-a",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.animation-acc",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.animation-angle",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.animation-b",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.animation-clip-h",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.animation-clip-w",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.animation-clip-x",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.animation-clip-y",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.animation-g",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.animation-h",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.animation-r",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.animation-time",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.animation-w",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.animation-x",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.animation-y",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.bpmgraph-delay",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.bpmgraph-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.bpmgraph-line-width",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.bpmgraph-main-bpmcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.bpmgraph-max-bpmcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.bpmgraph-min-bpmcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.bpmgraph-other-bpmcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.bpmgraph-stop-line-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.bpmgraph-transition-line-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.destination-blend",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.destination-center",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.destination-draw",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.destination-dst",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.destination-filter",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.destination-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.destination-loop",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.destination-mouse-rect",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.destination-offset",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.destination-offsets",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.destination-op",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.destination-option-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.destination-option-property",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.destination-stretch",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.destination-timer",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.float-value-align",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.float-value-cycle",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.float-value-divx",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.float-value-divy",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.float-value-fketa",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.float-value-gain",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.float-value-h",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.float-value-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.float-value-iketa",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.float-value-is-signvisible",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.float-value-offset",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.float-value-padding",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.float-value-ref",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.float-value-space",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.float-value-src",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.float-value-timer",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.float-value-value",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.float-value-w",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.float-value-x",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.float-value-y",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.float-value-zeropadding",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.font-fallback",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.font-fallback-path",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.font-fallback-type",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.font-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.font-path",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.font-type",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.gauge-graph-assist-and-easy-fail-bgcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.gauge-graph-assist-and-easy-fail-line-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.gauge-graph-assist-clear-bgcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.gauge-graph-assist-clear-line-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.gauge-graph-border-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.gauge-graph-borderline-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.gauge-graph-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.gauge-graph-ex-hard-bgcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.gauge-graph-ex-hard-line-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.gauge-graph-groove-clear-and-hard-bgcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.gauge-graph-groove-clear-and-hard-line-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.gauge-graph-groove-fail-bgcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.gauge-graph-groove-fail-line-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.gauge-graph-hazard-bgcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.gauge-graph-hazard-line-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.gauge-graph-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.graph-angle",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.graph-cycle",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.graph-divx",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.graph-divy",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.graph-h",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.graph-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.graph-is-ref-num",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.graph-max",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.graph-min",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.graph-src",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.graph-timer",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.graph-type",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.graph-value",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.graph-w",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.graph-x",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.graph-y",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.hidden-cover-cycle",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.hidden-cover-disapear-line",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.hidden-cover-divx",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.hidden-cover-divy",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.hidden-cover-h",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.hidden-cover-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.hidden-cover-is-disapear-line-link-lift",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.hidden-cover-src",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.hidden-cover-timer",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.hidden-cover-w",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.hidden-cover-x",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.hidden-cover-y",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.hit-error-visualizer-alpha",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.hit-error-visualizer-bdcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.hit-error-visualizer-center-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.hit-error-visualizer-color-mode",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.hit-error-visualizer-draw-decay",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.hit-error-visualizer-ema-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.hit-error-visualizer-ema-mode",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.hit-error-visualizer-gdcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.hit-error-visualizer-grcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.hit-error-visualizer-hiterror-mode",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.hit-error-visualizer-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.hit-error-visualizer-judge-width-millis",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.hit-error-visualizer-line-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.hit-error-visualizer-line-width",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.hit-error-visualizer-pgcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.hit-error-visualizer-prcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.hit-error-visualizer-transparent",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.hit-error-visualizer-width",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.hit-error-visualizer-window-length",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.image-act",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.image-click",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.image-cycle",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.image-divx",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.image-divy",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.image-h",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.image-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.image-len",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.image-ref",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.image-set-act",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.image-set-click",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.image-set-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.image-set-images",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.image-set-ref",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.image-set-value",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.image-src",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.image-timer",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.image-w",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.image-x",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.image-y",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.judge-graph-back-tex-off",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.judge-graph-delay",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.judge-graph-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.judge-graph-no-gap",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.judge-graph-no-gap-x",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.judge-graph-order-reverse",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.judge-graph-type",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.judge-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.judge-images",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.judge-index",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.judge-numbers",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.judge-shift",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.lift-cover-cycle",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.lift-cover-disapear-line",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.lift-cover-divx",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.lift-cover-divy",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.lift-cover-h",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.lift-cover-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.lift-cover-is-disapear-line-link-lift",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.lift-cover-src",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.lift-cover-timer",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.lift-cover-w",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.lift-cover-x",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.lift-cover-y",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.pmchara-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.pmchara-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.pmchara-side",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.pmchara-src",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.pmchara-type",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.rect-h",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.rect-w",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.rect-x",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.rect-y",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-author",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-bga",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-bpmgraph",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-category",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-close",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-custom-events",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-custom-timers",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-destination",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-fadeout",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-filepath",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-finishmargin",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-floatvalue",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-font",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-gauge",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-gaugegraph",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-graph",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-h",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-hidden-cover",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-hiterrorvisualizer",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-image",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-imageset",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-input",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-judge",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-judgegraph",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-judgetimer",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-lift-cover",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-loadend",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-name",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-note",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-offset",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-playstart",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-pmchara",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-practice",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-property",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-scene",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-skin-select",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-skinpreview",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-slider",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-songlist",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-source",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-text",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-timingdistributiongraph",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-timingvisualizer",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-type",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-value",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.skin-w",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.slider-angle",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.slider-changeable",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.slider-cycle",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.slider-divx",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.slider-divy",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.slider-event",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.slider-h",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.slider-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.slider-is-ref-num",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.slider-max",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.slider-min",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.slider-range",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.slider-src",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.slider-timer",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.slider-type",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.slider-value",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.slider-w",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.slider-x",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.slider-y",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.text-align",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.text-constant-text",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.text-editable",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.text-event",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.text-font",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.text-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.text-outline-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.text-outline-width",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.text-overflow",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.text-ref",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.text-shadow-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.text-shadow-offset-x",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.text-shadow-offset-y",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.text-shadow-smoothness",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.text-size",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.text-value",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.text-wrapping",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.timing-distribution-graph-average-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.timing-distribution-graph-bdcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.timing-distribution-graph-dev-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.timing-distribution-graph-draw-average",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.timing-distribution-graph-draw-dev",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.timing-distribution-graph-gdcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.timing-distribution-graph-graph-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.timing-distribution-graph-grcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.timing-distribution-graph-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.timing-distribution-graph-line-width",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.timing-distribution-graph-pgcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.timing-distribution-graph-prcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.timing-distribution-graph-width",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.timing-visualizer-bdcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.timing-visualizer-center-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.timing-visualizer-draw-decay",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.timing-visualizer-gdcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.timing-visualizer-grcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.timing-visualizer-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.timing-visualizer-judge-width-millis",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.timing-visualizer-line-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.timing-visualizer-line-width",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.timing-visualizer-pgcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.timing-visualizer-prcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.timing-visualizer-transparent",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.timing-visualizer-width",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.value-align",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.value-cycle",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.value-digit",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.value-divx",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.value-divy",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.value-h",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.value-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.value-offset",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.value-padding",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.value-ref",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.value-space",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.value-src",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.value-timer",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.value-value",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.value-w",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.value-x",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.value-y",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "json.field.value-zeropadding",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 4: JSON gameplay document decoder"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/JsonGameplaySkinDecoder.cpp",
+      "tests": "tests/json_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.csv-command.dst-bargraph",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.csv-command.dst-button",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.csv-command.dst-groovegauge",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.csv-command.dst-image",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.csv-command.dst-number",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.csv-command.dst-onmouse",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.csv-command.dst-slider",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.csv-command.dst-text",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.csv-command.fadeout",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.csv-command.image",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.csv-command.imageset",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.csv-command.include",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.csv-command.lr2-font",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.csv-command.scenetime",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.csv-command.src-bargraph",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.csv-command.src-bargraph-refnumber",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.csv-command.src-button",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.csv-command.src-groovegauge",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.csv-command.src-groovegauge-ex",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.csv-command.src-image",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.csv-command.src-imageset",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.csv-command.src-number",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.csv-command.src-onmouse",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.csv-command.src-slider",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.csv-command.src-slider-refnumber",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.csv-command.src-text",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.csv-command.startinput",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.csv-command.stretch",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.header-command.customfile",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.header-command.customoffset",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.header-command.customoption",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.header-command.customoption-addition-setting",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.header-command.include",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.header-command.information",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.header-command.resolution",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 5: LR2 syntax, encoding, header, and include engine"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2SkinCsvParser.cpp; src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp; src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_skin_csv_parser_tests.cpp; tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.close",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.dst-bga",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.dst-bpmchart",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.dst-hidden",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.dst-judgeline",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.dst-lift",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.dst-line",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.dst-note",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.dst-note-expansion-rate",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.dst-note2",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.dst-notechart-1-p",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.dst-nowcombo-1-p",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.dst-nowcombo-2-p",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.dst-nowcombo-3-p",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.dst-nowjudge-1-p",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.dst-nowjudge-2-p",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.dst-nowjudge-3-p",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.dst-pm-chara-1-p",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.dst-pm-chara-2-p",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.dst-pm-chara-animation",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.dst-pm-chara-image",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.dst-timing-1-p",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.finishmargin",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.judgetimer",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.loadend",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.loadstart",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.playstart",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.src-bga",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.src-bpmchart",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.src-hcn-body",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.src-hcn-body-active",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.src-hcn-body-inactive",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.src-hcn-damage",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.src-hcn-end",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.src-hcn-reactive",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.src-hcn-start",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.src-hidden",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.src-judgeline",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.src-lift",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.src-line",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.src-ln-body",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.src-ln-body-active",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.src-ln-body-inactive",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.src-ln-end",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.src-ln-start",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.src-mine",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.src-note",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.src-notechart-1-p",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.src-nowcombo-1-p",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.src-nowcombo-2-p",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.src-nowcombo-3-p",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.src-nowjudge-1-p",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.src-nowjudge-2-p",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.src-nowjudge-3-p",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.src-pm-chara-image",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lr2.play-command.src-timing-1-p",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md",
-      "task": "Task 6: LR2 gameplay commands to canonical model"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp",
+      "tests": "tests/lr2_gameplay_skin_decoder_tests.cpp"
     },
     {
       "id": "lua.event.event",
