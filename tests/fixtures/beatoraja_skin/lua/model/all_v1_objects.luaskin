@@ -87,6 +87,13 @@ return {
     },
   },
 
+  judgegraph = {
+    {
+      id = "judge-distribution", type = 2, delay = 750,
+      backTexOff = 1, orderReverse = 1, noGap = 1, noGapX = 1,
+    },
+  },
+
   note = {
     id = "notes",
     note = {shared_note_image},
@@ -126,5 +133,6 @@ return {
     {id = "rate-slider", dst = {{x = 70, y = 80, w = 10, h = 10}}},
     {id = "notes", dst = {{time = 0}}},
     {id = "optional-missing", dst = {{}}},
+    {id = "judge-distribution", dst = {{x = 90, y = 100, w = 300, h = 120}}},
   },
 }

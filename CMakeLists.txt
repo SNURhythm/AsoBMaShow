@@ -697,6 +697,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
             src/skin/beatoraja/SkinDestinationEvaluator.cpp
             src/skin/beatoraja/Skin2DRenderer.cpp
+            src/skin/beatoraja/SkinNoteDistributionGraphRenderer.cpp
             src/skin/package/SkinAliasDetector.cpp
             src/skin/package/SkinPathPolicy.cpp
             src/skin/package/SkinTreeSnapshotter.cpp
@@ -741,6 +742,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
             src/skin/beatoraja/SkinDestinationEvaluator.cpp
             src/skin/beatoraja/Skin2DRenderer.cpp
+            src/skin/beatoraja/SkinNoteDistributionGraphRenderer.cpp
             src/skin/package/SkinAliasDetector.cpp
             src/skin/package/SkinPathPolicy.cpp
             src/skin/package/SkinTreeSnapshotter.cpp
@@ -4529,6 +4531,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/PlaySkinStateBridge.cpp
             src/skin/beatoraja/PlaySkinViewport.cpp
             src/skin/beatoraja/Skin2DRenderer.cpp
+            src/skin/beatoraja/SkinNoteDistributionGraphRenderer.cpp
             src/skin/beatoraja/Skin2DRendererSubmit.cpp
             src/skin/beatoraja/SyntheticReplayGhostOverlay.cpp
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
@@ -4680,6 +4683,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinCoverNormalization.cpp
             src/skin/beatoraja/SkinDestinationEvaluator.cpp
             src/skin/beatoraja/Skin2DRenderer.cpp
+            src/skin/beatoraja/SkinNoteDistributionGraphRenderer.cpp
             src/skin/beatoraja/Skin2DRendererSubmit.cpp
             src/skin/beatoraja/SyntheticReplayGhostOverlay.cpp
             src/skin/beatoraja/SkinGaugeNodeExpansion.cpp
@@ -4807,6 +4811,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/PlaySkinStateBridge.cpp
             src/skin/beatoraja/PlaySkinViewport.cpp
             src/skin/beatoraja/Skin2DRenderer.cpp
+            src/skin/beatoraja/SkinNoteDistributionGraphRenderer.cpp
             src/skin/beatoraja/Skin2DRendererSubmit.cpp
             src/skin/beatoraja/SyntheticReplayGhostOverlay.cpp
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp

@@ -41,6 +41,7 @@ SkinObjectResolutionStatus expectedStatus(SkinObjectResolutionKind kind) {
   case SkinObjectResolutionKind::Text:
   case SkinObjectResolutionKind::Slider:
   case SkinObjectResolutionKind::Graph:
+  case SkinObjectResolutionKind::JudgeGraph:
   case SkinObjectResolutionKind::Gauge:
   case SkinObjectResolutionKind::Note:
   case SkinObjectResolutionKind::HiddenCover:

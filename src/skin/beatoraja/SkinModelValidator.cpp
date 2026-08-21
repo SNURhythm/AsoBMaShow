@@ -191,6 +191,20 @@ SkinModelValidationResult SkinModelValidator::validate(
     // allowing repeated authored destination names.
     objectNames.try_emplace(object.authoredName, object.id);
   }
+  if (std::ranges::any_of(model.objects, [](const auto &object) {
+        const auto *graph =
+            std::get_if<SkinNoteDistributionGraphObject>(&object.payload);
+        return graph != nullptr &&
+               graph->type != SkinNoteDistributionGraphType::Normal &&
+               graph->type != SkinNoteDistributionGraphType::Judge &&
+               graph->type != SkinNoteDistributionGraphType::EarlyLate;
+      })) {
+    result.criticalFailure = true;
+    result.diagnostics.push_back(validationDiagnostic(
+        "skin_lua_model_judgegraph_invalid",
+        "Lua skin judgegraph type is outside the pinned range"));
+    return result;
+  }
 
   // The Java factories are deliberately nullable. JSONSkinLoader keeps the
   // object and passes the factory result to it, so built-in catalog matches

@@ -937,6 +937,16 @@ struct RawSkinIdentity {
   std::string id;
 };
 
+struct RawSkinNoteDistributionGraph {
+  std::string id;
+  int type = 0;
+  int backTextureOff = 0;
+  int delayMillis = 500;
+  int reverseOrder = 0;
+  int noGap = 0;
+  int noHorizontalGap = 0;
+};
+
 struct RawSkinPmChara {
   std::string id;
   std::string source;
@@ -995,7 +1005,8 @@ struct GameplayDecodeRequest {
   std::map<std::string, RawSkinJudge, std::less<>> judges;
   std::map<std::string, RawSkinIdentity, std::less<>> bpmGraphs;
   std::map<std::string, RawSkinIdentity, std::less<>> hitErrorVisualizers;
-  std::map<std::string, RawSkinIdentity, std::less<>> judgeGraphs;
+  std::map<std::string, RawSkinNoteDistributionGraph, std::less<>>
+      judgeGraphs;
   std::map<std::string, RawSkinIdentity, std::less<>> timingVisualizers;
   std::map<std::string, RawSkinIdentity, std::less<>> timingDistributionGraphs;
   std::map<std::string, RawSkinPmChara, std::less<>> pmCharas;
@@ -1017,7 +1028,7 @@ struct GameplayDecodeRequest {
   std::vector<RawSkinJudge> rawJudges;
   std::vector<RawSkinIdentity> rawBpmGraphs;
   std::vector<RawSkinIdentity> rawHitErrorVisualizers;
-  std::vector<RawSkinIdentity> rawJudgeGraphs;
+  std::vector<RawSkinNoteDistributionGraph> rawJudgeGraphs;
   std::vector<RawSkinIdentity> rawTimingVisualizers;
   std::vector<RawSkinIdentity> rawTimingDistributionGraphs;
   std::vector<RawSkinPmChara> rawPmCharas;
@@ -1693,6 +1704,25 @@ bool decodeRawIdentity(lua_State *state, int index, std::size_t depth,
                      request);
 }
 
+bool decodeRawNoteDistributionGraph(lua_State *state, int index,
+                                    std::size_t depth,
+                                    RawSkinNoteDistributionGraph &output,
+                                    DecodeRequest &request) {
+  return requireObject(state, index, depth, request) &&
+         stringField(state, index, "id", output.id,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, false,
+                     request) &&
+         integerField(state, index, "type", output.type, request) &&
+         integerField(state, index, "backTexOff", output.backTextureOff,
+                      request) &&
+         integerField(state, index, "delay", output.delayMillis, request) &&
+         integerField(state, index, "orderReverse", output.reverseOrder,
+                      request) &&
+         integerField(state, index, "noGap", output.noGap, request) &&
+         integerField(state, index, "noGapX", output.noHorizontalGap,
+                      request);
+}
+
 bool decodeRawPmChara(lua_State *state, int index, std::size_t depth,
                       RawSkinPmChara &output, DecodeRequest &request) {
   return requireObject(state, index, depth, request) &&
@@ -2210,6 +2240,36 @@ bool makeGraphObject(GameplayDecodeRequest &request,
   return true;
 }
 
+bool makeNoteDistributionGraphObject(
+    GameplayDecodeRequest &request,
+    const RawSkinNoteDistributionGraph &definition,
+    SkinNoteDistributionGraphObject &output) {
+  SkinNoteDistributionGraphType type;
+  switch (definition.type) {
+  case 0:
+    type = SkinNoteDistributionGraphType::Normal;
+    break;
+  case 1:
+    type = SkinNoteDistributionGraphType::Judge;
+    break;
+  case 2:
+    type = SkinNoteDistributionGraphType::EarlyLate;
+    break;
+  default:
+    return fail(request.decoding, "skin_lua_model_judgegraph_invalid",
+                "Lua skin judgegraph type is outside the pinned range");
+  }
+  output = {
+      .type = type,
+      .backgroundTextureOff = definition.backTextureOff == 1,
+      .delayMillis = definition.delayMillis,
+      .reverseOrder = definition.reverseOrder == 1,
+      .noGap = definition.noGap == 1,
+      .noHorizontalGap = definition.noHorizontalGap == 1,
+  };
+  return true;
+}
+
 std::optional<SkinBlendMode> blendMode(int value) {
   switch (value) {
   case 0:
@@ -2539,6 +2599,16 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
       return false;
     }
     output = std::move(object);
+    return true;
+  }
+
+  if (resolved.kind == SkinObjectResolutionKind::JudgeGraph &&
+      judgeGraph != request.judgeGraphs.end()) {
+    SkinNoteDistributionGraphObject object;
+    if (!makeNoteDistributionGraphObject(request, judgeGraph->second, object)) {
+      return false;
+    }
+    output = object;
     return true;
   }
 
@@ -3052,7 +3122,7 @@ void decodeGameplayProtected(lua_State *state, int index,
         !decodeObjectArrayField(state, index, "judgegraph", 1,
                                 LuaSkinTableDecoderPolicy::maxDecodedObjects,
                                 request->rawJudgeGraphs, request->decoding,
-                                decodeRawIdentity) ||
+                                decodeRawNoteDistributionGraph) ||
         !decodeObjectArrayField(state, index, "timingvisualizer", 1,
                                 LuaSkinTableDecoderPolicy::maxDecodedObjects,
                                 request->rawTimingVisualizers,
@@ -3078,9 +3148,6 @@ void decodeGameplayProtected(lua_State *state, int index,
     recordUnsupportedDefinitions(
         *request, request->rawHitErrorVisualizers,
         "skin_lua_model_hiterrorvisualizer_unsupported", "hiterrorvisualizer");
-    recordUnsupportedDefinitions(*request, request->rawJudgeGraphs,
-                                 "skin_lua_model_judgegraph_unsupported",
-                                 "judgegraph");
     recordUnsupportedDefinitions(*request, request->rawTimingVisualizers,
                                  "skin_lua_model_timingvisualizer_unsupported",
                                  "timingvisualizer");
@@ -3932,8 +3999,8 @@ bool materializeGameplay(GameplayDecodeRequest &request,
       });
   moveFirstDefinitions(
       request.rawJudgeGraphs, request.judgeGraphs,
-      [](const RawSkinIdentity &identity) -> const std::string & {
-        return identity.id;
+      [](const RawSkinNoteDistributionGraph &graph) -> const std::string & {
+        return graph.id;
       });
   moveFirstDefinitions(
       request.rawTimingVisualizers, request.timingVisualizers,

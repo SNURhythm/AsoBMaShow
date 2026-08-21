@@ -42,6 +42,7 @@ if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
         beatoraja/SkinNoteNormalization.cpp
         beatoraja/SkinNoteLaneGeometryNormalization.cpp
         beatoraja/SkinNoteLineNormalization.cpp
+        beatoraja/SkinNoteDistributionGraphRenderer.cpp
         beatoraja/SkinTextGraphNormalization.cpp
         beatoraja/SkinCoverNormalization.cpp
         beatoraja/SkinObjectResolutionPrecedence.cpp

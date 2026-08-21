@@ -1467,6 +1467,127 @@ return {
   }
 }
 
+void testJudgeGraphsDecodePinnedModesAndPresentationFlags() {
+  const auto decoded = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  judgegraph={
+    {id='normal',backTexOff=2,orderReverse=-1,noGap=2,noGapX=-1},
+    {id='judge',type=1,backTexOff=1,delay=750,orderReverse=1,noGap=1,noGapX=1},
+    {id='early-late',type=2,delay=0},
+  },
+  destination={
+    {id='normal',dst={{x=0,y=0,w=100,h=50}}},
+    {id='judge',dst={{x=100,y=0,w=100,h=50}}},
+    {id='early-late',dst={{x=200,y=0,w=100,h=50}}},
+  }
+}
+)lua");
+  expect(decoded.model && decoded.model->objects.size() == 3,
+         "all three pinned judgegraph modes remain live model objects");
+  if (!decoded.model || decoded.model->objects.size() != 3) {
+    return;
+  }
+  const auto *normalDefinition = findObject(*decoded.model, "normal");
+  const auto *judgeDefinition = findObject(*decoded.model, "judge");
+  const auto *earlyLateDefinition = findObject(*decoded.model, "early-late");
+  const auto *normal = normalDefinition != nullptr
+                           ? std::get_if<SkinNoteDistributionGraphObject>(
+                                 &normalDefinition->payload)
+                           : nullptr;
+  const auto *judge = judgeDefinition != nullptr
+                          ? std::get_if<SkinNoteDistributionGraphObject>(
+                                &judgeDefinition->payload)
+                          : nullptr;
+  const auto *earlyLate = earlyLateDefinition != nullptr
+                              ? std::get_if<SkinNoteDistributionGraphObject>(
+                                    &earlyLateDefinition->payload)
+                              : nullptr;
+  expect(normal != nullptr &&
+             normal->type == SkinNoteDistributionGraphType::Normal &&
+             !normal->backgroundTextureOff && normal->delayMillis == 500 &&
+             !normal->reverseOrder && !normal->noGap &&
+             !normal->noHorizontalGap,
+         "judgegraph defaults match SkinNoteDistributionGraph");
+  expect(judge != nullptr &&
+             judge->type == SkinNoteDistributionGraphType::Judge &&
+             judge->backgroundTextureOff && judge->delayMillis == 750 &&
+             judge->reverseOrder && judge->noGap &&
+             judge->noHorizontalGap,
+         "judgegraph authored flags retain their exact equals-one semantics");
+  expect(earlyLate != nullptr &&
+             earlyLate->type == SkinNoteDistributionGraphType::EarlyLate &&
+             earlyLate->delayMillis == 0,
+         "early-late judgegraph decodes independently of judge mode");
+  expect(std::ranges::none_of(decoded.diagnostics, [](const auto &entry) {
+           return entry.code == "skin_lua_model_judgegraph_unsupported";
+         }),
+         "supported judgegraphs no longer emit the legacy unsupported diagnostic");
+
+  const auto validated =
+      test_support::validateWithAuthoredBuiltins(*decoded.model);
+  expect(validated.model && !validated.criticalFailure &&
+             std::ranges::none_of(validated.model->model.objects,
+                                  [](const auto &object) {
+                                    return std::holds_alternative<
+                                        SkinBlankObject>(object.payload);
+                                  }),
+         "valid judgegraphs remain typed through model validation");
+
+  auto invalidModel = *decoded.model;
+  auto &invalidGraph = std::get<SkinNoteDistributionGraphObject>(
+      invalidModel.objects.front().payload);
+  invalidGraph.type = static_cast<SkinNoteDistributionGraphType>(9);
+  const auto invalid = test_support::validateWithAuthoredBuiltins(
+      std::move(invalidModel));
+  expect(invalid.criticalFailure && !invalid.model &&
+             std::ranges::find_if(invalid.diagnostics, [](const auto &entry) {
+               return entry.code == "skin_lua_model_judgegraph_invalid";
+             }) != invalid.diagnostics.end(),
+         "model validation rejects an out-of-range judgegraph mode");
+
+  const auto invalidDecode = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  judgegraph={{id='invalid',type=3}},
+  destination={{id='invalid',dst={{x=0,y=0,w=10,h=10}}}}
+}
+)lua");
+  expect(!invalidDecode.model &&
+             std::ranges::find_if(invalidDecode.diagnostics,
+                                  [](const auto &entry) {
+                                    return entry.code ==
+                                           "skin_lua_model_judgegraph_invalid";
+                                  }) != invalidDecode.diagnostics.end(),
+         "decoder rejects a judgegraph constructor mode absent from the pinned implementation");
+}
+
+void testNegativeGenericDistributionGraphStaysOutsideGameplay() {
+  const auto decoded = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  source={{id='atlas',path='atlas.png'}},
+  graph={{id='select-only',src='atlas',w=11,h=1,divx=11,type=-1}},
+  destination={{id='select-only',dst={{x=0,y=0,w=100,h=20}}}}
+}
+)lua");
+  expect(decoded.model.has_value(),
+         "a select-only generic distribution declaration is noncritical");
+  if (!decoded.model) {
+    return;
+  }
+  const auto *definition = findObject(*decoded.model, "select-only");
+  expect(definition != nullptr &&
+             std::holds_alternative<SkinGraphObject>(definition->payload) &&
+             !std::holds_alternative<SkinNoteDistributionGraphObject>(
+                 definition->payload) &&
+             std::ranges::find_if(decoded.diagnostics, [](const auto &entry) {
+               return entry.code ==
+                      "skin_lua_model_distribution_graph_unsupported";
+             }) != decoded.diagnostics.end(),
+         "negative generic Graph retains the select-only invalid gameplay boundary");
+}
+
 void testOptionalVisualsAndBuiltinImagesStayLiveAcrossRepeatedDestinations() {
   const auto decoded = decodeInlineModel(R"lua(
 return {
@@ -1499,7 +1620,6 @@ return {
   const std::array expectedCodes{
       std::string_view("skin_lua_model_bpmgraph_unsupported"),
       std::string_view("skin_lua_model_hiterrorvisualizer_unsupported"),
-      std::string_view("skin_lua_model_judgegraph_unsupported"),
       std::string_view("skin_lua_model_timingvisualizer_unsupported"),
   };
   for (const auto code : expectedCodes) {
@@ -1508,6 +1628,10 @@ return {
     }) != decoded.diagnostics.end(),
            "each authored optional unsupported array emits its exact diagnostic");
   }
+  expect(std::ranges::none_of(decoded.diagnostics, [](const auto &entry) {
+           return entry.code == "skin_lua_model_judgegraph_unsupported";
+         }),
+         "the now-supported judgegraph array emits no unsupported diagnostic");
   if (decoded.model && decoded.model->objects.size() == 10) {
     const auto repeatedNames = static_cast<std::size_t>(std::count_if(
         decoded.model->objects.begin(), decoded.model->objects.end(),
@@ -1658,6 +1782,8 @@ int main() {
   testGameplayTypeMustBeSupported();
   testBooleanFieldsUseLuaTruthiness();
   testPracticePositionSliderDecodesItsExecutableWriter();
+  testJudgeGraphsDecodePinnedModesAndPresentationFlags();
+  testNegativeGenericDistributionGraphStaysOutsideGameplay();
   testOptionalVisualsAndBuiltinImagesStayLiveAcrossRepeatedDestinations();
   testPomyuCharaCycleExtractionFollowsPinnedLoaderOrder();
   testPomyuCharaCycleExtractionBoundsHostileFields();

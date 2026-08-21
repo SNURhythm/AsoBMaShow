@@ -1,4 +1,5 @@
 #include "skin/beatoraja/Skin2DRenderer.h"
+#include "skin/beatoraja/SkinNoteDistributionGraphRenderer.h"
 
 #include "FileChecksum.h"
 #include "skin/SkinStoragePaths.h"
@@ -314,6 +315,9 @@ public:
   projectedLines() const noexcept override {
     return lines;
   }
+  SkinGameplayGraphStateView gameplayGraphState() const noexcept override {
+    return graphResult;
+  }
   SkinGaugeStateView gaugeState() const noexcept override {
     return gaugeResult;
   }
@@ -329,6 +333,7 @@ public:
   std::vector<SkinProjectedNoteView> notes;
   std::vector<SkinProjectedLongNoteView> longNotes;
   std::vector<SkinProjectedLineView> lines;
+  SkinGameplayGraphStateView graphResult;
   SkinGaugeStateView gaugeResult;
   SkinJudgeStateView judgeResult;
   SkinNoteExpansionStateView noteExpansionResult;
@@ -3907,6 +3912,256 @@ void testHiddenNoteStillPreparesEveryLaneSourceInPinnedOrder() {
          "and processed sources before drawing nothing");
 }
 
+SkinDestination noteDistributionDestination(SkinObjectId object,
+                                             double width = 100.0,
+                                             double height = 100.0) {
+  auto value = destination(object, object, 0.0);
+  value.presentation.loop = 0;
+  value.presentation.frames.front().y = 0.0;
+  value.presentation.frames.front().width = width;
+  value.presentation.frames.front().height = height;
+  return value;
+}
+
+std::vector<const SkinPrimitiveCommand *>
+primitiveCommands(const SkinFrameEvaluationResult &result) {
+  std::vector<const SkinPrimitiveCommand *> primitives;
+  if (!result.submitReady) {
+    return primitives;
+  }
+  for (const auto &command : result.submitReady->commands) {
+    if (const auto *primitive =
+            std::get_if<SkinPrimitiveCommand>(&command.payload)) {
+      primitives.push_back(primitive);
+    }
+  }
+  return primitives;
+}
+
+void testNoteDistributionGraphUsesPinnedBucketsRevealOrderAndGaps() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  std::vector<SkinNormalDistribution> normal(2);
+  normal[0][0] = 1;
+  normal[0][1] = 1;
+  normal[1][6] = 1;
+  state.graphResult.normalDistribution = normal;
+
+  ValidatedBeatorajaSkinModel model;
+  model.model.header.type = 0;
+  model.model.objects = {{.id = 1,
+                          .authoredName = "normal-distribution",
+                          .payload = SkinNoteDistributionGraphObject{
+                              .type = SkinNoteDistributionGraphType::Normal,
+                              .backgroundTextureOff = true,
+                              .delayMillis = 1000},
+                          .authoredOrdinal = 1}};
+  model.model.destinations = {noteDistributionDestination(1)};
+
+  const auto half =
+      evaluate(renderer, runtime, model, resources, state, 1, 500'000);
+  const auto halfPrimitives = primitiveCommands(half);
+  expect(half.submitReady && halfPrimitives.size() == 2,
+         "positive delay reveals only the source-shaped leading graph half");
+  if (halfPrimitives.size() == 2) {
+    const auto &first = *halfPrimitives[0];
+    const auto &second = *halfPrimitives[1];
+    expect(first.vertices.front().rgba == 0xff44ff44U &&
+               second.vertices.front().rgba == 0xff228822U,
+           "normal distribution buckets use pinned color and stack order");
+    const auto firstMaxX = std::ranges::max(
+        first.vertices, {}, [](const SkinVertex &vertex) { return vertex.x; });
+    const auto firstMinY = std::ranges::min(
+        first.vertices, {}, [](const SkinVertex &vertex) { return vertex.y; });
+    const auto secondMaxY = std::ranges::max(
+        second.vertices, {}, [](const SkinVertex &vertex) { return vertex.y; });
+    expect(firstMaxX.x == 40.0F && firstMinY.y == 716.0F &&
+               secondMaxY.y == 715.0F,
+           "default 5px cells retain the pinned one-pixel horizontal and vertical gaps");
+  }
+
+  const auto full =
+      evaluate(renderer, runtime, model, resources, state, 2, 1'000'000);
+  expect(full.submitReady && primitiveCommands(full).size() == 3,
+         "delay deadline reveals the complete note distribution");
+
+  auto &graph = std::get<SkinNoteDistributionGraphObject>(
+      model.model.objects.front().payload);
+  graph.reverseOrder = true;
+  graph.noGap = true;
+  graph.noHorizontalGap = true;
+  const auto reversed =
+      evaluate(renderer, runtime, model, resources, state, 3, 1'000'000);
+  const auto reversedPrimitives = primitiveCommands(reversed);
+  expect(reversed.submitReady && reversedPrimitives.size() == 3,
+         "reverse and no-gap flags preserve every graph bucket");
+  if (reversedPrimitives.size() == 3) {
+    const auto &first = *reversedPrimitives.front();
+    const auto maxX = std::ranges::max(
+        first.vertices, {}, [](const SkinVertex &vertex) { return vertex.x; });
+    const auto minY = std::ranges::min(
+        first.vertices, {}, [](const SkinVertex &vertex) { return vertex.y; });
+    expect(first.vertices.front().rgba == 0xff228822U && maxX.x == 50.0F &&
+               minY.y == 715.0F,
+           "reverse order changes the bottom bucket while noGap/noGapX fill each 5px cell");
+  }
+}
+
+void testNoteDistributionGraphDrawsPinnedBackgroundPmsColorAndCursor() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+
+  std::vector<SkinNormalDistribution> gridData(61);
+  state.graphResult.normalDistribution = gridData;
+  ValidatedBeatorajaSkinModel gridModel;
+  gridModel.model.header.type = 0;
+  gridModel.model.objects = {{.id = 1,
+                              .authoredName = "grid",
+                              .payload = SkinNoteDistributionGraphObject{},
+                              .authoredOrdinal = 1}};
+  gridModel.model.destinations = {
+      noteDistributionDestination(1, 610.0, 100.0)};
+  const auto grid =
+      evaluate(renderer, runtime, gridModel, resources, state, 1, 500'000);
+  const auto gridPrimitives = primitiveCommands(grid);
+  expect(grid.submitReady && gridPrimitives.size() == 9,
+         "background emits black fill, one ten-row band, and seven ten-second grid lines");
+  if (gridPrimitives.size() == 9) {
+    expect(gridPrimitives[0]->kind == SkinPrimitiveKind::SolidQuad &&
+               gridPrimitives[0]->vertices.front().rgba == 0xcc000000U &&
+               gridPrimitives[1]->vertices.front().rgba == 0xff001111U &&
+               gridPrimitives[2]->kind == SkinPrimitiveKind::LineStrip &&
+               gridPrimitives[2]->vertices.front().rgba == 0xff3f3f3fU &&
+               gridPrimitives.back()->vertices.front().x == 600.0F,
+           "background/grid draw order, colors, and sixty-second placement match the pixmap source");
+  }
+
+  std::vector<SkinNormalDistribution> cursorData(2);
+  SkinNoteDistributionGraphObject cursorGraph;
+  cursorGraph.backgroundTextureOff = true;
+  AuthoredDestinationGeometry cursorGeometry;
+  cursorGeometry.rect = {.x = 0.0,
+                         .y = 0.0,
+                         .width = 100.0,
+                         .height = 100.0};
+  SkinGameplayGraphStateView cursorState;
+  cursorState.normalDistribution = cursorData;
+  const auto cursors = renderSkinNoteDistributionGraph(
+      {.sourceObject = 7,
+       .authoredOrdinal = 9,
+       .graph = cursorGraph,
+       .state = cursorState,
+       .geometry = cursorGeometry,
+       .viewport = viewport(),
+       .elapsedMillis = 500,
+       .startMillis = 250,
+       .endMillis = 750,
+       .currentMillis = 500,
+       .maximumCommands = 10,
+       .maximumPrimitiveVertices = 40});
+  expect(!cursors.failure && cursors.commands.size() == 3,
+         "start, end, and current cursors draw after an empty shape layer");
+  if (cursors.commands.size() == 3) {
+    const auto &start =
+        std::get<SkinPrimitiveCommand>(cursors.commands[0].payload);
+    const auto &end = std::get<SkinPrimitiveCommand>(cursors.commands[1].payload);
+    const auto &current =
+        std::get<SkinPrimitiveCommand>(cursors.commands[2].payload);
+    const auto startMinX = std::ranges::min(
+        start.vertices, {}, [](const SkinVertex &vertex) { return vertex.x; });
+    const auto endMinX = std::ranges::min(
+        end.vertices, {}, [](const SkinVertex &vertex) { return vertex.x; });
+    const auto currentMinX = std::ranges::min(
+        current.vertices, {}, [](const SkinVertex &vertex) { return vertex.x; });
+    expect(startMinX.x == 10.0F && endMinX.x == 30.0F &&
+               currentMinX.x == 20.0F &&
+               current.vertices.front().rgba == 0xffffffffU,
+           "cursor positions use source integer pixels and retain start/end/current draw order");
+  }
+  const auto boundedCursors = renderSkinNoteDistributionGraph(
+      {.sourceObject = 7,
+       .authoredOrdinal = 9,
+       .graph = cursorGraph,
+       .state = cursorState,
+       .geometry = cursorGeometry,
+       .viewport = viewport(),
+       .elapsedMillis = 500,
+       .startMillis = 250,
+       .endMillis = 750,
+       .currentMillis = 500,
+       .maximumCommands = 2,
+       .maximumPrimitiveVertices = 40});
+  expect(boundedCursors.failure && boundedCursors.commands.empty() &&
+             boundedCursors.primitiveVertices == 0,
+         "note distribution lowering publishes no partial commands when the frame bound is exceeded");
+
+  std::vector<SkinJudgeDistribution> judge(2);
+  judge[0][1] = 1;
+  state.graphResult = {};
+  state.graphResult.judgementDistribution = judge;
+  state.timerResult = 0;
+  ValidatedBeatorajaSkinModel pmsModel;
+  pmsModel.model.header.type = 4;
+  pmsModel.model.objects = {{.id = 1,
+                             .authoredName = "pms-judge",
+                             .payload = SkinNoteDistributionGraphObject{
+                                 .type = SkinNoteDistributionGraphType::Judge,
+                                 .backgroundTextureOff = true,
+                                 .delayMillis = 0},
+                             .authoredOrdinal = 1}};
+  pmsModel.model.destinations = {noteDistributionDestination(1)};
+  const auto pms =
+      evaluate(renderer, runtime, pmsModel, resources, state, 2, 500'000);
+  const auto pmsPrimitives = primitiveCommands(pms);
+  expect(pms.submitReady && pmsPrimitives.size() == 2,
+         "live judge graph draws its updated bucket followed by the current cursor");
+  if (pmsPrimitives.size() == 2) {
+    const auto &cursor = *pmsPrimitives.back();
+    const auto cursorMinX = std::ranges::min(
+        cursor.vertices, {}, [](const SkinVertex &vertex) { return vertex.x; });
+    const auto cursorMaxX = std::ranges::max(
+        cursor.vertices, {}, [](const SkinVertex &vertex) { return vertex.x; });
+    expect(pmsPrimitives.front()->vertices.front().rgba == 0xffb05effU &&
+               cursor.vertices.front().rgba == 0xffffffffU &&
+               cursorMinX.x == 20.0F && cursorMaxX.x == 50.0F,
+           "PMS judge palette and the source integer current-time cursor geometry are pinned");
+  }
+
+  judge[0][1] = 0;
+  judge[1][4] = 1;
+  const auto updated =
+      evaluate(renderer, runtime, pmsModel, resources, state, 3, 500'000);
+  const auto updatedPrimitives = primitiveCommands(updated);
+  expect(updated.submitReady && updatedPrimitives.size() == 2 &&
+             updatedPrimitives.front()->vertices.front().rgba == 0xffffc66cU,
+         "each frame consumes the latest immutable judgement distribution without scanning chart files");
+
+  std::vector<SkinEarlyLateDistribution> earlyLate(1);
+  earlyLate[0][9] = 101;
+  state.graphResult = {};
+  state.graphResult.earlyLateDistribution = earlyLate;
+  state.timerResult = INT64_MIN;
+  std::get<SkinNoteDistributionGraphObject>(
+      pmsModel.model.objects.front().payload)
+      .type = SkinNoteDistributionGraphType::EarlyLate;
+  const auto capped =
+      evaluate(renderer, runtime, pmsModel, resources, state, 4, 500'000);
+  const auto cappedPrimitives = primitiveCommands(capped);
+  expect(capped.submitReady && cappedPrimitives.size() == 100 &&
+             cappedPrimitives.back()->vertices.front().rgba == 0xff002244U,
+         "early-late mode uses its PMS palette and caps the pinned maximum graph height at 100");
+
+  state.graphResult.earlyLateDistribution = {};
+  const auto empty =
+      evaluate(renderer, runtime, pmsModel, resources, state, 5, 500'000);
+  expect(empty.submitReady && empty.submitReady->commands.empty(),
+         "an empty chart distribution emits no degenerate background, shape, or cursor commands");
+}
+
 std::int64_t fixtureFixed(double value) {
   // Floating-point to_chars implementations can choose different shortest
   // spellings for the same value. Store micro-units as integers so fixture
@@ -4442,6 +4697,8 @@ int main() {
   testNoteExpansionUsesCapturedQuarterNotePhase();
   testNoteLineCallbacksRunAfterTopLevelPreparationAndOnlyWhenDrawable();
   testHiddenNoteStillPreparesEveryLaneSourceInPinnedOrder();
+  testNoteDistributionGraphUsesPinnedBucketsRevealOrderAndGaps();
+  testNoteDistributionGraphDrawsPinnedBackgroundPmsColorAndCursor();
   testDesktopAndIpadFitCommandFixtures();
   return failures == 0 ? 0 : 1;
 }

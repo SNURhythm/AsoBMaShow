@@ -277,6 +277,21 @@ struct SkinGraphObject {
   int direction = 0;
 };
 
+enum class SkinNoteDistributionGraphType : std::uint8_t {
+  Normal,
+  Judge,
+  EarlyLate,
+};
+
+struct SkinNoteDistributionGraphObject {
+  SkinNoteDistributionGraphType type = SkinNoteDistributionGraphType::Normal;
+  bool backgroundTextureOff = false;
+  int delayMillis = 500;
+  bool reverseOrder = false;
+  bool noGap = false;
+  bool noHorizontalGap = false;
+};
+
 enum class SkinGaugeAnimationType : std::uint8_t {
   Random = 0,
   Increase = 1,
@@ -434,9 +449,10 @@ struct SkinBlankObject {};
 using SkinObjectPayload =
     std::variant<SkinImageObject, SkinNumberObject, SkinFloatObject,
                  SkinTextObject, SkinSliderObject, SkinGraphObject,
-                 SkinGaugeObject, SkinNoteObject, SkinCoverObject,
-                 SkinJudgeObject, SkinBgaObject, SkinBuiltinImageObject,
-                 SkinPmCharaObject, SkinBlankObject>;
+                 SkinNoteDistributionGraphObject, SkinGaugeObject,
+                 SkinNoteObject, SkinCoverObject, SkinJudgeObject,
+                 SkinBgaObject, SkinBuiltinImageObject, SkinPmCharaObject,
+                 SkinBlankObject>;
 
 struct SkinObjectDefinition {
   SkinObjectId id = 0;

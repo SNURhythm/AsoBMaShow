@@ -39,7 +39,8 @@
     {"id": 4, "name": "ratio", "authoredOrdinal": 3, "critical": false},
     {"id": 5, "name": "rate-slider", "authoredOrdinal": 4, "critical": false},
     {"id": 6, "name": "notes", "authoredOrdinal": 5, "critical": true},
-    {"id": 7, "name": "optional-missing", "authoredOrdinal": 6, "critical": false}
+    {"id": 7, "name": "optional-missing", "authoredOrdinal": 6, "critical": false},
+    {"id": 8, "name": "judge-distribution", "authoredOrdinal": 7, "critical": false}
   ],
   "stripStates": [
     [

@@ -4,6 +4,7 @@
 
 #include "Skin2DRenderer.h"
 #include "SkinCoverNormalization.h"
+#include "SkinNoteDistributionGraphRenderer.h"
 
 #include <algorithm>
 #include <array>
@@ -3122,6 +3123,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       const auto *text = std::get_if<SkinTextObject>(&object->payload);
       const auto *slider = std::get_if<SkinSliderObject>(&object->payload);
       const auto *graph = std::get_if<SkinGraphObject>(&object->payload);
+      const auto *noteDistribution =
+          std::get_if<SkinNoteDistributionGraphObject>(&object->payload);
       const auto *gauge = std::get_if<SkinGaugeObject>(&object->payload);
       const auto *note = std::get_if<SkinNoteObject>(&object->payload);
       const auto *cover = std::get_if<SkinCoverObject>(&object->payload);
@@ -3131,8 +3134,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           std::get_if<SkinBuiltinImageObject>(&object->payload);
       const auto *blank = std::get_if<SkinBlankObject>(&object->payload);
       if (!image && !number && !floating && !text && !slider && !graph &&
-          !gauge && !note && !cover && !judge && !bga && !builtinImage &&
-          !blank) {
+          !noteDistribution && !gauge && !note && !cover && !judge && !bga &&
+          !builtinImage && !blank) {
         if (reportObjectFailure(
                 result, *object,
                 diagnostic("skin.renderer.object.unsupported",
@@ -3401,6 +3404,41 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       }
       if (!evaluated.geometry && !image && !gauge && !note && !cover &&
           !judge) {
+        continue;
+      }
+
+      if (noteDistribution) {
+        std::optional<std::int64_t> currentMillis;
+        const std::int64_t playTimerStart =
+            inputs.state.timerProperty(SkinBuiltinPropertySelector{41});
+        if (playTimerStart != INT64_MIN) {
+          currentMillis = inputs.visualTimeMicros / 1000 -
+                          playTimerStart / 1000;
+        }
+        auto lowered = renderSkinNoteDistributionGraph(
+            {.sourceObject = object->id,
+             .authoredOrdinal = destination.presentation.authoredOrdinal,
+             .graph = *noteDistribution,
+             .state = inputs.state.gameplayGraphState(),
+             .geometry = *evaluated.geometry,
+             .viewport = inputs.viewport,
+             .pmsMode = inputs.model.model.header.type == 4,
+             .elapsedMillis = inputs.visualTimeMicros / 1000,
+             .currentMillis = currentMillis,
+             .maximumCommands =
+                 skinFrameMaximumCommands(inputs) - buffer.commands.size(),
+             .maximumPrimitiveVertices =
+                 skinFrameMaximumPrimitiveVertices(inputs) - primitiveVertices});
+        if (lowered.failure) {
+          if (reportObjectFailure(result, *object, *lowered.failure)) {
+            return result;
+          }
+          continue;
+        }
+        primitiveVertices += lowered.primitiveVertices;
+        buffer.commands.insert(buffer.commands.end(),
+                               std::make_move_iterator(lowered.commands.begin()),
+                               std::make_move_iterator(lowered.commands.end()));
         continue;
       }
 
