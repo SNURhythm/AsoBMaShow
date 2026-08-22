@@ -339,16 +339,29 @@ def implemented(identifier: str) -> dict:
     }
 
 
+def implemented_at(identifier: str, implementation: str, tests: str) -> dict:
+    return {
+        "id": identifier,
+        "status": "implemented",
+        "implementation": implementation,
+        "tests": tests,
+    }
+
+
 def source_defined_noop(identifier: str, source: dict) -> dict:
     return {"id": identifier, "status": "source-defined-noop", "source": source}
 
 
-def missing_legacy_export(identifier: str) -> dict:
+def legacy_export(identifier: str) -> dict:
     if identifier.startswith("lua.export.file-") or identifier in {
         "lua.export.mkdir",
         "lua.export.list-files",
     }:
-        return missing(identifier, PLAN_ASSETS, "Task 6: main_state file functions and legacy File facade")
+        return implemented_at(
+            identifier,
+            "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinFileSystem.cpp",
+            "tests/lua_skin_file_system_tests.cpp; tests/lua_skin_host_modules_tests.cpp",
+        )
     if identifier.startswith("lua.export.http-") or identifier in {
         "lua.export.bind-class",
         "lua.export.new",
@@ -361,10 +374,22 @@ def missing_legacy_export(identifier: str) -> dict:
         "lua.export.get-input-stream",
         "lua.export.read-line",
     }:
-        return missing(identifier, PLAN_ASSETS, "Task 7: Bounded HTTP and legacy URL/reader facade")
+        return implemented_at(
+            identifier,
+            "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinHttpClient.cpp; src/skin/beatoraja/LuaSkinCurlHttpTransport.cpp; src/skin/beatoraja/LuaSkinFoundationHttpTransport.mm",
+            "tests/lua_skin_host_modules_tests.cpp; tests/lua_skin_http_transport_tests.cpp",
+        )
     if identifier.startswith("lua.export.audio-"):
-        return missing(identifier, PLAN_ASSETS, "Task 8: Skin audio host lifecycle")
-    return missing(identifier, PLAN_ASSETS, "Task 9: Gdx input and controller legacy facade")
+        return implemented_at(
+            identifier,
+            "src/skin/beatoraja/LuaSkinAudioHost.cpp; src/skin/beatoraja/LuaSkinApplicationAudioBackend.cpp; src/audio/AudioWrapper.cpp; src/audio/AudioMix.cpp",
+            "tests/lua_skin_host_modules_tests.cpp; tests/audio_mix_tests.cpp; tests/audio_wrapper_lifecycle_tests.cpp; tests/play_skin_session_tests.cpp",
+        )
+    return implemented_at(
+        identifier,
+        "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinLegacyInputHost.cpp; src/input/InputDeviceRegistry.cpp; src/input/SDLInputBackend.cpp",
+        "tests/lua_skin_host_modules_tests.cpp; tests/input_device_registry_tests.cpp; tests/play_skin_session_tests.cpp; tests/gameplay_skin_session_factory_tests.cpp",
+    )
 
 
 def ledger_feature(feature: dict) -> dict:
@@ -378,7 +403,7 @@ def ledger_feature(feature: dict) -> dict:
     if identifier in IMPLEMENTED_LUA_IDS:
         return implemented(identifier)
     if identifier.startswith("lua.export."):
-        return missing_legacy_export(identifier)
+        return legacy_export(identifier)
     if "font" in identifier:
         return missing(identifier, PLAN_ASSETS, "Task 1: Bitmap .fnt and LR2FONT resources")
     if "pmchara" in identifier:

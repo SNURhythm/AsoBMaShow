@@ -2404,57 +2404,57 @@
     },
     {
       "id": "lua.export.a",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 9: Gdx input and controller legacy facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinLegacyInputHost.cpp; src/input/InputDeviceRegistry.cpp; src/input/SDLInputBackend.cpp",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/input_device_registry_tests.cpp; tests/play_skin_session_tests.cpp; tests/gameplay_skin_session_factory_tests.cpp"
     },
     {
       "id": "lua.export.audio-dispose",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 8: Skin audio host lifecycle"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinAudioHost.cpp; src/skin/beatoraja/LuaSkinApplicationAudioBackend.cpp; src/audio/AudioWrapper.cpp; src/audio/AudioMix.cpp",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/audio_mix_tests.cpp; tests/audio_wrapper_lifecycle_tests.cpp; tests/play_skin_session_tests.cpp"
     },
     {
       "id": "lua.export.audio-loop",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 8: Skin audio host lifecycle"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinAudioHost.cpp; src/skin/beatoraja/LuaSkinApplicationAudioBackend.cpp; src/audio/AudioWrapper.cpp; src/audio/AudioMix.cpp",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/audio_mix_tests.cpp; tests/audio_wrapper_lifecycle_tests.cpp; tests/play_skin_session_tests.cpp"
     },
     {
       "id": "lua.export.audio-play",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 8: Skin audio host lifecycle"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinAudioHost.cpp; src/skin/beatoraja/LuaSkinApplicationAudioBackend.cpp; src/audio/AudioWrapper.cpp; src/audio/AudioMix.cpp",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/audio_mix_tests.cpp; tests/audio_wrapper_lifecycle_tests.cpp; tests/play_skin_session_tests.cpp"
     },
     {
       "id": "lua.export.audio-preload",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 8: Skin audio host lifecycle"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinAudioHost.cpp; src/skin/beatoraja/LuaSkinApplicationAudioBackend.cpp; src/audio/AudioWrapper.cpp; src/audio/AudioMix.cpp",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/audio_mix_tests.cpp; tests/audio_wrapper_lifecycle_tests.cpp; tests/play_skin_session_tests.cpp"
     },
     {
       "id": "lua.export.audio-stop",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 8: Skin audio host lifecycle"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinAudioHost.cpp; src/skin/beatoraja/LuaSkinApplicationAudioBackend.cpp; src/audio/AudioWrapper.cpp; src/audio/AudioMix.cpp",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/audio_mix_tests.cpp; tests/audio_wrapper_lifecycle_tests.cpp; tests/play_skin_session_tests.cpp"
     },
     {
       "id": "lua.export.bind-class",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 7: Bounded HTTP and legacy URL/reader facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinHttpClient.cpp; src/skin/beatoraja/LuaSkinCurlHttpTransport.cpp; src/skin/beatoraja/LuaSkinFoundationHttpTransport.mm",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/lua_skin_http_transport_tests.cpp"
     },
     {
       "id": "lua.export.connect",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 7: Bounded HTTP and legacy URL/reader facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinHttpClient.cpp; src/skin/beatoraja/LuaSkinCurlHttpTransport.cpp; src/skin/beatoraja/LuaSkinFoundationHttpTransport.mm",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/lua_skin_http_transport_tests.cpp"
     },
     {
       "id": "lua.export.cpath",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 9: Gdx input and controller legacy facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinLegacyInputHost.cpp; src/input/InputDeviceRegistry.cpp; src/input/SDLInputBackend.cpp",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/input_device_registry_tests.cpp; tests/play_skin_session_tests.cpp; tests/gameplay_skin_session_factory_tests.cpp"
     },
     {
       "id": "lua.export.enabled-options",
@@ -2464,39 +2464,39 @@
     },
     {
       "id": "lua.export.file-append",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 6: main_state file functions and legacy File facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinFileSystem.cpp",
+      "tests": "tests/lua_skin_file_system_tests.cpp; tests/lua_skin_host_modules_tests.cpp"
     },
     {
       "id": "lua.export.file-clear",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 6: main_state file functions and legacy File facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinFileSystem.cpp",
+      "tests": "tests/lua_skin_file_system_tests.cpp; tests/lua_skin_host_modules_tests.cpp"
     },
     {
       "id": "lua.export.file-count-lines",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 6: main_state file functions and legacy File facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinFileSystem.cpp",
+      "tests": "tests/lua_skin_file_system_tests.cpp; tests/lua_skin_host_modules_tests.cpp"
     },
     {
       "id": "lua.export.file-exists",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 6: main_state file functions and legacy File facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinFileSystem.cpp",
+      "tests": "tests/lua_skin_file_system_tests.cpp; tests/lua_skin_host_modules_tests.cpp"
     },
     {
       "id": "lua.export.file-list",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 6: main_state file functions and legacy File facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinFileSystem.cpp",
+      "tests": "tests/lua_skin_file_system_tests.cpp; tests/lua_skin_host_modules_tests.cpp"
     },
     {
       "id": "lua.export.file-mkdir",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 6: main_state file functions and legacy File facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinFileSystem.cpp",
+      "tests": "tests/lua_skin_file_system_tests.cpp; tests/lua_skin_host_modules_tests.cpp"
     },
     {
       "id": "lua.export.file-path",
@@ -2506,51 +2506,51 @@
     },
     {
       "id": "lua.export.file-read-lines",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 6: main_state file functions and legacy File facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinFileSystem.cpp",
+      "tests": "tests/lua_skin_file_system_tests.cpp; tests/lua_skin_host_modules_tests.cpp"
     },
     {
       "id": "lua.export.file-write",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 6: main_state file functions and legacy File facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinFileSystem.cpp",
+      "tests": "tests/lua_skin_file_system_tests.cpp; tests/lua_skin_host_modules_tests.cpp"
     },
     {
       "id": "lua.export.first",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 9: Gdx input and controller legacy facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinLegacyInputHost.cpp; src/input/InputDeviceRegistry.cpp; src/input/SDLInputBackend.cpp",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/input_device_registry_tests.cpp; tests/play_skin_session_tests.cpp; tests/gameplay_skin_session_factory_tests.cpp"
     },
     {
       "id": "lua.export.get-button",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 9: Gdx input and controller legacy facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinLegacyInputHost.cpp; src/input/InputDeviceRegistry.cpp; src/input/SDLInputBackend.cpp",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/input_device_registry_tests.cpp; tests/play_skin_session_tests.cpp; tests/gameplay_skin_session_factory_tests.cpp"
     },
     {
       "id": "lua.export.get-controllers",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 9: Gdx input and controller legacy facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinLegacyInputHost.cpp; src/input/InputDeviceRegistry.cpp; src/input/SDLInputBackend.cpp",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/input_device_registry_tests.cpp; tests/play_skin_session_tests.cpp; tests/gameplay_skin_session_factory_tests.cpp"
     },
     {
       "id": "lua.export.get-height",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 9: Gdx input and controller legacy facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinLegacyInputHost.cpp; src/input/InputDeviceRegistry.cpp; src/input/SDLInputBackend.cpp",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/input_device_registry_tests.cpp; tests/play_skin_session_tests.cpp; tests/gameplay_skin_session_factory_tests.cpp"
     },
     {
       "id": "lua.export.get-input-stream",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 7: Bounded HTTP and legacy URL/reader facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinHttpClient.cpp; src/skin/beatoraja/LuaSkinCurlHttpTransport.cpp; src/skin/beatoraja/LuaSkinFoundationHttpTransport.mm",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/lua_skin_http_transport_tests.cpp"
     },
     {
       "id": "lua.export.get-name",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 9: Gdx input and controller legacy facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinLegacyInputHost.cpp; src/input/InputDeviceRegistry.cpp; src/input/SDLInputBackend.cpp",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/input_device_registry_tests.cpp; tests/play_skin_session_tests.cpp; tests/gameplay_skin_session_factory_tests.cpp"
     },
     {
       "id": "lua.export.get-path",
@@ -2560,99 +2560,99 @@
     },
     {
       "id": "lua.export.get-response-code",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 7: Bounded HTTP and legacy URL/reader facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinHttpClient.cpp; src/skin/beatoraja/LuaSkinCurlHttpTransport.cpp; src/skin/beatoraja/LuaSkinFoundationHttpTransport.mm",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/lua_skin_http_transport_tests.cpp"
     },
     {
       "id": "lua.export.get-width",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 9: Gdx input and controller legacy facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinLegacyInputHost.cpp; src/input/InputDeviceRegistry.cpp; src/input/SDLInputBackend.cpp",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/input_device_registry_tests.cpp; tests/play_skin_session_tests.cpp; tests/gameplay_skin_session_factory_tests.cpp"
     },
     {
       "id": "lua.export.getmetatable",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 9: Gdx input and controller legacy facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinLegacyInputHost.cpp; src/input/InputDeviceRegistry.cpp; src/input/SDLInputBackend.cpp",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/input_device_registry_tests.cpp; tests/play_skin_session_tests.cpp; tests/gameplay_skin_session_factory_tests.cpp"
     },
     {
       "id": "lua.export.graphics",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 9: Gdx input and controller legacy facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinLegacyInputHost.cpp; src/input/InputDeviceRegistry.cpp; src/input/SDLInputBackend.cpp",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/input_device_registry_tests.cpp; tests/play_skin_session_tests.cpp; tests/gameplay_skin_session_factory_tests.cpp"
     },
     {
       "id": "lua.export.h",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 9: Gdx input and controller legacy facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinLegacyInputHost.cpp; src/input/InputDeviceRegistry.cpp; src/input/SDLInputBackend.cpp",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/input_device_registry_tests.cpp; tests/play_skin_session_tests.cpp; tests/gameplay_skin_session_factory_tests.cpp"
     },
     {
       "id": "lua.export.http-get",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 7: Bounded HTTP and legacy URL/reader facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinHttpClient.cpp; src/skin/beatoraja/LuaSkinCurlHttpTransport.cpp; src/skin/beatoraja/LuaSkinFoundationHttpTransport.mm",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/lua_skin_http_transport_tests.cpp"
     },
     {
       "id": "lua.export.http-get-lines",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 7: Bounded HTTP and legacy URL/reader facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinHttpClient.cpp; src/skin/beatoraja/LuaSkinCurlHttpTransport.cpp; src/skin/beatoraja/LuaSkinFoundationHttpTransport.mm",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/lua_skin_http_transport_tests.cpp"
     },
     {
       "id": "lua.export.index",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 9: Gdx input and controller legacy facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinLegacyInputHost.cpp; src/input/InputDeviceRegistry.cpp; src/input/SDLInputBackend.cpp",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/input_device_registry_tests.cpp; tests/play_skin_session_tests.cpp; tests/gameplay_skin_session_factory_tests.cpp"
     },
     {
       "id": "lua.export.input",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 9: Gdx input and controller legacy facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinLegacyInputHost.cpp; src/input/InputDeviceRegistry.cpp; src/input/SDLInputBackend.cpp",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/input_device_registry_tests.cpp; tests/play_skin_session_tests.cpp; tests/gameplay_skin_session_factory_tests.cpp"
     },
     {
       "id": "lua.export.is-key-pressed",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 9: Gdx input and controller legacy facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinLegacyInputHost.cpp; src/input/InputDeviceRegistry.cpp; src/input/SDLInputBackend.cpp",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/input_device_registry_tests.cpp; tests/play_skin_session_tests.cpp; tests/gameplay_skin_session_factory_tests.cpp"
     },
     {
       "id": "lua.export.keys",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 9: Gdx input and controller legacy facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinLegacyInputHost.cpp; src/input/InputDeviceRegistry.cpp; src/input/SDLInputBackend.cpp",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/input_device_registry_tests.cpp; tests/play_skin_session_tests.cpp; tests/gameplay_skin_session_factory_tests.cpp"
     },
     {
       "id": "lua.export.list-files",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 6: main_state file functions and legacy File facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinFileSystem.cpp",
+      "tests": "tests/lua_skin_file_system_tests.cpp; tests/lua_skin_host_modules_tests.cpp"
     },
     {
       "id": "lua.export.loadlib",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 9: Gdx input and controller legacy facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinLegacyInputHost.cpp; src/input/InputDeviceRegistry.cpp; src/input/SDLInputBackend.cpp",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/input_device_registry_tests.cpp; tests/play_skin_session_tests.cpp; tests/gameplay_skin_session_factory_tests.cpp"
     },
     {
       "id": "lua.export.mkdir",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 6: main_state file functions and legacy File facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinFileSystem.cpp",
+      "tests": "tests/lua_skin_file_system_tests.cpp; tests/lua_skin_host_modules_tests.cpp"
     },
     {
       "id": "lua.export.new",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 7: Bounded HTTP and legacy URL/reader facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinHttpClient.cpp; src/skin/beatoraja/LuaSkinCurlHttpTransport.cpp; src/skin/beatoraja/LuaSkinFoundationHttpTransport.mm",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/lua_skin_http_transport_tests.cpp"
     },
     {
       "id": "lua.export.new-instance",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 7: Bounded HTTP and legacy URL/reader facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinHttpClient.cpp; src/skin/beatoraja/LuaSkinCurlHttpTransport.cpp; src/skin/beatoraja/LuaSkinFoundationHttpTransport.mm",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/lua_skin_http_transport_tests.cpp"
     },
     {
       "id": "lua.export.offset",
@@ -2662,9 +2662,9 @@
     },
     {
       "id": "lua.export.open-connection",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 7: Bounded HTTP and legacy URL/reader facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinHttpClient.cpp; src/skin/beatoraja/LuaSkinCurlHttpTransport.cpp; src/skin/beatoraja/LuaSkinFoundationHttpTransport.mm",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/lua_skin_http_transport_tests.cpp"
     },
     {
       "id": "lua.export.option",
@@ -2674,39 +2674,39 @@
     },
     {
       "id": "lua.export.path",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 9: Gdx input and controller legacy facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinLegacyInputHost.cpp; src/input/InputDeviceRegistry.cpp; src/input/SDLInputBackend.cpp",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/input_device_registry_tests.cpp; tests/play_skin_session_tests.cpp; tests/gameplay_skin_session_factory_tests.cpp"
     },
     {
       "id": "lua.export.r",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 9: Gdx input and controller legacy facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinLegacyInputHost.cpp; src/input/InputDeviceRegistry.cpp; src/input/SDLInputBackend.cpp",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/input_device_registry_tests.cpp; tests/play_skin_session_tests.cpp; tests/gameplay_skin_session_factory_tests.cpp"
     },
     {
       "id": "lua.export.read-line",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 7: Bounded HTTP and legacy URL/reader facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinHttpClient.cpp; src/skin/beatoraja/LuaSkinCurlHttpTransport.cpp; src/skin/beatoraja/LuaSkinFoundationHttpTransport.mm",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/lua_skin_http_transport_tests.cpp"
     },
     {
       "id": "lua.export.set-connect-timeout",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 7: Bounded HTTP and legacy URL/reader facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinHttpClient.cpp; src/skin/beatoraja/LuaSkinCurlHttpTransport.cpp; src/skin/beatoraja/LuaSkinFoundationHttpTransport.mm",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/lua_skin_http_transport_tests.cpp"
     },
     {
       "id": "lua.export.set-request-method",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 7: Bounded HTTP and legacy URL/reader facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinHttpClient.cpp; src/skin/beatoraja/LuaSkinCurlHttpTransport.cpp; src/skin/beatoraja/LuaSkinFoundationHttpTransport.mm",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/lua_skin_http_transport_tests.cpp"
     },
     {
       "id": "lua.export.size",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 9: Gdx input and controller legacy facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinLegacyInputHost.cpp; src/input/InputDeviceRegistry.cpp; src/input/SDLInputBackend.cpp",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/input_device_registry_tests.cpp; tests/play_skin_session_tests.cpp; tests/gameplay_skin_session_factory_tests.cpp"
     },
     {
       "id": "lua.export.skin-config",
@@ -2716,21 +2716,21 @@
     },
     {
       "id": "lua.export.w",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 9: Gdx input and controller legacy facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinLegacyInputHost.cpp; src/input/InputDeviceRegistry.cpp; src/input/SDLInputBackend.cpp",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/input_device_registry_tests.cpp; tests/play_skin_session_tests.cpp; tests/gameplay_skin_session_factory_tests.cpp"
     },
     {
       "id": "lua.export.x",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 9: Gdx input and controller legacy facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinLegacyInputHost.cpp; src/input/InputDeviceRegistry.cpp; src/input/SDLInputBackend.cpp",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/input_device_registry_tests.cpp; tests/play_skin_session_tests.cpp; tests/gameplay_skin_session_factory_tests.cpp"
     },
     {
       "id": "lua.export.y",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 9: Gdx input and controller legacy facade"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinHostModules.cpp; src/skin/beatoraja/LuaSkinLegacyInputHost.cpp; src/input/InputDeviceRegistry.cpp; src/input/SDLInputBackend.cpp",
+      "tests": "tests/lua_skin_host_modules_tests.cpp; tests/input_device_registry_tests.cpp; tests/play_skin_session_tests.cpp; tests/gameplay_skin_session_factory_tests.cpp"
     },
     {
       "id": "lua.object-field.animation-a",

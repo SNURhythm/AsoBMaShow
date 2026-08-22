@@ -97,7 +97,6 @@ def main() -> None:
     # These current Aso paths deliberately fail closed or are deferred; a
     # default implemented classification would hide a source-defined gap.
     expected_gaps = {
-        "lua.export.new-instance": "Task 7: Bounded HTTP and legacy URL/reader facade",
         "lua.object-field.bpmgraph-id": "Task 6: BPM/scroll/stop graph",
         "lua.object-field.judge-graph-id": "Task 2: Judgement and note-distribution graph",
         "lua.object-field.timing-visualizer-id": "Task 3: Timing visualizer",
