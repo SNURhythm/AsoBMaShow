@@ -12,6 +12,7 @@
 #include "GamePlayStartOptions.h"
 #include "BeatorajaHiSpeed.h"
 #include "GameplayBmsResourceAvailability.h"
+#include "GameplaySkinSessionFactory.h"
 #include "NoteTimeRange.h"
 #include "Pacemaker.h"
 #include "PlayfieldChartVisualModel.h"
@@ -286,6 +287,7 @@ private:
   PlayfieldVisualStateStore *playfieldVisualStateStore = nullptr;
   PlayfieldPresentationConfig playfieldPresentationConfiguration;
   std::unique_ptr<PlayfieldPresentation> ownedPresentation;
+  GameplaySkinSessionStopOwner gameplaySkinSessionStopOwner;
   BuiltInPlayfieldPresentation *builtInPresentation = nullptr;
   PlayfieldPresentation *presentation = nullptr;
   std::unique_ptr<PlayfieldPresentationEventFanout>

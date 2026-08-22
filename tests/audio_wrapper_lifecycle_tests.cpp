@@ -1871,6 +1871,156 @@ void testLuaSkinRetirementWaitsForCallbackWhileChartClockContinues() {
           "and the chart clock continue without device stop or restart");
 }
 
+void testLuaSkinDisposeRetriesAfterCommandQueueCapacityReturns() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  const path_t sharedPath = PATH("queue-full-shared-skin-and-chart.ogg");
+  const path_t fillerPath = PATH("queue-full-filler.ogg");
+  require(wrapper.loadGeneratedSound(sharedPath,
+                                     std::vector<short>(64, 12000), 1, 44100) &&
+              wrapper.loadGeneratedSound(fillerPath,
+                                         std::vector<short>(4, 100), 1, 44100),
+          "queue-full retirement fixture retains generated PCM");
+  auto backend = skin::createLuaSkinApplicationAudioBackend(
+      wrapper, [] { return 1.0F; },
+      {.maximumIdentities = 1,
+       .maximumEncodedBytes = 1024,
+       .maximumDecodedBytes = 256});
+  const auto identity = backend->load(std::filesystem::path(sharedPath), {});
+  require(identity.has_value() &&
+              wrapper.playSound(sharedPath, audio::Bus::Bgm),
+          "queue-full retirement fixture starts private and chart owners");
+  backend->play(*identity, 0.5F, true);
+  std::array<std::int16_t, 8> first{};
+  control->renderCallback(first.data(), 4, 2, control->renderUserData);
+
+  std::size_t queued = 0;
+  while (queued <= kAudioCommandQueueSize &&
+         wrapper.playSound(fillerPath, audio::Bus::System)) {
+    ++queued;
+  }
+  require(queued == kAudioCommandQueueSize,
+          "queue-full retirement fixture exhausts callback command capacity");
+  const std::size_t eventsBefore = control->events.size();
+  backend->dispose(*identity);
+
+  std::array<std::int16_t, 8> drain{};
+  control->renderCallback(drain.data(), 4, 2, control->renderUserData);
+  require(!backend->load(std::filesystem::path(sharedPath), {}).has_value(),
+          "the next backend operation retries retained queue-full disposal "
+          "while callback acknowledgement is still pending");
+  std::array<std::int16_t, 8> acknowledge{};
+  control->renderCallback(acknowledge.data(), 4, 2,
+                          control->renderUserData);
+  const auto replacement =
+      backend->load(std::filesystem::path(sharedPath), {});
+  require(replacement.has_value(),
+          "failed queue-full disposal retains identity for retry and releases "
+          "quota after callback acknowledgement");
+  require(wrapper.getSoundDurationMicros(sharedPath).has_value() &&
+              control->events.size() == eventsBefore,
+          "queue-full retry preserves same-path chart ownership without a "
+          "device stop or restart");
+}
+
+void testLuaSkinDisposeAcknowledgesWhileCallbackIsStopped() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  const path_t sharedPath = PATH("stopped-callback-shared-skin-and-chart.ogg");
+  require(wrapper.loadGeneratedSound(sharedPath,
+                                     std::vector<short>(64, 9000), 1, 44100),
+          "stopped-callback retirement fixture retains generated PCM");
+  auto backend = skin::createLuaSkinApplicationAudioBackend(
+      wrapper, [] { return 1.0F; },
+      {.maximumIdentities = 1,
+       .maximumEncodedBytes = 1024,
+       .maximumDecodedBytes = 256});
+  const auto identity = backend->load(std::filesystem::path(sharedPath), {});
+  require(identity.has_value() &&
+              wrapper.playSound(sharedPath, audio::Bus::Bgm),
+          "stopped-callback fixture starts private and chart owners");
+  backend->play(*identity, 0.5F, true);
+  std::array<std::int16_t, 8> first{};
+  control->renderCallback(first.data(), 4, 2, control->renderUserData);
+
+  control->authoritativeState = audio::playback::BackendRunState::Stopped;
+  const std::size_t eventsBefore = control->events.size();
+  backend->dispose(*identity);
+  const auto replacement =
+      backend->load(std::filesystem::path(sharedPath), {});
+  require(replacement.has_value(),
+          "authoritatively stopped callback retires and releases private PCM "
+          "synchronously");
+  require(wrapper.getSoundDurationMicros(sharedPath).has_value() &&
+              control->events.size() == eventsBefore,
+          "stopped callback cleanup preserves same-path chart ownership and "
+          "does not cycle the device");
+}
+
+void testLuaSkinBackendTeardownRetriesQueueFullRetirement() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  const path_t sharedPath = PATH("teardown-shared-skin-and-chart.ogg");
+  const path_t fillerPath = PATH("teardown-queue-filler.ogg");
+  require(wrapper.loadGeneratedSound(sharedPath,
+                                     std::vector<short>(64, 7000), 1, 44100) &&
+              wrapper.loadGeneratedSound(fillerPath,
+                                         std::vector<short>(4, 0), 1, 44100),
+          "teardown retirement fixture retains generated PCM");
+  auto backend = skin::createLuaSkinApplicationAudioBackend(
+      wrapper, [] { return 1.0F; },
+      {.maximumIdentities = 1,
+       .maximumEncodedBytes = 1024,
+       .maximumDecodedBytes = 256});
+  const auto identity = backend->load(std::filesystem::path(sharedPath), {});
+  require(identity.has_value() &&
+              wrapper.playSound(sharedPath, audio::Bus::Bgm),
+          "teardown fixture starts private and chart owners");
+  backend->play(*identity, 0.5F, true);
+  std::array<std::int16_t, 8> first{};
+  control->renderCallback(first.data(), 4, 2, control->renderUserData);
+  std::size_t queued = 0;
+  while (queued <= kAudioCommandQueueSize &&
+         wrapper.playSound(fillerPath, audio::Bus::System)) {
+    ++queued;
+  }
+  require(queued == kAudioCommandQueueSize,
+          "teardown fixture exhausts callback command capacity");
+  const std::size_t eventsBefore = control->events.size();
+
+  auto teardown = std::async(
+      std::launch::async,
+      [owned = std::move(backend)]() mutable { owned.reset(); });
+  require(teardown.wait_for(20ms) == std::future_status::timeout,
+          "backend teardown retains owner work while callback capacity is full");
+  std::array<std::int16_t, 8> drain{};
+  control->renderCallback(drain.data(), 4, 2, control->renderUserData);
+  require(teardown.wait_for(2s) == std::future_status::ready,
+          "backend teardown retries once callback capacity becomes available");
+  teardown.get();
+  std::array<std::int16_t, 8> acknowledge{};
+  control->renderCallback(acknowledge.data(), 4, 2,
+                          control->renderUserData);
+
+  auto replacementBackend = skin::createLuaSkinApplicationAudioBackend(
+      wrapper, [] { return 1.0F; },
+      {.maximumIdentities = 1,
+       .maximumEncodedBytes = 1024,
+       .maximumDecodedBytes = 256});
+  require(replacementBackend->load(std::filesystem::path(sharedPath), {})
+              .has_value() &&
+              wrapper.getSoundDurationMicros(sharedPath).has_value() &&
+              control->events.size() == eventsBefore,
+          "teardown acknowledgement releases quota, preserves same-path chart "
+          "ownership, and does not cycle the device");
+}
+
 } // namespace
 
 int main() {
@@ -1907,6 +2057,9 @@ int main() {
     testLuaSkinProductionAdapterPreservesUnrelatedAudioOwnership();
     testReplayLuaAudioBackendIsExplicitlyNoOutputAndCancellable();
     testLuaSkinRetirementWaitsForCallbackWhileChartClockContinues();
+    testLuaSkinDisposeAcknowledgesWhileCallbackIsStopped();
+    testLuaSkinDisposeRetriesAfterCommandQueueCapacityReturns();
+    testLuaSkinBackendTeardownRetriesQueueFullRetirement();
     return 0;
   } catch (const std::exception &error) {
     std::cerr << "audio_wrapper_lifecycle_tests: " << error.what() << '\n';

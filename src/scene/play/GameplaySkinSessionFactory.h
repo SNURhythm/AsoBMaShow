@@ -31,6 +31,27 @@ class SkinResourcePreparationService;
 #include <optional>
 #include <stop_token>
 
+class GameplaySkinSessionStopOwner final {
+public:
+  GameplaySkinSessionStopOwner() = default;
+  GameplaySkinSessionStopOwner(const GameplaySkinSessionStopOwner &) = delete;
+  GameplaySkinSessionStopOwner &
+  operator=(const GameplaySkinSessionStopOwner &) = delete;
+  ~GameplaySkinSessionStopOwner() { requestStop(); }
+
+  [[nodiscard]] std::stop_token token() const noexcept {
+    return source_.get_token();
+  }
+  void requestStop() noexcept { source_.request_stop(); }
+  void resetForNextSession() noexcept {
+    source_.request_stop();
+    source_ = std::stop_source{};
+  }
+
+private:
+  std::stop_source source_;
+};
+
 struct GameplaySkinSessionServices {
   skin::AcquireGameplaySkinForNextChart acquire;
   const skin::SkinStorageRoots *storageRoots = nullptr;

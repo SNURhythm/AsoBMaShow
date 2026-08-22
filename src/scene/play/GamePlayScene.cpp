@@ -1507,7 +1507,9 @@ void GamePlayScene::acquireGameplaySkinForAttempt() {
     return;
   }
   const skin::UiLogicalRect safeUiBounds = gameplaySkinSafeUiBounds();
+  gameplaySkinSessionStopOwner.resetForNextSession();
   auto services = gameplaySkinSessionServices(context);
+  services.stop = gameplaySkinSessionStopOwner.token();
   services.applyAudioVolume =
       [this](skin::SkinAudioVolumeWriterTarget target, float value) {
         applySkinAudioVolume(target, value);
@@ -1535,6 +1537,7 @@ void GamePlayScene::acquireGameplaySkinForAttempt() {
       .safeUiBounds = safeUiBounds,
   });
   if (result.disposition == GameplaySkinSessionDisposition::Failed) {
+    gameplaySkinSessionStopOwner.requestStop();
     showPlaybackInitializationFailure(
         gameplaySkinFailureMessage(result.failure->diagnostic));
     return;
@@ -1546,6 +1549,8 @@ void GamePlayScene::acquireGameplaySkinForAttempt() {
     gameplaySkinSafeBoundsY = safeUiBounds.y;
     gameplaySkinSafeBoundsWidth = safeUiBounds.width;
     gameplaySkinSafeBoundsHeight = safeUiBounds.height;
+  } else {
+    gameplaySkinSessionStopOwner.requestStop();
   }
 #endif
 }
@@ -2712,6 +2717,7 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
 }
 
 GamePlayScene::~GamePlayScene() {
+  gameplaySkinSessionStopOwner.requestStop();
   if (auto *coordinator =
           dynamic_cast<PlayfieldPresentationCoordinator *>(presentation);
       coordinator != nullptr && coordinator->hasFocusedTextInput()) {

@@ -130,12 +130,15 @@ class FactoryAudioBackend final : public skin::LuaSkinAudioBackend {
 public:
   float systemVolume() const noexcept override { return 1.0F; }
   std::optional<skin::LuaSkinAudioIdentity>
-  load(const fs::path &, std::stop_token) noexcept override {
-    return std::nullopt;
+  load(const fs::path &, std::stop_token stop) noexcept override {
+    loadedStop = stop;
+    return skin::LuaSkinAudioIdentity{.value = 1};
   }
   void play(skin::LuaSkinAudioIdentity, float, bool) noexcept override {}
   void stop(skin::LuaSkinAudioIdentity) noexcept override {}
   void dispose(skin::LuaSkinAudioIdentity) noexcept override {}
+
+  std::stop_token loadedStop;
 };
 
 class FactoryHttpTransport final : public skin::LuaSkinHttpTransport {
@@ -182,9 +185,11 @@ struct ReadyFixture {
   bool httpTransportForwarded = false;
   bool httpStopForwarded = false;
   bool legacyInputCaptureForwarded = false;
+  bool exerciseAudioPreparation = false;
   std::optional<skin::LuaSkinLegacyInputGeneration> capturedLegacyInput;
   skin::SkinConfigurationWriteQueue writes;
   std::stop_source stopSource;
+  std::stop_token expectedStop;
   PlayfieldChartVisualModel chart;
   PlayfieldVisualState state;
   PlayfieldProjectionResult projection;
@@ -215,6 +220,7 @@ struct ReadyFixture {
     state.clock.serial = 1;
     state.authority.loadingState = PlayfieldLoadingState::Loaded;
     projection.frameSerial = state.clock.serial;
+    expectedStop = stopSource.get_token();
   }
 
   GameplaySkinSessionServices services() {
@@ -251,7 +257,7 @@ struct ReadyFixture {
             .liveResourceCounters = counters,
             .createHttpTransport = [this](std::stop_token stop) {
               httpStopForwarded = stop.stop_possible() &&
-                                  stop == stopSource.get_token();
+                                  stop == expectedStop;
               return std::make_unique<FactoryHttpTransport>();
             },
             .audioBackend = audioBackend,
@@ -261,7 +267,7 @@ struct ReadyFixture {
             },
             .configurationWrites = &writes,
             .diagnosticHistory = &history,
-            .stop = stopSource.get_token(),
+            .stop = expectedStop,
             .createSessionForTesting =
                 [this, textureDevice = textureDevice](
                     skin::ValidatedSkinActivation activation,
@@ -274,6 +280,11 @@ struct ReadyFixture {
                   if (context.captureLegacyInputGeneration) {
                     capturedLegacyInput =
                         context.captureLegacyInputGeneration();
+                  }
+                  if (exerciseAudioPreparation && context.audioBackend) {
+                    (void)context.audioBackend->load(
+                        roots.visiblePackages / "preparation-audio.wav",
+                        context.stop);
                   }
                   context.textureDevice = textureDevice;
                   return skin::PlaySkinSession::create(std::move(activation),
@@ -367,6 +378,26 @@ void factorySuppliesTheValueOnlyProductionLegacyInputCapture() {
          "factory defaults to a value-only production drawable/input/controller snapshot");
 }
 
+void factoryOwnerCancellationReachesHttpAndAudioPreparation() {
+  ReadyFixture fixture;
+  if (!fixture.lease) {
+    return;
+  }
+  GameplaySkinSessionStopOwner owner;
+  fixture.expectedStop = owner.token();
+  fixture.exerciseAudioPreparation = true;
+  const auto ready =
+      createGameplaySkinSession(fixture.services(), fixture.input());
+  expect(ready.disposition == GameplaySkinSessionDisposition::Ready &&
+             ready.session != nullptr && fixture.httpStopForwarded &&
+             fixture.audioBackend->loadedStop.stop_possible() &&
+             !fixture.audioBackend->loadedStop.stop_requested(),
+         "production stop owner reaches HTTP construction and audio preparation");
+  owner.requestStop();
+  expect(fixture.audioBackend->loadedStop.stop_requested(),
+         "cancelling through the session owner reaches prepared audio work");
+}
+
 } // namespace
 
 int main() {
@@ -375,5 +406,6 @@ int main() {
   factoryPreservesLifecycleDiagnosticAndRecordsIt();
   factoryTransfersTheOwningSessionExactlyOnce();
   factorySuppliesTheValueOnlyProductionLegacyInputCapture();
+  factoryOwnerCancellationReachesHttpAndAudioPreparation();
   return failures == 0 ? 0 : 1;
 }

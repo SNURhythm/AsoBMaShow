@@ -26,6 +26,7 @@
 #include "scene/PracticeAnalyticsView.h"
 #include "scene/play/BMSRenderer.h"
 #include "scene/play/GamePlayTiming.h"
+#include "scene/play/GameplaySkinSessionFactory.h"
 #include "scene/play/PlayfieldChartVisualModel.h"
 #include "scene/play/ReplayPlayfieldPresentation.h"
 #include "scene/play/ReplayVideoGameplayPreflight.h"
@@ -124,7 +125,8 @@ struct PreparedReplayGameplayPresentation {
 };
 
 GameplaySkinSessionServices
-replayGameplaySkinSessionServices(ApplicationContext &context) {
+replayGameplaySkinSessionServices(ApplicationContext &context,
+                                  std::stop_token stop) {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   return {.acquire = context.acquireGameplaySkinForNextChart,
           .storageRoots = context.skinStorageRoots
@@ -138,9 +140,11 @@ replayGameplaySkinSessionServices(ApplicationContext &context) {
           },
           .audioBackend = skin::createLuaSkinNoOutputAudioBackend(),
           .configurationWrites = context.skinConfigurationWriteQueue.get(),
-          .diagnosticHistory = context.skinDiagnosticHistory.get()};
+          .diagnosticHistory = context.skinDiagnosticHistory.get(),
+          .stop = stop};
 #else
   (void)context;
+  (void)stop;
   return {};
 #endif
 }
@@ -208,7 +212,8 @@ preflightReplayGameplayPresentation(
     const PlayfieldAuthorityUpdate *initialAuthority = nullptr,
     bool rendererReservationAlreadyHeld = false,
     const replay_video_export::ReplayChartMetadataAuthority *chartMetadata =
-        nullptr) {
+        nullptr,
+    std::stop_token stop = {}) {
   const auto resolvedOptions = resolveReplayVideoExportOptions(options);
   const PlayfieldAuthorityUpdate fallbackInitialAuthority{
       .persistedScore = replayExportPersistedScore(context, chart.Meta),
@@ -258,12 +263,14 @@ preflightReplayGameplayPresentation(
           ? replay_video_export::preflightReplayGameplayPresentationWithReservedRenderer(
                 chart, replay, settings, preparationPlan, configuration,
                 resolvedOptions.width, resolvedOptions.height, authority,
-                context.jukebox, replayGameplaySkinSessionServices(context),
+                context.jukebox,
+                replayGameplaySkinSessionServices(context, stop),
                 prepared.presentation, pinnedRuntimeSelection)
           : replay_video_export::preflightReplayGameplayPresentation(
                 chart, replay, settings, preparationPlan, configuration,
                 resolvedOptions.width, resolvedOptions.height, authority,
-                context.jukebox, replayGameplaySkinSessionServices(context),
+                context.jukebox,
+                replayGameplaySkinSessionServices(context, stop),
                 context.rendererAccess, prepared.presentation,
                 pinnedRuntimeSelection);
   if (result) {
@@ -1159,7 +1166,7 @@ courseReplayStageTitles(const std::vector<CourseReplayVideoStage> &stages) {
 preflightCourseReplayGameplayPresentations(
     ApplicationContext &context, std::vector<CourseReplayVideoStage> &stages,
     const AppSettings &settings, const ReplayVideoExportOptions &options,
-    ReplayVideoExportLog *log) {
+    ReplayVideoExportLog *log, std::stop_token stop) {
   const auto resolvedOptions = resolveReplayVideoExportOptions(options);
   std::vector<replay_video_export::CourseReplayGameplayPreflightStage>
       preflightStages;
@@ -1212,7 +1219,7 @@ preflightCourseReplayGameplayPresentations(
              .hiddenRatio = stage.constraints.noSpeed ? 0.0F
                                                        : settings.hiddenRatio,
          },
-         .skinServices = replayGameplaySkinSessionServices(context),
+         .skinServices = replayGameplaySkinSessionServices(context, stop),
          .presentation = stage.gameplayPresentation->presentation,
          .selectedSkinTiming = stage.selectedSkinTiming,
          .runtimeSelection = stage.runtimeSkinSelection});
@@ -3277,7 +3284,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     std::vector<CourseReplayVideoStage> &stages, const AppSettings &settings,
     const ReplayVideoExportOptions &options,
     const std::filesystem::path &wavPath,
-    const std::filesystem::path &outputPath, ReplayVideoExportLog *log) {
+    const std::filesystem::path &outputPath, ReplayVideoExportLog *log,
+    std::stop_token stop) {
   if (stages.empty()) {
     return {.success = false, .outputPath = outputPath,
             .message = "No course replay stages"};
@@ -3682,7 +3690,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
             stage.runtimeSkinSelection ? &*stage.runtimeSkinSelection
                                        : nullptr,
             stage.constraints, &initialAuthority, true,
-            &chartMetadataAuthority)) {
+            &chartMetadataAuthority, stop)) {
       bgfxCleanup.runNow();
       return *failure;
     }
@@ -4174,15 +4182,19 @@ ReplayVideoExporter::Export(ApplicationContext &context,
       context.settings.prepMetronomeEnabled, 0, 0, std::nullopt,
       replay.provenance.playback);
   PreparedReplayGameplayPresentation preparedGameplay;
+  GameplaySkinSessionStopOwner skinSessionStopOwner;
+  auto skinSessionStop = makeScopeExit(
+      [&]() { skinSessionStopOwner.requestStop(); });
   return replay_video_export::runPreflightGatedNormalExport(
       [&]() -> std::optional<ReplayVideoExportResult> {
         return preflightReplayGameplayPresentation(
             context, *chart, replay, context.settings, preparationPlan,
             resolvedOptions, preparedGameplay, nullptr, nullptr, {}, nullptr,
-            false, &chartMetadataAuthority);
+            false, &chartMetadataAuthority, skinSessionStopOwner.token());
       },
       [&]() -> ReplayVideoExportResult {
   auto gameplayPresentationCleanup = makeScopeExit([&]() {
+    skinSessionStopOwner.requestStop();
     replay_video_export::destroyReplayGameplayPresentation(
         context.rendererAccess, preparedGameplay.presentation);
   });
@@ -4363,6 +4375,9 @@ ReplayVideoExportResult exportCourseReplayImpl(
        materializedStages->size() != replay.stages.size())) {
     return {.success = false, .message = "No course replay selected"};
   }
+  GameplaySkinSessionStopOwner skinSessionStopOwner;
+  auto skinSessionStop = makeScopeExit(
+      [&]() { skinSessionStopOwner.requestStop(); });
   reportReplayExportProgress(options, 0.0, "Preparing course export");
   const auto resolvedOptions = resolveReplayVideoExportOptions(options);
   const CourseConstraintSettings courseConstraintSettings =
@@ -4451,10 +4466,12 @@ ReplayVideoExportResult exportCourseReplayImpl(
   }
 
   if (const auto failure = preflightCourseReplayGameplayPresentations(
-          context, stages, context.settings, resolvedOptions, nullptr)) {
+          context, stages, context.settings, resolvedOptions, nullptr,
+          skinSessionStopOwner.token())) {
     return *failure;
   }
   auto gameplayPresentationCleanup = makeScopeExit([&]() {
+    skinSessionStopOwner.requestStop();
     for (auto &stage : stages) {
       if (stage.gameplayPresentation.has_value()) {
         replay_video_export::destroyReplayGameplayPresentation(
@@ -4589,7 +4606,7 @@ ReplayVideoExportResult exportCourseReplayImpl(
   const auto videoStart = std::chrono::steady_clock::now();
   auto muxResult = renderCourseReplayVideoToMp4(
       context, replay, stages, context.settings, resolvedOptions, wavPath,
-      outputPath, exportLog);
+      outputPath, exportLog, skinSessionStopOwner.token());
   if (!muxResult.success) {
     replayExportLog(exportLog, "Course replay export MP4 failed: %s",
                     muxResult.message.c_str());

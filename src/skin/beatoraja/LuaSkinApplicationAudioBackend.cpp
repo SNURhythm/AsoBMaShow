@@ -8,6 +8,7 @@
 #include <limits>
 #include <map>
 #include <stop_token>
+#include <thread>
 #include <utility>
 
 namespace skin {
@@ -22,9 +23,19 @@ public:
         limits_(limits) {}
 
   ~ApplicationLuaSkinAudioBackend() override {
-    for (const auto &[identity, record] : sounds_) {
-      (void)identity;
-      (void)audio_->disposeSkinSound(record.handle);
+    while (!sounds_.empty()) {
+      bool accepted = false;
+      for (auto found = sounds_.begin(); found != sounds_.end();) {
+        if (audio_->disposeSkinSound(found->second.handle)) {
+          found = sounds_.erase(found);
+          accepted = true;
+        } else {
+          ++found;
+        }
+      }
+      if (!accepted) {
+        std::this_thread::yield();
+      }
     }
   }
 
@@ -43,6 +54,7 @@ public:
   load(const std::filesystem::path &path,
        std::stop_token stop) noexcept override {
     try {
+      retryPendingDisposals();
       if (stop.stop_requested() || sounds_.size() >= limits_.maximumIdentities) {
         return std::nullopt;
       }
@@ -94,23 +106,35 @@ public:
 
   void play(LuaSkinAudioIdentity identity, float volume,
             bool loop) noexcept override {
+    retryPendingDisposals();
     if (const auto found = sounds_.find(identity); found != sounds_.end()) {
+      if (found->second.disposalPending) {
+        return;
+      }
       (void)audio_->playSkinSound(found->second.handle, volume, loop);
     }
   }
 
   void stop(LuaSkinAudioIdentity identity) noexcept override {
+    retryPendingDisposals();
     if (const auto found = sounds_.find(identity); found != sounds_.end()) {
+      if (found->second.disposalPending) {
+        return;
+      }
       (void)audio_->stopSkinSound(found->second.handle);
     }
   }
 
   void dispose(LuaSkinAudioIdentity identity) noexcept override {
+    retryPendingDisposals();
     if (const auto found = sounds_.find(identity); found != sounds_.end()) {
-      (void)audio_->disposeSkinSound(found->second.handle);
-      encodedBytesTotal_ -= found->second.encodedBytes;
-      decodedBytesTotal_ -= found->second.decodedBytes;
-      sounds_.erase(found);
+      if (audio_->disposeSkinSound(found->second.handle)) {
+        encodedBytesTotal_ -= found->second.encodedBytes;
+        decodedBytesTotal_ -= found->second.decodedBytes;
+        sounds_.erase(found);
+      } else {
+        found->second.disposalPending = true;
+      }
     }
   }
 
@@ -119,7 +143,21 @@ private:
     audio::SkinSoundHandle handle;
     std::size_t encodedBytes = 0;
     std::size_t decodedBytes = 0;
+    bool disposalPending = false;
   };
+
+  void retryPendingDisposals() noexcept {
+    for (auto found = sounds_.begin(); found != sounds_.end();) {
+      if (!found->second.disposalPending ||
+          !audio_->disposeSkinSound(found->second.handle)) {
+        ++found;
+        continue;
+      }
+      encodedBytesTotal_ -= found->second.encodedBytes;
+      decodedBytesTotal_ -= found->second.decodedBytes;
+      found = sounds_.erase(found);
+    }
+  }
 
   AudioWrapper *audio_ = nullptr;
   std::function<float()> systemVolume_;
