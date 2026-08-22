@@ -86,11 +86,116 @@ struct FakeHttpCall {
   std::string url;
   int timeoutMilliseconds = 0;
   LuaSkinHttpLimits limits;
+  int connects = 0;
+  int responses = 0;
+  int reads = 0;
+  int disconnects = 0;
 };
 
 struct FakeHttpState {
   std::vector<FakeHttpCall> calls;
+  int connects = 0;
+  int responses = 0;
+  int reads = 0;
+  int disconnects = 0;
   bool destroyed = false;
+};
+
+class FakeHttpConnection final : public LuaSkinHttpConnection {
+public:
+  FakeHttpConnection(std::shared_ptr<FakeHttpState> state, std::size_t call)
+      : state_(std::move(state)), call_(call), url_(state_->calls[call].url) {}
+
+  std::optional<std::string> connect() noexcept override {
+    ++state_->connects;
+    ++state_->calls[call_].connects;
+    if (url_.ends_with("/transport-error")) {
+      return "fixture transport failure";
+    }
+    connected_ = true;
+    return std::nullopt;
+  }
+
+  LuaSkinHttpCodeResult responseCode() noexcept override {
+    ++state_->responses;
+    ++state_->calls[call_].responses;
+    if (url_.ends_with("/response-error")) {
+      return {.failure = "fixture response failure"};
+    }
+    return {.code = url_.ends_with("/legacy") ? 206 : 204};
+  }
+
+  LuaSkinHttpBodyResult readBody() noexcept override {
+    ++state_->reads;
+    ++state_->calls[call_].reads;
+    if (url_.ends_with("/read-error")) {
+      return {.failure = "fixture read failure"};
+    }
+    const std::string_view url = url_;
+    if (url.ends_with("/utf8")) {
+      return {.body = "alpha\r\n\xED\x95\x9C\xEA\xB8\x80\nomega"};
+    }
+    if (url.ends_with("/malformed")) {
+      return {.body = std::string("\xFF\n", 2)};
+    }
+    if (url.ends_with("/truncated-utf8")) {
+      return {.body = std::string("\xE2\x82\n", 3)};
+    }
+    if (url.ends_with("/line-limit")) {
+      std::string body;
+      body.reserve(2 * 1025);
+      for (int index = 0; index < 1025; ++index) {
+        body += "x\n";
+      }
+      return {.body = std::move(body)};
+    }
+    if (url.ends_with("/char-limit")) {
+      return {.body = std::string(65536, 'a')};
+    }
+    if (url.ends_with("/char-limit-with-newline")) {
+      return {.body = std::string(32768, 'a') + "\n" +
+                      std::string(32768, 'b')};
+    }
+    if (url.ends_with("/utf16-limit")) {
+      std::string body;
+      body.reserve(32768 * 4);
+      for (int index = 0; index < 32768; ++index) {
+        body.append("\xF0\x9F\x98\x80", 4);
+      }
+      return {.body = std::move(body)};
+    }
+    if (url.ends_with("/utf16-overflow")) {
+      std::string body;
+      body.reserve(32768 * 4 + 1);
+      for (int index = 0; index < 32768; ++index) {
+        body.append("\xF0\x9F\x98\x80", 4);
+      }
+      body.push_back('x');
+      return {.body = std::move(body)};
+    }
+    if (url.ends_with("/char-overflow")) {
+      return {.body = std::string(65537, 'a')};
+    }
+    if (url.ends_with("/legacy")) {
+      return {.body = "first\r\n\xED\x95\x9C\xEA\xB8\x80\nlast"};
+    }
+    return {.body = "ok"};
+  }
+
+  void disconnect() noexcept override {
+    if (!disconnected_) {
+      disconnected_ = true;
+      ++state_->disconnects;
+      ++state_->calls[call_].disconnects;
+    }
+  }
+
+private:
+  std::shared_ptr<FakeHttpState> state_;
+  std::size_t call_ = 0;
+  std::string url_;
+  bool connected_ = false;
+  bool disconnected_ = false;
 };
 
 class FakeHttpTransport final : public LuaSkinHttpTransport {
@@ -100,76 +205,13 @@ public:
 
   ~FakeHttpTransport() override { state_->destroyed = true; }
 
-  LuaSkinHttpResult get(std::string_view url, int timeoutMilliseconds,
-                        LuaSkinHttpLimits limits) override {
+  LuaSkinHttpOpenResult open(std::string_view url, int timeoutMilliseconds,
+                             LuaSkinHttpLimits limits) override {
     state_->calls.push_back({.url = std::string(url),
                              .timeoutMilliseconds = timeoutMilliseconds,
                              .limits = limits});
-    if (url.ends_with("/transport-error")) {
-      return {.failure = "fixture transport failure"};
-    }
-    if (url.ends_with("/utf8")) {
-      return {.response = LuaSkinHttpResponse{
-                  .responseCode = 200,
-                  .body = "alpha\r\n\xED\x95\x9C\xEA\xB8\x80\nomega"}};
-    }
-    if (url.ends_with("/malformed")) {
-      return {.response = LuaSkinHttpResponse{
-                  .responseCode = 200, .body = std::string("\xFF\n", 2)}};
-    }
-    if (url.ends_with("/truncated-utf8")) {
-      return {.response = LuaSkinHttpResponse{
-                  .responseCode = 200,
-                  .body = std::string("\xE2\x82\n", 3)}};
-    }
-    if (url.ends_with("/line-limit")) {
-      std::string body;
-      body.reserve(2 * 1025);
-      for (int index = 0; index < 1025; ++index) {
-        body += "x\n";
-      }
-      return {.response = LuaSkinHttpResponse{
-                  .responseCode = 200, .body = std::move(body)}};
-    }
-    if (url.ends_with("/char-limit")) {
-      return {.response = LuaSkinHttpResponse{
-                  .responseCode = 200, .body = std::string(65536, 'a')}};
-    }
-    if (url.ends_with("/char-limit-with-newline")) {
-      return {.response = LuaSkinHttpResponse{
-                  .responseCode = 200,
-                  .body = std::string(32768, 'a') + "\n" +
-                          std::string(32768, 'b')}};
-    }
-    if (url.ends_with("/utf16-limit")) {
-      std::string body;
-      body.reserve(32768 * 4);
-      for (int index = 0; index < 32768; ++index) {
-        body.append("\xF0\x9F\x98\x80", 4);
-      }
-      return {.response = LuaSkinHttpResponse{
-                  .responseCode = 200, .body = std::move(body)}};
-    }
-    if (url.ends_with("/utf16-overflow")) {
-      std::string body;
-      body.reserve(32768 * 4 + 1);
-      for (int index = 0; index < 32768; ++index) {
-        body.append("\xF0\x9F\x98\x80", 4);
-      }
-      body.push_back('x');
-      return {.response = LuaSkinHttpResponse{
-                  .responseCode = 200, .body = std::move(body)}};
-    }
-    if (url.ends_with("/char-overflow")) {
-      return {.response = LuaSkinHttpResponse{
-                  .responseCode = 200, .body = std::string(65537, 'a')}};
-    }
-    if (url.ends_with("/legacy")) {
-      return {.response = LuaSkinHttpResponse{
-                  .responseCode = 206,
-                  .body = "first\r\n\xED\x95\x9C\xEA\xB8\x80\nlast"}};
-    }
-    return {.response = LuaSkinHttpResponse{.responseCode = 204, .body = "ok"}};
+    return {.connection = std::make_unique<FakeHttpConnection>(
+                state_, state_->calls.size() - 1)};
   }
 
 private:
@@ -449,10 +491,16 @@ assert(select(2, main_state.http_get("https://fixture/timeout-low", 0)) == true)
 assert(select(2, main_state.http_get("https://fixture/timeout-high", 999999)) == true)
 local failed, failure = main_state.http_get("https://fixture/transport-error")
 assert(failed == nil and failure == "fixture transport failure")
+local response_failed, response_failure = main_state.http_get("https://fixture/response-error")
+assert(response_failed == nil and response_failure == "fixture response failure")
+local read_failed, read_failure = main_state.http_get("https://fixture/read-error")
+assert(read_failed == nil and read_failure == "fixture read failure")
 local denied, denial = main_state.http_get("file:///tmp/denied")
 assert(denied == nil and denial == "unsupported scheme: file")
 local missing_scheme, missing_scheme_error = main_state.http_get("fixture/missing-scheme")
-assert(missing_scheme == nil and missing_scheme_error == "unsupported scheme: null")
+assert(missing_scheme == nil and missing_scheme_error == "URI is not absolute")
+local malformed_uri, malformed_uri_error = main_state.http_get("http://bad host/x")
+assert(malformed_uri == nil and malformed_uri_error == "Illegal character in URI")
 assert(not pcall(function() main_state.http_get() end))
 
 local url = luajava.newInstance("java.net.URL", "https://fixture/legacy")
@@ -470,8 +518,11 @@ for name in pairs(connection) do
 end
 assert(connection_count == 5)
 assert(connection:setRequestMethod("GET") == nil)
+assert(select('#', connection:setRequestMethod("GET")) == 1)
 assert(connection:setConnectTimeout(-7) == nil)
+assert(select('#', connection:setConnectTimeout(-7)) == 1)
 assert(connection:connect() == nil and connection:connect() == nil)
+assert(select('#', connection:connect()) == 1)
 assert(connection:getResponseCode() == 206)
 local input = connection:getInputStream()
 assert(luajava.newInstance("java.io.InputStreamReader", input) == input)
@@ -484,6 +535,7 @@ assert(reader:readLine() == "first")
 assert(reader:readLine() == "\237\149\156\234\184\128")
 assert(reader:readLine() == "last")
 assert(reader:readLine() == nil and reader:readLine() == nil)
+assert(select('#', reader:readLine()) == 1)
 
 local default_connection = luajava.newInstance("java.net.URL", "https://fixture/default"):openConnection()
 assert(default_connection:getResponseCode() == 204)
@@ -500,6 +552,15 @@ assert(not bad_scheme_ok and tostring(bad_scheme_error):find("Legacy Lua skin HT
 local bad_transport = luajava.newInstance("java.net.URL", "https://fixture/transport-error"):openConnection()
 local bad_transport_ok, bad_transport_error = pcall(function() bad_transport:getResponseCode() end)
 assert(not bad_transport_ok and tostring(bad_transport_error):find("Legacy Lua skin HTTP connection failed: fixture transport failure", 1, true))
+local bad_response = luajava.newInstance("java.net.URL", "https://fixture/response-error"):openConnection()
+local bad_response_ok, bad_response_error = pcall(function() bad_response:getResponseCode() end)
+assert(not bad_response_ok and tostring(bad_response_error):find("Legacy Lua skin HTTP response failed: fixture response failure", 1, true))
+local bad_read = luajava.newInstance("java.net.URL", "https://fixture/read-error"):openConnection()
+local bad_read_ok, bad_read_error = pcall(function() bad_read:getInputStream() end)
+assert(not bad_read_ok and tostring(bad_read_error):find("Legacy Lua skin HTTP read failed: fixture read failure", 1, true))
+local malformed_uri = luajava.newInstance("java.net.URL", "http://bad host/x"):openConnection()
+local malformed_uri_ok, malformed_uri_error = pcall(function() malformed_uri:connect() end)
+assert(not malformed_uri_ok and tostring(malformed_uri_error):find("Legacy Lua skin HTTP connection failed: Illegal character in URI", 1, true))
 local too_large = luajava.newInstance("java.net.URL", "https://fixture/char-overflow"):openConnection()
 local too_large_ok, too_large_error = pcall(function() too_large:getInputStream() end)
 assert(not too_large_ok and tostring(too_large_error):find("Legacy Lua skin HTTP read failed: response is too large", 1, true))
@@ -1173,6 +1234,12 @@ void testPinnedBoundedHttpAndClosedLegacyReaderFacade() {
           [&](const FakeHttpCall &call) { return call.url == url; });
       return found != state->calls.end() ? found->timeoutMilliseconds : -1;
     };
+    const auto callFor = [&](std::string_view url) -> const FakeHttpCall * {
+      const auto found = std::ranges::find_if(
+          state->calls,
+          [&](const FakeHttpCall &call) { return call.url == url; });
+      return found != state->calls.end() ? &*found : nullptr;
+    };
     expect(timeoutFor("https://fixture/utf8") == 1000,
            "modern HTTP uses the pinned default timeout");
     expect(timeoutFor("https://fixture/timeout-low") == 1 &&
@@ -1184,9 +1251,26 @@ void testPinnedBoundedHttpAndClosedLegacyReaderFacade() {
            "legacy HTTP uses the same pinned default and clamped timeout");
     expect(callsFor("https://fixture/legacy") == 1,
            "legacy connect, response, and reader access share one GET");
+    const FakeHttpCall *legacy = callFor("https://fixture/legacy");
+    expect(legacy != nullptr && legacy->connects == 1 &&
+               legacy->responses == 1 && legacy->reads == 1 &&
+               legacy->disconnects == 1,
+           "legacy HTTP preserves idempotent connection, response, read, and "
+           "disconnect stages");
+    const FakeHttpCall *responseFailure =
+        callFor("https://fixture/response-error");
+    const FakeHttpCall *readFailure = callFor("https://fixture/read-error");
+    expect(responseFailure != nullptr && responseFailure->connects == 1 &&
+               responseFailure->responses == 1 &&
+               responseFailure->reads == 0 &&
+               responseFailure->disconnects == 1 && readFailure != nullptr &&
+               readFailure->connects == 1 && readFailure->responses == 1 &&
+               readFailure->reads == 1 && readFailure->disconnects == 1,
+           "modern HTTP stops at the failing stage and disconnects exactly once");
     expect(callsFor("file:///tmp/denied") == 0 &&
-               callsFor("https://fixture/bad-method") == 0,
-           "denied schemes and methods never reach the transport");
+               callsFor("https://fixture/bad-method") == 0 &&
+               callsFor("http://bad host/x") == 0,
+           "denied schemes, malformed URIs, and methods never reach the transport");
     expect(std::ranges::all_of(state->calls, [](const FakeHttpCall &call) {
              return call.limits.maximumLines == 1024 &&
                     call.limits.maximumCharacters == 65536;

@@ -1,5 +1,6 @@
 #include "scene/play/GameplaySkinSessionFactory.h"
 #include "skin/beatoraja/LuaSkinAudioHost.h"
+#include "skin/beatoraja/LuaSkinHttpClient.h"
 
 #include "rendering/common.h"
 #include "skin/beatoraja/GameplaySkinValidator.h"
@@ -137,6 +138,14 @@ public:
   void dispose(skin::LuaSkinAudioIdentity) noexcept override {}
 };
 
+class FactoryHttpTransport final : public skin::LuaSkinHttpTransport {
+public:
+  skin::LuaSkinHttpOpenResult open(std::string_view, int,
+                                   skin::LuaSkinHttpLimits) override {
+    return {.failure = "factory fixture does not perform HTTP"};
+  }
+};
+
 GameplaySkinSessionServices
 failedAcquireServices(HistoryFixture &fixture, skin::SkinDiagnostic failure) {
   const auto entry = fixtureEntry();
@@ -170,9 +179,12 @@ struct ReadyFixture {
   std::shared_ptr<FactoryAudioBackend> audioBackend =
       std::make_shared<FactoryAudioBackend>();
   bool audioBackendForwarded = false;
+  bool httpTransportForwarded = false;
+  bool httpStopForwarded = false;
   bool legacyInputCaptureForwarded = false;
   std::optional<skin::LuaSkinLegacyInputSnapshot> capturedLegacyInput;
   skin::SkinConfigurationWriteQueue writes;
+  std::stop_source stopSource;
   PlayfieldChartVisualModel chart;
   PlayfieldVisualState state;
   PlayfieldProjectionResult projection;
@@ -237,19 +249,26 @@ struct ReadyFixture {
             .storageRoots = &roots,
             .resourcePreparation = &resources,
             .liveResourceCounters = counters,
-            .configurationWrites = &writes,
-            .diagnosticHistory = &history,
+            .createHttpTransport = [this](std::stop_token stop) {
+              httpStopForwarded = stop.stop_possible() &&
+                                  stop == stopSource.get_token();
+              return std::make_unique<FactoryHttpTransport>();
+            },
             .audioBackend = audioBackend,
             .captureLegacyInputSnapshot = [] {
               return skin::LuaSkinLegacyInputSnapshot{
                   .drawableWidth = 111, .drawableHeight = 222};
             },
+            .configurationWrites = &writes,
+            .diagnosticHistory = &history,
+            .stop = stopSource.get_token(),
             .createSessionForTesting =
                 [this, textureDevice = textureDevice](
                     skin::ValidatedSkinActivation activation,
                     skin::PlaySkinSessionContext context) {
                   audioBackendForwarded =
                       context.audioBackend == audioBackend;
+                  httpTransportForwarded = context.httpTransport != nullptr;
                   legacyInputCaptureForwarded =
                       static_cast<bool>(context.captureLegacyInputSnapshot);
                   if (context.captureLegacyInputSnapshot) {
@@ -320,12 +339,13 @@ void factoryTransfersTheOwningSessionExactlyOnce() {
       createGameplaySkinSession(fixture.services(), fixture.input());
   expect(ready.disposition == GameplaySkinSessionDisposition::Ready &&
              ready.session != nullptr && fixture.audioBackendForwarded &&
+             fixture.httpTransportForwarded && fixture.httpStopForwarded &&
              fixture.legacyInputCaptureForwarded &&
              fixture.capturedLegacyInput &&
              fixture.capturedLegacyInput->drawableWidth == 111 &&
              fixture.capturedLegacyInput->drawableHeight == 222,
-         "factory transfers the owning session and narrow audio backend "
-         "plus legacy-input capture exactly once");
+         "factory transfers the owning session, cancellable HTTP transport, "
+         "narrow audio backend, and legacy-input capture exactly once");
 }
 
 void factorySuppliesTheValueOnlyProductionLegacyInputCapture() {

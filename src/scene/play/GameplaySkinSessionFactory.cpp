@@ -290,12 +290,15 @@ createGameplaySkinSession(GameplaySkinSessionServices services,
         .resourcePreparation = *services.resourcePreparation,
         .builtinImageReader = std::move(services.builtinImageReader),
         .textureDevice = std::make_shared<skin::BgfxSkinTextureDevice>(),
-        .liveResourceCounters = std::move(services.liveResourceCounters),
+        .httpTransport = services.createHttpTransport
+                             ? services.createHttpTransport(services.stop)
+                             : nullptr,
         .audioBackend = std::move(services.audioBackend),
         .captureLegacyInputSnapshot =
             services.captureLegacyInputSnapshot
                 ? std::move(services.captureLegacyInputSnapshot)
                 : skin::captureLuaSkinLegacyInputSnapshot,
+        .liveResourceCounters = std::move(services.liveResourceCounters),
         .configurationWrites = *services.configurationWrites,
         .applyAudioVolume = std::move(services.applyAudioVolume),
         .applyPracticeItemScroll = std::move(services.applyPracticeItemScroll),
@@ -303,7 +306,7 @@ createGameplaySkinSession(GameplaySkinSessionServices services,
         .applyPracticeVisibleItems =
             std::move(services.applyPracticeVisibleItems),
         .pinnedRuntimeSelection = std::move(input.pinnedRuntimeSelection),
-        .stop = {}};
+        .stop = services.stop};
 #if defined(ASOBMASHOW_GAMEPLAY_SKIN_SESSION_FACTORY_TESTING)
     auto created = services.createSessionForTesting
                        ? services.createSessionForTesting(

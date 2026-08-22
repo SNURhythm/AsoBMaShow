@@ -3,6 +3,7 @@
 #include "PlaySkinStateBridge.h"
 #include "PlaySkinSessionIdentity.h"
 #include "LuaSkinAudioHost.h"
+#include "LuaSkinHttpClient.h"
 #include "LuaSkinLegacyInputHost.h"
 #include "Skin2DRenderer.h"
 #include "SkinResourceCatalog.h"
@@ -51,6 +52,7 @@ struct PlaySkinSessionContext {
   SkinBuiltinImageReader builtinImageReader;
   std::shared_ptr<SkinTextureDevice> textureDevice;
   std::shared_ptr<SkinMovieDevice> movieDevice;
+  std::unique_ptr<LuaSkinHttpTransport> httpTransport;
   std::shared_ptr<LuaSkinAudioBackend> audioBackend;
   std::function<LuaSkinLegacyInputSnapshot()> captureLegacyInputSnapshot;
   std::shared_ptr<SkinLiveResourceCounters> liveResourceCounters;

@@ -17,6 +17,66 @@ std::string_view urlScheme(std::string_view url) noexcept {
   return url.substr(0, colon);
 }
 
+bool asciiAlpha(char value) noexcept {
+  return (value >= 'a' && value <= 'z') ||
+         (value >= 'A' && value <= 'Z');
+}
+
+bool asciiDigit(char value) noexcept { return value >= '0' && value <= '9'; }
+
+bool asciiHex(char value) noexcept {
+  return asciiDigit(value) || (value >= 'a' && value <= 'f') ||
+         (value >= 'A' && value <= 'F');
+}
+
+std::optional<std::string> validateUri(std::string_view uri) {
+  const std::size_t colon = uri.find(':');
+  if (colon == std::string_view::npos || colon == 0 ||
+      !asciiAlpha(uri.front())) {
+    return "URI is not absolute";
+  }
+  for (std::size_t index = 1; index < colon; ++index) {
+    const char value = uri[index];
+    if (!asciiAlpha(value) && !asciiDigit(value) && value != '+' &&
+        value != '-' && value != '.') {
+      return "URI scheme is malformed";
+    }
+  }
+  constexpr std::string_view allowedAscii =
+      "-._~:/?#[]@!$&'()*+,;=";
+  int brackets = 0;
+  for (std::size_t index = colon + 1; index < uri.size(); ++index) {
+    const unsigned char value = static_cast<unsigned char>(uri[index]);
+    if (value == '%') {
+      if (index + 2 >= uri.size() || !asciiHex(uri[index + 1]) ||
+          !asciiHex(uri[index + 2])) {
+        return "Malformed escape pair in URI";
+      }
+      index += 2;
+      continue;
+    }
+    if (value < 0x80 && !asciiAlpha(static_cast<char>(value)) &&
+        !asciiDigit(static_cast<char>(value)) &&
+        allowedAscii.find(static_cast<char>(value)) == std::string_view::npos) {
+      return "Illegal character in URI";
+    }
+    if (value == '[') {
+      ++brackets;
+    } else if (value == ']') {
+      if (--brackets < 0) {
+        return "Malformed bracketed URI authority";
+      }
+    }
+  }
+  if (brackets != 0) {
+    return "Malformed bracketed URI authority";
+  }
+  if (uri.substr(colon + 1) == "//") {
+    return "Expected URI authority";
+  }
+  return std::nullopt;
+}
+
 bool asciiEqualIgnoringCase(std::string_view left,
                             std::string_view right) noexcept {
   if (left.size() != right.size()) {
@@ -106,27 +166,25 @@ DecodedLine decodeUtf8ReplacingMalformed(std::string_view input) {
 LuaSkinHttpClient::LuaSkinHttpClient(LuaSkinHttpTransport *transport) noexcept
     : transport_(transport) {}
 
-LuaSkinHttpResult
-LuaSkinHttpClient::get(std::string_view url,
-                       int timeoutMilliseconds) const noexcept {
-  const std::string_view scheme = urlScheme(url);
-  if (!asciiEqualIgnoringCase(scheme, "http") &&
-      !asciiEqualIgnoringCase(scheme, "https")) {
-    try {
-      return {.failure = "unsupported scheme: " +
-                         std::string(scheme.empty() ? "null" : scheme)};
-    } catch (...) {
-      return {.failure = "unsupported scheme"};
-    }
-  }
-  if (transport_ == nullptr) {
-    return {.failure = "HTTP transport is unavailable"};
-  }
+LuaSkinHttpOpenResult
+LuaSkinHttpClient::open(std::string_view url,
+                        int timeoutMilliseconds) const noexcept {
   try {
-    LuaSkinHttpResult result =
-        transport_->get(url, clampTimeout(timeoutMilliseconds), responseLimits);
-    if (!result.response && !result.failure) {
-      return {.failure = "HTTP transport returned no response"};
+    if (const auto invalid = validateUri(url)) {
+      return {.failure = *invalid};
+    }
+    const std::string_view scheme = urlScheme(url);
+    if (!asciiEqualIgnoringCase(scheme, "http") &&
+        !asciiEqualIgnoringCase(scheme, "https")) {
+      return {.failure = "unsupported scheme: " + std::string(scheme)};
+    }
+    if (transport_ == nullptr) {
+      return {.failure = "HTTP transport is unavailable"};
+    }
+    LuaSkinHttpOpenResult result = transport_->open(
+        url, clampTimeout(timeoutMilliseconds), responseLimits);
+    if (!result.connection && !result.failure) {
+      result.failure = "HTTP transport returned no connection";
     }
     if (result.failure && result.failure->empty()) {
       result.failure = "HTTP transport failed";
@@ -141,6 +199,45 @@ LuaSkinHttpClient::get(std::string_view url,
   } catch (...) {
     return {.failure = "HTTP transport failed"};
   }
+}
+
+LuaSkinHttpResult
+LuaSkinHttpClient::get(std::string_view url,
+                       int timeoutMilliseconds) const noexcept {
+  LuaSkinHttpOpenResult opened = open(url, timeoutMilliseconds);
+  if (opened.failure) {
+    return {.failure = std::move(opened.failure)};
+  }
+  if (!opened.connection) {
+    return {.failure = "HTTP transport returned no connection"};
+  }
+  struct DisconnectGuard {
+    LuaSkinHttpConnection *connection = nullptr;
+    ~DisconnectGuard() {
+      if (connection != nullptr) {
+        connection->disconnect();
+      }
+    }
+  } disconnect{opened.connection.get()};
+  if (auto failure = opened.connection->connect()) {
+    return {.failure = std::move(failure)};
+  }
+  LuaSkinHttpCodeResult code = opened.connection->responseCode();
+  if (code.failure) {
+    return {.failure = std::move(code.failure)};
+  }
+  if (!code.code) {
+    return {.failure = "HTTP transport returned no response code"};
+  }
+  LuaSkinHttpBodyResult body = opened.connection->readBody();
+  if (body.failure) {
+    return {.failure = std::move(body.failure)};
+  }
+  if (!body.body) {
+    return {.failure = "HTTP transport returned no response body"};
+  }
+  return {.response = LuaSkinHttpResponse{.responseCode = *code.code,
+                                          .body = std::move(*body.body)}};
 }
 
 LuaSkinHttpLinesResult

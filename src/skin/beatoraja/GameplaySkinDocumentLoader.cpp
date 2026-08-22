@@ -123,6 +123,7 @@ DecodedGameplaySkinDocument decodeLua(GameplaySkinDocumentRequest &request,
       {.purpose = request.luaPurpose,
        .fileSystem = std::move(request.luaFileSystem),
        .safetyPolicy = request.safetyPolicy,
+       .httpTransport = std::move(request.luaHttpTransport),
        .audioBackend = std::move(request.luaAudioBackend)});
   if (!runtime.runtime) {
     appendFailure(result.diagnostics, std::move(runtime.failure),

@@ -5,6 +5,7 @@ target_sources(main PRIVATE
     SkinStoragePaths.cpp
     beatoraja/LuaSkinFileSystem.cpp
     beatoraja/LuaSkinHttpClient.cpp
+    beatoraja/LuaSkinCurlHttpTransport.cpp
     beatoraja/SkinCompatibilityDiagnostics.cpp
     beatoraja/SkinDiagnosticHistory.cpp
     beatoraja/GameplaySkinSourceFormat.cpp
@@ -16,6 +17,12 @@ target_sources(main PRIVATE
     package/SkinPathPolicy.cpp
     package/SkinTreeSnapshotter.cpp
 )
+
+if(IOS)
+    target_sources(main PRIVATE
+        beatoraja/LuaSkinFoundationHttpTransport.mm
+    )
+endif()
 
 if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
     target_compile_definitions(main PRIVATE

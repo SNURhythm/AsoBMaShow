@@ -1944,7 +1944,7 @@ struct LegacyHttpConnection {
   std::string url;
   int timeoutMilliseconds = LuaSkinHttpClient::defaultTimeoutMilliseconds;
   bool connected = false;
-  std::optional<LuaSkinHttpResponse> response;
+  std::unique_ptr<LuaSkinHttpConnection> connection;
 
   std::optional<std::string>
   connect(LuaSkinHttpTransport *transport) noexcept {
@@ -1952,16 +1952,26 @@ struct LegacyHttpConnection {
       return std::nullopt;
     }
     LuaSkinHttpClient client(transport);
-    LuaSkinHttpResult fetched = client.get(url, timeoutMilliseconds);
-    if (fetched.failure) {
-      return std::move(fetched.failure);
+    LuaSkinHttpOpenResult opened = client.open(url, timeoutMilliseconds);
+    if (opened.failure) {
+      return std::move(opened.failure);
     }
-    if (!fetched.response) {
-      return std::string("HTTP transport returned no response");
+    if (!opened.connection) {
+      return std::string("HTTP transport returned no connection");
     }
-    response = std::move(fetched.response);
+    if (auto failure = opened.connection->connect()) {
+      opened.connection->disconnect();
+      return failure;
+    }
+    connection = std::move(opened.connection);
     connected = true;
     return std::nullopt;
+  }
+
+  ~LegacyHttpConnection() {
+    if (connection) {
+      connection->disconnect();
+    }
   }
 };
 
@@ -2078,7 +2088,8 @@ int legacySetRequestMethod(lua_State *state) {
   if (std::string_view(method) != "GET") {
     return luaL_error(state, "Legacy Lua skin HTTP method denied: %s", method);
   }
-  return 0;
+  lua_pushnil(state);
+  return 1;
 }
 
 int legacySetConnectTimeout(lua_State *state) {
@@ -2090,7 +2101,8 @@ int legacySetConnectTimeout(lua_State *state) {
   legacyHttpConnection(state)->timeoutMilliseconds =
       LuaSkinHttpClient::clampTimeout(
           boundedIntegerArgument(state, 2, 0, false));
-  return 0;
+  lua_pushnil(state);
+  return 1;
 }
 
 int legacyConnect(lua_State *state) {
@@ -2104,7 +2116,8 @@ int legacyConnect(lua_State *state) {
     return raiseLegacyHttpFailure(
         state, "Legacy Lua skin HTTP connection failed: ", *failure);
   }
-  return 0;
+  lua_pushnil(state);
+  return 1;
 }
 
 int legacyGetResponseCode(lua_State *state) {
@@ -2118,7 +2131,17 @@ int legacyGetResponseCode(lua_State *state) {
     return raiseLegacyHttpFailure(
         state, "Legacy Lua skin HTTP connection failed: ", *failure);
   }
-  lua_pushinteger(state, connection->response->responseCode);
+  LuaSkinHttpCodeResult result = connection->connection->responseCode();
+  if (result.failure) {
+    return raiseLegacyHttpFailure(
+        state, "Legacy Lua skin HTTP response failed: ", *result.failure);
+  }
+  if (!result.code) {
+    return raiseLegacyHttpFailure(
+        state, "Legacy Lua skin HTTP response failed: ",
+        "HTTP transport returned no response code");
+  }
+  lua_pushinteger(state, *result.code);
   return 1;
 }
 
@@ -2130,7 +2153,8 @@ int legacyReadLine(lua_State *state) {
   }
   SharedLegacyHttpReader &reader = legacyHttpReader(state);
   if (reader->position >= reader->lines.size()) {
-    return 0;
+    lua_pushnil(state);
+    return 1;
   }
   const std::string &line = reader->lines[reader->position++];
   lua_pushlstring(state, line.data(), line.size());
@@ -2163,8 +2187,19 @@ int legacyGetInputStream(lua_State *state) {
     return raiseLegacyHttpFailure(
         state, "Legacy Lua skin HTTP connection failed: ", *failure);
   }
-  LuaSkinHttpLinesResult result =
-      LuaSkinHttpClient::readLines(connection->response->body);
+  LuaSkinHttpBodyResult body = connection->connection->readBody();
+  connection->connection->disconnect();
+  if (body.failure) {
+    return raiseLegacyHttpFailure(state,
+                                  "Legacy Lua skin HTTP read failed: ",
+                                  *body.failure);
+  }
+  if (!body.body) {
+    return raiseLegacyHttpFailure(
+        state, "Legacy Lua skin HTTP read failed: ",
+        "HTTP transport returned no response body");
+  }
+  LuaSkinHttpLinesResult result = LuaSkinHttpClient::readLines(*body.body);
   if (result.failure) {
     return raiseLegacyHttpFailure(state,
                                   "Legacy Lua skin HTTP read failed: ",

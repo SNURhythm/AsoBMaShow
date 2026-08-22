@@ -1475,6 +1475,22 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 ${LUAJIT_LIBRARIES}
             )
         endif()
+
+        add_executable(lua_skin_http_transport_tests
+            tests/lua_skin_http_transport_tests.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
+            src/skin/beatoraja/LuaSkinCurlHttpTransport.cpp
+        )
+        target_include_directories(lua_skin_http_transport_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(lua_skin_http_transport_tests PRIVATE cxx_std_23)
+        target_link_libraries(lua_skin_http_transport_tests PRIVATE
+            CURL::libcurl
+        )
+        if(WIN32)
+            target_link_libraries(lua_skin_http_transport_tests PRIVATE ws2_32)
+        endif()
         if(APPLE)
             target_sources(lua_skin_host_modules_tests PRIVATE
                 src/skin/package/SkinAliasDetectorApple.mm
@@ -6667,6 +6683,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if (TARGET lua_skin_host_modules_tests)
         asobmashow_register_test(lua_skin_host_modules_tests)
+    endif()
+    if (TARGET lua_skin_http_transport_tests)
+        asobmashow_register_test(lua_skin_http_transport_tests)
     endif()
     if (TARGET beatoraja_skin_model_tests)
         asobmashow_register_test(beatoraja_skin_model_tests)

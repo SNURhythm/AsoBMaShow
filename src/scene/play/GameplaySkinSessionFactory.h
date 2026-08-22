@@ -21,6 +21,7 @@ class PlaySkinSession;
 class SkinConfigurationWriteQueue;
 class SkinLiveResourceCounters;
 class LuaSkinAudioBackend;
+class LuaSkinHttpTransport;
 class SkinResourcePreparationService;
 } // namespace skin
 #endif
@@ -28,6 +29,7 @@ class SkinResourcePreparationService;
 #include <functional>
 #include <memory>
 #include <optional>
+#include <stop_token>
 
 struct GameplaySkinSessionServices {
   skin::AcquireGameplaySkinForNextChart acquire;
@@ -35,6 +37,8 @@ struct GameplaySkinSessionServices {
   skin::SkinResourcePreparationService *resourcePreparation = nullptr;
   skin::SkinBuiltinImageReader builtinImageReader;
   std::shared_ptr<skin::SkinLiveResourceCounters> liveResourceCounters;
+  std::function<std::unique_ptr<skin::LuaSkinHttpTransport>(std::stop_token)>
+      createHttpTransport;
   std::shared_ptr<skin::LuaSkinAudioBackend> audioBackend;
   std::function<skin::LuaSkinLegacyInputSnapshot()>
       captureLegacyInputSnapshot;
@@ -45,6 +49,7 @@ struct GameplaySkinSessionServices {
   std::function<void(float)> applyPracticeItemScroll;
   std::function<void(std::size_t, bool)> applyPracticeMenuItem;
   std::function<void(int)> applyPracticeVisibleItems;
+  std::stop_token stop;
 
 #if defined(ASOBMASHOW_GAMEPLAY_SKIN_SESSION_FACTORY_TESTING)
   std::function<skin::PlaySkinSessionCreateResult(skin::ValidatedSkinActivation,

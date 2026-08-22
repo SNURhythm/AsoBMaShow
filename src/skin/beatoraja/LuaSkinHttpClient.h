@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -23,13 +24,38 @@ struct LuaSkinHttpResult {
   std::optional<std::string> failure;
 };
 
+struct LuaSkinHttpCodeResult {
+  std::optional<int> code;
+  std::optional<std::string> failure;
+};
+
+struct LuaSkinHttpBodyResult {
+  std::optional<std::string> body;
+  std::optional<std::string> failure;
+};
+
+class LuaSkinHttpConnection {
+public:
+  virtual ~LuaSkinHttpConnection() = default;
+
+  virtual std::optional<std::string> connect() noexcept = 0;
+  virtual LuaSkinHttpCodeResult responseCode() noexcept = 0;
+  virtual LuaSkinHttpBodyResult readBody() noexcept = 0;
+  virtual void disconnect() noexcept = 0;
+};
+
+struct LuaSkinHttpOpenResult {
+  std::unique_ptr<LuaSkinHttpConnection> connection;
+  std::optional<std::string> failure;
+};
+
 class LuaSkinHttpTransport {
 public:
   virtual ~LuaSkinHttpTransport() = default;
 
-  virtual LuaSkinHttpResult get(std::string_view url,
-                                int timeoutMilliseconds,
-                                LuaSkinHttpLimits limits) = 0;
+  virtual LuaSkinHttpOpenResult open(std::string_view url,
+                                     int timeoutMilliseconds,
+                                     LuaSkinHttpLimits limits) = 0;
 };
 
 struct LuaSkinHttpLinesResult {
@@ -45,6 +71,8 @@ public:
 
   explicit LuaSkinHttpClient(LuaSkinHttpTransport *transport) noexcept;
 
+  [[nodiscard]] LuaSkinHttpOpenResult
+  open(std::string_view url, int timeoutMilliseconds) const noexcept;
   [[nodiscard]] LuaSkinHttpResult get(std::string_view url,
                                       int timeoutMilliseconds) const noexcept;
   [[nodiscard]] static LuaSkinHttpLinesResult

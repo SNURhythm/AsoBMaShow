@@ -50,6 +50,7 @@
 #include "PlayfieldPresentationCoordinator.h"
 #include "GameplaySkinSessionFactory.h"
 #include "../../skin/beatoraja/LuaSkinApplicationAudioBackend.h"
+#include "../../skin/beatoraja/LuaSkinCurlHttpTransport.h"
 #endif
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "../../iOSNatives.hpp"
@@ -161,6 +162,9 @@ gameplaySkinSessionServices(ApplicationContext &context) {
           .resourcePreparation = context.skinResourcePreparationService.get(),
           .builtinImageReader = archive_file::readFileBounded,
           .liveResourceCounters = context.skinLiveResourceCounters,
+          .createHttpTransport = [](std::stop_token stop) {
+            return skin::createLuaSkinProductionHttpTransport(stop);
+          },
           .audioBackend = skin::createLuaSkinApplicationAudioBackend(
               context.jukebox.audioRuntime(), [&context] {
                 return context.settings.audioVideo.audio.masterVolume;

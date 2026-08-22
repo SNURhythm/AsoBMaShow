@@ -471,6 +471,7 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
          .entry = activation.entry,
          .documentFileSystem = *resourceFiles.fileSystem,
          .luaFileSystem = std::move(luaFiles),
+         .luaHttpTransport = std::move(context.httpTransport),
          .luaAudioBackend = std::move(context.audioBackend),
          .desiredSettings = &activation.reconciledSettings,
          .pinnedRuntimeSelection =

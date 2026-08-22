@@ -3,6 +3,7 @@
 #include "BeatorajaSkinModel.h"
 #include "GameplaySkinSourceFormat.h"
 #include "LuaSkinFileSystem.h"
+#include "LuaSkinHttpClient.h"
 
 #include <functional>
 #include <memory>
@@ -27,6 +28,7 @@ struct GameplaySkinDocumentRequest {
   // Required only for Lua. Static formats must leave this null so dispatch
   // cannot accidentally create a Lua VM for JSON or LR2 documents.
   std::unique_ptr<LuaSkinFileSystem> luaFileSystem;
+  std::unique_ptr<LuaSkinHttpTransport> luaHttpTransport;
   std::shared_ptr<LuaSkinAudioBackend> luaAudioBackend;
   const EntryProfileSettings *desiredSettings = nullptr;
   const RuntimeSkinConfigurationSelection *pinnedRuntimeSelection = nullptr;
