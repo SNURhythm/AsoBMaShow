@@ -117,6 +117,10 @@ public:
     return tailBytesSent_.load();
   }
 
+  [[nodiscard]] std::size_t stalledRequests() const noexcept {
+    return stalledRequests_.load();
+  }
+
 private:
   static bool sendAll(Socket client, std::string_view bytes) {
     std::size_t sent = 0;
@@ -182,6 +186,17 @@ private:
       }
       return;
     }
+    if (path == "/stall") {
+      stalledRequests_.fetch_add(1);
+      if (!sendAll(client,
+                   "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n"
+                   "Connection: close\r\n\r\n")) {
+        return;
+      }
+      std::this_thread::sleep_for(750ms);
+      (void)sendAll(client, "late");
+      return;
+    }
     const std::string body = "alpha\r\nbeta\n";
     const std::string response =
         "HTTP/1.1 200 OK\r\nContent-Length: " +
@@ -240,10 +255,47 @@ private:
   std::jthread thread_;
   std::vector<std::jthread> workers_;
   std::atomic_size_t tailBytesSent_{0};
+  std::atomic_size_t stalledRequests_{0};
 #if defined(_WIN32)
   bool startedSockets_ = false;
 #endif
 };
+
+void testResponseCodeReturnsBeforeAStalledBody() {
+  LoopbackHttpServer server;
+  expect(server.ready(), "staged loopback HTTP server starts");
+  if (!server.ready()) {
+    return;
+  }
+  auto transport = createLuaSkinProductionHttpTransport();
+  LuaSkinHttpClient client(transport.get());
+  auto opened = client.open(server.url("/stall"), 200);
+  expect(opened.connection != nullptr && !opened.failure,
+         "stalled response opens a production connection");
+  if (!opened.connection) {
+    return;
+  }
+  expect(!opened.connection->connect(), "stalled response connects");
+  const auto responseStarted = std::chrono::steady_clock::now();
+  const auto response = opened.connection->responseCode();
+  const auto responseElapsed = std::chrono::steady_clock::now() - responseStarted;
+  expect(response.code && *response.code == 200 && !response.failure,
+         "responseCode observes headers before the stalled body");
+  expect(responseElapsed < 150ms,
+         "responseCode does not spend the body read timeout");
+
+  const auto readStarted = std::chrono::steady_clock::now();
+  const auto body = opened.connection->readBody();
+  const auto readElapsed = std::chrono::steady_clock::now() - readStarted;
+  expect(body.failure && body.failure->find("timed out") != std::string::npos,
+         "the stalled body timeout belongs to the read phase");
+  expect(readElapsed >= 150ms,
+         "the read phase independently waits for its bounded timeout");
+  opened.connection->disconnect();
+  opened.connection->disconnect();
+  expect(server.stalledRequests() == 1,
+         "staged response and body operations issue exactly one GET");
+}
 
 void testProductionTransportStagesRedirectsAndBoundsTail() {
   LoopbackHttpServer server;
@@ -294,11 +346,44 @@ void testProductionTransportHonorsCancellation() {
          "production HTTP observes the owning session stop token");
 }
 
+void testStalledBodyCanBeCancelledAfterHeaders() {
+  LoopbackHttpServer server;
+  expect(server.ready(), "cancellation loopback HTTP server starts");
+  if (!server.ready()) {
+    return;
+  }
+  std::stop_source stop;
+  auto transport = createLuaSkinProductionHttpTransport(stop.get_token());
+  LuaSkinHttpClient client(transport.get());
+  auto opened = client.open(server.url("/stall"), 5000);
+  expect(opened.connection != nullptr && !opened.failure,
+         "cancellable stalled response opens");
+  if (!opened.connection) {
+    return;
+  }
+  expect(!opened.connection->connect(), "cancellable stalled response connects");
+  const auto response = opened.connection->responseCode();
+  expect(response.code && *response.code == 200,
+         "cancellable stalled response publishes headers");
+  std::jthread cancel([&stop] {
+    std::this_thread::sleep_for(30ms);
+    stop.request_stop();
+  });
+  const auto body = opened.connection->readBody();
+  expect(body.failure && *body.failure == "HTTP request was cancelled",
+         "read-phase cancellation stops a stalled production body");
+  opened.connection->disconnect();
+  expect(server.stalledRequests() == 1,
+         "cancelled staged request still sends only one GET");
+}
+
 } // namespace
 
 int main() {
+  testResponseCodeReturnsBeforeAStalledBody();
   testProductionTransportStagesRedirectsAndBoundsTail();
   testProductionTransportHonorsCancellation();
+  testStalledBodyCanBeCancelledAfterHeaders();
   if (failures != 0) {
     std::cerr << failures << " Lua skin HTTP transport test(s) failed\n";
     return 1;

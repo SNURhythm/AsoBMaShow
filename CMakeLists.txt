@@ -6475,6 +6475,22 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                     ${CMAKE_SOURCE_DIR}/tests/lua_skin_java_pattern_oracle_tests.py
                     $<TARGET_FILE:lua_skin_java_pattern_foundation_tests>)
         endif()
+
+        add_executable(lua_skin_foundation_http_transport_tests
+            tests/lua_skin_foundation_http_transport_tests.cpp
+            src/skin/beatoraja/LuaSkinFoundationHttpTransport.mm
+        )
+        target_include_directories(lua_skin_foundation_http_transport_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(lua_skin_foundation_http_transport_tests PRIVATE
+            cxx_std_23)
+        target_compile_definitions(lua_skin_foundation_http_transport_tests PRIVATE
+            ASOBMASHOW_TEST_FOUNDATION_HTTP_TRANSPORT=1)
+        target_link_libraries(lua_skin_foundation_http_transport_tests PRIVATE
+            "-framework Foundation")
+        add_test(NAME lua_skin_foundation_http_transport_tests
+                 COMMAND lua_skin_foundation_http_transport_tests)
     endif()
 
     foreach(archive_file_target IN ITEMS

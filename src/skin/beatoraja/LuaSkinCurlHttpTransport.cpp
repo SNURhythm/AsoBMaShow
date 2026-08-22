@@ -10,7 +10,9 @@
 
 #include <curl/curl.h>
 
+#include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <mutex>
@@ -77,9 +79,24 @@ public:
     if (auto failure = connect()) {
       return {.failure = std::move(failure)};
     }
-    if (auto failure = performResponse()) {
+    if (auto failure = startResponse()) {
       return {.failure = std::move(failure)};
     }
+    if (!responseHeadersReady_) {
+      if (auto failure = pump(TransferPhase::Response)) {
+        return {.failure = std::move(failure)};
+      }
+    }
+    long response = 0;
+    const CURLcode info =
+        curl_easy_getinfo(curl_.get(), CURLINFO_RESPONSE_CODE, &response);
+    if (info != CURLE_OK || response <= 0 ||
+        response > std::numeric_limits<int>::max()) {
+      return {.failure = transferCompleted_ && transferResult_ != CURLE_OK
+                             ? curlFailure(transferResult_, error_)
+                             : "HTTP response code is unavailable"};
+    }
+    responseCode_ = static_cast<int>(response);
     return {.code = responseCode_};
   }
 
@@ -87,9 +104,24 @@ public:
     if (auto failure = connect()) {
       return {.failure = std::move(failure)};
     }
-    if (auto failure = performResponse()) {
-      return {.failure = std::move(failure)};
+    const LuaSkinHttpCodeResult code = responseCode();
+    if (code.failure) {
+      return {.failure = code.failure};
     }
+    if (responsePaused_) {
+      const CURLcode resumed = curl_easy_pause(curl_.get(), CURLPAUSE_CONT);
+      responsePaused_ = false;
+      collectCompletion();
+      if (resumed != CURLE_OK && !transferCompleted_ && !intentionalStop_) {
+        return {.failure = curlFailure(resumed, error_)};
+      }
+    }
+    if (!transferCompleted_) {
+      if (auto failure = pump(TransferPhase::Read)) {
+        readFailure_ = *failure;
+      }
+    }
+    finishRead();
     if (readFailure_) {
       return {.failure = *readFailure_};
     }
@@ -101,10 +133,20 @@ public:
       return;
     }
     disconnected_ = true;
+    if (multi_ != nullptr) {
+      if (multiContainsEasy_ && curl_) {
+        (void)curl_multi_remove_handle(multi_, curl_.get());
+      }
+      curl_multi_cleanup(multi_);
+      multi_ = nullptr;
+      multiContainsEasy_ = false;
+    }
     curl_.reset();
   }
 
 private:
+  enum class TransferPhase { Response, Read };
+
   bool initialize() noexcept {
     if (curl_) {
       return true;
@@ -122,6 +164,8 @@ private:
     const bool configured =
         curl_easy_setopt(curl_.get(), CURLOPT_URL, url_.c_str()) == CURLE_OK &&
         curl_easy_setopt(curl_.get(), CURLOPT_HTTPGET, 1L) == CURLE_OK &&
+        curl_easy_setopt(curl_.get(), CURLOPT_HTTP_VERSION,
+                         CURL_HTTP_VERSION_1_1) == CURLE_OK &&
         curl_easy_setopt(curl_.get(), CURLOPT_NOSIGNAL, 1L) == CURLE_OK &&
         curl_easy_setopt(curl_.get(), CURLOPT_CONNECTTIMEOUT_MS,
                          static_cast<long>(timeoutMilliseconds_)) == CURLE_OK &&
@@ -150,11 +194,11 @@ private:
     return true;
   }
 
-  std::optional<std::string> performResponse() noexcept {
-    if (responsePerformed_) {
+  std::optional<std::string> startResponse() noexcept {
+    if (responseStarted_) {
       return responseFailure_;
     }
-    responsePerformed_ = true;
+    responseStarted_ = true;
     body_.clear();
     readFailure_.reset();
     responseFailure_.reset();
@@ -171,35 +215,164 @@ private:
         curl_easy_setopt(curl_.get(), CURLOPT_WRITEFUNCTION,
                          &CurlLuaSkinHttpConnection::write) == CURLE_OK &&
         curl_easy_setopt(curl_.get(), CURLOPT_WRITEDATA, this) == CURLE_OK &&
+        curl_easy_setopt(curl_.get(), CURLOPT_HEADERFUNCTION,
+                         &CurlLuaSkinHttpConnection::header) == CURLE_OK &&
+        curl_easy_setopt(curl_.get(), CURLOPT_HEADERDATA, this) == CURLE_OK &&
+        curl_easy_setopt(curl_.get(), CURLOPT_SUPPRESS_CONNECT_HEADERS, 1L) ==
+            CURLE_OK &&
+        curl_easy_setopt(curl_.get(), CURLOPT_TIMEOUT_MS, 0L) == CURLE_OK &&
         curl_easy_setopt(curl_.get(), CURLOPT_FAILONERROR, 1L) == CURLE_OK;
     if (!configured) {
       responseFailure_ = "libcurl response stage could not be configured";
       return responseFailure_;
     }
 
-    const CURLcode result = curl_easy_perform(curl_.get());
-    long response = 0;
-    const CURLcode info =
-        curl_easy_getinfo(curl_.get(), CURLINFO_RESPONSE_CODE, &response);
-    if (info != CURLE_OK || response <= 0 ||
-        response > std::numeric_limits<int>::max()) {
-      responseFailure_ = result == CURLE_OK
-                             ? "HTTP response code is unavailable"
-                             : curlFailure(result, error_);
+    multi_ = curl_multi_init();
+    if (multi_ == nullptr) {
+      responseFailure_ = "libcurl multi connection allocation failed";
       return responseFailure_;
     }
-    responseCode_ = static_cast<int>(response);
+    const CURLMcode added = curl_multi_add_handle(multi_, curl_.get());
+    if (added != CURLM_OK) {
+      responseFailure_ = curl_multi_strerror(added);
+      return responseFailure_;
+    }
+    multiContainsEasy_ = true;
+    return std::nullopt;
+  }
+
+  std::optional<std::string> pump(TransferPhase phase) noexcept {
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(timeoutMilliseconds_);
+    while (true) {
+      if (stop_.stop_requested()) {
+        return "HTTP request was cancelled";
+      }
+      int running = 0;
+      const CURLMcode performed = curl_multi_perform(multi_, &running);
+      if (performed != CURLM_OK) {
+        return curl_multi_strerror(performed);
+      }
+      collectCompletion();
+      if (phase == TransferPhase::Response && responseHeadersReady_) {
+        return std::nullopt;
+      }
+      if (transferCompleted_) {
+        if (transferResult_ != CURLE_OK && !intentionalStop_) {
+          return curlFailure(transferResult_, error_);
+        }
+        return std::nullopt;
+      }
+      const auto now = std::chrono::steady_clock::now();
+      if (now >= deadline) {
+        return "HTTP request timed out";
+      }
+      const auto remaining =
+          std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+      const int waitMilliseconds = static_cast<int>(
+          std::min<std::int64_t>(
+              10, std::max<std::int64_t>(1, remaining.count())));
+      int ready = 0;
+      const CURLMcode waited =
+          curl_multi_poll(multi_, nullptr, 0, waitMilliseconds, &ready);
+      if (waited != CURLM_OK) {
+        return curl_multi_strerror(waited);
+      }
+      (void)running;
+      (void)ready;
+    }
+  }
+
+  void collectCompletion() noexcept {
+    int queued = 0;
+    while (CURLMsg *message = curl_multi_info_read(multi_, &queued)) {
+      if (message->msg == CURLMSG_DONE && message->easy_handle == curl_.get()) {
+        transferCompleted_ = true;
+        transferResult_ = message->data.result;
+      }
+    }
+  }
+
+  void finishRead() noexcept {
+    if (readFinished_) {
+      return;
+    }
+    readFinished_ = true;
     flushPending();
     if (allocationFailed_) {
       readFailure_ = "HTTP response allocation failed";
     } else if (tooLarge_) {
       readFailure_ = "response is too large";
-    } else if (stop_.stop_requested() || result == CURLE_ABORTED_BY_CALLBACK) {
+    } else if (stop_.stop_requested() ||
+               transferResult_ == CURLE_ABORTED_BY_CALLBACK) {
       readFailure_ = "HTTP request was cancelled";
-    } else if (result != CURLE_OK && !intentionalStop_) {
-      readFailure_ = curlFailure(result, error_);
+    } else if (transferCompleted_ && transferResult_ != CURLE_OK &&
+               !intentionalStop_) {
+      readFailure_ = curlFailure(transferResult_, error_);
     }
-    return std::nullopt;
+  }
+
+  static bool isBlankHeader(std::string_view line) noexcept {
+    return line == "\r\n" || line == "\n";
+  }
+
+  static bool startsWithIgnoringCase(std::string_view value,
+                                     std::string_view prefix) noexcept {
+    if (value.size() < prefix.size()) {
+      return false;
+    }
+    for (std::size_t index = 0; index < prefix.size(); ++index) {
+      const unsigned char left = static_cast<unsigned char>(value[index]);
+      const unsigned char right = static_cast<unsigned char>(prefix[index]);
+      const unsigned char foldedLeft =
+          left >= 'A' && left <= 'Z' ? left - 'A' + 'a' : left;
+      const unsigned char foldedRight =
+          right >= 'A' && right <= 'Z' ? right - 'A' + 'a' : right;
+      if (foldedLeft != foldedRight) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  static std::size_t header(char *data, std::size_t size,
+                            std::size_t count, void *opaque) noexcept {
+    auto *self = static_cast<CurlLuaSkinHttpConnection *>(opaque);
+    if (self == nullptr || data == nullptr || size == 0 ||
+        count > std::numeric_limits<std::size_t>::max() / size) {
+      return 0;
+    }
+    const std::size_t bytes = size * count;
+    const std::string_view line(data, bytes);
+    if (line.starts_with("HTTP/")) {
+      self->currentResponseStatus_ = 0;
+      self->currentResponseHasLocation_ = false;
+      const std::size_t space = line.find(' ');
+      if (space != std::string_view::npos && space + 3 < line.size() &&
+          line[space + 1] >= '0' && line[space + 1] <= '9' &&
+          line[space + 2] >= '0' && line[space + 2] <= '9' &&
+          line[space + 3] >= '0' && line[space + 3] <= '9') {
+        self->currentResponseStatus_ =
+            (line[space + 1] - '0') * 100 + (line[space + 2] - '0') * 10 +
+            (line[space + 3] - '0');
+      }
+    } else if (startsWithIgnoringCase(line, "Location:")) {
+      self->currentResponseHasLocation_ = true;
+    } else if (isBlankHeader(line)) {
+      const bool informational = self->currentResponseStatus_ >= 100 &&
+                                 self->currentResponseStatus_ < 200;
+      const bool redirect = self->currentResponseStatus_ >= 300 &&
+                            self->currentResponseStatus_ < 400 &&
+                            self->currentResponseHasLocation_;
+      if (!informational && !redirect) {
+        if (curl_easy_pause(self->curl_.get(), CURLPAUSE_RECV) != CURLE_OK) {
+          return 0;
+        }
+        self->responseHeadersReady_ = true;
+        self->responsePaused_ = true;
+      }
+    }
+    return bytes;
   }
 
   void addCharacters(std::size_t count) noexcept {
@@ -316,6 +489,7 @@ private:
   LuaSkinHttpLimits limits_;
   std::stop_token stop_;
   CurlEasyHandle curl_{nullptr};
+  CURLM *multi_ = nullptr;
   std::array<char, CURL_ERROR_SIZE> error_{};
   std::string initializationFailure_;
   std::string body_;
@@ -327,13 +501,21 @@ private:
   std::size_t lineSeparators_ = 0;
   std::size_t utf16Characters_ = 0;
   int responseCode_ = 0;
+  int currentResponseStatus_ = 0;
   bool connected_ = false;
-  bool responsePerformed_ = false;
+  bool responseStarted_ = false;
+  bool responseHeadersReady_ = false;
+  bool responsePaused_ = false;
+  bool currentResponseHasLocation_ = false;
+  bool transferCompleted_ = false;
+  bool readFinished_ = false;
+  bool multiContainsEasy_ = false;
   bool disconnected_ = false;
   bool previousWasCarriageReturn_ = false;
   bool intentionalStop_ = false;
   bool tooLarge_ = false;
   bool allocationFailed_ = false;
+  CURLcode transferResult_ = CURLE_OK;
 };
 
 class CurlLuaSkinHttpTransport final : public LuaSkinHttpTransport {

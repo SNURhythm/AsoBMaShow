@@ -3,7 +3,9 @@
 #import <Foundation/Foundation.h>
 #import <TargetConditionals.h>
 
-#if TARGET_OS_IPHONE
+#if TARGET_OS_IPHONE || defined(ASOBMASHOW_TEST_FOUNDATION_HTTP_TRANSPORT)
+
+#include "LuaSkinFoundationHttpTransportTest.h"
 
 #include <array>
 #include <atomic>
@@ -18,18 +20,32 @@ namespace skin {
 namespace {
 
 struct FoundationHttpState {
-  explicit FoundationHttpState(LuaSkinHttpLimits value) : limits(value) {}
+  explicit FoundationHttpState(LuaSkinHttpLimits value)
+      : limits(value), maximumEncodedBytes(encodedLimit(value)) {}
+
+  static std::size_t encodedLimit(LuaSkinHttpLimits limits) noexcept {
+    constexpr std::size_t maximum =
+        std::numeric_limits<std::size_t>::max();
+    if (limits.maximumCharacters > maximum / 3) {
+      return maximum;
+    }
+    const std::size_t characters = limits.maximumCharacters * 3;
+    if (limits.maximumLines > (maximum - characters) / 2) {
+      return maximum;
+    }
+    return characters + limits.maximumLines * 2;
+  }
 
   bool append(const void *bytes, std::size_t size) noexcept {
-    try {
-      body.append(static_cast<const char *>(bytes), size);
-    } catch (...) {
-      allocationFailed = true;
-      intentionalStop = true;
-      return false;
-    }
     const auto *input = static_cast<const unsigned char *>(bytes);
+    std::size_t accepted = 0;
     for (std::size_t index = 0; index < size && !intentionalStop; ++index) {
+      if (encodedBytes >= maximumEncodedBytes ||
+          index >= maximumEncodedBytes - encodedBytes) {
+        tooLarge = true;
+        intentionalStop = true;
+        break;
+      }
       const unsigned char value = input[index];
       if (value == '\r' || value == '\n') {
         flushPending();
@@ -45,6 +61,19 @@ struct FoundationHttpState {
         previousWasCarriageReturn = false;
         countUtf8(value);
       }
+      if (!tooLarge) {
+        accepted = index + 1;
+      }
+    }
+    try {
+      if (accepted != 0) {
+        body.append(static_cast<const char *>(bytes), accepted);
+      }
+      encodedBytes += accepted;
+    } catch (...) {
+      allocationFailed = true;
+      intentionalStop = true;
+      return false;
     }
     return !intentionalStop;
   }
@@ -116,6 +145,7 @@ struct FoundationHttpState {
   }
 
   LuaSkinHttpLimits limits;
+  std::size_t maximumEncodedBytes = 0;
   std::string body;
   std::string failure;
   std::array<unsigned char, 4> pending{};
@@ -123,6 +153,7 @@ struct FoundationHttpState {
   std::size_t pendingExpected = 0;
   std::size_t lineSeparators = 0;
   std::size_t utf16Characters = 0;
+  std::size_t encodedBytes = 0;
   std::atomic_bool responseSignalled{false};
   std::atomic_bool completionSignalled{false};
   int responseCode = 0;
@@ -396,6 +427,16 @@ createLuaSkinProductionHttpTransport(std::stop_token stop) {
   } catch (...) {
     return nullptr;
   }
+}
+
+LuaSkinFoundationAppendProbe
+probeLuaSkinFoundationAppend(LuaSkinHttpLimits limits,
+                             std::span<const std::byte> chunk) {
+  FoundationHttpState state(limits);
+  const bool continued = state.append(chunk.data(), chunk.size());
+  return {.storedBytes = state.body.size(),
+          .continued = continued,
+          .tooLarge = state.tooLarge};
 }
 
 } // namespace skin
