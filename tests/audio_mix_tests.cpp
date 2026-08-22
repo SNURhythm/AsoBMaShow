@@ -606,6 +606,61 @@ void testRateTransitionRegeneratesAndRemapsEveryFrameDomain() {
           "all nonzero frame domains remain time-correct after 48 to 44.1 kHz");
 }
 
+void testRateTransitionRemapsCommandsPastFormerQueueBoundary() {
+  SoundData sound;
+  sound.channels = 1;
+  sound.sourceSampleRate = 44100;
+  sound.sourceFrameCount = 44100;
+  sound.sourceData.resize(sound.sourceFrameCount, 1000);
+  sound.outputData = sound.sourceData;
+  sound.outputFrameCount = sound.sourceFrameCount;
+
+  AudioCallbackState state;
+  for (std::size_t index = 0; index < kAudioCommandQueueSize; ++index) {
+    require(audio::playback::EnqueueCommand(
+                state, {.type = AudioCommandType::StopAll}),
+            "the fixture advances the combined ring past its former physical "
+            "boundary");
+  }
+  audio::playback::DrainCommands(state);
+  require(state.commandReadCursor.load() == kAudioCommandQueueSize &&
+              state.commandWriteCursor.load() == kAudioCommandQueueSize,
+          "draining preserves the advanced monotonic ring cursors");
+
+  require(audio::playback::EnqueueCommand(
+              state, {.type = AudioCommandType::PlayNow,
+                      .soundData = &sound,
+                      .bus = audio::Bus::Keysound,
+                      .startFrame = 11025}) &&
+              audio::playback::EnqueueCommand(
+                  state, {.type = AudioCommandType::Schedule,
+                          .soundData = &sound,
+                          .bus = audio::Bus::Keysound,
+                          .startMicros = 2000000,
+                          .sequence = 1,
+                          .startFrame = 11025}),
+          "play and schedule commands occupy combined-ring slots beyond 4096");
+
+  std::array<SoundData *, 1> sounds{&sound};
+  auto transition =
+      audio::playback::PrepareOutputRateTransition(sounds, 44100, 48000);
+  require(transition.has_value(),
+          "the retained PCM prepares a rate transition across queued work");
+  audio::playback::CommitOutputRateTransition(std::move(*transition), state);
+
+  require(state.commandQueue[kAudioCommandQueueSize].startFrame == 12000 &&
+              state.commandQueue[kAudioCommandQueueSize + 1].startFrame ==
+                  12000,
+          "rate transition remaps the actual combined-ring play and schedule "
+          "slots");
+  audio::playback::DrainCommands(state);
+  require(state.playingSoundCount == 1 &&
+              state.playingSounds[0].sourceFrameQ32 == 12000ULL << 32 &&
+              state.scheduledSoundCount == 1 &&
+              state.scheduledSounds[0].startFrame == 12000,
+          "the remapped commands retain their frame offsets when consumed");
+}
+
 std::vector<float> mixMonoRampAtRate(int playbackRatePercent,
                                      std::uint32_t outputFrames) {
   SoundData sound;
@@ -1209,6 +1264,7 @@ int main() {
             "scheduled audio retains explicit keysound classification");
 
     testRateTransitionRegeneratesAndRemapsEveryFrameDomain();
+    testRateTransitionRemapsCommandsPastFormerQueueBoundary();
     testStoppedQueryInterpretationPreservesErrors();
     testUnknownBackendStateCannotPublishRateTransition();
     testStopDrainFailureCannotPublishRateTransition();

@@ -452,7 +452,7 @@ void CommitOutputRateTransition(OutputRateTransition transition,
   const std::uint32_t writeCursor =
       state.commandWriteCursor.load(std::memory_order_acquire);
   for (std::uint32_t cursor = readCursor; cursor != writeCursor; ++cursor) {
-    auto &command = state.commandQueue[cursor % kAudioCommandQueueSize];
+    auto &command = state.commandQueue[cursor % kCombinedAudioCommandQueueSize];
     command.startFrame = clampFrameToSound(
         RemapFramePosition(command.startFrame, transition.previousSampleRate,
                            transition.targetSampleRate),
