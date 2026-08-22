@@ -801,6 +801,13 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
                     "tests/fixtures/beatoraja_skin/resources/fixture.jpg",
                 source / "entry/resources/second.webm");
+  for (std::size_t index = 0;
+       index <= skin::SkinResourcePolicy::maximumMovieDecoders; ++index) {
+    fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
+                      "tests/fixtures/beatoraja_skin/resources/fixture.png",
+                  source / "entry/resources" /
+                      ("movie-cap-" + std::to_string(index) + ".MP4"));
+  }
   const auto writePpm = [](const fs::path &path, int width) {
     std::ofstream stream(path, std::ios::binary);
     stream << "P6\n" << width << " 1\n255\n";
@@ -1165,6 +1172,35 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   expect(movieDevice->destroys == 1 && movieDevice->live.empty() &&
              !fs::exists(materializedMovie),
          "movie catalog teardown destroys the shared player and materialized source exactly once");
+
+  skin::ValidatedBeatorajaSkinModel decoderCapModel;
+  for (std::size_t index = 0;
+       index <= skin::SkinResourcePolicy::maximumMovieDecoders; ++index) {
+    const skin::SkinResourceId id = static_cast<skin::SkinResourceId>(100 + index);
+    decoderCapModel.model.resources.emplace_back(skin::SkinMovieResource{
+        .id = id,
+        .virtualPath = "resources/movie-cap-" + std::to_string(index) +
+                       ".MP4",
+        .authoredOrdinal = static_cast<std::uint32_t>(index + 1)});
+    decoderCapModel.model.objects.push_back(
+        {.id = static_cast<skin::SkinObjectId>(id),
+         .authoredName = "movie-cap-" + std::to_string(index),
+         .payload = skin::SkinImageObject{.orderedStates = {{.resource = id}}},
+         .critical = true});
+  }
+  auto cappedMovieDevice = std::make_shared<FakeMovieDevice>();
+  auto cappedMovies = skin::SkinMovieCatalog::prepare(
+      {.fileSystem = *leasedFs.fileSystem,
+       .model = decoderCapModel,
+       .configuration = configuration,
+       .device = cappedMovieDevice});
+  expect(!cappedMovies.catalog && !cappedMovies.cancelled &&
+             hasDiagnostic(cappedMovies.diagnostics,
+                           "skin.movie.session_limit") &&
+             cappedMovieDevice->loads == 0 &&
+             cappedMovieDevice->expensiveAllocations == 0 &&
+             cappedMovieDevice->live.empty(),
+         "unique referenced movies above the decoder cap fail before any player starts");
 
   auto oversizedMovieDevice = std::make_shared<FakeMovieDevice>();
   oversizedMovieDevice->resultWidth =

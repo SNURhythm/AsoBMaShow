@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <map>
 #include <optional>
@@ -243,6 +244,7 @@ public:
   explicit JavaPatternAdapter(std::string_view input) : input_(input) {}
 
   AdaptedPattern adapt() {
+    requireBoundedNesting();
     std::size_t cursor = 0;
     JavaFlags flags;
     std::string expression = transformSequence(cursor, flags, false);
@@ -256,6 +258,65 @@ public:
   }
 
 private:
+  static constexpr std::size_t maximumNestingDepth = 96;
+
+  void requireBoundedNesting() const {
+    std::size_t groupDepth = 0;
+    std::size_t classDepth = 0;
+    std::array<unsigned char, maximumNestingDepth + 1> classPrefix{};
+    bool quoted = false;
+    for (std::size_t cursor = 0; cursor < input_.size(); ++cursor) {
+      const char value = input_[cursor];
+      if (value == '\\' && cursor + 1 < input_.size()) {
+        const char escaped = input_[cursor + 1];
+        if (quoted) {
+          if (escaped == 'E') quoted = false;
+        } else if (classDepth == 0 && escaped == 'Q') {
+          quoted = true;
+        }
+        ++cursor;
+        continue;
+      }
+      if (quoted) continue;
+      if (classDepth != 0) {
+        unsigned char &prefix = classPrefix[classDepth];
+        if (prefix == 0 && value == '^') {
+          prefix = 1;
+          continue;
+        }
+        if (prefix < 2 && value == ']') {
+          prefix = 2;
+          continue;
+        }
+        if (value == '[') {
+          if (++classDepth > maximumNestingDepth) {
+            throw std::invalid_argument("Java Pattern nesting is too deep");
+          }
+          classPrefix[classDepth] = 0;
+          continue;
+        }
+        if (value == ']') {
+          --classDepth;
+          continue;
+        }
+        prefix = 2;
+        continue;
+      }
+      if (value == '[') {
+        classDepth = 1;
+        classPrefix[classDepth] = 0;
+        continue;
+      }
+      if (value == '(') {
+        if (++groupDepth > maximumNestingDepth) {
+          throw std::invalid_argument("Java Pattern nesting is too deep");
+        }
+      } else if (value == ')' && groupDepth != 0) {
+        --groupDepth;
+      }
+    }
+  }
+
   struct FlagGroup {
     std::string_view specification;
     char terminator = 0;

@@ -905,6 +905,24 @@ void testCommentedJsonKeepsExactPostCommentProvenanceAndCancellation() {
          "cancellation");
 }
 
+void testCancellationPreemptsDomParsing() {
+  const std::string invalidAfterLongPrefix =
+      std::string(2U * 1024U, ' ') + "!";
+  std::stop_source source;
+  CancellationCheckpoint checkpoint{
+      .source = &source,
+      .phase = StaticSkinDecodePhase::JsonStructure,
+      .stopAt = 2};
+  const auto cancelled = JsonGameplaySkinDecoder{}.decode(
+      std::as_bytes(std::span(invalidAfterLongPrefix)),
+      fixtureEntry("cancel-before-dom.json"), nullptr,
+      gameplaySkinBuiltinCatalog(), SkinSafetyPolicy{}, source.get_token(),
+      {.notify = requestCancellationAtCheckpoint, .context = &checkpoint});
+  expect(cancelled.cancelled && !cancelled.model &&
+             cancelled.diagnostics.empty(),
+         "raw JSON cancellation is observed before DOM parsing and diagnostics");
+}
+
 void testCancellationStopsMidJsonModelFold() {
   Json document{{"type", 0}, {"source", Json::array()},
                 {"image", Json::array()}, {"destination", Json::array()}};
@@ -939,6 +957,7 @@ int main(int argc, char **argv) {
   testTextRefWriterFallbackAndExplicitEventPrecedence();
   testJsonObjectDestinationAndMalformedFieldProvenance();
   testCommentedJsonKeepsExactPostCommentProvenanceAndCancellation();
+  testCancellationPreemptsDomParsing();
   testCancellationStopsMidJsonModelFold();
 
   return gameplay_skin_ledger_evidence::finish(

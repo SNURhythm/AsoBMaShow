@@ -1203,6 +1203,16 @@ int main() {
         audio::ResamplePcm(fractionalMonoFrames, 1, 44100, 48000);
     require(fractionalUpsampled.size() == 3,
             "fractional output duration retains its final frame interval");
+    const auto projectedUpsample =
+        audio::ProjectedResampledPcmSampleCount(2, 1, 1000, 44100);
+    require(projectedUpsample == std::optional<std::size_t>{89},
+            "resample projection rounds a fractional final frame exactly");
+    require(!audio::ResampledPcmFitsSampleBudget(2, 1, 1000, 44100, 90) &&
+                audio::ResampledPcmFitsSampleBudget(2, 1, 1000, 44100, 91),
+            "combined source and projected output must fit before resampling");
+    require(!audio::ProjectedResampledPcmSampleCount(
+                 std::numeric_limits<std::size_t>::max(), 1, 1, 2),
+            "overflowing resample projections fail before allocation");
 
     require(audio::ResamplePcm({}, 2, 44100, 48000).empty(),
             "empty PCM remains empty");

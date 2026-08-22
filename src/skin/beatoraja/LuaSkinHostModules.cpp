@@ -245,6 +245,7 @@ struct LuaSkinHostModulesImpl {
       std::numeric_limits<std::size_t>::max();
   bool allowProcessGlobalOperations = false;
   ISkinFrameState *frameState = nullptr;
+  bool frameCallbackActive = false;
   void *coroutineContext = nullptr;
   LuaCoroutineCreatedCallback coroutineCreated = nullptr;
   LuaSkinEventExecutor eventExecutor;
@@ -980,6 +981,10 @@ int pushHttpFailure(lua_State *state, std::string_view message) {
 
 LuaSkinHttpLinesResult mainStateHttpLines(lua_State *state,
                                          LuaSkinHostModulesImpl &impl) {
+  if (impl.frameCallbackActive) {
+    return {.failure =
+                "HTTP is unavailable during gameplay frame callbacks"};
+  }
   std::size_t urlSize = 0;
   const char *url = luaL_checklstring(state, 1, &urlSize);
   const int timeout = boundedIntegerArgument(
@@ -3122,6 +3127,12 @@ std::optional<SkinDiagnostic> LuaSkinHostModules::enableStateAccessors() {
 void LuaSkinHostModules::setFrameState(ISkinFrameState *state) noexcept {
   if (impl_) {
     impl_->frameState = state;
+  }
+}
+
+void LuaSkinHostModules::setFrameCallbackActive(bool active) noexcept {
+  if (impl_) {
+    impl_->frameCallbackActive = active;
   }
 }
 

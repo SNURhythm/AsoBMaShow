@@ -665,21 +665,33 @@ class JsonSourceIndex final {
 public:
   JsonSourceIndex(std::string_view text, std::string virtualPath,
                   DecodeContext &context)
-      : text_(text), virtualPath_(std::move(virtualPath)), context_(context),
-        lineStarts_{0} {
-    for (std::size_t index = 0; index < text_.size(); ++index) {
-      if (text_[index] == '\n') lineStarts_.push_back(index + 1);
-    }
-  }
+      : text_(text), virtualPath_(std::move(virtualPath)), context_(context) {}
 
-  [[nodiscard]] bool build(const Json &root) {
+  [[nodiscard]] bool scan(bool indexSources) {
+    limitExceeded_ = false;
+    lineStarts_.clear();
+    locations_.clear();
+    nodeSources_.clear();
+    if (indexSources) lineStarts_.push_back(0);
+    for (std::size_t index = 0; index < text_.size(); ++index) {
+      if (indexSources && text_[index] == '\n') {
+        lineStarts_.push_back(index + 1);
+      }
+      if ((index + 1) % 1024 == 0 &&
+          context_.checkpoint(StaticSkinDecodePhase::JsonStructure)) {
+        return false;
+      }
+    }
     std::size_t offset = 0;
     std::size_t values = 0;
-    if (!indexValue(offset, "", 1, values)) return false;
+    if (!indexValue(offset, "", 1, values, indexSources)) return false;
     if (!skipInsignificant(offset)) return false;
-    if (offset != text_.size()) return false;
-    return bind(root, "");
+    return offset == text_.size();
   }
+
+  [[nodiscard]] bool bindRoot(const Json &root) { return bind(root, ""); }
+
+  [[nodiscard]] bool limitExceeded() const noexcept { return limitExceeded_; }
 
   [[nodiscard]] std::optional<SkinSourceLocation>
   source(const Json *value) const {
@@ -769,17 +781,21 @@ private:
   }
 
   [[nodiscard]] bool indexValue(std::size_t &offset, std::string pointer,
-                                std::size_t depth, std::size_t &values) {
+                                std::size_t depth, std::size_t &values,
+                                bool indexSources) {
     if (context_.checkpoint(StaticSkinDecodePhase::JsonStructure)) {
       return false;
     }
     if (!skipInsignificant(offset)) return false;
-    if (offset >= text_.size() ||
-        depth > JsonGameplaySkinDecoderPolicy::maxDepth ||
-        ++values > JsonGameplaySkinDecoderPolicy::maxValues) {
+    if (offset >= text_.size()) {
       return false;
     }
-    locations_.insert_or_assign(pointer, sourceAt(offset));
+    if (depth > JsonGameplaySkinDecoderPolicy::maxDepth ||
+        ++values > JsonGameplaySkinDecoderPolicy::maxValues) {
+      limitExceeded_ = true;
+      return false;
+    }
+    if (indexSources) locations_.insert_or_assign(pointer, sourceAt(offset));
     const char leading = text_[offset];
     if (leading == '"') {
       const std::size_t end = skipJsonString(text_, offset);
@@ -799,16 +815,28 @@ private:
       std::size_t members = 0;
       while (offset < text_.size()) {
         if (++members > JsonGameplaySkinDecoderPolicy::maxArrayEntries) {
+          limitExceeded_ = true;
           return false;
         }
-        auto key = decodeString(offset);
-        if (!key) return false;
+        std::optional<std::string> key;
+        if (indexSources) {
+          key = decodeString(offset);
+          if (!key) return false;
+        } else {
+          if (offset >= text_.size() || text_[offset] != '"') return false;
+          const std::size_t end = skipJsonString(text_, offset);
+          if (end > text_.size() || end == 0 || text_[end - 1] != '"') {
+            return false;
+          }
+          offset = end;
+        }
         if (!skipInsignificant(offset)) return false;
         if (offset >= text_.size() || text_[offset] != ':') return false;
         ++offset;
-        if (!indexValue(offset,
-                        pointer + "/" + jsonPointerToken(*key), depth + 1,
-                        values)) {
+        const std::string childPointer =
+            indexSources ? pointer + "/" + jsonPointerToken(*key) : "";
+        if (!indexValue(offset, childPointer, depth + 1, values,
+                        indexSources)) {
           return false;
         }
         if (!skipInsignificant(offset)) return false;
@@ -832,8 +860,14 @@ private:
       std::size_t index = 0;
       while (offset < text_.size()) {
         if (index >= JsonGameplaySkinDecoderPolicy::maxArrayEntries ||
-            !indexValue(offset, pointer + "/" + std::to_string(index),
-                        depth + 1, values)) {
+            !indexValue(offset,
+                        indexSources
+                            ? pointer + "/" + std::to_string(index)
+                            : "",
+                        depth + 1, values, indexSources)) {
+          if (index >= JsonGameplaySkinDecoderPolicy::maxArrayEntries) {
+            limitExceeded_ = true;
+          }
           return false;
         }
         ++index;
@@ -887,6 +921,7 @@ private:
   std::vector<std::size_t> lineStarts_;
   std::map<std::string, SkinSourceLocation, std::less<>> locations_;
   std::map<const Json *, SkinSourceLocation> nodeSources_;
+  bool limitExceeded_ = false;
 };
 
 std::optional<SkinSourceLocation>
@@ -3106,6 +3141,19 @@ JsonGameplaySkinDecodeResult JsonGameplaySkinDecoder::decode(
   }
   const std::string_view text(
       reinterpret_cast<const char *>(bytes.data()), bytes.size());
+  JsonSourceIndex sourceIndex(text, entry.packageRelativePath, context);
+  if (!sourceIndex.scan(false)) {
+    if (result.cancelled) return result;
+    if (sourceIndex.limitExceeded()) {
+      context.error("skin_json_limit_exceeded",
+                    "JSON gameplay document exceeds the fixed structure limit");
+    } else {
+      context.error("skin_json_parse_failed",
+                    "JSON gameplay document is invalid",
+                    locationAt(text, 0, entry.packageRelativePath));
+    }
+    return result;
+  }
   Json root;
   try {
     root = Json::parse(text.begin(), text.end(), nullptr, true, true);
@@ -3129,8 +3177,13 @@ JsonGameplaySkinDecodeResult JsonGameplaySkinDecoder::decode(
     if (!validateBudget(root, context)) {
       return result;
     }
-    JsonSourceIndex sourceIndex(text, entry.packageRelativePath, context);
-    if (!sourceIndex.build(root)) {
+    if (!sourceIndex.scan(true)) {
+      if (result.cancelled) return result;
+      context.error("skin_json_source_index_failed",
+                    "JSON gameplay provenance index could not be built");
+      return result;
+    }
+    if (!sourceIndex.bindRoot(root)) {
       if (result.cancelled) return result;
       context.error("skin_json_source_index_failed",
                     "JSON gameplay provenance index could not be built");

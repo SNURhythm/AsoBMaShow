@@ -46,6 +46,7 @@ struct SkinResourcePolicy {
   static constexpr std::size_t maximumGeneratedTextures = 512;
   static constexpr std::size_t maximumGeneratedSessionBytes =
       128U * 1024U * 1024U;
+  static constexpr std::size_t maximumMovieDecoders = 8;
   static constexpr std::size_t maximumRuntimeStrings = 64;
   static constexpr std::size_t maximumRuntimeStringBytes = 64U * 1024U;
   static constexpr std::size_t maximumGlyphs = 8192;

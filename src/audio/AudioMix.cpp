@@ -133,23 +133,16 @@ Volumes VolumesFromSettings(const player_settings::AudioSettings &settings) {
           .keysound = settings.keysoundVolume};
 }
 
-std::vector<short> ResamplePcm(std::span<const short> source, int channels,
-                               int sourceRate, int targetRate) {
-  if (source.empty() || channels <= 0 || sourceRate <= 0 || targetRate <= 0) {
-    return {};
-  }
+std::optional<std::size_t>
+ProjectedResampledPcmSampleCount(std::size_t sourceSamples, int channels,
+                                 int sourceRate, int targetRate) noexcept {
+  if (channels <= 0 || sourceRate <= 0 || targetRate <= 0) return std::nullopt;
   const size_t channelCount = static_cast<size_t>(channels);
-  if (source.size() % channelCount != 0) {
-    return {};
-  }
-  if (sourceRate == targetRate) {
-    return {source.begin(), source.end()};
-  }
+  if (sourceSamples % channelCount != 0) return std::nullopt;
+  if (sourceRate == targetRate) return sourceSamples;
 
-  const size_t sourceFrames = source.size() / channelCount;
-  if (sourceFrames == 0) {
-    return {};
-  }
+  const size_t sourceFrames = sourceSamples / channelCount;
+  if (sourceFrames == 0) return std::size_t{0};
 
   const size_t sourceRateValue = static_cast<size_t>(sourceRate);
   const size_t targetRateValue = static_cast<size_t>(targetRate);
@@ -158,7 +151,7 @@ std::vector<short> ResamplePcm(std::span<const short> source, int channels,
   const size_t wholeSeconds = sourceFrames / sourceRateValue;
   const size_t remainingFrames = sourceFrames % sourceRateValue;
   if (wholeSeconds > maximumFrames / targetRateValue) {
-    return {};
+    return std::nullopt;
   }
   const size_t wholeTargetFrames = wholeSeconds * targetRateValue;
   const std::uint64_t fractionalNumerator =
@@ -168,10 +161,32 @@ std::vector<short> ResamplePcm(std::span<const short> source, int channels,
       fractionalNumerator / static_cast<std::uint64_t>(sourceRate) +
       (fractionalNumerator % static_cast<std::uint64_t>(sourceRate) != 0));
   if (fractionalTargetFrames > maximumFrames - wholeTargetFrames) {
-    return {};
+    return std::nullopt;
   }
   const size_t targetFrames = wholeTargetFrames + fractionalTargetFrames;
-  std::vector<short> output(targetFrames * channelCount);
+  return targetFrames * channelCount;
+}
+
+bool ResampledPcmFitsSampleBudget(
+    std::size_t sourceSamples, int channels, int sourceRate, int targetRate,
+    std::size_t maximumCombinedSamples) noexcept {
+  const auto outputSamples = ProjectedResampledPcmSampleCount(
+      sourceSamples, channels, sourceRate, targetRate);
+  return outputSamples && sourceSamples <= maximumCombinedSamples &&
+         *outputSamples <= maximumCombinedSamples - sourceSamples;
+}
+
+std::vector<short> ResamplePcm(std::span<const short> source, int channels,
+                               int sourceRate, int targetRate) {
+  const auto projectedSamples = ProjectedResampledPcmSampleCount(
+      source.size(), channels, sourceRate, targetRate);
+  if (!projectedSamples || source.empty()) return {};
+  if (sourceRate == targetRate) return {source.begin(), source.end()};
+
+  const size_t channelCount = static_cast<size_t>(channels);
+  const size_t sourceFrames = source.size() / channelCount;
+  const size_t targetFrames = *projectedSamples / channelCount;
+  std::vector<short> output(*projectedSamples);
 
   for (size_t targetFrame = 0; targetFrame < targetFrames; ++targetFrame) {
     const long double sourcePosition =

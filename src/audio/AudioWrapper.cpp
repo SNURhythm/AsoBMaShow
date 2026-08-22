@@ -954,9 +954,15 @@ audio::SkinSoundLoadResult AudioWrapper::loadSkinSound(
     }
 
     std::shared_ptr<SoundData> privateSound;
+    std::size_t remainingDecodedSamples = 0;
     {
       std::lock_guard<std::mutex> lock(soundDataListMutex);
       cleanupRetiredSkinSoundsLocked();
+      if (skinSoundDecodedBytes > maximumTotalDecodedBytes) {
+        return {};
+      }
+      remainingDecodedSamples =
+          (maximumTotalDecodedBytes - skinSoundDecodedBytes) / sizeof(short);
       if (skinSounds.size() + retiredSkinSounds.size() >=
           kOwnerControlCommandQueueSize) {
         return {};
@@ -994,12 +1000,10 @@ audio::SkinSoundLoadResult AudioWrapper::loadSkinSound(
     if (privateSound == nullptr) {
       std::vector<short> pcmData;
       SF_INFO sfInfo{};
-      const std::size_t maximumSamples =
-          maximumTotalDecodedBytes / sizeof(short);
       if (!decodeAudioToPCMBounded(
               path, pcmData, sfInfo, isCancelled,
               {.maximumEncodedBytes = maximumEncodedBytes,
-               .maximumPcmSamples = maximumSamples},
+               .maximumPcmSamples = remainingDecodedSamples},
               stop) ||
           isCancelled || sfInfo.channels <= 0 || sfInfo.samplerate <= 0 ||
           pcmData.size() % static_cast<std::size_t>(sfInfo.channels) != 0) {
@@ -1012,10 +1016,17 @@ audio::SkinSoundLoadResult AudioWrapper::loadSkinSound(
       privateSound->sourceFrameCount =
           privateSound->sourceData.size() /
           static_cast<std::size_t>(privateSound->channels);
+      const int targetSampleRate =
+          currentSampleRate.load(std::memory_order_acquire);
+      if (!audio::ResampledPcmFitsSampleBudget(
+              privateSound->sourceData.size(), privateSound->channels,
+              privateSound->sourceSampleRate, targetSampleRate,
+              remainingDecodedSamples)) {
+        return {};
+      }
       privateSound->outputData = audio::ResamplePcm(
           privateSound->sourceData, privateSound->channels,
-          privateSound->sourceSampleRate,
-          currentSampleRate.load(std::memory_order_acquire));
+          privateSound->sourceSampleRate, targetSampleRate);
       if ((!privateSound->sourceData.empty() &&
            privateSound->outputData.empty()) ||
           isCancelled) {

@@ -1398,8 +1398,10 @@ LuaCallbackResult LuaSkinRuntime::invoke(LuaCallbackId callback,
                         .callbackReference =
                             impl_->shared->callbackReferences[callback.slot - 1],
                         .arguments = arguments};
+  impl_->hostModules->setFrameCallbackActive(true);
   const int protectedStatus =
       lua_cpcall(impl_->state, invokeArgument, &request);
+  impl_->hostModules->setFrameCallbackActive(false);
   if (!impl_->shared->budgetViolated &&
       Clock::now() > impl_->shared->executionDeadline) {
     impl_->shared->budgetViolated = true;

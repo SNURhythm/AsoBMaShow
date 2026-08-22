@@ -82,6 +82,7 @@ public:
   installConfiguration(const BeatorajaSkinConfiguration &);
   std::optional<SkinDiagnostic> enableStateAccessors();
   void setFrameState(ISkinFrameState *) noexcept;
+  void setFrameCallbackActive(bool) noexcept;
   void setEventExecutor(LuaSkinEventExecutor) noexcept;
   LuaFileHandleInvalidationResult invalidateFileHandles() noexcept;
   std::span<const SkinCompatibilityDiagnostic> diagnostics() const noexcept;

@@ -125,6 +125,24 @@ public final class LuaSkinJavaPatternOracle {
 
 
 class LuaSkinJavaPatternOracleTests(unittest.TestCase):
+    def test_native_matcher_bounds_group_depth_before_adaptation(self):
+        if NATIVE_EXECUTABLE is None:
+            self.fail("native matcher executable argument is required")
+        native = NATIVE_EXECUTABLE
+        self.assertTrue(native.is_file(), native)
+
+        def native_result(depth):
+            pattern = "^" + "(" * depth + "a" + ")" * depth + "$"
+            return subprocess.run(
+                [str(native), pattern, "a"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+        self.assertEqual(native_result(96), "MATCH:61")
+        self.assertEqual(native_result(97), "INVALID")
+
     def test_native_matcher_agrees_with_java_pattern(self):
         if NATIVE_EXECUTABLE is None:
             self.fail("native matcher executable argument is required")

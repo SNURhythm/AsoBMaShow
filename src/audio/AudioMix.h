@@ -26,6 +26,12 @@ struct Volumes {
 float EffectiveGain(Bus bus, const Volumes &volumes);
 Volumes VolumesFromSettings(const player_settings::AudioSettings &settings);
 
+std::optional<std::size_t>
+ProjectedResampledPcmSampleCount(std::size_t sourceSamples, int channels,
+                                 int sourceRate, int targetRate) noexcept;
+bool ResampledPcmFitsSampleBudget(std::size_t sourceSamples, int channels,
+                                  int sourceRate, int targetRate,
+                                  std::size_t maximumCombinedSamples) noexcept;
 std::vector<short> ResamplePcm(std::span<const short> source, int channels,
                                int sourceRate, int targetRate);
 

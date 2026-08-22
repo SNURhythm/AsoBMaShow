@@ -581,7 +581,18 @@ end
 assert(luajava.newInstance("java.io.InputStreamReader", "passthrough") == "passthrough")
 local arbitrary_reader = {}
 assert(luajava.newInstance("java.io.BufferedReader", arbitrary_reader) == arbitrary_reader)
-return {}
+return {
+  render_http_get = function()
+    local value, failure = main_state.http_get("https://fixture/render")
+    return value == nil and
+           failure == "HTTP is unavailable during gameplay frame callbacks"
+  end,
+  render_http_get_lines = function()
+    local value, failure = main_state.http_get_lines("https://fixture/render-lines")
+    return value == nil and
+           failure == "HTTP is unavailable during gameplay frame callbacks"
+  end,
+}
 )lua");
     writeText(source / "skin/parts/frame/red/panel.png", "selected");
     writeText(source / "skin/parts/frame/blue/panel.png",
@@ -1281,6 +1292,28 @@ void testPinnedBoundedHttpAndClosedLegacyReaderFacade() {
                     call.limits.maximumCharacters == 65536;
            }),
            "every transport call receives the pinned response bounds");
+    const auto renderGet =
+        configured.value
+            ? configured.value->callbackNamed("render_http_get")
+            : std::nullopt;
+    const auto renderGetLines =
+        configured.value
+            ? configured.value->callbackNamed("render_http_get_lines")
+            : std::nullopt;
+    const std::size_t callsBeforeRender = state->calls.size();
+    expect(renderGet.has_value() && renderGetLines.has_value() &&
+               harness->runtime->enterRenderPhase().ok &&
+               harness->runtime->beginFrame(1).ok,
+           "HTTP fixture retains its render-frame rejection probes");
+    if (renderGet && renderGetLines) {
+      const auto getResult = harness->runtime->invoke(*renderGet, {});
+      const auto linesResult = harness->runtime->invoke(*renderGetLines, {});
+      expect(getResult.value == std::optional<LuaScalar>{true} &&
+                 !getResult.failure &&
+                 linesResult.value == std::optional<LuaScalar>{true} &&
+                 !linesResult.failure && state->calls.size() == callsBeforeRender,
+             "synchronous modern HTTP fails before transport during frame callbacks");
+    }
   }
   expect(state->destroyed,
          "HTTP transport is destroyed with its owning Lua session");

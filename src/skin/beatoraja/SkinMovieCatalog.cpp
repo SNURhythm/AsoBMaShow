@@ -214,19 +214,31 @@ SkinMovieCatalog::prepare(SkinMoviePreparationInputs input) {
   if (!result.diagnostics.empty()) {
     return result;
   }
-  auto catalog = std::unique_ptr<SkinMovieCatalog>(
-      new SkinMovieCatalog(std::move(input.device),
-                           std::move(input.liveResourceCounters)));
-  if (definitions.empty()) {
-    result.catalog = std::move(catalog);
-    return result;
-  }
   if (definitions.size() > skinResourceLimit(
                                input.safetyPolicy,
                                SkinResourcePolicy::maximumResources)) {
     result.diagnostics.push_back(movieDiagnostic(
         "skin.movie.session_limit",
         "movie resource count exceeds the session resource budget"));
+    return result;
+  }
+  std::set<std::string, std::less<>> uniqueDecoderPaths;
+  for (const auto &definition : definitions) {
+    uniqueDecoderPaths.insert(definition.path);
+  }
+  if (uniqueDecoderPaths.size() >
+      skinResourceLimit(input.safetyPolicy,
+                        SkinResourcePolicy::maximumMovieDecoders)) {
+    result.diagnostics.push_back(movieDiagnostic(
+        "skin.movie.session_limit",
+        "movie decoder count exceeds the session resource budget"));
+    return result;
+  }
+  auto catalog = std::unique_ptr<SkinMovieCatalog>(
+      new SkinMovieCatalog(std::move(input.device),
+                           std::move(input.liveResourceCounters)));
+  if (definitions.empty()) {
+    result.catalog = std::move(catalog);
     return result;
   }
   if (!catalog->device_ || !catalog->device_->ownsCurrentThread()) {
