@@ -27,6 +27,7 @@
 #include "../../view/IconText.h"
 #include "../../view/ImageView.h"
 #include "BuiltInPlayfieldPresentation.h"
+#include "PlayfieldPresentationCoordinator.h"
 #include "BeatorajaHiSpeedChart.h"
 #include "GameplayNoteJudgeRole.h"
 #include "RealtimeGameplayAuthorityPolicy.h"
@@ -47,7 +48,6 @@
 #endif
 #include "../../targets.h"
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
-#include "PlayfieldPresentationCoordinator.h"
 #include "GameplaySkinSessionFactory.h"
 #include "../../skin/beatoraja/LuaSkinApplicationAudioBackend.h"
 #include "../../skin/beatoraja/LuaSkinCurlHttpTransport.h"

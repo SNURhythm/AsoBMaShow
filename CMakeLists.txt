@@ -1861,6 +1861,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(settings_gameplay_skin_initialization_contract PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
+    add_test(NAME gameplay_scene_feature_off_compile_contract
+        COMMAND ${Python3_EXECUTABLE}
+                tests/gameplay_scene_feature_off_compile_contract.py
+                --build-dir ${CMAKE_BINARY_DIR})
+    set_tests_properties(gameplay_scene_feature_off_compile_contract PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
     add_test(NAME replay_video_ui_batch_contract
         COMMAND ${Python3_EXECUTABLE}
                 -m unittest
