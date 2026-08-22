@@ -412,6 +412,65 @@ void testScalableFontOutlineWorkIsBounded() {
                  "font outline work exceeds atlas preparation limit",
          "a caller cannot relax the fixed scalable-font paint-work safety cap");
 
+  skin::resetSkinTextAtlasPaintBlendOperationsForTesting();
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    const auto lateGlyphFailure = skin::buildSkinTextAtlas(
+        11 + static_cast<skin::SkinTextAtlasId>(attempt),
+        {.font = 1,
+         .pointSize = 24,
+         .fallbackChainDigest = "late-glyph-fixture-" +
+                                std::to_string(attempt),
+         .outlineRgba = {255, 0, 0, 255},
+         .outlineWidth = 2.0},
+        faces, std::set<char32_t>{U'A', U'\U0010ffff'}, {});
+    expect(!lateGlyphFailure.atlas &&
+               lateGlyphFailure.error ==
+                   "font atlas has an unsupported glyph",
+           "a late unsupported glyph rejects the whole scalable atlas");
+  }
+  expect(skin::skinTextAtlasPaintBlendOperationsForTesting() == 0,
+         "repeated late glyph rejection performs no outline blending");
+
+  std::size_t remainingAttemptWork =
+      skin::SkinResourcePolicy::maximumScalableFontPaintBlendOperations;
+  const auto reserveAttemptWork = [&remainingAttemptWork](std::size_t work) {
+    if (work > remainingAttemptWork) return false;
+    remainingAttemptWork -= work;
+    return true;
+  };
+  const skin::SkinTextAtlasKey expensiveKey{
+      .font = 1,
+      .pointSize = 160,
+      .outlineRgba = {255, 0, 0, 255},
+      .outlineWidth = 8.0,
+      .fallbackChainDigest = "post-accounting-fixture"};
+  skin::resetSkinTextAtlasPaintBlendOperationsForTesting();
+  const auto firstDiscarded = skin::buildSkinTextAtlas(
+      13, expensiveKey, faces, printableAscii, {}, skin::SkinSafetyPolicy{},
+      skin::SkinResourcePolicy::maximumScalableFontPaintBlendOperations, {},
+      reserveAttemptWork);
+  const std::size_t workAfterFirst =
+      skin::skinTextAtlasPaintBlendOperationsForTesting();
+  auto secondKey = expensiveKey;
+  secondKey.fallbackChainDigest = "post-accounting-fixture-second";
+  const auto secondDiscarded = skin::buildSkinTextAtlas(
+      14, secondKey, faces, printableAscii, {}, skin::SkinSafetyPolicy{},
+      skin::SkinResourcePolicy::maximumScalableFontPaintBlendOperations, {},
+      reserveAttemptWork);
+  expect(firstDiscarded.atlas &&
+             firstDiscarded.atlas->paintBlendOperations >
+                 skin::SkinResourcePolicy::
+                         maximumScalableFontPaintBlendOperations /
+                     2U,
+         "a valid expensive atlas can consume more than half the attempt budget");
+  expect(!secondDiscarded.atlas &&
+             secondDiscarded.error ==
+                 "font outline work exceeds atlas preparation limit" &&
+             skin::skinTextAtlasPaintBlendOperationsForTesting() ==
+                 workAfterFirst,
+         "discarding a painted atlas does not return its monotonic attempt "
+         "reservation to a repeated optional request");
+
   int cancellationChecks = 0;
   const auto cancelled = skin::buildSkinTextAtlas(
       3,
@@ -1151,6 +1210,59 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   const auto unknownGlyph = service.validateResources({.revision=snapshot.prepared->readView(), .entry=entry, .fileSystem=*stagedFs.fileSystem, .model=unknownGlyphModel, .configuration=configuration, .requiredRuntimeStrings=runtimeStrings});
   expect(!unknownGlyph.valid && hasDiagnostic(unknownGlyph.diagnostics, "skin.resource.glyph_missing"),
          "unknown live text glyphs fail synchronously before resource publication");
+  std::string expensiveText;
+  for (char value = '!'; value <= '~'; ++value) expensiveText.push_back(value);
+  skin::ValidatedBeatorajaSkinModel rejectedAtlasModel;
+  rejectedAtlasModel.model.resources.emplace_back(skin::SkinFontResource{
+      .id = 100,
+      .authoredName = "rejected-outline-font",
+      .virtualPath = "resources/signika.ttf",
+      .type = 0});
+  rejectedAtlasModel.model.objects.push_back(
+      {.id = 100,
+       .authoredName = "first-rejected-outline",
+       .payload = skin::SkinTextObject{
+           .font = 100,
+           .literal = expensiveText,
+           .pointSize = 160,
+           .outlineRgba = {255, 0, 0, 255},
+           .outlineWidth = 8.0},
+       .critical = false});
+  rejectedAtlasModel.model.objects.push_back(
+      {.id = 101,
+       .authoredName = "second-rejected-outline",
+       .payload = skin::SkinTextObject{
+           .font = 100,
+           .literal = expensiveText,
+           .pointSize = 160,
+           .outlineRgba = {0, 255, 0, 255},
+           .outlineWidth = 8.0},
+       .critical = false});
+  skin::setSkinResourceAccountingLimitsForTesting(
+      std::numeric_limits<std::size_t>::max(),
+      /*maximumAtlasSessionBytes=*/0);
+  skin::resetSkinTextAtlasPaintBlendOperationsForTesting();
+  const auto rejectedAtlases = service.validateResources(
+      {.revision = snapshot.prepared->readView(),
+       .entry = entry,
+       .fileSystem = *stagedFs.fileSystem,
+       .model = rejectedAtlasModel,
+       .configuration = configuration});
+  const std::size_t rejectedAtlasPaint =
+      skin::skinTextAtlasPaintBlendOperationsForTesting();
+  skin::resetSkinResourceAccountingLimitsForTesting();
+  expect(rejectedAtlases.valid &&
+             hasDiagnostic(rejectedAtlases.diagnostics,
+                           "skin.resource.atlas_limit") &&
+             rejectedAtlasPaint >
+                 skin::SkinResourcePolicy::
+                         maximumScalableFontPaintBlendOperations /
+                     2U &&
+             rejectedAtlasPaint <=
+                 skin::SkinResourcePolicy::
+                     maximumScalableFontPaintBlendOperations,
+         "repeated optional post-build accounting rejection cannot repaint "
+         "the session scalable-font work budget");
   const auto validated = service.validateResources({.revision=snapshot.prepared->readView(), .entry=entry, .fileSystem=*stagedFs.fileSystem, .model=model, .configuration=configuration, .requiredRuntimeStrings=runtimeStrings});
   expect(validated.valid && !validated.cancelled && validated.diagnostics.size() == 1 &&
              validated.diagnostics.front().code == "skin.resource.missing_optional",

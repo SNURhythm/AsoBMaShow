@@ -950,7 +950,8 @@ std::optional<SkinTextAtlasBuildResult> prepareFontAtlas(
     const std::function<bool()> &cancellationRequested,
     const SkinSafetyPolicy &safetyPolicy, std::stop_token stop,
     BitmapFontPreparationCache &cache,
-    BitmapFontAccountingIdentities &requestAccounting) {
+    BitmapFontAccountingIdentities &requestAccounting,
+    std::size_t &remainingScalableFontPaintAttemptWork) {
   if (request.resolvedFaces.empty()) return std::nullopt;
   if (isBitmapFontFace(request.resolvedFaces.front().path)) {
     const auto faces = readBitmapFontFaces(
@@ -964,10 +965,18 @@ std::optional<SkinTextAtlasBuildResult> prepareFontAtlas(
   const auto faces = readFontFaces(request, files, session, diagnostics,
                                    cancellationRequested, safetyPolicy);
   if (!faces) return std::nullopt;
+  const auto reservePaintAttemptWork =
+      [&remainingScalableFontPaintAttemptWork](std::size_t work) {
+        if (work > remainingScalableFontPaintAttemptWork) return false;
+        remainingScalableFontPaintAttemptWork -= work;
+        return true;
+      };
   return buildSkinTextAtlas(id, request.key, *faces, request.codepoints,
                             request.pairs, safetyPolicy,
-                            session.remainingScalableFontPaintBlendOperations(),
-                            cancellationRequested);
+                            std::min(
+                                session.remainingScalableFontPaintBlendOperations(),
+                                remainingScalableFontPaintAttemptWork),
+                            cancellationRequested, reservePaintAttemptWork);
 }
 
 struct AtlasAccountingDelta {
@@ -2095,6 +2104,8 @@ SkinResourceValidationResult SkinResourcePreparationService::validateResources(
   SkinTextAtlasId atlasId = 1;
   BitmapFontPreparationCache bitmapFontCache;
   std::set<std::string, std::less<>> accountedBitmapPages;
+  std::size_t remainingScalableFontPaintAttemptWork =
+      SkinResourcePolicy::maximumScalableFontPaintBlendOperations;
   for (const auto &request : fontRequests) {
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
     SkinResourceSessionAccounting fontSession = session;
@@ -2102,7 +2113,8 @@ SkinResourceValidationResult SkinResourcePreparationService::validateResources(
     const auto built = prepareFontAtlas(
         atlasId, request, input.fileSystem, fontSession, result.diagnostics,
         [this, &input] { return cancellationRequested(input.stop); },
-        input.safetyPolicy, input.stop, bitmapFontCache, requestAccounting);
+        input.safetyPolicy, input.stop, bitmapFontCache, requestAccounting,
+        remainingScalableFontPaintAttemptWork);
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
     if (!built) continue;
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
@@ -2473,6 +2485,8 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
   SkinTextAtlasId atlasId = 1;
   BitmapFontPreparationCache bitmapFontCache;
   std::set<std::string, std::less<>> accountedBitmapPages;
+  std::size_t remainingScalableFontPaintAttemptWork =
+      SkinResourcePolicy::maximumScalableFontPaintBlendOperations;
   for (const auto &request : fontRequests) {
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
     SkinResourceSessionAccounting fontSession = session;
@@ -2480,7 +2494,8 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
     const auto built = prepareFontAtlas(
         atlasId, request, input.fileSystem, fontSession, result.diagnostics,
         [this, &input] { return cancellationRequested(input.stop); },
-        input.safetyPolicy, input.stop, bitmapFontCache, requestAccounting);
+        input.safetyPolicy, input.stop, bitmapFontCache, requestAccounting,
+        remainingScalableFontPaintAttemptWork);
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
     if (!built) continue;
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
