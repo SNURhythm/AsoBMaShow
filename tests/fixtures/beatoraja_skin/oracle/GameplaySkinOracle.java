@@ -15,6 +15,7 @@ import bms.player.beatoraja.skin.SkinHitErrorVisualizer;
 import bms.player.beatoraja.skin.SkinNoteDistributionGraph;
 import bms.player.beatoraja.skin.SkinObject;
 import bms.player.beatoraja.skin.SkinObject.SkinObjectDestination;
+import bms.player.beatoraja.skin.SkinSlider;
 import bms.player.beatoraja.skin.SkinTimingDistributionGraph;
 import bms.player.beatoraja.skin.SkinTimingVisualizer;
 import bms.player.beatoraja.skin.SkinType;
@@ -25,9 +26,11 @@ import bms.player.beatoraja.skin.property.FloatPropertyFactory;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.TextureData;
+import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.utils.JsonReader;
 import com.badlogic.gdx.utils.JsonValue;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -377,18 +380,88 @@ public final class GameplaySkinOracle {
         throw new IllegalArgumentException("missing destination " + id);
     }
 
+    private static List<Object> renderSamples(SkinObject object,
+                                               JsonSkin.Skin skin, String id,
+                                               long[] times, int viewportWidth,
+                                               int viewportHeight)
+            throws Exception {
+        JsonSkin.Destination selected = null;
+        for (JsonSkin.Destination destination : skin.destination) {
+            if (id.equals(destination.id)) {
+                selected = destination;
+                break;
+            }
+        }
+        if (selected == null || selected.dst.length < 2) {
+            throw new IllegalArgumentException("render destination lacks timed frames " + id);
+        }
+        for (JsonSkin.Animation frame : selected.dst) {
+            object.setDestination(
+                authored(frame.time, 0), authored(frame.x, 0), authored(frame.y, 0),
+                authored(frame.w, 0), authored(frame.h, 0), authored(frame.acc, 0),
+                authored(frame.a, 255), authored(frame.r, 255), authored(frame.g, 255),
+                authored(frame.b, 255), selected.blend, selected.filter,
+                authored(frame.angle, 0), selected.center, selected.loop,
+                selected.timer, new int[0]);
+        }
+        Method prepareColor = SkinObject.class.getDeclaredMethod("prepareColor");
+        Method prepareAngle = SkinObject.class.getDeclaredMethod("prepareAngle");
+        prepareColor.setAccessible(true);
+        prepareAngle.setAccessible(true);
+        float scaleX = viewportWidth / (float)skin.w;
+        float scaleY = viewportHeight / (float)skin.h;
+        List<Object> samples = new ArrayList<>();
+        for (long time : times) {
+            object.prepareRegion(time, null);
+            prepareColor.invoke(object);
+            prepareAngle.invoke(object);
+            samples.add(map(
+                "visualTimeMillis", time,
+                "viewport", map("width", viewportWidth, "height", viewportHeight),
+                "geometry", map(
+                    "x", object.region.x * scaleX,
+                    "y", object.region.y * scaleY,
+                    "width", object.region.width * scaleX,
+                    "height", object.region.height * scaleY,
+                    "angleDegrees", object.angle,
+                    "rgba", List.of(object.color.r, object.color.g,
+                                    object.color.b, object.color.a))));
+        }
+        return samples;
+    }
+
+    private static Map<String,Object> rendered(Map<String,Object> values,
+                                                SkinObject object,
+                                                JsonSkin.Skin skin, String id,
+                                                long[] times, int viewportWidth,
+                                                int viewportHeight)
+            throws Exception {
+        Map<String,Object> result = new LinkedHashMap<>(values);
+        result.put("renderSamples", renderSamples(
+            object, skin, id, times, viewportWidth, viewportHeight));
+        return result;
+    }
+
     private static void structuredCases(Map<String,Object> cases, String prefix,
-                                        JsonSkin.Skin skin, long[] recent)
+                                        JsonSkin.Skin skin, long[] recent,
+                                        long[] times, int viewportWidth,
+                                        int viewportHeight)
             throws Exception {
         JsonSkin.JudgeGraph note = skin.judgegraph[0];
-        cases.put(prefix + ".note-distribution", noteDistribution(
-            new SkinNoteDistributionGraph(note.type, note.delay, note.backTexOff,
-                                          note.orderReverse, note.noGap, note.noGapX)));
+        SkinNoteDistributionGraph noteObject = new SkinNoteDistributionGraph(
+            note.type, note.delay, note.backTexOff, note.orderReverse,
+            note.noGap, note.noGapX);
+        cases.put(prefix + ".note-distribution", rendered(
+            noteDistribution(noteObject), noteObject, skin, note.id,
+            times, viewportWidth, viewportHeight));
         JsonSkin.BPMGraph bpmValue = skin.bpmgraph[0];
-        cases.put(prefix + ".bpm-graph", bpm(new SkinBPMGraph(
+        SkinBPMGraph bpmObject = new SkinBPMGraph(
             bpmValue.delay, bpmValue.lineWidth, bpmValue.mainBPMColor,
             bpmValue.minBPMColor, bpmValue.maxBPMColor, bpmValue.otherBPMColor,
-            bpmValue.stopLineColor, bpmValue.transitionLineColor)));
+            bpmValue.stopLineColor, bpmValue.transitionLineColor);
+        cases.put(prefix + ".bpm-graph", rendered(
+            bpm(bpmObject), bpmObject, skin, bpmValue.id,
+            times, viewportWidth, viewportHeight));
         JsonSkin.GaugeGraph gaugeValue = skin.gaugegraph[0];
         Color[][] gaugeColors = new Color[6][4];
         for (int row = 0; row < 6; ++row) {
@@ -397,32 +470,50 @@ public final class GameplaySkinOracle {
                     Color.valueOf(gaugeValue.color[row * 4 + column]);
             }
         }
-        cases.put(prefix + ".gauge-graph", gauge(new SkinGaugeGraphObject(gaugeColors)));
+        SkinGaugeGraphObject gaugeObject = new SkinGaugeGraphObject(gaugeColors);
+        cases.put(prefix + ".gauge-graph", rendered(
+            gauge(gaugeObject), gaugeObject, skin, gaugeValue.id,
+            times, viewportWidth, viewportHeight));
         JsonSkin.TimingVisualizer timingValue = skin.timingvisualizer[0];
-        cases.put(prefix + ".timing-visualizer", timing(new SkinTimingVisualizer(
+        SkinTimingVisualizer timingObject = new SkinTimingVisualizer(
             timingValue.width, timingValue.judgeWidthMillis, timingValue.lineWidth,
             timingValue.lineColor, timingValue.centerColor, timingValue.PGColor,
             timingValue.GRColor, timingValue.GDColor, timingValue.BDColor,
-            timingValue.PRColor, timingValue.transparent, timingValue.drawDecay)));
+            timingValue.PRColor, timingValue.transparent, timingValue.drawDecay);
+        cases.put(prefix + ".timing-visualizer", rendered(
+            timing(timingObject), timingObject, skin, timingValue.id,
+            times, viewportWidth, viewportHeight));
         JsonSkin.HitErrorVisualizer hit = skin.hiterrorvisualizer[0];
-        cases.put(prefix + ".hit-error-visualizer", hitError(
-            new SkinHitErrorVisualizer(hit.width, hit.judgeWidthMillis,
-                hit.lineWidth, hit.colorMode, hit.hiterrorMode, hit.emaMode,
-                hit.lineColor, hit.centerColor, hit.PGColor, hit.GRColor,
-                hit.GDColor, hit.BDColor, hit.PRColor, hit.emaColor, hit.alpha,
-                hit.windowLength, hit.transparent, hit.drawDecay), recent));
+        SkinHitErrorVisualizer hitObject = new SkinHitErrorVisualizer(
+            hit.width, hit.judgeWidthMillis, hit.lineWidth, hit.colorMode,
+            hit.hiterrorMode, hit.emaMode, hit.lineColor, hit.centerColor,
+            hit.PGColor, hit.GRColor, hit.GDColor, hit.BDColor, hit.PRColor,
+            hit.emaColor, hit.alpha, hit.windowLength, hit.transparent,
+            hit.drawDecay);
+        cases.put(prefix + ".hit-error-visualizer", rendered(
+            hitError(hitObject, recent), hitObject, skin, hit.id,
+            times, viewportWidth, viewportHeight));
         JsonSkin.TimingDistributionGraph distribution = skin.timingdistributiongraph[0];
-        cases.put(prefix + ".timing-distribution", timingDistribution(
-            new SkinTimingDistributionGraph(distribution.width, distribution.lineWidth,
-                distribution.graphColor, distribution.averageColor, distribution.devColor,
-                distribution.PGColor, distribution.GRColor, distribution.GDColor,
+        SkinTimingDistributionGraph distributionObject =
+            new SkinTimingDistributionGraph(
+                distribution.width, distribution.lineWidth,
+                distribution.graphColor, distribution.averageColor,
+                distribution.devColor, distribution.PGColor,
+                distribution.GRColor, distribution.GDColor,
                 distribution.BDColor, distribution.PRColor,
-                distribution.drawAverage, distribution.drawDev)));
+                distribution.drawAverage, distribution.drawDev);
+        cases.put(prefix + ".timing-distribution", rendered(
+            timingDistribution(distributionObject), distributionObject, skin,
+            distribution.id, times, viewportWidth, viewportHeight));
         JsonSkin.Slider slider = skin.slider[0];
-        cases.put(prefix + ".slider", map(
+        SkinSlider sliderObject = new SkinSlider(
+            new TextureRegion[]{new TextureRegion()}, 0, 0, slider.angle,
+            slider.range, slider.type, slider.changeable);
+        cases.put(prefix + ".slider", rendered(map(
             "direction", slider.angle, "range", slider.range,
             "changeable", slider.changeable,
-            "destination", authoredDestination(skin, slider.id)));
+            "destination", authoredDestination(skin, slider.id)), sliderObject,
+            skin, slider.id, times, viewportWidth, viewportHeight));
     }
 
     private static long[] longs(String encoded) {
@@ -449,27 +540,21 @@ public final class GameplaySkinOracle {
         long[] recent = longs(arguments[8]);
         Map<String,Object> cases = new LinkedHashMap<>();
         cases.put("selector.master-volume", selector(masterVolume));
-        structuredCases(cases, "lua", lua, recent);
-        structuredCases(cases, "json", json, recent);
+        structuredCases(cases, "lua", lua, recent, times,
+                        viewportWidth, viewportHeight);
+        structuredCases(cases, "json", json, recent, times,
+                        viewportWidth, viewportHeight);
 
         Path crossLr2 = Path.of(arguments[2]);
         Path allLr2 = Path.of(arguments[3]);
         cases.put("lr2.slider", lr2Slider(crossLr2));
         cases.putAll(lr2Graphs(allLr2));
-        List<Object> sampledFrames = new ArrayList<>();
-        for (long time : times) {
-            sampledFrames.add(map("visualTimeMillis", time,
-                                  "normalized", times[times.length - 1] == 0
-                                      ? 0.0 : time / (double)times[times.length - 1],
-                                  "viewportArea", viewportWidth * viewportHeight));
-        }
         Map<String,Object> execution = map(
             "viewport", map("width", viewportWidth, "height", viewportHeight),
             "visualTimesMillis", java.util.Arrays.stream(times).boxed().toList(),
             "runtimeState", map("masterVolumeRate", (double)masterVolume,
                                 "recentHitErrorsMillis",
                                 java.util.Arrays.stream(recent).boxed().toList()),
-            "sampledFrames", sampledFrames,
             "loadedLuaName", lua.name,
             "loadedJsonName", json.name,
             "longNoteConstants", map(

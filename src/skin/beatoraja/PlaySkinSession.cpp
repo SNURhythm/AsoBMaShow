@@ -15,9 +15,11 @@
 #include <cmath>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <ranges>
+#include <set>
 #include <stop_token>
 #include <string>
 #include <string_view>
@@ -314,6 +316,101 @@ struct PlaySkinSession::OwnedActivation final {
 };
 
 #if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
+PlaySkinModelResourceReferencesForTesting
+skinModelReferencedResourceIdsForTesting(
+    const ValidatedBeatorajaSkinModel &model, bool practiceMode) {
+  (void)practiceMode;
+  PlaySkinModelResourceReferencesForTesting result;
+  std::map<SkinObjectId, const SkinObjectDefinition *> objects;
+  const std::set<SkinObjectId> disabled(model.disabledOptionalObjects.begin(),
+                                        model.disabledOptionalObjects.end());
+  for (const auto &object : model.model.objects) {
+    objects.emplace(object.id, &object);
+  }
+  std::set<SkinObjectId> visited;
+  const auto addSprite = [&](const SkinSpriteFrames &sprite) {
+    result.images.push_back(sprite.resource);
+  };
+  const auto visit = [&](this const auto &self, SkinObjectId id) -> void {
+    if (disabled.contains(id) || !visited.insert(id).second) return;
+    const auto found = objects.find(id);
+    if (found == objects.end()) return;
+    std::visit(
+        [&](const auto &object) {
+          using T = std::decay_t<decltype(object)>;
+          if constexpr (std::is_same_v<T, SkinImageObject>) {
+            for (const auto &state : object.orderedStates) addSprite(state);
+          } else if constexpr (std::is_same_v<T, SkinNumberObject> ||
+                               std::is_same_v<T, SkinFloatObject>) {
+            addSprite(object.digits.positive);
+            if (object.digits.negative) addSprite(*object.digits.negative);
+          } else if constexpr (std::is_same_v<T, SkinTextObject>) {
+            result.textObjects.push_back(found->second->id);
+          } else if constexpr (std::is_same_v<T, SkinSliderObject>) {
+            addSprite(object.knob);
+          } else if constexpr (std::is_same_v<T, SkinGraphObject>) {
+            if (!object.builtinImageReference) addSprite(object.fill);
+          } else if constexpr (std::is_same_v<T, SkinGaugeObject>) {
+            for (const auto &node : object.orderedNodes) addSprite(node);
+          } else if constexpr (std::is_same_v<T, SkinNoteObject>) {
+            for (const auto &lane : object.lanes) {
+              for (const auto &[kind, visual] : lane.visuals) {
+                (void)kind;
+                if (const auto *sprite =
+                        std::get_if<SkinSpriteFrames>(&visual)) {
+                  addSprite(*sprite);
+                }
+              }
+            }
+            for (const auto &line : object.lines) {
+              if (line.sprite) addSprite(*line.sprite);
+            }
+          } else if constexpr (std::is_same_v<T, SkinCoverObject>) {
+            addSprite(object.sprite);
+          } else if constexpr (std::is_same_v<T, SkinJudgeObject>) {
+            for (const auto &grade : object.grades) {
+              if (grade.image) self(grade.image->object);
+              if (grade.detailNumber) self(grade.detailNumber->object);
+            }
+          } else if constexpr (
+              std::is_same_v<T, SkinNoteDistributionGraphObject> ||
+              std::is_same_v<T, SkinGaugeGraphObject> ||
+              std::is_same_v<T, SkinBpmGraphObject> ||
+              std::is_same_v<T, SkinTimingVisualizerObject> ||
+              std::is_same_v<T, SkinTimingDistributionGraphObject> ||
+              std::is_same_v<T, SkinHitErrorVisualizerObject> ||
+              std::is_same_v<T, SkinBgaObject> ||
+              std::is_same_v<T, SkinPracticeObject> ||
+              std::is_same_v<T, SkinBuiltinImageObject> ||
+              std::is_same_v<T, SkinPmCharaObject> ||
+              std::is_same_v<T, SkinInvalidInGameplayObject> ||
+              std::is_same_v<T, SkinBlankObject>) {
+            // These objects either generate pixels, use a separate auxiliary
+            // preparation contract, or have no catalog resource identity.
+          } else {
+            static_assert(!sizeof(T), "unhandled skin resource-bearing object");
+          }
+        },
+        found->second->payload);
+  };
+  for (const auto &object : model.model.objects) visit(object.id);
+  std::ranges::sort(result.images);
+  result.images.erase(std::unique(result.images.begin(), result.images.end()),
+                      result.images.end());
+  std::ranges::sort(result.textObjects);
+  result.textObjects.erase(
+      std::unique(result.textObjects.begin(), result.textObjects.end()),
+      result.textObjects.end());
+  return result;
+}
+
+bool skinResourcePreparationEvidenceCompleteForTesting(
+    const PlaySkinResourcePreparationEvidenceForTesting &evidence) noexcept {
+  return evidence.referencedImageResourceIds ==
+             evidence.preparedImageResourceIds &&
+         evidence.referencedTextObjectIds == evidence.preparedTextObjectIds;
+}
+
 PlaySkinSession::PlaySkinSession(PlaySkinSessionFrameContext context) noexcept
     : owned_(), context_(std::move(context)),
       touchLayoutRevision_(context_.sessionSerial == 0
@@ -399,7 +496,8 @@ PlaySkinResourcePreparationEvidenceForTesting
 PlaySkinSession::resourcePreparationEvidenceForTesting() const {
   PlaySkinResourcePreparationEvidenceForTesting result;
   if (!owned_) return result;
-  auto referenced = skinReferencedResourceIdsForTesting(context_.model, false);
+  auto referenced =
+      skinModelReferencedResourceIdsForTesting(context_.model, false);
   result.referencedImageResourceIds = std::move(referenced.images);
   result.referencedTextObjectIds = std::move(referenced.textObjects);
   if (owned_->resources) {

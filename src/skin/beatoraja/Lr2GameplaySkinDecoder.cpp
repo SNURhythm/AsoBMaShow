@@ -1291,9 +1291,18 @@ private:
 
   SkinNoteVisual noteVisual(
       const std::vector<std::optional<SkinSpriteFrames>> &slots,
-      std::size_t lane, SkinNoteVisualKind kind) const {
-    if (lane < slots.size() && slots[lane]) return *slots[lane];
-    return SkinSynthesizedNoteVisual{.kind = kind};
+      std::size_t lane, SkinNoteVisualKind kind,
+      std::optional<int> authoredSlot = std::nullopt) const {
+    SkinNoteVisual result =
+        lane < slots.size() && slots[lane]
+            ? SkinNoteVisual(*slots[lane])
+            : SkinNoteVisual(SkinSynthesizedNoteVisual{.kind = kind});
+    std::visit(
+        [authoredSlot](auto &visual) {
+          visual.authoredNoteSlot = authoredSlot;
+        },
+        result);
+    return result;
   }
 
   void createNoteObject(const Lr2SkinCommand &command) {
@@ -1329,35 +1338,35 @@ private:
           SkinSynthesizedNoteVisual{.kind = SkinNoteVisualKind::Processed});
       presentation.visuals.emplace(
           SkinNoteVisualKind::LnEnd,
-          noteVisual(lnEnd_, lane, SkinNoteVisualKind::LnEnd));
+          noteVisual(lnEnd_, lane, SkinNoteVisualKind::LnEnd, 0));
       presentation.visuals.emplace(
           SkinNoteVisualKind::LnStart,
-          noteVisual(lnStart_, lane, SkinNoteVisualKind::LnStart));
+          noteVisual(lnStart_, lane, SkinNoteVisualKind::LnStart, 1));
       presentation.visuals.emplace(
           SkinNoteVisualKind::LnBodyActive,
-          noteVisual(lnBodyActive_, lane, SkinNoteVisualKind::LnBodyActive));
+          noteVisual(lnBodyActive_, lane, SkinNoteVisualKind::LnBodyActive, 2));
       presentation.visuals.emplace(
           SkinNoteVisualKind::LnBodyInactive,
-          noteVisual(lnBody_, lane, SkinNoteVisualKind::LnBodyInactive));
+          noteVisual(lnBody_, lane, SkinNoteVisualKind::LnBodyInactive, 3));
       presentation.visuals.emplace(
           SkinNoteVisualKind::HcnEnd,
-          noteVisual(hcnEnd_, lane, SkinNoteVisualKind::HcnEnd));
+          noteVisual(hcnEnd_, lane, SkinNoteVisualKind::HcnEnd, 4));
       presentation.visuals.emplace(
           SkinNoteVisualKind::HcnStart,
-          noteVisual(hcnStart_, lane, SkinNoteVisualKind::HcnStart));
+          noteVisual(hcnStart_, lane, SkinNoteVisualKind::HcnStart, 5));
       presentation.visuals.emplace(
           SkinNoteVisualKind::HcnBodyActive,
           noteVisual(hcnBodyActive_, lane,
-                     SkinNoteVisualKind::HcnBodyActive));
+                     SkinNoteVisualKind::HcnBodyActive, 6));
       presentation.visuals.emplace(
           SkinNoteVisualKind::HcnBodyInactive,
-          noteVisual(hcnBody_, lane, SkinNoteVisualKind::HcnBodyInactive));
+          noteVisual(hcnBody_, lane, SkinNoteVisualKind::HcnBodyInactive, 7));
       presentation.visuals.emplace(
           SkinNoteVisualKind::HcnDamage,
-          noteVisual(hcnDamage_, lane, SkinNoteVisualKind::HcnDamage));
+          noteVisual(hcnDamage_, lane, SkinNoteVisualKind::HcnDamage, 8));
       presentation.visuals.emplace(
           SkinNoteVisualKind::HcnReactive,
-          noteVisual(hcnReactive_, lane, SkinNoteVisualKind::HcnReactive));
+          noteVisual(hcnReactive_, lane, SkinNoteVisualKind::HcnReactive, 9));
       note.lanes.push_back(std::move(presentation));
     }
     noteObject_ = addObject(std::move(note), command);

@@ -115,7 +115,7 @@ class GameplaySkinOracleTests(unittest.TestCase):
         self.assertEqual(trace["referenceCommit"], PINNED_COMMIT)
         self.assertEqual(trace["oracle"], "pinned-beatoraja-gameplay-v1")
         self.assertEqual(trace["frame"], {
-            "viewport": {"width": 1280, "height": 720},
+            "viewport": {"width": 960, "height": 540},
             "visualTimesMillis": [0, 250, 500, 1500],
             "runtimeState": {
                 "masterVolumeRate": 0.5,
@@ -177,6 +177,37 @@ class GameplaySkinOracleTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stdout)
+
+    def test_loader_cases_contain_source_evaluated_time_indexed_geometry(self):
+        trace = self.require_trace()
+        times = trace["frame"]["visualTimesMillis"]
+        viewport = trace["frame"]["viewport"]
+        rendered = [
+            case for case in trace["cases"]
+            if case["executedFormat"] in {"lua", "json"}
+            and case["id"] != "selector.master-volume"
+        ]
+        self.assertTrue(rendered)
+        for case in rendered:
+            with self.subTest(case=case["id"]):
+                samples = case["source"]["renderSamples"]
+                self.assertEqual(
+                    [sample["visualTimeMillis"] for sample in samples], times
+                )
+                self.assertTrue(all(sample["viewport"] == viewport for sample in samples))
+                geometries = [sample["geometry"] for sample in samples]
+                self.assertTrue(all(set(geometry) == {
+                    "x", "y", "width", "height", "angleDegrees", "rgba"
+                } for geometry in geometries))
+                self.assertGreater(
+                    len({json.dumps(value, sort_keys=True) for value in geometries}),
+                    1,
+                    "source destination evaluation must change across fixed times",
+                )
+                self.assertAlmostEqual(
+                    geometries[0]["x"], 7.5, delta=1e-6,
+                    msg="declared viewport must project authored x=10",
+                )
 
     def test_aso_trace_matches_pinned_source_with_declared_tolerances(self):
         trace = self.require_trace()

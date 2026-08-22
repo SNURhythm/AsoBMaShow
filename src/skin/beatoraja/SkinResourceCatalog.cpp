@@ -243,26 +243,6 @@ CollectedResourceUses collectResourceUses(
   return result;
 }
 
-#if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
-SkinReferencedResourceIdsForTesting collectResourceIdsForTestingInternal(
-    const ValidatedBeatorajaSkinModel &model, bool practiceMode) {
-  const auto uses = collectResourceUses(model, practiceMode);
-  SkinReferencedResourceIdsForTesting result;
-  for (const auto &[id, use] : uses.images) {
-    (void)use;
-    result.images.push_back(id);
-  }
-  for (const auto &text : uses.texts) {
-    result.textObjects.push_back(text.object);
-  }
-  std::ranges::sort(result.textObjects);
-  result.textObjects.erase(
-      std::unique(result.textObjects.begin(), result.textObjects.end()),
-      result.textObjects.end());
-  return result;
-}
-#endif
-
 SkinDiagnostic useDiagnostic(std::string criticalCode, std::string optionalCode,
                             std::string message, bool critical) {
   return {.code = critical ? std::move(criticalCode) : std::move(optionalCode),
@@ -1072,13 +1052,6 @@ void resetSkinResourceAccountingLimitsForTesting() noexcept {
 
 std::size_t skinResourceCommittedEncodedBytesForTesting() noexcept {
   return committedEncodedBytesForTesting.load(std::memory_order_relaxed);
-}
-#endif
-
-#if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
-SkinReferencedResourceIdsForTesting skinReferencedResourceIdsForTesting(
-    const ValidatedBeatorajaSkinModel &model, bool practiceMode) {
-  return collectResourceIdsForTestingInternal(model, practiceMode);
 }
 #endif
 

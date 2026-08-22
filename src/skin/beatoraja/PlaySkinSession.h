@@ -35,6 +35,17 @@ struct PlaySkinResourcePreparationEvidenceForTesting {
   std::vector<SkinObjectId> preparedTextObjectIds;
 };
 
+struct PlaySkinModelResourceReferencesForTesting {
+  std::vector<SkinResourceId> images;
+  std::vector<SkinObjectId> textObjects;
+};
+
+[[nodiscard]] PlaySkinModelResourceReferencesForTesting
+skinModelReferencedResourceIdsForTesting(
+    const ValidatedBeatorajaSkinModel &, bool practiceMode);
+[[nodiscard]] bool skinResourcePreparationEvidenceCompleteForTesting(
+    const PlaySkinResourcePreparationEvidenceForTesting &) noexcept;
+
 void resetPomyuCyclePreparationCountersForTesting() noexcept;
 [[nodiscard]] std::size_t pomyuCycleFileReadsForTesting() noexcept;
 [[nodiscard]] std::size_t pomyuRequirementParsesForTesting() noexcept;

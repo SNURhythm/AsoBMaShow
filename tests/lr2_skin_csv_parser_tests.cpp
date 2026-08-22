@@ -1,5 +1,6 @@
 #include "skin/SkinStoragePaths.h"
 #include "skin/beatoraja/Lr2SkinCsvParser.h"
+#include "gameplay_skin_ledger_evidence.h"
 #include "skin/beatoraja/Lr2SkinHeaderDecoder.h"
 #include "skin/package/SkinAliasDetector.h"
 #include "skin/package/SkinPathPolicy.h"
@@ -339,7 +340,7 @@ void testMalformedSetOptionCannotActivateIncludes() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
   testCp932TokenizationIncludesAndHeader();
   testPinnedDefaults();
   testCycleGuardRetainsSafeSiblings();
@@ -347,10 +348,7 @@ int main() {
   testFalseConditionDoesNotReadOrDiagnoseIncludes();
   testMalformedSetOptionCannotActivateIncludes();
 
-  if (failures != 0) {
-    std::cerr << failures << " LR2 skin parser test(s) failed\n";
-    return 1;
-  }
-  std::cout << "LR2 skin CSV parser tests passed\n";
-  return 0;
+  return gameplay_skin_ledger_evidence::finish(
+      argc, argv, "lr2_skin_csv_parser_tests", failures,
+      "LR2 skin parser test(s) failed", "LR2 skin CSV parser tests passed");
 }

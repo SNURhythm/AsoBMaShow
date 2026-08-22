@@ -4140,6 +4140,21 @@ void testEveryLongNoteBodyStateUsesItsDistinctVisualRole() {
 
   auto note = gameplayNoteObject(resources);
   note.hcnBodySlotLayout = SkinHcnBodySlotLayout::Modern;
+  const auto setAuthoredSlot = [&](SkinNoteVisualKind kind, int slot) {
+    std::visit(
+        [slot](auto &visual) { visual.authoredNoteSlot = slot; },
+        note.lanes.front().visuals.at(kind));
+  };
+  setAuthoredSlot(SkinNoteVisualKind::LnEnd, 0);
+  setAuthoredSlot(SkinNoteVisualKind::LnStart, 1);
+  setAuthoredSlot(SkinNoteVisualKind::LnBodyActive, 2);
+  setAuthoredSlot(SkinNoteVisualKind::LnBodyInactive, 3);
+  setAuthoredSlot(SkinNoteVisualKind::HcnEnd, 4);
+  setAuthoredSlot(SkinNoteVisualKind::HcnStart, 5);
+  setAuthoredSlot(SkinNoteVisualKind::HcnBodyActive, 6);
+  setAuthoredSlot(SkinNoteVisualKind::HcnBodyInactive, 7);
+  setAuthoredSlot(SkinNoteVisualKind::HcnDamage, 9);
+  setAuthoredSlot(SkinNoteVisualKind::HcnReactive, 8);
   ValidatedBeatorajaSkinModel model;
   model.model.objects = {{.id = 1,
                           .authoredName = "long-note-roles",
@@ -4175,6 +4190,12 @@ void testEveryLongNoteBodyStateUsesItsDistinctVisualRole() {
   auto &legacyNote =
       std::get<SkinNoteObject>(model.model.objects.front().payload);
   legacyNote.hcnBodySlotLayout = SkinHcnBodySlotLayout::Legacy;
+  std::visit([](auto &visual) { visual.authoredNoteSlot = 8; },
+             legacyNote.lanes.front().visuals.at(
+                 SkinNoteVisualKind::HcnDamage));
+  std::visit([](auto &visual) { visual.authoredNoteSlot = 9; },
+             legacyNote.lanes.front().visuals.at(
+                 SkinNoteVisualKind::HcnReactive));
   const auto legacyResult = evaluate(renderer, runtime, model, resources, state, 2);
   std::vector<int> legacySlots;
   if (legacyResult.submitReady) {
@@ -4184,6 +4205,21 @@ void testEveryLongNoteBodyStateUsesItsDistinctVisualRole() {
   }
   expect(legacySlots == expectedSlots,
          "legacy long-note draw commands retain pinned Beatoraja slots");
+
+  auto &legacyLane = legacyNote.lanes.front();
+  std::swap(legacyLane.visuals.at(SkinNoteVisualKind::HcnDamage),
+            legacyLane.visuals.at(SkinNoteVisualKind::HcnReactive));
+  const auto swappedResult =
+      evaluate(renderer, runtime, model, resources, state, 3);
+  std::vector<int> swappedSlots;
+  if (swappedResult.submitReady) {
+    for (const auto &command : swappedResult.submitReady->commands) {
+      swappedSlots.push_back(command.longNoteSlotForTesting);
+    }
+  }
+  expect(swappedSlots != expectedSlots,
+         "observed long-note slots follow swapped authored visuals rather "
+         "than semantic renderer intent");
 }
 
 void testProjectedLineEmitsEveryLaneGroupAndIgnoresNestedClip() {

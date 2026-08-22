@@ -7,6 +7,7 @@
 #include "skin/beatoraja/LuaSkinTableDecoder.h"
 #include "skin/beatoraja/PlaySkinViewport.h"
 #include "skin/beatoraja/Skin2DRenderer.h"
+#include "skin/beatoraja/SkinDestinationEvaluator.h"
 #include "skin/beatoraja/SkinModelValidator.h"
 #include "skin/package/SkinAliasDetector.h"
 #include "skin/package/SkinPathPolicy.h"
@@ -319,8 +320,8 @@ Json canonicalOverlap(const BeatorajaSkinModel &model) {
   expect(binding != model.floatProperties.end(),
          "parity slider binding is present");
   const auto *destination = findDestination(model, object->id);
-  expect(destination != nullptr && destination->presentation.frames.size() == 1,
-         "parity slider has one destination frame");
+  expect(destination != nullptr && destination->presentation.frames.size() == 2,
+         "parity slider retains both time-indexed destination frames");
   const auto resource = std::ranges::find_if(
       model.resources, [&](const SkinResourceDefinition &candidate) {
         const auto *image = std::get_if<SkinImageResource>(&candidate);
@@ -448,6 +449,42 @@ Json oracleDestination(const BeatorajaSkinModel &model,
           {"acceleration", frame.acceleration},
           {"rgba", packedRgba(frame.rgba)},
           {"angleDegrees", static_cast<int>(frame.angleDegrees)}};
+}
+
+Json oracleRenderSamples(const BeatorajaSkinModel &model,
+                         const SkinObjectDefinition &object) {
+  constexpr int viewportWidth = 960;
+  constexpr int viewportHeight = 540;
+  constexpr std::array<std::int64_t, 4> times{0, 250, 500, 1500};
+  const auto *destination = findDestination(model, object.id);
+  expect(destination != nullptr, "oracle render object retains a destination");
+  Json samples = Json::array();
+  if (!destination) return samples;
+  const double scaleX = static_cast<double>(viewportWidth) / model.header.width;
+  const double scaleY = static_cast<double>(viewportHeight) / model.header.height;
+  for (const auto time : times) {
+    const auto evaluated = evaluateSkinDestinationAuthored(
+        destination->presentation,
+        {.nowMicros = time * 1000,
+         .timerStartMicros = 0,
+         .optionConditions = {},
+         .orderedOffsets = {}});
+    expect(evaluated.geometry.has_value() && evaluated.diagnostics.empty(),
+           "oracle destination evaluates at the fixed source time");
+    if (!evaluated.geometry) continue;
+    const auto &geometry = *evaluated.geometry;
+    samples.push_back({
+        {"visualTimeMillis", time},
+        {"viewport", {{"width", viewportWidth}, {"height", viewportHeight}}},
+        {"geometry",
+         {{"x", geometry.rect.x * scaleX},
+          {"y", geometry.rect.y * scaleY},
+          {"width", geometry.rect.width * scaleX},
+          {"height", geometry.rect.height * scaleY},
+          {"angleDegrees", static_cast<int>(geometry.angleDegrees)},
+          {"rgba", geometry.rgba}}}});
+  }
+  return samples;
 }
 
 Json noteDistributionOracle(const SkinNoteDistributionGraphObject &value) {
@@ -588,22 +625,35 @@ Json gameplayOracleTrace() {
     const std::string base(prefix);
     result[base + ".note-distribution"] = noteDistributionOracle(
         std::get<SkinNoteDistributionGraphObject>(note->payload));
+    result[base + ".note-distribution"]["renderSamples"] =
+        oracleRenderSamples(model, *note);
     result[base + ".bpm-graph"] =
         bpmOracle(std::get<SkinBpmGraphObject>(bpm->payload));
+    result[base + ".bpm-graph"]["renderSamples"] =
+        oracleRenderSamples(model, *bpm);
     result[base + ".gauge-graph"] =
         gaugeOracle(std::get<SkinGaugeGraphObject>(gauge->payload));
+    result[base + ".gauge-graph"]["renderSamples"] =
+        oracleRenderSamples(model, *gauge);
     result[base + ".timing-visualizer"] =
         timingOracle(std::get<SkinTimingVisualizerObject>(timing->payload));
+    result[base + ".timing-visualizer"]["renderSamples"] =
+        oracleRenderSamples(model, *timing);
     result[base + ".hit-error-visualizer"] =
         hitErrorOracle(std::get<SkinHitErrorVisualizerObject>(hit->payload));
+    result[base + ".hit-error-visualizer"]["renderSamples"] =
+        oracleRenderSamples(model, *hit);
     result[base + ".timing-distribution"] = timingDistributionOracle(
         std::get<SkinTimingDistributionGraphObject>(distribution->payload));
+    result[base + ".timing-distribution"]["renderSamples"] =
+        oracleRenderSamples(model, *distribution);
     const auto &value = std::get<SkinSliderObject>(formatSlider->payload);
     result[base + ".slider"] = {
         {"direction", value.direction},
         {"range", static_cast<int>(value.range)},
         {"changeable", value.changeable},
-        {"destination", oracleDestination(model, *formatSlider)}};
+        {"destination", oracleDestination(model, *formatSlider)},
+        {"renderSamples", oracleRenderSamples(model, *formatSlider)}};
   };
   appendStructured("lua", luaModel);
   appendStructured("json", jsonModel);

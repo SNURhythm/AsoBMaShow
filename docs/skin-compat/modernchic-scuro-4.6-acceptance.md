@@ -69,8 +69,8 @@ movie bytes.
 | Resource preparation | complete; all referenced resources prepared |
 | Image / font / movie / audio decodes | 22 / 5 / 1 / 0 |
 | Texture uploads | 27 |
-| Lua callback frames / maximum wall time / budget | 3 / 49 us / 6,000 us |
-| Loading telemetry / independently measured load | 1,906,739 us / 1,910,393 us |
+| Lua callback frames / maximum wall time / budget | 3 / 47 us / 6,000 us |
+| Loading telemetry / independently measured load | 1,854,801 us / 1,858,455 us |
 | Other diagnostic codes | `skin.renderer.text.glyph` |
 
 The remaining glyph diagnostic is not an unsupported gameplay object, field,

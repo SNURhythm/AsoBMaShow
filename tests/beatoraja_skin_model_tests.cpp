@@ -4,6 +4,7 @@
 #include "skin/beatoraja/SkinModelValidator.h"
 #include "skin/beatoraja/SkinCoverNormalization.h"
 #include "lua_skin_binding_test_support.h"
+#include "gameplay_skin_ledger_evidence.h"
 
 #include "skin/SkinStoragePaths.h"
 #include "skin/beatoraja/LuaSkinFileSystem.h"
@@ -2520,7 +2521,7 @@ return {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
   testGameplayTimingPreservesDefaultsAndEveryAuthoredField();
   testPropertyInterningIncludesIntegerAndFloatDomains();
   testStableIdsAndPerUseFrameExpansionAreSourceNeutral();
@@ -2560,10 +2561,7 @@ int main() {
   testPomyuCharaCycleExtractionBoundsHostileFields();
   testPomyuCharaDefinitionPreservesPinnedSourceFields();
   testPracticeObjectClampsVisibleItemsAndKeepsItsDestination();
-  if (failures != 0) {
-    std::cerr << failures << " assertion(s) failed\n";
-    return 1;
-  }
-  std::cout << "beatoraja skin model tests passed\n";
-  return 0;
+  return gameplay_skin_ledger_evidence::finish(
+      argc, argv, "beatoraja_skin_model_tests", failures,
+      "assertion(s) failed", "beatoraja skin model tests passed");
 }

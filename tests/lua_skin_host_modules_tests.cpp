@@ -1,6 +1,7 @@
 #include "skin/beatoraja/LuaSkinFileIo.h"
 #include "skin/beatoraja/LuaSkinAudioHost.h"
 #include "skin/beatoraja/LuaSkinHostModules.h"
+#include "gameplay_skin_ledger_evidence.h"
 #include "skin/beatoraja/LuaSkinHttpClient.h"
 #include "skin/beatoraja/LuaSkinLegacyInputHost.h"
 #include "skin/beatoraja/LuaSkinRuntime.h"
@@ -1678,7 +1679,7 @@ void testLuaHostPhysicalPathsPreserveUtf8Bytes() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
   testExactShapeAndEnabledOptionsPreserveAuthoredDuplicates();
   testGetPathUsesBeatorajaEntryParentPaths();
   testGetPathUsesBeatorajaSourceSemantics();
@@ -1700,10 +1701,7 @@ int main() {
   testLuaHostCapsLineReadsBeforeGrowingHostStrings();
   testLuaSeekArithmeticClampsOrRejectsWithoutOverflow();
   testLuaHostPhysicalPathsPreserveUtf8Bytes();
-  if (failures != 0) {
-    std::cerr << failures << " assertion(s) failed\n";
-    return 1;
-  }
-  std::cout << "lua skin host modules tests passed\n";
-  return 0;
+  return gameplay_skin_ledger_evidence::finish(
+      argc, argv, "lua_skin_host_modules_tests", failures,
+      "assertion(s) failed", "lua skin host modules tests passed");
 }

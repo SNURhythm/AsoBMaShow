@@ -2356,7 +2356,12 @@ bool buildNoteObject(GameplayDecodeRequest &request, RawSkinNote &note) {
         }
         lane.visuals.emplace(kind, *sprite);
       } else {
-        lane.visuals.emplace(kind, SkinSynthesizedNoteVisual{.kind = kind});
+        const auto &fallback = std::get<SkinSynthesizedNoteFallback>(
+            normalizedLane.visuals[visualIndex]);
+        lane.visuals.emplace(
+            kind, SkinSynthesizedNoteVisual{
+                      .kind = kind,
+                      .authoredNoteSlot = fallback.authoredNoteSlot});
       }
     }
     note.object.lanes.push_back(std::move(lane));

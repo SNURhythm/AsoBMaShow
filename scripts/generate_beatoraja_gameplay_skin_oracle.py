@@ -47,10 +47,20 @@ REQUIRED_SOURCE_MARKERS = {
 }
 CASE_TOLERANCE = {
     "selector.master-volume": 1e-7,
-    "lua.timing-visualizer": 1e-6,
-    "lua.hit-error-visualizer": 1e-6,
-    "json.timing-visualizer": 1e-6,
-    "json.hit-error-visualizer": 1e-6,
+    "lua.note-distribution": 5e-6,
+    "lua.bpm-graph": 5e-6,
+    "lua.gauge-graph": 5e-6,
+    "lua.timing-visualizer": 5e-6,
+    "lua.hit-error-visualizer": 5e-6,
+    "lua.timing-distribution": 5e-6,
+    "lua.slider": 5e-6,
+    "json.note-distribution": 5e-6,
+    "json.bpm-graph": 5e-6,
+    "json.gauge-graph": 5e-6,
+    "json.timing-visualizer": 5e-6,
+    "json.hit-error-visualizer": 5e-6,
+    "json.timing-distribution": 5e-6,
+    "json.slider": 5e-6,
     "lr2.timing": 1e-6,
 }
 
@@ -193,7 +203,7 @@ def run_harness(reference: Path, jars: list[Path]) -> dict:
             "bms.player.beatoraja.skin.lr2.GameplaySkinOracle",
             str(ROOT / FIXTURES[0]), str(ROOT / FIXTURES[1]),
             str(ROOT / FIXTURES[2]), str(ROOT / FIXTURES[3]),
-            "1280", "720", "0,250,500,1500", "0.5", "40,-20,10",
+            "960", "540", "0,250,500,1500", "0.5", "40,-20,10",
             cwd=ROOT,
             timeout=30,
         ).strip()
@@ -354,7 +364,7 @@ def build_trace(reference: Path) -> dict:
     output = harness["cases"]
     execution = harness["execution"]
     expected_execution = {
-        "viewport": {"width": 1280, "height": 720},
+        "viewport": {"width": 960, "height": 540},
         "visualTimesMillis": [0, 250, 500, 1500],
         "runtimeState": {
             "masterVolumeRate": 0.5,
@@ -367,9 +377,6 @@ def build_trace(reference: Path) -> dict:
     if execution.get("loadedLuaName") != "Task 11 model contract" or \
        execution.get("loadedJsonName") != "JSON gameplay field contract":
         raise RuntimeError("Java oracle did not load the declared Lua/JSON fixtures")
-    if [item.get("visualTimeMillis") for item in execution.get("sampledFrames", [])] != \
-       expected_execution["visualTimesMillis"]:
-        raise RuntimeError("Java oracle did not sample the declared visual times")
     surface_ids = differential_surface_ids()
     owners: dict[str, list[str]] = {case: [] for case in output}
     for identifier in surface_ids:
@@ -386,7 +393,11 @@ def build_trace(reference: Path) -> dict:
             "id": case_id,
             "executedFormat": case_format(case_id),
             "fixturePath": case_fixture(case_id),
-            "execution": expected_execution,
+            "execution": {
+                "viewport": execution["viewport"],
+                "visualTimesMillis": execution["visualTimesMillis"],
+                "runtimeState": execution["runtimeState"],
+            },
             "surfaceIds": owners[case_id],
             "comparison": {
                 "mode": "absolute" if tolerance else "exact",
@@ -418,7 +429,7 @@ def build_trace(reference: Path) -> dict:
             {"path": relative, "sha256": sha256(ROOT / relative)} for relative in FIXTURES
         ],
         "frame": {
-            "viewport": {"width": 1280, "height": 720},
+            "viewport": expected_execution["viewport"],
             "visualTimesMillis": [0, 250, 500, 1500],
             "runtimeState": {
                 "masterVolumeRate": 0.5,

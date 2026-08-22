@@ -80,9 +80,14 @@ validateSelectedArrays(std::size_t laneCount,
 }
 
 void setVisual(SkinNormalizedNoteLane &lane, SkinNoteVisualKind kind,
-               const SkinAuthoredNoteVisualSlot &authored) {
-  lane.visuals[visualIndex(kind)] =
-      authored ? SkinNormalizedNoteVisual(*authored) : fallbackFor(kind);
+               const SkinAuthoredNoteVisualSlot &authored,
+               std::optional<int> authoredSlot = std::nullopt) {
+  auto visual = authored ? SkinNormalizedNoteVisual(*authored)
+                         : fallbackFor(kind);
+  std::visit(
+      [authoredSlot](auto &value) { value.authoredNoteSlot = authoredSlot; },
+      visual);
+  lane.visuals[visualIndex(kind)] = std::move(visual);
 }
 
 } // namespace
@@ -130,17 +135,19 @@ normalizeSkinNote(const SkinNoteNormalizationInput &input) {
         fallbackFor(SkinNoteVisualKind::Hidden);
     lane.visuals[visualIndex(SkinNoteVisualKind::Processed)] =
         fallbackFor(SkinNoteVisualKind::Processed);
-    setVisual(lane, SkinNoteVisualKind::LnEnd, input.lnEnd[laneIndex]);
-    setVisual(lane, SkinNoteVisualKind::LnStart, input.lnStart[laneIndex]);
-    setVisual(lane, SkinNoteVisualKind::LnBodyActive, lnActive[laneIndex]);
-    setVisual(lane, SkinNoteVisualKind::LnBodyInactive, lnInactive[laneIndex]);
-    setVisual(lane, SkinNoteVisualKind::HcnEnd, input.hcnEnd[laneIndex]);
-    setVisual(lane, SkinNoteVisualKind::HcnStart, input.hcnStart[laneIndex]);
-    setVisual(lane, SkinNoteVisualKind::HcnBodyActive, hcnActive[laneIndex]);
+    setVisual(lane, SkinNoteVisualKind::LnEnd, input.lnEnd[laneIndex], 0);
+    setVisual(lane, SkinNoteVisualKind::LnStart, input.lnStart[laneIndex], 1);
+    setVisual(lane, SkinNoteVisualKind::LnBodyActive, lnActive[laneIndex], 2);
+    setVisual(lane, SkinNoteVisualKind::LnBodyInactive, lnInactive[laneIndex], 3);
+    setVisual(lane, SkinNoteVisualKind::HcnEnd, input.hcnEnd[laneIndex], 4);
+    setVisual(lane, SkinNoteVisualKind::HcnStart, input.hcnStart[laneIndex], 5);
+    setVisual(lane, SkinNoteVisualKind::HcnBodyActive, hcnActive[laneIndex], 6);
     setVisual(lane, SkinNoteVisualKind::HcnBodyInactive,
-              hcnInactive[laneIndex]);
-    setVisual(lane, SkinNoteVisualKind::HcnDamage, hcnDamage[laneIndex]);
-    setVisual(lane, SkinNoteVisualKind::HcnReactive, hcnReactive[laneIndex]);
+              hcnInactive[laneIndex], 7);
+    setVisual(lane, SkinNoteVisualKind::HcnDamage, hcnDamage[laneIndex],
+              modernHcn ? 9 : 8);
+    setVisual(lane, SkinNoteVisualKind::HcnReactive, hcnReactive[laneIndex],
+              modernHcn ? 8 : 9);
     normalized.lanes.push_back(std::move(lane));
   }
 

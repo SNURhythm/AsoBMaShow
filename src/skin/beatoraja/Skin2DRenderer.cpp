@@ -2550,23 +2550,11 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
     output.primitiveVertices += lowered.primitiveVertices;
 #if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING) ||                         \
     defined(ASOBMASHOW_SKIN_RENDERER_TESTING)
-    const auto slot = [kind, layout = note.hcnBodySlotLayout]() {
-      switch (kind) {
-      case SkinNoteVisualKind::LnEnd: return 0;
-      case SkinNoteVisualKind::LnStart: return 1;
-      case SkinNoteVisualKind::LnBodyActive: return 2;
-      case SkinNoteVisualKind::LnBodyInactive: return 3;
-      case SkinNoteVisualKind::HcnEnd: return 4;
-      case SkinNoteVisualKind::HcnStart: return 5;
-      case SkinNoteVisualKind::HcnBodyActive: return 6;
-      case SkinNoteVisualKind::HcnBodyInactive: return 7;
-      case SkinNoteVisualKind::HcnReactive:
-        return layout == SkinHcnBodySlotLayout::Modern ? 8 : 9;
-      case SkinNoteVisualKind::HcnDamage:
-        return layout == SkinHcnBodySlotLayout::Modern ? 9 : 8;
-      default: return -1;
-      }
-    }();
+    const auto slot = std::visit(
+        [](const auto &selected) {
+          return selected.authoredNoteSlot.value_or(-1);
+        },
+        *visual);
     for (auto &command : lowered.commands) {
       command.longNoteSlotForTesting = slot;
     }

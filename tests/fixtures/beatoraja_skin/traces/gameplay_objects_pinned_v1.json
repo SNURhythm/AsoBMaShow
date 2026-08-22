@@ -16,8 +16,8 @@
           ]
         },
         "viewport": {
-          "height": 720,
-          "width": 1280
+          "height": 540,
+          "width": 960
         },
         "visualTimesMillis": [
           0,
@@ -38,8 +38,8 @@
     },
     {
       "comparison": {
-        "mode": "exact",
-        "tolerance": 0
+        "mode": "absolute",
+        "tolerance": 5e-06
       },
       "executedFormat": "lua",
       "execution": {
@@ -52,8 +52,8 @@
           ]
         },
         "viewport": {
-          "height": 720,
-          "width": 1280
+          "height": 540,
+          "width": 960
         },
         "visualTimesMillis": [
           0,
@@ -69,6 +69,88 @@
         "delayMillis": 750,
         "noGap": true,
         "noHorizontalGap": true,
+        "renderSamples": [
+          {
+            "geometry": {
+              "angleDegrees": 0,
+              "height": 37.5,
+              "rgba": [
+                0.039215688,
+                0.078431375,
+                0.11764706,
+                1.0
+              ],
+              "width": 75.0,
+              "x": 7.5,
+              "y": 15.0
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 0
+          },
+          {
+            "geometry": {
+              "angleDegrees": 5,
+              "height": 41.25,
+              "rgba": [
+                0.098039225,
+                0.13725491,
+                0.1764706,
+                0.9169935
+              ],
+              "width": 81.25,
+              "x": 20.0,
+              "y": 21.25
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 250
+          },
+          {
+            "geometry": {
+              "angleDegrees": 10,
+              "height": 45.0,
+              "rgba": [
+                0.15686275,
+                0.19607845,
+                0.23529413,
+                0.83398694
+              ],
+              "width": 87.5,
+              "x": 32.5,
+              "y": 27.5
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 500
+          },
+          {
+            "geometry": {
+              "angleDegrees": 0,
+              "height": 37.5,
+              "rgba": [
+                0.039215688,
+                0.078431375,
+                0.11764706,
+                1.0
+              ],
+              "width": 75.0,
+              "x": 7.5,
+              "y": 15.0
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 1500
+          }
+        ],
         "reverseOrder": true,
         "type": 2
       },
@@ -85,8 +167,8 @@
     },
     {
       "comparison": {
-        "mode": "exact",
-        "tolerance": 0
+        "mode": "absolute",
+        "tolerance": 5e-06
       },
       "executedFormat": "lua",
       "execution": {
@@ -99,8 +181,8 @@
           ]
         },
         "viewport": {
-          "height": 720,
-          "width": 1280
+          "height": 540,
+          "width": 960
         },
         "visualTimesMillis": [
           0,
@@ -121,7 +203,89 @@
           1364349951
         ],
         "delayMillis": 30,
-        "lineWidth": 3
+        "lineWidth": 3,
+        "renderSamples": [
+          {
+            "geometry": {
+              "angleDegrees": 0,
+              "height": 37.5,
+              "rgba": [
+                0.039215688,
+                0.078431375,
+                0.11764706,
+                1.0
+              ],
+              "width": 75.0,
+              "x": 7.5,
+              "y": 15.0
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 0
+          },
+          {
+            "geometry": {
+              "angleDegrees": 5,
+              "height": 41.25,
+              "rgba": [
+                0.098039225,
+                0.13725491,
+                0.1764706,
+                0.9169935
+              ],
+              "width": 81.25,
+              "x": 20.0,
+              "y": 21.25
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 250
+          },
+          {
+            "geometry": {
+              "angleDegrees": 10,
+              "height": 45.0,
+              "rgba": [
+                0.15686275,
+                0.19607845,
+                0.23529413,
+                0.83398694
+              ],
+              "width": 87.5,
+              "x": 32.5,
+              "y": 27.5
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 500
+          },
+          {
+            "geometry": {
+              "angleDegrees": 0,
+              "height": 37.5,
+              "rgba": [
+                0.039215688,
+                0.078431375,
+                0.11764706,
+                1.0
+              ],
+              "width": 75.0,
+              "x": 7.5,
+              "y": 15.0
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 1500
+          }
+        ]
       },
       "surfaceIds": [
         "lua.object-field.bpmgraph-delay",
@@ -138,8 +302,8 @@
     },
     {
       "comparison": {
-        "mode": "exact",
-        "tolerance": 0
+        "mode": "absolute",
+        "tolerance": 5e-06
       },
       "executedFormat": "lua",
       "execution": {
@@ -152,8 +316,8 @@
           ]
         },
         "viewport": {
-          "height": 720,
-          "width": 1280
+          "height": 540,
+          "width": 960
         },
         "visualTimesMillis": [
           0,
@@ -165,6 +329,88 @@
       "fixturePath": "tests/fixtures/beatoraja_skin/lua/model/all_v1_objects.luaskin",
       "id": "lua.gauge-graph",
       "source": {
+        "renderSamples": [
+          {
+            "geometry": {
+              "angleDegrees": 0,
+              "height": 37.5,
+              "rgba": [
+                0.039215688,
+                0.078431375,
+                0.11764706,
+                1.0
+              ],
+              "width": 75.0,
+              "x": 7.5,
+              "y": 15.0
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 0
+          },
+          {
+            "geometry": {
+              "angleDegrees": 5,
+              "height": 41.25,
+              "rgba": [
+                0.098039225,
+                0.13725491,
+                0.1764706,
+                0.9169935
+              ],
+              "width": 81.25,
+              "x": 20.0,
+              "y": 21.25
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 250
+          },
+          {
+            "geometry": {
+              "angleDegrees": 10,
+              "height": 45.0,
+              "rgba": [
+                0.15686275,
+                0.19607845,
+                0.23529413,
+                0.83398694
+              ],
+              "width": 87.5,
+              "x": 32.5,
+              "y": 27.5
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 500
+          },
+          {
+            "geometry": {
+              "angleDegrees": 0,
+              "height": 37.5,
+              "rgba": [
+                0.039215688,
+                0.078431375,
+                0.11764706,
+                1.0
+              ],
+              "width": 75.0,
+              "x": 7.5,
+              "y": 15.0
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 1500
+          }
+        ],
         "rgba": [
           [
             16909060,
@@ -227,7 +473,7 @@
     {
       "comparison": {
         "mode": "absolute",
-        "tolerance": 1e-06
+        "tolerance": 5e-06
       },
       "executedFormat": "lua",
       "execution": {
@@ -240,8 +486,8 @@
           ]
         },
         "viewport": {
-          "height": 720,
-          "width": 1280
+          "height": 540,
+          "width": 960
         },
         "visualTimesMillis": [
           0,
@@ -266,6 +512,88 @@
         "judgeWidthRate": 1.1788856,
         "lineRgba": 16909060,
         "lineWidth": 4,
+        "renderSamples": [
+          {
+            "geometry": {
+              "angleDegrees": 0,
+              "height": 37.5,
+              "rgba": [
+                0.039215688,
+                0.078431375,
+                0.11764706,
+                1.0
+              ],
+              "width": 75.0,
+              "x": 7.5,
+              "y": 15.0
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 0
+          },
+          {
+            "geometry": {
+              "angleDegrees": 5,
+              "height": 41.25,
+              "rgba": [
+                0.098039225,
+                0.13725491,
+                0.1764706,
+                0.9169935
+              ],
+              "width": 81.25,
+              "x": 20.0,
+              "y": 21.25
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 250
+          },
+          {
+            "geometry": {
+              "angleDegrees": 10,
+              "height": 45.0,
+              "rgba": [
+                0.15686275,
+                0.19607845,
+                0.23529413,
+                0.83398694
+              ],
+              "width": 87.5,
+              "x": 32.5,
+              "y": 27.5
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 500
+          },
+          {
+            "geometry": {
+              "angleDegrees": 0,
+              "height": 37.5,
+              "rgba": [
+                0.039215688,
+                0.078431375,
+                0.11764706,
+                1.0
+              ],
+              "width": 75.0,
+              "x": 7.5,
+              "y": 15.0
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 1500
+          }
+        ],
         "transparent": false
       },
       "surfaceIds": [
@@ -288,7 +616,7 @@
     {
       "comparison": {
         "mode": "absolute",
-        "tolerance": 1e-06
+        "tolerance": 5e-06
       },
       "executedFormat": "lua",
       "execution": {
@@ -301,8 +629,8 @@
           ]
         },
         "viewport": {
-          "height": 720,
-          "width": 1280
+          "height": 540,
+          "width": 960
         },
         "visualTimesMillis": [
           0,
@@ -337,6 +665,88 @@
         "judgeWidthRate": 1.2492212,
         "lineRgba": 16909060,
         "lineWidth": 3,
+        "renderSamples": [
+          {
+            "geometry": {
+              "angleDegrees": 0,
+              "height": 37.5,
+              "rgba": [
+                0.039215688,
+                0.078431375,
+                0.11764706,
+                1.0
+              ],
+              "width": 75.0,
+              "x": 7.5,
+              "y": 15.0
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 0
+          },
+          {
+            "geometry": {
+              "angleDegrees": 5,
+              "height": 41.25,
+              "rgba": [
+                0.098039225,
+                0.13725491,
+                0.1764706,
+                0.9169935
+              ],
+              "width": 81.25,
+              "x": 20.0,
+              "y": 21.25
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 250
+          },
+          {
+            "geometry": {
+              "angleDegrees": 10,
+              "height": 45.0,
+              "rgba": [
+                0.15686275,
+                0.19607845,
+                0.23529413,
+                0.83398694
+              ],
+              "width": 87.5,
+              "x": 32.5,
+              "y": 27.5
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 500
+          },
+          {
+            "geometry": {
+              "angleDegrees": 0,
+              "height": 37.5,
+              "rgba": [
+                0.039215688,
+                0.078431375,
+                0.11764706,
+                1.0
+              ],
+              "width": 75.0,
+              "x": 7.5,
+              "y": 15.0
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 1500
+          }
+        ],
         "transparent": false,
         "width": 401,
         "windowLength": 40
@@ -366,8 +776,8 @@
     },
     {
       "comparison": {
-        "mode": "exact",
-        "tolerance": 0
+        "mode": "absolute",
+        "tolerance": 5e-06
       },
       "executedFormat": "lua",
       "execution": {
@@ -380,8 +790,8 @@
           ]
         },
         "viewport": {
-          "height": 720,
-          "width": 1280
+          "height": 540,
+          "width": 960
         },
         "visualTimesMillis": [
           0,
@@ -407,6 +817,88 @@
           1364349780,
           1633837924,
           1903326068
+        ],
+        "renderSamples": [
+          {
+            "geometry": {
+              "angleDegrees": 0,
+              "height": 37.5,
+              "rgba": [
+                0.039215688,
+                0.078431375,
+                0.11764706,
+                1.0
+              ],
+              "width": 75.0,
+              "x": 7.5,
+              "y": 15.0
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 0
+          },
+          {
+            "geometry": {
+              "angleDegrees": 5,
+              "height": 41.25,
+              "rgba": [
+                0.098039225,
+                0.13725491,
+                0.1764706,
+                0.9169935
+              ],
+              "width": 81.25,
+              "x": 20.0,
+              "y": 21.25
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 250
+          },
+          {
+            "geometry": {
+              "angleDegrees": 10,
+              "height": 45.0,
+              "rgba": [
+                0.15686275,
+                0.19607845,
+                0.23529413,
+                0.83398694
+              ],
+              "width": 87.5,
+              "x": 32.5,
+              "y": 27.5
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 500
+          },
+          {
+            "geometry": {
+              "angleDegrees": 0,
+              "height": 37.5,
+              "rgba": [
+                0.039215688,
+                0.078431375,
+                0.11764706,
+                1.0
+              ],
+              "width": 75.0,
+              "x": 7.5,
+              "y": 15.0
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 1500
+          }
         ]
       },
       "surfaceIds": [
@@ -428,8 +920,8 @@
     },
     {
       "comparison": {
-        "mode": "exact",
-        "tolerance": 0
+        "mode": "absolute",
+        "tolerance": 5e-06
       },
       "executedFormat": "lua",
       "execution": {
@@ -442,8 +934,8 @@
           ]
         },
         "viewport": {
-          "height": 720,
-          "width": 1280
+          "height": 540,
+          "width": 960
         },
         "visualTimesMillis": [
           0,
@@ -459,15 +951,97 @@
         "destination": {
           "acceleration": 0,
           "angleDegrees": 0,
-          "height": 10.0,
-          "rgba": 4294967295,
+          "height": 50.0,
+          "rgba": 169090815,
           "timeMillis": 0,
-          "width": 10.0,
-          "x": 70.0,
-          "y": 80.0
+          "width": 100.0,
+          "x": 10.0,
+          "y": 20.0
         },
         "direction": 1,
-        "range": 90
+        "range": 90,
+        "renderSamples": [
+          {
+            "geometry": {
+              "angleDegrees": 0,
+              "height": 37.5,
+              "rgba": [
+                0.039215688,
+                0.078431375,
+                0.11764706,
+                1.0
+              ],
+              "width": 75.0,
+              "x": 7.5,
+              "y": 15.0
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 0
+          },
+          {
+            "geometry": {
+              "angleDegrees": 5,
+              "height": 41.25,
+              "rgba": [
+                0.098039225,
+                0.13725491,
+                0.1764706,
+                0.9169935
+              ],
+              "width": 81.25,
+              "x": 20.0,
+              "y": 21.25
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 250
+          },
+          {
+            "geometry": {
+              "angleDegrees": 10,
+              "height": 45.0,
+              "rgba": [
+                0.15686275,
+                0.19607845,
+                0.23529413,
+                0.83398694
+              ],
+              "width": 87.5,
+              "x": 32.5,
+              "y": 27.5
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 500
+          },
+          {
+            "geometry": {
+              "angleDegrees": 0,
+              "height": 37.5,
+              "rgba": [
+                0.039215688,
+                0.078431375,
+                0.11764706,
+                1.0
+              ],
+              "width": 75.0,
+              "x": 7.5,
+              "y": 15.0
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 1500
+          }
+        ]
       },
       "surfaceIds": [
         "lua.object-field.slider-angle",
@@ -478,8 +1052,8 @@
     },
     {
       "comparison": {
-        "mode": "exact",
-        "tolerance": 0
+        "mode": "absolute",
+        "tolerance": 5e-06
       },
       "executedFormat": "json",
       "execution": {
@@ -492,8 +1066,8 @@
           ]
         },
         "viewport": {
-          "height": 720,
-          "width": 1280
+          "height": 540,
+          "width": 960
         },
         "visualTimesMillis": [
           0,
@@ -509,6 +1083,88 @@
         "delayMillis": 750,
         "noGap": true,
         "noHorizontalGap": true,
+        "renderSamples": [
+          {
+            "geometry": {
+              "angleDegrees": 0,
+              "height": 37.5,
+              "rgba": [
+                0.039215688,
+                0.078431375,
+                0.11764706,
+                1.0
+              ],
+              "width": 75.0,
+              "x": 7.5,
+              "y": 15.0
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 0
+          },
+          {
+            "geometry": {
+              "angleDegrees": 5,
+              "height": 41.25,
+              "rgba": [
+                0.098039225,
+                0.13725491,
+                0.1764706,
+                0.9169935
+              ],
+              "width": 81.25,
+              "x": 20.0,
+              "y": 21.25
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 250
+          },
+          {
+            "geometry": {
+              "angleDegrees": 10,
+              "height": 45.0,
+              "rgba": [
+                0.15686275,
+                0.19607845,
+                0.23529413,
+                0.83398694
+              ],
+              "width": 87.5,
+              "x": 32.5,
+              "y": 27.5
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 500
+          },
+          {
+            "geometry": {
+              "angleDegrees": 0,
+              "height": 37.5,
+              "rgba": [
+                0.039215688,
+                0.078431375,
+                0.11764706,
+                1.0
+              ],
+              "width": 75.0,
+              "x": 7.5,
+              "y": 15.0
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 1500
+          }
+        ],
         "reverseOrder": true,
         "type": 2
       },
@@ -525,8 +1181,8 @@
     },
     {
       "comparison": {
-        "mode": "exact",
-        "tolerance": 0
+        "mode": "absolute",
+        "tolerance": 5e-06
       },
       "executedFormat": "json",
       "execution": {
@@ -539,8 +1195,8 @@
           ]
         },
         "viewport": {
-          "height": 720,
-          "width": 1280
+          "height": 540,
+          "width": 960
         },
         "visualTimesMillis": [
           0,
@@ -561,7 +1217,89 @@
           1364349951
         ],
         "delayMillis": 30,
-        "lineWidth": 3
+        "lineWidth": 3,
+        "renderSamples": [
+          {
+            "geometry": {
+              "angleDegrees": 0,
+              "height": 37.5,
+              "rgba": [
+                0.039215688,
+                0.078431375,
+                0.11764706,
+                1.0
+              ],
+              "width": 75.0,
+              "x": 7.5,
+              "y": 15.0
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 0
+          },
+          {
+            "geometry": {
+              "angleDegrees": 5,
+              "height": 41.25,
+              "rgba": [
+                0.098039225,
+                0.13725491,
+                0.1764706,
+                0.9169935
+              ],
+              "width": 81.25,
+              "x": 20.0,
+              "y": 21.25
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 250
+          },
+          {
+            "geometry": {
+              "angleDegrees": 10,
+              "height": 45.0,
+              "rgba": [
+                0.15686275,
+                0.19607845,
+                0.23529413,
+                0.83398694
+              ],
+              "width": 87.5,
+              "x": 32.5,
+              "y": 27.5
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 500
+          },
+          {
+            "geometry": {
+              "angleDegrees": 0,
+              "height": 37.5,
+              "rgba": [
+                0.039215688,
+                0.078431375,
+                0.11764706,
+                1.0
+              ],
+              "width": 75.0,
+              "x": 7.5,
+              "y": 15.0
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 1500
+          }
+        ]
       },
       "surfaceIds": [
         "json.field.bpmgraph-delay",
@@ -578,8 +1316,8 @@
     },
     {
       "comparison": {
-        "mode": "exact",
-        "tolerance": 0
+        "mode": "absolute",
+        "tolerance": 5e-06
       },
       "executedFormat": "json",
       "execution": {
@@ -592,8 +1330,8 @@
           ]
         },
         "viewport": {
-          "height": 720,
-          "width": 1280
+          "height": 540,
+          "width": 960
         },
         "visualTimesMillis": [
           0,
@@ -605,6 +1343,88 @@
       "fixturePath": "tests/fixtures/beatoraja_skin/json/all_gameplay_fields.json",
       "id": "json.gauge-graph",
       "source": {
+        "renderSamples": [
+          {
+            "geometry": {
+              "angleDegrees": 0,
+              "height": 37.5,
+              "rgba": [
+                0.039215688,
+                0.078431375,
+                0.11764706,
+                1.0
+              ],
+              "width": 75.0,
+              "x": 7.5,
+              "y": 15.0
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 0
+          },
+          {
+            "geometry": {
+              "angleDegrees": 5,
+              "height": 41.25,
+              "rgba": [
+                0.098039225,
+                0.13725491,
+                0.1764706,
+                0.9169935
+              ],
+              "width": 81.25,
+              "x": 20.0,
+              "y": 21.25
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 250
+          },
+          {
+            "geometry": {
+              "angleDegrees": 10,
+              "height": 45.0,
+              "rgba": [
+                0.15686275,
+                0.19607845,
+                0.23529413,
+                0.83398694
+              ],
+              "width": 87.5,
+              "x": 32.5,
+              "y": 27.5
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 500
+          },
+          {
+            "geometry": {
+              "angleDegrees": 0,
+              "height": 37.5,
+              "rgba": [
+                0.039215688,
+                0.078431375,
+                0.11764706,
+                1.0
+              ],
+              "width": 75.0,
+              "x": 7.5,
+              "y": 15.0
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 1500
+          }
+        ],
         "rgba": [
           [
             16909060,
@@ -667,7 +1487,7 @@
     {
       "comparison": {
         "mode": "absolute",
-        "tolerance": 1e-06
+        "tolerance": 5e-06
       },
       "executedFormat": "json",
       "execution": {
@@ -680,8 +1500,8 @@
           ]
         },
         "viewport": {
-          "height": 720,
-          "width": 1280
+          "height": 540,
+          "width": 960
         },
         "visualTimesMillis": [
           0,
@@ -706,6 +1526,88 @@
         "judgeWidthRate": 1.1788856,
         "lineRgba": 16909060,
         "lineWidth": 4,
+        "renderSamples": [
+          {
+            "geometry": {
+              "angleDegrees": 0,
+              "height": 37.5,
+              "rgba": [
+                0.039215688,
+                0.078431375,
+                0.11764706,
+                1.0
+              ],
+              "width": 75.0,
+              "x": 7.5,
+              "y": 15.0
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 0
+          },
+          {
+            "geometry": {
+              "angleDegrees": 5,
+              "height": 41.25,
+              "rgba": [
+                0.098039225,
+                0.13725491,
+                0.1764706,
+                0.9169935
+              ],
+              "width": 81.25,
+              "x": 20.0,
+              "y": 21.25
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 250
+          },
+          {
+            "geometry": {
+              "angleDegrees": 10,
+              "height": 45.0,
+              "rgba": [
+                0.15686275,
+                0.19607845,
+                0.23529413,
+                0.83398694
+              ],
+              "width": 87.5,
+              "x": 32.5,
+              "y": 27.5
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 500
+          },
+          {
+            "geometry": {
+              "angleDegrees": 0,
+              "height": 37.5,
+              "rgba": [
+                0.039215688,
+                0.078431375,
+                0.11764706,
+                1.0
+              ],
+              "width": 75.0,
+              "x": 7.5,
+              "y": 15.0
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 1500
+          }
+        ],
         "transparent": false
       },
       "surfaceIds": [
@@ -728,7 +1630,7 @@
     {
       "comparison": {
         "mode": "absolute",
-        "tolerance": 1e-06
+        "tolerance": 5e-06
       },
       "executedFormat": "json",
       "execution": {
@@ -741,8 +1643,8 @@
           ]
         },
         "viewport": {
-          "height": 720,
-          "width": 1280
+          "height": 540,
+          "width": 960
         },
         "visualTimesMillis": [
           0,
@@ -777,6 +1679,88 @@
         "judgeWidthRate": 1.2492212,
         "lineRgba": 16909060,
         "lineWidth": 3,
+        "renderSamples": [
+          {
+            "geometry": {
+              "angleDegrees": 0,
+              "height": 37.5,
+              "rgba": [
+                0.039215688,
+                0.078431375,
+                0.11764706,
+                1.0
+              ],
+              "width": 75.0,
+              "x": 7.5,
+              "y": 15.0
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 0
+          },
+          {
+            "geometry": {
+              "angleDegrees": 5,
+              "height": 41.25,
+              "rgba": [
+                0.098039225,
+                0.13725491,
+                0.1764706,
+                0.9169935
+              ],
+              "width": 81.25,
+              "x": 20.0,
+              "y": 21.25
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 250
+          },
+          {
+            "geometry": {
+              "angleDegrees": 10,
+              "height": 45.0,
+              "rgba": [
+                0.15686275,
+                0.19607845,
+                0.23529413,
+                0.83398694
+              ],
+              "width": 87.5,
+              "x": 32.5,
+              "y": 27.5
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 500
+          },
+          {
+            "geometry": {
+              "angleDegrees": 0,
+              "height": 37.5,
+              "rgba": [
+                0.039215688,
+                0.078431375,
+                0.11764706,
+                1.0
+              ],
+              "width": 75.0,
+              "x": 7.5,
+              "y": 15.0
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 1500
+          }
+        ],
         "transparent": false,
         "width": 401,
         "windowLength": 40
@@ -806,8 +1790,8 @@
     },
     {
       "comparison": {
-        "mode": "exact",
-        "tolerance": 0
+        "mode": "absolute",
+        "tolerance": 5e-06
       },
       "executedFormat": "json",
       "execution": {
@@ -820,8 +1804,8 @@
           ]
         },
         "viewport": {
-          "height": 720,
-          "width": 1280
+          "height": 540,
+          "width": 960
         },
         "visualTimesMillis": [
           0,
@@ -847,6 +1831,88 @@
           1364349780,
           1633837924,
           1903326068
+        ],
+        "renderSamples": [
+          {
+            "geometry": {
+              "angleDegrees": 0,
+              "height": 37.5,
+              "rgba": [
+                0.039215688,
+                0.078431375,
+                0.11764706,
+                1.0
+              ],
+              "width": 75.0,
+              "x": 7.5,
+              "y": 15.0
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 0
+          },
+          {
+            "geometry": {
+              "angleDegrees": 5,
+              "height": 41.25,
+              "rgba": [
+                0.098039225,
+                0.13725491,
+                0.1764706,
+                0.9169935
+              ],
+              "width": 81.25,
+              "x": 20.0,
+              "y": 21.25
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 250
+          },
+          {
+            "geometry": {
+              "angleDegrees": 10,
+              "height": 45.0,
+              "rgba": [
+                0.15686275,
+                0.19607845,
+                0.23529413,
+                0.83398694
+              ],
+              "width": 87.5,
+              "x": 32.5,
+              "y": 27.5
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 500
+          },
+          {
+            "geometry": {
+              "angleDegrees": 0,
+              "height": 37.5,
+              "rgba": [
+                0.039215688,
+                0.078431375,
+                0.11764706,
+                1.0
+              ],
+              "width": 75.0,
+              "x": 7.5,
+              "y": 15.0
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 1500
+          }
         ]
       },
       "surfaceIds": [
@@ -868,8 +1934,8 @@
     },
     {
       "comparison": {
-        "mode": "exact",
-        "tolerance": 0
+        "mode": "absolute",
+        "tolerance": 5e-06
       },
       "executedFormat": "json",
       "execution": {
@@ -882,8 +1948,8 @@
           ]
         },
         "viewport": {
-          "height": 720,
-          "width": 1280
+          "height": 540,
+          "width": 960
         },
         "visualTimesMillis": [
           0,
@@ -899,15 +1965,97 @@
         "destination": {
           "acceleration": 0,
           "angleDegrees": 0,
-          "height": 0.0,
-          "rgba": 4294967295,
+          "height": 50.0,
+          "rgba": 169090815,
           "timeMillis": 0,
-          "width": 0.0,
-          "x": 0.0,
-          "y": 0.0
+          "width": 100.0,
+          "x": 10.0,
+          "y": 20.0
         },
         "direction": 3,
-        "range": 120
+        "range": 120,
+        "renderSamples": [
+          {
+            "geometry": {
+              "angleDegrees": 0,
+              "height": 37.5,
+              "rgba": [
+                0.039215688,
+                0.078431375,
+                0.11764706,
+                1.0
+              ],
+              "width": 75.0,
+              "x": 7.5,
+              "y": 15.0
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 0
+          },
+          {
+            "geometry": {
+              "angleDegrees": 5,
+              "height": 41.25,
+              "rgba": [
+                0.098039225,
+                0.13725491,
+                0.1764706,
+                0.9169935
+              ],
+              "width": 81.25,
+              "x": 20.0,
+              "y": 21.25
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 250
+          },
+          {
+            "geometry": {
+              "angleDegrees": 10,
+              "height": 45.0,
+              "rgba": [
+                0.15686275,
+                0.19607845,
+                0.23529413,
+                0.83398694
+              ],
+              "width": 87.5,
+              "x": 32.5,
+              "y": 27.5
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 500
+          },
+          {
+            "geometry": {
+              "angleDegrees": 0,
+              "height": 37.5,
+              "rgba": [
+                0.039215688,
+                0.078431375,
+                0.11764706,
+                1.0
+              ],
+              "width": 75.0,
+              "x": 7.5,
+              "y": 15.0
+            },
+            "viewport": {
+              "height": 540,
+              "width": 960
+            },
+            "visualTimeMillis": 1500
+          }
+        ]
       },
       "surfaceIds": [
         "json.field.slider-angle",
@@ -932,8 +2080,8 @@
           ]
         },
         "viewport": {
-          "height": 720,
-          "width": 1280
+          "height": 540,
+          "width": 960
         },
         "visualTimesMillis": [
           0,
@@ -949,12 +2097,12 @@
         "destination": {
           "acceleration": 0,
           "angleDegrees": 0,
-          "height": 10.0,
-          "rgba": 4294967295,
+          "height": 50.0,
+          "rgba": 169090815,
           "timeMillis": 0,
-          "width": 10.0,
-          "x": 70.0,
-          "y": 80.0
+          "width": 100.0,
+          "x": 10.0,
+          "y": 20.0
         },
         "direction": 1,
         "range": 90
@@ -980,8 +2128,8 @@
           ]
         },
         "viewport": {
-          "height": 720,
-          "width": 1280
+          "height": 540,
+          "width": 960
         },
         "visualTimesMillis": [
           0,
@@ -1033,8 +2181,8 @@
           ]
         },
         "viewport": {
-          "height": 720,
-          "width": 1280
+          "height": 540,
+          "width": 960
         },
         "visualTimesMillis": [
           0,
@@ -1090,8 +2238,8 @@
           ]
         },
         "viewport": {
-          "height": 720,
-          "width": 1280
+          "height": 540,
+          "width": 960
         },
         "visualTimesMillis": [
           0,
@@ -1324,15 +2472,15 @@
   "fixtures": [
     {
       "path": "tests/fixtures/beatoraja_skin/lua/model/all_v1_objects.luaskin",
-      "sha256": "a52409965668f9d2a4fc249959538653fe35db317653eaaae3694f7caccadc1d"
+      "sha256": "d1e7b59f89b1fe5f122ddc948c9e24768fcd67c92dd0ffae04cb50b75670812c"
     },
     {
       "path": "tests/fixtures/beatoraja_skin/json/all_gameplay_fields.json",
-      "sha256": "ecb55ba77974420e30a32c5a0ba550301a3826b224df296cdf79d4246866ca99"
+      "sha256": "b1626ac82491f9d55e99471a9e15fe52373dcb150c0368c8273884cd99a5fd45"
     },
     {
       "path": "tests/fixtures/beatoraja_skin/lr2/all_gameplay_objects.lr2skin",
-      "sha256": "325a3e041649f141d68b9e9fdca8592ab72bba314d78f44b4a2c9bedf4645075"
+      "sha256": "7c6d7dd8642fd00bf183616d62c9aa2b90dc8494a39fd09065532e1a29d1cfb4"
     },
     {
       "path": "tests/fixtures/beatoraja_skin/lr2/all_play_commands.lr2skin",
@@ -1349,8 +2497,8 @@
       ]
     },
     "viewport": {
-      "height": 720,
-      "width": 1280
+      "height": 540,
+      "width": 960
     },
     "visualTimesMillis": [
       0,

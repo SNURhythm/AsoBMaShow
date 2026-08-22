@@ -206,6 +206,10 @@ struct SkinSpriteFrames {
   std::vector<SkinSourceRect> frames;
   int cycleMillis = 0;
   std::optional<SkinTimerPropertyId> timer;
+  // Present only for note visuals loaded from Beatoraja's raw positional
+  // longImage array. It follows the authored visual through normalization and
+  // lowering so acceptance observes the selected resource, not an enum guess.
+  std::optional<int> authoredNoteSlot;
 };
 
 struct SkinImageObject {
@@ -470,6 +474,7 @@ enum class SkinNoteVisualKind : std::uint8_t {
 
 struct SkinSynthesizedNoteVisual {
   SkinNoteVisualKind kind = SkinNoteVisualKind::Hidden;
+  std::optional<int> authoredNoteSlot;
 };
 
 using SkinNoteVisual =

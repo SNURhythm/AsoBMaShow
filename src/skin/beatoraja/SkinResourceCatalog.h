@@ -461,14 +461,4 @@ private:
   SkinSafetyPolicy safetyPolicy_{};
 };
 
-#if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
-struct SkinReferencedResourceIdsForTesting {
-  std::vector<SkinResourceId> images;
-  std::vector<SkinObjectId> textObjects;
-};
-[[nodiscard]] SkinReferencedResourceIdsForTesting
-skinReferencedResourceIdsForTesting(const ValidatedBeatorajaSkinModel &,
-                                    bool practiceMode);
-#endif
-
 } // namespace skin

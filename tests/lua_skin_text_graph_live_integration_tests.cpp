@@ -1,4 +1,5 @@
 #include "skin/beatoraja/LuaSkinTableDecoder.h"
+#include "gameplay_skin_ledger_evidence.h"
 #include "skin/beatoraja/SkinModelValidator.h"
 #include "lua_skin_binding_test_support.h"
 #include "skin/SkinStoragePaths.h"
@@ -805,7 +806,7 @@ void testValidatorPreservesUpstreamOptionalDependencies() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
   testLiveTextAndFontSemantics();
   testTextRefWriterFallbackUsesOnlySupportedIntegerSelectors();
   testStaticTextWithZeroRefKeepsItsLiteral();
@@ -815,10 +816,8 @@ int main() {
   testDistributionGraphIsDiagnosedAndRetainedAsBlank();
   testGraphVisualizersRetainTypedAndDeferredBoundaries();
   testValidatorPreservesUpstreamOptionalDependencies();
-  if (failures != 0) {
-    std::cerr << failures << " assertion(s) failed\n";
-    return 1;
-  }
-  std::cout << "lua skin Text/Graph live integration tests passed\n";
-  return 0;
+  return gameplay_skin_ledger_evidence::finish(
+      argc, argv, "lua_skin_text_graph_live_integration_tests", failures,
+      "assertion(s) failed",
+      "lua skin Text/Graph live integration tests passed");
 }

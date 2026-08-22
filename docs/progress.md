@@ -22,8 +22,9 @@ work from [`docs/todo.md`](todo.md). The pinned authority is Beatoraja commit
   slider/resource/rate-binding/destination model and identical textured draw
   trace. Format-exclusive gameplay families are decoded and asserted by their
   native all-field/all-command fixtures instead of being treated as
-  equivalent. `beatoraja_gameplay_skin_ledger_tests.py --require-complete`
-  executes every row's bound native runner as the CI gate.
+  equivalent. Each owning native runner emits its sorted test-owned assertion
+  IDs only after its suite succeeds; `--require-complete` requires their exact
+  755-row union with no duplicate, missing, extra, or wrong-owner ID.
 
 - The conformance evidence now loads matching Lua and JSON fixtures through
   the pinned Beatoraja frontends, compares their source-owned cases with Aso,

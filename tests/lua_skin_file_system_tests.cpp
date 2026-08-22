@@ -1,6 +1,7 @@
 #include "skin/SkinStoragePaths.h"
 #include "skin/SkinSafetyPolicy.h"
 #include "skin/beatoraja/LuaSkinFileSystem.h"
+#include "gameplay_skin_ledger_evidence.h"
 #include "skin/beatoraja/SkinCompatibilityDiagnostics.h"
 #include "skin/package/SkinAliasDetector.h"
 #include "skin/package/SkinPathPolicy.h"
@@ -610,7 +611,7 @@ void testLinkedVisibleSkinChildCannotEscapeLuaIoBoundary() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
   testShortStreamReadIsRejected();
   testBeatorajaDirectSkinDirectorySemantics();
   testPinnedFileListPreservesDirectoryIterationAndPatternMatches();
@@ -619,10 +620,8 @@ int main() {
   testUnrestrictedFilesystemLiftsWriteAndContainmentGuards();
   testLinkedVisibleSkinChildCannotEscapeLuaIoBoundary();
   testCompatibilityDiagnosticsDeduplicateAndRetainCriticality();
-  if (failures != 0) {
-    std::cerr << failures << " lua skin filesystem test(s) failed\n";
-    return 1;
-  }
-  std::cout << "lua skin filesystem tests passed\n";
-  return 0;
+  return gameplay_skin_ledger_evidence::finish(
+      argc, argv, "lua_skin_file_system_tests", failures,
+      "lua skin filesystem test(s) failed",
+      "lua skin filesystem tests passed");
 }

@@ -2543,7 +2543,12 @@ SkinObjectPayload buildNote(BuildState &state,
               &normalized.note->lanes[laneIndex].visuals[visual])) {
         lane.visuals.emplace(kind, *sprite);
       } else {
-        lane.visuals.emplace(kind, SkinSynthesizedNoteVisual{.kind = kind});
+        const auto &fallback = std::get<SkinSynthesizedNoteFallback>(
+            normalized.note->lanes[laneIndex].visuals[visual]);
+        lane.visuals.emplace(
+            kind, SkinSynthesizedNoteVisual{
+                      .kind = kind,
+                      .authoredNoteSlot = fallback.authoredNoteSlot});
       }
     }
     output.lanes.push_back(std::move(lane));

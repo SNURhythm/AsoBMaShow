@@ -55,6 +55,62 @@ def feature_by_id(features: list[dict]) -> dict[str, dict]:
     return {feature["id"]: feature for feature in features}
 
 
+def validate_executed_coverage(
+    expected: dict[str, str], emitted_by_runner: dict[str, list[str]]
+) -> None:
+    observed: dict[str, str] = {}
+    for runner, identifiers in emitted_by_runner.items():
+        assert len(identifiers) == len(set(identifiers)), (
+            f"{runner} emitted duplicate ledger assertion IDs"
+        )
+        for identifier in identifiers:
+            assert identifier not in observed, (
+                f"ledger assertion ID was emitted by multiple runners: {identifier}"
+            )
+            observed[identifier] = runner
+    assert set(observed) == set(expected), (
+        "executed ledger assertion coverage differs: missing="
+        + ",".join(sorted(set(expected) - set(observed)))
+        + " extra="
+        + ",".join(sorted(set(observed) - set(expected)))
+    )
+    wrong = {
+        identifier: (expected[identifier], observed[identifier])
+        for identifier in expected
+        if expected[identifier] != observed[identifier]
+    }
+    assert not wrong, f"ledger assertions were emitted by wrong runners: {wrong}"
+
+
+def executed_coverage(build_dir: Path, runners: set[str]) -> dict[str, list[str]]:
+    emitted: dict[str, list[str]] = {}
+    for runner in sorted(runners):
+        executable = build_dir / runner
+        assert executable.is_file(), f"executed ledger evidence is unbuilt: {runner}"
+        completed = subprocess.run(
+            [str(executable), "--list-ledger-assertions"], cwd=ROOT, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False,
+        )
+        assert completed.returncode == 0, (
+            f"executed ledger evidence failed: {runner}\n{completed.stdout}"
+        )
+        try:
+            payload = json.loads(completed.stdout.splitlines()[-1])
+        except (IndexError, json.JSONDecodeError) as error:
+            raise AssertionError(
+                f"{runner} emitted no machine-readable ledger evidence"
+            ) from error
+        assert payload.get("runner") == runner, (
+            f"{runner} emitted evidence for a different runner"
+        )
+        identifiers = payload.get("assertionIds")
+        assert isinstance(identifiers, list) and all(
+            isinstance(identifier, str) and identifier for identifier in identifiers
+        ), f"{runner} emitted invalid assertion IDs"
+        emitted[runner] = identifiers
+    return emitted
+
+
 def main() -> None:
     unexpected_arguments = set(sys.argv[1:]) - {"--require-complete"}
     assert not unexpected_arguments, (
@@ -134,7 +190,6 @@ def main() -> None:
             "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
             "tests": "tests/beatoraja_skin_model_tests.cpp",
             "assertion": {
-                "id": identifier,
                 "runner": "beatoraja_skin_model_tests",
             },
         }, f"{identifier} must retain concrete implementation evidence"
@@ -184,8 +239,8 @@ def main() -> None:
             assert isinstance(assertion, dict), (
                 f"{row['id']} must bind its implementation to an executed assertion"
             )
-            assert assertion.get("id") == row["id"], (
-                f"{row['id']} assertion identity must be row-exact"
+            assert set(assertion) == {"runner"}, (
+                f"{row['id']} ledger assertion may only name its native runner"
             )
             assert assertion.get("runner") in TEST_RUNNERS.values(), (
                 f"{row['id']} must name a runnable native assertion target"
@@ -215,16 +270,13 @@ def main() -> None:
             for row in ledger_features
             if row["status"] == "implemented"
         }
-        for runner in sorted(required_runners):
-            executable = build_dir / runner
-            assert executable.is_file(), f"executed ledger evidence is unbuilt: {runner}"
-            completed = subprocess.run(
-                [str(executable)], cwd=ROOT, text=True,
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False,
-            )
-            assert completed.returncode == 0, (
-                f"executed ledger evidence failed: {runner}\n{completed.stdout}"
-            )
+        emitted = executed_coverage(build_dir, required_runners)
+        expected = {
+            row["id"]: row["assertion"]["runner"]
+            for row in ledger_features
+            if row["status"] == "implemented"
+        }
+        validate_executed_coverage(expected, emitted)
 
 
 if __name__ == "__main__":

@@ -2322,7 +2322,15 @@ void testPreparedSessionRunsFiveHundredFramesWithoutLoadingAgain() {
          "texture acceptance facts");
   const auto resourceEvidence =
       created.session->resourcePreparationEvidenceForTesting();
+  const auto exhaustiveReferences = skinModelReferencedResourceIdsForTesting(
+      created.session->modelForTesting(), false);
   expect(resourceEvidence.referencedImageResourceIds ==
+                 exhaustiveReferences.images &&
+             resourceEvidence.referencedTextObjectIds ==
+                 exhaustiveReferences.textObjects &&
+             skinResourcePreparationEvidenceCompleteForTesting(
+                 resourceEvidence) &&
+             resourceEvidence.referencedImageResourceIds ==
                  resourceEvidence.preparedImageResourceIds &&
              resourceEvidence.referencedTextObjectIds ==
                  resourceEvidence.preparedTextObjectIds &&
@@ -2330,6 +2338,11 @@ void testPreparedSessionRunsFiveHundredFramesWithoutLoadingAgain() {
              !resourceEvidence.referencedTextObjectIds.empty(),
          "resource completeness compares independent model references with "
          "prepared image/movie and text-atlas identities");
+  auto omittedPlannerResource = resourceEvidence;
+  omittedPlannerResource.preparedImageResourceIds.pop_back();
+  expect(!skinResourcePreparationEvidenceCompleteForTesting(
+             omittedPlannerResource),
+         "independent model traversal detects one planner resource omission");
   const auto textureCreates = fixture.device()->createCalls;
   const auto movieLoads = fixture.movieDevice()->loadCalls;
   const auto audioLoads = fixture.audioState()->loads.size();

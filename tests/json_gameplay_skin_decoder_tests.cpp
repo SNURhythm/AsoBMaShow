@@ -1,4 +1,5 @@
 #include "skin/beatoraja/JsonGameplaySkinDecoder.h"
+#include "gameplay_skin_ledger_evidence.h"
 
 #include "skin/beatoraja/GameplaySkinBuiltinCatalog.h"
 #include "skin/beatoraja/SkinModelValidator.h"
@@ -929,7 +930,7 @@ void testCancellationStopsMidJsonModelFold() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
   testAllFieldFixtureCoversThePinnedJsonLedger();
   testPinnedDefaultsProduceTypedStaticModel();
   testAllGameplayFieldsPreserveOrderProvenanceAndPayloads();
@@ -940,10 +941,8 @@ int main() {
   testCommentedJsonKeepsExactPostCommentProvenanceAndCancellation();
   testCancellationStopsMidJsonModelFold();
 
-  if (failures != 0) {
-    std::cerr << failures << " JSON gameplay skin decoder test(s) failed\n";
-    return 1;
-  }
-  std::cout << "JSON gameplay skin decoder tests passed\n";
-  return 0;
+  return gameplay_skin_ledger_evidence::finish(
+      argc, argv, "json_gameplay_skin_decoder_tests", failures,
+      "JSON gameplay skin decoder test(s) failed",
+      "JSON gameplay skin decoder tests passed");
 }

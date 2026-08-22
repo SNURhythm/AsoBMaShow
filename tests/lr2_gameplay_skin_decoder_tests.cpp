@@ -1,5 +1,6 @@
 #include "skin/beatoraja/GameplaySkinBuiltinCatalog.h"
 #include "skin/beatoraja/Lr2GameplaySkinDecoder.h"
+#include "gameplay_skin_ledger_evidence.h"
 #include "skin/beatoraja/Lr2IntegerParser.h"
 #include "skin/beatoraja/Lr2SkinHeaderDecoder.h"
 #include "skin/beatoraja/SkinModelValidator.h"
@@ -719,15 +720,13 @@ void testCancellationStopsMidLr2ModelFold() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
   testStrictLr2IntegerMatchesJavaParseIntAsciiBoundary();
   testBuiltinReferenceBarGraphsRetainTheirPinnedSource();
   testCancellationStopsMidLr2ModelFold();
   testAllCommandsDecodeToTypedCanonicalModel();
-  if (failures != 0) {
-    std::cerr << failures << " LR2 gameplay skin decoder test(s) failed\n";
-    return 1;
-  }
-  std::cout << "LR2 gameplay skin decoder tests passed\n";
-  return 0;
+  return gameplay_skin_ledger_evidence::finish(
+      argc, argv, "lr2_gameplay_skin_decoder_tests", failures,
+      "LR2 gameplay skin decoder test(s) failed",
+      "LR2 gameplay skin decoder tests passed");
 }
