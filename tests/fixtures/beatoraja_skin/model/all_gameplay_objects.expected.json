@@ -1,0 +1,55 @@
+{
+  "comparisonScope": "Shared slider, image resource, numeric rate binding, destination, and textured draw only; format-exclusive gameplay objects remain covered by their native fixtures.",
+  "formatExclusiveEvidence": [
+    "tests/fixtures/beatoraja_skin/lua/model/all_v1_objects.luaskin",
+    "tests/fixtures/beatoraja_skin/json/all_gameplay_fields.json",
+    "tests/fixtures/beatoraja_skin/lr2/all_play_commands.lr2skin"
+  ],
+  "overlap": {
+    "header": {"type": 0, "width": 1280, "height": 720},
+    "resources": [
+      {"kind": "image", "virtualPath": "assets/atlas.png"}
+    ],
+    "bindings": [
+      {"kind": "float", "domain": "rate", "selector": 17}
+    ],
+    "objects": [
+      {
+        "kind": "slider",
+        "frames": [
+          {"x": 0, "y": 0, "w": 10, "h": 10, "gridColumn": 0, "gridRow": 0, "gridColumns": 1, "gridRows": 1}
+        ],
+        "cycleMillis": 0,
+        "direction": 1,
+        "range": 90.0,
+        "changeable": false
+      }
+    ],
+    "destinations": [
+      {
+        "loop": 0,
+        "blend": 0,
+        "filter": 0,
+        "frames": [
+          {"timeMillis": 0, "x": 70.0, "y": 80.0, "width": 10.0, "height": 10.0, "angleDegrees": 0.0, "rgba": [255, 255, 255, 255], "acceleration": 0}
+        ]
+      }
+    ]
+  },
+  "drawTrace": {
+    "frameSerial": 1,
+    "commands": [
+      {
+        "kind": "textured-quad",
+        "vertices": [
+          {"x": 115.0, "y": 640.0, "u": 0.0, "v": 1.0, "rgba": 4294967295},
+          {"x": 125.0, "y": 640.0, "u": 1.0, "v": 1.0, "rgba": 4294967295},
+          {"x": 125.0, "y": 630.0, "u": 1.0, "v": 0.0, "rgba": 4294967295},
+          {"x": 115.0, "y": 630.0, "u": 0.0, "v": 0.0, "rgba": 4294967295}
+        ],
+        "blend": 0,
+        "filter": 0
+      }
+    ]
+  }
+}

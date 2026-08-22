@@ -2824,57 +2824,57 @@
     },
     {
       "id": "lua.object-field.bpmgraph-delay",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 6: BPM/scroll/stop graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.bpmgraph-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 6: BPM/scroll/stop graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.bpmgraph-line-width",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 6: BPM/scroll/stop graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.bpmgraph-main-bpmcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 6: BPM/scroll/stop graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.bpmgraph-max-bpmcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 6: BPM/scroll/stop graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.bpmgraph-min-bpmcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 6: BPM/scroll/stop graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.bpmgraph-other-bpmcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 6: BPM/scroll/stop graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.bpmgraph-stop-line-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 6: BPM/scroll/stop graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.bpmgraph-transition-line-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 6: BPM/scroll/stop graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.destination-blend",
@@ -3094,135 +3094,135 @@
     },
     {
       "id": "lua.object-field.font-fallback",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 1: Bitmap .fnt and LR2FONT resources"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/lua_skin_text_graph_live_integration_tests.cpp"
     },
     {
       "id": "lua.object-field.font-fallback-path",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 1: Bitmap .fnt and LR2FONT resources"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/lua_skin_text_graph_live_integration_tests.cpp"
     },
     {
       "id": "lua.object-field.font-fallback-type",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 1: Bitmap .fnt and LR2FONT resources"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/lua_skin_text_graph_live_integration_tests.cpp"
     },
     {
       "id": "lua.object-field.font-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 1: Bitmap .fnt and LR2FONT resources"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/lua_skin_text_graph_live_integration_tests.cpp"
     },
     {
       "id": "lua.object-field.font-path",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 1: Bitmap .fnt and LR2FONT resources"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/lua_skin_text_graph_live_integration_tests.cpp"
     },
     {
       "id": "lua.object-field.font-type",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 1: Bitmap .fnt and LR2FONT resources"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/lua_skin_text_graph_live_integration_tests.cpp"
     },
     {
       "id": "lua.object-field.gauge-graph-assist-and-easy-fail-bgcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 7: Gauge-history graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.gauge-graph-assist-and-easy-fail-line-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 7: Gauge-history graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.gauge-graph-assist-clear-bgcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 7: Gauge-history graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.gauge-graph-assist-clear-line-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 7: Gauge-history graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.gauge-graph-border-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 7: Gauge-history graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.gauge-graph-borderline-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 7: Gauge-history graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.gauge-graph-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 7: Gauge-history graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.gauge-graph-ex-hard-bgcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 7: Gauge-history graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.gauge-graph-ex-hard-line-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 7: Gauge-history graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.gauge-graph-groove-clear-and-hard-bgcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 7: Gauge-history graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.gauge-graph-groove-clear-and-hard-line-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 7: Gauge-history graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.gauge-graph-groove-fail-bgcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 7: Gauge-history graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.gauge-graph-groove-fail-line-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 7: Gauge-history graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.gauge-graph-hazard-bgcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 7: Gauge-history graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.gauge-graph-hazard-line-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 7: Gauge-history graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.gauge-graph-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 7: Gauge-history graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.graph-angle",
@@ -3394,117 +3394,117 @@
     },
     {
       "id": "lua.object-field.hit-error-visualizer-alpha",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 4: Hit-error visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.hit-error-visualizer-bdcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 4: Hit-error visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.hit-error-visualizer-center-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 4: Hit-error visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.hit-error-visualizer-color-mode",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 4: Hit-error visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.hit-error-visualizer-draw-decay",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 4: Hit-error visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.hit-error-visualizer-ema-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 4: Hit-error visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.hit-error-visualizer-ema-mode",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 4: Hit-error visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.hit-error-visualizer-gdcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 4: Hit-error visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.hit-error-visualizer-grcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 4: Hit-error visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.hit-error-visualizer-hiterror-mode",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 4: Hit-error visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.hit-error-visualizer-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 4: Hit-error visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.hit-error-visualizer-judge-width-millis",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 4: Hit-error visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.hit-error-visualizer-line-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 4: Hit-error visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.hit-error-visualizer-line-width",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 4: Hit-error visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.hit-error-visualizer-pgcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 4: Hit-error visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.hit-error-visualizer-prcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 4: Hit-error visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.hit-error-visualizer-transparent",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 4: Hit-error visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.hit-error-visualizer-width",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 4: Hit-error visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.hit-error-visualizer-window-length",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 4: Hit-error visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.image-act",
@@ -3628,45 +3628,45 @@
     },
     {
       "id": "lua.object-field.judge-graph-back-tex-off",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 2: Judgement and note-distribution graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.judge-graph-delay",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 2: Judgement and note-distribution graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.judge-graph-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 2: Judgement and note-distribution graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.judge-graph-no-gap",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 2: Judgement and note-distribution graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.judge-graph-no-gap-x",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 2: Judgement and note-distribution graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.judge-graph-order-reverse",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 2: Judgement and note-distribution graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.judge-graph-type",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 2: Judgement and note-distribution graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.judge-id",
@@ -3772,33 +3772,33 @@
     },
     {
       "id": "lua.object-field.pmchara-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 3: Complete Pomyu/PM-character rendering"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.pmchara-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 3: Complete Pomyu/PM-character rendering"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.pmchara-side",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 3: Complete Pomyu/PM-character rendering"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.pmchara-src",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 3: Complete Pomyu/PM-character rendering"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.pmchara-type",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 3: Complete Pomyu/PM-character rendering"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.rect-h",
@@ -3838,9 +3838,9 @@
     },
     {
       "id": "lua.object-field.skin-bpmgraph",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 6: BPM/scroll/stop graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.skin-category",
@@ -3898,9 +3898,9 @@
     },
     {
       "id": "lua.object-field.skin-font",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 1: Bitmap .fnt and LR2FONT resources"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/lua_skin_text_graph_live_integration_tests.cpp"
     },
     {
       "id": "lua.object-field.skin-gauge",
@@ -3910,9 +3910,9 @@
     },
     {
       "id": "lua.object-field.skin-gaugegraph",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 7: Gauge-history graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.skin-graph",
@@ -3934,9 +3934,9 @@
     },
     {
       "id": "lua.object-field.skin-hiterrorvisualizer",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 4: Hit-error visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.skin-image",
@@ -3964,9 +3964,9 @@
     },
     {
       "id": "lua.object-field.skin-judgegraph",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 2: Judgement and note-distribution graph"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.skin-judgetimer",
@@ -4012,15 +4012,15 @@
     },
     {
       "id": "lua.object-field.skin-pmchara",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 3: Complete Pomyu/PM-character rendering"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.skin-practice",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 4: SkinPractice object"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.skin-property",
@@ -4064,9 +4064,9 @@
     },
     {
       "id": "lua.object-field.skin-source",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 2: Skin source movies"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.skin-text",
@@ -4084,9 +4084,9 @@
     },
     {
       "id": "lua.object-field.skin-timingvisualizer",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 3: Timing visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.skin-type",
@@ -4240,15 +4240,15 @@
     },
     {
       "id": "lua.object-field.text-event",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 5: Editable skin text"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/lua_skin_text_graph_live_integration_tests.cpp"
     },
     {
       "id": "lua.object-field.text-font",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md",
-      "task": "Task 1: Bitmap .fnt and LR2FONT resources"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/lua_skin_text_graph_live_integration_tests.cpp"
     },
     {
       "id": "lua.object-field.text-id",
@@ -4428,81 +4428,81 @@
     },
     {
       "id": "lua.object-field.timing-visualizer-bdcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 3: Timing visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.timing-visualizer-center-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 3: Timing visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.timing-visualizer-draw-decay",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 3: Timing visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.timing-visualizer-gdcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 3: Timing visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.timing-visualizer-grcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 3: Timing visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.timing-visualizer-id",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 3: Timing visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.timing-visualizer-judge-width-millis",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 3: Timing visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.timing-visualizer-line-color",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 3: Timing visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.timing-visualizer-line-width",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 3: Timing visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.timing-visualizer-pgcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 3: Timing visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.timing-visualizer-prcolor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 3: Timing visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.timing-visualizer-transparent",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 3: Timing visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.timing-visualizer-width",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md",
-      "task": "Task 3: Timing visualizer"
+      "status": "implemented",
+      "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+      "tests": "tests/beatoraja_skin_model_tests.cpp"
     },
     {
       "id": "lua.object-field.value-align",

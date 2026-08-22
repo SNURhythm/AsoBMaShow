@@ -2,6 +2,7 @@
 """Validate the committed Beatoraja gameplay skin parity contract."""
 
 import json
+import sys
 from pathlib import Path
 
 
@@ -38,6 +39,12 @@ def feature_by_id(features: list[dict]) -> dict[str, dict]:
 
 
 def main() -> None:
+    unexpected_arguments = set(sys.argv[1:]) - {"--require-complete"}
+    assert not unexpected_arguments, (
+        "unknown ledger-test arguments: " + ", ".join(sorted(unexpected_arguments))
+    )
+    require_complete = "--require-complete" in sys.argv[1:]
+
     # This catches a missing, added, or reclassified source feature before a
     # format implementation can accidentally leave it without an owner.
     assert EXTRACTOR_PATH.is_file(), "gameplay source-surface extractor must be committed"
@@ -94,17 +101,22 @@ def main() -> None:
     }:
         assert identifier not in source_by_id, f"non-gameplay child leaked into source surface: {identifier}"
 
-    # These current Aso paths deliberately fail closed or are deferred; a
-    # default implemented classification would hide a source-defined gap.
-    expected_gaps = {
-        "lua.object-field.bpmgraph-id": "Task 6: BPM/scroll/stop graph",
-        "lua.object-field.judge-graph-id": "Task 2: Judgement and note-distribution graph",
-        "lua.object-field.timing-visualizer-id": "Task 3: Timing visualizer",
+    # These representative rows were previously deferred. Keep them pinned to
+    # concrete decoder/test evidence so completing the ledger cannot silently
+    # reclassify an unimplemented feature.
+    previously_deferred = {
+        "lua.object-field.bpmgraph-id",
+        "lua.object-field.judge-graph-id",
+        "lua.object-field.timing-visualizer-id",
     }
-    for identifier, task in expected_gaps.items():
+    for identifier in previously_deferred:
         row = ledger_by_id[identifier]
-        assert row["status"] == "missing", f"{identifier} must not default to implemented"
-        assert row["task"] == task, f"{identifier} must retain its owning task"
+        assert row == {
+            "id": identifier,
+            "status": "implemented",
+            "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
+            "tests": "tests/beatoraja_skin_model_tests.cpp",
+        }, f"{identifier} must retain concrete implementation evidence"
 
     timing_distribution_rows = [
         row
@@ -133,6 +145,20 @@ def main() -> None:
             assert row.get("implementation") and row.get("tests"), (
                 f"{row['id']} must identify implementation and tests"
             )
+            for evidence_kind in ("implementation", "tests"):
+                evidence_paths = [
+                    value.strip()
+                    for value in row[evidence_kind].split(";")
+                    if value.strip()
+                ]
+                assert evidence_paths, (
+                    f"{row['id']} must retain {evidence_kind} paths"
+                )
+                for evidence_path in evidence_paths:
+                    assert (ROOT / evidence_path).is_file(), (
+                        f"{row['id']} cites missing {evidence_kind} evidence: "
+                        f"{evidence_path}"
+                    )
         elif row["status"] == "missing":
             assert row.get("plan", "").startswith("docs/superpowers/plans/"), (
                 f"{row['id']} must have an owning plan"
@@ -145,6 +171,13 @@ def main() -> None:
             assert source.get("path") and source.get("symbol"), (
                 f"{row['id']} must identify its source-defined no-op"
             )
+
+    if require_complete:
+        missing = [row["id"] for row in ledger_features if row["status"] == "missing"]
+        assert not missing, (
+            "complete gameplay ledger still contains missing rows: "
+            + ", ".join(missing)
+        )
 
 
 if __name__ == "__main__":

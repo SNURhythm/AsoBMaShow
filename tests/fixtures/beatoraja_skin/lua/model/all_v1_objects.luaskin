@@ -83,7 +83,10 @@ return {
     {
       id = "rate-slider", src = "atlas",
       x = 0, y = 0, w = 10, h = 10,
-      angle = 1, range = 90, type = 800, changeable = false,
+      -- Selector 17 is the shared, source-defined master-volume rate. The
+      -- cross-format matrix compares this overlap without treating Lua-only
+      -- callbacks or LR2-only command families as equivalent.
+      angle = 1, range = 90, type = 17, changeable = false,
     },
   },
 

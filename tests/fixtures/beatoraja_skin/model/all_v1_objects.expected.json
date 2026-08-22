@@ -30,7 +30,7 @@
   ],
   "floatBindings": [
     {"id": 1, "domain": "FloatValue", "selector": 800, "authoredOrdinal": 0},
-    {"id": 2, "domain": "Rate", "selector": 800, "authoredOrdinal": 1}
+    {"id": 2, "domain": "Rate", "selector": 17, "authoredOrdinal": 1}
   ],
   "objects": [
     {"id": 1, "name": "strip", "authoredOrdinal": 0, "critical": false},

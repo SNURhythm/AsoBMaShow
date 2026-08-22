@@ -1,0 +1,5 @@
+#INFORMATION,0,Cross-format gameplay overlap,AsoBMaShow tests
+#RESOLUTION,1
+#IMAGE,assets/atlas.png
+#SRC_SLIDER,0,0,0,0,10,10,1,1,0,0,1,90,17,1
+#DST_SLIDER,0,0,70,630,10,10,0,255,255,255,255,0,0,0,0,0,0,0,0,0

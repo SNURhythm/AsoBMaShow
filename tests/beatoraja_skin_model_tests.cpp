@@ -262,6 +262,10 @@ public:
                      .floatDomain = SkinFloatPropertyDomain::Rate},
             .selector = SkinBuiltinPropertySelector{800}},
         SkinBuiltinBindingCatalogEntry{
+            .type = {.kind = SkinBindingKind::FloatProperty,
+                     .floatDomain = SkinFloatPropertyDomain::Rate},
+            .selector = SkinBuiltinPropertySelector{17}},
+        SkinBuiltinBindingCatalogEntry{
             .type = {.kind = SkinBindingKind::TimerProperty},
             .selector = SkinBuiltinPropertySelector{42}},
         SkinBuiltinBindingCatalogEntry{

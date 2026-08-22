@@ -5,8 +5,12 @@
 The complete pinned-source gameplay-skin inventory and its current ownership
 classification live in the machine-readable
 [`beatoraja-gameplay-feature-ledger-v1.json`](skin-compat/beatoraja-gameplay-feature-ledger-v1.json).
-This page retains property-bridge notes rather than claiming complete
-gameplay-skin parity.
+That ledger now has evidence for every valid gameplay surface row and no
+`missing` classification. The cross-format fixture proves only the shared
+Lua/JSON/LR2 model and draw surface; format-exclusive behavior keeps its own
+pinned fixture evidence. The remaining differential-oracle, performance, and
+ModernChic acceptance gates stay in the conformance plan, so this page does
+not claim final gameplay-skin acceptance.
 
 The historical notes below are from the pinned Beatoraja checkout
 `c2ed5db1a46145ed10790c3872f717e95b59db9d`. They list a property only when

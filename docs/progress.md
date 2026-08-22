@@ -15,6 +15,15 @@ work from [`docs/todo.md`](todo.md). The pinned authority is Beatoraja commit
 
 ## Completed
 
+- The pinned gameplay-skin ledger now classifies all 771 source-surface rows:
+  755 implemented rows have concrete source/test evidence, 16 rows retain
+  their pinned source-defined no-op evidence, and none remain `missing`.
+  Redistributable Lua, JSON, and LR2 fixtures prove the genuinely shared
+  slider/resource/rate-binding/destination model and identical textured draw
+  trace. Format-exclusive gameplay families remain asserted by their native
+  all-field/all-command fixtures instead of being treated as equivalent.
+  `beatoraja_gameplay_skin_ledger_tests.py --require-complete` is the CI gate.
+
 - Practice now has a source-shaped no-audio `BMSPlayer.STATE_PRACTICE` phase.
   Before its held first input begins an attempt, selector `1080`, row
   availability/selection `3000`–`3035`, practice text strings, and committed
