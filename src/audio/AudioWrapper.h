@@ -232,8 +232,10 @@ private:
       soundDataIndexMap; // Map to store index of SoundData in soundDataList
   struct SkinSoundRecord {
     std::shared_ptr<SoundData> soundData;
-    std::shared_ptr<std::atomic_bool> acknowledgement;
     std::size_t decodedBytes = 0;
+    std::uint64_t lastPlaySequence = 0;
+    std::uint64_t pendingStopSequence = 0;
+    std::uint64_t retirementSequence = 0;
   };
   std::unordered_map<std::uint64_t, SkinSoundRecord> skinSounds;
   std::vector<SkinSoundRecord> retiredSkinSounds;
@@ -271,8 +273,7 @@ private:
                         int channels, int sampleRate,
                         std::atomic<bool> &isCancelled);
   void cleanupRetiredSkinSoundsLocked() noexcept;
-  bool disposeSkinSoundWithQueue(audio::SkinSoundHandle handle,
-                                 bool ownerControlQueue) noexcept;
+  bool retireSkinSound(audio::SkinSoundHandle handle) noexcept;
   void initializeUserData();
   void startBackendAfterConstruction();
   audio::playback::BackendOperationResult

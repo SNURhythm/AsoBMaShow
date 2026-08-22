@@ -10959,6 +10959,9 @@ void MainMenuScene::startAutoPlayVideoExport(
           autoPlayAssistOption, autoPlayClubMode,
           autoPlayGaugeAutoShiftLowerBound, autoPlayRuleset);
       ReplayVideoExportOptions exportOptions = options;
+      if (stopToken != nullptr) {
+        exportOptions.stop = *stopToken;
+      }
       exportOptions.renderTouchPoints = false;
       exportOptions.renderReplayGhosts = false;
       exportOptions.pacemakerTarget = pacemaker::kTargetOff;
@@ -11046,8 +11049,12 @@ void MainMenuScene::startModernReplayVideoExport(
         return;
       }
 
+      ReplayVideoExportOptions exportOptions = options;
+      if (stopToken != nullptr) {
+        exportOptions.stop = *stopToken;
+      }
       complete(ReplayVideoExporter::Export(
-          context, loaded.chart.get(), *loaded.replayData, options));
+          context, loaded.chart.get(), *loaded.replayData, exportOptions));
     } catch (const std::exception &e) {
       complete({.success = false, .message = e.what()});
     } catch (...) {
@@ -11135,8 +11142,12 @@ void MainMenuScene::startModernCourseReplayVideoExport(
         complete({.success = false, .message = "Replay export cancelled"});
         return;
       }
+      ReplayVideoExportOptions exportOptions = options;
+      if (stopToken != nullptr) {
+        exportOptions.stop = *stopToken;
+      }
       complete(ReplayVideoExporter::ExportCourseReplay(
-          context, std::move(loaded), options));
+          context, std::move(loaded), exportOptions));
     } catch (const std::exception &e) {
       complete({.success = false, .message = e.what()});
     } catch (...) {

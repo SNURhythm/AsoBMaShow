@@ -9,9 +9,8 @@
 AudioCallbackState::AudioCallbackState()
     : playingSounds(std::make_unique<PlayingSound[]>(kMaxActiveSounds)),
       scheduledSounds(std::make_unique<ScheduledSound[]>(kMaxScheduledSounds)),
-      commandQueue(std::make_unique<AudioCommand[]>(kAudioCommandQueueSize)),
-      ownerControlCommandQueue(
-          std::make_unique<AudioCommand[]>(kOwnerControlCommandQueueSize)),
+      commandQueue(
+          std::make_unique<AudioCommand[]>(kCombinedAudioCommandQueueSize)),
       realtimeCommandQueue(
           std::make_unique<AudioCommand[]>(kRealtimeAudioCommandQueueSize)) {}
 
@@ -345,14 +344,14 @@ StopBackendAndClearCallbackState(IBackendLifecycle &backend,
   }
   DrainRealtimeCommands(callbackState);
   DrainCommands(callbackState);
-  DrainOwnerControlCommands(callbackState);
   ClearCallbackSounds(callbackState);
   callbackState.commandReadCursor.store(0, std::memory_order_release);
   callbackState.commandWriteCursor.store(0, std::memory_order_release);
-  callbackState.ownerControlCommandReadCursor.store(0,
-                                                    std::memory_order_release);
-  callbackState.ownerControlCommandWriteCursor.store(0,
-                                                     std::memory_order_release);
+  callbackState.ordinaryCommandCount.store(0, std::memory_order_release);
+  callbackState.ownerControlCommandCount.store(0,
+                                               std::memory_order_release);
+  callbackState.ownerRetirementCommandCount.store(0,
+                                                  std::memory_order_release);
   callbackState.realtimeCommandReadCursor.store(0,
                                                 std::memory_order_release);
   callbackState.realtimeCommandWriteCursor.store(0,
@@ -573,12 +572,15 @@ void RemoveSound(AudioCallbackState &state, SoundData *soundData) {
   state.scheduledSoundCount = retained;
 }
 
-bool EnqueueCommand(AudioCallbackState &state, const AudioCommand &command) {
+bool EnqueueCommand(AudioCallbackState &state, const AudioCommand &command,
+                    std::uint64_t *submissionSequence) {
   const std::uint32_t readCursor =
       state.commandReadCursor.load(std::memory_order_acquire);
   const std::uint32_t writeCursor =
       state.commandWriteCursor.load(std::memory_order_relaxed);
-  if (writeCursor - readCursor >= kAudioCommandQueueSize) {
+  if (state.ordinaryCommandCount.load(std::memory_order_acquire) >=
+          kAudioCommandQueueSize ||
+      writeCursor - readCursor >= kCombinedAudioCommandQueueSize) {
     return false;
   }
 
@@ -586,28 +588,66 @@ bool EnqueueCommand(AudioCallbackState &state, const AudioCommand &command) {
   submitted.submissionSequence =
       state.nextCommandSubmissionSequence.fetch_add(1,
                                                     std::memory_order_relaxed);
-  state.commandQueue[writeCursor % kAudioCommandQueueSize] = submitted;
+  submitted.admission = AudioCommandAdmission::Ordinary;
+  state.commandQueue[writeCursor % kCombinedAudioCommandQueueSize] = submitted;
+  state.ordinaryCommandCount.fetch_add(1, std::memory_order_release);
   state.commandWriteCursor.store(writeCursor + 1, std::memory_order_release);
+  if (submissionSequence != nullptr) {
+    *submissionSequence = submitted.submissionSequence;
+  }
   return true;
 }
 
 bool EnqueueOwnerControlCommand(AudioCallbackState &state,
-                                const AudioCommand &command) {
+                                const AudioCommand &command,
+                                std::uint64_t *submissionSequence) {
   const std::uint32_t readCursor =
-      state.ownerControlCommandReadCursor.load(std::memory_order_acquire);
+      state.commandReadCursor.load(std::memory_order_acquire);
   const std::uint32_t writeCursor =
-      state.ownerControlCommandWriteCursor.load(std::memory_order_relaxed);
-  if (writeCursor - readCursor >= kOwnerControlCommandQueueSize) {
+      state.commandWriteCursor.load(std::memory_order_relaxed);
+  if (state.ownerControlCommandCount.load(std::memory_order_acquire) >=
+          kOwnerControlCommandQueueSize ||
+      writeCursor - readCursor >= kCombinedAudioCommandQueueSize) {
     return false;
   }
   AudioCommand submitted = command;
   submitted.submissionSequence =
       state.nextCommandSubmissionSequence.fetch_add(1,
                                                     std::memory_order_relaxed);
-  state.ownerControlCommandQueue[
-      writeCursor % kOwnerControlCommandQueueSize] = submitted;
-  state.ownerControlCommandWriteCursor.store(writeCursor + 1,
-                                             std::memory_order_release);
+  submitted.admission = AudioCommandAdmission::OwnerControl;
+  state.commandQueue[writeCursor % kCombinedAudioCommandQueueSize] = submitted;
+  state.ownerControlCommandCount.fetch_add(1, std::memory_order_release);
+  state.commandWriteCursor.store(writeCursor + 1, std::memory_order_release);
+  if (submissionSequence != nullptr) {
+    *submissionSequence = submitted.submissionSequence;
+  }
+  return true;
+}
+
+bool EnqueueOwnerRetirementCommand(
+    AudioCallbackState &state, const AudioCommand &command,
+    std::uint64_t *submissionSequence) {
+  const std::uint32_t readCursor =
+      state.commandReadCursor.load(std::memory_order_acquire);
+  const std::uint32_t writeCursor =
+      state.commandWriteCursor.load(std::memory_order_relaxed);
+  if (state.ownerRetirementCommandCount.load(std::memory_order_acquire) >=
+          kOwnerControlCommandQueueSize ||
+      writeCursor - readCursor >= kCombinedAudioCommandQueueSize) {
+    return false;
+  }
+  AudioCommand submitted = command;
+  submitted.submissionSequence =
+      state.nextCommandSubmissionSequence.fetch_add(1,
+                                                    std::memory_order_relaxed);
+  submitted.admission = AudioCommandAdmission::OwnerRetirement;
+  state.commandQueue[writeCursor % kCombinedAudioCommandQueueSize] = submitted;
+  state.ownerRetirementCommandCount.fetch_add(1,
+                                              std::memory_order_release);
+  state.commandWriteCursor.store(writeCursor + 1, std::memory_order_release);
+  if (submissionSequence != nullptr) {
+    *submissionSequence = submitted.submissionSequence;
+  }
   return true;
 }
 
@@ -662,6 +702,10 @@ void DrainRealtimeCommands(AudioCallbackState &state) noexcept {
       break;
     case AudioCommandType::StopOwner:
       RemoveSound(state, command.soundData);
+      if (command.soundData != nullptr) {
+        command.soundData->ownerControlAcknowledgedSequence.store(
+            command.submissionSequence, std::memory_order_release);
+      }
       if (command.acknowledgement != nullptr) {
         command.acknowledgement->store(true, std::memory_order_release);
       }
@@ -694,6 +738,10 @@ static void ApplyCommand(AudioCallbackState &state,
     break;
   case AudioCommandType::StopOwner:
     RemoveSound(state, command.soundData);
+    if (command.soundData != nullptr) {
+      command.soundData->ownerControlAcknowledgedSequence.store(
+          command.submissionSequence, std::memory_order_release);
+    }
     if (command.acknowledgement != nullptr) {
       command.acknowledgement->store(true, std::memory_order_release);
     }
@@ -704,57 +752,32 @@ static void ApplyCommand(AudioCallbackState &state,
   }
 }
 
-void DrainCommands(AudioCallbackState &state) {
+void DrainCommands(AudioCallbackState &state,
+                   CommandDrainSnapshotHook afterSnapshot,
+                   void *hookContext) {
   std::uint32_t readCursor =
       state.commandReadCursor.load(std::memory_order_relaxed);
   const std::uint32_t writeCursor =
       state.commandWriteCursor.load(std::memory_order_acquire);
-  std::uint32_t ownerReadCursor =
-      state.ownerControlCommandReadCursor.load(std::memory_order_relaxed);
-  const std::uint32_t ownerWriteCursor =
-      state.ownerControlCommandWriteCursor.load(std::memory_order_acquire);
+  if (afterSnapshot != nullptr) {
+    afterSnapshot(hookContext);
+  }
 
-  while (readCursor != writeCursor || ownerReadCursor != ownerWriteCursor) {
-    const AudioCommand *command = nullptr;
-    if (readCursor == writeCursor) {
-      command = &state.ownerControlCommandQueue[
-          ownerReadCursor++ % kOwnerControlCommandQueueSize];
-    } else if (ownerReadCursor == ownerWriteCursor) {
-      command = &state.commandQueue[readCursor++ % kAudioCommandQueueSize];
+  while (readCursor != writeCursor) {
+    const AudioCommand &command = state.commandQueue[
+        readCursor++ % kCombinedAudioCommandQueueSize];
+    ApplyCommand(state, command);
+    if (command.admission == AudioCommandAdmission::OwnerControl) {
+      state.ownerControlCommandCount.fetch_sub(1, std::memory_order_release);
+    } else if (command.admission == AudioCommandAdmission::OwnerRetirement) {
+      state.ownerRetirementCommandCount.fetch_sub(1,
+                                                  std::memory_order_release);
     } else {
-      const AudioCommand &ordinary =
-          state.commandQueue[readCursor % kAudioCommandQueueSize];
-      const AudioCommand &owner = state.ownerControlCommandQueue[
-          ownerReadCursor % kOwnerControlCommandQueueSize];
-      if (owner.submissionSequence < ordinary.submissionSequence) {
-        command = &owner;
-        ++ownerReadCursor;
-      } else {
-        command = &ordinary;
-        ++readCursor;
-      }
+      state.ordinaryCommandCount.fetch_sub(1, std::memory_order_release);
     }
-    ApplyCommand(state, *command);
   }
 
   state.commandReadCursor.store(readCursor, std::memory_order_release);
-  state.ownerControlCommandReadCursor.store(ownerReadCursor,
-                                            std::memory_order_release);
-}
-
-void DrainOwnerControlCommands(AudioCallbackState &state) noexcept {
-  std::uint32_t readCursor =
-      state.ownerControlCommandReadCursor.load(std::memory_order_relaxed);
-  const std::uint32_t writeCursor =
-      state.ownerControlCommandWriteCursor.load(std::memory_order_acquire);
-  while (readCursor != writeCursor) {
-    const AudioCommand &command = state.ownerControlCommandQueue[
-        readCursor % kOwnerControlCommandQueueSize];
-    ApplyCommand(state, command);
-    ++readCursor;
-  }
-  state.ownerControlCommandReadCursor.store(readCursor,
-                                            std::memory_order_release);
 }
 
 void ActivateScheduledSounds(AudioCallbackState &state,

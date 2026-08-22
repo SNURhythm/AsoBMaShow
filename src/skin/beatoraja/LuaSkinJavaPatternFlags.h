@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <map>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -150,6 +151,78 @@ inline std::string predefinedClass(char value, const JavaFlags &flags) {
   }
 }
 
+struct PosixPropertyClasses {
+  std::string positive;
+  std::string negative;
+};
+
+inline PosixPropertyClasses makePropertyClasses(std::string fragment) {
+  return {.positive = "[" + fragment + "]",
+          .negative = "[^" + fragment + "]"};
+}
+
+inline std::optional<PosixPropertyClasses>
+javaPosixProperty(std::string_view name, const JavaFlags &flags) {
+  if (!flags.unicodeClasses) {
+    if (name == "Lower") {
+      return makePropertyClasses(asciiCaseInsensitive(flags) ? "A-Za-z"
+                                                             : "a-z");
+    }
+    if (name == "Upper") {
+      return makePropertyClasses(asciiCaseInsensitive(flags) ? "A-Za-z"
+                                                             : "A-Z");
+    }
+    if (name == "ASCII") return makePropertyClasses("\\x00-\\x7F");
+    if (name == "Alpha") return makePropertyClasses("A-Za-z");
+    if (name == "Digit") return makePropertyClasses("0-9");
+    if (name == "Alnum") return makePropertyClasses("A-Za-z0-9");
+    if (name == "Punct") {
+      return makePropertyClasses(
+          "\\x21-\\x2F\\x3A-\\x40\\x5B-\\x60\\x7B-\\x7E");
+    }
+    if (name == "Graph") return makePropertyClasses("\\x21-\\x7E");
+    if (name == "Print") return makePropertyClasses("\\x20-\\x7E");
+    if (name == "Blank") return makePropertyClasses("\\x09\\x20");
+    if (name == "Cntrl") {
+      return makePropertyClasses("\\x00-\\x1F\\x7F");
+    }
+    if (name == "XDigit") return makePropertyClasses("0-9A-Fa-f");
+    if (name == "Space") {
+      return makePropertyClasses("\\x09-\\x0D\\x20");
+    }
+    return std::nullopt;
+  }
+
+  if (name == "Lower") return makePropertyClasses("\\p{Lower}");
+  if (name == "Upper") return makePropertyClasses("\\p{Upper}");
+  if (name == "ASCII") return makePropertyClasses("\\x00-\\x7F");
+  if (name == "Alpha") return makePropertyClasses("\\p{Alphabetic}");
+  if (name == "Digit") return makePropertyClasses("\\p{Nd}");
+  if (name == "Alnum") {
+    return makePropertyClasses("\\p{Alphabetic}\\p{Nd}");
+  }
+  if (name == "Punct") return makePropertyClasses("\\p{P}");
+  if (name == "Graph") {
+    return PosixPropertyClasses{
+        .positive = "[^\\p{White_Space}\\p{Cc}\\p{Cs}\\p{Cn}]",
+        .negative = "[\\p{White_Space}\\p{Cc}\\p{Cs}\\p{Cn}]"};
+  }
+  if (name == "Print") {
+    constexpr std::string_view excluded =
+        "\\p{Cc}\\p{Cs}\\p{Cn}\\p{Zl}\\p{Zp}"
+        "\\x09-\\x0D\\x85";
+    return PosixPropertyClasses{.positive = "[^" + std::string(excluded) + "]",
+                                .negative = "[" + std::string(excluded) + "]"};
+  }
+  if (name == "Blank") return makePropertyClasses("\\p{Zs}\\x09");
+  if (name == "Cntrl") return makePropertyClasses("\\p{Cc}");
+  if (name == "XDigit") {
+    return makePropertyClasses("\\p{Nd}\\p{Hex_Digit}");
+  }
+  if (name == "Space") return makePropertyClasses("\\p{White_Space}");
+  return std::nullopt;
+}
+
 inline std::string wordBoundary(bool boundary, const JavaFlags &flags) {
   const std::string word = flags.unicodeClasses
                                ? unicodeWordClass(false)
@@ -294,29 +367,59 @@ private:
                                           const JavaFlags &flags) {
     const bool negated = !content.empty() && content.front() == '^';
     std::size_t cursor = negated ? 1 : 0;
-    std::string translated;
-    translated.reserve(content.size() * 2 + 2);
-    translated.push_back('[');
-    if (negated) translated.push_back('^');
+    std::string fragment;
+    fragment.reserve(content.size() * 2);
+    std::vector<std::string> alternatives;
     while (cursor < content.size()) {
       if (content[cursor] == '\\') {
         if (cursor + 1 >= content.size())
           throw std::invalid_argument("trailing Java class escape");
         const char escaped = content[cursor + 1];
-        const std::string fragment = classFragment(escaped, flags);
-        if (!fragment.empty()) {
-          translated += fragment;
+        const std::string predefinedFragment = classFragment(escaped, flags);
+        if (!predefinedFragment.empty()) {
+          // Predefined Java classes are already reduced to a class fragment.
+          // They can therefore participate in unions without changing group
+          // or match width.
+          fragment += predefinedFragment;
           cursor += 2;
           continue;
         }
-        translated.push_back('\\');
-        translated.push_back(escaped);
+        if ((escaped == 'p' || escaped == 'P') &&
+            cursor + 2 < content.size() && content[cursor + 2] == '{') {
+          const std::size_t close = content.find('}', cursor + 3);
+          if (close == std::string_view::npos) {
+            throw std::invalid_argument("unterminated Java property escape");
+          }
+          if (const auto property = javaPosixProperty(
+                  content.substr(cursor + 3, close - cursor - 3), flags)) {
+            const std::string &translatedProperty =
+                escaped == 'p' ? property->positive : property->negative;
+            if (translatedProperty.size() >= 2 &&
+                translatedProperty.front() == '[' &&
+                translatedProperty[1] != '^' &&
+                translatedProperty.back() == ']') {
+              fragment.append(translatedProperty, 1,
+                              translatedProperty.size() - 2);
+            } else {
+              alternatives.push_back(translatedProperty);
+            }
+            cursor = close + 1;
+            continue;
+          }
+        }
+        fragment.push_back('\\');
+        fragment.push_back(escaped);
         cursor += 2;
         if ((escaped == 'p' || escaped == 'P' || escaped == 'x') &&
             cursor < content.size() && content[cursor] == '{') {
-          do { translated.push_back(content[cursor]); }
+          do { fragment.push_back(content[cursor]); }
           while (cursor < content.size() && content[cursor++] != '}');
         }
+        continue;
+      }
+      if (flags.comments &&
+          std::isspace(static_cast<unsigned char>(content[cursor]))) {
+        ++cursor;
         continue;
       }
       if (asciiCaseInsensitive(flags) && cursor + 2 < content.size() &&
@@ -324,25 +427,39 @@ private:
           isAsciiLetter(content[cursor + 2])) {
         const char first = content[cursor];
         const char last = content[cursor + 2];
-        translated.push_back(first);
-        translated.push_back('-');
-        translated.push_back(last);
+        fragment.push_back(first);
+        fragment.push_back('-');
+        fragment.push_back(last);
         if ((first >= 'a' && first <= 'z' && last >= 'a' && last <= 'z') ||
             (first >= 'A' && first <= 'Z' && last >= 'A' && last <= 'Z')) {
-          translated.push_back(oppositeAsciiCase(first));
-          translated.push_back('-');
-          translated.push_back(oppositeAsciiCase(last));
+          fragment.push_back(oppositeAsciiCase(first));
+          fragment.push_back('-');
+          fragment.push_back(oppositeAsciiCase(last));
         }
         cursor += 3;
         continue;
       }
-      translated.push_back(content[cursor]);
+      fragment.push_back(content[cursor]);
       if (asciiCaseInsensitive(flags) && isAsciiLetter(content[cursor]))
-        translated.push_back(oppositeAsciiCase(content[cursor]));
+        fragment.push_back(oppositeAsciiCase(content[cursor]));
       ++cursor;
     }
-    translated.push_back(']');
-    return translated;
+    if (!fragment.empty() || alternatives.empty()) {
+      alternatives.push_back("[" + fragment + "]");
+    }
+    std::string translated;
+    if (alternatives.size() == 1) {
+      translated = alternatives.front();
+    } else {
+      translated = "(?:";
+      for (std::size_t index = 0; index < alternatives.size(); ++index) {
+        if (index != 0) translated.push_back('|');
+        translated += alternatives[index];
+      }
+      translated.push_back(')');
+    }
+    if (!negated) return translated;
+    return "(?:(?!" + translated + ")[\\s\\S])";
   }
 
   static std::string translateClass(std::string_view content,
@@ -430,6 +547,18 @@ private:
       std::string quoted;
       cursor = appendQuoted(cursor + 2, flags, quoted);
       return quoted;
+    }
+    if ((escaped == 'p' || escaped == 'P') &&
+        cursor + 2 < input_.size() && input_[cursor + 2] == '{') {
+      const std::size_t close = input_.find('}', cursor + 3);
+      if (close == std::string_view::npos) {
+        throw std::invalid_argument("unterminated Java property escape");
+      }
+      if (const auto property = javaPosixProperty(
+              input_.substr(cursor + 3, close - cursor - 3), flags)) {
+        cursor = close + 1;
+        return escaped == 'p' ? property->positive : property->negative;
+      }
     }
     if (const auto predefined = predefinedClass(escaped, flags);
         !predefined.empty()) {

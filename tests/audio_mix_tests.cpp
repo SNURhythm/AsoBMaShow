@@ -855,7 +855,6 @@ void testOwnerControlQueuePreservesCrossQueueSubmissionOrder() {
                    .bus = audio::Bus::System}),
           "stop-then-play enters the separate owner and ordinary queues");
   audio::playback::DrainCommands(stopThenPlay);
-  audio::playback::DrainOwnerControlCommands(stopThenPlay);
   require(stopThenPlay.playingSoundCount == 1,
           "later play wins over an earlier owner stop across queues");
 
@@ -871,9 +870,70 @@ void testOwnerControlQueuePreservesCrossQueueSubmissionOrder() {
                    .soundData = &sound}),
           "play-then-stop enters the separate ordinary and owner queues");
   audio::playback::DrainCommands(playThenStop);
-  audio::playback::DrainOwnerControlCommands(playThenStop);
   require(playThenStop.playingSoundCount == 0,
           "later owner stop wins over an earlier play across queues");
+}
+
+struct CommandSnapshotInterleave {
+  AudioCallbackState *state = nullptr;
+  SoundData *sound = nullptr;
+  bool playFirst = false;
+};
+
+void enqueueCommandsAfterCallbackSnapshot(void *context) {
+  auto &interleave = *static_cast<CommandSnapshotInterleave *>(context);
+  const AudioCommand play{.type = AudioCommandType::PlayNow,
+                          .soundData = interleave.sound,
+                          .bus = audio::Bus::System};
+  const AudioCommand stop{.type = AudioCommandType::StopOwner,
+                          .soundData = interleave.sound};
+  if (interleave.playFirst) {
+    require(audio::playback::EnqueueCommand(*interleave.state, play) &&
+                audio::playback::EnqueueOwnerControlCommand(*interleave.state,
+                                                            stop),
+            "play-then-stop publishes during the callback snapshot seam");
+  } else {
+    require(audio::playback::EnqueueOwnerControlCommand(*interleave.state,
+                                                        stop) &&
+                audio::playback::EnqueueCommand(*interleave.state, play),
+            "stop-then-play publishes during the callback snapshot seam");
+  }
+}
+
+void testCallbackSnapshotNeverExposesOnlyTheLaterCrossQueueCommand() {
+  SoundData sound;
+  sound.channels = 1;
+  sound.outputData = {1000, 1000};
+  sound.outputFrameCount = 2;
+
+  AudioCallbackState playThenStop;
+  CommandSnapshotInterleave playFirst{.state = &playThenStop,
+                                      .sound = &sound,
+                                      .playFirst = true};
+  audio::playback::DrainCommands(playThenStop,
+                                 enqueueCommandsAfterCallbackSnapshot,
+                                 &playFirst);
+  require(playThenStop.playingSoundCount == 0,
+          "commands published after the coherent snapshot wait together");
+  audio::playback::DrainCommands(playThenStop);
+  require(playThenStop.playingSoundCount == 0,
+          "deferred play-then-stop retains authored order");
+
+  AudioCallbackState stopThenPlay;
+  require(audio::playback::AppendActiveSound(
+              stopThenPlay, &sound, audio::Bus::System, 0),
+          "stop-then-play interleave begins with the owner active");
+  CommandSnapshotInterleave stopFirst{.state = &stopThenPlay,
+                                      .sound = &sound,
+                                      .playFirst = false};
+  audio::playback::DrainCommands(stopThenPlay,
+                                 enqueueCommandsAfterCallbackSnapshot,
+                                 &stopFirst);
+  require(stopThenPlay.playingSoundCount == 1,
+          "the callback does not expose only the later owner control");
+  audio::playback::DrainCommands(stopThenPlay);
+  require(stopThenPlay.playingSoundCount == 1,
+          "deferred stop-then-play retains authored order");
 }
 
 void testRealtimeCommandReservationPublishesAtomically() {
@@ -1166,6 +1226,7 @@ int main() {
     testScopedSystemSoundLoopsAtPerVoiceGainAndStopsSelectively();
     testOwnerStopCommandAcknowledgesWithoutInterruptingOtherVoices();
     testOwnerControlQueuePreservesCrossQueueSubmissionOrder();
+    testCallbackSnapshotNeverExposesOnlyTheLaterCrossQueueCommand();
     testRealtimeCommandReservationPublishesAtomically();
     testRealtimeCommandReservationFailsClosedAtCapacity();
     testRealtimeCommandDeterministicallyAdmitsAtVoiceLimit();
