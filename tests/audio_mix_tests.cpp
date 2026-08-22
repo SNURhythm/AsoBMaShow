@@ -838,6 +838,44 @@ void testOwnerStopCommandAcknowledgesWithoutInterruptingOtherVoices() {
           "unrelated BGM continues on the next callback buffer");
 }
 
+void testOwnerControlQueuePreservesCrossQueueSubmissionOrder() {
+  SoundData sound;
+  sound.channels = 1;
+  sound.outputData = {1000, 1000};
+  sound.outputFrameCount = 2;
+
+  AudioCallbackState stopThenPlay;
+  require(audio::playback::EnqueueOwnerControlCommand(
+              stopThenPlay,
+              {.type = AudioCommandType::StopOwner, .soundData = &sound}) &&
+              audio::playback::EnqueueCommand(
+                  stopThenPlay,
+                  {.type = AudioCommandType::PlayNow,
+                   .soundData = &sound,
+                   .bus = audio::Bus::System}),
+          "stop-then-play enters the separate owner and ordinary queues");
+  audio::playback::DrainCommands(stopThenPlay);
+  audio::playback::DrainOwnerControlCommands(stopThenPlay);
+  require(stopThenPlay.playingSoundCount == 1,
+          "later play wins over an earlier owner stop across queues");
+
+  AudioCallbackState playThenStop;
+  require(audio::playback::EnqueueCommand(
+              playThenStop,
+              {.type = AudioCommandType::PlayNow,
+               .soundData = &sound,
+               .bus = audio::Bus::System}) &&
+              audio::playback::EnqueueOwnerControlCommand(
+                  playThenStop,
+                  {.type = AudioCommandType::StopOwner,
+                   .soundData = &sound}),
+          "play-then-stop enters the separate ordinary and owner queues");
+  audio::playback::DrainCommands(playThenStop);
+  audio::playback::DrainOwnerControlCommands(playThenStop);
+  require(playThenStop.playingSoundCount == 0,
+          "later owner stop wins over an earlier play across queues");
+}
+
 void testRealtimeCommandReservationPublishesAtomically() {
   SoundData keysound;
   keysound.channels = 1;
@@ -1127,6 +1165,7 @@ int main() {
     testBusFlowAndMixing();
     testScopedSystemSoundLoopsAtPerVoiceGainAndStopsSelectively();
     testOwnerStopCommandAcknowledgesWithoutInterruptingOtherVoices();
+    testOwnerControlQueuePreservesCrossQueueSubmissionOrder();
     testRealtimeCommandReservationPublishesAtomically();
     testRealtimeCommandReservationFailsClosedAtCapacity();
     testRealtimeCommandDeterministicallyAdmitsAtVoiceLimit();

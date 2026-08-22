@@ -351,6 +351,7 @@ resolveReplayVideoExportOptions(const ReplayVideoExportOptions &options) {
   resolved.renderReplayGhosts = options.renderReplayGhosts;
   resolved.pacemakerTarget = options.pacemakerTarget;
   resolved.progressCallback = options.progressCallback;
+  resolved.stop = options.stop;
   return resolved;
 }
 
@@ -4182,7 +4183,7 @@ ReplayVideoExporter::Export(ApplicationContext &context,
       context.settings.prepMetronomeEnabled, 0, 0, std::nullopt,
       replay.provenance.playback);
   PreparedReplayGameplayPresentation preparedGameplay;
-  GameplaySkinSessionStopOwner skinSessionStopOwner;
+  GameplaySkinSessionStopOwner skinSessionStopOwner(options.stop);
   auto skinSessionStop = makeScopeExit(
       [&]() { skinSessionStopOwner.requestStop(); });
   return replay_video_export::runPreflightGatedNormalExport(
@@ -4375,7 +4376,7 @@ ReplayVideoExportResult exportCourseReplayImpl(
        materializedStages->size() != replay.stages.size())) {
     return {.success = false, .message = "No course replay selected"};
   }
-  GameplaySkinSessionStopOwner skinSessionStopOwner;
+  GameplaySkinSessionStopOwner skinSessionStopOwner(options.stop);
   auto skinSessionStop = makeScopeExit(
       [&]() { skinSessionStopOwner.requestStop(); });
   reportReplayExportProgress(options, 0.0, "Preparing course export");

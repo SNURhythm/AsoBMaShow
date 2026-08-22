@@ -414,6 +414,7 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
   AudioCallbackState &state = *userData->callbackState;
   audio::playback::DrainRealtimeCommands(state);
   audio::playback::DrainCommands(state);
+  audio::playback::DrainOwnerControlCommands(state);
 
   if (!userData->stopwatch->isRunning()) {
     fillSilence(pOutput, frameCount, outputChannels);
@@ -871,9 +872,16 @@ void AudioWrapper::preloadSounds(const std::vector<path_t> &paths,
 }
 
 void AudioWrapper::clearCallbackState() {
+  audio::playback::DrainRealtimeCommands(callbackState);
+  audio::playback::DrainCommands(callbackState);
+  audio::playback::DrainOwnerControlCommands(callbackState);
   audio::playback::ClearCallbackSounds(callbackState);
   callbackState.commandReadCursor.store(0, std::memory_order_release);
   callbackState.commandWriteCursor.store(0, std::memory_order_release);
+  callbackState.ownerControlCommandReadCursor.store(0,
+                                                    std::memory_order_release);
+  callbackState.ownerControlCommandWriteCursor.store(0,
+                                                     std::memory_order_release);
   callbackState.realtimeCommandReadCursor.store(0, std::memory_order_release);
   callbackState.realtimeCommandWriteCursor.store(0,
                                                  std::memory_order_release);
@@ -1097,11 +1105,12 @@ bool AudioWrapper::stopSkinSound(audio::SkinSoundHandle handle) noexcept {
     std::lock_guard<std::mutex> commandLock(audioCommandMutex);
     if (audio::playback::CanMutateCallbackStateDirectly(observed.state)) {
       audio::playback::DrainCommands(callbackState);
+      audio::playback::DrainOwnerControlCommands(callbackState);
       audio::playback::RemoveSound(callbackState,
                                    found->second.soundData.get());
       return true;
     }
-    return audio::playback::EnqueueCommand(
+    return audio::playback::EnqueueOwnerControlCommand(
         callbackState, {.type = AudioCommandType::StopOwner,
                         .soundData = found->second.soundData.get()});
   } catch (...) {
@@ -1110,6 +1119,16 @@ bool AudioWrapper::stopSkinSound(audio::SkinSoundHandle handle) noexcept {
 }
 
 bool AudioWrapper::disposeSkinSound(audio::SkinSoundHandle handle) noexcept {
+  return disposeSkinSoundWithQueue(handle, false);
+}
+
+bool AudioWrapper::retireSkinSoundForTeardown(
+    audio::SkinSoundHandle handle) noexcept {
+  return disposeSkinSoundWithQueue(handle, true);
+}
+
+bool AudioWrapper::disposeSkinSoundWithQueue(
+    audio::SkinSoundHandle handle, bool ownerControlQueue) noexcept {
   try {
     std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
     std::lock_guard<std::mutex> soundDataLock(soundDataListMutex);
@@ -1127,6 +1146,7 @@ bool AudioWrapper::disposeSkinSound(audio::SkinSoundHandle handle) noexcept {
     if (audio::playback::CanMutateCallbackStateDirectly(observed.state)) {
       std::lock_guard<std::mutex> commandLock(audioCommandMutex);
       audio::playback::DrainCommands(callbackState);
+      audio::playback::DrainOwnerControlCommands(callbackState);
       audio::playback::RemoveSound(callbackState,
                                    found->second.soundData.get());
       skinSoundDecodedBytes -= found->second.decodedBytes;
@@ -1134,16 +1154,43 @@ bool AudioWrapper::disposeSkinSound(audio::SkinSoundHandle handle) noexcept {
       return true;
     }
     found->second.acknowledgement = std::make_shared<std::atomic_bool>(false);
+    bool accepted = false;
     {
       std::lock_guard<std::mutex> commandLock(audioCommandMutex);
-      if (!audio::playback::EnqueueCommand(
-              callbackState,
-              {.type = AudioCommandType::StopOwner,
-               .soundData = found->second.soundData.get(),
-               .acknowledgement = found->second.acknowledgement.get()})) {
+      const AudioCommand command{
+          .type = AudioCommandType::StopOwner,
+          .soundData = found->second.soundData.get(),
+          .acknowledgement = found->second.acknowledgement.get()};
+      accepted =
+          ownerControlQueue
+              ? audio::playback::EnqueueOwnerControlCommand(callbackState,
+                                                            command)
+              : audio::playback::EnqueueCommand(callbackState, command);
+      if (!accepted) {
         found->second.acknowledgement.reset();
+      }
+    }
+    if (!accepted) {
+      if (!ownerControlQueue || backend == nullptr) {
         return false;
       }
+      closeRealtimeSoundGateAndWait();
+      const auto stopped = backend->stopAndDrain();
+      const auto afterStop = backend->observeState();
+      backendState.store(afterStop.state, std::memory_order_release);
+      if (!stopped.success || afterStop.state !=
+                                  audio::playback::BackendRunState::Stopped) {
+        return false;
+      }
+      std::lock_guard<std::mutex> commandLock(audioCommandMutex);
+      audio::playback::DrainRealtimeCommands(callbackState);
+      audio::playback::DrainCommands(callbackState);
+      audio::playback::DrainOwnerControlCommands(callbackState);
+      audio::playback::RemoveSound(callbackState,
+                                   found->second.soundData.get());
+      skinSoundDecodedBytes -= found->second.decodedBytes;
+      skinSounds.erase(found);
+      return true;
     }
     retiredSkinSounds.push_back(std::move(found->second));
     skinSounds.erase(found);

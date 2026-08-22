@@ -70,6 +70,9 @@ public:
   bool renderViewBeforeScene(const View *view) const override;
   void renderScene() override;
   void cleanupScene() override;
+  [[nodiscard]] GameplaySkinSessionStopHandle
+  gameplaySkinPreparationCancellationHandle() const noexcept;
+  void cancelGameplaySkinPreparation() noexcept;
   bms_parser::Note *pressLane(int lane, double inputDelay) override;
   bms_parser::Note *pressLane(int mainLane, int compensateLane,
                               double inputDelay) override;

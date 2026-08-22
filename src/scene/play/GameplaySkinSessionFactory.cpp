@@ -189,6 +189,13 @@ createGameplaySkinSession(GameplaySkinSessionServices services,
       appendSessionDiagnostic(services.diagnosticHistory, entry, revisionDigest,
                               configurationDigest, std::move(diagnostic));
     }
+    if (services.stop.stop_requested()) {
+      return failedResult(
+          services.diagnosticHistory, entry, revisionDigest,
+          configurationDigest,
+          unavailableDiagnostic("skin.session.preparation_cancelled",
+                                "Gameplay skin preparation was cancelled."));
+    }
     if (!created.session) {
       const skin::SkinDiagnostic diagnostic = firstError.value_or(
           unavailableDiagnostic("skin.session.construction_failed",

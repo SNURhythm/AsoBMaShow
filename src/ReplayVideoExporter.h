@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <utility>
 
@@ -33,6 +34,7 @@ struct ReplayVideoExportOptions {
   bool renderReplayGhosts = true;
   std::string pacemakerTarget;
   ReplayVideoExportProgressCallback progressCallback;
+  std::stop_token stop;
 };
 
 struct ReplayVideoExportResult {

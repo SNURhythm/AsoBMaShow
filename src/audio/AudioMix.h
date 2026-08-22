@@ -82,11 +82,13 @@ struct AudioCommand {
   float gain = 1.0F;
   bool loop = false;
   std::atomic_bool *acknowledgement = nullptr;
+  std::uint64_t submissionSequence = 0;
 };
 
 constexpr size_t kMaxActiveSounds = 512;
 constexpr size_t kMaxScheduledSounds = 65536;
 constexpr size_t kAudioCommandQueueSize = 4096;
+constexpr size_t kOwnerControlCommandQueueSize = 4096;
 constexpr size_t kRealtimeAudioCommandQueueSize = 1024;
 
 struct RealtimeAudioCommandReservation {
@@ -103,6 +105,10 @@ struct AudioCallbackState {
   std::unique_ptr<AudioCommand[]> commandQueue;
   std::atomic<std::uint32_t> commandReadCursor{0};
   std::atomic<std::uint32_t> commandWriteCursor{0};
+  std::unique_ptr<AudioCommand[]> ownerControlCommandQueue;
+  std::atomic<std::uint32_t> ownerControlCommandReadCursor{0};
+  std::atomic<std::uint32_t> ownerControlCommandWriteCursor{0};
+  std::atomic<std::uint64_t> nextCommandSubmissionSequence{1};
   std::unique_ptr<AudioCommand[]> realtimeCommandQueue;
   std::atomic<std::uint32_t> realtimeCommandReadCursor{0};
   std::atomic<std::uint32_t> realtimeCommandWriteCursor{0};
@@ -173,6 +179,8 @@ bool InsertScheduledSound(AudioCallbackState &state,
 void ClearCallbackSounds(AudioCallbackState &state);
 void RemoveSound(AudioCallbackState &state, SoundData *soundData);
 bool EnqueueCommand(AudioCallbackState &state, const AudioCommand &command);
+bool EnqueueOwnerControlCommand(AudioCallbackState &state,
+                                const AudioCommand &command);
 std::optional<RealtimeAudioCommandReservation>
 TryReserveRealtimeCommand(const AudioCallbackState &state) noexcept;
 bool CommitRealtimeCommand(
@@ -180,6 +188,7 @@ bool CommitRealtimeCommand(
     const AudioCommand &command) noexcept;
 void DrainRealtimeCommands(AudioCallbackState &state) noexcept;
 void DrainCommands(AudioCallbackState &state);
+void DrainOwnerControlCommands(AudioCallbackState &state) noexcept;
 void ActivateScheduledSounds(AudioCallbackState &state,
                              long long bufferStartMicros, int sampleRate,
                              std::uint32_t frameCount, int playbackRatePercent);

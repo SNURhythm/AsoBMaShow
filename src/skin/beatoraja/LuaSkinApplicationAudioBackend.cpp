@@ -8,7 +8,6 @@
 #include <limits>
 #include <map>
 #include <stop_token>
-#include <thread>
 #include <utility>
 
 namespace skin {
@@ -23,18 +22,12 @@ public:
         limits_(limits) {}
 
   ~ApplicationLuaSkinAudioBackend() override {
-    while (!sounds_.empty()) {
-      bool accepted = false;
-      for (auto found = sounds_.begin(); found != sounds_.end();) {
-        if (audio_->disposeSkinSound(found->second.handle)) {
-          found = sounds_.erase(found);
-          accepted = true;
-        } else {
-          ++found;
-        }
-      }
-      if (!accepted) {
-        std::this_thread::yield();
+    retryPendingControls();
+    for (auto found = sounds_.begin(); found != sounds_.end();) {
+      if (audio_->retireSkinSoundForTeardown(found->second.handle)) {
+        found = sounds_.erase(found);
+      } else {
+        ++found;
       }
     }
   }
@@ -54,7 +47,7 @@ public:
   load(const std::filesystem::path &path,
        std::stop_token stop) noexcept override {
     try {
-      retryPendingDisposals();
+      retryPendingControls();
       if (stop.stop_requested() || sounds_.size() >= limits_.maximumIdentities) {
         return std::nullopt;
       }
@@ -106,9 +99,9 @@ public:
 
   void play(LuaSkinAudioIdentity identity, float volume,
             bool loop) noexcept override {
-    retryPendingDisposals();
+    retryPendingControls();
     if (const auto found = sounds_.find(identity); found != sounds_.end()) {
-      if (found->second.disposalPending) {
+      if (found->second.pendingControl != PendingControl::None) {
         return;
       }
       (void)audio_->playSkinSound(found->second.handle, volume, loop);
@@ -116,40 +109,56 @@ public:
   }
 
   void stop(LuaSkinAudioIdentity identity) noexcept override {
-    retryPendingDisposals();
+    retryPendingControls();
     if (const auto found = sounds_.find(identity); found != sounds_.end()) {
-      if (found->second.disposalPending) {
+      if (found->second.pendingControl == PendingControl::Dispose) {
         return;
       }
-      (void)audio_->stopSkinSound(found->second.handle);
+      if (audio_->stopSkinSound(found->second.handle)) {
+        found->second.pendingControl = PendingControl::None;
+      } else {
+        found->second.pendingControl = PendingControl::Stop;
+      }
     }
   }
 
   void dispose(LuaSkinAudioIdentity identity) noexcept override {
-    retryPendingDisposals();
+    retryPendingControls();
     if (const auto found = sounds_.find(identity); found != sounds_.end()) {
       if (audio_->disposeSkinSound(found->second.handle)) {
         encodedBytesTotal_ -= found->second.encodedBytes;
         decodedBytesTotal_ -= found->second.decodedBytes;
         sounds_.erase(found);
       } else {
-        found->second.disposalPending = true;
+        found->second.pendingControl = PendingControl::Dispose;
       }
     }
   }
 
 private:
+  enum class PendingControl : std::uint8_t { None, Stop, Dispose };
+
   struct SoundRecord {
     audio::SkinSoundHandle handle;
     std::size_t encodedBytes = 0;
     std::size_t decodedBytes = 0;
-    bool disposalPending = false;
+    PendingControl pendingControl = PendingControl::None;
   };
 
-  void retryPendingDisposals() noexcept {
+  void retryPendingControls() noexcept {
     for (auto found = sounds_.begin(); found != sounds_.end();) {
-      if (!found->second.disposalPending ||
-          !audio_->disposeSkinSound(found->second.handle)) {
+      if (found->second.pendingControl == PendingControl::None) {
+        ++found;
+        continue;
+      }
+      if (found->second.pendingControl == PendingControl::Stop) {
+        if (audio_->stopSkinSound(found->second.handle)) {
+          found->second.pendingControl = PendingControl::None;
+        }
+        ++found;
+        continue;
+      }
+      if (!audio_->disposeSkinSound(found->second.handle)) {
         ++found;
         continue;
       }

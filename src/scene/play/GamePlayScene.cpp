@@ -2717,7 +2717,7 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
 }
 
 GamePlayScene::~GamePlayScene() {
-  gameplaySkinSessionStopOwner.requestStop();
+  cancelGameplaySkinPreparation();
   if (auto *coordinator =
           dynamic_cast<PlayfieldPresentationCoordinator *>(presentation);
       coordinator != nullptr && coordinator->hasFocusedTextInput()) {
@@ -2731,6 +2731,15 @@ GamePlayScene::~GamePlayScene() {
   if (profileGameplayBlockerActive) {
     context.profileGameplayActive.store(false, std::memory_order_release);
   }
+}
+
+GameplaySkinSessionStopHandle
+GamePlayScene::gameplaySkinPreparationCancellationHandle() const noexcept {
+  return gameplaySkinSessionStopOwner.handle();
+}
+
+void GamePlayScene::cancelGameplaySkinPreparation() noexcept {
+  gameplaySkinSessionStopOwner.requestStop();
 }
 
 void GamePlayScene::init() {
@@ -3817,6 +3826,7 @@ void GamePlayScene::refreshRuntimePresentationConfiguration() {
 }
 
 void GamePlayScene::abortPlayFromStartSelectControl() {
+  cancelGameplaySkinPreparation();
   if (state == nullptr || state->isEnding || resultTransitionScheduled) {
     return;
   }
@@ -6045,6 +6055,7 @@ void GamePlayScene::renderCoursePauseHoldRing() {
 
 void GamePlayScene::cleanupScene() {
   SDL_Log("Cleaning up GamePlayScene");
+  cancelGameplaySkinPreparation();
   stopBestReplayLoad();
   stopRealtimeGameplayAuthority(false);
   context.profileGameplayActive.store(false, std::memory_order_release);

@@ -171,6 +171,7 @@ public:
                      bool loop) noexcept;
   bool stopSkinSound(audio::SkinSoundHandle handle) noexcept;
   bool disposeSkinSound(audio::SkinSoundHandle handle) noexcept;
+  bool retireSkinSoundForTeardown(audio::SkinSoundHandle handle) noexcept;
   bool playSkinSound(const path_t &path, float gain, bool loop);
   audio::playback::BackendOperationResult stopSkinSound(const path_t &path);
   audio::playback::BackendOperationResult disposeSkinSound(const path_t &path);
@@ -270,6 +271,8 @@ private:
                         int channels, int sampleRate,
                         std::atomic<bool> &isCancelled);
   void cleanupRetiredSkinSoundsLocked() noexcept;
+  bool disposeSkinSoundWithQueue(audio::SkinSoundHandle handle,
+                                 bool ownerControlQueue) noexcept;
   void initializeUserData();
   void startBackendAfterConstruction();
   audio::playback::BackendOperationResult
