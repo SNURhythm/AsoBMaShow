@@ -26,6 +26,7 @@
 #include "PracticeAnalyticsView.h"
 #include "RemoteResultRecallController.h"
 #include "ResultGaugeHistory.h"
+#include "ResultSkinApplicationOverlays.h"
 #include "ResultSkinLayering.h"
 #include "ResultTouchControls.h"
 
@@ -3198,16 +3199,30 @@ void ResultScene::init() {
   if (!selectedResultSkin) {
     skin->buildLayout("Result", rootLayout, &data);
   }
-  if (!selectedResultSkin && local != nullptr) {
-    addTimingAnalytics(std::move(analyticsModel));
-    addResultPersistenceStatus();
+  if (local != nullptr) {
+    const bool hasPersistenceResult =
+        local->persistenceOptions.chartAttempt != nullptr ||
+        !local->persistenceOptions.outcome.userMessage.empty();
+    const auto applicationOverlays = makeResultSkinApplicationOverlays(
+        {.selectedSkin = selectedResultSkin,
+         .hasPersistenceResult = hasPersistenceResult,
+         .courseStage = isCourseStageResult(),
+         .savedResultBrowsing = local->courseOptions.savedResultBrowsing});
+    if (!selectedResultSkin) {
+      addTimingAnalytics(std::move(analyticsModel));
+    }
+    if (applicationOverlays.showsPersistenceRecovery) {
+      addResultPersistenceStatus();
+    }
     addIrResultStatus();
     if (isCourseStageResult() || isCourseFinalResult()) {
-      addCourseButtons();
-      if (!local->courseOptions.savedResultBrowsing) {
+      if (!selectedResultSkin) {
+        addCourseButtons();
+      }
+      if (applicationOverlays.buildsCourseExitConfirmation) {
         buildCourseExitConfirmation();
       }
-    } else {
+    } else if (!selectedResultSkin) {
       addRetryButtons();
     }
   } else if (!selectedResultSkin && remote != nullptr) {
@@ -3235,7 +3250,7 @@ void ResultScene::init() {
     buildResultTouchControls();
   }
 
-  if (!selectedResultSkin && local != nullptr) {
+  if (local != nullptr) {
     updateResultPersistencePresentation();
     updateIrResultPresentation(true);
   }

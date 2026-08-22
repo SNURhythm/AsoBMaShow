@@ -1,4 +1,5 @@
 #include "scene/ResultPresentationModel.h"
+#include "scene/ResultSkinApplicationOverlays.h"
 #include "scene/ResultSkinLayering.h"
 #include "scene/ResultTouchControls.h"
 
@@ -1109,6 +1110,26 @@ void testSelectedResultSkinDefersRootOverlaysUntilAfterSkin() {
   expect(shouldRenderResultRootAfterSkin(true),
          "selected result skins render root overlays after the skin");
 }
+
+void testSelectedResultSkinKeepsRequiredApplicationOverlays() {
+  const auto selected = makeResultSkinApplicationOverlays(
+      {.selectedSkin = true,
+       .hasPersistenceResult = true,
+       .courseStage = true,
+       .savedResultBrowsing = false});
+  expect(selected.showsPersistenceRecovery &&
+             selected.buildsCourseExitConfirmation,
+         "selected result skins retain save recovery and unsaved-course exit");
+
+  const auto savedCourse = makeResultSkinApplicationOverlays(
+      {.selectedSkin = true,
+       .hasPersistenceResult = false,
+       .courseStage = true,
+       .savedResultBrowsing = true});
+  expect(!savedCourse.showsPersistenceRecovery &&
+             !savedCourse.buildsCourseExitConfirmation,
+         "saved course browsing does not add application recovery overlays");
+}
 } // namespace
 
 int main() {
@@ -1141,6 +1162,7 @@ int main() {
   testDefaultSkinExplicitZerosAndMobileMetadataWrap();
   testResultTouchControlsHideAndRestorePresentation();
   testSelectedResultSkinDefersRootOverlaysUntilAfterSkin();
+  testSelectedResultSkinKeepsRequiredApplicationOverlays();
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::shutdown();
   if (failures != 0) {
