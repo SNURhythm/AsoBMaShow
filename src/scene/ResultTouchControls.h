@@ -26,7 +26,6 @@ struct ResultTouchControlAvailability {
 };
 
 struct ResultTouchControlState {
-  bool touchControlsEnabled = false;
   bool skinSelected = false;
   bool hidden = false;
 };
@@ -40,7 +39,7 @@ struct ResultTouchControlPresentation {
 inline ResultTouchControlPresentation makeResultTouchControlPresentation(
     const ResultTouchControlState &state,
     const ResultTouchControlAvailability &availability) {
-  if (!state.touchControlsEnabled || !state.skinSelected) {
+  if (!state.skinSelected) {
     return {};
   }
   if (state.hidden) {

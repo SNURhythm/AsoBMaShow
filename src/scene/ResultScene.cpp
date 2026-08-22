@@ -1707,8 +1707,7 @@ void ResultScene::buildResultTouchControls() {
   }
 
   const auto presentation = makeResultTouchControlPresentation(
-      {.touchControlsEnabled = context.inputProfile.virtualController.enabled,
-       .skinSelected = true,
+      {.skinSelected = true,
        .hidden = resultTouchControlsHidden},
       availability);
   if (!presentation.showsControls && !presentation.capturesRestoreTouch) {

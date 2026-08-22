@@ -1075,7 +1075,7 @@ void testResultTouchControlsHideAndRestorePresentation() {
       .back = true, .retry = true, .retrySame = true, .rankings = true,
       .exportPhoto = true, .selectSection = true, .next = false};
   const auto visible = makeResultTouchControlPresentation(
-      {.touchControlsEnabled = true, .skinSelected = true, .hidden = false},
+      {.skinSelected = true, .hidden = false},
       availability);
   expect(visible.showsControls && !visible.capturesRestoreTouch &&
              visible.actions == std::vector<ResultTouchControlAction>{
@@ -1089,11 +1089,17 @@ void testResultTouchControlsHideAndRestorePresentation() {
          "selected touch result skins expose the built-in actions and Hide");
 
   const auto hidden = makeResultTouchControlPresentation(
-      {.touchControlsEnabled = true, .skinSelected = true, .hidden = true},
+      {.skinSelected = true, .hidden = true},
       availability);
   expect(!hidden.showsControls && hidden.capturesRestoreTouch &&
              hidden.actions.empty(),
          "hidden result touch controls consume one anywhere-touch to restore");
+
+  const auto withoutVirtualController = makeResultTouchControlPresentation(
+      {.skinSelected = true, .hidden = false}, availability);
+  expect(withoutVirtualController.showsControls &&
+             !withoutVirtualController.actions.empty(),
+         "selected result skins expose touch controls without a virtual controller");
 }
 } // namespace
 
