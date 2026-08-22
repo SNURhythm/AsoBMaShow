@@ -1243,6 +1243,13 @@ return skin
 #SRC_IMAGE,0,0,0,0,40,20,1,1,0,0
 #DST_IMAGE,0,0,10,360,40,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0
 )lr2");
+    const fs::path lr2Fixtures = fs::path(ASOBMASHOW_SOURCE_DIR) /
+                                 "tests/fixtures/beatoraja_skin/lr2/header";
+    for (const std::string_view name : {"malformed-setoption.lr2skin",
+                                        "malformed-setoption.inc",
+                                        "plus-option.inc"}) {
+      fs::copy_file(lr2Fixtures / name, source / "skin" / name);
+    }
 
     writeText(source / "skin/recoverable.lr2skin", R"lr2(#INFORMATION,0,Recoverable LR2,fixture
 #RESOLUTION,0
@@ -1308,6 +1315,7 @@ return skin
                                         "skin/builtin-graphs.lr2skin",
                                         "skin/commented.json",
                                         "skin/invalid-encoding.lr2skin",
+                                        "skin/malformed-setoption.lr2skin",
                                         "skin/option-state.lr2skin",
                                         "skin/parity.json",
                                         "skin/parity.lr2skin",
@@ -1316,7 +1324,7 @@ return skin
                                         "skin/skipped.lr2skin",
                                         "skin/unavailable-builtin-graphs.lr2skin",
                                         "skin/unsafe.lr2skin"} &&
-               selectable == 9 && unavailable == 2,
+               selectable == 10 && unavailable == 2,
            "header admission keeps gameplay and recoverable LR2 entries "
            "selectable while fatal documents remain invalid");
 
@@ -1568,6 +1576,28 @@ void testLr2DeclaredFalseOptionActivatesNegatedInclude() {
                frame.evaluation.submitReady->commands.size() == 1,
            "a negated unselected declared choice executes its included image");
   }
+}
+
+void testMalformedLr2SetOptionDoesNotDivergeFromIncludeFold() {
+  FormatParityFixture fixture;
+  auto created = fixture.create("skin/malformed-setoption.lr2skin", 114);
+  const auto countCode = [&](std::string_view code) {
+    return std::ranges::count_if(
+        created.diagnostics, [&](const SkinDiagnostic &diagnostic) {
+          return diagnostic.code == code;
+        });
+  };
+  expect(created.session && countCode("skin_lr2_include_read") == 0 &&
+             countCode("skin_lr2_gameplay_command_invalid") == 2,
+         "malformed root and included SETOPTION commands stay recoverable "
+         "without activating missing or unsafe includes");
+  if (!created.session) return;
+  const auto frame = created.session->prepareFrame(
+      stateAt(2), projectionAt(2), {});
+  expect(frame.ready() && frame.evaluation.submitReady &&
+             frame.evaluation.submitReady->commands.size() == 3,
+         "following root/included commands and a Java-valid plus-signed "
+         "SETOPTION branch all render");
 }
 
 void testCommentedJsonCreatesProductionSession() {
@@ -4563,6 +4593,7 @@ int main() {
   testLr2ProductionRecoveryAndFatalBoundaries();
   testLr2ProductionBuiltInGraphsOwnChartAndPlainImages();
   testLr2DeclaredFalseOptionActivatesNegatedInclude();
+  testMalformedLr2SetOptionDoesNotDivergeFromIncludeFold();
   testCommentedJsonCreatesProductionSession();
   testSessionOwnsDeduplicatedMoviesAndRollsBackBeforePublication();
   testCallbackBindingWithoutRuntimeFailsValidation();

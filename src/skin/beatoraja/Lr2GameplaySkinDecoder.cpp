@@ -1,10 +1,10 @@
 #include "Lr2GameplaySkinDecoder.h"
+#include "Lr2IntegerParser.h"
 
 #include "../GameplaySkinTraits.h"
 
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -26,13 +26,9 @@ constexpr std::size_t kMaximumFrames = 200'000;
 constexpr int kMaximumOffsetId = 199;
 
 int parseStrictInteger(std::string_view value) {
-  int result = 0;
-  const auto parsed =
-      std::from_chars(value.data(), value.data() + value.size(), result);
-  if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size()) {
-    throw std::invalid_argument("invalid LR2 integer");
-  }
-  return result;
+  const auto parsed = parseLr2JavaInteger(value);
+  if (!parsed) throw std::invalid_argument("invalid LR2 integer");
+  return *parsed;
 }
 
 int parseLooseInteger(std::string value) noexcept {

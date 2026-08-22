@@ -1,5 +1,6 @@
 #include "skin/beatoraja/GameplaySkinBuiltinCatalog.h"
 #include "skin/beatoraja/Lr2GameplaySkinDecoder.h"
+#include "skin/beatoraja/Lr2IntegerParser.h"
 #include "skin/beatoraja/Lr2SkinHeaderDecoder.h"
 #include "skin/beatoraja/SkinModelValidator.h"
 
@@ -10,6 +11,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -678,6 +680,23 @@ void testBuiltinReferenceBarGraphsRetainTheirPinnedSource() {
          "SRC_BARGRAPH and REFNUMBER retain gr>=100 as built-in image sources");
 }
 
+void testStrictLr2IntegerMatchesJavaParseIntAsciiBoundary() {
+  expect(parseLr2JavaInteger("0") == 0 &&
+             parseLr2JavaInteger("+2147483647") ==
+                 std::numeric_limits<int>::max() &&
+             parseLr2JavaInteger("-2147483648") ==
+                 std::numeric_limits<int>::min() &&
+             !parseLr2JavaInteger("") && !parseLr2JavaInteger("+") &&
+             !parseLr2JavaInteger(" 1") &&
+             !parseLr2JavaInteger("1 ") &&
+             !parseLr2JavaInteger("id=777") &&
+             !parseLr2JavaInteger("1junk") &&
+             !parseLr2JavaInteger("2147483648") &&
+             !parseLr2JavaInteger("-2147483649"),
+         "strict LR2 integers accept Java ASCII signs and 32-bit endpoints "
+         "without trimming, coercion, or overflow");
+}
+
 void testCancellationStopsMidLr2ModelFold() {
   const BeatorajaSkinHeader header{.type = 0, .width = 640, .height = 480};
   std::vector<Lr2SkinCommand> commands;
@@ -701,6 +720,7 @@ void testCancellationStopsMidLr2ModelFold() {
 } // namespace
 
 int main() {
+  testStrictLr2IntegerMatchesJavaParseIntAsciiBoundary();
   testBuiltinReferenceBarGraphsRetainTheirPinnedSource();
   testCancellationStopsMidLr2ModelFold();
   testAllCommandsDecodeToTypedCanonicalModel();

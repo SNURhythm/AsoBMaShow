@@ -1,0 +1,6 @@
+#SETOPTION,777,1junk
+#IF,777
+#INCLUDE,../../../outside-after-malformed.inc
+#ENDIF
+#SRC_IMAGE,0,0,0,0,40,20,1,1,0,0
+#DST_IMAGE,0,0,60,360,40,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0

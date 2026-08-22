@@ -1,4 +1,5 @@
 #include "Lr2SkinCsvParser.h"
+#include "Lr2IntegerParser.h"
 
 #include "../../Utils.h"
 
@@ -136,8 +137,8 @@ public:
       ifs_ = false;
     } else if (command.name == "SETOPTION" && !skip_ &&
                command.fields.size() >= 2) {
-      const auto id = conditionInteger(command.fields[0]);
-      const auto enabled = conditionInteger(command.fields[1]);
+      const auto id = parseLr2JavaInteger(command.fields[0]);
+      const auto enabled = parseLr2JavaInteger(command.fields[1]);
       if (id && enabled) {
         options_.insert_or_assign(*id, *enabled >= 1 ? 1 : 0);
       }

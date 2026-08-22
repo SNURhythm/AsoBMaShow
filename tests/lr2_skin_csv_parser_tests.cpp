@@ -319,6 +319,24 @@ void testFalseConditionDoesNotReadOrDiagnoseIncludes() {
          "retains following commands");
 }
 
+void testMalformedSetOptionCannotActivateIncludes() {
+  PackageFixture fixture("header/malformed-setoption.lr2skin");
+  const auto bytes = fixture.readEntry();
+  const auto parsed = Lr2SkinCsvParser{}.parse(
+      *fixture.fileSystem, fixture.entry.packageRelativePath, bytes.bytes, {},
+      {.includeExpansion = Lr2IncludeExpansionMode::ConditionAware});
+  const auto sources = commandsNamed(parsed, "SRC_IMAGE");
+  const auto options = commandsNamed(parsed, "SETOPTION");
+  expect(!parsed.cancelled && !parsed.fatal && parsed.diagnostics.empty() &&
+             sources.size() == 3 && options.size() == 3 &&
+             options[0]->fields.front() == "id=777" &&
+             options[1]->fields[1] == "1junk" &&
+             options[2]->fields.front() == "+778",
+         "malformed root and included SETOPTION values neither mutate the "
+         "include fold nor read missing/unsafe branches, while Java-valid "
+         "plus signs and following commands survive");
+}
+
 } // namespace
 
 int main() {
@@ -327,6 +345,7 @@ int main() {
   testCycleGuardRetainsSafeSiblings();
   testDepthByteEncodingAndCancellationGuards();
   testFalseConditionDoesNotReadOrDiagnoseIncludes();
+  testMalformedSetOptionCannotActivateIncludes();
 
   if (failures != 0) {
     std::cerr << failures << " LR2 skin parser test(s) failed\n";
