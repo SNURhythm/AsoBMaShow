@@ -23,8 +23,8 @@ local listed = directory:listFiles()
 assert(type(listed) == "table" and #listed > 0)
 for _, path in ipairs(listed) do
   assert(type(path) == "string")
-  assert(path:sub(1, 1) ~= "/")
-  assert(not path:find("RuntimeContract", 1, true))
+  assert(path:match("^/") or path:match("^%a:/"))
+  assert(path:find("RuntimeContract", 1, true))
 end
 assert(luajava.new(File, "legacy-created"):mkdir() == true)
 

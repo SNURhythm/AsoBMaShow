@@ -291,6 +291,53 @@ void testBeatorajaDirectSkinDirectorySemantics() {
          "skin-prefixed Lua writes remain confined to the selected package");
 }
 
+void testPinnedFileListPreservesDirectoryIterationAndPatternMatches() {
+  PackageFixture fixture;
+  if (!fixture.prepared) {
+    return;
+  }
+
+  const fs::path visiblePackage =
+      fixture.roots.visiblePackages / fixture.package.directoryName;
+  fs::create_directories(visiblePackage.parent_path());
+  fs::copy(fixture.temp.root() / "source", visiblePackage,
+           fs::copy_options::recursive);
+
+  auto created = fixture.create(fixture.entry, true);
+  expect(created.fileSystem != nullptr,
+         "the pinned file-list fixture creates a filesystem");
+  if (!created.fileSystem) {
+    return;
+  }
+
+  const fs::path directory = created.fileSystem->skinDirectory() / "file-list";
+  writeText(directory / "zeta.txt", "zeta\n");
+  writeText(directory / "alpha.txt", "alpha\n");
+  writeText(directory / "middle.bin", "middle\n");
+
+  std::vector<std::string> hostOrder;
+  std::error_code error;
+  for (fs::directory_iterator iterator(directory, error), end;
+       !error && iterator != end; iterator.increment(error)) {
+    hostOrder.push_back(iterator->path().generic_string());
+  }
+  expect(!error, "the host directory order can be observed for comparison");
+
+  const auto listed = created.fileSystem->list(
+      "file-list", {}, std::numeric_limits<std::size_t>::max());
+  expect(!listed.failure && listed.entries == hostOrder,
+         "file_list preserves the unsorted host directory iteration order");
+
+  const auto matched = created.fileSystem->list(
+      "file-list", "file%-list/(alpha|zeta)%.txt", 1);
+  expect(!matched.failure && matched.entries.size() == 2 &&
+             std::ranges::find(matched.entries, "file-list/alpha.txt") !=
+                 matched.entries.end() &&
+             std::ranges::find(matched.entries, "file-list/zeta.txt") !=
+                 matched.entries.end(),
+         "file_list returns each regex match rather than the complete host path");
+}
+
 void testReadOnlyFilesystemRejectsDataWrites() {
   PackageFixture fixture;
   if (!fixture.prepared) {
@@ -417,6 +464,7 @@ void testLinkedVisibleSkinChildCannotEscapeLuaIoBoundary() {
 int main() {
   testShortStreamReadIsRejected();
   testBeatorajaDirectSkinDirectorySemantics();
+  testPinnedFileListPreservesDirectoryIterationAndPatternMatches();
   testReadOnlyFilesystemRejectsDataWrites();
   testCompatibilityFilesystemLiftsOnlyProtectiveWriteGuard();
   testUnrestrictedFilesystemLiftsWriteAndContainmentGuards();

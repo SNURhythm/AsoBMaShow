@@ -68,6 +68,11 @@ struct SkinFileListResult {
   std::optional<SkinFileFailure> failure;
 };
 
+struct SkinFileExistsResult {
+  bool exists = false;
+  std::optional<SkinFileFailure> failure;
+};
+
 struct SkinFileWriteResult {
   std::uint64_t resultingBytes = 0;
   std::uint64_t resultingFiles = 0;
@@ -179,12 +184,14 @@ public:
   // by its mutable Files-visible pathname.
   LuaSkinFileOpenResult openLuaFile(std::string_view virtualPath,
                                     LuaSkinFileOpenMode);
+  SkinFileExistsResult exists(std::string_view virtualPath) const;
   SkinFileListResult list(std::string_view virtualDirectory,
                           std::string_view luaPattern,
                           std::size_t maximumEntries) const;
   SkinFileWriteResult writeData(std::string_view virtualPath,
                                 std::span<const std::byte>, bool append);
-  SkinFileWriteResult mkdirData(std::string_view virtualDirectory);
+  SkinFileWriteResult mkdirData(std::string_view virtualDirectory,
+                                bool recursive = true);
   SkinFileRenderTransitionResult enterRenderPhase();
   SkinFileActivityCounters activityCounters() const noexcept;
 

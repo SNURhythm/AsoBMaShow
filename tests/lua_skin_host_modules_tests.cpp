@@ -272,6 +272,19 @@ return {}
         source / pathFromUtf8(
                      "skin/\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E/\xE8\xAA\xAD\xE3\x81\xBF\xE8\xBE\xBC\xE3\x81\xBF.txt"),
         "utf8-host-path");
+    fs::copy_file(
+        fs::path(ASOBMASHOW_SOURCE_DIR) /
+            "tests/fixtures/beatoraja_skin/packages/runtime_contract/skin/"
+            "main_state_file_surface.luaskin",
+        source / "skin/main_state_file_surface.luaskin",
+        fs::copy_options::overwrite_existing);
+    writeText(source / "skin/file_surface_source.txt",
+              "alpha\n\xED\x95\x9C\xEA\xB8\x80\r\nomega");
+    writeText(source / "skin/file_surface_invalid_utf8.txt", "\xFF\n");
+
+    const fs::path visible = roots.visiblePackages / package.directoryName;
+    fs::create_directories(visible.parent_path());
+    fs::copy(source, visible, fs::copy_options::recursive);
 
     SkinTreeSnapshotter snapshotter(roots, aliases);
     auto snapshot = snapshotter.snapshot(source, package, {}, {});
@@ -301,8 +314,25 @@ return {}
                           .fileSystem = borrowed};
   }
 
+  std::optional<RuntimeHarness>
+  createWritable(std::string_view entryName, LuaRuntimePurpose purpose) {
+    auto fileSystem = createFileSystem(entryName, true);
+    if (!fileSystem) {
+      return std::nullopt;
+    }
+    LuaSkinFileSystem *borrowed = fileSystem.get();
+    auto runtime = LuaSkinRuntime::create(
+        {.purpose = purpose, .fileSystem = std::move(fileSystem)});
+    expect(runtime.runtime != nullptr, "writable host contract runtime creates");
+    if (!runtime.runtime) {
+      return std::nullopt;
+    }
+    return RuntimeHarness{.runtime = std::move(runtime.runtime),
+                          .fileSystem = borrowed};
+  }
+
   std::unique_ptr<LuaSkinFileSystem>
-  createFileSystem(std::string_view entryName) {
+  createFileSystem(std::string_view entryName, bool allowDataWrites = false) {
     if (!prepared) {
       return {};
     }
@@ -315,7 +345,8 @@ return {}
     auto fileSystem = LuaSkinFileSystem::create(
         {.revision = prepared->readView(),
          .entry = *entry.entry,
-         .storageRoots = roots});
+         .storageRoots = roots,
+         .allowDataWrites = allowDataWrites});
     expect(fileSystem.fileSystem != nullptr,
            "host contract filesystem creates");
     if (!fileSystem.fileSystem) {
@@ -610,6 +641,41 @@ void testSelectedMainStateSurfaceUsesBoundConfiguredState() {
   harness->runtime->setFrameState(nullptr);
 }
 
+void testPinnedMainStateFileSurfaceAndClosedLegacyFileFacade() {
+  auto harness = fixture().createWritable("main_state_file_surface.luaskin",
+                                          LuaRuntimePurpose::Gameplay);
+  if (!harness) {
+    return;
+  }
+  expect(harness->runtime->loadHeader().value.has_value(),
+         "file-surface fixture sees an empty header main_state module");
+  auto configured = harness->runtime->loadConfigured(happyConfiguration());
+  if (!configured.value && configured.failure) {
+    std::cerr << "main-state file surface diagnostic: "
+              << configured.failure->code << ": "
+              << configured.failure->message << '\n';
+  }
+  expect(configured.value.has_value() && !configured.failure,
+         "the eight pinned file functions and closed legacy File facade execute");
+  if (!configured.value) {
+    return;
+  }
+  const auto callback = configured.value->callbackNamed("after_render");
+  expect(callback.has_value(), "file-surface fixture retains its render callback");
+  if (!callback) {
+    return;
+  }
+  expect(harness->runtime->enterRenderPhase().ok &&
+             harness->runtime->beginFrame(1).ok,
+         "file-surface fixture enters render");
+  const auto rendered = harness->runtime->invoke(*callback, {});
+  const auto *lineCount = rendered.value
+                              ? std::get_if<std::int64_t>(&*rendered.value)
+                              : nullptr;
+  expect(!rendered.failure && lineCount != nullptr && *lineCount == 0,
+         "captured file functions retain pinned behavior during render");
+}
+
 void testIoLinesUsesTheVirtualSkinFileSystem() {
   auto harness = fixture().create("io_lines.luaskin",
                                   LuaRuntimePurpose::Validation);
@@ -797,6 +863,7 @@ int main() {
   testGetPathCanLoadAnEntryParentSibling();
   testUnsupportedDirectMainStateLookupsRaise();
   testSelectedMainStateSurfaceUsesBoundConfiguredState();
+  testPinnedMainStateFileSurfaceAndClosedLegacyFileFacade();
   testIoLinesUsesTheVirtualSkinFileSystem();
   testIoReadClampsHugeRequestedCountToAvailableBytes();
   testIoOpenReadsUtf8NamedSkinFiles();

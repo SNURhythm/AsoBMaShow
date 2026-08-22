@@ -885,7 +885,7 @@ SkinFileResolveResult LuaSkinFileSystem::normalizeVirtualPath(
          virtualPath.ends_with('/')) {
     virtualPath.remove_suffix(1);
   }
-  const auto normalized = impl_->normalize(virtualPath);
+  const auto normalized = impl_->normalize(virtualPath, directoryPath);
   if (!normalized.path) {
     return {.failure = normalized.failure};
   }
@@ -1095,6 +1095,18 @@ LuaSkinFileSystem::openLuaFile(std::string_view virtualPath,
   return {.file = stream};
 }
 
+SkinFileExistsResult
+LuaSkinFileSystem::exists(std::string_view virtualPath) const {
+  const std::scoped_lock lock(impl_->operationMutex);
+  const auto normalized = impl_->normalize(virtualPath, true);
+  if (!normalized.path) {
+    return {.failure = normalized.failure};
+  }
+  std::error_code error;
+  const bool pathExists = fs::exists(pathFromUtf8(*normalized.path), error);
+  return {.exists = !error && pathExists};
+}
+
 SkinFileListResult LuaSkinFileSystem::list(std::string_view virtualDirectory,
                                            std::string_view luaPattern,
                                            std::size_t maximumEntries) const {
@@ -1193,7 +1205,8 @@ LuaSkinFileSystem::writeData(std::string_view virtualPath,
 }
 
 SkinFileWriteResult
-LuaSkinFileSystem::mkdirData(std::string_view virtualDirectory) {
+LuaSkinFileSystem::mkdirData(std::string_view virtualDirectory,
+                             bool recursive) {
   const std::scoped_lock lock(impl_->operationMutex);
   if (!impl_->allowDataWrites &&
       impl_->safetyPolicy.enforces(SkinSafetyGuard::CatalogWriteAuthorization)) {
@@ -1212,20 +1225,31 @@ LuaSkinFileSystem::mkdirData(std::string_view virtualDirectory) {
   if (!impl_->safetyPolicy.enforces(SkinSafetyGuard::VirtualFileContainment)) {
 #endif
     std::error_code error;
-    fs::create_directories(target, error);
-    if (!error) {
+    const bool created = recursive ? fs::create_directories(target, error)
+                                   : fs::create_directory(target, error);
+    if (!error && (recursive || created)) {
       return {.resultingBytes = 0, .resultingFiles = 0};
     }
   }
 #if !defined(_WIN32)
   else {
     fs::path leaf;
-    auto parent = openVerifiedParentDirectory(impl_->packageRoot, target, true,
-                                              leaf);
-    if (parent) {
+    auto parent = openVerifiedParentDirectory(impl_->packageRoot, target,
+                                              recursive, leaf);
+    if (parent && recursive) {
       auto directory = openVerifiedChildDirectory(parent->get(), leaf, true);
       if (directory) {
         return {.resultingBytes = 0, .resultingFiles = 0};
+      }
+    } else if (parent) {
+      const std::string name = leaf.string();
+      if (::mkdirat(parent->get(), name.c_str(), 0700) == 0) {
+        auto directory =
+            openVerifiedChildDirectory(parent->get(), leaf, false);
+        if (directory) {
+          return {.resultingBytes = 0, .resultingFiles = 0};
+        }
+        ::unlinkat(parent->get(), name.c_str(), AT_REMOVEDIR);
       }
     }
   }

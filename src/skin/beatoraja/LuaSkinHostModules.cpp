@@ -675,6 +675,200 @@ int mainStateVolumeSys(lua_State *state) {
   return pushNamedFloat(state, "volume_sys");
 }
 
+std::string luaToJString(lua_State *state, int index) {
+  std::size_t size = 0;
+  if (const char *value = lua_tolstring(state, index, &size)) {
+    return {value, size};
+  }
+  switch (lua_type(state, index)) {
+  case LUA_TNIL:
+  case LUA_TNONE:
+    return "nil";
+  case LUA_TBOOLEAN:
+    return lua_toboolean(state, index) ? "true" : "false";
+  default:
+    return luaL_typename(state, index);
+  }
+}
+
+bool validUtf8FileContents(std::string_view value) {
+  std::size_t index = 0;
+  while (index < value.size()) {
+    const auto first = static_cast<unsigned char>(value[index]);
+    if (first <= 0x7f) {
+      ++index;
+      continue;
+    }
+    std::size_t continuationCount = 0;
+    std::uint32_t codePoint = 0;
+    if (first >= 0xc2 && first <= 0xdf) {
+      continuationCount = 1;
+      codePoint = first & 0x1f;
+    } else if (first >= 0xe0 && first <= 0xef) {
+      continuationCount = 2;
+      codePoint = first & 0x0f;
+    } else if (first >= 0xf0 && first <= 0xf4) {
+      continuationCount = 3;
+      codePoint = first & 0x07;
+    } else {
+      return false;
+    }
+    if (continuationCount >= value.size() - index) {
+      return false;
+    }
+    for (std::size_t continuation = 1; continuation <= continuationCount;
+         ++continuation) {
+      const auto byte = static_cast<unsigned char>(value[index + continuation]);
+      if ((byte & 0xc0) != 0x80) {
+        return false;
+      }
+      codePoint = (codePoint << 6) | (byte & 0x3f);
+    }
+    if ((continuationCount == 2 && codePoint < 0x800) ||
+        (continuationCount == 3 && codePoint < 0x10000) ||
+        (codePoint >= 0xd800 && codePoint <= 0xdfff) ||
+        codePoint > 0x10ffff) {
+      return false;
+    }
+    index += continuationCount + 1;
+  }
+  return true;
+}
+
+std::vector<std::string_view> utf8FileLines(std::string_view contents) {
+  std::vector<std::string_view> lines;
+  std::size_t start = 0;
+  while (start < contents.size()) {
+    const std::size_t separator = contents.find_first_of("\r\n", start);
+    if (separator == std::string_view::npos) {
+      lines.push_back(contents.substr(start));
+      break;
+    }
+    lines.push_back(contents.substr(start, separator - start));
+    start = separator + 1;
+    if (contents[separator] == '\r' && start < contents.size() &&
+        contents[start] == '\n') {
+      ++start;
+    }
+  }
+  return lines;
+}
+
+int mainStateFileExists(lua_State *state) {
+  auto *impl = host(state);
+  const std::string path = luaToJString(state, 1);
+  const auto result = impl->fileSystem->exists(path);
+  if (result.failure) {
+    impl->storeFileError(*result.failure);
+    return raiseStoredError(state, impl);
+  }
+  lua_pushboolean(state, result.exists);
+  return 1;
+}
+
+int mainStateFileMkdir(lua_State *state) {
+  auto *impl = host(state);
+  const std::string path = luaToJString(state, 1);
+  const auto result = impl->fileSystem->mkdirData(path, true);
+  lua_pushboolean(state, !result.failure);
+  return 1;
+}
+
+int mainStateFileList(lua_State *state) {
+  auto *impl = host(state);
+  std::size_t pathSize = 0;
+  const char *path = luaL_checklstring(state, 1, &pathSize);
+  std::string pattern;
+  if (lua_gettop(state) >= 2 && !lua_isnil(state, 2)) {
+    pattern = luaToJString(state, 2);
+  }
+  const auto result = impl->fileSystem->list(
+      std::string_view(path, pathSize), pattern,
+      std::numeric_limits<std::size_t>::max());
+  if (result.failure) {
+    lua_pushliteral(state, "");
+    lua_pushinteger(state, 0);
+    return 2;
+  }
+  luaL_Buffer buffer;
+  luaL_buffinit(state, &buffer);
+  for (const auto &entry : result.entries) {
+    luaL_addlstring(&buffer, entry.data(), entry.size());
+    luaL_addchar(&buffer, '\n');
+  }
+  luaL_pushresult(&buffer);
+  lua_pushinteger(state, static_cast<lua_Integer>(result.entries.size()));
+  return 2;
+}
+
+int mainStateFileReadLines(lua_State *state) {
+  auto *impl = host(state);
+  const std::string path = luaToJString(state, 1);
+  const auto read = impl->fileSystem->read(
+      path, SkinFileUse::DataRead, impl->maximumSourceBytes);
+  lua_newtable(state);
+  if (read.failure) {
+    return 1;
+  }
+  const std::string_view contents(
+      reinterpret_cast<const char *>(read.bytes.data()), read.bytes.size());
+  if (!validUtf8FileContents(contents)) {
+    return 1;
+  }
+  const auto lines = utf8FileLines(contents);
+  for (std::size_t index = 0; index < lines.size(); ++index) {
+    lua_pushlstring(state, lines[index].data(), lines[index].size());
+    lua_rawseti(state, -2, static_cast<int>(index + 1));
+  }
+  return 1;
+}
+
+int writeMainStateFile(lua_State *state, bool append) {
+  auto *impl = host(state);
+  const std::string path = luaToJString(state, 1);
+  const std::string text = luaToJString(state, 2);
+  const auto result = impl->fileSystem->writeData(
+      path, std::as_bytes(std::span(text.data(), text.size())), append);
+  lua_pushboolean(state, !result.failure);
+  return 1;
+}
+
+int mainStateFileWrite(lua_State *state) {
+  return writeMainStateFile(state, false);
+}
+
+int mainStateFileAppend(lua_State *state) {
+  return writeMainStateFile(state, true);
+}
+
+int mainStateFileClear(lua_State *state) {
+  auto *impl = host(state);
+  const std::string path = luaToJString(state, 1);
+  const auto result = impl->fileSystem->writeData(path, {}, false);
+  lua_pushboolean(state, !result.failure);
+  return 1;
+}
+
+int mainStateFileCountLines(lua_State *state) {
+  auto *impl = host(state);
+  const std::string path = luaToJString(state, 1);
+  const auto read = impl->fileSystem->read(
+      path, SkinFileUse::DataRead, impl->maximumSourceBytes);
+  if (read.failure) {
+    lua_pushinteger(state, 0);
+    return 1;
+  }
+  const std::string_view contents(
+      reinterpret_cast<const char *>(read.bytes.data()), read.bytes.size());
+  if (!validUtf8FileContents(contents)) {
+    lua_pushinteger(state, 0);
+    return 1;
+  }
+  lua_pushinteger(state,
+                  static_cast<lua_Integer>(utf8FileLines(contents).size()));
+  return 1;
+}
+
 void populateMainState(lua_State *state, LuaSkinHostModulesImpl *impl) {
   lua_getglobal(state, "main_state");
   if (!lua_istable(state, -1)) {
@@ -717,6 +911,22 @@ void populateMainState(lua_State *state, LuaSkinHostModulesImpl *impl) {
   lua_setfield(state, -2, "volume_key");
   installClosure(state, impl, mainStateVolumeSys);
   lua_setfield(state, -2, "volume_sys");
+  installClosure(state, impl, mainStateFileExists);
+  lua_setfield(state, -2, "file_exists");
+  installClosure(state, impl, mainStateFileMkdir);
+  lua_setfield(state, -2, "file_mkdir");
+  installClosure(state, impl, mainStateFileList);
+  lua_setfield(state, -2, "file_list");
+  installClosure(state, impl, mainStateFileReadLines);
+  lua_setfield(state, -2, "file_read_lines");
+  installClosure(state, impl, mainStateFileWrite);
+  lua_setfield(state, -2, "file_write");
+  installClosure(state, impl, mainStateFileAppend);
+  lua_setfield(state, -2, "file_append");
+  installClosure(state, impl, mainStateFileClear);
+  lua_setfield(state, -2, "file_clear");
+  installClosure(state, impl, mainStateFileCountLines);
+  lua_setfield(state, -2, "file_count_lines");
   lua_pop(state, 1);
 }
 
@@ -1555,13 +1765,7 @@ LegacyListStatus pushLegacyList(lua_State *state, LuaSkinHostModulesImpl &impl,
   lua_createtable(state, static_cast<int>(listed.entries.size()), 0);
   int index = 1;
   for (const auto &entry : listed.entries) {
-    const std::size_t slash = entry.rfind('/');
-    std::string visiblePath(path);
-    if (!visiblePath.empty() && !visiblePath.ends_with('/')) {
-      visiblePath.push_back('/');
-    }
-    visiblePath.append(entry.substr(slash == std::string::npos ? 0 : slash + 1));
-    lua_pushlstring(state, visiblePath.data(), visiblePath.size());
+    lua_pushlstring(state, entry.data(), entry.size());
     lua_rawseti(state, -2, index++);
   }
   return LegacyListStatus::Success;
@@ -1585,7 +1789,7 @@ int legacyListFiles(lua_State *state) {
 
 bool performLegacyMkdir(LuaSkinHostModulesImpl &impl,
                         std::string_view path) {
-  const auto result = impl.fileSystem->mkdirData(path);
+  const auto result = impl.fileSystem->mkdirData(path, false);
   if (!result.failure) {
     return true;
   }
@@ -1692,7 +1896,19 @@ int legacyNew(lua_State *state) {
   }
   std::size_t pathSize = 0;
   const char *path = lua_tolstring(state, 2, &pathSize);
-  pushLegacyFileObject(state, impl, path, pathSize);
+  const auto resolved = impl->fileSystem->normalizeVirtualPath(
+      std::string_view(path, pathSize), true);
+  if (resolved.failure || !resolved.normalizedVirtualPath) {
+    if (resolved.failure) {
+      impl->storeFileError(*resolved.failure);
+    } else {
+      impl->storeError("skin_lua_file_operation_failed",
+                       "legacy File path could not be resolved");
+    }
+    return raiseStoredError(state, impl);
+  }
+  pushLegacyFileObject(state, impl, resolved.normalizedVirtualPath->data(),
+                       resolved.normalizedVirtualPath->size());
   return 1;
 }
 
