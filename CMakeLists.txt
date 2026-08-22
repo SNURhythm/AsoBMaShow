@@ -845,7 +845,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                     src/rendering/SkinQuadBatchRenderer.cpp
                     src/rendering/UniformCache.cpp
                     src/skin/beatoraja/PlaySkinViewport.cpp
+                    src/skin/beatoraja/SkinBpmGraphRenderer.cpp
                     src/skin/beatoraja/SkinDestinationEvaluator.cpp
+                    src/skin/beatoraja/SkinGaugeGraphRenderer.cpp
+                    src/skin/beatoraja/SkinHitErrorVisualizerRenderer.cpp
+                    src/skin/beatoraja/SkinNoteDistributionGraphRenderer.cpp
+                    src/skin/beatoraja/SkinTimingVisualizerRenderer.cpp
                     bgfx/bimg/3rdparty/lodepng/lodepng.cpp
                 )
                 target_include_directories(skin_renderer_golden_tests PRIVATE
@@ -4849,6 +4854,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinNoteLineNormalization.cpp
             src/skin/beatoraja/SkinNoteNormalization.cpp
             src/skin/beatoraja/SkinObjectResolutionPrecedence.cpp
+            src/skin/beatoraja/SkinPerformanceTelemetry.cpp
             src/skin/beatoraja/SkinMovieCatalog.cpp
             src/skin/beatoraja/SkinMovieCatalogFrame.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
@@ -5018,6 +5024,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinNoteLineNormalization.cpp
             src/skin/beatoraja/SkinNoteNormalization.cpp
             src/skin/beatoraja/SkinObjectResolutionPrecedence.cpp
+            src/skin/beatoraja/SkinPerformanceTelemetry.cpp
             src/skin/beatoraja/SkinMovieCatalog.cpp
             src/skin/beatoraja/SkinMovieCatalogFrame.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
@@ -5070,6 +5077,33 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 iconv
             )
         endif()
+
+        get_target_property(_gameplay_skin_benchmark_sources
+            play_skin_session_tests SOURCES)
+        list(REMOVE_ITEM _gameplay_skin_benchmark_sources
+            tests/play_skin_session_tests.cpp)
+        add_executable(gameplay_skin_loading_benchmark_tests
+            tests/gameplay_skin_loading_benchmark_tests.cpp
+            ${_gameplay_skin_benchmark_sources}
+        )
+        target_include_directories(gameplay_skin_loading_benchmark_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(gameplay_skin_loading_benchmark_tests PRIVATE
+            cxx_std_23
+        )
+        target_compile_definitions(gameplay_skin_loading_benchmark_tests PRIVATE
+            ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
+            ASOBMASHOW_PLAY_SKIN_SESSION_TESTING=1
+            ASOBMASHOW_SKIN_LOADING_TELEMETRY=1
+            ASOBMASHOW_SKIN_STORAGE_PATHS_NO_PLATFORM_DEFAULTS
+            ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        )
+        get_target_property(_gameplay_skin_benchmark_links
+            play_skin_session_tests LINK_LIBRARIES)
+        target_link_libraries(gameplay_skin_loading_benchmark_tests PRIVATE
+            ${_gameplay_skin_benchmark_links}
+        )
 
         add_executable(playfield_presentation_coordinator_tests
             tests/playfield_presentation_coordinator_tests.cpp
@@ -6961,6 +6995,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if(TARGET play_skin_session_tests)
         asobmashow_register_test(play_skin_session_tests)
+    endif()
+    if(TARGET gameplay_skin_loading_benchmark_tests)
+        asobmashow_register_test(gameplay_skin_loading_benchmark_tests)
     endif()
     if(TARGET playfield_presentation_coordinator_tests)
         asobmashow_register_test(playfield_presentation_coordinator_tests)

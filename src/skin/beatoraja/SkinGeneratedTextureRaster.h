@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -258,6 +259,183 @@ private:
   std::shared_ptr<std::vector<std::uint8_t>> pixels_;
 };
 
+struct SkinGeneratedTextureCacheLimits {
+  std::size_t maximumTextures = SkinResourcePolicy::maximumGeneratedTextures;
+  std::size_t maximumBytes =
+      SkinResourcePolicy::maximumGeneratedSessionBytes;
+};
+
+struct SkinGeneratedTextureCacheStats {
+  std::size_t pixmapAllocations = 0;
+  std::size_t rasterizations = 0;
+  std::size_t alphaScans = 0;
+  std::size_t reuses = 0;
+  std::size_t allocatedBytes = 0;
+};
+
+// Session-owned CPU Pixmap state. Two buffers per key keep a previously
+// published command immutable while the next dirty generation is rasterized.
+// Count and byte admission happens before either backing vector is allocated.
+class SkinGeneratedTextureCache {
+public:
+  struct Acquisition {
+    SkinSoftwarePixmap *pixmap = nullptr;
+    std::uint8_t *maximumAlpha = nullptr;
+    bool rasterize = false;
+    std::uint64_t generation = 0;
+  };
+
+  explicit SkinGeneratedTextureCache(
+      SkinGeneratedTextureCacheLimits limits = {}) noexcept
+      : limits_(limits) {}
+  ~SkinGeneratedTextureCache() { clear(); }
+  SkinGeneratedTextureCache(const SkinGeneratedTextureCache &) = delete;
+  SkinGeneratedTextureCache &
+  operator=(const SkinGeneratedTextureCache &) = delete;
+
+  void setLiveResourceCounters(
+      std::shared_ptr<SkinLiveResourceCounters> counters) noexcept {
+    if (liveCounters_ == counters) return;
+    clear();
+    liveCounters_ = std::move(counters);
+  }
+
+  [[nodiscard]] Acquisition acquire(const SkinGeneratedTextureKey &key,
+                                    int width, int height,
+                                    std::uint64_t contentRevision,
+                                    std::int64_t nowMillis,
+                                    int minimumUpdateIntervalMillis) {
+    if (key.sourceObject == 0 || width <= 0 || height <= 0) {
+      return {};
+    }
+    const auto byteCount64 = static_cast<std::uint64_t>(width) *
+                             static_cast<std::uint64_t>(height) * 4U;
+    if (byteCount64 > std::numeric_limits<std::size_t>::max() ||
+        byteCount64 > std::numeric_limits<std::size_t>::max() / 2U) {
+      return {};
+    }
+    const std::size_t doubleBufferedBytes =
+        static_cast<std::size_t>(byteCount64) * 2U;
+    auto found = entries_.find(key);
+    const std::size_t oldBytes =
+        found == entries_.end() ? 0U : found->second.allocatedBytes;
+    if (limits_.maximumTextures == 0 ||
+        (found == entries_.end() && entries_.size() >= limits_.maximumTextures) ||
+        stats_.allocatedBytes < oldBytes ||
+        doubleBufferedBytes >
+            limits_.maximumBytes -
+                std::min(limits_.maximumBytes,
+                         stats_.allocatedBytes - oldBytes)) {
+      return {};
+    }
+
+    if (found == entries_.end() || found->second.width != width ||
+        found->second.height != height) {
+      auto first = SkinSoftwarePixmap::create(width, height);
+      auto second = SkinSoftwarePixmap::create(width, height);
+      if (!first || !second) {
+        return {};
+      }
+      Entry replacement;
+      replacement.width = width;
+      replacement.height = height;
+      replacement.buffers[0] = std::move(*first);
+      replacement.buffers[1] = std::move(*second);
+      replacement.allocatedBytes = doubleBufferedBytes;
+      replacement.contentRevision = contentRevision;
+      replacement.lastRasterMillis = nowMillis;
+      replacement.generation = 1;
+      if (found == entries_.end()) {
+        try {
+          found = entries_.emplace(key, std::move(replacement)).first;
+        } catch (...) {
+          return {};
+        }
+      } else {
+        found->second = std::move(replacement);
+      }
+      stats_.allocatedBytes = stats_.allocatedBytes - oldBytes +
+                              doubleBufferedBytes;
+      if (liveCounters_) {
+        if (oldBytes != 0) {
+          liveCounters_->generatedPixmapDestroyed(oldBytes / 2U);
+          liveCounters_->generatedPixmapDestroyed(oldBytes / 2U);
+        }
+        liveCounters_->generatedPixmapCreated(doubleBufferedBytes / 2U);
+        liveCounters_->generatedPixmapCreated(doubleBufferedBytes / 2U);
+      }
+      stats_.pixmapAllocations += 2;
+      ++stats_.rasterizations;
+      found->second.buffers[0]->clear(0U);
+      return {.pixmap = &*found->second.buffers[0],
+              .maximumAlpha = &found->second.maximumAlpha,
+              .rasterize = true,
+              .generation = found->second.generation};
+    }
+
+    Entry &entry = found->second;
+    bool cadenceReached = minimumUpdateIntervalMillis <= 0;
+    if (!cadenceReached && nowMillis >= entry.lastRasterMillis) {
+      cadenceReached =
+          nowMillis - entry.lastRasterMillis >= minimumUpdateIntervalMillis;
+    }
+    if (contentRevision != entry.contentRevision &&
+        (cadenceReached || nowMillis < entry.lastRasterMillis)) {
+      entry.active ^= 1U;
+      entry.contentRevision = contentRevision;
+      entry.lastRasterMillis = nowMillis;
+      ++entry.generation;
+      ++stats_.rasterizations;
+      entry.buffers[entry.active]->clear(0U);
+      return {.pixmap = &*entry.buffers[entry.active],
+              .maximumAlpha = &entry.maximumAlpha,
+              .rasterize = true,
+              .generation = entry.generation};
+    }
+    ++stats_.reuses;
+    return {.pixmap = &*entry.buffers[entry.active],
+            .maximumAlpha = &entry.maximumAlpha,
+            .rasterize = false,
+            .generation = entry.generation};
+  }
+
+  void clear() noexcept {
+    if (liveCounters_) {
+      for (const auto &[key, entry] : entries_) {
+        (void)key;
+        liveCounters_->generatedPixmapDestroyed(entry.allocatedBytes / 2U);
+        liveCounters_->generatedPixmapDestroyed(entry.allocatedBytes / 2U);
+      }
+    }
+    entries_.clear();
+    stats_.allocatedBytes = 0;
+  }
+
+  [[nodiscard]] SkinGeneratedTextureCacheStats stats() const noexcept {
+    return stats_;
+  }
+
+  void recordAlphaScan() noexcept { ++stats_.alphaScans; }
+
+private:
+  struct Entry {
+    int width = 0;
+    int height = 0;
+    std::array<std::optional<SkinSoftwarePixmap>, 2> buffers;
+    std::size_t active = 0;
+    std::size_t allocatedBytes = 0;
+    std::uint64_t contentRevision = 0;
+    std::int64_t lastRasterMillis = 0;
+    std::uint64_t generation = 0;
+    std::uint8_t maximumAlpha = 0;
+  };
+
+  SkinGeneratedTextureCacheLimits limits_;
+  std::map<SkinGeneratedTextureKey, Entry> entries_;
+  SkinGeneratedTextureCacheStats stats_;
+  std::shared_ptr<SkinLiveResourceCounters> liveCounters_;
+};
+
 struct SkinGeneratedTextureRasterRequest {
   SkinObjectId sourceObject = 0;
   std::uint32_t authoredOrdinal = 0;
@@ -274,6 +452,9 @@ struct SkinGeneratedTextureRasterRequest {
   bool truncateDestinationRevealWidth = true;
   bool verticalFlip = true;
   std::string_view diagnosticObject;
+  SkinGeneratedTextureCache *cache = nullptr;
+  std::uint64_t contentRevision = 0;
+  int minimumUpdateIntervalMillis = 0;
 };
 
 struct SkinGeneratedTextureRasterResult {
@@ -295,8 +476,25 @@ public:
         textureHeight_ <= 0) {
       return;
     }
-    pixmap_ = SkinSoftwarePixmap::create(textureWidth_, textureHeight_);
-    if (!pixmap_) {
+    if (request.cache != nullptr) {
+      const auto acquired = request.cache->acquire(
+          {.sourceObject = request.sourceObject,
+           .authoredOrdinal = request.authoredOrdinal,
+           .layer = request.layer},
+          textureWidth_, textureHeight_, request.contentRevision,
+          request.elapsedMillis, request.minimumUpdateIntervalMillis);
+      pixmap_ = acquired.pixmap;
+      cachedMaximumAlpha_ = acquired.maximumAlpha;
+      rasterize_ = acquired.rasterize;
+      contentRevision_ = acquired.generation;
+      cache_ = request.cache;
+    } else {
+      ownedPixmap_ = SkinSoftwarePixmap::create(textureWidth_, textureHeight_);
+      pixmap_ = ownedPixmap_ ? &*ownedPixmap_ : nullptr;
+      rasterize_ = true;
+      contentRevision_ = 1;
+    }
+    if (pixmap_ == nullptr) {
       failure_ = diagnostic("skin.renderer.generated_texture.invalid",
                             "has an invalid or unallocatable Pixmap canvas.");
       return;
@@ -307,21 +505,22 @@ public:
   [[nodiscard]] int textureWidth() const noexcept { return textureWidth_; }
   [[nodiscard]] int textureHeight() const noexcept { return textureHeight_; }
   [[nodiscard]] SkinSoftwarePixmap *pixmap() noexcept {
-    return pixmap_ ? &*pixmap_ : nullptr;
+    return rasterize_ ? pixmap_ : nullptr;
   }
   bool appendRectangle(int x, int y, int width, int height,
                        std::uint32_t rgba) noexcept {
-    if (pixmap_) pixmap_->fillRectangle(x, y, width, height, rgba);
+    if (pixmap_ && rasterize_) pixmap_->fillRectangle(x, y, width, height, rgba);
     return true;
   }
   bool appendLine(int x0, int y0, int x1, int y1,
                   std::uint32_t rgba) noexcept {
-    if (pixmap_) pixmap_->drawLine(x0, y0, x1, y1, rgba);
+    if (pixmap_ && rasterize_) pixmap_->drawLine(x0, y0, x1, y1, rgba);
     return true;
   }
   bool appendTriangle(int x1, int y1, int x2, int y2, int x3, int y3,
                       std::uint32_t rgba) noexcept {
-    if (pixmap_) pixmap_->fillTriangle(x1, y1, x2, y2, x3, y3, rgba);
+    if (pixmap_ && rasterize_)
+      pixmap_->fillTriangle(x1, y1, x2, y2, x3, y3, rgba);
     return true;
   }
   [[nodiscard]] SkinGeneratedTextureRasterResult take() {
@@ -332,6 +531,16 @@ public:
     }
     if (!drawable_ || !pixmap_) {
       return result;
+    }
+    std::uint8_t maximumAlpha = 0;
+    if (rasterize_ || cachedMaximumAlpha_ == nullptr) {
+      maximumAlpha = pixmap_->maximumAlpha();
+      if (cachedMaximumAlpha_ != nullptr) {
+        *cachedMaximumAlpha_ = maximumAlpha;
+        cache_->recordAlphaScan();
+      }
+    } else {
+      maximumAlpha = *cachedMaximumAlpha_;
     }
     const float reveal = request_.revealMillis <= 0 ||
                                  request_.elapsedMillis >= request_.revealMillis
@@ -353,7 +562,7 @@ public:
       return result;
     }
     const auto packedAlpha = static_cast<std::uint8_t>(
-        static_cast<float>(pixmap_->maximumAlpha()) *
+        static_cast<float>(maximumAlpha) *
         std::clamp(request_.geometry.rgba[3], 0.0F, 1.0F));
     if (packedAlpha == 0U) {
       return result;
@@ -392,7 +601,8 @@ public:
                    .layer = request_.layer};
     command.texture = {.width = textureWidth_,
                        .height = textureHeight_,
-                       .rgba = pixmap_->pixels()};
+                       .rgba = pixmap_->pixels(),
+                       .contentRevision = contentRevision_};
     command.state = {.blend = projected.blend,
                      .filter = projected.filter,
                      .scissor = clip};
@@ -471,9 +681,14 @@ private:
   SkinGeneratedTextureRasterRequest request_;
   int textureWidth_ = 0;
   int textureHeight_ = 0;
-  std::optional<SkinSoftwarePixmap> pixmap_;
+  std::optional<SkinSoftwarePixmap> ownedPixmap_;
+  SkinSoftwarePixmap *pixmap_ = nullptr;
+  SkinGeneratedTextureCache *cache_ = nullptr;
+  std::uint8_t *cachedMaximumAlpha_ = nullptr;
   std::optional<SkinDiagnostic> failure_;
   bool drawable_ = false;
+  bool rasterize_ = false;
+  std::uint64_t contentRevision_ = 0;
 };
 
 } // namespace skin

@@ -46,7 +46,13 @@ SkinGeneratedTextureRaster rasterFor(
                ? std::optional<float>{
                      static_cast<float>(request.geometry.rect.width)}
                : std::nullopt,
-       .diagnosticObject = "Gauge graph"});
+       .diagnosticObject = "Gauge graph",
+       .cache = request.cache,
+       .contentRevision = revealMillis == 0
+                              ? static_cast<std::uint64_t>(
+                                    static_cast<std::uint32_t>(
+                                        request.state.gaugeType) + 1U)
+                              : request.state.gaugeRevision + 1U});
 }
 
 SkinGaugeGraphRenderResult combine(

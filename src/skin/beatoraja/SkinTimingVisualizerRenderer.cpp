@@ -99,8 +99,29 @@ public:
 
   bool appendQuad(double x, double y, double width, double height,
                   std::uint32_t color) {
-    color = modulatedColor(color, geometry_.rgba);
-    if (clippedOut_ || width == 0.0 || height == 0.0 || color >> 24U == 0U) {
+    if (width == 0.0 || height == 0.0 || color >> 24U == 0U) {
+      return true;
+    }
+    auto lineGeometry = request_.geometry;
+    lineGeometry.rect = {.x = x, .y = y, .width = width, .height = height};
+    // SkinTimingVisualizer calls the explicit draw overload for recent
+    // lines: the per-line color and angle zero replace destination tint and
+    // rotation, while blend/filter/clip/stretch remain authored state.
+    lineGeometry.angleDegrees = 0.0;
+    lineGeometry.rgba = {1.0F, 1.0F, 1.0F, 1.0F};
+    const int sourceWidth = std::max(
+        1, skinGeneratedTextureJavaInt(std::abs(width)));
+    const auto projected = projectSkinDestinationToUi(
+        lineGeometry,
+        {.textureWidth = sourceWidth,
+         .textureHeight = 1,
+         .region = {.x = 0, .y = 0, .w = sourceWidth, .h = 1}},
+        request_.viewport);
+    bool empty = false;
+    const auto clip = intersect(projected.clip,
+                                projectedSkinScissorBounds(request_.viewport),
+                                empty);
+    if (empty) {
       return true;
     }
     constexpr std::size_t vertexCount = 4;
@@ -109,25 +130,18 @@ public:
     }
     SkinPrimitiveCommand primitive;
     primitive.kind = SkinPrimitiveKind::SolidQuad;
-    primitive.state = {.blend = geometry_.blend,
-                       .filter = geometry_.filter,
-                       .scissor = clip_};
+    primitive.state = {.blend = projected.blend,
+                       .filter = projected.filter,
+                       .scissor = clip};
     primitive.vertices.reserve(vertexCount);
-    const std::array<std::array<double, 2>, 4> points{{
-        {x, y},
-        {x + width, y},
-        {x + width, y + height},
-        {x, y + height},
-    }};
-    for (const auto point : points) {
-      const auto projected = project(point[0], point[1]);
-      if (!finite(projected)) {
+    for (const auto &point : projected.vertices) {
+      if (!finite(point)) {
         failGeometry();
         return false;
       }
       primitive.vertices.push_back(
-          {.x = static_cast<float>(projected[0]),
-           .y = static_cast<float>(projected[1]),
+          {.x = static_cast<float>(point[0]),
+           .y = static_cast<float>(point[1]),
            .rgba = color});
     }
     append(std::move(primitive));
@@ -270,7 +284,9 @@ renderSkinTimingVisualizer(const SkinTimingVisualizerRenderRequest &request) {
        .sourceWidth = pixelWidth,
        .sourceHeight = 1,
        .verticalFlip = false,
-       .diagnosticObject = "Timing visualizer background"});
+       .diagnosticObject = "Timing visualizer background",
+       .cache = request.cache,
+       .contentRevision = 1});
   if (!background.drawable()) return background.take();
   const std::int64_t center = request.visualizer.judgeWidthMillis;
   background.appendRectangle(static_cast<int>(center), 0, 1, 1,

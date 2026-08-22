@@ -94,6 +94,10 @@ struct LuaSkinFileOpenResult {
 };
 
 struct SkinFileActivityCounters {
+  std::uint64_t readsPerformed = 0;
+  std::uint64_t writesPerformed = 0;
+  std::uint64_t directoryScansPerformed = 0;
+  std::uint64_t bytesRead = 0;
   std::uint64_t renderReadsPerformed = 0;
   std::uint64_t renderReadsDenied = 0;
   std::uint64_t renderWritesPerformed = 0;

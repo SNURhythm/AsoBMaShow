@@ -20,6 +20,12 @@ struct LuaSkinAudioIdentity {
   auto operator<=>(const LuaSkinAudioIdentity &) const = default;
 };
 
+struct LuaSkinAudioActivityCounters {
+  std::uint64_t loadAttempts = 0;
+  std::uint64_t loadsSucceeded = 0;
+  std::uint64_t liveIdentities = 0;
+};
+
 // Finite application seam for the Beatoraja skin-audio surface. The Lua
 // runtime never receives the application mixer or callback state.
 class LuaSkinAudioBackend {
@@ -31,6 +37,10 @@ public:
   virtual void play(LuaSkinAudioIdentity, float volume, bool loop) noexcept = 0;
   virtual void stop(LuaSkinAudioIdentity) noexcept = 0;
   virtual void dispose(LuaSkinAudioIdentity) noexcept = 0;
+  [[nodiscard]] virtual LuaSkinAudioActivityCounters
+  activityCounters() const noexcept {
+    return {};
+  }
 };
 
 struct LuaSkinAudioOperationResult {

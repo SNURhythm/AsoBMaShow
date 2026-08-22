@@ -37,6 +37,7 @@
 #include <new>
 #include <optional>
 #include <span>
+#include <set>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -617,15 +618,19 @@ struct SessionAudioState {
 
 class SessionAudioBackend final : public LuaSkinAudioBackend {
 public:
-  explicit SessionAudioBackend(std::shared_ptr<SessionAudioState> state)
-      : state_(std::move(state)) {}
+  SessionAudioBackend(std::shared_ptr<SessionAudioState> state,
+                      std::shared_ptr<SkinLiveResourceCounters> counters)
+      : state_(std::move(state)), counters_(std::move(counters)) {}
   ~SessionAudioBackend() override { state_->backendDestroyed = true; }
 
   float systemVolume() const noexcept override { return 0.4F; }
   std::optional<LuaSkinAudioIdentity>
   load(const fs::path &path, std::stop_token) noexcept override {
     state_->loads.push_back(path);
-    return LuaSkinAudioIdentity{.value = ++nextIdentity_};
+    const LuaSkinAudioIdentity identity{.value = ++nextIdentity_};
+    live_.insert(identity);
+    counters_->audioCreated(0);
+    return identity;
   }
   void play(LuaSkinAudioIdentity identity, float, bool) noexcept override {
     state_->plays.push_back(identity);
@@ -635,10 +640,18 @@ public:
   }
   void dispose(LuaSkinAudioIdentity identity) noexcept override {
     state_->disposals.push_back(identity);
+    if (live_.erase(identity) != 0) counters_->audioDestroyed(0);
+  }
+  LuaSkinAudioActivityCounters activityCounters() const noexcept override {
+    return {.loadAttempts = state_->loads.size(),
+            .loadsSucceeded = state_->loads.size(),
+            .liveIdentities = state_->loads.size() - state_->disposals.size()};
   }
 
 private:
   std::shared_ptr<SessionAudioState> state_;
+  std::shared_ptr<SkinLiveResourceCounters> counters_;
+  std::set<LuaSkinAudioIdentity> live_;
   std::uint64_t nextIdentity_ = 0;
 };
 
@@ -684,8 +697,9 @@ public:
             "66666666-6666-4666-8666-666666666666")),
         device_(std::make_shared<SessionTextureDevice>()),
         movieDevice_(std::make_shared<SessionMovieDevice>()),
-        audioState_(std::make_shared<SessionAudioState>()),
-        audioBackend_(std::make_shared<SessionAudioBackend>(audioState_)) {
+        audioState_(std::make_shared<SessionAudioState>()) {
+    audioBackend_ = std::make_shared<SessionAudioBackend>(
+        audioState_, liveResourceCounters_);
     chart_.text.title = "Artist 日本 42";
     chart_.text.subtitle = "Session subtitle";
     chart_.text.artist = "Session artist";
@@ -2214,7 +2228,13 @@ void testResourceSessionOwnsUploadsAndExactRuntimeStringAtlas() {
   expect(created.session && fixture.device()->createCalls == 2 &&
              fixture.device()->destroyCalls == 0 &&
              fixture.device()->wrongThreadOperations == 0 &&
-             weakRevision.hasLiveLease(),
+             weakRevision.hasLiveLease() &&
+             isCompleteSkinLoadingTelemetry(created.loadingTelemetry) &&
+             created.loadingTelemetry.resources.imageDecodes == 1 &&
+             created.loadingTelemetry.resources.fontDecodes == 1 &&
+             created.loadingTelemetry.resources.movieDecodes == 0 &&
+             created.loadingTelemetry.resources.audioDecodes == 0 &&
+             created.loadingTelemetry.resources.textureUploads == 2,
          "session owns one image and one runtime-string glyph atlas upload");
   expect(fixture.liveCounters()->snapshot() ==
              SkinLiveResourceSnapshot{.liveTextures = 2,
@@ -2269,9 +2289,63 @@ void testPostUploadCancellationRollsBackResourcesOnOwnerThread() {
              fixture.device()->wrongThreadOperations == 0 &&
              fixture.device()->revisionLiveDuringDestroy &&
              !weakRevision.hasLiveLease() &&
-             fixture.liveCounters()->snapshot() == SkinLiveResourceSnapshot{},
+             fixture.liveCounters()->snapshot() == SkinLiveResourceSnapshot{} &&
+             created.loadingTelemetry.cancelled &&
+             !created.loadingTelemetry.sessionPublished &&
+             !isCompleteSkinLoadingTelemetry(created.loadingTelemetry),
          "post-upload cancellation destroys both owner-thread textures and "
          "releases the final revision pin");
+}
+
+void testPreparedSessionRunsFiveHundredFramesWithoutLoadingAgain() {
+  ActivationFixture fixture(
+      {.resourceBearing = true, .movieBearing = true, .audioBearing = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  auto created =
+      PlaySkinSession::create(fixture.takeActivation(), fixture.context());
+  expect(created.session &&
+             created.loadingTelemetry.resources.imageDecodes == 1 &&
+             created.loadingTelemetry.resources.fontDecodes == 1 &&
+             created.loadingTelemetry.resources.movieDecodes == 1 &&
+             created.loadingTelemetry.resources.audioDecodes == 1 &&
+             created.loadingTelemetry.resources.textureUploads == 2,
+         "combined fixture records each prepared resource kind exactly once");
+  if (!created.session) {
+    return;
+  }
+  const auto textureCreates = fixture.device()->createCalls;
+  const auto movieLoads = fixture.movieDevice()->loadCalls;
+  const auto audioLoads = fixture.audioState()->loads.size();
+  const auto fileActivity =
+      created.session->fileActivityCountersForTesting();
+  bool framesReady = true;
+  for (std::uint64_t serial = 2; serial <= 501; ++serial) {
+    const auto frame = created.session->prepareFrame(
+        stateAt(serial), projectionAt(serial), {});
+    framesReady = framesReady && frame.ready();
+  }
+  expect(framesReady && fixture.device()->createCalls == textureCreates &&
+             fixture.movieDevice()->loadCalls == movieLoads &&
+             fixture.audioState()->loads.size() == audioLoads &&
+             fileActivity.readsPerformed > 0 &&
+             created.session->fileActivityCountersForTesting().readsPerformed ==
+                 fileActivity.readsPerformed &&
+             created.session->fileActivityCountersForTesting()
+                     .renderReadsPerformed == 0 &&
+             created.session->fileActivityCountersForTesting()
+                     .renderDirectoryScansPerformed == 0,
+         "five hundred evaluated frames perform no image/font/movie/audio "
+         "decode or upload after preparation");
+  const auto active = fixture.liveCounters()->snapshot();
+  expect(active.liveTextures == 2 && active.liveResources == 1 &&
+             active.liveCpuPixmaps == 0 && active.liveMovies == 1 &&
+             active.liveMovieBytes > 0 && active.liveAudioIdentities == 1,
+         "published session exposes CPU/GPU/movie/audio ownership by kind");
+  created.session.reset();
+  expect(fixture.liveCounters()->snapshot() == SkinLiveResourceSnapshot{},
+         "combined session teardown returns every resource kind to baseline");
 }
 
 void testInvalidViewportRollsBackUploadedResourcesOnOwnerThread() {
@@ -4748,6 +4822,7 @@ int main() {
   testActivationRejectsAReconciledDigestMismatch();
   testResourceSessionOwnsUploadsAndExactRuntimeStringAtlas();
   testPostUploadCancellationRollsBackResourcesOnOwnerThread();
+  testPreparedSessionRunsFiveHundredFramesWithoutLoadingAgain();
   testInvalidViewportRollsBackUploadedResourcesOnOwnerThread();
   testActivationCancellationAndZeroSerialDoNotPublishSessions();
   testSuccessfulFrameCommitsWriterMutationsInInputOrder();

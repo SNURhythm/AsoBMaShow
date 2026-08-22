@@ -413,6 +413,9 @@ public:
   pomyuMotionCyclesMillis() const noexcept {
     return pomyuMotionCyclesMillis_;
   }
+  [[nodiscard]] std::size_t textureCount() const noexcept {
+    return owned_.size();
+  }
   const PreparedSkinGeneratedTexture *prepareGeneratedTexture(
       const SkinGeneratedTextureKey &,
       const SkinGeneratedTextureData &) const noexcept override;
@@ -443,6 +446,7 @@ private:
   struct GeneratedTextureEntry {
     PreparedSkinGeneratedTexture prepared;
     std::shared_ptr<const std::vector<std::uint8_t>> pixels;
+    std::uint64_t contentRevision = 0;
     std::size_t ownedIndex = 0;
   };
   mutable std::map<SkinGeneratedTextureKey, GeneratedTextureEntry>

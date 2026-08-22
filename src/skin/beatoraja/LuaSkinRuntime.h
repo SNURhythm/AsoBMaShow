@@ -27,6 +27,7 @@ struct lua_State;
 namespace skin {
 
 class LuaSkinFileSystem;
+struct SkinFileActivityCounters;
 class LuaSkinAudioBackend;
 class LuaSkinRuntime;
 class LuaSkinTableDecoder;
@@ -251,6 +252,8 @@ public:
   LuaValueResult
   loadConfigured(const BeatorajaSkinConfiguration &configuration);
   LuaOperationResult enterRenderPhase();
+  [[nodiscard]] SkinFileActivityCounters
+  fileActivityCounters() const noexcept;
   void setFrameState(ISkinFrameState *) noexcept;
   [[nodiscard]] bool
   setLegacyInputSnapshot(LuaSkinLegacyInputSnapshot) noexcept;

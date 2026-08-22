@@ -34,6 +34,7 @@ struct SkinHitErrorVisualizerRenderRequest {
   const PlaySkinViewport &viewport;
   std::size_t maximumCommands = 0;
   std::size_t maximumPrimitiveVertices = 0;
+  SkinGeneratedTextureCache *cache = nullptr;
 };
 
 using SkinHitErrorVisualizerRenderResult = SkinGeneratedTextureRasterResult;

@@ -3472,6 +3472,10 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       hitErrorVisualizerSessionSerial_ = inputs.sessionSerial;
       hitErrorVisualizerModelIdentity_ = &inputs.model;
     }
+    if (generatedTextureCacheSessionSerial_ != inputs.sessionSerial) {
+      generatedTextureCache_.clear();
+      generatedTextureCacheSessionSerial_ = inputs.sessionSerial;
+    }
 
     std::vector<ProjectionElement> mergedProjectionElements;
     validateAndMergeProjection(inputs.state, mergedProjectionElements);
@@ -4142,7 +4146,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
              .maximumCommands =
                  skinFrameMaximumCommands(inputs) - buffer.commands.size(),
              .maximumPrimitiveVertices =
-                 skinFrameMaximumPrimitiveVertices(inputs) - primitiveVertices});
+                 skinFrameMaximumPrimitiveVertices(inputs) - primitiveVertices,
+             .cache = &generatedTextureCache_});
         if (lowered.failure) {
           if (reportObjectFailure(result, *object, *lowered.failure)) {
             return result;
@@ -4171,7 +4176,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
              .maximumCommands =
                  skinFrameMaximumCommands(inputs) - buffer.commands.size(),
              .maximumPrimitiveVertices =
-                 skinFrameMaximumPrimitiveVertices(inputs) - primitiveVertices});
+                 skinFrameMaximumPrimitiveVertices(inputs) - primitiveVertices,
+             .cache = &generatedTextureCache_});
         if (lowered.failure) {
           if (reportObjectFailure(result, *object, *lowered.failure)) {
             return result;
@@ -4200,7 +4206,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
              .maximumCommands =
                  skinFrameMaximumCommands(inputs) - buffer.commands.size(),
              .maximumPrimitiveVertices =
-                 skinFrameMaximumPrimitiveVertices(inputs) - primitiveVertices});
+                 skinFrameMaximumPrimitiveVertices(inputs) - primitiveVertices,
+             .cache = &generatedTextureCache_});
         if (lowered.failure) {
           if (reportObjectFailure(result, *object, *lowered.failure)) {
             return result;
@@ -4228,7 +4235,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
              .maximumCommands =
                  skinFrameMaximumCommands(inputs) - buffer.commands.size(),
              .maximumPrimitiveVertices =
-                 skinFrameMaximumPrimitiveVertices(inputs) - primitiveVertices});
+                 skinFrameMaximumPrimitiveVertices(inputs) - primitiveVertices,
+             .cache = &generatedTextureCache_});
         if (lowered.failure) {
           if (reportObjectFailure(result, *object, *lowered.failure)) {
             return result;
@@ -4262,7 +4270,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
              .maximumCommands =
                  skinFrameMaximumCommands(inputs) - buffer.commands.size(),
              .maximumPrimitiveVertices =
-                 skinFrameMaximumPrimitiveVertices(inputs) - primitiveVertices});
+                 skinFrameMaximumPrimitiveVertices(inputs) - primitiveVertices,
+             .cache = &generatedTextureCache_});
         if (lowered.failure) {
           if (reportObjectFailure(result, *object, *lowered.failure)) {
             return result;

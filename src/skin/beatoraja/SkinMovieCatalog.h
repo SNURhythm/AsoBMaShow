@@ -97,6 +97,7 @@ struct SkinMoviePreparationInputs {
   const BeatorajaSkinConfiguration &configuration;
   std::shared_ptr<SkinMovieDevice> device;
   SkinSafetyPolicy safetyPolicy{};
+  std::shared_ptr<SkinLiveResourceCounters> liveResourceCounters;
   std::stop_token stop;
   std::size_t sessionDecodedBytes = 0;
 };
@@ -132,9 +133,13 @@ public:
   [[nodiscard]] std::size_t decodedBytes() const noexcept {
     return decodedBytes_;
   }
+  [[nodiscard]] std::size_t movieCount() const noexcept {
+    return ownedPlayers_.size();
+  }
 
 private:
-  explicit SkinMovieCatalog(std::shared_ptr<SkinMovieDevice>);
+  explicit SkinMovieCatalog(std::shared_ptr<SkinMovieDevice>,
+                            std::shared_ptr<SkinLiveResourceCounters>);
 
   std::shared_ptr<SkinMovieDevice> device_;
   std::thread::id owner_;
@@ -143,6 +148,7 @@ private:
   std::vector<SkinMoviePlayerHandle> ownedPlayers_;
   std::size_t preparedCount_ = 0;
   std::size_t decodedBytes_ = 0;
+  std::shared_ptr<SkinLiveResourceCounters> liveCounters_;
 };
 
 [[nodiscard]] std::shared_ptr<SkinMovieDevice> createSkinMovieDevice();

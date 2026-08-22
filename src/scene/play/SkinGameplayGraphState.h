@@ -96,6 +96,10 @@ struct SkinGameplayDynamicGraphState {
   float gaugeMaximum = 100.0F;
   float gaugeBorder = 0.0F;
   bool gaugeSupported = false;
+  // Source-specific monotonic revisions let retained Pixmaps compare exact
+  // authority changes without hashing or copying the published spans.
+  std::uint64_t judgementRevision = 0;
+  std::uint64_t gaugeRevision = 0;
 
   bool operator==(const SkinGameplayDynamicGraphState &) const = default;
 };
@@ -122,6 +126,8 @@ struct SkinGameplayGraphStateView {
   float gaugeMaximum = 100.0F;
   float gaugeBorder = 0.0F;
   bool gaugeSupported = false;
+  std::uint64_t judgementRevision = 0;
+  std::uint64_t gaugeRevision = 0;
 };
 
 [[nodiscard]] SkinGameplayGraphStateView

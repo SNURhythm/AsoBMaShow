@@ -95,7 +95,9 @@ renderSkinBpmGraph(const SkinBpmGraphRenderRequest &request) {
        .revealMillis = request.graph.delayMillis,
        .maximumCommands = request.maximumCommands,
        .maximumPrimitiveVertices = request.maximumPrimitiveVertices,
-       .diagnosticObject = "BPM graph"});
+       .diagnosticObject = "BPM graph",
+       .cache = request.cache,
+       .contentRevision = 1});
   if (!builder.drawable()) {
     return {};
   }

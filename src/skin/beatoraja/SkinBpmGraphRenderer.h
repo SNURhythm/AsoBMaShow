@@ -24,6 +24,7 @@ struct SkinBpmGraphRenderRequest {
   std::int64_t elapsedMillis = 0;
   std::size_t maximumCommands = 0;
   std::size_t maximumPrimitiveVertices = 0;
+  SkinGeneratedTextureCache *cache = nullptr;
 };
 
 using SkinBpmGraphRenderResult = SkinGeneratedTextureRasterResult;

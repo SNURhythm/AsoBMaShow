@@ -119,7 +119,9 @@ SkinHitErrorVisualizerRenderResult renderSkinHitErrorVisualizer(
        .sourceWidth = sourceWidth,
        .sourceHeight = sourceHeight,
        .verticalFlip = false,
-       .diagnosticObject = "Hit-error visualizer"});
+       .diagnosticObject = "Hit-error visualizer",
+       .cache = request.cache,
+       .contentRevision = request.state.judgementRevision + 1U});
   if (!builder.drawable()) return builder.take();
 
   const auto recent = request.state.recentJudgeTimingsMillis;

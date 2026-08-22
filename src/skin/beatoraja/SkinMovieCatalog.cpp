@@ -162,8 +162,11 @@ std::vector<ResolvedMovieDefinition> resolveMovies(
 
 } // namespace
 
-SkinMovieCatalog::SkinMovieCatalog(std::shared_ptr<SkinMovieDevice> device)
-    : device_(std::move(device)), owner_(std::this_thread::get_id()) {}
+SkinMovieCatalog::SkinMovieCatalog(
+    std::shared_ptr<SkinMovieDevice> device,
+    std::shared_ptr<SkinLiveResourceCounters> liveCounters)
+    : device_(std::move(device)), owner_(std::this_thread::get_id()),
+      liveCounters_(std::move(liveCounters)) {}
 
 SkinMovieCatalog::~SkinMovieCatalog() {
   if (device_ &&
@@ -172,8 +175,13 @@ SkinMovieCatalog::~SkinMovieCatalog() {
   }
   if (device_) {
     device_->discardFrame();
-    for (const auto handle : ownedPlayers_) {
+    for (std::size_t index = 0; index < ownedPlayers_.size(); ++index) {
+      const auto handle = ownedPlayers_[index];
       device_->destroy(handle);
+      if (liveCounters_) {
+        liveCounters_->movieDestroyed(
+            index + 1U == ownedPlayers_.size() ? decodedBytes_ : 0U);
+      }
     }
   }
   if (!materializedRoot_.empty()) {
@@ -194,7 +202,8 @@ SkinMovieCatalog::prepare(SkinMoviePreparationInputs input) {
     return result;
   }
   auto catalog = std::unique_ptr<SkinMovieCatalog>(
-      new SkinMovieCatalog(std::move(input.device)));
+      new SkinMovieCatalog(std::move(input.device),
+                           std::move(input.liveResourceCounters)));
   if (definitions.empty()) {
     result.catalog = std::move(catalog);
     return result;
@@ -322,6 +331,9 @@ SkinMovieCatalog::prepare(SkinMoviePreparationInputs input) {
       return result;
     }
     catalog->decodedBytes_ += loaded->decodedBytes;
+    if (catalog->liveCounters_) {
+      catalog->liveCounters_->movieCreated(loaded->decodedBytes);
+    }
     if (input.stop.stop_requested()) {
       result.cancelled = true;
       result.diagnostics.clear();

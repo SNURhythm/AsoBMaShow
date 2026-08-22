@@ -1,6 +1,7 @@
 #pragma once
 
 #include "LuaSkinAudioHost.h"
+#include "SkinLiveResourceCounters.h"
 
 #include <cstddef>
 #include <functional>
@@ -19,12 +20,14 @@ struct LuaSkinApplicationAudioLimits {
 [[nodiscard]] std::shared_ptr<LuaSkinAudioBackend>
 createLuaSkinApplicationAudioBackend(AudioWrapper &,
                                      std::function<float()> systemVolume,
-                                     LuaSkinApplicationAudioLimits = {});
+                                     LuaSkinApplicationAudioLimits = {},
+                                     std::shared_ptr<SkinLiveResourceCounters> = {});
 
 // Replay export mixes chart audio through its export-owned renderer. Skin
 // audio is therefore source-faithfully silent and must not touch the live
 // application mixer.
 [[nodiscard]] std::shared_ptr<LuaSkinAudioBackend>
-createLuaSkinNoOutputAudioBackend();
+createLuaSkinNoOutputAudioBackend(
+    std::shared_ptr<SkinLiveResourceCounters> = {});
 
 } // namespace skin

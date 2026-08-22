@@ -1308,6 +1308,11 @@ LuaOperationResult LuaSkinRuntime::enterRenderPhase() {
   return {.ok = true};
 }
 
+SkinFileActivityCounters LuaSkinRuntime::fileActivityCounters() const noexcept {
+  return impl_ && impl_->fileSystem ? impl_->fileSystem->activityCounters()
+                                   : SkinFileActivityCounters{};
+}
+
 void LuaSkinRuntime::setFrameState(ISkinFrameState *state) noexcept {
   if (impl_ && impl_->hostModules) {
     impl_->hostModules->setFrameState(state);

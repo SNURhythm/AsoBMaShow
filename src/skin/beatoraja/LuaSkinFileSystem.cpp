@@ -520,6 +520,29 @@ struct LuaSkinFileSystem::Impl {
   bool allowDataWrites = false;
   SkinSafetyPolicy safetyPolicy;
   mutable std::mutex operationMutex;
+  bool renderPhase = false;
+  mutable SkinFileActivityCounters activity;
+
+  SkinFileReadResult finishRead(SkinFileReadResult result) const noexcept {
+    if (result.failure) {
+      if (renderPhase) ++activity.renderReadsDenied;
+      return result;
+    }
+    ++activity.readsPerformed;
+    activity.bytesRead += result.bytes.size();
+    if (renderPhase) ++activity.renderReadsPerformed;
+    return result;
+  }
+
+  SkinFileListResult finishScan(SkinFileListResult result) const noexcept {
+    if (result.failure) {
+      if (renderPhase) ++activity.renderDirectoryScansDenied;
+      return result;
+    }
+    ++activity.directoryScansPerformed;
+    if (renderPhase) ++activity.renderDirectoryScansPerformed;
+    return result;
+  }
 
   std::optional<SkinFileFailure>
   rejectAliasedPath(const fs::path &root, const fs::path &resolved,
@@ -741,25 +764,27 @@ struct LuaSkinFileSystem::Impl {
       std::FILE *stream = openNormalized(normalized, LuaSkinFileOpenMode::Read);
       if (stream == nullptr) {
         const HostStatResult status = statDirectPath(pathFromUtf8(normalized));
-        return {.failure = failure(errorForKind(status.kind), normalized,
-                                   messageForKind(status.kind))};
+        return finishRead({.failure = failure(errorForKind(status.kind),
+                                              normalized,
+                                              messageForKind(status.kind))});
       }
       const SkinFileReadResult result =
           readOpenedStream(stream, normalized, maximumBytes);
       std::fclose(stream);
-      return result;
+      return finishRead(result);
     }
     HostReadResult host =
         readDirectPath(pathFromUtf8(normalized), maximumBytes);
     if (host.limitExceeded) {
-      return {.failure = failure(SkinFileError::LimitExceeded, normalized,
-                                 "skin virtual file could not fit in memory")};
+      return finishRead({.failure = failure(
+                             SkinFileError::LimitExceeded, normalized,
+                             "skin virtual file could not fit in memory")});
     }
     if (host.kind != HostEntryKind::Regular) {
-      return {.failure = failure(errorForKind(host.kind), normalized,
-                                 messageForKind(host.kind))};
+      return finishRead({.failure = failure(errorForKind(host.kind), normalized,
+                                            messageForKind(host.kind))});
     }
-    return {.bytes = std::move(host.bytes)};
+    return finishRead({.bytes = std::move(host.bytes)});
   }
 
   std::vector<std::string>
@@ -948,11 +973,12 @@ SkinFileListResult LuaSkinFileSystem::listResourceDirectory(
     entries.push_back(utf8Path(iterator->path()));
   }
   if (error) {
-    return {.failure = failure(SkinFileError::IoError,
-                               entryRelativeDirectory,
-                               "skin resource directory could not be listed")};
+    return impl_->finishScan({.failure = failure(
+                                  SkinFileError::IoError,
+                                  entryRelativeDirectory,
+                                  "skin resource directory could not be listed")});
   }
-  return {.entries = std::move(entries)};
+  return impl_->finishScan({.entries = std::move(entries)});
 }
 
 SkinFileReadResult LuaSkinFileSystem::readResolvedResource(
@@ -1174,10 +1200,11 @@ SkinFileListResult LuaSkinFileSystem::list(std::string_view virtualDirectory,
     }
   }
   if (error) {
-    return {.failure = failure(SkinFileError::IoError, *normalized.path,
-                               "skin directory could not be listed")};
+    return impl_->finishScan({.failure = failure(
+                                  SkinFileError::IoError, *normalized.path,
+                                  "skin directory could not be listed")});
   }
-  return {.entries = std::move(entries)};
+  return impl_->finishScan({.entries = std::move(entries)});
 }
 
 SkinFileWriteResult
@@ -1294,11 +1321,14 @@ LuaSkinFileSystem::mkdirData(std::string_view virtualDirectory,
 
 SkinFileRenderTransitionResult LuaSkinFileSystem::enterRenderPhase() {
   // Beatoraja does not freeze Lua file access when gameplay begins.
+  const std::scoped_lock lock(impl_->operationMutex);
+  impl_->renderPhase = true;
   return {.ok = true};
 }
 
 SkinFileActivityCounters LuaSkinFileSystem::activityCounters() const noexcept {
-  return {};
+  const std::scoped_lock lock(impl_->operationMutex);
+  return impl_->activity;
 }
 
 } // namespace skin

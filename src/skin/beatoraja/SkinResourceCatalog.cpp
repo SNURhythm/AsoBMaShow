@@ -1800,8 +1800,16 @@ SkinResourceCatalog::prepareGeneratedTexture(
   if (existing != generatedTextures_.end() &&
       existing->second.prepared.width == data.width &&
       existing->second.prepared.height == data.height) {
-    if (existing->second.pixels != nullptr &&
-        *existing->second.pixels == *data.rgba) {
+    const bool stableRevision =
+        data.contentRevision != 0 &&
+        existing->second.contentRevision != 0 &&
+        data.contentRevision == existing->second.contentRevision;
+    const bool stableLegacyPixels =
+        data.contentRevision == 0 &&
+        existing->second.contentRevision == 0 &&
+        existing->second.pixels != nullptr &&
+        *existing->second.pixels == *data.rgba;
+    if (stableRevision || stableLegacyPixels) {
       return &existing->second.prepared;
     }
     bool updated = false;
@@ -1814,6 +1822,7 @@ SkinResourceCatalog::prepareGeneratedTexture(
       return nullptr;
     }
     existing->second.pixels = data.rgba;
+    existing->second.contentRevision = data.contentRevision;
     return &existing->second.prepared;
   }
 
@@ -1838,6 +1847,7 @@ SkinResourceCatalog::prepareGeneratedTexture(
                                  .width = data.width,
                                  .height = data.height};
     existing->second.pixels = data.rgba;
+    existing->second.contentRevision = data.contentRevision;
     generatedDecodedBytes_ = generatedDecodedBytes_ - oldBytes + byteCount;
     if (liveCounters_) {
       liveCounters_->textureCreated();
@@ -1856,6 +1866,7 @@ SkinResourceCatalog::prepareGeneratedTexture(
                                 .width = data.width,
                                 .height = data.height},
                    .pixels = data.rgba,
+                   .contentRevision = data.contentRevision,
                    .ownedIndex = ownedIndex});
       if (!accepted) {
         owned_.pop_back();

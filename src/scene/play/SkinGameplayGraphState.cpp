@@ -1,7 +1,14 @@
 #include "SkinGameplayGraphState.h"
 
 #include <algorithm>
+#include <limits>
 #include <utility>
+
+namespace {
+void advanceRevision(std::uint64_t &value) noexcept {
+  value = value == std::numeric_limits<std::uint64_t>::max() ? 1U : value + 1U;
+}
+} // namespace
 
 SkinGameplayGraphStateView
 skinGameplayGraphStateView(const SkinGameplayGraphState &state) noexcept {
@@ -19,6 +26,7 @@ skinGameplayGraphStateView(const SkinGameplayGraphState &state) noexcept {
     view.judgeWindows = state.dynamic->judgeWindows;
     view.recentJudgeTimingsMillis = state.dynamic->recentJudgeTimingsMillis;
     view.recentJudgeTimingIndex = state.dynamic->recentJudgeTimingIndex;
+    view.judgementRevision = state.dynamic->judgementRevision;
     const int gaugeIndex = gaugeTypeIndex(state.dynamic->gaugeType);
     if (gaugeIndex >= 0 &&
         static_cast<std::size_t>(gaugeIndex) <
@@ -31,6 +39,7 @@ skinGameplayGraphStateView(const SkinGameplayGraphState &state) noexcept {
     view.gaugeMaximum = state.dynamic->gaugeMaximum;
     view.gaugeBorder = state.dynamic->gaugeBorder;
     view.gaugeSupported = state.dynamic->gaugeSupported;
+    view.gaugeRevision = state.dynamic->gaugeRevision;
   }
   return view;
 }
@@ -158,6 +167,7 @@ void SkinGameplayGraphAccumulator::applyJudge(
     state_.recentJudgeTimingsMillis[state_.recentJudgeTimingIndex] =
         nextPlayTimeMillis;
   }
+  advanceRevision(state_.judgementRevision);
 }
 
 bool SkinGameplayGraphAccumulator::setGauge(
@@ -171,16 +181,21 @@ bool SkinGameplayGraphAccumulator::setGauge(
   if (!rules.compiled || index < 0 ||
       static_cast<std::size_t>(index) >= rules.gauges.size()) {
     state_.gaugeSupported = false;
-    return beforeType != state_.gaugeType || beforeSupported;
+    const bool changed = beforeType != state_.gaugeType || beforeSupported;
+    if (changed) advanceRevision(state_.gaugeRevision);
+    return changed;
   }
   const auto &gauge = rules.gauges[static_cast<std::size_t>(index)];
   state_.gaugeMinimum = gauge.minimum;
   state_.gaugeMaximum = gauge.maximum;
   state_.gaugeBorder = gauge.clearBorder;
   state_.gaugeSupported = true;
-  return beforeType != state_.gaugeType || !beforeSupported ||
-         before != std::array{state_.gaugeMinimum, state_.gaugeMaximum,
-                              state_.gaugeBorder};
+  const bool changed = beforeType != state_.gaugeType || !beforeSupported ||
+                       before != std::array{state_.gaugeMinimum,
+                                            state_.gaugeMaximum,
+                                            state_.gaugeBorder};
+  if (changed) advanceRevision(state_.gaugeRevision);
+  return changed;
 }
 
 bool SkinGameplayGraphAccumulator::updateGaugeState(
@@ -214,6 +229,7 @@ bool SkinGameplayGraphAccumulator::advanceGaugeHistoryTo(
     auto &history = state_.gaugeHistories[type];
     history.insert(history.end(), appended, gaugeValues_[type]);
   }
+  if (appended != 0) advanceRevision(state_.gaugeRevision);
 
   const auto remaining =
       std::numeric_limits<std::int64_t>::max() - nextGaugeSampleMicros_;

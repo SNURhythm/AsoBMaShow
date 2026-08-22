@@ -5395,9 +5395,17 @@ void testGeneratedBpmPixmapPreservesSourceRasterRevealAndIntegration() {
                           .authoredOrdinal = 1}};
   model.model.destinations = {noteDistributionDestination(1, 80.0, 80.0)};
   const auto integrated = evaluate(renderer, runtime, model, resources, state);
+  const auto steady = evaluate(renderer, runtime, model, resources, state, 2,
+                               16'000);
+  const auto cacheStats = renderer.generatedTextureCacheStatsForTesting();
   expect(integrated.submitReady && integrated.diagnostics.empty() &&
-             generatedCommands(integrated).size() == 1,
-         "Skin2DRenderer publishes the BPM graph as one generated texture");
+             steady.submitReady && steady.diagnostics.empty() &&
+             generatedCommands(integrated).size() == 1 &&
+             generatedCommands(steady).size() == 1 &&
+             cacheStats.pixmapAllocations == 2 &&
+             cacheStats.rasterizations == 1 && cacheStats.reuses == 1,
+         "Skin2DRenderer publishes and reuses one session-owned BPM Pixmap "
+         "without a steady-frame CPU allocation");
 }
 
 SkinGameplayGraphStateView generatedGaugeState(std::span<const float> history,
@@ -5601,8 +5609,8 @@ void testGeneratedTimingPixmapPreservesBandsLinesAndZeroAlphaBudget() {
          "timing background bands precompose once while recent white-source "
          "line draws retain their independent destination blending");
 
-  geometry.rgba[3] = 0.001F;
-  const auto invisible = renderSkinTimingVisualizer(
+  geometry.rgba = {0.0F, 0.0F, 0.0F, 0.001F};
+  const auto explicitLines = renderSkinTimingVisualizer(
       {.sourceObject = 11,
        .authoredOrdinal = 13,
        .visualizer = visualizer,
@@ -5613,10 +5621,161 @@ void testGeneratedTimingPixmapPreservesBandsLinesAndZeroAlphaBudget() {
        .viewport = viewport(),
        .maximumCommands = 0,
        .maximumPrimitiveVertices = 0});
-  expect(!invisible.failure && invisible.commands.empty() &&
-             invisible.primitiveVertices == 0,
-         "timing background and recent lines suppress post-tint alpha zero "
-         "before command and primitive budget admission");
+  expect(explicitLines.failure.has_value(),
+         "timing recent lines retain their explicit source color and consume "
+         "their own budget even when destination tint hides the background");
+}
+
+void testTimingRecentLinesUseExplicitColorZeroAngleAndPerLineStretch() {
+  SkinTimingVisualizerObject visualizer;
+  visualizer.lineRgba = 0x336699ffU;
+  visualizer.centerRgba = 0U;
+  visualizer.judgeRgba.fill(0U);
+  visualizer.drawDecay = false;
+  auto recent = emptySkinRecentJudgeTimings();
+  recent[0] = 0;
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 10.0, .y = 20.0, .width = 100.0, .height = 50.0};
+  geometry.clip = AuthoredRect{.x = 0.0, .y = 0.0,
+                               .width = 200.0, .height = 200.0};
+  geometry.angleDegrees = 90.0;
+  geometry.rgba = {0.0F, 1.0F, 0.0F, 0.25F};
+  geometry.blend = SkinBlendMode::Additive;
+  geometry.filter = SkinFilterMode::Linear;
+  geometry.stretch = SkinStretchMode::KeepAspectRatioFitInner;
+  const auto rendered = renderSkinTimingVisualizer(
+      {.sourceObject = 91,
+       .authoredOrdinal = 92,
+       .visualizer = visualizer,
+       .state = {.judgeWindows = generatedJudgeWindows(),
+                 .recentJudgeTimingsMillis = recent,
+                 .recentJudgeTimingIndex = 0},
+       .geometry = geometry,
+       .viewport = viewport(),
+       .maximumCommands = 2,
+       .maximumPrimitiveVertices = 4});
+  const auto *line = rendered.commands.size() == 2
+                         ? std::get_if<SkinPrimitiveCommand>(
+                               &rendered.commands[1].payload)
+                         : nullptr;
+  if (line == nullptr || line->vertices.size() != 4) {
+    expect(false, "timing recent line lowers to one stretched solid quad");
+    return;
+  }
+  const auto [minimumX, maximumX] = std::ranges::minmax(
+      line->vertices, {}, &SkinVertex::x);
+  const auto [minimumY, maximumY] = std::ranges::minmax(
+      line->vertices, {}, &SkinVertex::y);
+  expect(!rendered.failure && line->state.blend == SkinBlendMode::Additive &&
+             line->state.filter == SkinFilterMode::Linear &&
+             line->state.scissor.has_value() &&
+             std::ranges::all_of(line->vertices, [](const SkinVertex &vertex) {
+               return vertex.rgba == 0xff996633U;
+             }) &&
+             std::abs((maximumX.x - minimumX.x) - 1.0F) < 0.001F &&
+             std::abs((maximumY.y - minimumY.y) - 1.0F) < 0.001F,
+         "timing line ignores destination tint/angle, preserves state, and "
+         "applies fit-inner to its own 1x1 source");
+}
+
+void testGeneratedPixmapCacheBoundsCpuBeforeAllocationAndHonorsCadence() {
+  SkinGeneratedTextureCache cache(
+      {.maximumTextures = 2, .maximumBytes = 64});
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 0.0, .y = 0.0, .width = 2.0, .height = 2.0};
+  const auto render = [&](SkinObjectId object, std::uint64_t revision,
+                          std::int64_t nowMillis, int cadenceMillis) {
+    SkinGeneratedTextureRaster raster(
+        {.sourceObject = object,
+         .authoredOrdinal = static_cast<std::uint32_t>(object),
+         .geometry = geometry,
+         .viewport = viewport(),
+         .elapsedMillis = nowMillis,
+         .maximumCommands = 1,
+         .maximumPrimitiveVertices = 0,
+         .diagnosticObject = "cache cadence fixture",
+         .cache = &cache,
+         .contentRevision = revision,
+         .minimumUpdateIntervalMillis = cadenceMillis});
+    if (raster.drawable()) {
+      raster.appendRectangle(0, 0, 2, 2,
+                             revision == 1 ? 0xff0000ffU : 0x00ff00ffU);
+    }
+    return raster.take();
+  };
+
+  const auto first = render(1, 1, 0, 50);
+  const auto reused = render(1, 1, 10, 50);
+  const auto deferred = render(1, 2, 49, 50);
+  const auto refreshed = render(1, 2, 50, 50);
+  const auto second = render(2, 1, 0, 0);
+  const auto rejected = render(3, 1, 0, 0);
+  const auto firstTexture = first.commands.empty()
+                                ? nullptr
+                                : generatedTexture(first.commands.front());
+  const auto deferredTexture = deferred.commands.empty()
+                                   ? nullptr
+                                   : generatedTexture(deferred.commands.front());
+  const auto refreshedTexture = refreshed.commands.empty()
+                                    ? nullptr
+                                    : generatedTexture(refreshed.commands.front());
+  const auto stats = cache.stats();
+  expect(firstTexture && deferredTexture && refreshedTexture &&
+             !reused.failure && !second.failure && rejected.failure &&
+             generatedRgba(*firstTexture, 0, 0) == 0xff0000ffU &&
+             generatedRgba(*deferredTexture, 0, 0) == 0xff0000ffU &&
+             generatedRgba(*refreshedTexture, 0, 0) == 0x00ff00ffU &&
+             stats.pixmapAllocations == 4 && stats.rasterizations == 3 &&
+             stats.alphaScans == 3 && stats.reuses == 2 &&
+             stats.allocatedBytes == 64,
+         "session Pixmap cache preflights aggregate double-buffer bytes, "
+         "reuses steady pixels and alpha, and refreshes only at the declared "
+         "cadence");
+}
+
+void testGeneratedGaugeCacheRefreshesEveryPublishedHistoryRevision() {
+  SkinGeneratedTextureCache cache;
+  SkinGaugeGraphObject graph;
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 0.0, .y = 0.0, .width = 20.0, .height = 10.0};
+  const std::array<float, 3> firstHistory{20.0F, 40.0F, 60.0F};
+  const std::array<float, 3> secondHistory{80.0F, 50.0F, 30.0F};
+  const auto render = [&](std::span<const float> history,
+                          std::uint64_t revision) {
+    return renderSkinGaugeGraph(
+        {.sourceObject = 41,
+         .authoredOrdinal = 42,
+         .graph = graph,
+         .state = {.gaugeHistory = history,
+                   .gaugeType = 0,
+                   .gaugeMaximum = 100.0F,
+                   .gaugeBorder = 50.0F,
+                   .gaugeSupported = true,
+                   .gaugeRevision = revision},
+         .geometry = geometry,
+         .viewport = viewport(),
+         .elapsedMillis = 1'500,
+         .maximumCommands = 2,
+         .maximumPrimitiveVertices = 0,
+         .cache = &cache});
+  };
+
+  const auto first = render(firstHistory, 1);
+  const auto changed = render(secondHistory, 2);
+  const auto stats = cache.stats();
+  const auto *firstShape = first.commands.size() == 2
+                               ? generatedTexture(first.commands[1])
+                               : nullptr;
+  const auto *changedShape = changed.commands.size() == 2
+                                 ? generatedTexture(changed.commands[1])
+                                 : nullptr;
+  expect(firstShape && changedShape && !first.failure && !changed.failure &&
+             firstShape->texture.contentRevision !=
+                 changedShape->texture.contentRevision &&
+             stats.rasterizations == 3 && stats.alphaScans == 3 &&
+             stats.reuses == 1,
+         "only the gauge shape Pixmap refreshes on each published history "
+         "revision when the gauge type is unchanged");
 }
 
 std::array<SkinJudgeWindow, 5> generatedJudgeWindows() {
@@ -5972,6 +6131,9 @@ int main() {
   testGeneratedNotePixmapPreservesPmsOrderGapsCursorAndFloatReveal();
   testGeneratedHitErrorPixmapPreservesEmaAndDestinationState();
   testGeneratedTimingPixmapPreservesBandsLinesAndZeroAlphaBudget();
+  testTimingRecentLinesUseExplicitColorZeroAngleAndPerLineStretch();
+  testGeneratedPixmapCacheBoundsCpuBeforeAllocationAndHonorsCadence();
+  testGeneratedGaugeCacheRefreshesEveryPublishedHistoryRevision();
   testGeneratedPixmapWidgetsMatchSourceLayersAndPixels();
   testGeneratedPixmapHitErrorTimingAndZeroAlphaContracts();
   testDesktopAndIpadFitCommandFixtures();

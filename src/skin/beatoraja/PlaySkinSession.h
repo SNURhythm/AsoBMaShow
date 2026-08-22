@@ -7,6 +7,7 @@
 #include "LuaSkinLegacyInputHost.h"
 #include "Skin2DRenderer.h"
 #include "SkinResourceCatalog.h"
+#include "SkinPerformanceTelemetry.h"
 #include "../../scene/play/PlayfieldPresentation.h"
 #include "../../scene/play/CoordinatedPlaySkinSession.h"
 #include "../SkinConfigurationWriteQueue.h"
@@ -74,6 +75,7 @@ struct PlaySkinSessionCreateResult {
   EntryProfileSettings reconciledSettings;
   std::string configurationDigest;
   bool cancelled = false;
+  SkinLoadingTelemetry loadingTelemetry;
   std::vector<SkinDiagnostic> diagnostics;
 };
 
@@ -208,6 +210,8 @@ public:
 
 #if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
   [[nodiscard]] bool hasLuaRuntimeForTesting() const noexcept;
+  [[nodiscard]] SkinFileActivityCounters
+  fileActivityCountersForTesting() const noexcept;
   // Focused transaction-core seam. Application code cannot supply an
   // external writer span or observe an unpublished bridge commit.
   [[nodiscard]] PlaySkinFrameTransactionResult prepareFrame(

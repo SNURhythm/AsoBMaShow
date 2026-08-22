@@ -138,7 +138,8 @@ replayGameplaySkinSessionServices(ApplicationContext &context,
           .createHttpTransport = [](std::stop_token stop) {
             return skin::createLuaSkinProductionHttpTransport(stop);
           },
-          .audioBackend = skin::createLuaSkinNoOutputAudioBackend(),
+          .audioBackend = skin::createLuaSkinNoOutputAudioBackend(
+              context.skinLiveResourceCounters),
           .configurationWrites = context.skinConfigurationWriteQueue.get(),
           .diagnosticHistory = context.skinDiagnosticHistory.get(),
           .stop = stop};

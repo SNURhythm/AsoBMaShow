@@ -17,14 +17,18 @@ class ApplicationLuaSkinAudioBackend final : public LuaSkinAudioBackend {
 public:
   ApplicationLuaSkinAudioBackend(AudioWrapper &audio,
                                  std::function<float()> systemVolume,
-                                 LuaSkinApplicationAudioLimits limits)
+                                 LuaSkinApplicationAudioLimits limits,
+                                 std::shared_ptr<SkinLiveResourceCounters> counters)
       : audio_(&audio), systemVolume_(std::move(systemVolume)),
-        limits_(limits) {}
+        limits_(limits), liveCounters_(std::move(counters)) {}
 
   ~ApplicationLuaSkinAudioBackend() override {
     retryPendingControls();
     for (auto found = sounds_.begin(); found != sounds_.end();) {
       if (audio_->retireSkinSoundForTeardown(found->second.handle)) {
+        if (liveCounters_) {
+          liveCounters_->audioDestroyed(found->second.decodedBytes);
+        }
         found = sounds_.erase(found);
       } else {
         ++found;
@@ -46,6 +50,7 @@ public:
   std::optional<LuaSkinAudioIdentity>
   load(const std::filesystem::path &path,
        std::stop_token stop) noexcept override {
+    ++loadAttempts_;
     try {
       retryPendingControls();
       if (stop.stop_requested() || sounds_.size() >= limits_.maximumIdentities) {
@@ -91,10 +96,20 @@ public:
       }
       encodedBytesTotal_ += inserted->second.encodedBytes;
       decodedBytesTotal_ += inserted->second.decodedBytes;
+      if (liveCounters_) {
+        liveCounters_->audioCreated(inserted->second.decodedBytes);
+      }
+      ++loadsSucceeded_;
       return identity;
     } catch (...) {
       return std::nullopt;
     }
+  }
+
+  LuaSkinAudioActivityCounters activityCounters() const noexcept override {
+    return {.loadAttempts = loadAttempts_,
+            .loadsSucceeded = loadsSucceeded_,
+            .liveIdentities = sounds_.size()};
   }
 
   void play(LuaSkinAudioIdentity identity, float volume,
@@ -126,6 +141,9 @@ public:
     retryPendingControls();
     if (const auto found = sounds_.find(identity); found != sounds_.end()) {
       if (audio_->disposeSkinSound(found->second.handle)) {
+        if (liveCounters_) {
+          liveCounters_->audioDestroyed(found->second.decodedBytes);
+        }
         encodedBytesTotal_ -= found->second.encodedBytes;
         decodedBytesTotal_ -= found->second.decodedBytes;
         sounds_.erase(found);
@@ -164,6 +182,9 @@ private:
       }
       encodedBytesTotal_ -= found->second.encodedBytes;
       decodedBytesTotal_ -= found->second.decodedBytes;
+      if (liveCounters_) {
+        liveCounters_->audioDestroyed(found->second.decodedBytes);
+      }
       found = sounds_.erase(found);
     }
   }
@@ -175,14 +196,28 @@ private:
   std::size_t encodedBytesTotal_ = 0;
   std::size_t decodedBytesTotal_ = 0;
   std::uint64_t nextIdentity_ = 0;
+  std::uint64_t loadAttempts_ = 0;
+  std::uint64_t loadsSucceeded_ = 0;
+  std::shared_ptr<SkinLiveResourceCounters> liveCounters_;
 };
 
 class NoOutputLuaSkinAudioBackend final : public LuaSkinAudioBackend {
 public:
+  explicit NoOutputLuaSkinAudioBackend(
+      std::shared_ptr<SkinLiveResourceCounters> counters)
+      : liveCounters_(std::move(counters)) {}
+  ~NoOutputLuaSkinAudioBackend() override {
+    if (liveCounters_) {
+      for (std::size_t index = 0; index < identities_.size(); ++index) {
+        liveCounters_->audioDestroyed(0);
+      }
+    }
+  }
   float systemVolume() const noexcept override { return 0.0F; }
 
   std::optional<LuaSkinAudioIdentity>
   load(const std::filesystem::path &, std::stop_token stop) noexcept override {
+    ++loadAttempts_;
     if (stop.stop_requested() || identities_.size() >= 256) {
       return std::nullopt;
     }
@@ -191,18 +226,31 @@ public:
       identity.value = ++nextIdentity_;
     }
     identities_.emplace(identity, true);
+    if (liveCounters_) liveCounters_->audioCreated(0);
+    ++loadsSucceeded_;
     return identity;
   }
 
   void play(LuaSkinAudioIdentity, float, bool) noexcept override {}
   void stop(LuaSkinAudioIdentity) noexcept override {}
   void dispose(LuaSkinAudioIdentity identity) noexcept override {
-    identities_.erase(identity);
+    if (identities_.erase(identity) != 0 && liveCounters_) {
+      liveCounters_->audioDestroyed(0);
+    }
+  }
+
+  LuaSkinAudioActivityCounters activityCounters() const noexcept override {
+    return {.loadAttempts = loadAttempts_,
+            .loadsSucceeded = loadsSucceeded_,
+            .liveIdentities = identities_.size()};
   }
 
 private:
   std::map<LuaSkinAudioIdentity, bool> identities_;
   std::uint64_t nextIdentity_ = 0;
+  std::uint64_t loadAttempts_ = 0;
+  std::uint64_t loadsSucceeded_ = 0;
+  std::shared_ptr<SkinLiveResourceCounters> liveCounters_;
 };
 
 } // namespace
@@ -210,13 +258,15 @@ private:
 std::shared_ptr<LuaSkinAudioBackend>
 createLuaSkinApplicationAudioBackend(
     AudioWrapper &audio, std::function<float()> systemVolume,
-    LuaSkinApplicationAudioLimits limits) {
+    LuaSkinApplicationAudioLimits limits,
+    std::shared_ptr<SkinLiveResourceCounters> counters) {
   return std::make_shared<ApplicationLuaSkinAudioBackend>(
-      audio, std::move(systemVolume), limits);
+      audio, std::move(systemVolume), limits, std::move(counters));
 }
 
-std::shared_ptr<LuaSkinAudioBackend> createLuaSkinNoOutputAudioBackend() {
-  return std::make_shared<NoOutputLuaSkinAudioBackend>();
+std::shared_ptr<LuaSkinAudioBackend> createLuaSkinNoOutputAudioBackend(
+    std::shared_ptr<SkinLiveResourceCounters> counters) {
+  return std::make_shared<NoOutputLuaSkinAudioBackend>(std::move(counters));
 }
 
 } // namespace skin

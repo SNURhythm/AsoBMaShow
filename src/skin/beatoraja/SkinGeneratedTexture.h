@@ -29,6 +29,10 @@ struct SkinGeneratedTextureData {
   int width = 0;
   int height = 0;
   std::shared_ptr<const std::vector<std::uint8_t>> rgba;
+  // Monotonic per-key CPU Pixmap generation. The upload cache must not infer
+  // dirtiness from shared pointer identity because session Pixmaps are
+  // retained and redrawn in-place on their source-defined cadence.
+  std::uint64_t contentRevision = 0;
 };
 
 } // namespace skin

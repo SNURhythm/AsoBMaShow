@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <iterator>
 #include <limits>
@@ -137,6 +138,15 @@ bool cancelled(std::stop_token stop, PlaySkinSessionCreateResult &result) {
   }
   result.cancelled = true;
   return true;
+}
+
+using LoadingClock = std::chrono::steady_clock;
+
+std::uint64_t loadingMicros(LoadingClock::time_point started) noexcept {
+  const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+      LoadingClock::now() - started);
+  return elapsed.count() <= 0 ? 0U
+                              : static_cast<std::uint64_t>(elapsed.count());
 }
 
 void advanceRevision(std::uint64_t &revision) noexcept {
@@ -362,12 +372,26 @@ PlaySkinSession::runtimeConfigurationSelection() const {
 bool PlaySkinSession::hasLuaRuntimeForTesting() const noexcept {
   return owned_ != nullptr && owned_->runtime != nullptr;
 }
+
+SkinFileActivityCounters
+PlaySkinSession::fileActivityCountersForTesting() const noexcept {
+  return owned_ && owned_->runtime
+             ? owned_->runtime->fileActivityCounters()
+             : SkinFileActivityCounters{};
+}
 #endif
 
 PlaySkinSessionCreateResult
 PlaySkinSession::create(ValidatedSkinActivation activation,
                         PlaySkinSessionContext context) {
   PlaySkinSessionCreateResult result;
+  const auto loadingStarted = LoadingClock::now();
+  const auto finish = [&]() -> PlaySkinSessionCreateResult {
+    result.loadingTelemetry.totalMicros = loadingMicros(loadingStarted);
+    result.loadingTelemetry.cancelled = result.cancelled;
+    result.loadingTelemetry.sessionPublished = result.session != nullptr;
+    return std::move(result);
+  };
   activation.reconciledSettings.viewport = context.viewport;
   result.reconciledSettings = activation.reconciledSettings;
 
@@ -375,14 +399,14 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
     result.diagnostics.push_back(sessionDiagnostic(
         "skin.session.serial_invalid",
         "Gameplay skin session serial must be nonzero."));
-    return result;
+    return finish();
   }
   if (context.initialState == nullptr || context.initialProjection == nullptr) {
     result.diagnostics.push_back(sessionDiagnostic(
         "skin.session.initial_state_missing",
         "Gameplay skin configuration requires an initialized authoritative "
         "playfield state and projection."));
-    return result;
+    return finish();
   }
   if (context.initialState->clock.serial == 0 ||
       context.initialProjection->frameSerial !=
@@ -391,23 +415,23 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
         "skin.session.initial_state_invalid",
         "Gameplay skin configuration requires matching nonzero initial "
         "playfield state and projection serials."));
-    return result;
+    return finish();
   }
   if (cancelled(context.stop, result)) {
-    return result;
+    return finish();
   }
   if (!context.liveResourceCounters) {
     result.diagnostics.push_back(sessionDiagnostic(
         "skin.session.live_resource_counters_missing",
         "Gameplay skin session requires application-owned resource "
         "accounting."));
-    return result;
+    return finish();
   }
   if (activation.entry.package != activation.revision.revision().package) {
     result.diagnostics.push_back(sessionDiagnostic(
         "skin.session.activation_package_mismatch",
         "Gameplay skin entry and revision package identities do not match."));
-    return result;
+    return finish();
   }
 
   try {
@@ -419,7 +443,7 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
           "skin.document.source_unsupported",
           "Gameplay skin activation has an unsupported source extension.",
           activation.entry.packageRelativePath));
-      return result;
+      return finish();
     }
 
     // Decode, configuration, and resource reads share this exact retained
@@ -438,10 +462,10 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
               ? resourceFiles.failure->message
               : "Gameplay skin resource filesystem could not be created",
           resourceFiles.failure ? resourceFiles.failure->virtualPath : ""));
-      return result;
+      return finish();
     }
     if (cancelled(context.stop, result)) {
-      return result;
+      return finish();
     }
 
     std::unique_ptr<LuaSkinFileSystem> luaFiles;
@@ -460,12 +484,14 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
                 ? created.failure->message
                 : "Lua gameplay skin filesystem could not be created",
             created.failure ? created.failure->virtualPath : ""));
-        return result;
+        return finish();
       }
       luaFiles = std::move(created.fileSystem);
     }
 
     GameplaySkinDocumentLoader documentLoader;
+    const auto audioActivity = context.audioBackend;
+    const auto documentStarted = LoadingClock::now();
     auto loaded = documentLoader.load(
         {.sourceFormat = *sourceFormat,
          .entry = activation.entry,
@@ -524,15 +550,22 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
              },
          .safetyPolicy = context.safetyPolicy,
          .stop = context.stop});
+    (void)recordSkinLoadingPhase(result.loadingTelemetry,
+                                 SkinLoadingPhase::Document,
+                                 loadingMicros(documentStarted));
+    if (audioActivity) {
+      result.loadingTelemetry.resources.audioDecodes =
+          audioActivity->activityCounters().loadsSucceeded;
+    }
     result.reconciledSettings = std::move(loaded.reconciledSettings);
     result.configurationDigest = std::move(loaded.configurationDigest);
     appendMovedDiagnostics(result.diagnostics, loaded.diagnostics);
     if (loaded.cancelled || cancelled(context.stop, result)) {
       result.cancelled = true;
-      return result;
+      return finish();
     }
     if (!loaded.document || hasErrors(result.diagnostics)) {
-      return result;
+      return finish();
     }
     LoadedGameplaySkinDocument document = std::move(*loaded.document);
     appendMovedDiagnostics(result.diagnostics, document.diagnostics);
@@ -550,6 +583,7 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
                    context.chartModel.staticMetadata.backBmpResourcePath);
     addBuiltinPath(102,
                    context.chartModel.staticMetadata.bannerResourcePath);
+    const auto resourceStarted = LoadingClock::now();
     auto planned = context.resourcePreparation.decodeAndPlan(
         {.revision = activation.revision.clone(),
          .entry = activation.entry,
@@ -563,14 +597,23 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
          .builtinImageReader = std::move(context.builtinImageReader),
          .safetyPolicy = context.safetyPolicy,
          .stop = context.stop});
+    (void)recordSkinLoadingPhase(result.loadingTelemetry,
+                                 SkinLoadingPhase::ResourcePreparation,
+                                 loadingMicros(resourceStarted));
     appendMovedDiagnostics(result.diagnostics, planned.diagnostics);
     if (planned.cancelled || cancelled(context.stop, result)) {
       result.cancelled = true;
-      return result;
+      return finish();
     }
     if (!planned.plan || hasErrors(result.diagnostics)) {
-      return result;
+      return finish();
     }
+    result.loadingTelemetry.resources.imageDecodes =
+        planned.plan->images.size();
+    result.loadingTelemetry.resources.fontDecodes =
+        planned.plan->atlases.size();
+    result.loadingTelemetry.resources.decodedBytes =
+        planned.plan->decodedBytes;
 
     auto movieDevice = std::move(context.movieDevice);
 #if ASOBMASHOW_ENABLE_SKIN_MOVIE_DEVICE
@@ -578,32 +621,56 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
       movieDevice = createSkinMovieDevice();
     }
 #endif
+    const auto movieStarted = LoadingClock::now();
     auto preparedMovies = SkinMovieCatalog::prepare(
         {.fileSystem = *resourceFiles.fileSystem,
          .model = document.model,
          .configuration = document.configuration,
          .device = std::move(movieDevice),
          .safetyPolicy = context.safetyPolicy,
+         .liveResourceCounters = context.liveResourceCounters,
          .stop = context.stop,
          .sessionDecodedBytes = planned.plan->decodedBytes});
+    (void)recordSkinLoadingPhase(result.loadingTelemetry,
+                                 SkinLoadingPhase::Movie,
+                                 loadingMicros(movieStarted));
     appendMovedDiagnostics(result.diagnostics, preparedMovies.diagnostics);
     if (preparedMovies.cancelled || cancelled(context.stop, result)) {
       result.cancelled = true;
-      return result;
+      return finish();
     }
     if (!preparedMovies.catalog || hasErrors(result.diagnostics)) {
-      return result;
+      return finish();
     }
+    result.loadingTelemetry.resources.movieDecodes =
+        preparedMovies.catalog->movieCount();
+    result.loadingTelemetry.resources.decodedBytes +=
+        preparedMovies.catalog->decodedBytes();
+    const auto resourceFileActivity = resourceFiles.fileSystem->activityCounters();
+    const auto runtimeFileActivity =
+        document.luaRuntime
+            ? document.luaRuntime->fileActivityCounters()
+            : SkinFileActivityCounters{};
+    result.loadingTelemetry.resources.filesystemReads =
+        resourceFileActivity.readsPerformed + runtimeFileActivity.readsPerformed;
+    result.loadingTelemetry.resources.encodedBytes =
+        resourceFileActivity.bytesRead + runtimeFileActivity.bytesRead;
 
+    const auto uploadStarted = LoadingClock::now();
     auto uploaded = SkinResourceCatalog::upload(std::move(*planned.plan),
                                                 context.textureDevice,
                                                 context.liveResourceCounters);
+    (void)recordSkinLoadingPhase(result.loadingTelemetry,
+                                 SkinLoadingPhase::Upload,
+                                 loadingMicros(uploadStarted));
     appendMovedDiagnostics(result.diagnostics, uploaded.diagnostics);
     if (!uploaded.catalog || hasErrors(result.diagnostics)) {
-      return result;
+      return finish();
     }
+    result.loadingTelemetry.resources.textureUploads =
+        uploaded.catalog->textureCount();
     if (cancelled(context.stop, result)) {
-      return result;
+      return finish();
     }
     const auto pomyuMotionCyclesMillis =
         uploaded.catalog->pomyuMotionCyclesMillis();
@@ -614,7 +681,7 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
         appendFailure(result.diagnostics, std::move(renderPhase.failure),
                       "skin_lua_render_phase_failed",
                       "Lua gameplay skin could not enter render phase");
-        return result;
+        return finish();
       }
     }
     uploaded.catalog->enterRenderPhase();
@@ -628,10 +695,10 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
       result.diagnostics.push_back(sessionDiagnostic(
           "skin.session.viewport_invalid",
           "Gameplay skin viewport could not be evaluated."));
-      return result;
+      return finish();
     }
     if (cancelled(context.stop, result)) {
-      return result;
+      return finish();
     }
 
     PlaySkinSessionIdentity identity{
@@ -654,14 +721,16 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
         std::move(context.captureLegacyInputGeneration),
         context.viewport, context.safeUiBounds, viewport,
         context.safetyPolicy, pomyuMotionCyclesMillis);
+    owned->renderer.setGeneratedTextureLiveCounters(
+        context.liveResourceCounters);
     result.session.reset(new PlaySkinSession(std::move(owned)));
-    return result;
+    return finish();
   } catch (...) {
     result.session.reset();
     result.diagnostics.push_back(sessionDiagnostic(
         "skin.session.create_failed",
         "Gameplay skin session creation failed closed."));
-    return result;
+    return finish();
   }
 }
 

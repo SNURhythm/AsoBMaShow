@@ -108,7 +108,9 @@ SkinNoteDistributionGraphRenderResult renderDistribution(
        .sourceWidth = width,
        .sourceHeight = height,
        .verticalFlip = true,
-       .diagnosticObject = "Note distribution background"});
+       .diagnosticObject = "Note distribution background",
+       .cache = request.cache,
+       .contentRevision = 1});
   if (auto *pixmap = background.pixmap(); pixmap != nullptr) {
     pixmap->clear(0U);
     if (!request.graph.backgroundTextureOff) {
@@ -149,7 +151,16 @@ SkinNoteDistributionGraphRenderResult renderDistribution(
        .sourceHeight = height,
        .truncateDestinationRevealWidth = false,
        .verticalFlip = true,
-       .diagnosticObject = "Note distribution shape"});
+       .diagnosticObject = "Note distribution shape",
+       .cache = request.cache,
+       .contentRevision = request.graph.type ==
+                                  SkinNoteDistributionGraphType::Normal
+                              ? 1U
+                              : request.state.judgementRevision + 1U,
+       .minimumUpdateIntervalMillis =
+           request.graph.type == SkinNoteDistributionGraphType::Normal
+               ? 0
+               : 750});
   if (auto *pixmap = shape.pixmap(); pixmap != nullptr) {
     const auto type = static_cast<std::size_t>(request.graph.type);
     const auto &palette = request.pmsMode ? kPmsColorsAbgr[type]
@@ -187,7 +198,12 @@ SkinNoteDistributionGraphRenderResult renderDistribution(
        .sourceWidth = width,
        .sourceHeight = height,
        .verticalFlip = true,
-       .diagnosticObject = "Note distribution cursor"});
+       .diagnosticObject = "Note distribution cursor",
+       .cache = request.cache,
+       .contentRevision = static_cast<std::uint64_t>(
+                              std::max<std::int64_t>(0,
+                                  request.elapsedMillis / 50)) + 1U,
+       .minimumUpdateIntervalMillis = 50});
   if (auto *pixmap = cursor.pixmap(); pixmap != nullptr) {
     const auto drawCursor = [&](std::optional<std::int64_t> millis,
                                 std::uint32_t color) {

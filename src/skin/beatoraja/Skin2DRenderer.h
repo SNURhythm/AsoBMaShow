@@ -6,6 +6,7 @@
 #include "SkinHitErrorVisualizerRenderer.h"
 #include "SkinDrawCommand.h"
 #include "SkinMovieCatalog.h"
+#include "SkinGeneratedTextureRaster.h"
 #include "SyntheticReplayGhostOverlay.h"
 #include "../SkinSafetyPolicy.h"
 #include "../../scene/play/SkinGameplayGraphState.h"
@@ -385,6 +386,16 @@ public:
       SkinMovieCatalog *, const PlaySkinViewport &,
       const PreparedGameplayBgaFrame &, IGameplayBgaSubmitter &) const
       noexcept;
+  void setGeneratedTextureLiveCounters(
+      std::shared_ptr<SkinLiveResourceCounters> counters) noexcept {
+    generatedTextureCache_.setLiveResourceCounters(std::move(counters));
+  }
+#if defined(ASOBMASHOW_SKIN_RENDERER_TESTING)
+  [[nodiscard]] SkinGeneratedTextureCacheStats
+  generatedTextureCacheStatsForTesting() const noexcept {
+    return generatedTextureCache_.stats();
+  }
+#endif
 
 private:
   SkinFrameEvaluationResult evaluateFrameImpl(const SkinFrameInputs &,
@@ -402,6 +413,8 @@ private:
   const ValidatedBeatorajaSkinModel *hitErrorVisualizerModelIdentity_ = nullptr;
   std::map<SkinObjectId, SkinHitErrorVisualizerPresentationState>
       hitErrorVisualizerStates_;
+  std::uint64_t generatedTextureCacheSessionSerial_ = 0;
+  SkinGeneratedTextureCache generatedTextureCache_;
   std::uint64_t externalOwnershipSessionSerial_ = 0;
   std::uint64_t lastExternalOwnershipFrameSerial_ = 0;
 };

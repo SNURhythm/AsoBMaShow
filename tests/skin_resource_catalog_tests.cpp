@@ -2093,32 +2093,38 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   const auto equalPixels =
       std::make_shared<const std::vector<std::uint8_t>>(16U, 0x11U);
   const auto changedPixels =
-      std::make_shared<const std::vector<std::uint8_t>>(16U, 0x22U);
+      std::make_shared<std::vector<std::uint8_t>>(16U, 0x22U);
   const auto resizedPixels =
       std::make_shared<const std::vector<std::uint8_t>>(32U, 0x33U);
   const int generatedCreatesBefore = device->creates;
   const int generatedDestroysBefore = device->destroys;
   const auto *createdGenerated = uploaded.catalog->prepareGeneratedTexture(
       generatedKey,
-      {.width = 2, .height = 2, .rgba = firstPixels});
+      {.width = 2, .height = 2, .rgba = firstPixels, .contentRevision = 1});
   const auto *cachedGenerated = uploaded.catalog->prepareGeneratedTexture(
       generatedKey,
-      {.width = 2, .height = 2, .rgba = equalPixels});
+      {.width = 2, .height = 2, .rgba = equalPixels, .contentRevision = 1});
   const auto *updatedGenerated = uploaded.catalog->prepareGeneratedTexture(
       generatedKey,
-      {.width = 2, .height = 2, .rgba = changedPixels});
+      {.width = 2, .height = 2, .rgba = changedPixels, .contentRevision = 2});
+  (*changedPixels)[0] = 0x44U;
+  const auto *updatedSameBuffer = uploaded.catalog->prepareGeneratedTexture(
+      generatedKey,
+      {.width = 2, .height = 2, .rgba = changedPixels, .contentRevision = 3});
   const auto *resizedGenerated = uploaded.catalog->prepareGeneratedTexture(
       generatedKey,
-      {.width = 4, .height = 2, .rgba = resizedPixels});
+      {.width = 4, .height = 2, .rgba = resizedPixels, .contentRevision = 4});
   expect(createdGenerated != nullptr && cachedGenerated != nullptr &&
-             updatedGenerated != nullptr && resizedGenerated != nullptr &&
+             updatedGenerated != nullptr && updatedSameBuffer != nullptr &&
+             resizedGenerated != nullptr &&
              createdGenerated->key == generatedKey &&
              resizedGenerated->width == 4 && resizedGenerated->height == 2 &&
              device->creates == generatedCreatesBefore + 2 &&
-             device->updates == 1 &&
+             device->updates == 2 &&
              device->destroys == generatedDestroysBefore + 1,
-         "session-generated textures create once, skip byte-identical frames, "
-         "update dirty pixels, and replace only on dimension changes");
+         "session-generated textures create once, skip a stable revision, "
+         "update every dirty revision even when a Pixmap buffer is reused, "
+         "and replace only on dimension changes");
   const auto onePixel =
       std::make_shared<const std::vector<std::uint8_t>>(4U, 0xffU);
   const int boundedCreatesBefore = device->creates;

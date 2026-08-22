@@ -158,6 +158,46 @@ void testEnabledTelemetryReusesFixedStorageAndNeverEvicts() {
          "retained summaries exclude overflow sentinels and preserve the first accepted sample");
 }
 
+void testLoadingTelemetryOwnsClosedPhaseAndResourceFacts() {
+  SkinLoadingTelemetry telemetry;
+  expect(recordSkinLoadingPhase(telemetry, SkinLoadingPhase::Document,
+                                1'100) &&
+             recordSkinLoadingPhase(telemetry,
+                                    SkinLoadingPhase::ResourcePreparation,
+                                    2'200) &&
+             recordSkinLoadingPhase(telemetry, SkinLoadingPhase::Movie,
+                                    300) &&
+             recordSkinLoadingPhase(telemetry, SkinLoadingPhase::Upload,
+                                    400) &&
+             !recordSkinLoadingPhase(telemetry, SkinLoadingPhase::Document,
+                                     99),
+         "loading telemetry accepts each closed phase exactly once");
+  telemetry.totalMicros = 4'500;
+  telemetry.resources = {.filesystemReads = 4,
+                         .imageDecodes = 2,
+                         .fontDecodes = 1,
+                         .movieDecodes = 1,
+                         .audioDecodes = 1,
+                         .textureUploads = 3,
+                         .encodedBytes = 128,
+                         .decodedBytes = 512};
+  telemetry.sessionPublished = true;
+  expect(isCompleteSkinLoadingTelemetry(telemetry) &&
+             telemetry.documentMicros == 1'100 &&
+             telemetry.resourcePreparationMicros == 2'200 &&
+             telemetry.movieMicros == 300 && telemetry.uploadMicros == 400 &&
+             telemetry.totalMicros >= telemetry.documentMicros +
+                                          telemetry.resourcePreparationMicros +
+                                          telemetry.movieMicros +
+                                          telemetry.uploadMicros,
+         "loading telemetry is value-owned, path-free, and complete only for "
+         "a published four-phase session");
+  telemetry.cancelled = true;
+  telemetry.sessionPublished = false;
+  expect(!isCompleteSkinLoadingTelemetry(telemetry),
+         "cancelled preparation cannot masquerade as a published load");
+}
+
 void testSummaryUsesNearestRankP99AndAggregatesEveryFact() {
   SkinPerformanceTelemetry telemetry(true);
   for (std::uint64_t index = 0; index < 100; ++index) {
@@ -471,6 +511,7 @@ void testNegativeRunAllowsExactlyTheSelectedDeniedOperation() {
 int main() {
   testDisabledTelemetryAllocatesNothingAndRetainsNothing();
   testEnabledTelemetryReusesFixedStorageAndNeverEvicts();
+  testLoadingTelemetryOwnsClosedPhaseAndResourceFacts();
   testSummaryUsesNearestRankP99AndAggregatesEveryFact();
   testContributionMaskRejectsDuplicateOutOfOrderAndInvalidEnvelopes();
   testEnvelopeValidationPinsEveryIdentityFieldAndStrictFrameOrder();
