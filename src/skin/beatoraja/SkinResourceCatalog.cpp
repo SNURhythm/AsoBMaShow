@@ -966,6 +966,7 @@ std::optional<SkinTextAtlasBuildResult> prepareFontAtlas(
   if (!faces) return std::nullopt;
   return buildSkinTextAtlas(id, request.key, *faces, request.codepoints,
                             request.pairs, safetyPolicy,
+                            session.remainingScalableFontPaintBlendOperations(),
                             cancellationRequested);
 }
 
@@ -1131,7 +1132,8 @@ bool SkinResourceSessionAccounting::addImage(
 
 bool SkinResourceSessionAccounting::addAtlas(
     std::size_t decodedBytes, std::size_t glyphs,
-    std::size_t kerningPairs, std::size_t physicalResources) noexcept {
+    std::size_t kerningPairs, std::size_t physicalResources,
+    std::size_t scalableFontPaintBlendOperations) noexcept {
   SkinResourceSessionAccounting next = *this;
   if (!addWithin(next.physicalResources_, physicalResources,
                  skinResourceLimit(safetyPolicy_,
@@ -1149,7 +1151,10 @@ bool SkinResourceSessionAccounting::addAtlas(
                                    SkinResourcePolicy::maximumGlyphs)) ||
       !addWithin(next.kerningPairs_, kerningPairs,
                  skinResourceLimit(safetyPolicy_,
-                                   SkinResourcePolicy::maximumKerningPairs))) {
+                                   SkinResourcePolicy::maximumKerningPairs)) ||
+      !addWithin(next.scalableFontPaintBlendOperations_,
+                 scalableFontPaintBlendOperations,
+                 SkinResourcePolicy::maximumScalableFontPaintBlendOperations)) {
     return false;
   }
   *this = next;
@@ -1375,7 +1380,7 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
       atlasPhysicalResources = 1;
     } else {
       if (atlas.pixels.width != 0 || atlas.pixels.height != 0 ||
-          atlas.pixels.rgba ||
+          atlas.pixels.rgba || atlas.paintBlendOperations != 0 ||
           atlas.pages.size() > skinResourceLimit(
                                    safetyPolicy,
                                    SkinResourcePolicy::maximumResources)) {
@@ -1484,7 +1489,8 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
           std::llabs(static_cast<long long>(amount)) > skinResourceDimensionLimit(safetyPolicy)) { result.diagnostics.push_back(diagnostic("skin.resource.atlas_limit", "resource upload plan has invalid kerning pair")); return result; }
     }
     if (!session.addAtlas(atlasDecodedBytes, atlas.glyphs.size(),
-                          atlas.kerning.size(), atlasPhysicalResources)) {
+                          atlas.kerning.size(), atlasPhysicalResources,
+                          atlas.paintBlendOperations)) {
       result.diagnostics.push_back(diagnostic("skin.resource.session_limit", "resource upload plan exceeds fixed aggregate limits")); return result;
     }
   }
@@ -2106,7 +2112,8 @@ SkinResourceValidationResult SkinResourcePreparationService::validateResources(
              !delta || !fontSession.addAtlas(
                            delta->decodedBytes, built->atlas->glyphs.size(),
                            built->atlas->kerning.size(),
-                           delta->physicalResources))
+                           delta->physicalResources,
+                           built->atlas->paintBlendOperations))
       result.diagnostics.push_back(fontDiagnostic(request.font, request.critical, "skin.resource.atlas_limit", "font atlas session aggregate exceeds policy"));
     else {
       session = fontSession;
@@ -2486,7 +2493,8 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
     if (!delta || !fontSession.addAtlas(delta->decodedBytes,
                                         built->atlas->glyphs.size(),
                                         built->atlas->kerning.size(),
-                                        delta->physicalResources)) {
+                                        delta->physicalResources,
+                                        built->atlas->paintBlendOperations)) {
       result.diagnostics.push_back(fontDiagnostic(request.font, request.critical, "skin.resource.atlas_limit", "font atlas session aggregate exceeds policy"));
       continue;
     }

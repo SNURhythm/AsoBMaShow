@@ -50,6 +50,8 @@ struct SkinTextAtlasBuildResult {
     const std::set<char32_t> &codepoints,
     const std::set<std::pair<char32_t, char32_t>> &pairs,
     SkinSafetyPolicy safetyPolicy = SkinSafetyPolicy{},
+    std::size_t maximumPaintBlendOperations =
+        SkinResourcePolicy::maximumScalableFontPaintBlendOperations,
     const std::function<bool()> &cancellationRequested = {});
 
 [[nodiscard]] SkinTextAtlasBuildResult buildSkinBitmapTextAtlas(

@@ -315,6 +315,54 @@ void testScalableFontOutlineWorkIsBounded() {
       faces, std::set<char32_t>{U'A'}, {});
   expect(ordinary.atlas && ordinary.error.empty(),
          "an ordinary fractional outline still produces a scalable glyph atlas");
+
+  const skin::SkinTextAtlasKey transparentShadowKey{
+      .font = 1,
+      .pointSize = 24,
+      .shadowRgba = {0, 0, 255, 0},
+      .shadowOffsetX = 3.0,
+      .shadowOffsetY = 2.0,
+      .shadowSmoothness = 1.0,
+      .fallbackChainDigest = "transparent-shadow-fixture"};
+  const auto transparentShadow = skin::buildSkinTextAtlas(
+      5, transparentShadowKey, faces, std::set<char32_t>{U'A'}, {},
+      skin::SkinSafetyPolicy{}, /*maximumPaintBlendOperations=*/0);
+  expect(transparentShadow.atlas && transparentShadow.error.empty() &&
+             transparentShadow.atlas->paintBlendOperations == 0,
+         "a transparent shadow consumes no scalable-font paint budget");
+  auto transparentOutlineKey = transparentShadowKey;
+  transparentOutlineKey.outlineWidth = 8.0;
+  transparentOutlineKey.fallbackChainDigest = "transparent-outline-fixture";
+  const auto transparentOutline = skin::buildSkinTextAtlas(
+      9, transparentOutlineKey, faces, std::set<char32_t>{U'A'}, {},
+      skin::SkinSafetyPolicy{}, /*maximumPaintBlendOperations=*/0);
+  expect(transparentOutline.atlas && transparentOutline.error.empty() &&
+             transparentOutline.atlas->paintBlendOperations == 0,
+         "a transparent outline consumes no scalable-font paint budget");
+
+  auto shadowCenterKey = transparentShadowKey;
+  shadowCenterKey.shadowRgba[3] = 255;
+  shadowCenterKey.shadowSmoothness = 0.0;
+  shadowCenterKey.fallbackChainDigest = "shadow-center-fixture";
+  const auto rejectedShadowCenter = skin::buildSkinTextAtlas(
+      6, shadowCenterKey, faces, std::set<char32_t>{U'A'}, {},
+      skin::SkinSafetyPolicy{}, /*maximumPaintBlendOperations=*/0);
+  expect(!rejectedShadowCenter.atlas &&
+             rejectedShadowCenter.error ==
+                 "font paint work exceeds atlas preparation limit",
+         "an active shadow center is rejected when no session work remains");
+  const auto shadowCenter = skin::buildSkinTextAtlas(
+      7, shadowCenterKey, faces, std::set<char32_t>{U'A'}, {});
+  auto smoothShadowKey = shadowCenterKey;
+  smoothShadowKey.shadowSmoothness = 1.0;
+  smoothShadowKey.fallbackChainDigest = "smooth-shadow-fixture";
+  const auto smoothShadow = skin::buildSkinTextAtlas(
+      8, smoothShadowKey, faces, std::set<char32_t>{U'A'}, {});
+  expect(shadowCenter.atlas && smoothShadow.atlas &&
+             shadowCenter.atlas->paintBlendOperations > 0 &&
+             smoothShadow.atlas->paintBlendOperations ==
+                 shadowCenter.atlas->paintBlendOperations * 9U,
+         "radius-one shadow smoothing charges its center and eight neighbors");
   const auto oversized = skin::buildSkinTextAtlas(
       4,
       {.font = 1,
@@ -350,6 +398,19 @@ void testScalableFontOutlineWorkIsBounded() {
              excessive.error ==
                  "font outline work exceeds atlas preparation limit",
          "aggregate cap-compliant outline work is rejected before painting");
+  const auto attemptedOverride = skin::buildSkinTextAtlas(
+      10,
+      {.font = 1,
+       .pointSize = 192,
+       .fallbackChainDigest = "outline-override-fixture",
+       .outlineRgba = {255, 0, 0, 255},
+       .outlineWidth = 8.0},
+      faces, printableAscii, {}, skin::SkinSafetyPolicy{},
+      std::numeric_limits<std::size_t>::max());
+  expect(!attemptedOverride.atlas &&
+             attemptedOverride.error ==
+                 "font outline work exceeds atlas preparation limit",
+         "a caller cannot relax the fixed scalable-font paint-work safety cap");
 
   int cancellationChecks = 0;
   const auto cancelled = skin::buildSkinTextAtlas(
@@ -360,6 +421,7 @@ void testScalableFontOutlineWorkIsBounded() {
        .outlineRgba = {255, 0, 0, 255},
        .outlineWidth = 2.0},
       faces, std::set<char32_t>{U'A'}, {}, skin::SkinSafetyPolicy{},
+      skin::SkinResourcePolicy::maximumScalableFontPaintBlendOperations,
       [&] { return ++cancellationChecks == 2; });
   expect(!cancelled.atlas &&
              cancelled.error == "font atlas preparation cancelled" &&
@@ -432,6 +494,30 @@ void testSharedSessionAccountingRejectsDistributedAggregateOverages() {
              !pairs.addAtlas(/*decodedBytes=*/0, /*glyphs=*/0,
                              /*kerningPairs=*/1),
          "an aggregate kerning overage is rejected before upload");
+
+  skin::SkinResourceSessionAccounting paintWork;
+  constexpr std::size_t firstAtlasPaintWork = 40U * 1024U * 1024U;
+  constexpr std::size_t finalAtlasPaintWork = 24U * 1024U * 1024U;
+  expect(paintWork.addAtlas(/*decodedBytes=*/0, /*glyphs=*/0,
+                            /*kerningPairs=*/0,
+                            /*physicalResources=*/1,
+                            firstAtlasPaintWork) &&
+             paintWork.remainingScalableFontPaintBlendOperations() ==
+                 finalAtlasPaintWork,
+         "the first scalable atlas commits paint work to the session ledger");
+  expect(!paintWork.addAtlas(/*decodedBytes=*/0, /*glyphs=*/0,
+                             /*kerningPairs=*/0,
+                             /*physicalResources=*/1,
+                             finalAtlasPaintWork + 1U) &&
+             paintWork.remainingScalableFontPaintBlendOperations() ==
+                 finalAtlasPaintWork,
+         "a rejected second atlas leaks no transactional paint budget");
+  expect(paintWork.addAtlas(/*decodedBytes=*/0, /*glyphs=*/0,
+                            /*kerningPairs=*/0,
+                            /*physicalResources=*/1,
+                            finalAtlasPaintWork) &&
+             paintWork.remainingScalableFontPaintBlendOperations() == 0,
+         "multiple accepted atlases can consume the exact session paint budget");
 }
 
 struct TemporaryDirectory {
@@ -1835,6 +1921,23 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
                      });
   rejectBeforeUpload("duplicate atlas IDs fail before upload",
                      [](auto &plan, auto &) { plan.atlases.back().id = plan.atlases.front().id; });
+  rejectBeforeUpload("aggregate scalable-font paint work fails before upload",
+                     [](auto &plan, auto &) {
+                       for (auto &atlas : plan.atlases) {
+                         atlas.paintBlendOperations = 0;
+                       }
+                       plan.atlases[0].paintBlendOperations =
+                           40U * 1024U * 1024U;
+                       plan.atlases[1].paintBlendOperations =
+                           24U * 1024U * 1024U + 1U;
+                     });
+  rejectBeforeUpload("bitmap atlases cannot claim scalable paint work",
+                     [](auto &plan, auto &) {
+                       const auto bitmap = std::ranges::find_if(
+                           plan.atlases,
+                           [](const auto &atlas) { return atlas.bitmapFont; });
+                       bitmap->paintBlendOperations = 1;
+                     });
   rejectBeforeUpload("text-atlas mappings must reference an uploaded atlas",
                      [](auto &plan, auto &) {
                        plan.textAtlasesByObject.begin()->second =

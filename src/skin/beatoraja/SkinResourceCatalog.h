@@ -56,9 +56,9 @@ struct SkinResourcePolicy {
   static constexpr std::size_t maximumFallbackChainDigestBytes =
       64U * 1024U;
   // These CPU-work limits remain fixed even when byte/dimension guards are
-  // relaxed: scalable glyph outlining performs one blend per covered offset.
+  // relaxed: scalable glyph effects perform one blend per covered offset.
   static constexpr double maximumScalableFontOutlineWidth = 8.0;
-  static constexpr std::size_t maximumScalableFontOutlineBlendOperations =
+  static constexpr std::size_t maximumScalableFontPaintBlendOperations =
       64U * 1024U * 1024U;
   static constexpr std::size_t cacheByteBudget = 128U * 1024U * 1024U;
   static constexpr std::size_t workerCount = 2;
@@ -94,12 +94,19 @@ public:
                               std::size_t regions) noexcept;
   [[nodiscard]] bool addAtlas(std::size_t decodedBytes, std::size_t glyphs,
                               std::size_t kerningPairs,
-                              std::size_t physicalResources = 1) noexcept;
+                              std::size_t physicalResources = 1,
+                              std::size_t scalableFontPaintBlendOperations = 0)
+      noexcept;
   [[nodiscard]] std::size_t decodedBytes() const noexcept {
     return decodedBytes_;
   }
   [[nodiscard]] std::size_t encodedBytes() const noexcept {
     return encodedBytes_;
+  }
+  [[nodiscard]] std::size_t
+  remainingScalableFontPaintBlendOperations() const noexcept {
+    return SkinResourcePolicy::maximumScalableFontPaintBlendOperations -
+           scalableFontPaintBlendOperations_;
   }
 
 private:
@@ -113,6 +120,7 @@ private:
   std::size_t atlasBytes_ = 0;
   std::size_t glyphs_ = 0;
   std::size_t kerningPairs_ = 0;
+  std::size_t scalableFontPaintBlendOperations_ = 0;
 };
 
 [[nodiscard]] bool skinResourceDimensionsAllowed(int width, int height,
@@ -214,6 +222,7 @@ struct SkinPreparedGlyphAtlas {
   int pageHeight = 0;
   SkinTextLayoutKind layoutKind = SkinTextLayoutKind::Scalable;
   int margin = 0;
+  std::size_t paintBlendOperations = 0;
 };
 struct SkinResourceUploadPlan {
   SkinRevisionLease revision;
