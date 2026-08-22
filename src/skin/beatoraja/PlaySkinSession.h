@@ -54,7 +54,7 @@ struct PlaySkinSessionContext {
   std::shared_ptr<SkinMovieDevice> movieDevice;
   std::unique_ptr<LuaSkinHttpTransport> httpTransport;
   std::shared_ptr<LuaSkinAudioBackend> audioBackend;
-  std::function<LuaSkinLegacyInputSnapshot()> captureLegacyInputSnapshot;
+  std::function<LuaSkinLegacyInputGeneration()> captureLegacyInputGeneration;
   std::shared_ptr<SkinLiveResourceCounters> liveResourceCounters;
   SkinConfigurationWriteQueue &configurationWrites;
   // Config.AudioConfig FloatWriter IDs 17-19 apply only after an authored
@@ -89,7 +89,7 @@ struct PlaySkinSessionFrameContext {
   ViewportSettings viewportSettings;
   PlaySkinViewport viewport;
   LuaSkinRuntime *runtime = nullptr;
-  std::function<LuaSkinLegacyInputSnapshot()> captureLegacyInputSnapshot;
+  std::function<LuaSkinLegacyInputGeneration()> captureLegacyInputGeneration;
   PlaySkinStateBridge &bridge;
   Skin2DRenderer &renderer;
   rendering::SkinQuadBatchRenderer &quadRenderer;

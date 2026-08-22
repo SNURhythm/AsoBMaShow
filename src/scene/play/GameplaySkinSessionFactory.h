@@ -40,8 +40,8 @@ struct GameplaySkinSessionServices {
   std::function<std::unique_ptr<skin::LuaSkinHttpTransport>(std::stop_token)>
       createHttpTransport;
   std::shared_ptr<skin::LuaSkinAudioBackend> audioBackend;
-  std::function<skin::LuaSkinLegacyInputSnapshot()>
-      captureLegacyInputSnapshot;
+  std::function<skin::LuaSkinLegacyInputGeneration()>
+      captureLegacyInputGeneration;
   skin::SkinConfigurationWriteQueue *configurationWrites = nullptr;
   skin::SkinDiagnosticHistory *diagnosticHistory = nullptr;
   std::function<void(skin::SkinAudioVolumeWriterTarget, float)>

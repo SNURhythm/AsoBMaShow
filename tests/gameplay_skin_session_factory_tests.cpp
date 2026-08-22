@@ -182,7 +182,7 @@ struct ReadyFixture {
   bool httpTransportForwarded = false;
   bool httpStopForwarded = false;
   bool legacyInputCaptureForwarded = false;
-  std::optional<skin::LuaSkinLegacyInputSnapshot> capturedLegacyInput;
+  std::optional<skin::LuaSkinLegacyInputGeneration> capturedLegacyInput;
   skin::SkinConfigurationWriteQueue writes;
   std::stop_source stopSource;
   PlayfieldChartVisualModel chart;
@@ -255,8 +255,8 @@ struct ReadyFixture {
               return std::make_unique<FactoryHttpTransport>();
             },
             .audioBackend = audioBackend,
-            .captureLegacyInputSnapshot = [] {
-              return skin::LuaSkinLegacyInputSnapshot{
+            .captureLegacyInputGeneration = [] {
+              return skin::LuaSkinLegacyInputGeneration{
                   .drawableWidth = 111, .drawableHeight = 222};
             },
             .configurationWrites = &writes,
@@ -270,9 +270,10 @@ struct ReadyFixture {
                       context.audioBackend == audioBackend;
                   httpTransportForwarded = context.httpTransport != nullptr;
                   legacyInputCaptureForwarded =
-                      static_cast<bool>(context.captureLegacyInputSnapshot);
-                  if (context.captureLegacyInputSnapshot) {
-                    capturedLegacyInput = context.captureLegacyInputSnapshot();
+                      static_cast<bool>(context.captureLegacyInputGeneration);
+                  if (context.captureLegacyInputGeneration) {
+                    capturedLegacyInput =
+                        context.captureLegacyInputGeneration();
                   }
                   context.textureDevice = textureDevice;
                   return skin::PlaySkinSession::create(std::move(activation),
@@ -354,7 +355,7 @@ void factorySuppliesTheValueOnlyProductionLegacyInputCapture() {
     return;
   }
   auto services = fixture.services();
-  services.captureLegacyInputSnapshot = {};
+  services.captureLegacyInputGeneration = {};
   const auto ready =
       createGameplaySkinSession(std::move(services), fixture.input());
   expect(ready.disposition == GameplaySkinSessionDisposition::Ready &&

@@ -234,8 +234,8 @@ struct PlaySkinSession::OwnedActivation final {
                   std::function<void(std::size_t, bool)>
                       applyPracticeMenuItemValue,
                   std::function<void(int)> applyPracticeVisibleItemsValue,
-                  std::function<LuaSkinLegacyInputSnapshot()>
-                      captureLegacyInputSnapshotValue,
+                  std::function<LuaSkinLegacyInputGeneration()>
+                      captureLegacyInputGenerationValue,
                   ViewportSettings viewportSettingsValue,
                   UiLogicalRect safeUiBoundsValue,
                   PlaySkinViewport viewportValue,
@@ -254,8 +254,8 @@ struct PlaySkinSession::OwnedActivation final {
         applyPracticeItemScroll(std::move(applyPracticeItemScrollValue)),
         applyPracticeMenuItem(std::move(applyPracticeMenuItemValue)),
         applyPracticeVisibleItems(std::move(applyPracticeVisibleItemsValue)),
-        captureLegacyInputSnapshot(
-            std::move(captureLegacyInputSnapshotValue)),
+        captureLegacyInputGeneration(
+            std::move(captureLegacyInputGenerationValue)),
         viewportSettings(viewportSettingsValue),
         safeUiBounds(safeUiBoundsValue), viewport(viewportValue),
         safetyPolicy(safetyPolicyValue),
@@ -290,7 +290,7 @@ struct PlaySkinSession::OwnedActivation final {
   std::function<void(float)> applyPracticeItemScroll;
   std::function<void(std::size_t, bool)> applyPracticeMenuItem;
   std::function<void(int)> applyPracticeVisibleItems;
-  std::function<LuaSkinLegacyInputSnapshot()> captureLegacyInputSnapshot;
+  std::function<LuaSkinLegacyInputGeneration()> captureLegacyInputGeneration;
   ViewportSettings viewportSettings;
   UiLogicalRect safeUiBounds;
   PlaySkinViewport viewport;
@@ -328,8 +328,8 @@ PlaySkinSession::PlaySkinSession(
                .viewportSettings = owned_->viewportSettings,
                .viewport = owned_->viewport,
                .runtime = owned_->runtime.get(),
-               .captureLegacyInputSnapshot =
-                   owned_->captureLegacyInputSnapshot,
+               .captureLegacyInputGeneration =
+                   owned_->captureLegacyInputGeneration,
                .bridge = *owned_->bridge,
                .renderer = owned_->renderer,
                .quadRenderer = owned_->quadRenderer,
@@ -484,10 +484,10 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
              [&context](LuaSkinRuntime &runtime,
                         const BeatorajaSkinConfiguration &configuration,
                         std::vector<SkinDiagnostic> &diagnostics) {
-               if (context.captureLegacyInputSnapshot) {
+               if (context.captureLegacyInputGeneration) {
                  try {
-                   runtime.setLegacyInputSnapshot(
-                       context.captureLegacyInputSnapshot());
+                   runtime.setLegacyInputGeneration(
+                       context.captureLegacyInputGeneration());
                  } catch (...) {
                    return LuaValueResult{
                        .failure = sessionDiagnostic(
@@ -651,7 +651,7 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
         std::move(context.applyPracticeItemScroll),
         std::move(context.applyPracticeMenuItem),
         std::move(context.applyPracticeVisibleItems),
-        std::move(context.captureLegacyInputSnapshot),
+        std::move(context.captureLegacyInputGeneration),
         context.viewport, context.safeUiBounds, viewport,
         context.safetyPolicy, pomyuMotionCyclesMillis);
     result.session.reset(new PlaySkinSession(std::move(owned)));
@@ -727,10 +727,10 @@ PlaySkinFrameTransactionResult PlaySkinSession::runFrameTransaction(
         "Gameplay skin session serial must be nonzero."));
     return result;
   }
-  if (context_.runtime != nullptr && context_.captureLegacyInputSnapshot) {
+  if (context_.runtime != nullptr && context_.captureLegacyInputGeneration) {
     try {
-      context_.runtime->setLegacyInputSnapshot(
-          context_.captureLegacyInputSnapshot());
+      context_.runtime->setLegacyInputGeneration(
+          context_.captureLegacyInputGeneration());
     } catch (...) {
       result.diagnostics.push_back(transactionDiagnostic(
           "skin.session.legacy_input_capture_failed",

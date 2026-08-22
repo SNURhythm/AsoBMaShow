@@ -1314,10 +1314,18 @@ void LuaSkinRuntime::setFrameState(ISkinFrameState *state) noexcept {
   }
 }
 
-void LuaSkinRuntime::setLegacyInputSnapshot(
+bool LuaSkinRuntime::setLegacyInputSnapshot(
     LuaSkinLegacyInputSnapshot snapshot) noexcept {
   if (impl_ && impl_->legacyInputHost) {
-    (void)impl_->legacyInputHost->publish(std::move(snapshot));
+    return impl_->legacyInputHost->publish(std::move(snapshot));
+  }
+  return false;
+}
+
+void LuaSkinRuntime::setLegacyInputGeneration(
+    LuaSkinLegacyInputGeneration generation) noexcept {
+  if (impl_ && impl_->legacyInputHost) {
+    impl_->legacyInputHost->publish(std::move(generation));
   }
 }
 

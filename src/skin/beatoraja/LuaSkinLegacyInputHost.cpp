@@ -68,21 +68,6 @@ constexpr auto kKeyNames = std::to_array<KeyName>({
     KeyName{255, "F12"},
 });
 
-void normalize(LuaSkinLegacyInputSnapshot &snapshot) {
-  snapshot.drawableWidth = std::max(0, snapshot.drawableWidth);
-  snapshot.drawableHeight = std::max(0, snapshot.drawableHeight);
-  std::ranges::sort(snapshot.pressedKeys);
-  auto uniqueKeys = std::ranges::unique(snapshot.pressedKeys);
-  snapshot.pressedKeys.erase(uniqueKeys.begin(), uniqueKeys.end());
-  snapshot.anyKeyPressed =
-      snapshot.anyKeyPressed || !snapshot.pressedKeys.empty();
-  for (auto &controller : snapshot.controllers) {
-    std::ranges::sort(controller.pressedButtons);
-    auto uniqueButtons = std::ranges::unique(controller.pressedButtons);
-    controller.pressedButtons.erase(uniqueButtons.begin(), uniqueButtons.end());
-  }
-}
-
 } // namespace
 
 LuaSkinLegacyInputHost::LuaSkinLegacyInputHost()
@@ -90,50 +75,87 @@ LuaSkinLegacyInputHost::LuaSkinLegacyInputHost()
 
 LuaSkinLegacyInputHost::LuaSkinLegacyInputHost(
     LuaSkinLegacyInputSnapshot snapshot) {
-  if (!publish(std::move(snapshot))) {
-    snapshot_ = std::make_shared<const LuaSkinLegacyInputSnapshot>();
-  }
+  (void)publish(std::move(snapshot));
 }
 
 bool LuaSkinLegacyInputHost::publish(
     LuaSkinLegacyInputSnapshot snapshot) noexcept {
-  try {
-    normalize(snapshot);
-    snapshot_ = std::make_shared<const LuaSkinLegacyInputSnapshot>(
-        std::move(snapshot));
-    return true;
-  } catch (...) {
-    return false;
+  LuaSkinLegacyInputGeneration generation;
+  generation.sequence = generation_.sequence + 1;
+  generation.drawableWidth = std::max(0, snapshot.drawableWidth);
+  generation.drawableHeight = std::max(0, snapshot.drawableHeight);
+  generation.anyKeyPressed = snapshot.anyKeyPressed;
+  for (const int key : snapshot.pressedKeys) {
+    if (key >= 0 &&
+        static_cast<std::size_t>(key) < generation.pressedGdxKeys.size()) {
+      generation.pressedGdxKeys.set(static_cast<std::size_t>(key));
+      generation.anyKeyPressed = true;
+    }
   }
+  generation.controllerCount = std::min(
+      snapshot.controllers.size(), input::kLegacyInputMaximumControllers);
+  for (std::size_t index = 0; index < generation.controllerCount; ++index) {
+    generation.controllers[index].setName(snapshot.controllers[index].name);
+    for (const int button : snapshot.controllers[index].pressedButtons) {
+      if (button >= 0 &&
+          static_cast<std::size_t>(button) <
+              generation.controllers[index].pressedButtons.size()) {
+        generation.controllers[index].pressedButtons.set(
+            static_cast<std::size_t>(button));
+      }
+    }
+  }
+  publish(std::move(generation));
+  return true;
+}
+
+void LuaSkinLegacyInputHost::publish(
+    LuaSkinLegacyInputGeneration generation) noexcept {
+  generation.drawableWidth = std::max(0, generation.drawableWidth);
+  generation.drawableHeight = std::max(0, generation.drawableHeight);
+  generation.controllerCount = std::min(
+      generation.controllerCount, input::kLegacyInputMaximumControllers);
+  generation.anyKeyPressed =
+      generation.anyKeyPressed || generation.pressedGdxKeys.any();
+  generation_ = std::move(generation);
 }
 
 int LuaSkinLegacyInputHost::drawableWidth() const noexcept {
-  return snapshot_ ? snapshot_->drawableWidth : 0;
+  return generation_.drawableWidth;
 }
 
 int LuaSkinLegacyInputHost::drawableHeight() const noexcept {
-  return snapshot_ ? snapshot_->drawableHeight : 0;
+  return generation_.drawableHeight;
 }
 
 bool LuaSkinLegacyInputHost::isKeyPressed(int gdxKeyCode) const noexcept {
-  if (!snapshot_) {
-    return false;
-  }
   if (gdxKeyCode == -1) {
-    return snapshot_->anyKeyPressed;
+    return generation_.anyKeyPressed;
   }
-  return std::ranges::binary_search(snapshot_->pressedKeys, gdxKeyCode);
+  return gdxKeyCode >= 0 &&
+         static_cast<std::size_t>(gdxKeyCode) <
+             generation_.pressedGdxKeys.size() &&
+         generation_.pressedGdxKeys.test(static_cast<std::size_t>(gdxKeyCode));
 }
 
 std::size_t LuaSkinLegacyInputHost::controllerCount() const noexcept {
-  return snapshot_ ? snapshot_->controllers.size() : 0;
+  return generation_.controllerCount;
 }
 
-const LuaSkinLegacyControllerSnapshot *
-LuaSkinLegacyInputHost::controller(std::size_t index) const noexcept {
-  return snapshot_ && index < snapshot_->controllers.size()
-             ? &snapshot_->controllers[index]
-             : nullptr;
+std::string_view
+LuaSkinLegacyInputHost::controllerName(std::size_t index) const noexcept {
+  return index < generation_.controllerCount
+             ? generation_.controllers[index].name()
+             : std::string_view{};
+}
+
+bool LuaSkinLegacyInputHost::controllerButtonPressed(
+    std::size_t index, int button) const noexcept {
+  return index < generation_.controllerCount && button >= 0 &&
+         static_cast<std::size_t>(button) <
+             generation_.controllers[index].pressedButtons.size() &&
+         generation_.controllers[index].pressedButtons.test(
+             static_cast<std::size_t>(button));
 }
 
 int LuaSkinLegacyInputHost::keyCode(std::string_view name) noexcept {

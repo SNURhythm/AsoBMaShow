@@ -2452,21 +2452,27 @@ int legacyControllerGetButton(lua_State *state) {
 
 void pushLegacyControllerObject(
     lua_State *state, LuaSkinHostModulesImpl *impl,
-    const LuaSkinLegacyControllerSnapshot &controller) {
+    std::size_t controllerIndex) {
   lua_createtable(state, 0, 2);
   const int objectIndex = lua_gettop(state);
 
   lua_pushlightuserdata(state, impl);
   lua_pushvalue(state, objectIndex);
-  lua_pushlstring(state, controller.name.data(), controller.name.size());
+  const std::string_view name =
+      impl->legacyInputHost->controllerName(controllerIndex);
+  lua_pushlstring(state, name.data(), name.size());
   lua_pushcclosure(state, legacyControllerGetName, 3);
   lua_setfield(state, objectIndex, "getName");
 
   lua_newtable(state);
   const int buttonsIndex = lua_gettop(state);
-  for (const int button : controller.pressedButtons) {
-    lua_pushboolean(state, 1);
-    lua_rawseti(state, buttonsIndex, button);
+  for (std::size_t button = 0;
+       button < input::kLegacyInputMaximumButtons; ++button) {
+    if (impl->legacyInputHost->controllerButtonPressed(
+            controllerIndex, static_cast<int>(button))) {
+      lua_pushboolean(state, 1);
+      lua_rawseti(state, buttonsIndex, static_cast<lua_Integer>(button));
+    }
   }
   lua_pushlightuserdata(state, impl);
   lua_pushvalue(state, objectIndex);
@@ -2500,8 +2506,8 @@ int legacyGetControllers(lua_State *state) {
   lua_pushinteger(
       state, static_cast<lua_Integer>(impl->legacyInputHost->controllerCount()));
   lua_setfield(state, listIndex, "size");
-  if (const auto *first = impl->legacyInputHost->controller(0)) {
-    pushLegacyControllerObject(state, impl, *first);
+  if (impl->legacyInputHost->controllerCount() != 0) {
+    pushLegacyControllerObject(state, impl, 0);
   } else {
     lua_pushnil(state);
   }

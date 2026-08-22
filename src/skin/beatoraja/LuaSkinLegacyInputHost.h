@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../../input/InputTypes.h"
+
 #include <memory>
 #include <optional>
 #include <string>
@@ -21,6 +23,8 @@ struct LuaSkinLegacyInputSnapshot {
   std::vector<LuaSkinLegacyControllerSnapshot> controllers;
 };
 
+using LuaSkinLegacyInputGeneration = input::LegacyInputGeneration;
+
 // Owns one value-only input publication. Lua receives no SDL window,
 // keyboard-state, joystick, or controller pointer through this facade.
 class LuaSkinLegacyInputHost final {
@@ -29,19 +33,22 @@ public:
   explicit LuaSkinLegacyInputHost(LuaSkinLegacyInputSnapshot);
 
   [[nodiscard]] bool publish(LuaSkinLegacyInputSnapshot) noexcept;
+  void publish(LuaSkinLegacyInputGeneration) noexcept;
   [[nodiscard]] int drawableWidth() const noexcept;
   [[nodiscard]] int drawableHeight() const noexcept;
   [[nodiscard]] bool isKeyPressed(int gdxKeyCode) const noexcept;
   [[nodiscard]] std::size_t controllerCount() const noexcept;
-  [[nodiscard]] const LuaSkinLegacyControllerSnapshot *
-  controller(std::size_t index) const noexcept;
+  [[nodiscard]] std::string_view
+  controllerName(std::size_t index) const noexcept;
+  [[nodiscard]] bool controllerButtonPressed(std::size_t index,
+                                             int button) const noexcept;
 
   // Mirrors the pinned LibGDX Input.Keys.valueOf display-name lookup. The
   // source method returns -1 (ANY_KEY) for an unknown, case-mismatched name.
   [[nodiscard]] static int keyCode(std::string_view name) noexcept;
 
 private:
-  std::shared_ptr<const LuaSkinLegacyInputSnapshot> snapshot_;
+  LuaSkinLegacyInputGeneration generation_;
 };
 
 } // namespace skin

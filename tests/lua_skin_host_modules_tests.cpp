@@ -1460,20 +1460,43 @@ void testPinnedLegacyInputSurfaceUsesImmutableSnapshots() {
   expect(harness->runtime->enterRenderPhase().ok &&
              harness->runtime->beginFrame(1).ok,
          "legacy-input fixture enters an active render frame");
-  harness->runtime->setLegacyInputSnapshot({
-      .drawableWidth = 1280,
-      .drawableHeight = 720,
-      .pressedKeys = {131},
-      .controllers = {{.name = "Solo Pad", .pressedButtons = {3}}},
-  });
+  LuaSkinLegacyInputGeneration oneController;
+  oneController.drawableWidth = 1280;
+  oneController.drawableHeight = 720;
+  oneController.pressedGdxKeys.set(131);
+  oneController.controllerCount = 1;
+  oneController.controllers[0].setName("Solo Pad");
+  oneController.controllers[0].pressedButtons.set(3);
+  harness->runtime->setLegacyInputGeneration(oneController);
   const auto one = harness->runtime->invoke(*verifyOne, {});
   expect(one.value == std::optional<LuaScalar>{true} && !one.failure,
          "one-controller snapshot replaces the prior immutable snapshot");
 
-  harness->runtime->setLegacyInputSnapshot({});
+  harness->runtime->setLegacyInputGeneration({});
   const auto zero = harness->runtime->invoke(*verifyZero, {});
   expect(zero.value == std::optional<LuaScalar>{true} && !zero.failure,
          "zero-controller snapshot returns size zero and nil first");
+}
+
+void testLegacyInputGenerationPublicationIsBoundedAndNeverStale() {
+  static_assert(noexcept(std::declval<LuaSkinLegacyInputHost &>().publish(
+      std::declval<LuaSkinLegacyInputGeneration>())));
+  LuaSkinLegacyInputHost host;
+  LuaSkinLegacyInputGeneration populated;
+  populated.controllerCount = input::kLegacyInputMaximumControllers + 10;
+  populated.pressedGdxKeys.set(29);
+  populated.controllers[0].setName(std::string(300, 'x'));
+  populated.controllers[0].pressedButtons.set(255);
+  host.publish(populated);
+  expect(host.controllerCount() == input::kLegacyInputMaximumControllers &&
+             host.isKeyPressed(29) &&
+             host.controllerName(0).size() ==
+                 input::kLegacyInputControllerNameBytes &&
+             host.controllerButtonPressed(0, 255),
+         "fixed legacy input publication clamps controller/name/button storage");
+  host.publish(LuaSkinLegacyInputGeneration{});
+  expect(host.controllerCount() == 0 && !host.isKeyPressed(29),
+         "allocation-free empty publication replaces state instead of exposing a stale generation");
 }
 
 void testIoLinesUsesTheVirtualSkinFileSystem() {
@@ -1668,6 +1691,7 @@ int main() {
   testPinnedAudioSurfaceOwnsResolvedBackendIdentities();
   testAudioHostBoundsIdentitiesAndHonorsSessionCancellation();
   testPinnedLegacyInputSurfaceUsesImmutableSnapshots();
+  testLegacyInputGenerationPublicationIsBoundedAndNeverStale();
   testIoLinesUsesTheVirtualSkinFileSystem();
   testIoReadClampsHugeRequestedCountToAvailableBytes();
   testIoOpenReadsUtf8NamedSkinFiles();

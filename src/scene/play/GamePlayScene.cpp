@@ -169,6 +169,10 @@ gameplaySkinSessionServices(ApplicationContext &context) {
               context.jukebox.audioRuntime(), [&context] {
                 return context.settings.audioVideo.audio.masterVolume;
               }),
+          .captureLegacyInputGeneration = [&context] {
+            return context.inputDeviceRegistry.legacyInputGeneration(
+                rendering::render_width, rendering::render_height);
+          },
           .configurationWrites = context.skinConfigurationWriteQueue.get(),
           .diagnosticHistory = context.skinDiagnosticHistory.get()};
 }

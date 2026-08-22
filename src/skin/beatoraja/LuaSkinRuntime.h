@@ -252,7 +252,9 @@ public:
   loadConfigured(const BeatorajaSkinConfiguration &configuration);
   LuaOperationResult enterRenderPhase();
   void setFrameState(ISkinFrameState *) noexcept;
-  void setLegacyInputSnapshot(LuaSkinLegacyInputSnapshot) noexcept;
+  [[nodiscard]] bool
+  setLegacyInputSnapshot(LuaSkinLegacyInputSnapshot) noexcept;
+  void setLegacyInputGeneration(LuaSkinLegacyInputGeneration) noexcept;
   void setEventExecutor(LuaSkinEventExecutor) noexcept;
   LuaOperationResult beginFrame(std::uint64_t visualStateSequence);
   LuaCallbackResult invoke(LuaCallbackId, std::span<const LuaScalar> arguments);

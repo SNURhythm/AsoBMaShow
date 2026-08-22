@@ -1877,12 +1877,13 @@ void testLuaSessionCapturesLegacyInputAtEachAuthoritativeBoundary() {
   }
   int captures = 0;
   auto context = fixture.context();
-  context.captureLegacyInputSnapshot = [&captures] {
+  context.captureLegacyInputGeneration = [&captures] {
     ++captures;
-    return LuaSkinLegacyInputSnapshot{
-        .drawableWidth = captures == 1 ? 640 : 800,
-        .drawableHeight = captures == 1 ? 360 : 450,
-        .pressedKeys = {29}};
+    LuaSkinLegacyInputGeneration generation;
+    generation.drawableWidth = captures == 1 ? 640 : 800;
+    generation.drawableHeight = captures == 1 ? 360 : 450;
+    generation.pressedGdxKeys.set(29);
+    return generation;
   };
   auto created =
       PlaySkinSession::create(fixture.takeActivation(), std::move(context));
