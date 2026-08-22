@@ -32,7 +32,10 @@ bool canonicalizeSkinTextAtlasKey(SkinTextAtlasKey &key,
          key.fallbackChainDigest.size() <=
              skinResourceLimit(safetyPolicy,
                                SkinResourcePolicy::maximumFallbackChainDigestBytes) &&
-         key.outlineWidth >= 0.0 && key.shadowSmoothness >= 0.0 &&
+         key.outlineWidth >= 0.0 &&
+         key.outlineWidth <=
+             SkinResourcePolicy::maximumScalableFontOutlineWidth &&
+         key.shadowSmoothness >= 0.0 &&
          quantize(key.outlineWidth, safetyPolicy) &&
          quantize(key.shadowOffsetX, safetyPolicy) &&
          quantize(key.shadowOffsetY, safetyPolicy) &&
@@ -120,8 +123,15 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     const std::vector<SkinTextAtlasFontBytes> &faces,
     const std::set<char32_t> &codepoints,
     const std::set<std::pair<char32_t, char32_t>> &pairs,
-    SkinSafetyPolicy safetyPolicy) {
+    SkinSafetyPolicy safetyPolicy,
+    const std::function<bool()> &cancellationRequested) {
   SkinTextAtlasBuildResult result;
+  if (std::isfinite(key.outlineWidth) &&
+      key.outlineWidth >
+          SkinResourcePolicy::maximumScalableFontOutlineWidth) {
+    result.error = "font outline width exceeds atlas preparation limit";
+    return result;
+  }
   if (id == 0 || !canonicalizeSkinTextAtlasKey(key, safetyPolicy) ||
       faces.empty() ||
       codepoints.size() >
@@ -180,11 +190,27 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
   }
   const int primaryAscent = TTF_FontAscent(opened.front().font);
   const int layoutAscent = primaryAscent - capHeight;
+  const int outline = static_cast<int>(std::ceil(key.outlineWidth));
+  std::vector<std::pair<int, int>> outlineOffsets;
+  if (key.outlineRgba[3] != 0) {
+    for (int oy = -outline; oy <= outline; ++oy) {
+      for (int ox = -outline; ox <= outline; ++ox) {
+        if (ox * ox + oy * oy <= outline * outline) {
+          outlineOffsets.emplace_back(ox, oy);
+        }
+      }
+    }
+  }
 
   std::vector<GlyphBitmap> glyphs;
   glyphs.reserve(codepoints.size());
   std::size_t temporaryGlyphBytes = 0;
+  std::size_t outlineBlendOperations = 0;
   for (char32_t codepoint : codepoints) {
+    if (cancellationRequested && cancellationRequested()) {
+      result.error = "font atlas preparation cancelled";
+      return result;
+    }
     if (codepoint == U'\n' || codepoint == U'\r') continue;
     std::size_t faceIndex = opened.size();
     for (std::size_t index = 0; index < opened.size(); ++index)
@@ -194,7 +220,6 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     if (TTF_GlyphMetrics32(opened[faceIndex].font, static_cast<Uint32>(codepoint), &minX, &maxX, &minY, &maxY, &advance) != 0) {
       result.error = "font glyph metrics failed"; return result;
     }
-    const int outline = static_cast<int>(std::ceil(key.outlineWidth));
     const int shadowX = static_cast<int>(std::round(key.shadowOffsetX));
     const int shadowY = static_cast<int>(std::round(key.shadowOffsetY));
     const int smoothRadius = std::min(4, static_cast<int>(std::ceil(key.shadowSmoothness)));
@@ -228,7 +253,14 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     int alphaMinY = surface->h;
     int alphaMaxX = -1;
     int alphaMaxY = -1;
+    std::size_t opaquePixels = 0;
     for (int y = 0; y < surface->h; ++y) {
+      if (cancellationRequested && cancellationRequested()) {
+        SDL_UnlockSurface(surface);
+        SDL_FreeSurface(surface);
+        result.error = "font atlas preparation cancelled";
+        return result;
+      }
       for (int x = 0; x < surface->w; ++x) {
         const unsigned char alpha =
             pixels[static_cast<std::size_t>(y) * surface->pitch +
@@ -236,12 +268,25 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
         if (alpha == 0) {
           continue;
         }
+        ++opaquePixels;
         alphaMinX = std::min(alphaMinX, x);
         alphaMinY = std::min(alphaMinY, y);
         alphaMaxX = std::max(alphaMaxX, x);
         alphaMaxY = std::max(alphaMaxY, y);
       }
     }
+    const std::size_t maximumOutlineBlendOperations =
+        SkinResourcePolicy::maximumScalableFontOutlineBlendOperations;
+    if (!outlineOffsets.empty() &&
+        (opaquePixels >
+             (maximumOutlineBlendOperations - outlineBlendOperations) /
+                 outlineOffsets.size())) {
+      SDL_UnlockSurface(surface);
+      SDL_FreeSurface(surface);
+      result.error = "font outline work exceeds atlas preparation limit";
+      return result;
+    }
+    outlineBlendOperations += opaquePixels * outlineOffsets.size();
     const bool hasPixels = alphaMaxX >= alphaMinX && alphaMaxY >= alphaMinY;
     const int glyphPadding = hasPixels ? padding : 0;
     const int contentWidth =
@@ -286,23 +331,31 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
       if (targetX < 0 || targetY < 0 || targetX >= glyph.width || targetY >= glyph.height) return;
       alphaOver(glyph.rgba.data() + (static_cast<std::size_t>(targetY) * glyph.width + targetX) * 4U, color, alpha);
     };
-    for (int y = alphaMinY; hasPixels && y <= alphaMaxY; ++y) for (int x = alphaMinX; x <= alphaMaxX; ++x) {
-      const unsigned char alpha = pixels[static_cast<std::size_t>(y) * surface->pitch + static_cast<std::size_t>(x) * 4U + 3U];
-      if (alpha == 0) continue;
-      const int glyphX = x - alphaMinX + glyphPadding;
-      const int glyphY = y - alphaMinY + glyphPadding;
-      put(glyphX + shadowX, glyphY + shadowY, key.shadowRgba, alpha);
-      if (smoothRadius > 0) {
-        const unsigned char smoothAlpha = static_cast<unsigned char>(
-            static_cast<double>(alpha) * std::min(1.0, key.shadowSmoothness) /
-            static_cast<double>((2 * smoothRadius + 1) * (2 * smoothRadius + 1)));
-        for (int oy = -smoothRadius; oy <= smoothRadius; ++oy)
-          for (int ox = -smoothRadius; ox <= smoothRadius; ++ox)
-            if (ox != 0 || oy != 0) put(glyphX + shadowX + ox, glyphY + shadowY + oy, key.shadowRgba, smoothAlpha);
+    for (int y = alphaMinY; hasPixels && y <= alphaMaxY; ++y) {
+      if (cancellationRequested && cancellationRequested()) {
+        SDL_UnlockSurface(surface);
+        SDL_FreeSurface(surface);
+        result.error = "font atlas preparation cancelled";
+        return result;
       }
-      for (int oy = -outline; oy <= outline; ++oy) for (int ox = -outline; ox <= outline; ++ox)
-        if (ox * ox + oy * oy <= outline * outline) put(glyphX + ox, glyphY + oy, key.outlineRgba, alpha);
-      put(glyphX, glyphY, {255,255,255,255}, alpha);
+      for (int x = alphaMinX; x <= alphaMaxX; ++x) {
+        const unsigned char alpha = pixels[static_cast<std::size_t>(y) * surface->pitch + static_cast<std::size_t>(x) * 4U + 3U];
+        if (alpha == 0) continue;
+        const int glyphX = x - alphaMinX + glyphPadding;
+        const int glyphY = y - alphaMinY + glyphPadding;
+        put(glyphX + shadowX, glyphY + shadowY, key.shadowRgba, alpha);
+        if (smoothRadius > 0) {
+          const unsigned char smoothAlpha = static_cast<unsigned char>(
+              static_cast<double>(alpha) * std::min(1.0, key.shadowSmoothness) /
+              static_cast<double>((2 * smoothRadius + 1) * (2 * smoothRadius + 1)));
+          for (int oy = -smoothRadius; oy <= smoothRadius; ++oy)
+            for (int ox = -smoothRadius; ox <= smoothRadius; ++ox)
+              if (ox != 0 || oy != 0) put(glyphX + shadowX + ox, glyphY + shadowY + oy, key.shadowRgba, smoothAlpha);
+        }
+        for (const auto [ox, oy] : outlineOffsets)
+          put(glyphX + ox, glyphY + oy, key.outlineRgba, alpha);
+        put(glyphX, glyphY, {255,255,255,255}, alpha);
+      }
     }
     SDL_UnlockSurface(surface);
     SDL_FreeSurface(surface);
@@ -312,6 +365,10 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
   int cursorX = 1, cursorY = 1, rowHeight = 0;
   std::map<char32_t, SkinPreparedGlyphMetrics> metrics;
   for (const auto &glyph : glyphs) {
+    if (cancellationRequested && cancellationRequested()) {
+      result.error = "font atlas preparation cancelled";
+      return result;
+    }
     if (glyph.width + 2 > atlasWidth) { result.error = "font glyph exceeds atlas width"; return result; }
     if (cursorX + glyph.width + 1 > atlasWidth) { cursorX = 1; cursorY += rowHeight + 1; rowHeight = 0; }
     if (cursorY + glyph.height + 1 >
@@ -341,13 +398,22 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
   auto rgba = std::make_shared<std::vector<unsigned char>>(byteCount, 0);
   for (const auto &glyph : glyphs) {
     const auto &region = metrics.at(glyph.codepoint).region;
-    for (int y = 0; y < glyph.height; ++y)
+    for (int y = 0; y < glyph.height; ++y) {
+      if (cancellationRequested && cancellationRequested()) {
+        result.error = "font atlas preparation cancelled";
+        return result;
+      }
       std::copy_n(glyph.rgba.data() + static_cast<std::size_t>(y) * glyph.width * 4U,
                   static_cast<std::size_t>(glyph.width) * 4U,
                   rgba->data() + (static_cast<std::size_t>(region.y + y) * atlasWidth + region.x) * 4U);
+    }
   }
   std::map<std::pair<char32_t, char32_t>, int> kerning;
   for (const auto &[left, right] : pairs) {
+    if (cancellationRequested && cancellationRequested()) {
+      result.error = "font atlas preparation cancelled";
+      return result;
+    }
     const auto leftGlyph = std::find_if(glyphs.begin(), glyphs.end(), [left] (const GlyphBitmap &item) { return item.codepoint == left; });
     const auto rightGlyph = std::find_if(glyphs.begin(), glyphs.end(), [right] (const GlyphBitmap &item) { return item.codepoint == right; });
     if (leftGlyph == glyphs.end() || rightGlyph == glyphs.end() || leftGlyph->face != rightGlyph->face) {

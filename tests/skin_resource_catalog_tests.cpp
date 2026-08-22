@@ -254,6 +254,12 @@ void testTextAtlasKeyRejectsNegativePaintExtents() {
   key.outlineWidth = -0.25;
   expect(!skin::canonicalizeSkinTextAtlasKey(key),
          "negative outline extent cannot become a canonical atlas key");
+  key.outlineWidth = 8.0;
+  expect(skin::canonicalizeSkinTextAtlasKey(key),
+         "the maximum ordinary scalable-font outline remains compatible");
+  key.outlineWidth = 8.25;
+  expect(!skin::canonicalizeSkinTextAtlasKey(key),
+         "an oversized scalable-font outline is rejected before raster work");
   key.outlineWidth = 0.0;
   key.shadowSmoothness = -0.25;
   expect(!skin::canonicalizeSkinTextAtlasKey(key),
@@ -286,6 +292,79 @@ void testTextAtlasKeyRejectsNegativePaintExtents() {
       8192, {.virtualPath="font/fallback.ttf", .type=0});
   expect(skin::stableFallbackChainDigest(1, 0, oversizedChain).empty(),
          "the public fallback-chain builder refuses an oversized identity");
+}
+
+void testScalableFontOutlineWorkIsBounded() {
+  const std::filesystem::path fontPath =
+      std::filesystem::path(ASOBMASHOW_SOURCE_DIR) /
+      "bgfx/bgfx/examples/runtime/font/signika-regular.ttf";
+  std::ifstream input(fontPath, std::ios::binary);
+  const std::string encoded((std::istreambuf_iterator<char>(input)),
+                            std::istreambuf_iterator<char>());
+  const auto encodedBytes = std::as_bytes(std::span(encoded));
+  const std::vector<skin::SkinTextAtlasFontBytes> faces{{
+      .encoded = std::vector<std::byte>(encodedBytes.begin(),
+                                       encodedBytes.end())}};
+  const auto ordinary = skin::buildSkinTextAtlas(
+      1,
+      {.font = 1,
+       .pointSize = 24,
+       .fallbackChainDigest = "outline-fixture",
+       .outlineRgba = {255, 0, 0, 255},
+       .outlineWidth = 1.25},
+      faces, std::set<char32_t>{U'A'}, {});
+  expect(ordinary.atlas && ordinary.error.empty(),
+         "an ordinary fractional outline still produces a scalable glyph atlas");
+  const auto oversized = skin::buildSkinTextAtlas(
+      4,
+      {.font = 1,
+       .pointSize = 24,
+       .fallbackChainDigest = "outline-width-fixture",
+       .outlineRgba = {255, 0, 0, 255},
+       .outlineWidth = 8.25},
+      faces, std::set<char32_t>{U'A'}, {});
+  expect(!oversized.atlas &&
+             oversized.error ==
+                 "font outline width exceeds atlas preparation limit",
+         "oversized scalable outlines report their rejected work explicitly");
+
+  std::set<char32_t> printableAscii;
+  for (char32_t codepoint = U'!'; codepoint <= U'~'; ++codepoint) {
+    printableAscii.insert(codepoint);
+  }
+  const auto excessive = skin::buildSkinTextAtlas(
+      2,
+      {.font = 1,
+       .pointSize = 192,
+       .fallbackChainDigest = "outline-work-fixture",
+       .outlineRgba = {255, 0, 0, 255},
+       .outlineWidth = 8.0},
+      faces, printableAscii, {});
+  if (excessive.error !=
+      "font outline work exceeds atlas preparation limit") {
+    std::cerr << "outline work diagnostic: "
+              << (excessive.atlas ? "atlas published" : excessive.error)
+              << '\n';
+  }
+  expect(!excessive.atlas &&
+             excessive.error ==
+                 "font outline work exceeds atlas preparation limit",
+         "aggregate cap-compliant outline work is rejected before painting");
+
+  int cancellationChecks = 0;
+  const auto cancelled = skin::buildSkinTextAtlas(
+      3,
+      {.font = 1,
+       .pointSize = 24,
+       .fallbackChainDigest = "outline-cancellation-fixture",
+       .outlineRgba = {255, 0, 0, 255},
+       .outlineWidth = 2.0},
+      faces, std::set<char32_t>{U'A'}, {}, skin::SkinSafetyPolicy{},
+      [&] { return ++cancellationChecks == 2; });
+  expect(!cancelled.atlas &&
+             cancelled.error == "font atlas preparation cancelled" &&
+             cancellationChecks == 2,
+         "scalable outline painting observes deterministic mid-glyph cancellation");
 }
 
 void testSharedSessionAccountingRejectsDistributedAggregateOverages() {
@@ -2219,6 +2298,7 @@ int main() {
   testSharedSdlTtfRuntimeFinalRelease();
   testSpriteBoundsAndNormalizedGridCells();
   testTextAtlasKeyRejectsNegativePaintExtents();
+  testScalableFontOutlineWorkIsBounded();
   testSharedSessionAccountingRejectsDistributedAggregateOverages();
   testChartBuiltinReaderOwnsBytesAndAccountingTransaction();
   testBitmapFontEncodedAccountingCommitsWithAtlasTransaction();

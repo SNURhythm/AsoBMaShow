@@ -55,6 +55,11 @@ struct SkinResourcePolicy {
   // small enough to duplicate safely across bounded style variants.
   static constexpr std::size_t maximumFallbackChainDigestBytes =
       64U * 1024U;
+  // These CPU-work limits remain fixed even when byte/dimension guards are
+  // relaxed: scalable glyph outlining performs one blend per covered offset.
+  static constexpr double maximumScalableFontOutlineWidth = 8.0;
+  static constexpr std::size_t maximumScalableFontOutlineBlendOperations =
+      64U * 1024U * 1024U;
   static constexpr std::size_t cacheByteBudget = 128U * 1024U * 1024U;
   static constexpr std::size_t workerCount = 2;
 };

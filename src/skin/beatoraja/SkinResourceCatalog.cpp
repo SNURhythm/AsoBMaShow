@@ -965,7 +965,8 @@ std::optional<SkinTextAtlasBuildResult> prepareFontAtlas(
                                    cancellationRequested, safetyPolicy);
   if (!faces) return std::nullopt;
   return buildSkinTextAtlas(id, request.key, *faces, request.codepoints,
-                            request.pairs, safetyPolicy);
+                            request.pairs, safetyPolicy,
+                            cancellationRequested);
 }
 
 struct AtlasAccountingDelta {
