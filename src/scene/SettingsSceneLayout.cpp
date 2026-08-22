@@ -2823,7 +2823,7 @@ void SettingsScene::initView() {
   bmsLibraryTabButton =
       makeTabButton(SettingsTab::BmsLibrary, "BMS Library", &bmsLibraryTabText);
   gameplaySkinsTabButton = makeTabButton(SettingsTab::GameplaySkins,
-                                         "Gameplay Skins",
+                                         "Skins",
                                          &gameplaySkinsTabText);
   irTabButton = makeTabButton(SettingsTab::Ir, "IR", &irTabText);
   tabControls->addView(profileTabButton);

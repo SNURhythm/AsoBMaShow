@@ -21,7 +21,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   body->addView(makeWrappedText(
       "The built-in gameplay presentation remains active.",
       metrics.smallTextSize, ui_theme::textMuted()));
-  column->addView(makeCard(metrics, "Gameplay Skins", "Availability", body,
+  column->addView(makeCard(metrics, "Skins", "Availability", body,
                            metrics.modeCardHeight, metrics.cardsWidth));
   return column;
 }

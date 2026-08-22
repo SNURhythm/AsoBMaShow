@@ -3,6 +3,7 @@
 #include "GameplaySkinDocumentLoader.h"
 #include "GameplaySkinSourceFormat.h"
 #include "../GameplaySkinTraits.h"
+#include "../SkinTargetTraits.h"
 #include "LuaSkinFileSystem.h"
 
 #include <algorithm>
@@ -184,7 +185,7 @@ SkinValidationResult GameplaySkinValidator::validate(
     result.metadata = metadataFor(
         *inspected.header,
         inspected.configuration.value_or(BeatorajaSkinConfiguration{}));
-    if (!gameplaySkinTraitForSkinType(result.metadata->skinType)) {
+    if (!skinTargetTraitForType(result.metadata->skinType)) {
       result.disposition = SkinValidationDisposition::UnavailableType;
       const auto [code, message] = unavailableTypeDiagnostic(*sourceFormat);
       result.diagnostics.push_back(validationDiagnostic(

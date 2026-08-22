@@ -15,6 +15,7 @@
 #include "play/RhythmState.h"
 #include "../bms_parser.hpp"
 #include "../skin/ISkin.h"
+#include "../skin/LuaGameplaySkinFeature.h"
 #include "../skin/SkinTypes.h"
 #include <algorithm>
 #include <cstddef>
@@ -251,6 +252,7 @@ class Button;
 class BlockingOverlayView;
 class PracticeAnalyticsView;
 class OverlayPortal;
+namespace skin { class ResultSkinSession; }
 
 class ResultScene : public Scene {
 public:
@@ -269,7 +271,7 @@ public:
       std::optional<std::string> modernReplayAttemptId = std::nullopt,
       bool retrySameAllowed = true, ResultTableContext tableContext = {});
   ResultScene(ApplicationContext &context, ResultRemoteOptions remote);
-  ~ResultScene() override = default;
+  ~ResultScene() override;
 
   void init() override;
   void update(float dt) override;
@@ -277,6 +279,7 @@ public:
   void cleanupScene() override;
 
 private:
+  bool startSelectedResultSkin();
   void loadDifficultyLabel();
   void loadPreviousBest();
   bool persistModernCourseResult();
@@ -338,6 +341,10 @@ private:
   std::variant<LocalResultSource, RemoteResultSource> source;
   View *rootLayout = nullptr;
   View *graphPlaceHolder = nullptr;
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  std::unique_ptr<skin::ResultSkinSession> resultSkinSession;
+  long long resultSkinStartedMicros = 0;
+#endif
   View *normalResultActions = nullptr;
   View *resultPersistenceStatus = nullptr;
   TextView *persistenceStatusMessage = nullptr;

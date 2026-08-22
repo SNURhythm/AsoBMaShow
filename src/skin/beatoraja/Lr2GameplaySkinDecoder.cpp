@@ -2,6 +2,7 @@
 #include "Lr2IntegerParser.h"
 
 #include "../GameplaySkinTraits.h"
+#include "../SkinTargetTraits.h"
 
 #include <algorithm>
 #include <array>
@@ -1671,6 +1672,11 @@ private:
 
   void sourceGraphObject(const Lr2SkinCommand &command) {
     const auto values = commandValues(command);
+    if (command.name == "SRC_GAUGECHART_1P") {
+      gaugeChart_ = addObject(SkinGaugeGraphObject{}, command);
+      graphSize_ = {values[11], values[12]};
+      return;
+    }
     if (command.name == "SRC_NOTECHART_1P") {
       if (values[1] < 0 || values[1] > 2) {
         throw std::out_of_range("LR2 note-chart type");
@@ -1722,6 +1728,22 @@ private:
           .transparent = values[15] == 1,
           .drawDecay = values[16] == 1};
       timingChart_ = addObject(std::move(visualizer), command);
+      graphSize_ = {values[4], values[5]};
+      return;
+    }
+    if (command.name == "SRC_TIMINGCHART_1P") {
+      SkinTimingDistributionGraphObject graph{
+          .width = values[4], .lineWidth = std::clamp(values[6], 1, 4),
+          .graphRgba = timingColor(requiredField(command, 7)),
+          .averageRgba = timingColor(requiredField(command, 8)),
+          .devRgba = timingColor(requiredField(command, 9)),
+          .judgeRgba = {timingColor(requiredField(command, 10)),
+                        timingColor(requiredField(command, 11)),
+                        timingColor(requiredField(command, 12)),
+                        timingColor(requiredField(command, 13)),
+                        timingColor(requiredField(command, 14))},
+          .drawAverage = values[15] == 1, .drawDev = values[16] == 1};
+      timingChart_ = addObject(std::move(graph), command);
       graphSize_ = {values[4], values[5]};
     }
   }
@@ -2083,10 +2105,15 @@ private:
       }
       return;
     }
-    if (command.name == "SRC_NOTECHART_1P" ||
+    if (command.name == "SRC_GAUGECHART_1P" ||
+        command.name == "SRC_NOTECHART_1P" ||
         command.name == "SRC_BPMCHART" ||
-        command.name == "SRC_TIMING_1P") {
+        command.name == "SRC_TIMING_1P" ||
+        command.name == "SRC_TIMINGCHART_1P") {
       return sourceGraphObject(command);
+    }
+    if (command.name == "DST_GAUGECHART_1P") {
+      return destinationGraphObject(command, gaugeChart_, graphSize_);
     }
     if (command.name == "DST_NOTECHART_1P") {
       return destinationGraphObject(command, noteChart_, graphSize_);
@@ -2095,6 +2122,9 @@ private:
       return destinationGraphObject(command, bpmChart_, graphSize_);
     }
     if (command.name == "DST_TIMING_1P") {
+      return destinationGraphObject(command, timingChart_, graphSize_);
+    }
+    if (command.name == "DST_TIMINGCHART_1P") {
       return destinationGraphObject(command, timingChart_, graphSize_);
     }
     if (command.name == "SRC_HIDDEN") {
@@ -2279,6 +2309,7 @@ private:
   std::array<JudgeBuildState, 3> judges_;
 
   std::optional<SkinObjectId> noteChart_;
+  std::optional<SkinObjectId> gaugeChart_;
   std::optional<SkinObjectId> bpmChart_;
   std::optional<SkinObjectId> timingChart_;
   std::array<int, 2> graphSize_{};
@@ -2307,11 +2338,11 @@ Lr2GameplaySkinDecodeResult Lr2GameplaySkinDecoder::decode(
     result.cancelled = true;
     return result;
   }
-  if (!gameplaySkinTraitForSkinType(header.type)) {
+  if (!skinTargetTraitForType(header.type)) {
     result.fatal = true;
     result.diagnostics.push_back(documentDiagnostic(
         "skin_lr2_not_gameplay",
-        "LR2 document header is not a gameplay skin type"));
+        "LR2 document header is not a supported skin type"));
     return result;
   }
   const auto maximumCommands = static_cast<std::size_t>(safetyPolicy.limit(

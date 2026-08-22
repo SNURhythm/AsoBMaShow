@@ -33,6 +33,11 @@
 #include "bgfx/bgfx.h"
 #include "../skin/DefaultSkin.h"
 #include "../skin/SkinTypes.h"
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+#include "../skin/GameplaySkinLifecycle.h"
+#include "../skin/beatoraja/BgfxSkinTextureDevice.h"
+#include "../skin/beatoraja/ResultSkinSession.h"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -454,6 +459,43 @@ ResultScene::ResultScene(ApplicationContext &context,
                          ResultRemoteOptions remote)
     : Scene(context), source(makeResultRemoteSource(std::move(remote))) {
   skin = std::make_unique<DefaultSkin>();
+}
+
+ResultScene::~ResultScene() = default;
+
+bool ResultScene::startSelectedResultSkin() {
+#if !ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  return false;
+#else
+  if (!context.gameplaySkinLifecycle || !context.skinStorageRoots ||
+      !context.skinResourcePreparationService ||
+      !context.skinLiveResourceCounters) {
+    return false;
+  }
+  const auto profileId =
+      skin::makeSkinProfileId(context.profileManager.activeProfile().id);
+  if (!profileId) return false;
+  const int skinType = isCourseFinalResult() ? 15 : 7;
+  auto acquisition =
+      context.gameplaySkinLifecycle->acquireForSkinType(skinType);
+  if (acquisition.disposition !=
+          skin::GameplaySkinAcquisitionDisposition::Ready ||
+      !acquisition.request) {
+    return false;
+  }
+  auto created = skin::ResultSkinSession::create(
+      std::move(acquisition.request->activation),
+      {.profileId = *profileId,
+       .storageRoots = *context.skinStorageRoots,
+       .resourcePreparation = *context.skinResourcePreparationService,
+       .textureDevice = std::make_shared<skin::BgfxSkinTextureDevice>(),
+       .liveResourceCounters = context.skinLiveResourceCounters,
+       .safetyPolicy = skin::SkinSafetyPolicy(acquisition.request->safetyLevel)});
+  if (!created.session) return false;
+  resultSkinSession = std::move(created.session);
+  resultSkinStartedMicros = nowMicros();
+  return true;
+#endif
 }
 
 LocalResultSource *ResultScene::localSource() noexcept {
@@ -2887,8 +2929,11 @@ void ResultScene::init() {
   ResultSkinData data = makeResultSkinData();
   data.showTimingAnalytics = analyticsModel.has_value();
   data.showResultGraph = !series.empty();
-  skin->buildLayout("Result", rootLayout, &data);
-  if (local != nullptr) {
+  const bool selectedResultSkin = startSelectedResultSkin();
+  if (!selectedResultSkin) {
+    skin->buildLayout("Result", rootLayout, &data);
+  }
+  if (!selectedResultSkin && local != nullptr) {
     addTimingAnalytics(std::move(analyticsModel));
     addResultPersistenceStatus();
     addIrResultStatus();
@@ -2900,12 +2945,12 @@ void ResultScene::init() {
     } else {
       addRetryButtons();
     }
-  } else if (remote != nullptr) {
+  } else if (!selectedResultSkin && remote != nullptr) {
     addRemoteIrStatus();
     addRemoteButtons();
   }
 
-  if (!isCourseStageResult() && !isCourseFinalResult()) {
+  if (!selectedResultSkin && !isCourseStageResult() && !isCourseFinalResult()) {
     if (auto *backButton =
             dynamic_cast<Button *>(rootLayout->findViewByName("backButton"));
         backButton != nullptr) {
@@ -2921,12 +2966,12 @@ void ResultScene::init() {
   rankingOverlayPortal->setZIndex(2000);
   rootLayout->addView(rankingOverlayPortal);
 
-  if (local != nullptr) {
+  if (!selectedResultSkin && local != nullptr) {
     updateResultPersistencePresentation();
     updateIrResultPresentation(true);
   }
 
-  graphPlaceHolder = rootLayout->findViewByName("graph");
+  graphPlaceHolder = selectedResultSkin ? nullptr : rootLayout->findViewByName("graph");
   if (graphPlaceHolder != nullptr) {
     auto *graphView = new ResultGaugeGraphView(std::move(series));
     graphView->setWidthPercent(100.0F)->setFlex(1.0F);
@@ -3009,6 +3054,17 @@ void ResultScene::update(float dt) {
 }
 
 void ResultScene::renderScene() {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (resultSkinSession) {
+    RenderContext renderContext(context.uiBatchRenderer);
+    RenderContext::UiBatchScope uiBatchScope(renderContext);
+    const long long elapsedMillis =
+        std::max(0LL, (nowMicros() - resultSkinStartedMicros) / 1000LL);
+    (void)resultSkinSession->render(
+        renderContext, makeResultSkinData(),
+        std::max<std::uint64_t>(1, context.currentFrame), elapsedMillis);
+  }
+#endif
   if (persistenceDetailsModalRoot != nullptr) {
     persistenceDetailsModalRoot->setSize(rendering::window_width,
                                          rendering::window_height);
@@ -3020,6 +3076,9 @@ void ResultScene::renderScene() {
 }
 
 void ResultScene::cleanupScene() {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  resultSkinSession.reset();
+#endif
   rankingsModal.reset();
   rootLayout = nullptr;
   graphPlaceHolder = nullptr;

@@ -636,7 +636,7 @@ void testArchiveFolderSelectionAndDurableLayoutFlow() {
                      const auto settings =
                          fixture.owner.snapshot(fixture.profileA).settings;
                      return !settings.gameplayCompatibilityEnabled &&
-                            settings.selectedGameplayEntries.empty();
+                            settings.selectedSkinEntries.empty();
                    }),
          "clearing compatibility removes trait selections");
 
@@ -1556,7 +1556,7 @@ void testLifecycleCallbacksCustomViewportAndRemoval() {
          "Custom viewport values persist with policy bounds applied");
 
   auto profileB = fixture.owner.snapshot(fixture.profileB);
-  profileB.settings.selectedGameplayEntries.emplace(0, entry);
+  profileB.settings.selectedSkinEntries.emplace(0, entry);
   expect(fixture.owner
                  .beginCommit(fixture.profileB, profileB.generation,
                               profileB.settings)
@@ -1579,7 +1579,7 @@ void testLifecycleCallbacksCustomViewportAndRemoval() {
          "catalog entry");
 
   profileB = fixture.owner.snapshot(fixture.profileB);
-  profileB.settings.selectedGameplayEntries.clear();
+  profileB.settings.selectedSkinEntries.clear();
   expect(fixture.owner
                  .beginCommit(fixture.profileB, profileB.generation,
                               profileB.settings)

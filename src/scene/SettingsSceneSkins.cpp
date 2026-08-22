@@ -4,7 +4,7 @@
 
 #include "GameplaySkinSettingsController.h"
 #include "GameplaySkinSettingsPresentation.h"
-#include "../skin/GameplaySkinTraits.h"
+#include "../skin/SkinTargetTraits.h"
 #include "../skin/beatoraja/BeatorajaSkinConfiguration.h"
 #include "../view/BlockingOverlayView.h"
 #include "../view/DropdownView.h"
@@ -403,9 +403,9 @@ void SettingsScene::updateGameplaySkinSettingsLiveUi(
                                            : gameplaySkinUiMessage);
   }
   if (gameplaySkinConfigurationDigestText != nullptr) {
-    const auto selected = snapshot.selectedGameplayEntries.find(
+    const auto selected = snapshot.selectedSkinEntries.find(
         gameplaySkinActiveTraitSkinType);
-    const auto row = selected == snapshot.selectedGameplayEntries.end()
+    const auto row = selected == snapshot.selectedSkinEntries.end()
                          ? snapshot.entries.end()
                          : std::ranges::find_if(
                                snapshot.entries, [&selected](const auto &entry) {
@@ -458,7 +458,7 @@ void SettingsScene::ensureGameplaySkinBusyOverlay(
     panel->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow);
     panel->setThemedBorderColor(ui_theme::hairline);
     panel->setBorderWidth(1);
-    panel->addView(makeWrappedText("Updating gameplay skins", 26,
+    panel->addView(makeWrappedText("Updating skins", 26,
                                    ui_theme::textPrimary()));
     gameplaySkinBusyOverlayStatusText =
         makeWrappedText({}, 20, ui_theme::textSecondary());
@@ -852,7 +852,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
             lastLayoutWidth = -1;
           }));
     }
-    column->addView(makeCard(metrics, "Gameplay Skins", "Availability", body,
+    column->addView(makeCard(metrics, "Skins", "Availability", body,
                              metrics.modeCardHeight, metrics.cardsWidth));
     return column;
   }
@@ -868,7 +868,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   overview->setFlexDirection(FlexDirection::Column);
   overview->setGap(static_cast<float>(metrics.cardGap));
   overview->addView(makeWrappedText(
-      "Install and configure Beatoraja gameplay skins. Installing, scanning, "
+      "Install and configure Beatoraja skins. Installing, scanning, "
       "and revalidation evaluate Lua declarations in the compatibility runtime.",
       metrics.bodyTextSize, ui_theme::textSecondary()));
   const std::filesystem::path visibleSkinRoot =
@@ -934,7 +934,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
        .menuWidth = 0.0f});
   safetyRow->addView(safetyDropdown);
   overview->addView(safetyRow);
-  column->addView(makeCard(metrics, "Gameplay Skins", "Availability and mode",
+  column->addView(makeCard(metrics, "Skins", "Availability and mode",
                            overview, metrics.modeCardHeight,
                            metrics.cardsWidth));
 
@@ -1023,9 +1023,9 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
                            "Import a .zip or an unpacked folder.", imports,
                            metrics.modeCardHeight, metrics.cardsWidth));
 
-  std::vector<skin::GameplaySkinTrait> traits(
-      skin::gameplaySkinTraits().begin(), skin::gameplaySkinTraits().end());
-  std::ranges::sort(traits, {}, &skin::GameplaySkinTrait::keyMode);
+  std::vector<skin::SkinTargetTrait> traits(
+      skin::skinTargetTraits().begin(), skin::skinTargetTraits().end());
+  std::ranges::sort(traits, {}, &skin::SkinTargetTrait::skinType);
   if (!std::ranges::any_of(traits, [this](const auto &trait) {
         return trait.skinType == gameplaySkinActiveTraitSkinType;
       })) {
@@ -1082,7 +1082,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
       });
   const std::string traitLabel = std::string(activeTrait->label);
   traitPanel->addView(makeWrappedText(
-      traitLabel + " gameplay skin", metrics.bodyTextSize,
+      traitLabel + " skin", metrics.bodyTextSize,
       ui_theme::textPrimary()));
 
   std::vector<const skin::GameplaySkinEntryRow *> selectableRows;
@@ -1093,10 +1093,10 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
       selectableRows.push_back(&candidate);
     }
   }
-  const auto selected = snapshot.selectedGameplayEntries.find(
+  const auto selected = snapshot.selectedSkinEntries.find(
       gameplaySkinActiveTraitSkinType);
   const skin::GameplaySkinEntryRow *selectedRow = nullptr;
-  if (selected != snapshot.selectedGameplayEntries.end()) {
+  if (selected != snapshot.selectedSkinEntries.end()) {
     const auto selectedCandidate = std::ranges::find_if(
         selectableRows, [&selected](const auto *candidate) {
           return candidate->entry == selected->second;
@@ -1170,7 +1170,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   skinDropdownRow->addView(skinDropdownLabel);
   skinDropdownRow->addView(skinDropdown);
   traitPanel->addView(skinDropdownRow);
-  if (selected != snapshot.selectedGameplayEntries.end() &&
+  if (selected != snapshot.selectedSkinEntries.end() &&
       selectedRow == nullptr) {
     traitPanel->addView(makeWrappedText(
         "The selected skin is no longer available. Choose Built-in or another "
@@ -1178,7 +1178,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
         metrics.smallTextSize, ui_theme::coral()));
   } else if (selectableRows.empty()) {
     traitPanel->addView(makeWrappedText(
-        "No validated " + traitLabel + " gameplay skin is installed.",
+        "No validated " + traitLabel + " skin is installed.",
         metrics.smallTextSize, ui_theme::textSecondary()));
   }
 
@@ -1630,7 +1630,8 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
         ui_theme::coral()));
     entryBody->addView(actions);
     traitPanel->addView(entryBody);
-  } else if (selected == snapshot.selectedGameplayEntries.end()) {
+  } else if (selected == snapshot.selectedSkinEntries.end() &&
+             activeTrait->kind == skin::SkinTargetKind::Gameplay) {
     auto *builtInBody = new View();
     builtInBody->setFlexDirection(FlexDirection::Column);
     builtInBody->setGap(metrics.compact ? 10.0F : 12.0F);
@@ -1640,8 +1641,8 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   }
 
   traitWorkspace->addView(traitPanel);
-  column->addView(makeCard(metrics, "Gameplay Skin Traits",
-                           "Choose a keymode, then a skin and its settings.",
+  column->addView(makeCard(metrics, "Skin Traits",
+                           "Choose a screen, then a skin and its settings.",
                            traitWorkspace, metrics.modeCardHeight,
                            metrics.cardsWidth));
 
@@ -1710,7 +1711,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
     auto *empty = new View();
     empty->setFlexDirection(FlexDirection::Column);
     empty->setGap(static_cast<float>(metrics.cardGap));
-    empty->addView(makeWrappedText("No installed gameplay skins were found.",
+    empty->addView(makeWrappedText("No installed skins were found.",
                                    metrics.bodyTextSize,
                                    ui_theme::textSecondary()));
     column->addView(makeCard(metrics, "Installed Skins", "Catalog", empty,

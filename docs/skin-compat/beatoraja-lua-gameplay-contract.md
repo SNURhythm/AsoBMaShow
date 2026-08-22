@@ -1,10 +1,18 @@
-# Beatoraja Lua gameplay source contract
+# Beatoraja skin source contract
 
 This contract freezes the source semantics used by AsoBMaShow's first Lua
-gameplay-skin compatibility milestone. The only Beatoraja baseline is commit
+gameplay, result, and course-result skin compatibility. The only Beatoraja baseline is commit
 `c2ed5db1a46145ed10790c3872f717e95b59db9d`. The default build and CTest suite
 consume the committed manifest and never inspect a Beatoraja clone or the
 external SCURO package.
+
+Result support uses Beatoraja `SkinType.RESULT` (7) and
+`SkinType.COURSE_RESULT` (15), including the source loaders
+`LR2ResultSkinLoader`, `LR2CourseResultSkinLoader`,
+`JsonResultSkinObjectLoader`, and `JsonCourseResultSkinObjectLoader`. Their
+property and event meanings come from the same pinned property factories as
+gameplay; application state that has no AsoBMaShow counterpart remains
+unsupported at runtime and is not rejected during catalog admission.
 
 ## Pinned loading and conversion behavior
 

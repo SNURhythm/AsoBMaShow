@@ -50,7 +50,7 @@ struct GameplaySkinSettingsSnapshot {
   bool compatibilityEnabled = false;
   SkinSafetyLevel safetyLevel = SkinSafetyLevel::Standard;
   std::optional<SkinSafetyLevel> pendingSafetyLevel;
-  std::map<int, SkinEntryId> selectedGameplayEntries;
+  std::map<int, SkinEntryId> selectedSkinEntries;
   // Transitional projection for old callers. The trait map above is the UI's
   // source of truth.
   std::optional<SkinEntryId> selected7KeyEntry;

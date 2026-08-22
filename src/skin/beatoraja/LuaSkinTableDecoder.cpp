@@ -1,6 +1,7 @@
 #include "LuaSkinTableDecoder.h"
 
 #include "../LuaGameplaySkinFeature.h"
+#include "../SkinTargetTraits.h"
 
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 
@@ -3618,9 +3619,9 @@ void decodeGameplayProtected(lua_State *state, int index,
     request->result.model.emplace();
     auto &model = *request->result.model;
     model.header = std::move(*request->decoding.result.header);
-    if (!gameplaySkinTraitForSkinType(model.header.type)) {
+    if (!skinTargetTraitForType(model.header.type)) {
       fail(request->decoding, "skin_lua_model_type_unsupported",
-           "Lua gameplay skins require a supported Beatoraja gameplay type");
+           "Lua skin requires a supported Beatoraja screen type");
       transferDecodeDiagnostics(*request);
       request->result.model.reset();
       return;
