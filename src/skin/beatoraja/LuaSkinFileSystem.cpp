@@ -479,10 +479,168 @@ std::string_view messageForKind(HostEntryKind kind) {
   return "skin virtual file operation failed";
 }
 
-// SkinFileLuaApiExporter translates Lua %-escapes to Java regex escapes and
-// otherwise hands the expression to Pattern.  Do the same rather than keep
-// the previous bounded custom subset.
-std::optional<std::regex> compileLuaFileListPattern(std::string_view pattern) {
+struct JavaFileListLookbehind {
+  std::regex expression;
+  bool positive = true;
+};
+
+struct JavaFileListPattern {
+  std::regex expression;
+  std::vector<JavaFileListLookbehind> leadingLookbehinds;
+
+  [[nodiscard]] std::optional<std::string>
+  find(std::string_view text) const {
+    std::size_t offset = 0;
+    while (offset <= text.size()) {
+      const std::string remaining(text.substr(offset));
+      std::smatch match;
+      if (!std::regex_search(remaining, match, expression)) {
+        return std::nullopt;
+      }
+      const std::size_t matchStart =
+          offset + static_cast<std::size_t>(match.position());
+      bool accepted = true;
+      for (const auto &lookbehind : leadingLookbehinds) {
+        bool assertionMatched = false;
+        for (std::size_t start = 0; start <= matchStart; ++start) {
+          if (std::regex_match(
+                  std::string(text.substr(start, matchStart - start)),
+                  lookbehind.expression)) {
+            assertionMatched = true;
+            break;
+          }
+        }
+        if (assertionMatched != lookbehind.positive) {
+          accepted = false;
+          break;
+        }
+      }
+      if (accepted) {
+        return match.str();
+      }
+      if (matchStart == text.size()) {
+        return std::nullopt;
+      }
+      offset = matchStart + 1;
+    }
+    return std::nullopt;
+  }
+};
+
+std::optional<std::size_t>
+javaGroupEnd(std::string_view expression, std::size_t opening) {
+  std::size_t depth = 0;
+  bool escaped = false;
+  bool quoted = false;
+  bool characterClass = false;
+  for (std::size_t index = opening; index < expression.size(); ++index) {
+    const char value = expression[index];
+    if (quoted) {
+      if (value == '\\' && index + 1 < expression.size() &&
+          expression[index + 1] == 'E') {
+        quoted = false;
+        ++index;
+      }
+      continue;
+    }
+    if (escaped) {
+      if (value == 'Q') {
+        quoted = true;
+      }
+      escaped = false;
+      continue;
+    }
+    if (value == '\\') {
+      escaped = true;
+      continue;
+    }
+    if (value == '[') {
+      characterClass = true;
+      continue;
+    }
+    if (value == ']' && characterClass) {
+      characterClass = false;
+      continue;
+    }
+    if (characterClass) {
+      continue;
+    }
+    if (value == '(') {
+      ++depth;
+    } else if (value == ')') {
+      if (depth == 0) {
+        return std::nullopt;
+      }
+      --depth;
+      if (depth == 0) {
+        return index;
+      }
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> translateJavaPatternExpression(
+    std::string_view expression, bool dotAll) {
+  std::string translated;
+  translated.reserve(expression.size());
+  bool characterClass = false;
+  for (std::size_t index = 0; index < expression.size(); ++index) {
+    const char value = expression[index];
+    if (value == '\\' && index + 1 < expression.size() &&
+        expression[index + 1] == 'Q') {
+      index += 2;
+      while (index < expression.size()) {
+        if (expression[index] == '\\' && index + 1 < expression.size() &&
+            expression[index + 1] == 'E') {
+          ++index;
+          break;
+        }
+        const char literal = expression[index];
+        if (std::string_view(R"(\.^$|()[]{}*+?)").find(literal) !=
+            std::string_view::npos) {
+          translated.push_back('\\');
+        }
+        translated.push_back(literal);
+        ++index;
+      }
+      if (index >= expression.size()) {
+        break;
+      }
+      continue;
+    }
+    if (value == '\\') {
+      if (index + 1 >= expression.size()) {
+        translated.push_back(value);
+        continue;
+      }
+      translated.push_back(value);
+      translated.push_back(expression[++index]);
+      continue;
+    }
+    if (value == '[') {
+      characterClass = true;
+    } else if (value == ']' && characterClass) {
+      characterClass = false;
+    }
+    if (dotAll && value == '.' && !characterClass) {
+      translated += R"([\s\S])";
+    } else {
+      translated.push_back(value);
+    }
+  }
+  return translated;
+}
+
+// SkinFileLuaApiExporter first translates Lua %-escapes and then delegates to
+// java.util.regex.Pattern.  The runtime needs only Matcher.find/group and the
+// finite surface used by gameplay skins: Java quoting, leading embedded flags,
+// lookahead, leading lookbehind assertions, capture groups, and numbered
+// backreferences.  Translate that surface explicitly before using the
+// standard executor; a Java-valid feature outside the finite surface is
+// rejected deliberately rather than being mistaken for an invalid pattern.
+std::optional<JavaFileListPattern>
+compileLuaFileListPattern(std::string_view pattern) {
   std::string expression;
   expression.reserve(pattern.size() + 1);
   bool escaped = false;
@@ -500,8 +658,95 @@ std::optional<std::regex> compileLuaFileListPattern(std::string_view pattern) {
   if (escaped) {
     expression.push_back('%');
   }
+
+  bool caseInsensitive = false;
+  bool multiline = false;
+  bool dotAll = false;
+  std::size_t cursor = 0;
+  while (expression.substr(cursor).starts_with("(?")) {
+    const std::size_t close = expression.find(')', cursor + 2);
+    if (close == std::string::npos || close + 1 >= expression.size() ||
+        expression[cursor + 2] == '<' || expression[cursor + 2] == '=' ||
+        expression[cursor + 2] == '!') {
+      break;
+    }
+    const std::string_view flags(expression.data() + cursor + 2,
+                                 close - cursor - 2);
+    bool enabled = true;
+    bool recognized = !flags.empty();
+    for (const char flag : flags) {
+      if (flag == '-') {
+        enabled = false;
+      } else if (flag == 'i') {
+        caseInsensitive = enabled;
+      } else if (flag == 'm') {
+        multiline = enabled;
+      } else if (flag == 's') {
+        dotAll = enabled;
+      } else {
+        recognized = false;
+      }
+    }
+    if (!recognized) {
+      break;
+    }
+    cursor = close + 1;
+  }
+
+  JavaFileListPattern result;
+  while (expression.substr(cursor).starts_with("(?<=") ||
+         expression.substr(cursor).starts_with("(?<!")) {
+    const bool positive = expression[cursor + 3] == '=';
+    const auto close = javaGroupEnd(expression, cursor);
+    if (!close) {
+      return std::nullopt;
+    }
+    const std::string_view assertion(
+        expression.data() + cursor + 4, *close - cursor - 4);
+    const auto translated = translateJavaPatternExpression(assertion, dotAll);
+    if (!translated) {
+      return std::nullopt;
+    }
+    auto options = std::regex_constants::ECMAScript;
+    if (caseInsensitive) {
+      options |= std::regex_constants::icase;
+    }
+    if (multiline) {
+      options |= std::regex_constants::multiline;
+    }
+    try {
+      result.leadingLookbehinds.push_back(
+          {.expression = std::regex(*translated, options),
+           .positive = positive});
+    } catch (const std::regex_error &) {
+      return std::nullopt;
+    }
+    cursor = *close + 1;
+  }
+
+  const std::string_view remainder(expression.data() + cursor,
+                                   expression.size() - cursor);
+  if (remainder.find("(?<=") != std::string_view::npos ||
+      remainder.find("(?<!") != std::string_view::npos ||
+      remainder.find("(?i:") != std::string_view::npos ||
+      remainder.find("(?m:") != std::string_view::npos ||
+      remainder.find("(?s:") != std::string_view::npos) {
+    return std::nullopt;
+  }
+  const auto translated = translateJavaPatternExpression(remainder, dotAll);
+  if (!translated) {
+    return std::nullopt;
+  }
+  auto options = std::regex_constants::ECMAScript;
+  if (caseInsensitive) {
+    options |= std::regex_constants::icase;
+  }
+  if (multiline) {
+    options |= std::regex_constants::multiline;
+  }
   try {
-    return std::regex(expression);
+    result.expression = std::regex(*translated, options);
+    return result;
   } catch (const std::regex_error &) {
     return std::nullopt;
   }
@@ -586,8 +831,8 @@ struct LuaSkinFileSystem::Impl {
     return {.path = utf8Path(resolved)};
   }
 
-  NormalizedReference normalize(std::string_view authored,
-                                bool allowPackageRoot = false) const {
+  NormalizedReference normalizeSelected(std::string_view authored,
+                                        bool allowPackageRoot = false) const {
     if (!safetyPolicy.enforces(SkinSafetyGuard::VirtualFileContainment)) {
       if (authored.empty() || authored.find('\0') != std::string_view::npos) {
         return {.failure = failure(SkinFileError::InvalidPath, authored,
@@ -599,12 +844,44 @@ struct LuaSkinFileSystem::Impl {
               .lexically_normal();
       return {.path = utf8Path(resolved)};
     }
-    // SkinLoader#getPath returns paths rooted at Beatoraja's `skin/`
-    // directory.  A configured skin can subsequently pass that exact result
-    // to dofile/io, including a sibling reached through `..` from its entry
-    // directory.  Interpret only this explicit virtual form against the
-    // package root; ordinary relative Lua paths retain SkinLuaPathResolver's
-    // selected-entry-directory boundary below.
+    // skin_config.get_path exposes the selected package as a virtual
+    // `skin/<package>/...` path. Treat that exact current-package spelling as
+    // the corresponding selected-directory path, but never promote another
+    // package name to the shared Skins root.
+    constexpr std::string_view beatorajaRootPrefix = "skin/";
+    const std::string packagePrefix =
+        std::string(beatorajaRootPrefix) + entry.package.directoryName;
+    if (authored == packagePrefix ||
+        (authored.size() > packagePrefix.size() &&
+         authored.starts_with(packagePrefix) &&
+         authored[packagePrefix.size()] == '/')) {
+      std::string_view suffix = authored.substr(packagePrefix.size());
+      if (suffix.starts_with('/')) {
+        suffix.remove_prefix(1);
+      }
+      const fs::path resolved =
+          (packageRoot / pathFromUtf8(suffix)).lexically_normal();
+      if (isWithinDirectory(resolved, skinDirectory)) {
+        return checkedReference(packageRoot, resolved, authored);
+      }
+    }
+    const auto normalized =
+        normalizeAtSkinDirectory(skinDirectory, authored, allowPackageRoot);
+    if (!normalized.path) {
+      return normalized;
+    }
+    return checkedReference(packageRoot, pathFromUtf8(*normalized.path),
+                            authored);
+  }
+
+  NormalizedReference normalize(std::string_view authored,
+                                bool allowPackageRoot = false) const {
+    if (!safetyPolicy.enforces(SkinSafetyGuard::VirtualFileContainment)) {
+      return normalizeSelected(authored, allowPackageRoot);
+    }
+    // Existing Lua module-loader compatibility accepts virtual shared paths.
+    // Modern file/io/File/audio calls use
+    // normalizeSelected instead and retain SkinLuaPathResolver isolation.
     constexpr std::string_view beatorajaRootPrefix = "skin/";
     if (authored.starts_with(beatorajaRootPrefix)) {
       const std::string packagePrefix =
@@ -632,22 +909,14 @@ struct LuaSkinFileSystem::Impl {
       return checkedReference(currentPackage ? packageRoot : beatorajaSkinRoot,
                               resolved, authored);
     }
-    const auto normalized =
-        normalizeAtSkinDirectory(skinDirectory, authored, allowPackageRoot);
-    if (!normalized.path) {
-      return normalized;
-    }
-    return checkedReference(packageRoot, pathFromUtf8(*normalized.path),
-                            authored);
+    return normalizeSelected(authored, allowPackageRoot);
   }
 
-  NormalizedReference normalizeDataWrite(std::string_view authored,
-                                         bool allowPackageRoot = false) const {
-    auto normalized = normalize(authored, allowPackageRoot);
-    if (!normalized.path) {
-      return normalized;
-    }
-    if (!safetyPolicy.enforces(SkinSafetyGuard::VirtualFileContainment)) {
+  NormalizedReference normalizeSelectedDataWrite(
+      std::string_view authored, bool allowPackageRoot = false) const {
+    auto normalized = normalizeSelected(authored, allowPackageRoot);
+    if (!normalized.path ||
+        !safetyPolicy.enforces(SkinSafetyGuard::VirtualFileContainment)) {
       return normalized;
     }
     if (!isWithinDirectory(pathFromUtf8(*normalized.path), packageRoot)) {
@@ -855,9 +1124,12 @@ SkinFileResolveResult LuaSkinFileSystem::resolve(std::string_view virtualPath,
     return {.failure = failure(SkinFileError::WrongUse, virtualPath,
                                "Lua data writes are unavailable in this phase")};
   }
-  const auto normalized = use == SkinFileUse::DataWrite
-                              ? impl_->normalizeDataWrite(virtualPath)
-                              : impl_->normalize(virtualPath);
+  const auto normalized =
+      use == SkinFileUse::DataWrite
+          ? impl_->normalizeSelectedDataWrite(virtualPath)
+          : use == SkinFileUse::DataRead
+                ? impl_->normalizeSelected(virtualPath)
+                : impl_->normalize(virtualPath);
   if (!normalized.path) {
     return {.failure = normalized.failure};
   }
@@ -885,7 +1157,8 @@ SkinFileResolveResult LuaSkinFileSystem::normalizeVirtualPath(
          virtualPath.ends_with('/')) {
     virtualPath.remove_suffix(1);
   }
-  const auto normalized = impl_->normalize(virtualPath, directoryPath);
+  const auto normalized =
+      impl_->normalizeSelected(virtualPath, directoryPath);
   if (!normalized.path) {
     return {.failure = normalized.failure};
   }
@@ -995,7 +1268,9 @@ SkinFileReadResult LuaSkinFileSystem::read(std::string_view virtualPath,
     return {.failure = failure(SkinFileError::WrongUse, virtualPath,
                                "write use cannot be read")};
   }
-  const auto normalized = impl_->normalize(virtualPath);
+  const auto normalized = use == SkinFileUse::DataRead
+                              ? impl_->normalizeSelected(virtualPath)
+                              : impl_->normalize(virtualPath);
   if (!normalized.path) {
     return {.failure = normalized.failure};
   }
@@ -1064,8 +1339,9 @@ LuaSkinFileSystem::openLuaFile(std::string_view virtualPath,
     return {.failure = failure(SkinFileError::WrongUse, virtualPath,
                                "Lua data writes are unavailable in this phase")};
   }
-  const auto normalized = writable ? impl_->normalizeDataWrite(virtualPath)
-                                   : impl_->normalize(virtualPath);
+  const auto normalized =
+      writable ? impl_->normalizeSelectedDataWrite(virtualPath)
+               : impl_->normalizeSelected(virtualPath);
   if (!normalized.path) {
     return {.failure = normalized.failure};
   }
@@ -1098,7 +1374,7 @@ LuaSkinFileSystem::openLuaFile(std::string_view virtualPath,
 SkinFileExistsResult
 LuaSkinFileSystem::exists(std::string_view virtualPath) const {
   const std::scoped_lock lock(impl_->operationMutex);
-  const auto normalized = impl_->normalize(virtualPath, true);
+  const auto normalized = impl_->normalizeSelected(virtualPath, true);
   if (!normalized.path) {
     return {.failure = normalized.failure};
   }
@@ -1112,14 +1388,15 @@ SkinFileListResult LuaSkinFileSystem::list(std::string_view virtualDirectory,
                                            std::size_t maximumEntries) const {
   const std::scoped_lock lock(impl_->operationMutex);
   (void)maximumEntries;
-  const auto normalized = impl_->normalize(virtualDirectory, true);
+  const auto normalized =
+      impl_->normalizeSelected(virtualDirectory, true);
   // LegacySkinLuaApi#fileFacade returns nil when the path cannot be resolved
   // or Files.newDirectoryStream fails.  It does not cap or sort the host
   // directory stream.
   if (!normalized.path) {
     return {.failure = normalized.failure};
   }
-  std::optional<std::regex> pattern;
+  std::optional<JavaFileListPattern> pattern;
   if (!luaPattern.empty()) {
     pattern = compileLuaFileListPattern(luaPattern);
     if (!pattern) {
@@ -1137,9 +1414,8 @@ SkinFileListResult LuaSkinFileSystem::list(std::string_view virtualDirectory,
       entries.push_back(path);
       continue;
     }
-    std::smatch match;
-    if (std::regex_search(path, match, *pattern)) {
-      entries.push_back(match.str());
+    if (const auto match = pattern->find(path)) {
+      entries.push_back(*match);
     }
   }
   if (error) {
@@ -1158,7 +1434,7 @@ LuaSkinFileSystem::writeData(std::string_view virtualPath,
     return {.failure = failure(SkinFileError::WrongUse, virtualPath,
                                "Lua data writes are unavailable in this phase")};
   }
-  const auto normalized = impl_->normalizeDataWrite(virtualPath);
+  const auto normalized = impl_->normalizeSelectedDataWrite(virtualPath);
   if (!normalized.path) {
     return {.failure = normalized.failure};
   }
@@ -1214,7 +1490,8 @@ LuaSkinFileSystem::mkdirData(std::string_view virtualDirectory,
                 failure(SkinFileError::WrongUse, virtualDirectory,
                         "Lua data writes are unavailable in this phase")};
   }
-  const auto normalized = impl_->normalizeDataWrite(virtualDirectory, true);
+  const auto normalized =
+      impl_->normalizeSelectedDataWrite(virtualDirectory, true);
   if (!normalized.path) {
     return {.failure = normalized.failure};
   }

@@ -874,8 +874,13 @@ int mainStateFileMkdir(lua_State *state) {
 
 int mainStateFileList(lua_State *state) {
   auto *impl = host(state);
+  if (!lua_isstring(state, 1)) {
+    lua_pushliteral(state, "");
+    lua_pushinteger(state, 0);
+    return 2;
+  }
   std::size_t pathSize = 0;
-  const char *path = luaL_checklstring(state, 1, &pathSize);
+  const char *path = lua_tolstring(state, 1, &pathSize);
   std::string pattern;
   if (lua_gettop(state) >= 2 && !lua_isnil(state, 2)) {
     pattern = luaToJString(state, 2);

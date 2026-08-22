@@ -282,13 +282,40 @@ void testBeatorajaDirectSkinDirectorySemantics() {
 
   const fs::path otherPackage = fixture.roots.visiblePackages / "OtherSkin";
   writeText(otherPackage / "state.txt", "other package state\n");
+  writeText(otherPackage / "nested/secret.txt", "foreign secret\n");
+  const auto foreignExists =
+      fileSystem.exists("skin/OtherSkin/nested/secret.txt");
+  expect(!foreignExists.failure && !foreignExists.exists,
+         "selected-skin file_exists does not promote skin-prefixed paths to "
+         "a sibling package");
+  const auto foreignRead = fileSystem.read(
+      "skin/OtherSkin/nested/secret.txt", SkinFileUse::DataRead, 4096);
+  expect(foreignRead.failure &&
+             foreignRead.failure->code == SkinFileError::Missing,
+         "selected-skin file reads cannot consume a real sibling package");
+  const auto foreignList = fileSystem.list(
+      "skin/OtherSkin/nested", {},
+      std::numeric_limits<std::size_t>::max());
+  expect(foreignList.failure.has_value(),
+         "selected-skin directory listing cannot enumerate a real sibling package");
+  const auto strictAudioPath = fileSystem.normalizeVirtualPath(
+      "skin/OtherSkin/nested/secret.txt");
+  expect(strictAudioPath.normalizedVirtualPath &&
+             *strictAudioPath.normalizedVirtualPath ==
+                 (visiblePackage / "entry/skin/OtherSkin/nested/secret.txt")
+                     .lexically_normal()
+                     .generic_string(),
+         "the shared file/audio resolver retains SkinLuaPathResolver's "
+         "selected-directory interpretation");
   const auto foreignWrite = fileSystem.writeData(
       "skin/OtherSkin/state.txt", bytesOf("must not cross package\n"),
       false);
-  expect(foreignWrite.failure &&
-             foreignWrite.failure->code == SkinFileError::EscapesPackage &&
-             readText(otherPackage / "state.txt") == "other package state\n",
-         "skin-prefixed Lua writes remain confined to the selected package");
+  expect(!foreignWrite.failure &&
+             readText(otherPackage / "state.txt") == "other package state\n" &&
+             readText(visiblePackage / "entry/skin/OtherSkin/state.txt") ==
+                 "must not cross package\n",
+         "skin-prefixed Lua writes resolve beneath the selected directory "
+         "without mutating a sibling package");
 }
 
 void testPinnedFileListPreservesDirectoryIterationAndPatternMatches() {
@@ -314,6 +341,10 @@ void testPinnedFileListPreservesDirectoryIterationAndPatternMatches() {
   writeText(directory / "zeta.txt", "zeta\n");
   writeText(directory / "alpha.txt", "alpha\n");
   writeText(directory / "middle.bin", "middle\n");
+  writeText(directory / "file_source.txt", "lookaround\n");
+  writeText(directory / "FLAG_ONLY.TXT", "flags\n");
+  writeText(directory / "file_file.txt", "backreference\n");
+  writeText(directory / "[literal].txt", "quoting\n");
 
   std::vector<std::string> hostOrder;
   std::error_code error;
@@ -336,6 +367,43 @@ void testPinnedFileListPreservesDirectoryIterationAndPatternMatches() {
              std::ranges::find(matched.entries, "file-list/zeta.txt") !=
                  matched.entries.end(),
          "file_list returns each regex match rather than the complete host path");
+
+  const auto lookbehind = created.fileSystem->list(
+      "file-list", "(?<=file_)source", std::numeric_limits<std::size_t>::max());
+  expect(!lookbehind.failure && lookbehind.entries == std::vector<std::string>{"source"},
+         "file_list supports Java Pattern positive lookbehind and returns Matcher.group");
+
+  const auto lookahead = created.fileSystem->list(
+      "file-list", "file_(?=source)",
+      std::numeric_limits<std::size_t>::max());
+  expect(!lookahead.failure && lookahead.entries == std::vector<std::string>{"file_"},
+         "file_list supports Java Pattern lookahead");
+
+  const auto quoted = created.fileSystem->list(
+      "file-list", R"(\Q[literal].txt\E)",
+      std::numeric_limits<std::size_t>::max());
+  expect(!quoted.failure &&
+             quoted.entries == std::vector<std::string>{"[literal].txt"},
+         "file_list supports Java Pattern quoted literals");
+
+  const auto insensitive = created.fileSystem->list(
+      "file-list", "(?i)flag_only%.txt",
+      std::numeric_limits<std::size_t>::max());
+  expect(!insensitive.failure &&
+             insensitive.entries == std::vector<std::string>{"FLAG_ONLY.TXT"},
+         "file_list supports Java Pattern embedded case-insensitive flags");
+
+  const auto backreference = created.fileSystem->list(
+      "file-list", "(file)_%1%.txt",
+      std::numeric_limits<std::size_t>::max());
+  expect(!backreference.failure &&
+             backreference.entries == std::vector<std::string>{"file_file.txt"},
+         "file_list preserves Java Pattern capture and numbered backreference semantics");
+
+  const auto invalid = created.fileSystem->list(
+      "file-list", "(?<=*)", std::numeric_limits<std::size_t>::max());
+  expect(!invalid.failure && invalid.entries.empty(),
+         "file_list maps invalid Java Pattern expressions to an empty result");
 }
 
 void testReadOnlyFilesystemRejectsDataWrites() {

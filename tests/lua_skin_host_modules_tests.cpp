@@ -582,6 +582,7 @@ assert(main_state.audio_dispose("missing.ogg") == true)
 assert(main_state.audio_play("coerce.ogg", true) == true)
 assert(main_state.audio_loop("coerce.ogg", "not-a-number") == true)
 assert(main_state.audio_play("coerce.ogg", "0.5") == true)
+assert(main_state.audio_play("skin/ForeignSkin/secret.ogg", 1) == true)
 assert(main_state.audio_preload() == true)
 return {}
 )lua");
@@ -682,6 +683,10 @@ return {
     const fs::path visible = roots.visiblePackages / package.directoryName;
     fs::create_directories(visible.parent_path());
     fs::copy(source, visible, fs::copy_options::recursive);
+    writeText(roots.visiblePackages / "ForeignSkin/secret.txt",
+              "must remain outside the selected skin facade\n");
+    writeText(roots.visiblePackages / "ForeignSkin/secret.ogg",
+              "must not reach the selected skin audio backend\n");
 
     SkinTreeSnapshotter snapshotter(roots, aliases);
     auto snapshot = snapshotter.snapshot(source, package, {}, {});
@@ -1211,17 +1216,21 @@ void testPinnedAudioSurfaceOwnsResolvedBackendIdentities() {
     }
     expect(configured.value.has_value() && !configured.failure,
            "all five pinned audio functions execute and return true");
-    expect(state->loads.size() == 7 &&
+    expect(state->loads.size() == 8 &&
                state->loads[0].ends_with("/skin/sound.ogg") &&
                state->loads[1].ends_with("/skin/loop.ogg") &&
                state->loads[2].ends_with("/skin/preload.wav") &&
                state->loads[3].ends_with("/skin/sound.ogg") &&
                state->loads[4].ends_with("/skin/missing.ogg") &&
                state->loads[5].ends_with("/skin/coerce.ogg") &&
-               state->loads[6].ends_with("/skin/nil"),
+               state->loads[6].ends_with(
+                   "/HostContract/skin/skin/ForeignSkin/secret.ogg") &&
+               state->loads[7].ends_with("/skin/nil") &&
+               state->loads[6].find("/visible/ForeignSkin/") ==
+                   std::string::npos,
            "audio paths use the selected-skin resolver, successful dispose "
-           "permits reload, and a missing identity is cached");
-    expect(state->plays.size() == 9 &&
+           "permits reload, cache misses, and cannot reach a real sibling package");
+    expect(state->plays.size() == 10 &&
                state->plays[0] == FakeAudioPlayCall{
                                       .identity = {.value = 1},
                                       .volume = 0.25F,
@@ -1256,6 +1265,10 @@ void testPinnedAudioSurfaceOwnsResolvedBackendIdentities() {
                                       .loop = false} &&
                state->plays[8] == FakeAudioPlayCall{
                                       .identity = {.value = 6},
+                                      .volume = 0.25F,
+                                      .loop = false} &&
+               state->plays[9] == FakeAudioPlayCall{
+                                      .identity = {.value = 7},
                                       .volume = 0.0F,
                                       .loop = false},
            "play, loop, default/clamped/scaled volume, and silent preload "
@@ -1274,7 +1287,8 @@ void testPinnedAudioSurfaceOwnsResolvedBackendIdentities() {
                                                    {.value = 3},
                                                    {.value = 4},
                                                    {.value = 5},
-                                                   {.value = 6}} &&
+                                                   {.value = 6},
+                                                   {.value = 7}} &&
              state->destroyed,
          "Lua session teardown disposes every remaining identity exactly once "
          "before releasing the backend");

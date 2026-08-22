@@ -49,6 +49,17 @@ local invalid_pattern, invalid_count = state.file_list(".", "[")
 assert(invalid_pattern == "" and invalid_count == 0)
 local missing_list, missing_count = state.file_list("missing-directory")
 assert(missing_list == "" and missing_count == 0)
+for _, arguments in ipairs({{}, {nil}, {true}, {{}}}) do
+  local values = {state.file_list(unpack(arguments))}
+  assert(select('#', state.file_list(unpack(arguments))) == 2)
+  assert(values[1] == "" and values[2] == 0)
+end
+
+assert(state.file_exists("skin/ForeignSkin/secret.txt") == false)
+local foreign_read = state.file_read_lines("skin/ForeignSkin/secret.txt")
+assert(#foreign_read == 0)
+local foreign_list, foreign_count = state.file_list("skin/ForeignSkin")
+assert(foreign_list == "" and foreign_count == 0)
 
 local source_lines = state.file_read_lines(absolute_source)
 assert(#source_lines == 3)
@@ -92,6 +103,7 @@ assert(not pcall(luajava.new, File))
 assert(not pcall(luajava.new, File, 7))
 assert(not pcall(luajava.new, File, ".", "extra"))
 assert(not pcall(luajava.new, File, "../../outside"))
+assert(luajava.new(File, "skin/ForeignSkin"):listFiles() == nil)
 
 local missing_legacy = luajava.new(File, "legacy-missing")
 assert(missing_legacy:listFiles() == nil)
