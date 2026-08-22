@@ -169,6 +169,33 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
             self.assertIn(token, diagnostics)
         self.assertIn("MsvcCliDiagnostics.cpp", self.src_cmake)
 
+    def test_play_skin_session_archive_target_links_windows_system_libraries(self):
+        session_target = self.cmake.split(
+            "add_executable(play_skin_session_tests", 1
+        )[1].split("add_executable(playfield_presentation_coordinator_tests", 1)[0]
+        self.assertIn("src/ArchiveFile.cpp", session_target)
+        windows_link = re.search(
+            r"if\(WIN32\)\s*"
+            r"target_link_libraries\(play_skin_session_tests PRIVATE"
+            r"(?P<libraries>.*?)\)\s*else\(\)",
+            session_target,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(windows_link)
+        for library in ("shell32", "ole32"):
+            self.assertRegex(windows_link.group("libraries"), rf"\b{library}\b")
+
+    def test_play_skin_session_archive_target_stages_sevenzip_on_windows(self):
+        staging_function = self.cmake.split(
+            "function(asobmashow_stage_sevenzip_runtime target_name)", 1
+        )[1].split("endfunction()", 1)[0]
+        self.assertIn("if(WIN32)", staging_function)
+        self.assertIn("$<TARGET_FILE:7zip::7zip>", staging_function)
+        archive_targets = self.cmake.split(
+            "foreach(archive_file_target IN ITEMS", 1
+        )[1].split(")", 1)[0]
+        self.assertRegex(archive_targets, r"\bplay_skin_session_tests\b")
+
     def test_release_test_binaries_keep_assertion_based_fixture_setup(self):
         register_function = self.cmake.split(
             "function(asobmashow_register_test target_name)", 1

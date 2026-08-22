@@ -4876,6 +4876,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         if(WIN32)
             target_link_libraries(play_skin_session_tests PRIVATE
                 ${LUAJIT_LIB}
+                shell32
+                ole32
                 advapi32
             )
         else()
@@ -6361,6 +6363,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ir_upload_candidate_list_view_tests
         find_bms_download_tests
         gameplay_bga_target_tests
+        play_skin_session_tests
         profile_switch_tests
     )
         if(TARGET ${archive_file_target})
