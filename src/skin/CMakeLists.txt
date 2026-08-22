@@ -37,6 +37,7 @@ if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
         beatoraja/PomyuCharaResource.cpp
         beatoraja/LuaSkinHostModules.cpp
         beatoraja/LuaSkinAudioHost.cpp
+        beatoraja/LuaSkinLegacyInputHost.cpp
         beatoraja/LuaSkinApplicationAudioBackend.cpp
         beatoraja/LuaSkinBindingDecoder.cpp
         beatoraja/LuaSkinRuntime.cpp

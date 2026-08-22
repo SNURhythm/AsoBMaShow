@@ -2,6 +2,7 @@
 #include "skin/beatoraja/LuaSkinAudioHost.h"
 #include "skin/beatoraja/LuaSkinHostModules.h"
 #include "skin/beatoraja/LuaSkinHttpClient.h"
+#include "skin/beatoraja/LuaSkinLegacyInputHost.h"
 #include "skin/beatoraja/LuaSkinRuntime.h"
 #include "skin/beatoraja/Skin2DRenderer.h"
 
@@ -584,6 +585,99 @@ assert(main_state.audio_play("coerce.ogg", "0.5") == true)
 assert(main_state.audio_preload() == true)
 return {}
 )lua");
+    writeText(source / "skin/legacy_input_surface.luaskin", R"lua(
+if not skin_config then return {type = 0} end
+
+local function expect_members(value, expected)
+  local count = 0
+  for name in pairs(value) do
+    assert(expected[name], "unexpected member: " .. tostring(name))
+    count = count + 1
+  end
+  local expected_count = 0
+  for _ in pairs(expected) do expected_count = expected_count + 1 end
+  assert(count == expected_count)
+end
+
+local Gdx = luajava.bindClass("com.badlogic.gdx.Gdx")
+local Input = luajava.bindClass("com.badlogic.gdx.Input")
+local Controllers = luajava.bindClass("com.badlogic.gdx.controllers.Controllers")
+local Controller = luajava.bindClass("com.badlogic.gdx.controllers.Controller")
+expect_members(Gdx, {graphics = true, input = true})
+expect_members(Gdx.graphics, {getWidth = true, getHeight = true})
+expect_members(Gdx.input, {isKeyPressed = true})
+expect_members(Input, {Keys = true})
+expect_members(Input.Keys, {})
+expect_members(Controllers, {getControllers = true})
+expect_members(Controller, {})
+assert(Gdx.app == nil)
+assert(Gdx.graphics:getWidth() == 1920)
+assert(Gdx.graphics:getHeight() == 1080)
+assert(Input.Keys.A == 29)
+assert(Input.Keys.Escape == 131)
+assert(Input.Keys.F1 == 244)
+assert(Input.Keys["Numpad 0"] == 144)
+assert(Input.Keys["Not A Key"] == -1)
+assert(Gdx.input:isKeyPressed(Input.Keys.A) == true)
+assert(Gdx.input:isKeyPressed(Input.Keys.Escape) == false)
+assert(Gdx.input:isKeyPressed(Input.Keys["Not A Key"]) == true)
+
+local controllers = Controllers:getControllers()
+expect_members(controllers, {size = true, first = true})
+assert(controllers.size == 2)
+local first = controllers:first()
+expect_members(first, {getName = true, getButton = true})
+assert(first:getName() == "Arcade Alpha")
+assert(first:getButton(0) == false)
+assert(first:getButton(1) == true)
+assert(first:getButton(99) == false)
+
+for _, probe in ipairs({
+  function() return luajava.bindClass("java.lang.Runtime") end,
+  function() return luajava.bindClass("com.badlogic.gdx.graphics.GL20") end,
+  function() return luajava.new(Controller) end,
+  function() return luajava.new(Gdx) end,
+  function() return luajava.new(Input) end,
+  function() return luajava.new(Controllers) end,
+  function() return luajava.new({}) end,
+  function() return luajava.newInstance("com.badlogic.gdx.Gdx") end,
+  function() return Gdx.files end,
+  function() return Gdx.graphics.density end,
+  function() return Gdx.input.getX end,
+  function() return Input.Buttons end,
+  function() return Controllers.addListener end,
+  function() return Controller.getAxis end,
+  function() return controllers.get(0) end,
+  function() return first.getAxis end,
+  function() return Gdx.graphics.getWidth({}) end,
+  function() return Gdx.input.isKeyPressed({}, Input.Keys.A) end,
+  function() return Controllers.getControllers({}) end,
+  function() return controllers.first({}) end,
+  function() return first.getName({}) end,
+  function() return first.getButton({}, 1) end,
+}) do
+  assert(not pcall(probe), "nonallowlisted or forged legacy input authority must be denied")
+end
+
+return {
+  verify_one = function()
+    assert(Gdx.graphics:getWidth() == 1280 and Gdx.graphics:getHeight() == 720)
+    assert(Gdx.input:isKeyPressed(Input.Keys.A) == false)
+    assert(Gdx.input:isKeyPressed(Input.Keys.Escape) == true)
+    local current = Controllers:getControllers()
+    assert(current.size == 1)
+    assert(current:first():getName() == "Solo Pad")
+    assert(current:first():getButton(3) == true)
+    return true
+  end,
+  verify_zero = function()
+    local current = Controllers:getControllers()
+    assert(current.size == 0)
+    assert(current:first() == nil)
+    return true
+  end,
+}
+)lua");
 
     const fs::path visible = roots.visiblePackages / package.directoryName;
     fs::create_directories(visible.parent_path());
@@ -650,6 +744,27 @@ return {}
          .fileSystem = std::move(fileSystem),
          .audioBackend = std::move(audioBackend)});
     expect(runtime.runtime != nullptr, "audio host contract runtime creates");
+    if (!runtime.runtime) {
+      return std::nullopt;
+    }
+    return RuntimeHarness{.runtime = std::move(runtime.runtime),
+                          .fileSystem = borrowed};
+  }
+
+  std::optional<RuntimeHarness> createWithLegacyInput(
+      std::string_view entryName, LuaRuntimePurpose purpose,
+      LuaSkinLegacyInputSnapshot snapshot) {
+    auto fileSystem = createFileSystem(entryName);
+    if (!fileSystem) {
+      return std::nullopt;
+    }
+    LuaSkinFileSystem *borrowed = fileSystem.get();
+    auto runtime = LuaSkinRuntime::create(
+        {.purpose = purpose,
+         .fileSystem = std::move(fileSystem),
+         .legacyInputSnapshot = std::move(snapshot)});
+    expect(runtime.runtime != nullptr,
+           "legacy-input host contract runtime creates");
     if (!runtime.runtime) {
       return std::nullopt;
     }
@@ -1165,6 +1280,61 @@ void testPinnedAudioSurfaceOwnsResolvedBackendIdentities() {
          "before releasing the backend");
 }
 
+void testPinnedLegacyInputSurfaceUsesImmutableSnapshots() {
+  LuaSkinLegacyInputSnapshot initial{
+      .drawableWidth = 1920,
+      .drawableHeight = 1080,
+      .pressedKeys = {29},
+      .controllers = {
+          {.name = "Arcade Alpha", .pressedButtons = {1}},
+          {.name = "Arcade Beta", .pressedButtons = {0, 4}},
+      }};
+  auto harness = fixture().createWithLegacyInput(
+      "legacy_input_surface.luaskin", LuaRuntimePurpose::Gameplay,
+      std::move(initial));
+  if (!harness) {
+    return;
+  }
+  expect(harness->runtime->loadHeader().value.has_value(),
+         "legacy-input fixture sees an empty header facade");
+  auto configured = harness->runtime->loadConfigured(happyConfiguration());
+  if (!configured.value && configured.failure) {
+    std::cerr << "legacy-input surface diagnostic: "
+              << configured.failure->code << ": "
+              << configured.failure->message << '\n';
+  }
+  expect(configured.value.has_value() && !configured.failure,
+         "the exact pinned Gdx, Input, Controllers, and Controller facade executes");
+  if (!configured.value) {
+    return;
+  }
+
+  const auto verifyOne = configured.value->callbackNamed("verify_one");
+  const auto verifyZero = configured.value->callbackNamed("verify_zero");
+  expect(verifyOne.has_value() && verifyZero.has_value(),
+         "legacy-input fixture retains its snapshot probes");
+  if (!verifyOne || !verifyZero) {
+    return;
+  }
+  expect(harness->runtime->enterRenderPhase().ok &&
+             harness->runtime->beginFrame(1).ok,
+         "legacy-input fixture enters an active render frame");
+  harness->runtime->setLegacyInputSnapshot({
+      .drawableWidth = 1280,
+      .drawableHeight = 720,
+      .pressedKeys = {131},
+      .controllers = {{.name = "Solo Pad", .pressedButtons = {3}}},
+  });
+  const auto one = harness->runtime->invoke(*verifyOne, {});
+  expect(one.value == std::optional<LuaScalar>{true} && !one.failure,
+         "one-controller snapshot replaces the prior immutable snapshot");
+
+  harness->runtime->setLegacyInputSnapshot({});
+  const auto zero = harness->runtime->invoke(*verifyZero, {});
+  expect(zero.value == std::optional<LuaScalar>{true} && !zero.failure,
+         "zero-controller snapshot returns size zero and nil first");
+}
+
 void testIoLinesUsesTheVirtualSkinFileSystem() {
   auto harness = fixture().create("io_lines.luaskin",
                                   LuaRuntimePurpose::Validation);
@@ -1355,6 +1525,7 @@ int main() {
   testPinnedMainStateFileSurfaceAndClosedLegacyFileFacade();
   testPinnedBoundedHttpAndClosedLegacyReaderFacade();
   testPinnedAudioSurfaceOwnsResolvedBackendIdentities();
+  testPinnedLegacyInputSurfaceUsesImmutableSnapshots();
   testIoLinesUsesTheVirtualSkinFileSystem();
   testIoReadClampsHugeRequestedCountToAvailableBytes();
   testIoOpenReadsUtf8NamedSkinFiles();

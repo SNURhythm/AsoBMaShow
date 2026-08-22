@@ -170,6 +170,8 @@ struct ReadyFixture {
   std::shared_ptr<FactoryAudioBackend> audioBackend =
       std::make_shared<FactoryAudioBackend>();
   bool audioBackendForwarded = false;
+  bool legacyInputCaptureForwarded = false;
+  std::optional<skin::LuaSkinLegacyInputSnapshot> capturedLegacyInput;
   skin::SkinConfigurationWriteQueue writes;
   PlayfieldChartVisualModel chart;
   PlayfieldVisualState state;
@@ -238,12 +240,21 @@ struct ReadyFixture {
             .configurationWrites = &writes,
             .diagnosticHistory = &history,
             .audioBackend = audioBackend,
+            .captureLegacyInputSnapshot = [] {
+              return skin::LuaSkinLegacyInputSnapshot{
+                  .drawableWidth = 111, .drawableHeight = 222};
+            },
             .createSessionForTesting =
                 [this, textureDevice = textureDevice](
                     skin::ValidatedSkinActivation activation,
                     skin::PlaySkinSessionContext context) {
                   audioBackendForwarded =
                       context.audioBackend == audioBackend;
+                  legacyInputCaptureForwarded =
+                      static_cast<bool>(context.captureLegacyInputSnapshot);
+                  if (context.captureLegacyInputSnapshot) {
+                    capturedLegacyInput = context.captureLegacyInputSnapshot();
+                  }
                   context.textureDevice = textureDevice;
                   return skin::PlaySkinSession::create(std::move(activation),
                                                        std::move(context));
@@ -308,9 +319,31 @@ void factoryTransfersTheOwningSessionExactlyOnce() {
   const auto ready =
       createGameplaySkinSession(fixture.services(), fixture.input());
   expect(ready.disposition == GameplaySkinSessionDisposition::Ready &&
-             ready.session != nullptr && fixture.audioBackendForwarded,
+             ready.session != nullptr && fixture.audioBackendForwarded &&
+             fixture.legacyInputCaptureForwarded &&
+             fixture.capturedLegacyInput &&
+             fixture.capturedLegacyInput->drawableWidth == 111 &&
+             fixture.capturedLegacyInput->drawableHeight == 222,
          "factory transfers the owning session and narrow audio backend "
-         "exactly once");
+         "plus legacy-input capture exactly once");
+}
+
+void factorySuppliesTheValueOnlyProductionLegacyInputCapture() {
+  ReadyFixture fixture;
+  if (!fixture.lease) {
+    return;
+  }
+  auto services = fixture.services();
+  services.captureLegacyInputSnapshot = {};
+  const auto ready =
+      createGameplaySkinSession(std::move(services), fixture.input());
+  expect(ready.disposition == GameplaySkinSessionDisposition::Ready &&
+             ready.session != nullptr && fixture.capturedLegacyInput &&
+             fixture.capturedLegacyInput->drawableWidth ==
+                 rendering::render_width &&
+             fixture.capturedLegacyInput->drawableHeight ==
+                 rendering::render_height,
+         "factory defaults to a value-only production drawable/input/controller snapshot");
 }
 
 } // namespace
@@ -320,5 +353,6 @@ int main() {
   factoryKeepsBuiltInPresentationWhenAcquisitionIsUnavailable();
   factoryPreservesLifecycleDiagnosticAndRecordsIt();
   factoryTransfersTheOwningSessionExactlyOnce();
+  factorySuppliesTheValueOnlyProductionLegacyInputCapture();
   return failures == 0 ? 0 : 1;
 }

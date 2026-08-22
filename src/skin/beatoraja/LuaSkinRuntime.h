@@ -2,6 +2,7 @@
 
 #include "BeatorajaSkinConfiguration.h"
 #include "LuaSkinHttpClient.h"
+#include "LuaSkinLegacyInputHost.h"
 #include "SkinCompatibilityDiagnostics.h"
 #include "../SkinSafetyPolicy.h"
 #include "../package/SkinPackageTypes.h"
@@ -233,6 +234,7 @@ struct LuaSkinRuntimeOptions {
   SkinSafetyPolicy safetyPolicy{};
   std::unique_ptr<LuaSkinHttpTransport> httpTransport;
   std::shared_ptr<LuaSkinAudioBackend> audioBackend;
+  LuaSkinLegacyInputSnapshot legacyInputSnapshot;
 };
 
 class LuaSkinRuntime final {
@@ -248,6 +250,7 @@ public:
   loadConfigured(const BeatorajaSkinConfiguration &configuration);
   LuaOperationResult enterRenderPhase();
   void setFrameState(ISkinFrameState *) noexcept;
+  void setLegacyInputSnapshot(LuaSkinLegacyInputSnapshot) noexcept;
   void setEventExecutor(LuaSkinEventExecutor) noexcept;
   LuaOperationResult beginFrame(std::uint64_t visualStateSequence);
   LuaCallbackResult invoke(LuaCallbackId, std::span<const LuaScalar> arguments);

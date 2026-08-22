@@ -36,6 +36,8 @@ struct GameplaySkinSessionServices {
   skin::SkinBuiltinImageReader builtinImageReader;
   std::shared_ptr<skin::SkinLiveResourceCounters> liveResourceCounters;
   std::shared_ptr<skin::LuaSkinAudioBackend> audioBackend;
+  std::function<skin::LuaSkinLegacyInputSnapshot()>
+      captureLegacyInputSnapshot;
   skin::SkinConfigurationWriteQueue *configurationWrites = nullptr;
   skin::SkinDiagnosticHistory *diagnosticHistory = nullptr;
   std::function<void(skin::SkinAudioVolumeWriterTarget, float)>

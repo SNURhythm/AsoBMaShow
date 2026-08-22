@@ -4,6 +4,7 @@
 #include "../package/SkinPathPolicy.h"
 #include "LuaSkinFileIo.h"
 #include "LuaSkinAudioHost.h"
+#include "LuaSkinLegacyInputHost.h"
 
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 
@@ -237,6 +238,8 @@ struct LuaSkinHostModulesImpl {
   LuaSkinFileSystem *fileSystem = nullptr;
   LuaSkinHttpTransport *httpTransport = nullptr;
   LuaSkinAudioHost *audioHost = nullptr;
+  LuaSkinLegacyInputHost *legacyInputHost = nullptr;
+  std::unique_ptr<LuaSkinLegacyInputHost> ownedLegacyInputHost;
   std::size_t maximumSourceBytes = std::numeric_limits<std::size_t>::max();
   std::size_t maximumModuleSearchTemplates =
       std::numeric_limits<std::size_t>::max();
@@ -248,6 +251,9 @@ struct LuaSkinHostModulesImpl {
   SkinCompatibilityDiagnostics diagnostics;
   int fileTokenReference = LUA_NOREF;
   int gdxTokenReference = LUA_NOREF;
+  int inputTokenReference = LUA_NOREF;
+  int controllersTokenReference = LUA_NOREF;
+  int controllerTokenReference = LUA_NOREF;
   const BeatorajaSkinConfiguration *pendingConfiguration = nullptr;
   std::vector<ConfiguredFile> configuredFiles;
   std::string configurationPathPrefix;
@@ -286,6 +292,11 @@ struct LuaSkinHostModulesImpl {
                 authority == "java.io.BufferedReader.member" ||
                 authority == "java.net.URL.constructor" ||
                 authority == "java.io.BufferedReader.constructor" ||
+                authority == "com.badlogic.gdx.Gdx.member" ||
+                authority == "com.badlogic.gdx.Input.member" ||
+                authority == "com.badlogic.gdx.Controllers.member" ||
+                authority == "com.badlogic.gdx.Controller.member" ||
+                authority == "com.badlogic.gdx.ControllerList.member" ||
                 authority == "bindClass"
             ? authority
             : "unknown_legacy_authority";
@@ -2306,6 +2317,220 @@ void installClosedMemberMetatable(lua_State *state,
   lua_setmetatable(state, -2);
 }
 
+int legacyInputMemberDenied(lua_State *state) {
+  LuaSkinHostModulesImpl *impl = host(state);
+  impl->reportLegacyDenial("com.badlogic.gdx.Input.member");
+  return raiseStoredError(state, impl);
+}
+
+int legacyControllersMemberDenied(lua_State *state) {
+  LuaSkinHostModulesImpl *impl = host(state);
+  impl->reportLegacyDenial("com.badlogic.gdx.Controllers.member");
+  return raiseStoredError(state, impl);
+}
+
+int legacyControllerMemberDenied(lua_State *state) {
+  LuaSkinHostModulesImpl *impl = host(state);
+  impl->reportLegacyDenial("com.badlogic.gdx.Controller.member");
+  return raiseStoredError(state, impl);
+}
+
+int legacyControllerListMemberDenied(lua_State *state) {
+  LuaSkinHostModulesImpl *impl = host(state);
+  impl->reportLegacyDenial("com.badlogic.gdx.ControllerList.member");
+  return raiseStoredError(state, impl);
+}
+
+bool legacyInputReceiver(lua_State *state, int arguments) {
+  return lua_gettop(state) == arguments && sameUpvalueTable(state, 1, 2);
+}
+
+int legacyGraphicsWidth(lua_State *state) {
+  LuaSkinHostModulesImpl *impl = host(state);
+  if (!legacyInputReceiver(state, 1)) {
+    impl->reportLegacyDenial("com.badlogic.gdx.Gdx.graphics.getWidth");
+    return raiseStoredError(state, impl);
+  }
+  lua_pushinteger(state, impl->legacyInputHost->drawableWidth());
+  return 1;
+}
+
+int legacyGraphicsHeight(lua_State *state) {
+  LuaSkinHostModulesImpl *impl = host(state);
+  if (!legacyInputReceiver(state, 1)) {
+    impl->reportLegacyDenial("com.badlogic.gdx.Gdx.graphics.getHeight");
+    return raiseStoredError(state, impl);
+  }
+  lua_pushinteger(state, impl->legacyInputHost->drawableHeight());
+  return 1;
+}
+
+int legacyIsKeyPressed(lua_State *state) {
+  LuaSkinHostModulesImpl *impl = host(state);
+  if (!legacyInputReceiver(state, 2)) {
+    impl->reportLegacyDenial("com.badlogic.gdx.Gdx.input.isKeyPressed");
+    return raiseStoredError(state, impl);
+  }
+  const int key = static_cast<int>(luaL_checkinteger(state, 2));
+  lua_pushboolean(state, impl->legacyInputHost->isKeyPressed(key));
+  return 1;
+}
+
+int legacyKeyLookup(lua_State *state) {
+  std::size_t size = 0;
+  const char *name = luaL_checklstring(state, 2, &size);
+  lua_pushinteger(
+      state, LuaSkinLegacyInputHost::keyCode(std::string_view(name, size)));
+  return 1;
+}
+
+int legacyControllerGetName(lua_State *state) {
+  LuaSkinHostModulesImpl *impl = host(state);
+  if (!legacyInputReceiver(state, 1)) {
+    impl->reportLegacyDenial("com.badlogic.gdx.Controller.getName");
+    return raiseStoredError(state, impl);
+  }
+  lua_pushvalue(state, lua_upvalueindex(3));
+  return 1;
+}
+
+int legacyControllerGetButton(lua_State *state) {
+  LuaSkinHostModulesImpl *impl = host(state);
+  if (!legacyInputReceiver(state, 2)) {
+    impl->reportLegacyDenial("com.badlogic.gdx.Controller.getButton");
+    return raiseStoredError(state, impl);
+  }
+  const int button = static_cast<int>(luaL_checkinteger(state, 2));
+  lua_pushvalue(state, lua_upvalueindex(3));
+  lua_pushinteger(state, button);
+  lua_rawget(state, -2);
+  const bool pressed = lua_toboolean(state, -1) != 0;
+  lua_pop(state, 2);
+  lua_pushboolean(state, pressed);
+  return 1;
+}
+
+void pushLegacyControllerObject(
+    lua_State *state, LuaSkinHostModulesImpl *impl,
+    const LuaSkinLegacyControllerSnapshot &controller) {
+  lua_createtable(state, 0, 2);
+  const int objectIndex = lua_gettop(state);
+
+  lua_pushlightuserdata(state, impl);
+  lua_pushvalue(state, objectIndex);
+  lua_pushlstring(state, controller.name.data(), controller.name.size());
+  lua_pushcclosure(state, legacyControllerGetName, 3);
+  lua_setfield(state, objectIndex, "getName");
+
+  lua_newtable(state);
+  const int buttonsIndex = lua_gettop(state);
+  for (const int button : controller.pressedButtons) {
+    lua_pushboolean(state, 1);
+    lua_rawseti(state, buttonsIndex, button);
+  }
+  lua_pushlightuserdata(state, impl);
+  lua_pushvalue(state, objectIndex);
+  lua_pushvalue(state, buttonsIndex);
+  lua_pushcclosure(state, legacyControllerGetButton, 3);
+  lua_setfield(state, objectIndex, "getButton");
+  lua_pop(state, 1);
+
+  installClosedMemberMetatable(state, impl, legacyControllerMemberDenied);
+}
+
+int legacyControllerListFirst(lua_State *state) {
+  LuaSkinHostModulesImpl *impl = host(state);
+  if (!legacyInputReceiver(state, 1)) {
+    impl->reportLegacyDenial("com.badlogic.gdx.ControllerList.first");
+    return raiseStoredError(state, impl);
+  }
+  lua_pushvalue(state, lua_upvalueindex(3));
+  return 1;
+}
+
+int legacyGetControllers(lua_State *state) {
+  LuaSkinHostModulesImpl *impl = host(state);
+  if (!legacyInputReceiver(state, 1)) {
+    impl->reportLegacyDenial("com.badlogic.gdx.Controllers.getControllers");
+    return raiseStoredError(state, impl);
+  }
+
+  lua_createtable(state, 0, 2);
+  const int listIndex = lua_gettop(state);
+  lua_pushinteger(
+      state, static_cast<lua_Integer>(impl->legacyInputHost->controllerCount()));
+  lua_setfield(state, listIndex, "size");
+  if (const auto *first = impl->legacyInputHost->controller(0)) {
+    pushLegacyControllerObject(state, impl, *first);
+  } else {
+    lua_pushnil(state);
+  }
+  lua_pushlightuserdata(state, impl);
+  lua_pushvalue(state, listIndex);
+  lua_pushvalue(state, -3);
+  lua_pushcclosure(state, legacyControllerListFirst, 3);
+  lua_setfield(state, listIndex, "first");
+  lua_pop(state, 1);
+  installClosedMemberMetatable(state, impl,
+                               legacyControllerListMemberDenied);
+  return 1;
+}
+
+void installLegacyInputMethod(lua_State *state,
+                              LuaSkinHostModulesImpl *impl,
+                              int receiverIndex, const char *name,
+                              lua_CFunction function) {
+  lua_pushlightuserdata(state, impl);
+  lua_pushvalue(state, receiverIndex);
+  lua_pushcclosure(state, function, 2);
+  lua_setfield(state, receiverIndex, name);
+}
+
+void pushLegacyGdxClass(lua_State *state, LuaSkinHostModulesImpl *impl) {
+  lua_createtable(state, 0, 2);
+  const int gdxIndex = lua_gettop(state);
+
+  lua_createtable(state, 0, 2);
+  const int graphicsIndex = lua_gettop(state);
+  installLegacyInputMethod(state, impl, graphicsIndex, "getWidth",
+                           legacyGraphicsWidth);
+  installLegacyInputMethod(state, impl, graphicsIndex, "getHeight",
+                           legacyGraphicsHeight);
+  installClosedMemberMetatable(state, impl, legacyGdxMember);
+  lua_setfield(state, gdxIndex, "graphics");
+
+  lua_createtable(state, 0, 1);
+  const int inputIndex = lua_gettop(state);
+  installLegacyInputMethod(state, impl, inputIndex, "isKeyPressed",
+                           legacyIsKeyPressed);
+  installClosedMemberMetatable(state, impl, legacyGdxMember);
+  lua_setfield(state, gdxIndex, "input");
+  installClosedMemberMetatable(state, impl, legacyGdxMember);
+}
+
+void pushLegacyInputClass(lua_State *state, LuaSkinHostModulesImpl *impl) {
+  lua_createtable(state, 0, 1);
+  const int inputIndex = lua_gettop(state);
+  lua_newtable(state);
+  lua_createtable(state, 0, 2);
+  installClosure(state, impl, legacyKeyLookup);
+  lua_setfield(state, -2, "__index");
+  lua_pushboolean(state, 0);
+  lua_setfield(state, -2, "__metatable");
+  lua_setmetatable(state, -2);
+  lua_setfield(state, inputIndex, "Keys");
+  installClosedMemberMetatable(state, impl, legacyInputMemberDenied);
+}
+
+void pushLegacyControllersClass(lua_State *state,
+                                LuaSkinHostModulesImpl *impl) {
+  lua_createtable(state, 0, 1);
+  const int controllersIndex = lua_gettop(state);
+  installLegacyInputMethod(state, impl, controllersIndex, "getControllers",
+                           legacyGetControllers);
+  installClosedMemberMetatable(state, impl, legacyControllersMemberDenied);
+}
+
 void pushLegacyFileObject(lua_State *state, LuaSkinHostModulesImpl *impl,
                           const char *path, std::size_t pathSize) {
   lua_createtable(state, 0, 2);
@@ -2341,6 +2566,18 @@ int legacyBindClass(lua_State *state) {
   }
   if (requested == "com.badlogic.gdx.Gdx") {
     lua_rawgeti(state, LUA_REGISTRYINDEX, impl->gdxTokenReference);
+    return 1;
+  }
+  if (requested == "com.badlogic.gdx.Input") {
+    lua_rawgeti(state, LUA_REGISTRYINDEX, impl->inputTokenReference);
+    return 1;
+  }
+  if (requested == "com.badlogic.gdx.controllers.Controllers") {
+    lua_rawgeti(state, LUA_REGISTRYINDEX, impl->controllersTokenReference);
+    return 1;
+  }
+  if (requested == "com.badlogic.gdx.controllers.Controller") {
+    lua_rawgeti(state, LUA_REGISTRYINDEX, impl->controllerTokenReference);
     return 1;
   }
   impl->reportLegacyDenial(requested);
@@ -2614,9 +2851,15 @@ int installHost(lua_State *state) {
   lua_newtable(state);
   installClosedMemberMetatable(state, impl, legacyFileMemberDenied);
   impl->fileTokenReference = luaL_ref(state, LUA_REGISTRYINDEX);
-  lua_newtable(state);
-  installClosedMemberMetatable(state, impl, legacyGdxMember);
+  pushLegacyGdxClass(state, impl);
   impl->gdxTokenReference = luaL_ref(state, LUA_REGISTRYINDEX);
+  pushLegacyInputClass(state, impl);
+  impl->inputTokenReference = luaL_ref(state, LUA_REGISTRYINDEX);
+  pushLegacyControllersClass(state, impl);
+  impl->controllersTokenReference = luaL_ref(state, LUA_REGISTRYINDEX);
+  lua_newtable(state);
+  installClosedMemberMetatable(state, impl, legacyControllerMemberDenied);
+  impl->controllerTokenReference = luaL_ref(state, LUA_REGISTRYINDEX);
 
   lua_createtable(state, 0, 2);
   installClosure(state, impl, legacyBindClass);
@@ -2733,6 +2976,18 @@ LuaSkinHostModules::create(lua_State *state,
   impl->fileSystem = options.fileSystem;
   impl->httpTransport = options.httpTransport;
   impl->audioHost = options.audioHost;
+  impl->legacyInputHost = options.legacyInputHost;
+  if (impl->legacyInputHost == nullptr) {
+    try {
+      impl->ownedLegacyInputHost =
+          std::make_unique<LuaSkinLegacyInputHost>();
+      impl->legacyInputHost = impl->ownedLegacyInputHost.get();
+    } catch (...) {
+      return {.failure =
+                  diagnostic("skin_lua_runtime_create_failed",
+                             "Lua legacy-input host allocation failed")};
+    }
+  }
   impl->maximumSourceBytes = options.maximumSourceBytes;
   impl->maximumModuleSearchTemplates = options.maximumModuleSearchTemplates;
   impl->allowProcessGlobalOperations = options.allowProcessGlobalOperations;

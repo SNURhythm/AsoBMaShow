@@ -913,6 +913,7 @@ struct LuaSkinRuntime::Impl {
   std::unique_ptr<LuaSkinFileSystem> fileSystem;
   std::unique_ptr<LuaSkinHttpTransport> httpTransport;
   std::unique_ptr<LuaSkinAudioHost> audioHost;
+  std::unique_ptr<LuaSkinLegacyInputHost> legacyInputHost;
   std::unique_ptr<LuaSkinHostModules> hostModules;
 
   ~Impl() {
@@ -1207,9 +1208,11 @@ LuaRuntimeCreateResult LuaSkinRuntime::create(LuaSkinRuntimeOptions options) {
   try {
     impl->audioHost = std::make_unique<LuaSkinAudioHost>(
         *impl->fileSystem, std::move(options.audioBackend));
+    impl->legacyInputHost = std::make_unique<LuaSkinLegacyInputHost>(
+        std::move(options.legacyInputSnapshot));
   } catch (...) {
     return {.failure = makeDiagnostic("skin_lua_runtime_create_failed",
-                                      "Lua audio host allocation failed")};
+                                      "Lua session host allocation failed")};
   }
 
   lua_pushlightuserdata(state, &kRuntimeRegistryKey);
@@ -1226,6 +1229,7 @@ LuaRuntimeCreateResult LuaSkinRuntime::create(LuaSkinRuntimeOptions options) {
       {.fileSystem = impl->fileSystem.get(),
        .httpTransport = impl->httpTransport.get(),
        .audioHost = impl->audioHost.get(),
+       .legacyInputHost = impl->legacyInputHost.get(),
        .maximumSourceBytes = loadBudget.maxAllocatorBytes,
        .maximumModuleSearchTemplates =
            options.safetyPolicy.enforces(SkinSafetyGuard::LuaResourceBudget)
@@ -1306,6 +1310,13 @@ LuaOperationResult LuaSkinRuntime::enterRenderPhase() {
 void LuaSkinRuntime::setFrameState(ISkinFrameState *state) noexcept {
   if (impl_ && impl_->hostModules) {
     impl_->hostModules->setFrameState(state);
+  }
+}
+
+void LuaSkinRuntime::setLegacyInputSnapshot(
+    LuaSkinLegacyInputSnapshot snapshot) noexcept {
+  if (impl_ && impl_->legacyInputHost) {
+    (void)impl_->legacyInputHost->publish(std::move(snapshot));
   }
 }
 

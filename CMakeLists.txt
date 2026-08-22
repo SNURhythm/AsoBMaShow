@@ -694,6 +694,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/PlaySkinViewport.cpp
@@ -745,6 +746,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/PlaySkinViewport.cpp
@@ -1014,6 +1016,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
@@ -1062,6 +1065,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
@@ -1114,6 +1118,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
@@ -1177,6 +1182,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
@@ -1240,6 +1246,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
@@ -1304,6 +1311,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
@@ -1368,6 +1376,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
@@ -1431,6 +1440,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
@@ -1484,6 +1494,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
@@ -3769,6 +3780,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
@@ -4679,6 +4691,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
@@ -4780,6 +4793,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/PlaySkinStateBridge.cpp
@@ -4847,6 +4861,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
@@ -4998,6 +5013,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp

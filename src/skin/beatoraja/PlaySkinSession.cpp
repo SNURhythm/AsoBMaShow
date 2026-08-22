@@ -234,6 +234,8 @@ struct PlaySkinSession::OwnedActivation final {
                   std::function<void(std::size_t, bool)>
                       applyPracticeMenuItemValue,
                   std::function<void(int)> applyPracticeVisibleItemsValue,
+                  std::function<LuaSkinLegacyInputSnapshot()>
+                      captureLegacyInputSnapshotValue,
                   ViewportSettings viewportSettingsValue,
                   UiLogicalRect safeUiBoundsValue,
                   PlaySkinViewport viewportValue,
@@ -252,6 +254,8 @@ struct PlaySkinSession::OwnedActivation final {
         applyPracticeItemScroll(std::move(applyPracticeItemScrollValue)),
         applyPracticeMenuItem(std::move(applyPracticeMenuItemValue)),
         applyPracticeVisibleItems(std::move(applyPracticeVisibleItemsValue)),
+        captureLegacyInputSnapshot(
+            std::move(captureLegacyInputSnapshotValue)),
         viewportSettings(viewportSettingsValue),
         safeUiBounds(safeUiBoundsValue), viewport(viewportValue),
         safetyPolicy(safetyPolicyValue),
@@ -286,6 +290,7 @@ struct PlaySkinSession::OwnedActivation final {
   std::function<void(float)> applyPracticeItemScroll;
   std::function<void(std::size_t, bool)> applyPracticeMenuItem;
   std::function<void(int)> applyPracticeVisibleItems;
+  std::function<LuaSkinLegacyInputSnapshot()> captureLegacyInputSnapshot;
   ViewportSettings viewportSettings;
   UiLogicalRect safeUiBounds;
   PlaySkinViewport viewport;
@@ -323,6 +328,8 @@ PlaySkinSession::PlaySkinSession(
                .viewportSettings = owned_->viewportSettings,
                .viewport = owned_->viewport,
                .runtime = owned_->runtime.get(),
+               .captureLegacyInputSnapshot =
+                   owned_->captureLegacyInputSnapshot,
                .bridge = *owned_->bridge,
                .renderer = owned_->renderer,
                .quadRenderer = owned_->quadRenderer,
@@ -476,6 +483,18 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
              [&context](LuaSkinRuntime &runtime,
                         const BeatorajaSkinConfiguration &configuration,
                         std::vector<SkinDiagnostic> &diagnostics) {
+               if (context.captureLegacyInputSnapshot) {
+                 try {
+                   runtime.setLegacyInputSnapshot(
+                       context.captureLegacyInputSnapshot());
+                 } catch (...) {
+                   return LuaValueResult{
+                       .failure = sessionDiagnostic(
+                           "skin.session.legacy_input_capture_failed",
+                           "Gameplay skin legacy input could not be captured "
+                           "for configured Lua.")};
+                 }
+               }
                SkinEventMutationTable mutationTable =
                    makePinnedSkinEventMutationTableV1();
                PlaySkinStateBridge bridge({
@@ -631,6 +650,7 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
         std::move(context.applyPracticeItemScroll),
         std::move(context.applyPracticeMenuItem),
         std::move(context.applyPracticeVisibleItems),
+        std::move(context.captureLegacyInputSnapshot),
         context.viewport, context.safeUiBounds, viewport,
         context.safetyPolicy, pomyuMotionCyclesMillis);
     result.session.reset(new PlaySkinSession(std::move(owned)));
@@ -705,6 +725,17 @@ PlaySkinFrameTransactionResult PlaySkinSession::runFrameTransaction(
         "skin.session.serial_invalid",
         "Gameplay skin session serial must be nonzero."));
     return result;
+  }
+  if (context_.runtime != nullptr && context_.captureLegacyInputSnapshot) {
+    try {
+      context_.runtime->setLegacyInputSnapshot(
+          context_.captureLegacyInputSnapshot());
+    } catch (...) {
+      result.diagnostics.push_back(transactionDiagnostic(
+          "skin.session.legacy_input_capture_failed",
+          "Gameplay skin legacy input could not be captured for the frame."));
+      return result;
+    }
   }
   context_.bridge.beginFrame(state, projection);
   FrameDiscardGuard discard(context_.bridge);

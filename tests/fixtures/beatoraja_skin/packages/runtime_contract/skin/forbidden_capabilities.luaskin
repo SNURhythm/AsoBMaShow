@@ -52,11 +52,18 @@ assert(not pcall(luajava.newInstance, "java.lang.Runtime", "x"))
 
 local gdx = luajava.bindClass("com.badlogic.gdx.Gdx")
 assert(gdx.app == nil)
-assert(next(gdx) == nil)
+assert(type(gdx.graphics) == "table" and type(gdx.input) == "table")
+assert(gdx.graphics:getWidth() == 0 and gdx.graphics:getHeight() == 0)
+local Input = luajava.bindClass("com.badlogic.gdx.Input")
+assert(Input.Keys.A == 29 and Input.Keys["not a key"] == -1)
+local Controllers = luajava.bindClass("com.badlogic.gdx.controllers.Controllers")
+local controllers = Controllers:getControllers()
+assert(controllers.size == 0 and controllers:first() == nil)
+local Controller = luajava.bindClass("com.badlogic.gdx.controllers.Controller")
+assert(next(Controller) == nil)
 assert(not pcall(luajava.bindClass, "java.net.URL"))
-assert(not pcall(luajava.bindClass, "com.badlogic.gdx.Input"))
 assert(not pcall(luajava.bindClass,
-                 "com.badlogic.gdx.controllers.Controllers"))
+                 "com.badlogic.gdx.graphics.GL20"))
 
 local binary_signature = string.char(27) .. "Lua"
 assert(select(1, loadstring(binary_signature)) == nil)

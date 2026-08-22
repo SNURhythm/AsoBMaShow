@@ -658,6 +658,7 @@ struct ActivationFixtureOptions {
   bool movieBearing = false;
   bool audioBearing = false;
   bool requireConfiguredState = false;
+  bool legacyInputBearing = false;
   bool repeatedPomyu = false;
   bool oversizedPomyuWithSibling = false;
   bool pomyuMissingCharBmp = false;
@@ -842,6 +843,14 @@ if skin_config then
       script += R"lua(
   if main_state.option(81) ~= true then
     error("configured state did not expose the initialized loaded option")
+  end
+)lua";
+    }
+    if (options.legacyInputBearing) {
+      script += R"lua(
+  local Gdx = luajava.bindClass("com.badlogic.gdx.Gdx")
+  if Gdx.graphics:getWidth() ~= 640 or Gdx.graphics:getHeight() ~= 360 then
+    error("configured phase did not receive the initial legacy-input snapshot")
   end
 )lua";
     }
@@ -1859,6 +1868,34 @@ void testConfiguredLoadUsesTheInitializedAuthoritativeState() {
       PlaySkinSession::create(fixture.takeActivation(), fixture.context());
   expect(created.session != nullptr && created.diagnostics.empty(),
          "configured Lua load receives the initialized authoritative state");
+}
+
+void testLuaSessionCapturesLegacyInputAtEachAuthoritativeBoundary() {
+  ActivationFixture fixture({.legacyInputBearing = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  int captures = 0;
+  auto context = fixture.context();
+  context.captureLegacyInputSnapshot = [&captures] {
+    ++captures;
+    return LuaSkinLegacyInputSnapshot{
+        .drawableWidth = captures == 1 ? 640 : 800,
+        .drawableHeight = captures == 1 ? 360 : 450,
+        .pressedKeys = {29}};
+  };
+  auto created =
+      PlaySkinSession::create(fixture.takeActivation(), std::move(context));
+  expect(created.session != nullptr && created.diagnostics.empty() &&
+             captures == 1,
+         "configured Lua load captures legacy input with its initial main_state boundary");
+  if (!created.session) {
+    return;
+  }
+  const auto frame = created.session->prepareFrame(
+      stateAt(2), projectionAt(2), {});
+  expect(frame.ready() && captures == 2,
+         "each later Lua frame replaces the legacy-input snapshot at the same boundary");
 }
 
 void testRepeatedPomyuObjectsShareCyclePreparation() {
@@ -4697,6 +4734,7 @@ int main() {
   testCallbackBindingWithoutRuntimeFailsValidation();
   testActivationCreatesAnOwningFreshStateSession();
   testConfiguredLoadUsesTheInitializedAuthoritativeState();
+  testLuaSessionCapturesLegacyInputAtEachAuthoritativeBoundary();
   testRepeatedPomyuObjectsShareCyclePreparation();
   testMalformedPomyuNumericDirectivesAbortTheCp932Character();
   testExplicitOversizedPomyuDoesNotFallBackToSibling();
