@@ -318,6 +318,33 @@ endif()
 # headers on Apple Silicon without injecting compiler-specific -I flags.
 set(CMAKE_NO_SYSTEM_FROM_IMPORTED ON)
 
+# Lua skin file_list mirrors java.util.regex.Pattern.  Keep the desktop and
+# Android regex engine pinned in the repository instead of relying on a host
+# package; iOS uses Foundation's system ICU implementation through the same
+# wrapper API.
+if(NOT IOS)
+    set(PCRE2_BUILD_PCRE2_8 ON CACHE BOOL "" FORCE)
+    set(PCRE2_BUILD_PCRE2_16 OFF CACHE BOOL "" FORCE)
+    set(PCRE2_BUILD_PCRE2_32 OFF CACHE BOOL "" FORCE)
+    set(PCRE2_BUILD_PCRE2GREP OFF CACHE BOOL "" FORCE)
+    set(PCRE2_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(PCRE2_SUPPORT_JIT OFF CACHE BOOL "" FORCE)
+    set(PCRE2_SHOW_REPORT OFF CACHE BOOL "" FORCE)
+    add_subdirectory(third_party/pcre2 EXCLUDE_FROM_ALL)
+endif()
+
+function(asobmashow_enable_lua_skin_java_pattern target_name)
+    if(IOS)
+        target_sources(${target_name} PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/skin/beatoraja/LuaSkinJavaPatternFoundation.mm)
+        target_link_libraries(${target_name} PRIVATE "-framework Foundation")
+    else()
+        target_sources(${target_name} PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/skin/beatoraja/LuaSkinJavaPatternPcre2.cpp)
+        target_link_libraries(${target_name} PRIVATE pcre2-8-static)
+    endif()
+endfunction()
+
 add_library(TinyFileDialogs STATIC ${SRC_DIR}/tinyfiledialogs.c)
 add_library(SQLite3 STATIC ${SRC_DIR}/sqlite3.c)
 
@@ -6413,6 +6440,43 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         )
     endif()
 
+    add_executable(lua_skin_java_pattern_tests
+        tests/lua_skin_java_pattern_tests.cpp
+    )
+    target_include_directories(lua_skin_java_pattern_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(lua_skin_java_pattern_tests PRIVATE cxx_std_23)
+    asobmashow_enable_lua_skin_java_pattern(lua_skin_java_pattern_tests)
+    find_package(Java QUIET COMPONENTS Runtime Development)
+    if(Java_JAVA_EXECUTABLE AND Java_JAVAC_EXECUTABLE)
+        add_test(NAME lua_skin_java_pattern_oracle_tests
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/lua_skin_java_pattern_oracle_tests.py
+                $<TARGET_FILE:lua_skin_java_pattern_tests>)
+    endif()
+    if(APPLE AND NOT IOS)
+        add_executable(lua_skin_java_pattern_foundation_tests
+            tests/lua_skin_java_pattern_tests.cpp
+            src/skin/beatoraja/LuaSkinJavaPatternFoundation.mm
+        )
+        target_include_directories(lua_skin_java_pattern_foundation_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(lua_skin_java_pattern_foundation_tests PRIVATE
+            cxx_std_23)
+        target_compile_definitions(lua_skin_java_pattern_foundation_tests PRIVATE
+            ASOBMASHOW_TEST_FOUNDATION_JAVA_PATTERN=1)
+        target_link_libraries(lua_skin_java_pattern_foundation_tests PRIVATE
+            "-framework Foundation")
+        if(Java_JAVA_EXECUTABLE AND Java_JAVAC_EXECUTABLE)
+            add_test(NAME lua_skin_java_pattern_foundation_oracle_tests
+                COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_SOURCE_DIR}/tests/lua_skin_java_pattern_oracle_tests.py
+                    $<TARGET_FILE:lua_skin_java_pattern_foundation_tests>)
+        endif()
+    endif()
+
     foreach(archive_file_target IN ITEMS
         builtin_renderer_characterization_tests
         ir_upload_candidates_tests
@@ -6918,6 +6982,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                asobmashow_parser_source_index EQUAL -1)
                 target_sources(${asobmashow_target} PRIVATE
                     src/bms_parser.cpp)
+            endif()
+
+            list(FIND asobmashow_target_sources
+                "src/skin/beatoraja/LuaSkinFileSystem.cpp"
+                asobmashow_lua_skin_file_system_source_index)
+            if(NOT asobmashow_lua_skin_file_system_source_index EQUAL -1)
+                asobmashow_enable_lua_skin_java_pattern(${asobmashow_target})
             endif()
 
             # Utils.cpp uses CoreFoundation for exact MS932 decoding on Apple.

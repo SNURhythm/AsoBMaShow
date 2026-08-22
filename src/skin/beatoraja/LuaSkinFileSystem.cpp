@@ -1,5 +1,7 @@
 #include "LuaSkinFileSystem.h"
 
+#include "LuaSkinJavaPattern.h"
+
 #include "../package/SkinAliasDetector.h"
 #include "../package/SkinPathPolicy.h"
 
@@ -10,7 +12,6 @@
 #include <fstream>
 #include <limits>
 #include <mutex>
-#include <regex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -479,167 +480,11 @@ std::string_view messageForKind(HostEntryKind kind) {
   return "skin virtual file operation failed";
 }
 
-struct JavaFileListLookbehind {
-  std::regex expression;
-  bool positive = true;
-};
-
-struct JavaFileListPattern {
-  std::regex expression;
-  std::vector<JavaFileListLookbehind> leadingLookbehinds;
-
-  [[nodiscard]] std::optional<std::string>
-  find(std::string_view text) const {
-    std::size_t offset = 0;
-    while (offset <= text.size()) {
-      const std::string remaining(text.substr(offset));
-      std::smatch match;
-      if (!std::regex_search(remaining, match, expression)) {
-        return std::nullopt;
-      }
-      const std::size_t matchStart =
-          offset + static_cast<std::size_t>(match.position());
-      bool accepted = true;
-      for (const auto &lookbehind : leadingLookbehinds) {
-        bool assertionMatched = false;
-        for (std::size_t start = 0; start <= matchStart; ++start) {
-          if (std::regex_match(
-                  std::string(text.substr(start, matchStart - start)),
-                  lookbehind.expression)) {
-            assertionMatched = true;
-            break;
-          }
-        }
-        if (assertionMatched != lookbehind.positive) {
-          accepted = false;
-          break;
-        }
-      }
-      if (accepted) {
-        return match.str();
-      }
-      if (matchStart == text.size()) {
-        return std::nullopt;
-      }
-      offset = matchStart + 1;
-    }
-    return std::nullopt;
-  }
-};
-
-std::optional<std::size_t>
-javaGroupEnd(std::string_view expression, std::size_t opening) {
-  std::size_t depth = 0;
-  bool escaped = false;
-  bool quoted = false;
-  bool characterClass = false;
-  for (std::size_t index = opening; index < expression.size(); ++index) {
-    const char value = expression[index];
-    if (quoted) {
-      if (value == '\\' && index + 1 < expression.size() &&
-          expression[index + 1] == 'E') {
-        quoted = false;
-        ++index;
-      }
-      continue;
-    }
-    if (escaped) {
-      if (value == 'Q') {
-        quoted = true;
-      }
-      escaped = false;
-      continue;
-    }
-    if (value == '\\') {
-      escaped = true;
-      continue;
-    }
-    if (value == '[') {
-      characterClass = true;
-      continue;
-    }
-    if (value == ']' && characterClass) {
-      characterClass = false;
-      continue;
-    }
-    if (characterClass) {
-      continue;
-    }
-    if (value == '(') {
-      ++depth;
-    } else if (value == ')') {
-      if (depth == 0) {
-        return std::nullopt;
-      }
-      --depth;
-      if (depth == 0) {
-        return index;
-      }
-    }
-  }
-  return std::nullopt;
-}
-
-std::optional<std::string> translateJavaPatternExpression(
-    std::string_view expression, bool dotAll) {
-  std::string translated;
-  translated.reserve(expression.size());
-  bool characterClass = false;
-  for (std::size_t index = 0; index < expression.size(); ++index) {
-    const char value = expression[index];
-    if (value == '\\' && index + 1 < expression.size() &&
-        expression[index + 1] == 'Q') {
-      index += 2;
-      while (index < expression.size()) {
-        if (expression[index] == '\\' && index + 1 < expression.size() &&
-            expression[index + 1] == 'E') {
-          ++index;
-          break;
-        }
-        const char literal = expression[index];
-        if (std::string_view(R"(\.^$|()[]{}*+?)").find(literal) !=
-            std::string_view::npos) {
-          translated.push_back('\\');
-        }
-        translated.push_back(literal);
-        ++index;
-      }
-      if (index >= expression.size()) {
-        break;
-      }
-      continue;
-    }
-    if (value == '\\') {
-      if (index + 1 >= expression.size()) {
-        translated.push_back(value);
-        continue;
-      }
-      translated.push_back(value);
-      translated.push_back(expression[++index]);
-      continue;
-    }
-    if (value == '[') {
-      characterClass = true;
-    } else if (value == ']' && characterClass) {
-      characterClass = false;
-    }
-    if (dotAll && value == '.' && !characterClass) {
-      translated += R"([\s\S])";
-    } else {
-      translated.push_back(value);
-    }
-  }
-  return translated;
-}
-
 // SkinFileLuaApiExporter first translates Lua %-escapes and then delegates to
-// java.util.regex.Pattern.  The runtime needs only Matcher.find/group and the
-// finite surface used by gameplay skins: Java quoting, leading embedded flags,
-// lookahead, leading lookbehind assertions, capture groups, and numbered
-// backreferences.  Translate that surface explicitly before using the
-// standard executor; a Java-valid feature outside the finite surface is
-// rejected deliberately rather than being mistaken for an invalid pattern.
-std::optional<JavaFileListPattern>
+// java.util.regex.Pattern.  Preserve the conversion here and leave Pattern
+// parsing plus Matcher.find/group behavior to the cross-platform compatibility
+// engine.
+std::optional<LuaSkinJavaPattern>
 compileLuaFileListPattern(std::string_view pattern) {
   std::string expression;
   expression.reserve(pattern.size() + 1);
@@ -659,97 +504,7 @@ compileLuaFileListPattern(std::string_view pattern) {
     expression.push_back('%');
   }
 
-  bool caseInsensitive = false;
-  bool multiline = false;
-  bool dotAll = false;
-  std::size_t cursor = 0;
-  while (expression.substr(cursor).starts_with("(?")) {
-    const std::size_t close = expression.find(')', cursor + 2);
-    if (close == std::string::npos || close + 1 >= expression.size() ||
-        expression[cursor + 2] == '<' || expression[cursor + 2] == '=' ||
-        expression[cursor + 2] == '!') {
-      break;
-    }
-    const std::string_view flags(expression.data() + cursor + 2,
-                                 close - cursor - 2);
-    bool enabled = true;
-    bool recognized = !flags.empty();
-    for (const char flag : flags) {
-      if (flag == '-') {
-        enabled = false;
-      } else if (flag == 'i') {
-        caseInsensitive = enabled;
-      } else if (flag == 'm') {
-        multiline = enabled;
-      } else if (flag == 's') {
-        dotAll = enabled;
-      } else {
-        recognized = false;
-      }
-    }
-    if (!recognized) {
-      break;
-    }
-    cursor = close + 1;
-  }
-
-  JavaFileListPattern result;
-  while (expression.substr(cursor).starts_with("(?<=") ||
-         expression.substr(cursor).starts_with("(?<!")) {
-    const bool positive = expression[cursor + 3] == '=';
-    const auto close = javaGroupEnd(expression, cursor);
-    if (!close) {
-      return std::nullopt;
-    }
-    const std::string_view assertion(
-        expression.data() + cursor + 4, *close - cursor - 4);
-    const auto translated = translateJavaPatternExpression(assertion, dotAll);
-    if (!translated) {
-      return std::nullopt;
-    }
-    auto options = std::regex_constants::ECMAScript;
-    if (caseInsensitive) {
-      options |= std::regex_constants::icase;
-    }
-    if (multiline) {
-      options |= std::regex_constants::multiline;
-    }
-    try {
-      result.leadingLookbehinds.push_back(
-          {.expression = std::regex(*translated, options),
-           .positive = positive});
-    } catch (const std::regex_error &) {
-      return std::nullopt;
-    }
-    cursor = *close + 1;
-  }
-
-  const std::string_view remainder(expression.data() + cursor,
-                                   expression.size() - cursor);
-  if (remainder.find("(?<=") != std::string_view::npos ||
-      remainder.find("(?<!") != std::string_view::npos ||
-      remainder.find("(?i:") != std::string_view::npos ||
-      remainder.find("(?m:") != std::string_view::npos ||
-      remainder.find("(?s:") != std::string_view::npos) {
-    return std::nullopt;
-  }
-  const auto translated = translateJavaPatternExpression(remainder, dotAll);
-  if (!translated) {
-    return std::nullopt;
-  }
-  auto options = std::regex_constants::ECMAScript;
-  if (caseInsensitive) {
-    options |= std::regex_constants::icase;
-  }
-  if (multiline) {
-    options |= std::regex_constants::multiline;
-  }
-  try {
-    result.expression = std::regex(*translated, options);
-    return result;
-  } catch (const std::regex_error &) {
-    return std::nullopt;
-  }
+  return LuaSkinJavaPattern::compile(expression);
 }
 
 } // namespace
@@ -1396,7 +1151,7 @@ SkinFileListResult LuaSkinFileSystem::list(std::string_view virtualDirectory,
   if (!normalized.path) {
     return {.failure = normalized.failure};
   }
-  std::optional<JavaFileListPattern> pattern;
+  std::optional<LuaSkinJavaPattern> pattern;
   if (!luaPattern.empty()) {
     pattern = compileLuaFileListPattern(luaPattern);
     if (!pattern) {

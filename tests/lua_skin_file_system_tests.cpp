@@ -344,6 +344,8 @@ void testPinnedFileListPreservesDirectoryIterationAndPatternMatches() {
   writeText(directory / "file_source.txt", "lookaround\n");
   writeText(directory / "FLAG_ONLY.TXT", "flags\n");
   writeText(directory / "file_file.txt", "backreference\n");
+  writeText(directory / "file_target_file_.txt", "cross-lookbehind capture\n");
+  writeText(directory / "Élan.txt", "unicode\n");
   writeText(directory / "[literal].txt", "quoting\n");
 
   std::vector<std::string> hostOrder;
@@ -399,6 +401,85 @@ void testPinnedFileListPreservesDirectoryIterationAndPatternMatches() {
   expect(!backreference.failure &&
              backreference.entries == std::vector<std::string>{"file_file.txt"},
          "file_list preserves Java Pattern capture and numbered backreference semantics");
+
+  const auto scopedFlags = created.fileSystem->list(
+      "file-list", "(?i:flag_only\\.txt)",
+      std::numeric_limits<std::size_t>::max());
+  expect(!scopedFlags.failure &&
+             scopedFlags.entries == std::vector<std::string>{"FLAG_ONLY.TXT"},
+         "file_list supports Java Pattern scoped flags");
+
+  const auto midExpressionFlags = created.fileSystem->list(
+      "file-list", "file_(?i)SOURCE\\.TXT",
+      std::numeric_limits<std::size_t>::max());
+  expect(!midExpressionFlags.failure &&
+             midExpressionFlags.entries ==
+                 std::vector<std::string>{"file_source.txt"},
+         "file_list supports Java Pattern mid-expression flags");
+
+  const auto nonLeadingLookbehind = created.fileSystem->list(
+      "file-list", "file_(?<=file_)source",
+      std::numeric_limits<std::size_t>::max());
+  expect(!nonLeadingLookbehind.failure &&
+             nonLeadingLookbehind.entries ==
+                 std::vector<std::string>{"file_source"},
+         "file_list supports non-leading Java Pattern lookbehind");
+
+  const auto crossLookbehindCapture = created.fileSystem->list(
+      "file-list", R"((?<=(file_))target_\1\.txt)",
+      std::numeric_limits<std::size_t>::max());
+  expect(!crossLookbehindCapture.failure &&
+             crossLookbehindCapture.entries ==
+                 std::vector<std::string>{"target_file_.txt"},
+         "file_list keeps capture groups visible across Java lookbehind");
+
+  const auto namedBackreference = created.fileSystem->list(
+      "file-list", R"((?<stem>file)_\k<stem>\.txt)",
+      std::numeric_limits<std::size_t>::max());
+  expect(!namedBackreference.failure &&
+             namedBackreference.entries ==
+                 std::vector<std::string>{"file_file.txt"},
+         "file_list supports Java Pattern named groups and backreferences");
+
+  const auto atomicGroup = created.fileSystem->list(
+      "file-list", R"((?>file)_source\.txt)",
+      std::numeric_limits<std::size_t>::max());
+  expect(!atomicGroup.failure &&
+             atomicGroup.entries ==
+                 std::vector<std::string>{"file_source.txt"},
+         "file_list supports Java Pattern atomic groups");
+
+  const auto possessiveQuantifier = created.fileSystem->list(
+      "file-list", R"(file_+source\.txt)",
+      std::numeric_limits<std::size_t>::max());
+  expect(!possessiveQuantifier.failure &&
+             possessiveQuantifier.entries ==
+                 std::vector<std::string>{"file_source.txt"},
+         "file_list supports Java Pattern possessive quantifiers");
+
+  const auto unicodeClass = created.fileSystem->list(
+      "file-list", R"((?U)(?<![\p{L}\p{N}_])\w+\.txt$)",
+      std::numeric_limits<std::size_t>::max());
+  expect(!unicodeClass.failure &&
+             std::ranges::find(unicodeClass.entries, "Élan.txt") !=
+                 unicodeClass.entries.end(),
+         "file_list supports Java Unicode-character-class flags");
+
+  const auto zeroLengthFlagOnly = created.fileSystem->list(
+      "file-list", "(?i)", 1);
+  expect(!zeroLengthFlagOnly.failure &&
+             zeroLengthFlagOnly.entries.size() == hostOrder.size() &&
+             std::ranges::all_of(zeroLengthFlagOnly.entries,
+                                 [](const auto &entry) { return entry.empty(); }),
+         "file_list supports a zero-length Java flag-only expression");
+
+  const auto quotedGroupAndClass = created.fileSystem->list(
+      "file-list", R"((?:\Q[literal]\E)[.]txt)",
+      std::numeric_limits<std::size_t>::max());
+  expect(!quotedGroupAndClass.failure &&
+             quotedGroupAndClass.entries ==
+                 std::vector<std::string>{"[literal].txt"},
+         "file_list supports Java quoting inside groups beside classes");
 
   const auto invalid = created.fileSystem->list(
       "file-list", "(?<=*)", std::numeric_limits<std::size_t>::max());

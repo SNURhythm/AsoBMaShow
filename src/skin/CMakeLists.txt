@@ -17,6 +17,7 @@ target_sources(main PRIVATE
     package/SkinPathPolicy.cpp
     package/SkinTreeSnapshotter.cpp
 )
+asobmashow_enable_lua_skin_java_pattern(main)
 
 if(IOS)
     target_sources(main PRIVATE

@@ -16,6 +16,11 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
     def setUpClass(cls):
         cls.cmake = read("CMakeLists.txt")
         cls.src_cmake = read("src/CMakeLists.txt")
+        cls.skin_cmake = read("src/skin/CMakeLists.txt")
+        cls.gitmodules = read(".gitmodules")
+        cls.xcode_project = read(
+            "ios/Xcode/AsoBMaShow/AsoBMaShow.xcodeproj/project.pbxproj"
+        )
         cls.info_plist = read("Info.plist")
         cls.macos_init = read("scripts/macos_init.sh")
         cls.macos_workflow = read(".github/workflows/macos-build.yml")
@@ -76,6 +81,28 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
             1,
         )[0]
         self.assertIn("_LIBCPP_ENABLE_EXPERIMENTAL", android_target)
+
+    def test_java_pattern_backend_is_repo_owned_on_cmake_platforms_and_foundation_on_ios(self):
+        self.assertIn('[submodule "third_party/pcre2"]', self.gitmodules)
+        self.assertIn(
+            "url = https://github.com/PCRE2Project/pcre2.git", self.gitmodules
+        )
+        self.assertIn("if(NOT IOS)", self.cmake)
+        self.assertIn(
+            "add_subdirectory(third_party/pcre2 EXCLUDE_FROM_ALL)", self.cmake
+        )
+        self.assertIn(
+            "target_link_libraries(${target_name} PRIVATE pcre2-8-static)",
+            self.cmake,
+        )
+        self.assertIn("LuaSkinJavaPatternPcre2.cpp", self.cmake)
+        self.assertIn("LuaSkinJavaPatternFoundation.mm", self.cmake)
+        self.assertIn("asobmashow_enable_lua_skin_java_pattern(main)", self.skin_cmake)
+        self.assertIn("PBXFileSystemSynchronizedRootGroup", self.xcode_project)
+        self.assertNotIn(
+            "skin/beatoraja/LuaSkinJavaPatternFoundation.mm,",
+            self.xcode_project.split("membershipExceptions = (", 1)[1].split(")", 1)[0],
+        )
 
     def test_android_launcher_uses_the_approved_application_icon(self):
         self.assertIn('android:icon="@mipmap/ic_launcher"', self.android_manifest)
