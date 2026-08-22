@@ -1784,6 +1784,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(beatoraja_gameplay_skin_ledger PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
+    if (TARGET beatoraja_gameplay_cross_format_tests)
+        add_test(NAME beatoraja_gameplay_oracle
+            COMMAND ${Python3_EXECUTABLE}
+                    tests/beatoraja_gameplay_oracle_tests.py)
+        set_tests_properties(beatoraja_gameplay_oracle PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            ENVIRONMENT
+                "ASOBMASHOW_GAMEPLAY_ORACLE_EXECUTABLE=$<TARGET_FILE:beatoraja_gameplay_cross_format_tests>"
+        )
+    endif()
     add_test(NAME build_identity_refresh_contract
         COMMAND ${Python3_EXECUTABLE}
                 -m unittest tests/build_identity_refresh_tests.py -v)

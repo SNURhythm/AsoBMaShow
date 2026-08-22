@@ -1,0 +1,860 @@
+{
+  "cases": [
+    {
+      "comparison": {
+        "mode": "absolute",
+        "tolerance": 1e-07
+      },
+      "id": "selector.master-volume",
+      "source": {
+        "named": 0.5,
+        "numeric": 0.5
+      },
+      "surfaceIds": [
+        "lua.property.float-property"
+      ]
+    },
+    {
+      "comparison": {
+        "mode": "exact",
+        "tolerance": 0
+      },
+      "id": "json.note-distribution",
+      "source": {
+        "backgroundTextureOff": true,
+        "delayMillis": 750,
+        "noGap": true,
+        "noHorizontalGap": true,
+        "reverseOrder": true,
+        "type": 2
+      },
+      "surfaceIds": [
+        "json.field.judge-graph-back-tex-off",
+        "json.field.judge-graph-delay",
+        "json.field.judge-graph-id",
+        "json.field.judge-graph-no-gap",
+        "json.field.judge-graph-no-gap-x",
+        "json.field.judge-graph-order-reverse",
+        "json.field.judge-graph-type",
+        "json.field.skin-judgegraph",
+        "lua.object-field.judge-graph-back-tex-off",
+        "lua.object-field.judge-graph-delay",
+        "lua.object-field.judge-graph-id",
+        "lua.object-field.judge-graph-no-gap",
+        "lua.object-field.judge-graph-no-gap-x",
+        "lua.object-field.judge-graph-order-reverse",
+        "lua.object-field.judge-graph-type",
+        "lua.object-field.skin-judgegraph"
+      ]
+    },
+    {
+      "comparison": {
+        "mode": "exact",
+        "tolerance": 0
+      },
+      "id": "json.bpm-graph",
+      "source": {
+        "colors": [
+          16909311,
+          286397439,
+          555885567,
+          825373695,
+          1094861823,
+          1364349951
+        ],
+        "delayMillis": 30,
+        "lineWidth": 3
+      },
+      "surfaceIds": [
+        "json.field.bpmgraph-delay",
+        "json.field.bpmgraph-id",
+        "json.field.bpmgraph-line-width",
+        "json.field.bpmgraph-main-bpmcolor",
+        "json.field.bpmgraph-max-bpmcolor",
+        "json.field.bpmgraph-min-bpmcolor",
+        "json.field.bpmgraph-other-bpmcolor",
+        "json.field.bpmgraph-stop-line-color",
+        "json.field.bpmgraph-transition-line-color",
+        "json.field.skin-bpmgraph",
+        "lua.object-field.bpmgraph-delay",
+        "lua.object-field.bpmgraph-id",
+        "lua.object-field.bpmgraph-line-width",
+        "lua.object-field.bpmgraph-main-bpmcolor",
+        "lua.object-field.bpmgraph-max-bpmcolor",
+        "lua.object-field.bpmgraph-min-bpmcolor",
+        "lua.object-field.bpmgraph-other-bpmcolor",
+        "lua.object-field.bpmgraph-stop-line-color",
+        "lua.object-field.bpmgraph-transition-line-color",
+        "lua.object-field.skin-bpmgraph"
+      ]
+    },
+    {
+      "comparison": {
+        "mode": "exact",
+        "tolerance": 0
+      },
+      "id": "json.gauge-graph",
+      "source": {
+        "rgba": [
+          [
+            16909060,
+            286397204,
+            555885348,
+            825373492
+          ],
+          [
+            1094861636,
+            1364349780,
+            1633837924,
+            1903326068
+          ],
+          [
+            2172814212,
+            2442302356,
+            2711790500,
+            2981278644
+          ],
+          [
+            3250766788,
+            3520254932,
+            3789743076,
+            4059231220
+          ],
+          [
+            270544960,
+            540033104,
+            809521248,
+            1079009392
+          ],
+          [
+            1348497536,
+            1617985680,
+            1887473824,
+            2156961968
+          ]
+        ]
+      },
+      "surfaceIds": [
+        "json.field.gauge-graph-assist-and-easy-fail-bgcolor",
+        "json.field.gauge-graph-assist-and-easy-fail-line-color",
+        "json.field.gauge-graph-assist-clear-bgcolor",
+        "json.field.gauge-graph-assist-clear-line-color",
+        "json.field.gauge-graph-border-color",
+        "json.field.gauge-graph-borderline-color",
+        "json.field.gauge-graph-color",
+        "json.field.gauge-graph-ex-hard-bgcolor",
+        "json.field.gauge-graph-ex-hard-line-color",
+        "json.field.gauge-graph-groove-clear-and-hard-bgcolor",
+        "json.field.gauge-graph-groove-clear-and-hard-line-color",
+        "json.field.gauge-graph-groove-fail-bgcolor",
+        "json.field.gauge-graph-groove-fail-line-color",
+        "json.field.gauge-graph-hazard-bgcolor",
+        "json.field.gauge-graph-hazard-line-color",
+        "json.field.gauge-graph-id",
+        "json.field.skin-gaugegraph",
+        "lua.object-field.gauge-graph-assist-and-easy-fail-bgcolor",
+        "lua.object-field.gauge-graph-assist-and-easy-fail-line-color",
+        "lua.object-field.gauge-graph-assist-clear-bgcolor",
+        "lua.object-field.gauge-graph-assist-clear-line-color",
+        "lua.object-field.gauge-graph-border-color",
+        "lua.object-field.gauge-graph-borderline-color",
+        "lua.object-field.gauge-graph-color",
+        "lua.object-field.gauge-graph-ex-hard-bgcolor",
+        "lua.object-field.gauge-graph-ex-hard-line-color",
+        "lua.object-field.gauge-graph-groove-clear-and-hard-bgcolor",
+        "lua.object-field.gauge-graph-groove-clear-and-hard-line-color",
+        "lua.object-field.gauge-graph-groove-fail-bgcolor",
+        "lua.object-field.gauge-graph-groove-fail-line-color",
+        "lua.object-field.gauge-graph-hazard-bgcolor",
+        "lua.object-field.gauge-graph-hazard-line-color",
+        "lua.object-field.gauge-graph-id",
+        "lua.object-field.skin-gaugegraph"
+      ]
+    },
+    {
+      "comparison": {
+        "mode": "absolute",
+        "tolerance": 1e-06
+      },
+      "id": "json.timing-visualizer",
+      "source": {
+        "centerMillis": 170,
+        "centerRgba": 286397204,
+        "drawDecay": false,
+        "judgeRgba": [
+          555885348,
+          825373492,
+          1094861636,
+          1364349780,
+          1633837924
+        ],
+        "judgeWidthRate": 1.1788856,
+        "lineRgba": 16909060,
+        "lineWidth": 4,
+        "transparent": false
+      },
+      "surfaceIds": [
+        "json.field.skin-timingvisualizer",
+        "json.field.timing-visualizer-bdcolor",
+        "json.field.timing-visualizer-center-color",
+        "json.field.timing-visualizer-draw-decay",
+        "json.field.timing-visualizer-gdcolor",
+        "json.field.timing-visualizer-grcolor",
+        "json.field.timing-visualizer-id",
+        "json.field.timing-visualizer-judge-width-millis",
+        "json.field.timing-visualizer-line-color",
+        "json.field.timing-visualizer-line-width",
+        "json.field.timing-visualizer-pgcolor",
+        "json.field.timing-visualizer-prcolor",
+        "json.field.timing-visualizer-transparent",
+        "json.field.timing-visualizer-width",
+        "lua.object-field.skin-timingvisualizer",
+        "lua.object-field.timing-visualizer-bdcolor",
+        "lua.object-field.timing-visualizer-center-color",
+        "lua.object-field.timing-visualizer-draw-decay",
+        "lua.object-field.timing-visualizer-gdcolor",
+        "lua.object-field.timing-visualizer-grcolor",
+        "lua.object-field.timing-visualizer-id",
+        "lua.object-field.timing-visualizer-judge-width-millis",
+        "lua.object-field.timing-visualizer-line-color",
+        "lua.object-field.timing-visualizer-line-width",
+        "lua.object-field.timing-visualizer-pgcolor",
+        "lua.object-field.timing-visualizer-prcolor",
+        "lua.object-field.timing-visualizer-transparent",
+        "lua.object-field.timing-visualizer-width"
+      ]
+    },
+    {
+      "comparison": {
+        "mode": "absolute",
+        "tolerance": 1e-06
+      },
+      "id": "json.hit-error-visualizer",
+      "source": {
+        "alpha": 0.25,
+        "centerMillis": 160,
+        "centerRgba": 286397204,
+        "colorMode": false,
+        "drawDecay": false,
+        "emaMode": 2,
+        "emaRgba": 1903326068,
+        "emaSequence": [
+          10,
+          3,
+          4
+        ],
+        "hitErrorMode": false,
+        "judgeRgba": [
+          555885348,
+          825373492,
+          1094861636,
+          1364349780,
+          1633837924
+        ],
+        "judgeWidthRate": 1.2492212,
+        "lineRgba": 16909060,
+        "lineWidth": 3,
+        "transparent": false,
+        "width": 401,
+        "windowLength": 40
+      },
+      "surfaceIds": [
+        "json.field.hit-error-visualizer-alpha",
+        "json.field.hit-error-visualizer-bdcolor",
+        "json.field.hit-error-visualizer-center-color",
+        "json.field.hit-error-visualizer-color-mode",
+        "json.field.hit-error-visualizer-draw-decay",
+        "json.field.hit-error-visualizer-ema-color",
+        "json.field.hit-error-visualizer-ema-mode",
+        "json.field.hit-error-visualizer-gdcolor",
+        "json.field.hit-error-visualizer-grcolor",
+        "json.field.hit-error-visualizer-hiterror-mode",
+        "json.field.hit-error-visualizer-id",
+        "json.field.hit-error-visualizer-judge-width-millis",
+        "json.field.hit-error-visualizer-line-color",
+        "json.field.hit-error-visualizer-line-width",
+        "json.field.hit-error-visualizer-pgcolor",
+        "json.field.hit-error-visualizer-prcolor",
+        "json.field.hit-error-visualizer-transparent",
+        "json.field.hit-error-visualizer-width",
+        "json.field.hit-error-visualizer-window-length",
+        "json.field.skin-hiterrorvisualizer",
+        "lua.object-field.hit-error-visualizer-alpha",
+        "lua.object-field.hit-error-visualizer-bdcolor",
+        "lua.object-field.hit-error-visualizer-center-color",
+        "lua.object-field.hit-error-visualizer-color-mode",
+        "lua.object-field.hit-error-visualizer-draw-decay",
+        "lua.object-field.hit-error-visualizer-ema-color",
+        "lua.object-field.hit-error-visualizer-ema-mode",
+        "lua.object-field.hit-error-visualizer-gdcolor",
+        "lua.object-field.hit-error-visualizer-grcolor",
+        "lua.object-field.hit-error-visualizer-hiterror-mode",
+        "lua.object-field.hit-error-visualizer-id",
+        "lua.object-field.hit-error-visualizer-judge-width-millis",
+        "lua.object-field.hit-error-visualizer-line-color",
+        "lua.object-field.hit-error-visualizer-line-width",
+        "lua.object-field.hit-error-visualizer-pgcolor",
+        "lua.object-field.hit-error-visualizer-prcolor",
+        "lua.object-field.hit-error-visualizer-transparent",
+        "lua.object-field.hit-error-visualizer-width",
+        "lua.object-field.hit-error-visualizer-window-length",
+        "lua.object-field.skin-hiterrorvisualizer"
+      ]
+    },
+    {
+      "comparison": {
+        "mode": "exact",
+        "tolerance": 0
+      },
+      "id": "json.timing-distribution",
+      "source": {
+        "averageRgba": 286397204,
+        "centerColumn": 67,
+        "columns": 134,
+        "devRgba": 555885348,
+        "drawAverage": false,
+        "drawDev": false,
+        "gameplayDraw": false,
+        "graphRgba": 16909060,
+        "judgeRgba": [
+          825373492,
+          1094861636,
+          1364349780,
+          1633837924,
+          1903326068
+        ]
+      },
+      "surfaceIds": [
+        "json.field.skin-timingdistributiongraph",
+        "json.field.timing-distribution-graph-average-color",
+        "json.field.timing-distribution-graph-bdcolor",
+        "json.field.timing-distribution-graph-dev-color",
+        "json.field.timing-distribution-graph-draw-average",
+        "json.field.timing-distribution-graph-draw-dev",
+        "json.field.timing-distribution-graph-gdcolor",
+        "json.field.timing-distribution-graph-graph-color",
+        "json.field.timing-distribution-graph-grcolor",
+        "json.field.timing-distribution-graph-id",
+        "json.field.timing-distribution-graph-line-width",
+        "json.field.timing-distribution-graph-pgcolor",
+        "json.field.timing-distribution-graph-prcolor",
+        "json.field.timing-distribution-graph-width",
+        "lua.object-field.skin-timingdistributiongraph",
+        "lua.object-field.timing-distribution-graph-average-color",
+        "lua.object-field.timing-distribution-graph-bdcolor",
+        "lua.object-field.timing-distribution-graph-dev-color",
+        "lua.object-field.timing-distribution-graph-draw-average",
+        "lua.object-field.timing-distribution-graph-draw-dev",
+        "lua.object-field.timing-distribution-graph-gdcolor",
+        "lua.object-field.timing-distribution-graph-graph-color",
+        "lua.object-field.timing-distribution-graph-grcolor",
+        "lua.object-field.timing-distribution-graph-id",
+        "lua.object-field.timing-distribution-graph-line-width",
+        "lua.object-field.timing-distribution-graph-pgcolor",
+        "lua.object-field.timing-distribution-graph-prcolor",
+        "lua.object-field.timing-distribution-graph-width"
+      ]
+    },
+    {
+      "comparison": {
+        "mode": "exact",
+        "tolerance": 0
+      },
+      "id": "lr2.slider",
+      "source": {
+        "changeable": false,
+        "destination": {
+          "acceleration": 0,
+          "angleDegrees": 0,
+          "height": 10.0,
+          "rgba": 4294967295,
+          "timeMillis": 0,
+          "width": 10.0,
+          "x": 70.0,
+          "y": 80.0
+        },
+        "direction": 1,
+        "range": 90
+      },
+      "surfaceIds": [
+        "json.field.slider-angle",
+        "json.field.slider-changeable",
+        "json.field.slider-range",
+        "json.field.slider-type",
+        "lr2.csv-command.dst-slider",
+        "lr2.csv-command.src-slider",
+        "lua.object-field.slider-angle",
+        "lua.object-field.slider-changeable",
+        "lua.object-field.slider-range",
+        "lua.object-field.slider-type"
+      ]
+    },
+    {
+      "comparison": {
+        "mode": "exact",
+        "tolerance": 0
+      },
+      "id": "lr2.note-chart",
+      "source": {
+        "destination": {
+          "acceleration": 0,
+          "angleDegrees": 0,
+          "height": 77.0,
+          "rgba": 4294967295,
+          "timeMillis": 0,
+          "width": 222.0,
+          "x": 20.0,
+          "y": 180.0
+        },
+        "object": {
+          "backgroundTextureOff": true,
+          "delayMillis": 500,
+          "noGap": true,
+          "noHorizontalGap": true,
+          "reverseOrder": true,
+          "type": 1
+        }
+      },
+      "surfaceIds": [
+        "lr2.play-command.dst-notechart-1-p",
+        "lr2.play-command.src-notechart-1-p"
+      ]
+    },
+    {
+      "comparison": {
+        "mode": "exact",
+        "tolerance": 0
+      },
+      "id": "lr2.bpm-chart",
+      "source": {
+        "destination": {
+          "acceleration": 0,
+          "angleDegrees": 0,
+          "height": 77.0,
+          "rgba": 4294967295,
+          "timeMillis": 0,
+          "width": 222.0,
+          "x": 20.0,
+          "y": 200.0
+        },
+        "object": {
+          "colors": [
+            16711935,
+            65535,
+            4278190335,
+            4294902015,
+            4278255615,
+            2139062271
+          ],
+          "delayMillis": 250,
+          "lineWidth": 2
+        }
+      },
+      "surfaceIds": [
+        "lr2.play-command.dst-bpmchart",
+        "lr2.play-command.src-bpmchart"
+      ]
+    },
+    {
+      "comparison": {
+        "mode": "absolute",
+        "tolerance": 1e-06
+      },
+      "id": "lr2.timing",
+      "source": {
+        "destination": {
+          "acceleration": 0,
+          "angleDegrees": 0,
+          "height": 80.0,
+          "rgba": 4294967295,
+          "timeMillis": 0,
+          "width": 301.0,
+          "x": 20.0,
+          "y": 220.0
+        },
+        "object": {
+          "centerMillis": 150,
+          "centerRgba": 4294967295,
+          "drawDecay": true,
+          "judgeRgba": [
+            35071,
+            8913151,
+            2290614527,
+            2281701631,
+            0
+          ],
+          "judgeWidthRate": 1.0,
+          "lineRgba": 16711935,
+          "lineWidth": 2,
+          "transparent": true
+        }
+      },
+      "surfaceIds": [
+        "lr2.play-command.dst-timing-1-p",
+        "lr2.play-command.src-timing-1-p"
+      ]
+    }
+  ],
+  "differentialSurfaceIds": [
+    "json.field.bpmgraph-delay",
+    "json.field.bpmgraph-id",
+    "json.field.bpmgraph-line-width",
+    "json.field.bpmgraph-main-bpmcolor",
+    "json.field.bpmgraph-max-bpmcolor",
+    "json.field.bpmgraph-min-bpmcolor",
+    "json.field.bpmgraph-other-bpmcolor",
+    "json.field.bpmgraph-stop-line-color",
+    "json.field.bpmgraph-transition-line-color",
+    "json.field.gauge-graph-assist-and-easy-fail-bgcolor",
+    "json.field.gauge-graph-assist-and-easy-fail-line-color",
+    "json.field.gauge-graph-assist-clear-bgcolor",
+    "json.field.gauge-graph-assist-clear-line-color",
+    "json.field.gauge-graph-border-color",
+    "json.field.gauge-graph-borderline-color",
+    "json.field.gauge-graph-color",
+    "json.field.gauge-graph-ex-hard-bgcolor",
+    "json.field.gauge-graph-ex-hard-line-color",
+    "json.field.gauge-graph-groove-clear-and-hard-bgcolor",
+    "json.field.gauge-graph-groove-clear-and-hard-line-color",
+    "json.field.gauge-graph-groove-fail-bgcolor",
+    "json.field.gauge-graph-groove-fail-line-color",
+    "json.field.gauge-graph-hazard-bgcolor",
+    "json.field.gauge-graph-hazard-line-color",
+    "json.field.gauge-graph-id",
+    "json.field.hit-error-visualizer-alpha",
+    "json.field.hit-error-visualizer-bdcolor",
+    "json.field.hit-error-visualizer-center-color",
+    "json.field.hit-error-visualizer-color-mode",
+    "json.field.hit-error-visualizer-draw-decay",
+    "json.field.hit-error-visualizer-ema-color",
+    "json.field.hit-error-visualizer-ema-mode",
+    "json.field.hit-error-visualizer-gdcolor",
+    "json.field.hit-error-visualizer-grcolor",
+    "json.field.hit-error-visualizer-hiterror-mode",
+    "json.field.hit-error-visualizer-id",
+    "json.field.hit-error-visualizer-judge-width-millis",
+    "json.field.hit-error-visualizer-line-color",
+    "json.field.hit-error-visualizer-line-width",
+    "json.field.hit-error-visualizer-pgcolor",
+    "json.field.hit-error-visualizer-prcolor",
+    "json.field.hit-error-visualizer-transparent",
+    "json.field.hit-error-visualizer-width",
+    "json.field.hit-error-visualizer-window-length",
+    "json.field.judge-graph-back-tex-off",
+    "json.field.judge-graph-delay",
+    "json.field.judge-graph-id",
+    "json.field.judge-graph-no-gap",
+    "json.field.judge-graph-no-gap-x",
+    "json.field.judge-graph-order-reverse",
+    "json.field.judge-graph-type",
+    "json.field.skin-bpmgraph",
+    "json.field.skin-gaugegraph",
+    "json.field.skin-hiterrorvisualizer",
+    "json.field.skin-judgegraph",
+    "json.field.skin-timingdistributiongraph",
+    "json.field.skin-timingvisualizer",
+    "json.field.slider-angle",
+    "json.field.slider-changeable",
+    "json.field.slider-range",
+    "json.field.slider-type",
+    "json.field.timing-distribution-graph-average-color",
+    "json.field.timing-distribution-graph-bdcolor",
+    "json.field.timing-distribution-graph-dev-color",
+    "json.field.timing-distribution-graph-draw-average",
+    "json.field.timing-distribution-graph-draw-dev",
+    "json.field.timing-distribution-graph-gdcolor",
+    "json.field.timing-distribution-graph-graph-color",
+    "json.field.timing-distribution-graph-grcolor",
+    "json.field.timing-distribution-graph-id",
+    "json.field.timing-distribution-graph-line-width",
+    "json.field.timing-distribution-graph-pgcolor",
+    "json.field.timing-distribution-graph-prcolor",
+    "json.field.timing-distribution-graph-width",
+    "json.field.timing-visualizer-bdcolor",
+    "json.field.timing-visualizer-center-color",
+    "json.field.timing-visualizer-draw-decay",
+    "json.field.timing-visualizer-gdcolor",
+    "json.field.timing-visualizer-grcolor",
+    "json.field.timing-visualizer-id",
+    "json.field.timing-visualizer-judge-width-millis",
+    "json.field.timing-visualizer-line-color",
+    "json.field.timing-visualizer-line-width",
+    "json.field.timing-visualizer-pgcolor",
+    "json.field.timing-visualizer-prcolor",
+    "json.field.timing-visualizer-transparent",
+    "json.field.timing-visualizer-width",
+    "lr2.csv-command.dst-slider",
+    "lr2.csv-command.src-slider",
+    "lr2.play-command.dst-bpmchart",
+    "lr2.play-command.dst-notechart-1-p",
+    "lr2.play-command.dst-timing-1-p",
+    "lr2.play-command.src-bpmchart",
+    "lr2.play-command.src-notechart-1-p",
+    "lr2.play-command.src-timing-1-p",
+    "lua.object-field.bpmgraph-delay",
+    "lua.object-field.bpmgraph-id",
+    "lua.object-field.bpmgraph-line-width",
+    "lua.object-field.bpmgraph-main-bpmcolor",
+    "lua.object-field.bpmgraph-max-bpmcolor",
+    "lua.object-field.bpmgraph-min-bpmcolor",
+    "lua.object-field.bpmgraph-other-bpmcolor",
+    "lua.object-field.bpmgraph-stop-line-color",
+    "lua.object-field.bpmgraph-transition-line-color",
+    "lua.object-field.gauge-graph-assist-and-easy-fail-bgcolor",
+    "lua.object-field.gauge-graph-assist-and-easy-fail-line-color",
+    "lua.object-field.gauge-graph-assist-clear-bgcolor",
+    "lua.object-field.gauge-graph-assist-clear-line-color",
+    "lua.object-field.gauge-graph-border-color",
+    "lua.object-field.gauge-graph-borderline-color",
+    "lua.object-field.gauge-graph-color",
+    "lua.object-field.gauge-graph-ex-hard-bgcolor",
+    "lua.object-field.gauge-graph-ex-hard-line-color",
+    "lua.object-field.gauge-graph-groove-clear-and-hard-bgcolor",
+    "lua.object-field.gauge-graph-groove-clear-and-hard-line-color",
+    "lua.object-field.gauge-graph-groove-fail-bgcolor",
+    "lua.object-field.gauge-graph-groove-fail-line-color",
+    "lua.object-field.gauge-graph-hazard-bgcolor",
+    "lua.object-field.gauge-graph-hazard-line-color",
+    "lua.object-field.gauge-graph-id",
+    "lua.object-field.hit-error-visualizer-alpha",
+    "lua.object-field.hit-error-visualizer-bdcolor",
+    "lua.object-field.hit-error-visualizer-center-color",
+    "lua.object-field.hit-error-visualizer-color-mode",
+    "lua.object-field.hit-error-visualizer-draw-decay",
+    "lua.object-field.hit-error-visualizer-ema-color",
+    "lua.object-field.hit-error-visualizer-ema-mode",
+    "lua.object-field.hit-error-visualizer-gdcolor",
+    "lua.object-field.hit-error-visualizer-grcolor",
+    "lua.object-field.hit-error-visualizer-hiterror-mode",
+    "lua.object-field.hit-error-visualizer-id",
+    "lua.object-field.hit-error-visualizer-judge-width-millis",
+    "lua.object-field.hit-error-visualizer-line-color",
+    "lua.object-field.hit-error-visualizer-line-width",
+    "lua.object-field.hit-error-visualizer-pgcolor",
+    "lua.object-field.hit-error-visualizer-prcolor",
+    "lua.object-field.hit-error-visualizer-transparent",
+    "lua.object-field.hit-error-visualizer-width",
+    "lua.object-field.hit-error-visualizer-window-length",
+    "lua.object-field.judge-graph-back-tex-off",
+    "lua.object-field.judge-graph-delay",
+    "lua.object-field.judge-graph-id",
+    "lua.object-field.judge-graph-no-gap",
+    "lua.object-field.judge-graph-no-gap-x",
+    "lua.object-field.judge-graph-order-reverse",
+    "lua.object-field.judge-graph-type",
+    "lua.object-field.skin-bpmgraph",
+    "lua.object-field.skin-gaugegraph",
+    "lua.object-field.skin-hiterrorvisualizer",
+    "lua.object-field.skin-judgegraph",
+    "lua.object-field.skin-timingdistributiongraph",
+    "lua.object-field.skin-timingvisualizer",
+    "lua.object-field.slider-angle",
+    "lua.object-field.slider-changeable",
+    "lua.object-field.slider-range",
+    "lua.object-field.slider-type",
+    "lua.object-field.timing-distribution-graph-average-color",
+    "lua.object-field.timing-distribution-graph-bdcolor",
+    "lua.object-field.timing-distribution-graph-dev-color",
+    "lua.object-field.timing-distribution-graph-draw-average",
+    "lua.object-field.timing-distribution-graph-draw-dev",
+    "lua.object-field.timing-distribution-graph-gdcolor",
+    "lua.object-field.timing-distribution-graph-graph-color",
+    "lua.object-field.timing-distribution-graph-grcolor",
+    "lua.object-field.timing-distribution-graph-id",
+    "lua.object-field.timing-distribution-graph-line-width",
+    "lua.object-field.timing-distribution-graph-pgcolor",
+    "lua.object-field.timing-distribution-graph-prcolor",
+    "lua.object-field.timing-distribution-graph-width",
+    "lua.object-field.timing-visualizer-bdcolor",
+    "lua.object-field.timing-visualizer-center-color",
+    "lua.object-field.timing-visualizer-draw-decay",
+    "lua.object-field.timing-visualizer-gdcolor",
+    "lua.object-field.timing-visualizer-grcolor",
+    "lua.object-field.timing-visualizer-id",
+    "lua.object-field.timing-visualizer-judge-width-millis",
+    "lua.object-field.timing-visualizer-line-color",
+    "lua.object-field.timing-visualizer-line-width",
+    "lua.object-field.timing-visualizer-pgcolor",
+    "lua.object-field.timing-visualizer-prcolor",
+    "lua.object-field.timing-visualizer-transparent",
+    "lua.object-field.timing-visualizer-width",
+    "lua.property.float-property"
+  ],
+  "fixtures": [
+    {
+      "path": "tests/fixtures/beatoraja_skin/lua/model/all_v1_objects.luaskin",
+      "sha256": "76261fa05afc3fa5c7998957c94ba449ee74b17e31c647968de3400053321fec"
+    },
+    {
+      "path": "tests/fixtures/beatoraja_skin/json/all_gameplay_fields.json",
+      "sha256": "ecb55ba77974420e30a32c5a0ba550301a3826b224df296cdf79d4246866ca99"
+    },
+    {
+      "path": "tests/fixtures/beatoraja_skin/lr2/all_gameplay_objects.lr2skin",
+      "sha256": "325a3e041649f141d68b9e9fdca8592ab72bba314d78f44b4a2c9bedf4645075"
+    },
+    {
+      "path": "tests/fixtures/beatoraja_skin/lr2/all_play_commands.lr2skin",
+      "sha256": "98776c9aff83c05353d25938866e0f858f62be0b64e3d2a651907b5656c91c71"
+    }
+  ],
+  "frame": {
+    "runtimeState": {
+      "masterVolumeRate": 0.5,
+      "recentHitErrorsMillis": [
+        40,
+        -20,
+        10
+      ]
+    },
+    "viewport": {
+      "height": 720,
+      "width": 1280
+    },
+    "visualTimesMillis": [
+      0,
+      250,
+      500,
+      1500
+    ]
+  },
+  "oracle": "pinned-beatoraja-gameplay-v1",
+  "referenceClasspath": {
+    "jars": [
+      {
+        "path": "lib/commons-compress-1.16.1.jar",
+        "sha256": "a20d8e45315abbe07faf952e095817b9925f38c4fc39e8a211c7d072702e97eb"
+      },
+      {
+        "path": "lib/commons-dbutils.jar",
+        "sha256": "bd42e879e33afeacf6c59bdd5382a987eb017202857c509bbd1c88e15bc9a974"
+      },
+      {
+        "path": "lib/ffmpeg-linux-x86.jar",
+        "sha256": "030fd7a87fbdbfdd1875f81f203f6877093eeea1e2e21297da5e18f3e7bf4e8d"
+      },
+      {
+        "path": "lib/ffmpeg-linux-x86_64.jar",
+        "sha256": "ac6f3fc9eb5b4cefe3ca84c81cf82403bc9ab4df26ceda569ebbe7ecdc1769d6"
+      },
+      {
+        "path": "lib/ffmpeg-macosx-x86_64.jar",
+        "sha256": "47e433b905e595c68d2f89cdc23bbcea3600b86ca2a56192e09ee2c0b1cc54b7"
+      },
+      {
+        "path": "lib/ffmpeg-platform.jar",
+        "sha256": "fb8ff4f7897c5b747bdf52917695d7c7765fdf758140684151623f9ebe0546a9"
+      },
+      {
+        "path": "lib/ffmpeg-windows-x86.jar",
+        "sha256": "a5c1f415cee64e1cd1de17adfe6ce425479fde159fa92776b47de37dcac13878"
+      },
+      {
+        "path": "lib/ffmpeg-windows-x86_64.jar",
+        "sha256": "d6b1284299c442c6b720660d21e8abf32640ef0283cc0b27c005153b302577ec"
+      },
+      {
+        "path": "lib/ffmpeg.jar",
+        "sha256": "7cd071753ca3c7ed8b9f4d3e20e631986c6d3e8fc0daba7b1f3eb9fab073f5cc"
+      },
+      {
+        "path": "lib/gdx-backend-lwjgl-natives.jar",
+        "sha256": "0e9893e68b7f8cdd78db575d709b005355a5284259c07546436c9b2ef157b4bf"
+      },
+      {
+        "path": "lib/gdx-backend-lwjgl.jar",
+        "sha256": "234fc051622303972c0dbe49118692ac2ad5816a20d16be6063185f599bade25"
+      },
+      {
+        "path": "lib/gdx-controllers-desktop-natives.jar",
+        "sha256": "6cdb09cec6e083e70997c40c46378b7e56c22b8e8de35724cf939476b23edff2"
+      },
+      {
+        "path": "lib/gdx-controllers-desktop.jar",
+        "sha256": "f33013f2e99551ba216b30331d4d4ecbcbde30446c31c4531a21b3b17a5daa99"
+      },
+      {
+        "path": "lib/gdx-controllers.jar",
+        "sha256": "adecc46b196997f3b894a062be0fbe2ec518afb4ddd796d0f4450f6a05a282e7"
+      },
+      {
+        "path": "lib/gdx-freetype-natives.jar",
+        "sha256": "80b6e7759a0951e1bf032b73d962960adf14c186301d0840ac518b7c08ba6a58"
+      },
+      {
+        "path": "lib/gdx-freetype.jar",
+        "sha256": "fd9e78f51682ca5fe82229bd981239ad8ae2bad417ff060fd6d3daf37aec94cb"
+      },
+      {
+        "path": "lib/gdx-natives.jar",
+        "sha256": "177260891eb0f8c518e955c9278d2f76ef5603d8ea6e1e63815075ffc735e78b"
+      },
+      {
+        "path": "lib/gdx.jar",
+        "sha256": "b395fb54558e843408e618e6b647d29d5fe4f4629842a05ec4c9349761b5bd5b"
+      },
+      {
+        "path": "lib/java-discord-rpc-2.0.1-all.jar",
+        "sha256": "2c483ef447eca5c11a41714927b894d09ff1f223c5bc0c12f9900e7d8a17ba71"
+      },
+      {
+        "path": "lib/javacpp.jar",
+        "sha256": "e800b74c7239bc651b747cf4936ae84d055d2fbb1b45bd2f51e32cfeaf2ec186"
+      },
+      {
+        "path": "lib/javacv-platform.jar",
+        "sha256": "04c9d7fc3ec01c50c0f1bfd265479649fb12301367e120b4cd2394fa042f82f2"
+      },
+      {
+        "path": "lib/javacv.jar",
+        "sha256": "aa14054a40320bd0dfc449ddd2ad9736cae24fc22aa6c374edfd06b3be5f4523"
+      },
+      {
+        "path": "lib/jbms-parser.jar",
+        "sha256": "30b9abb1e892e6e7f53ab7ae3c507479e7cdd45689eb5fdfd0363fe1775bcbdb"
+      },
+      {
+        "path": "lib/jbmstable-parser.jar",
+        "sha256": "d18350ff4030ef7371fcdcce3d021b4bc96925698de177f1a452aa8472c66e3f"
+      },
+      {
+        "path": "lib/jflac-codec-1.5.3.jar",
+        "sha256": "3961956c4e013d449ff1ccd259428a107466d97f589137ec8983f8e1b5df7529"
+      },
+      {
+        "path": "lib/jportaudio.jar",
+        "sha256": "45add37639cb9f3e9381a6ae257da0cd318a41f28545df9edb0094ceece9e292"
+      },
+      {
+        "path": "lib/luaj-jse-3.0.2-custom.jar",
+        "sha256": "15bcbdd85ddf6f1e189093b28850c086e5bf13085cbc29595f3523444fb5fd8a"
+      },
+      {
+        "path": "lib/sqlite-jdbc.jar",
+        "sha256": "d570af636a2be99e20be9510fb615aa819b2059857b2dd625aecbff774766331"
+      },
+      {
+        "path": "lib/tarsosdsp-latest.jar",
+        "sha256": "2127c8d23a1988af472a6111d7e432f19d4fb6268c909dbb48c1f7e3758aa270"
+      },
+      {
+        "path": "lib/twitter4j-core-4.0.4.jar",
+        "sha256": "52fa07b43d9d8bc415df852d477d0379b9d9ffbb9bb44109d0815c07fd7913d9"
+      }
+    ],
+    "kind": "tracked-ant-lib-wildcard"
+  },
+  "referenceCommit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+  "schemaVersion": 1,
+  "sourceClosure": {
+    "excluded": [
+      "src/bms/player/beatoraja/launcher/**",
+      "src/bms/player/beatoraja/MainLoader.java",
+      "src/bms/player/beatoraja/play/LaneRenderer.java"
+    ],
+    "testStubs": [
+      "bms.player.beatoraja.MainLoader",
+      "bms.player.beatoraja.play.LaneRenderer"
+    ]
+  }
+}

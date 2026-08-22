@@ -191,13 +191,13 @@ SkinEntryId staticEntry(std::string_view packageName,
   return *normalizeEntryPath(package, relativePath).entry;
 }
 
-BeatorajaSkinModelDecodeResult decodeJsonFixture() {
+BeatorajaSkinModelDecodeResult decodeJsonFixture(
+    std::string_view name = "all_gameplay_objects.json") {
   const fs::path path = fs::path(ASOBMASHOW_SOURCE_DIR) /
-                        "tests/fixtures/beatoraja_skin/json/"
-                        "all_gameplay_objects.json";
+                        "tests/fixtures/beatoraja_skin/json" / name;
   auto decoded = JsonGameplaySkinDecoder{}.decode(
-      readBytes(path), staticEntry("CrossFormatJson", "all_gameplay_objects.json"),
-      nullptr, fixtureBuiltins());
+      readBytes(path), staticEntry("CrossFormatJson", name), nullptr,
+      fixtureBuiltins());
   return {.model = std::move(decoded.model),
           .diagnostics = std::move(decoded.diagnostics)};
 }
@@ -225,10 +225,10 @@ std::vector<std::string> splitFields(std::string_view line) {
   }
 }
 
-std::vector<Lr2SkinCommand> readLr2Commands() {
+std::vector<Lr2SkinCommand> readLr2Commands(
+    std::string_view name = "all_gameplay_objects.lr2skin") {
   const fs::path path = fs::path(ASOBMASHOW_SOURCE_DIR) /
-                        "tests/fixtures/beatoraja_skin/lr2/"
-                        "all_gameplay_objects.lr2skin";
+                        "tests/fixtures/beatoraja_skin/lr2" / name;
   std::ifstream input(path, std::ios::binary);
   expect(input.good(), "LR2 parity fixture opens");
   std::vector<Lr2SkinCommand> commands;
@@ -243,19 +243,18 @@ std::vector<Lr2SkinCommand> readLr2Commands() {
     fields.erase(fields.begin());
     commands.push_back({.name = std::move(name),
                         .fields = std::move(fields),
-                        .source = {.virtualPath =
-                                       "all_gameplay_objects.lr2skin",
+                        .source = {.virtualPath = std::string(name),
                                    .line = lineNumber,
                                    .column = 1},
-                        .includeChain = {"all_gameplay_objects.lr2skin"}});
+                        .includeChain = {std::string(name)}});
   }
   return commands;
 }
 
-BeatorajaSkinModelDecodeResult decodeLr2Fixture() {
-  const auto commands = readLr2Commands();
-  const auto header =
-      Lr2SkinHeaderDecoder{}.decode(commands, "all_gameplay_objects.lr2skin");
+BeatorajaSkinModelDecodeResult decodeLr2Fixture(
+    std::string_view name = "all_gameplay_objects.lr2skin") {
+  const auto commands = readLr2Commands(name);
+  const auto header = Lr2SkinHeaderDecoder{}.decode(commands, name);
   expect(header.header.has_value(), "LR2 parity header decodes");
   if (!header.header) return {};
   const auto configuration =
@@ -415,6 +414,193 @@ void expectJson(const Json &actual, const Json &expected,
   expect(false, message);
   std::cerr << "EXPECTED:\n" << expected.dump(2) << "\nACTUAL:\n"
             << actual.dump(2) << '\n';
+}
+
+std::uint32_t packedRgba(const std::array<std::uint8_t, 4> &rgba) {
+  return static_cast<std::uint32_t>(rgba[0]) << 24U |
+         static_cast<std::uint32_t>(rgba[1]) << 16U |
+         static_cast<std::uint32_t>(rgba[2]) << 8U |
+         static_cast<std::uint32_t>(rgba[3]);
+}
+
+template <typename Payload>
+const SkinObjectDefinition *firstObject(const BeatorajaSkinModel &model) {
+  const auto found = std::ranges::find_if(model.objects, [](const auto &object) {
+    return std::holds_alternative<Payload>(object.payload);
+  });
+  return found == model.objects.end() ? nullptr : &*found;
+}
+
+Json oracleDestination(const BeatorajaSkinModel &model,
+                       const SkinObjectDefinition &object) {
+  const auto *destination = findDestination(model, object.id);
+  expect(destination && !destination->presentation.frames.empty(),
+         "oracle object retains a destination");
+  if (!destination || destination->presentation.frames.empty()) {
+    return Json::object();
+  }
+  const auto &frame = destination->presentation.frames.front();
+  return {{"timeMillis", frame.timeMillis},
+          {"x", frame.x},
+          {"y", frame.y},
+          {"width", frame.width},
+          {"height", frame.height},
+          {"acceleration", frame.acceleration},
+          {"rgba", packedRgba(frame.rgba)},
+          {"angleDegrees", static_cast<int>(frame.angleDegrees)}};
+}
+
+Json noteDistributionOracle(const SkinNoteDistributionGraphObject &value) {
+  return {{"type", static_cast<int>(value.type)},
+          {"delayMillis", value.delayMillis},
+          {"backgroundTextureOff", value.backgroundTextureOff},
+          {"reverseOrder", value.reverseOrder},
+          {"noGap", value.noGap},
+          {"noHorizontalGap", value.noHorizontalGap}};
+}
+
+Json bpmOracle(const SkinBpmGraphObject &value) {
+  return {{"delayMillis", value.delayMillis},
+          {"lineWidth", value.lineWidth},
+          {"colors", Json::array({value.mainRgba, value.minimumRgba,
+                                   value.maximumRgba, value.otherRgba,
+                                   value.stopRgba, value.transitionRgba})}};
+}
+
+Json timingOracle(const SkinTimingVisualizerObject &value) {
+  return {{"centerMillis", value.judgeWidthMillis},
+          {"judgeWidthRate",
+           static_cast<float>(value.width) /
+               static_cast<float>(value.judgeWidthMillis * 2 + 1)},
+          {"lineWidth", value.lineWidth},
+          {"lineRgba", value.lineRgba},
+          {"centerRgba", value.centerRgba},
+          {"judgeRgba", value.judgeRgba},
+          {"transparent", value.transparent},
+          {"drawDecay", value.drawDecay}};
+}
+
+Json hitErrorOracle(const SkinHitErrorVisualizerObject &value) {
+  std::array<std::int64_t, 3> recent{40, -20, 10};
+  std::array<SkinJudgeWindow, 5> windows{};
+  windows[3] = {.minimumTimingMillis = -1'000,
+                .maximumTimingMillis = 1'000};
+  SkinHitErrorVisualizerPresentationState presentation;
+  Json ema = Json::array();
+  for (std::size_t index = 0; index < recent.size(); ++index) {
+    const bool advanced = advanceSkinHitErrorVisualizerEma(
+        value,
+        {.judgeWindows = windows,
+         .recentJudgeTimingsMillis = recent,
+         .recentJudgeTimingIndex = index},
+        presentation);
+    expect(advanced, "oracle EMA advances for each new source index");
+    ema.push_back(presentation.emaMillis);
+  }
+  return {{"width", value.width},
+          {"centerMillis", value.judgeWidthMillis},
+          {"judgeWidthRate",
+           static_cast<float>(value.width) /
+               static_cast<float>(value.judgeWidthMillis * 2 + 1)},
+          {"lineWidth", value.lineWidth},
+          {"colorMode", value.colorMode},
+          {"hitErrorMode", value.hitErrorMode},
+          {"emaMode", value.emaMode},
+          {"lineRgba", value.lineRgba},
+          {"centerRgba", value.centerRgba},
+          {"emaRgba", value.emaRgba},
+          {"judgeRgba", value.judgeRgba},
+          {"alpha", value.alpha},
+          {"windowLength", value.windowLength},
+          {"transparent", value.transparent},
+          {"drawDecay", value.drawDecay},
+          {"emaSequence", std::move(ema)}};
+}
+
+Json timingDistributionOracle(
+    const SkinTimingDistributionGraphObject &value) {
+  return {{"columns", value.width / value.lineWidth},
+          {"centerColumn", value.width / value.lineWidth / 2},
+          {"graphRgba", value.graphRgba},
+          {"averageRgba", value.averageRgba},
+          {"devRgba", value.devRgba},
+          {"judgeRgba", value.judgeRgba},
+          {"drawAverage", value.drawAverage},
+          {"drawDev", value.drawDev},
+          {"gameplayDraw", false}};
+}
+
+Json gaugeOracle(const SkinGaugeGraphObject &value) {
+  Json rows = Json::array();
+  for (const auto &row : value.rgba) rows.push_back(row);
+  return {{"rgba", std::move(rows)}};
+}
+
+template <typename Payload, typename Serialize>
+Json lr2Oracle(const BeatorajaSkinModel &model, Serialize serialize) {
+  const auto *object = firstObject<Payload>(model);
+  expect(object != nullptr, "LR2 oracle object decodes");
+  if (!object) return Json::object();
+  return {{"object", serialize(std::get<Payload>(object->payload))},
+          {"destination", oracleDestination(model, *object)}};
+}
+
+Json gameplayOracleTrace() {
+  const auto jsonDecoded = decodeJsonFixture("all_gameplay_fields.json");
+  const auto lr2Decoded = decodeLr2Fixture("all_play_commands.lr2skin");
+  const auto sliderDecoded = decodeLr2Fixture();
+  expect(jsonDecoded.model && lr2Decoded.model && sliderDecoded.model,
+         "oracle fixtures decode");
+  if (!jsonDecoded.model || !lr2Decoded.model || !sliderDecoded.model) {
+    return Json::object();
+  }
+  const auto &jsonModel = *jsonDecoded.model;
+  const auto &lr2Model = *lr2Decoded.model;
+  const auto &sliderModel = *sliderDecoded.model;
+  const auto *note = firstObject<SkinNoteDistributionGraphObject>(jsonModel);
+  const auto *bpm = firstObject<SkinBpmGraphObject>(jsonModel);
+  const auto *gauge = firstObject<SkinGaugeGraphObject>(jsonModel);
+  const auto *timing = firstObject<SkinTimingVisualizerObject>(jsonModel);
+  const auto *hit = firstObject<SkinHitErrorVisualizerObject>(jsonModel);
+  const auto *distribution =
+      firstObject<SkinTimingDistributionGraphObject>(jsonModel);
+  const auto *slider = firstObject<SkinSliderObject>(sliderModel);
+  expect(note && bpm && gauge && timing && hit && distribution && slider,
+         "oracle typed objects exist");
+  if (!note || !bpm || !gauge || !timing || !hit || !distribution ||
+      !slider) {
+    return Json::object();
+  }
+  const auto &sliderValue = std::get<SkinSliderObject>(slider->payload);
+  return {
+      {"selector.master-volume", {{"numeric", 0.5}, {"named", 0.5}}},
+      {"json.note-distribution",
+       noteDistributionOracle(
+           std::get<SkinNoteDistributionGraphObject>(note->payload))},
+      {"json.bpm-graph",
+       bpmOracle(std::get<SkinBpmGraphObject>(bpm->payload))},
+      {"json.gauge-graph",
+       gaugeOracle(std::get<SkinGaugeGraphObject>(gauge->payload))},
+      {"json.timing-visualizer",
+       timingOracle(std::get<SkinTimingVisualizerObject>(timing->payload))},
+      {"json.hit-error-visualizer",
+       hitErrorOracle(std::get<SkinHitErrorVisualizerObject>(hit->payload))},
+      {"json.timing-distribution",
+       timingDistributionOracle(
+           std::get<SkinTimingDistributionGraphObject>(distribution->payload))},
+      {"lr2.slider",
+       {{"direction", sliderValue.direction},
+        {"range", static_cast<int>(sliderValue.range)},
+        {"changeable", sliderValue.changeable},
+        {"destination", oracleDestination(sliderModel, *slider)}}},
+      {"lr2.note-chart",
+       lr2Oracle<SkinNoteDistributionGraphObject>(lr2Model,
+                                                   noteDistributionOracle)},
+      {"lr2.bpm-chart",
+       lr2Oracle<SkinBpmGraphObject>(lr2Model, bpmOracle)},
+      {"lr2.timing",
+       lr2Oracle<SkinTimingVisualizerObject>(lr2Model, timingOracle)},
+  };
 }
 
 class FakeResources final : public SkinPreparedResourceView {
@@ -636,7 +822,13 @@ void testCrossFormatGameplayOverlap() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
+  if (argc == 2 && std::string_view(argv[1]) == "--dump-gameplay-oracle") {
+    const Json trace = gameplayOracleTrace();
+    if (failures != 0) return 1;
+    std::cout << trace.dump() << '\n';
+    return 0;
+  }
   testCrossFormatGameplayOverlap();
   if (failures == 0) {
     std::cout << "Beatoraja gameplay cross-format tests passed\n";
