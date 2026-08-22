@@ -36,9 +36,7 @@ LuaSkinJavaPattern::compile(std::string_view pattern) {
       NSError *error = nil;
       NSRegularExpression *expression =
           [[NSRegularExpression alloc] initWithPattern:source
-                                               options:adapted.unixLines
-                                                           ? NSRegularExpressionUseUnixLineSeparators
-                                                           : 0
+                                               options:0
                                                  error:&error];
       if (expression == nil || error != nil) {
         return std::nullopt;

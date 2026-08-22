@@ -32,18 +32,13 @@ LuaSkinJavaPattern::compile(std::string_view pattern) {
   try {
     auto adapted =
         lua_skin_java_pattern_detail::adaptJavaEmbeddedFlags(pattern);
-    std::uint32_t options = PCRE2_UTF | PCRE2_ALT_BSUX;
-    if (adapted.unicodeCharacterClasses) {
-      options |= PCRE2_UCP;
-    }
+    const std::uint32_t options = PCRE2_UTF | PCRE2_ALT_BSUX;
     std::unique_ptr<pcre2_compile_context,
                     decltype(&pcre2_compile_context_free)>
         context(pcre2_compile_context_create(nullptr),
                 &pcre2_compile_context_free);
     if (!context ||
-        pcre2_set_newline(context.get(), adapted.unixLines
-                                            ? PCRE2_NEWLINE_LF
-                                            : PCRE2_NEWLINE_ANY) != 0) {
+        pcre2_set_max_pattern_length(context.get(), 65536) != 0) {
       return std::nullopt;
     }
     int error = 0;
@@ -69,12 +64,18 @@ LuaSkinJavaPattern::find(std::string_view subject) const noexcept {
     std::unique_ptr<pcre2_match_data, decltype(&pcre2_match_data_free)>
         match(pcre2_match_data_create_from_pattern(impl_->code, nullptr),
               &pcre2_match_data_free);
-    if (!match) {
+    std::unique_ptr<pcre2_match_context,
+                    decltype(&pcre2_match_context_free)>
+        context(pcre2_match_context_create(nullptr), &pcre2_match_context_free);
+    if (!match || !context ||
+        pcre2_set_match_limit(context.get(), 100000) != 0 ||
+        pcre2_set_depth_limit(context.get(), 1000) != 0 ||
+        pcre2_set_heap_limit(context.get(), 8192) != 0) {
       return std::nullopt;
     }
     const int result = pcre2_match(
         impl_->code, reinterpret_cast<PCRE2_SPTR>(subject.data()),
-        subject.size(), 0, 0, match.get(), nullptr);
+        subject.size(), 0, 0, match.get(), context.get());
     if (result < 0) {
       return std::nullopt;
     }
