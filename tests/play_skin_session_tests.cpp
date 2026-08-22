@@ -1,4 +1,5 @@
 #include "skin/beatoraja/PlaySkinSession.h"
+#include "skin/beatoraja/ResultSkinSession.h"
 
 #include "ArchiveFile.h"
 
@@ -667,10 +668,12 @@ enum class MalformedPomyuNumeric {
 };
 
 struct ActivationFixtureOptions {
+  int skinType = 0;
   bool resourceBearing = false;
   bool movieBearing = false;
   bool audioBearing = false;
   bool requireConfiguredState = false;
+  bool requireResultConfiguredState = false;
   bool legacyInputBearing = false;
   bool repeatedPomyu = false;
   bool oversizedPomyuWithSibling = false;
@@ -860,6 +863,13 @@ if skin_config then
   end
 )lua";
     }
+    if (options.requireResultConfiguredState) {
+      script += R"lua(
+  if main_state.option(90) ~= false then
+    error("configured result state did not expose the result clear property")
+  end
+)lua";
+    }
     if (options.legacyInputBearing) {
       script += R"lua(
   local Gdx = luajava.bindClass("com.badlogic.gdx.Gdx")
@@ -973,17 +983,13 @@ if skin_config then
   }
 )lua";
     } else {
-      script += R"lua(
-  return { type = 0, w = 1280, h = 720 }
-)lua";
+      script += "\n  return { type = " + std::to_string(options.skinType) +
+                ", w = 1280, h = 720 }\n";
     }
-    script += R"lua(
-end
-if phase_count ~= 1 then
-  error("header phase did not begin in a fresh state")
-end
-return { type = 0, name = "activation shell", w = 1280, h = 720 }
-)lua";
+    script += "\nend\nif phase_count ~= 1 then\n"
+              "  error(\"header phase did not begin in a fresh state\")\n"
+              "end\nreturn { type = " + std::to_string(options.skinType) +
+              ", name = \"activation shell\", w = 1280, h = 720 }\n";
     writeText(source / "skin/main.luaskin", script);
 
     // Runtime execution follows the installed, Files-visible package exactly
@@ -1012,10 +1018,10 @@ return { type = 0, name = "activation shell", w = 1280, h = 720 }
     GameplaySkinValidator validator(resources_);
     validation_ = validator.validate(lease_->readView(), entry_, &desired_, {});
     expect(validation_.disposition ==
-               SkinValidationDisposition::Selectable7Key &&
+           SkinValidationDisposition::SelectableGameplay &&
                validation_.reconciledSettings.has_value() &&
                !validation_.configurationDigest.empty(),
-           "activation fixture validates a selectable 7-key skin");
+           "activation fixture validates a selectable skin");
   }
 
   bool ready() const noexcept {
@@ -1053,6 +1059,15 @@ return { type = 0, name = "activation shell", w = 1280, h = 720 }
             .liveResourceCounters = liveResourceCounters_,
             .configurationWrites = configurationWrites_,
             .stop = stop};
+  }
+
+  ResultSkinSessionContext resultContext(ResultSkinData initialData = {}) {
+    return {.profileId = profile_,
+            .storageRoots = roots_,
+            .resourcePreparation = resources_,
+            .initialData = std::move(initialData),
+            .textureDevice = device_,
+            .liveResourceCounters = liveResourceCounters_};
   }
 
   const SkinEntryId &entry() const noexcept { return entry_; }
@@ -4829,6 +4844,18 @@ void testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin() {
          "legacy double begin is rejected deterministically");
 }
 
+void testResultLuaSessionBindsMainStateDuringConfiguredLoad() {
+  ActivationFixture fixture({.skinType = 7,
+                             .requireResultConfiguredState = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  auto created = ResultSkinSession::create(fixture.takeActivation(),
+                                           fixture.resultContext());
+  expect(created.session != nullptr && created.diagnostics.empty(),
+         "result Lua session configures against the result main_state");
+}
+
 } // namespace
 
 int main() {
@@ -4900,6 +4927,7 @@ int main() {
   testTouchLayoutNormalizesAgainstTheWholeWindowWithSafeOrigin();
   testSuccessfulGeometryChangesOnlyHitRevisionAndTeardownDiscardsState();
   testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin();
+  testResultLuaSessionBindsMainStateDuringConfiguredLoad();
   if (failures != 0) {
     std::cerr << failures << " play skin session test(s) failed\n";
     return 1;

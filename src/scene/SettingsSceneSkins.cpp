@@ -1211,7 +1211,9 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
             " • Configuration: " + row.configurationDigest,
         metrics.smallTextSize, ui_theme::textMuted());
     entryBody->addView(gameplaySkinConfigurationDigestText);
-    appendSelectedSkinHudSettings(entryBody, metrics, false);
+    if (activeTrait->kind == skin::SkinTargetKind::Gameplay) {
+      appendSelectedSkinHudSettings(entryBody, metrics, false);
+    }
     for (const auto &diagnostic : row.diagnostics) {
       entryBody->addView(makeWrappedText(diagnosticPresentation(diagnostic),
                                          metrics.smallTextSize,

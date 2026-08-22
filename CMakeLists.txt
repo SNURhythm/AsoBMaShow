@@ -5026,6 +5026,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/PlaySkinSession.cpp
             src/skin/beatoraja/PlaySkinStateBridge.cpp
             src/skin/beatoraja/PlaySkinViewport.cpp
+            src/skin/beatoraja/ResultSkinSession.cpp
+            src/skin/beatoraja/ResultSkinStateBridge.cpp
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
             src/skin/beatoraja/SkinCoverNormalization.cpp
             src/skin/beatoraja/SkinDestinationEvaluator.cpp

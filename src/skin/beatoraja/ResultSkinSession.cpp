@@ -25,6 +25,20 @@ bool hasErrors(const std::vector<SkinDiagnostic> &diagnostics) {
   });
 }
 
+class LuaFrameStateBinding final {
+public:
+  LuaFrameStateBinding(LuaSkinRuntime *runtime, ISkinFrameState *state)
+      : runtime_(runtime) {
+    if (runtime_ != nullptr) runtime_->setFrameState(state);
+  }
+  ~LuaFrameStateBinding() {
+    if (runtime_ != nullptr) runtime_->setFrameState(nullptr);
+  }
+
+private:
+  LuaSkinRuntime *runtime_ = nullptr;
+};
+
 } // namespace
 
 ResultSkinSession::ResultSkinSession(
@@ -92,9 +106,12 @@ ResultSkinSessionCreateResult ResultSkinSession::create(
          .desiredSettings = &activation.reconciledSettings,
          .expectedConfigurationDigest = activation.configurationDigest,
          .luaPurpose = LuaRuntimePurpose::Gameplay,
-         .loadConfiguredLua = [](LuaSkinRuntime &runtime,
+         .loadConfiguredLua = [&context](
+                                  LuaSkinRuntime &runtime,
                                   const BeatorajaSkinConfiguration &configuration,
                                   std::vector<SkinDiagnostic> &) {
+           ResultSkinStateBridge bridge(context.initialData, 1, 0);
+           LuaFrameStateBinding frameState(&runtime, &bridge);
            return runtime.loadConfigured(configuration);
          },
          .safetyPolicy = context.safetyPolicy, .stop = context.stop});
@@ -155,6 +172,7 @@ bool ResultSkinSession::render(RenderContext &renderContext,
                                std::int64_t elapsedMillis) {
   if (!resources_ || frameSerial == 0) return false;
   ResultSkinStateBridge bridge(data, frameSerial, elapsedMillis);
+  LuaFrameStateBinding frameState(runtime_.get(), &bridge);
   const auto &header = model_.model.header;
   const auto viewport = evaluatePlaySkinViewport(
       {.width = static_cast<double>(header.width),

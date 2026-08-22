@@ -467,6 +467,30 @@ bool ResultScene::startSelectedResultSkin() {
 #if !ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   return false;
 #else
+  const auto appendDiagnostic =
+      [this](const skin::SkinEntryId &entry, std::string revisionDigest,
+             std::string configurationDigest,
+             skin::SkinDiagnostic diagnostic) noexcept {
+        if (!context.skinDiagnosticHistory) {
+          return;
+        }
+        try {
+          const auto luaLine = diagnostic.source && diagnostic.source->line != 0
+                                   ? std::optional<std::uint32_t>(
+                                         diagnostic.source->line)
+                                   : std::nullopt;
+          context.skinDiagnosticHistory->append({
+              .entry = entry,
+              .revisionDigest = std::move(revisionDigest),
+              .configurationDigest = std::move(configurationDigest),
+              .phase = skin::SkinDiagnosticPhase::Session,
+              .diagnostic = std::move(diagnostic),
+              .luaLine = luaLine,
+              .frameSerial = std::nullopt,
+          });
+        } catch (...) {
+        }
+      };
   if (!context.gameplaySkinLifecycle || !context.skinStorageRoots ||
       !context.skinResourcePreparationService ||
       !context.skinLiveResourceCounters) {
@@ -481,17 +505,37 @@ bool ResultScene::startSelectedResultSkin() {
   if (acquisition.disposition !=
           skin::GameplaySkinAcquisitionDisposition::Ready ||
       !acquisition.request) {
+    if (acquisition.disposition ==
+            skin::GameplaySkinAcquisitionDisposition::Failed &&
+        acquisition.failure) {
+      const auto &failure = *acquisition.failure;
+      appendDiagnostic(failure.entry.value_or(skin::SkinEntryId{}),
+                       failure.revisionDigest, failure.configurationDigest,
+                       failure.diagnostic);
+    }
     return false;
   }
+  const auto entry = acquisition.request->activation.entry;
+  const auto revisionDigest =
+      acquisition.request->activation.revision.revision().lowercaseSha256;
+  const auto configurationDigest =
+      acquisition.request->activation.configurationDigest;
   auto created = skin::ResultSkinSession::create(
       std::move(acquisition.request->activation),
       {.profileId = *profileId,
        .storageRoots = *context.skinStorageRoots,
        .resourcePreparation = *context.skinResourcePreparationService,
+       .initialData = makeResultSkinData(),
        .textureDevice = std::make_shared<skin::BgfxSkinTextureDevice>(),
        .liveResourceCounters = context.skinLiveResourceCounters,
        .safetyPolicy = skin::SkinSafetyPolicy(acquisition.request->safetyLevel)});
-  if (!created.session) return false;
+  if (!created.session) {
+    for (auto &diagnostic : created.diagnostics) {
+      appendDiagnostic(entry, revisionDigest, configurationDigest,
+                       std::move(diagnostic));
+    }
+    return false;
+  }
   resultSkinSession = std::move(created.session);
   resultSkinStartedMicros = nowMicros();
   return true;

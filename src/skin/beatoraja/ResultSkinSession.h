@@ -22,6 +22,9 @@ struct ResultSkinSessionContext {
   SkinProfileId profileId;
   SkinStorageRoots storageRoots;
   SkinResourcePreparationService &resourcePreparation;
+  // Beatoraja runs configured Lua against the active result MainState. Keep
+  // the immutable result data available for that one-time configured phase.
+  ResultSkinData initialData;
   std::shared_ptr<SkinTextureDevice> textureDevice;
   std::shared_ptr<SkinLiveResourceCounters> liveResourceCounters;
   SkinSafetyPolicy safetyPolicy{};
