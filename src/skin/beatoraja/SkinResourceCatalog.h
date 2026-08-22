@@ -416,6 +416,12 @@ public:
   [[nodiscard]] std::size_t textureCount() const noexcept {
     return owned_.size();
   }
+#if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
+  [[nodiscard]] std::vector<SkinResourceId>
+  preparedResourceIdsForTesting() const;
+  [[nodiscard]] std::vector<SkinObjectId>
+  preparedTextObjectIdsForTesting() const;
+#endif
   const PreparedSkinGeneratedTexture *prepareGeneratedTexture(
       const SkinGeneratedTextureKey &,
       const SkinGeneratedTextureData &) const noexcept override;
@@ -454,5 +460,15 @@ private:
   mutable std::size_t generatedDecodedBytes_ = 0;
   SkinSafetyPolicy safetyPolicy_{};
 };
+
+#if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
+struct SkinReferencedResourceIdsForTesting {
+  std::vector<SkinResourceId> images;
+  std::vector<SkinObjectId> textObjects;
+};
+[[nodiscard]] SkinReferencedResourceIdsForTesting
+skinReferencedResourceIdsForTesting(const ValidatedBeatorajaSkinModel &,
+                                    bool practiceMode);
+#endif
 
 } // namespace skin

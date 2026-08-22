@@ -546,61 +546,80 @@ Json lr2Oracle(const BeatorajaSkinModel &model, Serialize serialize) {
 }
 
 Json gameplayOracleTrace() {
+  const auto luaDecoded = decodeLuaFixture();
   const auto jsonDecoded = decodeJsonFixture("all_gameplay_fields.json");
   const auto lr2Decoded = decodeLr2Fixture("all_play_commands.lr2skin");
   const auto sliderDecoded = decodeLr2Fixture();
-  expect(jsonDecoded.model && lr2Decoded.model && sliderDecoded.model,
+  expect(luaDecoded.model && jsonDecoded.model && lr2Decoded.model &&
+             sliderDecoded.model,
          "oracle fixtures decode");
-  if (!jsonDecoded.model || !lr2Decoded.model || !sliderDecoded.model) {
+  if (!luaDecoded.model || !jsonDecoded.model || !lr2Decoded.model ||
+      !sliderDecoded.model) {
     return Json::object();
   }
+  const auto &luaModel = *luaDecoded.model;
   const auto &jsonModel = *jsonDecoded.model;
   const auto &lr2Model = *lr2Decoded.model;
   const auto &sliderModel = *sliderDecoded.model;
-  const auto *note = firstObject<SkinNoteDistributionGraphObject>(jsonModel);
-  const auto *bpm = firstObject<SkinBpmGraphObject>(jsonModel);
-  const auto *gauge = firstObject<SkinGaugeGraphObject>(jsonModel);
-  const auto *timing = firstObject<SkinTimingVisualizerObject>(jsonModel);
-  const auto *hit = firstObject<SkinHitErrorVisualizerObject>(jsonModel);
-  const auto *distribution =
-      firstObject<SkinTimingDistributionGraphObject>(jsonModel);
   const auto *slider = firstObject<SkinSliderObject>(sliderModel);
-  expect(note && bpm && gauge && timing && hit && distribution && slider,
-         "oracle typed objects exist");
-  if (!note || !bpm || !gauge || !timing || !hit || !distribution ||
-      !slider) {
+  expect(slider, "LR2 oracle slider exists");
+  if (!slider) {
     return Json::object();
   }
   const auto &sliderValue = std::get<SkinSliderObject>(slider->payload);
-  return {
-      {"selector.master-volume", {{"numeric", 0.5}, {"named", 0.5}}},
-      {"json.note-distribution",
-       noteDistributionOracle(
-           std::get<SkinNoteDistributionGraphObject>(note->payload))},
-      {"json.bpm-graph",
-       bpmOracle(std::get<SkinBpmGraphObject>(bpm->payload))},
-      {"json.gauge-graph",
-       gaugeOracle(std::get<SkinGaugeGraphObject>(gauge->payload))},
-      {"json.timing-visualizer",
-       timingOracle(std::get<SkinTimingVisualizerObject>(timing->payload))},
-      {"json.hit-error-visualizer",
-       hitErrorOracle(std::get<SkinHitErrorVisualizerObject>(hit->payload))},
-      {"json.timing-distribution",
-       timingDistributionOracle(
-           std::get<SkinTimingDistributionGraphObject>(distribution->payload))},
-      {"lr2.slider",
-       {{"direction", sliderValue.direction},
-        {"range", static_cast<int>(sliderValue.range)},
-        {"changeable", sliderValue.changeable},
-        {"destination", oracleDestination(sliderModel, *slider)}}},
-      {"lr2.note-chart",
-       lr2Oracle<SkinNoteDistributionGraphObject>(lr2Model,
-                                                   noteDistributionOracle)},
-      {"lr2.bpm-chart",
-       lr2Oracle<SkinBpmGraphObject>(lr2Model, bpmOracle)},
-      {"lr2.timing",
-       lr2Oracle<SkinTimingVisualizerObject>(lr2Model, timingOracle)},
+  Json result{{"selector.master-volume", {{"numeric", 0.5}, {"named", 0.5}}}};
+  const auto appendStructured = [&](std::string_view prefix,
+                                    const BeatorajaSkinModel &model) {
+    const auto *note = firstObject<SkinNoteDistributionGraphObject>(model);
+    const auto *bpm = firstObject<SkinBpmGraphObject>(model);
+    const auto *gauge = firstObject<SkinGaugeGraphObject>(model);
+    const auto *timing = firstObject<SkinTimingVisualizerObject>(model);
+    const auto *hit = firstObject<SkinHitErrorVisualizerObject>(model);
+    const auto *distribution =
+        firstObject<SkinTimingDistributionGraphObject>(model);
+    const auto *formatSlider = firstObject<SkinSliderObject>(model);
+    expect(note && bpm && gauge && timing && hit && distribution &&
+               formatSlider,
+           "Lua/JSON oracle typed objects exist");
+    if (!note || !bpm || !gauge || !timing || !hit || !distribution ||
+        !formatSlider) {
+      return;
+    }
+    const std::string base(prefix);
+    result[base + ".note-distribution"] = noteDistributionOracle(
+        std::get<SkinNoteDistributionGraphObject>(note->payload));
+    result[base + ".bpm-graph"] =
+        bpmOracle(std::get<SkinBpmGraphObject>(bpm->payload));
+    result[base + ".gauge-graph"] =
+        gaugeOracle(std::get<SkinGaugeGraphObject>(gauge->payload));
+    result[base + ".timing-visualizer"] =
+        timingOracle(std::get<SkinTimingVisualizerObject>(timing->payload));
+    result[base + ".hit-error-visualizer"] =
+        hitErrorOracle(std::get<SkinHitErrorVisualizerObject>(hit->payload));
+    result[base + ".timing-distribution"] = timingDistributionOracle(
+        std::get<SkinTimingDistributionGraphObject>(distribution->payload));
+    const auto &value = std::get<SkinSliderObject>(formatSlider->payload);
+    result[base + ".slider"] = {
+        {"direction", value.direction},
+        {"range", static_cast<int>(value.range)},
+        {"changeable", value.changeable},
+        {"destination", oracleDestination(model, *formatSlider)}};
   };
+  appendStructured("lua", luaModel);
+  appendStructured("json", jsonModel);
+  result["lr2.slider"] = {
+      {"direction", sliderValue.direction},
+      {"range", static_cast<int>(sliderValue.range)},
+      {"changeable", sliderValue.changeable},
+      {"destination", oracleDestination(sliderModel, *slider)}};
+  result["lr2.note-chart"] =
+      lr2Oracle<SkinNoteDistributionGraphObject>(lr2Model,
+                                                  noteDistributionOracle);
+  result["lr2.bpm-chart"] =
+      lr2Oracle<SkinBpmGraphObject>(lr2Model, bpmOracle);
+  result["lr2.timing"] =
+      lr2Oracle<SkinTimingVisualizerObject>(lr2Model, timingOracle);
+  return result;
 }
 
 class FakeResources final : public SkinPreparedResourceView {
@@ -813,10 +832,55 @@ void testCrossFormatGameplayOverlap() {
   expect(luaDraw == jsonDraw && jsonDraw == lr2Draw,
          "Lua, JSON, and LR2 emit equivalent overlap draw commands");
 
-  for (const auto &relative : expected["formatExclusiveEvidence"]) {
-    expect(fs::is_regular_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
-                               relative.get<std::string>()),
-           "format-exclusive surface retains separate fixture evidence");
+  for (const auto &evidence : expected["formatExclusiveEvidence"]) {
+    const std::string format = evidence.at("format");
+    const std::string fixture = evidence.at("fixture");
+    BeatorajaSkinModelDecodeResult decoded;
+    if (format == "lua") {
+      decoded = decodeLuaFixture();
+    } else if (format == "json") {
+      decoded = decodeJsonFixture(fixture);
+    } else if (format == "lr2") {
+      decoded = decodeLr2Fixture(fixture);
+    }
+    expect(decoded.model.has_value(),
+           "format-exclusive fixture executes through its native decoder");
+    if (!decoded.model) continue;
+    for (const std::string kind : evidence.at("requiredKinds")) {
+      const bool present = std::ranges::any_of(
+          decoded.model->objects, [&](const SkinObjectDefinition &object) {
+            if (kind == "slider") {
+              return std::holds_alternative<SkinSliderObject>(object.payload);
+            }
+            if (kind == "note") {
+              return std::holds_alternative<SkinNoteObject>(object.payload);
+            }
+            if (kind == "note-distribution") {
+              return std::holds_alternative<SkinNoteDistributionGraphObject>(
+                  object.payload);
+            }
+            if (kind == "bpm-graph") {
+              return std::holds_alternative<SkinBpmGraphObject>(object.payload);
+            }
+            if (kind == "timing-visualizer") {
+              return std::holds_alternative<SkinTimingVisualizerObject>(
+                  object.payload);
+            }
+            if (kind == "hit-error-visualizer") {
+              return std::holds_alternative<SkinHitErrorVisualizerObject>(
+                  object.payload);
+            }
+            if (kind == "text") {
+              return std::holds_alternative<SkinTextObject>(object.payload);
+            }
+            if (kind == "gauge") {
+              return std::holds_alternative<SkinGaugeObject>(object.payload);
+            }
+            return false;
+          });
+      expect(present, "native format-exclusive fixture retains required " +
+                          format + " " + kind + " family");
+    }
   }
 }
 

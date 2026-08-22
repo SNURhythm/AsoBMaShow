@@ -50,6 +50,8 @@ int ui_view_height = design_height;
 
 namespace {
 
+// ASOBMASHOW_LOADING_WORKLOAD_V2: isolated Lua/JSON/LR2 session creation.
+
 namespace fs = std::filesystem;
 using namespace skin;
 
@@ -152,12 +154,13 @@ public:
 struct BenchmarkOptions {
   bool benchmark = false;
   bool acceptanceReport = false;
+  bool acceptanceMatrix = false;
   bool warm = false;
   std::size_t samples = 1;
   std::optional<fs::path> skin;
   std::optional<std::string> entry;
   std::optional<std::string> entryIdentity;
-  bool luaOnly = false;
+  std::optional<GameplaySkinSourceFormat> format;
 };
 
 std::optional<BenchmarkOptions> parseOptions(int argc, char **argv) {
@@ -168,6 +171,8 @@ std::optional<BenchmarkOptions> parseOptions(int argc, char **argv) {
       result.benchmark = true;
     } else if (argument == "--acceptance-report") {
       result.acceptanceReport = true;
+    } else if (argument == "--acceptance-matrix") {
+      result.acceptanceMatrix = true;
     } else if (argument == "--mode" && index + 1 < argc) {
       const std::string_view mode(argv[++index]);
       if (mode != "cold" && mode != "warm") return std::nullopt;
@@ -186,23 +191,38 @@ std::optional<BenchmarkOptions> parseOptions(int argc, char **argv) {
     } else if (argument == "--entry-identity" && index + 1 < argc) {
       result.entryIdentity = argv[++index];
     } else if (argument == "--format" && index + 1 < argc) {
-      if (std::string_view(argv[++index]) != "lua") return std::nullopt;
-      result.luaOnly = true;
+      const std::string_view format(argv[++index]);
+      if (format == "lua") {
+        result.format = GameplaySkinSourceFormat::Lua;
+      } else if (format == "json") {
+        result.format = GameplaySkinSourceFormat::Json;
+      } else if (format == "lr2") {
+        result.format = GameplaySkinSourceFormat::Lr2;
+      } else {
+        return std::nullopt;
+      }
     } else {
       return std::nullopt;
     }
   }
-  if (result.benchmark && result.acceptanceReport) return std::nullopt;
+  if (static_cast<int>(result.benchmark) +
+          static_cast<int>(result.acceptanceReport) +
+          static_cast<int>(result.acceptanceMatrix) >
+      1) {
+    return std::nullopt;
+  }
   if (result.acceptanceReport &&
       (!result.skin || !result.entry || !result.entryIdentity)) {
     return std::nullopt;
   }
+  if (result.acceptanceMatrix && !result.skin) return std::nullopt;
   return result;
 }
 
 class BenchmarkFixture final {
 public:
-  BenchmarkFixture(const std::optional<fs::path> &localSkin, bool luaOnly,
+  BenchmarkFixture(const std::optional<fs::path> &localSkin,
+                   std::optional<GameplaySkinSourceFormat> format,
                    std::optional<std::string> selectedEntry = std::nullopt)
       : roots_{.visiblePackages = temp_.root() / "visible",
                .privateRevisions = temp_.root() / "revisions",
@@ -239,7 +259,12 @@ public:
     if (localSkin) {
       if (!prepareLocalSkin(*localSkin, source)) return;
     } else {
-      prepareSyntheticFormats(source, luaOnly);
+      prepareSyntheticFormats(source);
+    }
+    if (format) {
+      std::erase_if(entryPaths_, [&](const std::string &relative) {
+        return gameplaySkinSourceFormatForPath(relative) != format;
+      });
     }
     if (selectedEntry) entryPaths_ = {std::move(*selectedEntry)};
     fs::create_directories(roots_.visiblePackages);
@@ -268,6 +293,7 @@ public:
         continue;
       }
       entries_.push_back({.entry = *normalized,
+                          .relativePath = relative,
                           .settings = *validated.reconciledSettings,
                           .digest = std::move(validated.configurationDigest)});
     }
@@ -511,9 +537,143 @@ public:
 
   std::size_t formatCount() const noexcept { return entries_.size(); }
 
+  nlohmann::json acceptanceMatrix() {
+    nlohmann::json matrix = nlohmann::json::array();
+    SkinResourcePreparationService preparation;
+    std::uint64_t sessionSerial = 900;
+    for (const auto &entry : entries_) {
+      int keys = 0;
+      for (const int candidate : {5, 7, 10, 14}) {
+        if (entry.relativePath ==
+            "play" + std::to_string(candidate) + "_hw.luaskin") {
+          keys = candidate;
+        }
+      }
+      if (keys == 0) continue;
+      for (const int mode : {1, 2, 3}) {
+        auto chart = chart_;
+        chart.keyCount = keys;
+        chart.staticMetadata.selectedLongNoteMode = mode;
+        auto state = initialState_;
+        auto projection = initialProjection_;
+        auto device = std::make_shared<BenchmarkTextureDevice>();
+        auto movieDevice = std::make_shared<BenchmarkMovieDevice>();
+        auto counters = std::make_shared<SkinLiveResourceCounters>();
+        auto created = PlaySkinSession::create(
+            {.revision = lease_->clone(),
+             .entry = entry.entry,
+             .reconciledSettings = entry.settings,
+             .configurationDigest = entry.digest},
+            {.sessionSerial = ++sessionSerial,
+             .profileId = profile_,
+             .chartModel = chart,
+             .initialState = &state,
+             .initialProjection = &projection,
+             .safeUiBounds = {.x = 0.0, .y = 0.0,
+                              .width = 1280.0, .height = 720.0},
+             .storageRoots = roots_,
+             .resourcePreparation = preparation,
+             .textureDevice = device,
+             .movieDevice = movieDevice,
+             .liveResourceCounters = counters,
+             .configurationWrites = configurationWrites_});
+        nlohmann::json unsupported = nlohmann::json::array();
+        for (const auto &diagnostic : created.diagnostics) {
+          if (diagnostic.code.find("unsupported") != std::string::npos) {
+            unsupported.push_back(diagnostic.code);
+          }
+        }
+        nlohmann::json cell = {
+            {"entryPath", entry.relativePath},
+            {"keys", keys},
+            {"lnMode", mode},
+            {"sessionPublished", created.session != nullptr},
+            {"selectorIndex", nullptr},
+            {"drawSlots", nlohmann::json::object()},
+            {"referencedImageResourceIds", nlohmann::json::array()},
+            {"preparedImageResourceIds", nlohmann::json::array()},
+            {"referencedTextObjectIds", nlohmann::json::array()},
+            {"preparedTextObjectIds", nlohmann::json::array()},
+            {"unsupportedDiagnostics", std::move(unsupported)}};
+        if (created.session) {
+          if (const auto selected =
+                  created.session->selectedLongNoteImageIndexForTesting(
+                      state, projection)) {
+            cell["selectorIndex"] = *selected;
+          }
+          const auto resources =
+              created.session->resourcePreparationEvidenceForTesting();
+          cell["referencedImageResourceIds"] =
+              resources.referencedImageResourceIds;
+          cell["preparedImageResourceIds"] =
+              resources.preparedImageResourceIds;
+          cell["referencedTextObjectIds"] =
+              resources.referencedTextObjectIds;
+          cell["preparedTextObjectIds"] = resources.preparedTextObjectIds;
+
+          struct DrawScenario {
+            std::string_view name;
+            bool active = false;
+            bool damaged = false;
+            bool reactive = false;
+          };
+          std::vector<DrawScenario> scenarios{{"active", true},
+                                              {"inactive"}};
+          if (mode == 3) {
+            scenarios.push_back({"reactive", false, false, true});
+            scenarios.push_back({"damaged", false, true, false});
+          }
+          std::uint64_t frameSerial = 10;
+          for (const auto &scenario : scenarios) {
+            ++frameSerial;
+            state.clock.serial = frameSerial;
+            state.clock.visualTimeMicros =
+                static_cast<long long>(frameSerial) * 100'000;
+            state.clock.gameplayTimeMicros = state.clock.visualTimeMicros;
+            projection.frameSerial = frameSerial;
+            projection.longNotes = {{
+                .headId = 1,
+                .tailId = 2,
+                .lane = 0,
+                .mode = mode == 1 ? ChartLongNoteMode::LN
+                                  : mode == 2 ? ChartLongNoteMode::CN
+                                              : ChartLongNoteMode::HCN,
+                .headScrollDelta = 20.0,
+                .tailScrollDelta = 80.0,
+                .active = scenario.active,
+                .damaged = scenario.damaged,
+                .reactive = scenario.reactive,
+                .submissionOrdinal = 1}};
+            const auto frame =
+                created.session->prepareFrame(state, projection, {});
+            std::vector<int> slots;
+            if (frame.evaluation.submitReady) {
+              for (const auto &command :
+                   frame.evaluation.submitReady->commands) {
+                if (command.longNoteSlotForTesting >= 0) {
+                  slots.push_back(command.longNoteSlotForTesting);
+                }
+              }
+            }
+            for (const auto &diagnostic : frame.diagnostics) {
+              if (diagnostic.code.find("unsupported") != std::string::npos) {
+                cell["unsupportedDiagnostics"].push_back(diagnostic.code);
+              }
+            }
+            cell["drawSlots"][std::string(scenario.name)] = std::move(slots);
+          }
+        }
+        created.session.reset();
+        matrix.push_back(std::move(cell));
+      }
+    }
+    return matrix;
+  }
+
 private:
   struct Entry {
     SkinEntryId entry;
+    std::string relativePath;
     EntryProfileSettings settings;
     std::string digest;
   };
@@ -582,7 +742,7 @@ private:
         .dynamic = std::move(dynamic)};
   }
 
-  void prepareSyntheticFormats(const fs::path &source, bool luaOnly) {
+  void prepareSyntheticFormats(const fs::path &source) {
     constexpr int objectCount = 48;
     fs::create_directories(source / "skin/resources");
     fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
@@ -635,7 +795,6 @@ return skin
 )lua");
     entryPaths_ = {"skin/parity.luaskin"};
 #if ASOBMASHOW_BENCHMARK_HAS_STATIC_FORMATS
-    if (luaOnly) return;
     std::string json =
         R"json({"type":0,"name":"JSON loading","author":"fixture","w":1280,"h":720,"source":[{"id":"atlas","path":"resources/fixture.png"}],"image":[)json";
     for (int index = 1; index <= objectCount; ++index) {
@@ -668,7 +827,6 @@ return skin
     entryPaths_ = {"skin/parity.luaskin", "skin/parity.json",
                    "skin/parity.lr2skin"};
 #else
-    (void)luaOnly;
 #endif
   }
 
@@ -754,10 +912,10 @@ int main(int argc, char **argv) {
     std::cerr << "usage: gameplay_skin_loading_benchmark_tests "
                  "[--benchmark --mode cold|warm --samples N] [--skin PATH] "
                  "[--acceptance-report --skin PATH --entry PATH "
-                 "--entry-identity ID]\n";
+                 "--entry-identity ID] [--acceptance-matrix --skin PATH]\n";
     return 2;
   }
-  BenchmarkFixture fixture(options->skin, options->luaOnly, options->entry);
+  BenchmarkFixture fixture(options->skin, options->format, options->entry);
   if (!fixture.ready()) {
     std::cerr << "gameplay skin loading benchmark fixture is unavailable\n";
     return 1;
@@ -768,6 +926,10 @@ int main(int argc, char **argv) {
     std::cout << report->dump() << '\n';
     return 0;
   }
+  if (options->acceptanceMatrix) {
+    std::cout << fixture.acceptanceMatrix().dump() << '\n';
+    return 0;
+  }
   if (!options->benchmark) {
     const auto cold = runSamples(fixture, false, 1);
     const auto warm = runSamples(fixture, true, 2);
@@ -775,7 +937,8 @@ int main(int argc, char **argv) {
                fixture.formatCount() ==
                    (ASOBMASHOW_BENCHMARK_HAS_STATIC_FORMATS ? 3U : 1U),
            "cold and warm production session creation covers Lua/JSON/LR2");
-    BenchmarkFixture acceptanceFixture({}, true, "skin/parity.luaskin");
+    BenchmarkFixture acceptanceFixture({}, GameplaySkinSourceFormat::Lua,
+                                       "skin/parity.luaskin");
     const auto acceptance =
         acceptanceFixture.acceptanceReport("entry-synthetic-fixture");
     expect(acceptance && (*acceptance)["sessionPublished"] == true &&

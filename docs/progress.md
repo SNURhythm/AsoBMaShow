@@ -16,13 +16,23 @@ work from [`docs/todo.md`](todo.md). The pinned authority is Beatoraja commit
 ## Completed
 
 - The pinned gameplay-skin ledger now classifies all 771 source-surface rows:
-  755 implemented rows have concrete source/test evidence, 16 rows retain
+  755 implemented rows have row-exact executed native evidence, 16 rows retain
   their pinned source-defined no-op evidence, and none remain `missing`.
   Redistributable Lua, JSON, and LR2 fixtures prove the genuinely shared
   slider/resource/rate-binding/destination model and identical textured draw
-  trace. Format-exclusive gameplay families remain asserted by their native
-  all-field/all-command fixtures instead of being treated as equivalent.
-  `beatoraja_gameplay_skin_ledger_tests.py --require-complete` is the CI gate.
+  trace. Format-exclusive gameplay families are decoded and asserted by their
+  native all-field/all-command fixtures instead of being treated as
+  equivalent. `beatoraja_gameplay_skin_ledger_tests.py --require-complete`
+  executes every row's bound native runner as the CI gate.
+
+- The conformance evidence now loads matching Lua and JSON fixtures through
+  the pinned Beatoraja frontends, compares their source-owned cases with Aso,
+  and records consumed viewport/time/state inputs. The performance runner
+  refuses to transplant candidate code into its baseline and requires the
+  same marked Lua/JSON/LR2 workload on both revisions. Local ModernChic 4.6
+  acceptance publishes all 12 gameplay entry/mode sessions (5/7/10/14 keys
+  by LN/CN/HCN), matches generated pinned selector/draw slots, and compares
+  decoded-model resource references with prepared catalog identities.
 
 - Practice now has a source-shaped no-audio `BMSPlayer.STATE_PRACTICE` phase.
   Before its held first input begins an attempt, selector `1080`, row

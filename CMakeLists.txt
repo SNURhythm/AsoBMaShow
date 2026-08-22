@@ -1789,6 +1789,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(beatoraja_gameplay_skin_ledger PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
+    add_test(NAME gameplay_skin_loading_benchmark_script_contract
+        COMMAND ${Python3_EXECUTABLE}
+                -m unittest
+                tests/gameplay_skin_loading_benchmark_script_tests.py -v)
+    set_tests_properties(gameplay_skin_loading_benchmark_script_contract PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
     if (TARGET beatoraja_gameplay_cross_format_tests)
         add_test(NAME beatoraja_gameplay_oracle
             COMMAND ${Python3_EXECUTABLE}
@@ -5205,6 +5212,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinNoteLineNormalization.cpp
             src/skin/beatoraja/SkinNoteNormalization.cpp
             src/skin/beatoraja/SkinObjectResolutionPrecedence.cpp
+            src/skin/beatoraja/SkinPerformanceTelemetry.cpp
             src/skin/beatoraja/SkinMovieCatalog.cpp
             src/skin/beatoraja/SkinMovieCatalogFrame.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp

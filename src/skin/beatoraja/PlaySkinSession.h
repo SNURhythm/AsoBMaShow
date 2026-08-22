@@ -28,6 +28,13 @@
 namespace skin {
 
 #if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
+struct PlaySkinResourcePreparationEvidenceForTesting {
+  std::vector<SkinResourceId> referencedImageResourceIds;
+  std::vector<SkinResourceId> preparedImageResourceIds;
+  std::vector<SkinObjectId> referencedTextObjectIds;
+  std::vector<SkinObjectId> preparedTextObjectIds;
+};
+
 void resetPomyuCyclePreparationCountersForTesting() noexcept;
 [[nodiscard]] std::size_t pomyuCycleFileReadsForTesting() noexcept;
 [[nodiscard]] std::size_t pomyuRequirementParsesForTesting() noexcept;
@@ -215,6 +222,11 @@ public:
   [[nodiscard]] const ValidatedBeatorajaSkinModel &modelForTesting() const noexcept;
   [[nodiscard]] std::size_t preparedTextureCountForTesting() const noexcept;
   [[nodiscard]] std::uint64_t callbackWallMicrosForTesting() const noexcept;
+  [[nodiscard]] PlaySkinResourcePreparationEvidenceForTesting
+  resourcePreparationEvidenceForTesting() const;
+  [[nodiscard]] std::optional<std::int64_t>
+  selectedLongNoteImageIndexForTesting(const PlayfieldVisualState &,
+                                       const PlayfieldProjectionResult &);
   // Focused transaction-core seam. Application code cannot supply an
   // external writer span or observe an unpublished bridge commit.
   [[nodiscard]] PlaySkinFrameTransactionResult prepareFrame(

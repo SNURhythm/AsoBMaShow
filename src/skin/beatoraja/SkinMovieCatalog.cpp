@@ -190,6 +190,19 @@ SkinMovieCatalog::~SkinMovieCatalog() {
   }
 }
 
+#if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
+std::vector<SkinResourceId>
+SkinMovieCatalog::preparedResourceIdsForTesting() const {
+  std::vector<SkinResourceId> result;
+  result.reserve(movies_.size());
+  for (const auto &[id, movie] : movies_) {
+    (void)movie;
+    result.push_back(id);
+  }
+  return result;
+}
+#endif
+
 SkinMovieCatalogPreparationResult
 SkinMovieCatalog::prepare(SkinMoviePreparationInputs input) {
   SkinMovieCatalogPreparationResult result;

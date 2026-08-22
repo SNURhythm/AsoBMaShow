@@ -40,7 +40,12 @@
     {"id": 5, "name": "rate-slider", "authoredOrdinal": 4, "critical": false},
     {"id": 6, "name": "notes", "authoredOrdinal": 5, "critical": true},
     {"id": 7, "name": "optional-missing", "authoredOrdinal": 6, "critical": false},
-    {"id": 8, "name": "judge-distribution", "authoredOrdinal": 7, "critical": false}
+    {"id": 8, "name": "judge-distribution", "authoredOrdinal": 7, "critical": false},
+    {"id": 9, "name": "bpmgraph-all", "authoredOrdinal": 8, "critical": false},
+    {"id": 10, "name": "gaugegraph-all", "authoredOrdinal": 9, "critical": false},
+    {"id": 11, "name": "timing-all", "authoredOrdinal": 10, "critical": false},
+    {"id": 12, "name": "hiterror-all", "authoredOrdinal": 11, "critical": false},
+    {"id": 13, "name": "timing-distribution-all", "authoredOrdinal": 12, "critical": false}
   ],
   "stripStates": [
     [

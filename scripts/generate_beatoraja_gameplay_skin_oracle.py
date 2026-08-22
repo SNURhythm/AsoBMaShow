@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -46,6 +47,8 @@ REQUIRED_SOURCE_MARKERS = {
 }
 CASE_TOLERANCE = {
     "selector.master-volume": 1e-7,
+    "lua.timing-visualizer": 1e-6,
+    "lua.hit-error-visualizer": 1e-6,
     "json.timing-visualizer": 1e-6,
     "json.hit-error-visualizer": 1e-6,
     "lr2.timing": 1e-6,
@@ -188,7 +191,9 @@ def run_harness(reference: Path, jars: list[Path]) -> dict:
         output = run(
             "java", "-cp", runtime_classpath,
             "bms.player.beatoraja.skin.lr2.GameplaySkinOracle",
-            str(ROOT / FIXTURES[1]), str(ROOT / FIXTURES[2]), str(ROOT / FIXTURES[3]),
+            str(ROOT / FIXTURES[0]), str(ROOT / FIXTURES[1]),
+            str(ROOT / FIXTURES[2]), str(ROOT / FIXTURES[3]),
+            "1280", "720", "0,250,500,1500", "0.5", "40,-20,10",
             cwd=ROOT,
             timeout=30,
         ).strip()
@@ -227,26 +232,144 @@ def case_for(identifier: str) -> str:
         if "notechart" in identifier: return "lr2.note-chart"
         if "bpmchart" in identifier: return "lr2.bpm-chart"
         if "timing-1-p" in identifier: return "lr2.timing"
+    prefix = identifier.split(".", 1)[0]
     if "timing-distribution" in identifier or "timingdistribution" in identifier:
-        return "json.timing-distribution"
+        return prefix + ".timing-distribution"
     if "hit-error" in identifier or "hiterror" in identifier:
-        return "json.hit-error-visualizer"
+        return prefix + ".hit-error-visualizer"
     if "timing-visualizer" in identifier or "timingvisualizer" in identifier:
-        return "json.timing-visualizer"
+        return prefix + ".timing-visualizer"
     if "gauge-graph" in identifier or "gaugegraph" in identifier:
-        return "json.gauge-graph"
+        return prefix + ".gauge-graph"
     if "judge-graph" in identifier or "judgegraph" in identifier:
-        return "json.note-distribution"
+        return prefix + ".note-distribution"
     if "bpmgraph" in identifier:
-        return "json.bpm-graph"
+        return prefix + ".bpm-graph"
     if "slider" in identifier:
-        return "lr2.slider"
+        return prefix + ".slider"
     raise RuntimeError(f"differential surface has no oracle owner: {identifier}")
+
+
+def case_format(case_id: str) -> str:
+    return "lua" if case_id == "selector.master-volume" else case_id.split(".", 1)[0]
+
+
+def case_fixture(case_id: str) -> str:
+    format_name = case_format(case_id)
+    if format_name == "lua":
+        return FIXTURES[0]
+    if format_name == "json":
+        return FIXTURES[1]
+    return FIXTURES[2] if case_id == "lr2.slider" else FIXTURES[3]
+
+
+def long_note_oracle(reference: Path, constants: object) -> dict:
+    if not isinstance(constants, dict):
+        raise RuntimeError("Java oracle omitted JBMS long-note constants")
+    required = {
+        "modelLN", "modelCN", "modelHCN", "undefined",
+        "noteLN", "noteCN", "noteHCN",
+    }
+    if set(constants) != required or any(
+        isinstance(value, bool) or not isinstance(value, int)
+        for value in constants.values()
+    ):
+        raise RuntimeError("Java oracle emitted invalid JBMS long-note constants")
+    relative = "src/bms/player/beatoraja/play/LaneRenderer.java"
+    source_path = reference / relative
+    source = source_path.read_text(encoding="utf-8")
+    start = source.index("final private void drawLongNote")
+    end = source.index("\n\tpublic void dispose", start)
+    method = source[start:end]
+    hcn = method[method.index("// HCN"):method.index("// CN")]
+    cn = method[method.index("// CN"):method.index("// LN")]
+    ln = method[method.index("// LN"):]
+    hcn_expression = re.findall(r"longImage\[(.*?)\]", hcn, re.DOTALL)[0]
+    hcn_slots = re.search(
+        r"\?\s*(\d+)\s*:\s*\(.*?\?\s*\(.*?\?\s*(\d+)\s*:\s*(\d+)\)\s*:\s*(\d+)\)",
+        hcn_expression,
+        re.DOTALL,
+    )
+    cn_slots = re.search(
+        r"\?\s*(\d+)\s*:\s*(\d+)",
+        re.findall(r"longImage\[(.*?)\]", cn, re.DOTALL)[0],
+    )
+    ln_slots = re.search(
+        r"\?\s*(\d+)\s*:\s*(\d+)",
+        re.findall(r"longImage\[(.*?)\]", ln, re.DOTALL)[0],
+    )
+    hcn_caps = [int(value) for value in re.findall(r"longImage\[(\d+)\]", hcn)]
+    cn_caps = [int(value) for value in re.findall(r"longImage\[(\d+)\]", cn)]
+    ln_caps = [int(value) for value in re.findall(r"longImage\[(\d+)\]", ln)]
+    if not hcn_slots or not cn_slots or not ln_slots or \
+       len(hcn_caps) != 2 or len(cn_caps) != 2 or len(ln_caps) != 1:
+        raise RuntimeError("pinned LaneRenderer long-note slot grammar changed")
+    hcn_active, hcn_reactive, hcn_damaged, hcn_inactive = (
+        int(value) for value in hcn_slots.groups()
+    )
+    cn_active, cn_inactive = (int(value) for value in cn_slots.groups())
+    ln_active, ln_inactive = (int(value) for value in ln_slots.groups())
+    return {
+        "generation": "pinned-LaneRenderer-lexical-slots+jvm-JBMS-constants",
+        "source": {
+            "path": relative,
+            "symbol": "LaneRenderer.drawLongNote",
+            "sha256": sha256(source_path),
+        },
+        "constants": constants,
+        "undefinedByModelType": [
+            {"modelLntype": constants["modelLN"], "selectedMode": constants["noteLN"], "mode": "LN"},
+            {"modelLntype": constants["modelCN"], "selectedMode": constants["noteCN"], "mode": "CN"},
+            {"modelLntype": constants["modelHCN"], "selectedMode": constants["noteHCN"], "mode": "HCN"},
+        ],
+        "explicitTypeOverridesModel": [
+            {"noteType": constants["noteLN"], "mode": "LN"},
+            {"noteType": constants["noteCN"], "mode": "CN"},
+            {"noteType": constants["noteHCN"], "mode": "HCN"},
+        ],
+        "drawSlots": {
+            str(constants["noteLN"]): {
+                "active": [ln_active, *ln_caps],
+                "inactive": [ln_inactive, *ln_caps],
+            },
+            str(constants["noteCN"]): {
+                "active": [cn_active, *cn_caps],
+                "inactive": [cn_inactive, *cn_caps],
+            },
+            str(constants["noteHCN"]): {
+                "active": [hcn_active, *hcn_caps],
+                "inactive": [hcn_inactive, *hcn_caps],
+                "reactive": [hcn_reactive, *hcn_caps],
+                "damaged": [hcn_damaged, *hcn_caps],
+            },
+        },
+    }
 
 
 def build_trace(reference: Path) -> dict:
     jars = validate_reference(reference)
-    output = run_harness(reference, jars)
+    harness = run_harness(reference, jars)
+    if set(harness) != {"execution", "cases"}:
+        raise RuntimeError("Java oracle output lacks executed input provenance")
+    output = harness["cases"]
+    execution = harness["execution"]
+    expected_execution = {
+        "viewport": {"width": 1280, "height": 720},
+        "visualTimesMillis": [0, 250, 500, 1500],
+        "runtimeState": {
+            "masterVolumeRate": 0.5,
+            "recentHitErrorsMillis": [40, -20, 10],
+        },
+    }
+    for key, value in expected_execution.items():
+        if execution.get(key) != value:
+            raise RuntimeError(f"Java oracle did not consume fixed {key}")
+    if execution.get("loadedLuaName") != "Task 11 model contract" or \
+       execution.get("loadedJsonName") != "JSON gameplay field contract":
+        raise RuntimeError("Java oracle did not load the declared Lua/JSON fixtures")
+    if [item.get("visualTimeMillis") for item in execution.get("sampledFrames", [])] != \
+       expected_execution["visualTimesMillis"]:
+        raise RuntimeError("Java oracle did not sample the declared visual times")
     surface_ids = differential_surface_ids()
     owners: dict[str, list[str]] = {case: [] for case in output}
     for identifier in surface_ids:
@@ -261,6 +384,9 @@ def build_trace(reference: Path) -> dict:
         tolerance = CASE_TOLERANCE.get(case_id, 0)
         cases.append({
             "id": case_id,
+            "executedFormat": case_format(case_id),
+            "fixturePath": case_fixture(case_id),
+            "execution": expected_execution,
             "surfaceIds": owners[case_id],
             "comparison": {
                 "mode": "absolute" if tolerance else "exact",
@@ -300,6 +426,9 @@ def build_trace(reference: Path) -> dict:
             },
         },
         "differentialSurfaceIds": surface_ids,
+        "longNoteOracle": long_note_oracle(
+            reference, execution.get("longNoteConstants")
+        ),
         "cases": cases,
     }
 

@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = ROOT / "tests/fixtures/beatoraja_skin/reference_manifest.json"
 VERIFIER = ROOT / "scripts/run_skin_acceptance.py"
 MODERNCHIC_VERIFIER = ROOT / "scripts/verify_modernchic_gameplay_skin.py"
-SCURO_TRACE = ROOT / "tests/fixtures/beatoraja_skin/traces/scuro_property_frames_v1.json"
+SCURO_TRACE = ROOT / "tests/fixtures/beatoraja_skin/traces/gameplay_objects_pinned_v1.json"
 PINNED_COMMIT = "c2ed5db1a46145ed10790c3872f717e95b59db9d"
 
 
@@ -155,12 +155,48 @@ class SkinAcceptanceContractTests(unittest.TestCase):
                         malformed, trace, "entry-d5399e62255ddbda273e7a63"
                     )
 
+    def test_modernchic_verifier_requires_four_entries_and_three_runtime_modes(self):
+        verifier = self.modernchic_verifier()
+        trace = json.loads(SCURO_TRACE.read_text(encoding="utf-8"))
+        entries = [
+            {"path": f"play{keys}_hw.luaskin", "keys": keys,
+             "identity": f"entry-{keys}"}
+            for keys in (5, 7, 10, 14)
+        ]
+        matrix = []
+        for entry in entries:
+            for mode in (1, 2, 3):
+                matrix.append({
+                    "entryIdentity": entry["identity"],
+                    "keys": entry["keys"],
+                    "lnMode": mode,
+                    "sessionPublished": True,
+                    "selectorIndex": mode - 1,
+                    "drawSlots": trace["longNoteOracle"]["drawSlots"][str(mode)],
+                    "referencedImageResourceIds": [1, 2],
+                    "preparedImageResourceIds": [1, 2],
+                    "referencedTextObjectIds": [3],
+                    "preparedTextObjectIds": [3],
+                    "unsupportedDiagnostics": [],
+                })
+        verifier.validate_runtime_matrix(matrix, entries, trace)
+        for mutation in (
+            lambda value: value.pop(),
+            lambda value: value[0].update(selectorIndex=2),
+            lambda value: value[0].update(preparedImageResourceIds=[1]),
+            lambda value: value[0]["drawSlots"].update(active=[9]),
+        ):
+            malformed = json.loads(json.dumps(matrix))
+            mutation(malformed)
+            with self.assertRaises(verifier.VerificationError):
+                verifier.validate_runtime_matrix(malformed, entries, trace)
+
     def test_scuro_trace_pins_beatoraja_long_note_slots_not_a_cyclic_shift(self):
         verifier = self.modernchic_verifier()
         trace = json.loads(SCURO_TRACE.read_text(encoding="utf-8"))
         verifier.validate_long_note_trace(trace)
         shifted = json.loads(json.dumps(trace))
-        cases = shifted["longNoteSelectorOracle"]["undefinedByModelType"]
+        cases = shifted["longNoteOracle"]["undefinedByModelType"]
         modes = [case["mode"] for case in cases]
         for index, case in enumerate(cases):
             case["mode"] = modes[(index + 1) % len(modes)]

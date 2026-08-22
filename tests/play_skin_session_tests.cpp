@@ -2320,6 +2320,16 @@ void testPreparedSessionRunsFiveHundredFramesWithoutLoadingAgain() {
              !created.session->modelForTesting().model.objects.empty(),
          "an owning session exposes only test-scoped model and materialized "
          "texture acceptance facts");
+  const auto resourceEvidence =
+      created.session->resourcePreparationEvidenceForTesting();
+  expect(resourceEvidence.referencedImageResourceIds ==
+                 resourceEvidence.preparedImageResourceIds &&
+             resourceEvidence.referencedTextObjectIds ==
+                 resourceEvidence.preparedTextObjectIds &&
+             !resourceEvidence.referencedImageResourceIds.empty() &&
+             !resourceEvidence.referencedTextObjectIds.empty(),
+         "resource completeness compares independent model references with "
+         "prepared image/movie and text-atlas identities");
   const auto textureCreates = fixture.device()->createCalls;
   const auto movieLoads = fixture.movieDevice()->loadCalls;
   const auto audioLoads = fixture.audioState()->loads.size();

@@ -5,6 +5,28 @@
         "mode": "absolute",
         "tolerance": 1e-07
       },
+      "executedFormat": "lua",
+      "execution": {
+        "runtimeState": {
+          "masterVolumeRate": 0.5,
+          "recentHitErrorsMillis": [
+            40,
+            -20,
+            10
+          ]
+        },
+        "viewport": {
+          "height": 720,
+          "width": 1280
+        },
+        "visualTimesMillis": [
+          0,
+          250,
+          500,
+          1500
+        ]
+      },
+      "fixturePath": "tests/fixtures/beatoraja_skin/lua/model/all_v1_objects.luaskin",
       "id": "selector.master-volume",
       "source": {
         "named": 0.5,
@@ -19,6 +41,468 @@
         "mode": "exact",
         "tolerance": 0
       },
+      "executedFormat": "lua",
+      "execution": {
+        "runtimeState": {
+          "masterVolumeRate": 0.5,
+          "recentHitErrorsMillis": [
+            40,
+            -20,
+            10
+          ]
+        },
+        "viewport": {
+          "height": 720,
+          "width": 1280
+        },
+        "visualTimesMillis": [
+          0,
+          250,
+          500,
+          1500
+        ]
+      },
+      "fixturePath": "tests/fixtures/beatoraja_skin/lua/model/all_v1_objects.luaskin",
+      "id": "lua.note-distribution",
+      "source": {
+        "backgroundTextureOff": true,
+        "delayMillis": 750,
+        "noGap": true,
+        "noHorizontalGap": true,
+        "reverseOrder": true,
+        "type": 2
+      },
+      "surfaceIds": [
+        "lua.object-field.judge-graph-back-tex-off",
+        "lua.object-field.judge-graph-delay",
+        "lua.object-field.judge-graph-id",
+        "lua.object-field.judge-graph-no-gap",
+        "lua.object-field.judge-graph-no-gap-x",
+        "lua.object-field.judge-graph-order-reverse",
+        "lua.object-field.judge-graph-type",
+        "lua.object-field.skin-judgegraph"
+      ]
+    },
+    {
+      "comparison": {
+        "mode": "exact",
+        "tolerance": 0
+      },
+      "executedFormat": "lua",
+      "execution": {
+        "runtimeState": {
+          "masterVolumeRate": 0.5,
+          "recentHitErrorsMillis": [
+            40,
+            -20,
+            10
+          ]
+        },
+        "viewport": {
+          "height": 720,
+          "width": 1280
+        },
+        "visualTimesMillis": [
+          0,
+          250,
+          500,
+          1500
+        ]
+      },
+      "fixturePath": "tests/fixtures/beatoraja_skin/lua/model/all_v1_objects.luaskin",
+      "id": "lua.bpm-graph",
+      "source": {
+        "colors": [
+          16909311,
+          286397439,
+          555885567,
+          825373695,
+          1094861823,
+          1364349951
+        ],
+        "delayMillis": 30,
+        "lineWidth": 3
+      },
+      "surfaceIds": [
+        "lua.object-field.bpmgraph-delay",
+        "lua.object-field.bpmgraph-id",
+        "lua.object-field.bpmgraph-line-width",
+        "lua.object-field.bpmgraph-main-bpmcolor",
+        "lua.object-field.bpmgraph-max-bpmcolor",
+        "lua.object-field.bpmgraph-min-bpmcolor",
+        "lua.object-field.bpmgraph-other-bpmcolor",
+        "lua.object-field.bpmgraph-stop-line-color",
+        "lua.object-field.bpmgraph-transition-line-color",
+        "lua.object-field.skin-bpmgraph"
+      ]
+    },
+    {
+      "comparison": {
+        "mode": "exact",
+        "tolerance": 0
+      },
+      "executedFormat": "lua",
+      "execution": {
+        "runtimeState": {
+          "masterVolumeRate": 0.5,
+          "recentHitErrorsMillis": [
+            40,
+            -20,
+            10
+          ]
+        },
+        "viewport": {
+          "height": 720,
+          "width": 1280
+        },
+        "visualTimesMillis": [
+          0,
+          250,
+          500,
+          1500
+        ]
+      },
+      "fixturePath": "tests/fixtures/beatoraja_skin/lua/model/all_v1_objects.luaskin",
+      "id": "lua.gauge-graph",
+      "source": {
+        "rgba": [
+          [
+            16909060,
+            286397204,
+            555885348,
+            825373492
+          ],
+          [
+            1094861636,
+            1364349780,
+            1633837924,
+            1903326068
+          ],
+          [
+            2172814212,
+            2442302356,
+            2711790500,
+            2981278644
+          ],
+          [
+            3250766788,
+            3520254932,
+            3789743076,
+            4059231220
+          ],
+          [
+            270544960,
+            540033104,
+            809521248,
+            1079009392
+          ],
+          [
+            1348497536,
+            1617985680,
+            1887473824,
+            2156961968
+          ]
+        ]
+      },
+      "surfaceIds": [
+        "lua.object-field.gauge-graph-assist-and-easy-fail-bgcolor",
+        "lua.object-field.gauge-graph-assist-and-easy-fail-line-color",
+        "lua.object-field.gauge-graph-assist-clear-bgcolor",
+        "lua.object-field.gauge-graph-assist-clear-line-color",
+        "lua.object-field.gauge-graph-border-color",
+        "lua.object-field.gauge-graph-borderline-color",
+        "lua.object-field.gauge-graph-color",
+        "lua.object-field.gauge-graph-ex-hard-bgcolor",
+        "lua.object-field.gauge-graph-ex-hard-line-color",
+        "lua.object-field.gauge-graph-groove-clear-and-hard-bgcolor",
+        "lua.object-field.gauge-graph-groove-clear-and-hard-line-color",
+        "lua.object-field.gauge-graph-groove-fail-bgcolor",
+        "lua.object-field.gauge-graph-groove-fail-line-color",
+        "lua.object-field.gauge-graph-hazard-bgcolor",
+        "lua.object-field.gauge-graph-hazard-line-color",
+        "lua.object-field.gauge-graph-id",
+        "lua.object-field.skin-gaugegraph"
+      ]
+    },
+    {
+      "comparison": {
+        "mode": "absolute",
+        "tolerance": 1e-06
+      },
+      "executedFormat": "lua",
+      "execution": {
+        "runtimeState": {
+          "masterVolumeRate": 0.5,
+          "recentHitErrorsMillis": [
+            40,
+            -20,
+            10
+          ]
+        },
+        "viewport": {
+          "height": 720,
+          "width": 1280
+        },
+        "visualTimesMillis": [
+          0,
+          250,
+          500,
+          1500
+        ]
+      },
+      "fixturePath": "tests/fixtures/beatoraja_skin/lua/model/all_v1_objects.luaskin",
+      "id": "lua.timing-visualizer",
+      "source": {
+        "centerMillis": 170,
+        "centerRgba": 286397204,
+        "drawDecay": false,
+        "judgeRgba": [
+          555885348,
+          825373492,
+          1094861636,
+          1364349780,
+          1633837924
+        ],
+        "judgeWidthRate": 1.1788856,
+        "lineRgba": 16909060,
+        "lineWidth": 4,
+        "transparent": false
+      },
+      "surfaceIds": [
+        "lua.object-field.skin-timingvisualizer",
+        "lua.object-field.timing-visualizer-bdcolor",
+        "lua.object-field.timing-visualizer-center-color",
+        "lua.object-field.timing-visualizer-draw-decay",
+        "lua.object-field.timing-visualizer-gdcolor",
+        "lua.object-field.timing-visualizer-grcolor",
+        "lua.object-field.timing-visualizer-id",
+        "lua.object-field.timing-visualizer-judge-width-millis",
+        "lua.object-field.timing-visualizer-line-color",
+        "lua.object-field.timing-visualizer-line-width",
+        "lua.object-field.timing-visualizer-pgcolor",
+        "lua.object-field.timing-visualizer-prcolor",
+        "lua.object-field.timing-visualizer-transparent",
+        "lua.object-field.timing-visualizer-width"
+      ]
+    },
+    {
+      "comparison": {
+        "mode": "absolute",
+        "tolerance": 1e-06
+      },
+      "executedFormat": "lua",
+      "execution": {
+        "runtimeState": {
+          "masterVolumeRate": 0.5,
+          "recentHitErrorsMillis": [
+            40,
+            -20,
+            10
+          ]
+        },
+        "viewport": {
+          "height": 720,
+          "width": 1280
+        },
+        "visualTimesMillis": [
+          0,
+          250,
+          500,
+          1500
+        ]
+      },
+      "fixturePath": "tests/fixtures/beatoraja_skin/lua/model/all_v1_objects.luaskin",
+      "id": "lua.hit-error-visualizer",
+      "source": {
+        "alpha": 0.25,
+        "centerMillis": 160,
+        "centerRgba": 286397204,
+        "colorMode": false,
+        "drawDecay": false,
+        "emaMode": 2,
+        "emaRgba": 1903326068,
+        "emaSequence": [
+          10,
+          3,
+          4
+        ],
+        "hitErrorMode": false,
+        "judgeRgba": [
+          555885348,
+          825373492,
+          1094861636,
+          1364349780,
+          1633837924
+        ],
+        "judgeWidthRate": 1.2492212,
+        "lineRgba": 16909060,
+        "lineWidth": 3,
+        "transparent": false,
+        "width": 401,
+        "windowLength": 40
+      },
+      "surfaceIds": [
+        "lua.object-field.hit-error-visualizer-alpha",
+        "lua.object-field.hit-error-visualizer-bdcolor",
+        "lua.object-field.hit-error-visualizer-center-color",
+        "lua.object-field.hit-error-visualizer-color-mode",
+        "lua.object-field.hit-error-visualizer-draw-decay",
+        "lua.object-field.hit-error-visualizer-ema-color",
+        "lua.object-field.hit-error-visualizer-ema-mode",
+        "lua.object-field.hit-error-visualizer-gdcolor",
+        "lua.object-field.hit-error-visualizer-grcolor",
+        "lua.object-field.hit-error-visualizer-hiterror-mode",
+        "lua.object-field.hit-error-visualizer-id",
+        "lua.object-field.hit-error-visualizer-judge-width-millis",
+        "lua.object-field.hit-error-visualizer-line-color",
+        "lua.object-field.hit-error-visualizer-line-width",
+        "lua.object-field.hit-error-visualizer-pgcolor",
+        "lua.object-field.hit-error-visualizer-prcolor",
+        "lua.object-field.hit-error-visualizer-transparent",
+        "lua.object-field.hit-error-visualizer-width",
+        "lua.object-field.hit-error-visualizer-window-length",
+        "lua.object-field.skin-hiterrorvisualizer"
+      ]
+    },
+    {
+      "comparison": {
+        "mode": "exact",
+        "tolerance": 0
+      },
+      "executedFormat": "lua",
+      "execution": {
+        "runtimeState": {
+          "masterVolumeRate": 0.5,
+          "recentHitErrorsMillis": [
+            40,
+            -20,
+            10
+          ]
+        },
+        "viewport": {
+          "height": 720,
+          "width": 1280
+        },
+        "visualTimesMillis": [
+          0,
+          250,
+          500,
+          1500
+        ]
+      },
+      "fixturePath": "tests/fixtures/beatoraja_skin/lua/model/all_v1_objects.luaskin",
+      "id": "lua.timing-distribution",
+      "source": {
+        "averageRgba": 286397204,
+        "centerColumn": 67,
+        "columns": 134,
+        "devRgba": 555885348,
+        "drawAverage": false,
+        "drawDev": false,
+        "gameplayDraw": false,
+        "graphRgba": 16909060,
+        "judgeRgba": [
+          825373492,
+          1094861636,
+          1364349780,
+          1633837924,
+          1903326068
+        ]
+      },
+      "surfaceIds": [
+        "lua.object-field.skin-timingdistributiongraph",
+        "lua.object-field.timing-distribution-graph-average-color",
+        "lua.object-field.timing-distribution-graph-bdcolor",
+        "lua.object-field.timing-distribution-graph-dev-color",
+        "lua.object-field.timing-distribution-graph-draw-average",
+        "lua.object-field.timing-distribution-graph-draw-dev",
+        "lua.object-field.timing-distribution-graph-gdcolor",
+        "lua.object-field.timing-distribution-graph-graph-color",
+        "lua.object-field.timing-distribution-graph-grcolor",
+        "lua.object-field.timing-distribution-graph-id",
+        "lua.object-field.timing-distribution-graph-line-width",
+        "lua.object-field.timing-distribution-graph-pgcolor",
+        "lua.object-field.timing-distribution-graph-prcolor",
+        "lua.object-field.timing-distribution-graph-width"
+      ]
+    },
+    {
+      "comparison": {
+        "mode": "exact",
+        "tolerance": 0
+      },
+      "executedFormat": "lua",
+      "execution": {
+        "runtimeState": {
+          "masterVolumeRate": 0.5,
+          "recentHitErrorsMillis": [
+            40,
+            -20,
+            10
+          ]
+        },
+        "viewport": {
+          "height": 720,
+          "width": 1280
+        },
+        "visualTimesMillis": [
+          0,
+          250,
+          500,
+          1500
+        ]
+      },
+      "fixturePath": "tests/fixtures/beatoraja_skin/lua/model/all_v1_objects.luaskin",
+      "id": "lua.slider",
+      "source": {
+        "changeable": false,
+        "destination": {
+          "acceleration": 0,
+          "angleDegrees": 0,
+          "height": 10.0,
+          "rgba": 4294967295,
+          "timeMillis": 0,
+          "width": 10.0,
+          "x": 70.0,
+          "y": 80.0
+        },
+        "direction": 1,
+        "range": 90
+      },
+      "surfaceIds": [
+        "lua.object-field.slider-angle",
+        "lua.object-field.slider-changeable",
+        "lua.object-field.slider-range",
+        "lua.object-field.slider-type"
+      ]
+    },
+    {
+      "comparison": {
+        "mode": "exact",
+        "tolerance": 0
+      },
+      "executedFormat": "json",
+      "execution": {
+        "runtimeState": {
+          "masterVolumeRate": 0.5,
+          "recentHitErrorsMillis": [
+            40,
+            -20,
+            10
+          ]
+        },
+        "viewport": {
+          "height": 720,
+          "width": 1280
+        },
+        "visualTimesMillis": [
+          0,
+          250,
+          500,
+          1500
+        ]
+      },
+      "fixturePath": "tests/fixtures/beatoraja_skin/json/all_gameplay_fields.json",
       "id": "json.note-distribution",
       "source": {
         "backgroundTextureOff": true,
@@ -36,15 +520,7 @@
         "json.field.judge-graph-no-gap-x",
         "json.field.judge-graph-order-reverse",
         "json.field.judge-graph-type",
-        "json.field.skin-judgegraph",
-        "lua.object-field.judge-graph-back-tex-off",
-        "lua.object-field.judge-graph-delay",
-        "lua.object-field.judge-graph-id",
-        "lua.object-field.judge-graph-no-gap",
-        "lua.object-field.judge-graph-no-gap-x",
-        "lua.object-field.judge-graph-order-reverse",
-        "lua.object-field.judge-graph-type",
-        "lua.object-field.skin-judgegraph"
+        "json.field.skin-judgegraph"
       ]
     },
     {
@@ -52,6 +528,28 @@
         "mode": "exact",
         "tolerance": 0
       },
+      "executedFormat": "json",
+      "execution": {
+        "runtimeState": {
+          "masterVolumeRate": 0.5,
+          "recentHitErrorsMillis": [
+            40,
+            -20,
+            10
+          ]
+        },
+        "viewport": {
+          "height": 720,
+          "width": 1280
+        },
+        "visualTimesMillis": [
+          0,
+          250,
+          500,
+          1500
+        ]
+      },
+      "fixturePath": "tests/fixtures/beatoraja_skin/json/all_gameplay_fields.json",
       "id": "json.bpm-graph",
       "source": {
         "colors": [
@@ -75,17 +573,7 @@
         "json.field.bpmgraph-other-bpmcolor",
         "json.field.bpmgraph-stop-line-color",
         "json.field.bpmgraph-transition-line-color",
-        "json.field.skin-bpmgraph",
-        "lua.object-field.bpmgraph-delay",
-        "lua.object-field.bpmgraph-id",
-        "lua.object-field.bpmgraph-line-width",
-        "lua.object-field.bpmgraph-main-bpmcolor",
-        "lua.object-field.bpmgraph-max-bpmcolor",
-        "lua.object-field.bpmgraph-min-bpmcolor",
-        "lua.object-field.bpmgraph-other-bpmcolor",
-        "lua.object-field.bpmgraph-stop-line-color",
-        "lua.object-field.bpmgraph-transition-line-color",
-        "lua.object-field.skin-bpmgraph"
+        "json.field.skin-bpmgraph"
       ]
     },
     {
@@ -93,6 +581,28 @@
         "mode": "exact",
         "tolerance": 0
       },
+      "executedFormat": "json",
+      "execution": {
+        "runtimeState": {
+          "masterVolumeRate": 0.5,
+          "recentHitErrorsMillis": [
+            40,
+            -20,
+            10
+          ]
+        },
+        "viewport": {
+          "height": 720,
+          "width": 1280
+        },
+        "visualTimesMillis": [
+          0,
+          250,
+          500,
+          1500
+        ]
+      },
+      "fixturePath": "tests/fixtures/beatoraja_skin/json/all_gameplay_fields.json",
       "id": "json.gauge-graph",
       "source": {
         "rgba": [
@@ -151,24 +661,7 @@
         "json.field.gauge-graph-hazard-bgcolor",
         "json.field.gauge-graph-hazard-line-color",
         "json.field.gauge-graph-id",
-        "json.field.skin-gaugegraph",
-        "lua.object-field.gauge-graph-assist-and-easy-fail-bgcolor",
-        "lua.object-field.gauge-graph-assist-and-easy-fail-line-color",
-        "lua.object-field.gauge-graph-assist-clear-bgcolor",
-        "lua.object-field.gauge-graph-assist-clear-line-color",
-        "lua.object-field.gauge-graph-border-color",
-        "lua.object-field.gauge-graph-borderline-color",
-        "lua.object-field.gauge-graph-color",
-        "lua.object-field.gauge-graph-ex-hard-bgcolor",
-        "lua.object-field.gauge-graph-ex-hard-line-color",
-        "lua.object-field.gauge-graph-groove-clear-and-hard-bgcolor",
-        "lua.object-field.gauge-graph-groove-clear-and-hard-line-color",
-        "lua.object-field.gauge-graph-groove-fail-bgcolor",
-        "lua.object-field.gauge-graph-groove-fail-line-color",
-        "lua.object-field.gauge-graph-hazard-bgcolor",
-        "lua.object-field.gauge-graph-hazard-line-color",
-        "lua.object-field.gauge-graph-id",
-        "lua.object-field.skin-gaugegraph"
+        "json.field.skin-gaugegraph"
       ]
     },
     {
@@ -176,6 +669,28 @@
         "mode": "absolute",
         "tolerance": 1e-06
       },
+      "executedFormat": "json",
+      "execution": {
+        "runtimeState": {
+          "masterVolumeRate": 0.5,
+          "recentHitErrorsMillis": [
+            40,
+            -20,
+            10
+          ]
+        },
+        "viewport": {
+          "height": 720,
+          "width": 1280
+        },
+        "visualTimesMillis": [
+          0,
+          250,
+          500,
+          1500
+        ]
+      },
+      "fixturePath": "tests/fixtures/beatoraja_skin/json/all_gameplay_fields.json",
       "id": "json.timing-visualizer",
       "source": {
         "centerMillis": 170,
@@ -207,21 +722,7 @@
         "json.field.timing-visualizer-pgcolor",
         "json.field.timing-visualizer-prcolor",
         "json.field.timing-visualizer-transparent",
-        "json.field.timing-visualizer-width",
-        "lua.object-field.skin-timingvisualizer",
-        "lua.object-field.timing-visualizer-bdcolor",
-        "lua.object-field.timing-visualizer-center-color",
-        "lua.object-field.timing-visualizer-draw-decay",
-        "lua.object-field.timing-visualizer-gdcolor",
-        "lua.object-field.timing-visualizer-grcolor",
-        "lua.object-field.timing-visualizer-id",
-        "lua.object-field.timing-visualizer-judge-width-millis",
-        "lua.object-field.timing-visualizer-line-color",
-        "lua.object-field.timing-visualizer-line-width",
-        "lua.object-field.timing-visualizer-pgcolor",
-        "lua.object-field.timing-visualizer-prcolor",
-        "lua.object-field.timing-visualizer-transparent",
-        "lua.object-field.timing-visualizer-width"
+        "json.field.timing-visualizer-width"
       ]
     },
     {
@@ -229,6 +730,28 @@
         "mode": "absolute",
         "tolerance": 1e-06
       },
+      "executedFormat": "json",
+      "execution": {
+        "runtimeState": {
+          "masterVolumeRate": 0.5,
+          "recentHitErrorsMillis": [
+            40,
+            -20,
+            10
+          ]
+        },
+        "viewport": {
+          "height": 720,
+          "width": 1280
+        },
+        "visualTimesMillis": [
+          0,
+          250,
+          500,
+          1500
+        ]
+      },
+      "fixturePath": "tests/fixtures/beatoraja_skin/json/all_gameplay_fields.json",
       "id": "json.hit-error-visualizer",
       "source": {
         "alpha": 0.25,
@@ -278,27 +801,7 @@
         "json.field.hit-error-visualizer-transparent",
         "json.field.hit-error-visualizer-width",
         "json.field.hit-error-visualizer-window-length",
-        "json.field.skin-hiterrorvisualizer",
-        "lua.object-field.hit-error-visualizer-alpha",
-        "lua.object-field.hit-error-visualizer-bdcolor",
-        "lua.object-field.hit-error-visualizer-center-color",
-        "lua.object-field.hit-error-visualizer-color-mode",
-        "lua.object-field.hit-error-visualizer-draw-decay",
-        "lua.object-field.hit-error-visualizer-ema-color",
-        "lua.object-field.hit-error-visualizer-ema-mode",
-        "lua.object-field.hit-error-visualizer-gdcolor",
-        "lua.object-field.hit-error-visualizer-grcolor",
-        "lua.object-field.hit-error-visualizer-hiterror-mode",
-        "lua.object-field.hit-error-visualizer-id",
-        "lua.object-field.hit-error-visualizer-judge-width-millis",
-        "lua.object-field.hit-error-visualizer-line-color",
-        "lua.object-field.hit-error-visualizer-line-width",
-        "lua.object-field.hit-error-visualizer-pgcolor",
-        "lua.object-field.hit-error-visualizer-prcolor",
-        "lua.object-field.hit-error-visualizer-transparent",
-        "lua.object-field.hit-error-visualizer-width",
-        "lua.object-field.hit-error-visualizer-window-length",
-        "lua.object-field.skin-hiterrorvisualizer"
+        "json.field.skin-hiterrorvisualizer"
       ]
     },
     {
@@ -306,6 +809,28 @@
         "mode": "exact",
         "tolerance": 0
       },
+      "executedFormat": "json",
+      "execution": {
+        "runtimeState": {
+          "masterVolumeRate": 0.5,
+          "recentHitErrorsMillis": [
+            40,
+            -20,
+            10
+          ]
+        },
+        "viewport": {
+          "height": 720,
+          "width": 1280
+        },
+        "visualTimesMillis": [
+          0,
+          250,
+          500,
+          1500
+        ]
+      },
+      "fixturePath": "tests/fixtures/beatoraja_skin/json/all_gameplay_fields.json",
       "id": "json.timing-distribution",
       "source": {
         "averageRgba": 286397204,
@@ -338,21 +863,7 @@
         "json.field.timing-distribution-graph-line-width",
         "json.field.timing-distribution-graph-pgcolor",
         "json.field.timing-distribution-graph-prcolor",
-        "json.field.timing-distribution-graph-width",
-        "lua.object-field.skin-timingdistributiongraph",
-        "lua.object-field.timing-distribution-graph-average-color",
-        "lua.object-field.timing-distribution-graph-bdcolor",
-        "lua.object-field.timing-distribution-graph-dev-color",
-        "lua.object-field.timing-distribution-graph-draw-average",
-        "lua.object-field.timing-distribution-graph-draw-dev",
-        "lua.object-field.timing-distribution-graph-gdcolor",
-        "lua.object-field.timing-distribution-graph-graph-color",
-        "lua.object-field.timing-distribution-graph-grcolor",
-        "lua.object-field.timing-distribution-graph-id",
-        "lua.object-field.timing-distribution-graph-line-width",
-        "lua.object-field.timing-distribution-graph-pgcolor",
-        "lua.object-field.timing-distribution-graph-prcolor",
-        "lua.object-field.timing-distribution-graph-width"
+        "json.field.timing-distribution-graph-width"
       ]
     },
     {
@@ -360,6 +871,78 @@
         "mode": "exact",
         "tolerance": 0
       },
+      "executedFormat": "json",
+      "execution": {
+        "runtimeState": {
+          "masterVolumeRate": 0.5,
+          "recentHitErrorsMillis": [
+            40,
+            -20,
+            10
+          ]
+        },
+        "viewport": {
+          "height": 720,
+          "width": 1280
+        },
+        "visualTimesMillis": [
+          0,
+          250,
+          500,
+          1500
+        ]
+      },
+      "fixturePath": "tests/fixtures/beatoraja_skin/json/all_gameplay_fields.json",
+      "id": "json.slider",
+      "source": {
+        "changeable": false,
+        "destination": {
+          "acceleration": 0,
+          "angleDegrees": 0,
+          "height": 0.0,
+          "rgba": 4294967295,
+          "timeMillis": 0,
+          "width": 0.0,
+          "x": 0.0,
+          "y": 0.0
+        },
+        "direction": 3,
+        "range": 120
+      },
+      "surfaceIds": [
+        "json.field.slider-angle",
+        "json.field.slider-changeable",
+        "json.field.slider-range",
+        "json.field.slider-type"
+      ]
+    },
+    {
+      "comparison": {
+        "mode": "exact",
+        "tolerance": 0
+      },
+      "executedFormat": "lr2",
+      "execution": {
+        "runtimeState": {
+          "masterVolumeRate": 0.5,
+          "recentHitErrorsMillis": [
+            40,
+            -20,
+            10
+          ]
+        },
+        "viewport": {
+          "height": 720,
+          "width": 1280
+        },
+        "visualTimesMillis": [
+          0,
+          250,
+          500,
+          1500
+        ]
+      },
+      "fixturePath": "tests/fixtures/beatoraja_skin/lr2/all_gameplay_objects.lr2skin",
       "id": "lr2.slider",
       "source": {
         "changeable": false,
@@ -377,16 +960,8 @@
         "range": 90
       },
       "surfaceIds": [
-        "json.field.slider-angle",
-        "json.field.slider-changeable",
-        "json.field.slider-range",
-        "json.field.slider-type",
         "lr2.csv-command.dst-slider",
-        "lr2.csv-command.src-slider",
-        "lua.object-field.slider-angle",
-        "lua.object-field.slider-changeable",
-        "lua.object-field.slider-range",
-        "lua.object-field.slider-type"
+        "lr2.csv-command.src-slider"
       ]
     },
     {
@@ -394,6 +969,28 @@
         "mode": "exact",
         "tolerance": 0
       },
+      "executedFormat": "lr2",
+      "execution": {
+        "runtimeState": {
+          "masterVolumeRate": 0.5,
+          "recentHitErrorsMillis": [
+            40,
+            -20,
+            10
+          ]
+        },
+        "viewport": {
+          "height": 720,
+          "width": 1280
+        },
+        "visualTimesMillis": [
+          0,
+          250,
+          500,
+          1500
+        ]
+      },
+      "fixturePath": "tests/fixtures/beatoraja_skin/lr2/all_play_commands.lr2skin",
       "id": "lr2.note-chart",
       "source": {
         "destination": {
@@ -425,6 +1022,28 @@
         "mode": "exact",
         "tolerance": 0
       },
+      "executedFormat": "lr2",
+      "execution": {
+        "runtimeState": {
+          "masterVolumeRate": 0.5,
+          "recentHitErrorsMillis": [
+            40,
+            -20,
+            10
+          ]
+        },
+        "viewport": {
+          "height": 720,
+          "width": 1280
+        },
+        "visualTimesMillis": [
+          0,
+          250,
+          500,
+          1500
+        ]
+      },
+      "fixturePath": "tests/fixtures/beatoraja_skin/lr2/all_play_commands.lr2skin",
       "id": "lr2.bpm-chart",
       "source": {
         "destination": {
@@ -460,6 +1079,28 @@
         "mode": "absolute",
         "tolerance": 1e-06
       },
+      "executedFormat": "lr2",
+      "execution": {
+        "runtimeState": {
+          "masterVolumeRate": 0.5,
+          "recentHitErrorsMillis": [
+            40,
+            -20,
+            10
+          ]
+        },
+        "viewport": {
+          "height": 720,
+          "width": 1280
+        },
+        "visualTimesMillis": [
+          0,
+          250,
+          500,
+          1500
+        ]
+      },
+      "fixturePath": "tests/fixtures/beatoraja_skin/lr2/all_play_commands.lr2skin",
       "id": "lr2.timing",
       "source": {
         "destination": {
@@ -683,7 +1324,7 @@
   "fixtures": [
     {
       "path": "tests/fixtures/beatoraja_skin/lua/model/all_v1_objects.luaskin",
-      "sha256": "76261fa05afc3fa5c7998957c94ba449ee74b17e31c647968de3400053321fec"
+      "sha256": "a52409965668f9d2a4fc249959538653fe35db317653eaaae3694f7caccadc1d"
     },
     {
       "path": "tests/fixtures/beatoraja_skin/json/all_gameplay_fields.json",
@@ -716,6 +1357,100 @@
       250,
       500,
       1500
+    ]
+  },
+  "longNoteOracle": {
+    "constants": {
+      "modelCN": 1,
+      "modelHCN": 2,
+      "modelLN": 0,
+      "noteCN": 2,
+      "noteHCN": 3,
+      "noteLN": 1,
+      "undefined": 0
+    },
+    "drawSlots": {
+      "1": {
+        "active": [
+          2,
+          1
+        ],
+        "inactive": [
+          3,
+          1
+        ]
+      },
+      "2": {
+        "active": [
+          2,
+          0,
+          1
+        ],
+        "inactive": [
+          3,
+          0,
+          1
+        ]
+      },
+      "3": {
+        "active": [
+          6,
+          4,
+          5
+        ],
+        "damaged": [
+          9,
+          4,
+          5
+        ],
+        "inactive": [
+          7,
+          4,
+          5
+        ],
+        "reactive": [
+          8,
+          4,
+          5
+        ]
+      }
+    },
+    "explicitTypeOverridesModel": [
+      {
+        "mode": "LN",
+        "noteType": 1
+      },
+      {
+        "mode": "CN",
+        "noteType": 2
+      },
+      {
+        "mode": "HCN",
+        "noteType": 3
+      }
+    ],
+    "generation": "pinned-LaneRenderer-lexical-slots+jvm-JBMS-constants",
+    "source": {
+      "path": "src/bms/player/beatoraja/play/LaneRenderer.java",
+      "sha256": "f638eb06f3cfd0792df116f1054acd23c1f205966b36b8e4a0d0cb0c45f92d2e",
+      "symbol": "LaneRenderer.drawLongNote"
+    },
+    "undefinedByModelType": [
+      {
+        "mode": "LN",
+        "modelLntype": 0,
+        "selectedMode": 1
+      },
+      {
+        "mode": "CN",
+        "modelLntype": 1,
+        "selectedMode": 2
+      },
+      {
+        "mode": "HCN",
+        "modelLntype": 2,
+        "selectedMode": 3
+      }
     ]
   },
   "oracle": "pinned-beatoraja-gameplay-v1",

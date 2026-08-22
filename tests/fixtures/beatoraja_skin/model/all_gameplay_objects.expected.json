@@ -1,9 +1,9 @@
 {
-  "comparisonScope": "Shared slider, image resource, numeric rate binding, destination, and textured draw only; format-exclusive gameplay objects remain covered by their native fixtures.",
+  "comparisonScope": "Shared slider canonical/draw parity plus executed native family assertions for format-exclusive gameplay surfaces.",
   "formatExclusiveEvidence": [
-    "tests/fixtures/beatoraja_skin/lua/model/all_v1_objects.luaskin",
-    "tests/fixtures/beatoraja_skin/json/all_gameplay_fields.json",
-    "tests/fixtures/beatoraja_skin/lr2/all_play_commands.lr2skin"
+    {"format": "lua", "fixture": "all_v1_objects.luaskin", "requiredKinds": ["slider", "note", "note-distribution"]},
+    {"format": "json", "fixture": "all_gameplay_fields.json", "requiredKinds": ["slider", "note", "note-distribution", "bpm-graph", "timing-visualizer", "hit-error-visualizer", "text", "gauge"]},
+    {"format": "lr2", "fixture": "all_play_commands.lr2skin", "requiredKinds": ["slider", "note", "note-distribution", "bpm-graph", "timing-visualizer", "text", "gauge"]}
   ],
   "overlap": {
     "header": {"type": 0, "width": 1280, "height": 720},

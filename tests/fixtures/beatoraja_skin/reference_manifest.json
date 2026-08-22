@@ -308,10 +308,34 @@
     {
       "criticality": "critical",
       "format": "lua",
+      "identity": "entry-f8c6b6f1b2914d602812d2ca",
+      "keys": 5,
+      "path": "play5_hw.luaskin",
+      "sha256": "8e3155900120949562f02d9cceff9b8ef4bc4c1b80dd06774b810e8b9b91199f"
+    },
+    {
+      "criticality": "critical",
+      "format": "lua",
       "identity": "entry-d5399e62255ddbda273e7a63",
       "keys": 7,
       "path": "play7_hw.luaskin",
       "sha256": "aac73c59526e74f159731608b3b54e58a7e534537503acb88565a4c175cf8f13"
+    },
+    {
+      "criticality": "critical",
+      "format": "lua",
+      "identity": "entry-338bec476d1c2ae36e50cbb6",
+      "keys": 10,
+      "path": "play10_hw.luaskin",
+      "sha256": "86dfe492d57c936c53a41c18d4e3d92a50c5f7855a01931e96979799be25686e"
+    },
+    {
+      "criticality": "critical",
+      "format": "lua",
+      "identity": "entry-517ffa1a30626f80272e3c43",
+      "keys": 14,
+      "path": "play14_hw.luaskin",
+      "sha256": "690d1c6bcb259af502c6a7dac5b619d9037b5fa3e62361c7aefc43cc3b291f82"
     }
   ],
   "externalPayloadDigests": [

@@ -35,6 +35,20 @@ fi
 repo=$(git rev-parse --show-toplevel)
 git -C "$repo" rev-parse --verify "${baseline}^{commit}" >/dev/null
 git -C "$repo" rev-parse --verify "${candidate}^{commit}" >/dev/null
+benchmark_source=tests/gameplay_skin_loading_benchmark_tests.cpp
+for ref in "$baseline" "$candidate"; do
+  if ! git -C "$repo" cat-file -e "$ref:$benchmark_source" 2>/dev/null ||
+     ! git -C "$repo" show "$ref:CMakeLists.txt" |
+       grep -q 'add_executable(gameplay_skin_loading_benchmark_tests'; then
+    echo "error: same benchmark target/workload is unavailable at $ref" >&2
+    exit 1
+  fi
+  if ! git -C "$repo" show "$ref:$benchmark_source" |
+       grep -q 'ASOBMASHOW_LOADING_WORKLOAD_V2'; then
+    echo "error: same benchmark target/workload is unavailable at $ref" >&2
+    exit 1
+  fi
+done
 vcpkg_toolchain=${CMAKE_TOOLCHAIN_FILE:-}
 if [[ -z $vcpkg_toolchain && -n ${VCPKG_ROOT:-} ]]; then
   vcpkg_toolchain="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
@@ -87,40 +101,6 @@ link_submodules() {
 link_submodules "$baseline_tree"
 link_submodules "$candidate_tree"
 
-# The feature benchmark target does not exist on develop. Install the exact
-# same Lua-only harness into the isolated baseline tree; feature-only
-# JSON/LR2 code is compiled out there. No baseline source escapes the temp
-# worktree and both revisions execute the identical Lua session workload.
-cp "$candidate_tree/tests/gameplay_skin_loading_benchmark_tests.cpp" \
-   "$baseline_tree/tests/gameplay_skin_loading_benchmark_tests.cpp"
-python3 - "$baseline_tree/CMakeLists.txt" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-fragment = r'''
-if(TARGET play_skin_session_tests)
-  get_target_property(_loading_benchmark_sources play_skin_session_tests SOURCES)
-  list(REMOVE_ITEM _loading_benchmark_sources tests/play_skin_session_tests.cpp)
-  add_executable(gameplay_skin_loading_benchmark_tests
-    tests/gameplay_skin_loading_benchmark_tests.cpp
-    ${_loading_benchmark_sources})
-  target_include_directories(gameplay_skin_loading_benchmark_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src)
-  target_compile_features(gameplay_skin_loading_benchmark_tests PRIVATE cxx_std_23)
-  target_compile_definitions(gameplay_skin_loading_benchmark_tests PRIVATE
-    ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
-    ASOBMASHOW_PLAY_SKIN_SESSION_TESTING=1
-    ASOBMASHOW_SKIN_STORAGE_PATHS_NO_PLATFORM_DEFAULTS
-    ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-  get_target_property(_loading_benchmark_links play_skin_session_tests LINK_LIBRARIES)
-  target_link_libraries(gameplay_skin_loading_benchmark_tests PRIVATE
-    ${_loading_benchmark_links})
-endif()
-'''
-path.write_text(path.read_text(encoding="utf-8") + fragment, encoding="utf-8")
-PY
-
 configure_and_build() {
   local tree=$1
   local build=$2
@@ -136,34 +116,44 @@ configure_and_build() {
 configure_and_build "$baseline_tree" "$temporary/build-baseline"
 configure_and_build "$candidate_tree" "$temporary/build-candidate"
 
-extra=(--format lua)
-if [[ -n $skin_path ]]; then
-  extra+=(--skin "$skin_path")
-fi
 requested=$((samples + 1))
 
 run_mode() {
   local executable=$1
   local mode=$2
+  local format=$3
+  local extra=(--format "$format")
+  if [[ -n $skin_path ]]; then
+    extra+=(--skin "$skin_path")
+  fi
   "$executable" --benchmark --mode "$mode" --samples "$requested" "${extra[@]}"
 }
 
-baseline_cold=$(run_mode "$temporary/build-baseline/gameplay_skin_loading_benchmark_tests" cold)
-baseline_warm=$(run_mode "$temporary/build-baseline/gameplay_skin_loading_benchmark_tests" warm)
-candidate_cold=$(run_mode "$temporary/build-candidate/gameplay_skin_loading_benchmark_tests" cold)
-candidate_warm=$(run_mode "$temporary/build-candidate/gameplay_skin_loading_benchmark_tests" warm)
+records=()
+for format in lua json lr2; do
+  for mode in cold warm; do
+    records+=("$(run_mode "$temporary/build-baseline/gameplay_skin_loading_benchmark_tests" "$mode" "$format")")
+    records+=("$(run_mode "$temporary/build-candidate/gameplay_skin_loading_benchmark_tests" "$mode" "$format")")
+  done
+done
 
-python3 - "$baseline_cold" "$baseline_warm" "$candidate_cold" "$candidate_warm" \
-  "$samples" "$maximum_regression_percent" <<'PY'
+python3 - "$samples" "$maximum_regression_percent" "${records[@]}" <<'PY'
 import json
 import statistics
 import sys
 
-labels = ("baseline cold", "baseline warm", "candidate cold", "candidate warm")
-records = [json.loads(value) for value in sys.argv[1:5]]
-expected = int(sys.argv[5])
-maximum = float(sys.argv[6])
-medians = []
+expected = int(sys.argv[1])
+maximum = float(sys.argv[2])
+records = [json.loads(value) for value in sys.argv[3:]]
+labels = [
+    f"{format_name} {mode} {revision}"
+    for format_name in ("lua", "json", "lr2")
+    for mode in ("cold", "warm")
+    for revision in ("baseline", "candidate")
+]
+if len(records) != len(labels):
+    raise SystemExit("error: benchmark result matrix is incomplete")
+medians = {}
 for label, record in zip(labels, records):
     values = record.get("samplesMicros", [])
     if len(values) != expected + 1:
@@ -171,16 +161,18 @@ for label, record in zip(labels, records):
     retained = values[1:]
     if len(retained) < 7 or any(value < 0 for value in retained):
         raise SystemExit(f"error: {label} returned invalid retained samples")
-    medians.append(statistics.median(retained))
+    if record.get("formats") != 1:
+        raise SystemExit(f"error: {label} did not isolate one source format")
+    medians[label] = statistics.median(retained)
 
 failed = False
-for mode, base, candidate in (
-    ("cold", medians[0], medians[2]),
-    ("warm", medians[1], medians[3]),
-):
-    regression = 0.0 if base == 0 else (candidate - base) * 100.0 / base
-    print(f"{mode}: baseline={base:.1f}us candidate={candidate:.1f}us regression={regression:.2f}%")
-    failed = failed or regression > maximum
+for format_name in ("lua", "json", "lr2"):
+    for mode in ("cold", "warm"):
+        base = medians[f"{format_name} {mode} baseline"]
+        candidate = medians[f"{format_name} {mode} candidate"]
+        regression = 0.0 if base == 0 else (candidate - base) * 100.0 / base
+        print(f"{format_name} {mode}: baseline={base:.1f}us candidate={candidate:.1f}us regression={regression:.2f}%")
+        failed = failed or regression > maximum
 if failed:
     raise SystemExit(1)
 PY

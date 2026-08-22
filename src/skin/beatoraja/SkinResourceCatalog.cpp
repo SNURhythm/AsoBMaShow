@@ -243,6 +243,26 @@ CollectedResourceUses collectResourceUses(
   return result;
 }
 
+#if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
+SkinReferencedResourceIdsForTesting collectResourceIdsForTestingInternal(
+    const ValidatedBeatorajaSkinModel &model, bool practiceMode) {
+  const auto uses = collectResourceUses(model, practiceMode);
+  SkinReferencedResourceIdsForTesting result;
+  for (const auto &[id, use] : uses.images) {
+    (void)use;
+    result.images.push_back(id);
+  }
+  for (const auto &text : uses.texts) {
+    result.textObjects.push_back(text.object);
+  }
+  std::ranges::sort(result.textObjects);
+  result.textObjects.erase(
+      std::unique(result.textObjects.begin(), result.textObjects.end()),
+      result.textObjects.end());
+  return result;
+}
+#endif
+
 SkinDiagnostic useDiagnostic(std::string criticalCode, std::string optionalCode,
                             std::string message, bool critical) {
   return {.code = critical ? std::move(criticalCode) : std::move(optionalCode),
@@ -1055,6 +1075,13 @@ std::size_t skinResourceCommittedEncodedBytesForTesting() noexcept {
 }
 #endif
 
+#if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
+SkinReferencedResourceIdsForTesting skinReferencedResourceIdsForTesting(
+    const ValidatedBeatorajaSkinModel &model, bool practiceMode) {
+  return collectResourceIdsForTestingInternal(model, practiceMode);
+}
+#endif
+
 bool skinResourceDimensionsAllowed(int width, int height, std::size_t bytes,
                                    SkinSafetyPolicy safetyPolicy) noexcept {
   if (width <= 0 || height <= 0 ||
@@ -1732,6 +1759,29 @@ const SkinResolvedRegion *SkinResourceCatalog::findResolvedRegion(SkinResourceId
   return sameRect(mapping.authored, authored) ? &mapping : nullptr;
 }
 const PreparedSkinTextAtlas *SkinResourceCatalog::findTextAtlas(SkinTextAtlasId id) const noexcept { const auto it=atlases_.find(id); return it==atlases_.end()?nullptr:&it->second; }
+#if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
+std::vector<SkinResourceId>
+SkinResourceCatalog::preparedResourceIdsForTesting() const {
+  std::vector<SkinResourceId> result;
+  result.reserve(resources_.size());
+  for (const auto &[id, resource] : resources_) {
+    (void)resource;
+    result.push_back(id);
+  }
+  return result;
+}
+
+std::vector<SkinObjectId>
+SkinResourceCatalog::preparedTextObjectIdsForTesting() const {
+  std::vector<SkinObjectId> result;
+  result.reserve(textAtlasesByObject_.size());
+  for (const auto &[id, atlas] : textAtlasesByObject_) {
+    (void)atlas;
+    result.push_back(id);
+  }
+  return result;
+}
+#endif
 const PreparedSkinTextAtlas *SkinResourceCatalog::findTextAtlas(const SkinTextAtlasKey &key) const noexcept { const auto it=atlasKeys_.find(key); return it==atlasKeys_.end()?nullptr:findTextAtlas(it->second); }
 const PreparedSkinTextAtlas *SkinResourceCatalog::findTextAtlasForObject(
     SkinObjectId object) const noexcept {

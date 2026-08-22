@@ -146,8 +146,21 @@ class GameplaySkinOracleTests(unittest.TestCase):
             self.assertIsInstance(tolerance, (int, float))
             self.assertGreaterEqual(tolerance, 0)
             self.assertTrue(case["source"])
+            executed_format = case["executedFormat"]
+            fixture_path = case["fixturePath"]
+            self.assertIn(executed_format, {"lua", "json", "lr2"})
+            self.assertIn(fixture_path, FIXTURES)
+            self.assertIn(f"/{executed_format}/", f"/{fixture_path}")
+            execution = case["execution"]
+            self.assertEqual(execution["viewport"], trace["frame"]["viewport"])
+            self.assertEqual(
+                execution["visualTimesMillis"],
+                trace["frame"]["visualTimesMillis"],
+            )
+            self.assertEqual(execution["runtimeState"], trace["frame"]["runtimeState"])
             for identifier in case["surfaceIds"]:
                 self.assertIn(identifier, owners)
+                self.assertTrue(identifier.startswith(executed_format + "."))
                 owners[identifier].append(case["id"])
         self.assertEqual(
             {identifier: cases for identifier, cases in owners.items() if len(cases) != 1},

@@ -4158,13 +4158,32 @@ void testEveryLongNoteBodyStateUsesItsDistinctVisualRole() {
       106, 105, 107, 104, 105, 111, 108, 109, 110,
       108, 109, 112, 108, 109, 113, 108, 109};
   std::vector<SkinResourceId> actualResources;
+  std::vector<int> actualSlots;
   for (const auto &command : result.submitReady->commands) {
     actualResources.push_back(
         std::get<SkinTexturedQuadCommand>(command.payload).resource);
+    actualSlots.push_back(command.longNoteSlotForTesting);
   }
   expect(actualResources == expectedResources,
          "LN active/inactive and HCN inactive/active/damage/reactive roles "
          "remain distinct");
+  const std::vector<int> expectedSlots = {
+      2, 1, 3, 0, 1, 7, 4, 5, 6, 4, 5, 9, 4, 5, 8, 4, 5};
+  expect(actualSlots == expectedSlots,
+         "modern long-note draw commands retain pinned Beatoraja slots");
+
+  auto &legacyNote =
+      std::get<SkinNoteObject>(model.model.objects.front().payload);
+  legacyNote.hcnBodySlotLayout = SkinHcnBodySlotLayout::Legacy;
+  const auto legacyResult = evaluate(renderer, runtime, model, resources, state, 2);
+  std::vector<int> legacySlots;
+  if (legacyResult.submitReady) {
+    for (const auto &command : legacyResult.submitReady->commands) {
+      legacySlots.push_back(command.longNoteSlotForTesting);
+    }
+  }
+  expect(legacySlots == expectedSlots,
+         "legacy long-note draw commands retain pinned Beatoraja slots");
 }
 
 void testProjectedLineEmitsEveryLaneGroupAndIgnoresNestedClip() {

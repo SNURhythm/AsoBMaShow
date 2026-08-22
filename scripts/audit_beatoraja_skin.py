@@ -3251,6 +3251,24 @@ def build_manifest(arguments, archive_data, disk_tree_sha, provenance, target: T
         [*archive_data["payloads"], archive_payload],
         key=lambda item: item["id"],
     )
+    gameplay_entries = []
+    for keys in (5, 7, 10, 14):
+        gameplay_entry = f"play{keys}_hw.luaskin"
+        if gameplay_entry not in lua_text:
+            raise AuditError(
+                f"ModernChic gameplay entry is missing: {gameplay_entry}"
+            )
+        gameplay_sha = payload_by_id[opaque_id("payload", gameplay_entry)]["sha256"]
+        gameplay_entries.append({
+            "identity": "entry-" + hashlib.sha256(
+                gameplay_entry.encode("utf-8")
+            ).hexdigest()[:24],
+            "path": gameplay_entry,
+            "format": "lua",
+            "keys": keys,
+            "sha256": gameplay_sha,
+            "criticality": "critical",
+        })
     return {
         "schemaVersion": 1,
         "beatorajaCommit": PINNED_COMMIT,
@@ -3281,16 +3299,7 @@ def build_manifest(arguments, archive_data, disk_tree_sha, provenance, target: T
             closure_contract["sha256"],
         ),
         "redistributableSyntheticFixtureDigests": redistributable_synthetic_fixture_digests(),
-        "entries": [
-            {
-                "identity": "entry-" + hashlib.sha256(entry.encode("utf-8")).hexdigest()[:24],
-                "path": entry,
-                "format": "lua",
-                "keys": 7,
-                "sha256": entry_sha,
-                "criticality": "critical",
-            }
-        ],
+        "entries": gameplay_entries,
         "surface": surface,
         "legacyLuaApiSurface": legacy_surface,
         "selectedFileIoSurface": selected_file_io_surface,

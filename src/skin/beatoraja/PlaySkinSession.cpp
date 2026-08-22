@@ -394,6 +394,44 @@ std::uint64_t PlaySkinSession::callbackWallMicrosForTesting() const noexcept {
              ? context_.runtime->callbackFrameWallMicrosForTesting()
              : 0U;
 }
+
+PlaySkinResourcePreparationEvidenceForTesting
+PlaySkinSession::resourcePreparationEvidenceForTesting() const {
+  PlaySkinResourcePreparationEvidenceForTesting result;
+  if (!owned_) return result;
+  auto referenced = skinReferencedResourceIdsForTesting(context_.model, false);
+  result.referencedImageResourceIds = std::move(referenced.images);
+  result.referencedTextObjectIds = std::move(referenced.textObjects);
+  if (owned_->resources) {
+    result.preparedImageResourceIds =
+        owned_->resources->preparedResourceIdsForTesting();
+    result.preparedTextObjectIds =
+        owned_->resources->preparedTextObjectIdsForTesting();
+  }
+  if (owned_->movies) {
+    auto movieIds = owned_->movies->preparedResourceIdsForTesting();
+    result.preparedImageResourceIds.insert(
+        result.preparedImageResourceIds.end(), movieIds.begin(), movieIds.end());
+  }
+  std::ranges::sort(result.preparedImageResourceIds);
+  result.preparedImageResourceIds.erase(
+      std::unique(result.preparedImageResourceIds.begin(),
+                  result.preparedImageResourceIds.end()),
+      result.preparedImageResourceIds.end());
+  return result;
+}
+
+std::optional<std::int64_t>
+PlaySkinSession::selectedLongNoteImageIndexForTesting(
+    const PlayfieldVisualState &state,
+    const PlayfieldProjectionResult &projection) {
+  context_.bridge.beginFrame(state, projection);
+  const auto value = context_.bridge.integerProperty(
+      {308}, SkinIntegerPropertyDomain::ImageIndex);
+  context_.bridge.discardFrame();
+  return value.supported ? std::optional<std::int64_t>{value.value}
+                         : std::nullopt;
+}
 #endif
 
 PlaySkinSessionCreateResult

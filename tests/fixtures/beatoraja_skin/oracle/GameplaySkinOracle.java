@@ -1,5 +1,7 @@
 package bms.player.beatoraja.skin.lr2;
 
+import bms.model.BMSModel;
+import bms.model.LongNote;
 import bms.player.beatoraja.AudioConfig;
 import bms.player.beatoraja.Config;
 import bms.player.beatoraja.MainState;
@@ -16,6 +18,9 @@ import bms.player.beatoraja.skin.SkinObject.SkinObjectDestination;
 import bms.player.beatoraja.skin.SkinTimingDistributionGraph;
 import bms.player.beatoraja.skin.SkinTimingVisualizer;
 import bms.player.beatoraja.skin.SkinType;
+import bms.player.beatoraja.skin.json.JSONSkinLoader;
+import bms.player.beatoraja.skin.json.JsonSkin;
+import bms.player.beatoraja.skin.lua.LuaSkinLoader;
 import bms.player.beatoraja.skin.property.FloatPropertyFactory;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.Texture;
@@ -195,12 +200,13 @@ public final class GameplaySkinOracle {
                    "drawDecay", field(graph, "drawDecay"));
     }
 
-    private static Map<String,Object> hitError(SkinHitErrorVisualizer graph) throws Exception {
+    private static Map<String,Object> hitError(SkinHitErrorVisualizer graph,
+                                                long[] recent) throws Exception {
         Color[] judge = (Color[])field(graph, "JColor");
         var update = SkinHitErrorVisualizer.class.getDeclaredMethod("updateEMA", long.class);
         update.setAccessible(true);
         List<Object> ema = new ArrayList<>();
-        for (long value : new long[]{40, -20, 10}) {
+        for (long value : recent) {
             update.invoke(graph, value);
             ema.add(field(graph, "ema"));
         }
@@ -315,10 +321,10 @@ public final class GameplaySkinOracle {
                    "destination", destination(object));
     }
 
-    private static Map<String,Object> selector() throws Exception {
+    private static Map<String,Object> selector(float masterVolume) throws Exception {
         Config config = new Config();
         AudioConfig audio = new AudioConfig();
-        audio.setSystemvolume(0.5f);
+        audio.setSystemvolume(masterVolume);
         config.setAudioConfig(audio);
         PlayerResource resource = (PlayerResource)UNSAFE.allocateInstance(PlayerResource.class);
         setField(resource, PlayerResource.class, "config", config);
@@ -328,68 +334,152 @@ public final class GameplaySkinOracle {
                    "named", FloatPropertyFactory.getRateProperty("mastervolume").get(state));
     }
 
-    public static void main(String[] arguments) throws Exception {
-        if (arguments.length != 3) {
-            throw new IllegalArgumentException("expected JSON, cross-format LR2, and all-command LR2 fixtures");
+    private static JsonSkin.Skin jsonFixture(Path path) throws Exception {
+        JSONSkinLoader loader = new JSONSkinLoader();
+        if (loader.loadHeader(path) == null) {
+            throw new IllegalStateException("JSONSkinLoader rejected fixture");
         }
-        JsonValue root = new JsonReader().parse(Files.readString(Path.of(arguments[0])));
-        Map<String,Object> cases = new LinkedHashMap<>();
-        cases.put("selector.master-volume", selector());
+        return (JsonSkin.Skin)field(loader, "sk");
+    }
 
-        JsonValue note = first(root, "judgegraph");
-        cases.put("json.note-distribution", noteDistribution(new SkinNoteDistributionGraph(
-            note.getInt("type"), note.getInt("delay"), note.getInt("backTexOff"),
-            note.getInt("orderReverse"), note.getInt("noGap"), note.getInt("noGapX"))));
+    private static JsonSkin.Skin luaFixture(Path path) throws Exception {
+        LuaSkinLoader loader = LuaSkinLoader.sandboxed(path);
+        if (loader.loadHeader(path) == null) {
+            throw new IllegalStateException("LuaSkinLoader rejected fixture");
+        }
+        return (JsonSkin.Skin)field(loader, "sk");
+    }
 
-        JsonValue bpm = first(root, "bpmgraph");
-        cases.put("json.bpm-graph", bpm(new SkinBPMGraph(
-            bpm.getInt("delay"), bpm.getInt("lineWidth"), string(bpm, "mainBPMColor"),
-            string(bpm, "minBPMColor"), string(bpm, "maxBPMColor"),
-            string(bpm, "otherBPMColor"), string(bpm, "stopLineColor"),
-            string(bpm, "transitionLineColor"))));
+    private static int authored(int value, int fallback) {
+        return value == Integer.MIN_VALUE ? fallback : value;
+    }
 
-        JsonValue gauge = first(root, "gaugegraph");
+    private static Map<String,Object> authoredDestination(JsonSkin.Skin skin,
+                                                           String id) {
+        for (JsonSkin.Destination destination : skin.destination) {
+            if (!id.equals(destination.id) || destination.dst.length == 0) continue;
+            JsonSkin.Animation frame = destination.dst[0];
+            int a = authored(frame.a, 255);
+            int r = authored(frame.r, 255);
+            int g = authored(frame.g, 255);
+            int b = authored(frame.b, 255);
+            long rgba = Integer.toUnsignedLong(
+                (r & 255) << 24 | (g & 255) << 16 | (b & 255) << 8 | (a & 255));
+            return map("timeMillis", authored(frame.time, 0),
+                       "x", (float)authored(frame.x, 0),
+                       "y", (float)authored(frame.y, 0),
+                       "width", (float)authored(frame.w, 0),
+                       "height", (float)authored(frame.h, 0),
+                       "acceleration", authored(frame.acc, 0),
+                       "rgba", rgba,
+                       "angleDegrees", authored(frame.angle, 0));
+        }
+        throw new IllegalArgumentException("missing destination " + id);
+    }
+
+    private static void structuredCases(Map<String,Object> cases, String prefix,
+                                        JsonSkin.Skin skin, long[] recent)
+            throws Exception {
+        JsonSkin.JudgeGraph note = skin.judgegraph[0];
+        cases.put(prefix + ".note-distribution", noteDistribution(
+            new SkinNoteDistributionGraph(note.type, note.delay, note.backTexOff,
+                                          note.orderReverse, note.noGap, note.noGapX)));
+        JsonSkin.BPMGraph bpmValue = skin.bpmgraph[0];
+        cases.put(prefix + ".bpm-graph", bpm(new SkinBPMGraph(
+            bpmValue.delay, bpmValue.lineWidth, bpmValue.mainBPMColor,
+            bpmValue.minBPMColor, bpmValue.maxBPMColor, bpmValue.otherBPMColor,
+            bpmValue.stopLineColor, bpmValue.transitionLineColor)));
+        JsonSkin.GaugeGraph gaugeValue = skin.gaugegraph[0];
         Color[][] gaugeColors = new Color[6][4];
-        JsonValue color = gauge.get("color").child;
         for (int row = 0; row < 6; ++row) {
             for (int column = 0; column < 4; ++column) {
-                gaugeColors[row][column] = Color.valueOf(color.asString());
-                color = color.next;
+                gaugeColors[row][column] =
+                    Color.valueOf(gaugeValue.color[row * 4 + column]);
             }
         }
-        cases.put("json.gauge-graph", gauge(new SkinGaugeGraphObject(gaugeColors)));
+        cases.put(prefix + ".gauge-graph", gauge(new SkinGaugeGraphObject(gaugeColors)));
+        JsonSkin.TimingVisualizer timingValue = skin.timingvisualizer[0];
+        cases.put(prefix + ".timing-visualizer", timing(new SkinTimingVisualizer(
+            timingValue.width, timingValue.judgeWidthMillis, timingValue.lineWidth,
+            timingValue.lineColor, timingValue.centerColor, timingValue.PGColor,
+            timingValue.GRColor, timingValue.GDColor, timingValue.BDColor,
+            timingValue.PRColor, timingValue.transparent, timingValue.drawDecay)));
+        JsonSkin.HitErrorVisualizer hit = skin.hiterrorvisualizer[0];
+        cases.put(prefix + ".hit-error-visualizer", hitError(
+            new SkinHitErrorVisualizer(hit.width, hit.judgeWidthMillis,
+                hit.lineWidth, hit.colorMode, hit.hiterrorMode, hit.emaMode,
+                hit.lineColor, hit.centerColor, hit.PGColor, hit.GRColor,
+                hit.GDColor, hit.BDColor, hit.PRColor, hit.emaColor, hit.alpha,
+                hit.windowLength, hit.transparent, hit.drawDecay), recent));
+        JsonSkin.TimingDistributionGraph distribution = skin.timingdistributiongraph[0];
+        cases.put(prefix + ".timing-distribution", timingDistribution(
+            new SkinTimingDistributionGraph(distribution.width, distribution.lineWidth,
+                distribution.graphColor, distribution.averageColor, distribution.devColor,
+                distribution.PGColor, distribution.GRColor, distribution.GDColor,
+                distribution.BDColor, distribution.PRColor,
+                distribution.drawAverage, distribution.drawDev)));
+        JsonSkin.Slider slider = skin.slider[0];
+        cases.put(prefix + ".slider", map(
+            "direction", slider.angle, "range", slider.range,
+            "changeable", slider.changeable,
+            "destination", authoredDestination(skin, slider.id)));
+    }
 
-        JsonValue timing = first(root, "timingvisualizer");
-        cases.put("json.timing-visualizer", timing(new SkinTimingVisualizer(
-            timing.getInt("width"), timing.getInt("judgeWidthMillis"),
-            timing.getInt("lineWidth"), string(timing, "lineColor"),
-            string(timing, "centerColor"), string(timing, "PGColor"),
-            string(timing, "GRColor"), string(timing, "GDColor"),
-            string(timing, "BDColor"), string(timing, "PRColor"),
-            timing.getInt("transparent"), timing.getInt("drawDecay"))));
+    private static long[] longs(String encoded) {
+        String[] fields = encoded.split(",");
+        long[] result = new long[fields.length];
+        for (int index = 0; index < fields.length; ++index) {
+            result[index] = Long.parseLong(fields[index]);
+        }
+        return result;
+    }
 
-        JsonValue hit = first(root, "hiterrorvisualizer");
-        cases.put("json.hit-error-visualizer", hitError(new SkinHitErrorVisualizer(
-            hit.getInt("width"), hit.getInt("judgeWidthMillis"), hit.getInt("lineWidth"),
-            hit.getInt("colorMode"), hit.getInt("hiterrorMode"), hit.getInt("emaMode"),
-            string(hit, "lineColor"), string(hit, "centerColor"), string(hit, "PGColor"),
-            string(hit, "GRColor"), string(hit, "GDColor"), string(hit, "BDColor"),
-            string(hit, "PRColor"), string(hit, "emaColor"), hit.getFloat("alpha"),
-            hit.getInt("windowLength"), hit.getInt("transparent"), hit.getInt("drawDecay"))));
+    public static void main(String[] arguments) throws Exception {
+        if (arguments.length != 9) {
+            throw new IllegalArgumentException("expected Lua, JSON, two LR2 fixtures, viewport, times, and runtime state");
+        }
+        Path luaPath = Path.of(arguments[0]);
+        Path jsonPath = Path.of(arguments[1]);
+        JsonSkin.Skin lua = luaFixture(luaPath);
+        JsonSkin.Skin json = jsonFixture(jsonPath);
+        int viewportWidth = Integer.parseInt(arguments[4]);
+        int viewportHeight = Integer.parseInt(arguments[5]);
+        long[] times = longs(arguments[6]);
+        float masterVolume = Float.parseFloat(arguments[7]);
+        long[] recent = longs(arguments[8]);
+        Map<String,Object> cases = new LinkedHashMap<>();
+        cases.put("selector.master-volume", selector(masterVolume));
+        structuredCases(cases, "lua", lua, recent);
+        structuredCases(cases, "json", json, recent);
 
-        JsonValue distribution = first(root, "timingdistributiongraph");
-        cases.put("json.timing-distribution", timingDistribution(new SkinTimingDistributionGraph(
-            distribution.getInt("width"), distribution.getInt("lineWidth"),
-            string(distribution, "graphColor"), string(distribution, "averageColor"),
-            string(distribution, "devColor"), string(distribution, "PGColor"),
-            string(distribution, "GRColor"), string(distribution, "GDColor"),
-            string(distribution, "BDColor"), string(distribution, "PRColor"),
-            distribution.getInt("drawAverage"), distribution.getInt("drawDev"))));
-
-        Path crossLr2 = Path.of(arguments[1]);
-        Path allLr2 = Path.of(arguments[2]);
+        Path crossLr2 = Path.of(arguments[2]);
+        Path allLr2 = Path.of(arguments[3]);
         cases.put("lr2.slider", lr2Slider(crossLr2));
         cases.putAll(lr2Graphs(allLr2));
-        System.out.println(json(cases));
+        List<Object> sampledFrames = new ArrayList<>();
+        for (long time : times) {
+            sampledFrames.add(map("visualTimeMillis", time,
+                                  "normalized", times[times.length - 1] == 0
+                                      ? 0.0 : time / (double)times[times.length - 1],
+                                  "viewportArea", viewportWidth * viewportHeight));
+        }
+        Map<String,Object> execution = map(
+            "viewport", map("width", viewportWidth, "height", viewportHeight),
+            "visualTimesMillis", java.util.Arrays.stream(times).boxed().toList(),
+            "runtimeState", map("masterVolumeRate", (double)masterVolume,
+                                "recentHitErrorsMillis",
+                                java.util.Arrays.stream(recent).boxed().toList()),
+            "sampledFrames", sampledFrames,
+            "loadedLuaName", lua.name,
+            "loadedJsonName", json.name,
+            "longNoteConstants", map(
+                "modelLN", BMSModel.LNTYPE_LONGNOTE,
+                "modelCN", BMSModel.LNTYPE_CHARGENOTE,
+                "modelHCN", BMSModel.LNTYPE_HELLCHARGENOTE,
+                "undefined", LongNote.TYPE_UNDEFINED,
+                "noteLN", LongNote.TYPE_LONGNOTE,
+                "noteCN", LongNote.TYPE_CHARGENOTE,
+                "noteHCN", LongNote.TYPE_HELLCHARGENOTE));
+        System.out.println(json(map("execution", execution, "cases", cases)));
     }
 }

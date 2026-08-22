@@ -2,6 +2,8 @@
 """Validate the committed Beatoraja gameplay skin parity contract."""
 
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -16,6 +18,21 @@ LEDGER_PATH = ROOT / "docs/skin-compat/beatoraja-gameplay-feature-ledger-v1.json
 EXTRACTOR_PATH = ROOT / "scripts/extract_beatoraja_gameplay_skin_surface.py"
 VALID_STATUS = {"implemented", "missing", "source-defined-noop"}
 FORBIDDEN_CLASSIFICATIONS = {"unclassified", "tbd", "todo"}
+TEST_RUNNERS = {
+    "tests/json_gameplay_skin_decoder_tests.cpp": "json_gameplay_skin_decoder_tests",
+    "tests/beatoraja_skin_model_tests.cpp": "beatoraja_skin_model_tests",
+    "tests/lr2_gameplay_skin_decoder_tests.cpp": "lr2_gameplay_skin_decoder_tests",
+    "tests/lr2_skin_csv_parser_tests.cpp": "lr2_skin_csv_parser_tests",
+    "tests/lua_skin_host_modules_tests.cpp": "lua_skin_host_modules_tests",
+    "tests/play_skin_session_tests.cpp": "play_skin_session_tests",
+    "tests/input_device_registry_tests.cpp": "input_device_registry_tests",
+    "tests/gameplay_skin_session_factory_tests.cpp": "gameplay_skin_session_factory_tests",
+    "tests/lua_skin_http_transport_tests.cpp": "lua_skin_http_transport_tests",
+    "tests/lua_skin_file_system_tests.cpp": "lua_skin_file_system_tests",
+    "tests/lua_skin_text_graph_live_integration_tests.cpp": "lua_skin_text_graph_live_integration_tests",
+    "tests/audio_mix_tests.cpp": "audio_mix_tests",
+    "tests/audio_wrapper_lifecycle_tests.cpp": "audio_wrapper_lifecycle_tests",
+}
 
 
 def load_json(path: Path) -> dict:
@@ -116,6 +133,10 @@ def main() -> None:
             "status": "implemented",
             "implementation": "src/skin/beatoraja/LuaSkinTableDecoder.cpp",
             "tests": "tests/beatoraja_skin_model_tests.cpp",
+            "assertion": {
+                "id": identifier,
+                "runner": "beatoraja_skin_model_tests",
+            },
         }, f"{identifier} must retain concrete implementation evidence"
 
     timing_distribution_rows = [
@@ -159,6 +180,16 @@ def main() -> None:
                         f"{row['id']} cites missing {evidence_kind} evidence: "
                         f"{evidence_path}"
                     )
+            assertion = row.get("assertion")
+            assert isinstance(assertion, dict), (
+                f"{row['id']} must bind its implementation to an executed assertion"
+            )
+            assert assertion.get("id") == row["id"], (
+                f"{row['id']} assertion identity must be row-exact"
+            )
+            assert assertion.get("runner") in TEST_RUNNERS.values(), (
+                f"{row['id']} must name a runnable native assertion target"
+            )
         elif row["status"] == "missing":
             assert row.get("plan", "").startswith("docs/superpowers/plans/"), (
                 f"{row['id']} must have an owning plan"
@@ -178,6 +209,22 @@ def main() -> None:
             "complete gameplay ledger still contains missing rows: "
             + ", ".join(missing)
         )
+        build_dir = Path(os.environ.get("ASOBMASHOW_TEST_BUILD_DIR", ROOT / "cmake-build-debug"))
+        required_runners = {
+            row["assertion"]["runner"]
+            for row in ledger_features
+            if row["status"] == "implemented"
+        }
+        for runner in sorted(required_runners):
+            executable = build_dir / runner
+            assert executable.is_file(), f"executed ledger evidence is unbuilt: {runner}"
+            completed = subprocess.run(
+                [str(executable)], cwd=ROOT, text=True,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False,
+            )
+            assert completed.returncode == 0, (
+                f"executed ledger evidence failed: {runner}\n{completed.stdout}"
+            )
 
 
 if __name__ == "__main__":

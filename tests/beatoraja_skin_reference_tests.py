@@ -576,9 +576,13 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
     def test_selected_entry_and_surface_have_complete_dispositions(self):
         manifest = self.require_manifest()
         entries = manifest["entries"]
-        self.assertTrue(
-            any(entry["format"] == "lua" and entry["keys"] == 7 for entry in entries)
+        self.assertEqual([entry["keys"] for entry in entries], [5, 7, 10, 14])
+        self.assertEqual(
+            [entry["path"] for entry in entries],
+            ["play5_hw.luaskin", "play7_hw.luaskin",
+             "play10_hw.luaskin", "play14_hw.luaskin"],
         )
+        self.assertTrue(all(entry["format"] == "lua" for entry in entries))
         surface = manifest["surface"]
         required_kinds = {"object", "property", "timer", "event", "module", "file-api"}
         self.assertTrue(required_kinds.issubset({item["kind"] for item in surface}))
@@ -823,7 +827,8 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
             runtime_binding["selectedRevisionSha256"],
             manifest["archivePayloadTreeSha256"],
         )
-        self.assertEqual(runtime_binding["entrySha256"], manifest["entries"][0]["sha256"])
+        selected_entry = next(entry for entry in manifest["entries"] if entry["keys"] == 7)
+        self.assertEqual(runtime_binding["entrySha256"], selected_entry["sha256"])
         self.assertEqual(len(runtime_binding["guardBindings"]), 2)
         for binding in runtime_binding["guardBindings"]:
             self.assertRegex(binding["guardId"], r"^guard-[0-9a-f]{24}$")
@@ -1204,8 +1209,12 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
 
     def make_skin_archive(self):
         skin_root = self.temp_path / "skin"
+        gameplay_entry = b'local t = require("fixture.entry")\nreturn t\n'
         files = {
-            "play7_hw.luaskin": b'local t = require("fixture.entry")\nreturn t\n',
+            "play5_hw.luaskin": gameplay_entry,
+            "play7_hw.luaskin": gameplay_entry,
+            "play10_hw.luaskin": gameplay_entry,
+            "play14_hw.luaskin": gameplay_entry,
             "fixture/entry.lua": (
                 b'local state = require("main_state")\n'
                 b'local helper = require("fixture.helper")\n'

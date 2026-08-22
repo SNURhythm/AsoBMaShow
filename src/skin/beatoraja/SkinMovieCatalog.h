@@ -136,6 +136,10 @@ public:
   [[nodiscard]] std::size_t movieCount() const noexcept {
     return ownedPlayers_.size();
   }
+#if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
+  [[nodiscard]] std::vector<SkinResourceId>
+  preparedResourceIdsForTesting() const;
+#endif
 
 private:
   explicit SkinMovieCatalog(std::shared_ptr<SkinMovieDevice>,

@@ -104,6 +104,10 @@ struct SkinDrawCommand {
   std::uint32_t authoredOrdinal = 0;
   SkinObjectId sourceObject = 0;
   SkinDrawPayload payload;
+#if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING) ||                         \
+    defined(ASOBMASHOW_SKIN_RENDERER_TESTING)
+  int longNoteSlotForTesting = -1;
+#endif
 };
 
 struct SkinBatchRange {

@@ -19,9 +19,9 @@ every schema-v2 completion criterion to be `pass` with external evidence.
 | Corresponding extracted root identity | `skin-tree:515d52ba1a00a6067f636f838c935328b7765aef8f0019557748a2441ebb89df` |
 | Archive payload `SkinTreeDigestV1` | `515d52ba1a00a6067f636f838c935328b7765aef8f0019557748a2441ebb89df` |
 | Extracted source `SkinTreeDigestV1` | `515d52ba1a00a6067f636f838c935328b7765aef8f0019557748a2441ebb89df` |
-| Selected 7-key entry | `play7_hw.luaskin` |
-| Selected entry identity | `entry-d5399e62255ddbda273e7a63` |
-| Selected entry SHA-256 | `aac73c59526e74f159731608b3b54e58a7e534537503acb88565a4c175cf8f13` |
+| Gameplay entries | `play5_hw.luaskin`, `play7_hw.luaskin`, `play10_hw.luaskin`, `play14_hw.luaskin` |
+| Entry identities | `entry-f8c6b6f1b2914d602812d2ca`, `entry-d5399e62255ddbda273e7a63`, `entry-338bec476d1c2ae36e50cbb6`, `entry-517ffa1a30626f80272e3c43` |
+| Entry SHA-256 values | `8e3155900120949562f02d9cceff9b8ef4bc4c1b80dd06774b810e8b9b91199f`, `aac73c59526e74f159731608b3b54e58a7e534537503acb88565a4c175cf8f13`, `86dfe492d57c936c53a41c18d4e3d92a50c5f7855a01931e96979799be25686e`, `690d1c6bcb259af502c6a7dac5b619d9037b5fa3e62361c7aefc43cc3b291f82` |
 | Selected Lua closure `SelectedLuaClosureContractV1` SHA-256 | `9d2a5acafc57edd6fa958c86fd92b861b851d952581a6828c1beb5b7fde67c0d` |
 
 The archive and extraction live outside the repository. The equal, independently
@@ -42,9 +42,14 @@ python3 scripts/verify_modernchic_gameplay_skin.py \
 ```
 
 The verifier safely extracted into a temporary directory, repeated the
-archive/tree/selected-closure audit, loaded `play7_hw.luaskin` through a real
-`PlaySkinSession`, evaluated three fixed gameplay frames, emitted only a
-sanitized JSON report, and deleted the temporary package. The headless movie
+archive/tree/selected-closure audit, and loaded all four gameplay entries
+through real `PlaySkinSession` instances in LN, CN, and HCN modes. It observed
+the selected long-note property, lowered projected notes to draw commands,
+compared their source slots with the generated pinned Beatoraja trace, and
+compared decoded-model resource references with independently prepared catalog
+identities. The existing 7-key session also evaluated three fixed gameplay
+frames for graph, callback, and loading telemetry. The verifier emitted only a
+sanitized JSON report and deleted the temporary package. The headless movie
 device seam verifies materialization, decoded-memory accounting, frame
 lifecycle, and owner-thread destruction without retaining or redistributing
 movie bytes.
@@ -52,6 +57,10 @@ movie bytes.
 | Automated fact | 2026-08-22 result |
 | --- | --- |
 | Session publication | pass |
+| Gameplay entry/mode sessions | 12 / 12 published (5/7/10/14 keys × LN/CN/HCN) |
+| LN/CN/HCN selector indices | `0` / `1` / `2` for every entry |
+| Pinned draw-slot comparisons | 12 / 12 exact, including HCN reactive/damaged bodies |
+| Referenced/prepared resource identities | exact for image/movie and text sets in every cell |
 | Unsupported diagnostics / selectors | 0 / 0 |
 | Note-distribution graphs | 3 declared / 9 commands |
 | Timing visualizers | 1 declared / 12 commands |
@@ -60,8 +69,8 @@ movie bytes.
 | Resource preparation | complete; all referenced resources prepared |
 | Image / font / movie / audio decodes | 22 / 5 / 1 / 0 |
 | Texture uploads | 27 |
-| Lua callback frames / maximum wall time / budget | 3 / 36 us / 6,000 us |
-| Loading telemetry / independently measured load | 1,874,421 us / 1,878,029 us |
+| Lua callback frames / maximum wall time / budget | 3 / 49 us / 6,000 us |
+| Loading telemetry / independently measured load | 1,906,739 us / 1,910,393 us |
 | Other diagnostic codes | `skin.renderer.text.glyph` |
 
 The remaining glyph diagnostic is not an unsupported gameplay object, field,
@@ -69,8 +78,9 @@ API, or selector diagnostic and does not prevent frame publication or the four
 required graph families. It is retained in the report rather than reclassified
 or hidden.
 
-The source/fixture trace pins the exact Beatoraja `LaneRenderer.drawLongNote`
-rule and JBMS constants. Undefined model type `0`, `1`, or `2` selects Aso
+The generated source/fixture trace pins the exact Beatoraja
+`LaneRenderer.drawLongNote` rule and JVM-read JBMS constants, with the pinned
+source file's SHA-256. Undefined model type `0`, `1`, or `2` selects Aso
 mode `1` (LN), `2` (CN), or `3` (HCN), respectively; an explicit note type
 `1`, `2`, or `3` overrides the model. The fixture also pins the exact body,
 cap, reactive, and damaged slots for every mode, and its negative contract
@@ -177,7 +187,7 @@ contract rather than treating unmeasured memory as proof of no drift.
 
 ## Audited compatibility decision and remaining work
 
-The selected 7-key entry's loaded closure critically imports Beatoraja's
+The selected 7-key audit closure critically imports Beatoraja's
 restricted legacy `luajava` facade for package file behavior. The reviewed v1
 surface contains one unguarded `java.io.File` class bind, two File-constructor
 sites, one configured-load `listFiles` site, and one deferred `mkdir` site. It

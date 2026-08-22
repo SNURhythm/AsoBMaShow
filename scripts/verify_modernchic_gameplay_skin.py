@@ -18,7 +18,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = ROOT / "tests/fixtures/beatoraja_skin/reference_manifest.json"
-DEFAULT_TRACE = ROOT / "tests/fixtures/beatoraja_skin/traces/scuro_property_frames_v1.json"
+DEFAULT_TRACE = ROOT / "tests/fixtures/beatoraja_skin/traces/gameplay_objects_pinned_v1.json"
 DEFAULT_REPORTER = ROOT / "cmake-build-debug/gameplay_skin_loading_benchmark_tests"
 AUDITOR = ROOT / "scripts/audit_beatoraja_skin.py"
 PINNED_COMMIT = "c2ed5db1a46145ed10790c3872f717e95b59db9d"
@@ -85,63 +85,108 @@ def string_array_at(value: Any, label: str) -> list[str]:
     return result
 
 
-def expected_long_note_oracle() -> dict[str, Any]:
-    return {
-        "source": {
-            "path": "src/bms/player/beatoraja/play/LaneRenderer.java",
-            "symbol": "LaneRenderer.drawLongNote",
-            "jarConstants": "lib/jbms-parser.jar",
-            "rule": (
-                "explicit LongNote type wins; TYPE_UNDEFINED selects by "
-                "BMSModel lntype 0=LN, 1=CN, 2=HCN"
-            ),
-        },
-        "undefinedByModelType": [
-            {
-                "modelLntype": 0,
-                "asoResolvedLnMode": 1,
-                "mode": "LN",
-                "bodyActive": 2,
-                "bodyInactive": 3,
-                "end": None,
-                "start": 1,
-            },
-            {
-                "modelLntype": 1,
-                "asoResolvedLnMode": 2,
-                "mode": "CN",
-                "bodyActive": 2,
-                "bodyInactive": 3,
-                "end": 0,
-                "start": 1,
-            },
-            {
-                "modelLntype": 2,
-                "asoResolvedLnMode": 3,
-                "mode": "HCN",
-                "bodyActive": 6,
-                "bodyInactive": 7,
-                "bodyReactive": 8,
-                "bodyDamaged": 9,
-                "end": 4,
-                "start": 5,
-            },
-        ],
-        "explicitTypeOverridesModel": [
-            {"noteType": 1, "mode": "LN"},
-            {"noteType": 2, "mode": "CN"},
-            {"noteType": 3, "mode": "HCN"},
-        ],
-    }
-
-
 def validate_long_note_trace(trace: Any) -> None:
     if not isinstance(trace, dict):
-        fail("SCURO trace must be an object")
-    if trace.get("schemaVersion") != 1 or trace.get("beatorajaCommit") != PINNED_COMMIT:
-        fail("SCURO trace does not identify the pinned schema and Beatoraja commit")
-    if trace.get("longNoteSelectorOracle") != expected_long_note_oracle():
-        fail("SCURO long-note selector trace differs from pinned LaneRenderer slots")
+        fail("gameplay oracle trace must be an object")
+    if trace.get("schemaVersion") != 1 or trace.get("referenceCommit") != PINNED_COMMIT:
+        fail("gameplay oracle does not identify the pinned Beatoraja commit")
+    oracle = trace.get("longNoteOracle")
+    if not isinstance(oracle, dict) or oracle.get("generation") != (
+        "pinned-LaneRenderer-lexical-slots+jvm-JBMS-constants"
+    ):
+        fail("long-note oracle was not generated from pinned source and constants")
+    source = oracle.get("source")
+    if not isinstance(source, dict) or source.get("path") != (
+        "src/bms/player/beatoraja/play/LaneRenderer.java"
+    ) or source.get("symbol") != "LaneRenderer.drawLongNote" or not isinstance(
+        source.get("sha256"), str
+    ) or len(source["sha256"]) != 64:
+        fail("long-note oracle lacks pinned LaneRenderer provenance")
+    constants = oracle.get("constants")
+    slots = oracle.get("drawSlots")
+    if not isinstance(constants, dict) or not isinstance(slots, dict):
+        fail("long-note oracle lacks generated constants or draw slots")
+    modes = [constants.get("noteLN"), constants.get("noteCN"), constants.get("noteHCN")]
+    if any(isinstance(mode, bool) or not isinstance(mode, int) for mode in modes) or \
+       set(slots) != {str(mode) for mode in modes}:
+        fail("long-note oracle mode/slot identity is inconsistent")
+    expected_undefined = [
+        {"modelLntype": constants.get("modelLN"),
+         "selectedMode": constants.get("noteLN"), "mode": "LN"},
+        {"modelLntype": constants.get("modelCN"),
+         "selectedMode": constants.get("noteCN"), "mode": "CN"},
+        {"modelLntype": constants.get("modelHCN"),
+         "selectedMode": constants.get("noteHCN"), "mode": "HCN"},
+    ]
+    expected_explicit = [
+        {"noteType": constants.get("noteLN"), "mode": "LN"},
+        {"noteType": constants.get("noteCN"), "mode": "CN"},
+        {"noteType": constants.get("noteHCN"), "mode": "HCN"},
+    ]
+    if oracle.get("undefinedByModelType") != expected_undefined or \
+       oracle.get("explicitTypeOverridesModel") != expected_explicit:
+        fail("long-note selector mapping differs from generated constants")
+
+
+def validate_runtime_matrix(
+    matrix: Any, entries: Any, trace: Any
+) -> list[dict[str, Any]]:
+    validate_long_note_trace(trace)
+    if not isinstance(entries, list) or len(entries) != 4:
+        fail("ModernChic manifest must declare four gameplay entries")
+    expected_keys = {5, 7, 10, 14}
+    if {entry.get("keys") for entry in entries if isinstance(entry, dict)} != expected_keys:
+        fail("ModernChic gameplay entries must cover 5/7/10/14 keys")
+    identities = {
+        entry.get("identity"): entry.get("keys") for entry in entries
+        if isinstance(entry, dict)
+    }
+    oracle = trace["longNoteOracle"]
+    constants = oracle["constants"]
+    modes = [constants["noteLN"], constants["noteCN"], constants["noteHCN"]]
+    cells = array_at(matrix, "runtimeMatrix")
+    expected_cells = {(identity, mode) for identity in identities for mode in modes}
+    observed_cells: set[tuple[str, int]] = set()
+    for index, raw in enumerate(cells):
+        cell = object_at(raw, f"runtimeMatrix[{index}]", {
+            "entryIdentity", "keys", "lnMode", "sessionPublished",
+            "selectorIndex", "drawSlots", "referencedImageResourceIds",
+            "preparedImageResourceIds", "referencedTextObjectIds",
+            "preparedTextObjectIds", "unsupportedDiagnostics",
+        })
+        identity = cell["entryIdentity"]
+        mode = cell["lnMode"]
+        if identity not in identities or mode not in modes or \
+           cell["keys"] != identities[identity]:
+            fail("runtime matrix cell has an unknown entry or long-note mode")
+        if (identity, mode) in observed_cells:
+            fail("runtime matrix contains a duplicate entry/mode cell")
+        observed_cells.add((identity, mode))
+        if boolean_at(cell["sessionPublished"], "sessionPublished") is not True:
+            fail("ModernChic runtime matrix session did not publish")
+        if integer_at(cell["selectorIndex"], "selectorIndex") != modes.index(mode):
+            fail("ModernChic long-note selector differs from generated constants")
+        if cell["drawSlots"] != oracle["drawSlots"][str(mode)]:
+            fail("ModernChic long-note draw slots differ from pinned LaneRenderer")
+        for key in (
+            "referencedImageResourceIds", "preparedImageResourceIds",
+            "referencedTextObjectIds", "preparedTextObjectIds",
+        ):
+            values = array_at(cell[key], key)
+            if values != sorted(set(values)) or any(
+                isinstance(value, bool) or not isinstance(value, int) or value <= 0
+                for value in values
+            ):
+                fail(f"{key} must contain sorted unique positive IDs")
+        if cell["referencedImageResourceIds"] != cell["preparedImageResourceIds"]:
+            fail("ModernChic referenced images differ from independently prepared IDs")
+        if cell["referencedTextObjectIds"] != cell["preparedTextObjectIds"]:
+            fail("ModernChic referenced text objects differ from prepared atlas owners")
+        if string_array_at(cell["unsupportedDiagnostics"], "unsupportedDiagnostics"):
+            fail("ModernChic matrix cell emitted an unsupported diagnostic")
+    if observed_cells != expected_cells:
+        fail("ModernChic runtime matrix is incomplete")
+    return cells
 
 
 def validate_session_report(
@@ -336,6 +381,17 @@ def json_from_output(output: str, label: str) -> dict[str, Any]:
     fail(f"{label} emitted no JSON object")
 
 
+def json_array_from_output(output: str, label: str) -> list[Any]:
+    for line in reversed(output.splitlines()):
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, list):
+            return value
+    fail(f"{label} emitted no JSON array")
+
+
 def verified_inputs(
     skin: Path, temporary: Path, manifest: dict[str, Any]
 ) -> tuple[Path, Path]:
@@ -390,11 +446,14 @@ def main() -> int:
         if manifest.get("beatorajaCommit") != PINNED_COMMIT:
             fail("reference manifest does not pin the required Beatoraja commit")
         entry_records = manifest.get("entries")
-        if not isinstance(entry_records, list) or len(entry_records) != 1:
-            fail("reference manifest must select exactly one ModernChic gameplay entry")
-        entry = entry_records[0]
-        if not isinstance(entry, dict):
-            fail("reference manifest ModernChic entry is invalid")
+        if not isinstance(entry_records, list) or len(entry_records) != 4 or any(
+            not isinstance(entry, dict) for entry in entry_records
+        ):
+            fail("reference manifest must select four ModernChic gameplay entries")
+        selected = [entry for entry in entry_records if entry.get("keys") == 7]
+        if len(selected) != 1:
+            fail("reference manifest must select exactly one 7-key gameplay entry")
+        entry = selected[0]
         entry_path = entry.get("path")
         entry_identity = entry.get("identity")
         if not all(isinstance(value, str) and value for value in (entry_path, entry_identity)):
@@ -451,13 +510,47 @@ def main() -> int:
                 trace,
                 entry_identity,
             )
+            matrix_output = run_checked(
+                [
+                    str(reporter),
+                    "--acceptance-matrix",
+                    "--skin",
+                    str(skin_root),
+                    "--format",
+                    "lua",
+                ],
+                "ModernChic gameplay runtime matrix",
+            )
+            entries_by_path = {
+                record["path"]: record["identity"] for record in entry_records
+            }
+            raw_matrix = json_array_from_output(
+                matrix_output, "ModernChic gameplay runtime matrix"
+            )
+            runtime_matrix = []
+            for index, cell in enumerate(raw_matrix):
+                if not isinstance(cell, dict) or "entryPath" not in cell or (
+                    "entryIdentity" in cell
+                ):
+                    fail(f"runtime matrix cell {index} is invalid")
+                entry_path_value = cell.get("entryPath")
+                if entry_path_value not in entries_by_path:
+                    fail(f"runtime matrix cell {index} names an unaudited entry")
+                sanitized = dict(cell)
+                del sanitized["entryPath"]
+                sanitized["entryIdentity"] = entries_by_path[entry_path_value]
+                runtime_matrix.append(sanitized)
+            validate_runtime_matrix(runtime_matrix, entry_records, trace)
             report = {
                 "schemaVersion": 1,
                 "beatorajaCommit": PINNED_COMMIT,
                 "archiveSha256": manifest["archiveSha256"],
                 "payloadTreeSha256": manifest["archivePayloadTreeSha256"],
-                "entryIdentity": entry_identity,
-                "longNoteSelectorOracle": trace["longNoteSelectorOracle"],
+                "entryIdentities": sorted(
+                    record["identity"] for record in entry_records
+                ),
+                "longNoteOracle": trace["longNoteOracle"],
+                "runtimeMatrix": runtime_matrix,
                 "session": session,
             }
             report_path = temporary / "modernchic-acceptance-report.json"
