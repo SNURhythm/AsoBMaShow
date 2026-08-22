@@ -8,6 +8,7 @@
 #include "GamePlayTiming.h"
 #include "PracticeNoteFinalizer.h"
 #include "../../ChartPlaybackDuration.h"
+#include "../../ArchiveFile.h"
 #include "../../ReplayGhostUtils.h"
 #include "../../GBattleMode.h"
 #include "../../CourseConstraintUtils.h"
@@ -157,6 +158,7 @@ gameplaySkinSessionServices(ApplicationContext &context) {
           .storageRoots =
               context.skinStorageRoots ? &*context.skinStorageRoots : nullptr,
           .resourcePreparation = context.skinResourcePreparationService.get(),
+          .builtinImageReader = archive_file::readFileBounded,
           .liveResourceCounters = context.skinLiveResourceCounters,
           .configurationWrites = context.skinConfigurationWriteQueue.get(),
           .diagnosticHistory = context.skinDiagnosticHistory.get()};

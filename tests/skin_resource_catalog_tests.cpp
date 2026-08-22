@@ -499,6 +499,137 @@ skin::ValidatedBeatorajaSkinModel singleFontModel(std::string virtualPath,
   return model;
 }
 
+void testChartBuiltinReaderOwnsBytesAndAccountingTransaction() {
+  namespace fs = std::filesystem;
+  TemporaryDirectory temporary;
+  const fs::path source = temporary.root / "visible" / "ChartBuiltinFixture";
+  fs::create_directories(source / "entry");
+  std::ofstream(source / "entry/play.lr2skin") << "#INFORMATION,0,Play,test\n";
+  const auto package =
+      *skin::normalizePackageId("ChartBuiltinFixture").package;
+  const auto entry =
+      *skin::normalizeEntryPath(package, "entry/play.lr2skin").entry;
+  skin::SkinStorageRoots roots{
+      .visiblePackages = temporary.root / "visible",
+      .privateRevisions = temporary.root / "revisions",
+      .privateCatalog = temporary.root / "catalog",
+      .profileOverlays = temporary.root / "overlays",
+      .liveSources = true};
+  auto aliases = skin::createPlatformSkinAliasDetector();
+  skin::SkinTreeSnapshotter snapshotter(roots, *aliases);
+  auto snapshot = snapshotter.snapshot(source, package, {}, {});
+  expect(snapshot.prepared.has_value(),
+         "chart built-in accounting fixture snapshots");
+  if (!snapshot.prepared) return;
+  std::string publishError;
+  auto lease = std::move(*snapshot.prepared).publish(publishError);
+  expect(lease.has_value() && publishError.empty(),
+         "chart built-in accounting fixture publishes");
+  if (!lease) return;
+  auto fileSystem = skin::LuaSkinFileSystem::create(
+      {.revision = lease->readView(), .entry = entry, .storageRoots = roots});
+  expect(fileSystem.fileSystem != nullptr,
+         "chart built-in accounting fixture opens its package filesystem");
+  if (!fileSystem.fileSystem) return;
+
+  std::ifstream imageFile(
+      fs::path(ASOBMASHOW_SOURCE_DIR) /
+          "tests/fixtures/beatoraja_skin/resources/fixture.png",
+      std::ios::binary);
+  const std::vector<unsigned char> returnedBytes{
+      std::istreambuf_iterator<char>(imageFile),
+      std::istreambuf_iterator<char>()};
+  const fs::path platformPath = temporary.root / "platform/stage.png";
+  fs::create_directories(platformPath.parent_path());
+  std::ofstream(platformPath, std::ios::binary).put('\0');
+
+  skin::ValidatedBeatorajaSkinModel model;
+  model.model.objects.push_back(
+      {.id = 1,
+       .authoredName = "stage-graph",
+       .payload = skin::SkinGraphObject{.builtinImageReference = 100},
+       .critical = false});
+  skin::BeatorajaSkinConfiguration configuration;
+  const skin::SkinBuiltinImageReader reader =
+      [platformPath, returnedBytes](const fs::path &path,
+                                    std::vector<unsigned char> &bytes,
+                                    std::size_t maximumBytes,
+                                    std::string *, std::stop_token) {
+        if (path != platformPath || returnedBytes.size() > maximumBytes) {
+          return false;
+        }
+        bytes = returnedBytes;
+        return true;
+      };
+  struct ResetAccountingLimits {
+    ~ResetAccountingLimits() {
+      skin::resetSkinResourceAccountingLimitsForTesting();
+    }
+  } resetAccountingLimits;
+  skin::SkinResourcePreparationService service;
+
+  skin::setSkinResourceAccountingLimitsForTesting(
+      returnedBytes.size(), std::numeric_limits<std::size_t>::max());
+  auto exact = service.decodeAndPlan(
+      {.revision = lease->clone(),
+       .entry = entry,
+       .fileSystem = *fileSystem.fileSystem,
+       .model = model,
+       .configuration = configuration,
+       .builtinImagePaths = {{100, platformPath}},
+       .builtinImageReader = reader});
+  expect(exact.plan && exact.plan->builtinImageResources.contains(100) &&
+             skin::skinResourceCommittedEncodedBytesForTesting() ==
+                 returnedBytes.size(),
+         "chart built-in charges the reader's retained bytes once rather "
+         "than the stale one-byte path size");
+
+  skin::setSkinResourceAccountingLimitsForTesting(
+      returnedBytes.size() - 1U, std::numeric_limits<std::size_t>::max());
+  auto oversized = service.decodeAndPlan(
+      {.revision = lease->clone(),
+       .entry = entry,
+       .fileSystem = *fileSystem.fileSystem,
+       .model = model,
+       .configuration = configuration,
+       .builtinImagePaths = {{100, platformPath}},
+       .builtinImageReader = reader});
+  const bool warned = std::ranges::any_of(
+      oversized.diagnostics, [](const skin::SkinDiagnostic &diagnostic) {
+        return diagnostic.code == "skin.resource.builtin_image_unavailable";
+      });
+  expect(oversized.plan &&
+             !oversized.plan->builtinImageResources.contains(100) && warned &&
+             skin::skinResourceCommittedEncodedBytesForTesting() == 0,
+         "aggregate encoded-byte overage rolls back the optional chart image "
+         "without charging rejected bytes");
+
+  skin::setSkinResourceAccountingLimitsForTesting(
+      returnedBytes.size(), std::numeric_limits<std::size_t>::max());
+  std::stop_source stop;
+  const skin::SkinBuiltinImageReader cancellingReader =
+      [returnedBytes, &stop](const fs::path &,
+                             std::vector<unsigned char> &bytes, std::size_t,
+                             std::string *, std::stop_token) {
+        bytes = returnedBytes;
+        stop.request_stop();
+        return true;
+      };
+  auto cancelled = service.decodeAndPlan(
+      {.revision = lease->clone(),
+       .entry = entry,
+       .fileSystem = *fileSystem.fileSystem,
+       .model = model,
+       .configuration = configuration,
+       .builtinImagePaths = {{100, platformPath}},
+       .builtinImageReader = cancellingReader,
+       .stop = stop.get_token()});
+  expect(cancelled.cancelled && !cancelled.plan &&
+             skin::skinResourceCommittedEncodedBytesForTesting() == 0,
+         "cancellation after the bounded chart read publishes and charges "
+         "nothing");
+}
+
 void testBitmapFontEncodedAccountingCommitsWithAtlasTransaction() {
   namespace fs = std::filesystem;
   TemporaryDirectory temporary;
@@ -2047,6 +2178,7 @@ int main() {
   testSpriteBoundsAndNormalizedGridCells();
   testTextAtlasKeyRejectsNegativePaintExtents();
   testSharedSessionAccountingRejectsDistributedAggregateOverages();
+  testChartBuiltinReaderOwnsBytesAndAccountingTransaction();
   testBitmapFontEncodedAccountingCommitsWithAtlasTransaction();
   testSecurePreparationLeaseAliasAndCatalogLifetime();
   if (failures) return 1;

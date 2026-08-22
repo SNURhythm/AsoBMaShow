@@ -2230,31 +2230,34 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
       if (path == input.builtinImagePaths.end() || path->second.empty()) {
         continue;
       }
-      std::error_code fileError;
-      const std::uintmax_t reportedSize =
-          std::filesystem::file_size(path->second, fileError);
-      if (fileError ||
-          reportedSize > skinResourceLimit(
-                             input.safetyPolicy,
-                             SkinResourcePolicy::maximumEncodedBytes) ||
-          reportedSize > std::numeric_limits<std::size_t>::max()) {
+      if (!input.builtinImageReader) {
         continue;
       }
+      const std::size_t maximumEncodedBytes = skinResourceLimit(
+          input.safetyPolicy, SkinResourcePolicy::maximumEncodedBytes);
+      std::vector<unsigned char> encoded;
+      std::string readError;
+      const bool read = input.builtinImageReader(
+          path->second, encoded, maximumEncodedBytes, &readError, input.stop);
+      if (cancellationRequested(input.stop)) {
+        result.cancelled = true;
+        return false;
+      }
+      if (!read || encoded.size() > maximumEncodedBytes) continue;
       SkinResourceSessionAccounting candidateSession = session;
       if (!candidateSession.addImage(
               /*physicalResources=*/1, /*logicalResources=*/1,
-              static_cast<std::size_t>(reportedSize), /*decodedBytes=*/0,
+              encoded.size(), /*decodedBytes=*/0,
               /*regions=*/0)) {
         result.diagnostics.push_back(warning(
             "skin.resource.builtin_image_unavailable",
             "chart built-in image exceeds the session resource policy"));
         continue;
       }
-      auto decoded = image_decode::decodeImageFile(
-          path->second,
+      auto decoded = image_decode::decodeImageMemory(
+          std::as_bytes(std::span(encoded)),
           {.maximumDimension = skinResourceDimensionLimit(input.safetyPolicy),
-           .maximumEncodedBytes = skinResourceLimit(
-               input.safetyPolicy, SkinResourcePolicy::maximumEncodedBytes),
+           .maximumEncodedBytes = maximumEncodedBytes,
            .maximumDecodedBytes = skinResourceLimit(
                input.safetyPolicy, SkinResourcePolicy::maximumImageBytes),
            .stop = input.stop});

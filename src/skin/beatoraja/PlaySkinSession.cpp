@@ -539,6 +539,7 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
          .practiceMode = context.initialState->authority.gameplayMode ==
                          PlayfieldGameplayMode::Practice,
          .builtinImagePaths = std::move(builtinImagePaths),
+         .builtinImageReader = std::move(context.builtinImageReader),
          .safetyPolicy = context.safetyPolicy,
          .stop = context.stop});
     appendMovedDiagnostics(result.diagnostics, planned.diagnostics);

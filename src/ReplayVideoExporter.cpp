@@ -3,6 +3,7 @@
 #include "replay/ReplayOption.h"
 
 #include "ChartPlaybackDuration.h"
+#include "ArchiveFile.h"
 #include "CourseConstraintUtils.h"
 #include "CoursePlaySession.h"
 #include "PlayOptionUtils.h"
@@ -128,6 +129,7 @@ replayGameplaySkinSessionServices(ApplicationContext &context) {
                               ? &*context.skinStorageRoots
                               : nullptr,
           .resourcePreparation = context.skinResourcePreparationService.get(),
+          .builtinImageReader = archive_file::readFileBounded,
           .liveResourceCounters = context.skinLiveResourceCounters,
           .configurationWrites = context.skinConfigurationWriteQueue.get(),
           .diagnosticHistory = context.skinDiagnosticHistory.get()};

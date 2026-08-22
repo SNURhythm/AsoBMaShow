@@ -46,6 +46,7 @@ struct PlaySkinSessionContext {
   UiLogicalRect safeUiBounds;
   SkinStorageRoots storageRoots;
   SkinResourcePreparationService &resourcePreparation;
+  SkinBuiltinImageReader builtinImageReader;
   std::shared_ptr<SkinTextureDevice> textureDevice;
   std::shared_ptr<SkinMovieDevice> movieDevice;
   std::shared_ptr<SkinLiveResourceCounters> liveResourceCounters;

@@ -1,5 +1,7 @@
 #include "skin/beatoraja/PlaySkinSession.h"
 
+#include "ArchiveFile.h"
+
 #include "rendering/SkinQuadBatchRenderer.h"
 #include "scene/play/PlayfieldPresentation.h"
 #include "skin/SkinStoragePaths.h"
@@ -16,6 +18,9 @@
 #include "skin/package/SkinPathPolicy.h"
 #include "skin/package/SkinTreeSnapshotter.h"
 #include "view/View.h"
+
+#include <archive.h>
+#include <archive_entry.h>
 
 #include <algorithm>
 #include <array>
@@ -93,6 +98,36 @@ void writeText(const fs::path &path, std::string_view value) {
   fs::create_directories(path.parent_path());
   std::ofstream output(path, std::ios::binary | std::ios::trunc);
   output.write(value.data(), static_cast<std::streamsize>(value.size()));
+}
+
+void writeStoredZip(const fs::path &path,
+                    const std::vector<std::pair<std::string,
+                                                std::vector<unsigned char>>>
+                        &members) {
+  archive *writer = archive_write_new();
+  expect(writer != nullptr && archive_write_set_format_zip(writer) == ARCHIVE_OK &&
+             archive_write_set_options(writer, "zip:compression=store") ==
+                 ARCHIVE_OK &&
+             archive_write_open_filename(writer, path.string().c_str()) ==
+                 ARCHIVE_OK,
+         "chart resource ZIP opens");
+  if (writer == nullptr) return;
+  for (const auto &[name, bytes] : members) {
+    archive_entry *entry = archive_entry_new();
+    archive_entry_set_pathname(entry, name.c_str());
+    archive_entry_set_filetype(entry, AE_IFREG);
+    archive_entry_set_perm(entry, 0644);
+    archive_entry_set_size(entry, static_cast<la_int64_t>(bytes.size()));
+    expect(archive_write_header(writer, entry) == ARCHIVE_OK &&
+               archive_write_data(writer, bytes.data(), bytes.size()) ==
+                   static_cast<la_ssize_t>(bytes.size()) &&
+               archive_write_finish_entry(writer) == ARCHIVE_OK,
+           "chart resource ZIP member writes");
+    archive_entry_free(entry);
+  }
+  expect(archive_write_close(writer) == ARCHIVE_OK,
+         "chart resource ZIP closes");
+  archive_write_free(writer);
 }
 
 class TempDirectory final {
@@ -1064,21 +1099,29 @@ public:
     chart_.text.fullArtist = "format fixture";
 
     const fs::path source = temp_.root() / "source";
-    const fs::path chartResources = temp_.root() / "chart-resources";
-    fs::create_directories(chartResources);
+    const fs::path chartResources = temp_.root() / "chart-resources.zip";
     fs::create_directories(source / "skin/resources");
     fs::create_directories(source / "skin/fonts");
     fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
                       "tests/fixtures/beatoraja_skin/resources/fixture.png",
                   source / "skin/resources/fixture.png");
-    for (const std::string_view name : {"stage.png", "back.png", "banner.png"}) {
-      fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
-                        "tests/fixtures/beatoraja_skin/resources/fixture.png",
-                    chartResources / name);
-    }
-    chart_.staticMetadata.stageFileResourcePath = chartResources / "stage.png";
-    chart_.staticMetadata.backBmpResourcePath = chartResources / "back.png";
-    chart_.staticMetadata.bannerResourcePath = chartResources / "banner.png";
+    std::ifstream chartImage(
+        fs::path(ASOBMASHOW_SOURCE_DIR) /
+            "tests/fixtures/beatoraja_skin/resources/fixture.png",
+        std::ios::binary);
+    const std::vector<unsigned char> chartImageBytes{
+        std::istreambuf_iterator<char>(chartImage),
+        std::istreambuf_iterator<char>()};
+    writeStoredZip(chartResources,
+                   {{"song/stage.png", chartImageBytes},
+                    {"song/back.png", chartImageBytes},
+                    {"song/banner.png", chartImageBytes}});
+    chart_.staticMetadata.stageFileResourcePath =
+        chartResources / "song/stage.png";
+    chart_.staticMetadata.backBmpResourcePath =
+        chartResources / "song/back.png";
+    chart_.staticMetadata.bannerResourcePath =
+        chartResources / "song/banner.png";
     unavailableChart_ = chart_;
     unavailableChart_.staticMetadata.stageFileResourcePath.clear();
     unavailableChart_.staticMetadata.backBmpResourcePath.clear();
@@ -1339,6 +1382,7 @@ return skin
          .safeUiBounds = {.x = 0.0, .y = 0.0, .width = 640.0, .height = 480.0},
          .storageRoots = roots_,
          .resourcePreparation = resources_,
+         .builtinImageReader = archive_file::readFileBounded,
          .textureDevice = std::move(textureDevice),
          .liveResourceCounters = std::make_shared<SkinLiveResourceCounters>(),
          .configurationWrites = configurationWrites_});

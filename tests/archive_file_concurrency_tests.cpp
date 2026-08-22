@@ -308,6 +308,34 @@ void testBoundedReadRejectsOversizedIndexedEntryBeforeExtraction() {
   assert(error.find("exceeds bounded read limit") != std::string::npos);
 }
 
+void testBoundedReadStreamsOrdinaryPlatformPathExactlyOnce() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "platform-resource.bin";
+  constexpr std::string_view payload = "0123456789";
+  std::ofstream(path, std::ios::binary)
+      .write(payload.data(), static_cast<std::streamsize>(payload.size()));
+
+  std::vector<unsigned char> bytes;
+  std::string error;
+  assert(archive_file::readFileBounded(path, bytes, payload.size(), &error));
+  assert(std::string_view(reinterpret_cast<const char *>(bytes.data()),
+                          bytes.size()) == payload);
+
+  bytes.assign(1, 0xff);
+  error.clear();
+  assert(!archive_file::readFileBounded(path, bytes, payload.size() - 1U,
+                                        &error));
+  assert(bytes.empty());
+  assert(error.find("exceeds bounded read limit") != std::string::npos);
+
+  std::stop_source stopped;
+  stopped.request_stop();
+  bytes.assign(1, 0xff);
+  assert(!archive_file::readFileBounded(path, bytes, payload.size(), nullptr,
+                                        stopped.get_token()));
+  assert(bytes.empty());
+}
+
 void testIndependentSevenZipCacheMissesOpenConcurrently() {
   TempDirectory temporary;
   const auto firstPath = temporary.path() / "first.7z";
@@ -498,6 +526,7 @@ int main() {
   testZipIndexPausePollingStillCancelsDuringLargeDirectory();
   testZipIndexUsesCommonSystemEntryFilter();
   testBoundedReadRejectsOversizedIndexedEntryBeforeExtraction();
+  testBoundedReadStreamsOrdinaryPlatformPathExactlyOnce();
   testIndependentSevenZipCacheMissesOpenConcurrently();
   testSevenZipReadUsesCurrentOperationPauseCallback();
   testEncodedHeaderSevenZipUsesSdk();

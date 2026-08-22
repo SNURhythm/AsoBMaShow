@@ -4792,6 +4792,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
         add_executable(play_skin_session_tests
             tests/play_skin_session_tests.cpp
+            src/ArchiveFile.cpp
             src/MinizBridge.c
             src/FileChecksum.cpp
             src/Utils.cpp
@@ -4888,6 +4889,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             )
             target_link_libraries(play_skin_session_tests PRIVATE
                 "-framework Foundation"
+                iconv
             )
         endif()
 

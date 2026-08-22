@@ -873,6 +873,118 @@ bool readRegularFile(const std::filesystem::path &path,
   return true;
 }
 
+bool appendBoundedRead(std::vector<unsigned char> &bytes,
+                       const unsigned char *data, std::size_t size,
+                       std::size_t maximumBytes,
+                       const std::filesystem::path &path,
+                       std::string *errorMessage) {
+  if (bytes.size() > maximumBytes || size > maximumBytes - bytes.size()) {
+    bytes.clear();
+    if (errorMessage != nullptr) {
+      *errorMessage = "File exceeds bounded read limit: " + pathForLog(path);
+    }
+    return false;
+  }
+  bytes.insert(bytes.end(), data, data + size);
+  return true;
+}
+
+bool readRegularFileBounded(const std::filesystem::path &path,
+                            std::vector<unsigned char> &bytes,
+                            std::size_t maximumBytes,
+                            std::string *errorMessage,
+                            std::stop_token stop) {
+  bytes.clear();
+  std::array<unsigned char, 64U * 1024U> buffer{};
+#if TARGET_OS_ANDROID
+  if (IsAndroidTreePath(path)) {
+    std::string androidError;
+    const auto descriptor = OpenAndroidTreeFileDescriptor(path, androidError);
+    if (!descriptor.has_value()) {
+      if (errorMessage != nullptr) *errorMessage = std::move(androidError);
+      return false;
+    }
+    const auto closeDescriptor =
+        makeScopeExit([descriptor = *descriptor] { (void)close(descriptor); });
+    for (;;) {
+      if (stop.stop_requested()) {
+        bytes.clear();
+        return false;
+      }
+      const ssize_t count = read(*descriptor, buffer.data(), buffer.size());
+      if (count > 0) {
+        if (!appendBoundedRead(bytes, buffer.data(),
+                               static_cast<std::size_t>(count), maximumBytes,
+                               path, errorMessage)) {
+          return false;
+        }
+        continue;
+      }
+      if (count == 0) return true;
+      if (errno == EINTR) continue;
+      bytes.clear();
+      if (errorMessage != nullptr) {
+        *errorMessage = "Android file descriptor read failed.";
+      }
+      return false;
+    }
+  }
+#endif
+
+  std::ifstream file(path, std::ios::binary);
+  if (file) {
+    for (;;) {
+      if (stop.stop_requested()) {
+        bytes.clear();
+        return false;
+      }
+      file.read(reinterpret_cast<char *>(buffer.data()),
+                static_cast<std::streamsize>(buffer.size()));
+      const std::streamsize count = file.gcount();
+      if (count > 0 &&
+          !appendBoundedRead(bytes, buffer.data(),
+                             static_cast<std::size_t>(count), maximumBytes,
+                             path, errorMessage)) {
+        return false;
+      }
+      if (file.eof()) return true;
+      if (!file) {
+        bytes.clear();
+        if (errorMessage != nullptr) {
+          *errorMessage = "Could not read file: " + pathForLog(path);
+        }
+        return false;
+      }
+    }
+  }
+
+#if TARGET_OS_ANDROID
+  const std::string assetPath = path.generic_string();
+  UniqueResource<SDL_RWops, SDL_RWclose> input(
+      SDL_RWFromFile(assetPath.c_str(), "rb"));
+  if (input) {
+    for (;;) {
+      if (stop.stop_requested()) {
+        bytes.clear();
+        return false;
+      }
+      const std::size_t count =
+          SDL_RWread(input.get(), buffer.data(), 1, buffer.size());
+      if (!appendBoundedRead(bytes, buffer.data(), count, maximumBytes, path,
+                             errorMessage)) {
+        return false;
+      }
+      if (count < buffer.size()) return true;
+    }
+  }
+#endif
+
+  if (errorMessage != nullptr) {
+    *errorMessage = "Could not open file: " + pathForLog(path);
+  }
+  return false;
+}
+
 #if ASOBMSHOW_ARCHIVEFILE_HAS_UNARR
 using UnarrStreamHandle = UniqueResource<ar_stream, ar_close>;
 using UnarrArchiveHandle = UniqueResource<ar_archive, ar_close_archive>;
@@ -7808,10 +7920,8 @@ bool readFileBounded(const std::filesystem::path &path,
   std::filesystem::path archivePath;
   std::filesystem::path innerPath;
   if (!splitVirtualPath(path, archivePath, innerPath)) {
-    if (errorMessage != nullptr) {
-      *errorMessage = "Bounded archive reads require a virtual archive path.";
-    }
-    return false;
+    return readRegularFileBounded(path, bytes, maximumBytes, errorMessage,
+                                  stop);
   }
   if (isSystemEntryPath(innerPath)) {
     if (errorMessage != nullptr) {

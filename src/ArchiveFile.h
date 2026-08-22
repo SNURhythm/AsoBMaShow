@@ -190,9 +190,9 @@ bool exists(const std::filesystem::path &path);
 bool readFile(const std::filesystem::path &path,
               std::vector<unsigned char> &bytes,
               std::string *errorMessage = nullptr);
-// Bounded variant for callers that receive untrusted media.  Archive entries
-// are checked against the indexed uncompressed size before extraction and the
-// libarchive fallback enforces the same cap while streaming output.
+// Bounded variant for callers that receive untrusted media. Ordinary files
+// and platform paths stream under the cap; archive entries are also checked
+// against indexed uncompressed size before bounded extraction.
 bool readFileBounded(const std::filesystem::path &path,
                      std::vector<unsigned char> &bytes,
                      std::size_t maximumBytes,

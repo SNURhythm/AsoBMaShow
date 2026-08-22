@@ -235,6 +235,9 @@ struct SkinResourceValidationInputs {
   std::stop_token stop;
 };
 struct SkinResourceValidationResult { bool valid = false; bool cancelled = false; std::vector<SkinDiagnostic> diagnostics; };
+using SkinBuiltinImageReader = std::function<bool(
+    const std::filesystem::path &, std::vector<unsigned char> &,
+    std::size_t, std::string *, std::stop_token)>;
 struct SkinResourcePreparationInputs {
   SkinRevisionLease revision;
   SkinEntryId entry;
@@ -244,6 +247,7 @@ struct SkinResourcePreparationInputs {
   std::span<const std::string> requiredRuntimeStrings;
   bool practiceMode = false;
   std::map<int, std::filesystem::path> builtinImagePaths;
+  SkinBuiltinImageReader builtinImageReader;
   SkinSafetyPolicy safetyPolicy{};
   std::stop_token stop;
 };
