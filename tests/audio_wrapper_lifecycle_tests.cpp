@@ -3,6 +3,7 @@
 #include "audio/JukeboxLifecycle.h"
 #include "audio/JukeboxSoundResources.h"
 #include "audio/decoder.h"
+#include "skin/beatoraja/LuaSkinApplicationAudioBackend.h"
 
 #include <atomic>
 #include <array>
@@ -1756,6 +1757,36 @@ void testRealtimeReservationDoesNotContendOnUnrelatedLifecycleWork() {
           "lock-free reservation still commits the matching keysound");
 }
 
+void testLuaSkinProductionAdapterPreservesUnrelatedAudioOwnership() {
+  WrapperFixture fixture;
+  const path_t skinPath = PATH("skin-adapter-sound.ogg");
+  const path_t retainedPath = PATH("skin-adapter-retained");
+  fixture.load(skinPath);
+  fixture.load(retainedPath);
+  float systemVolume = 0.3F;
+  auto backend = skin::createLuaSkinApplicationAudioBackend(
+      *fixture.wrapper, [&systemVolume] { return systemVolume; });
+  require(backend != nullptr && backend->systemVolume() == 0.3F,
+          "production adapter reads the current application system volume");
+  require(!backend->load(std::filesystem::path(PATH("missing-device-audio")))
+               .has_value(),
+          "production adapter fails closed when the decoder-backed sound is genuinely unavailable");
+
+  const auto identity = backend->load(std::filesystem::path(skinPath));
+  require(identity.has_value(),
+          "production adapter resolves a decoder-backed audio identity");
+  backend->play(*identity, 0.6F, true);
+  backend->stop(*identity);
+  require(fixture.wrapper->getSoundDurationMicros(skinPath).has_value() &&
+              fixture.wrapper->getSoundDurationMicros(retainedPath).has_value(),
+          "selective stop retains decoded skin and unrelated chart audio");
+  backend->dispose(*identity);
+  require(!fixture.wrapper->getSoundDurationMicros(skinPath).has_value() &&
+              fixture.wrapper->getSoundDurationMicros(retainedPath).has_value() &&
+              fixture.wrapper->playSound(retainedPath, audio::Bus::Bgm),
+          "selective dispose releases only the skin identity and keeps BGM playable");
+}
+
 } // namespace
 
 int main() {
@@ -1789,6 +1820,7 @@ int main() {
     testRealtimeKeysoundHandleCommitsWithoutLookupOrLifecycleWork();
     testRealtimeReservationExcludesLifecycleResetUntilCommit();
     testRealtimeReservationDoesNotContendOnUnrelatedLifecycleWork();
+    testLuaSkinProductionAdapterPreservesUnrelatedAudioOwnership();
     return 0;
   } catch (const std::exception &error) {
     std::cerr << "audio_wrapper_lifecycle_tests: " << error.what() << '\n';

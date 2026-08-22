@@ -30,6 +30,7 @@
 #include "scene/play/ReplayPlayfieldPresentation.h"
 #include "scene/play/ReplayVideoGameplayPreflight.h"
 #include "skin/DefaultSkin.h"
+#include "skin/beatoraja/LuaSkinApplicationAudioBackend.h"
 #include "view/ImageView.h"
 #include "view/UiTheme.h"
 #include "view/View.h"
@@ -131,6 +132,10 @@ replayGameplaySkinSessionServices(ApplicationContext &context) {
           .resourcePreparation = context.skinResourcePreparationService.get(),
           .builtinImageReader = archive_file::readFileBounded,
           .liveResourceCounters = context.skinLiveResourceCounters,
+          .audioBackend = skin::createLuaSkinApplicationAudioBackend(
+              context.jukebox.audioRuntime(), [&context] {
+                return context.settings.audioVideo.audio.masterVolume;
+              }),
           .configurationWrites = context.skinConfigurationWriteQueue.get(),
           .diagnosticHistory = context.skinDiagnosticHistory.get()};
 #else

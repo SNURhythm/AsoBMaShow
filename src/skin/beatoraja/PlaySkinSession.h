@@ -2,6 +2,7 @@
 
 #include "PlaySkinStateBridge.h"
 #include "PlaySkinSessionIdentity.h"
+#include "LuaSkinAudioHost.h"
 #include "Skin2DRenderer.h"
 #include "SkinResourceCatalog.h"
 #include "../../scene/play/PlayfieldPresentation.h"
@@ -49,6 +50,7 @@ struct PlaySkinSessionContext {
   SkinBuiltinImageReader builtinImageReader;
   std::shared_ptr<SkinTextureDevice> textureDevice;
   std::shared_ptr<SkinMovieDevice> movieDevice;
+  std::shared_ptr<LuaSkinAudioBackend> audioBackend;
   std::shared_ptr<SkinLiveResourceCounters> liveResourceCounters;
   SkinConfigurationWriteQueue &configurationWrites;
   // Config.AudioConfig FloatWriter IDs 17-19 apply only after an authored

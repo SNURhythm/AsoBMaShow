@@ -1,4 +1,5 @@
 #include "skin/beatoraja/LuaSkinFileIo.h"
+#include "skin/beatoraja/LuaSkinAudioHost.h"
 #include "skin/beatoraja/LuaSkinHostModules.h"
 #include "skin/beatoraja/LuaSkinHttpClient.h"
 #include "skin/beatoraja/LuaSkinRuntime.h"
@@ -172,6 +173,59 @@ public:
 
 private:
   std::shared_ptr<FakeHttpState> state_;
+};
+
+struct FakeAudioPlayCall {
+  LuaSkinAudioIdentity identity;
+  float volume = 0.0F;
+  bool loop = false;
+  bool operator==(const FakeAudioPlayCall &) const = default;
+};
+
+struct FakeAudioState {
+  std::vector<std::string> loads;
+  std::vector<FakeAudioPlayCall> plays;
+  std::vector<LuaSkinAudioIdentity> stops;
+  std::vector<LuaSkinAudioIdentity> disposals;
+  bool destroyed = false;
+};
+
+class FakeAudioBackend final : public LuaSkinAudioBackend {
+public:
+  explicit FakeAudioBackend(std::shared_ptr<FakeAudioState> state)
+      : state_(std::move(state)) {}
+
+  ~FakeAudioBackend() override { state_->destroyed = true; }
+
+  float systemVolume() const noexcept override { return 0.25F; }
+
+  std::optional<LuaSkinAudioIdentity>
+  load(const fs::path &path) noexcept override {
+    const std::string value = path.generic_string();
+    state_->loads.push_back(value);
+    if (value.ends_with("/missing.ogg")) {
+      return std::nullopt;
+    }
+    return LuaSkinAudioIdentity{.value = ++nextIdentity_};
+  }
+
+  void play(LuaSkinAudioIdentity identity, float volume,
+            bool loop) noexcept override {
+    state_->plays.push_back(
+        {.identity = identity, .volume = volume, .loop = loop});
+  }
+
+  void stop(LuaSkinAudioIdentity identity) noexcept override {
+    state_->stops.push_back(identity);
+  }
+
+  void dispose(LuaSkinAudioIdentity identity) noexcept override {
+    state_->disposals.push_back(identity);
+  }
+
+private:
+  std::shared_ptr<FakeAudioState> state_;
+  std::uint64_t nextIdentity_ = 0;
 };
 
 struct RuntimeHarness {
@@ -493,6 +547,43 @@ return {}
     writeText(source / "skin/file_surface_source.txt",
               "alpha\n\xED\x95\x9C\xEA\xB8\x80\r\nomega");
     writeText(source / "skin/file_surface_invalid_utf8.txt", "\xFF\n");
+    writeText(source / "skin/audio_surface.luaskin", R"lua(
+if not skin_config then return {type = 0} end
+local expected = {
+  audio_play = true,
+  audio_loop = true,
+  audio_preload = true,
+  audio_stop = true,
+  audio_dispose = true,
+}
+local count = 0
+for name, value in pairs(main_state) do
+  if name:sub(1, 6) == "audio_" then
+    assert(expected[name] and type(value) == "function")
+    count = count + 1
+  end
+end
+assert(count == 5)
+
+assert(main_state.audio_play("sound.ogg") == true)
+assert(main_state.audio_loop("./loop.ogg", 3) == true)
+assert(main_state.audio_play("sound.ogg", -1) == true)
+assert(main_state.audio_preload("preload.wav") == true)
+assert(main_state.audio_stop("sound.ogg") == true)
+assert(main_state.audio_stop("sound.ogg") == true)
+assert(main_state.audio_dispose("sound.ogg") == true)
+assert(main_state.audio_dispose("sound.ogg") == true)
+assert(main_state.audio_play("sound.ogg", 0.5) == true)
+assert(main_state.audio_play("missing.ogg", 1) == true)
+assert(main_state.audio_play("missing.ogg", 1) == true)
+assert(main_state.audio_stop("missing.ogg") == true)
+assert(main_state.audio_dispose("missing.ogg") == true)
+assert(main_state.audio_play("coerce.ogg", true) == true)
+assert(main_state.audio_loop("coerce.ogg", "not-a-number") == true)
+assert(main_state.audio_play("coerce.ogg", "0.5") == true)
+assert(main_state.audio_preload() == true)
+return {}
+)lua");
 
     const fs::path visible = roots.visiblePackages / package.directoryName;
     fs::create_directories(visible.parent_path());
@@ -539,6 +630,26 @@ return {}
          .fileSystem = std::move(fileSystem),
          .httpTransport = std::move(httpTransport)});
     expect(runtime.runtime != nullptr, "HTTP host contract runtime creates");
+    if (!runtime.runtime) {
+      return std::nullopt;
+    }
+    return RuntimeHarness{.runtime = std::move(runtime.runtime),
+                          .fileSystem = borrowed};
+  }
+
+  std::optional<RuntimeHarness>
+  createWithAudio(std::string_view entryName, LuaRuntimePurpose purpose,
+                  std::shared_ptr<LuaSkinAudioBackend> audioBackend) {
+    auto fileSystem = createFileSystem(entryName);
+    if (!fileSystem) {
+      return std::nullopt;
+    }
+    LuaSkinFileSystem *borrowed = fileSystem.get();
+    auto runtime = LuaSkinRuntime::create(
+        {.purpose = purpose,
+         .fileSystem = std::move(fileSystem),
+         .audioBackend = std::move(audioBackend)});
+    expect(runtime.runtime != nullptr, "audio host contract runtime creates");
     if (!runtime.runtime) {
       return std::nullopt;
     }
@@ -966,6 +1077,94 @@ void testPinnedBoundedHttpAndClosedLegacyReaderFacade() {
          "HTTP transport is destroyed with its owning Lua session");
 }
 
+void testPinnedAudioSurfaceOwnsResolvedBackendIdentities() {
+  auto state = std::make_shared<FakeAudioState>();
+  {
+    auto harness = fixture().createWithAudio(
+        "audio_surface.luaskin", LuaRuntimePurpose::Gameplay,
+        std::make_shared<FakeAudioBackend>(state));
+    if (!harness) {
+      return;
+    }
+    expect(harness->runtime->loadHeader().value.has_value(),
+           "audio fixture sees an empty header main_state module");
+    const auto configured =
+        harness->runtime->loadConfigured(happyConfiguration());
+    if (!configured.value && configured.failure) {
+      std::cerr << "audio surface diagnostic: " << configured.failure->code
+                << ": " << configured.failure->message << '\n';
+    }
+    expect(configured.value.has_value() && !configured.failure,
+           "all five pinned audio functions execute and return true");
+    expect(state->loads.size() == 7 &&
+               state->loads[0].ends_with("/skin/sound.ogg") &&
+               state->loads[1].ends_with("/skin/loop.ogg") &&
+               state->loads[2].ends_with("/skin/preload.wav") &&
+               state->loads[3].ends_with("/skin/sound.ogg") &&
+               state->loads[4].ends_with("/skin/missing.ogg") &&
+               state->loads[5].ends_with("/skin/coerce.ogg") &&
+               state->loads[6].ends_with("/skin/nil"),
+           "audio paths use the selected-skin resolver, successful dispose "
+           "permits reload, and a missing identity is cached");
+    expect(state->plays.size() == 9 &&
+               state->plays[0] == FakeAudioPlayCall{
+                                      .identity = {.value = 1},
+                                      .volume = 0.25F,
+                                      .loop = false} &&
+               state->plays[1] == FakeAudioPlayCall{
+                                      .identity = {.value = 2},
+                                      .volume = 0.5F,
+                                      .loop = true} &&
+               state->plays[2] == FakeAudioPlayCall{
+                                      .identity = {.value = 1},
+                                      .volume = 0.0F,
+                                      .loop = false} &&
+               state->plays[3] == FakeAudioPlayCall{
+                                      .identity = {.value = 3},
+                                      .volume = 0.0F,
+                                      .loop = false} &&
+               state->plays[4] == FakeAudioPlayCall{
+                                      .identity = {.value = 4},
+                                      .volume = 0.125F,
+                                      .loop = false} &&
+               state->plays[5] == FakeAudioPlayCall{
+                                      .identity = {.value = 5},
+                                      .volume = 0.0F,
+                                      .loop = false} &&
+               state->plays[6] == FakeAudioPlayCall{
+                                      .identity = {.value = 5},
+                                      .volume = 0.0F,
+                                      .loop = true} &&
+               state->plays[7] == FakeAudioPlayCall{
+                                      .identity = {.value = 5},
+                                      .volume = 0.125F,
+                                      .loop = false} &&
+               state->plays[8] == FakeAudioPlayCall{
+                                      .identity = {.value = 6},
+                                      .volume = 0.0F,
+                                      .loop = false},
+           "play, loop, default/clamped/scaled volume, and silent preload "
+           "match the pinned backend calls including LuaJ coercion");
+    expect(state->stops ==
+               std::vector<LuaSkinAudioIdentity>{{.value = 1}, {.value = 1}},
+           "repeated stops address the retained backend identity");
+    expect(state->disposals ==
+               std::vector<LuaSkinAudioIdentity>{{.value = 1}},
+           "explicit repeated dispose releases a loaded identity once");
+  }
+  std::ranges::sort(state->disposals);
+  expect(state->disposals ==
+                 std::vector<LuaSkinAudioIdentity>{{.value = 1},
+                                                   {.value = 2},
+                                                   {.value = 3},
+                                                   {.value = 4},
+                                                   {.value = 5},
+                                                   {.value = 6}} &&
+             state->destroyed,
+         "Lua session teardown disposes every remaining identity exactly once "
+         "before releasing the backend");
+}
+
 void testIoLinesUsesTheVirtualSkinFileSystem() {
   auto harness = fixture().create("io_lines.luaskin",
                                   LuaRuntimePurpose::Validation);
@@ -1155,6 +1354,7 @@ int main() {
   testSelectedMainStateSurfaceUsesBoundConfiguredState();
   testPinnedMainStateFileSurfaceAndClosedLegacyFileFacade();
   testPinnedBoundedHttpAndClosedLegacyReaderFacade();
+  testPinnedAudioSurfaceOwnsResolvedBackendIdentities();
   testIoLinesUsesTheVirtualSkinFileSystem();
   testIoReadClampsHugeRequestedCountToAvailableBytes();
   testIoOpenReadsUtf8NamedSkinFiles();

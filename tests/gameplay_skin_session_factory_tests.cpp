@@ -1,4 +1,5 @@
 #include "scene/play/GameplaySkinSessionFactory.h"
+#include "skin/beatoraja/LuaSkinAudioHost.h"
 
 #include "rendering/common.h"
 #include "skin/beatoraja/GameplaySkinValidator.h"
@@ -124,6 +125,18 @@ struct HistoryFixture {
   skin::SkinDiagnosticHistory history{catalog};
 };
 
+class FactoryAudioBackend final : public skin::LuaSkinAudioBackend {
+public:
+  float systemVolume() const noexcept override { return 1.0F; }
+  std::optional<skin::LuaSkinAudioIdentity>
+  load(const fs::path &) noexcept override {
+    return std::nullopt;
+  }
+  void play(skin::LuaSkinAudioIdentity, float, bool) noexcept override {}
+  void stop(skin::LuaSkinAudioIdentity) noexcept override {}
+  void dispose(skin::LuaSkinAudioIdentity) noexcept override {}
+};
+
 GameplaySkinSessionServices
 failedAcquireServices(HistoryFixture &fixture, skin::SkinDiagnostic failure) {
   const auto entry = fixtureEntry();
@@ -154,6 +167,9 @@ struct ReadyFixture {
       std::make_shared<skin::SkinLiveResourceCounters>();
   std::shared_ptr<FactoryTextureDevice> textureDevice =
       std::make_shared<FactoryTextureDevice>();
+  std::shared_ptr<FactoryAudioBackend> audioBackend =
+      std::make_shared<FactoryAudioBackend>();
+  bool audioBackendForwarded = false;
   skin::SkinConfigurationWriteQueue writes;
   PlayfieldChartVisualModel chart;
   PlayfieldVisualState state;
@@ -221,10 +237,13 @@ struct ReadyFixture {
             .liveResourceCounters = counters,
             .configurationWrites = &writes,
             .diagnosticHistory = &history,
+            .audioBackend = audioBackend,
             .createSessionForTesting =
-                [textureDevice =
-                     textureDevice](skin::ValidatedSkinActivation activation,
-                                    skin::PlaySkinSessionContext context) {
+                [this, textureDevice = textureDevice](
+                    skin::ValidatedSkinActivation activation,
+                    skin::PlaySkinSessionContext context) {
+                  audioBackendForwarded =
+                      context.audioBackend == audioBackend;
                   context.textureDevice = textureDevice;
                   return skin::PlaySkinSession::create(std::move(activation),
                                                        std::move(context));
@@ -289,8 +308,9 @@ void factoryTransfersTheOwningSessionExactlyOnce() {
   const auto ready =
       createGameplaySkinSession(fixture.services(), fixture.input());
   expect(ready.disposition == GameplaySkinSessionDisposition::Ready &&
-             ready.session != nullptr,
-         "factory transfers the owning session exactly once");
+             ready.session != nullptr && fixture.audioBackendForwarded,
+         "factory transfers the owning session and narrow audio backend "
+         "exactly once");
 }
 
 } // namespace

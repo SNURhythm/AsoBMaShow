@@ -15,7 +15,7 @@ struct AudioSettings;
 
 namespace audio {
 
-enum class Bus : std::uint8_t { Bgm, Keysound };
+enum class Bus : std::uint8_t { Bgm, Keysound, System };
 
 struct Volumes {
   float master = 1.0f;
@@ -51,6 +51,8 @@ struct PlayingSound {
   audio::Bus bus = audio::Bus::Bgm;
   std::uint64_t sourceFrameQ32 = 0;
   std::uint32_t outputOffsetFrames = 0;
+  float gain = 1.0F;
+  bool loop = false;
 };
 
 struct ScheduledSound {
@@ -59,6 +61,8 @@ struct ScheduledSound {
   long long startMicros = 0;
   std::uint64_t sequence = 0;
   size_t startFrame = 0;
+  float gain = 1.0F;
+  bool loop = false;
 };
 
 enum class AudioCommandType : std::uint8_t { PlayNow, Schedule, StopAll };
@@ -70,6 +74,8 @@ struct AudioCommand {
   long long startMicros = 0;
   std::uint64_t sequence = 0;
   size_t startFrame = 0;
+  float gain = 1.0F;
+  bool loop = false;
 };
 
 constexpr size_t kMaxActiveSounds = 512;
@@ -154,10 +160,12 @@ void CommitOutputRateTransition(OutputRateTransition transition,
                                 AudioCallbackState &state);
 
 bool AppendActiveSound(AudioCallbackState &state, SoundData *soundData, Bus bus,
-                       std::uint32_t outputOffsetFrames, size_t startFrame = 0);
+                       std::uint32_t outputOffsetFrames, size_t startFrame = 0,
+                       float gain = 1.0F, bool loop = false);
 bool InsertScheduledSound(AudioCallbackState &state,
                           const ScheduledSound &scheduledSound);
 void ClearCallbackSounds(AudioCallbackState &state);
+void RemoveSound(AudioCallbackState &state, SoundData *soundData);
 bool EnqueueCommand(AudioCallbackState &state, const AudioCommand &command);
 std::optional<RealtimeAudioCommandReservation>
 TryReserveRealtimeCommand(const AudioCallbackState &state) noexcept;

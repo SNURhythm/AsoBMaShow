@@ -3,6 +3,7 @@
 #include "../LuaGameplaySkinFeature.h"
 #include "../package/SkinPathPolicy.h"
 #include "LuaSkinFileIo.h"
+#include "LuaSkinAudioHost.h"
 
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 
@@ -235,6 +236,7 @@ struct LuaSkinHostModulesImpl {
   lua_State *state = nullptr;
   LuaSkinFileSystem *fileSystem = nullptr;
   LuaSkinHttpTransport *httpTransport = nullptr;
+  LuaSkinAudioHost *audioHost = nullptr;
   std::size_t maximumSourceBytes = std::numeric_limits<std::size_t>::max();
   std::size_t maximumModuleSearchTemplates =
       std::numeric_limits<std::size_t>::max();
@@ -442,6 +444,80 @@ int expectedFailure(lua_State *state, std::string_view message) {
   lua_pushnil(state);
   lua_pushlstring(state, message.data(), message.size());
   return 2;
+}
+
+std::string_view audioPathArgument(lua_State *state, int index) {
+  std::size_t size = 0;
+  if (const char *value = lua_tolstring(state, index, &size)) {
+    return {value, size};
+  }
+  if (lua_isnoneornil(state, index)) {
+    return "nil";
+  }
+  if (lua_isboolean(state, index)) {
+    return lua_toboolean(state, index) ? "true" : "false";
+  }
+  return lua_typename(state, lua_type(state, index));
+}
+
+float audioVolumeArgument(lua_State *state, int index) {
+  if (lua_isnoneornil(state, index)) {
+    return 1.0F;
+  }
+  return lua_isnumber(state, index)
+             ? static_cast<float>(lua_tonumber(state, index))
+             : 0.0F;
+}
+
+int returnAudioResult(lua_State *state, LuaSkinHostModulesImpl *impl,
+                      LuaSkinAudioOperationResult result) {
+  if (!result.ok()) {
+    if (result.failure) {
+      impl->storeFileError(*result.failure);
+    } else {
+      impl->storeError("skin_lua_audio_operation_failed",
+                       "Lua skin audio operation failed");
+    }
+    return raiseStoredError(state, impl);
+  }
+  lua_pushboolean(state, 1);
+  return 1;
+}
+
+int mainStateAudioPlay(lua_State *state) {
+  LuaSkinHostModulesImpl *impl = host(state);
+  const std::string_view path = audioPathArgument(state, 1);
+  const float volume = audioVolumeArgument(state, 2);
+  return returnAudioResult(
+      state, impl,
+      impl->audioHost->play(path, std::clamp(volume, 0.0F, 2.0F), false));
+}
+
+int mainStateAudioLoop(lua_State *state) {
+  LuaSkinHostModulesImpl *impl = host(state);
+  const std::string_view path = audioPathArgument(state, 1);
+  const float volume = audioVolumeArgument(state, 2);
+  return returnAudioResult(
+      state, impl,
+      impl->audioHost->play(path, std::clamp(volume, 0.0F, 2.0F), true));
+}
+
+int mainStateAudioPreload(lua_State *state) {
+  LuaSkinHostModulesImpl *impl = host(state);
+  return returnAudioResult(
+      state, impl, impl->audioHost->preload(audioPathArgument(state, 1)));
+}
+
+int mainStateAudioStop(lua_State *state) {
+  LuaSkinHostModulesImpl *impl = host(state);
+  return returnAudioResult(
+      state, impl, impl->audioHost->stop(audioPathArgument(state, 1)));
+}
+
+int mainStateAudioDispose(lua_State *state) {
+  LuaSkinHostModulesImpl *impl = host(state);
+  return returnAudioResult(
+      state, impl, impl->audioHost->dispose(audioPathArgument(state, 1)));
 }
 
 void installClosure(lua_State *state, LuaSkinHostModulesImpl *impl,
@@ -1012,6 +1088,16 @@ void populateMainState(lua_State *state, LuaSkinHostModulesImpl *impl) {
   lua_setfield(state, -2, "http_get");
   installClosure(state, impl, mainStateHttpGetLines);
   lua_setfield(state, -2, "http_get_lines");
+  installClosure(state, impl, mainStateAudioPlay);
+  lua_setfield(state, -2, "audio_play");
+  installClosure(state, impl, mainStateAudioLoop);
+  lua_setfield(state, -2, "audio_loop");
+  installClosure(state, impl, mainStateAudioPreload);
+  lua_setfield(state, -2, "audio_preload");
+  installClosure(state, impl, mainStateAudioStop);
+  lua_setfield(state, -2, "audio_stop");
+  installClosure(state, impl, mainStateAudioDispose);
+  lua_setfield(state, -2, "audio_dispose");
   lua_pop(state, 1);
 }
 
@@ -2646,6 +2732,7 @@ LuaSkinHostModules::create(lua_State *state,
   impl->state = state;
   impl->fileSystem = options.fileSystem;
   impl->httpTransport = options.httpTransport;
+  impl->audioHost = options.audioHost;
   impl->maximumSourceBytes = options.maximumSourceBytes;
   impl->maximumModuleSearchTemplates = options.maximumModuleSearchTemplates;
   impl->allowProcessGlobalOperations = options.allowProcessGlobalOperations;

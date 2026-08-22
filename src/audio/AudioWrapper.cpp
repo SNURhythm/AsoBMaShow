@@ -920,6 +920,107 @@ bool AudioWrapper::playSound(const path_t &path, audio::Bus bus,
   return true;
 }
 
+bool AudioWrapper::playSkinSound(const path_t &path, float gain, bool loop) {
+  std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
+  std::lock_guard<std::mutex> soundDataLock(soundDataListMutex);
+
+  const auto indexIt = soundDataIndexMap.find(path);
+  if (indexIt == soundDataIndexMap.end()) {
+    SDL_Log("Skin sound not found: %s", path_t_to_utf8(path).c_str());
+    return false;
+  }
+  const auto started = startDeviceWithLifecycleAndSoundLocked();
+  if (!started.success) {
+    SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "Skin audio start failed for %s: %s",
+                 path_t_to_utf8(path).c_str(), started.diagnostic.c_str());
+    return false;
+  }
+  std::lock_guard<std::mutex> commandLock(audioCommandMutex);
+  return audio::playback::EnqueueCommand(
+      callbackState,
+      {.type = AudioCommandType::PlayNow,
+       .soundData = soundDataList[indexIt->second].get(),
+       .bus = audio::Bus::System,
+       .gain = gain,
+       .loop = loop});
+}
+
+audio::playback::BackendOperationResult
+AudioWrapper::stopSkinSound(const path_t &path) {
+  return mutateSkinSound(path, false);
+}
+
+audio::playback::BackendOperationResult
+AudioWrapper::disposeSkinSound(const path_t &path) {
+  return mutateSkinSound(path, true);
+}
+
+audio::playback::BackendOperationResult
+AudioWrapper::mutateSkinSound(const path_t &path, bool dispose) {
+  std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
+  std::lock_guard<std::mutex> soundDataLock(soundDataListMutex);
+  const auto indexIt = soundDataIndexMap.find(path);
+  if (indexIt == soundDataIndexMap.end()) {
+    return {.success = true};
+  }
+  if (!backend) {
+    closeRealtimeSoundGateAndWait();
+    backendState.store(audio::playback::BackendRunState::Unknown,
+                       std::memory_order_release);
+    return {.success = false, .diagnostic = "Audio backend is unavailable"};
+  }
+
+  closeRealtimeSoundGateAndWait();
+  const auto observed = backend->observeState();
+  backendState.store(observed.state, std::memory_order_release);
+  if (observed.state == audio::playback::BackendRunState::Unknown) {
+    return {.success = false,
+            .diagnostic = observed.diagnostic.empty()
+                              ? "Audio backend state is unavailable"
+                              : observed.diagnostic};
+  }
+  const bool restart =
+      observed.state == audio::playback::BackendRunState::Running;
+  if (restart) {
+    const auto stopped = backend->stopAndDrain();
+    if (!stopped.success) {
+      openRealtimeSoundGate();
+      return stopped;
+    }
+    backendState.store(audio::playback::BackendRunState::Stopped,
+                       std::memory_order_release);
+  }
+
+  SoundData *target = soundDataList[indexIt->second].get();
+  {
+    std::lock_guard<std::mutex> commandLock(audioCommandMutex);
+    audio::playback::DrainRealtimeCommands(callbackState);
+    audio::playback::DrainCommands(callbackState);
+    audio::playback::RemoveSound(callbackState, target);
+  }
+
+  if (dispose) {
+    const std::size_t removedIndex = indexIt->second;
+    soundDataList.erase(soundDataList.begin() + removedIndex);
+    soundDataIndexMap.erase(indexIt);
+    for (auto &[retainedPath, retainedIndex] : soundDataIndexMap) {
+      (void)retainedPath;
+      if (retainedIndex > removedIndex) {
+        --retainedIndex;
+      }
+    }
+  }
+
+  if (!restart) {
+    return {.success = true};
+  }
+  const auto started = startDeviceWithLifecycleAndSoundLocked();
+  if (!started.success) {
+    return started;
+  }
+  return {.success = true};
+}
+
 std::optional<long long>
 AudioWrapper::getSoundDurationMicros(const path_t &path) const {
   std::lock_guard<std::mutex> lock(soundDataListMutex);

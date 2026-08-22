@@ -16,6 +16,7 @@ namespace skin {
 
 class LuaSkinFileSystem;
 class LuaSkinHttpTransport;
+class LuaSkinAudioHost;
 class ISkinFrameState;
 struct LuaSkinHostModulesImpl;
 
@@ -42,6 +43,7 @@ struct LuaSkinEventExecutor {
 struct LuaSkinHostModulesOptions {
   LuaSkinFileSystem *fileSystem = nullptr;
   LuaSkinHttpTransport *httpTransport = nullptr;
+  LuaSkinAudioHost *audioHost = nullptr;
   // Lua source first enters host storage before luaL_loadbuffer can charge it
   // to the Lua allocator. The runtime supplies its existing load budget here
   // to prevent an arbitrarily large package file from bypassing that budget.

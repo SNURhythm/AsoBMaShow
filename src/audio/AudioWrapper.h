@@ -148,6 +148,9 @@ public:
                      std::atomic<bool> &isCancelled);
   bool playSound(const path_t &path, audio::Bus bus,
                  long long startOffsetMicros = 0);
+  bool playSkinSound(const path_t &path, float gain, bool loop);
+  audio::playback::BackendOperationResult stopSkinSound(const path_t &path);
+  audio::playback::BackendOperationResult disposeSkinSound(const path_t &path);
   bool scheduleSound(const path_t &path, audio::Bus bus, long long startMicros);
   bool stageScheduledSound(const path_t &path, audio::Bus bus,
                            long long startMicros);
@@ -240,5 +243,7 @@ private:
   startDeviceWithLifecycleAndSoundLocked();
   audio::playback::BackendOperationResult
   stopSoundsWithLifecycleAndCommandLocked();
+  audio::playback::BackendOperationResult
+  mutateSkinSound(const path_t &, bool dispose);
   void clearCallbackState();
 };

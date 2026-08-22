@@ -118,8 +118,11 @@ size_t clampFrameToSound(size_t frame, const SoundData *soundData) {
 } // namespace
 
 float EffectiveGain(Bus bus, const Volumes &volumes) {
-  const float busVolume = bus == Bus::Bgm ? ClampVolume(volumes.bgm)
-                                          : ClampVolume(volumes.keysound);
+  const float busVolume = bus == Bus::Bgm
+                              ? ClampVolume(volumes.bgm)
+                              : bus == Bus::Keysound
+                                    ? ClampVolume(volumes.keysound)
+                                    : 1.0F;
   return ClampVolume(volumes.master) * busVolume;
 }
 
@@ -464,7 +467,8 @@ void CommitOutputRateTransition(OutputRateTransition transition,
 }
 
 bool AppendActiveSound(AudioCallbackState &state, SoundData *soundData, Bus bus,
-                       std::uint32_t outputOffsetFrames, size_t startFrame) {
+                       std::uint32_t outputOffsetFrames, size_t startFrame,
+                       float gain, bool loop) {
   if (soundData == nullptr || startFrame >= soundData->outputFrameCount ||
       startFrame > kQ32MaximumWholeFrame ||
       state.playingSoundCount >= kMaxActiveSounds) {
@@ -476,6 +480,8 @@ bool AppendActiveSound(AudioCallbackState &state, SoundData *soundData, Bus bus,
       .bus = bus,
       .sourceFrameQ32 = frameToQ32(startFrame),
       .outputOffsetFrames = outputOffsetFrames,
+      .gain = gain,
+      .loop = loop,
   };
   return true;
 }
@@ -540,6 +546,24 @@ void ClearCallbackSounds(AudioCallbackState &state) {
   state.scheduledSoundCount = 0;
 }
 
+void RemoveSound(AudioCallbackState &state, SoundData *soundData) {
+  std::size_t active = 0;
+  while (active < state.playingSoundCount) {
+    if (state.playingSounds[active].soundData == soundData) {
+      removeActiveSoundAt(state, active);
+    } else {
+      ++active;
+    }
+  }
+  std::size_t retained = 0;
+  for (std::size_t index = 0; index < state.scheduledSoundCount; ++index) {
+    if (state.scheduledSounds[index].soundData != soundData) {
+      state.scheduledSounds[retained++] = state.scheduledSounds[index];
+    }
+  }
+  state.scheduledSoundCount = retained;
+}
+
 bool EnqueueCommand(AudioCallbackState &state, const AudioCommand &command) {
   const std::uint32_t readCursor =
       state.commandReadCursor.load(std::memory_order_acquire);
@@ -599,7 +623,9 @@ void DrainRealtimeCommands(AudioCallbackState &state) noexcept {
                                    .bus = command.bus,
                                    .startMicros = command.startMicros,
                                    .sequence = command.sequence,
-                                   .startFrame = command.startFrame});
+                                   .startFrame = command.startFrame,
+                                   .gain = command.gain,
+                                   .loop = command.loop});
       break;
     case AudioCommandType::StopAll:
       ClearCallbackSounds(state);
@@ -623,14 +649,16 @@ void DrainCommands(AudioCallbackState &state) {
     switch (command.type) {
     case AudioCommandType::PlayNow:
       AppendActiveSound(state, command.soundData, command.bus, 0,
-                        command.startFrame);
+                        command.startFrame, command.gain, command.loop);
       break;
     case AudioCommandType::Schedule:
       InsertScheduledSound(state, {.soundData = command.soundData,
                                    .bus = command.bus,
                                    .startMicros = command.startMicros,
                                    .sequence = command.sequence,
-                                   .startFrame = command.startFrame});
+                                   .startFrame = command.startFrame,
+                                   .gain = command.gain,
+                                   .loop = command.loop});
       break;
     case AudioCommandType::StopAll:
       ClearCallbackSounds(state);
@@ -659,7 +687,8 @@ void ActivateScheduledSounds(AudioCallbackState &state,
       break;
     }
     AppendActiveSound(state, scheduledSound.soundData, scheduledSound.bus,
-                      outputOffsetFrames, scheduledSound.startFrame);
+                      outputOffsetFrames, scheduledSound.startFrame,
+                      scheduledSound.gain, scheduledSound.loop);
   }
 
   if (scheduledSoundsToRemove == 0) {
@@ -701,12 +730,21 @@ void MixActiveSounds(AudioCallbackState &state, std::span<float> mixBuffer,
         std::min(playingSound.outputOffsetFrames, frameCount);
     const short *source = soundData->outputData.data();
     const int channels = soundData->channels;
-    const float gain =
-        kMixHeadroom * (playingSound.bus == Bus::Bgm ? bgmGain : keysoundGain);
+    const float busGain = playingSound.bus == Bus::Bgm
+                              ? bgmGain
+                              : playingSound.bus == Bus::Keysound
+                                    ? keysoundGain
+                                    : 1.0F;
+    const float gain = kMixHeadroom * busGain * playingSound.gain;
+    const std::uint64_t loopLengthQ32 =
+        frameToQ32(soundData->outputFrameCount);
 
     std::uint64_t positionQ32 = playingSound.sourceFrameQ32;
     bool finished = false;
     for (size_t frame = 0; frame < frameCount - outputOffsetFrames; ++frame) {
+      if (playingSound.loop && positionQ32 >= loopLengthQ32) {
+        positionQ32 %= loopLengthQ32;
+      }
       const size_t leftFrame = static_cast<size_t>(positionQ32 >> 32);
       if (leftFrame >= soundData->outputFrameCount) {
         finished = true;
@@ -753,8 +791,12 @@ void MixActiveSounds(AudioCallbackState &state, std::span<float> mixBuffer,
       positionQ32 += rateIncrement;
       if (static_cast<size_t>(positionQ32 >> 32) >=
           soundData->outputFrameCount) {
-        finished = true;
-        break;
+        if (playingSound.loop) {
+          positionQ32 %= loopLengthQ32;
+        } else {
+          finished = true;
+          break;
+        }
       }
     }
 

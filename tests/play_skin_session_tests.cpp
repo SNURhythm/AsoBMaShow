@@ -9,6 +9,7 @@
 #include "skin/beatoraja/GameplaySkinValidator.h"
 #include "skin/beatoraja/GameplaySkinBuiltinCatalog.h"
 #include "skin/beatoraja/LuaSkinFileSystem.h"
+#include "skin/beatoraja/LuaSkinAudioHost.h"
 #include "skin/beatoraja/PlaySkinViewport.h"
 #include "skin/beatoraja/SkinModelValidator.h"
 #include "skin/beatoraja/SyntheticReplayGhostOverlay.h"
@@ -606,6 +607,41 @@ private:
   std::stop_source *stopAfterLoad_ = nullptr;
 };
 
+struct SessionAudioState {
+  std::vector<fs::path> loads;
+  std::vector<LuaSkinAudioIdentity> plays;
+  std::vector<LuaSkinAudioIdentity> stops;
+  std::vector<LuaSkinAudioIdentity> disposals;
+  bool backendDestroyed = false;
+};
+
+class SessionAudioBackend final : public LuaSkinAudioBackend {
+public:
+  explicit SessionAudioBackend(std::shared_ptr<SessionAudioState> state)
+      : state_(std::move(state)) {}
+  ~SessionAudioBackend() override { state_->backendDestroyed = true; }
+
+  float systemVolume() const noexcept override { return 0.4F; }
+  std::optional<LuaSkinAudioIdentity>
+  load(const fs::path &path) noexcept override {
+    state_->loads.push_back(path);
+    return LuaSkinAudioIdentity{.value = ++nextIdentity_};
+  }
+  void play(LuaSkinAudioIdentity identity, float, bool) noexcept override {
+    state_->plays.push_back(identity);
+  }
+  void stop(LuaSkinAudioIdentity identity) noexcept override {
+    state_->stops.push_back(identity);
+  }
+  void dispose(LuaSkinAudioIdentity identity) noexcept override {
+    state_->disposals.push_back(identity);
+  }
+
+private:
+  std::shared_ptr<SessionAudioState> state_;
+  std::uint64_t nextIdentity_ = 0;
+};
+
 enum class MalformedPomyuNumeric {
   None,
   Anime,
@@ -620,6 +656,7 @@ enum class MalformedPomyuNumeric {
 struct ActivationFixtureOptions {
   bool resourceBearing = false;
   bool movieBearing = false;
+  bool audioBearing = false;
   bool requireConfiguredState = false;
   bool repeatedPomyu = false;
   bool oversizedPomyuWithSibling = false;
@@ -645,7 +682,9 @@ public:
         profile_(*makeSkinProfileId(
             "66666666-6666-4666-8666-666666666666")),
         device_(std::make_shared<SessionTextureDevice>()),
-        movieDevice_(std::make_shared<SessionMovieDevice>()) {
+        movieDevice_(std::make_shared<SessionMovieDevice>()),
+        audioState_(std::make_shared<SessionAudioState>()),
+        audioBackend_(std::make_shared<SessionAudioBackend>(audioState_)) {
     chart_.text.title = "Artist 日本 42";
     chart_.text.subtitle = "Session subtitle";
     chart_.text.artist = "Session artist";
@@ -813,6 +852,13 @@ if skin_config then
     marker:close()
   end
 )lua";
+    if (options.audioBearing) {
+      script += R"lua(
+  assert(main_state.audio_preload("session-audio.ogg") == true)
+  assert(main_state.audio_play("session-audio.ogg") == true)
+  assert(main_state.audio_loop("session-audio.ogg", 0.5) == true)
+)lua";
+    }
     if (options.movieBearing && options.resourceBearing) {
       script += R"lua(
   return {
@@ -980,6 +1026,7 @@ return { type = 0, name = "activation shell", w = 1280, h = 720 }
             .resourcePreparation = resources_,
             .textureDevice = device_,
             .movieDevice = movieDevice_,
+            .audioBackend = audioBackend_,
             .liveResourceCounters = liveResourceCounters_,
             .configurationWrites = configurationWrites_,
             .stop = stop};
@@ -1001,6 +1048,10 @@ return { type = 0, name = "activation shell", w = 1280, h = 720 }
   const std::shared_ptr<SessionMovieDevice> &movieDevice() const noexcept {
     return movieDevice_;
   }
+  const std::shared_ptr<SessionAudioState> &audioState() const noexcept {
+    return audioState_;
+  }
+  void releaseAudioBackend() noexcept { audioBackend_.reset(); }
   const std::shared_ptr<SkinLiveResourceCounters> &liveCounters() const
       noexcept {
     return liveResourceCounters_;
@@ -1020,6 +1071,8 @@ private:
   SkinResourcePreparationService resources_;
   std::shared_ptr<SessionTextureDevice> device_;
   std::shared_ptr<SessionMovieDevice> movieDevice_;
+  std::shared_ptr<SessionAudioState> audioState_;
+  std::shared_ptr<SessionAudioBackend> audioBackend_;
   std::shared_ptr<SkinLiveResourceCounters> liveResourceCounters_ =
       std::make_shared<SkinLiveResourceCounters>();
   SkinConfigurationWriteQueue configurationWrites_;
@@ -1692,6 +1745,50 @@ void testSessionOwnsDeduplicatedMoviesAndRollsBackBeforePublication() {
                fixture.movieDevice()->live.empty() &&
                !fs::exists(fixture.movieDevice()->loadedPaths.front()),
            "a post-load session creation failure tears down the movie graph exactly once");
+  }
+}
+
+void testSessionOwnsLuaAudioAndRollsBackBeforePublication() {
+  {
+    ActivationFixture fixture({.audioBearing = true});
+    if (!fixture.ready()) {
+      return;
+    }
+    auto created =
+        PlaySkinSession::create(fixture.takeActivation(), fixture.context());
+    const auto state = fixture.audioState();
+    expect(created.session && state->loads.size() == 1 &&
+               state->loads.front().generic_string().ends_with(
+                   "/skin/session-audio.ogg") &&
+               state->plays == std::vector<LuaSkinAudioIdentity>(
+                                   3, LuaSkinAudioIdentity{.value = 1}) &&
+               state->disposals.empty(),
+           "published session retains one resolved audio identity across "
+           "preload, play, and loop calls");
+    created.session.reset();
+    expect(state->disposals ==
+               std::vector<LuaSkinAudioIdentity>{{.value = 1}},
+           "session destruction disposes its Lua audio identity exactly once");
+    const auto callsAfterDestruction = state->disposals.size();
+    fixture.releaseAudioBackend();
+    expect(state->backendDestroyed &&
+               state->disposals.size() == callsAfterDestruction,
+           "backend destruction cannot call back into the destroyed session");
+  }
+
+  {
+    ActivationFixture fixture({.audioBearing = true});
+    if (!fixture.ready()) {
+      return;
+    }
+    auto context = fixture.context();
+    context.safeUiBounds.width = 0.0;
+    auto created = PlaySkinSession::create(fixture.takeActivation(),
+                                           std::move(context));
+    expect(!created.session && fixture.audioState()->loads.size() == 1 &&
+               fixture.audioState()->disposals ==
+                   std::vector<LuaSkinAudioIdentity>{{.value = 1}},
+           "post-configured session failure rolls back loaded Lua audio once");
   }
 }
 
@@ -4596,6 +4693,7 @@ int main() {
   testMalformedLr2SetOptionDoesNotDivergeFromIncludeFold();
   testCommentedJsonCreatesProductionSession();
   testSessionOwnsDeduplicatedMoviesAndRollsBackBeforePublication();
+  testSessionOwnsLuaAudioAndRollsBackBeforePublication();
   testCallbackBindingWithoutRuntimeFailsValidation();
   testActivationCreatesAnOwningFreshStateSession();
   testConfiguredLoadUsesTheInitializedAuthoritativeState();

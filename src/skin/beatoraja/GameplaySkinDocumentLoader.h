@@ -14,6 +14,8 @@
 
 namespace skin {
 
+class LuaSkinAudioBackend;
+
 using LuaConfiguredGameplayDocumentLoad = std::function<LuaValueResult(
     LuaSkinRuntime &, const BeatorajaSkinConfiguration &,
     std::vector<SkinDiagnostic> &)>;
@@ -25,6 +27,7 @@ struct GameplaySkinDocumentRequest {
   // Required only for Lua. Static formats must leave this null so dispatch
   // cannot accidentally create a Lua VM for JSON or LR2 documents.
   std::unique_ptr<LuaSkinFileSystem> luaFileSystem;
+  std::shared_ptr<LuaSkinAudioBackend> luaAudioBackend;
   const EntryProfileSettings *desiredSettings = nullptr;
   const RuntimeSkinConfigurationSelection *pinnedRuntimeSelection = nullptr;
   // When nonempty, a fresh reconciliation must match this already validated

@@ -753,6 +753,46 @@ void testBusFlowAndMixing() {
               "the right channel mixes each voice with its own bus gain");
 }
 
+void testScopedSystemSoundLoopsAtPerVoiceGainAndStopsSelectively() {
+  SoundData systemSound;
+  systemSound.channels = 1;
+  systemSound.outputData = {16384, 8192};
+  systemSound.outputFrameCount = 2;
+  SoundData bgm;
+  bgm.channels = 1;
+  bgm.outputData = {4096, 4096};
+  bgm.outputFrameCount = 2;
+
+  AudioCallbackState state;
+  require(audio::playback::AppendActiveSound(
+              state, &systemSound, audio::Bus::System, 0, 0, 0.5F, true) &&
+              audio::playback::AppendActiveSound(
+                  state, &bgm, audio::Bus::Bgm, 0),
+          "scoped system and ordinary BGM voices enter the mixer");
+  std::vector<float> output(4, 0.0F);
+  audio::playback::MixActiveSounds(state, output, 4, 1, 0.25F, 0.75F,
+                                   100);
+  requireNear(output[0], 0.253125F,
+              "system voice uses only its pinned per-voice gain");
+  requireNear(output[1], 0.140625F,
+              "system voice advances independently of the BGM bus");
+  requireNear(output[2], 0.225F,
+              "looping system voice restarts inside the same output buffer");
+  requireNear(output[3], 0.1125F,
+              "looping system voice preserves its gain after wrap");
+  require(state.playingSoundCount == 1 &&
+              state.playingSounds[0].soundData == &systemSound,
+          "looping system sound remains active after its source boundary");
+
+  require(audio::playback::AppendActiveSound(
+              state, &bgm, audio::Bus::Bgm, 0),
+          "unrelated BGM is active for selective-removal verification");
+  audio::playback::RemoveSound(state, &systemSound);
+  require(state.playingSoundCount == 1 &&
+              state.playingSounds[0].soundData == &bgm,
+          "selective removal preserves unrelated BGM ownership");
+}
+
 void testRealtimeCommandReservationPublishesAtomically() {
   SoundData keysound;
   keysound.channels = 1;
@@ -1040,6 +1080,7 @@ int main() {
     testQ32ActiveCursorRejectsUnrepresentableStartFrame();
     testScheduledOffsetsUseInversePlaybackRate();
     testBusFlowAndMixing();
+    testScopedSystemSoundLoopsAtPerVoiceGainAndStopsSelectively();
     testRealtimeCommandReservationPublishesAtomically();
     testRealtimeCommandReservationFailsClosedAtCapacity();
     testRealtimeCommandDeterministicallyAdmitsAtVoiceLimit();

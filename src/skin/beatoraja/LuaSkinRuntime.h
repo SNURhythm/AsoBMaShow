@@ -25,6 +25,7 @@ struct lua_State;
 namespace skin {
 
 class LuaSkinFileSystem;
+class LuaSkinAudioBackend;
 class LuaSkinRuntime;
 class LuaSkinTableDecoder;
 class ISkinFrameState;
@@ -231,6 +232,7 @@ struct LuaSkinRuntimeOptions {
   std::unique_ptr<LuaSkinFileSystem> fileSystem;
   SkinSafetyPolicy safetyPolicy{};
   std::unique_ptr<LuaSkinHttpTransport> httpTransport;
+  std::shared_ptr<LuaSkinAudioBackend> audioBackend;
 };
 
 class LuaSkinRuntime final {

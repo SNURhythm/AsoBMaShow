@@ -20,6 +20,7 @@ enum class SkinAudioVolumeWriterTarget : std::uint8_t;
 class PlaySkinSession;
 class SkinConfigurationWriteQueue;
 class SkinLiveResourceCounters;
+class LuaSkinAudioBackend;
 class SkinResourcePreparationService;
 } // namespace skin
 #endif
@@ -34,6 +35,7 @@ struct GameplaySkinSessionServices {
   skin::SkinResourcePreparationService *resourcePreparation = nullptr;
   skin::SkinBuiltinImageReader builtinImageReader;
   std::shared_ptr<skin::SkinLiveResourceCounters> liveResourceCounters;
+  std::shared_ptr<skin::LuaSkinAudioBackend> audioBackend;
   skin::SkinConfigurationWriteQueue *configurationWrites = nullptr;
   skin::SkinDiagnosticHistory *diagnosticHistory = nullptr;
   std::function<void(skin::SkinAudioVolumeWriterTarget, float)>
