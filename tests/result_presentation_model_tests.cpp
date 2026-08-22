@@ -1,4 +1,5 @@
 #include "scene/ResultPresentationModel.h"
+#include "scene/ResultSkinLayering.h"
 #include "scene/ResultTouchControls.h"
 
 #include "rendering/UniformCache.h"
@@ -1101,6 +1102,13 @@ void testResultTouchControlsHideAndRestorePresentation() {
              !withoutVirtualController.actions.empty(),
          "selected result skins expose touch controls without a virtual controller");
 }
+
+void testSelectedResultSkinDefersRootOverlaysUntilAfterSkin() {
+  expect(!shouldRenderResultRootAfterSkin(false),
+         "built-in results render their root layout before scene rendering");
+  expect(shouldRenderResultRootAfterSkin(true),
+         "selected result skins render root overlays after the skin");
+}
 } // namespace
 
 int main() {
@@ -1132,6 +1140,7 @@ int main() {
   testDefaultSkinSummaryCardsFlexWithoutAbsentSpace();
   testDefaultSkinExplicitZerosAndMobileMetadataWrap();
   testResultTouchControlsHideAndRestorePresentation();
+  testSelectedResultSkinDefersRootOverlaysUntilAfterSkin();
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::shutdown();
   if (failures != 0) {

@@ -26,6 +26,7 @@
 #include "PracticeAnalyticsView.h"
 #include "RemoteResultRecallController.h"
 #include "ResultGaugeHistory.h"
+#include "ResultSkinLayering.h"
 #include "ResultTouchControls.h"
 
 #include "../rendering/Color.h"
@@ -3319,6 +3320,16 @@ void ResultScene::update(float dt) {
   if (rankingsModal) {
     rankingsModal->update();
   }
+}
+
+bool ResultScene::renderViewBeforeScene(const View *view) const {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  return view != rootLayout ||
+         !shouldRenderResultRootAfterSkin(resultSkinSession != nullptr);
+#else
+  (void)view;
+  return true;
+#endif
 }
 
 void ResultScene::renderScene() {

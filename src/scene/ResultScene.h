@@ -275,6 +275,7 @@ public:
 
   void init() override;
   void update(float dt) override;
+  bool renderViewBeforeScene(const View *view) const override;
   void renderScene() override;
   void cleanupScene() override;
 
