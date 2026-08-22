@@ -1,4 +1,5 @@
 #include "scene/ResultPresentationModel.h"
+#include "scene/ResultTouchControls.h"
 
 #include "rendering/UniformCache.h"
 #include "scene/ResultGaugeHistory.h"
@@ -1068,6 +1069,32 @@ void testDefaultSkinExplicitZerosAndMobileMetadataWrap() {
              textView(root.get(), "resultInfoLabel:gauge-type"),
          "remote metadata labels have deterministic semantic names");
 }
+
+void testResultTouchControlsHideAndRestorePresentation() {
+  const ResultTouchControlAvailability availability{
+      .back = true, .retry = true, .retrySame = true, .rankings = true,
+      .exportPhoto = true, .selectSection = true, .next = false};
+  const auto visible = makeResultTouchControlPresentation(
+      {.touchControlsEnabled = true, .skinSelected = true, .hidden = false},
+      availability);
+  expect(visible.showsControls && !visible.capturesRestoreTouch &&
+             visible.actions == std::vector<ResultTouchControlAction>{
+                                    ResultTouchControlAction::Back,
+                                    ResultTouchControlAction::Retry,
+                                    ResultTouchControlAction::RetrySame,
+                                    ResultTouchControlAction::Rankings,
+                                    ResultTouchControlAction::ExportPhoto,
+                                    ResultTouchControlAction::SelectSection,
+                                    ResultTouchControlAction::Hide},
+         "selected touch result skins expose the built-in actions and Hide");
+
+  const auto hidden = makeResultTouchControlPresentation(
+      {.touchControlsEnabled = true, .skinSelected = true, .hidden = true},
+      availability);
+  expect(!hidden.showsControls && hidden.capturesRestoreTouch &&
+             hidden.actions.empty(),
+         "hidden result touch controls consume one anywhere-touch to restore");
+}
 } // namespace
 
 int main() {
@@ -1098,6 +1125,7 @@ int main() {
   testDefaultSkinSparseRemoteOmitsUnsupportedViews();
   testDefaultSkinSummaryCardsFlexWithoutAbsentSpace();
   testDefaultSkinExplicitZerosAndMobileMetadataWrap();
+  testResultTouchControlsHideAndRestorePresentation();
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::shutdown();
   if (failures != 0) {

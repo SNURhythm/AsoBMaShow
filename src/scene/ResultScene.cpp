@@ -26,6 +26,7 @@
 #include "PracticeAnalyticsView.h"
 #include "RemoteResultRecallController.h"
 #include "ResultGaugeHistory.h"
+#include "ResultTouchControls.h"
 
 #include "../rendering/Color.h"
 #include "../rendering/SimpleBatchRenderer.h"
@@ -1667,6 +1668,220 @@ void ResultScene::addRetryButtons() {
   actionHost->addView(retryRow);
 }
 
+void ResultScene::buildResultTouchControls() {
+  if (rootLayout == nullptr || resultTouchControlsOverlay != nullptr) {
+    return;
+  }
+  ResultTouchControlAvailability availability{.back = true};
+  const auto *local = localSource();
+  const auto *remote = remoteSource();
+  if (local != nullptr) {
+    if (isCourseStageResult()) {
+      availability.next = true;
+    } else if (isCourseFinalResult()) {
+      const auto &course = local->courseOptions;
+      availability.replay = course.session != nullptr &&
+                             course.session->courseReplayData != nullptr &&
+                             !course.session->courseReplayData->stages.empty();
+      availability.retrySame = course.session != nullptr &&
+                              course.session->modernCourseResultBrowsing &&
+                              course.session->modernCourseRetrySameAllowed;
+      availability.exportPhoto = true;
+    } else {
+      availability.replay = local->replayResult;
+      availability.retry = !local->replayResult;
+      availability.retrySame = !local->replayResult &&
+                              local->retrySameAllowed &&
+                              (local->retryData.has_value()
+                                   ? play_options::hasSamePatternRandomization(
+                                         *local->retryData)
+                                   : play_options::hasSamePatternRandomization(
+                                         local->meta));
+      availability.rankings = true;
+      availability.exportPhoto = true;
+      availability.selectSection = true;
+    }
+  } else if (remote != nullptr) {
+    availability.rankings = remote->rankingQuery.has_value();
+    availability.exportPhoto = true;
+  }
+
+  const auto presentation = makeResultTouchControlPresentation(
+      {.touchControlsEnabled = context.inputProfile.virtualController.enabled,
+       .skinSelected = true,
+       .hidden = resultTouchControlsHidden},
+      availability);
+  if (!presentation.showsControls && !presentation.capturesRestoreTouch) {
+    return;
+  }
+
+  auto *overlay = new View();
+  overlay->setName("resultTouchControlsOverlay");
+  overlay->setPositionType(YGPositionTypeAbsolute);
+  overlay->setPosition(Edge::Left, 0);
+  overlay->setPosition(Edge::Top, 0);
+  overlay->setWidth(static_cast<float>(rendering::window_width));
+  overlay->setHeight(static_cast<float>(rendering::window_height));
+  overlay->setZIndex(1900);
+
+  auto *panel = new View();
+  panel->setName("resultTouchControlsPanel");
+  panel->setPositionType(YGPositionTypeAbsolute);
+  panel->setPosition(Edge::Left, 12.0F);
+  panel->setPosition(Edge::Right, 12.0F);
+  panel->setPosition(Edge::Bottom, 12.0F);
+  panel->setFlexDirection(FlexDirection::Row);
+  panel->setAlignItems(YGAlignCenter);
+  panel->setJustifyContent(YGJustifyCenter);
+  panel->setFlexWrap(YGWrapWrap);
+  panel->setGap(8.0F);
+  panel->setPadding(Edge::All, 8.0F);
+  panel->setCornerRadius(ui_theme::controlRadius());
+  panel->setBackgroundColor(Color(8, 16, 24, 96));
+
+  const auto addAction = [this, panel, local](
+                             ResultTouchControlAction action) {
+    std::string label;
+    Color accent = ui_theme::cyan();
+    std::function<void()> callback;
+    bool enabled = true;
+    switch (action) {
+    case ResultTouchControlAction::Back:
+      label = "Back";
+      callback = [this]() {
+        const auto *current = localSource();
+        if (current != nullptr && isCourseStageResult() &&
+            !current->courseOptions.savedResultBrowsing) {
+          showCourseExitConfirmation();
+        } else {
+          exitResult();
+        }
+      };
+      break;
+    case ResultTouchControlAction::Retry:
+      label = "Retry";
+      accent = ui_theme::primaryAction();
+      callback = [this, local]() {
+        if (local == nullptr) return;
+        const bool canRetrySame = local->retrySameAllowed &&
+                                  (local->retryData.has_value()
+                                       ? play_options::hasSamePatternRandomization(
+                                             *local->retryData)
+                                       : play_options::hasSamePatternRandomization(
+                                             local->meta));
+        startRetry(!canRetrySame);
+      };
+      break;
+    case ResultTouchControlAction::RetrySame:
+      label = "Retry Same";
+      accent = ui_theme::successAction();
+      callback = [this]() {
+        if (isCourseFinalResult()) {
+          startModernCourseRetrySame();
+        } else {
+          startRetry(true);
+        }
+      };
+      break;
+    case ResultTouchControlAction::Replay:
+      label = "Replay";
+      accent = ui_theme::infoAction();
+      callback = [this]() {
+        if (isCourseFinalResult()) {
+          startCourseReplay();
+        } else {
+          startReplay();
+        }
+      };
+      break;
+    case ResultTouchControlAction::Rankings:
+      label = "Rankings";
+      accent = ui_theme::infoAction();
+      callback = [this]() { openRankings(); };
+      enabled = rankingsAvailable();
+      break;
+    case ResultTouchControlAction::ExportPhoto:
+      label = "Export";
+      accent = ui_theme::violetAction();
+      callback = [this]() { exportPhoto(); };
+      break;
+    case ResultTouchControlAction::SelectSection:
+      label = "Section";
+      accent = ui_theme::successAction();
+      callback = [this]() { practiceThisSection(); };
+      break;
+    case ResultTouchControlAction::Next:
+      label = "Next";
+      accent = ui_theme::successAction();
+      callback = [this]() { continueCourse(); };
+      break;
+    case ResultTouchControlAction::Hide:
+      label = "Hide";
+      accent = ui_theme::textSecondary();
+      callback = [this]() { setResultTouchControlsHidden(true); };
+      break;
+    }
+    auto *button = new Button();
+    auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+    text->setText(label);
+    text->setAlign(TextView::CENTER);
+    text->setVAlign(TextView::MIDDLE);
+    text->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+    button->setContentView(text);
+    button->setSize(142, 48);
+    button->setCornerRadius(ui_theme::controlRadius());
+    button->setBackgroundColors(ui_theme::withAlpha(accent, 76),
+                                ui_theme::withAlpha(accent, 112),
+                                ui_theme::withAlpha(accent, 152));
+    button->setBorderColors(ui_theme::withAlpha(accent, 140),
+                            ui_theme::withAlpha(accent, 190), accent);
+    button->setStyledBorderWidth(1);
+    button->setEnabled(enabled);
+    button->setOnClickListener(std::move(callback));
+    panel->addView(button);
+  };
+  for (const auto action : presentation.actions) {
+    addAction(action);
+  }
+  overlay->addView(panel);
+
+  auto *restore = new Button();
+  restore->setName("resultTouchControlsRestore");
+  restore->setPositionType(YGPositionTypeAbsolute);
+  restore->setPosition(Edge::Left, 0);
+  restore->setPosition(Edge::Top, 0);
+  restore->setWidth(static_cast<float>(rendering::window_width));
+  restore->setHeight(static_cast<float>(rendering::window_height));
+  restore->setBackgroundColors(Color(0, 0, 0, 0), Color(0, 0, 0, 0),
+                               Color(0, 0, 0, 0));
+  restore->setOnClickListener(
+      [this]() { setResultTouchControlsHidden(false); });
+  restore->setVisible(presentation.capturesRestoreTouch);
+  restore->setDisplay(presentation.capturesRestoreTouch ? YGDisplayFlex
+                                                         : YGDisplayNone);
+  overlay->addView(restore);
+
+  resultTouchControlsOverlay = overlay;
+  resultTouchControlsPanel = panel;
+  resultTouchControlsRestore = restore;
+  rootLayout->addView(overlay);
+}
+
+void ResultScene::setResultTouchControlsHidden(bool hidden) {
+  resultTouchControlsHidden = hidden;
+  if (resultTouchControlsPanel == nullptr || resultTouchControlsRestore == nullptr) {
+    return;
+  }
+  resultTouchControlsPanel->setVisible(!hidden);
+  resultTouchControlsPanel->setDisplay(hidden ? YGDisplayNone : YGDisplayFlex);
+  resultTouchControlsRestore->setVisible(hidden);
+  resultTouchControlsRestore->setDisplay(hidden ? YGDisplayFlex
+                                                : YGDisplayNone);
+  if (rootLayout != nullptr) {
+    rootLayout->applyYogaLayout();
+  }
+}
+
 void ResultScene::addRemoteButtons() {
   const auto *remote = remoteSource();
   if (remote == nullptr || rootLayout == nullptr) {
@@ -3016,6 +3231,10 @@ void ResultScene::init() {
   rankingOverlayPortal->setZIndex(2000);
   rootLayout->addView(rankingOverlayPortal);
 
+  if (selectedResultSkin) {
+    buildResultTouchControls();
+  }
+
   if (!selectedResultSkin && local != nullptr) {
     updateResultPersistencePresentation();
     updateIrResultPresentation(true);
@@ -3132,6 +3351,10 @@ void ResultScene::cleanupScene() {
   rankingsModal.reset();
   rootLayout = nullptr;
   graphPlaceHolder = nullptr;
+  resultTouchControlsOverlay = nullptr;
+  resultTouchControlsPanel = nullptr;
+  resultTouchControlsRestore = nullptr;
+  resultTouchControlsHidden = false;
   normalResultActions = nullptr;
   resultPersistenceStatus = nullptr;
   persistenceStatusMessage = nullptr;

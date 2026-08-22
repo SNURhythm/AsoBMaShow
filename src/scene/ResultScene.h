@@ -301,6 +301,8 @@ private:
   void addRemoteButtons();
   void addRemoteIrStatus();
   void addCourseButtons();
+  void buildResultTouchControls();
+  void setResultTouchControlsHidden(bool hidden);
   void buildCourseExitConfirmation();
   void showCourseExitConfirmation();
   void hideCourseExitConfirmation();
@@ -341,6 +343,10 @@ private:
   std::variant<LocalResultSource, RemoteResultSource> source;
   View *rootLayout = nullptr;
   View *graphPlaceHolder = nullptr;
+  View *resultTouchControlsOverlay = nullptr;
+  View *resultTouchControlsPanel = nullptr;
+  Button *resultTouchControlsRestore = nullptr;
+  bool resultTouchControlsHidden = false;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   std::unique_ptr<skin::ResultSkinSession> resultSkinSession;
   long long resultSkinStartedMicros = 0;
