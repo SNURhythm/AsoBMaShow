@@ -7,6 +7,7 @@
 #include "skin/SkinProfileSettings.h"
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <iosfwd>
 #include <map>
@@ -126,6 +127,12 @@ public:
   static constexpr const char *kDefaultLnMode = "LN";
   static constexpr const char *kDefaultAssistOption = "OFF";
   static constexpr const char *kDefaultPacemakerTarget = "BEST";
+  // PlayerConfig strings are copied into the per-frame skin authority. Keep
+  // corrupt settings from turning that snapshot into unbounded allocation
+  // work while retaining ample room for authored display names and targets.
+  static constexpr std::size_t kMaximumSkinPropertyStringBytes = 256;
+  static constexpr std::size_t kMaximumSkinTargetListEntries = 256;
+  static constexpr std::size_t kMaximumSkinTargetListBytes = 16 * 1024;
 
   player_settings::AudioVideoSettings audioVideo =
       player_settings::defaultAudioVideoSettingsForPlatform();
@@ -145,9 +152,35 @@ public:
   bool prepMetronomeEnabled = false;
   bool startLaneIndicatorsEnabled = true;
   bool showInvisibleNotes = false;
+  // PlayerConfig.showpastnote. Its narrow LaneRenderer condition is applied
+  // by playfield projection rather than broadening past-note rendering.
+  bool showPastNotes = false;
   // Beatoraja PlayerConfig.markprocessednote. When enabled, judged normal
   // notes use SkinNote's processed-note visual instead of the normal visual.
   bool markProcessedNotes = false;
+  // PlayerConfig.isCustomJudge() and isShowjudgearea(), retained for the
+  // matching gameplay skin image-index properties.
+  bool customJudge = false;
+  bool showJudgeArea = false;
+  // Remaining raw PlayerConfig/PlayConfig values consumed by pinned
+  // IntegerPropertyFactory image indexes. They remain separate from Aso's
+  // gameplay options because their source semantics are configuration state.
+  bool notesDisplayTimingAutoAdjust = false;
+  // PlayerConfig.judgetiming, distinct from Aso's visual calibration. This
+  // moves only LaneRenderer's display clock and can be mutated live by the
+  // source auto-adjust rule.
+  int notesDisplayTimingMilliseconds = 0;
+  std::array<int, 4> autoSaveReplay{};
+  bool guideSoundEffects = false;
+  int extraNoteDepth = 0;
+  int mineMode = 0;
+  int scrollMode = 0;
+  int longNoteModifierMode = 0;
+  int sevenToNinePattern = 0;
+  int sevenToNineType = 0;
+  bool constantScroll = false;
+  // PlayConfig.constantFadeinTime. The source default is 100 ms.
+  int constantFadeInMilliseconds = 100;
   bool touchVisualizationEnabled = true;
   bool archiveChartPreviewEnabled = true;
   bool findBmsSkipUnarchivingForNonSolidArchives = false;
@@ -160,6 +193,12 @@ public:
   int laneBeamLengthPercent = kDefaultLaneBeamLengthPercent;
   int noteStartPositionPercent = kDefaultNoteStartPositionPercent;
   bool laneCoverEnabled = true;
+  // PlayConfig's Lift/HIDDEN configuration. The pinned source defaults each
+  // ratio to 0.1 while both planes begin disabled.
+  bool liftEnabled = false;
+  float liftRatio = 0.1F;
+  bool hiddenEnabled = false;
+  float hiddenRatio = 0.1F;
   // Matches PlayConfig.hispeedautoadjust. When lane cover changes during play,
   // keep the green number at the current BPM instead of the configured
   // reference BPM.
@@ -204,6 +243,28 @@ public:
   std::string selectedLnMode = kDefaultLnMode;
   std::string selectedAssistOption = kDefaultAssistOption;
   std::string selectedPacemakerTarget = kDefaultPacemakerTarget;
+  // Direct StringPropertyFactory PlayerConfig values. Mode and difficulty
+  // retain ModeFilter/DifficultyFilter display text, while sort and chart
+  // replication retain their source identifiers verbatim.
+  std::string skinModeFilterName = "ALL";
+  std::string skinSortId = "TITLE";
+  std::string skinDifficultyFilterName = "ALL";
+  std::string skinChartReplicationMode = "RIVALCHART";
+  // Raw PlayerConfig.targetid and targetlist. TargetProperty performs target
+  // lookup only when StringPropertyFactory asks for a neighbouring label, so
+  // these remain independent from Aso's selectable pacemaker targets.
+  std::string skinTargetId = "MAX";
+  std::vector<std::string> skinTargetList = {
+      "RATE_A-", "RATE_A", "RATE_A+", "RATE_AA-", "RATE_AA", "RATE_AA+",
+      "RATE_AAA-", "RATE_AAA", "RATE_AAA+", "RATE_MAX-", "MAX",
+      "RANK_NEXT", "IR_NEXT_1", "IR_NEXT_2", "IR_NEXT_3", "IR_NEXT_4",
+      "IR_NEXT_5", "IR_NEXT_10", "IR_RANK_1", "IR_RANK_5", "IR_RANK_10",
+      "IR_RANK_20", "IR_RANK_30", "IR_RANK_40", "IR_RANK_50",
+      "IR_RANKRATE_5", "IR_RANKRATE_10", "IR_RANKRATE_15",
+      "IR_RANKRATE_20", "IR_RANKRATE_25", "IR_RANKRATE_30",
+      "IR_RANKRATE_35", "IR_RANKRATE_40", "IR_RANKRATE_45",
+      "IR_RANKRATE_50", "RIVAL_RANK_1", "RIVAL_RANK_2", "RIVAL_RANK_3",
+      "RIVAL_NEXT_1", "RIVAL_NEXT_2", "RIVAL_NEXT_3"};
   int selectedPlaybackRatePercent = 100;
   audio::PlaybackMode selectedPlaybackMode = audio::PlaybackMode::PitchShift;
   bool defaultDifficultyTablesSeeded = false;

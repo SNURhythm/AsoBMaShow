@@ -1249,6 +1249,22 @@ void verifyFactoryUsesBorrowedNonNullChart() {
          "presentation is destroyed first");
 }
 
+void verifyBuiltInTimingWindowsFollowPracticeJudgePlan() {
+  SyntheticChartFixture fixture;
+  Judge judge(fixture.chart->Meta.Rank);
+  BMSRenderer renderer(fixture.chart.get(), judge.timingWindows, 667, false);
+  auto changedWindows = judge.timingWindows;
+  changedWindows[Bad] = {-345'000, 456'000};
+
+  renderer.updateJudgeTimingWindows(changedWindows);
+
+  expect(renderer.projectionLatePoorTimingMicros() == 456'000 &&
+             renderer.judgementIndicatorTimingWindowForTesting(Bad) ==
+                 changedWindows[Bad],
+         "retained practice judge plan updates built-in projection and "
+         "indicator windows together");
+}
+
 void verifyTerminalZeroNoteRowsAdvanceLegacyScroll(const RenderTarget &target) {
   configureGeometryAndViews(target.framebuffer);
   bgfx::touch(rendering::clear_view);
@@ -1869,6 +1885,7 @@ int main() {
       verifyPrepareFailurePrecedesSubmission();
       verifySubmissionFailurePropagatesAfterConsumption();
       verifyFactoryUsesBorrowedNonNullChart();
+      verifyBuiltInTimingWindowsFollowPracticeJudgePlan();
       verifyTerminalZeroNoteRowsAdvanceLegacyScroll(target);
       verifyFinalMeasureTailAdvancesLegacyScroll(target);
 

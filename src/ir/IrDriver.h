@@ -67,6 +67,16 @@ enum class ChartRankingStatus {
   Cancelled,
 };
 
+enum class IrAuthenticatedAccountStatus {
+  Succeeded,
+  AuthenticationRequired,
+  TransientFailure,
+  Unsupported,
+  MalformedResponse,
+  OversizedResponse,
+  Cancelled,
+};
+
 struct BuildDraftOutcome {
   BuildDraftStatus status = BuildDraftStatus::Invalid;
   SubmissionEligibilityReason reason =
@@ -98,6 +108,19 @@ struct IrOutboxBatchPlan {
 struct ChartRankingOutcome {
   ChartRankingStatus status = ChartRankingStatus::MalformedResponse;
   std::optional<IrChartRanking> ranking;
+  std::string diagnostic;
+};
+
+struct IrAuthenticatedAccount {
+  std::string name;
+
+  bool operator==(const IrAuthenticatedAccount &) const = default;
+};
+
+struct IrAuthenticatedAccountOutcome {
+  IrAuthenticatedAccountStatus status =
+      IrAuthenticatedAccountStatus::MalformedResponse;
+  std::optional<IrAuthenticatedAccount> account;
   std::string diagnostic;
 };
 
@@ -138,6 +161,9 @@ public:
   fetchChartRankingPage(const IrChartQuery &, std::string_view pageToken,
                         const IrProviderRuntimeConfig &, IrHttpClient &,
                         std::stop_token) const;
+  virtual IrAuthenticatedAccountOutcome
+  fetchAuthenticatedAccount(const IrProviderRuntimeConfig &, IrHttpClient &,
+                            std::stop_token) const;
   virtual IrUserScoreSnapshotOutcome
   fetchUserScoreSnapshot(const IrProviderRuntimeConfig &, IrHttpClient &,
                          std::stop_token, IrUserScoreProgress) const;
@@ -185,6 +211,11 @@ public:
                         std::string_view pageToken,
                         const IrProviderRuntimeConfig &config,
                         IrHttpClient &http, std::stop_token stopToken) const;
+  [[nodiscard]] IrAuthenticatedAccountOutcome
+  fetchAuthenticatedAccount(std::string_view providerId,
+                            const IrProviderRuntimeConfig &config,
+                            IrHttpClient &http,
+                            std::stop_token stopToken) const;
   [[nodiscard]] IrUserScoreSnapshotOutcome
   fetchUserScoreSnapshot(std::string_view providerId,
                          const IrProviderRuntimeConfig &config,

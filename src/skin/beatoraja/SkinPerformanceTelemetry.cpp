@@ -7,6 +7,16 @@
 namespace skin {
 namespace {
 
+constexpr std::uint8_t loadingPhaseBit(SkinLoadingPhase phase) noexcept {
+  return static_cast<std::uint8_t>(1U << static_cast<unsigned int>(phase));
+}
+
+constexpr std::uint8_t kAllLoadingPhases =
+    loadingPhaseBit(SkinLoadingPhase::Document) |
+    loadingPhaseBit(SkinLoadingPhase::ResourcePreparation) |
+    loadingPhaseBit(SkinLoadingPhase::Movie) |
+    loadingPhaseBit(SkinLoadingPhase::Upload);
+
 constexpr std::int64_t kWarmupMicros = 30'000'000;
 constexpr std::int64_t kRecordingMicros = 180'000'000;
 constexpr std::int64_t kMaximumResidentDriftBytes = 32LL * 1024 * 1024;
@@ -140,6 +150,43 @@ bool onlySelectedDenial(const SkinRenderIoCounters &value,
 }
 
 } // namespace
+
+bool recordSkinLoadingPhase(SkinLoadingTelemetry &telemetry,
+                            SkinLoadingPhase phase,
+                            std::uint64_t micros) noexcept {
+  const auto bit = loadingPhaseBit(phase);
+  if ((bit & kAllLoadingPhases) == 0 ||
+      (telemetry.completedPhases & bit) != 0) {
+    return false;
+  }
+  switch (phase) {
+  case SkinLoadingPhase::Document:
+    telemetry.documentMicros = micros;
+    break;
+  case SkinLoadingPhase::ResourcePreparation:
+    telemetry.resourcePreparationMicros = micros;
+    break;
+  case SkinLoadingPhase::Movie:
+    telemetry.movieMicros = micros;
+    break;
+  case SkinLoadingPhase::Upload:
+    telemetry.uploadMicros = micros;
+    break;
+  }
+  telemetry.completedPhases |= bit;
+  return true;
+}
+
+bool isCompleteSkinLoadingTelemetry(
+    const SkinLoadingTelemetry &telemetry) noexcept {
+  const auto phaseTotal = saturatingAdd(
+      saturatingAdd(telemetry.documentMicros,
+                    telemetry.resourcePreparationMicros),
+      saturatingAdd(telemetry.movieMicros, telemetry.uploadMicros));
+  return telemetry.completedPhases == kAllLoadingPhases &&
+         telemetry.sessionPublished && !telemetry.cancelled &&
+         telemetry.totalMicros >= phaseTotal;
+}
 
 SkinTelemetryContributionResult
 addSkinTelemetryContribution(SkinFrameTelemetryEnvelope &envelope,

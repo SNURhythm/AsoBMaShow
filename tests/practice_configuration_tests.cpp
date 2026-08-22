@@ -1,5 +1,7 @@
 #include "audio/PlaybackRate.h"
+#include "bms_parser.hpp"
 #include "practice/PracticeConfiguration.h"
+#include "practice/PracticeSession.h"
 #include "scene/ChartListenStart.h"
 
 #include <iostream>
@@ -39,6 +41,588 @@ void testFreshCountInUsesChartMeasureSize() {
          "fresh 4/4 practice defaults to four count-in beats");
   expect(practice::defaultCountInBeatsForChart(0) == 4,
          "invalid chart measure size falls back to four beats");
+}
+
+void testSkinMenuUsesPinnedInitialPracticeViewport() {
+  practice::Configuration configuration{
+      .startMicros = 0,
+      .endMicros = 90'000'000,
+  };
+  const auto menu = practice::buildSkinMenuState(
+      configuration,
+      {.lastTimelineMicros = 90'000'000,
+       .judgeRank = 100,
+       .chartTotal = 200.0,
+       .keyMode = 7,
+       .random1P = 0,
+       .random2P = 0,
+       .doublePlay = 0});
+  expect(menu.items[0].available && menu.items[0].selected &&
+             menu.items[0].label == "START TIME" &&
+             menu.items[0].value == " 0:00.0" &&
+             menu.items[9].available && menu.items[9].label == "OPTION-1P" &&
+             !menu.items[10].available,
+         "practice skin menu preserves the source ten-slot initial viewport");
+}
+
+void testSkinMenuInitialJudgeRankUsesPinnedBmsRuleConversion() {
+  expect(practice::sourcePracticeJudgeRank(5, 2) == 75 &&
+             practice::sourcePracticeJudgeRank(7, 3) == 100 &&
+             practice::sourcePracticeJudgeRank(7, 5) == 75 &&
+             practice::sourcePracticeJudgeRank(9, 2) == 70,
+         "practice JUDGERANK converts BMS RANK through the pinned mode rule");
+}
+
+void testFiveKeyPracticeUsesTheNormalRandomOptionDomain() {
+  practice::SkinMenuController menu(
+      {.startMicros = 0, .endMicros = 5'000'000},
+      {.lastTimelineMicros = 5'000'000,
+       .judgeRank = 75,
+       .chartTotal = 200.0,
+       .keyMode = 5,
+       .random1P = 0});
+
+  expect(menu.changeVisibleItem(9, false),
+         "five-key option row accepts a decrement event");
+  expect(menu.skinMenuState().items[9].value == "S-RANDOM-EX",
+         "five-key option row uses the normal ten-choice random domain");
+}
+
+void testSkinMenuJudgeRankUsesPinnedWindowRule() {
+  const auto seven = practice::sourcePracticeJudgeRules(7, 50);
+  const auto &sevenWindows =
+      seven.contexts[static_cast<std::size_t>(gameplay::JudgeWindowContext::Normal)]
+          .windows;
+  const auto pms = practice::sourcePracticeJudgeRules(9, 50);
+  const auto &pmsWindows =
+      pms.contexts[static_cast<std::size_t>(gameplay::JudgeWindowContext::Normal)]
+          .windows;
+  expect(sevenWindows[0].earlyMicros == -10'000 &&
+             sevenWindows[1].lateMicros == 30'000 &&
+             sevenWindows[2].lateMicros == 75'000 &&
+             sevenWindows[3].earlyMicros == -280'000 &&
+             sevenWindows[4].lateMicros == 500'000 &&
+             pmsWindows[0].lateMicros == 20'000 &&
+             pmsWindows[1].lateMicros == 25'000 &&
+             pmsWindows[2].lateMicros == 58'500,
+         "practice JUDGERANK scales only the pinned adjustable windows and "
+         "retains their source fixed bounds");
+}
+
+void testSkinMenuScrollUsesPinnedDoublePlayViewport() {
+  practice::Configuration configuration{
+      .startMicros = 0,
+      .endMicros = 90'000'000,
+  };
+  const auto menu = practice::buildSkinMenuState(
+      configuration,
+      {.lastTimelineMicros = 90'000'000,
+       .judgeRank = 100,
+       .chartTotal = 200.0,
+       .keyMode = 14,
+       .random1P = 0,
+       .random2P = 1,
+       .doublePlay = 1},
+      1.0F);
+  expect(menu.itemScrollPosition == 1.0F && menu.items[0].available &&
+             menu.items[0].label == "GAUGE TYPE" &&
+             menu.items[9].available && menu.items[9].label == "OPTION-DP" &&
+             menu.items[9].value == "FLIP",
+         "practice scroll follows Beatoraja's two-row double-play viewport "
+         "offset");
+}
+
+void testSkinMenuControllerRetainsSourceRowsAndActions() {
+  practice::Configuration configuration{
+      .startMicros = 0,
+      .endMicros = 90'000'000,
+      .gaugeType = GaugeType::Normal,
+      .startingGaugePercent = 20,
+      .playback = {.percent = 100, .mode = audio::PlaybackMode::PitchShift},
+  };
+  practice::SkinMenuInputs inputs{
+      .lastTimelineMicros = 90'000'000,
+      .judgeRank = 100,
+      .chartTotal = 200.0,
+      .keyMode = 14,
+      .random1P = 0,
+      .random2P = 0,
+      .doublePlay = 0,
+  };
+  practice::SkinMenuController menu(configuration, inputs);
+
+  auto state = menu.skinMenuState();
+  expect(state.items[0].available && state.items[0].selected &&
+             state.items[0].label == "START TIME" &&
+             state.items[9].available && state.items[9].label == "OPTION-1P" &&
+             !state.items[10].available,
+         "source menu starts with its first ten double-play rows visible");
+
+  menu.setItemScrollPosition(1.0F);
+  state = menu.skinMenuState();
+  expect(state.itemScrollPosition == 1.0F && state.items[0].selected &&
+             state.items[0].label == "GAUGE TYPE" &&
+             state.items[9].label == "OPTION-DP" &&
+             state.items[9].value == "NORMAL",
+         "source scroll selects the first visible row at the two-row maximum");
+
+  expect(menu.changeVisibleItem(0, false),
+         "source gauge row accepts a decrement event");
+  state = menu.skinMenuState();
+  expect(state.items[0].selected && state.items[0].value == "EASY",
+         "source gauge event updates the selected scrolled row");
+
+  expect(menu.changeVisibleItem(9, true),
+         "source double-play row accepts an increment event");
+  state = menu.skinMenuState();
+  expect(state.items[9].selected && state.items[9].value == "FLIP",
+         "source double-play event toggles the DP option and selects its row");
+}
+
+void testSkinMenuControllerUsesPinnedRowDomains() {
+  practice::Configuration configuration{
+      .startMicros = 0,
+      .endMicros = 5'000'000,
+      .gaugeType = GaugeType::Normal,
+      .startingGaugePercent = 20,
+      .playback = {.percent = 100, .mode = audio::PlaybackMode::PitchShift},
+  };
+  practice::SkinMenuInputs inputs{
+      .lastTimelineMicros = 5'000'000,
+      .judgeRank = 100,
+      .chartTotal = 200.0,
+      .keyMode = 9,
+      .random1P = 0,
+      .random2P = 0,
+      .doublePlay = 0,
+  };
+  practice::SkinMenuController menu(configuration, inputs);
+
+  expect(menu.changeVisibleItem(9, false),
+         "source Pop'n option row accepts a decrement event");
+  auto state = menu.skinMenuState();
+  expect(state.items[9].value == "H-RANDOM",
+         "source Pop'n option row wraps through seven random modes");
+
+  expect(menu.changeVisibleItem(8, false),
+         "source graph-type row accepts a decrement event");
+  state = menu.skinMenuState();
+  expect(state.items[8].value == "EARLYLATE",
+         "source graph type decrements through its three-value ring");
+
+  expect(menu.changeVisibleItem(7, false),
+         "source frequency row accepts a decrement event");
+  expect(menu.configuration().playback.percent == 95,
+         "source non-turbo frequency changes in five-percent steps");
+
+  expect(menu.changeVisibleItem(0, true),
+         "source start-time row accepts an increment event");
+  expect(menu.configuration().startMicros == 100'000,
+         "source start time changes in one-hundred-millisecond steps");
+  expect(menu.changeVisibleItem(1, false),
+         "source end-time row accepts a decrement event");
+  expect(menu.configuration().endMicros == 4'900'000,
+         "source end time preserves its one-second minimum above start");
+}
+
+void testPracticeSessionUsesRetainedSkinMenuController() {
+  practice::Configuration configuration{
+      .startMicros = 0,
+      .endMicros = 90'000'000,
+  };
+  practice::Session session(configuration);
+  session.configureSkinMenu({.lastTimelineMicros = 90'000'000,
+                             .judgeRank = 100,
+                             .chartTotal = 200.0,
+                             .keyMode = 14,
+                             .random1P = 0,
+                             .random2P = 0,
+                             .doublePlay = 0});
+  session.setSkinItemScrollPosition(1.0F);
+  expect(session.changeSkinMenuVisibleItem(9, true),
+         "practice session forwards a visible source row action");
+  const auto state = session.skinMenuState();
+  expect(state.items[9].selected && state.items[9].value == "FLIP",
+         "practice session retains the controller's selected DP row");
+}
+
+void testSkinMenuVisibleCountRetainsAndClampsTheSourceViewport() {
+  practice::SkinMenuController menu(
+      {.startMicros = 0, .endMicros = 90'000'000},
+      {.lastTimelineMicros = 90'000'000,
+       .judgeRank = 100,
+       .chartTotal = 200.0,
+       .keyMode = 14,
+       .horizontalInputMode = true,
+       .inputTurbo = true});
+
+  menu.setVisibleItemCount(3);
+  auto state = menu.skinMenuState();
+  expect(state.visibleItemCount == 3 && state.items[0].available &&
+             state.items[2].available && !state.items[3].available &&
+             state.horizontalInputMode && state.inputTurbo,
+         "a positive SkinPractice count updates the retained three-row "
+         "viewport");
+
+  menu.setVisibleItemCount(10);
+  expect(menu.changeVisibleItem(9, true),
+         "the source cursor can select the last initial row");
+  menu.setVisibleItemCount(3);
+  state = menu.skinMenuState();
+  expect(state.items[0].label == "FREQUENCY" &&
+             state.items[2].label == "OPTION-1P" &&
+             state.items[2].selected,
+         "shrinking the practice viewport scrolls to retain the source "
+         "cursor instead of replacing its selection");
+
+  menu.setItemScrollPosition(1.0F);
+  state = menu.skinMenuState();
+  expect(state.items[0].label == "OPTION-1P" &&
+             state.items[2].label == "OPTION-DP",
+         "the smaller retained viewport recomputes its source maximum "
+         "offset");
+
+  menu.setVisibleItemCount(16);
+  state = menu.skinMenuState();
+  expect(state.visibleItemCount == 12 && state.items[0].label == "START TIME" &&
+             state.items[11].label == "OPTION-DP" &&
+             !state.items[12].available,
+         "PracticeConfiguration clamps a positive skin viewport to its "
+         "twelve source elements and keeps the selected row visible");
+}
+
+void testSkinMenuPropertyProducesPinnedAttemptPlan() {
+  practice::Configuration configuration{
+      .startMicros = 2'000'000,
+      .endMicros = 9'000'000,
+      .gaugeType = GaugeType::Normal,
+      .startingGaugePercent = 20,
+      .playback = {.percent = 200, .mode = audio::PlaybackMode::PitchShift},
+  };
+  practice::SkinMenuController menu(
+      configuration,
+      {.lastTimelineMicros = 90'000'000,
+       .judgeRank = 250,
+       .chartTotal = 333.0,
+       .keyMode = 14,
+       .random1P = 0,
+       .random2P = 0,
+       .doublePlay = 0});
+
+  menu.setItemScrollPosition(1.0F);
+  for (int index = 0; index < 4; ++index) {
+    expect(menu.changeVisibleItem(0, true),
+           "source gauge row advances to the Grade gauge");
+    if (index == 3) {
+      break;
+    }
+    expect(menu.changeVisibleItem(1, true),
+           "source gauge category row advances to LR2");
+  }
+
+  const auto attempt = practice::skinMenuAttemptPlan(menu.property());
+  expect(attempt.startMicros == 1'000'000 &&
+             attempt.endMicros == 4'500'000 &&
+             attempt.gaugeType == GaugeType::Grade &&
+             attempt.gaugeProfile == GaugeProfile::StandardLr2 &&
+             attempt.startingGaugePercent == 100 && attempt.judgeRank == 250 &&
+             attempt.total == 333.0 && attempt.playback.percent == 200,
+         "source menu property retains frequency-scaled range and Grade/LR2 "
+         "attempt authority");
+}
+
+void testSkinMenuAttemptPlanMovesOutOfRangeNotesToBackground() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 1;
+  chart.Meta.TotalNotes = 3;
+  chart.Meta.HasTotal = true;
+  chart.Meta.Total = 300.0;
+  auto *measure = new bms_parser::Measure();
+  for (const long long timing : {0LL, 1'000'000LL, 2'000'000LL}) {
+    auto *timeline = new bms_parser::TimeLine(1, false);
+    timeline->Timing = timing;
+    timeline->SetNote(0, new bms_parser::Note(1));
+    measure->TimeLines.push_back(timeline);
+  }
+  chart.Measures.push_back(measure);
+
+  practice::applySkinMenuPracticeModifier(
+      chart, {.startMicros = 500'000,
+              .endMicros = 1'500'000,
+              .gaugeType = GaugeType::Normal,
+              .total = 300.0});
+
+  expect(measure->TimeLines[0]->Notes[0] == nullptr &&
+             measure->TimeLines[0]->BackgroundNotes.size() == 1 &&
+             measure->TimeLines[1]->Notes[0] != nullptr &&
+             measure->TimeLines[2]->Notes[0] == nullptr &&
+             measure->TimeLines[2]->BackgroundNotes.size() == 1 &&
+             chart.Meta.TotalNotes == 1 && chart.Meta.Total == 100.0,
+         "source practice modifier keeps only the selected range visible and "
+         "scales NORMAL TOTAL by its remaining note count");
+}
+
+void testSkinMenuAttemptPlanMovesBothCrossingLongNoteEndpoints() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 2;
+  chart.Meta.LnMode = 1;
+  chart.Meta.TotalNotes = 2;
+  chart.Meta.TotalLongNotes = 2;
+  chart.Meta.HasTotal = true;
+  chart.Meta.Total = 200.0;
+  auto *measure = new bms_parser::Measure();
+  for (const long long timing : {0LL, 1'000'000LL, 2'000'000LL,
+                                 3'000'000LL}) {
+    auto *timeline = new bms_parser::TimeLine(2, false);
+    timeline->Timing = timing;
+    measure->TimeLines.push_back(timeline);
+  }
+
+  auto *crossingStartHead = new bms_parser::LongNote(
+      1, bms_parser::LongNoteType::LongNote);
+  auto *crossingStartTail = new bms_parser::LongNote(
+      1, bms_parser::LongNoteType::LongNote);
+  crossingStartHead->Tail = crossingStartTail;
+  crossingStartTail->Head = crossingStartHead;
+  measure->TimeLines[0]->SetNote(0, crossingStartHead);
+  measure->TimeLines[1]->SetNote(0, crossingStartTail);
+
+  auto *crossingEndHead = new bms_parser::LongNote(
+      2, bms_parser::LongNoteType::LongNote);
+  auto *crossingEndTail = new bms_parser::LongNote(
+      2, bms_parser::LongNoteType::LongNote);
+  crossingEndHead->Tail = crossingEndTail;
+  crossingEndTail->Head = crossingEndHead;
+  measure->TimeLines[2]->SetNote(1, crossingEndHead);
+  measure->TimeLines[3]->SetNote(1, crossingEndTail);
+  chart.Measures.push_back(measure);
+
+  practice::applySkinMenuPracticeModifier(
+      chart, {.startMicros = 500'000,
+              .endMicros = 2'500'000,
+              .gaugeType = GaugeType::Normal,
+              .total = 200.0});
+
+  expect(measure->TimeLines[0]->Notes[0] == nullptr &&
+             measure->TimeLines[1]->Notes[0] == nullptr &&
+             measure->TimeLines[2]->Notes[1] == nullptr &&
+             measure->TimeLines[3]->Notes[1] == nullptr &&
+             measure->TimeLines[0]->BackgroundNotes.size() == 1 &&
+             measure->TimeLines[1]->BackgroundNotes.size() == 1 &&
+             measure->TimeLines[2]->BackgroundNotes.size() == 1 &&
+             measure->TimeLines[3]->BackgroundNotes.size() == 1 &&
+             chart.Meta.TotalNotes == 0 && chart.Meta.TotalLongNotes == 0 &&
+             chart.Meta.Total == 0.0,
+         "source practice modifier removes both endpoints when a long note "
+         "crosses either range boundary");
+}
+
+void testSkinMenuPracticeModifierPreservesLandmineOnlyTotal() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 1;
+  chart.Meta.TotalNotes = 0;
+  chart.Meta.TotalLandmineNotes = 1;
+  chart.Meta.HasTotal = true;
+  chart.Meta.Total = 300.0;
+  auto *measure = new bms_parser::Measure();
+  auto *timeline = new bms_parser::TimeLine(1, false);
+  timeline->Timing = 1'000'000;
+  timeline->SetLandmineNote(0, new bms_parser::LandmineNote(24.0F));
+  measure->TimeLines.push_back(timeline);
+  chart.Measures.push_back(measure);
+
+  practice::applySkinMenuPracticeModifier(
+      chart, {.startMicros = 500'000,
+              .endMicros = 1'500'000,
+              .gaugeType = GaugeType::Normal,
+              .total = 300.0});
+
+  expect(chart.Meta.TotalNotes == 0 && chart.Meta.TotalLandmineNotes == 1 &&
+             chart.Meta.Total == 300.0,
+         "landmine-only practice keeps finite authored TOTAL when there are "
+         "no playable notes to scale");
+}
+
+void testSkinMenuPracticeModifierRemovesOutOfRangeLandmines() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 1;
+  chart.Meta.TotalLandmineNotes = 3;
+  auto *measure = new bms_parser::Measure();
+  for (const long long timing : {1'000'000LL, 2'000'000LL}) {
+    auto *timeline = new bms_parser::TimeLine(1, false);
+    timeline->Timing = timing;
+    timeline->SetLandmineNote(0, new bms_parser::LandmineNote(24.0F));
+    measure->TimeLines.push_back(timeline);
+  }
+  auto *legacyMineTimeline = new bms_parser::TimeLine(1, false);
+  legacyMineTimeline->Timing = 3'000'000;
+  legacyMineTimeline->SetNote(0, new bms_parser::LandmineNote(24.0F));
+  measure->TimeLines.push_back(legacyMineTimeline);
+  chart.Measures.push_back(measure);
+
+  practice::applySkinMenuPracticeModifier(
+      chart, {.startMicros = 500'000,
+              .endMicros = 1'500'000,
+              .gaugeType = GaugeType::Normal,
+              .total = 300.0});
+
+  expect(measure->TimeLines[0]->LandmineNotes[0] != nullptr &&
+             measure->TimeLines[1]->LandmineNotes[0] == nullptr &&
+             measure->TimeLines[2]->Notes[0] == nullptr &&
+             measure->TimeLines[2]->BackgroundNotes.empty() &&
+             chart.Meta.TotalLandmineNotes == 1,
+         "source practice modifier discards every out-of-range landmine "
+         "without turning legacy mine-channel notes into BGM");
+}
+
+void testSkinMenuDoublePlayFlipSwapsSourcePlayerHalves() {
+  bms_parser::Chart chart;
+  auto *measure = new bms_parser::Measure();
+  auto *timeline = new bms_parser::TimeLine(16, false);
+  auto *note = new bms_parser::Note(1);
+  timeline->SetNote(0, note);
+  measure->TimeLines.push_back(timeline);
+  chart.Measures.push_back(measure);
+
+  practice::applySkinMenuDoublePlayFlip(chart);
+
+  expect(timeline->Notes[0] == nullptr && timeline->Notes[8] == note &&
+             note->Lane == 8,
+         "source PlayerFlipModifier rotates every double-play lane by one "
+         "player half");
+}
+
+void testSkinMenuDoublePlayFlipSwapsLandminePlayerHalves() {
+  bms_parser::Chart chart;
+  auto *measure = new bms_parser::Measure();
+  auto *timeline = new bms_parser::TimeLine(16, false);
+  auto *mine = new bms_parser::LandmineNote(24.0F);
+  timeline->SetLandmineNote(1, mine);
+  measure->TimeLines.push_back(timeline);
+  chart.Measures.push_back(measure);
+
+  practice::applySkinMenuDoublePlayFlip(chart);
+
+  expect(timeline->LandmineNotes[1] == nullptr &&
+             timeline->LandmineNotes[9] == mine && mine->Lane == 9,
+         "source PlayerFlipModifier rotates landmines with every other "
+         "double-play lane");
+}
+
+void testSkinMenuShortChartDoesNotSelectNegativeStartTime() {
+  practice::SkinMenuController menu(
+      {.startMicros = 0, .endMicros = 1'000'000},
+      {.lastTimelineMicros = 1'000'000,
+       .judgeRank = 100,
+       .chartTotal = 200.0,
+       .keyMode = 7});
+
+  expect(menu.changeVisibleItem(0, true),
+         "short-chart START TIME accepts a source menu increment event");
+  expect(menu.property().startTimeMillis == 0,
+         "short-chart START TIME remains at the source zero minimum");
+}
+
+void testSessionUsesScaledRangeDuringRateAdjustedAttempt() {
+  practice::Session session(
+      {.startMicros = 2'000'000,
+       .endMicros = 9'000'000,
+       .playback = {.percent = 200,
+                    .mode = audio::PlaybackMode::PitchShift}});
+  const practice::SkinMenuInputs inputs{
+      .lastTimelineMicros = 90'000'000,
+      .judgeRank = 100,
+      .chartTotal = 200.0,
+      .keyMode = 7,
+      .random1P = 0,
+      .random2P = 0,
+      .doublePlay = 0,
+  };
+  session.configureSkinMenu(inputs);
+  const auto plan = session.beginSkinMenuAttempt();
+  expect(plan.has_value() && plan->startMicros == 1'000'000 &&
+             plan->endMicros == 4'500'000,
+         "practice start returns the frequency-scaled chart range");
+  expect(session.configuration().startMicros == 1'000'000 &&
+             session.configuration().endMicros == 4'500'000 &&
+             session.configuration().playback.percent == 200,
+         "active practice runtime uses the frequency-scaled chart range");
+
+  auto retry = session.freshForRetry();
+  retry.configureSkinMenu(inputs);
+  const auto retryPlan = retry.beginSkinMenuAttempt();
+  expect(retryPlan.has_value() && retryPlan->startMicros == 1'000'000 &&
+             retryPlan->endMicros == 4'500'000,
+         "fresh practice retry rebuilds the scaled range from the raw menu "
+         "coordinates without scaling twice");
+  expect(retry.configuration().startMicros == 1'000'000 &&
+             retry.configuration().endMicros == 4'500'000,
+         "activating the retained retry plan publishes its scaled range to "
+         "built-in practice startup");
+}
+
+void testFreshPracticeRetryRetainsSourceOnlyMenuChoices() {
+  practice::Session session(
+      {.startMicros = 2'000'000, .endMicros = 9'000'000});
+  const practice::SkinMenuInputs inputs{
+      .lastTimelineMicros = 90'000'000,
+      .judgeRank = 100,
+      .chartTotal = 200.0,
+      .keyMode = 14,
+      .random1P = 0,
+      .random2P = 0,
+      .doublePlay = 0,
+  };
+  session.configureSkinMenu(inputs);
+  expect(session.changeSkinMenuVisibleItem(3, true),
+         "practice gauge category accepts a source menu change");
+  expect(session.changeSkinMenuVisibleItem(5, true),
+         "practice judge rank accepts a source menu change");
+  expect(session.changeSkinMenuVisibleItem(6, true),
+         "practice total accepts a source menu change");
+  session.setSkinItemScrollPosition(1.0F);
+  expect(session.changeSkinMenuVisibleItem(9, true),
+         "practice DP option accepts a source menu change");
+  const auto before = session.beginSkinMenuAttempt();
+
+  auto retry = session.freshForRetry();
+  retry.configureSkinMenu(inputs);
+  const auto after = retry.skinMenuAttemptPlan();
+
+  expect(before.has_value() && after.has_value() &&
+             before->gaugeProfile == after->gaugeProfile &&
+             before->judgeRank == after->judgeRank &&
+             before->total == after->total &&
+             before->doublePlayFlip == after->doublePlayFlip,
+         "fresh practice retry retains source-only menu attempt choices");
+  expect(retry.hasActivatedSkinMenuAttempt(),
+         "fresh practice retry remembers that its retained menu was accepted");
+}
+
+void testFreshPracticeRetryDistinguishesUnacceptedSkinMenu() {
+  const practice::Configuration configuration{
+      .startMicros = 2'000'000,
+      .endMicros = 9'000'000,
+      .gaugeAutoShift = GaugeAutoShiftMode::Continue,
+      .judge = {.kind = practice::JudgeOverrideKind::Scale,
+                .scalePercent = 75},
+      .playback = {.percent = 200,
+                   .mode = audio::PlaybackMode::PitchShift},
+  };
+  practice::Session session(configuration);
+  session.configureSkinMenu({.lastTimelineMicros = 90'000'000,
+                             .judgeRank = 100,
+                             .chartTotal = 200.0,
+                             .keyMode = 7});
+
+  auto retry = session.freshForRetry();
+
+  expect(!retry.hasActivatedSkinMenuAttempt(),
+         "an unaccepted synthesized menu does not become retained retry "
+         "authority");
+  expect(retry.configuration() == configuration,
+         "an unaccepted menu retry preserves panel range, judge, rate, and "
+         "gauge settings");
 }
 
 void testListenUsesPracticeStartInsteadOfCursorOrEndMarker() {
@@ -210,6 +794,26 @@ void testPlayabilityIssuesExplainBlockingConfiguration() {
 int main() {
   testPlaybackRateConversions();
   testFreshCountInUsesChartMeasureSize();
+  testSkinMenuInitialJudgeRankUsesPinnedBmsRuleConversion();
+  testFiveKeyPracticeUsesTheNormalRandomOptionDomain();
+  testSkinMenuJudgeRankUsesPinnedWindowRule();
+  testSkinMenuUsesPinnedInitialPracticeViewport();
+  testSkinMenuScrollUsesPinnedDoublePlayViewport();
+  testSkinMenuControllerRetainsSourceRowsAndActions();
+  testSkinMenuControllerUsesPinnedRowDomains();
+  testPracticeSessionUsesRetainedSkinMenuController();
+  testSkinMenuVisibleCountRetainsAndClampsTheSourceViewport();
+  testSkinMenuPropertyProducesPinnedAttemptPlan();
+  testSkinMenuAttemptPlanMovesOutOfRangeNotesToBackground();
+  testSkinMenuAttemptPlanMovesBothCrossingLongNoteEndpoints();
+  testSkinMenuPracticeModifierPreservesLandmineOnlyTotal();
+  testSkinMenuPracticeModifierRemovesOutOfRangeLandmines();
+  testSkinMenuDoublePlayFlipSwapsSourcePlayerHalves();
+  testSkinMenuDoublePlayFlipSwapsLandminePlayerHalves();
+  testSkinMenuShortChartDoesNotSelectNegativeStartTime();
+  testSessionUsesScaledRangeDuringRateAdjustedAttempt();
+  testFreshPracticeRetryRetainsSourceOnlyMenuChoices();
+  testFreshPracticeRetryDistinguishesUnacceptedSkinMenu();
   testListenUsesPracticeStartInsteadOfCursorOrEndMarker();
   testConfigurationSanitization();
   testGaugeAutoShiftDropdownModel();

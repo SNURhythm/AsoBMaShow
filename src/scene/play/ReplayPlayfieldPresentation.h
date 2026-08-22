@@ -89,6 +89,10 @@ public:
   lastFrameBuiltBuiltInPlanForTesting() const noexcept {
     return lastFrameBuiltBuiltInPlanForTesting_;
   }
+  [[nodiscard]] const PlayfieldProjectionResult &
+  lastProjectionForTesting() const noexcept {
+    return lastProjectionForTesting_;
+  }
 #endif
 
 private:
@@ -132,12 +136,16 @@ private:
                               BMSRenderer *, PlayfieldAuthorityUpdate,
                               PlayfieldPresentationConfig,
                               gameplay_hispeed::State,
-                              std::optional<skin::RuntimeSkinConfigurationSelection>);
+                              std::optional<skin::RuntimeSkinConfigurationSelection>,
+                              std::array<SkinJudgeWindow, 5>, std::size_t);
 
   [[nodiscard]] const ChartVisualNote *replayNote(const ReplayEvent &) const;
   [[nodiscard]] NotePresentationState *noteState(ChartVisualId) noexcept;
   void publishNoteState(ChartVisualId);
-  void setReplayGauge(const ReplayEvent &);
+  void setReplayGauge(const ReplayEvent &, const ChartVisualNote *);
+  void initializeReplayGraphGaugeState();
+  void advanceGameplayGraphTo(long long gameplayTimeMicros);
+  void publishGameplayGraphState();
   void markReplayMissedNote(const ChartVisualNote &, long long);
   void updateLongVisualState(const ChartVisualNote &);
   void setHcnHolding(const ChartVisualNote &, bool);
@@ -155,6 +163,9 @@ private:
   gameplay_hispeed::State hispeed_;
   std::optional<skin::RuntimeSkinConfigurationSelection>
       runtimeSkinConfigurationSelection_;
+  SkinGameplayGraphAccumulator skinGameplayGraph_;
+  std::optional<GameplayScoreState> replayGraphGaugeState_;
+  bool skinGameplayGraphDirty_ = false;
   std::unordered_map<ChartVisualId, long long> timelineTimeById_;
   std::unordered_map<ChartVisualId, const ChartVisualNote *> notesById_;
   std::unordered_map<ReplayNoteLookupKey, const ChartVisualNote *,
@@ -171,5 +182,6 @@ private:
 #if defined(ASOBMASHOW_REPLAY_PLAYFIELD_PRESENTATION_TESTING)
   std::function<void()> destructionObserverForTesting_;
   bool lastFrameBuiltBuiltInPlanForTesting_ = false;
+  PlayfieldProjectionResult lastProjectionForTesting_;
 #endif
 };

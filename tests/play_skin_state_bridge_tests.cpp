@@ -272,6 +272,73 @@ PlayfieldProjectionResult projectionAt(std::uint64_t serial) {
 
 bool hasDiagnostic(const PlaySkinStateBridge &bridge, std::string_view code);
 
+void testStaticBridgeFrameDoesNotRequireLuaRuntime() {
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = nullptr,
+                              .mutationTable = mutations});
+  bridge.beginFrame(stateAt(201), projectionAt(201));
+  const auto property = bridge.integerProperty({10});
+  const auto customObjects = bridge.updateCustomObjects();
+  const auto committed = bridge.commitFrame();
+  expect(property.supported && customObjects.ok() &&
+             committed.frameSerial == 201 && bridge.diagnostics().empty(),
+         "static bridge frame completes with built-in state and no Lua runtime");
+}
+
+void testGraphViewBorrowsTheCapturedImmutableStorage() {
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = nullptr,
+                              .mutationTable = mutations});
+  auto state = stateAt(211);
+  auto chartGraph = std::make_shared<SkinGameplayChartGraphState>();
+  chartGraph->normalDistribution = {{{1, 2, 3, 4, 5, 6, 7}}};
+  chartGraph->bpmSeries = {{.chartTimeMicros = 123,
+                            .sourceOrder = 4,
+                            .bpm = 150.0,
+                            .scroll = -1.0,
+                            .bpmTimesScroll = -150.0,
+                            .graphSpeed = -150.0}};
+  chartGraph->mainBpm = 150.0;
+  auto dynamicGraph = std::make_shared<SkinGameplayDynamicGraphState>();
+  dynamicGraph->judgementDistribution = {{{0, 1, 2, 3, 4, 5}}};
+  dynamicGraph->earlyLateDistribution = {
+      {{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}}};
+  const auto normalGaugeIndex =
+      static_cast<std::size_t>(gaugeTypeIndex(GaugeType::Normal));
+  dynamicGraph->gaugeHistories[normalGaugeIndex] = {25.0F, 50.0F};
+  dynamicGraph->recentJudgeTimingsMillis[1] = -12;
+  dynamicGraph->recentJudgeTimingIndex = 1;
+  state.skinGameplayGraph = {.chart = chartGraph, .dynamic = dynamicGraph};
+
+  bridge.beginFrame(state, projectionAt(211));
+  const auto view = bridge.gameplayGraphState();
+  expect(view.normalDistribution.data() ==
+                 chartGraph->normalDistribution.data() &&
+             view.judgementDistribution.data() ==
+                 dynamicGraph->judgementDistribution.data() &&
+             view.earlyLateDistribution.data() ==
+                 dynamicGraph->earlyLateDistribution.data() &&
+             view.bpmSeries.data() == chartGraph->bpmSeries.data() &&
+             view.gaugeHistory.data() ==
+                 dynamicGraph->gaugeHistories[normalGaugeIndex].data() &&
+             view.recentJudgeTimingsMillis.data() ==
+                 dynamicGraph->recentJudgeTimingsMillis.data() &&
+             view.recentJudgeTimingIndex == 1 && view.mainBpm == 150.0,
+         "graph view exposes spans into the captured immutable storage without copying");
+}
+
 void testDurationBindingsUsePinnedLaneRendererFormula() {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
@@ -287,7 +354,7 @@ void testDurationBindingsUsePinnedLaneRendererFormula() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto state = stateAt(202);
@@ -329,7 +396,7 @@ void testZeroHispeedDurationBindingsFollowJavaCurrentDuration() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto state = stateAt(202);
@@ -350,6 +417,35 @@ void testZeroHispeedDurationBindingsFollowJavaCurrentDuration() {
          "fallback or unsupported property");
 }
 
+void testDurationBindingsUseFrameLocalSpeedObjectMultiplier() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = &runtime.runtime(),
+                              .mutationTable = mutations});
+
+  auto state = stateAt(202);
+  state.authority.currentBpm = 180.0;
+  state.authority.laneCoverPercent = 25;
+  state.authority.laneCoverEnabled = true;
+  state.authority.currentSpeedMultiplier = 0.5;
+  bridge.beginFrame(state, projectionAt(202));
+
+  const auto duration = bridge.integerProperty({312});
+  const auto green = bridge.integerProperty({313});
+  expect(duration.supported && duration.value == 1'000 && green.supported &&
+             green.value == 600,
+         "duration selectors divide by the frame-local SPEED multiplier");
+}
+
 void testHispeedBindingsUsePinnedIntegerAndFloatProperties() {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
@@ -362,7 +458,7 @@ void testHispeedBindingsUsePinnedIntegerAndFloatProperties() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto state = stateAt(203);
@@ -412,7 +508,7 @@ void testIntegerPropertyFactoryDomainNeverRejectsGameplaySkins() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto state = stateAt(231);
@@ -453,7 +549,7 @@ void testMarkProcessedNoteImageIndexTracksPlayerConfiguration() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto state = stateAt(232);
@@ -471,6 +567,37 @@ void testMarkProcessedNoteImageIndexTracksPlayerConfiguration() {
       {305}, SkinIntegerPropertyDomain::ImageIndex);
   expect(enabled.supported && enabled.value == 1,
          "ImageIndex 305 reflects the enabled processed-note marker");
+  bridge.discardFrame();
+}
+
+void testUndefinedLongNoteImageIndexMatchesBeatorajaPlayerConfig() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+  PlayfieldChartVisualModel chart;
+  chart.staticMetadata.hasAnyLongNote = true;
+  chart.staticMetadata.hasUndefinedLongNote = true;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = &runtime.runtime(),
+                              .mutationTable = mutations});
+  bridge.beginFrame(stateAt(234), projectionAt(234));
+
+  for (const auto [selectedMode, expectedIndex] :
+       std::array{std::pair{1, 0LL}, std::pair{2, 1LL},
+                  std::pair{3, 2LL}}) {
+    chart.staticMetadata.selectedLongNoteMode = selectedMode;
+    const auto value = bridge.integerProperty(
+        {308}, SkinIntegerPropertyDomain::ImageIndex);
+    expect(value.supported && value.value == expectedIndex,
+           "undefined-LN ImageIndex 308 matches Beatoraja PlayerConfig mode: " +
+               std::to_string(selectedMode));
+  }
   bridge.discardFrame();
 }
 
@@ -554,7 +681,7 @@ void testBridgeOwnsSnapshotAndClosesEachFrameExactlyOnce() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto state = stateAt(71);
@@ -651,7 +778,7 @@ void testFramePropertiesUseAuthoritativeGaugeAndTimerRules() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
   auto state = stateAt(81);
   bridge.beginFrame(state, projectionAt(81));
@@ -725,7 +852,7 @@ void testGameplayModeAndLoadingBooleanProperties() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto state = stateAt(201);
@@ -774,8 +901,9 @@ void testGameplayModeAndLoadingBooleanProperties() {
              bridge.booleanProperty({84}).supported &&
              !bridge.booleanProperty({84}).value &&
              bridge.booleanProperty({1080}).supported &&
-             bridge.booleanProperty({1080}).value,
-         "practice mode selects only the pinned practice boolean");
+             !bridge.booleanProperty({1080}).value,
+         "practice gameplay does not fabricate Beatoraja's separate "
+         "STATE_PRACTICE menu boolean");
   bridge.discardFrame();
 
   state = stateAt(204);
@@ -810,19 +938,47 @@ void testExistingGameplayStatePropertyWiring() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto state = stateAt(205);
   state.authority.gameplayMode = PlayfieldGameplayMode::Practice;
   state.authority.gaugeType = GaugeType::ExHard;
   state.authority.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
+  state.authority.gaugeAutoShiftLowerBound = GaugeType::ExHard;
   state.authority.laneCoverEnabled = true;
   state.authority.liftEnabled = true;
-  state.authority.hiddenEnabled = false;
+  state.authority.liftRatio = 0.25F;
+  state.authority.hiddenEnabled = true;
+  state.authority.hiddenRatio = 0.75F;
   state.configuration.hispeedFixMode = AppSettings::HiSpeedFixMode::Max;
   state.configuration.hispeedAutoAdjust = true;
   state.configuration.bpmGuideEnabled = true;
+  state.configuration.customJudge = true;
+  state.configuration.showJudgeArea = true;
+  state.configuration.notesDisplayTimingMilliseconds = -37;
+  state.configuration.notesDisplayTimingAutoAdjust = true;
+  state.configuration.autoSaveReplay = {1, 2, 3, 10};
+  state.configuration.guideSoundEffects = true;
+  state.configuration.extraNoteDepth = 23;
+  state.configuration.mineMode = 3;
+  state.configuration.scrollMode = 1;
+  state.configuration.longNoteModifierMode = 4;
+  state.configuration.sevenToNinePattern = 6;
+  state.configuration.sevenToNineType = 2;
+  state.configuration.constantScroll = true;
+  practice::SkinMenuState practiceMenu;
+  practiceMenu.items[0] = {.available = true,
+                           .selected = true,
+                           .label = "START TIME",
+                           .value = " 0:00.0",
+                           .text = "START TIME :  0:00.0"};
+  practiceMenu.items[1] = {.available = true,
+                           .selected = false,
+                           .label = "END TIME",
+                           .value = " 1:30.0",
+                           .text = "END TIME :  1:30.0"};
+  state.authority.practiceMenu = std::move(practiceMenu);
   state.clock.playTimer = {.active = true,
                            .startMicros = 0,
                            .elapsedMillisExact = true,
@@ -839,8 +995,30 @@ void testExistingGameplayStatePropertyWiring() {
       {Kpoor, {.fast = 9, .slow = 10}}};
   bridge.beginFrame(state, projectionAt(205));
 
+  expect(bridge.stringProperty({1010}).supported &&
+             bridge.stringProperty({1010}).value == "0.0.1",
+         "version string reads the declared application version");
+  expect(bridge.booleanProperty({3000}).supported &&
+             !bridge.booleanProperty({3000}).value &&
+             bridge.booleanProperty({3001}).supported &&
+             !bridge.booleanProperty({3001}).value &&
+             bridge.booleanProperty({3002}).supported &&
+             !bridge.booleanProperty({3002}).value &&
+             bridge.booleanProperty({3020}).supported &&
+             !bridge.booleanProperty({3020}).value &&
+             bridge.booleanProperty({3021}).supported &&
+             !bridge.booleanProperty({3021}).value &&
+             bridge.stringProperty({1040}).value == "START TIME :  0:00.0" &&
+             bridge.stringProperty({1061}).value == "END TIME" &&
+             bridge.stringProperty({1081}).value == " 1:30.0" &&
+             bridge.stringProperty({std::string{"practice_item2"}}).value ==
+                 "END TIME :  1:30.0",
+         "practice text remains readable during play while availability and "
+         "selection require the unavailable STATE_PRACTICE UI");
+
   for (const auto [id, expected] : std::array{
            std::pair{40, false}, std::pair{41, true}, std::pair{82, true},
+           std::pair{272, true}, std::pair{273, true},
            std::pair{160, false}, std::pair{161, false},
            std::pair{162, true}, std::pair{163, false},
            std::pair{164, false}, std::pair{1160, false},
@@ -853,13 +1031,33 @@ void testExistingGameplayStatePropertyWiring() {
   for (const auto [id, expected] : std::array{
            std::pair{40, 4LL}, std::pair{55, 2LL}, std::pair{78, 4LL},
            std::pair{72, 0LL}, std::pair{306, 1LL}, std::pair{330, 1LL},
-           std::pair{331, 1LL}, std::pair{332, 0LL}, std::pair{342, 1LL}}) {
+           std::pair{331, 1LL}, std::pair{332, 1LL}, std::pair{341, 4LL},
+           std::pair{342, 1LL}, std::pair{301, 1LL}, std::pair{303, 1LL},
+           std::pair{75, 1LL}, std::pair{321, 1LL}, std::pair{322, 2LL},
+           std::pair{323, 3LL}, std::pair{324, 10LL}, std::pair{343, 1LL},
+           std::pair{350, 23LL}, std::pair{351, 3LL}, std::pair{352, 1LL},
+           std::pair{353, 4LL}, std::pair{360, 6LL}, std::pair{361, 2LL},
+           std::pair{400, 1LL}}) {
     const auto value = bridge.integerProperty(
         {id}, SkinIntegerPropertyDomain::ImageIndex);
     expect(value.supported && value.value == expected,
            "existing gameplay image index uses the pinned source: " +
                std::to_string(id));
   }
+  const auto displayTiming = bridge.integerProperty({12});
+  expect(displayTiming.supported && displayTiming.value == -37,
+         "notes-display timing uses the captured PlayerConfig value");
+  for (const auto [id, expected] :
+       std::array{std::pair{314, 250LL}, std::pair{315, 750LL},
+                  std::pair{316, 337LL}}) {
+    const auto value = bridge.integerProperty({id});
+    expect(value.supported && value.value == expected,
+           "Lift/HIDDEN numeric property uses the captured PlayConfig state: " +
+               std::to_string(id));
+  }
+  expect(bridge.booleanProperty({400}).supported &&
+             bridge.booleanProperty({400}).value,
+         "OPTION_CONSTANT shares PlayConfig's captured enabled value");
   const auto progress = bridge.floatProperty({101});
   expect(progress.supported && progress.value == bridge.floatProperty({6}).value,
          "music progress bar is the same pinned source as music progress");
@@ -879,9 +1077,20 @@ void testExistingGameplayStatePropertyWiring() {
          "skin name and author use the decoded active skin header");
   bridge.discardFrame();
 
-  state.clock.serial = 206;
+  for (const GaugeType gaugeType :
+       {GaugeType::ExGrade, GaugeType::ExHardGrade}) {
+    ++state.clock.serial;
+    state.authority.gaugeType = gaugeType;
+    bridge.beginFrame(state, projectionAt(state.clock.serial));
+    expect(bridge.booleanProperty({1046}).supported &&
+               bridge.booleanProperty({1046}).value,
+           "gauge_ex recognizes the pinned EX grade gauge indexes");
+    bridge.discardFrame();
+  }
+
+  state.clock.serial = 208;
   state.configuration.bgaEnabled = false;
-  bridge.beginFrame(state, projectionAt(206));
+  bridge.beginFrame(state, projectionAt(208));
   const auto bgaOff = bridge.booleanProperty({40});
   const auto bgaOn = bridge.booleanProperty({41});
   const auto bgaIndex = bridge.integerProperty(
@@ -890,6 +1099,139 @@ void testExistingGameplayStatePropertyWiring() {
              bgaIndex.supported && bgaIndex.value == 2,
          "BGA resource selectors and the global BGA mode use their separate "
          "pinned sources");
+  bridge.discardFrame();
+}
+
+void testPracticeMenuSelectorsAndEventsRequireCapturedMenuState() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = &runtime.runtime(),
+                              .mutationTable = mutations});
+
+  auto state = stateAt(206);
+  state.authority.gameplayMode = PlayfieldGameplayMode::Practice;
+  state.authority.practiceMenuActive = true;
+  practice::SkinMenuState menu;
+  menu.items[0] = {.available = true, .selected = false};
+  menu.items[1] = {.available = true, .selected = true};
+  state.authority.practiceMenu = std::move(menu);
+  bridge.beginFrame(state, projectionAt(206));
+
+  expect(bridge.booleanProperty({1080}).supported &&
+             bridge.booleanProperty({1080}).value &&
+             bridge.booleanProperty({3000}).supported &&
+             bridge.booleanProperty({3000}).value &&
+             bridge.booleanProperty({3001}).supported &&
+             bridge.booleanProperty({3001}).value &&
+             bridge.booleanProperty({3020}).supported &&
+             !bridge.booleanProperty({3020}).value &&
+             bridge.booleanProperty({3021}).supported &&
+             bridge.booleanProperty({3021}).value,
+         "captured STATE_PRACTICE menu authority drives source row booleans");
+  expect(bridge.executeEvent(370, {}).status == SkinHostCallStatus::Completed &&
+             bridge.executeEvent(371, std::array{-1}).status ==
+                 SkinHostCallStatus::Completed,
+         "practice item events preserve Java's default increment and negative "
+         "decrement direction");
+  const auto committed = bridge.commitFrame();
+  expect(committed.orderedMutations.size() == 2,
+         "active practice events stage one mutation per source event");
+  if (committed.orderedMutations.size() == 2) {
+    const auto *first = std::get_if<SetPracticeMenuItem>(
+        &committed.orderedMutations[0]);
+    const auto *second = std::get_if<SetPracticeMenuItem>(
+        &committed.orderedMutations[1]);
+    expect(first != nullptr && first->visibleIndex == 0 && first->increment &&
+               second != nullptr && second->visibleIndex == 1 &&
+               !second->increment,
+           "practice event mutations retain visible row and source direction");
+  }
+
+  state.clock.serial = 207;
+  state.authority.practiceMenuActive = false;
+  bridge.beginFrame(state, projectionAt(207));
+  expect(bridge.booleanProperty({1080}).supported &&
+             !bridge.booleanProperty({1080}).value &&
+             bridge.booleanProperty({3000}).supported &&
+             !bridge.booleanProperty({3000}).value &&
+             bridge.executeEvent(370, {}).status == SkinHostCallStatus::Completed &&
+             bridge.commitFrame().orderedMutations.empty(),
+         "practice item events remain source no-ops outside STATE_PRACTICE");
+}
+
+void testLiftHiddenOffsetsFollowPinnedLaneRenderer() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  SkinNoteObject note;
+  note.lanes.push_back({.authoredLane = 0,
+                        .laneDestination = {.x = 100.0,
+                                            .y = 200.0,
+                                            .width = 40.0,
+                                            .height = 200.0}});
+  model.model.objects.push_back(
+      {.id = 1, .payload = std::move(note), .authoredOrdinal = 1});
+  BeatorajaSkinConfiguration configuration;
+  configuration.offsetsById.emplace(3, ConfigOffset{.x = 7});
+  configuration.offsetsById.emplace(4, ConfigOffset{.x = 8});
+  configuration.offsetsById.emplace(5, ConfigOffset{.x = 9});
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = &runtime.runtime(),
+                              .mutationTable = mutations});
+
+  auto state = stateAt(208);
+  state.authority.laneCoverEnabled = true;
+  state.authority.laneCoverPercent = 40;
+  state.authority.liftEnabled = true;
+  state.authority.liftRatio = 0.333F;
+  state.authority.hiddenEnabled = true;
+  state.authority.hiddenRatio = 0.25F;
+  bridge.beginFrame(state, projectionAt(208));
+  const auto lift = bridge.offsetProperty(3);
+  const auto laneCover = bridge.offsetProperty(4);
+  const auto hidden = bridge.offsetProperty(5);
+  expect(lift.supported && laneCover.supported && hidden.supported &&
+             lift.value.x == 7.0 && laneCover.value.x == 8.0 &&
+             hidden.value.x == 9.0 &&
+             std::abs(lift.value.y - 66.6) < 0.0001 &&
+             std::abs(laneCover.value.y + 53.36) < 0.0001 &&
+             std::abs(hidden.value.y - 33.35) < 0.0001 &&
+             hidden.value.a == 0.0,
+         "LaneRenderer writes fractional Lift, lane-cover, and HIDDEN "
+         "offsets while preserving the loaded reserved offset fields");
+  bridge.discardFrame();
+
+  state = stateAt(209);
+  state.authority.laneCoverEnabled = true;
+  state.authority.laneCoverPercent = 40;
+  state.authority.liftEnabled = false;
+  state.authority.hiddenEnabled = false;
+  bridge.beginFrame(state, projectionAt(209));
+  const auto disabledLift = bridge.offsetProperty(3);
+  const auto disabledLaneCover = bridge.offsetProperty(4);
+  const auto disabledHidden = bridge.offsetProperty(5);
+  expect(disabledLift.supported && disabledLaneCover.supported &&
+             disabledHidden.supported && disabledLift.value.y == 0.0 &&
+             disabledLaneCover.value.y == -80.0 &&
+             std::abs(disabledHidden.value.y - 33.35) < 0.0001 &&
+             disabledHidden.value.a == -255.0,
+         "disabled HIDDEN keeps LaneRenderer's prior y while suppressing "
+         "draws through alpha");
   bridge.discardFrame();
 }
 
@@ -903,6 +1245,7 @@ void testRemainingDirectGameplayStatePropertyWiring() {
   chart.chartMd5 = "captured-md5";
   chart.chartSha256 = "captured-sha256";
   chart.staticMetadata = {.totalNotes = 100,
+                          .playLevel = 12,
                           .hasRandomSequence = true,
                           .hasBpmStop = true};
 
@@ -912,7 +1255,7 @@ void testRemainingDirectGameplayStatePropertyWiring() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto state = stateAt(207);
@@ -934,6 +1277,7 @@ void testRemainingDirectGameplayStatePropertyWiring() {
                                      .maxScore = 200,
                                      .totalNotes = 100};
   state.authority.judgementCounters = {{PGreat, 40}, {Great, 40}};
+  state.authority.loadingState = PlayfieldLoadingState::Loaded;
   state.configuration.masterVolume = 0.25F;
   state.configuration.keysoundVolume = 0.5F;
   state.configuration.bgmVolume = 0.75F;
@@ -942,6 +1286,7 @@ void testRemainingDirectGameplayStatePropertyWiring() {
   for (const auto [id, expected] : std::array{
            std::pair{178, false}, std::pair{179, true},
            std::pair{1177, true},
+           std::pair{192, true}, std::pair{193, false},
            // score / (passed notes * 2) = 120 / 160 = 75% (A).
            std::pair{200, false}, std::pair{201, false},
            std::pair{202, true}, std::pair{300, false},
@@ -960,6 +1305,9 @@ void testRemainingDirectGameplayStatePropertyWiring() {
   }
 
   for (const auto [id, expected] : std::array{
+           std::pair{45, 12LL}, std::pair{46, 12LL},
+           std::pair{47, 12LL}, std::pair{48, 12LL},
+           std::pair{49, 12LL}, std::pair{96, 12LL},
            std::pair{72, 200LL}, std::pair{102, 75LL},
            std::pair{103, 0LL}, std::pair{104, 12LL},
            std::pair{115, 60LL}, std::pair{116, 0LL},
@@ -978,13 +1326,16 @@ void testRemainingDirectGameplayStatePropertyWiring() {
                std::to_string(id));
   }
   for (const auto [id, expected] : std::array{
-           std::pair{17, 0.25}, std::pair{18, 0.5}, std::pair{19, 0.75}}) {
+           std::pair{17, 0.25}, std::pair{18, 0.5}, std::pair{19, 0.75},
+           std::pair{20, 0.0}}) {
     const auto value = bridge.floatProperty({id});
     expect(value.supported && value.value == expected,
            "direct audio float property uses the pinned source: " +
                std::to_string(id));
   }
   const auto currentRate = bridge.floatProperty({111});
+  const auto loadingProgress =
+      bridge.floatProperty({165}, SkinFloatPropertyDomain::FloatValue);
   const auto currentRateFloat = bridge.floatProperty(
       {1102}, SkinFloatPropertyDomain::FloatValue);
   expect(currentRate.supported && currentRateFloat.supported &&
@@ -992,6 +1343,8 @@ void testRemainingDirectGameplayStatePropertyWiring() {
              std::abs(currentRateFloat.value - 0.75) < 0.000001,
          "current score rates use JudgeManager past notes even without a "
          "pacemaker target");
+  expect(loadingProgress.supported && loadingProgress.value == 1.0,
+         "loaded gameplay exposes BMSResource's completed float progress");
   expect(bridge.stringProperty({1030}).supported &&
              bridge.stringProperty({1030}).value == "captured-md5" &&
              bridge.stringProperty({1031}).supported &&
@@ -1065,17 +1418,34 @@ void testRemainingDirectGameplayStatePropertyWiring() {
   expect(bridge.integerProperty({340}, SkinIntegerPropertyDomain::ImageIndex)
                  .value == 1,
          "judge-algorithm image index preserves the pinned duration mode");
+  for (const int id : {61, 62, 63}) {
+    const auto targetOption =
+        bridge.integerProperty({id}, SkinIntegerPropertyDomain::ImageIndex);
+    expect(targetOption.supported &&
+               targetOption.value == std::numeric_limits<int>::min(),
+           "target option image indexes preserve the source null-target "
+           "sentinel");
+  }
   bridge.discardFrame();
 
   state.clock.serial = 212;
   state.configuration.judgeAlgorithmImageIndex =
       std::numeric_limits<std::int32_t>::min();
+  state.authority.targetPlayOption = 123;
   bridge.beginFrame(state, projectionAt(212));
   const auto scorePriority =
       bridge.integerProperty({340}, SkinIntegerPropertyDomain::ImageIndex);
   expect(scorePriority.supported &&
              scorePriority.value == std::numeric_limits<std::int32_t>::min(),
          "judge-algorithm Score preserves Beatoraja's non-index sentinel");
+  expect(bridge.integerProperty({61}, SkinIntegerPropertyDomain::ImageIndex)
+                 .value == 3 &&
+             bridge.integerProperty({62}, SkinIntegerPropertyDomain::ImageIndex)
+                     .value == 2 &&
+             bridge.integerProperty({63}, SkinIntegerPropertyDomain::ImageIndex)
+                     .value == 1,
+         "target option image indexes split ScoreData.option with the pinned "
+         "decimal divisors");
   bridge.discardFrame();
 }
 
@@ -1108,7 +1478,7 @@ void testLongNoteHoldTimersUseCapturedLaneState() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto state = stateAt(212);
@@ -1132,6 +1502,868 @@ void testLongNoteHoldTimersUseCapturedLaneState() {
   expect(bridge.timerProperty({71}) == kPlayfieldTimestampOff,
          "Beatoraja 1P hold timer turns off when its captured long note ends");
   bridge.discardFrame();
+
+  state.clock.serial = 214;
+  state.notes = {{.id = 1, .longActive = true, .longReactive = true},
+                 {.id = 2, .longActive = true, .longReactive = true}};
+  bridge.beginFrame(state, projectionAt(214));
+  expect(bridge.timerProperty({251}) == 7'000'000 &&
+             bridge.timerProperty({271}) == kPlayfieldTimestampOff,
+         "normal-range HCN active timer uses the captured increase state, "
+         "not the generic long-note hold state");
+  bridge.discardFrame();
+
+  state.clock.serial = 215;
+  state.notes = {{.id = 1, .longDamaged = true},
+                 {.id = 2, .longDamaged = true}};
+  bridge.beginFrame(state, projectionAt(215));
+  expect(bridge.timerProperty({251}) == kPlayfieldTimestampOff &&
+             bridge.timerProperty({271}) == 7'000'000,
+         "normal-range HCN damage timer stays independent from active HCN");
+  bridge.discardFrame();
+}
+
+void testExtendedPlayerOneLaneTimersUsePinnedSkinOffsets() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+
+  // Beatoraja LaneProperty.KEYBOARD_24K maps the physical lane at index 9
+  // to skin offset 10. SkinPropertyMapper must therefore select the extended
+  // 1P timer ranges rather than treating this as an absent normal-key lane.
+  PlayfieldChartVisualModel chart;
+  chart.keyCount = 24;
+  chart.laneOrder = {9};
+  chart.notes = {{.id = 1,
+                  .timelineId = 1,
+                  .lane = 9,
+                  .kind = ChartVisualNoteKind::LongHead}};
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = &runtime.runtime(),
+                              .mutationTable = mutations});
+
+  auto state = stateAt(214);
+  state.sceneStartMicros = 0;
+  state.clock.visualTimeMicros = 8'000'000;
+  state.lanes = {{.pressed = true,
+                  .pressMicros = 7'000'000,
+                  .bombMicros = 7'500'000}};
+  state.notes = {{.id = 1, .longActive = true, .longReactive = true}};
+  bridge.beginFrame(state, projectionAt(214));
+  expect(bridge.timerProperty({1010}) == 7'500'000 &&
+             bridge.timerProperty({1210}) == 8'000'000 &&
+             bridge.timerProperty({1410}) == 7'000'000 &&
+             bridge.timerProperty({1810}) == 8'000'000 &&
+             bridge.timerProperty({2010}) == kPlayfieldTimestampOff,
+         "extended 1P bomb, hold, key-on, and HCN timers use LaneProperty's "
+         "24K offset and JudgeManager's active HCN state");
+  bridge.discardFrame();
+
+  state.clock.serial = 215;
+  state.lanes = {{.pressed = false, .releaseMicros = 8'100'000}};
+  state.notes = {{.id = 1, .longDamaged = true}};
+  bridge.beginFrame(state, projectionAt(215));
+  expect(bridge.timerProperty({1610}) == 8'100'000 &&
+             bridge.timerProperty({1810}) == kPlayfieldTimestampOff &&
+             bridge.timerProperty({2010}) == 8'000'000,
+         "extended 1P key-off and HCN-damage timers retain the pinned "
+         "independent inactive and damage states");
+  bridge.discardFrame();
+}
+
+void testPomyuTimersFollowPinnedDefaultProcessorCycles() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = &runtime.runtime(),
+                              .mutationTable = mutations});
+
+  auto state = stateAt(215);
+  state.sceneStartMicros = 0;
+  state.clock.visualTimeMicros = 0;
+  state.clock.gameplayTimeMicros = 0;
+  state.clock.playTimer = {.active = true,
+                           .startMicros = 0,
+                           .elapsedMillisExact = true};
+  state.authority.stagePassedNotes = 0;
+  state.lastJudge = JudgeResult(None, 0);
+  bridge.beginFrame(state, projectionAt(215));
+  expect(bridge.timerProperty({900}) == 0 &&
+             bridge.timerProperty({905}) == 0 &&
+             bridge.timerProperty({909}) == 0 &&
+             bridge.timerProperty({901}) == kPlayfieldTimestampOff,
+         "PomyuCharaProcessor initializes both neutral motions and dance "
+         "with its pinned unconfigured state");
+  bridge.discardFrame();
+
+  state.clock.serial = 216;
+  state.clock.visualTimeMicros = 2'000;
+  state.clock.gameplayTimeMicros = 2'000;
+  state.authority.stagePassedNotes = 1;
+  state.lastJudge = JudgeResult(PGreat, 0);
+  bridge.beginFrame(state, projectionAt(216));
+  expect(bridge.timerProperty({900}) == kPlayfieldTimestampOff &&
+             bridge.timerProperty({902}) == 2'000 &&
+             bridge.timerProperty({905}) == kPlayfieldTimestampOff &&
+             bridge.timerProperty({907}) == 2'000 &&
+             bridge.timerProperty({909}) == 0,
+         "PomyuCharaProcessor maps a PGREAT to 1P great and 2P bad after "
+         "the default neutral-cycle boundary");
+  bridge.discardFrame();
+
+  state.clock.serial = 217;
+  state.clock.visualTimeMicros = 4'000;
+  state.clock.gameplayTimeMicros = 4'000;
+  bridge.beginFrame(state, projectionAt(217));
+  expect(bridge.timerProperty({900}) == 4'000 &&
+             bridge.timerProperty({902}) == kPlayfieldTimestampOff &&
+             bridge.timerProperty({905}) == 4'000 &&
+             bridge.timerProperty({907}) == kPlayfieldTimestampOff,
+         "PomyuCharaProcessor returns completed default motions to their "
+         "neutral timers and captures the processed-note count");
+  bridge.discardFrame();
+}
+
+void testPomyuTimersUseAuthoredMotionCycles() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({
+      .chartModel = chart,
+      .model = &model,
+      .configuration = configuration,
+      .runtime = &runtime.runtime(),
+      .mutationTable = mutations,
+      .pomyuMotionCyclesMillis = {100, 250, 250, 250, 250, 100, 250, 250},
+  });
+
+  auto state = stateAt(215);
+  state.sceneStartMicros = 0;
+  state.clock.visualTimeMicros = 0;
+  state.clock.gameplayTimeMicros = 0;
+  state.clock.playTimer = {.active = true,
+                           .startMicros = 0,
+                           .elapsedMillisExact = true};
+  state.authority.stagePassedNotes = 0;
+  state.lastJudge = JudgeResult(None, 0);
+  bridge.beginFrame(state, projectionAt(215));
+  bridge.discardFrame();
+
+  state.clock.serial = 216;
+  state.clock.visualTimeMicros = 2'000;
+  state.clock.gameplayTimeMicros = 2'000;
+  state.authority.stagePassedNotes = 1;
+  state.lastJudge = JudgeResult(PGreat, 0);
+  bridge.beginFrame(state, projectionAt(216));
+  expect(bridge.timerProperty({900}) == 0 &&
+             bridge.timerProperty({902}) == kPlayfieldTimestampOff &&
+             bridge.timerProperty({905}) == 0 &&
+             bridge.timerProperty({907}) == kPlayfieldTimestampOff,
+         "PomyuCharaProcessor leaves authored neutral motions active until "
+         "their source-defined cycle boundary");
+  bridge.discardFrame();
+
+  state.clock.serial = 217;
+  state.clock.visualTimeMicros = 100'000;
+  state.clock.gameplayTimeMicros = 100'000;
+  bridge.beginFrame(state, projectionAt(217));
+  expect(bridge.timerProperty({900}) == kPlayfieldTimestampOff &&
+             bridge.timerProperty({902}) == 100'000 &&
+             bridge.timerProperty({905}) == kPlayfieldTimestampOff &&
+             bridge.timerProperty({907}) == 100'000,
+         "PomyuCharaProcessor enters judgement motions at the authored "
+         "neutral-cycle boundary");
+  bridge.discardFrame();
+
+  state.clock.serial = 218;
+  state.clock.visualTimeMicros = 350'000;
+  state.clock.gameplayTimeMicros = 350'000;
+  bridge.beginFrame(state, projectionAt(218));
+  expect(bridge.timerProperty({900}) == 350'000 &&
+             bridge.timerProperty({902}) == kPlayfieldTimestampOff &&
+             bridge.timerProperty({905}) == 350'000 &&
+             bridge.timerProperty({907}) == kPlayfieldTimestampOff,
+         "PomyuCharaProcessor holds authored judgement motions for their "
+         "own configured cycle before returning to neutral");
+  bridge.discardFrame();
+}
+
+void testIrProviderStringUsesCapturedProfileConfiguration() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = &runtime.runtime(),
+                              .mutationTable = mutations});
+  auto state = stateAt(215);
+  state.authority.irProviderName = "tachi";
+  bridge.beginFrame(state, projectionAt(215));
+  expect(bridge.stringProperty({1020}).value == "tachi",
+         "StringPropertyFactory.irname exposes the captured first configured "
+         "IR provider during gameplay");
+  bridge.discardFrame();
+}
+
+void testIrAccountStringUsesCapturedConnectedAccount() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = &runtime.runtime(),
+                              .mutationTable = mutations});
+  auto state = stateAt(216);
+  state.authority.irAccountName = "source-account";
+  bridge.beginFrame(state, projectionAt(216));
+  expect(bridge.stringProperty({1021}).value == "source-account",
+         "StringPropertyFactory.irUserName exposes the first connected IR "
+         "account rather than a local or provider name");
+  bridge.discardFrame();
+
+  state.clock.serial = 217;
+  state.authority.irAccountName.clear();
+  bridge.beginFrame(state, projectionAt(217));
+  expect(bridge.stringProperty({1021}).value.empty(),
+         "StringPropertyFactory.irUserName remains empty without a connected "
+         "account");
+  bridge.discardFrame();
+}
+
+void testSongInformationPropertiesUseImmutableSourceAnalysis() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+
+  PlayfieldChartVisualModel chart;
+  chart.staticMetadata.songInformation = {
+      .density = 0.75, .peakDensity = 1.0, .endDensity = 1.0, .total = 100.0};
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = &runtime.runtime(),
+                              .mutationTable = mutations});
+  auto state = stateAt(216);
+  bridge.beginFrame(state, projectionAt(216));
+  expect(bridge.integerProperty({360}).value == 1 &&
+             bridge.integerProperty({361}).value == 0 &&
+             bridge.integerProperty({362}).value == 1 &&
+             bridge.integerProperty({363}).value == 0 &&
+             bridge.integerProperty({364}).value == 0 &&
+             bridge.integerProperty({365}).value == 75 &&
+             bridge.integerProperty({368}).value == 100,
+         "SongInformation integer properties preserve Beatoraja's whole-"
+         "second density and decimal-part conversions");
+  expect(std::abs(bridge.floatProperty({360}, SkinFloatPropertyDomain::FloatValue)
+                      .value -
+                  1.0) < 0.000001 &&
+             std::abs(bridge.floatProperty({362},
+                                             SkinFloatPropertyDomain::FloatValue)
+                          .value -
+                      1.0) < 0.000001 &&
+             std::abs(bridge.floatProperty({367},
+                                             SkinFloatPropertyDomain::FloatValue)
+                          .value -
+                      0.75) < 0.000001 &&
+             std::abs(bridge.floatProperty({368},
+                                             SkinFloatPropertyDomain::FloatValue)
+                          .value -
+                      100.0) < 0.000001,
+         "SongInformation float properties retain Beatoraja's unrounded "
+         "analysis values");
+  bridge.discardFrame();
+}
+
+void testPersistedScorePropertiesUseScoreDataRatherThanLiveJudgements() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = &runtime.runtime(),
+                              .mutationTable = mutations});
+  auto state = stateAt(217);
+  state.authority.judgementCounters = {{PGreat, 1}, {Great, 2}};
+  state.authority.persistedScore = PlayfieldPersistedScoreState{
+      .score = 165,
+      .maxScore = 200,
+      .totalNotes = 100,
+      .judgementCounts = {80, 10, 5, 3, 2},
+      .lastPlayedUnixSeconds = 1'700'000'000};
+  state.authority.playerScoreHistory = {
+      .playCount = 17,
+      .clearCount = 11,
+      .judgementCounts = {900, 80, 7, 6, 5},
+      .playDurationSeconds = 7'384};
+  bridge.beginFrame(state, projectionAt(217));
+  expect(bridge.integerProperty({80}).value == 80 &&
+             bridge.integerProperty({81}).value == 10 &&
+             bridge.integerProperty({84}).value == 2 &&
+             bridge.integerProperty({85}).value == 80 &&
+             bridge.integerProperty({86}).value == 10 &&
+             bridge.integerProperty({89}).value == 2 &&
+             bridge.integerProperty({243}).value == 1'700'000'000,
+         "ScoreData integer counts, rates, and date use the persisted high "
+         "score record rather than current JudgeManager counters");
+  expect(bridge.integerProperty({30}).value == 17 &&
+             bridge.integerProperty({31}).value == 11 &&
+             bridge.integerProperty({32}).value == 6 &&
+             bridge.integerProperty({33}).value == 900 &&
+             bridge.integerProperty({37}).value == 5 &&
+             bridge.integerProperty({333}).value == 993 &&
+             bridge.integerProperty({17}).value == 2 &&
+             bridge.integerProperty({18}).value == 3 &&
+             bridge.integerProperty({19}).value == 4,
+         "PlayerData properties use the immutable local player-history "
+         "aggregate rather than the active chart");
+  expect(std::abs(bridge.floatProperty({85}, SkinFloatPropertyDomain::FloatValue)
+                      .value -
+                  0.8) < 0.000001 &&
+             std::abs(bridge.floatProperty({89}, SkinFloatPropertyDomain::FloatValue)
+                          .value -
+                      0.02) < 0.000001,
+         "ScoreData float rates use the persisted record denominator");
+  bridge.discardFrame();
+}
+
+void testRivalScorePropertiesRequireCapturedTargetScoreData() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = &runtime.runtime(),
+                              .mutationTable = mutations});
+  auto state = stateAt(225);
+  bridge.beginFrame(state, projectionAt(225));
+  expect(bridge.integerProperty({271}).value == 0 &&
+             bridge.integerProperty({280}).value ==
+                 std::numeric_limits<int>::min() &&
+             bridge.floatProperty({285}, SkinFloatPropertyDomain::Rate).value ==
+                 std::numeric_limits<float>::min(),
+         "ScoreDataProperty preserves zero rival score but sentinels for an "
+         "absent rival ScoreData record");
+  bridge.discardFrame();
+
+  state = stateAt(226);
+  state.authority.rivalScore = PlayfieldRivalScoreState{
+      .score = 170,
+      .totalNotes = 100,
+      .judgementCounts = {80, 10, 5, 3, 2},
+  };
+  bridge.beginFrame(state, projectionAt(226));
+  expect(bridge.integerProperty({271}).value == 170 &&
+             bridge.integerProperty({280}).value == 80 &&
+             bridge.integerProperty({284}).value == 2 &&
+             bridge.integerProperty({285}).value == 80 &&
+             bridge.integerProperty({289}).value == 2 &&
+             std::abs(bridge.floatProperty({285}, SkinFloatPropertyDomain::Rate)
+                          .value -
+                      0.8) < 0.000001 &&
+             std::abs(bridge.floatProperty({289}, SkinFloatPropertyDomain::Rate)
+                          .value -
+                      0.02) < 0.000001,
+         "rival score/count/rate selectors use the captured target ScoreData "
+         "record and its own note denominator");
+  bridge.discardFrame();
+}
+
+void testWallClockPropertiesUseTheLocalCalendar() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = &runtime.runtime(),
+                              .mutationTable = mutations});
+  auto state = stateAt(218);
+  bridge.beginFrame(state, projectionAt(218));
+  const auto year = bridge.integerProperty({21});
+  const auto month = bridge.integerProperty({22});
+  const auto day = bridge.integerProperty({23});
+  const auto hour = bridge.integerProperty({24});
+  const auto minute = bridge.integerProperty({25});
+  const auto second = bridge.integerProperty({26});
+  expect(year.supported && month.supported && day.supported && hour.supported &&
+             minute.supported && second.supported && year.value > 1970 &&
+             month.value >= 1 && month.value <= 12 && day.value >= 1 &&
+             day.value <= 31 && hour.value >= 0 && hour.value <= 23 &&
+             minute.value >= 0 && minute.value <= 59 && second.value >= 0 &&
+             second.value <= 59,
+         "wall-clock properties expose the source local Calendar fields");
+  bridge.discardFrame();
+}
+
+void testRuntimeFpsAndUptimePropertiesUseCapturedApplicationAuthority() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = &runtime.runtime(),
+                              .mutationTable = mutations});
+  auto state = stateAt(224);
+  state.authority.currentFramesPerSecond = 144;
+  state.authority.applicationUptimeMillis = 3'661'999;
+  bridge.beginFrame(state, projectionAt(224));
+  expect(bridge.integerProperty({20}).supported &&
+             bridge.integerProperty({20}).value == 144 &&
+             bridge.integerProperty({27}).value == 1 &&
+             bridge.integerProperty({28}).value == 1 &&
+             bridge.integerProperty({29}).value == 1,
+         "current FPS and boot-time fields use the captured live application "
+         "authority with Beatoraja's integer divisions");
+  bridge.discardFrame();
+}
+
+void testStartInputTimerUsesPinnedSkinTiming() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  model.model.timing.inputMillis = 150;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = &runtime.runtime(),
+                              .mutationTable = mutations});
+
+  auto state = stateAt(217);
+  state.sceneStartMicros = 0;
+  state.clock.visualTimeMicros = 150'000;
+  bridge.beginFrame(state, projectionAt(217));
+  expect(bridge.timerProperty({1}) == kPlayfieldTimestampOff,
+         "TIMER_STARTINPUT stays off at the authored input boundary because "
+         "BMSPlayer uses a strict greater-than comparison");
+  bridge.discardFrame();
+
+  state.clock.serial = 218;
+  state.clock.visualTimeMicros = 150'001;
+  bridge.beginFrame(state, projectionAt(218));
+  expect(bridge.timerProperty({1}) == 150'001,
+         "TIMER_STARTINPUT preserves the first post-delay gameplay-clock "
+         "timestamp rather than the authored delay");
+  bridge.discardFrame();
+}
+
+void testFailureTimerUsesCapturedSurvivalFailureEvent() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = &runtime.runtime(),
+                              .mutationTable = mutations});
+  auto state = stateAt(219);
+  state.sceneStartMicros = 0;
+  state.clock.visualTimeMicros = 2'000'000;
+  bridge.beginFrame(state, projectionAt(219));
+  expect(bridge.timerProperty({3}) == kPlayfieldTimestampOff,
+         "TIMER_FAILED stays off when no captured survival failure exists");
+  bridge.discardFrame();
+
+  state.clock.serial = 220;
+  state.authority.failureAnimationActive = true;
+  bridge.beginFrame(state, projectionAt(220));
+  expect(bridge.timerProperty({3}) == 2'000'000,
+         "TIMER_FAILED starts from the captured active-gauge failure frame, "
+         "not an inferred display gauge threshold");
+  bridge.discardFrame();
+}
+
+void testRhythmTimerUsesPinnedSectionAndBpmAccumulator() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+
+  PlayfieldChartVisualModel chart;
+  chart.timelines = {
+      {.timeMicros = 1'000'000, .bpm = 60.0, .sectionLine = true},
+      {.timeMicros = 2'000'000, .bpm = 60.0, .sectionLine = true},
+  };
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .configuration = configuration,
+                              .runtime = &runtime.runtime(),
+                              .mutationTable = mutations});
+
+  auto state = stateAt(230);
+  state.sceneStartMicros = 0;
+  state.clock.visualTimeMicros = 0;
+  state.clock.gameplayTimeMicros = 0;
+  state.clock.playTimer = {.active = true,
+                           .startMicros = 0,
+                           .elapsedMillisExact = true};
+  state.authority.currentBpm = 60.0;
+  bridge.beginFrame(state, projectionAt(230));
+  bridge.discardFrame();
+
+  state.clock.serial = 231;
+  state.clock.visualTimeMicros = 1'000'000;
+  state.clock.gameplayTimeMicros = 1'000'000;
+  bridge.beginFrame(state, projectionAt(231));
+  expect(bridge.timerProperty({140}) == 1'000'000,
+         "TIMER_RHYTHM resets to the current skin clock at a section line");
+  bridge.discardFrame();
+
+  state.clock.serial = 232;
+  state.clock.visualTimeMicros = 1'250'000;
+  state.clock.gameplayTimeMicros = 1'250'000;
+  state.authority.currentBpm = 120.0;
+  bridge.beginFrame(state, projectionAt(232));
+  expect(bridge.timerProperty({140}) == 750'000,
+         "TIMER_RHYTHM advances with RhythmTimerProcessor's integer BPM accumulator");
+  bridge.discardFrame();
+
+  state.clock.serial = 233;
+  state.clock.visualTimeMicros = 2'000'000;
+  state.clock.gameplayTimeMicros = 2'000'000;
+  bridge.beginFrame(state, projectionAt(233));
+  expect(bridge.timerProperty({140}) == 2'000'000,
+         "TIMER_RHYTHM applies its section reset after writing the accumulated timer");
+  bridge.discardFrame();
+}
+
+void testFavoriteChartImageIndexUsesCapturedRepositoryState() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = &runtime.runtime(),
+                              .mutationTable = mutations});
+  auto state = stateAt(221);
+  state.authority.songReviewFavorite = 2;
+  bridge.beginFrame(state, projectionAt(221));
+  expect(bridge.integerProperty({90}, SkinIntegerPropertyDomain::ImageIndex)
+                 .supported &&
+             bridge.integerProperty({90}, SkinIntegerPropertyDomain::ImageIndex)
+                     .value ==
+                 1,
+         "favorite_chart uses the captured chart repository state rather than "
+         "the generic image-index fallback");
+  bridge.discardFrame();
+}
+
+void testSongReviewImageIndexesUsePinnedBitmaskStates() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = &runtime.runtime(),
+                              .mutationTable = mutations});
+  auto state = stateAt(222);
+  state.authority.songReviewFavorite = 3;
+  bridge.beginFrame(state, projectionAt(222));
+  expect(bridge.integerProperty({89}, SkinIntegerPropertyDomain::ImageIndex)
+                 .value == 1 &&
+             bridge.integerProperty({90}, SkinIntegerPropertyDomain::ImageIndex)
+                     .value == 1,
+         "SongReview favourite bits select state one for both image indexes");
+  bridge.discardFrame();
+
+  state.clock.serial = 223;
+  state.authority.songReviewFavorite = 12;
+  bridge.beginFrame(state, projectionAt(223));
+  expect(bridge.integerProperty({89}, SkinIntegerPropertyDomain::ImageIndex)
+                 .value == 2 &&
+             bridge.integerProperty({90}, SkinIntegerPropertyDomain::ImageIndex)
+                     .value == 2,
+         "SongReview invisible bits take precedence for both image indexes");
+  bridge.discardFrame();
+}
+
+void testDifficultyTableStringsUseCapturedSelectionContext() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = &runtime.runtime(),
+                              .mutationTable = mutations});
+  auto state = stateAt(224);
+  state.authority.tableName = "Example Difficulty Table";
+  state.authority.tableLevel = "★12";
+  state.authority.tableFullName = "★12Example Difficulty Table";
+  bridge.beginFrame(state, projectionAt(224));
+  expect(bridge.stringProperty({1001}).value == "Example Difficulty Table" &&
+             bridge.stringProperty({1002}).value == "★12" &&
+             bridge.stringProperty({1003}).value ==
+                 "★12Example Difficulty Table",
+         "table string selectors preserve PlayerResource's level-before-name "
+         "concatenation");
+  bridge.discardFrame();
+}
+
+void testPlayerConfigurationStringsUseCapturedSourceValues() {
+  // StringPropertyFactory reads these four PlayerConfig values in every
+  // gameplay state.  The display strings below are the pinned enum outputs;
+  // sort and replication stay the exact configured identifiers.
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = &runtime.runtime(),
+                              .mutationTable = mutations});
+  auto state = stateAt(233);
+  state.authority.modeFilterName = "14KEY";
+  state.authority.sortId = "MISSCOUNT";
+  state.authority.difficultyFilterName = "SPEED CHANGE CHART";
+  state.authority.chartReplicationMode = "RIVALCHART";
+  bridge.beginFrame(state, projectionAt(233));
+
+  expect(bridge.stringProperty({60}).value == "14KEY" &&
+             bridge.stringProperty({"sort"}).value == "MISSCOUNT" &&
+             bridge.stringProperty({62}).value == "SPEED CHANGE CHART" &&
+             bridge.stringProperty({"chartreplication"}).value ==
+                 "RIVALCHART",
+         "source PlayerConfig strings survive immutable gameplay capture");
+}
+
+void testConfiguredTargetNameNeighborsFollowPinnedTargetRing() {
+  // StringPropertyFactory resolves 200-209 as the ten preceding target-list
+  // positions and 210-219 as the following ten positions around targetid.
+  // These literals exercise TargetProperty's static, IR, missing-rival, and
+  // unknown-id-to-MAX name branches without using Aso's pacemaker labels.
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = &runtime.runtime(),
+                              .mutationTable = mutations});
+  auto state = stateAt(234);
+  state.authority.skinTargetId = "RANK_NEXT";
+  state.authority.skinTargetList = {
+      "RATE_A", "RANK_NEXT", "IR_NEXT_3", "RIVAL_1", "unknown-target"};
+  bridge.beginFrame(state, projectionAt(234));
+
+  expect(bridge.stringProperty({200}).value == "NEXT RANK" &&
+             bridge.stringProperty({"targetnamep1"}).value == "RANK A" &&
+             bridge.stringProperty({210}).value == "IR NEXT 3RANK" &&
+             bridge.stringProperty({"targetnamen2"}).value == "NO RIVAL" &&
+             bridge.stringProperty({212}).value == "MAX" &&
+             bridge.stringProperty({213}).value == "RANK A",
+         "configured target neighbours preserve the pinned target-list ring "
+         "and TargetProperty display branches");
+  bridge.discardFrame();
+
+  state = stateAt(235);
+  state.authority.skinTargetId = "RANK_NEXT";
+  state.authority.skinTargetList = {"RATE_ 50 ", "RANK_NEXT"};
+  bridge.beginFrame(state, projectionAt(235));
+  expect(bridge.stringProperty({210}).value == "SCORE RATE 50.0%",
+         "custom RATE target labels retain Java Float.parseFloat whitespace "
+         "semantics");
+}
+
+void testTargetScoreStringsFollowPinnedTargetSource() {
+  // During BMSPlayer gameplay, StringPropertyFactory.rival and .target both
+  // read targetScoreData.player. These cases cover the source's static,
+  // local-only rival, no-ranking IR, and practice branches without treating
+  // Aso's pacemaker label as a player name.
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = &runtime.runtime(),
+                              .mutationTable = mutations});
+  auto state = stateAt(236);
+  state.authority.gameplayMode = PlayfieldGameplayMode::Play;
+  state.authority.skinTargetId = "RATE_AA";
+  bridge.beginFrame(state, projectionAt(236));
+  expect(bridge.stringProperty({1}).value == "RANK AA" &&
+             bridge.stringProperty({"target"}).value == "RANK AA",
+         "static target ScoreData player labels drive both gameplay strings");
+  bridge.discardFrame();
+
+  state = stateAt(237);
+  state.authority.gameplayMode = PlayfieldGameplayMode::Play;
+  state.authority.skinTargetId = "RIVAL_RANK_1";
+  state.authority.persistedScore = PlayfieldPersistedScoreState{.score = 42};
+  bridge.beginFrame(state, projectionAt(237));
+  expect(bridge.stringProperty({1}).value.empty() &&
+             bridge.stringProperty({3}).value.empty(),
+         "local-only rival rank preserves the pinned empty self-player name");
+  bridge.discardFrame();
+
+  state = stateAt(238);
+  state.authority.gameplayMode = PlayfieldGameplayMode::Play;
+  state.authority.skinTargetId = "IR_NEXT_1";
+  bridge.beginFrame(state, projectionAt(238));
+  expect(bridge.stringProperty({1}).value == "NO DATA" &&
+             bridge.stringProperty({3}).value == "NO DATA",
+         "IR targets retain TargetProperty's no-RankingData player label");
+  bridge.discardFrame();
+
+  state = stateAt(239);
+  state.authority.gameplayMode = PlayfieldGameplayMode::Practice;
+  state.authority.skinTargetId = "MAX";
+  bridge.beginFrame(state, projectionAt(239));
+  expect(bridge.stringProperty({1}).value.empty() &&
+             bridge.stringProperty({3}).value.empty(),
+         "practice keeps BMSPlayer's absent target-score strings empty");
+}
+
+void testChartDocumentBooleansUseCapturedLibraryMetadata() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = &runtime.runtime(),
+                              .mutationTable = mutations});
+  auto state = stateAt(222);
+  state.authority.chartHasDocument = true;
+  bridge.beginFrame(state, projectionAt(222));
+  expect(bridge.booleanProperty({174}).supported &&
+             !bridge.booleanProperty({174}).value &&
+             bridge.booleanProperty({175}).supported &&
+             bridge.booleanProperty({175}).value,
+         "song_text and song_no_text mirror SongData.CONTENT_TEXT");
+  bridge.discardFrame();
+
+  state = stateAt(223);
+  bridge.beginFrame(state, projectionAt(223));
+  expect(bridge.booleanProperty({174}).supported &&
+             bridge.booleanProperty({174}).value &&
+             bridge.booleanProperty({175}).supported &&
+             !bridge.booleanProperty({175}).value,
+         "document booleans remain complementary when the library flag is off");
+  bridge.discardFrame();
 }
 
 void testScoreAndComboTimersUseCapturedGameplayState() {
@@ -1147,7 +2379,7 @@ void testScoreAndComboTimersUseCapturedGameplayState() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto state = stateAt(208);
@@ -1220,7 +2452,7 @@ void testPlayTimerPropertiesMatchPinnedJavaConversions() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto state = stateAt(211);
@@ -1410,7 +2642,7 @@ void testReadyAndLiveTimersUseTheSharedSkinStateClock() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto beforeReady = stateAt(218);
@@ -1456,7 +2688,7 @@ void testClearAndFullComboTimersFollowPinnedBmsPlayerState() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   // BMSPlayer switches TIMER_ENDOFNOTE_1P only after its integer play clock
@@ -1513,9 +2745,18 @@ void testClearAndFullComboTimersFollowPinnedBmsPlayerState() {
   musicEnded.clock.visualTimeMicros = 11'001'000;
   musicEnded.clock.gameplayTimeMicros = 10'001'000;
   bridge.beginFrame(musicEnded, projectionAt(227));
+  bool pomyuMotionsStopped = true;
+  for (int id = 900; id <= 907; ++id) {
+    pomyuMotionsStopped =
+        pomyuMotionsStopped &&
+        bridge.timerProperty({id}) == kPlayfieldTimestampOff;
+  }
   expect(bridge.timerProperty({908}) == 10'001'000 &&
-             bridge.timerProperty({2}) == kPlayfieldTimestampOff,
-         "music-end starts after the exact complete playtime before fadeout");
+             bridge.timerProperty({2}) == kPlayfieldTimestampOff &&
+             pomyuMotionsStopped &&
+             bridge.timerProperty({909}) == kPlayfieldTimestampOff,
+         "music-end starts after the exact complete playtime before fadeout "
+         "and stops every Pomyu motion timer");
   bridge.discardFrame();
 
   auto fadingOut = musicEnded;
@@ -1552,7 +2793,7 @@ void testPlayTimerVisualRebaseSaturatesWithoutLosingCancellation() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   const auto timer = [&](std::uint64_t serial, std::int64_t start,
@@ -1591,8 +2832,7 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
                 .subartist = "subartist",
                 .fullArtist = "artist subartist",
                 .genre = "genre",
-                .auditedStringProperties = {{12, "full title"},
-                                            {1003, "leveltable"}}};
+                .auditedStringProperties = {{12, "full title"}}};
   chart.staticMetadata = {.difficulty = 3,
                           .judgeRank = 70,
                           .minimumBpm = 120.9,
@@ -1618,7 +2858,7 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
 
   auto state = stateAt(101);
@@ -1658,6 +2898,11 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
       {Good, {.fast = 6, .slow = 5}},   {Bad, {.fast = 8, .slow = 7}},
       {Kpoor, {.fast = 10, .slow = 9}}, {Poor, {.fast = 12, .slow = 11}}};
   state.authority.loadingState = PlayfieldLoadingState::Loaded;
+  state.authority.stageFileAvailable = true;
+  state.authority.backBmpAvailable = true;
+  state.authority.tableName = "table";
+  state.authority.tableLevel = "level";
+  state.authority.tableFullName = "leveltable";
   state.configuration.visibleTimeDurationMilliseconds = 667;
   state.lanes.resize(8);
   for (std::size_t index = 0; index < state.lanes.size(); ++index) {
@@ -1850,7 +3095,7 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
                  "artist subartist" &&
              bridge.stringProperty({std::string{"tablefull"}}).value ==
                  "leveltable",
-         "pinned full artist and table text use immutable chart metadata");
+         "pinned full artist and table text use their authoritative states");
   const auto practiceText =
       bridge.stringProperty({std::string{"practice_item1"}});
   expect(practiceText.supported && practiceText.value.empty(),
@@ -1863,7 +3108,9 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   }
   for (const int id : {1, 2, 199}) {
     const auto offset = bridge.offsetProperty(id);
-    expect(offset.supported && offset.value == ConfigOffset{},
+    expect(offset.supported && offset.value.x == 0.0 && offset.value.y == 0.0 &&
+               offset.value.w == 0.0 && offset.value.h == 0.0 &&
+               offset.value.r == 0.0 && offset.value.a == 0.0,
            "every unconfigured pinned SkinOffset ID returns Beatoraja's "
            "zero-initialized offset");
   }
@@ -1891,7 +3138,7 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   }
   const auto diagnosticCount = bridge.diagnostics().size();
   for (const int id : {2, 3, 11, 40, 42, 44, 48, 70, 71, 72, 73, 74,
-                       75, 76, 77, 140, 143, 172, 173}) {
+                       75, 76, 77, 143, 172, 173}) {
     expect(bridge.timerProperty({id}) == INT64_MIN,
            "selected timer without an authoritative source is off");
   }
@@ -1912,9 +3159,21 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   state = stateAt(102);
   state.authority.laneCoverEnabled = true;
   state.authority.laneCoverPercent = 0;
+  state.authority.stageFileAvailable = false;
+  state.authority.backBmpAvailable = false;
   state.lastJudge = JudgeResult(Great, 20);
   state.fastSlowMicros = -20;
   bridge.beginFrame(state, projectionAt(102));
+  expect(bridge.booleanProperty({190}).supported &&
+             bridge.booleanProperty({190}).value &&
+             bridge.booleanProperty({191}).supported &&
+             !bridge.booleanProperty({191}).value &&
+             bridge.booleanProperty({194}).supported &&
+             bridge.booleanProperty({194}).value &&
+             bridge.booleanProperty({195}).supported &&
+             !bridge.booleanProperty({195}).value,
+         "stagefile and backbmp options require a decoded gameplay resource, "
+         "not merely a declared chart path");
   expect(bridge.floatProperty({4}).supported &&
              bridge.floatProperty({4}).value == 0.0,
          "enabled zero lane cover remains zero");
@@ -1973,7 +3232,7 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   PlaySkinStateBridge unaudited({.chartModel = unauditedChart,
                                  .model = &model,
                                  .configuration = configuration,
-                                 .runtime = runtime.runtime(),
+                                 .runtime = &runtime.runtime(),
                                  .mutationTable = mutations});
   unaudited.beginFrame(stateAt(108), projectionAt(108));
   expect(!unaudited.stringProperty({12}).supported,
@@ -1993,7 +3252,7 @@ void testEmptyCustomObjectsStayZeroCost() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
   bridge.beginFrame(stateAt(91), projectionAt(91));
   const auto update = bridge.updateCustomObjects();
@@ -2046,7 +3305,7 @@ void testCustomTimersPrecedeAutomaticEventsInAuthoredOrder() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
   bridge.beginFrame(stateAt(111), projectionAt(111));
   expect(runtime.runtime().beginFrame(111).ok,
@@ -2099,7 +3358,7 @@ void testCustomEventsAcceptManualAritiesAndRollbackCriticalFrames() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
   bridge.beginFrame(stateAt(112), projectionAt(112));
   expect(runtime.runtime().beginFrame(112).ok,
@@ -2153,7 +3412,7 @@ void testAutomaticCustomEventUsesTheCapturedFrameClockForMinimumInterval() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
   auto runFrame = [&](std::uint64_t serial, std::int64_t visualMicros) {
     auto state = stateAt(serial);
@@ -2219,7 +3478,7 @@ void testCustomObjectBudgetStopsLaterEventsAndRollsBackWrites() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
   bridge.beginFrame(stateAt(113), projectionAt(113));
   expect(runtime.runtime().beginFrame(113).ok,
@@ -2254,6 +3513,18 @@ void testFloatWritersResolveLocallyAndRollbackCallbackMutations() {
        .source = runtime.callback("excessive_arity_writer")},
       {.id = SkinFloatWriterId{7},
        .source = runtime.callback("stage_then_fail_writer")},
+      {.id = SkinFloatWriterId{8},
+       .source = SkinBuiltinPropertySelector{.value = 17}},
+      {.id = SkinFloatWriterId{9},
+       .source = SkinBuiltinPropertySelector{.value = 18}},
+      {.id = SkinFloatWriterId{10},
+       .source = SkinBuiltinPropertySelector{.value = 19}},
+      {.id = SkinFloatWriterId{11},
+       .source = SkinBuiltinPropertySelector{.value = 20}},
+  };
+  model.model.stringWriters = {
+      {.id = SkinStringWriterId{1},
+       .source = SkinBuiltinPropertySelector{.value = 30}},
   };
   BeatorajaSkinConfiguration configuration;
   auto rules = makePinnedSkinEventMutationTableV1();
@@ -2266,9 +3537,11 @@ void testFloatWritersResolveLocallyAndRollbackCallbackMutations() {
   PlaySkinStateBridge bridge({.chartModel = chart,
                               .model = &model,
                               .configuration = configuration,
-                              .runtime = runtime.runtime(),
+                              .runtime = &runtime.runtime(),
                               .mutationTable = mutations});
-  bridge.beginFrame(stateAt(121), projectionAt(121));
+  auto state = stateAt(121);
+  state.authority.practiceMenu = practice::SkinMenuState{};
+  bridge.beginFrame(state, projectionAt(121));
   expect(runtime.runtime().beginFrame(121).ok,
          "writer transaction shares the renderer-owned Lua frame budget");
 
@@ -2286,6 +3559,20 @@ void testFloatWritersResolveLocallyAndRollbackCallbackMutations() {
              bridge.invokeWriter(SkinFloatWriterId{999}, 0.5).status ==
                  SkinHostCallStatus::Unsupported,
          "built-in and missing writer sources fail closed in the model");
+  for (const auto [writer, input] :
+       std::array{std::pair{SkinFloatWriterId{8}, -0.5},
+                  std::pair{SkinFloatWriterId{9}, 0.5},
+                  std::pair{SkinFloatWriterId{10}, 1.5}}) {
+    const auto result = bridge.invokeWriter(writer, input);
+    expect(result.status == SkinHostCallStatus::Completed,
+           "pinned audio writer is staged as a built-in gameplay mutation");
+  }
+  expect(bridge.invokeWriter(SkinFloatWriterId{11}, 0.5).status ==
+             SkinHostCallStatus::Completed,
+         "practice-position writer stages the source viewport mutation");
+  expect(bridge.invokeWriter(SkinStringWriterId{1}, "query").status ==
+             SkinHostCallStatus::Completed,
+         "searchword StringWriter is an accepted no-op outside MusicSelector");
 
   for (const double value : {-2.0, 2.0, 0.25}) {
     const auto result = bridge.invokeWriter(SkinFloatWriterId{1}, value);
@@ -2309,15 +3596,32 @@ void testFloatWritersResolveLocallyAndRollbackCallbackMutations() {
          "authority-changing and unknown direct events remain unsupported");
   const auto committed = bridge.commitFrame();
   expect(committed.frameSerial == 121 &&
-             committed.orderedMutations.size() == 3,
+             committed.orderedMutations.size() == 7,
          "failed callbacks roll back only their savepoint before one commit");
+  const std::array expectedAudioWrites{
+      SetSkinAudioVolume{.target = SkinAudioVolumeWriterTarget::Master,
+                         .value = 0.0F},
+      SetSkinAudioVolume{.target = SkinAudioVolumeWriterTarget::Keysound,
+                         .value = 0.5F},
+      SetSkinAudioVolume{.target = SkinAudioVolumeWriterTarget::Bgm,
+                         .value = 1.0F},
+  };
+  for (std::size_t index = 0; index < expectedAudioWrites.size(); ++index) {
+    const auto *audio = std::get_if<SetSkinAudioVolume>(
+        &committed.orderedMutations[index]);
+    expect(audio != nullptr && audio->target == expectedAudioWrites[index].target &&
+               audio->value == expectedAudioWrites[index].value,
+           "successful built-in audio writers preserve pinned target and "
+           "clamped value order");
+  }
+  const auto *practiceScroll = std::get_if<SetPracticeItemScroll>(
+      &committed.orderedMutations[expectedAudioWrites.size()]);
+  expect(practiceScroll != nullptr && practiceScroll->position == 0.5F,
+         "practice-position preserves its normalized authored value");
   const std::array<int, 3> expectedArguments{0, 100, 25};
-  for (std::size_t index = 0;
-       index < committed.orderedMutations.size() &&
-       index < expectedArguments.size();
-       ++index) {
-    const auto *presentation =
-        std::get_if<SessionPresentationWrite>(&committed.orderedMutations[index]);
+  for (std::size_t index = 0; index < expectedArguments.size(); ++index) {
+    const auto *presentation = std::get_if<SessionPresentationWrite>(
+        &committed.orderedMutations[index + expectedAudioWrites.size() + 1]);
     expect(presentation != nullptr && presentation->eventId == 900 &&
                presentation->argumentCount == 1 &&
                presentation->arguments[0] == expectedArguments[index],
@@ -2333,17 +3637,43 @@ void testFloatWritersResolveLocallyAndRollbackCallbackMutations() {
 
 int main() {
   testPinnedMutationTableMatchesFrozenFixtureExhaustively();
+  testStaticBridgeFrameDoesNotRequireLuaRuntime();
+  testGraphViewBorrowsTheCapturedImmutableStorage();
   testDurationBindingsUsePinnedLaneRendererFormula();
   testZeroHispeedDurationBindingsFollowJavaCurrentDuration();
+  testDurationBindingsUseFrameLocalSpeedObjectMultiplier();
   testHispeedBindingsUsePinnedIntegerAndFloatProperties();
   testIntegerPropertyFactoryDomainNeverRejectsGameplaySkins();
   testMarkProcessedNoteImageIndexTracksPlayerConfiguration();
+  testUndefinedLongNoteImageIndexMatchesBeatorajaPlayerConfig();
   testBridgeOwnsSnapshotAndClosesEachFrameExactlyOnce();
   testFramePropertiesUseAuthoritativeGaugeAndTimerRules();
   testGameplayModeAndLoadingBooleanProperties();
   testExistingGameplayStatePropertyWiring();
+  testPracticeMenuSelectorsAndEventsRequireCapturedMenuState();
+  testLiftHiddenOffsetsFollowPinnedLaneRenderer();
   testRemainingDirectGameplayStatePropertyWiring();
   testLongNoteHoldTimersUseCapturedLaneState();
+  testExtendedPlayerOneLaneTimersUsePinnedSkinOffsets();
+  testPomyuTimersFollowPinnedDefaultProcessorCycles();
+  testPomyuTimersUseAuthoredMotionCycles();
+  testIrProviderStringUsesCapturedProfileConfiguration();
+  testIrAccountStringUsesCapturedConnectedAccount();
+  testSongInformationPropertiesUseImmutableSourceAnalysis();
+  testPersistedScorePropertiesUseScoreDataRatherThanLiveJudgements();
+  testRivalScorePropertiesRequireCapturedTargetScoreData();
+  testWallClockPropertiesUseTheLocalCalendar();
+  testRuntimeFpsAndUptimePropertiesUseCapturedApplicationAuthority();
+  testStartInputTimerUsesPinnedSkinTiming();
+  testFailureTimerUsesCapturedSurvivalFailureEvent();
+  testRhythmTimerUsesPinnedSectionAndBpmAccumulator();
+  testFavoriteChartImageIndexUsesCapturedRepositoryState();
+  testSongReviewImageIndexesUsePinnedBitmaskStates();
+  testDifficultyTableStringsUseCapturedSelectionContext();
+  testPlayerConfigurationStringsUseCapturedSourceValues();
+  testConfiguredTargetNameNeighborsFollowPinnedTargetRing();
+  testTargetScoreStringsFollowPinnedTargetSource();
+  testChartDocumentBooleansUseCapturedLibraryMetadata();
   testScoreAndComboTimersUseCapturedGameplayState();
   testPlayTimerPropertiesMatchPinnedJavaConversions();
   testReadyAndLiveTimersUseTheSharedSkinStateClock();

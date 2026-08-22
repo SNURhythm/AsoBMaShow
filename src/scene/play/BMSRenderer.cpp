@@ -747,6 +747,7 @@ BMSRenderer::BMSRenderer(
   // late-POOR processed-note lifecycle.
   double previousBpm = chart->Meta.Bpm;
   double previousScroll = 1.0;
+  double previousSpeed = 1.0;
   authoredTimelineOrdinal = 0;
   for (const auto &measure : chart->Measures) {
     for (const auto &timeLine : measure->TimeLines) {
@@ -784,10 +785,12 @@ BMSRenderer::BMSRenderer(
           terminalScrollContinuation ||
           gameplay_scroll_geometry::shouldKeepRenderTimeline(
               previousBpm, timeLine->Bpm, timeLine->GetStopDuration(),
-              previousScroll, timeLine->Scroll, timeLine->IsFirstInMeasure,
+              previousScroll, timeLine->Scroll, previousSpeed, timeLine->Speed,
+              timeLine->HasSpeedObject, timeLine->IsFirstInMeasure,
               hasPlayableNote, hasInvisibleNote, hasLandmine);
       previousBpm = timeLine->Bpm;
       previousScroll = timeLine->Scroll;
+      previousSpeed = timeLine->Speed;
       ++authoredTimelineOrdinal;
       if (!keep) {
         continue;
@@ -1078,6 +1081,12 @@ std::unique_ptr<TextView> BMSRenderer::createAutoPlayMarkText() {
   text->setBorderWidth(1);
   text->setCornerRadius(ui_theme::controlRadius());
   return text;
+}
+
+void BMSRenderer::updateJudgeTimingWindows(
+    const std::map<Judgement, std::pair<long long, long long>> &windows) {
+  judgementIndicator.updateTimingWindows(windows);
+  latePoorTiming = latePoorTimingFromWindows(windows);
 }
 
 void BMSRenderer::drawTitle(RenderContext &context) const {
@@ -2346,6 +2355,7 @@ BuiltInRendererTraversal BMSRenderer::builtInProjectionTraversal() const {
   const float hispeed =
       configuredHispeed *
       static_cast<float>(gameplay_timing::playbackTravelScale(playbackRate));
+  const float speedMultiplier = static_cast<float>(currentSpeedMultiplier);
   const float laneHeight = std::max(0.001F, upperBound - judgeY);
   const float hiddenRatio =
       static_cast<float>(noteStartPositionPercent) / 100.0F;
@@ -2357,9 +2367,10 @@ BuiltInRendererTraversal BMSRenderer::builtInProjectionTraversal() const {
       // Beatoraja changes the live Hi-Speed when cover moves.  Keeping that
       // factor in the raw speed preserves the built-in product while giving
       // skins the same LaneRenderer::getHispeed() semantics.
-      .rxhs = laneHeight * hispeed,
+      .rxhs = laneHeight * hispeed * speedMultiplier,
       .configuredHispeed = configuredHispeed,
-      .hispeed = hispeed,
+      .baseHispeed = hispeed,
+      .hispeed = hispeed * speedMultiplier,
       .noteVisibleUpperBound = visibleUpper};
   traversal.playableLaneOrder.reserve(laneOrder.size());
   const auto appendGroup = [this, &traversal](const auto &group) {
@@ -2397,7 +2408,8 @@ int BMSRenderer::effectiveVisibleTimeGreenNumber() const {
           : visibleTimeReferenceBpm();
   const auto duration = gameplay_visible_time::currentDurationMilliseconds(
       bpm, builtInProjectionTraversal().configuredHispeed,
-      noteStartPositionPercent, laneCoverEnabled, currentScrollRate);
+      noteStartPositionPercent, laneCoverEnabled, currentScrollRate,
+      currentSpeedMultiplier);
   return duration ? gameplay_visible_time::durationToGreenNumber(*duration)
                   : AppSettings::durationMillisecondsToGreenNumber(
                         visibleTimeDurationMilliseconds);
@@ -2411,7 +2423,8 @@ std::string BMSRenderer::laneCoverVisibleTimeLabel() const {
                            : visibleTimeReferenceBpm();
     const auto duration = gameplay_visible_time::currentDurationMilliseconds(
         bpm, builtInProjectionTraversal().configuredHispeed,
-        noteStartPositionPercent, laneCoverEnabled, currentScrollRate);
+        noteStartPositionPercent, laneCoverEnabled, currentScrollRate,
+        currentSpeedMultiplier);
     const int milliseconds = duration.value_or(
         std::max(1, visibleTimeDurationMilliseconds));
     return std::to_string(milliseconds) + " ms";
@@ -2845,6 +2858,7 @@ PresentationFrameOutcome BMSRenderer::prepareFrame(
     currentScrollRate = std::isfinite(authority.currentScrollRate)
                             ? authority.currentScrollRate
                             : 1.0;
+    currentSpeedMultiplier = authority.currentSpeedMultiplier;
     synchronizeCapturedJudgementHud(capturedState);
     setGaugeStatus(authority.gaugeType, authority.gaugeAutoShift,
                    authority.currentGauge, authority.gaugeRules);

@@ -29,6 +29,7 @@ ScoreProvenanceBuildInput sampleInput(const std::string &hashSuffix = "one") {
   input.chartMeta.SHA256 = "sha256-" + hashSuffix;
   input.chartMeta.Rank = 1;
   input.chartMeta.TotalNotes = 1000;
+  input.chartMeta.PlayLength = 12'999'999;
   input.chartMeta.HasTotal = true;
   input.chartMeta.Total = 200.5;
   input.chartMeta.RandomSeed = 42U;
@@ -99,7 +100,7 @@ void testRulesetContract() {
 }
 
 void testSchemaAndInputDeviceVocabularyContract() {
-  assert(ScoreProvenance::kSchemaVersion == 5);
+  assert(ScoreProvenance::kSchemaVersion == 6);
   assert(static_cast<int>(InputDeviceCategory::Keyboard) == 0);
   assert(static_cast<int>(InputDeviceCategory::GameController) == 1);
   assert(static_cast<int>(InputDeviceCategory::Joystick) == 2);
@@ -224,6 +225,20 @@ void testPlaybackAndJudgeProvenanceValidation() {
   maximumPlayback.playback = {.percent = 200,
                               .mode = audio::PlaybackMode::TimeStretch};
   assertValid(maximumPlayback);
+
+  auto maximumDuration = sampleVerifiedProvenance();
+  maximumDuration.stages.front().playDurationSeconds =
+      ScoreStageProvenance::kMaximumPlayDurationSeconds;
+  assertValid(maximumDuration);
+
+  auto negativeDuration = sampleVerifiedProvenance();
+  negativeDuration.stages.front().playDurationSeconds = -1;
+  assertInvalid(negativeDuration);
+
+  auto excessiveDuration = sampleVerifiedProvenance();
+  excessiveDuration.stages.front().playDurationSeconds =
+      ScoreStageProvenance::kMaximumPlayDurationSeconds + 1;
+  assertInvalid(excessiveDuration);
 
   auto invalidPlayback = sampleVerifiedProvenance();
   invalidPlayback.playback.percent = 49;
@@ -398,6 +413,26 @@ void testVersionOneMigratesToCurrentSchema() {
          error.find("Unsupported") != std::string::npos);
 }
 
+void testPreDurationSchemaWirePayloadSurvivesRoundTrip() {
+  auto legacy = nlohmann::ordered_json::parse(
+      serializeScoreProvenance(sampleVerifiedProvenance("legacy-wire")));
+  legacy["schemaVersion"] =
+      ScoreProvenance::kPlayDurationSchemaVersion - 1;
+  for (auto &stage : legacy["stages"]) {
+    stage.erase("playDurationSeconds");
+  }
+  const std::string serialized = legacy.dump();
+
+  std::string error;
+  const auto decoded = deserializeScoreProvenance(serialized, error);
+  assert(error.empty());
+  assert(decoded.has_value());
+  assert(decoded->schemaVersion == ScoreProvenance::kSchemaVersion);
+  assert(decoded->fingerprintSchemaVersion ==
+         ScoreProvenance::kPlayDurationSchemaVersion - 1);
+  assert(serializeScoreProvenance(*decoded) == serialized);
+}
+
 void testVersionZeroDescriptorRemainsLegacy() {
   auto root = nlohmann::json::parse(
       serializeScoreProvenance(sampleVerifiedProvenance("legacy-ruleset")));
@@ -443,6 +478,7 @@ void testSchemaFourPolicyProofRoundTrip() {
     assert(value.stages.size() == 1);
     const auto &stage = value.stages.front();
     assert(stage.totalNotes == 1000);
+    assert(stage.playDurationSeconds == 12);
     assert(stage.authoredGaugeTotal == 200.5);
     assert(stage.effectiveGaugeTotal == input.effectiveGaugeTotal);
     assert(stage.candidateSelection == input.candidateSelection);
@@ -459,6 +495,7 @@ void testSchemaFourPolicyProofRoundTrip() {
     assert(json.find("\"context\":\"long-scratch-tail\"") !=
            std::string::npos);
     assert(json.find("\"effectiveGaugeTotal\":") != std::string::npos);
+    assert(json.find("\"playDurationSeconds\":12") != std::string::npos);
 
     std::string error;
     const auto decoded = deserializeScoreProvenance(json, error);
@@ -984,6 +1021,34 @@ void testCourseSessionAggregatesRecordedStagesByIndex() {
   assert(captured.eligibility == ScoreEligibility::Modified);
 }
 
+void testTargetScoreOptionUsesPinnedScoreDataEncoding() {
+  result_persistence::ChartScoreWrite target;
+  target.provenance.player1.option = "RANDOM";
+  target.provenance.player2.option = "SPIRAL";
+  target.provenance.doublePlayFlip = true;
+
+  bms_parser::ChartMeta singlePlayer;
+  singlePlayer.IsDP = false;
+  assert(targetScorePlayOption(target, singlePlayer) == 2);
+
+  bms_parser::ChartMeta doublePlayer;
+  doublePlayer.IsDP = true;
+  assert(targetScorePlayOption(target, doublePlayer) == 152);
+
+  assert(!targetScorePlayOption(std::nullopt, doublePlayer).has_value());
+
+  StartOptions ordinaryPlay;
+  assert(targetScorePlayOptionForGameplay(ordinaryPlay, doublePlayer) == 0);
+  ordinaryPlay.targetScore = target;
+  assert(targetScorePlayOptionForGameplay(ordinaryPlay, doublePlayer) ==
+         152);
+
+  StartOptions practicePlay;
+  practicePlay.practiceMode = true;
+  assert(!targetScorePlayOptionForGameplay(practicePlay, doublePlayer)
+              .has_value());
+}
+
 } // namespace
 
 int main() {
@@ -997,6 +1062,7 @@ int main() {
   testSignedWindowsAndCanonicalDevices();
   testFutureSchemaIsRejected();
   testVersionOneMigratesToCurrentSchema();
+  testPreDurationSchemaWirePayloadSurvivesRoundTrip();
   testVersionZeroDescriptorRemainsLegacy();
   testSchemaFourPolicyProofRoundTrip();
   testSchemaFourMalformedPolicyProofIsRejected();
@@ -1014,6 +1080,7 @@ int main() {
   testPlayStartInputPlatformDefaultsAreIncluded();
   testConstrainedPlayCapturesEffectiveWindowsAsVerified();
   testCourseSessionAggregatesRecordedStagesByIndex();
+  testTargetScoreOptionUsesPinnedScoreDataEncoding();
   std::cout << "score provenance tests passed\n";
   return 0;
 }

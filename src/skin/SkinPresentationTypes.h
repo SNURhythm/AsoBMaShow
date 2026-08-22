@@ -74,6 +74,7 @@ enum class PresentationUiControlKind : std::uint8_t {
   LaneCover,
   Slider,
   Image,
+  Text,
   NativeOverlay,
   VirtualController,
 };

@@ -1,0 +1,56 @@
+{
+  "comparisonScope": "Shared slider canonical/draw parity plus executed native family assertions for format-exclusive gameplay surfaces.",
+  "formatExclusiveEvidence": [
+    {"format": "lua", "fixture": "all_v1_objects.luaskin", "requiredKinds": ["slider", "note", "note-distribution"]},
+    {"format": "json", "fixture": "all_gameplay_fields.json", "requiredKinds": ["slider", "note", "note-distribution", "bpm-graph", "timing-visualizer", "hit-error-visualizer", "text", "gauge"]},
+    {"format": "lr2", "fixture": "all_play_commands.lr2skin", "requiredKinds": ["slider", "note", "note-distribution", "bpm-graph", "timing-visualizer", "text", "gauge"]}
+  ],
+  "overlap": {
+    "header": {"type": 0, "width": 1280, "height": 720},
+    "resources": [
+      {"kind": "image", "virtualPath": "assets/atlas.png"}
+    ],
+    "bindings": [
+      {"kind": "float", "domain": "rate", "selector": 17}
+    ],
+    "objects": [
+      {
+        "kind": "slider",
+        "frames": [
+          {"x": 0, "y": 0, "w": 10, "h": 10, "gridColumn": 0, "gridRow": 0, "gridColumns": 1, "gridRows": 1}
+        ],
+        "cycleMillis": 0,
+        "direction": 1,
+        "range": 90.0,
+        "changeable": false
+      }
+    ],
+    "destinations": [
+      {
+        "loop": 0,
+        "blend": 0,
+        "filter": 0,
+        "frames": [
+          {"timeMillis": 0, "x": 10.0, "y": 20.0, "width": 100.0, "height": 50.0, "angleDegrees": 0.0, "rgba": [10, 20, 30, 255], "acceleration": 0},
+          {"timeMillis": 1500, "x": 110.0, "y": 70.0, "width": 150.0, "height": 80.0, "angleDegrees": 30.0, "rgba": [100, 110, 120, 128], "acceleration": 0}
+        ]
+      }
+    ]
+  },
+  "drawTrace": {
+    "frameSerial": 1,
+    "commands": [
+      {
+        "kind": "textured-quad",
+        "vertices": [
+          {"x": 55.0, "y": 700.0, "u": 0.0, "v": 1.0, "rgba": 4280161290},
+          {"x": 155.0, "y": 700.0, "u": 1.0, "v": 1.0, "rgba": 4280161290},
+          {"x": 155.0, "y": 650.0, "u": 1.0, "v": 0.0, "rgba": 4280161290},
+          {"x": 55.0, "y": 650.0, "u": 0.0, "v": 0.0, "rgba": 4280161290}
+        ],
+        "blend": 0,
+        "filter": 0
+      }
+    ]
+  }
+}

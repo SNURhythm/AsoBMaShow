@@ -1,4 +1,5 @@
 #include "skin/beatoraja/LuaSkinTableDecoder.h"
+#include "gameplay_skin_ledger_evidence.h"
 #include "skin/beatoraja/SkinModelValidator.h"
 #include "lua_skin_binding_test_support.h"
 #include "skin/SkinStoragePaths.h"
@@ -629,12 +630,14 @@ return {type=0,w=1280,h=720,
          "validator retains the unsupported distribution Graph placeholder");
 }
 
-void testUnsupportedGraphWidgetsRetainDestinationOrder() {
+void testGraphVisualizersRetainTypedAndDeferredBoundaries() {
   const auto decoded = decodeInline(R"lua(
 return {type=0,w=1280,h=720,
  gaugegraph={{id='gauge-history'}},
+ bpmgraph={{id='bpm'}},
  timingdistributiongraph={{id='timing-distribution'}},
  destination={{id='gauge-history',dst={{}}},
+              {id='bpm',dst={{}}},
               {id='timing-distribution',dst={{}}}}}
 )lua");
   const auto hasDiagnostic = [&](std::string_view code) {
@@ -643,26 +646,31 @@ return {type=0,w=1280,h=720,
     });
   };
   expect(decoded.model &&
-             hasDiagnostic("skin_lua_model_gaugegraph_unsupported") &&
-             hasDiagnostic(
+             !hasDiagnostic("skin_lua_model_gaugegraph_unsupported") &&
+             !hasDiagnostic("skin_lua_model_bpmgraph_unsupported") &&
+             !hasDiagnostic(
                  "skin_lua_model_timingdistributiongraph_unsupported"),
-         "GaugeGraph and TimingDistributionGraph definitions are decoded "
-         "with explicit v1 compatibility warnings");
+         "GaugeGraph, BPMGraph, and TimingDistributionGraph are accepted "
+         "without compatibility warnings");
   if (!decoded.model) {
     return;
   }
   const auto &objects = decoded.model->objects;
-  expect(objects.size() == 2 && objects[0].authoredName == "gauge-history" &&
-             objects[1].authoredName == "timing-distribution" &&
-             std::holds_alternative<SkinBlankObject>(objects[0].payload) &&
-             std::holds_alternative<SkinBlankObject>(objects[1].payload),
-         "unsupported graph widgets retain their authored destination order "
-         "as blank objects");
+  expect(objects.size() == 3 && objects[0].authoredName == "gauge-history" &&
+             objects[1].authoredName == "bpm" &&
+             objects[2].authoredName == "timing-distribution" &&
+             std::holds_alternative<SkinGaugeGraphObject>(
+                 objects[0].payload) &&
+             std::holds_alternative<SkinBpmGraphObject>(objects[1].payload) &&
+             std::holds_alternative<SkinTimingDistributionGraphObject>(
+                 objects[2].payload),
+         "typed gauge, BPM, and timing no-op objects preserve "
+         "authored destination order");
   const auto validated =
       test_support::validateWithAuthoredBuiltins(*decoded.model);
   expect(validated.model && !validated.criticalFailure &&
              validated.model->disabledOptionalObjects.empty(),
-         "unsupported graph widget placeholders remain selectable");
+         "typed GaugeGraph and graph objects remain selectable");
 }
 
 void testValidatorPreservesUpstreamOptionalDependencies() {
@@ -798,7 +806,7 @@ void testValidatorPreservesUpstreamOptionalDependencies() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
   testLiveTextAndFontSemantics();
   testTextRefWriterFallbackUsesOnlySupportedIntegerSelectors();
   testStaticTextWithZeroRefKeepsItsLiteral();
@@ -806,12 +814,10 @@ int main() {
   testSliderRetainsAnyAuthoredAngle();
   testLiveGraphPrecedenceAndAuthoredOrder();
   testDistributionGraphIsDiagnosedAndRetainedAsBlank();
-  testUnsupportedGraphWidgetsRetainDestinationOrder();
+  testGraphVisualizersRetainTypedAndDeferredBoundaries();
   testValidatorPreservesUpstreamOptionalDependencies();
-  if (failures != 0) {
-    std::cerr << failures << " assertion(s) failed\n";
-    return 1;
-  }
-  std::cout << "lua skin Text/Graph live integration tests passed\n";
-  return 0;
+  return gameplay_skin_ledger_evidence::finish(
+      argc, argv, "lua_skin_text_graph_live_integration_tests", failures,
+      "assertion(s) failed",
+      "lua skin Text/Graph live integration tests passed");
 }

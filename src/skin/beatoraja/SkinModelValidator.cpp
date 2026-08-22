@@ -119,6 +119,27 @@ SkinModelValidationResult SkinModelValidator::validate(
     return result;
   }
 
+  const auto containsLuaCallback = [](const auto &bindings) {
+    return std::ranges::any_of(bindings, [](const auto &binding) {
+      return std::holds_alternative<LuaCallbackId>(binding.source);
+    });
+  };
+  if (!bindingContext.callbacks &&
+      (containsLuaCallback(model.booleanProperties) ||
+       containsLuaCallback(model.integerProperties) ||
+       containsLuaCallback(model.floatProperties) ||
+       containsLuaCallback(model.stringProperties) ||
+       containsLuaCallback(model.timerProperties) ||
+       containsLuaCallback(model.floatWriters) ||
+       containsLuaCallback(model.stringWriters) ||
+       containsLuaCallback(model.events))) {
+    result.criticalFailure = true;
+    result.diagnostics.push_back(validationDiagnostic(
+        "skin.model.callback_runtime_missing",
+        "Lua callback bindings require a live gameplay runtime."));
+    return result;
+  }
+
   std::set<SkinResourceId> resourceIds;
   std::set<SkinResourceId> imageResourceIds;
   std::set<SkinResourceId> fontResourceIds;
@@ -130,20 +151,26 @@ SkinModelValidationResult SkinModelValidator::validate(
     const bool valid = std::visit(
         [&](const auto &resource) {
           using T = std::decay_t<decltype(resource)>;
-          if (resource.id == 0 || resource.authoredName.empty() ||
-              !resourceIds.insert(resource.id).second) {
+          if (resource.id == 0 || !resourceIds.insert(resource.id).second) {
             return false;
           }
-          // JSONSkinLoader's sourceMap is populated with Map.put(), so a
-          // later authored source declaration intentionally replaces an
-          // earlier declaration with the same name. Keep that effective
-          // lookup while still requiring our internal resource IDs to be
-          // unique.
-          resourceNames.insert_or_assign(resource.authoredName, resource.id);
-          if constexpr (std::is_same_v<T, SkinImageResource>) {
+          if constexpr (std::is_same_v<T, SkinMovieResource>) {
             return imageResourceIds.insert(resource.id).second;
           } else {
-            return fontResourceIds.insert(resource.id).second;
+            if (resource.authoredName.empty()) {
+              return false;
+            }
+            // JSONSkinLoader's sourceMap is populated with Map.put(), so a
+            // later authored source declaration intentionally replaces an
+            // earlier declaration with the same name. Keep that effective
+            // lookup while still requiring our internal resource IDs to be
+            // unique.
+            resourceNames.insert_or_assign(resource.authoredName, resource.id);
+            if constexpr (std::is_same_v<T, SkinImageResource>) {
+              return imageResourceIds.insert(resource.id).second;
+            } else {
+              return fontResourceIds.insert(resource.id).second;
+            }
           }
         },
         definition);
@@ -170,11 +197,80 @@ SkinModelValidationResult SkinModelValidator::validate(
     // allowing repeated authored destination names.
     objectNames.try_emplace(object.authoredName, object.id);
   }
+  if (std::ranges::any_of(model.objects, [](const auto &object) {
+        const auto *graph =
+            std::get_if<SkinNoteDistributionGraphObject>(&object.payload);
+        return graph != nullptr &&
+               graph->type != SkinNoteDistributionGraphType::Normal &&
+               graph->type != SkinNoteDistributionGraphType::Judge &&
+               graph->type != SkinNoteDistributionGraphType::EarlyLate;
+      })) {
+    result.criticalFailure = true;
+    result.diagnostics.push_back(validationDiagnostic(
+        "skin_lua_model_judgegraph_invalid",
+        "Lua skin judgegraph type is outside the pinned range"));
+    return result;
+  }
+
+  if (std::ranges::any_of(model.objects, [](const auto &object) {
+        const auto *visualizer =
+            std::get_if<SkinTimingVisualizerObject>(&object.payload);
+        return visualizer != nullptr &&
+               (visualizer->lineWidth < 1 || visualizer->lineWidth > 4);
+      })) {
+    result.criticalFailure = true;
+    result.diagnostics.push_back(validationDiagnostic(
+        "skin_lua_model_timingvisualizer_invalid",
+        "Lua skin timingvisualizer line width is outside the pinned range"));
+    return result;
+  }
+
+  if (std::ranges::any_of(model.objects, [](const auto &object) {
+        const auto *graph = std::get_if<SkinBpmGraphObject>(&object.payload);
+        return graph != nullptr &&
+               (graph->delayMillis < 0 || graph->lineWidth <= 0);
+      })) {
+    result.criticalFailure = true;
+    result.diagnostics.push_back(validationDiagnostic(
+        "skin_lua_model_bpmgraph_invalid",
+        "Lua skin bpmgraph normalized timing or line width is invalid"));
+    return result;
+  }
+
+  if (std::ranges::any_of(model.objects, [](const auto &object) {
+        const auto *graph =
+            std::get_if<SkinTimingDistributionGraphObject>(&object.payload);
+        return graph != nullptr && graph->lineWidth == 0;
+      })) {
+    result.criticalFailure = true;
+    result.diagnostics.push_back(validationDiagnostic(
+        "skin_lua_model_timingdistributiongraph_invalid",
+        "Lua skin timingdistributiongraph has the pinned constructor's "
+        "zero line-width divide failure"));
+    return result;
+  }
+
+  if (std::ranges::any_of(model.objects, [](const auto &object) {
+        const auto *visualizer =
+            std::get_if<SkinHitErrorVisualizerObject>(&object.payload);
+        return visualizer != nullptr &&
+               (visualizer->lineWidth < 1 || visualizer->lineWidth > 4 ||
+                visualizer->windowLength < 1 ||
+                visualizer->windowLength > 100);
+      })) {
+    result.criticalFailure = true;
+    result.diagnostics.push_back(validationDiagnostic(
+        "skin_lua_model_hiterrorvisualizer_invalid",
+        "Lua skin hiterrorvisualizer normalized geometry is outside the "
+        "pinned range"));
+    return result;
+  }
 
   // The Java factories are deliberately nullable. JSONSkinLoader keeps the
-  // object and passes the factory result to it, so catalog/callback lookup is
-  // a runtime concern rather than a skin-admission condition.
-  (void)bindingContext;
+  // object and passes the factory result to it, so built-in catalog matches
+  // and individual callback liveness remain runtime concerns after the
+  // callback-bearing model has proved that a runtime exists.
+  (void)bindingContext.builtins;
   const auto validBooleanIds = booleanIds;
   const auto validIntegerIds = integerIds;
   const auto validFloatIds = floatIds;

@@ -5,12 +5,14 @@
 #include "../../ChartPlaybackDuration.h"
 #include "Judge.h"
 #include "GamePlayTiming.h"
+#include "../../repositories/ChartStorageIdentity.h"
 #include "../../skin/beatoraja/GameplaySkinEndAnimation.h"
 #include "../../rendering/common.h"
 
 #include <algorithm>
 #include <bit>
 #include <cstdint>
+#include <limits>
 
 namespace replay_video_export {
 
@@ -71,6 +73,7 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
       .noteStartPositionPercent = noteStartPositionPercent,
       .laneBeamClockUsesRenderTime = true,
       .showInvisibleNotes = settings.showInvisibleNotes,
+      .showPastNotes = settings.showPastNotes,
       .masterVolume = settings.audioVideo.audio.masterVolume,
       .keysoundVolume = settings.audioVideo.audio.keysoundVolume,
       .bgmVolume = settings.audioVideo.audio.bgmVolume,
@@ -78,6 +81,21 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
       .bpmGuideEnabled = assist_options::isBpmGuide(assistOption),
       .hispeedAutoAdjust = settings.hispeedAutoAdjust,
       .markProcessedNotes = settings.markProcessedNotes,
+      .customJudge = settings.customJudge,
+      .showJudgeArea = settings.showJudgeArea,
+      .notesDisplayTimingMilliseconds =
+          settings.notesDisplayTimingMilliseconds,
+      .notesDisplayTimingAutoAdjust = settings.notesDisplayTimingAutoAdjust,
+      .autoSaveReplay = settings.autoSaveReplay,
+      .guideSoundEffects = settings.guideSoundEffects,
+      .extraNoteDepth = settings.extraNoteDepth,
+      .mineMode = settings.mineMode,
+      .scrollMode = settings.scrollMode,
+      .longNoteModifierMode = settings.longNoteModifierMode,
+      .sevenToNinePattern = settings.sevenToNinePattern,
+      .sevenToNineType = settings.sevenToNineType,
+      .constantScroll = !noSpeed && settings.constantScroll,
+      .constantFadeInMilliseconds = settings.constantFadeInMilliseconds,
       .judgementIndicatorEnabled = settings.judgementIndicatorEnabled,
       .judgementIndicatorY = settings.judgementIndicatorY,
       .judgementIndicatorWidthScale = settings.judgementIndicatorWidthScale,
@@ -97,6 +115,34 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
       .judgeAlgorithmImageIndex =
           beatorajaJudgeAlgorithmImageIndex(settings.notePriorityMode),
   };
+}
+
+ReplayChartMetadataAuthority projectReplayChartMetadataAuthority(
+    const bms_parser::ChartMeta &chartMeta,
+    const ChartMetaPathBatchReadOutcome &records, bool stageFileAvailable,
+    bool backBmpAvailable) {
+  ReplayChartMetadataAuthority authority{
+      .stageFileAvailable = stageFileAvailable,
+      .backBmpAvailable = backBmpAvailable,
+  };
+  if (chartMeta.BmsPath.empty() ||
+      records.status != ChartMetaPathBatchReadStatus::Loaded) {
+    return authority;
+  }
+  const std::string chartPath =
+      chart_storage_identity::StoredPathText(chartMeta.BmsPath);
+  if (chartPath.empty()) return authority;
+  const auto record = std::find_if(
+      records.records.begin(), records.records.end(),
+      [&chartPath](const ChartMetaRecord &candidate) {
+        return chart_storage_identity::StoredPathText(candidate.meta.BmsPath) ==
+               chartPath;
+      });
+  if (record != records.records.end()) {
+    authority.songReviewFavorite = record->songReviewFavorite;
+    authority.chartHasDocument = record->hasDocument;
+  }
+  return authority;
 }
 
 void releaseUnsubmittedReplayGameplayBga(
@@ -176,6 +222,58 @@ ReplayGameplayFrameState replayGameplayFrameState(
       .sceneStartMicros = sceneStart.visualTimeMicros,
       .playStartMicros = 0,
   };
+}
+
+long long replayGameplayNoteDisplayTimeMicros(
+    const ReplayGameplayFrameState &frame, const AppSettings &settings) noexcept {
+  return gameplay_timing::noteDisplayTimeMicros(
+      frame.clock.visualTimeMicros, settings.notesDisplayTimingMilliseconds);
+}
+
+ChartVisualTimelineAuthority replayGameplayTimelineAuthority(
+    const PlayfieldChartVisualModel &chartVisualModel,
+    const ReplayGameplayFrameState &frame,
+    const AppSettings &settings, bool noSpeed) noexcept {
+  auto authority = chartVisualTimelineAuthorityAtTime(
+      chartVisualModel, replayGameplayNoteDisplayTimeMicros(frame, settings));
+  if (!noSpeed && settings.constantScroll) {
+    authority.speedMultiplier = 1.0;
+  }
+  return authority;
+}
+
+bool replayGameplayFailureAnimationActive(
+    long long gameplayTimeMicros,
+    std::optional<long long> failureMicros) noexcept {
+  return failureMicros.has_value() && gameplayTimeMicros >= *failureMicros;
+}
+
+void applyReplayGameplayGaugeAuthority(PlayfieldAuthorityUpdate &authority,
+                                       const ReplayData &replay,
+                                       GaugeType currentGaugeType,
+                                       float currentGauge) noexcept {
+  authority.gaugeType = currentGaugeType;
+  authority.gaugeAutoShift = replay.gaugeAutoShift;
+  authority.gaugeAutoShiftLowerBound = replay.gaugeAutoShiftLowerBound;
+  authority.currentGauge = currentGauge;
+}
+
+void applyReplayGameplayRuntimeAuthority(
+    PlayfieldAuthorityUpdate &authority, int currentFramesPerSecond,
+    std::int64_t exportStartUptimeMillis,
+    long long exportElapsedMicros) noexcept {
+  authority.currentFramesPerSecond = currentFramesPerSecond;
+  const std::int64_t start = std::max<std::int64_t>(0, exportStartUptimeMillis);
+  const std::int64_t elapsed = std::max<long long>(0, exportElapsedMicros) / 1'000;
+  authority.applicationUptimeMillis =
+      start > std::numeric_limits<std::int64_t>::max() - elapsed
+          ? std::numeric_limits<std::int64_t>::max()
+          : start + elapsed;
+}
+
+void applyReplayGameplayTargetOptionAuthority(
+    PlayfieldAuthorityUpdate &authority) noexcept {
+  authority.targetPlayOption = 0;
 }
 
 long long replayGameplayDurationWithSelectedSkinAnimation(

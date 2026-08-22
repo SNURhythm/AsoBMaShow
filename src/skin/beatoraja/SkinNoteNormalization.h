@@ -53,6 +53,7 @@ enum class SkinNoteFallbackShape : std::uint8_t { Solid, DoubleOutline };
 struct SkinSynthesizedNoteFallback {
   SkinNoteFallbackColor color = SkinNoteFallbackColor::Yellow;
   SkinNoteFallbackShape shape = SkinNoteFallbackShape::Solid;
+  std::optional<int> authoredNoteSlot;
 };
 
 using SkinNormalizedNoteVisual =

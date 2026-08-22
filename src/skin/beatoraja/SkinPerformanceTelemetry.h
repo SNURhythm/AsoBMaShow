@@ -1,12 +1,50 @@
 #pragma once
 
-#include "PlaySkinSession.h"
+#include "PlaySkinSessionIdentity.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 
 namespace skin {
+
+enum class SkinLoadingPhase : std::uint8_t {
+  Document,
+  ResourcePreparation,
+  Movie,
+  Upload,
+};
+
+struct SkinLoadingResourceCounters {
+  std::uint64_t filesystemReads = 0;
+  std::uint64_t imageDecodes = 0;
+  std::uint64_t fontDecodes = 0;
+  std::uint64_t movieDecodes = 0;
+  std::uint64_t audioDecodes = 0;
+  std::uint64_t textureUploads = 0;
+  std::uint64_t encodedBytes = 0;
+  std::uint64_t decodedBytes = 0;
+};
+
+// Path-free, value-owned preparation evidence. Phase bits distinguish a
+// measured zero-duration phase from one skipped by cancellation/failure.
+struct SkinLoadingTelemetry {
+  std::uint64_t documentMicros = 0;
+  std::uint64_t resourcePreparationMicros = 0;
+  std::uint64_t movieMicros = 0;
+  std::uint64_t uploadMicros = 0;
+  std::uint64_t totalMicros = 0;
+  SkinLoadingResourceCounters resources;
+  std::uint8_t completedPhases = 0;
+  bool sessionPublished = false;
+  bool cancelled = false;
+};
+
+[[nodiscard]] bool recordSkinLoadingPhase(SkinLoadingTelemetry &,
+                                          SkinLoadingPhase,
+                                          std::uint64_t micros) noexcept;
+[[nodiscard]] bool
+isCompleteSkinLoadingTelemetry(const SkinLoadingTelemetry &) noexcept;
 
 struct SkinRenderIoCounters {
   std::uint64_t filesystemReadsPerformed = 0;

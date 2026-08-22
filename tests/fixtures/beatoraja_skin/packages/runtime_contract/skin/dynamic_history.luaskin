@@ -3,11 +3,13 @@ if not skin_config then
 end
 
 local File = luajava.bindClass("java.io.File")
+local history_root = skin_config.get_path("History")
 local directory = skin_config.get_path("History/260805/")
 local file_path = skin_config.get_path("History/260805/history.txt")
 
 assert(directory:match("History/260805$"))
 assert(file_path:match("History/260805/history%.txt$"))
+assert(luajava.new(File, history_root):mkdir() == true)
 assert(luajava.new(File, directory):mkdir() == true)
 
 local writer = assert(io.open(file_path, "w"))
@@ -20,6 +22,7 @@ assert(reader:close() == true)
 
 local entries = assert(luajava.new(File, directory):listFiles())
 assert(#entries == 1)
-assert(entries[1] == file_path)
+assert(entries[1]:match("^/") or entries[1]:match("^%a:/"))
+assert(entries[1]:match("/History/260805/history%.txt$"))
 
 return { phase = "configured" }

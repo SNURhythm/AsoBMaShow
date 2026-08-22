@@ -1,4 +1,5 @@
 #include "scene/play/PlayfieldProjection.h"
+#include "scene/play/GamePlayTiming.h"
 #include "bms_parser.hpp"
 
 #include <algorithm>
@@ -60,6 +61,340 @@ bool testPassedNormalNotesDoNotRemainInTheSkinProjection() {
   return !containsNote(result.notes, 10) && containsNote(result.notes, 11) &&
          skin.notes.size() == 1 &&
          skin.notes.front().kind == skin::SkinProjectedNoteKind::Mine;
+}
+
+bool testNoteDisplayTimeIsScopedToProjection() {
+  // PlayerConfig.judgetiming is a LaneRenderer-only offset. Projection must
+  // accept it without changing the frame clock observed by skins and events.
+  PlayfieldChartVisualModel model;
+  model.laneOrder = {0};
+  model.timelines = {
+      {.id = 1,
+       .timeMicros = 0,
+       .scrollPosition = 0.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 0,
+       .retainedOrdinal = 0},
+      {.id = 2,
+       .timeMicros = 100,
+       .scrollPosition = 1.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 1,
+       .retainedOrdinal = 1},
+  };
+  model.notes = {
+      {.id = 10, .timelineId = 1, .lane = 0, .authoredOrdinal = 0},
+  };
+  PlayfieldVisualState state;
+  state.clock = {.serial = 1, .visualTimeMicros = 50};
+
+  PlayfieldProjection projection;
+  const auto result = projection.project(
+      model, state,
+      {.noteDisplayTimeMicros = 0,
+       .visibleScrollBefore = 1.0,
+       .visibleScrollAfter = 1.0});
+  return state.clock.visualTimeMicros == 50 && containsNote(result.notes, 10);
+}
+
+bool testShowPastNotesKeepsOnlyAnUnprocessedPastNormalNote() {
+  // Pinned LaneRenderer's optional showpastnote path is deliberately narrow:
+  // it retains an already-past NormalNote only while its source state is 0.
+  // A resolved note must stay absent, and mines never participate.
+  PlayfieldChartVisualModel model;
+  model.laneOrder = {0};
+  model.timelines = {
+      {.id = 1,
+       .timeMicros = 0,
+       .scrollPosition = 0.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 0,
+       .retainedOrdinal = 0},
+      {.id = 2,
+       .timeMicros = 10,
+       .scrollPosition = 0.1,
+       .retainedForProjection = true,
+       .authoredOrdinal = 1,
+       .retainedOrdinal = 1},
+      {.id = 3,
+       .timeMicros = 20,
+       .scrollPosition = 0.2,
+       .retainedForProjection = true,
+       .authoredOrdinal = 2,
+       .retainedOrdinal = 2},
+  };
+  model.notes = {
+      {.id = 10, .timelineId = 1, .lane = 0, .authoredOrdinal = 0},
+      {.id = 11, .timelineId = 2, .lane = 0, .authoredOrdinal = 1},
+      {.id = 12,
+       .timelineId = 3,
+       .lane = 0,
+       .kind = ChartVisualNoteKind::Mine,
+       .source = ChartVisualNoteSource::Mine,
+       .authoredOrdinal = 2},
+  };
+  PlayfieldVisualState state;
+  state.clock = {.serial = 1, .visualTimeMicros = 30};
+  state.notes = {
+      {.id = 10},
+      {.id = 11, .judged = true},
+      {.id = 12},
+  };
+
+  PlayfieldProjection projection;
+  const auto result = projection.project(
+      model, state,
+      {.visibleScrollBefore = 1.0,
+       .visibleScrollAfter = 1.0,
+       .showPastNormalNotes = true});
+  return containsNote(result.notes, 10) && !containsNote(result.notes, 11) &&
+         !containsNote(result.notes, 12);
+}
+
+bool testPmsDst2ProjectsSourceLatePoorDescent() {
+  // Removing the dedicated PMS path, treating its late-BAD hold as moving
+  // time, or reusing a processed-note visual must all make this fail.
+  // LaneRenderer holds a note for the BAD late window, then drops it at
+  // no-speed velocity across the Lift-shortened 75px lane:
+  // 500,000us * 120 BPM / 240,000,000 * 75px = 18.75px.
+  PlayfieldChartVisualModel model;
+  model.laneOrder = {0};
+  model.timelines = {
+      {.id = 1,
+       .timeMicros = 0,
+       .bpm = 120.0,
+       .scrollPosition = 0.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 0,
+       .retainedOrdinal = 0},
+      {.id = 2,
+       .timeMicros = 1'000'000,
+       .bpm = 120.0,
+       .scrollPosition = 4.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 1,
+       .retainedOrdinal = 1},
+  };
+  model.notes = {
+      {.id = 10, .timelineId = 1, .lane = 0, .authoredOrdinal = 0},
+      {.id = 11, .timelineId = 1, .lane = 0, .authoredOrdinal = 1},
+      {.id = 12, .timelineId = 1, .lane = 0, .authoredOrdinal = 2},
+  };
+  PlayfieldVisualState state;
+  state.clock = {.serial = 1, .visualTimeMicros = 1'000'000};
+  state.authority.liftEnabled = true;
+  state.authority.liftRatio = 0.25F;
+  state.notes = {
+      {.id = 10},
+      {.id = 11, .judged = true},
+      {.id = 12, .judged = true, .dead = true},
+  };
+
+  PlayfieldProjection projection;
+  const auto result = projection.project(
+      model, state,
+      {.latePoorTimingMicros = 500'000,
+       .pmsPoorDestination = PmsPoorDestinationGeometry{
+           .laneOriginY = 10.0,
+           .laneHeight = 100.0,
+           .secondaryDestinationY = -20.0},
+       .buildBuiltInPlan = false});
+  const auto skin = adaptPlayfieldProjectionForSkin(result);
+  const auto descent = [](const auto &notes, std::uint32_t id) {
+    const auto found = std::ranges::find(notes, id,
+                                         &skin::SkinProjectedNoteView::visualId);
+    return found == notes.end() ? std::optional<double>{}
+                                : found->pmsPoorYDisplacement;
+  };
+  return skin.notes.size() == 2 && descent(skin.notes, 10).has_value() &&
+         closeTo(*descent(skin.notes, 10), -18.75) &&
+         !descent(skin.notes, 11).has_value() &&
+         descent(skin.notes, 12).has_value() &&
+         closeTo(*descent(skin.notes, 12), -18.75);
+}
+
+bool testPmsDst2DescentTraversesBeforeRetainedCursor() {
+  // LaneRenderer uses `pos` only to find its current timeline. Its dst2
+  // descent then walks all the way back to timeline zero, so a previous frame
+  // having advanced `pos` must not hide an older missed POOR.
+  PlayfieldChartVisualModel model;
+  model.laneOrder = {0};
+  model.timelines = {
+      {.id = 1,
+       .timeMicros = 0,
+       .bpm = 120.0,
+       .scrollPosition = 0.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 0,
+       .retainedOrdinal = 0},
+      {.id = 2,
+       .timeMicros = 100'000,
+       .bpm = 120.0,
+       .scrollPosition = 1.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 1,
+       .retainedOrdinal = 1},
+      {.id = 3,
+       .timeMicros = 2'000'000,
+       .bpm = 120.0,
+       .scrollPosition = 2.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 2,
+       .retainedOrdinal = 2},
+  };
+  model.notes = {{.id = 10, .timelineId = 1, .lane = 0}};
+  const auto request = PlayfieldProjectionRequest{
+      .pmsPoorDestination = PmsPoorDestinationGeometry{
+          .laneOriginY = 0.0,
+          .laneHeight = 100.0,
+          .secondaryDestinationY = -100.0},
+      .buildBuiltInPlan = false};
+
+  PlayfieldVisualState state;
+  PlayfieldProjection projection;
+  state.clock = {.serial = 1, .visualTimeMicros = 1'000'000};
+  [[maybe_unused]] const auto first = projection.project(model, state, request);
+  state.clock = {.serial = 2, .visualTimeMicros = 1'500'000};
+  const auto result = projection.project(model, state, request);
+  const auto note = std::ranges::find(result.notes, ChartVisualId{10},
+                                      &ProjectedPlayfieldNote::noteId);
+  return note != result.notes.end() && note->pmsPoorYDisplacement.has_value() &&
+         closeTo(*note->pmsPoorYDisplacement, -75.0);
+}
+
+bool testPmsDst2DescentInheritsTheLastConstantFade() {
+  // LaneRenderer resets the sprite to white before its primary note pass.
+  // Its subsequent dst2 pass does not reset that color, so a past missed POOR
+  // inherits the last primary future-row Constant fade (here 50%).
+  PlayfieldChartVisualModel model;
+  model.laneOrder = {0};
+  model.timelines = {
+      {.id = 1,
+       .timeMicros = 0,
+       .bpm = 120.0,
+       .scrollPosition = 0.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 0,
+       .retainedOrdinal = 0},
+      {.id = 2,
+       .timeMicros = 1'050'000,
+       .bpm = 120.0,
+       .scrollPosition = 0.5,
+       .retainedForProjection = true,
+       .authoredOrdinal = 1,
+       .retainedOrdinal = 1},
+  };
+  model.notes = {{.id = 10, .timelineId = 1, .lane = 0}};
+  PlayfieldVisualState state;
+  state.clock = {.serial = 1, .visualTimeMicros = 700'000};
+  PlayfieldProjection projection;
+  const auto result = projection.project(
+      model, state,
+      {.constantScroll = true,
+       .constantDurationMilliseconds = 300,
+       .constantFadeInMilliseconds = 100,
+       .pmsPoorDestination = PmsPoorDestinationGeometry{
+           .laneOriginY = 0.0,
+           .laneHeight = 100.0,
+           .secondaryDestinationY = -100.0},
+       .buildBuiltInPlan = false,
+       .builtInTraversal = BuiltInRendererTraversal{
+           .lowerBound = -100.0F,
+           .judgeY = 0.0F,
+           .upperBound = 100.0F,
+           .rxhs = 100.0F,
+           .hispeed = 1.0F,
+           .startRetainedOrdinal = 0}});
+  const auto note = std::ranges::find(result.notes, ChartVisualId{10},
+                                      &ProjectedPlayfieldNote::noteId);
+  return note != result.notes.end() && note->pmsPoorYDisplacement.has_value() &&
+         closeTo(note->opacity, 0.5);
+}
+
+bool testNotesDisplayTimingAutoAdjustUsesPinnedJudgeStep() {
+  // JudgeManager adjusts only PGREAT/GREAT/GOOD within ±150 ms. Java integer
+  // division truncates toward zero after applying its sign-specific 15 ms
+  // half-step; no configuration clamp occurs in this update path.
+  return gameplay_timing::nextNotesDisplayTimingMilliseconds(
+             7, true, true, PGreat, 15'000) == 6 &&
+         gameplay_timing::nextNotesDisplayTimingMilliseconds(
+             7, true, true, Great, -15'000) == 8 &&
+         gameplay_timing::nextNotesDisplayTimingMilliseconds(
+             7, true, true, Good, 150'000) == 2 &&
+         gameplay_timing::nextNotesDisplayTimingMilliseconds(
+             7, true, true, Bad, 30'000) == 7 &&
+         gameplay_timing::nextNotesDisplayTimingMilliseconds(
+             7, true, false, PGreat, 30'000) == 7 &&
+         gameplay_timing::nextNotesDisplayTimingMilliseconds(
+             7, true, true, PGreat, 150'001) == 7;
+}
+
+bool testConstantProjectionUsesPinnedPositiveFadeWindow() {
+  // LaneRenderer starts its Constant cutoff at visual time + duration. With a
+  // positive fade it keeps the target row fully opaque, fades only the strict
+  // interval after it, and skips the exact fade endpoint.
+  PlayfieldChartVisualModel model;
+  model.laneOrder = {0};
+  model.timelines = {
+      {.id = 1, .timeMicros = 900'000, .scrollPosition = 0.9,
+       .retainedForProjection = true, .authoredOrdinal = 0,
+       .retainedOrdinal = 0},
+      {.id = 2, .timeMicros = 1'000'000, .scrollPosition = 1.0,
+       .retainedForProjection = true, .authoredOrdinal = 1,
+       .retainedOrdinal = 1},
+      {.id = 3, .timeMicros = 1'050'000, .scrollPosition = 1.05,
+       .sectionLine = true,
+       .retainedForProjection = true, .authoredOrdinal = 2,
+       .retainedOrdinal = 2},
+      {.id = 4, .timeMicros = 1'100'000, .scrollPosition = 1.1,
+       .retainedForProjection = true, .authoredOrdinal = 3,
+       .retainedOrdinal = 3},
+      {.id = 5, .timeMicros = 1'200'000, .scrollPosition = 1.2,
+       .retainedForProjection = true, .authoredOrdinal = 4,
+       .retainedOrdinal = 4},
+  };
+  model.notes = {
+      {.id = 10, .timelineId = 1, .lane = 0, .authoredOrdinal = 0},
+      {.id = 11, .timelineId = 2, .lane = 0, .authoredOrdinal = 1},
+      {.id = 12, .timelineId = 3, .lane = 0, .authoredOrdinal = 2},
+      {.id = 13, .timelineId = 4, .lane = 0, .authoredOrdinal = 3},
+      {.id = 14,
+       .timelineId = 3,
+       .pairId = 15,
+       .lane = 0,
+       .kind = ChartVisualNoteKind::LongHead,
+       .authoredOrdinal = 4},
+      {.id = 15,
+       .timelineId = 5,
+       .pairId = 14,
+       .lane = 0,
+       .kind = ChartVisualNoteKind::LongTail,
+       .authoredOrdinal = 5},
+  };
+  PlayfieldVisualState state;
+  state.clock = {.serial = 1, .visualTimeMicros = 0};
+  PlayfieldProjection projection;
+  const auto result = projection.project(
+      model, state,
+      {.visibleScrollAfter = 2.0,
+       .constantScroll = true,
+       .constantDurationMilliseconds = 1'000,
+       .constantFadeInMilliseconds = 100});
+  const auto note = [&](ChartVisualId id) -> const ProjectedPlayfieldNote * {
+    const auto found = std::ranges::find(result.notes, id,
+                                         &ProjectedPlayfieldNote::noteId);
+    return found == result.notes.end() ? nullptr : &*found;
+  };
+  const auto line = std::ranges::find(result.lines, ChartVisualId{3},
+                                      &ProjectedLineDescriptor::timelineId);
+  const auto longNote = std::ranges::find(result.longNotes, ChartVisualId{14},
+                                          &ProjectedLongNoteDescriptor::headId);
+  return note(10) != nullptr && closeTo(note(10)->opacity, 1.0) &&
+         note(11) != nullptr && closeTo(note(11)->opacity, 1.0) &&
+         note(12) != nullptr && closeTo(note(12)->opacity, 0.5) &&
+         note(13) == nullptr && line != result.lines.end() &&
+         closeTo(line->opacity, 0.5) && longNote != result.longNotes.end() &&
+         closeTo(longNote->opacity, 0.5);
 }
 
 bool testFinalMeasureTailContinuesScrollWithoutParserRows() {
@@ -582,6 +917,36 @@ int main() {
   if (!testPassedNormalNotesDoNotRemainInTheSkinProjection()) {
     std::cerr << "passed normal notes must not remain in the default skin "
                  "projection, while mines retain their Mine visual kind\n";
+    return EXIT_FAILURE;
+  }
+  if (!testNoteDisplayTimeIsScopedToProjection()) {
+    std::cerr << "note display timing must not change the frame clock\n";
+    return EXIT_FAILURE;
+  }
+  if (!testShowPastNotesKeepsOnlyAnUnprocessedPastNormalNote()) {
+    std::cerr << "showpastnote must retain only source-state-zero normal notes\n";
+    return EXIT_FAILURE;
+  }
+  if (!testPmsDst2ProjectsSourceLatePoorDescent()) {
+    std::cerr << "PMS dst2 late-POOR descent projection failed\n";
+    return EXIT_FAILURE;
+  }
+  if (!testPmsDst2DescentTraversesBeforeRetainedCursor()) {
+    std::cerr << "PMS dst2 descent must traverse before the retained cursor\n";
+    return EXIT_FAILURE;
+  }
+  if (!testPmsDst2DescentInheritsTheLastConstantFade()) {
+    std::cerr << "PMS dst2 descent must inherit the Constant fade\n";
+    return EXIT_FAILURE;
+  }
+  if (!testNotesDisplayTimingAutoAdjustUsesPinnedJudgeStep()) {
+    std::cerr << "notes-display timing auto-adjust must use the pinned "
+                 "JudgeManager step formula\n";
+    return EXIT_FAILURE;
+  }
+  if (!testConstantProjectionUsesPinnedPositiveFadeWindow()) {
+    std::cerr << "Constant projection must use LaneRenderer's positive fade "
+                 "window\n";
     return EXIT_FAILURE;
   }
   if (!testFinalMeasureTailContinuesScrollWithoutParserRows()) {

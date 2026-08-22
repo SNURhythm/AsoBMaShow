@@ -11,6 +11,8 @@
 #include "../../math/Vector3.h"
 #include "GamePlayStartOptions.h"
 #include "BeatorajaHiSpeed.h"
+#include "GameplayBmsResourceAvailability.h"
+#include "GameplaySkinSessionFactory.h"
 #include "NoteTimeRange.h"
 #include "Pacemaker.h"
 #include "PlayfieldChartVisualModel.h"
@@ -35,6 +37,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 class Button;
@@ -67,6 +70,9 @@ public:
   bool renderViewBeforeScene(const View *view) const override;
   void renderScene() override;
   void cleanupScene() override;
+  [[nodiscard]] GameplaySkinSessionStopHandle
+  gameplaySkinPreparationCancellationHandle() const noexcept;
+  void cancelGameplaySkinPreparation() noexcept;
   bms_parser::Note *pressLane(int lane, double inputDelay) override;
   bms_parser::Note *pressLane(int mainLane, int compensateLane,
                               double inputDelay) override;
@@ -95,6 +101,13 @@ private:
   void refreshGameplayPresentationGeometry();
   void updateSkinResetLayoutVisibility();
   void acquireGameplaySkinForAttempt();
+  [[nodiscard]] bool shouldEnterPracticeMenu() const noexcept;
+  [[nodiscard]] bool enterPracticeMenu();
+  void consumePracticeMenuLaneInput(int lane, bool pressed);
+  [[nodiscard]] bool preparePracticeAttemptFromMenu(
+      const practice::SkinMenuAttemptPlan &attempt,
+      std::string_view logContext);
+  void startPracticeAttemptFromMenu();
   [[nodiscard]] bool publishRealtimeTouchHitSnapshot();
   void updateRealtimeVisualTimeline(long long gameplayTimeMicros);
   void syncRealtimeGameplaySnapshot();
@@ -117,6 +130,8 @@ private:
   void applyStartSelectControlActions(
       const std::vector<gameplay::StartSelectControlAction> &actions);
   void refreshRuntimePresentationConfiguration();
+  void persistAutoAdjustedNotesDisplayTiming();
+  void persistSkinAudioSettings();
   void abortPlayFromStartSelectControl();
   void adjustLaneCoverFromInput(int deltaPercent);
   void restartCurrentPattern();
@@ -149,6 +164,7 @@ private:
   bool startCourseReplayChartAtCurrentIndex();
   bool startCourseChartAtCurrentIndex();
   bool startNextCourseChart();
+  bool handleSkinTextInputEvent(SDL_Event &event);
   bool handleCoursePauseButtonEvent(SDL_Event &event);
   void beginCoursePauseHold(bool touch, SDL_FingerID fingerId);
   void cancelCoursePauseHold();
@@ -184,6 +200,10 @@ private:
                                                  double inputDelay = 0.0) const;
   [[nodiscard]] long long getVisualOffsetMicros() const;
   [[nodiscard]] long long getVisualTimeMicros(long long songTimeMicros) const;
+  [[nodiscard]] long long
+  getNoteDisplayTimeMicros(long long visualTimeMicros) const;
+  [[nodiscard]] double
+  noteDisplayBpmAtGameplayTime(long long gameplayTimeMicros) const;
   View *pauseLayout = nullptr;
   View *playbackFailureLayout = nullptr;
   Button *pauseButton = nullptr;
@@ -249,6 +269,15 @@ private:
   pacemaker::Target activePacemakerTarget;
   pacemaker::Target activeBestScoreTarget;
   std::optional<ScoreBestSnapshot> activePacemakerBest;
+  std::optional<ChartScoreHistorySnapshot> activePersistedScore;
+  std::optional<PlayfieldRivalScoreState> activeRivalScore;
+  std::optional<int> activeTargetPlayOption;
+  PlayerScoreHistorySnapshot activePlayerScoreHistory;
+  int playfieldSongReviewFavorite = 0;
+  bool playfieldChartHasDocument = false;
+  bool chartImageAvailabilityStarted = false;
+  gameplay::BmsResourceImageAvailabilityProbe stageFileAvailability;
+  gameplay::BmsResourceImageAvailabilityProbe backBmpAvailability;
   std::optional<ResultPreviousBestData> activeReplayPacemakerPreviousBest;
   std::jthread bestReplayLoadThread;
   std::shared_ptr<std::atomic_bool> bestReplayLoadCancelled =
@@ -261,6 +290,7 @@ private:
   PlayfieldVisualStateStore *playfieldVisualStateStore = nullptr;
   PlayfieldPresentationConfig playfieldPresentationConfiguration;
   std::unique_ptr<PlayfieldPresentation> ownedPresentation;
+  GameplaySkinSessionStopOwner gameplaySkinSessionStopOwner;
   BuiltInPlayfieldPresentation *builtInPresentation = nullptr;
   PlayfieldPresentation *presentation = nullptr;
   std::unique_ptr<PlayfieldPresentationEventFanout>
@@ -294,6 +324,8 @@ private:
   size_t replayLaneCoverCursor = 0;
   bool touchVisualizerLoaded = false;
   bool playbackInitializationFailed = false;
+  bool practiceMenuActive = false;
+  long long practiceMenuStartPressedMicros = 0;
   bool practiceGhostPublished = false;
   bool recordedAttemptCompleted = false;
   bool resultTransitionScheduled = false;
@@ -301,9 +333,18 @@ private:
   std::optional<gameplay::StartSelectControl> startSelectControl;
   std::optional<gameplay_hispeed::State> playfieldHispeedState;
   bool playfieldLaneCoverEnabled = true;
+  bool playfieldLiftEnabled = false;
+  float playfieldLiftRatio = 0.1F;
+  bool playfieldHiddenEnabled = false;
+  float playfieldHiddenRatio = 0.1F;
+  // ControlInputProcessor starts on Lift when both Lift and HIDDEN are active,
+  // and flips this target on each short START+SELECT conjunction.
+  bool playfieldChangeLiftTarget = true;
   bool floatingLaneCoverDragActive = false;
   bool floatingLaneCoverDragChanged = false;
   bool floatingLaneCoverSettingsDirty = false;
+  bool notesDisplayTimingSettingsDirty = false;
+  bool skinAudioSettingsDirty = false;
   SDL_FingerID floatingLaneCoverFinger = -1;
   float floatingLaneCoverDragOffsetY = 0.0f;
   std::uint64_t playfieldFrameSerial = 0;
@@ -329,6 +370,10 @@ private:
   void applyPendingBestReplay();
   void stopBestReplayLoad();
   void updatePacemakerStatus();
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  void applySkinAudioVolume(skin::SkinAudioVolumeWriterTarget target,
+                            float value);
+#endif
   void updateGaugeStatusText();
   bool finishIfGaugeFailed();
   void updateLaneStateText();

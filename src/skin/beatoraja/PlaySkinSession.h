@@ -2,8 +2,12 @@
 
 #include "PlaySkinStateBridge.h"
 #include "PlaySkinSessionIdentity.h"
+#include "LuaSkinAudioHost.h"
+#include "LuaSkinHttpClient.h"
+#include "LuaSkinLegacyInputHost.h"
 #include "Skin2DRenderer.h"
 #include "SkinResourceCatalog.h"
+#include "SkinPerformanceTelemetry.h"
 #include "../../scene/play/PlayfieldPresentation.h"
 #include "../../scene/play/CoordinatedPlaySkinSession.h"
 #include "../SkinConfigurationWriteQueue.h"
@@ -17,9 +21,36 @@
 #include <span>
 #include <stop_token>
 #include <string>
+#include <string_view>
+#include <variant>
 #include <vector>
 
 namespace skin {
+
+#if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
+struct PlaySkinResourcePreparationEvidenceForTesting {
+  std::vector<SkinResourceId> referencedImageResourceIds;
+  std::vector<SkinResourceId> preparedImageResourceIds;
+  std::vector<SkinObjectId> referencedTextObjectIds;
+  std::vector<SkinObjectId> preparedTextObjectIds;
+};
+
+struct PlaySkinModelResourceReferencesForTesting {
+  std::vector<SkinResourceId> images;
+  std::vector<SkinObjectId> textObjects;
+};
+
+[[nodiscard]] PlaySkinModelResourceReferencesForTesting
+skinModelReferencedResourceIdsForTesting(
+    const ValidatedBeatorajaSkinModel &, bool practiceMode);
+[[nodiscard]] bool skinResourcePreparationEvidenceCompleteForTesting(
+    const PlaySkinResourcePreparationEvidenceForTesting &) noexcept;
+
+void resetPomyuCyclePreparationCountersForTesting() noexcept;
+[[nodiscard]] std::size_t pomyuCycleFileReadsForTesting() noexcept;
+[[nodiscard]] std::size_t pomyuRequirementParsesForTesting() noexcept;
+[[nodiscard]] std::size_t pomyuCycleParsesForTesting() noexcept;
+#endif
 
 struct PlaySkinSessionContext {
   std::uint64_t sessionSerial = 0;
@@ -37,9 +68,20 @@ struct PlaySkinSessionContext {
   UiLogicalRect safeUiBounds;
   SkinStorageRoots storageRoots;
   SkinResourcePreparationService &resourcePreparation;
+  SkinBuiltinImageReader builtinImageReader;
   std::shared_ptr<SkinTextureDevice> textureDevice;
+  std::shared_ptr<SkinMovieDevice> movieDevice;
+  std::unique_ptr<LuaSkinHttpTransport> httpTransport;
+  std::shared_ptr<LuaSkinAudioBackend> audioBackend;
+  std::function<LuaSkinLegacyInputGeneration()> captureLegacyInputGeneration;
   std::shared_ptr<SkinLiveResourceCounters> liveResourceCounters;
   SkinConfigurationWriteQueue &configurationWrites;
+  // Config.AudioConfig FloatWriter IDs 17-19 apply only after an authored
+  // skin frame has submitted successfully.
+  std::function<void(SkinAudioVolumeWriterTarget, float)> applyAudioVolume;
+  std::function<void(float)> applyPracticeItemScroll;
+  std::function<void(std::size_t, bool)> applyPracticeMenuItem;
+  std::function<void(int)> applyPracticeVisibleItems;
   std::optional<RuntimeSkinConfigurationSelection> pinnedRuntimeSelection;
   std::stop_token stop;
 };
@@ -51,6 +93,7 @@ struct PlaySkinSessionCreateResult {
   EntryProfileSettings reconciledSettings;
   std::string configurationDigest;
   bool cancelled = false;
+  SkinLoadingTelemetry loadingTelemetry;
   std::vector<SkinDiagnostic> diagnostics;
 };
 
@@ -62,13 +105,19 @@ struct PlaySkinSessionFrameContext {
   const ValidatedBeatorajaSkinModel &model;
   const BeatorajaSkinConfiguration &configuration;
   const SkinPreparedResourceView &resources;
+  SkinMovieCatalog *movies = nullptr;
   ViewportSettings viewportSettings;
   PlaySkinViewport viewport;
-  LuaSkinRuntime &runtime;
+  LuaSkinRuntime *runtime = nullptr;
+  std::function<LuaSkinLegacyInputGeneration()> captureLegacyInputGeneration;
   PlaySkinStateBridge &bridge;
   Skin2DRenderer &renderer;
   rendering::SkinQuadBatchRenderer &quadRenderer;
   SkinConfigurationWriteQueue &configurationWrites;
+  std::function<void(SkinAudioVolumeWriterTarget, float)> applyAudioVolume;
+  std::function<void(float)> applyPracticeItemScroll;
+  std::function<void(std::size_t, bool)> applyPracticeMenuItem;
+  std::function<void(int)> applyPracticeVisibleItems;
   ISkinGaugeRandomSource *gaugeRandomSource = nullptr;
 };
 
@@ -139,6 +188,8 @@ public:
   identity() const noexcept override;
   [[nodiscard]] std::optional<SkinGameplayTiming>
   selectedSkinGameplayTiming() const override;
+  [[nodiscard]] std::optional<PmsPoorDestinationGeometry>
+  pmsPoorDestinationGeometry() const override;
   [[nodiscard]] gameplay::RealtimeTouchLayout touchLayout() const override;
   [[nodiscard]] std::uint64_t
   touchLayoutRevision() const noexcept override;
@@ -156,6 +207,12 @@ public:
   endPresentationTouch(const PresentationTouchEvent &event,
                        bool cancelled) override;
   void cancelPresentationTouches(long long eventMicros) override;
+  bool focusTextInput(UiLogicalPoint, long long eventMicros) override;
+  [[nodiscard]] bool hasFocusedTextInput() const noexcept override;
+  bool appendTextInput(std::string_view utf8) override;
+  bool backspaceTextInput() override;
+  bool commitTextInput(long long eventMicros) override;
+  void cancelTextInput() noexcept override;
   // Task 20's bounded Down queue and next-frame transactional drain supersede
   // the earlier immediate invokeWriter/SkinWriterResult plan surface. Touch
   // callbacks never mutate gameplay authority in the input callback itself.
@@ -170,6 +227,17 @@ public:
                bool recordTimingSample) override;
 
 #if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
+  [[nodiscard]] bool hasLuaRuntimeForTesting() const noexcept;
+  [[nodiscard]] SkinFileActivityCounters
+  fileActivityCountersForTesting() const noexcept;
+  [[nodiscard]] const ValidatedBeatorajaSkinModel &modelForTesting() const noexcept;
+  [[nodiscard]] std::size_t preparedTextureCountForTesting() const noexcept;
+  [[nodiscard]] std::uint64_t callbackWallMicrosForTesting() const noexcept;
+  [[nodiscard]] PlaySkinResourcePreparationEvidenceForTesting
+  resourcePreparationEvidenceForTesting() const;
+  [[nodiscard]] std::optional<std::int64_t>
+  selectedLongNoteImageIndexForTesting(const PlayfieldVisualState &,
+                                       const PlayfieldProjectionResult &);
   // Focused transaction-core seam. Application code cannot supply an
   // external writer span or observe an unpublished bridge commit.
   [[nodiscard]] PlaySkinFrameTransactionResult prepareFrame(
@@ -186,25 +254,55 @@ public:
 
 private:
   struct OwnedActivation;
-  struct PendingFrame {
-    PlaySkinFrameTransactionResult transaction;
-  };
   struct TouchCapture {
     long long pointerId = 0;
     bool active = false;
     PresentationUiHit hit;
   };
+  struct FocusedTextInput {
+    SkinObjectId sourceObject = 0;
+    std::uint32_t authoredOrdinal = 0;
+    SkinStringWriterId writer{};
+    std::string value;
+    std::size_t codepoints = 0;
+  };
+  struct QueuedStringWriter {
+    SkinStringWriterId writer{};
+    std::string value;
+    long long eventMicros = 0;
+  };
+  using QueuedInteractionPayload =
+      std::variant<SkinEventInvocation, SkinWriterInvocation,
+                   QueuedStringWriter>;
+  struct QueuedInteraction {
+    std::uint64_t sequence = 0;
+    QueuedInteractionPayload payload;
+  };
+  struct PendingFrame {
+    PlaySkinFrameTransactionResult transaction;
+    std::vector<QueuedInteraction> interactions;
+    std::size_t deferredBegin = 0;
+
+    [[nodiscard]] bool hasDeferredInteractions() const noexcept {
+      return deferredBegin < interactions.size();
+    }
+  };
 
   explicit PlaySkinSession(std::unique_ptr<OwnedActivation>);
   [[nodiscard]] PlaySkinFrameTransactionResult runFrameTransaction(
       const PlayfieldVisualState &, const PlayfieldProjectionResult &,
-      std::span<const SkinWriterInvocation>,
-      std::span<const SkinEventInvocation> = {});
+      std::span<const QueuedInteraction>, bool retainBridgeForContinuation);
   [[nodiscard]] PresentationFrameOutcome preparePendingFrame(
       const PlayfieldVisualState &, const PlayfieldProjectionResult &,
-      std::span<const SkinWriterInvocation>,
-      std::span<const SkinEventInvocation> = {},
+      std::vector<QueuedInteraction> = {},
       std::span<const SkinFrameMutation> extraMutations = {});
+  [[nodiscard]] bool enqueueInteraction(QueuedInteractionPayload,
+                                        std::size_t stringBytes = 0);
+  [[nodiscard]] SkinHostCallResult
+  invokeInteraction(const QueuedInteraction &);
+  void applyFrameMutations(std::span<const SkinFrameMutation>) const;
+  void clearQueuedInteractions() noexcept;
+  void discardPendingFrame() noexcept;
   void clearPublishedGeometry(bool advanceTopology) noexcept;
 
   // Declared before the borrowed frame context so every non-owning reference
@@ -219,10 +317,16 @@ private:
   std::optional<SkinInteractionLayout> publishedLayout_;
   std::optional<SyntheticReplayGhostGeometry> publishedReplayGhostGeometry_;
   static constexpr std::size_t maximumQueuedInteractions = 256;
-  std::array<SkinWriterInvocation, maximumQueuedInteractions> queuedWriters_{};
-  std::size_t queuedWriterCount_ = 0;
-  std::array<SkinEventInvocation, maximumQueuedInteractions> queuedEvents_{};
-  std::size_t queuedEventCount_ = 0;
+  static constexpr std::size_t maximumFocusedTextBytes =
+      SkinResourcePolicy::maximumRuntimeStringBytes;
+  static constexpr std::size_t maximumFocusedTextCodepoints =
+      SkinResourcePolicy::maximumRuntimeStringBytes / 2U;
+  static constexpr std::size_t maximumQueuedStringBytes =
+      SkinResourcePolicy::maximumRuntimeStringBytes;
+  std::vector<QueuedInteraction> queuedInteractions_;
+  std::size_t queuedStringBytes_ = 0;
+  std::uint64_t nextInteractionSequence_ = 1;
+  std::optional<FocusedTextInput> focusedTextInput_;
   std::uint64_t touchLayoutRevision_ = 1;
   std::uint64_t touchHitRegionsRevision_ = 1;
 };

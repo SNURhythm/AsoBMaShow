@@ -13,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -890,6 +891,102 @@ void testSdlKeyboardFiltersRepeatAndUsesScancodes() {
          "keyboard events publish physical scancode edges and microseconds");
 }
 
+void testLegacyGenerationUsesMaintainedRawDevicesAndButtonIndices() {
+  static_assert(
+      std::is_trivially_copyable_v<input::LegacyInputGeneration>,
+      "frame publication must remain fixed-value and allocation-free");
+  auto provider = std::make_shared<FakeSdlDeviceProvider>();
+  auto mapped = controllerInfo(301, "/dev/input/mapped");
+  mapped.legacyName = "Mapped Raw Joystick";
+  mapped.pressedRawButtons = {7};
+  auto raw = joystickInfo(302);
+  raw.legacyName = "Unmapped Arcade Raw";
+  provider->devices = {mapped, raw};
+  auto registry = makeRegistryWithSdlProvider(provider);
+
+  SDL_Event mappedButton{};
+  mappedButton.type = SDL_JOYBUTTONDOWN;
+  mappedButton.jbutton.which = 301;
+  mappedButton.jbutton.button = 9;
+  registry.handleSdlEvent(mappedButton);
+  SDL_Event rawButton = mappedButton;
+  rawButton.jbutton.which = 302;
+  rawButton.jbutton.button = 3;
+  registry.handleSdlEvent(rawButton);
+  SDL_Event key{};
+  key.type = SDL_KEYDOWN;
+  key.key.keysym.scancode = SDL_SCANCODE_VOLUMEUP;
+  registry.handleSdlEvent(key);
+
+  const std::size_t opensBeforeCapture = provider->openedInstances.size();
+  const auto generation = registry.legacyInputGeneration(1280, 720);
+  expect(generation.drawableWidth == 1280 && generation.drawableHeight == 720 &&
+             generation.controllerCount == 2 &&
+             generation.controllers[0].name() == "Mapped Raw Joystick" &&
+             generation.controllers[0].pressedButtons.test(7) &&
+             generation.controllers[0].pressedButtons.test(9) &&
+             generation.controllers[1].name() == "Unmapped Arcade Raw" &&
+             generation.controllers[1].pressedButtons.test(3) &&
+             generation.pressedGdxKeys.test(24),
+         "legacy generation preserves registry order, raw names/button indices, "
+         "unmapped devices, and explicit GDX aliases");
+  expect(provider->openedInstances.size() == opensBeforeCapture &&
+             provider->closedInstances.empty(),
+         "legacy frame capture neither enumerates nor opens/closes SDL devices");
+}
+
+void testSdlToGdxAliasTableIsExhaustiveAndUnambiguous() {
+  std::array<int, SDL_NUM_SCANCODES> expected{};
+  expected.fill(-1);
+  bool valid = true;
+  for (const auto alias : sdlGdxKeyAliases()) {
+    const int scancode = static_cast<int>(alias.scancode);
+    valid = valid && scancode >= 0 && scancode < SDL_NUM_SCANCODES &&
+            alias.gdxKeyCode >= 0 && alias.gdxKeyCode <= 255 &&
+            expected[static_cast<std::size_t>(scancode)] == -1;
+    if (scancode >= 0 && scancode < SDL_NUM_SCANCODES) {
+      expected[static_cast<std::size_t>(scancode)] = alias.gdxKeyCode;
+    }
+  }
+  for (int scancode = 0; scancode < SDL_NUM_SCANCODES; ++scancode) {
+    valid = valid &&
+            gdxKeyCodeForSdlScancode(static_cast<SDL_Scancode>(scancode)) ==
+                expected[static_cast<std::size_t>(scancode)];
+  }
+  expect(valid,
+         "every SDL scancode has exactly its explicit representable GDX alias");
+  expect(gdxKeyCodeForSdlScancode(SDL_SCANCODE_SOFTLEFT) == 1 &&
+             gdxKeyCodeForSdlScancode(SDL_SCANCODE_SOFTRIGHT) == 2 &&
+             gdxKeyCodeForSdlScancode(SDL_SCANCODE_ENDCALL) == 6 &&
+             gdxKeyCodeForSdlScancode(SDL_SCANCODE_VOLUMEUP) == 24 &&
+             gdxKeyCodeForSdlScancode(SDL_SCANCODE_VOLUMEDOWN) == 25 &&
+             gdxKeyCodeForSdlScancode(SDL_SCANCODE_NUMLOCKCLEAR) == 78 &&
+             gdxKeyCodeForSdlScancode(SDL_SCANCODE_WWW) == 64 &&
+             gdxKeyCodeForSdlScancode(SDL_SCANCODE_MAIL) == 65 &&
+             gdxKeyCodeForSdlScancode(SDL_SCANCODE_AC_SEARCH) == 84,
+         "mobile, volume, Numlock, browser, mail, and search aliases match the pinned GDX codes");
+
+  auto provider = std::make_shared<FakeSdlDeviceProvider>();
+  auto registry = makeRegistryWithSdlProvider(provider);
+  SDL_Event mainEnter{};
+  mainEnter.type = SDL_KEYDOWN;
+  mainEnter.key.keysym.scancode = SDL_SCANCODE_RETURN;
+  registry.handleSdlEvent(mainEnter);
+  SDL_Event keypadEnter = mainEnter;
+  keypadEnter.key.keysym.scancode = SDL_SCANCODE_KP_ENTER;
+  registry.handleSdlEvent(keypadEnter);
+  mainEnter.type = SDL_KEYUP;
+  registry.handleSdlEvent(mainEnter);
+  expect(registry.legacyInputGeneration(1, 1).pressedGdxKeys.test(66),
+         "releasing one SDL alias does not clear a still-held equivalent GDX key");
+  SDL_Event focusLost{};
+  focusLost.type = SDL_WINDOWEVENT;
+  focusLost.window.event = SDL_WINDOWEVENT_FOCUS_LOST;
+  registry.handleSdlEvent(focusLost);
+  expect(!registry.legacyInputGeneration(1, 1).anyKeyPressed,
+         "focus loss clears maintained keys instead of publishing stale input");
+}
+
 void testSdlInputYieldsClaimedClassesToNativeRealtimeSource() {
   auto provider = std::make_shared<FakeSdlDeviceProvider>();
   auto xinput = controllerInfo(101, "XInput#0");
@@ -1700,6 +1797,8 @@ int main() {
   testFailedBackendIsCleanedAndNeverDispatched();
   testSdlEnumerationFailureKeepsKeyboardAndHotplugOperational();
   testSdlKeyboardFiltersRepeatAndUsesScancodes();
+  testLegacyGenerationUsesMaintainedRawDevicesAndButtonIndices();
+  testSdlToGdxAliasTableIsExhaustiveAndUnambiguous();
   testSdlInputYieldsClaimedClassesToNativeRealtimeSource();
   testRealtimeSdlTranslationDoesNotWaitForRegistryDispatch();
   testSdlRawJoystickButtonsAxesAndHatEdges();

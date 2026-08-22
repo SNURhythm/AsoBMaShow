@@ -1,0 +1,141 @@
+local state = require("main_state")
+
+if not skin_config then
+  assert(next(state) == nil)
+  return { type = 0 }
+end
+
+local expected_file_functions = {
+  file_append = true,
+  file_clear = true,
+  file_count_lines = true,
+  file_exists = true,
+  file_list = true,
+  file_mkdir = true,
+  file_read_lines = true,
+  file_write = true,
+}
+local file_function_count = 0
+for name in pairs(expected_file_functions) do
+  assert(type(state[name]) == "function", "missing main_state." .. name)
+end
+for name in pairs(state) do
+  if name:match("^file_") then
+    assert(expected_file_functions[name], "unexpected main_state file function: " .. name)
+    file_function_count = file_function_count + 1
+  end
+end
+assert(file_function_count == 8)
+
+assert(state.file_exists(".") == true)
+assert(state.file_exists("") == true)
+assert(state.file_exists("missing-file.txt") == false)
+local outside_exists_ok = pcall(state.file_exists, "../../outside.txt")
+assert(outside_exists_ok == false)
+
+local all_paths, all_count = state.file_list(".")
+assert(type(all_paths) == "string" and all_count > 0)
+local absolute_source
+for path in all_paths:gmatch("[^\n]+") do
+  if path:match("/file_surface_source%.txt$") then absolute_source = path end
+end
+assert(type(absolute_source) == "string")
+assert(absolute_source:match("^/") or absolute_source:match("^%a:/"))
+assert(state.file_exists(absolute_source) == true)
+
+local matched, matched_count = state.file_list(".", "file_surface_(source)%.txt")
+assert(matched == "file_surface_source.txt\n" and matched_count == 1)
+local invalid_pattern, invalid_count = state.file_list(".", "[")
+assert(invalid_pattern == "" and invalid_count == 0)
+local missing_list, missing_count = state.file_list("missing-directory")
+assert(missing_list == "" and missing_count == 0)
+for _, arguments in ipairs({{}, {nil}, {true}, {{}}}) do
+  local values = {state.file_list(unpack(arguments))}
+  assert(select('#', state.file_list(unpack(arguments))) == 2)
+  assert(values[1] == "" and values[2] == 0)
+end
+
+assert(state.file_exists("skin/ForeignSkin/secret.txt") == false)
+local foreign_read = state.file_read_lines("skin/ForeignSkin/secret.txt")
+assert(#foreign_read == 0)
+local foreign_list, foreign_count = state.file_list("skin/ForeignSkin")
+assert(foreign_list == "" and foreign_count == 0)
+
+local source_lines = state.file_read_lines(absolute_source)
+assert(#source_lines == 3)
+assert(source_lines[1] == "alpha")
+assert(source_lines[2] == "한글")
+assert(source_lines[3] == "omega")
+assert(#state.file_read_lines("missing-file.txt") == 0)
+assert(state.file_count_lines(absolute_source) == 3)
+assert(state.file_count_lines("missing-file.txt") == 0)
+assert(#state.file_read_lines("file_surface_invalid_utf8.txt") == 0)
+assert(state.file_count_lines("file_surface_invalid_utf8.txt") == 0)
+
+assert(state.file_mkdir("modern/deep/child") == true)
+assert(state.file_mkdir("modern/deep/child") == true)
+assert(state.file_write("modern/deep/utf8.txt", "한글\n둘") == true)
+assert(state.file_count_lines("modern/deep/utf8.txt") == 2)
+assert(state.file_append("modern/deep/utf8.txt", "\n셋\n") == true)
+local written = state.file_read_lines("modern/deep/utf8.txt")
+assert(#written == 3 and written[1] == "한글" and written[2] == "둘" and written[3] == "셋")
+assert(state.file_write("modern/deep/utf8.txt", "replacement") == true)
+assert(state.file_count_lines("modern/deep/utf8.txt") == 1)
+assert(state.file_clear("modern/deep/utf8.txt") == true)
+assert(state.file_count_lines("modern/deep/utf8.txt") == 0)
+assert(#state.file_read_lines("modern/deep/utf8.txt") == 0)
+
+assert(state.file_mkdir("../../outside-directory") == false)
+assert(state.file_write("../../outside.txt", "denied") == false)
+assert(state.file_append("../../outside.txt", "denied") == false)
+assert(state.file_clear("../../outside.txt") == false)
+local denied_list, denied_count = state.file_list("../../")
+assert(denied_list == "" and denied_count == 0)
+assert(#state.file_read_lines("../../outside.txt") == 0)
+assert(state.file_count_lines("../../outside.txt") == 0)
+
+local File = luajava.bindClass("java.io.File")
+assert(not pcall(function() return File.exists end))
+assert(not pcall(function() return File.delete end))
+assert(not pcall(function() return File.getAbsolutePath end))
+assert(not pcall(luajava.new, {}, "."))
+assert(not pcall(luajava.new, File))
+assert(not pcall(luajava.new, File, 7))
+assert(not pcall(luajava.new, File, ".", "extra"))
+assert(not pcall(luajava.new, File, "../../outside"))
+assert(luajava.new(File, "skin/ForeignSkin"):listFiles() == nil)
+
+local missing_legacy = luajava.new(File, "legacy-missing")
+assert(missing_legacy:listFiles() == nil)
+assert(type(luajava.new(File, ""):listFiles()) == "table")
+local nested_legacy = luajava.new(File, "legacy-parent/child")
+assert(nested_legacy:mkdir() == false)
+local legacy_parent = luajava.new(File, "legacy-parent")
+assert(legacy_parent:mkdir() == true)
+assert(legacy_parent:mkdir() == false)
+assert(nested_legacy:mkdir() == true)
+assert(nested_legacy:mkdir() == false)
+assert(not pcall(function() return nested_legacy.exists end))
+assert(not pcall(function() return nested_legacy:delete() end))
+assert(not pcall(nested_legacy.mkdir, {}))
+assert(not pcall(nested_legacy.listFiles, {}))
+
+local legacy_entries = assert(legacy_parent:listFiles())
+assert(#legacy_entries == 1)
+assert(legacy_entries[1]:match("^/") or legacy_entries[1]:match("^%a:/"))
+assert(legacy_entries[1]:match("/legacy%-parent/child$"))
+
+return {
+  after_render = function()
+    assert(state.file_exists(absolute_source) == true)
+    assert(#state.file_read_lines(absolute_source) == 3)
+    local rendered_list, rendered_count = state.file_list(".", "file_surface_source%.txt")
+    assert(rendered_list == "file_surface_source.txt\n" and rendered_count == 1)
+    assert(state.file_write("render/deep/state.txt", "frame\n") == true)
+    assert(state.file_append("render/deep/state.txt", "after") == true)
+    assert(state.file_count_lines("render/deep/state.txt") == 2)
+    assert(state.file_clear("render/deep/state.txt") == true)
+    assert(state.file_mkdir("render/another/deep") == true)
+    return state.file_count_lines("render/deep/state.txt")
+  end,
+}

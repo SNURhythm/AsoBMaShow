@@ -25,11 +25,13 @@ inline float renderY(double itemScrollPosition, double currentScrollPosition,
 inline bool shouldKeepRenderTimeline(double previousBpm, double bpm,
                                      double stopDurationMicros,
                                      double previousScroll, double scroll,
+                                     double previousSpeed, double speed,
+                                     bool hasSpeedObject,
                                      bool isMeasureLine, bool hasPlayableNote,
                                      bool hasInvisibleNote, bool hasLandmine) {
   return previousBpm != bpm || stopDurationMicros > 0.0 ||
-         previousScroll != scroll || isMeasureLine || hasPlayableNote ||
-         hasInvisibleNote || hasLandmine;
+         previousScroll != scroll || previousSpeed != speed || hasSpeedObject ||
+         isMeasureLine || hasPlayableNote || hasInvisibleNote || hasLandmine;
 }
 
 // Value-only equivalent of BMSRenderer's retained timeline scroll lookup.

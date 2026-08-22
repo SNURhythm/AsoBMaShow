@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PlaySkinViewport.h"
+#include "../SkinProfileSettings.h"
 
 #include <array>
 #include <cstdint>
@@ -9,6 +10,40 @@
 #include <vector>
 
 namespace skin {
+
+// MainController owns SkinOffset values as floats. Persisted skin-profile
+// offsets remain integral ConfigOffset values, but LaneRenderer writes the
+// reserved gameplay offsets (Lift, lane cover, and HIDDEN) from scaled lane
+// geometry every frame, so their render-time representation must retain the
+// source precision.
+struct SkinRuntimeOffset {
+  double x = 0.0;
+  double y = 0.0;
+  double w = 0.0;
+  double h = 0.0;
+  double r = 0.0;
+  double a = 0.0;
+};
+
+[[nodiscard]] constexpr SkinRuntimeOffset
+skinRuntimeOffset(const ConfigOffset &offset) noexcept {
+  return {.x = static_cast<double>(offset.x),
+          .y = static_cast<double>(offset.y),
+          .w = static_cast<double>(offset.w),
+          .h = static_cast<double>(offset.h),
+          .r = static_cast<double>(offset.r),
+          .a = static_cast<double>(offset.a)};
+}
+
+struct SkinLaneCoverStateView {
+  bool supported = false;
+  bool laneCoverEnabled = false;
+  double laneCover = 0.0;
+  bool liftEnabled = false;
+  double lift = 0.0;
+  bool hiddenEnabled = false;
+  double hidden = 0.0;
+};
 
 struct SkinDestinationEvaluationInputs {
   std::int64_t nowMicros = 0;
@@ -21,7 +56,7 @@ struct SkinDestinationEvaluationInputs {
   // order, followed by drawCondition when that condition is present.
   std::span<const bool> optionConditions;
   // Already-resolved values in SkinDestinationBody::offsetIds authored order.
-  std::span<const ConfigOffset> orderedOffsets;
+  std::span<const SkinRuntimeOffset> orderedOffsets;
 };
 
 struct AuthoredDestinationGeometry {
@@ -59,13 +94,23 @@ struct UiDestinationGeometry {
   SkinFilterMode filter = SkinFilterMode::Nearest;
 };
 
+struct SkinStretchedDestinationGeometry {
+  AuthoredRect rect;
+  SkinSourceRect region;
+};
+
 SkinDestinationEvaluationResult
 evaluateSkinDestinationAuthored(const SkinDestinationBody &destination,
                                 const SkinDestinationEvaluationInputs &inputs);
 
+[[nodiscard]] SkinStretchedDestinationGeometry
+stretchSkinDestinationAuthored(const AuthoredDestinationGeometry &destination,
+                               const SkinSourceRegionGeometry &source);
+
 UiDestinationGeometry
 projectSkinDestinationToUi(const AuthoredDestinationGeometry &destination,
                            const SkinSourceRegionGeometry &source,
-                           const PlaySkinViewport &viewport);
+                           const PlaySkinViewport &viewport,
+                           bool allowCollapsedSource = false);
 
 } // namespace skin

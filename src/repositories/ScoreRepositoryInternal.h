@@ -77,6 +77,12 @@ std::optional<ScoreBestSnapshot> LoadBestScoreOnConnection(
     const std::optional<std::string> &excludeAttemptId,
     int selectedLongNoteMode = 0,
     const RulesetDescriptor *requiredRuleset = nullptr);
+std::optional<ChartScoreHistorySnapshot> LoadChartScoreHistoryOnConnection(
+    sqlite3 *database, const bms_parser::ChartMeta &chartMeta,
+    int selectedLongNoteMode = 0);
+PlayerScoreHistorySnapshot
+LoadPlayerScoreHistoryOnConnection(
+    sqlite3 *database, const std::filesystem::path &chartDatabasePath);
 std::optional<ScoreBestSnapshot> LoadBestClearScoreOnConnection(
     sqlite3 *database, const bms_parser::ChartMeta &chartMeta,
     const std::optional<std::string> &beforeCreatedAt,

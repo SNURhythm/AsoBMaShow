@@ -2,6 +2,7 @@
 
 #include "../../skin/beatoraja/BgfxSkinTextureDevice.h"
 #include "../../skin/beatoraja/PlaySkinSession.h"
+#include "../../rendering/common.h"
 
 #include <optional>
 #include <string>
@@ -131,6 +132,16 @@ createGameplaySkinSession(GameplaySkinSessionServices services,
   }
 
   try {
+    auto captureLegacyInputGeneration =
+        std::move(services.captureLegacyInputGeneration);
+    if (!captureLegacyInputGeneration) {
+      captureLegacyInputGeneration = [] {
+        skin::LuaSkinLegacyInputGeneration generation;
+        generation.drawableWidth = rendering::render_width;
+        generation.drawableHeight = rendering::render_height;
+        return generation;
+      };
+    }
     skin::PlaySkinSessionContext context{
         .sessionSerial = request.sessionSerial,
         .profileId = std::move(request.profileId),
@@ -142,11 +153,23 @@ createGameplaySkinSession(GameplaySkinSessionServices services,
         .safeUiBounds = input.safeUiBounds,
         .storageRoots = *services.storageRoots,
         .resourcePreparation = *services.resourcePreparation,
+        .builtinImageReader = std::move(services.builtinImageReader),
         .textureDevice = std::make_shared<skin::BgfxSkinTextureDevice>(),
+        .httpTransport = services.createHttpTransport
+                             ? services.createHttpTransport(services.stop)
+                             : nullptr,
+        .audioBackend = std::move(services.audioBackend),
+        .captureLegacyInputGeneration =
+            std::move(captureLegacyInputGeneration),
         .liveResourceCounters = std::move(services.liveResourceCounters),
         .configurationWrites = *services.configurationWrites,
+        .applyAudioVolume = std::move(services.applyAudioVolume),
+        .applyPracticeItemScroll = std::move(services.applyPracticeItemScroll),
+        .applyPracticeMenuItem = std::move(services.applyPracticeMenuItem),
+        .applyPracticeVisibleItems =
+            std::move(services.applyPracticeVisibleItems),
         .pinnedRuntimeSelection = std::move(input.pinnedRuntimeSelection),
-        .stop = {}};
+        .stop = services.stop};
 #if defined(ASOBMASHOW_GAMEPLAY_SKIN_SESSION_FACTORY_TESTING)
     auto created = services.createSessionForTesting
                        ? services.createSessionForTesting(
@@ -165,6 +188,13 @@ createGameplaySkinSession(GameplaySkinSessionServices services,
       }
       appendSessionDiagnostic(services.diagnosticHistory, entry, revisionDigest,
                               configurationDigest, std::move(diagnostic));
+    }
+    if (services.stop.stop_requested()) {
+      return failedResult(
+          services.diagnosticHistory, entry, revisionDigest,
+          configurationDigest,
+          unavailableDiagnostic("skin.session.preparation_cancelled",
+                                "Gameplay skin preparation was cancelled."));
     }
     if (!created.session) {
       const skin::SkinDiagnostic diagnostic = firstError.value_or(

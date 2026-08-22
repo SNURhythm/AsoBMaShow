@@ -1,6 +1,8 @@
 #pragma once
 
 #include "BeatorajaSkinConfiguration.h"
+#include "LuaSkinHttpClient.h"
+#include "LuaSkinLegacyInputHost.h"
 #include "SkinCompatibilityDiagnostics.h"
 #include "../SkinSafetyPolicy.h"
 #include "../package/SkinPackageTypes.h"
@@ -13,6 +15,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -24,6 +27,8 @@ struct lua_State;
 namespace skin {
 
 class LuaSkinFileSystem;
+struct SkinFileActivityCounters;
+class LuaSkinAudioBackend;
 class LuaSkinRuntime;
 class LuaSkinTableDecoder;
 class ISkinFrameState;
@@ -229,6 +234,10 @@ struct LuaSkinRuntimeOptions {
   LuaRuntimePurpose purpose = LuaRuntimePurpose::Catalog;
   std::unique_ptr<LuaSkinFileSystem> fileSystem;
   SkinSafetyPolicy safetyPolicy{};
+  std::unique_ptr<LuaSkinHttpTransport> httpTransport;
+  std::shared_ptr<LuaSkinAudioBackend> audioBackend;
+  std::stop_token stop;
+  LuaSkinLegacyInputSnapshot legacyInputSnapshot;
 };
 
 class LuaSkinRuntime final {
@@ -243,7 +252,15 @@ public:
   LuaValueResult
   loadConfigured(const BeatorajaSkinConfiguration &configuration);
   LuaOperationResult enterRenderPhase();
+  [[nodiscard]] SkinFileActivityCounters
+  fileActivityCounters() const noexcept;
+#if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
+  [[nodiscard]] std::uint64_t callbackFrameWallMicrosForTesting() const noexcept;
+#endif
   void setFrameState(ISkinFrameState *) noexcept;
+  [[nodiscard]] bool
+  setLegacyInputSnapshot(LuaSkinLegacyInputSnapshot) noexcept;
+  void setLegacyInputGeneration(LuaSkinLegacyInputGeneration) noexcept;
   void setEventExecutor(LuaSkinEventExecutor) noexcept;
   LuaOperationResult beginFrame(std::uint64_t visualStateSequence);
   LuaCallbackResult invoke(LuaCallbackId, std::span<const LuaScalar> arguments);

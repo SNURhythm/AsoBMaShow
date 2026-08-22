@@ -4,8 +4,11 @@ target_sources(main PRIVATE
     SkinCommitCoordinator.cpp
     SkinStoragePaths.cpp
     beatoraja/LuaSkinFileSystem.cpp
+    beatoraja/LuaSkinHttpClient.cpp
+    beatoraja/LuaSkinCurlHttpTransport.cpp
     beatoraja/SkinCompatibilityDiagnostics.cpp
     beatoraja/SkinDiagnosticHistory.cpp
+    beatoraja/GameplaySkinSourceFormat.cpp
     package/SkinAliasDetector.cpp
     package/SkinArchiveImporter.cpp
     package/SkinPackageCatalog.cpp
@@ -14,18 +17,36 @@ target_sources(main PRIVATE
     package/SkinPathPolicy.cpp
     package/SkinTreeSnapshotter.cpp
 )
+asobmashow_enable_lua_skin_java_pattern(main)
+
+if(IOS)
+    target_sources(main PRIVATE
+        beatoraja/LuaSkinFoundationHttpTransport.mm
+    )
+endif()
 
 if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
+    target_compile_definitions(main PRIVATE
+        ASOBMASHOW_ENABLE_SKIN_MOVIE_DEVICE=1)
     target_sources(main PRIVATE
         GameplaySkinLifecycle.cpp
         beatoraja/GameplaySkinBuiltinCatalog.cpp
+        beatoraja/GameplaySkinDocumentLoader.cpp
+        beatoraja/JsonGameplaySkinDecoder.cpp
+        beatoraja/Lr2GameplaySkinDecoder.cpp
+        beatoraja/Lr2SkinCsvParser.cpp
+        beatoraja/Lr2SkinHeaderDecoder.cpp
         beatoraja/GameplaySkinValidator.cpp
         beatoraja/BgfxSkinTextureDevice.cpp
         LuaGameplaySkinFeatureEnabled.cpp
         SkinConfigurationWriteQueue.cpp
         beatoraja/PlaySkinSession.cpp
         beatoraja/PlaySkinStateBridge.cpp
+        beatoraja/PomyuCharaResource.cpp
         beatoraja/LuaSkinHostModules.cpp
+        beatoraja/LuaSkinAudioHost.cpp
+        beatoraja/LuaSkinLegacyInputHost.cpp
+        beatoraja/LuaSkinApplicationAudioBackend.cpp
         beatoraja/LuaSkinBindingDecoder.cpp
         beatoraja/LuaSkinRuntime.cpp
         beatoraja/LuaSkinTableDecoder.cpp
@@ -41,6 +62,12 @@ if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
         beatoraja/SkinNoteNormalization.cpp
         beatoraja/SkinNoteLaneGeometryNormalization.cpp
         beatoraja/SkinNoteLineNormalization.cpp
+        beatoraja/SkinBpmGraphRenderer.cpp
+        beatoraja/SkinBitmapFontParser.cpp
+        beatoraja/SkinGaugeGraphRenderer.cpp
+        beatoraja/SkinNoteDistributionGraphRenderer.cpp
+        beatoraja/SkinHitErrorVisualizerRenderer.cpp
+        beatoraja/SkinTimingVisualizerRenderer.cpp
         beatoraja/SkinTextGraphNormalization.cpp
         beatoraja/SkinCoverNormalization.cpp
         beatoraja/SkinObjectResolutionPrecedence.cpp
@@ -48,6 +75,8 @@ if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
         beatoraja/SkinOverlayDigestProvider.cpp
         beatoraja/SkinProcessResidentMemory.cpp
         beatoraja/SkinModelValidator.cpp
+        beatoraja/SkinMovieCatalog.cpp
+        beatoraja/SkinMovieCatalogFrame.cpp
         beatoraja/SkinResourceCatalog.cpp
         beatoraja/SkinTextAtlas.cpp
     )

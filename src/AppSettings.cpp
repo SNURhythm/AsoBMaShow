@@ -417,6 +417,18 @@ void AppSettings::sanitize() {
   visibleTimeDurationMilliseconds =
       std::clamp(visibleTimeDurationMilliseconds, kMinVisibleTimeMs,
                  kMaxVisibleTimeMs);
+  // Preserve the bounds applied by PlayerConfig.validate() and
+  // PlayConfig.validate() before skins consume these raw image-index values.
+  notesDisplayTimingMilliseconds =
+      std::clamp(notesDisplayTimingMilliseconds, -500, 500);
+  constantFadeInMilliseconds =
+      std::clamp(constantFadeInMilliseconds, -1000, 1000);
+  extraNoteDepth = std::clamp(extraNoteDepth, 0, 100);
+  mineMode = std::clamp(mineMode, 0, 4);
+  scrollMode = std::clamp(scrollMode, 0, 2);
+  longNoteModifierMode = std::clamp(longNoteModifierMode, 0, 5);
+  sevenToNinePattern = std::clamp(sevenToNinePattern, 0, 6);
+  sevenToNineType = std::clamp(sevenToNineType, 0, 2);
   gameplayHispeed = sanitizeFloat(gameplayHispeed, 1.0F,
                                   kMinGameplayHispeed,
                                   kMaxGameplayHispeed);
@@ -445,6 +457,8 @@ void AppSettings::sanitize() {
   noteStartPositionPercent =
       std::clamp(noteStartPositionPercent, kMinNoteStartPositionPercent,
                  kMaxNoteStartPositionPercent);
+  liftRatio = sanitizeFloat(liftRatio, 0.1F, 0.0F, 1.0F);
+  hiddenRatio = sanitizeFloat(hiddenRatio, 0.1F, 0.0F, 1.0F);
   playAreaWidth4K = sanitizePlayAreaWidth(playAreaWidth4K);
   playAreaWidth5K = sanitizePlayAreaWidth(playAreaWidth5K);
   playAreaWidth6K = sanitizePlayAreaWidth(playAreaWidth6K);
@@ -551,6 +565,31 @@ void AppSettings::sanitize() {
       parseAssistOptionId(selectedAssistOption, kDefaultAssistOption);
   selectedPacemakerTarget =
       parsePacemakerTargetId(selectedPacemakerTarget, kDefaultPacemakerTarget);
+  const auto boundedSkinString = [](std::string &value,
+                                    std::string_view fallback) {
+    if (value.size() > kMaximumSkinPropertyStringBytes) {
+      value = fallback;
+    }
+  };
+  boundedSkinString(skinModeFilterName, "ALL");
+  boundedSkinString(skinSortId, "TITLE");
+  boundedSkinString(skinDifficultyFilterName, "ALL");
+  boundedSkinString(skinChartReplicationMode, "RIVALCHART");
+  boundedSkinString(skinTargetId, "MAX");
+  std::vector<std::string> boundedTargetList;
+  boundedTargetList.reserve(
+      std::min(skinTargetList.size(), kMaximumSkinTargetListEntries));
+  std::size_t targetBytes = 0;
+  for (auto &target : skinTargetList) {
+    if (boundedTargetList.size() >= kMaximumSkinTargetListEntries ||
+        target.size() > kMaximumSkinPropertyStringBytes ||
+        target.size() > kMaximumSkinTargetListBytes - targetBytes) {
+      continue;
+    }
+    targetBytes += target.size();
+    boundedTargetList.push_back(std::move(target));
+  }
+  skinTargetList = std::move(boundedTargetList);
   musicPlayerPlaybackRatePercent =
       ((std::clamp(musicPlayerPlaybackRatePercent, 50, 200) + 2) / 5) * 5;
   switch (musicPlayerPlaybackMode) {
@@ -694,10 +733,27 @@ bool AppSettings::parseLegacyCfg(std::istream &file, AppSettings &settings,
         if (parseBool(value, parsed)) {
           settings.showInvisibleNotes = parsed;
         }
+      } else if (key == "show_past_notes") {
+        bool parsed = settings.showPastNotes;
+        if (parseBool(value, parsed)) {
+          settings.showPastNotes = parsed;
+        }
+      } else if (key == "judge_timing") {
+        settings.notesDisplayTimingMilliseconds = std::stoi(value);
       } else if (key == "mark_processed_notes") {
         bool parsed = settings.markProcessedNotes;
         if (parseBool(value, parsed)) {
           settings.markProcessedNotes = parsed;
+        }
+      } else if (key == "custom_judge") {
+        bool parsed = settings.customJudge;
+        if (parseBool(value, parsed)) {
+          settings.customJudge = parsed;
+        }
+      } else if (key == "show_judge_area") {
+        bool parsed = settings.showJudgeArea;
+        if (parseBool(value, parsed)) {
+          settings.showJudgeArea = parsed;
         }
       } else if (key == "touch_visualization_enabled") {
         bool parsed = settings.touchVisualizationEnabled;
@@ -734,6 +790,20 @@ bool AppSettings::parseLegacyCfg(std::istream &file, AppSettings &settings,
         if (parseBool(value, parsed)) {
           settings.laneCoverEnabled = parsed;
         }
+      } else if (key == "lift_enabled") {
+        bool parsed = settings.liftEnabled;
+        if (parseBool(value, parsed)) {
+          settings.liftEnabled = parsed;
+        }
+      } else if (key == "lift_ratio") {
+        settings.liftRatio = std::stof(value);
+      } else if (key == "hidden_enabled") {
+        bool parsed = settings.hiddenEnabled;
+        if (parseBool(value, parsed)) {
+          settings.hiddenEnabled = parsed;
+        }
+      } else if (key == "hidden_ratio") {
+        settings.hiddenRatio = std::stof(value);
       } else if (key == "hispeed_auto_adjust") {
         bool parsed = settings.hispeedAutoAdjust;
         if (parseBool(value, parsed)) {

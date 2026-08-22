@@ -62,6 +62,28 @@ struct ScoreBestSnapshot {
   ScoreBestSource source = ScoreBestSource::Local;
 };
 
+// The local equivalent of Beatoraja's one-row ScoreData record.  Aso stores
+// each authenticated play independently, so this projection retains the
+// particular historical fields SkinPropertyFactory reads: the first attempt
+// that established the high EX score and the timestamp of the latest play.
+struct ChartScoreHistorySnapshot {
+  int score = 0;
+  int maxScore = 0;
+  int totalNotes = 0;
+  std::array<int, 5> judgementCounts{};
+  std::optional<std::int64_t> lastPlayedUnixSeconds;
+};
+
+// The local equivalent of Beatoraja PlayerData. PlayDataAccessor increments
+// these fields for each locally recorded play, independently of the selected
+// chart's score record.
+struct PlayerScoreHistorySnapshot {
+  int playCount = 0;
+  int clearCount = 0;
+  std::array<int, 5> judgementCounts{};
+  std::int64_t playDurationSeconds = 0;
+};
+
 [[nodiscard]] inline bool scoreBestSnapshotIsBetter(
     const ScoreBestSnapshot &candidate,
     const std::optional<ScoreBestSnapshot> &current) {

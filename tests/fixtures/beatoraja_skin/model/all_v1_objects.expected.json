@@ -30,7 +30,7 @@
   ],
   "floatBindings": [
     {"id": 1, "domain": "FloatValue", "selector": 800, "authoredOrdinal": 0},
-    {"id": 2, "domain": "Rate", "selector": 800, "authoredOrdinal": 1}
+    {"id": 2, "domain": "Rate", "selector": 17, "authoredOrdinal": 1}
   ],
   "objects": [
     {"id": 1, "name": "strip", "authoredOrdinal": 0, "critical": false},
@@ -39,7 +39,13 @@
     {"id": 4, "name": "ratio", "authoredOrdinal": 3, "critical": false},
     {"id": 5, "name": "rate-slider", "authoredOrdinal": 4, "critical": false},
     {"id": 6, "name": "notes", "authoredOrdinal": 5, "critical": true},
-    {"id": 7, "name": "optional-missing", "authoredOrdinal": 6, "critical": false}
+    {"id": 7, "name": "optional-missing", "authoredOrdinal": 6, "critical": false},
+    {"id": 8, "name": "judge-distribution", "authoredOrdinal": 7, "critical": false},
+    {"id": 9, "name": "bpmgraph-all", "authoredOrdinal": 8, "critical": false},
+    {"id": 10, "name": "gaugegraph-all", "authoredOrdinal": 9, "critical": false},
+    {"id": 11, "name": "timing-all", "authoredOrdinal": 10, "critical": false},
+    {"id": 12, "name": "hiterror-all", "authoredOrdinal": 11, "critical": false},
+    {"id": 13, "name": "timing-distribution-all", "authoredOrdinal": 12, "critical": false}
   ],
   "stripStates": [
     [

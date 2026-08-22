@@ -149,6 +149,18 @@ std::vector<SkinBuiltinBindingCatalogEntry> makeCatalog() {
     add(entries, rate, selector);
   }
 
+  // FloatPropertyFactory.RateType provides built-in writers for the three
+  // Config.AudioConfig fields and BMSPlayer's practice-menu viewport.
+  // Lane-cover mutation remains unavailable through this binding surface.
+  const SkinBindingType floatWriter{.kind = SkinBindingKind::FloatWriter};
+  for (const int selector : {17, 18, 19, 20}) {
+    add(entries, floatWriter, selector);
+  }
+  for (const char *selector : {"mastervolume", "keyvolume", "bgmvolume",
+                               "practice_position"}) {
+    add(entries, floatWriter, selector);
+  }
+
   // getFloatProperty is FloatType + its pattern table + RateType fallback.
   const SkinBindingType floatValue{
       .kind = SkinBindingKind::FloatProperty,
@@ -229,9 +241,14 @@ std::vector<SkinBuiltinBindingCatalogEntry> makeCatalog() {
     add(entries, string, "practice_item_value" + std::to_string(index));
   }
 
+  // StringPropertyFactory.StringType.searchword is the only pinned numeric
+  // StringWriter. In BMSPlayer its MusicSelector-only body is an intentional
+  // no-op, but the non-null writer still makes implicit Text fields editable.
+  add(entries, SkinBindingType{.kind = SkinBindingKind::StringWriter}, 30);
+
   // Timers are not a gap: TimerPropertyFactory and PlaySkinStateBridge both
   // define every nonnegative ID, including an exact inactive fallback. No
-  // built-in float or string writer is executable yet.
+  // other built-in string writer is executable in the pinned factory.
   return entries;
 }
 

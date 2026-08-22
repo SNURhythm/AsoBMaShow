@@ -2,6 +2,8 @@
 
 #include "BeatorajaSkinModel.h"
 #include "LuaSkinFileSystem.h"
+#include "PomyuCharaResource.h"
+#include "SkinGeneratedTexture.h"
 #include "SkinLiveResourceCounters.h"
 #include "../SkinSafetyPolicy.h"
 #include "../package/SkinTreeSnapshotter.h"
@@ -17,12 +19,15 @@
 #include <optional>
 #include <span>
 #include <stop_token>
+#include <string_view>
 #include <thread>
 #include <vector>
 
 #include <bgfx/bgfx.h>
 
 namespace skin {
+
+[[nodiscard]] bool skinResourcePathIsMovie(std::string_view) noexcept;
 
 // One fixed policy is shared by staged validation and planning. Values are
 // deliberately far below package-import limits: resources are frame-critical.
@@ -38,6 +43,10 @@ struct SkinResourcePolicy {
   static constexpr std::size_t maximumTextAtlasUses = 8'192;
   static constexpr std::size_t maximumAtlasBytes = 32U * 1024U * 1024U;
   static constexpr std::size_t maximumAtlasSessionBytes = 128U * 1024U * 1024U;
+  static constexpr std::size_t maximumGeneratedTextures = 512;
+  static constexpr std::size_t maximumGeneratedSessionBytes =
+      128U * 1024U * 1024U;
+  static constexpr std::size_t maximumMovieDecoders = 8;
   static constexpr std::size_t maximumRuntimeStrings = 64;
   static constexpr std::size_t maximumRuntimeStringBytes = 64U * 1024U;
   static constexpr std::size_t maximumGlyphs = 8192;
@@ -46,6 +55,11 @@ struct SkinResourcePolicy {
   // small enough to duplicate safely across bounded style variants.
   static constexpr std::size_t maximumFallbackChainDigestBytes =
       64U * 1024U;
+  // These CPU-work limits remain fixed even when byte/dimension guards are
+  // relaxed: scalable glyph effects perform one blend per covered offset.
+  static constexpr double maximumScalableFontOutlineWidth = 8.0;
+  static constexpr std::size_t maximumScalableFontPaintBlendOperations =
+      64U * 1024U * 1024U;
   static constexpr std::size_t cacheByteBudget = 128U * 1024U * 1024U;
   static constexpr std::size_t workerCount = 2;
 };
@@ -79,9 +93,20 @@ public:
                               std::size_t decodedBytes,
                               std::size_t regions) noexcept;
   [[nodiscard]] bool addAtlas(std::size_t decodedBytes, std::size_t glyphs,
-                              std::size_t kerningPairs) noexcept;
+                              std::size_t kerningPairs,
+                              std::size_t physicalResources = 1,
+                              std::size_t scalableFontPaintBlendOperations = 0)
+      noexcept;
   [[nodiscard]] std::size_t decodedBytes() const noexcept {
     return decodedBytes_;
+  }
+  [[nodiscard]] std::size_t encodedBytes() const noexcept {
+    return encodedBytes_;
+  }
+  [[nodiscard]] std::size_t
+  remainingScalableFontPaintBlendOperations() const noexcept {
+    return SkinResourcePolicy::maximumScalableFontPaintBlendOperations -
+           scalableFontPaintBlendOperations_;
   }
 
 private:
@@ -95,6 +120,7 @@ private:
   std::size_t atlasBytes_ = 0;
   std::size_t glyphs_ = 0;
   std::size_t kerningPairs_ = 0;
+  std::size_t scalableFontPaintBlendOperations_ = 0;
 };
 
 [[nodiscard]] bool skinResourceDimensionsAllowed(int width, int height,
@@ -116,6 +142,15 @@ skinResourceRegionLookupComparisonsForTesting() noexcept;
 void resetSkinResourceFontAtlasRequestHighWaterForTesting() noexcept;
 [[nodiscard]] std::size_t
 skinResourceFontAtlasRequestHighWaterForTesting() noexcept;
+void resetSkinResourcePlatformAssetReadsForTesting() noexcept;
+[[nodiscard]] std::size_t
+skinResourcePlatformAssetReadsForTesting() noexcept;
+void setSkinResourceAccountingLimitsForTesting(
+    std::size_t maximumSessionEncodedBytes,
+    std::size_t maximumAtlasSessionBytes) noexcept;
+void resetSkinResourceAccountingLimitsForTesting() noexcept;
+[[nodiscard]] std::size_t
+skinResourceCommittedEncodedBytesForTesting() noexcept;
 #endif
 
 // The authored rectangle is the stable command-side identity. Resolution is
@@ -138,6 +173,11 @@ struct SkinDecodedImage {
   std::map<SkinResourceId, std::vector<SkinResolvedRegion>> aliasRegionMappings;
 };
 using SkinTextAtlasId = std::uint32_t;
+enum class SkinTextLayoutKind : std::uint8_t {
+  Scalable,
+  Bitmap,
+  Lr2Image,
+};
 struct SkinTextAtlasKey {
   SkinResourceId font = 0;
   int pointSize = 0;
@@ -159,21 +199,42 @@ struct SkinPreparedGlyphMetrics {
   // It includes the primary layout ascent, the selected face's yoffset, and
   // any bounded atlas padding, so fallback glyphs need no font access later.
   int layoutOffsetY = 0;
+  std::size_t page = 0;
+  // Bitmap fallback faces retain their own source type so a colored
+  // distance-field primary can identify ordinary color glyphs.
+  int bitmapFontType = -1;
+};
+struct SkinPreparedGlyphPage {
+  std::string physicalKey;
+  std::optional<image_decode::DecodedImageData> pixels;
+  int bitmapFontType = 0;
 };
 struct SkinPreparedGlyphAtlas {
   SkinTextAtlasId id = 0; SkinTextAtlasKey key; image_decode::DecodedImageData pixels;
+  std::vector<SkinPreparedGlyphPage> pages;
   std::map<char32_t, SkinPreparedGlyphMetrics> glyphs;
   std::map<std::pair<char32_t,char32_t>, int> kerning;
   int ascent = 0; int capHeight = 0; int descent = 0; int lineHeight = 0;
+  bool bitmapFont = false;
+  int bitmapFontType = 0;
+  int originalSize = 0;
+  int pageWidth = 0;
+  int pageHeight = 0;
+  SkinTextLayoutKind layoutKind = SkinTextLayoutKind::Scalable;
+  int margin = 0;
+  std::size_t paintBlendOperations = 0;
 };
 struct SkinResourceUploadPlan {
   SkinRevisionLease revision;
   SkinSafetyPolicy safetyPolicy{};
   std::vector<SkinDecodedImage> images;
+  std::map<int, SkinResourceId> builtinImageResources;
   std::vector<SkinPreparedGlyphAtlas> atlases;
   // Render-time text lookup must not reconstruct the configured and securely
   // resolved fallback-chain identity used to key an atlas.
   std::map<SkinObjectId, SkinTextAtlasId> textAtlasesByObject;
+  std::vector<PreparedPomyuCharaResource> pomyuCharas;
+  std::array<int, 8> pomyuMotionCyclesMillis = {1, 1, 1, 1, 1, 1, 1, 1};
   std::size_t decodedBytes = 0;
 };
 
@@ -184,10 +245,14 @@ struct SkinResourceValidationInputs {
   const ValidatedBeatorajaSkinModel &model;
   const BeatorajaSkinConfiguration &configuration;
   std::span<const std::string> requiredRuntimeStrings;
+  bool practiceMode = false;
   SkinSafetyPolicy safetyPolicy{};
   std::stop_token stop;
 };
 struct SkinResourceValidationResult { bool valid = false; bool cancelled = false; std::vector<SkinDiagnostic> diagnostics; };
+using SkinBuiltinImageReader = std::function<bool(
+    const std::filesystem::path &, std::vector<unsigned char> &,
+    std::size_t, std::string *, std::stop_token)>;
 struct SkinResourcePreparationInputs {
   SkinRevisionLease revision;
   SkinEntryId entry;
@@ -195,6 +260,9 @@ struct SkinResourcePreparationInputs {
   const ValidatedBeatorajaSkinModel &model;
   const BeatorajaSkinConfiguration &configuration;
   std::span<const std::string> requiredRuntimeStrings;
+  bool practiceMode = false;
+  std::map<int, std::filesystem::path> builtinImagePaths;
+  SkinBuiltinImageReader builtinImageReader;
   SkinSafetyPolicy safetyPolicy{};
   std::stop_token stop;
 };
@@ -247,12 +315,34 @@ struct PreparedSkinTextAtlas {
   bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
   int width = 0;
   int height = 0;
+  struct Page {
+    bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
+    int width = 0;
+    int height = 0;
+    int bitmapFontType = 0;
+    bool available = false;
+  };
+  std::vector<Page> pages;
   std::map<char32_t, SkinPreparedGlyphMetrics> glyphs;
   std::map<std::pair<char32_t, char32_t>, int> kerning;
   int ascent = 0;
   int capHeight = 0;
   int descent = 0;
   int lineHeight = 0;
+  bool bitmapFont = false;
+  int bitmapFontType = 0;
+  int originalSize = 0;
+  int pageWidth = 0;
+  int pageHeight = 0;
+  SkinTextLayoutKind layoutKind = SkinTextLayoutKind::Scalable;
+  int margin = 0;
+};
+
+struct PreparedSkinGeneratedTexture {
+  SkinGeneratedTextureKey key;
+  bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
+  int width = 0;
+  int height = 0;
 };
 
 class SkinTextureDevice {
@@ -265,6 +355,10 @@ public:
     return create(image);
   }
   virtual void destroy(bgfx::TextureHandle) noexcept = 0;
+  virtual bool update(bgfx::TextureHandle,
+                      const image_decode::DecodedImageData &) {
+    return false;
+  }
   virtual bool ownsCurrentThread() const noexcept = 0;
   virtual int maximumTextureDimension() const noexcept {
     return SkinResourcePolicy::maximumDimension;
@@ -288,6 +382,22 @@ public:
   findTextAtlas(SkinTextAtlasId) const noexcept = 0;
   virtual const PreparedSkinTextAtlas *
   findTextAtlasForObject(SkinObjectId) const noexcept = 0;
+  // System/chart images are prepared outside the package resource plan. A
+  // host that owns one exposes the catalog resource which backs the pinned
+  // SkinSourceReference ID; unavailable references return nullopt.
+  virtual std::optional<SkinResourceId>
+  builtinImageResource(int) const noexcept {
+    return std::nullopt;
+  }
+  virtual const PreparedPomyuCharaResource *
+  findPomyuChara(SkinObjectId) const noexcept {
+    return nullptr;
+  }
+  virtual const PreparedSkinGeneratedTexture *prepareGeneratedTexture(
+      const SkinGeneratedTextureKey &,
+      const SkinGeneratedTextureData &) const noexcept {
+    return nullptr;
+  }
 };
 
 class SkinResourceCatalog;
@@ -310,6 +420,26 @@ public:
   const PreparedSkinTextAtlas *findTextAtlas(const SkinTextAtlasKey &) const noexcept;
   const PreparedSkinTextAtlas *
   findTextAtlasForObject(SkinObjectId) const noexcept override;
+  std::optional<SkinResourceId>
+  builtinImageResource(int) const noexcept override;
+  const PreparedPomyuCharaResource *
+  findPomyuChara(SkinObjectId) const noexcept override;
+  [[nodiscard]] const std::array<int, 8> &
+  pomyuMotionCyclesMillis() const noexcept {
+    return pomyuMotionCyclesMillis_;
+  }
+  [[nodiscard]] std::size_t textureCount() const noexcept {
+    return owned_.size();
+  }
+#if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
+  [[nodiscard]] std::vector<SkinResourceId>
+  preparedResourceIdsForTesting() const;
+  [[nodiscard]] std::vector<SkinObjectId>
+  preparedTextObjectIdsForTesting() const;
+#endif
+  const PreparedSkinGeneratedTexture *prepareGeneratedTexture(
+      const SkinGeneratedTextureKey &,
+      const SkinGeneratedTextureData &) const noexcept override;
   void enterRenderPhase() noexcept { renderPhase_ = true; }
 private:
   struct OwnedTexture { bgfx::TextureHandle handle = BGFX_INVALID_HANDLE; };
@@ -325,11 +455,25 @@ private:
   std::thread::id owner_;
   bool renderPhase_ = false;
   bool liveResourceCounted_ = false;
-  std::vector<OwnedTexture> owned_;
+  mutable std::vector<OwnedTexture> owned_;
   std::map<SkinResourceId, PreparedSkinResource> resources_;
+  std::map<int, SkinResourceId> builtinImageResources_;
   std::map<SkinTextAtlasId, PreparedSkinTextAtlas> atlases_;
   std::map<SkinTextAtlasKey, SkinTextAtlasId> atlasKeys_;
   std::map<SkinObjectId, SkinTextAtlasId> textAtlasesByObject_;
+  std::map<SkinObjectId, PreparedPomyuCharaResource> pomyuCharas_;
+  std::array<int, 8> pomyuMotionCyclesMillis_ = {1, 1, 1, 1,
+                                                 1, 1, 1, 1};
+  struct GeneratedTextureEntry {
+    PreparedSkinGeneratedTexture prepared;
+    std::shared_ptr<const std::vector<std::uint8_t>> pixels;
+    std::uint64_t contentRevision = 0;
+    std::size_t ownedIndex = 0;
+  };
+  mutable std::map<SkinGeneratedTextureKey, GeneratedTextureEntry>
+      generatedTextures_;
+  mutable std::size_t generatedDecodedBytes_ = 0;
+  SkinSafetyPolicy safetyPolicy_{};
 };
 
 } // namespace skin

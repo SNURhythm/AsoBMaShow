@@ -9,12 +9,25 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <iterator>
 #include <limits>
 #include <optional>
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace {
+
+std::filesystem::path chartResourcePath(
+    const bms_parser::ChartMeta &metadata,
+    const std::filesystem::path &declared) {
+  if (declared.empty()) return {};
+  const std::filesystem::path directory =
+      !metadata.BmsPath.empty() ? metadata.BmsPath.parent_path()
+                                : metadata.Folder;
+  return (directory / declared).lexically_normal();
+}
 
 std::optional<std::uint32_t> nextUtf8CodePoint(std::string_view value,
                                                std::size_t &index) {
@@ -215,6 +228,7 @@ double beatorajaMainBpm(const bms_parser::Chart &chart,
     std::uint32_t hash = 0;
   };
   std::vector<Entry> entries;
+  std::unordered_map<std::uint64_t, std::size_t> entryIndexByBits;
   for (const auto *measure : chart.Measures) {
     if (measure == nullptr) {
       continue;
@@ -224,13 +238,13 @@ double beatorajaMainBpm(const bms_parser::Chart &chart,
         continue;
       }
       const std::uint64_t bits = javaDoubleBits(timeline->Bpm);
-      const auto found = std::ranges::find_if(
-          entries, [bits](const Entry &entry) { return entry.keyBits == bits; });
       const int noteCount = songInformationTimelineNoteCount(
           *timeline, chart, longNoteModeOverride);
-      if (found != entries.end()) {
-        found->noteCount += noteCount;
+      if (const auto found = entryIndexByBits.find(bits);
+          found != entryIndexByBits.end()) {
+        entries[found->second].noteCount += noteCount;
       } else {
+        entryIndexByBits.emplace(bits, entries.size());
         entries.push_back({.keyBits = bits,
                            .bpm = timeline->Bpm,
                            .noteCount = noteCount,
@@ -365,6 +379,188 @@ BeatorajaNoteCounts beatorajaNoteCounts(const bms_parser::Chart &chart,
   return result;
 }
 
+int javaDoubleToIntForSongInformation(double value) {
+  if (std::isnan(value)) {
+    return 0;
+  }
+  if (value >= static_cast<double>(std::numeric_limits<int>::max())) {
+    return std::numeric_limits<int>::max();
+  }
+  if (value <= static_cast<double>(std::numeric_limits<int>::min())) {
+    return std::numeric_limits<int>::min();
+  }
+  return static_cast<int>(value);
+}
+
+PlayfieldSongInformation
+beatorajaSongInformation(const bms_parser::Chart &chart,
+                         int longNoteModeOverride) {
+  // This follows SongInformation(BMSModel) at the pinned Beatoraja revision.
+  // Keep the source's fixed seven buckets even though gameplay skins only
+  // consume its aggregate density values.
+  long long lastTimeMicros = 0;
+  for (const auto *measure : chart.Measures) {
+    if (measure == nullptr) {
+      continue;
+    }
+    for (const auto *timeline : measure->TimeLines) {
+      if (timeline != nullptr) {
+        lastTimeMicros = std::max(lastTimeMicros, timeline->Timing);
+      }
+    }
+  }
+  const std::size_t bucketCount =
+      static_cast<std::size_t>(std::max(0LL, lastTimeMicros / 1'000'000)) +
+      2U;
+  // SongInformation uses one bucket per elapsed second. Retaining every zero
+  // bucket lets a distant malformed timeline allocate gigabytes, while its
+  // aggregate results only depend on sparse note changes. Keep the source's
+  // inclusive per-second semantics as delta intervals instead.
+  std::unordered_map<std::size_t, long long> noteCountDeltas;
+  if (chart.Meta.TotalNotes > 0) {
+    noteCountDeltas.reserve(std::min<std::size_t>(
+        static_cast<std::size_t>(chart.Meta.TotalNotes) * 2U + 2U,
+        1U << 20U));
+  }
+  const auto addNoteRange = [&](std::size_t start, std::size_t end) {
+    if (start > end) {
+      return;
+    }
+    ++noteCountDeltas[start];
+    --noteCountDeltas[end + 1U];
+  };
+  const double borderValue =
+      static_cast<double>(chart.Meta.TotalNotes) *
+      (1.0 - 100.0 / chart.Meta.Total);
+  int border = javaDoubleToIntForSongInformation(borderValue);
+  std::size_t borderPosition = 0;
+  for (const auto *measure : chart.Measures) {
+    if (measure == nullptr) {
+      continue;
+    }
+    for (const auto *timeline : measure->TimeLines) {
+      if (timeline == nullptr) {
+        continue;
+      }
+      const std::size_t second =
+          static_cast<std::size_t>(timeline->Timing / 1'000'000);
+      for (const auto *note : timeline->Notes) {
+        if (note == nullptr) {
+          continue;
+        }
+        const auto *longNote = dynamic_cast<const bms_parser::LongNote *>(note);
+        if (longNote != nullptr && !longNote->IsTail()) {
+          const long long tailMillis =
+              longNote->Tail->Timeline->Timing / 1'000'000;
+          const std::size_t tailSecond = static_cast<std::size_t>(tailMillis);
+          addNoteRange(second, tailSecond);
+        }
+
+        const bool omittedLnTail =
+            longNote != nullptr && longNote->IsTail() &&
+            longNoteMode(*longNote, chart, longNoteModeOverride) ==
+                ChartLongNoteMode::LN;
+        if (omittedLnTail) {
+          continue;
+        }
+        if (dynamic_cast<const bms_parser::LandmineNote *>(note) != nullptr) {
+          // Mines do not contribute to the density aggregate.
+        } else if (longNote == nullptr) {
+          addNoteRange(second, second);
+        }
+        --border;
+        if (border == 0) {
+          borderPosition = second;
+        }
+      }
+    }
+  }
+
+  const int bucketCountForMinimum =
+      bucketCount > static_cast<std::size_t>(std::numeric_limits<int>::max())
+          ? std::numeric_limits<int>::max()
+          : static_cast<int>(bucketCount);
+  const int minimumDensity =
+      chart.Meta.TotalNotes / bucketCountForMinimum / 4;
+  PlayfieldSongInformation result;
+  std::vector<std::pair<std::size_t, long long>> orderedNoteCountDeltas(
+      noteCountDeltas.begin(), noteCountDeltas.end());
+  std::ranges::sort(orderedNoteCountDeltas, {},
+                    [](const auto &entry) { return entry.first; });
+  struct NoteCountSegment {
+    std::size_t start = 0;
+    std::size_t end = 0;
+    long long notes = 0;
+  };
+  std::vector<NoteCountSegment> segments;
+  segments.reserve(noteCountDeltas.size() + 1U);
+  std::size_t segmentStart = 0;
+  long long currentNotes = 0;
+  const auto appendSegment = [&](std::size_t end) {
+    if (segmentStart < end) {
+      segments.push_back(
+          {.start = segmentStart, .end = end, .notes = currentNotes});
+    }
+  };
+  for (const auto &[second, delta] : orderedNoteCountDeltas) {
+    if (second >= bucketCount) {
+      break;
+    }
+    appendSegment(second);
+    currentNotes += delta;
+    segmentStart = second;
+  }
+  appendSegment(bucketCount);
+
+  long double densityTotal = 0.0;
+  long double densityCount = 0.0;
+  for (const auto &segment : segments) {
+    result.peakDensity =
+        std::max(result.peakDensity, static_cast<double>(segment.notes));
+    if (segment.notes >= minimumDensity) {
+      const long double length =
+          static_cast<long double>(segment.end - segment.start);
+      densityTotal += static_cast<long double>(segment.notes) * length;
+      densityCount += length;
+    }
+  }
+  result.density = static_cast<double>(densityTotal / densityCount);
+
+  const std::size_t window =
+      std::min<std::size_t>(5U, bucketCount - borderPosition - 1U);
+  const std::size_t lastWindowStart = bucketCount - window - 1U;
+  std::set<std::size_t> windowStarts = {borderPosition, lastWindowStart};
+  for (const auto &[second, delta] : orderedNoteCountDeltas) {
+    (void)delta;
+    const std::size_t first =
+        second > window ? second - window : static_cast<std::size_t>(0);
+    const std::size_t last = std::min(second, lastWindowStart);
+    for (std::size_t start = std::max(first, borderPosition); start <= last;
+         ++start) {
+      windowStarts.insert(start);
+    }
+  }
+  const auto notesAt = [&segments](std::size_t second) {
+    const auto it = std::upper_bound(
+        segments.begin(), segments.end(), second,
+        [](std::size_t value, const NoteCountSegment &segment) {
+          return value < segment.start;
+        });
+    return std::prev(it)->notes;
+  };
+  for (const std::size_t start : windowStarts) {
+    long long notes = 0;
+    for (std::size_t next = 0; next < window; ++next) {
+      notes += notesAt(start + next);
+    }
+    result.endDensity = std::max(result.endDensity,
+                                 static_cast<double>(notes) /
+                                     static_cast<double>(window));
+  }
+  result.total = chart.Meta.Total;
+  return result;
+}
+
 } // namespace
 
 std::vector<std::string> PlayfieldChartVisualModel::runtimeStrings() const {
@@ -396,6 +592,7 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
   result.chartMd5 = chart.Meta.MD5;
   result.chartSha256 = chart.Meta.SHA256;
   result.keyCount = chart.Meta.KeyMode;
+  result.initialBpm = chart.Meta.Bpm;
   result.text.title = chart.Meta.Title;
   result.text.subtitle = chart.Meta.SubTitle;
   result.text.artist = chart.Meta.Artist;
@@ -413,9 +610,6 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
       {13, chart.Meta.Genre},
       {14, chart.Meta.Artist},
       {15, chart.Meta.SubArtist},
-      // A chart session has no selected table unless the application provides
-      // one.  Beatoraja concatenates two empty resource values in that case.
-      {1003, ""},
   };
   const BeatorajaNoteCounts noteCounts =
       beatorajaNoteCounts(chart, longNoteModeOverride);
@@ -463,6 +657,11 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
       .hasBpmStop = hasBpmStop,
       .stageFilePath = chart.Meta.StageFile.generic_string(),
       .backBmpPath = chart.Meta.BackBmp.generic_string(),
+      .stageFileResourcePath =
+          chartResourcePath(chart.Meta, chart.Meta.StageFile),
+      .backBmpResourcePath = chartResourcePath(chart.Meta, chart.Meta.BackBmp),
+      .bannerResourcePath = chartResourcePath(chart.Meta, chart.Meta.Banner),
+      .songInformation = beatorajaSongInformation(chart, longNoteModeOverride),
   };
   result.laneOrder = chart.Meta.GetTotalLaneIndices();
 
@@ -528,6 +727,8 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
           previous != nullptr ? previous->Bpm : timeline->Bpm;
       const double previousScroll =
           previous != nullptr ? previous->Scroll : timeline->Scroll;
+      const double previousSpeed =
+          previous != nullptr ? previous->Speed : timeline->Speed;
       const bool terminalScrollContinuation =
           lastVisualNoteTimelineOrdinal.has_value() &&
           timelineOrdinal > *lastVisualNoteTimelineOrdinal;
@@ -535,7 +736,8 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
           terminalScrollContinuation ||
           gameplay_scroll_geometry::shouldKeepRenderTimeline(
               previousBpm, timeline->Bpm, stopMicros(*timeline), previousScroll,
-              timeline->Scroll, timeline->IsFirstInMeasure,
+              timeline->Scroll, previousSpeed, timeline->Speed,
+              timeline->HasSpeedObject, timeline->IsFirstInMeasure,
               hasAny(timeline->Notes), hasAny(timeline->InvisibleNotes),
               hasAny(timeline->LandmineNotes));
       ChartVisualTimeline value{
@@ -545,7 +747,8 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
           .scrollPosition = scrollPosition,
           .bpm = timeline->Bpm,
           .scrollRate = timeline->Scroll,
-          .speed = 1.0,
+          .speed = timeline->Speed,
+          .hasSpeedObject = timeline->HasSpeedObject,
           .stopMicros = stopMicros(*timeline),
           .sectionLine = timeline->IsFirstInMeasure,
           .bgaOnly = hasBga && !hasNotes,
@@ -564,6 +767,10 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
       }
       result.scrollPrefix.push_back(value.scrollPosition);
       result.timelines.push_back(value);
+      if (value.hasSpeedObject) {
+        result.speedPoints.push_back(
+            {.timeMicros = value.timeMicros, .speed = value.speed});
+      }
       previous = timeline;
     }
   }
@@ -688,5 +895,194 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
     }
     result.notes.push_back(entry.value);
   }
+
+  auto &graph = result.skinGameplayGraph;
+  graph.mainBpm = result.staticMetadata.mainBpm;
+  const std::size_t distributionSeconds =
+      result.timelines.empty()
+          ? 0
+          : static_cast<std::size_t>(
+                std::max(0LL, result.timelines.back().timeMicros) /
+                1'000'000) +
+                2;
+  graph.normalDistribution.assign(distributionSeconds, {});
+  graph.judgementDistributionSeconds =
+      distributionSeconds == 0 ? 0 : distributionSeconds - 1;
+
+  std::unordered_map<ChartVisualId, long long> graphTimelineTimes;
+  graphTimelineTimes.reserve(result.timelines.size());
+  for (const auto &timeline : result.timelines) {
+    graphTimelineTimes.emplace(timeline.id, timeline.timeMicros);
+  }
+  const auto graphSecond = [&graphTimelineTimes](const ChartVisualNote &note) {
+    const auto timeline = graphTimelineTimes.find(note.timelineId);
+    return timeline == graphTimelineTimes.end()
+               ? -1
+               : static_cast<int>(timeline->second / 1'000'000);
+  };
+  std::unordered_map<ChartVisualId, int> graphSecondsByNoteId;
+  graphSecondsByNoteId.reserve(result.notes.size());
+  for (const auto &note : result.notes) {
+    graphSecondsByNoteId.emplace(note.id, graphSecond(note));
+  }
+  const auto graphScratchLanes = chart.Meta.GetScratchLaneIndices();
+  graph.judgementNotes.reserve(result.notes.size());
+  for (const auto &note : result.notes) {
+    const int second = graphSecondsByNoteId.at(note.id);
+    const bool classicTail = note.source == ChartVisualNoteSource::Playable &&
+                             note.kind == ChartVisualNoteKind::LongTail &&
+                             note.longNoteMode == ChartLongNoteMode::LN;
+    const bool countsTowardJudgement =
+        note.source == ChartVisualNoteSource::Playable &&
+        note.kind != ChartVisualNoteKind::Mine && !classicTail;
+    graph.judgementNotes.push_back(
+        {.sourceId = note.id,
+         .second = second,
+         .countsTowardJudgement = countsTowardJudgement,
+         .redirectSourceId = classicTail ? note.pairId
+                                         : kInvalidSkinGameplayGraphSourceId});
+    if (second < 0 || static_cast<std::size_t>(second) >=
+                          graph.normalDistribution.size()) {
+      continue;
+    }
+    const bool scratch = std::ranges::find(graphScratchLanes, note.lane) !=
+                         graphScratchLanes.end();
+    if (note.kind == ChartVisualNoteKind::Mine) {
+      ++graph.normalDistribution[second][6];
+    } else if (note.source != ChartVisualNoteSource::Playable) {
+      continue;
+    } else if (note.kind == ChartVisualNoteKind::Normal) {
+      ++graph.normalDistribution[second][scratch ? 2 : 5];
+    } else if (note.kind == ChartVisualNoteKind::LongHead ||
+               note.kind == ChartVisualNoteKind::LongTail) {
+      if (note.kind == ChartVisualNoteKind::LongHead) {
+        const auto pair = graphSecondsByNoteId.find(note.pairId);
+        if (pair == graphSecondsByNoteId.end()) {
+          continue;
+        }
+        const int tailSecond = pair->second;
+        if (tailSecond < second || tailSecond < 0 ||
+            static_cast<std::size_t>(tailSecond) >=
+                graph.normalDistribution.size()) {
+          continue;
+        }
+        for (int index = second; index <= tailSecond; ++index) {
+          ++graph.normalDistribution[index][scratch ? 1 : 4];
+        }
+      }
+      if (!(note.kind == ChartVisualNoteKind::LongTail &&
+            note.longNoteMode == ChartLongNoteMode::LN)) {
+        ++graph.normalDistribution[second][scratch ? 0 : 3];
+        --graph.normalDistribution[second][scratch ? 1 : 4];
+      }
+    }
+  }
+
+  double graphSpeed = result.initialBpm;
+  long long lastGraphPointTime = 0;
+  graph.bpmSeries.reserve(result.timelines.size() + 2);
+  graph.bpmSeries.push_back({.chartTimeMicros = 0,
+                             .sourceOrder = 0,
+                             .bpm = result.initialBpm,
+                             .scroll = 1.0,
+                             .bpmTimesScroll = result.initialBpm,
+                             .graphSpeed = result.initialBpm,
+                             .emitsGraphPoint = true,
+                             .synthetic = true});
+  for (const auto &timeline : result.timelines) {
+    const double bpmTimesScroll = timeline.bpm * timeline.scrollRate;
+    bool emitsGraphPoint = false;
+    if (timeline.stopMicros > 0) {
+      if (graphSpeed != 0.0) {
+        graphSpeed = 0.0;
+        emitsGraphPoint = true;
+      }
+    } else if (graphSpeed != bpmTimesScroll) {
+      graphSpeed = bpmTimesScroll;
+      emitsGraphPoint = true;
+    }
+    if (emitsGraphPoint) {
+      lastGraphPointTime = timeline.timeMicros;
+    }
+    graph.bpmSeries.push_back({.chartTimeMicros = timeline.timeMicros,
+                               .sourceOrder = timeline.authoredOrdinal,
+                               .bpm = timeline.bpm,
+                               .scroll = timeline.scrollRate,
+                               .bpmTimesScroll = bpmTimesScroll,
+                               .stopMicros = timeline.stopMicros,
+                               .graphSpeed = graphSpeed,
+                               .emitsGraphPoint = emitsGraphPoint});
+  }
+  if (!result.timelines.empty() &&
+      lastGraphPointTime != result.timelines.back().timeMicros) {
+    const auto &last = result.timelines.back();
+    graph.bpmSeries.push_back({.chartTimeMicros = last.timeMicros,
+                               .sourceOrder = last.authoredOrdinal,
+                               .bpm = last.bpm,
+                               .scroll = last.scrollRate,
+                               .bpmTimesScroll = last.bpm * last.scrollRate,
+                               .stopMicros = last.stopMicros,
+                               .graphSpeed = graphSpeed,
+                               .emitsGraphPoint = true,
+                               .synthetic = true});
+  }
+  graph.minimumBpm = std::numeric_limits<double>::max();
+  graph.maximumBpm = std::numeric_limits<double>::lowest();
+  for (const auto &point : graph.bpmSeries) {
+    if (!point.emitsGraphPoint) {
+      continue;
+    }
+    if (point.graphSpeed > 0.0) {
+      graph.minimumBpm = std::min(graph.minimumBpm, point.graphSpeed);
+    }
+    graph.maximumBpm = std::max(graph.maximumBpm, point.graphSpeed);
+  }
+  if (graph.minimumBpm == std::numeric_limits<double>::max()) {
+    graph.minimumBpm = 0.0;
+  }
+  if (graph.maximumBpm == std::numeric_limits<double>::lowest()) {
+    graph.maximumBpm = 0.0;
+  }
+  return result;
+}
+
+double speedObjectMultiplierAtTime(const PlayfieldChartVisualModel &model,
+                                   long long timeMicros) noexcept {
+  const auto next = std::upper_bound(
+      model.speedPoints.begin(), model.speedPoints.end(), timeMicros,
+      [](long long time, const ChartVisualSpeedPoint &point) {
+        return time < point.timeMicros;
+      });
+  const ChartVisualSpeedPoint *previous =
+      next == model.speedPoints.begin() ? nullptr : &*std::prev(next);
+  const double speed = previous != nullptr ? previous->speed : 1.0;
+  if (next == model.speedPoints.end()) {
+    return speed;
+  }
+  const long long start = previous != nullptr ? previous->timeMicros : 0;
+  const long long end = next->timeMicros;
+  if (end <= start) {
+    return next->speed;
+  }
+  double progress = static_cast<double>(timeMicros - start) /
+                    static_cast<double>(end - start);
+  progress = std::max(0.0, std::min(1.0, progress));
+  return speed + (next->speed - speed) * progress;
+}
+
+ChartVisualTimelineAuthority chartVisualTimelineAuthorityAtTime(
+    const PlayfieldChartVisualModel &model, long long timeMicros) noexcept {
+  ChartVisualTimelineAuthority result{.bpm = model.initialBpm};
+  const auto next = std::upper_bound(
+      model.timelines.begin(), model.timelines.end(), timeMicros,
+      [](long long time, const ChartVisualTimeline &timeline) {
+        return time < timeline.timeMicros;
+      });
+  if (next != model.timelines.begin()) {
+    const auto &current = *std::prev(next);
+    result.bpm = current.bpm;
+    result.scrollRate = current.scrollRate;
+  }
+  result.speedMultiplier = speedObjectMultiplierAtTime(model, timeMicros);
   return result;
 }

@@ -3,6 +3,7 @@
 #include "replay/ReplayOption.h"
 
 #include "ChartPlaybackDuration.h"
+#include "ArchiveFile.h"
 #include "CourseConstraintUtils.h"
 #include "CoursePlaySession.h"
 #include "PlayOptionUtils.h"
@@ -25,9 +26,14 @@
 #include "scene/PracticeAnalyticsView.h"
 #include "scene/play/BMSRenderer.h"
 #include "scene/play/GamePlayTiming.h"
+#include "scene/play/GameplaySkinSessionFactory.h"
+#include "scene/play/PlayfieldChartVisualModel.h"
 #include "scene/play/ReplayPlayfieldPresentation.h"
 #include "scene/play/ReplayVideoGameplayPreflight.h"
 #include "skin/DefaultSkin.h"
+#include "skin/beatoraja/LuaSkinApplicationAudioBackend.h"
+#include "skin/beatoraja/LuaSkinCurlHttpTransport.h"
+#include "view/ImageView.h"
 #include "view/UiTheme.h"
 #include "view/View.h"
 #include "targets.h"
@@ -119,20 +125,79 @@ struct PreparedReplayGameplayPresentation {
 };
 
 GameplaySkinSessionServices
-replayGameplaySkinSessionServices(ApplicationContext &context) {
+replayGameplaySkinSessionServices(ApplicationContext &context,
+                                  std::stop_token stop) {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   return {.acquire = context.acquireGameplaySkinForNextChart,
           .storageRoots = context.skinStorageRoots
                               ? &*context.skinStorageRoots
                               : nullptr,
           .resourcePreparation = context.skinResourcePreparationService.get(),
+          .builtinImageReader = archive_file::readFileBounded,
           .liveResourceCounters = context.skinLiveResourceCounters,
+          .createHttpTransport = [](std::stop_token stop) {
+            return skin::createLuaSkinProductionHttpTransport(stop);
+          },
+          .audioBackend = skin::createLuaSkinNoOutputAudioBackend(
+              context.skinLiveResourceCounters),
           .configurationWrites = context.skinConfigurationWriteQueue.get(),
-          .diagnosticHistory = context.skinDiagnosticHistory.get()};
+          .diagnosticHistory = context.skinDiagnosticHistory.get(),
+          .stop = stop};
 #else
   (void)context;
+  (void)stop;
   return {};
 #endif
+}
+
+std::optional<PlayfieldPersistedScoreState>
+replayExportPersistedScore(ApplicationContext &context,
+                           const bms_parser::ChartMeta &meta) {
+  const auto persisted = context.scoreRepository.LoadChartScoreHistory(meta, 0);
+  if (!persisted) {
+    return std::nullopt;
+  }
+  return PlayfieldPersistedScoreState{
+      .score = persisted->score,
+      .maxScore = persisted->maxScore,
+      .totalNotes = persisted->totalNotes,
+      .judgementCounts = persisted->judgementCounts,
+      .lastPlayedUnixSeconds = persisted->lastPlayedUnixSeconds};
+}
+
+PlayfieldPlayerScoreHistoryState
+replayExportPlayerScoreHistory(ApplicationContext &context) {
+  const auto history = context.scoreRepository.LoadPlayerScoreHistory();
+  return {.playCount = history.playCount,
+          .clearCount = history.clearCount,
+          .judgementCounts = history.judgementCounts,
+          .playDurationSeconds = history.playDurationSeconds};
+}
+
+bool replayExportBmsResourceImageAvailable(
+    const bms_parser::ChartMeta &meta,
+    const std::filesystem::path &declaredPath) {
+  if (declaredPath.empty() || meta.BmsPath.empty()) return false;
+  try {
+    return imageResourceAvailable(meta.BmsPath.parent_path() / declaredPath);
+  } catch (...) {
+    return false;
+  }
+}
+
+replay_video_export::ReplayChartMetadataAuthority
+replayExportChartMetadataAuthority(ApplicationContext &context,
+                                   const bms_parser::ChartMeta &meta) {
+  ChartMetaPathBatchReadOutcome records;
+  if (!meta.BmsPath.empty()) {
+    if (auto session = context.chartRepository.OpenSession()) {
+      const std::array<std::filesystem::path, 1> paths{meta.BmsPath};
+      records = session->SelectChartMetaByPaths(paths);
+    }
+  }
+  return replay_video_export::projectReplayChartMetadataAuthority(
+      meta, records, replayExportBmsResourceImageAvailable(meta, meta.StageFile),
+      replayExportBmsResourceImageAvailable(meta, meta.BackBmp));
 }
 
 [[nodiscard]] std::optional<ReplayVideoExportResult>
@@ -146,27 +211,67 @@ preflightReplayGameplayPresentation(
         nullptr,
     const CourseConstraintRules &constraints = {},
     const PlayfieldAuthorityUpdate *initialAuthority = nullptr,
-    bool rendererReservationAlreadyHeld = false) {
+    bool rendererReservationAlreadyHeld = false,
+    const replay_video_export::ReplayChartMetadataAuthority *chartMetadata =
+        nullptr,
+    std::stop_token stop = {}) {
   const auto resolvedOptions = resolveReplayVideoExportOptions(options);
   const PlayfieldAuthorityUpdate fallbackInitialAuthority{
-      .playerName = context.profileManager.activeProfile().displayName};
+      .persistedScore = replayExportPersistedScore(context, chart.Meta),
+      .playerScoreHistory = replayExportPlayerScoreHistory(context),
+      .playerName = context.profileManager.activeProfile().displayName,
+      .irProviderName = gameplaySkinFirstIrProviderName(settings.irProviders),
+      .irAccountName = context.irAccountNameSnapshot(),
+      .modeFilterName = settings.skinModeFilterName,
+      .sortId = settings.skinSortId,
+      .difficultyFilterName = settings.skinDifficultyFilterName,
+      .chartReplicationMode = settings.skinChartReplicationMode,
+      .skinTargetId = settings.skinTargetId,
+      .skinTargetList = settings.skinTargetList,
+      .liftEnabled = settings.liftEnabled,
+      .liftRatio = constraints.noSpeed ? 0.0F : settings.liftRatio,
+      .hiddenEnabled = settings.hiddenEnabled,
+      .hiddenRatio = constraints.noSpeed ? 0.0F : settings.hiddenRatio};
+  const auto resolvedChartMetadata =
+      chartMetadata != nullptr
+          ? *chartMetadata
+          : replayExportChartMetadataAuthority(context, chart.Meta);
+  PlayfieldAuthorityUpdate authority =
+      initialAuthority != nullptr ? *initialAuthority : fallbackInitialAuthority;
+  if (!authority.graphGaugeState.has_value()) {
+    const GaugeProfile gaugeProfile =
+        resolveGaugeProfile(GaugeProfile::Standard, chart.Meta.KeyMode);
+    const RhythmState initialGaugeState =
+        replay_result::BuildInitialGaugeState(chart, replay, gaugeProfile);
+    authority.gaugeType = initialGaugeState.gaugeType;
+    authority.gaugeAutoShift = initialGaugeState.gaugeAutoShift;
+    authority.gaugeAutoShiftLowerBound =
+        initialGaugeState.gaugeAutoShiftLowerBound;
+    authority.currentGauge = initialGaugeState.currentGauge;
+    authority.gaugeRules = initialGaugeState.gaugeRules();
+    authority.graphGaugeState = initialGaugeState.gaugeSnapshot();
+  }
+  authority.songReviewFavorite = resolvedChartMetadata.songReviewFavorite;
+  authority.chartHasDocument = resolvedChartMetadata.chartHasDocument;
+  authority.stageFileAvailable = resolvedChartMetadata.stageFileAvailable;
+  authority.backBmpAvailable = resolvedChartMetadata.backBmpAvailable;
   const auto configuration = replay_video_export::replayGameplayPresentationConfig(
       settings, settings.playAreaWidthForKeyMode(chart.Meta.KeyMode), chart,
       resolvedOptions.renderTouchPoints, resolvedOptions.renderReplayGhosts,
       constraints, replay.assistOption);
-  const PlayfieldAuthorityUpdate &authority =
-      initialAuthority != nullptr ? *initialAuthority : fallbackInitialAuthority;
   const auto result =
       rendererReservationAlreadyHeld
           ? replay_video_export::preflightReplayGameplayPresentationWithReservedRenderer(
                 chart, replay, settings, preparationPlan, configuration,
                 resolvedOptions.width, resolvedOptions.height, authority,
-                context.jukebox, replayGameplaySkinSessionServices(context),
+                context.jukebox,
+                replayGameplaySkinSessionServices(context, stop),
                 prepared.presentation, pinnedRuntimeSelection)
           : replay_video_export::preflightReplayGameplayPresentation(
                 chart, replay, settings, preparationPlan, configuration,
                 resolvedOptions.width, resolvedOptions.height, authority,
-                context.jukebox, replayGameplaySkinSessionServices(context),
+                context.jukebox,
+                replayGameplaySkinSessionServices(context, stop),
                 context.rendererAccess, prepared.presentation,
                 pinnedRuntimeSelection);
   if (result) {
@@ -247,6 +352,7 @@ resolveReplayVideoExportOptions(const ReplayVideoExportOptions &options) {
   resolved.renderReplayGhosts = options.renderReplayGhosts;
   resolved.pacemakerTarget = options.pacemakerTarget;
   resolved.progressCallback = options.progressCallback;
+  resolved.stop = options.stop;
   return resolved;
 }
 
@@ -692,35 +798,6 @@ std::string replayExportPlayOptionLabel(const ReplayData &replay) {
   return label.empty() ? "" : "Option: " + label;
 }
 
-// LaneRenderer advances both BPM and #SCROLL from its timeline cursor before
-// computing the live green number and note travel.  Export must carry the
-// same pair into the shared presentation instead of treating BPM changes as
-// the only visual-rate state.
-std::vector<const bms_parser::TimeLine *>
-collectPlaybackRateChangeTimelines(const bms_parser::Chart &chart) {
-  std::vector<const bms_parser::TimeLine *> timelines;
-  for (const auto &measure : chart.Measures) {
-    if (measure == nullptr) {
-      continue;
-    }
-    for (const auto *timeline : measure->TimeLines) {
-      if (timeline == nullptr ||
-          (!timeline->BpmChange && !timeline->ScrollChange) ||
-          !std::isfinite(timeline->Bpm) || timeline->Bpm <= 0.0 ||
-          !std::isfinite(timeline->Scroll)) {
-        continue;
-      }
-      timelines.push_back(timeline);
-    }
-  }
-  std::sort(timelines.begin(), timelines.end(),
-            [](const bms_parser::TimeLine *lhs,
-               const bms_parser::TimeLine *rhs) {
-              return lhs->Timing < rhs->Timing;
-            });
-  return timelines;
-}
-
 struct ReplayAudioTrackResult {
   bool success = false;
   std::filesystem::path outputPath;
@@ -1091,7 +1168,7 @@ courseReplayStageTitles(const std::vector<CourseReplayVideoStage> &stages) {
 preflightCourseReplayGameplayPresentations(
     ApplicationContext &context, std::vector<CourseReplayVideoStage> &stages,
     const AppSettings &settings, const ReplayVideoExportOptions &options,
-    ReplayVideoExportLog *log) {
+    ReplayVideoExportLog *log, std::stop_token stop) {
   const auto resolvedOptions = resolveReplayVideoExportOptions(options);
   std::vector<replay_video_export::CourseReplayGameplayPreflightStage>
       preflightStages;
@@ -1121,13 +1198,30 @@ preflightCourseReplayGameplayPresentations(
          .exportWidth = resolvedOptions.width,
          .exportHeight = resolvedOptions.height,
          .initialAuthority = {
+             .persistedScore = replayExportPersistedScore(context,
+                                                          stage.chart->Meta),
+             .playerScoreHistory = replayExportPlayerScoreHistory(context),
              .playerName = context.profileManager.activeProfile().displayName,
+             .irProviderName =
+                 gameplaySkinFirstIrProviderName(settings.irProviders),
+             .irAccountName = context.irAccountNameSnapshot(),
+             .modeFilterName = settings.skinModeFilterName,
+             .sortId = settings.skinSortId,
+             .difficultyFilterName = settings.skinDifficultyFilterName,
+             .chartReplicationMode = settings.skinChartReplicationMode,
+             .skinTargetId = settings.skinTargetId,
+             .skinTargetList = settings.skinTargetList,
              .courseMode = true,
              .courseStageIndex = static_cast<int>(stageIndex),
              .courseStageCount = static_cast<int>(stages.size()),
              .courseStageTitles = courseStageTitles,
+             .liftEnabled = settings.liftEnabled,
+             .liftRatio = stage.constraints.noSpeed ? 0.0F : settings.liftRatio,
+             .hiddenEnabled = settings.hiddenEnabled,
+             .hiddenRatio = stage.constraints.noSpeed ? 0.0F
+                                                       : settings.hiddenRatio,
          },
-         .skinServices = replayGameplaySkinSessionServices(context),
+         .skinServices = replayGameplaySkinSessionServices(context, stop),
          .presentation = stage.gameplayPresentation->presentation,
          .selectedSkinTiming = stage.selectedSkinTiming,
          .runtimeSelection = stage.runtimeSkinSelection});
@@ -2483,11 +2577,15 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
                        long long requestedGameplayDurationMicros,
                        long long requestedAudioDurationMicros,
                        bool stoppedOnGaugeFailure,
-                       ReplayVideoExportLog *log) {
+                       ReplayVideoExportLog *log,
+                       const replay_video_export::ReplayChartMetadataAuthority &
+                           chartMetadataAuthority) {
   const auto resolvedOptions = resolveReplayVideoExportOptions(options);
   const int width = resolvedOptions.width;
   const int height = resolvedOptions.height;
   const int fps = resolvedOptions.fps;
+  const std::int64_t exportStartUptimeMillis =
+      context.applicationUptimeMillis.load(std::memory_order_acquire);
   const long long audioOffsetMicros =
       static_cast<long long>(settings.audioOffsetMs) * 1000LL;
   long long gameplayDurationMicros =
@@ -2634,22 +2732,11 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
           gameplayDurationMicros, stoppedOnGaugeFailure,
           preparedGameplay.presentation.get());
 
-  const auto playbackRateChangeTimelines =
-      collectPlaybackRateChangeTimelines(chart);
-  size_t playbackRateChangeCursor = 0;
-  double currentExportBpm = chart.Meta.Bpm;
-  double currentExportScrollRate = 1.0;
-  auto applyExportPlaybackRate = [&](long long songTimeMicros) {
-    while (playbackRateChangeCursor < playbackRateChangeTimelines.size() &&
-           playbackRateChangeTimelines[playbackRateChangeCursor]->Timing <=
-               songTimeMicros) {
-      const auto *timeline =
-          playbackRateChangeTimelines[playbackRateChangeCursor];
-      currentExportBpm = timeline->Bpm;
-      currentExportScrollRate = timeline->Scroll;
-      ++playbackRateChangeCursor;
-    }
-  };
+  const PlayfieldChartVisualModel exportChartVisualModel =
+      buildPlayfieldChartVisualModel(chart, 0);
+  const auto replayPersistedScore = replayExportPersistedScore(context, chart.Meta);
+  const auto replayPlayerScoreHistory = replayExportPlayerScoreHistory(context);
+
   const auto initialLaneCover =
       replay_video_export::replayLaneCoverInitialState(replay, settings, false);
   replay_video_export::ReplayLaneCoverPlayback laneCoverPlayback(
@@ -2658,6 +2745,11 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
       resolveGaugeProfile(GaugeProfile::Standard, chart.Meta.KeyMode);
   const RhythmState initialGaugeState =
       replay_result::BuildInitialGaugeState(chart, replay, gaugeProfile);
+  const std::optional<long long> failureMicros =
+      stoppedOnGaugeFailure
+          ? replay_result::FindGaugeFailureMicros(
+                chart, replay, GaugeProfile::Standard)
+          : std::nullopt;
   GaugeType replayGaugeType = initialGaugeState.gaugeType;
   float replayGauge = initialGaugeState.currentGauge;
   const std::optional<ResultPreviousBestData> previousBest =
@@ -2697,11 +2789,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   const size_t resultFrameCount = static_cast<size_t>(
       std::ceil(static_cast<long double>(resultTailMicros) * fps / 1000000.0L));
   const size_t frameCount = gameplayFrameCount + resultFrameCount;
-  const ReplayData resultReplay = replayThroughFailure(
-      replay, stoppedOnGaugeFailure
-                  ? replay_result::FindGaugeFailureMicros(
-                        chart, replay, GaugeProfile::Standard)
-                  : std::nullopt);
+  const ReplayData resultReplay = replayThroughFailure(replay, failureMicros);
   const RhythmState replayResultState =
       replay_result::BuildResultState(chart, resultReplay);
   rendering::SimpleBatchRenderer resultGraphBatch;
@@ -2954,19 +3042,22 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
       }
       ++replayCursor;
     }
-    applyExportPlaybackRate(frameTiming.gameplayTimeMicros);
+    const auto timelineAuthority =
+        replay_video_export::replayGameplayTimelineAuthority(
+            exportChartVisualModel, presentationFrameState, settings);
     const auto laneCover = laneCoverPlayback.advance(
         replay.laneCoverEvents, frameTiming.gameplayTimeMicros);
     for (const auto &transition : laneCover.transitions) {
       preparedGameplay.presentation->applyLaneCoverTransition(
-          transition, currentExportBpm);
+          transition, timelineAuthority.bpm);
     }
     preparedGameplay.presentation->releaseDueClassicLongNoteTails(
         frameTiming.gameplayTimeMicros);
 
-    preparedGameplay.presentation->applyAuthorityUpdate({
-        .currentBpm = currentExportBpm,
-        .currentScrollRate = currentExportScrollRate,
+    PlayfieldAuthorityUpdate frameAuthority{
+        .currentBpm = timelineAuthority.bpm,
+        .currentScrollRate = timelineAuthority.scrollRate,
+        .currentSpeedMultiplier = timelineAuthority.speedMultiplier,
         .judgementCounters = replayJudgementAuthority.judgementCounters(),
         .judgementFastSlowCounters =
             replayJudgementAuthority.judgementFastSlowCounters(),
@@ -2974,10 +3065,9 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
         .maximumCombo =
             preparedGameplay.presentation->progressiveMaximumCombo(),
         .bestScore = bestScoreAuthority.bestScore,
+        .persistedScore = replayPersistedScore,
+        .playerScoreHistory = replayPlayerScoreHistory,
         .bestScoreTarget = bestScoreAuthority.bestScoreTarget,
-        .gaugeType = replayGaugeType,
-        .gaugeAutoShift = replay.gaugeAutoShift,
-        .currentGauge = replayGauge,
         .gaugeRules = initialGaugeState.gaugeRules(),
         .pacemakerTarget = activePacemakerTarget,
         .pacemakerStatus =
@@ -2989,7 +3079,19 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
                                    replay.playOption2.value_or("NORMAL"))
                                    .value_or(0),
         .doublePlayOption = replay.provenance.doublePlayFlip ? 1 : 0,
+        .songReviewFavorite = chartMetadataAuthority.songReviewFavorite,
+        .chartHasDocument = chartMetadataAuthority.chartHasDocument,
+        .stageFileAvailable = chartMetadataAuthority.stageFileAvailable,
+        .backBmpAvailable = chartMetadataAuthority.backBmpAvailable,
         .playerName = context.profileManager.activeProfile().displayName,
+        .irProviderName = gameplaySkinFirstIrProviderName(settings.irProviders),
+        .irAccountName = context.irAccountNameSnapshot(),
+        .modeFilterName = settings.skinModeFilterName,
+        .sortId = settings.skinSortId,
+        .difficultyFilterName = settings.skinDifficultyFilterName,
+        .chartReplicationMode = settings.skinChartReplicationMode,
+        .skinTargetId = settings.skinTargetId,
+        .skinTargetList = settings.skinTargetList,
         .playOptionLabel = replayExportPlayOptionLabel(replay),
         .autoPlayMarkVisible = replay.autoPlay,
         .gameplayMode = PlayfieldGameplayMode::Replay,
@@ -3000,8 +3102,22 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
             preparationPlan.indicatorVisibleAt(rawSongTimeMicros),
         .laneCoverPercent = laneCover.percent,
         .laneCoverEnabled = laneCover.enabled,
+        .liftEnabled = settings.liftEnabled,
+        .liftRatio = settings.liftRatio,
+        .hiddenEnabled = settings.hiddenEnabled,
+        .hiddenRatio = settings.hiddenRatio,
+        .failureAnimationActive =
+            replay_video_export::replayGameplayFailureAnimationActive(
+                frameTiming.gameplayTimeMicros, failureMicros),
         .laneCoverChanged = false,
-    });
+    };
+    replay_video_export::applyReplayGameplayGaugeAuthority(
+        frameAuthority, replay, replayGaugeType, replayGauge);
+    replay_video_export::applyReplayGameplayTargetOptionAuthority(
+        frameAuthority);
+    replay_video_export::applyReplayGameplayRuntimeAuthority(
+        frameAuthority, fps, exportStartUptimeMillis, videoTimeMicros);
+    preparedGameplay.presentation->applyAuthorityUpdate(frameAuthority);
 
     bool presentationFailed = false;
     if (!renderAndQueueFrame(frameIndex, videoTimeMicros, [&]() {
@@ -3012,7 +3128,10 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
           const auto presentationFrame = preparedGameplay.presentation->renderFrame(
               renderContext,
               presentationFrameState.clock,
-              {.includeInvisibleNotes = settings.showInvisibleNotes});
+              {.noteDisplayTimeMicros =
+                   replay_video_export::replayGameplayNoteDisplayTimeMicros(
+                       presentationFrameState, settings),
+               .includeInvisibleNotes = settings.showInvisibleNotes});
           if (presentationFrame.outcome ==
                   PresentationFrameOutcome::CriticalFailure ||
               presentationFrame.failure) {
@@ -3167,7 +3286,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     std::vector<CourseReplayVideoStage> &stages, const AppSettings &settings,
     const ReplayVideoExportOptions &options,
     const std::filesystem::path &wavPath,
-    const std::filesystem::path &outputPath, ReplayVideoExportLog *log) {
+    const std::filesystem::path &outputPath, ReplayVideoExportLog *log,
+    std::stop_token stop) {
   if (stages.empty()) {
     return {.success = false, .outputPath = outputPath,
             .message = "No course replay stages"};
@@ -3177,6 +3297,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
   const int width = resolvedOptions.width;
   const int height = resolvedOptions.height;
   const int fps = resolvedOptions.fps;
+  const std::int64_t exportStartUptimeMillis =
+      context.applicationUptimeMillis.load(std::memory_order_acquire);
   const long long audioOffsetMicros =
       static_cast<long long>(settings.audioOffsetMs) * 1000LL;
   const std::vector<std::string> courseStageTitles =
@@ -3534,23 +3656,43 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     bgaMissTracker.reset();
     bms_parser::Chart &chart = *stage.chart;
     const ReplayData &stageReplay = stage.replay;
+    const auto chartMetadataAuthority =
+        replayExportChartMetadataAuthority(context, chart.Meta);
+    const PlayfieldChartVisualModel stageChartVisualModel =
+        buildPlayfieldChartVisualModel(chart, 0);
 
     if (!stage.gameplayPresentation.has_value()) {
       stage.gameplayPresentation.emplace();
     }
     PlayfieldAuthorityUpdate initialAuthority{
         .playerName = context.profileManager.activeProfile().displayName,
+        .irProviderName = gameplaySkinFirstIrProviderName(settings.irProviders),
+        .irAccountName = context.irAccountNameSnapshot(),
+        .modeFilterName = settings.skinModeFilterName,
+        .sortId = settings.skinSortId,
+        .difficultyFilterName = settings.skinDifficultyFilterName,
+        .chartReplicationMode = settings.skinChartReplicationMode,
+        .skinTargetId = settings.skinTargetId,
+        .skinTargetList = settings.skinTargetList,
         .courseMode = true,
         .courseStageIndex = static_cast<int>(stageIndex),
         .courseStageCount = static_cast<int>(stages.size()),
         .courseStageTitles = courseStageTitles,
     };
+    initialAuthority.gaugeType = stage.initialGaugeState.gaugeType;
+    initialAuthority.gaugeAutoShift = stage.initialGaugeState.gaugeAutoShift;
+    initialAuthority.gaugeAutoShiftLowerBound =
+        stage.initialGaugeState.gaugeAutoShiftLowerBound;
+    initialAuthority.currentGauge = stage.initialGaugeState.currentGauge;
+    initialAuthority.gaugeRules = stage.resultState.gaugeRules();
+    initialAuthority.graphGaugeState = stage.initialGaugeState;
     if (const auto failure = preflightReplayGameplayPresentation(
             context, chart, stageReplay, settings, stage.preparationPlan,
             resolvedOptions, *stage.gameplayPresentation, log,
             stage.runtimeSkinSelection ? &*stage.runtimeSkinSelection
                                        : nullptr,
-            stage.constraints, &initialAuthority, true)) {
+            stage.constraints, &initialAuthority, true,
+            &chartMetadataAuthority, stop)) {
       bgfxCleanup.runNow();
       return *failure;
     }
@@ -3594,27 +3736,14 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
         stage.initialGaugeState.gaugeProfile,
         stageReplay.gaugeAutoShiftLowerBound);
 
-    const auto playbackRateChangeTimelines =
-        collectPlaybackRateChangeTimelines(chart);
-    size_t playbackRateChangeCursor = 0;
-    double currentExportBpm = chart.Meta.Bpm;
-    double currentExportScrollRate = 1.0;
-    auto applyExportPlaybackRate = [&](long long songTimeMicros) {
-      while (playbackRateChangeCursor < playbackRateChangeTimelines.size() &&
-             playbackRateChangeTimelines[playbackRateChangeCursor]->Timing <=
-                 songTimeMicros) {
-        const auto *timeline =
-            playbackRateChangeTimelines[playbackRateChangeCursor];
-        currentExportBpm = timeline->Bpm;
-        currentExportScrollRate = timeline->Scroll;
-        ++playbackRateChangeCursor;
-      }
-    };
     const auto initialLaneCover =
         replay_video_export::replayLaneCoverInitialState(
             stageReplay, settings, stage.constraints.noSpeed);
     replay_video_export::ReplayLaneCoverPlayback laneCoverPlayback(
         initialLaneCover.percent, initialLaneCover.enabled);
+    const auto replayPersistedScore =
+        replayExportPersistedScore(context, chart.Meta);
+    const auto replayPlayerScoreHistory = replayExportPlayerScoreHistory(context);
     const long long visualOffsetMicros =
         static_cast<long long>(settings.visualOffsetMs) * 1000LL;
     const size_t gameplayFrameCount =
@@ -3687,7 +3816,10 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
         }
         ++replayCursor;
       }
-      applyExportPlaybackRate(frameTiming.gameplayTimeMicros);
+      const auto timelineAuthority =
+          replay_video_export::replayGameplayTimelineAuthority(
+              stageChartVisualModel, presentationFrameState, settings,
+              stage.constraints.noSpeed);
       const auto laneCover = stage.constraints.noSpeed
                                  ? replay_video_export::ReplayLaneCoverFrameState{
                                        .percent =
@@ -3697,20 +3829,25 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                                        stageReplay.laneCoverEvents,
                                        frameTiming.gameplayTimeMicros);
       for (const auto &transition : laneCover.transitions) {
-        presentation.applyLaneCoverTransition(transition, currentExportBpm);
+        presentation.applyLaneCoverTransition(transition,
+                                              timelineAuthority.bpm);
       }
       presentation.releaseDueClassicLongNoteTails(
           frameTiming.gameplayTimeMicros);
-      presentation.applyAuthorityUpdate({
-          .currentBpm = currentExportBpm,
-          .currentScrollRate = currentExportScrollRate,
+      PlayfieldAuthorityUpdate frameAuthority{
+          .currentBpm = timelineAuthority.bpm,
+          .currentScrollRate = timelineAuthority.scrollRate,
+          .currentSpeedMultiplier = timelineAuthority.speedMultiplier,
           .judgementCounters = replayJudgementAuthority.judgementCounters(),
           .judgementFastSlowCounters =
               replayJudgementAuthority.judgementFastSlowCounters(),
           .comboBreak = replayJudgementAuthority.comboBreak(),
           .maximumCombo = courseMaximumComboPlayback.observe(presentation),
           .bestScore = bestScoreAuthority.bestScore,
+          .persistedScore = replayPersistedScore,
+          .playerScoreHistory = replayPlayerScoreHistory,
           .bestScoreTarget = bestScoreAuthority.bestScoreTarget,
+          .gaugeRules = stage.resultState.gaugeRules(),
           .pacemakerTarget = activePacemakerTarget,
           .pacemakerStatus =
               pacemaker::snapshotForState(activePacemakerTarget,
@@ -3722,11 +3859,20 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                                      stageReplay.playOption2.value_or("NORMAL"))
                                      .value_or(0),
           .doublePlayOption = stageReplay.provenance.doublePlayFlip ? 1 : 0,
+          .songReviewFavorite = chartMetadataAuthority.songReviewFavorite,
+          .chartHasDocument = chartMetadataAuthority.chartHasDocument,
+          .stageFileAvailable = chartMetadataAuthority.stageFileAvailable,
+          .backBmpAvailable = chartMetadataAuthority.backBmpAvailable,
           .playerName = context.profileManager.activeProfile().displayName,
-          .gaugeType = replayGaugeType,
-          .gaugeAutoShift = replay.gaugeAutoShift,
-          .currentGauge = replayGauge,
-          .gaugeRules = stage.resultState.gaugeRules(),
+          .irProviderName =
+              gameplaySkinFirstIrProviderName(settings.irProviders),
+          .irAccountName = context.irAccountNameSnapshot(),
+          .modeFilterName = settings.skinModeFilterName,
+          .sortId = settings.skinSortId,
+          .difficultyFilterName = settings.skinDifficultyFilterName,
+          .chartReplicationMode = settings.skinChartReplicationMode,
+          .skinTargetId = settings.skinTargetId,
+          .skinTargetList = settings.skinTargetList,
           .playOptionLabel = replayExportPlayOptionLabel(stageReplay),
           .autoPlayMarkVisible = stageReplay.autoPlay,
           .gameplayMode = PlayfieldGameplayMode::Replay,
@@ -3740,8 +3886,24 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
               stage.preparationPlan.indicatorVisibleAt(rawSongTimeMicros),
           .laneCoverPercent = laneCover.percent,
           .laneCoverEnabled = laneCover.enabled,
+          .liftEnabled = settings.liftEnabled,
+          .liftRatio = stage.constraints.noSpeed ? 0.0F : settings.liftRatio,
+          .hiddenEnabled = settings.hiddenEnabled,
+          .hiddenRatio = stage.constraints.noSpeed ? 0.0F
+                                                   : settings.hiddenRatio,
+          .failureAnimationActive =
+              replay_video_export::replayGameplayFailureAnimationActive(
+                  frameTiming.gameplayTimeMicros, stage.failureMicros),
           .laneCoverChanged = false,
-      });
+      };
+      replay_video_export::applyReplayGameplayGaugeAuthority(
+          frameAuthority, stageReplay, replayGaugeType, replayGauge);
+      replay_video_export::applyReplayGameplayTargetOptionAuthority(
+          frameAuthority);
+      replay_video_export::applyReplayGameplayRuntimeAuthority(
+          frameAuthority, fps, exportStartUptimeMillis,
+          globalVideoTimeMicros);
+      presentation.applyAuthorityUpdate(frameAuthority);
 
       bool presentationFailed = false;
       if (!renderAndQueueFrame(globalFrameIndex, globalVideoTimeMicros,
@@ -3755,7 +3917,12 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                                      presentation.renderFrame(
                                          renderContext,
                                          presentationFrameState.clock,
-                                         {.includeInvisibleNotes =
+                                         {.noteDisplayTimeMicros =
+                                              replay_video_export::
+                                                  replayGameplayNoteDisplayTimeMicros(
+                                                      presentationFrameState,
+                                                      settings),
+                                          .includeInvisibleNotes =
                                               settings.showInvisibleNotes});
                                  if (presentationFrame.outcome ==
                                          PresentationFrameOutcome::CriticalFailure ||
@@ -4009,20 +4176,27 @@ ReplayVideoExporter::Export(ApplicationContext &context,
   reportReplayExportProgress(options, 0.0, "Preparing export");
 
   replay_video_export::prepareReplayChartForExport(*chart, replay);
+  const auto chartMetadataAuthority =
+      replayExportChartMetadataAuthority(context, chart->Meta);
   const auto resolvedOptions = resolveReplayVideoExportOptions(options);
   const preparation::Plan preparationPlan = preparation::buildNormalPlan(
       *chart, context.settings.startLaneIndicatorsEnabled,
       context.settings.prepMetronomeEnabled, 0, 0, std::nullopt,
       replay.provenance.playback);
   PreparedReplayGameplayPresentation preparedGameplay;
+  GameplaySkinSessionStopOwner skinSessionStopOwner(options.stop);
+  auto skinSessionStop = makeScopeExit(
+      [&]() { skinSessionStopOwner.requestStop(); });
   return replay_video_export::runPreflightGatedNormalExport(
       [&]() -> std::optional<ReplayVideoExportResult> {
         return preflightReplayGameplayPresentation(
             context, *chart, replay, context.settings, preparationPlan,
-            resolvedOptions, preparedGameplay, nullptr);
+            resolvedOptions, preparedGameplay, nullptr, nullptr, {}, nullptr,
+            false, &chartMetadataAuthority, skinSessionStopOwner.token());
       },
       [&]() -> ReplayVideoExportResult {
   auto gameplayPresentationCleanup = makeScopeExit([&]() {
+    skinSessionStopOwner.requestStop();
     replay_video_export::destroyReplayGameplayPresentation(
         context.rendererAccess, preparedGameplay.presentation);
   });
@@ -4145,7 +4319,8 @@ ReplayVideoExporter::Export(ApplicationContext &context,
       context, *chart, replay, context.settings, preparationPlan,
       preparedGameplay, resolvedOptions, wavPath, outputPath,
       gameplayDurationMicros,
-      requestedAudioDurationMicros, failureMicros.has_value(), exportLog);
+      requestedAudioDurationMicros, failureMicros.has_value(), exportLog,
+      chartMetadataAuthority);
   if (!muxResult.success) {
     replayExportLog(exportLog, "Replay export MP4 failed: %s",
                     muxResult.message.c_str());
@@ -4202,6 +4377,9 @@ ReplayVideoExportResult exportCourseReplayImpl(
        materializedStages->size() != replay.stages.size())) {
     return {.success = false, .message = "No course replay selected"};
   }
+  GameplaySkinSessionStopOwner skinSessionStopOwner(options.stop);
+  auto skinSessionStop = makeScopeExit(
+      [&]() { skinSessionStopOwner.requestStop(); });
   reportReplayExportProgress(options, 0.0, "Preparing course export");
   const auto resolvedOptions = resolveReplayVideoExportOptions(options);
   const CourseConstraintSettings courseConstraintSettings =
@@ -4290,10 +4468,12 @@ ReplayVideoExportResult exportCourseReplayImpl(
   }
 
   if (const auto failure = preflightCourseReplayGameplayPresentations(
-          context, stages, context.settings, resolvedOptions, nullptr)) {
+          context, stages, context.settings, resolvedOptions, nullptr,
+          skinSessionStopOwner.token())) {
     return *failure;
   }
   auto gameplayPresentationCleanup = makeScopeExit([&]() {
+    skinSessionStopOwner.requestStop();
     for (auto &stage : stages) {
       if (stage.gameplayPresentation.has_value()) {
         replay_video_export::destroyReplayGameplayPresentation(
@@ -4428,7 +4608,7 @@ ReplayVideoExportResult exportCourseReplayImpl(
   const auto videoStart = std::chrono::steady_clock::now();
   auto muxResult = renderCourseReplayVideoToMp4(
       context, replay, stages, context.settings, resolvedOptions, wavPath,
-      outputPath, exportLog);
+      outputPath, exportLog, skinSessionStopOwner.token());
   if (!muxResult.success) {
     replayExportLog(exportLog, "Course replay export MP4 failed: %s",
                     muxResult.message.c_str());

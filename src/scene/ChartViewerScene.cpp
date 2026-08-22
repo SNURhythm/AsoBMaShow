@@ -4576,9 +4576,8 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
           return true;
         }
 
-        if (!applyViewerPlayOptions(*practiceChart,
-                                    autoPlay ? "practice autoplay"
-                                             : "practice")) {
+        if (autoPlay && !applyViewerPlayOptions(*practiceChart,
+                                                "practice autoplay")) {
           if (statusText != nullptr) {
             statusText->setText(autoPlay ? "Auto play option failed"
                                          : "Practice play option failed");

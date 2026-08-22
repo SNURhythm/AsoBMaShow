@@ -1,7 +1,10 @@
 #include "Utils.h"
 #include <cstdlib>
+#include <cerrno>
+#include <cstring>
 #include <cstdint>
 #include <iterator>
+#include <limits>
 #include "path.h"
 #include "targets.h"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
@@ -9,6 +12,18 @@
 #include <CoreFoundation/CoreFoundation.h>
 #elif TARGET_OS_ANDROID
 #include "AndroidNatives.h"
+#endif
+
+#if defined(__APPLE__)
+#include <CoreFoundation/CoreFoundation.h>
+#endif
+
+#if !TARGET_OS_ANDROID && !defined(_WIN32) && !defined(__APPLE__) && \
+    __has_include(<iconv.h>)
+#include <iconv.h>
+#define ASOBMASHOW_UTILS_HAS_ICONV 1
+#else
+#define ASOBMASHOW_UTILS_HAS_ICONV 0
 #endif
 
 namespace {
@@ -94,6 +109,91 @@ void parallel_for(size_t n, std::function<void(int start, int end)> f) {
   for (auto &t : threads) {
     t.join();
   }
+}
+
+std::optional<std::string> cp932_to_utf8(std::string_view value) {
+  if (value.empty()) {
+    return std::string{};
+  }
+#if TARGET_OS_ANDROID
+  return ConvertAndroidMs932ToUtf8(value);
+#elif defined(_WIN32)
+  if (value.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+    return std::nullopt;
+  }
+  const int inputLength = static_cast<int>(value.size());
+  const int wideLength = MultiByteToWideChar(932, 0, value.data(), inputLength,
+                                              nullptr, 0);
+  if (wideLength <= 0) {
+    return std::nullopt;
+  }
+  std::wstring wide(static_cast<std::size_t>(wideLength), L'\0');
+  if (MultiByteToWideChar(932, 0, value.data(), inputLength, wide.data(),
+                          wideLength) != wideLength) {
+    return std::nullopt;
+  }
+  const int utf8Length = WideCharToMultiByte(
+      CP_UTF8, 0, wide.data(), wideLength, nullptr, 0, nullptr, nullptr);
+  if (utf8Length <= 0) {
+    return std::nullopt;
+  }
+  std::string utf8(static_cast<std::size_t>(utf8Length), '\0');
+  if (WideCharToMultiByte(CP_UTF8, 0, wide.data(), wideLength, utf8.data(),
+                          utf8Length, nullptr, nullptr) != utf8Length) {
+    return std::nullopt;
+  }
+  return utf8;
+#elif defined(__APPLE__)
+  const CFStringRef decoded = CFStringCreateWithBytes(
+      kCFAllocatorDefault, reinterpret_cast<const UInt8 *>(value.data()),
+      static_cast<CFIndex>(value.size()), kCFStringEncodingDOSJapanese, false);
+  if (decoded == nullptr) {
+    return std::nullopt;
+  }
+  const CFIndex maximumBytes =
+      CFStringGetMaximumSizeForEncoding(CFStringGetLength(decoded),
+                                        kCFStringEncodingUTF8) +
+      1;
+  std::string utf8(static_cast<std::size_t>(maximumBytes), '\0');
+  const bool converted = CFStringGetCString(
+      decoded, utf8.data(), maximumBytes, kCFStringEncodingUTF8);
+  CFRelease(decoded);
+  if (!converted) {
+    return std::nullopt;
+  }
+  utf8.resize(std::strlen(utf8.c_str()));
+  return utf8;
+#elif ASOBMASHOW_UTILS_HAS_ICONV
+  iconv_t converter = iconv_open("UTF-8", "CP932");
+  if (converter == reinterpret_cast<iconv_t>(-1)) {
+    return std::nullopt;
+  }
+  std::string output(std::max<std::size_t>(value.size() * 4U, 32U), '\0');
+  char *input = const_cast<char *>(value.data());
+  std::size_t inputBytes = value.size();
+  std::size_t outputOffset = 0;
+  while (inputBytes > 0) {
+    char *nextOutput = output.data() + outputOffset;
+    std::size_t outputBytes = output.size() - outputOffset;
+    const std::size_t status =
+        iconv(converter, &input, &inputBytes, &nextOutput, &outputBytes);
+    outputOffset = output.size() - outputBytes;
+    if (status != static_cast<std::size_t>(-1)) {
+      continue;
+    }
+    if (errno != E2BIG || output.size() >
+                              std::numeric_limits<std::size_t>::max() / 2U) {
+      iconv_close(converter);
+      return std::nullopt;
+    }
+    output.resize(output.size() * 2U);
+  }
+  iconv_close(converter);
+  output.resize(outputOffset);
+  return output;
+#else
+  return std::nullopt;
+#endif
 }
 
 std::string ws2s_utf8(const std::wstring &wstr) {

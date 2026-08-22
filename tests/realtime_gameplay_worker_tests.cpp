@@ -244,8 +244,50 @@ void testRapidInputsCommitStateAndSoundWithoutFramePump() {
               snapshot->transactions[2].result.replayEvent.songTimeMicros ==
                   1'100'000,
           "catch-up judges retain each transaction source time instead of a frame timestamp");
+  require(snapshot->skinGameplayGraph.judgementDistribution.size() == 2 &&
+              snapshot->skinGameplayGraph.judgementDistribution[1][1] == 2 &&
+              snapshot->skinGameplayGraph.earlyLateDistribution[1][1] == 2 &&
+              snapshot->skinGameplayGraph.recentJudgeTimingIndex == 2 &&
+              snapshot->skinGameplayGraph.recentJudgeTimingsMillis[1] == 0 &&
+              snapshot->skinGameplayGraph.recentJudgeTimingsMillis[2] == 0 &&
+              snapshot->skinGameplayGraph
+                      .gaugeHistories[static_cast<std::size_t>(
+                          gaugeTypeIndex(GaugeType::Normal))]
+                      .size() == 3 &&
+              snapshot->skinGameplayGraph
+                      .gaugeHistories[static_cast<std::size_t>(
+                          gaugeTypeIndex(GaugeType::Hard))]
+                      .front() == 100.0F,
+          "realtime snapshots transfer the producer-owned graph authority");
   require(worker.fault() == gameplay::RealtimeGameplayFault::None,
           "normal rapid input remains valid");
+  worker.stop();
+}
+
+void testRealtimeSnapshotPublishesFlatGaugeSamplesWithoutInput() {
+  FakeClock clock;
+  FakeAudio audio;
+  gameplay::RealtimeGameplayWorker worker(makeRapidDefinition(),
+                                           makeConfig(clock, audio));
+  require(worker.start(), "flat gauge sampling worker starts");
+  const auto initial = worker.acquireLatestSnapshot();
+  const auto initialGeneration = initial ? initial->generation : 0;
+
+  clock.nowMicros.store(1'100'000, std::memory_order_release);
+  require(waitUntil([&] {
+            const auto snapshot = worker.acquireLatestSnapshot();
+            return snapshot && snapshot->generation > initialGeneration &&
+                   snapshot->skinGameplayGraph
+                           .gaugeHistories[static_cast<std::size_t>(
+                               gaugeTypeIndex(GaugeType::Normal))] ==
+                       std::vector<float>({20.0F, 20.0F, 20.0F}) &&
+                   snapshot->skinGameplayGraph
+                           .gaugeHistories[static_cast<std::size_t>(
+                               gaugeTypeIndex(GaugeType::Hard))] ==
+                       std::vector<float>({100.0F, 100.0F, 100.0F});
+          }),
+          "realtime snapshots publish every flat 500 ms per-type gauge "
+          "sample without waiting for a judgement");
   worker.stop();
 }
 
@@ -1417,6 +1459,7 @@ void testLr2MultiBadPublishesEveryTransactionWithOneKeysound() {
 
 int main() {
   testRapidInputsCommitStateAndSoundWithoutFramePump();
+  testRealtimeSnapshotPublishesFlatGaugeSamplesWithoutInput();
   testRealtimeWorkerJudgesPhysicalLanesBeyondLegacyCapacity();
   testWorkerTransfersAcceptedRawReplayInputInOrder();
   testWorkerRetainsAcceptedReplayInputWithInterleavedTimestamps();

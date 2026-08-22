@@ -711,9 +711,9 @@ void testNestedFunctionSurvivesConfiguredHandleDestruction() {
   const SkinBindingValidationContext validationContext{.builtins = {},
                                                        .callbacks = liveness};
   expect(
-      validationContext.callbacks.contains(retained) &&
-          !validationContext.callbacks.contains({}) &&
-          !validationContext.callbacks.contains(
+      validationContext.callbacks->contains(retained) &&
+          !validationContext.callbacks->contains({}) &&
+          !validationContext.callbacks->contains(
               {.slot = retained.slot, .generation = retained.generation + 1}),
       "validator context exposes immutable callback liveness without ID 0");
 

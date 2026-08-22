@@ -1,8 +1,10 @@
 #pragma once
 
 #include "GameplayScrollGeometry.h"
+#include "SkinGameplayGraphState.h"
 
 #include <cstdint>
+#include <filesystem>
 #include <limits>
 #include <map>
 #include <optional>
@@ -41,9 +43,10 @@ struct ChartVisualTimeline {
   double scrollPosition = 0.0;
   double bpm = 0.0;
   double scrollRate = 1.0;
-  // bms-parser-cpp does not expose SPEED/hasSpeedObj. Projection therefore
-  // intentionally uses a fixed neutral speed until parser support exists.
+  // Pinned TimeLine#getSpeed() is the propagated multiplier. Only authored
+  // SPEED points carry the matching hasSpeedObj marker.
   double speed = 1.0;
+  bool hasSpeedObject = false;
   long long stopMicros = 0;
   bool sectionLine = false;
   bool bgaOnly = false;
@@ -54,6 +57,21 @@ struct ChartVisualTimeline {
   std::uint32_t retainedOrdinal = kNoRetainedTimelineOrdinal;
 
   bool operator==(const ChartVisualTimeline &) const = default;
+};
+
+struct ChartVisualSpeedPoint {
+  long long timeMicros = 0;
+  double speed = 1.0;
+
+  bool operator==(const ChartVisualSpeedPoint &) const = default;
+};
+
+struct ChartVisualTimelineAuthority {
+  double bpm = 0.0;
+  double scrollRate = 1.0;
+  double speedMultiplier = 1.0;
+
+  bool operator==(const ChartVisualTimelineAuthority &) const = default;
 };
 
 struct ChartVisualNote {
@@ -81,6 +99,18 @@ struct PlayfieldChartTextMetadata {
   std::map<int, std::string> auditedStringProperties;
 
   bool operator==(const PlayfieldChartTextMetadata &) const = default;
+};
+
+// Immutable equivalent of Beatoraja SongData.getInformation(). A missing value
+// remains observable because the source factories return their numeric
+// sentinels when SongInformation has not been prepared.
+struct PlayfieldSongInformation {
+  double density = 0.0;
+  double peakDensity = 0.0;
+  double endDensity = 0.0;
+  double total = 0.0;
+
+  bool operator==(const PlayfieldSongInformation &) const = default;
 };
 
 // Immutable chart data used by static Beatoraja skin properties. This remains
@@ -115,6 +145,12 @@ struct PlayfieldChartStaticMetadata {
   bool hasBpmStop = false;
   std::string stageFilePath;
   std::string backBmpPath;
+  // Session preparation needs the resolved chart-owned files rather than the
+  // authored header strings exposed to skin properties.
+  std::filesystem::path stageFileResourcePath;
+  std::filesystem::path backBmpResourcePath;
+  std::filesystem::path bannerResourcePath;
+  std::optional<PlayfieldSongInformation> songInformation;
 
   bool operator==(const PlayfieldChartStaticMetadata &) const = default;
 };
@@ -131,10 +167,14 @@ struct PlayfieldChartVisualModel {
   std::string chartMd5;
   std::string chartSha256;
   int keyCount = 0;
+  double initialBpm = 0.0;
   PlayfieldChartTextMetadata text;
   PlayfieldChartStaticMetadata staticMetadata;
   std::vector<int> laneOrder;
   std::vector<ChartVisualTimeline> timelines;
+  // Sparse authored SPEED points used by per-frame LaneRenderer-compatible
+  // interpolation. Ordinary chart timelines never participate in lookup.
+  std::vector<ChartVisualSpeedPoint> speedPoints;
   std::vector<ChartVisualNote> notes;
   std::vector<double> scrollPrefix;
   // The parser has no object for the end of a measure. This is a geometry-only
@@ -142,6 +182,7 @@ struct PlayfieldChartVisualModel {
   std::optional<gameplay_scroll_geometry::ScrollPositionTimeline>
       terminalScrollAnchor;
   std::vector<ChartVisualBgaPoorSequence> bgaPoorSequences;
+  SkinGameplayChartGraphState skinGameplayGraph;
 
   [[nodiscard]] std::vector<std::string> runtimeStrings() const;
 
@@ -151,3 +192,14 @@ struct PlayfieldChartVisualModel {
 [[nodiscard]] PlayfieldChartVisualModel
 buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
                                int longNoteModeOverride);
+
+// LaneRenderer#getCurrentSpeed(), expressed against the immutable chart DTO.
+[[nodiscard]] double
+speedObjectMultiplierAtTime(const PlayfieldChartVisualModel &model,
+                            long long timeMicros) noexcept;
+
+// LaneRenderer resolves BPM, #SCROLL, and SPEED after applying the note-only
+// display clock adjustment. Sample all three from one immutable timeline.
+[[nodiscard]] ChartVisualTimelineAuthority
+chartVisualTimelineAuthorityAtTime(const PlayfieldChartVisualModel &model,
+                                   long long timeMicros) noexcept;

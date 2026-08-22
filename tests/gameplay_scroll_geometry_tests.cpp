@@ -56,24 +56,27 @@ int main() {
   require(!shouldDrawMeasureLine(1'100'000, 1'000'000, 9.0F, 0.5F, 8.5F),
           "a future measure line above the visible lane is hidden");
 
-  require(!shouldKeepRenderTimeline(145.0, 145.0, 0.0, 1.0, 1.0, false, false,
-                                    false, false),
+  require(!shouldKeepRenderTimeline(145.0, 145.0, 0.0, 1.0, 1.0, 1.0, 1.0,
+                                    false, false, false, false, false),
           "a BGA-only row is omitted from render traversal");
-  require(shouldKeepRenderTimeline(145.0, 290.0, 0.0, 1.0, 1.0, false, false,
-                                   false, false),
+  require(shouldKeepRenderTimeline(145.0, 290.0, 0.0, 1.0, 1.0, 1.0, 1.0,
+                                   false, false, false, false, false),
           "a BPM change remains in render traversal");
-  require(shouldKeepRenderTimeline(145.0, 145.0, 0.0, 1.0, -10'000.0, false,
-                                   false, false, false),
+  require(shouldKeepRenderTimeline(145.0, 145.0, 0.0, 1.0, -10'000.0, 1.0,
+                                   1.0, false, false, false, false, false),
           "a scroll change remains in render traversal");
-  require(shouldKeepRenderTimeline(145.0, 145.0, 0.0, 1.0, 1.0, false, true,
-                                   false, false),
+  require(shouldKeepRenderTimeline(145.0, 145.0, 0.0, 1.0, 1.0, 1.0, 1.0,
+                                   false, false, true, false, false),
           "a playable note remains in render traversal");
-  require(shouldKeepRenderTimeline(145.0, 145.0, 0.0, 1.0, 1.0, false, false,
-                                   true, false),
+  require(shouldKeepRenderTimeline(145.0, 145.0, 0.0, 1.0, 1.0, 1.0, 1.0,
+                                   false, false, false, true, false),
           "an invisible note remains in render traversal");
-  require(shouldKeepRenderTimeline(145.0, 145.0, 0.0, 1.0, 1.0, false, false,
-                                   false, true),
+  require(shouldKeepRenderTimeline(145.0, 145.0, 0.0, 1.0, 1.0, 1.0, 1.0,
+                                   false, false, false, false, true),
           "a landmine remains in render traversal");
+  require(shouldKeepRenderTimeline(145.0, 145.0, 0.0, 1.0, 1.0, 1.0, 1.0,
+                                   true, false, false, false, false),
+          "an authored SPEED object remains in render traversal");
 
   const std::array<ScrollPositionTimeline, 2> positiveLeadIn{{
       {.timeMicros = 1'000'000,

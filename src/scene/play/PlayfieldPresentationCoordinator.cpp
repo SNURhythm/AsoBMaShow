@@ -67,6 +67,11 @@ PlayfieldPresentationCoordinator::selectedSkinGameplayTiming() const {
   return skin_ ? skin_->selectedSkinGameplayTiming() : std::nullopt;
 }
 
+std::optional<PmsPoorDestinationGeometry>
+PlayfieldPresentationCoordinator::pmsPoorDestinationGeometry() const {
+  return skin_ ? skin_->pmsPoorDestinationGeometry() : std::nullopt;
+}
+
 bool PlayfieldPresentationCoordinator::resetLayoutToFit() {
   if (!skin_) {
     return false;
@@ -573,6 +578,74 @@ void PlayfieldPresentationCoordinator::cancelPresentationTouches(
     long long eventMicros) {
   lastEventMicros_ = eventMicros;
   cancelAndClearActiveTouches();
+}
+
+bool PlayfieldPresentationCoordinator::focusTextInput(UiLogicalPoint point,
+                                                       long long eventMicros) {
+  lastEventMicros_ = eventMicros;
+  if (!skin_) {
+    return false;
+  }
+  try {
+    return skin_->focusTextInput(point, eventMicros);
+  } catch (...) {
+    return false;
+  }
+}
+
+bool PlayfieldPresentationCoordinator::hasFocusedTextInput() const noexcept {
+  if (!skin_) {
+    return false;
+  }
+  try {
+    return skin_->hasFocusedTextInput();
+  } catch (...) {
+    return false;
+  }
+}
+
+bool PlayfieldPresentationCoordinator::appendTextInput(std::string_view utf8) {
+  if (!skin_ || !hasFocusedTextInput()) {
+    return false;
+  }
+  try {
+    return skin_->appendTextInput(utf8);
+  } catch (...) {
+    return false;
+  }
+}
+
+bool PlayfieldPresentationCoordinator::backspaceTextInput() {
+  if (!skin_ || !hasFocusedTextInput()) {
+    return false;
+  }
+  try {
+    return skin_->backspaceTextInput();
+  } catch (...) {
+    return false;
+  }
+}
+
+bool PlayfieldPresentationCoordinator::commitTextInput(long long eventMicros) {
+  lastEventMicros_ = eventMicros;
+  if (!skin_ || !hasFocusedTextInput()) {
+    return false;
+  }
+  try {
+    return skin_->commitTextInput(eventMicros);
+  } catch (...) {
+    return false;
+  }
+}
+
+void PlayfieldPresentationCoordinator::cancelTextInput() noexcept {
+  if (!skin_) {
+    return;
+  }
+  try {
+    skin_->cancelTextInput();
+  } catch (...) {
+  }
 }
 
 void PlayfieldPresentationCoordinator::onLanePressed(int lane,

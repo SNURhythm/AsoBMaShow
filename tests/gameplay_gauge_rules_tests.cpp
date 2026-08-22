@@ -107,6 +107,9 @@ void testLr2StandardGaugeDefinitionsAndDeltas() {
            DefinitionCase{GaugeType::Hard, 100, 0, 0, true},
            DefinitionCase{GaugeType::ExHard, 100, 0, 0, true},
            DefinitionCase{GaugeType::Hazard, 100, 0, 0, true},
+           DefinitionCase{GaugeType::Grade, 100, 0, 0, true},
+           DefinitionCase{GaugeType::ExGrade, 100, 0, 0, true},
+           DefinitionCase{GaugeType::ExHardGrade, 100, 0, 0, true},
        }) {
     const auto &definition = rules.gauges[gaugeTypeIndex(entry.type)];
     require(definition.initial == entry.initial &&
@@ -128,6 +131,9 @@ void testLr2StandardGaugeDefinitionsAndDeltas() {
       std::array<float, 6>{.1F, .1F, .05F, -6.F, -10.F, -2.F},
       std::array<float, 6>{.1F, .1F, .05F, -12.F, -20.F, -2.F},
       std::array<float, 6>{.15F, .06F, 0.F, -100.F, -100.F, -10.F},
+      std::array<float, 6>{.10F, .10F, .05F, -2.F, -3.F, -2.F},
+      std::array<float, 6>{.10F, .10F, .05F, -6.F, -10.F, -2.F},
+      std::array<float, 6>{.10F, .10F, .05F, -12.F, -20.F, -2.F},
   };
   for (int typeIndex = 0; typeIndex < static_cast<int>(kGaugeTypeCount);
        ++typeIndex) {
@@ -280,6 +286,7 @@ void testBeatorajaCompiledRulesMatchLegacyHelpers() {
   const std::array profiles{
       GaugeProfile::Standard5Keys,  GaugeProfile::Standard,
       GaugeProfile::Standard9Keys, GaugeProfile::Standard24Keys,
+      GaugeProfile::StandardLr2,
       GaugeProfile::Course5Keys,   GaugeProfile::Course7Keys,
       GaugeProfile::Course9Keys,   GaugeProfile::Course24Keys,
       GaugeProfile::CourseLR2,
@@ -317,6 +324,26 @@ void testBeatorajaCompiledRulesMatchLegacyHelpers() {
     }
   }
 }
+
+void testPracticeLr2CategoryUsesPinnedGradeGaugeTable() {
+  const auto rules = compileGameplayGaugeRules(
+      GameplayRuleset::Beatoraja, meta(200, 200.0), GaugeProfile::StandardLr2);
+  const auto &grade = rules.gauges[gaugeTypeIndex(GaugeType::Grade)];
+  const auto &exGrade = rules.gauges[gaugeTypeIndex(GaugeType::ExGrade)];
+  const auto &exHardGrade =
+      rules.gauges[gaugeTypeIndex(GaugeType::ExHardGrade)];
+  require(grade.initial == 100.0F && grade.minimum == 0.0F &&
+              grade.maximum == 100.0F && grade.clearBorder == 0.0F &&
+              grade.survival &&
+              close(rules.delta(GaugeType::Grade, Bad, 29.999F), -1.2F) &&
+              close(rules.delta(GaugeType::Grade, Bad, 30.0F), -2.0F) &&
+              close(rules.delta(GaugeType::ExGrade, Poor, 29.999F), -6.0F) &&
+              close(rules.delta(GaugeType::ExHardGrade, Bad, 29.999F),
+                    -12.0F) &&
+              exGrade.initial == 100.0F && exHardGrade.initial == 100.0F,
+          "practice LR2 category retains the pinned CLASS/EXCLASS/EXHARDCLASS "
+          "gauge definitions and thirty-percent guts");
+}
 } // namespace
 
 int main() {
@@ -328,5 +355,6 @@ int main() {
   testLr2CourseTables();
   testLr2StateDeathAndAutoShift();
   testBeatorajaCompiledRulesMatchLegacyHelpers();
+  testPracticeLr2CategoryUsesPinnedGradeGaugeTable();
   return 0;
 }

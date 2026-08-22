@@ -359,6 +359,12 @@ const char *gaugeTypeName(GaugeType value) {
     return "ex-hard";
   case GaugeType::Hazard:
     return "hazard";
+  case GaugeType::Grade:
+    return "grade";
+  case GaugeType::ExGrade:
+    return "ex-grade";
+  case GaugeType::ExHardGrade:
+    return "exhard-grade";
   }
   throw std::invalid_argument("Unknown gauge type value.");
 }
@@ -381,6 +387,15 @@ std::optional<GaugeType> gaugeTypeFromName(std::string_view value) {
   }
   if (value == "hazard") {
     return GaugeType::Hazard;
+  }
+  if (value == "grade") {
+    return GaugeType::Grade;
+  }
+  if (value == "ex-grade") {
+    return GaugeType::ExGrade;
+  }
+  if (value == "exhard-grade") {
+    return GaugeType::ExHardGrade;
   }
   return std::nullopt;
 }
@@ -418,6 +433,8 @@ const char *gaugeProfileName(GaugeProfile value) {
     return "standard-9-keys";
   case GaugeProfile::Standard24Keys:
     return "standard-24-keys";
+  case GaugeProfile::StandardLr2:
+    return "standard-lr2";
   }
   throw std::invalid_argument("Unknown gauge profile value.");
 }
@@ -452,6 +469,9 @@ std::optional<GaugeProfile> gaugeProfileFromName(std::string_view value) {
   }
   if (value == "standard-24-keys") {
     return GaugeProfile::Standard24Keys;
+  }
+  if (value == "standard-lr2") {
+    return GaugeProfile::StandardLr2;
   }
   return std::nullopt;
 }
@@ -609,6 +629,12 @@ void validateStageProof(const ScoreStageProvenance &stage) {
     throw std::runtime_error(
         "Score provenance total note count must be positive.");
   }
+  if (stage.playDurationSeconds < 0 ||
+      stage.playDurationSeconds >
+          ScoreStageProvenance::kMaximumPlayDurationSeconds) {
+    throw std::runtime_error(
+        "Score provenance play duration is outside safe bounds.");
+  }
   if (stage.authoredGaugeTotal.has_value() &&
       !std::isfinite(*stage.authoredGaugeTotal)) {
     throw std::runtime_error(
@@ -642,7 +668,7 @@ void migrateLegacyBeatorajaWindows(ScoreStageProvenance &stage) {
   }
 }
 
-Json stageToJson(ScoreStageProvenance stage) {
+Json stageToJson(ScoreStageProvenance stage, int wireSchemaVersion) {
   validateStageProof(stage);
   canonicalizeWindows(stage.effectiveJudgeWindows);
 
@@ -656,6 +682,9 @@ Json stageToJson(ScoreStageProvenance stage) {
   value["judgeRankSource"] = judgeRankSourceName(stage.judgeRankSource);
   writeOptional(value, "sourceJudgeRank", stage.sourceJudgeRank);
   value["totalNotes"] = stage.totalNotes;
+  if (wireSchemaVersion >= ScoreProvenance::kPlayDurationSchemaVersion) {
+    value["playDurationSeconds"] = stage.playDurationSeconds;
+  }
   writeOptional(value, "authoredGaugeTotal", stage.authoredGaugeTotal);
   value["effectiveGaugeTotal"] = stage.effectiveGaugeTotal;
   value["candidateSelection"] =
@@ -694,6 +723,8 @@ ScoreStageProvenance stageFromJson(const Json &value, int schemaVersion,
       "Unknown judge-rank source in score provenance.");
   result.sourceJudgeRank = readOptional<int>(value, "sourceJudgeRank");
   result.totalNotes = value.value("totalNotes", result.totalNotes);
+  result.playDurationSeconds =
+      value.value("playDurationSeconds", result.playDurationSeconds);
   result.authoredGaugeTotal =
       readOptional<double>(value, "authoredGaugeTotal");
   const auto effectiveTotal = value.find("effectiveGaugeTotal");
@@ -848,6 +879,15 @@ ScoreProvenance ScoreProvenance::Legacy() {
 std::string serializeScoreProvenance(const ScoreProvenance &provenance) {
   ScoreProvenance canonical = provenance;
   canonicalizeDevices(canonical.inputDevices);
+  if (canonical.fingerprintSchemaVersion > 0) {
+    canonical.schemaVersion = canonical.fingerprintSchemaVersion;
+  }
+  // Schema v6 adds playDurationSeconds solely to a stage proof. Preserve the
+  // established v5 wire payload for an unverified no-stage provenance so
+  // durable IR snapshots and their fingerprints remain byte-for-byte stable.
+  if (canonical.stages.empty() && canonical.ruleset.version == 0) {
+    canonical.schemaVersion = ScoreProvenance::kDoublePlayFlipSchemaVersion;
+  }
 
   Json root = Json::object();
   root["schemaVersion"] = canonical.schemaVersion;
@@ -855,7 +895,7 @@ std::string serializeScoreProvenance(const ScoreProvenance &provenance) {
 
   Json stages = Json::array();
   for (const auto &stage : canonical.stages) {
-    stages.push_back(stageToJson(stage));
+    stages.push_back(stageToJson(stage, canonical.schemaVersion));
   }
   root["stages"] = std::move(stages);
   root["gaugeType"] = gaugeTypeName(canonical.gaugeType);
@@ -904,6 +944,10 @@ deserializeScoreProvenance(std::string_view serialized, std::string &error) {
 
     ScoreProvenance result = ScoreProvenance::Legacy();
     result.schemaVersion = ScoreProvenance::kSchemaVersion;
+    result.fingerprintSchemaVersion =
+        schemaVersion < ScoreProvenance::kPlayDurationSchemaVersion
+            ? schemaVersion
+            : 0;
     if (const auto ruleset = root.find("ruleset"); ruleset != root.end()) {
       result.ruleset = rulesetFromJson(*ruleset, schemaVersion);
     }
@@ -1027,6 +1071,8 @@ ScoreProvenance makeScoreProvenance(const ScoreProvenanceBuildInput &input) {
   }
   stage.totalNotes =
       input.totalNotes > 0 ? input.totalNotes : input.chartMeta.TotalNotes;
+  stage.playDurationSeconds =
+      std::max<std::int64_t>(0, input.chartMeta.PlayLength) / 1'000'000;
   stage.authoredGaugeTotal =
       input.authoredGaugeTotal.has_value()
           ? input.authoredGaugeTotal
@@ -1151,6 +1197,7 @@ ScoreProvenance mergeCourseProvenance(std::span<const ScoreProvenance> stages) {
     result.ruleset = RulesetDescriptor::Legacy();
   }
   result.schemaVersion = ScoreProvenance::kSchemaVersion;
+  result.fingerprintSchemaVersion = 0;
   result.eligibility = eligibility;
   return result;
 }

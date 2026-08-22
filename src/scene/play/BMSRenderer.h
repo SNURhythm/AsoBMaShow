@@ -349,6 +349,7 @@ private:
   bool visibleTimeUseMilliseconds = false;
   double currentBpm = 0.0;
   double currentScrollRate = 1.0;
+  double currentSpeedMultiplier = 1.0;
   bool laneCoverEnabled = true;
   std::optional<double> floatingVisibleTimeReferenceBpm;
   AppSettings::HiSpeedFixMode hispeedFixMode =
@@ -587,6 +588,9 @@ public:
   projectionLatePoorTimingMicros() const noexcept override {
     return latePoorTiming;
   }
+  void updateJudgeTimingWindows(
+      const std::map<Judgement, std::pair<long long, long long>> &windows)
+      override;
   [[nodiscard]] BuiltInRendererTraversal
   projectionTraversal() const override;
   [[nodiscard]] BuiltInRendererTraversal
@@ -667,6 +671,10 @@ public:
   [[nodiscard]] std::size_t judgementIndicatorSampleCountForTesting() const
       noexcept {
     return judgementIndicator.retainedSampleCountForTesting();
+  }
+  [[nodiscard]] std::pair<long long, long long>
+  judgementIndicatorTimingWindowForTesting(Judgement judgement) const {
+    return judgementIndicator.timingWindowForTesting(judgement);
   }
   [[nodiscard]] JudgeResult pendingJudgementForTesting() const noexcept {
     return {static_cast<Judgement>(pendingJudge.load(std::memory_order_relaxed)),

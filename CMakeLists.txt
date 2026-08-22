@@ -2,6 +2,10 @@ cmake_minimum_required(VERSION 3.22)
 
 include(ExternalProject)
 project(AsoBMaShow VERSION 0.0.1 LANGUAGES C CXX)
+set(ASOBMASHOW_APPLICATION_VERSION "${PROJECT_VERSION}" CACHE STRING
+    "Application version exposed to native runtime and gameplay skins")
+add_compile_definitions(
+    ASOBMASHOW_APPLICATION_VERSION="${ASOBMASHOW_APPLICATION_VERSION}")
 include(CTest)
 option(ASOBMASHOW_BUILD_TESTS "Build lightweight unit tests" ON)
 option(ASOBMASHOW_ENABLE_PERF_TELEMETRY
@@ -314,6 +318,33 @@ endif()
 # headers on Apple Silicon without injecting compiler-specific -I flags.
 set(CMAKE_NO_SYSTEM_FROM_IMPORTED ON)
 
+# Lua skin file_list mirrors java.util.regex.Pattern.  Keep the desktop and
+# Android regex engine pinned in the repository instead of relying on a host
+# package; iOS uses Foundation's system ICU implementation through the same
+# wrapper API.
+if(NOT IOS)
+    set(PCRE2_BUILD_PCRE2_8 ON CACHE BOOL "" FORCE)
+    set(PCRE2_BUILD_PCRE2_16 OFF CACHE BOOL "" FORCE)
+    set(PCRE2_BUILD_PCRE2_32 OFF CACHE BOOL "" FORCE)
+    set(PCRE2_BUILD_PCRE2GREP OFF CACHE BOOL "" FORCE)
+    set(PCRE2_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(PCRE2_SUPPORT_JIT OFF CACHE BOOL "" FORCE)
+    set(PCRE2_SHOW_REPORT OFF CACHE BOOL "" FORCE)
+    add_subdirectory(third_party/pcre2 EXCLUDE_FROM_ALL)
+endif()
+
+function(asobmashow_enable_lua_skin_java_pattern target_name)
+    if(IOS)
+        target_sources(${target_name} PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/skin/beatoraja/LuaSkinJavaPatternFoundation.mm)
+        target_link_libraries(${target_name} PRIVATE "-framework Foundation")
+    else()
+        target_sources(${target_name} PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/skin/beatoraja/LuaSkinJavaPatternPcre2.cpp)
+        target_link_libraries(${target_name} PRIVATE pcre2-8-static)
+    endif()
+endfunction()
+
 add_library(TinyFileDialogs STATIC ${SRC_DIR}/tinyfiledialogs.c)
 add_library(SQLite3 STATIC ${SRC_DIR}/sqlite3.c)
 
@@ -353,7 +384,12 @@ asobmashow_configure_build_identity_refresh(asobmashow_build_identity
     "${CMAKE_SOURCE_DIR}")
 target_sources(main PRIVATE $<TARGET_OBJECTS:asobmashow_build_identity>)
 if (ANDROID)
-    target_compile_definitions(main PRIVATE PLATFORM_ANDROID=1)
+    # Android NDK libc++ keeps C++20 stop_token/jthread behind this opt-in.
+    # The application uses both for cancellable background work.
+    target_compile_definitions(main PRIVATE
+        PLATFORM_ANDROID=1
+        _LIBCPP_ENABLE_EXPERIMENTAL
+    )
 endif()
 target_compile_definitions(main PRIVATE
     ASOBMASHOW_ENABLE_PERF_TELEMETRY=$<BOOL:${ASOBMASHOW_ENABLE_PERF_TELEMETRY}>
@@ -511,6 +547,7 @@ if (WIN32 AND ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
     set(WINDOWS_GAMEPLAY_SKIN_SHADERS
         shaders/dx11/vs_skin_quad.bin
         shaders/dx11/fs_skin_quad.bin
+        shaders/dx11/fs_skin_distance_field.bin
         shaders/dx11/vs_skin_yuvrgb.bin
         shaders/dx11/fs_skin_yuvrgb.bin
     )
@@ -614,6 +651,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/scene/play/PlayfieldChartVisualModel.cpp
             src/scene/play/PlayfieldProjection.cpp
             src/scene/play/PlayfieldVisualState.cpp
+            src/scene/play/SkinGameplayGraphState.cpp
             src/utils/SpriteLoader.cpp
             src/view/DecodedImageCache.cpp
             src/view/ImageFileDecoder.cpp
@@ -649,6 +687,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(skin_path_policy_tests PRIVATE cxx_std_23)
     target_link_libraries(skin_path_policy_tests PRIVATE utf8proc::utf8proc)
 
+    add_executable(gameplay_skin_source_format_tests
+        tests/gameplay_skin_source_format_tests.cpp
+        src/skin/beatoraja/GameplaySkinSourceFormat.cpp
+    )
+    target_include_directories(gameplay_skin_source_format_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(gameplay_skin_source_format_tests PRIVATE cxx_std_23)
+
     if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
         add_executable(play_skin_viewport_tests
             tests/play_skin_viewport_tests.cpp
@@ -673,11 +720,19 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/SkinStoragePaths.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/PlaySkinViewport.cpp
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
             src/skin/beatoraja/SkinDestinationEvaluator.cpp
             src/skin/beatoraja/Skin2DRenderer.cpp
+            src/skin/beatoraja/SkinBpmGraphRenderer.cpp
+            src/skin/beatoraja/SkinGaugeGraphRenderer.cpp
+            src/skin/beatoraja/SkinNoteDistributionGraphRenderer.cpp
+            src/skin/beatoraja/SkinHitErrorVisualizerRenderer.cpp
+            src/skin/beatoraja/SkinTimingVisualizerRenderer.cpp
             src/skin/package/SkinAliasDetector.cpp
             src/skin/package/SkinPathPolicy.cpp
             src/skin/package/SkinTreeSnapshotter.cpp
@@ -717,11 +772,19 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/SkinStoragePaths.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/PlaySkinViewport.cpp
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
             src/skin/beatoraja/SkinDestinationEvaluator.cpp
             src/skin/beatoraja/Skin2DRenderer.cpp
+            src/skin/beatoraja/SkinBpmGraphRenderer.cpp
+            src/skin/beatoraja/SkinGaugeGraphRenderer.cpp
+            src/skin/beatoraja/SkinNoteDistributionGraphRenderer.cpp
+            src/skin/beatoraja/SkinHitErrorVisualizerRenderer.cpp
+            src/skin/beatoraja/SkinTimingVisualizerRenderer.cpp
             src/skin/package/SkinAliasDetector.cpp
             src/skin/package/SkinPathPolicy.cpp
             src/skin/package/SkinTreeSnapshotter.cpp
@@ -759,6 +822,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 tests/skin_quad_batch_renderer_tests.cpp
                 src/rendering/SkinQuadBatchRenderer.cpp
                 src/rendering/UniformCache.cpp
+                src/skin/beatoraja/SkinMovieCatalogFrame.cpp
             )
             target_include_directories(skin_quad_batch_renderer_tests PRIVATE
                 ${CMAKE_SOURCE_DIR}/src
@@ -781,7 +845,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                     src/rendering/SkinQuadBatchRenderer.cpp
                     src/rendering/UniformCache.cpp
                     src/skin/beatoraja/PlaySkinViewport.cpp
+                    src/skin/beatoraja/SkinBpmGraphRenderer.cpp
                     src/skin/beatoraja/SkinDestinationEvaluator.cpp
+                    src/skin/beatoraja/SkinGaugeGraphRenderer.cpp
+                    src/skin/beatoraja/SkinHitErrorVisualizerRenderer.cpp
+                    src/skin/beatoraja/SkinNoteDistributionGraphRenderer.cpp
+                    src/skin/beatoraja/SkinTimingVisualizerRenderer.cpp
                     bgfx/bimg/3rdparty/lodepng/lodepng.cpp
                 )
                 target_include_directories(skin_renderer_golden_tests PRIVATE
@@ -978,6 +1047,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/SkinStoragePaths.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
             src/skin/package/SkinAliasDetector.cpp
@@ -1024,6 +1096,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
             src/skin/package/SkinAliasDetector.cpp
@@ -1074,6 +1149,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
             src/skin/beatoraja/NumericGlyphAtlas.cpp
@@ -1135,6 +1213,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
             src/skin/beatoraja/NumericGlyphAtlas.cpp
@@ -1196,6 +1277,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
             src/skin/beatoraja/NumericGlyphAtlas.cpp
@@ -1258,6 +1342,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
             src/skin/beatoraja/NumericGlyphAtlas.cpp
@@ -1320,6 +1407,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
             src/skin/beatoraja/NumericGlyphAtlas.cpp
@@ -1381,6 +1471,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/SkinStoragePaths.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
             src/skin/package/SkinAliasDetector.cpp
@@ -1414,6 +1507,22 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 ${LUAJIT_LIBRARIES}
             )
         endif()
+
+        add_executable(lua_skin_http_transport_tests
+            tests/lua_skin_http_transport_tests.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
+            src/skin/beatoraja/LuaSkinCurlHttpTransport.cpp
+        )
+        target_include_directories(lua_skin_http_transport_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(lua_skin_http_transport_tests PRIVATE cxx_std_23)
+        target_link_libraries(lua_skin_http_transport_tests PRIVATE
+            CURL::libcurl
+        )
+        if(WIN32)
+            target_link_libraries(lua_skin_http_transport_tests PRIVATE ws2_32)
+        endif()
         if(APPLE)
             target_sources(lua_skin_host_modules_tests PRIVATE
                 src/skin/package/SkinAliasDetectorApple.mm
@@ -1432,6 +1541,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
             src/skin/beatoraja/NumericGlyphAtlas.cpp
@@ -1488,6 +1600,180 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 "-framework Foundation"
             )
         endif()
+
+        add_executable(json_gameplay_skin_decoder_tests
+            tests/json_gameplay_skin_decoder_tests.cpp
+            src/FileChecksum.cpp
+            src/skin/SkinProfileSettings.cpp
+            src/skin/package/SkinPathPolicy.cpp
+            src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
+            src/skin/beatoraja/JsonGameplaySkinDecoder.cpp
+            src/skin/beatoraja/NumericGlyphAtlas.cpp
+            src/skin/beatoraja/SkinCoverNormalization.cpp
+            src/skin/beatoraja/SkinGaugeNodeExpansion.cpp
+            src/skin/beatoraja/SkinJudgeNormalization.cpp
+            src/skin/beatoraja/SkinJudgeNumberNormalization.cpp
+            src/skin/beatoraja/SkinNoteLaneGeometryNormalization.cpp
+            src/skin/beatoraja/SkinNoteLineNormalization.cpp
+            src/skin/beatoraja/SkinNoteNormalization.cpp
+            src/skin/beatoraja/SkinObjectResolutionPrecedence.cpp
+            src/skin/beatoraja/SkinModelValidator.cpp
+            src/skin/beatoraja/SkinTextGraphNormalization.cpp
+        )
+        target_include_directories(json_gameplay_skin_decoder_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        set_target_properties(json_gameplay_skin_decoder_tests PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+        )
+        target_compile_definitions(json_gameplay_skin_decoder_tests PRIVATE
+            ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
+            ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        )
+        target_link_libraries(json_gameplay_skin_decoder_tests PRIVATE
+            utf8proc::utf8proc
+        )
+
+        add_executable(lr2_skin_csv_parser_tests
+            tests/lr2_skin_csv_parser_tests.cpp
+            src/FileChecksum.cpp
+            src/Utils.cpp
+            src/path.cpp
+            src/skin/SkinProfileSettings.cpp
+            src/skin/SkinStoragePaths.cpp
+            src/skin/beatoraja/Lr2SkinCsvParser.cpp
+            src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp
+            src/skin/beatoraja/LuaSkinFileSystem.cpp
+            src/skin/package/SkinAliasDetector.cpp
+            src/skin/package/SkinPathPolicy.cpp
+            src/skin/package/SkinTreeSnapshotter.cpp
+        )
+        target_include_directories(lr2_skin_csv_parser_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(lr2_skin_csv_parser_tests PRIVATE cxx_std_23)
+        target_compile_definitions(lr2_skin_csv_parser_tests PRIVATE
+            ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
+            ASOBMASHOW_SKIN_STORAGE_PATHS_NO_PLATFORM_DEFAULTS
+            ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        )
+        target_link_libraries(lr2_skin_csv_parser_tests PRIVATE
+            utf8proc::utf8proc
+        )
+        if(WIN32)
+            target_link_libraries(lr2_skin_csv_parser_tests PRIVATE advapi32)
+        endif()
+        if(APPLE)
+            target_sources(lr2_skin_csv_parser_tests PRIVATE
+                src/skin/package/SkinAliasDetectorApple.mm
+            )
+            target_link_libraries(lr2_skin_csv_parser_tests PRIVATE
+                "-framework Foundation"
+            )
+        endif()
+
+        add_executable(lr2_gameplay_skin_decoder_tests
+            tests/lr2_gameplay_skin_decoder_tests.cpp
+            src/FileChecksum.cpp
+            src/skin/SkinProfileSettings.cpp
+            src/skin/package/SkinPathPolicy.cpp
+            src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
+            src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp
+            src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp
+            src/skin/beatoraja/SkinModelValidator.cpp
+            src/skin/beatoraja/SkinNoteNormalization.cpp
+        )
+        target_include_directories(lr2_gameplay_skin_decoder_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(lr2_gameplay_skin_decoder_tests PRIVATE
+            cxx_std_23
+        )
+        target_compile_definitions(lr2_gameplay_skin_decoder_tests PRIVATE
+            ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
+            ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        )
+        target_link_libraries(lr2_gameplay_skin_decoder_tests PRIVATE
+            utf8proc::utf8proc
+        )
+
+        add_executable(beatoraja_gameplay_cross_format_tests
+            tests/beatoraja_gameplay_cross_format_tests.cpp
+            src/FileChecksum.cpp
+            src/skin/SkinProfileSettings.cpp
+            src/skin/SkinStoragePaths.cpp
+            src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
+            src/skin/beatoraja/JsonGameplaySkinDecoder.cpp
+            src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp
+            src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp
+            src/skin/beatoraja/LuaSkinBindingDecoder.cpp
+            src/skin/beatoraja/LuaSkinFileSystem.cpp
+            src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
+            src/skin/beatoraja/LuaSkinRuntime.cpp
+            src/skin/beatoraja/LuaSkinTableDecoder.cpp
+            src/skin/beatoraja/NumericGlyphAtlas.cpp
+            src/skin/beatoraja/PlaySkinViewport.cpp
+            src/skin/beatoraja/Skin2DRenderer.cpp
+            src/skin/beatoraja/SkinBpmGraphRenderer.cpp
+            src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
+            src/skin/beatoraja/SkinCoverNormalization.cpp
+            src/skin/beatoraja/SkinDestinationEvaluator.cpp
+            src/skin/beatoraja/SkinGaugeGraphRenderer.cpp
+            src/skin/beatoraja/SkinGaugeNodeExpansion.cpp
+            src/skin/beatoraja/SkinHitErrorVisualizerRenderer.cpp
+            src/skin/beatoraja/SkinJudgeNormalization.cpp
+            src/skin/beatoraja/SkinJudgeNumberNormalization.cpp
+            src/skin/beatoraja/SkinModelValidator.cpp
+            src/skin/beatoraja/SkinNoteDistributionGraphRenderer.cpp
+            src/skin/beatoraja/SkinNoteLaneGeometryNormalization.cpp
+            src/skin/beatoraja/SkinNoteLineNormalization.cpp
+            src/skin/beatoraja/SkinNoteNormalization.cpp
+            src/skin/beatoraja/SkinObjectResolutionPrecedence.cpp
+            src/skin/beatoraja/SkinTextGraphNormalization.cpp
+            src/skin/beatoraja/SkinTimingVisualizerRenderer.cpp
+            src/skin/package/SkinAliasDetector.cpp
+            src/skin/package/SkinPathPolicy.cpp
+            src/skin/package/SkinTreeSnapshotter.cpp
+        )
+        target_include_directories(beatoraja_gameplay_cross_format_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        set_target_properties(beatoraja_gameplay_cross_format_tests PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+        )
+        target_compile_definitions(beatoraja_gameplay_cross_format_tests PRIVATE
+            ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
+            ASOBMASHOW_SKIN_STORAGE_PATHS_NO_PLATFORM_DEFAULTS
+            ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        )
+        target_link_libraries(beatoraja_gameplay_cross_format_tests PRIVATE
+            utf8proc::utf8proc
+        )
+        if(WIN32)
+            target_link_libraries(beatoraja_gameplay_cross_format_tests PRIVATE
+                ${LUAJIT_LIB}
+                advapi32
+            )
+        else()
+            target_link_libraries(beatoraja_gameplay_cross_format_tests PRIVATE
+                ${LUAJIT_LIBRARIES}
+            )
+        endif()
+        if(APPLE)
+            target_sources(beatoraja_gameplay_cross_format_tests PRIVATE
+                src/skin/package/SkinAliasDetectorApple.mm
+            )
+            target_link_libraries(beatoraja_gameplay_cross_format_tests PRIVATE
+                "-framework Foundation"
+            )
+        endif()
     endif()
 
     add_test(NAME beatoraja_skin_reference_contract
@@ -1496,6 +1782,37 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(beatoraja_skin_reference_contract PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
+    add_test(NAME beatoraja_gameplay_skin_ledger
+        COMMAND ${Python3_EXECUTABLE}
+                tests/beatoraja_gameplay_skin_ledger_tests.py
+                --require-complete)
+    set_tests_properties(beatoraja_gameplay_skin_ledger PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+    add_test(NAME gameplay_skin_loading_benchmark_script_contract
+        COMMAND ${Python3_EXECUTABLE}
+                -m unittest
+                tests/gameplay_skin_loading_benchmark_script_tests.py -v)
+    set_tests_properties(gameplay_skin_loading_benchmark_script_contract PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+    add_test(NAME beatoraja_gameplay_skin_ledger_evidence_contract
+        COMMAND ${Python3_EXECUTABLE}
+                -m unittest
+                tests/beatoraja_gameplay_skin_ledger_evidence_tests.py -v)
+    set_tests_properties(beatoraja_gameplay_skin_ledger_evidence_contract PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+    if (TARGET beatoraja_gameplay_cross_format_tests)
+        add_test(NAME beatoraja_gameplay_oracle
+            COMMAND ${Python3_EXECUTABLE}
+                    tests/beatoraja_gameplay_oracle_tests.py)
+        set_tests_properties(beatoraja_gameplay_oracle PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            ENVIRONMENT
+                "ASOBMASHOW_GAMEPLAY_ORACLE_EXECUTABLE=$<TARGET_FILE:beatoraja_gameplay_cross_format_tests>"
+        )
+    endif()
     add_test(NAME build_identity_refresh_contract
         COMMAND ${Python3_EXECUTABLE}
                 -m unittest tests/build_identity_refresh_tests.py -v)
@@ -1542,6 +1859,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 -m unittest
                 tests/settings_gameplay_skin_initialization_contract_tests.py -v)
     set_tests_properties(settings_gameplay_skin_initialization_contract PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+    add_test(NAME gameplay_scene_feature_off_compile_contract
+        COMMAND ${Python3_EXECUTABLE}
+                tests/gameplay_scene_feature_off_compile_contract.py
+                --build-dir ${CMAKE_BINARY_DIR})
+    set_tests_properties(gameplay_scene_feature_off_compile_contract PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
     add_test(NAME replay_video_ui_batch_contract
@@ -2127,6 +2451,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_include_directories(ir_driver_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(ir_driver_tests PRIVATE cxx_std_23)
+
+    add_executable(ir_account_lookup_service_tests
+        tests/ir_account_lookup_service_tests.cpp
+    )
+    target_include_directories(ir_account_lookup_service_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(ir_account_lookup_service_tests PRIVATE cxx_std_23)
 
     add_executable(ir_receipt_models_tests
         tests/ir_receipt_models_tests.cpp
@@ -2917,6 +3249,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/play/GameplayNoteJudgeRole.cpp
         src/scene/play/GameplayRulesetPolicy.cpp
         src/scene/play/GameplaySimulation.cpp
+        src/scene/play/SkinGameplayGraphState.cpp
         src/scene/play/Judge.cpp
     )
     target_include_directories(course_replay_consumer_tests PRIVATE
@@ -2948,6 +3281,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/play/GameplayNoteJudgeRole.cpp
         src/scene/play/GameplayRulesetPolicy.cpp
         src/scene/play/GameplaySimulation.cpp
+        src/scene/play/SkinGameplayGraphState.cpp
         src/scene/play/Judge.cpp
     )
     target_include_directories(replay_playback_driver_tests PRIVATE
@@ -3440,6 +3774,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/audio/AudioBackend.cpp
         src/audio/AudioMix.cpp
         src/audio/AudioWrapper.cpp
+        src/skin/beatoraja/LuaSkinApplicationAudioBackend.cpp
         src/path.cpp
         src/utils/Stopwatch.cpp
     )
@@ -3564,12 +3899,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(image_file_decoder_tests
         tests/image_file_decoder_tests.cpp
         src/MinizBridge.c
+        src/path.cpp
         src/view/DecodedImageCache.cpp
         src/view/ImageFileDecoder.cpp
     )
     target_include_directories(image_file_decoder_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(image_file_decoder_tests PRIVATE cxx_std_23)
     target_compile_definitions(image_file_decoder_tests PRIVATE ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    target_link_libraries(image_file_decoder_tests PRIVATE ${FFMPEG_LIBRARIES})
 
     if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS AND NOT IOS)
         add_executable(gameplay_skin_validator_tests
@@ -3588,10 +3925,19 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/package/SkinPathPolicy.cpp
             src/skin/package/SkinTreeSnapshotter.cpp
             src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
+            src/skin/beatoraja/GameplaySkinDocumentLoader.cpp
+            src/skin/beatoraja/GameplaySkinSourceFormat.cpp
+            src/skin/beatoraja/JsonGameplaySkinDecoder.cpp
+            src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp
+            src/skin/beatoraja/Lr2SkinCsvParser.cpp
+            src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp
             src/skin/beatoraja/GameplaySkinValidator.cpp
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
             src/skin/beatoraja/NumericGlyphAtlas.cpp
@@ -3606,6 +3952,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinObjectResolutionPrecedence.cpp
             src/skin/beatoraja/SkinModelValidator.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
+            src/skin/beatoraja/PomyuCharaResource.cpp
+            src/skin/beatoraja/SkinBitmapFontParser.cpp
             src/skin/beatoraja/SkinTextAtlas.cpp
             src/skin/beatoraja/SkinTextGraphNormalization.cpp
         )
@@ -3651,7 +3999,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/package/SkinPathPolicy.cpp
             src/skin/package/SkinTreeSnapshotter.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
+            src/skin/beatoraja/SkinMovieCatalog.cpp
+            src/skin/beatoraja/SkinMovieCatalogFrame.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
+            src/skin/beatoraja/PomyuCharaResource.cpp
+            src/skin/beatoraja/SkinBitmapFontParser.cpp
             src/skin/beatoraja/SkinTextAtlas.cpp
         )
         if(APPLE)
@@ -4351,7 +4703,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(practice_configuration_tests
         tests/practice_configuration_tests.cpp
         src/practice/PracticeConfiguration.cpp
+        src/practice/PracticeSession.cpp
         src/scene/play/GameplayGaugeRules.cpp
+        src/bms_parser.cpp
     )
     target_include_directories(practice_configuration_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
@@ -4387,6 +4741,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/play/Judge.cpp
         src/scene/play/PlayfieldChartVisualModel.cpp
         src/scene/play/PlayfieldVisualState.cpp
+        src/scene/play/SkinGameplayGraphState.cpp
     )
     target_include_directories(playfield_visual_state_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
@@ -4420,6 +4775,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(gameplay_bga_target_tests PRIVATE cxx_std_23)
+    target_compile_definitions(gameplay_bga_target_tests PRIVATE
+        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    )
     target_link_libraries(gameplay_bga_target_tests PRIVATE ${COMMON_LIBS} bgfx)
     if(APPLE)
         target_link_libraries(gameplay_bga_target_tests PRIVATE iconv)
@@ -4472,15 +4830,25 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/scene/play/GameplaySkinSessionFactory.cpp
             src/scene/play/PlayfieldChartVisualModel.cpp
             src/scene/play/PlayfieldProjection.cpp
+            src/scene/play/SkinGameplayGraphState.cpp
             src/skin/SkinConfigurationWriteQueue.cpp
             src/skin/SkinProfileSettings.cpp
             src/skin/SkinStoragePaths.cpp
             src/skin/beatoraja/BgfxSkinTextureDevice.cpp
             src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
+            src/skin/beatoraja/GameplaySkinDocumentLoader.cpp
+            src/skin/beatoraja/GameplaySkinSourceFormat.cpp
+            src/skin/beatoraja/JsonGameplaySkinDecoder.cpp
+            src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp
+            src/skin/beatoraja/Lr2SkinCsvParser.cpp
+            src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp
             src/skin/beatoraja/GameplaySkinValidator.cpp
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
             src/skin/beatoraja/NumericGlyphAtlas.cpp
@@ -4488,6 +4856,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/PlaySkinStateBridge.cpp
             src/skin/beatoraja/PlaySkinViewport.cpp
             src/skin/beatoraja/Skin2DRenderer.cpp
+            src/skin/beatoraja/SkinBpmGraphRenderer.cpp
+            src/skin/beatoraja/SkinGaugeGraphRenderer.cpp
+            src/skin/beatoraja/SkinNoteDistributionGraphRenderer.cpp
+            src/skin/beatoraja/SkinHitErrorVisualizerRenderer.cpp
+            src/skin/beatoraja/SkinTimingVisualizerRenderer.cpp
             src/skin/beatoraja/Skin2DRendererSubmit.cpp
             src/skin/beatoraja/SyntheticReplayGhostOverlay.cpp
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
@@ -4502,7 +4875,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinNoteLineNormalization.cpp
             src/skin/beatoraja/SkinNoteNormalization.cpp
             src/skin/beatoraja/SkinObjectResolutionPrecedence.cpp
+            src/skin/beatoraja/SkinPerformanceTelemetry.cpp
+            src/skin/beatoraja/SkinMovieCatalog.cpp
+            src/skin/beatoraja/SkinMovieCatalogFrame.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
+            src/skin/beatoraja/PomyuCharaResource.cpp
+            src/skin/beatoraja/SkinBitmapFontParser.cpp
             src/skin/beatoraja/SkinTextAtlas.cpp
             src/skin/beatoraja/SkinTextGraphNormalization.cpp
             src/skin/package/SkinAliasDetector.cpp
@@ -4565,11 +4943,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/Utils.cpp
             src/path.cpp
             src/scene/play/PlayfieldProjection.cpp
+            src/scene/play/SkinGameplayGraphState.cpp
             src/skin/SkinProfileSettings.cpp
             src/skin/SkinStoragePaths.cpp
             src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/PlaySkinStateBridge.cpp
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
@@ -4610,6 +4992,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
         add_executable(play_skin_session_tests
             tests/play_skin_session_tests.cpp
+            src/ArchiveFile.cpp
             src/MinizBridge.c
             src/FileChecksum.cpp
             src/Utils.cpp
@@ -4619,14 +5002,24 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/rendering/UniformCache.cpp
             src/scene/play/PlayfieldChartVisualModel.cpp
             src/scene/play/PlayfieldProjection.cpp
+            src/scene/play/SkinGameplayGraphState.cpp
             src/skin/SkinConfigurationWriteQueue.cpp
             src/skin/SkinProfileSettings.cpp
             src/skin/SkinStoragePaths.cpp
             src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
+            src/skin/beatoraja/GameplaySkinDocumentLoader.cpp
+            src/skin/beatoraja/GameplaySkinSourceFormat.cpp
+            src/skin/beatoraja/JsonGameplaySkinDecoder.cpp
+            src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp
+            src/skin/beatoraja/Lr2SkinCsvParser.cpp
+            src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp
             src/skin/beatoraja/GameplaySkinValidator.cpp
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
             src/skin/beatoraja/NumericGlyphAtlas.cpp
@@ -4637,6 +5030,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinCoverNormalization.cpp
             src/skin/beatoraja/SkinDestinationEvaluator.cpp
             src/skin/beatoraja/Skin2DRenderer.cpp
+            src/skin/beatoraja/SkinBpmGraphRenderer.cpp
+            src/skin/beatoraja/SkinGaugeGraphRenderer.cpp
+            src/skin/beatoraja/SkinNoteDistributionGraphRenderer.cpp
+            src/skin/beatoraja/SkinHitErrorVisualizerRenderer.cpp
+            src/skin/beatoraja/SkinTimingVisualizerRenderer.cpp
             src/skin/beatoraja/Skin2DRendererSubmit.cpp
             src/skin/beatoraja/SyntheticReplayGhostOverlay.cpp
             src/skin/beatoraja/SkinGaugeNodeExpansion.cpp
@@ -4647,10 +5045,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinNoteLineNormalization.cpp
             src/skin/beatoraja/SkinNoteNormalization.cpp
             src/skin/beatoraja/SkinObjectResolutionPrecedence.cpp
+            src/skin/beatoraja/SkinPerformanceTelemetry.cpp
+            src/skin/beatoraja/SkinMovieCatalog.cpp
+            src/skin/beatoraja/SkinMovieCatalogFrame.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
+            src/skin/beatoraja/PomyuCharaResource.cpp
+            src/skin/beatoraja/SkinBitmapFontParser.cpp
             src/skin/beatoraja/SkinTextAtlas.cpp
             src/skin/beatoraja/SkinTextGraphNormalization.cpp
             src/skin/package/SkinAliasDetector.cpp
+            src/skin/package/SkinArchiveImporter.cpp
             src/skin/package/SkinPathPolicy.cpp
             src/skin/package/SkinTreeSnapshotter.cpp
             src/view/DecodedImageCache.cpp
@@ -4676,6 +5080,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         if(WIN32)
             target_link_libraries(play_skin_session_tests PRIVATE
                 ${LUAJIT_LIB}
+                shell32
+                ole32
                 advapi32
             )
         else()
@@ -4689,8 +5095,36 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             )
             target_link_libraries(play_skin_session_tests PRIVATE
                 "-framework Foundation"
+                iconv
             )
         endif()
+
+        get_target_property(_gameplay_skin_benchmark_sources
+            play_skin_session_tests SOURCES)
+        list(REMOVE_ITEM _gameplay_skin_benchmark_sources
+            tests/play_skin_session_tests.cpp)
+        add_executable(gameplay_skin_loading_benchmark_tests
+            tests/gameplay_skin_loading_benchmark_tests.cpp
+            ${_gameplay_skin_benchmark_sources}
+        )
+        target_include_directories(gameplay_skin_loading_benchmark_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(gameplay_skin_loading_benchmark_tests PRIVATE
+            cxx_std_23
+        )
+        target_compile_definitions(gameplay_skin_loading_benchmark_tests PRIVATE
+            ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
+            ASOBMASHOW_PLAY_SKIN_SESSION_TESTING=1
+            ASOBMASHOW_SKIN_LOADING_TELEMETRY=1
+            ASOBMASHOW_SKIN_STORAGE_PATHS_NO_PLATFORM_DEFAULTS
+            ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        )
+        get_target_property(_gameplay_skin_benchmark_links
+            play_skin_session_tests LINK_LIBRARIES)
+        target_link_libraries(gameplay_skin_loading_benchmark_tests PRIVATE
+            ${_gameplay_skin_benchmark_links}
+        )
 
         add_executable(playfield_presentation_coordinator_tests
             tests/playfield_presentation_coordinator_tests.cpp
@@ -4726,11 +5160,18 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/rendering/SkinQuadBatchRenderer.cpp
             src/rendering/TexBatchRenderer.cpp
             src/rendering/UniformCache.cpp
+            src/repositories/ChartStorageIdentity.cpp
             src/ScoreProvenance.cpp
             src/scene/play/BMSRenderer.cpp
             src/scene/play/BeatorajaHiSpeedChart.cpp
             src/scene/play/BuiltInPlayfieldPresentation.cpp
+            src/scene/play/CompiledGameplayJudge.cpp
+            src/scene/play/GameplayCandidateRules.cpp
+            src/scene/play/GameplayDefinition.cpp
             src/scene/play/GameplayGaugeRules.cpp
+            src/scene/play/GameplayJudgeRules.cpp
+            src/scene/play/GameplayNoteJudgeRole.cpp
+            src/scene/play/GameplaySimulation.cpp
             src/scene/play/GameplaySkinSessionFactory.cpp
             src/scene/play/Judge.cpp
             src/scene/play/JudgementIndicatorRenderer.cpp
@@ -4740,15 +5181,25 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/scene/play/PlayfieldVisualState.cpp
             src/scene/play/ReplayPlayfieldPresentation.cpp
             src/scene/play/ReplayVideoGameplayPreflight.cpp
+            src/scene/play/SkinGameplayGraphState.cpp
             src/skin/SkinConfigurationWriteQueue.cpp
             src/skin/SkinProfileSettings.cpp
             src/skin/SkinStoragePaths.cpp
             src/skin/beatoraja/BgfxSkinTextureDevice.cpp
             src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
+            src/skin/beatoraja/GameplaySkinDocumentLoader.cpp
+            src/skin/beatoraja/GameplaySkinSourceFormat.cpp
+            src/skin/beatoraja/JsonGameplaySkinDecoder.cpp
+            src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp
+            src/skin/beatoraja/Lr2SkinCsvParser.cpp
+            src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp
             src/skin/beatoraja/GameplaySkinValidator.cpp
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
             src/skin/beatoraja/NumericGlyphAtlas.cpp
@@ -4756,6 +5207,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/PlaySkinStateBridge.cpp
             src/skin/beatoraja/PlaySkinViewport.cpp
             src/skin/beatoraja/Skin2DRenderer.cpp
+            src/skin/beatoraja/SkinBpmGraphRenderer.cpp
+            src/skin/beatoraja/SkinGaugeGraphRenderer.cpp
+            src/skin/beatoraja/SkinNoteDistributionGraphRenderer.cpp
+            src/skin/beatoraja/SkinHitErrorVisualizerRenderer.cpp
+            src/skin/beatoraja/SkinTimingVisualizerRenderer.cpp
             src/skin/beatoraja/Skin2DRendererSubmit.cpp
             src/skin/beatoraja/SyntheticReplayGhostOverlay.cpp
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
@@ -4770,7 +5226,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinNoteLineNormalization.cpp
             src/skin/beatoraja/SkinNoteNormalization.cpp
             src/skin/beatoraja/SkinObjectResolutionPrecedence.cpp
+            src/skin/beatoraja/SkinPerformanceTelemetry.cpp
+            src/skin/beatoraja/SkinMovieCatalog.cpp
+            src/skin/beatoraja/SkinMovieCatalogFrame.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
+            src/skin/beatoraja/PomyuCharaResource.cpp
+            src/skin/beatoraja/SkinBitmapFontParser.cpp
             src/skin/beatoraja/SkinTextAtlas.cpp
             src/skin/beatoraja/SkinTextGraphNormalization.cpp
             src/skin/package/SkinAliasDetector.cpp
@@ -4950,7 +5411,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(practice_session_tests
         tests/practice_session_tests.cpp
         src/ScoreProvenance.cpp
+        src/bms_parser.cpp
+        src/practice/PracticeConfiguration.cpp
         src/practice/PracticeSession.cpp
+        src/scene/play/GameplayGaugeRules.cpp
     )
     target_include_directories(practice_session_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
@@ -4978,6 +5442,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(gameplay_playback_startup_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(gameplay_playback_startup_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(gameplay_playback_startup_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(gameplay_playback_startup_tests PRIVATE SDL2)
+    endif()
 
     add_executable(gameplay_practice_input_boundary_tests
         tests/gameplay_practice_input_boundary_tests.cpp
@@ -5015,6 +5486,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/play/GameplayCandidateRules.cpp
         src/scene/play/GameplayDefinition.cpp
         src/scene/play/GameplaySimulation.cpp
+        src/scene/play/SkinGameplayGraphState.cpp
         src/scene/play/Judge.cpp
         src/scene/play/RhythmLaneInputController.cpp
     )
@@ -5039,6 +5511,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/play/GameplayCandidateRules.cpp
         src/scene/play/GameplayDefinition.cpp
         src/scene/play/GameplaySimulation.cpp
+        src/scene/play/SkinGameplayGraphState.cpp
         src/scene/play/Judge.cpp
     )
     target_include_directories(gameplay_automatic_authority_tests PRIVATE
@@ -5066,6 +5539,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/play/GameplayCandidateRules.cpp
         src/scene/play/GameplayDefinition.cpp
         src/scene/play/GameplaySimulation.cpp
+        src/scene/play/SkinGameplayGraphState.cpp
         src/scene/play/Judge.cpp
         src/scene/play/RealtimeGameplayInputBridge.cpp
         src/scene/play/RealtimeGameplayWorker.cpp
@@ -5308,6 +5782,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         tests/practice_preset_store_tests.cpp
         src/AtomicFile.cpp
         src/VersionedJson.cpp
+        src/bms_parser.cpp
         src/practice/PracticeConfiguration.cpp
         src/scene/play/GameplayGaugeRules.cpp
         src/practice/PracticePresetStore.cpp
@@ -5755,6 +6230,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/skin/SkinCommitCoordinator.cpp
         src/skin/SkinProfileSettings.cpp
         src/skin/SkinStoragePaths.cpp
+        src/skin/beatoraja/GameplaySkinSourceFormat.cpp
         src/skin/beatoraja/SkinDiagnosticHistory.cpp
         src/skin/package/SkinAliasDetector.cpp
         src/skin/package/SkinArchiveImporter.cpp
@@ -5836,6 +6312,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/FileChecksum.cpp
         src/skin/SkinProfileSettings.cpp
         src/skin/SkinStoragePaths.cpp
+        src/skin/beatoraja/GameplaySkinSourceFormat.cpp
         src/skin/package/SkinAliasDetector.cpp
         src/skin/package/SkinPathPolicy.cpp
         src/skin/package/SkinTreeSnapshotter.cpp
@@ -5900,6 +6377,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/VersionedJson.cpp
         src/skin/SkinProfileSettings.cpp
         src/skin/SkinStoragePaths.cpp
+        src/skin/beatoraja/GameplaySkinSourceFormat.cpp
         src/skin/package/SkinAliasDetector.cpp
         src/skin/package/SkinArchiveImporter.cpp
         src/skin/package/SkinPackageCatalog.cpp
@@ -5954,6 +6432,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/skin/SkinCommitCoordinator.cpp
         src/skin/SkinProfileSettings.cpp
         src/skin/SkinStoragePaths.cpp
+        src/skin/beatoraja/GameplaySkinSourceFormat.cpp
         src/skin/package/SkinAliasDetector.cpp
         src/skin/package/SkinArchiveImporter.cpp
         src/skin/package/SkinPackageCatalog.cpp
@@ -6013,6 +6492,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/skin/SkinCommitCoordinator.cpp
         src/skin/SkinProfileSettings.cpp
         src/skin/SkinStoragePaths.cpp
+        src/skin/beatoraja/GameplaySkinSourceFormat.cpp
         src/skin/package/SkinAliasDetector.cpp
         src/skin/package/SkinArchiveImporter.cpp
         src/skin/package/SkinPackageCatalog.cpp
@@ -6103,6 +6583,59 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         )
     endif()
 
+    add_executable(lua_skin_java_pattern_tests
+        tests/lua_skin_java_pattern_tests.cpp
+    )
+    target_include_directories(lua_skin_java_pattern_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(lua_skin_java_pattern_tests PRIVATE cxx_std_23)
+    asobmashow_enable_lua_skin_java_pattern(lua_skin_java_pattern_tests)
+    find_package(Java QUIET COMPONENTS Runtime Development)
+    if(Java_JAVA_EXECUTABLE AND Java_JAVAC_EXECUTABLE)
+        add_test(NAME lua_skin_java_pattern_oracle_tests
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/lua_skin_java_pattern_oracle_tests.py
+                $<TARGET_FILE:lua_skin_java_pattern_tests>)
+    endif()
+    if(APPLE AND NOT IOS)
+        add_executable(lua_skin_java_pattern_foundation_tests
+            tests/lua_skin_java_pattern_tests.cpp
+            src/skin/beatoraja/LuaSkinJavaPatternFoundation.mm
+        )
+        target_include_directories(lua_skin_java_pattern_foundation_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(lua_skin_java_pattern_foundation_tests PRIVATE
+            cxx_std_23)
+        target_compile_definitions(lua_skin_java_pattern_foundation_tests PRIVATE
+            ASOBMASHOW_TEST_FOUNDATION_JAVA_PATTERN=1)
+        target_link_libraries(lua_skin_java_pattern_foundation_tests PRIVATE
+            "-framework Foundation")
+        if(Java_JAVA_EXECUTABLE AND Java_JAVAC_EXECUTABLE)
+            add_test(NAME lua_skin_java_pattern_foundation_oracle_tests
+                COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_SOURCE_DIR}/tests/lua_skin_java_pattern_oracle_tests.py
+                    $<TARGET_FILE:lua_skin_java_pattern_foundation_tests>)
+        endif()
+
+        add_executable(lua_skin_foundation_http_transport_tests
+            tests/lua_skin_foundation_http_transport_tests.cpp
+            src/skin/beatoraja/LuaSkinFoundationHttpTransport.mm
+        )
+        target_include_directories(lua_skin_foundation_http_transport_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(lua_skin_foundation_http_transport_tests PRIVATE
+            cxx_std_23)
+        target_compile_definitions(lua_skin_foundation_http_transport_tests PRIVATE
+            ASOBMASHOW_TEST_FOUNDATION_HTTP_TRANSPORT=1)
+        target_link_libraries(lua_skin_foundation_http_transport_tests PRIVATE
+            "-framework Foundation")
+        add_test(NAME lua_skin_foundation_http_transport_tests
+                 COMMAND lua_skin_foundation_http_transport_tests)
+    endif()
+
     foreach(archive_file_target IN ITEMS
         builtin_renderer_characterization_tests
         ir_upload_candidates_tests
@@ -6118,6 +6651,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ir_upload_candidate_list_view_tests
         find_bms_download_tests
         gameplay_bga_target_tests
+        play_skin_session_tests
         profile_switch_tests
     )
         if(TARGET ${archive_file_target})
@@ -6211,6 +6745,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endforeach()
 
     asobmashow_register_test(skin_path_policy_tests)
+    asobmashow_register_test(gameplay_skin_source_format_tests)
     asobmashow_register_test(skin_tree_snapshotter_tests)
     asobmashow_register_test(gameplay_skin_lifecycle_tests)
     asobmashow_register_test(gameplay_skin_settings_tests)
@@ -6268,6 +6803,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         result_record_summary_tests
         course_identity_tests
         ir_driver_tests
+        ir_account_lookup_service_tests
         ir_receipt_models_tests
         ir_upload_candidates_tests
         ir_remote_score_models_tests
@@ -6371,8 +6907,23 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     if (TARGET lua_skin_host_modules_tests)
         asobmashow_register_test(lua_skin_host_modules_tests)
     endif()
+    if (TARGET lua_skin_http_transport_tests)
+        asobmashow_register_test(lua_skin_http_transport_tests)
+    endif()
     if (TARGET beatoraja_skin_model_tests)
         asobmashow_register_test(beatoraja_skin_model_tests)
+    endif()
+    if (TARGET json_gameplay_skin_decoder_tests)
+        asobmashow_register_test(json_gameplay_skin_decoder_tests)
+    endif()
+    if (TARGET lr2_skin_csv_parser_tests)
+        asobmashow_register_test(lr2_skin_csv_parser_tests)
+    endif()
+    if (TARGET lr2_gameplay_skin_decoder_tests)
+        asobmashow_register_test(lr2_gameplay_skin_decoder_tests)
+    endif()
+    if (TARGET beatoraja_gameplay_cross_format_tests)
+        asobmashow_register_test(beatoraja_gameplay_cross_format_tests)
     endif()
     if (TARGET play_skin_viewport_tests)
         asobmashow_register_test(play_skin_viewport_tests)
@@ -6466,6 +7017,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if(TARGET play_skin_session_tests)
         asobmashow_register_test(play_skin_session_tests)
+    endif()
+    if(TARGET gameplay_skin_loading_benchmark_tests)
+        asobmashow_register_test(gameplay_skin_loading_benchmark_tests)
     endif()
     if(TARGET playfield_presentation_coordinator_tests)
         asobmashow_register_test(playfield_presentation_coordinator_tests)
@@ -6575,4 +7129,43 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(sdl_display_backend_tests foundation_av_sdl_display)
     asobmashow_register_test(score_provenance_db_tests foundation_provenance_db)
     asobmashow_register_test(midi_input_tests foundation_input_midi)
+
+    get_property(asobmashow_directory_targets DIRECTORY
+        PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(asobmashow_target IN LISTS asobmashow_directory_targets)
+        get_target_property(asobmashow_target_sources
+            ${asobmashow_target} SOURCES)
+        if(asobmashow_target_sources)
+            # PracticeConfiguration owns chart mutations and therefore needs
+            # the parser implementation, including in standalone test targets.
+            list(FIND asobmashow_target_sources
+                "src/practice/PracticeConfiguration.cpp"
+                asobmashow_practice_source_index)
+            list(FIND asobmashow_target_sources "src/bms_parser.cpp"
+                asobmashow_parser_source_index)
+            if(NOT asobmashow_practice_source_index EQUAL -1 AND
+               asobmashow_parser_source_index EQUAL -1)
+                target_sources(${asobmashow_target} PRIVATE
+                    src/bms_parser.cpp)
+            endif()
+
+            list(FIND asobmashow_target_sources
+                "src/skin/beatoraja/LuaSkinFileSystem.cpp"
+                asobmashow_lua_skin_file_system_source_index)
+            if(NOT asobmashow_lua_skin_file_system_source_index EQUAL -1)
+                asobmashow_enable_lua_skin_java_pattern(${asobmashow_target})
+            endif()
+
+            # Utils.cpp uses CoreFoundation for exact MS932 decoding on Apple.
+            # Keep standalone consumers on the application/iOS link contract.
+            if(APPLE)
+                list(FIND asobmashow_target_sources "src/Utils.cpp"
+                    asobmashow_utils_source_index)
+                if(NOT asobmashow_utils_source_index EQUAL -1)
+                    target_link_libraries(${asobmashow_target} PRIVATE
+                        "-framework CoreFoundation")
+                endif()
+            endif()
+        endif()
+    endforeach()
 endif()

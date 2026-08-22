@@ -1,25 +1,33 @@
 #include "PlaySkinSession.h"
 
+#include "GameplaySkinDocumentLoader.h"
 #include "GameplaySkinBuiltinCatalog.h"
+#include "GameplaySkinSourceFormat.h"
 #include "LuaSkinFileSystem.h"
-#include "LuaSkinTableDecoder.h"
-#include "SkinModelValidator.h"
 #include "../../scene/play/StartLaneIndicatorGeometry.h"
 #include "../../rendering/SkinQuadBatchRenderer.h"
 #include "../../rendering/common.h"
 #include "../../replay/ReplayKeyMode.h"
 
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cmath>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <ranges>
+#include <set>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <vector>
+
+#include <utf8proc.h>
 
 namespace skin {
 namespace {
@@ -134,6 +142,15 @@ bool cancelled(std::stop_token stop, PlaySkinSessionCreateResult &result) {
   return true;
 }
 
+using LoadingClock = std::chrono::steady_clock;
+
+std::uint64_t loadingMicros(LoadingClock::time_point started) noexcept {
+  const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+      LoadingClock::now() - started);
+  return elapsed.count() <= 0 ? 0U
+                              : static_cast<std::uint64_t>(elapsed.count());
+}
+
 void advanceRevision(std::uint64_t &revision) noexcept {
   revision = revision == std::numeric_limits<std::uint64_t>::max()
                  ? 1
@@ -179,6 +196,24 @@ bool finiteRect(const AuthoredRect &rect) noexcept {
          rect.width > 0.0 && rect.height > 0.0;
 }
 
+std::optional<std::size_t>
+utf8CodepointCount(std::string_view value) noexcept {
+  std::size_t offset = 0;
+  std::size_t count = 0;
+  while (offset < value.size()) {
+    utf8proc_int32_t codepoint = 0;
+    const auto consumed = utf8proc_iterate(
+        reinterpret_cast<const utf8proc_uint8_t *>(value.data() + offset),
+        static_cast<utf8proc_ssize_t>(value.size() - offset), &codepoint);
+    if (consumed <= 0) {
+      return std::nullopt;
+    }
+    offset += static_cast<std::size_t>(consumed);
+    ++count;
+  }
+  return count;
+}
+
 std::array<float, 4>
 startLaneIndicatorColor(start_lane_indicator::ColorRole role) noexcept {
   switch (role) {
@@ -203,11 +238,21 @@ struct PlaySkinSession::OwnedActivation final {
                   BeatorajaSkinConfiguration configurationValue,
                   std::unique_ptr<LuaSkinRuntime> runtimeValue,
                   std::unique_ptr<SkinResourceCatalog> resourcesValue,
+                  std::unique_ptr<SkinMovieCatalog> moviesValue,
                   SkinConfigurationWriteQueue &configurationWritesValue,
+                  std::function<void(SkinAudioVolumeWriterTarget, float)>
+                      applyAudioVolumeValue,
+                  std::function<void(float)> applyPracticeItemScrollValue,
+                  std::function<void(std::size_t, bool)>
+                      applyPracticeMenuItemValue,
+                  std::function<void(int)> applyPracticeVisibleItemsValue,
+                  std::function<LuaSkinLegacyInputGeneration()>
+                      captureLegacyInputGenerationValue,
                   ViewportSettings viewportSettingsValue,
                   UiLogicalRect safeUiBoundsValue,
                   PlaySkinViewport viewportValue,
-                  SkinSafetyPolicy safetyPolicyValue)
+                  SkinSafetyPolicy safetyPolicyValue,
+                  std::array<int, 8> pomyuMotionCyclesMillisValue)
       : revision(std::move(revisionValue)),
         identity(std::move(identityValue)), chartModel(&chartModelValue),
         reconciledSettings(std::move(reconciledSettingsValue)),
@@ -215,18 +260,27 @@ struct PlaySkinSession::OwnedActivation final {
         configuration(std::move(configurationValue)),
         mutationTable(makePinnedSkinEventMutationTableV1()),
         runtime(std::move(runtimeValue)), resources(std::move(resourcesValue)),
+        movies(std::move(moviesValue)),
         configurationWrites(&configurationWritesValue),
+        applyAudioVolume(std::move(applyAudioVolumeValue)),
+        applyPracticeItemScroll(std::move(applyPracticeItemScrollValue)),
+        applyPracticeMenuItem(std::move(applyPracticeMenuItemValue)),
+        applyPracticeVisibleItems(std::move(applyPracticeVisibleItemsValue)),
+        captureLegacyInputGeneration(
+            std::move(captureLegacyInputGenerationValue)),
         viewportSettings(viewportSettingsValue),
         safeUiBounds(safeUiBoundsValue), viewport(viewportValue),
         safetyPolicy(safetyPolicyValue),
+        pomyuMotionCyclesMillis(pomyuMotionCyclesMillisValue),
         gaugeRandom(std::make_unique<DeterministicGaugeRandomSource>(
             identitySeed(identity))),
         bridge(std::make_unique<PlaySkinStateBridge>(PlaySkinStateBridgeContext{
             .chartModel = *chartModel,
             .model = &model,
             .configuration = configuration,
-            .runtime = *runtime,
-            .mutationTable = mutationTable})) {}
+            .runtime = runtime.get(),
+            .mutationTable = mutationTable,
+            .pomyuMotionCyclesMillis = pomyuMotionCyclesMillis})) {}
 
   // The master revision is declared first and therefore released only after
   // the runtime/filesystem, resource catalog clone, and every borrowed frame
@@ -242,11 +296,19 @@ struct PlaySkinSession::OwnedActivation final {
   SkinEventMutationTable mutationTable;
   std::unique_ptr<LuaSkinRuntime> runtime;
   std::unique_ptr<SkinResourceCatalog> resources;
+  std::unique_ptr<SkinMovieCatalog> movies;
   SkinConfigurationWriteQueue *configurationWrites = nullptr;
+  std::function<void(SkinAudioVolumeWriterTarget, float)> applyAudioVolume;
+  std::function<void(float)> applyPracticeItemScroll;
+  std::function<void(std::size_t, bool)> applyPracticeMenuItem;
+  std::function<void(int)> applyPracticeVisibleItems;
+  std::function<LuaSkinLegacyInputGeneration()> captureLegacyInputGeneration;
   ViewportSettings viewportSettings;
   UiLogicalRect safeUiBounds;
   PlaySkinViewport viewport;
   SkinSafetyPolicy safetyPolicy{};
+  std::array<int, 8> pomyuMotionCyclesMillis = {1, 1, 1, 1,
+                                                 1, 1, 1, 1};
   Skin2DRenderer renderer;
   rendering::SkinQuadBatchRenderer quadRenderer;
   std::unique_ptr<ISkinGaugeRandomSource> gaugeRandom;
@@ -254,6 +316,101 @@ struct PlaySkinSession::OwnedActivation final {
 };
 
 #if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
+PlaySkinModelResourceReferencesForTesting
+skinModelReferencedResourceIdsForTesting(
+    const ValidatedBeatorajaSkinModel &model, bool practiceMode) {
+  (void)practiceMode;
+  PlaySkinModelResourceReferencesForTesting result;
+  std::map<SkinObjectId, const SkinObjectDefinition *> objects;
+  const std::set<SkinObjectId> disabled(model.disabledOptionalObjects.begin(),
+                                        model.disabledOptionalObjects.end());
+  for (const auto &object : model.model.objects) {
+    objects.emplace(object.id, &object);
+  }
+  std::set<SkinObjectId> visited;
+  const auto addSprite = [&](const SkinSpriteFrames &sprite) {
+    result.images.push_back(sprite.resource);
+  };
+  const auto visit = [&](this const auto &self, SkinObjectId id) -> void {
+    if (disabled.contains(id) || !visited.insert(id).second) return;
+    const auto found = objects.find(id);
+    if (found == objects.end()) return;
+    std::visit(
+        [&](const auto &object) {
+          using T = std::decay_t<decltype(object)>;
+          if constexpr (std::is_same_v<T, SkinImageObject>) {
+            for (const auto &state : object.orderedStates) addSprite(state);
+          } else if constexpr (std::is_same_v<T, SkinNumberObject> ||
+                               std::is_same_v<T, SkinFloatObject>) {
+            addSprite(object.digits.positive);
+            if (object.digits.negative) addSprite(*object.digits.negative);
+          } else if constexpr (std::is_same_v<T, SkinTextObject>) {
+            result.textObjects.push_back(found->second->id);
+          } else if constexpr (std::is_same_v<T, SkinSliderObject>) {
+            addSprite(object.knob);
+          } else if constexpr (std::is_same_v<T, SkinGraphObject>) {
+            if (!object.builtinImageReference) addSprite(object.fill);
+          } else if constexpr (std::is_same_v<T, SkinGaugeObject>) {
+            for (const auto &node : object.orderedNodes) addSprite(node);
+          } else if constexpr (std::is_same_v<T, SkinNoteObject>) {
+            for (const auto &lane : object.lanes) {
+              for (const auto &[kind, visual] : lane.visuals) {
+                (void)kind;
+                if (const auto *sprite =
+                        std::get_if<SkinSpriteFrames>(&visual)) {
+                  addSprite(*sprite);
+                }
+              }
+            }
+            for (const auto &line : object.lines) {
+              if (line.sprite) addSprite(*line.sprite);
+            }
+          } else if constexpr (std::is_same_v<T, SkinCoverObject>) {
+            addSprite(object.sprite);
+          } else if constexpr (std::is_same_v<T, SkinJudgeObject>) {
+            for (const auto &grade : object.grades) {
+              if (grade.image) self(grade.image->object);
+              if (grade.detailNumber) self(grade.detailNumber->object);
+            }
+          } else if constexpr (
+              std::is_same_v<T, SkinNoteDistributionGraphObject> ||
+              std::is_same_v<T, SkinGaugeGraphObject> ||
+              std::is_same_v<T, SkinBpmGraphObject> ||
+              std::is_same_v<T, SkinTimingVisualizerObject> ||
+              std::is_same_v<T, SkinTimingDistributionGraphObject> ||
+              std::is_same_v<T, SkinHitErrorVisualizerObject> ||
+              std::is_same_v<T, SkinBgaObject> ||
+              std::is_same_v<T, SkinPracticeObject> ||
+              std::is_same_v<T, SkinBuiltinImageObject> ||
+              std::is_same_v<T, SkinPmCharaObject> ||
+              std::is_same_v<T, SkinInvalidInGameplayObject> ||
+              std::is_same_v<T, SkinBlankObject>) {
+            // These objects either generate pixels, use a separate auxiliary
+            // preparation contract, or have no catalog resource identity.
+          } else {
+            static_assert(!sizeof(T), "unhandled skin resource-bearing object");
+          }
+        },
+        found->second->payload);
+  };
+  for (const auto &object : model.model.objects) visit(object.id);
+  std::ranges::sort(result.images);
+  result.images.erase(std::unique(result.images.begin(), result.images.end()),
+                      result.images.end());
+  std::ranges::sort(result.textObjects);
+  result.textObjects.erase(
+      std::unique(result.textObjects.begin(), result.textObjects.end()),
+      result.textObjects.end());
+  return result;
+}
+
+bool skinResourcePreparationEvidenceCompleteForTesting(
+    const PlaySkinResourcePreparationEvidenceForTesting &evidence) noexcept {
+  return evidence.referencedImageResourceIds ==
+             evidence.preparedImageResourceIds &&
+         evidence.referencedTextObjectIds == evidence.preparedTextObjectIds;
+}
+
 PlaySkinSession::PlaySkinSession(PlaySkinSessionFrameContext context) noexcept
     : owned_(), context_(std::move(context)),
       touchLayoutRevision_(context_.sessionSerial == 0
@@ -274,32 +431,118 @@ PlaySkinSession::PlaySkinSession(
                .model = owned_->model,
                .configuration = owned_->configuration,
                .resources = *owned_->resources,
+               .movies = owned_->movies.get(),
                .viewportSettings = owned_->viewportSettings,
                .viewport = owned_->viewport,
-               .runtime = *owned_->runtime,
+               .runtime = owned_->runtime.get(),
+               .captureLegacyInputGeneration =
+                   owned_->captureLegacyInputGeneration,
                .bridge = *owned_->bridge,
                .renderer = owned_->renderer,
                .quadRenderer = owned_->quadRenderer,
                .configurationWrites = *owned_->configurationWrites,
+               .applyAudioVolume = owned_->applyAudioVolume,
+               .applyPracticeItemScroll = owned_->applyPracticeItemScroll,
+               .applyPracticeMenuItem = owned_->applyPracticeMenuItem,
+               .applyPracticeVisibleItems = owned_->applyPracticeVisibleItems,
                .gaugeRandomSource = owned_->gaugeRandom.get()},
       touchLayoutRevision_(context_.sessionSerial == 0
                                ? 1
                                : context_.sessionSerial),
       touchHitRegionsRevision_(touchLayoutRevision_) {
   context_.identity.sessionSerial = context_.sessionSerial;
+  queuedInteractions_.reserve(maximumQueuedInteractions);
 }
 
-PlaySkinSession::~PlaySkinSession() = default;
+PlaySkinSession::~PlaySkinSession() {
+  discardPendingFrame();
+  cancelTextInput();
+  clearQueuedInteractions();
+}
 
 RuntimeSkinConfigurationSelection
 PlaySkinSession::runtimeConfigurationSelection() const {
   return runtimeSkinConfigurationSelection(context_.configuration);
 }
 
+#if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
+bool PlaySkinSession::hasLuaRuntimeForTesting() const noexcept {
+  return owned_ != nullptr && owned_->runtime != nullptr;
+}
+
+SkinFileActivityCounters
+PlaySkinSession::fileActivityCountersForTesting() const noexcept {
+  return owned_ && owned_->runtime
+             ? owned_->runtime->fileActivityCounters()
+             : SkinFileActivityCounters{};
+}
+
+const ValidatedBeatorajaSkinModel &
+PlaySkinSession::modelForTesting() const noexcept {
+  return context_.model;
+}
+
+std::size_t PlaySkinSession::preparedTextureCountForTesting() const noexcept {
+  return owned_ && owned_->resources ? owned_->resources->textureCount() : 0U;
+}
+
+std::uint64_t PlaySkinSession::callbackWallMicrosForTesting() const noexcept {
+  return context_.runtime
+             ? context_.runtime->callbackFrameWallMicrosForTesting()
+             : 0U;
+}
+
+PlaySkinResourcePreparationEvidenceForTesting
+PlaySkinSession::resourcePreparationEvidenceForTesting() const {
+  PlaySkinResourcePreparationEvidenceForTesting result;
+  if (!owned_) return result;
+  auto referenced =
+      skinModelReferencedResourceIdsForTesting(context_.model, false);
+  result.referencedImageResourceIds = std::move(referenced.images);
+  result.referencedTextObjectIds = std::move(referenced.textObjects);
+  if (owned_->resources) {
+    result.preparedImageResourceIds =
+        owned_->resources->preparedResourceIdsForTesting();
+    result.preparedTextObjectIds =
+        owned_->resources->preparedTextObjectIdsForTesting();
+  }
+  if (owned_->movies) {
+    auto movieIds = owned_->movies->preparedResourceIdsForTesting();
+    result.preparedImageResourceIds.insert(
+        result.preparedImageResourceIds.end(), movieIds.begin(), movieIds.end());
+  }
+  std::ranges::sort(result.preparedImageResourceIds);
+  result.preparedImageResourceIds.erase(
+      std::unique(result.preparedImageResourceIds.begin(),
+                  result.preparedImageResourceIds.end()),
+      result.preparedImageResourceIds.end());
+  return result;
+}
+
+std::optional<std::int64_t>
+PlaySkinSession::selectedLongNoteImageIndexForTesting(
+    const PlayfieldVisualState &state,
+    const PlayfieldProjectionResult &projection) {
+  context_.bridge.beginFrame(state, projection);
+  const auto value = context_.bridge.integerProperty(
+      {308}, SkinIntegerPropertyDomain::ImageIndex);
+  context_.bridge.discardFrame();
+  return value.supported ? std::optional<std::int64_t>{value.value}
+                         : std::nullopt;
+}
+#endif
+
 PlaySkinSessionCreateResult
 PlaySkinSession::create(ValidatedSkinActivation activation,
                         PlaySkinSessionContext context) {
   PlaySkinSessionCreateResult result;
+  const auto loadingStarted = LoadingClock::now();
+  const auto finish = [&]() -> PlaySkinSessionCreateResult {
+    result.loadingTelemetry.totalMicros = loadingMicros(loadingStarted);
+    result.loadingTelemetry.cancelled = result.cancelled;
+    result.loadingTelemetry.sessionPublished = result.session != nullptr;
+    return std::move(result);
+  };
   activation.reconciledSettings.viewport = context.viewport;
   result.reconciledSettings = activation.reconciledSettings;
 
@@ -307,14 +550,14 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
     result.diagnostics.push_back(sessionDiagnostic(
         "skin.session.serial_invalid",
         "Gameplay skin session serial must be nonzero."));
-    return result;
+    return finish();
   }
   if (context.initialState == nullptr || context.initialProjection == nullptr) {
     result.diagnostics.push_back(sessionDiagnostic(
         "skin.session.initial_state_missing",
         "Gameplay skin configuration requires an initialized authoritative "
         "playfield state and projection."));
-    return result;
+    return finish();
   }
   if (context.initialState->clock.serial == 0 ||
       context.initialProjection->frameSerial !=
@@ -323,77 +566,40 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
         "skin.session.initial_state_invalid",
         "Gameplay skin configuration requires matching nonzero initial "
         "playfield state and projection serials."));
-    return result;
+    return finish();
   }
   if (cancelled(context.stop, result)) {
-    return result;
+    return finish();
   }
   if (!context.liveResourceCounters) {
     result.diagnostics.push_back(sessionDiagnostic(
         "skin.session.live_resource_counters_missing",
         "Gameplay skin session requires application-owned resource "
         "accounting."));
-    return result;
+    return finish();
   }
   if (activation.entry.package != activation.revision.revision().package) {
     result.diagnostics.push_back(sessionDiagnostic(
         "skin.session.activation_package_mismatch",
         "Gameplay skin entry and revision package identities do not match."));
-    return result;
+    return finish();
   }
 
   try {
     const SkinRevisionReadView revision = activation.revision.readView();
-    auto runtimeFiles = LuaSkinFileSystem::create(
-        {.revision = revision,
-         .entry = activation.entry,
-         .storageRoots = context.storageRoots,
-         .profileId = context.profileId,
-         .allowDataWrites = true,
-         .safetyPolicy = context.safetyPolicy});
-    if (!runtimeFiles.fileSystem) {
+    const auto sourceFormat =
+        gameplaySkinSourceFormatForPath(activation.entry.packageRelativePath);
+    if (!sourceFormat) {
       result.diagnostics.push_back(sessionDiagnostic(
-          "skin_lua_filesystem_create_failed",
-          runtimeFiles.failure
-              ? runtimeFiles.failure->message
-              : "Lua gameplay skin filesystem could not be created",
-          runtimeFiles.failure ? runtimeFiles.failure->virtualPath : ""));
-      return result;
-    }
-    if (cancelled(context.stop, result)) {
-      return result;
+          "skin.document.source_unsupported",
+          "Gameplay skin activation has an unsupported source extension.",
+          activation.entry.packageRelativePath));
+      return finish();
     }
 
-    auto runtime = LuaSkinRuntime::create(
-        {.purpose = LuaRuntimePurpose::Gameplay,
-         .fileSystem = std::move(runtimeFiles.fileSystem),
-         .safetyPolicy = context.safetyPolicy});
-    if (!runtime.runtime) {
-      appendFailure(result.diagnostics, std::move(runtime.failure),
-                    "skin_lua_runtime_create_failed",
-                    "Lua gameplay runtime could not be created");
-      return result;
-    }
-
-    LuaSkinTableDecoder decoder(context.safetyPolicy);
-    auto headerValue = runtime.runtime->loadHeader();
-    if (!headerValue.value) {
-      appendFailure(result.diagnostics, std::move(headerValue.failure),
-                    "skin_lua_header_load_failed",
-                    "Lua gameplay skin header could not be loaded");
-      return result;
-    }
-    auto decodedHeader = decoder.decodeHeader(*headerValue.value);
-    appendMovedDiagnostics(result.diagnostics, decodedHeader.diagnostics);
-    headerValue.value.reset();
-    if (!decodedHeader.header || hasErrors(result.diagnostics) ||
-        cancelled(context.stop, result)) {
-      return result;
-    }
-
-    // Reconciliation/resource reads use an equivalent non-writing view while
-    // the gameplay runtime exclusively owns its filesystem for both Lua load
-    // phases and later profile-isolated data access.
+    // Decode, configuration, and resource reads share this exact retained
+    // revision/live-source view. Only Lua receives the distinct writable
+    // runtime filesystem below.
     auto resourceFiles = LuaSkinFileSystem::create(
         {.revision = revision,
          .entry = activation.entry,
@@ -402,146 +608,236 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
          .safetyPolicy = context.safetyPolicy});
     if (!resourceFiles.fileSystem) {
       result.diagnostics.push_back(sessionDiagnostic(
-          "skin_lua_filesystem_create_failed",
+          "skin.document.filesystem_create_failed",
           resourceFiles.failure
               ? resourceFiles.failure->message
-              : "Lua gameplay skin resource filesystem could not be created",
+              : "Gameplay skin resource filesystem could not be created",
           resourceFiles.failure ? resourceFiles.failure->virtualPath : ""));
-      return result;
-    }
-
-    auto reconciliation = reconcileSkinConfiguration(
-        *decodedHeader.header, &activation.reconciledSettings,
-        *resourceFiles.fileSystem,
-        context.pinnedRuntimeSelection
-            ? &*context.pinnedRuntimeSelection
-            : nullptr);
-    appendMovedDiagnostics(result.diagnostics, reconciliation.diagnostics);
-    if (!reconciliation.configuration || hasErrors(result.diagnostics) ||
-        cancelled(context.stop, result)) {
-      return result;
-    }
-    result.reconciledSettings = reconciliation.reconciledSettings;
-    BeatorajaSkinConfiguration configuration =
-        std::move(*reconciliation.configuration);
-    result.configurationDigest = configuration.lowercaseSha256;
-    if (result.configurationDigest.empty() ||
-        result.configurationDigest != skinConfigurationDigest(configuration)) {
-      result.diagnostics.push_back(sessionDiagnostic(
-          "skin_lua_configuration_digest_invalid",
-          "Reconciled Lua gameplay skin configuration has an inconsistent "
-          "digest."));
-      return result;
-    }
-    if (result.configurationDigest != activation.configurationDigest) {
-      result.diagnostics.push_back(sessionDiagnostic(
-          "skin.session.configuration_digest_mismatch",
-          "Fresh gameplay skin configuration does not match the validated "
-          "activation digest."));
-      return result;
-    }
-
-    SkinEventMutationTable configuredMutationTable =
-        makePinnedSkinEventMutationTableV1();
-    PlaySkinStateBridge configuredStateBridge({
-        .chartModel = context.chartModel,
-        .model = nullptr,
-        .configuration = configuration,
-        .runtime = *runtime.runtime,
-        .mutationTable = configuredMutationTable,
-    });
-    configuredStateBridge.beginFrame(*context.initialState,
-                                     *context.initialProjection);
-    if (configuredStateBridge.frameSerial() !=
-        context.initialState->clock.serial) {
-      appendDiagnostics(result.diagnostics, configuredStateBridge.diagnostics());
-      configuredStateBridge.discardFrame();
-      if (!hasErrors(result.diagnostics)) {
-        result.diagnostics.push_back(sessionDiagnostic(
-            "skin.session.initial_state_invalid",
-            "Gameplay skin configuration could not bind its initialized "
-            "authoritative state."));
-      }
-      return result;
-    }
-    auto configuredValue = runtime.runtime->loadConfigured(configuration);
-    appendDiagnostics(result.diagnostics, configuredStateBridge.diagnostics());
-    configuredStateBridge.discardFrame();
-    if (!configuredValue.value) {
-      appendFailure(result.diagnostics, std::move(configuredValue.failure),
-                    "skin_lua_configured_load_failed",
-                    "Lua gameplay skin configured phase could not be loaded");
-      return result;
+      return finish();
     }
     if (cancelled(context.stop, result)) {
-      return result;
-    }
-    const SkinBuiltinBindingCatalogView builtins =
-        gameplaySkinBuiltinCatalog();
-    auto decodedModel = decoder.decodeGameplay(
-        *configuredValue.value,
-        {.runtime = *runtime.runtime,
-         .builtins = builtins,
-         .safetyPolicy = context.safetyPolicy});
-    appendMovedDiagnostics(result.diagnostics, decodedModel.diagnostics);
-    configuredValue.value.reset();
-    if (!decodedModel.model || hasErrors(result.diagnostics) ||
-        cancelled(context.stop, result)) {
-      return result;
+      return finish();
     }
 
-    SkinModelValidator modelValidator;
-    auto validatedModel = modelValidator.validate(
-        std::move(*decodedModel.model),
-        {.builtins = builtins,
-         .callbacks = runtime.runtime->callbackLiveness()});
-    appendMovedDiagnostics(result.diagnostics, validatedModel.diagnostics);
-    if (!validatedModel.model || hasErrors(result.diagnostics) ||
-        cancelled(context.stop, result)) {
-      return result;
+    std::unique_ptr<LuaSkinFileSystem> luaFiles;
+    if (*sourceFormat == GameplaySkinSourceFormat::Lua) {
+      auto created = LuaSkinFileSystem::create(
+          {.revision = revision,
+           .entry = activation.entry,
+           .storageRoots = context.storageRoots,
+           .profileId = context.profileId,
+           .allowDataWrites = true,
+           .safetyPolicy = context.safetyPolicy});
+      if (!created.fileSystem) {
+        result.diagnostics.push_back(sessionDiagnostic(
+            "skin_lua_filesystem_create_failed",
+            created.failure
+                ? created.failure->message
+                : "Lua gameplay skin filesystem could not be created",
+            created.failure ? created.failure->virtualPath : ""));
+        return finish();
+      }
+      luaFiles = std::move(created.fileSystem);
     }
+
+    GameplaySkinDocumentLoader documentLoader;
+    const auto audioActivity = context.audioBackend;
+    const auto documentStarted = LoadingClock::now();
+    auto loaded = documentLoader.load(
+        {.sourceFormat = *sourceFormat,
+         .entry = activation.entry,
+         .documentFileSystem = *resourceFiles.fileSystem,
+         .luaFileSystem = std::move(luaFiles),
+         .luaHttpTransport = std::move(context.httpTransport),
+         .luaAudioBackend = std::move(context.audioBackend),
+         .desiredSettings = &activation.reconciledSettings,
+         .pinnedRuntimeSelection =
+             context.pinnedRuntimeSelection
+                 ? &*context.pinnedRuntimeSelection
+                 : nullptr,
+         .expectedConfigurationDigest = activation.configurationDigest,
+         .luaPurpose = LuaRuntimePurpose::Gameplay,
+         .loadConfiguredLua =
+             [&context](LuaSkinRuntime &runtime,
+                        const BeatorajaSkinConfiguration &configuration,
+                        std::vector<SkinDiagnostic> &diagnostics) {
+               if (context.captureLegacyInputGeneration) {
+                 try {
+                   runtime.setLegacyInputGeneration(
+                       context.captureLegacyInputGeneration());
+                 } catch (...) {
+                   return LuaValueResult{
+                       .failure = sessionDiagnostic(
+                           "skin.session.legacy_input_capture_failed",
+                           "Gameplay skin legacy input could not be captured "
+                           "for configured Lua.")};
+                 }
+               }
+               SkinEventMutationTable mutationTable =
+                   makePinnedSkinEventMutationTableV1();
+               PlaySkinStateBridge bridge({
+                   .chartModel = context.chartModel,
+                   .model = nullptr,
+                   .configuration = configuration,
+                   .runtime = &runtime,
+                   .mutationTable = mutationTable,
+               });
+               bridge.beginFrame(*context.initialState,
+                                 *context.initialProjection);
+               if (bridge.frameSerial() !=
+                   context.initialState->clock.serial) {
+                 appendDiagnostics(diagnostics, bridge.diagnostics());
+                 bridge.discardFrame();
+                 return LuaValueResult{
+                     .failure = sessionDiagnostic(
+                         "skin.session.initial_state_invalid",
+                         "Gameplay skin configuration could not bind its "
+                         "initialized authoritative state.")};
+               }
+               auto value = runtime.loadConfigured(configuration);
+               appendDiagnostics(diagnostics, bridge.diagnostics());
+               bridge.discardFrame();
+               return value;
+             },
+         .safetyPolicy = context.safetyPolicy,
+         .stop = context.stop});
+    (void)recordSkinLoadingPhase(result.loadingTelemetry,
+                                 SkinLoadingPhase::Document,
+                                 loadingMicros(documentStarted));
+    if (audioActivity) {
+      result.loadingTelemetry.resources.audioDecodes =
+          audioActivity->activityCounters().loadsSucceeded;
+    }
+    result.reconciledSettings = std::move(loaded.reconciledSettings);
+    result.configurationDigest = std::move(loaded.configurationDigest);
+    appendMovedDiagnostics(result.diagnostics, loaded.diagnostics);
+    if (loaded.cancelled || cancelled(context.stop, result)) {
+      result.cancelled = true;
+      return finish();
+    }
+    if (!loaded.document || hasErrors(result.diagnostics)) {
+      return finish();
+    }
+    LoadedGameplaySkinDocument document = std::move(*loaded.document);
+    appendMovedDiagnostics(result.diagnostics, document.diagnostics);
 
     const std::vector<std::string> runtimeStrings =
         context.chartModel.runtimeStrings();
+    std::map<int, std::filesystem::path> builtinImagePaths;
+    const auto addBuiltinPath = [&](int reference,
+                                    const std::filesystem::path &path) {
+      if (!path.empty()) builtinImagePaths.emplace(reference, path);
+    };
+    addBuiltinPath(100,
+                   context.chartModel.staticMetadata.stageFileResourcePath);
+    addBuiltinPath(101,
+                   context.chartModel.staticMetadata.backBmpResourcePath);
+    addBuiltinPath(102,
+                   context.chartModel.staticMetadata.bannerResourcePath);
+    const auto resourceStarted = LoadingClock::now();
     auto planned = context.resourcePreparation.decodeAndPlan(
         {.revision = activation.revision.clone(),
          .entry = activation.entry,
          .fileSystem = *resourceFiles.fileSystem,
-         .model = *validatedModel.model,
-         .configuration = configuration,
+         .model = document.model,
+         .configuration = document.configuration,
          .requiredRuntimeStrings = runtimeStrings,
+         .practiceMode = context.initialState->authority.gameplayMode ==
+                         PlayfieldGameplayMode::Practice,
+         .builtinImagePaths = std::move(builtinImagePaths),
+         .builtinImageReader = std::move(context.builtinImageReader),
          .safetyPolicy = context.safetyPolicy,
          .stop = context.stop});
+    (void)recordSkinLoadingPhase(result.loadingTelemetry,
+                                 SkinLoadingPhase::ResourcePreparation,
+                                 loadingMicros(resourceStarted));
     appendMovedDiagnostics(result.diagnostics, planned.diagnostics);
     if (planned.cancelled || cancelled(context.stop, result)) {
       result.cancelled = true;
-      return result;
+      return finish();
     }
     if (!planned.plan || hasErrors(result.diagnostics)) {
-      return result;
+      return finish();
     }
+    result.loadingTelemetry.resources.imageDecodes =
+        planned.plan->images.size();
+    result.loadingTelemetry.resources.fontDecodes =
+        planned.plan->atlases.size();
+    result.loadingTelemetry.resources.decodedBytes =
+        planned.plan->decodedBytes;
 
+    auto movieDevice = std::move(context.movieDevice);
+#if ASOBMASHOW_ENABLE_SKIN_MOVIE_DEVICE
+    if (!movieDevice) {
+      movieDevice = createSkinMovieDevice();
+    }
+#endif
+    const auto movieStarted = LoadingClock::now();
+    auto preparedMovies = SkinMovieCatalog::prepare(
+        {.fileSystem = *resourceFiles.fileSystem,
+         .model = document.model,
+         .configuration = document.configuration,
+         .device = std::move(movieDevice),
+         .safetyPolicy = context.safetyPolicy,
+         .liveResourceCounters = context.liveResourceCounters,
+         .stop = context.stop,
+         .sessionDecodedBytes = planned.plan->decodedBytes});
+    (void)recordSkinLoadingPhase(result.loadingTelemetry,
+                                 SkinLoadingPhase::Movie,
+                                 loadingMicros(movieStarted));
+    appendMovedDiagnostics(result.diagnostics, preparedMovies.diagnostics);
+    if (preparedMovies.cancelled || cancelled(context.stop, result)) {
+      result.cancelled = true;
+      return finish();
+    }
+    if (!preparedMovies.catalog || hasErrors(result.diagnostics)) {
+      return finish();
+    }
+    result.loadingTelemetry.resources.movieDecodes =
+        preparedMovies.catalog->movieCount();
+    result.loadingTelemetry.resources.decodedBytes +=
+        preparedMovies.catalog->decodedBytes();
+    const auto resourceFileActivity = resourceFiles.fileSystem->activityCounters();
+    const auto runtimeFileActivity =
+        document.luaRuntime
+            ? document.luaRuntime->fileActivityCounters()
+            : SkinFileActivityCounters{};
+    result.loadingTelemetry.resources.filesystemReads =
+        resourceFileActivity.readsPerformed + runtimeFileActivity.readsPerformed;
+    result.loadingTelemetry.resources.encodedBytes =
+        resourceFileActivity.bytesRead + runtimeFileActivity.bytesRead;
+
+    const auto uploadStarted = LoadingClock::now();
     auto uploaded = SkinResourceCatalog::upload(std::move(*planned.plan),
                                                 context.textureDevice,
                                                 context.liveResourceCounters);
+    (void)recordSkinLoadingPhase(result.loadingTelemetry,
+                                 SkinLoadingPhase::Upload,
+                                 loadingMicros(uploadStarted));
     appendMovedDiagnostics(result.diagnostics, uploaded.diagnostics);
     if (!uploaded.catalog || hasErrors(result.diagnostics)) {
-      return result;
+      return finish();
     }
+    result.loadingTelemetry.resources.textureUploads =
+        uploaded.catalog->textureCount();
     if (cancelled(context.stop, result)) {
-      return result;
+      return finish();
     }
+    const auto pomyuMotionCyclesMillis =
+        uploaded.catalog->pomyuMotionCyclesMillis();
 
-    auto renderPhase = runtime.runtime->enterRenderPhase();
-    if (!renderPhase.ok) {
-      appendFailure(result.diagnostics, std::move(renderPhase.failure),
-                    "skin_lua_render_phase_failed",
-                    "Lua gameplay skin could not enter render phase");
-      return result;
+    if (document.luaRuntime) {
+      auto renderPhase = document.luaRuntime->enterRenderPhase();
+      if (!renderPhase.ok) {
+        appendFailure(result.diagnostics, std::move(renderPhase.failure),
+                      "skin_lua_render_phase_failed",
+                      "Lua gameplay skin could not enter render phase");
+        return finish();
+      }
     }
     uploaded.catalog->enterRenderPhase();
 
-    const auto &header = validatedModel.model->model.header;
+    const auto &header = document.model.model.header;
     const PlaySkinViewport viewport = evaluatePlaySkinViewport(
         {.width = static_cast<double>(header.width),
          .height = static_cast<double>(header.height)},
@@ -550,10 +846,10 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
       result.diagnostics.push_back(sessionDiagnostic(
           "skin.session.viewport_invalid",
           "Gameplay skin viewport could not be evaluated."));
-      return result;
+      return finish();
     }
     if (cancelled(context.stop, result)) {
-      return result;
+      return finish();
     }
 
     PlaySkinSessionIdentity identity{
@@ -566,19 +862,26 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
     auto owned = std::make_unique<OwnedActivation>(
         std::move(activation.revision), std::move(identity),
         context.chartModel, result.reconciledSettings,
-        std::move(*validatedModel.model), std::move(configuration),
-        std::move(runtime.runtime), std::move(uploaded.catalog),
-        context.configurationWrites,
+        std::move(document.model), std::move(document.configuration),
+        std::move(document.luaRuntime), std::move(uploaded.catalog),
+        std::move(preparedMovies.catalog),
+        context.configurationWrites, std::move(context.applyAudioVolume),
+        std::move(context.applyPracticeItemScroll),
+        std::move(context.applyPracticeMenuItem),
+        std::move(context.applyPracticeVisibleItems),
+        std::move(context.captureLegacyInputGeneration),
         context.viewport, context.safeUiBounds, viewport,
-        context.safetyPolicy);
+        context.safetyPolicy, pomyuMotionCyclesMillis);
+    owned->renderer.setGeneratedTextureLiveCounters(
+        context.liveResourceCounters);
     result.session.reset(new PlaySkinSession(std::move(owned)));
-    return result;
+    return finish();
   } catch (...) {
     result.session.reset();
     result.diagnostics.push_back(sessionDiagnostic(
         "skin.session.create_failed",
-        "Lua gameplay skin session creation failed closed."));
-    return result;
+        "Gameplay skin session creation failed closed."));
+    return finish();
   }
 }
 
@@ -591,17 +894,69 @@ PlaySkinSession::selectedSkinGameplayTiming() const {
   return context_.model.model.timing;
 }
 
+std::optional<PmsPoorDestinationGeometry>
+PlaySkinSession::pmsPoorDestinationGeometry() const {
+  const auto note = std::ranges::find_if(
+      context_.model.model.objects, [](const SkinObjectDefinition &object) {
+        return std::holds_alternative<SkinNoteObject>(object.payload);
+      });
+  if (note == context_.model.model.objects.end()) {
+    return std::nullopt;
+  }
+  const auto &lanes = std::get<SkinNoteObject>(note->payload).lanes;
+  if (lanes.empty() || !lanes.front().secondaryDestinationY) {
+    return std::nullopt;
+  }
+  return PmsPoorDestinationGeometry{
+      .laneOriginY = lanes.front().laneDestination.y,
+      .laneHeight = lanes.front().laneDestination.height,
+      .secondaryDestinationY =
+          static_cast<double>(*lanes.front().secondaryDestinationY)};
+}
+
+SkinHostCallResult
+PlaySkinSession::invokeInteraction(const QueuedInteraction &interaction) {
+  return std::visit(
+      [&](const auto &payload) -> SkinHostCallResult {
+        using T = std::decay_t<decltype(payload)>;
+        if constexpr (std::is_same_v<T, SkinEventInvocation>) {
+          const std::array<int, 1> arguments{payload.argument};
+          return context_.bridge.invokeEventBinding(
+              SkinEventBindingId{payload.eventBinding}, arguments);
+        } else if constexpr (std::is_same_v<T, SkinWriterInvocation>) {
+          (void)payload.eventMicros;
+          return context_.bridge.invokeWriter(payload.writer,
+                                              payload.normalizedValue);
+        } else {
+          (void)payload.eventMicros;
+          return context_.bridge.invokeWriter(payload.writer, payload.value);
+        }
+      },
+      interaction.payload);
+}
+
 PlaySkinFrameTransactionResult PlaySkinSession::runFrameTransaction(
     const PlayfieldVisualState &state,
     const PlayfieldProjectionResult &projection,
-    std::span<const SkinWriterInvocation> queuedWriters,
-    std::span<const SkinEventInvocation> queuedEvents) {
+    std::span<const QueuedInteraction> interactions,
+    bool retainBridgeForContinuation) {
   PlaySkinFrameTransactionResult result{.frameSerial = state.clock.serial};
   if (context_.sessionSerial == 0) {
     result.diagnostics.push_back(transactionDiagnostic(
         "skin.session.serial_invalid",
         "Gameplay skin session serial must be nonzero."));
     return result;
+  }
+  if (context_.runtime != nullptr && context_.captureLegacyInputGeneration) {
+    try {
+      context_.runtime->setLegacyInputGeneration(
+          context_.captureLegacyInputGeneration());
+    } catch (...) {
+      result.diagnostics.push_back(transactionDiagnostic(
+          "skin.session.legacy_input_capture_failed",
+          "Gameplay skin legacy input could not be captured for the frame."));
+      return result;
+    }
   }
   context_.bridge.beginFrame(state, projection);
   FrameDiscardGuard discard(context_.bridge);
@@ -611,37 +966,24 @@ PlaySkinFrameTransactionResult PlaySkinSession::runFrameTransaction(
     return result;
   }
 
-  const auto begun = context_.runtime.beginFrame(state.clock.serial);
-  if (!begun.ok) {
-    result.diagnostics.push_back(begun.failure.value_or(
-        transactionDiagnostic("skin.session.frame.begin",
-                              "Lua runtime rejected the session frame.")));
-    return result;
+  if (context_.runtime != nullptr) {
+    const auto begun = context_.runtime->beginFrame(state.clock.serial);
+    if (!begun.ok) {
+      result.diagnostics.push_back(begun.failure.value_or(
+          transactionDiagnostic("skin.session.frame.begin",
+                                "Lua runtime rejected the session frame.")));
+      return result;
+    }
   }
   SkinExternalFrameOwnership ownership(state.clock.serial,
                                        context_.sessionSerial);
 
-  for (const auto &event : queuedEvents) {
-    // SkinObject.mousePressed dispatches the image event on primary pointer
-    // down. Touch delivery is frame-bound here, so preserve its single signed
-    // argument at the next valid transaction boundary.
-    const std::array<int, 1> arguments{event.argument};
-    const auto invoked = context_.bridge.invokeEventBinding(
-        SkinEventBindingId{event.eventBinding}, arguments);
-    if (!invoked.ok()) {
-      appendDiagnostics(result.diagnostics, invoked.diagnostics);
-      return result;
-    }
-  }
-
-  for (const auto &writer : queuedWriters) {
-    // Pinned FloatWriter receives only the normalized value. eventMicros is
-    // retained at this transaction boundary for later diagnostic/persistence
-    // integration and never changes callback ordering.
-    (void)writer.eventMicros;
-    const auto invoked =
-        context_.bridge.invokeWriter(writer.writer, writer.normalizedValue);
-    if (invoked.status != SkinHostCallStatus::Completed) {
+  for (const auto &interaction : interactions) {
+    const auto invoked = invokeInteraction(interaction);
+    const bool event =
+        std::holds_alternative<SkinEventInvocation>(interaction.payload);
+    if (event ? !invoked.ok()
+              : invoked.status != SkinHostCallStatus::Completed) {
       appendDiagnostics(result.diagnostics, invoked.diagnostics);
       return result;
     }
@@ -660,6 +1002,7 @@ PlaySkinFrameTransactionResult PlaySkinSession::runFrameTransaction(
        .model = context_.model,
        .configuration = context_.configuration,
        .resources = context_.resources,
+       .movies = context_.movies,
        .viewport = context_.viewport,
        .runtime = context_.runtime,
        .state = context_.bridge,
@@ -672,9 +1015,14 @@ PlaySkinFrameTransactionResult PlaySkinSession::runFrameTransaction(
     return result;
   }
 
-  result.committed = context_.bridge.commitFrame();
+  result.committed = retainBridgeForContinuation
+                         ? context_.bridge.takeFrameCommitForContinuation()
+                         : context_.bridge.commitFrame();
   discard.release();
   if (result.committed.frameSerial != state.clock.serial) {
+    if (retainBridgeForContinuation) {
+      context_.bridge.discardFrame();
+    }
     result.committed = {};
     result.evaluation.submitReady.reset();
     result.evaluation.interactionLayout.reset();
@@ -690,15 +1038,23 @@ PlaySkinFrameTransactionResult PlaySkinSession::runFrameTransaction(
 PresentationFrameOutcome PlaySkinSession::preparePendingFrame(
     const PlayfieldVisualState &state,
     const PlayfieldProjectionResult &projection,
-    std::span<const SkinWriterInvocation> queuedWriters,
-    std::span<const SkinEventInvocation> queuedEvents,
+    std::vector<QueuedInteraction> interactions,
     std::span<const SkinFrameMutation> extraMutations) {
   if (pendingFrame_) {
     return PresentationFrameOutcome::CriticalFailure;
   }
 
-  auto transaction = runFrameTransaction(state, projection, queuedWriters,
-                                         queuedEvents);
+  const auto firstString = std::ranges::find_if(
+      interactions, [](const QueuedInteraction &interaction) {
+        return std::holds_alternative<QueuedStringWriter>(interaction.payload);
+      });
+  const std::size_t deferredBegin = static_cast<std::size_t>(
+      std::distance(interactions.begin(), firstString));
+  const bool hasDeferred = deferredBegin < interactions.size();
+  auto transaction = runFrameTransaction(
+      state, projection,
+      std::span<const QueuedInteraction>{interactions.data(), deferredBegin},
+      hasDeferred);
   if (transaction.ready() && !extraMutations.empty()) {
     try {
       transaction.committed.orderedMutations.insert(
@@ -715,7 +1071,17 @@ PresentationFrameOutcome PlaySkinSession::preparePendingFrame(
     }
   }
   const bool ready = transaction.ready();
-  pendingFrame_.emplace(PendingFrame{.transaction = std::move(transaction)});
+  try {
+    pendingFrame_.emplace(
+        PendingFrame{.transaction = std::move(transaction),
+                     .interactions = std::move(interactions),
+                     .deferredBegin = deferredBegin});
+  } catch (...) {
+    if (hasDeferred) {
+      context_.bridge.discardFrame();
+    }
+    return PresentationFrameOutcome::CriticalFailure;
+  }
   return ready ? PresentationFrameOutcome::Ready
                : PresentationFrameOutcome::CriticalFailure;
 }
@@ -726,15 +1092,10 @@ PresentationFrameOutcome PlaySkinSession::prepareFrame(
   if (pendingFrame_) {
     return PresentationFrameOutcome::CriticalFailure;
   }
-  const std::size_t writerCount = queuedWriterCount_;
-  const std::size_t eventCount = queuedEventCount_;
-  queuedWriterCount_ = 0;
-  queuedEventCount_ = 0;
-  return preparePendingFrame(
-      state, projection,
-      std::span<const SkinWriterInvocation>{queuedWriters_.data(),
-                                            writerCount},
-      std::span<const SkinEventInvocation>{queuedEvents_.data(), eventCount});
+  std::vector<QueuedInteraction> interactions;
+  interactions.swap(queuedInteractions_);
+  queuedStringBytes_ = 0;
+  return preparePendingFrame(state, projection, std::move(interactions));
 }
 
 #if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
@@ -742,7 +1103,14 @@ PlaySkinFrameTransactionResult PlaySkinSession::prepareFrame(
     const PlayfieldVisualState &state,
     const PlayfieldProjectionResult &projection,
     std::span<const SkinWriterInvocation> queuedWriters) {
-  return runFrameTransaction(state, projection, queuedWriters);
+  std::vector<QueuedInteraction> interactions;
+  interactions.reserve(queuedWriters.size());
+  std::uint64_t sequence = 1;
+  for (const auto &writer : queuedWriters) {
+    interactions.push_back(
+        {.sequence = sequence++, .payload = writer});
+  }
+  return runFrameTransaction(state, projection, interactions, false);
 }
 
 PresentationFrameOutcome PlaySkinSession::prepareFrameForTesting(
@@ -750,10 +1118,43 @@ PresentationFrameOutcome PlaySkinSession::prepareFrameForTesting(
     const PlayfieldProjectionResult &projection,
     std::span<const SkinWriterInvocation> queuedWriters,
     std::span<const SkinFrameMutation> extraMutations) {
-  return preparePendingFrame(state, projection, queuedWriters,
-                             {}, extraMutations);
+  std::vector<QueuedInteraction> interactions;
+  interactions.reserve(queuedWriters.size());
+  std::uint64_t sequence = 1;
+  for (const auto &writer : queuedWriters) {
+    interactions.push_back(
+        {.sequence = sequence++, .payload = writer});
+  }
+  return preparePendingFrame(state, projection, std::move(interactions),
+                             extraMutations);
 }
 #endif
+
+void PlaySkinSession::applyFrameMutations(
+    std::span<const SkinFrameMutation> mutations) const {
+  for (const auto &mutation : mutations) {
+    if (const auto *write = std::get_if<SetSkinAudioVolume>(&mutation)) {
+      if (context_.applyAudioVolume) {
+        context_.applyAudioVolume(write->target, write->value);
+      }
+    } else if (const auto *write =
+                   std::get_if<SetPracticeItemScroll>(&mutation)) {
+      if (context_.applyPracticeItemScroll) {
+        context_.applyPracticeItemScroll(write->position);
+      }
+    } else if (const auto *write =
+                   std::get_if<SetPracticeMenuItem>(&mutation)) {
+      if (context_.applyPracticeMenuItem) {
+        context_.applyPracticeMenuItem(write->visibleIndex, write->increment);
+      }
+    } else if (const auto *write =
+                   std::get_if<SetPracticeVisibleItems>(&mutation)) {
+      if (context_.applyPracticeVisibleItems) {
+        context_.applyPracticeVisibleItems(write->count);
+      }
+    }
+  }
+}
 
 PresentationFrameResult PlaySkinSession::render(
     RenderContext &renderContext, const PreparedGameplayBgaFrame &preparedBga,
@@ -773,6 +1174,10 @@ PresentationFrameResult PlaySkinSession::render(
   // render can therefore never submit or enqueue this frame again.
   PendingFrame pending = std::move(*pendingFrame_);
   pendingFrame_.reset();
+  FrameDiscardGuard continuationDiscard(context_.bridge);
+  if (!pending.hasDeferredInteractions()) {
+    continuationDiscard.release();
+  }
   auto &transaction = pending.transaction;
   PresentationFrameResult result{
       .frameSerial = transaction.frameSerial,
@@ -899,9 +1304,21 @@ PresentationFrameResult PlaySkinSession::render(
         touchLayoutRevision_;
     publishedLayout_ =
         std::move(transaction.evaluation.interactionLayout);
+    if (focusedTextInput_ &&
+        std::ranges::none_of(
+            publishedLayout_->textsTopmostFirst,
+            [&](const SkinTextInteractionGeometry &text) {
+              return text.sourceObject == focusedTextInput_->sourceObject &&
+                     text.authoredOrdinal ==
+                         focusedTextInput_->authoredOrdinal &&
+                     text.writer == focusedTextInput_->writer;
+            })) {
+      cancelTextInput();
+    }
   } else {
     publishedLayout_.reset();
     captures_.fill({});
+    cancelTextInput();
   }
 
   // The prepared-BGA overload is noexcept and returns false only before its
@@ -909,7 +1326,8 @@ PresentationFrameResult PlaySkinSession::render(
   // into built-in fallback; the renderer boundary prevents one escaping.
   const bool submitted = context_.renderer.submit(
       *transaction.evaluation.submitReady, context_.resources,
-      renderContext, context_.quadRenderer, preparedBga, bgaSubmitter);
+      renderContext, context_.quadRenderer, context_.movies,
+      context_.viewport, preparedBga, bgaSubmitter);
   if (!submitted) {
     clearPublishedGeometry(true);
     result.failure = presentationFailure(
@@ -928,6 +1346,59 @@ PresentationFrameResult PlaySkinSession::render(
   result.outcome = PresentationFrameOutcome::Ready;
   result.submittedMode = PresentationMode::Skin;
   result.bgaCompositeMode = GameplayBgaCompositeMode::EmbeddedSkin;
+
+  applyFrameMutations(transaction.committed.orderedMutations);
+
+  std::optional<SkinDiagnostic> deferredInteractionFailure;
+  if (pending.hasDeferredInteractions()) {
+    for (std::size_t index = pending.deferredBegin;
+         index < pending.interactions.size(); ++index) {
+      const auto &interaction = pending.interactions[index];
+      const auto invoked = invokeInteraction(interaction);
+      const bool event =
+          std::holds_alternative<SkinEventInvocation>(interaction.payload);
+      if (event ? !invoked.ok()
+                : invoked.status != SkinHostCallStatus::Completed) {
+        const auto error = std::ranges::find_if(
+            invoked.diagnostics, [](const SkinDiagnostic &diagnostic) {
+              return diagnostic.severity == DiagnosticSeverity::Error;
+            });
+        deferredInteractionFailure =
+            error != invoked.diagnostics.end()
+                ? *error
+                : transactionDiagnostic(
+                      "skin.session.interaction.post_submit_failed",
+                      "A deferred skin interaction failed after submission.");
+        break;
+      }
+    }
+    if (!deferredInteractionFailure) {
+      auto committed = context_.bridge.commitFrame();
+      continuationDiscard.release();
+      if (committed.frameSerial != transaction.frameSerial) {
+        deferredInteractionFailure = transactionDiagnostic(
+            "skin.session.interaction.post_submit_commit_failed",
+            "Deferred skin interactions could not commit their frame.");
+      } else {
+        applyFrameMutations(committed.orderedMutations);
+        try {
+          transaction.committed.orderedMutations.insert(
+              transaction.committed.orderedMutations.end(),
+              std::make_move_iterator(committed.orderedMutations.begin()),
+              std::make_move_iterator(committed.orderedMutations.end()));
+        } catch (...) {
+          deferredInteractionFailure = transactionDiagnostic(
+              "skin.session.interaction.post_submit_retain_failed",
+              "Deferred skin interaction writes could not be retained.");
+        }
+      }
+    }
+    if (deferredInteractionFailure) {
+      result.outcome = PresentationFrameOutcome::RecoverableFailure;
+      result.failure = presentationFailure(
+          identity(), transaction.frameSerial, *deferredInteractionFailure);
+    }
+  }
 
   if (persistenceFailure == PersistencePreparationFailure::Copy) {
     return std::move(*copyFailureResult);
@@ -1042,8 +1513,8 @@ void PlaySkinSession::clearPublishedGeometry(bool advanceTopology) noexcept {
   captures_.fill({});
   publishedLayout_.reset();
   publishedReplayGhostGeometry_.reset();
-  queuedWriterCount_ = 0;
-  queuedEventCount_ = 0;
+  cancelTextInput();
+  clearQueuedInteractions();
   if (advanceTopology) {
     advanceRevision(touchLayoutRevision_);
   }
@@ -1059,7 +1530,7 @@ void PlaySkinSession::setViewport(ViewportSettings settings) {
 }
 
 void PlaySkinSession::updateViewportGeometry(UiLogicalRect safeUiBounds) {
-  pendingFrame_.reset();
+  discardPendingFrame();
   const auto &header = context_.model.model.header;
   context_.viewport = evaluatePlaySkinViewport(
       {.width = static_cast<double>(header.width),
@@ -1186,6 +1657,42 @@ PlaySkinSession::hitTestUiControl(UiLogicalPoint point) const {
                           : PresentationUiHit{};
 }
 
+bool PlaySkinSession::enqueueInteraction(QueuedInteractionPayload payload,
+                                         std::size_t stringBytes) {
+  if (pendingFrame_ ||
+      queuedInteractions_.size() >= maximumQueuedInteractions ||
+      nextInteractionSequence_ == 0 ||
+      stringBytes > maximumQueuedStringBytes -
+                        std::min(queuedStringBytes_,
+                                 maximumQueuedStringBytes)) {
+    return false;
+  }
+  try {
+    queuedInteractions_.push_back(
+        {.sequence = nextInteractionSequence_, .payload = std::move(payload)});
+  } catch (...) {
+    return false;
+  }
+  queuedStringBytes_ += stringBytes;
+  nextInteractionSequence_ =
+      nextInteractionSequence_ == std::numeric_limits<std::uint64_t>::max()
+          ? 0
+          : nextInteractionSequence_ + 1;
+  return true;
+}
+
+void PlaySkinSession::clearQueuedInteractions() noexcept {
+  queuedInteractions_.clear();
+  queuedStringBytes_ = 0;
+}
+
+void PlaySkinSession::discardPendingFrame() noexcept {
+  if (pendingFrame_ && pendingFrame_->hasDeferredInteractions()) {
+    context_.bridge.discardFrame();
+  }
+  pendingFrame_.reset();
+}
+
 PresentationTouchResult PlaySkinSession::beginPresentationTouch(
     const PresentationTouchEvent &event) {
   if (!publishedLayout_ ||
@@ -1202,19 +1709,29 @@ PresentationTouchResult PlaySkinSession::beginPresentationTouch(
       publishedLayout_->hitTestUiControl(event.uiPoint) != event.hit) {
     return {};
   }
-  if (const auto eventInvocation = publishedLayout_->eventInvocationFor(
-          event.hit, event.uiPoint, event.eventMicros)) {
-    if (queuedEventCount_ == queuedEvents_.size()) {
+  if (event.hit.kind == PresentationUiControlKind::Text) {
+    const auto *text = publishedLayout_->editableTextAtUi(event.uiPoint);
+    if (text == nullptr || text->sourceObject != event.hit.sourceObject ||
+        text->authoredOrdinal != event.hit.authoredOrdinal ||
+        !focusTextInput(event.uiPoint, event.eventMicros)) {
       return {};
     }
-    queuedEvents_[queuedEventCount_++] = *eventInvocation;
+    *capture = {.pointerId = event.pointerId,
+                .active = true,
+                .hit = event.hit};
+    return {.consumed = true, .excludeFromGameplay = true};
+  }
+  if (const auto eventInvocation = publishedLayout_->eventInvocationFor(
+          event.hit, event.uiPoint, event.eventMicros)) {
+    if (!enqueueInteraction(*eventInvocation)) {
+      return {};
+    }
   } else {
     const auto writerInvocation = publishedLayout_->writerInvocationFor(
         event.hit, event.uiPoint, event.eventMicros);
-    if (!writerInvocation || queuedWriterCount_ == queuedWriters_.size()) {
+    if (!writerInvocation || !enqueueInteraction(*writerInvocation)) {
       return {};
     }
-    queuedWriters_[queuedWriterCount_++] = *writerInvocation;
   }
   *capture = {.pointerId = event.pointerId,
               .active = true,
@@ -1259,6 +1776,134 @@ PresentationTouchResult PlaySkinSession::endPresentationTouch(
 void PlaySkinSession::cancelPresentationTouches(long long eventMicros) {
   (void)eventMicros;
   captures_.fill({});
+}
+
+bool PlaySkinSession::focusTextInput(UiLogicalPoint point,
+                                     long long eventMicros) {
+  const SkinTextInteractionGeometry *target =
+      publishedLayout_ ? publishedLayout_->editableTextAtUi(point) : nullptr;
+  const auto targetCodepoints = [&]() -> std::optional<std::size_t> {
+    if (target == nullptr || target->currentValue.size() >
+                                 maximumFocusedTextBytes) {
+      return std::nullopt;
+    }
+    const auto count = utf8CodepointCount(target->currentValue);
+    return count && *count <= maximumFocusedTextCodepoints ? count
+                                                           : std::nullopt;
+  };
+  if (focusedTextInput_) {
+    const bool sameTarget =
+        target != nullptr &&
+        target->sourceObject == focusedTextInput_->sourceObject &&
+        target->authoredOrdinal == focusedTextInput_->authoredOrdinal &&
+        target->writer == focusedTextInput_->writer;
+    if (sameTarget) {
+      const auto codepoints = targetCodepoints();
+      if (!codepoints) {
+        return false;
+      }
+      try {
+        focusedTextInput_->value = target->currentValue;
+        focusedTextInput_->codepoints = *codepoints;
+      } catch (...) {
+        return false;
+      }
+      return true;
+    }
+    if (!commitTextInput(eventMicros)) {
+      return false;
+    }
+  }
+  if (target == nullptr) {
+    return false;
+  }
+  const auto codepoints = targetCodepoints();
+  if (!codepoints) {
+    return false;
+  }
+  try {
+    focusedTextInput_.emplace(
+        FocusedTextInput{.sourceObject = target->sourceObject,
+                         .authoredOrdinal = target->authoredOrdinal,
+                         .writer = target->writer,
+                         .value = target->currentValue,
+                         .codepoints = *codepoints});
+  } catch (...) {
+    focusedTextInput_.reset();
+    return false;
+  }
+  return true;
+}
+
+bool PlaySkinSession::hasFocusedTextInput() const noexcept {
+  return focusedTextInput_.has_value();
+}
+
+bool PlaySkinSession::appendTextInput(std::string_view utf8) {
+  if (!focusedTextInput_ || utf8.empty()) {
+    return false;
+  }
+  const auto codepoints = utf8CodepointCount(utf8);
+  if (!codepoints ||
+      utf8.size() > maximumFocusedTextBytes -
+                        std::min(focusedTextInput_->value.size(),
+                                 maximumFocusedTextBytes) ||
+      *codepoints > maximumFocusedTextCodepoints -
+                        std::min(focusedTextInput_->codepoints,
+                                 maximumFocusedTextCodepoints)) {
+    return false;
+  }
+  try {
+    focusedTextInput_->value.append(utf8);
+    focusedTextInput_->codepoints += *codepoints;
+  } catch (...) {
+    return false;
+  }
+  return true;
+}
+
+bool PlaySkinSession::backspaceTextInput() {
+  if (!focusedTextInput_ || focusedTextInput_->value.empty()) {
+    return false;
+  }
+  std::size_t offset = focusedTextInput_->value.size() - 1;
+  while (offset > 0 &&
+         (static_cast<unsigned char>(focusedTextInput_->value[offset]) &
+          0xc0U) == 0x80U) {
+    --offset;
+  }
+  focusedTextInput_->value.erase(offset);
+  if (focusedTextInput_->codepoints > 0) {
+    --focusedTextInput_->codepoints;
+  }
+  return true;
+}
+
+bool PlaySkinSession::commitTextInput(long long eventMicros) {
+  if (!focusedTextInput_ ||
+      queuedInteractions_.size() >= maximumQueuedInteractions ||
+      focusedTextInput_->value.size() >
+          maximumQueuedStringBytes -
+              std::min(queuedStringBytes_, maximumQueuedStringBytes)) {
+    return false;
+  }
+  try {
+    QueuedStringWriter writer{.writer = focusedTextInput_->writer,
+                              .value = focusedTextInput_->value,
+                              .eventMicros = eventMicros};
+    const std::size_t bytes = writer.value.size();
+    if (!enqueueInteraction(std::move(writer), bytes)) {
+      return false;
+    }
+  } catch (...) {
+    return false;
+  }
+  focusedTextInput_.reset();
+  return true;
+}
+
+void PlaySkinSession::cancelTextInput() noexcept {
+  focusedTextInput_.reset();
 }
 
 void PlaySkinSession::onLanePressed(int lane, JudgeResult judge,

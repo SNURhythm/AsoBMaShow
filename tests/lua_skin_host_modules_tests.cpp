@@ -1,5 +1,9 @@
 #include "skin/beatoraja/LuaSkinFileIo.h"
+#include "skin/beatoraja/LuaSkinAudioHost.h"
 #include "skin/beatoraja/LuaSkinHostModules.h"
+#include "gameplay_skin_ledger_evidence.h"
+#include "skin/beatoraja/LuaSkinHttpClient.h"
+#include "skin/beatoraja/LuaSkinLegacyInputHost.h"
 #include "skin/beatoraja/LuaSkinRuntime.h"
 #include "skin/beatoraja/Skin2DRenderer.h"
 
@@ -17,6 +21,7 @@ extern "C" {
 }
 
 #include <atomic>
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -76,6 +81,195 @@ public:
   SkinRejectedLinkKind inspectNoFollow(const fs::path &) const override {
     return SkinRejectedLinkKind::None;
   }
+};
+
+struct FakeHttpCall {
+  std::string url;
+  int timeoutMilliseconds = 0;
+  LuaSkinHttpLimits limits;
+  int connects = 0;
+  int responses = 0;
+  int reads = 0;
+  int disconnects = 0;
+};
+
+struct FakeHttpState {
+  std::vector<FakeHttpCall> calls;
+  int connects = 0;
+  int responses = 0;
+  int reads = 0;
+  int disconnects = 0;
+  bool destroyed = false;
+};
+
+class FakeHttpConnection final : public LuaSkinHttpConnection {
+public:
+  FakeHttpConnection(std::shared_ptr<FakeHttpState> state, std::size_t call)
+      : state_(std::move(state)), call_(call), url_(state_->calls[call].url) {}
+
+  std::optional<std::string> connect() noexcept override {
+    ++state_->connects;
+    ++state_->calls[call_].connects;
+    if (url_.ends_with("/transport-error")) {
+      return "fixture transport failure";
+    }
+    connected_ = true;
+    return std::nullopt;
+  }
+
+  LuaSkinHttpCodeResult responseCode() noexcept override {
+    ++state_->responses;
+    ++state_->calls[call_].responses;
+    if (url_.ends_with("/response-error")) {
+      return {.failure = "fixture response failure"};
+    }
+    return {.code = url_.ends_with("/legacy") ? 206 : 204};
+  }
+
+  LuaSkinHttpBodyResult readBody() noexcept override {
+    ++state_->reads;
+    ++state_->calls[call_].reads;
+    if (url_.ends_with("/read-error")) {
+      return {.failure = "fixture read failure"};
+    }
+    const std::string_view url = url_;
+    if (url.ends_with("/utf8")) {
+      return {.body = "alpha\r\n\xED\x95\x9C\xEA\xB8\x80\nomega"};
+    }
+    if (url.ends_with("/malformed")) {
+      return {.body = std::string("\xFF\n", 2)};
+    }
+    if (url.ends_with("/truncated-utf8")) {
+      return {.body = std::string("\xE2\x82\n", 3)};
+    }
+    if (url.ends_with("/line-limit")) {
+      std::string body;
+      body.reserve(2 * 1025);
+      for (int index = 0; index < 1025; ++index) {
+        body += "x\n";
+      }
+      return {.body = std::move(body)};
+    }
+    if (url.ends_with("/char-limit")) {
+      return {.body = std::string(65536, 'a')};
+    }
+    if (url.ends_with("/char-limit-with-newline")) {
+      return {.body = std::string(32768, 'a') + "\n" +
+                      std::string(32768, 'b')};
+    }
+    if (url.ends_with("/utf16-limit")) {
+      std::string body;
+      body.reserve(32768 * 4);
+      for (int index = 0; index < 32768; ++index) {
+        body.append("\xF0\x9F\x98\x80", 4);
+      }
+      return {.body = std::move(body)};
+    }
+    if (url.ends_with("/utf16-overflow")) {
+      std::string body;
+      body.reserve(32768 * 4 + 1);
+      for (int index = 0; index < 32768; ++index) {
+        body.append("\xF0\x9F\x98\x80", 4);
+      }
+      body.push_back('x');
+      return {.body = std::move(body)};
+    }
+    if (url.ends_with("/char-overflow")) {
+      return {.body = std::string(65537, 'a')};
+    }
+    if (url.ends_with("/legacy")) {
+      return {.body = "first\r\n\xED\x95\x9C\xEA\xB8\x80\nlast"};
+    }
+    return {.body = "ok"};
+  }
+
+  void disconnect() noexcept override {
+    if (!disconnected_) {
+      disconnected_ = true;
+      ++state_->disconnects;
+      ++state_->calls[call_].disconnects;
+    }
+  }
+
+private:
+  std::shared_ptr<FakeHttpState> state_;
+  std::size_t call_ = 0;
+  std::string url_;
+  bool connected_ = false;
+  bool disconnected_ = false;
+};
+
+class FakeHttpTransport final : public LuaSkinHttpTransport {
+public:
+  explicit FakeHttpTransport(std::shared_ptr<FakeHttpState> state)
+      : state_(std::move(state)) {}
+
+  ~FakeHttpTransport() override { state_->destroyed = true; }
+
+  LuaSkinHttpOpenResult open(std::string_view url, int timeoutMilliseconds,
+                             LuaSkinHttpLimits limits) override {
+    state_->calls.push_back({.url = std::string(url),
+                             .timeoutMilliseconds = timeoutMilliseconds,
+                             .limits = limits});
+    return {.connection = std::make_unique<FakeHttpConnection>(
+                state_, state_->calls.size() - 1)};
+  }
+
+private:
+  std::shared_ptr<FakeHttpState> state_;
+};
+
+struct FakeAudioPlayCall {
+  LuaSkinAudioIdentity identity;
+  float volume = 0.0F;
+  bool loop = false;
+  bool operator==(const FakeAudioPlayCall &) const = default;
+};
+
+struct FakeAudioState {
+  std::vector<std::string> loads;
+  std::vector<FakeAudioPlayCall> plays;
+  std::vector<LuaSkinAudioIdentity> stops;
+  std::vector<LuaSkinAudioIdentity> disposals;
+  bool destroyed = false;
+};
+
+class FakeAudioBackend final : public LuaSkinAudioBackend {
+public:
+  explicit FakeAudioBackend(std::shared_ptr<FakeAudioState> state)
+      : state_(std::move(state)) {}
+
+  ~FakeAudioBackend() override { state_->destroyed = true; }
+
+  float systemVolume() const noexcept override { return 0.25F; }
+
+  std::optional<LuaSkinAudioIdentity>
+  load(const fs::path &path, std::stop_token) noexcept override {
+    const std::string value = path.generic_string();
+    state_->loads.push_back(value);
+    if (value.ends_with("/missing.ogg")) {
+      return std::nullopt;
+    }
+    return LuaSkinAudioIdentity{.value = ++nextIdentity_};
+  }
+
+  void play(LuaSkinAudioIdentity identity, float volume,
+            bool loop) noexcept override {
+    state_->plays.push_back(
+        {.identity = identity, .volume = volume, .loop = loop});
+  }
+
+  void stop(LuaSkinAudioIdentity identity) noexcept override {
+    state_->stops.push_back(identity);
+  }
+
+  void dispose(LuaSkinAudioIdentity identity) noexcept override {
+    state_->disposals.push_back(identity);
+  }
+
+private:
+  std::shared_ptr<FakeAudioState> state_;
+  std::uint64_t nextIdentity_ = 0;
 };
 
 struct RuntimeHarness {
@@ -254,6 +448,152 @@ assert(file:read("*a") == "utf8-host-path")
 assert(file:close())
 return {}
 )lua");
+    writeText(source / "skin/http_surface.luaskin", R"lua(
+if not skin_config then
+  assert(next(main_state) == nil)
+  return {type = 0}
+end
+
+local http_names = {http_get = true, http_get_lines = true}
+local http_count = 0
+for name, value in pairs(main_state) do
+  if name:sub(1, 5) == "http_" then
+    assert(http_names[name] and type(value) == "function",
+           "unexpected main_state HTTP member: " .. tostring(name))
+    http_count = http_count + 1
+  end
+end
+assert(http_count == 2)
+
+local lines, lines_ok = main_state.http_get_lines("https://fixture/utf8")
+assert(lines_ok == true and #lines == 3)
+assert(lines[1] == "alpha" and lines[2] == "\237\149\156\234\184\128" and lines[3] == "omega")
+local text, text_ok = main_state.http_get("http://fixture/utf8")
+assert(text_ok == true and text == "alpha\n\237\149\156\234\184\128\nomega")
+
+local bounded, bounded_ok = main_state.http_get_lines("https://fixture/line-limit")
+assert(bounded_ok == true and #bounded == 1024 and bounded[1024] == "x")
+local exact, exact_ok = main_state.http_get("https://fixture/char-limit")
+assert(exact_ok == true and #exact == 65536)
+local exact_with_newline, newline_ok = main_state.http_get("https://fixture/char-limit-with-newline")
+assert(newline_ok == true and #exact_with_newline == 65537)
+local utf16_exact, utf16_exact_ok = main_state.http_get("https://fixture/utf16-limit")
+assert(utf16_exact_ok == true and #utf16_exact == 131072)
+local overflow, overflow_error = main_state.http_get_lines("https://fixture/char-overflow")
+assert(overflow == nil and overflow_error == "response is too large")
+local utf16_overflow, utf16_overflow_error = main_state.http_get_lines("https://fixture/utf16-overflow")
+assert(utf16_overflow == nil and utf16_overflow_error == "response is too large")
+
+local malformed, malformed_ok = main_state.http_get_lines("https://fixture/malformed")
+assert(malformed_ok == true and #malformed == 1 and malformed[1] == "\239\191\189")
+local truncated, truncated_ok = main_state.http_get_lines("https://fixture/truncated-utf8")
+assert(truncated_ok == true and #truncated == 1 and truncated[1] == "\239\191\189")
+assert(select(2, main_state.http_get("https://fixture/timeout-low", 0)) == true)
+assert(select(2, main_state.http_get("https://fixture/timeout-high", 999999)) == true)
+local failed, failure = main_state.http_get("https://fixture/transport-error")
+assert(failed == nil and failure == "fixture transport failure")
+local response_failed, response_failure = main_state.http_get("https://fixture/response-error")
+assert(response_failed == nil and response_failure == "fixture response failure")
+local read_failed, read_failure = main_state.http_get("https://fixture/read-error")
+assert(read_failed == nil and read_failure == "fixture read failure")
+local denied, denial = main_state.http_get("file:///tmp/denied")
+assert(denied == nil and denial == "unsupported scheme: file")
+local missing_scheme, missing_scheme_error = main_state.http_get("fixture/missing-scheme")
+assert(missing_scheme == nil and missing_scheme_error == "URI is not absolute")
+local malformed_uri, malformed_uri_error = main_state.http_get("http://bad host/x")
+assert(malformed_uri == nil and malformed_uri_error == "Illegal character in URI")
+assert(not pcall(function() main_state.http_get() end))
+
+local url = luajava.newInstance("java.net.URL", "https://fixture/legacy")
+local url_members = 0
+for name in pairs(url) do assert(name == "openConnection"); url_members = url_members + 1 end
+assert(url_members == 1)
+local connection = url:openConnection()
+local connection_members = {
+  setRequestMethod = true, setConnectTimeout = true, connect = true,
+  getResponseCode = true, getInputStream = true,
+}
+local connection_count = 0
+for name in pairs(connection) do
+  assert(connection_members[name]); connection_count = connection_count + 1
+end
+assert(connection_count == 5)
+assert(connection:setRequestMethod("GET") == nil)
+assert(select('#', connection:setRequestMethod("GET")) == 1)
+assert(connection:setConnectTimeout(-7) == nil)
+assert(select('#', connection:setConnectTimeout(-7)) == 1)
+assert(connection:connect() == nil and connection:connect() == nil)
+assert(select('#', connection:connect()) == 1)
+assert(connection:getResponseCode() == 206)
+local input = connection:getInputStream()
+assert(luajava.newInstance("java.io.InputStreamReader", input) == input)
+local reader = luajava.newInstance("java.io.BufferedReader", input)
+assert(reader == input)
+local reader_members = 0
+for name in pairs(reader) do assert(name == "readLine"); reader_members = reader_members + 1 end
+assert(reader_members == 1)
+assert(reader:readLine() == "first")
+assert(reader:readLine() == "\237\149\156\234\184\128")
+assert(reader:readLine() == "last")
+assert(reader:readLine() == nil and reader:readLine() == nil)
+assert(select('#', reader:readLine()) == 1)
+
+local default_connection = luajava.newInstance("java.net.URL", "https://fixture/default"):openConnection()
+assert(default_connection:getResponseCode() == 204)
+local maximum_connection = luajava.newInstance("java.net.URL", "https://fixture/maximum"):openConnection()
+maximum_connection:setConnectTimeout(999999)
+assert(maximum_connection:getResponseCode() == 204)
+
+local bad_method = luajava.newInstance("java.net.URL", "https://fixture/bad-method"):openConnection()
+local bad_method_ok, bad_method_error = pcall(function() bad_method:setRequestMethod("POST") end)
+assert(not bad_method_ok and tostring(bad_method_error):find("Legacy Lua skin HTTP method denied: POST", 1, true))
+local bad_scheme = luajava.newInstance("java.net.URL", "file:///tmp/denied"):openConnection()
+local bad_scheme_ok, bad_scheme_error = pcall(function() bad_scheme:connect() end)
+assert(not bad_scheme_ok and tostring(bad_scheme_error):find("Legacy Lua skin HTTP connection failed: unsupported scheme: file", 1, true))
+local bad_transport = luajava.newInstance("java.net.URL", "https://fixture/transport-error"):openConnection()
+local bad_transport_ok, bad_transport_error = pcall(function() bad_transport:getResponseCode() end)
+assert(not bad_transport_ok and tostring(bad_transport_error):find("Legacy Lua skin HTTP connection failed: fixture transport failure", 1, true))
+local bad_response = luajava.newInstance("java.net.URL", "https://fixture/response-error"):openConnection()
+local bad_response_ok, bad_response_error = pcall(function() bad_response:getResponseCode() end)
+assert(not bad_response_ok and tostring(bad_response_error):find("Legacy Lua skin HTTP response failed: fixture response failure", 1, true))
+local bad_read = luajava.newInstance("java.net.URL", "https://fixture/read-error"):openConnection()
+local bad_read_ok, bad_read_error = pcall(function() bad_read:getInputStream() end)
+assert(not bad_read_ok and tostring(bad_read_error):find("Legacy Lua skin HTTP read failed: fixture read failure", 1, true))
+local malformed_uri = luajava.newInstance("java.net.URL", "http://bad host/x"):openConnection()
+local malformed_uri_ok, malformed_uri_error = pcall(function() malformed_uri:connect() end)
+assert(not malformed_uri_ok and tostring(malformed_uri_error):find("Legacy Lua skin HTTP connection failed: Illegal character in URI", 1, true))
+local too_large = luajava.newInstance("java.net.URL", "https://fixture/char-overflow"):openConnection()
+local too_large_ok, too_large_error = pcall(function() too_large:getInputStream() end)
+assert(not too_large_ok and tostring(too_large_error):find("Legacy Lua skin HTTP read failed: response is too large", 1, true))
+
+for _, probe in ipairs({
+  function() return url.denied end,
+  function() return connection.denied end,
+  function() return reader.denied end,
+  function() return url.openConnection({}) end,
+  function() return connection.getResponseCode({}) end,
+  function() return reader.readLine({}) end,
+  function() return luajava.newInstance("java.lang.Runtime", "x") end,
+  function() return luajava.newInstance("java.io.BufferedReader", "not-a-reader") end,
+}) do
+  assert(not pcall(probe), "nonallowlisted legacy HTTP authority must be denied")
+end
+assert(luajava.newInstance("java.io.InputStreamReader", "passthrough") == "passthrough")
+local arbitrary_reader = {}
+assert(luajava.newInstance("java.io.BufferedReader", arbitrary_reader) == arbitrary_reader)
+return {
+  render_http_get = function()
+    local value, failure = main_state.http_get("https://fixture/render")
+    return value == nil and
+           failure == "HTTP is unavailable during gameplay frame callbacks"
+  end,
+  render_http_get_lines = function()
+    local value, failure = main_state.http_get_lines("https://fixture/render-lines")
+    return value == nil and
+           failure == "HTTP is unavailable during gameplay frame callbacks"
+  end,
+}
+)lua");
     writeText(source / "skin/parts/frame/red/panel.png", "selected");
     writeText(source / "skin/parts/frame/blue/panel.png",
               "random-fallback-must-not-win");
@@ -272,6 +612,158 @@ return {}
         source / pathFromUtf8(
                      "skin/\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E/\xE8\xAA\xAD\xE3\x81\xBF\xE8\xBE\xBC\xE3\x81\xBF.txt"),
         "utf8-host-path");
+    fs::copy_file(
+        fs::path(ASOBMASHOW_SOURCE_DIR) /
+            "tests/fixtures/beatoraja_skin/packages/runtime_contract/skin/"
+            "main_state_file_surface.luaskin",
+        source / "skin/main_state_file_surface.luaskin",
+        fs::copy_options::overwrite_existing);
+    writeText(source / "skin/file_surface_source.txt",
+              "alpha\n\xED\x95\x9C\xEA\xB8\x80\r\nomega");
+    writeText(source / "skin/file_surface_invalid_utf8.txt", "\xFF\n");
+    writeText(source / "skin/audio_surface.luaskin", R"lua(
+if not skin_config then return {type = 0} end
+local expected = {
+  audio_play = true,
+  audio_loop = true,
+  audio_preload = true,
+  audio_stop = true,
+  audio_dispose = true,
+}
+local count = 0
+for name, value in pairs(main_state) do
+  if name:sub(1, 6) == "audio_" then
+    assert(expected[name] and type(value) == "function")
+    count = count + 1
+  end
+end
+assert(count == 5)
+
+assert(main_state.audio_play("sound.ogg") == true)
+assert(main_state.audio_loop("./loop.ogg", 3) == true)
+assert(main_state.audio_play("sound.ogg", -1) == true)
+assert(main_state.audio_preload("preload.wav") == true)
+assert(main_state.audio_stop("sound.ogg") == true)
+assert(main_state.audio_stop("sound.ogg") == true)
+assert(main_state.audio_dispose("sound.ogg") == true)
+assert(main_state.audio_dispose("sound.ogg") == true)
+assert(main_state.audio_play("sound.ogg", 0.5) == true)
+assert(main_state.audio_play("missing.ogg", 1) == true)
+assert(main_state.audio_play("missing.ogg", 1) == true)
+assert(main_state.audio_stop("missing.ogg") == true)
+assert(main_state.audio_dispose("missing.ogg") == true)
+assert(main_state.audio_play("coerce.ogg", true) == true)
+assert(main_state.audio_loop("coerce.ogg", "not-a-number") == true)
+assert(main_state.audio_play("coerce.ogg", "0.5") == true)
+assert(main_state.audio_play("skin/ForeignSkin/secret.ogg", 1) == true)
+assert(main_state.audio_preload() == true)
+return {
+  render_miss = function()
+    return main_state.audio_play("render-miss.ogg", 1)
+  end,
+}
+)lua");
+    writeText(source / "skin/legacy_input_surface.luaskin", R"lua(
+if not skin_config then return {type = 0} end
+
+local function expect_members(value, expected)
+  local count = 0
+  for name in pairs(value) do
+    assert(expected[name], "unexpected member: " .. tostring(name))
+    count = count + 1
+  end
+  local expected_count = 0
+  for _ in pairs(expected) do expected_count = expected_count + 1 end
+  assert(count == expected_count)
+end
+
+local Gdx = luajava.bindClass("com.badlogic.gdx.Gdx")
+local Input = luajava.bindClass("com.badlogic.gdx.Input")
+local Controllers = luajava.bindClass("com.badlogic.gdx.controllers.Controllers")
+local Controller = luajava.bindClass("com.badlogic.gdx.controllers.Controller")
+expect_members(Gdx, {graphics = true, input = true})
+expect_members(Gdx.graphics, {getWidth = true, getHeight = true})
+expect_members(Gdx.input, {isKeyPressed = true})
+expect_members(Input, {Keys = true})
+expect_members(Input.Keys, {})
+expect_members(Controllers, {getControllers = true})
+expect_members(Controller, {})
+assert(Gdx.app == nil)
+assert(Gdx.graphics:getWidth() == 1920)
+assert(Gdx.graphics:getHeight() == 1080)
+assert(Input.Keys.A == 29)
+assert(Input.Keys.Escape == 131)
+assert(Input.Keys.F1 == 244)
+assert(Input.Keys["Numpad 0"] == 144)
+assert(Input.Keys["Not A Key"] == -1)
+assert(Gdx.input:isKeyPressed(Input.Keys.A) == true)
+assert(Gdx.input:isKeyPressed(Input.Keys.Escape) == false)
+assert(Gdx.input:isKeyPressed(Input.Keys["Not A Key"]) == true)
+
+local controllers = Controllers:getControllers()
+expect_members(controllers, {size = true, first = true})
+assert(controllers.size == 2)
+local first = controllers:first()
+expect_members(first, {getName = true, getButton = true})
+assert(first:getName() == "Arcade Alpha")
+assert(first:getButton(0) == false)
+assert(first:getButton(1) == true)
+assert(first:getButton(99) == false)
+
+for _, probe in ipairs({
+  function() return luajava.bindClass("java.lang.Runtime") end,
+  function() return luajava.bindClass("com.badlogic.gdx.graphics.GL20") end,
+  function() return luajava.new(Controller) end,
+  function() return luajava.new(Gdx) end,
+  function() return luajava.new(Input) end,
+  function() return luajava.new(Controllers) end,
+  function() return luajava.new({}) end,
+  function() return luajava.newInstance("com.badlogic.gdx.Gdx") end,
+  function() return Gdx.files end,
+  function() return Gdx.graphics.density end,
+  function() return Gdx.input.getX end,
+  function() return Input.Buttons end,
+  function() return Controllers.addListener end,
+  function() return Controller.getAxis end,
+  function() return controllers.get(0) end,
+  function() return first.getAxis end,
+  function() return Gdx.graphics.getWidth({}) end,
+  function() return Gdx.input.isKeyPressed({}, Input.Keys.A) end,
+  function() return Controllers.getControllers({}) end,
+  function() return controllers.first({}) end,
+  function() return first.getName({}) end,
+  function() return first.getButton({}, 1) end,
+}) do
+  assert(not pcall(probe), "nonallowlisted or forged legacy input authority must be denied")
+end
+
+return {
+  verify_one = function()
+    assert(Gdx.graphics:getWidth() == 1280 and Gdx.graphics:getHeight() == 720)
+    assert(Gdx.input:isKeyPressed(Input.Keys.A) == false)
+    assert(Gdx.input:isKeyPressed(Input.Keys.Escape) == true)
+    local current = Controllers:getControllers()
+    assert(current.size == 1)
+    assert(current:first():getName() == "Solo Pad")
+    assert(current:first():getButton(3) == true)
+    return true
+  end,
+  verify_zero = function()
+    local current = Controllers:getControllers()
+    assert(current.size == 0)
+    assert(current:first() == nil)
+    return true
+  end,
+}
+)lua");
+
+    const fs::path visible = roots.visiblePackages / package.directoryName;
+    fs::create_directories(visible.parent_path());
+    fs::copy(source, visible, fs::copy_options::recursive);
+    writeText(roots.visiblePackages / "ForeignSkin/secret.txt",
+              "must remain outside the selected skin facade\n");
+    writeText(roots.visiblePackages / "ForeignSkin/secret.ogg",
+              "must not reach the selected skin audio backend\n");
 
     SkinTreeSnapshotter snapshotter(roots, aliases);
     auto snapshot = snapshotter.snapshot(source, package, {}, {});
@@ -301,8 +793,86 @@ return {}
                           .fileSystem = borrowed};
   }
 
+  std::optional<RuntimeHarness>
+  createWithHttp(std::string_view entryName, LuaRuntimePurpose purpose,
+                 std::unique_ptr<LuaSkinHttpTransport> httpTransport) {
+    auto fileSystem = createFileSystem(entryName);
+    if (!fileSystem) {
+      return std::nullopt;
+    }
+    LuaSkinFileSystem *borrowed = fileSystem.get();
+    auto runtime = LuaSkinRuntime::create(
+        {.purpose = purpose,
+         .fileSystem = std::move(fileSystem),
+         .httpTransport = std::move(httpTransport)});
+    expect(runtime.runtime != nullptr, "HTTP host contract runtime creates");
+    if (!runtime.runtime) {
+      return std::nullopt;
+    }
+    return RuntimeHarness{.runtime = std::move(runtime.runtime),
+                          .fileSystem = borrowed};
+  }
+
+  std::optional<RuntimeHarness>
+  createWithAudio(std::string_view entryName, LuaRuntimePurpose purpose,
+                  std::shared_ptr<LuaSkinAudioBackend> audioBackend) {
+    auto fileSystem = createFileSystem(entryName);
+    if (!fileSystem) {
+      return std::nullopt;
+    }
+    LuaSkinFileSystem *borrowed = fileSystem.get();
+    auto runtime = LuaSkinRuntime::create(
+        {.purpose = purpose,
+         .fileSystem = std::move(fileSystem),
+         .audioBackend = std::move(audioBackend)});
+    expect(runtime.runtime != nullptr, "audio host contract runtime creates");
+    if (!runtime.runtime) {
+      return std::nullopt;
+    }
+    return RuntimeHarness{.runtime = std::move(runtime.runtime),
+                          .fileSystem = borrowed};
+  }
+
+  std::optional<RuntimeHarness> createWithLegacyInput(
+      std::string_view entryName, LuaRuntimePurpose purpose,
+      LuaSkinLegacyInputSnapshot snapshot) {
+    auto fileSystem = createFileSystem(entryName);
+    if (!fileSystem) {
+      return std::nullopt;
+    }
+    LuaSkinFileSystem *borrowed = fileSystem.get();
+    auto runtime = LuaSkinRuntime::create(
+        {.purpose = purpose,
+         .fileSystem = std::move(fileSystem),
+         .legacyInputSnapshot = std::move(snapshot)});
+    expect(runtime.runtime != nullptr,
+           "legacy-input host contract runtime creates");
+    if (!runtime.runtime) {
+      return std::nullopt;
+    }
+    return RuntimeHarness{.runtime = std::move(runtime.runtime),
+                          .fileSystem = borrowed};
+  }
+
+  std::optional<RuntimeHarness>
+  createWritable(std::string_view entryName, LuaRuntimePurpose purpose) {
+    auto fileSystem = createFileSystem(entryName, true);
+    if (!fileSystem) {
+      return std::nullopt;
+    }
+    LuaSkinFileSystem *borrowed = fileSystem.get();
+    auto runtime = LuaSkinRuntime::create(
+        {.purpose = purpose, .fileSystem = std::move(fileSystem)});
+    expect(runtime.runtime != nullptr, "writable host contract runtime creates");
+    if (!runtime.runtime) {
+      return std::nullopt;
+    }
+    return RuntimeHarness{.runtime = std::move(runtime.runtime),
+                          .fileSystem = borrowed};
+  }
+
   std::unique_ptr<LuaSkinFileSystem>
-  createFileSystem(std::string_view entryName) {
+  createFileSystem(std::string_view entryName, bool allowDataWrites = false) {
     if (!prepared) {
       return {};
     }
@@ -315,7 +885,8 @@ return {}
     auto fileSystem = LuaSkinFileSystem::create(
         {.revision = prepared->readView(),
          .entry = *entry.entry,
-         .storageRoots = roots});
+         .storageRoots = roots,
+         .allowDataWrites = allowDataWrites});
     expect(fileSystem.fileSystem != nullptr,
            "host contract filesystem creates");
     if (!fileSystem.fileSystem) {
@@ -402,7 +973,9 @@ public:
   }
   SkinPropertyLookup<std::string_view>
   stringProperty(const SkinBuiltinPropertySelector &) override { return {}; }
-  SkinPropertyLookup<ConfigOffset> offsetProperty(int) override { return {}; }
+  SkinPropertyLookup<SkinRuntimeOffset> offsetProperty(int) override {
+    return {};
+  }
   std::int64_t timerProperty(const SkinBuiltinPropertySelector &) override {
     return std::numeric_limits<std::int64_t>::min();
   }
@@ -608,6 +1181,358 @@ void testSelectedMainStateSurfaceUsesBoundConfiguredState() {
   harness->runtime->setFrameState(nullptr);
 }
 
+void testPinnedMainStateFileSurfaceAndClosedLegacyFileFacade() {
+  auto harness = fixture().createWritable("main_state_file_surface.luaskin",
+                                          LuaRuntimePurpose::Gameplay);
+  if (!harness) {
+    return;
+  }
+  expect(harness->runtime->loadHeader().value.has_value(),
+         "file-surface fixture sees an empty header main_state module");
+  auto configured = harness->runtime->loadConfigured(happyConfiguration());
+  if (!configured.value && configured.failure) {
+    std::cerr << "main-state file surface diagnostic: "
+              << configured.failure->code << ": "
+              << configured.failure->message << '\n';
+  }
+  expect(configured.value.has_value() && !configured.failure,
+         "the eight pinned file functions and closed legacy File facade execute");
+  if (!configured.value) {
+    return;
+  }
+  const auto callback = configured.value->callbackNamed("after_render");
+  expect(callback.has_value(), "file-surface fixture retains its render callback");
+  if (!callback) {
+    return;
+  }
+  expect(harness->runtime->enterRenderPhase().ok &&
+             harness->runtime->beginFrame(1).ok,
+         "file-surface fixture enters render");
+  const auto rendered = harness->runtime->invoke(*callback, {});
+  const auto *lineCount = rendered.value
+                              ? std::get_if<std::int64_t>(&*rendered.value)
+                              : nullptr;
+  expect(!rendered.failure && lineCount != nullptr && *lineCount == 0,
+         "captured file functions retain pinned behavior during render");
+}
+
+void testPinnedBoundedHttpAndClosedLegacyReaderFacade() {
+  auto state = std::make_shared<FakeHttpState>();
+  {
+    auto harness = fixture().createWithHttp(
+        "http_surface.luaskin", LuaRuntimePurpose::Gameplay,
+        std::make_unique<FakeHttpTransport>(state));
+    if (!harness) {
+      return;
+    }
+    expect(!state->destroyed,
+           "HTTP transport remains owned for the Lua session lifetime");
+    expect(harness->runtime->loadHeader().value.has_value(),
+           "HTTP fixture sees an empty header main_state module");
+    const auto configured =
+        harness->runtime->loadConfigured(happyConfiguration());
+    if (!configured.value && configured.failure) {
+      std::cerr << "HTTP surface diagnostic: " << configured.failure->code
+                << ": " << configured.failure->message << '\n';
+    }
+    expect(configured.value.has_value() && !configured.failure,
+           "bounded modern HTTP and closed legacy URL/reader facades execute");
+
+    const auto callsFor = [&](std::string_view url) {
+      return static_cast<int>(std::ranges::count_if(
+          state->calls, [&](const FakeHttpCall &call) {
+            return call.url == url;
+          }));
+    };
+    const auto timeoutFor = [&](std::string_view url) {
+      const auto found = std::ranges::find_if(
+          state->calls,
+          [&](const FakeHttpCall &call) { return call.url == url; });
+      return found != state->calls.end() ? found->timeoutMilliseconds : -1;
+    };
+    const auto callFor = [&](std::string_view url) -> const FakeHttpCall * {
+      const auto found = std::ranges::find_if(
+          state->calls,
+          [&](const FakeHttpCall &call) { return call.url == url; });
+      return found != state->calls.end() ? &*found : nullptr;
+    };
+    expect(timeoutFor("https://fixture/utf8") == 1000,
+           "modern HTTP uses the pinned default timeout");
+    expect(timeoutFor("https://fixture/timeout-low") == 1 &&
+               timeoutFor("https://fixture/timeout-high") == 5000,
+           "modern HTTP clamps timeout to one through five thousand milliseconds");
+    expect(timeoutFor("https://fixture/legacy") == 1 &&
+               timeoutFor("https://fixture/default") == 1000 &&
+               timeoutFor("https://fixture/maximum") == 5000,
+           "legacy HTTP uses the same pinned default and clamped timeout");
+    expect(callsFor("https://fixture/legacy") == 1,
+           "legacy connect, response, and reader access share one GET");
+    const FakeHttpCall *legacy = callFor("https://fixture/legacy");
+    expect(legacy != nullptr && legacy->connects == 1 &&
+               legacy->responses == 1 && legacy->reads == 1 &&
+               legacy->disconnects == 1,
+           "legacy HTTP preserves idempotent connection, response, read, and "
+           "disconnect stages");
+    const FakeHttpCall *responseFailure =
+        callFor("https://fixture/response-error");
+    const FakeHttpCall *readFailure = callFor("https://fixture/read-error");
+    expect(responseFailure != nullptr && responseFailure->connects == 1 &&
+               responseFailure->responses == 1 &&
+               responseFailure->reads == 0 &&
+               responseFailure->disconnects == 1 && readFailure != nullptr &&
+               readFailure->connects == 1 && readFailure->responses == 1 &&
+               readFailure->reads == 1 && readFailure->disconnects == 1,
+           "modern HTTP stops at the failing stage and disconnects exactly once");
+    expect(callsFor("file:///tmp/denied") == 0 &&
+               callsFor("https://fixture/bad-method") == 0 &&
+               callsFor("http://bad host/x") == 0,
+           "denied schemes, malformed URIs, and methods never reach the transport");
+    expect(std::ranges::all_of(state->calls, [](const FakeHttpCall &call) {
+             return call.limits.maximumLines == 1024 &&
+                    call.limits.maximumCharacters == 65536;
+           }),
+           "every transport call receives the pinned response bounds");
+    const auto renderGet =
+        configured.value
+            ? configured.value->callbackNamed("render_http_get")
+            : std::nullopt;
+    const auto renderGetLines =
+        configured.value
+            ? configured.value->callbackNamed("render_http_get_lines")
+            : std::nullopt;
+    const std::size_t callsBeforeRender = state->calls.size();
+    expect(renderGet.has_value() && renderGetLines.has_value() &&
+               harness->runtime->enterRenderPhase().ok &&
+               harness->runtime->beginFrame(1).ok,
+           "HTTP fixture retains its render-frame rejection probes");
+    if (renderGet && renderGetLines) {
+      const auto getResult = harness->runtime->invoke(*renderGet, {});
+      const auto linesResult = harness->runtime->invoke(*renderGetLines, {});
+      expect(getResult.value == std::optional<LuaScalar>{true} &&
+                 !getResult.failure &&
+                 linesResult.value == std::optional<LuaScalar>{true} &&
+                 !linesResult.failure && state->calls.size() == callsBeforeRender,
+             "synchronous modern HTTP fails before transport during frame callbacks");
+    }
+  }
+  expect(state->destroyed,
+         "HTTP transport is destroyed with its owning Lua session");
+}
+
+void testPinnedAudioSurfaceOwnsResolvedBackendIdentities() {
+  auto state = std::make_shared<FakeAudioState>();
+  {
+    auto harness = fixture().createWithAudio(
+        "audio_surface.luaskin", LuaRuntimePurpose::Gameplay,
+        std::make_shared<FakeAudioBackend>(state));
+    if (!harness) {
+      return;
+    }
+    expect(harness->runtime->loadHeader().value.has_value(),
+           "audio fixture sees an empty header main_state module");
+    const auto configured =
+        harness->runtime->loadConfigured(happyConfiguration());
+    if (!configured.value && configured.failure) {
+      std::cerr << "audio surface diagnostic: " << configured.failure->code
+                << ": " << configured.failure->message << '\n';
+    }
+    expect(configured.value.has_value() && !configured.failure,
+           "all five pinned audio functions execute and return true");
+    const auto renderMiss = configured.value
+                                ? configured.value->callbackNamed("render_miss")
+                                : std::nullopt;
+    expect(renderMiss.has_value() && harness->runtime->enterRenderPhase().ok &&
+               harness->runtime->beginFrame(1).ok,
+           "audio fixture retains its render-time miss probe");
+    if (renderMiss) {
+      const auto invoked = harness->runtime->invoke(*renderMiss, {});
+      expect(invoked.value == std::optional<LuaScalar>{true} &&
+                 !invoked.failure && state->loads.size() == 8,
+             "render-time unknown audio fails closed without synchronous backend load");
+    }
+    expect(state->loads.size() == 8 &&
+               state->loads[0].ends_with("/skin/sound.ogg") &&
+               state->loads[1].ends_with("/skin/loop.ogg") &&
+               state->loads[2].ends_with("/skin/preload.wav") &&
+               state->loads[3].ends_with("/skin/sound.ogg") &&
+               state->loads[4].ends_with("/skin/missing.ogg") &&
+               state->loads[5].ends_with("/skin/coerce.ogg") &&
+               state->loads[6].ends_with(
+                   "/HostContract/skin/skin/ForeignSkin/secret.ogg") &&
+               state->loads[7].ends_with("/skin/nil") &&
+               state->loads[6].find("/visible/ForeignSkin/") ==
+                   std::string::npos,
+           "audio paths use the selected-skin resolver, successful dispose "
+           "permits reload, cache misses, and cannot reach a real sibling package");
+    expect(state->plays.size() == 10 &&
+               state->plays[0] == FakeAudioPlayCall{
+                                      .identity = {.value = 1},
+                                      .volume = 0.25F,
+                                      .loop = false} &&
+               state->plays[1] == FakeAudioPlayCall{
+                                      .identity = {.value = 2},
+                                      .volume = 0.5F,
+                                      .loop = true} &&
+               state->plays[2] == FakeAudioPlayCall{
+                                      .identity = {.value = 1},
+                                      .volume = 0.0F,
+                                      .loop = false} &&
+               state->plays[3] == FakeAudioPlayCall{
+                                      .identity = {.value = 3},
+                                      .volume = 0.0F,
+                                      .loop = false} &&
+               state->plays[4] == FakeAudioPlayCall{
+                                      .identity = {.value = 4},
+                                      .volume = 0.125F,
+                                      .loop = false} &&
+               state->plays[5] == FakeAudioPlayCall{
+                                      .identity = {.value = 5},
+                                      .volume = 0.0F,
+                                      .loop = false} &&
+               state->plays[6] == FakeAudioPlayCall{
+                                      .identity = {.value = 5},
+                                      .volume = 0.0F,
+                                      .loop = true} &&
+               state->plays[7] == FakeAudioPlayCall{
+                                      .identity = {.value = 5},
+                                      .volume = 0.125F,
+                                      .loop = false} &&
+               state->plays[8] == FakeAudioPlayCall{
+                                      .identity = {.value = 6},
+                                      .volume = 0.25F,
+                                      .loop = false} &&
+               state->plays[9] == FakeAudioPlayCall{
+                                      .identity = {.value = 7},
+                                      .volume = 0.0F,
+                                      .loop = false},
+           "play, loop, default/clamped/scaled volume, and silent preload "
+           "match the pinned backend calls including LuaJ coercion");
+    expect(state->stops ==
+               std::vector<LuaSkinAudioIdentity>{{.value = 1}, {.value = 1}},
+           "repeated stops address the retained backend identity");
+    expect(state->disposals ==
+               std::vector<LuaSkinAudioIdentity>{{.value = 1}},
+           "explicit repeated dispose releases a loaded identity once");
+  }
+  std::ranges::sort(state->disposals);
+  expect(state->disposals ==
+                 std::vector<LuaSkinAudioIdentity>{{.value = 1},
+                                                   {.value = 2},
+                                                   {.value = 3},
+                                                   {.value = 4},
+                                                   {.value = 5},
+                                                   {.value = 6},
+                                                   {.value = 7}} &&
+             state->destroyed,
+         "Lua session teardown disposes every remaining identity exactly once "
+         "before releasing the backend");
+}
+
+void testAudioHostBoundsIdentitiesAndHonorsSessionCancellation() {
+  auto fileSystem = fixture().createFileSystem("audio_surface.luaskin");
+  auto state = std::make_shared<FakeAudioState>();
+  if (!fileSystem) {
+    expect(false, "audio quota fixture creates a filesystem");
+    return;
+  }
+  LuaSkinAudioHost bounded(
+      *fileSystem, std::make_shared<FakeAudioBackend>(state), {},
+      {.maximumIdentities = 2});
+  expect(bounded.play("one.ogg", 1.0F, false).ok() &&
+             bounded.play("two.ogg", 1.0F, false).ok() &&
+             !bounded.play("three.ogg", 1.0F, false).ok() &&
+             state->loads.size() == 2,
+         "audio identity quota fails closed before a third backend load");
+
+  std::stop_source cancelled;
+  cancelled.request_stop();
+  auto cancelledState = std::make_shared<FakeAudioState>();
+  LuaSkinAudioHost stopped(*fileSystem,
+                           std::make_shared<FakeAudioBackend>(cancelledState),
+                           cancelled.get_token());
+  expect(stopped.play("cancelled.ogg", 1.0F, false).ok() &&
+             cancelledState->loads.empty(),
+         "cancelled sessions cache an audio miss without entering the decoder backend");
+}
+
+void testPinnedLegacyInputSurfaceUsesImmutableSnapshots() {
+  LuaSkinLegacyInputSnapshot initial{
+      .drawableWidth = 1920,
+      .drawableHeight = 1080,
+      .pressedKeys = {29},
+      .controllers = {
+          {.name = "Arcade Alpha", .pressedButtons = {1}},
+          {.name = "Arcade Beta", .pressedButtons = {0, 4}},
+      }};
+  auto harness = fixture().createWithLegacyInput(
+      "legacy_input_surface.luaskin", LuaRuntimePurpose::Gameplay,
+      std::move(initial));
+  if (!harness) {
+    return;
+  }
+  expect(harness->runtime->loadHeader().value.has_value(),
+         "legacy-input fixture sees an empty header facade");
+  auto configured = harness->runtime->loadConfigured(happyConfiguration());
+  if (!configured.value && configured.failure) {
+    std::cerr << "legacy-input surface diagnostic: "
+              << configured.failure->code << ": "
+              << configured.failure->message << '\n';
+  }
+  expect(configured.value.has_value() && !configured.failure,
+         "the exact pinned Gdx, Input, Controllers, and Controller facade executes");
+  if (!configured.value) {
+    return;
+  }
+
+  const auto verifyOne = configured.value->callbackNamed("verify_one");
+  const auto verifyZero = configured.value->callbackNamed("verify_zero");
+  expect(verifyOne.has_value() && verifyZero.has_value(),
+         "legacy-input fixture retains its snapshot probes");
+  if (!verifyOne || !verifyZero) {
+    return;
+  }
+  expect(harness->runtime->enterRenderPhase().ok &&
+             harness->runtime->beginFrame(1).ok,
+         "legacy-input fixture enters an active render frame");
+  LuaSkinLegacyInputGeneration oneController;
+  oneController.drawableWidth = 1280;
+  oneController.drawableHeight = 720;
+  oneController.pressedGdxKeys.set(131);
+  oneController.controllerCount = 1;
+  oneController.controllers[0].setName("Solo Pad");
+  oneController.controllers[0].pressedButtons.set(3);
+  harness->runtime->setLegacyInputGeneration(oneController);
+  const auto one = harness->runtime->invoke(*verifyOne, {});
+  expect(one.value == std::optional<LuaScalar>{true} && !one.failure,
+         "one-controller snapshot replaces the prior immutable snapshot");
+
+  harness->runtime->setLegacyInputGeneration({});
+  const auto zero = harness->runtime->invoke(*verifyZero, {});
+  expect(zero.value == std::optional<LuaScalar>{true} && !zero.failure,
+         "zero-controller snapshot returns size zero and nil first");
+}
+
+void testLegacyInputGenerationPublicationIsBoundedAndNeverStale() {
+  static_assert(noexcept(std::declval<LuaSkinLegacyInputHost &>().publish(
+      std::declval<LuaSkinLegacyInputGeneration>())));
+  LuaSkinLegacyInputHost host;
+  LuaSkinLegacyInputGeneration populated;
+  populated.controllerCount = input::kLegacyInputMaximumControllers + 10;
+  populated.pressedGdxKeys.set(29);
+  populated.controllers[0].setName(std::string(300, 'x'));
+  populated.controllers[0].pressedButtons.set(255);
+  host.publish(populated);
+  expect(host.controllerCount() == input::kLegacyInputMaximumControllers &&
+             host.isKeyPressed(29) &&
+             host.controllerName(0).size() ==
+                 input::kLegacyInputControllerNameBytes &&
+             host.controllerButtonPressed(0, 255),
+         "fixed legacy input publication clamps controller/name/button storage");
+  host.publish(LuaSkinLegacyInputGeneration{});
+  expect(host.controllerCount() == 0 && !host.isKeyPressed(29),
+         "allocation-free empty publication replaces state instead of exposing a stale generation");
+}
+
 void testIoLinesUsesTheVirtualSkinFileSystem() {
   auto harness = fixture().create("io_lines.luaskin",
                                   LuaRuntimePurpose::Validation);
@@ -787,7 +1712,7 @@ void testLuaHostPhysicalPathsPreserveUtf8Bytes() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
   testExactShapeAndEnabledOptionsPreserveAuthoredDuplicates();
   testGetPathUsesBeatorajaEntryParentPaths();
   testGetPathUsesBeatorajaSourceSemantics();
@@ -795,6 +1720,12 @@ int main() {
   testGetPathCanLoadAnEntryParentSibling();
   testUnsupportedDirectMainStateLookupsRaise();
   testSelectedMainStateSurfaceUsesBoundConfiguredState();
+  testPinnedMainStateFileSurfaceAndClosedLegacyFileFacade();
+  testPinnedBoundedHttpAndClosedLegacyReaderFacade();
+  testPinnedAudioSurfaceOwnsResolvedBackendIdentities();
+  testAudioHostBoundsIdentitiesAndHonorsSessionCancellation();
+  testPinnedLegacyInputSurfaceUsesImmutableSnapshots();
+  testLegacyInputGenerationPublicationIsBoundedAndNeverStale();
   testIoLinesUsesTheVirtualSkinFileSystem();
   testIoReadClampsHugeRequestedCountToAvailableBytes();
   testIoOpenReadsUtf8NamedSkinFiles();
@@ -803,10 +1734,7 @@ int main() {
   testLuaHostCapsLineReadsBeforeGrowingHostStrings();
   testLuaSeekArithmeticClampsOrRejectsWithoutOverflow();
   testLuaHostPhysicalPathsPreserveUtf8Bytes();
-  if (failures != 0) {
-    std::cerr << failures << " assertion(s) failed\n";
-    return 1;
-  }
-  std::cout << "lua skin host modules tests passed\n";
-  return 0;
+  return gameplay_skin_ledger_evidence::finish(
+      argc, argv, "lua_skin_host_modules_tests", failures,
+      "assertion(s) failed", "lua skin host modules tests passed");
 }

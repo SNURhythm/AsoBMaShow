@@ -60,6 +60,62 @@ int judgeCount(const RhythmState &state, Judgement judgement) {
   return it == state.judgeCount.end() ? 0 : it->second;
 }
 
+class AttachedChartDurationLookup final {
+public:
+  AttachedChartDurationLookup(sqlite3 *database,
+                              const std::filesystem::path &path)
+      : database_(database) {
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(path, error) || error ||
+        attachSqliteDatabase(database_, path, "player_history_chart")) {
+      return;
+    }
+    attached_ = true;
+    constexpr const char *query =
+        "SELECT MIN(2147483647, MAX(0, CAST(length / 1000000 AS INTEGER))) "
+        "FROM player_history_chart.chart_meta WHERE "
+        "((?1 <> '' AND lower(trim(sha256)) = lower(trim(?1))) OR "
+        "(?2 <> '' AND lower(trim(md5)) = lower(trim(?2)))) "
+        "ORDER BY CASE WHEN ?1 <> '' AND lower(trim(sha256)) = "
+        "lower(trim(?1)) THEN 0 ELSE 1 END, source_priority, "
+        "source_archive_size, path LIMIT 1";
+    if (!prepareSqliteStatementLogged(
+            database_, query, statement_,
+            "preparing historical course duration lookup", logSqlErrorText)) {
+      statement_.reset();
+    }
+  }
+
+  ~AttachedChartDurationLookup() {
+    statement_.reset();
+    if (attached_) {
+      sqlite3_exec(database_, "DETACH DATABASE player_history_chart", nullptr,
+                   nullptr, nullptr);
+    }
+  }
+
+  std::optional<std::int64_t>
+  duration(const ScoreStageProvenance &stage) {
+    if (!statement_ || (stage.chartSha256.empty() && stage.chartMd5.empty())) {
+      return std::nullopt;
+    }
+    sqlite3_reset(statement_.get());
+    sqlite3_clear_bindings(statement_.get());
+    if (!bindSqliteText(statement_.get(), 1, stage.chartSha256) ||
+        !bindSqliteText(statement_.get(), 2, stage.chartMd5) ||
+        sqlite3_step(statement_.get()) != SQLITE_ROW ||
+        sqlite3_column_type(statement_.get(), 0) != SQLITE_INTEGER) {
+      return std::nullopt;
+    }
+    return sqlite3_column_int64(statement_.get(), 0);
+  }
+
+private:
+  sqlite3 *database_ = nullptr;
+  SqliteStatementHandle statement_;
+  bool attached_ = false;
+};
+
 bool serializeProvenanceForWrite(const ScoreProvenance &provenance,
                                  const char *scoreKind,
                                  std::string &provenanceJson) {
@@ -91,6 +147,16 @@ bool isAttemptIdentityUniqueConstraint(int extendedError,
          diagnostic == "UNIQUE constraint failed: scores.attempt_id";
 }
 
+std::int64_t
+scorePlayDurationSeconds(const result_persistence::ChartScoreWrite &score) {
+  bms_parser::ChartMeta identity;
+  identity.MD5 = score.chartMd5;
+  identity.SHA256 = score.chartSha256;
+  const ScoreStageProvenance *stage =
+      score_provenance::uniqueStageForChart(score.provenance, identity);
+  return stage == nullptr ? 0 : stage->playDurationSeconds;
+}
+
 score_repository_detail::ScoreWriteOutcome insertScoreWriteOnConnectionImpl(
     sqlite3 *db, const result_persistence::ChartScoreWrite &score,
     std::optional<std::string_view> attemptId,
@@ -111,6 +177,7 @@ score_repository_detail::ScoreWriteOutcome insertScoreWriteOnConnectionImpl(
       "chart_path, chart_md5, chart_sha256, ln_mode, chart_title, "
       "chart_artist, score, max_score, max_combo, combo_break, pgreat, great, "
       "good, bad, poor, kpoor, fast, slow, final_gauge, clear_type, "
+      "play_duration_seconds, "
       "ruleset_version, eligibility, provenance_json, attempt_id, "
       "score_source, source_provider_id, source_server_origin, "
       "source_remote_score_id, source_sync_generation";
@@ -118,7 +185,7 @@ score_repository_detail::ScoreWriteOutcome insertScoreWriteOnConnectionImpl(
     query += ", created_at";
   }
   query += ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
-           "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?";
+           "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?";
   if (createdAt.has_value()) {
     query += ", ?";
   }
@@ -163,6 +230,9 @@ score_repository_detail::ScoreWriteOutcome insertScoreWriteOnConnectionImpl(
   bound = bound && sqlite3_bind_double(stmt.get(), bindIndex++,
                                        score.finalGauge) == SQLITE_OK;
   bindInt(score.clearType);
+  bound = bound && sqlite3_bind_int64(stmt.get(), bindIndex++,
+                                       scorePlayDurationSeconds(score)) ==
+                       SQLITE_OK;
   bindInt(score.provenance.ruleset.version);
   bindInt(static_cast<int>(score.provenance.eligibility));
   bindText(provenanceJson);
@@ -191,7 +261,7 @@ score_repository_detail::ScoreWriteOutcome insertScoreWriteOnConnectionImpl(
   if (createdAt.has_value()) {
     bindText(*createdAt);
   }
-  const int expectedBindIndex = createdAt.has_value() ? 31 : 30;
+  const int expectedBindIndex = createdAt.has_value() ? 32 : 31;
   if (!bound || bindIndex != expectedBindIndex) {
     logSqlError("binding score insert", db);
     return {.diagnostic = "could not bind the score insert"};
@@ -254,7 +324,8 @@ result_persistence::ProjectionOutcome classifyProjectedScoreCollision(
           "SELECT attempt_id, chart_path, chart_md5, chart_sha256, ln_mode, "
           "chart_title, chart_artist, score, max_score, max_combo, "
           "combo_break, pgreat, great, good, bad, poor, kpoor, fast, slow, "
-          "final_gauge, clear_type, ruleset_version, eligibility, "
+          "final_gauge, clear_type, play_duration_seconds, ruleset_version, "
+          "eligibility, "
           "provenance_json, created_at FROM scores WHERE attempt_id = ?",
           stmt, "preparing projected score collision lookup",
           logSqlErrorText) ||
@@ -279,6 +350,7 @@ result_persistence::ProjectionOutcome classifyProjectedScoreCollision(
   result_persistence::ChartScoreWrite stored;
   int indexedRulesetVersion = 0;
   int indexedEligibility = 0;
+  std::int64_t storedPlayDurationSeconds = 0;
   std::string storedProvenanceJson;
   std::string storedCreatedAt;
   if (!readStrictScoreText(stmt.get(), 0, storedAttemptId, false) ||
@@ -302,10 +374,11 @@ result_persistence::ProjectionOutcome classifyProjectedScoreCollision(
       !readStrictScoreInteger(stmt.get(), 18, stored.slow) ||
       sqlite3_column_type(stmt.get(), 19) != SQLITE_FLOAT ||
       !readStrictScoreInteger(stmt.get(), 20, stored.clearType) ||
-      !readStrictScoreInteger(stmt.get(), 21, indexedRulesetVersion) ||
-      !readStrictScoreInteger(stmt.get(), 22, indexedEligibility) ||
-      !readStrictScoreText(stmt.get(), 23, storedProvenanceJson, false) ||
-      !readStrictScoreText(stmt.get(), 24, storedCreatedAt, false)) {
+      sqlite3_column_type(stmt.get(), 21) != SQLITE_INTEGER ||
+      !readStrictScoreInteger(stmt.get(), 22, indexedRulesetVersion) ||
+      !readStrictScoreInteger(stmt.get(), 23, indexedEligibility) ||
+      !readStrictScoreText(stmt.get(), 24, storedProvenanceJson, false) ||
+      !readStrictScoreText(stmt.get(), 25, storedCreatedAt, false)) {
     return {.status = ProjectionStatus::IntegrityConflict,
             .diagnostic =
                 "stored projected score has invalid SQLite value types"};
@@ -325,6 +398,13 @@ result_persistence::ProjectionOutcome classifyProjectedScoreCollision(
                 "payload exactly"};
   }
   stored.finalGauge = static_cast<float>(storedGauge);
+  storedPlayDurationSeconds = sqlite3_column_int64(stmt.get(), 21);
+  if (storedPlayDurationSeconds != scorePlayDurationSeconds(pending.score)) {
+    return {.status = ProjectionStatus::IntegrityConflict,
+            .diagnostic =
+                "stored projected score play duration does not match the "
+                "attempted provenance"};
+  }
 
   const int nextRc = sqlite3_step(stmt.get());
   if (nextRc == SQLITE_ROW) {
@@ -1239,6 +1319,28 @@ std::optional<ScoreBestSnapshot> ScoreRepository::LoadBestScore(
       selectedLongNoteMode);
 }
 
+std::optional<ChartScoreHistorySnapshot>
+ScoreRepository::LoadChartScoreHistory(
+    const bms_parser::ChartMeta &chartMeta, int selectedLongNoteMode) {
+  profile_database_activity::ReadGuard operation;
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return std::nullopt;
+  }
+  return score_repository_detail::LoadChartScoreHistoryOnConnection(
+      impl_->sessionDatabase, chartMeta, selectedLongNoteMode);
+}
+
+PlayerScoreHistorySnapshot ScoreRepository::LoadPlayerScoreHistory() {
+  profile_database_activity::ReadGuard operation;
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {};
+  }
+  return score_repository_detail::LoadPlayerScoreHistoryOnConnection(
+      impl_->sessionDatabase, impl_->chartDatabasePath);
+}
+
 std::optional<ScoreBestSnapshot> ScoreRepository::LoadBestClearScore(
     const bms_parser::ChartMeta &chartMeta,
     const std::optional<std::string> &beforeCreatedAt,
@@ -1361,6 +1463,148 @@ score_repository_detail::LoadBestScoreOnConnection(
     return snapshot;
   }
   return std::nullopt;
+}
+
+std::optional<ChartScoreHistorySnapshot>
+score_repository_detail::LoadChartScoreHistoryOnConnection(
+    sqlite3 *db, const bms_parser::ChartMeta &chartMeta,
+    int selectedLongNoteMode) {
+  // PlayDataAccessor.readScoreData() reads the one local ScoreData row for
+  // the chart SHA-256 and its effective LN mode.  The attempt store keeps
+  // those plays separately, so reconstruct the fields ScoreData.update()
+  // retains: judgement counts from the first high-EX-score attempt and the
+  // date from the latest play. Imported IR rows have no source counterpart.
+  const std::string hash = normalizedHash(chartMeta.SHA256);
+  const int longNoteMode =
+      scoreLongNoteModeForClearLamp(chartMeta, selectedLongNoteMode);
+  const std::string predicate = normalizedSqlHash("s.chart_sha256") +
+                                " = ? AND s.ln_mode = ? AND s.score_source = " +
+                                std::to_string(static_cast<int>(
+                                    ScoreStorageSource::LocalGameplay));
+
+  SqliteStatementHandle bestStatement;
+  const std::string bestQuery =
+      "SELECT CAST(s.pgreat AS INTEGER) * 2 + CAST(s.great AS INTEGER), "
+      "s.max_score, s.pgreat, s.great, s.good, s.bad, "
+      "s.poor FROM scores s WHERE " +
+      predicate + " ORDER BY CAST(s.pgreat AS INTEGER) * 2 + "
+                  "CAST(s.great AS INTEGER) DESC, s.id ASC LIMIT 1";
+  if (!prepareSqliteStatementLogged(db, bestQuery, bestStatement,
+                                    "loading score history",
+                                    logSqlErrorText)) {
+    return std::nullopt;
+  }
+  bindSqliteText(bestStatement.get(), 1, hash);
+  sqlite3_bind_int(bestStatement.get(), 2, longNoteMode);
+  if (sqlite3_step(bestStatement.get()) != SQLITE_ROW) {
+    return std::nullopt;
+  }
+
+  ChartScoreHistorySnapshot snapshot;
+  snapshot.score = sqlite3_column_int(bestStatement.get(), 0);
+  snapshot.maxScore = sqlite3_column_int(bestStatement.get(), 1);
+  snapshot.totalNotes = snapshot.maxScore / 2;
+  for (int index = 0; index < 5; ++index) {
+    snapshot.judgementCounts[static_cast<std::size_t>(index)] =
+        sqlite3_column_int(bestStatement.get(), index + 2);
+  }
+
+  SqliteStatementHandle lastPlayedStatement;
+  const std::string lastPlayedQuery =
+      "SELECT CAST(strftime('%s', MAX(s.created_at)) AS INTEGER) "
+      "FROM scores s WHERE " +
+      predicate;
+  if (!prepareSqliteStatementLogged(db, lastPlayedQuery, lastPlayedStatement,
+                                    "loading score history timestamp",
+                                    logSqlErrorText)) {
+    return std::nullopt;
+  }
+  bindSqliteText(lastPlayedStatement.get(), 1, hash);
+  sqlite3_bind_int(lastPlayedStatement.get(), 2, longNoteMode);
+  if (sqlite3_step(lastPlayedStatement.get()) == SQLITE_ROW &&
+      sqlite3_column_type(lastPlayedStatement.get(), 0) == SQLITE_INTEGER) {
+    snapshot.lastPlayedUnixSeconds =
+        static_cast<std::int64_t>(sqlite3_column_int64(lastPlayedStatement.get(), 0));
+  }
+  return snapshot;
+}
+
+PlayerScoreHistorySnapshot
+score_repository_detail::LoadPlayerScoreHistoryOnConnection(
+    sqlite3 *db, const std::filesystem::path &chartDatabasePath) {
+  // PlayDataAccessor.updatePlayerData() records every local play in
+  // PlayerData, summing its five judgement families and counting clears above
+  // ClearType.Failed. Aso's attempt table is the corresponding local source;
+  // imported IR data is not a player play and must not participate.  A course
+  // attempt has its own aggregate row rather than a chart score row, but it
+  // is still one local PlayerData play.
+  const std::string query =
+      "SELECT COUNT(*), "
+      "SUM(CASE WHEN clear_type > ? THEN 1 ELSE 0 END), "
+      "SUM(pgreat), SUM(great), SUM(good), SUM(bad), SUM(poor), "
+      "SUM(play_duration_seconds) "
+      "FROM ("
+      "SELECT clear_type, pgreat, great, good, bad, poor, "
+      "play_duration_seconds FROM scores WHERE score_source = ? "
+      "UNION ALL "
+      "SELECT clear_type, pgreat, great, good, bad, poor, 0 "
+      "FROM course_scores)";
+  SqliteStatementHandle statement;
+  if (!prepareSqliteStatementLogged(db, query, statement,
+                                    "loading player score history",
+                                    logSqlErrorText)) {
+    return {};
+  }
+  sqlite3_bind_int(statement.get(), 1, kClearTypeFailedRank);
+  sqlite3_bind_int(statement.get(), 2,
+                   static_cast<int>(ScoreStorageSource::LocalGameplay));
+  if (sqlite3_step(statement.get()) != SQLITE_ROW) {
+    return {};
+  }
+
+  PlayerScoreHistorySnapshot snapshot;
+  snapshot.playCount = sqlite3_column_int(statement.get(), 0);
+  snapshot.clearCount = sqlite3_column_int(statement.get(), 1);
+  for (int index = 0; index < 5; ++index) {
+    snapshot.judgementCounts[static_cast<std::size_t>(index)] =
+        sqlite3_column_int(statement.get(), index + 2);
+  }
+  snapshot.playDurationSeconds = sqlite3_column_int64(statement.get(), 7);
+
+  SqliteStatementHandle courseStatement;
+  if (!prepareSqliteStatementLogged(db, "SELECT provenance_json FROM "
+                                       "course_scores",
+                                    courseStatement,
+                                    "loading course player history duration",
+                                    logSqlErrorText)) {
+    return snapshot;
+  }
+  AttachedChartDurationLookup chartDurations(db, chartDatabasePath);
+  bool durationSaturated = false;
+  while (!durationSaturated &&
+         sqlite3_step(courseStatement.get()) == SQLITE_ROW) {
+    std::string provenanceError;
+    const auto provenance = deserializeScoreProvenance(
+        sqliteColumnString(courseStatement.get(), 0), provenanceError);
+    if (!provenance.has_value()) continue;
+    for (const auto &stage : provenance->stages) {
+      const std::int64_t duration =
+          stage.playDurationSeconds > 0
+              ? stage.playDurationSeconds
+              : chartDurations.duration(stage).value_or(0);
+      if (duration <= 0) continue;
+      if (snapshot.playDurationSeconds >
+          std::numeric_limits<std::int64_t>::max() -
+              duration) {
+        snapshot.playDurationSeconds = std::numeric_limits<std::int64_t>::max();
+        durationSaturated = true;
+        break;
+      }
+      snapshot.playDurationSeconds += duration;
+    }
+  }
+  courseStatement.reset();
+  return snapshot;
 }
 
 std::optional<ScoreBestSnapshot>

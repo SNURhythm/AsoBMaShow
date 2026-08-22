@@ -645,6 +645,8 @@ bool RealtimeGameplayWorker::advanceAutomatic() {
     return false;
   }
   const auto before = simulation_.snapshot();
+  const std::size_t gaugeSamplesBefore =
+      simulation_.skinGameplayGraphState().gaugeHistories.front().size();
   const std::size_t replayCountBefore = simulation_.replayEvents().size();
   const auto terminalBefore = simulation_.terminalReason();
   const auto practiceEnd = config_.practiceCompletionSongTimeMicros;
@@ -665,11 +667,14 @@ bool RealtimeGameplayWorker::advanceAutomatic() {
     }
   }
   const auto after = simulation_.snapshot();
+  const std::size_t gaugeSamplesAfter =
+      simulation_.skinGameplayGraphState().gaugeHistories.front().size();
   return !result.transactions.empty() || before.judgeCounts != after.judgeCounts ||
          before.combo != after.combo || before.maxCombo != after.maxCombo ||
          before.comboBreak != after.comboBreak || before.score != after.score ||
          before.gauge != after.gauge || before.gaugeType != after.gaugeType ||
          before.clearTypeRank != after.clearTypeRank ||
+         gaugeSamplesBefore != gaugeSamplesAfter ||
          replayCountBefore != simulation_.replayEvents().size() ||
          terminalBefore != simulation_.terminalReason();
 }
@@ -717,6 +722,7 @@ void RealtimeGameplayWorker::publishSnapshot() {
       snapshot.lanePressed[lane] = simulation_.lanePressed(lane);
     }
     snapshot.attempt = simulation_.snapshot();
+    snapshot.skinGameplayGraph = simulation_.skinGameplayGraphState();
     const auto &scoreState = simulation_.scoreState();
     snapshot.gaugeState = scoreState.gaugeSnapshot();
     snapshot.fastCount = scoreState.fastCount;

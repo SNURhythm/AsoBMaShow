@@ -141,6 +141,29 @@ public:
     images_.emplace(id, std::move(resource));
   }
 
+  void addTextAtlas(SkinObjectId object, SkinTextAtlasId id = 1) {
+    PreparedSkinTextAtlas atlas;
+    atlas.id = id;
+    atlas.width = 32;
+    atlas.height = 16;
+    atlas.key.pointSize = 10;
+    atlas.ascent = 8;
+    atlas.capHeight = 8;
+    atlas.descent = -2;
+    atlas.lineHeight = 10;
+    atlas.glyphs.emplace(
+        U'A', SkinPreparedGlyphMetrics{.region = {.x = 0,
+                                                  .y = 0,
+                                                  .w = 8,
+                                                  .h = 10},
+                                       .bearingX = 0,
+                                       .bearingY = 8,
+                                       .advance = 8,
+                                       .layoutOffsetY = -10});
+    textAtlasesByObject_.emplace(object, id);
+    atlases_.emplace(id, std::move(atlas));
+  }
+
   const PreparedSkinResource *find(SkinResourceId id) const noexcept override {
     const auto found = images_.find(id);
     return found == images_.end() ? nullptr : &found->second;
@@ -163,17 +186,22 @@ public:
   }
 
   const PreparedSkinTextAtlas *
-  findTextAtlas(SkinTextAtlasId) const noexcept override {
-    return nullptr;
+  findTextAtlas(SkinTextAtlasId id) const noexcept override {
+    const auto found = atlases_.find(id);
+    return found == atlases_.end() ? nullptr : &found->second;
   }
 
   const PreparedSkinTextAtlas *
-  findTextAtlasForObject(SkinObjectId) const noexcept override {
-    return nullptr;
+  findTextAtlasForObject(SkinObjectId object) const noexcept override {
+    const auto found = textAtlasesByObject_.find(object);
+    return found == textAtlasesByObject_.end() ? nullptr
+                                               : findTextAtlas(found->second);
   }
 
 private:
   std::map<SkinResourceId, PreparedSkinResource> images_;
+  std::map<SkinTextAtlasId, PreparedSkinTextAtlas> atlases_;
+  std::map<SkinObjectId, SkinTextAtlasId> textAtlasesByObject_;
 };
 
 class FakeState final : public ISkinFrameState {
@@ -195,9 +223,11 @@ public:
   }
   SkinPropertyLookup<std::string_view>
   stringProperty(const SkinBuiltinPropertySelector &) override {
+    return {.value = text, .supported = true};
+  }
+  SkinPropertyLookup<SkinRuntimeOffset> offsetProperty(int) override {
     return {};
   }
-  SkinPropertyLookup<ConfigOffset> offsetProperty(int) override { return {}; }
   std::int64_t timerProperty(const SkinBuiltinPropertySelector &) override {
     return INT64_MIN;
   }
@@ -220,6 +250,7 @@ public:
   }
 
   std::uint64_t serial = 1;
+  std::string text = "A";
 };
 
 SkinSpriteFrames sprite(SkinResourceId resource) {
@@ -289,6 +320,24 @@ void addClickableImage(ValidatedBeatorajaSkinModel &model,
                                  .critical = true});
 }
 
+void addText(ValidatedBeatorajaSkinModel &model, FakeResources &resources,
+             SkinObjectId id, bool editable,
+             std::optional<SkinStringWriterId> writer,
+             std::uint32_t objectOrdinal, int alignment = 0) {
+  resources.addTextAtlas(id, id);
+  SkinTextObject text;
+  text.value = SkinStringPropertyId{1};
+  text.writer = writer;
+  text.pointSize = 10;
+  text.alignment = alignment;
+  text.editable = editable;
+  model.model.objects.push_back({.id = id,
+                                 .authoredName = "text-" + std::to_string(id),
+                                 .payload = std::move(text),
+                                 .authoredOrdinal = objectOrdinal,
+                                 .critical = true});
+}
+
 class TestContext final {
 public:
   TestContext() {
@@ -311,7 +360,7 @@ public:
                                    .configuration = configuration,
                                    .resources = resources,
                                    .viewport = viewport,
-                                   .runtime = runtime.runtime(),
+                                   .runtime = &runtime.runtime(),
                                    .state = state});
   }
 
@@ -555,6 +604,96 @@ void testImageActPublishesPointerDownHitGeometry() {
              eventArgumentFor(3, {.x = 15.0F, .y = 25.0F}) == -1 &&
              eventArgumentFor(3, {.x = 15.0F, .y = 35.0F}) == 1,
          "all four pinned Image click modes preserve their signed arguments");
+}
+
+void testEditableTextJoinsTopmostInteractionOrder() {
+  TestContext context;
+  context.model.model.stringProperties.push_back(
+      {.id = SkinStringPropertyId{1},
+       .source = SkinBuiltinPropertySelector{.value = 1},
+       .authoredOrdinal = 1});
+  context.model.model.stringWriters.push_back(
+      {.id = SkinStringWriterId{1},
+       .source = LuaCallbackId{.slot = 1, .generation = 1},
+       .authoredOrdinal = 1});
+  addText(context.model, context.resources, 1, true, SkinStringWriterId{1}, 1,
+          2);
+  addClickableImage(context.model, context.resources, 2,
+                    SkinEventBindingId{1}, 0, 2);
+  context.model.model.events.push_back(
+      {.id = SkinEventBindingId{1},
+       .source = SkinBuiltinPropertySelector{.value = 42},
+       .authoredOrdinal = 1});
+  context.model.model.destinations = {
+      destination(1, 1, 40.0, 10.0, 20.0, 10.0),
+      destination(2, 2, 25.0, 10.0, 20.0, 10.0)};
+
+  const auto viewport = evaluatePlaySkinViewport(
+      {.width = 100.0, .height = 50.0},
+      {.x = 0.0, .y = 0.0, .width = 100.0, .height = 50.0}, {});
+  const auto result = context.evaluate(viewport);
+  expect(result.interactionLayout &&
+             result.interactionLayout->controlsTopmostFirst.size() == 2 &&
+             result.interactionLayout->textsTopmostFirst.size() == 1,
+         "visible editable text joins the heterogeneous interaction stack");
+  if (result.interactionLayout &&
+      result.interactionLayout->controlsTopmostFirst.size() == 2) {
+    const auto sourceObject = [](const SkinInteractionControl &control) {
+      return std::visit([](const auto &value) { return value.sourceObject; },
+                        control);
+    };
+    expect(sourceObject(result.interactionLayout->controlsTopmostFirst[0]) ==
+                   2 &&
+               sourceObject(
+                   result.interactionLayout->controlsTopmostFirst[1]) == 1,
+           "editable text retains reverse-authored ordering with images");
+    const auto &text = result.interactionLayout->textsTopmostFirst.front();
+    const auto obscured = result.interactionLayout->editableTextAtUi(
+        uiPointForAuthored(viewport, 30.0, 15.0));
+    const auto exposed = result.interactionLayout->editableTextAtUi(
+        uiPointForAuthored(viewport, 22.0, 15.0));
+    const auto exposedHit = result.interactionLayout->hitTestUiControl(
+        uiPointForAuthored(viewport, 22.0, 15.0));
+    const auto hitRegions = result.interactionLayout->uiHitRegions();
+    expect(text.sourceObject == 1 && text.writer == SkinStringWriterId{1} &&
+               text.currentValue == "A" && near(text.authoredRegion.x, 20.0) &&
+               near(text.authoredRegion.y, 10.0) &&
+               near(text.authoredRegion.width, 20.0) &&
+               near(text.authoredRegion.height, 10.0) && !obscured && exposed &&
+               exposed->sourceObject == 1 &&
+               exposedHit.kind != PresentationUiControlKind::None &&
+               exposedHit.sourceObject == 1 && hitRegions.size() == 2 &&
+               hitRegions.back().hit == exposedHit,
+           "text input bounds use the pinned alignment shift and topmost "
+           "cross-control hit and published pointer ownership order");
+  }
+}
+
+void testNoneditableTextDoesNotJoinInteractionOrder() {
+  TestContext context;
+  context.model.model.stringProperties.push_back(
+      {.id = SkinStringPropertyId{1},
+       .source = SkinBuiltinPropertySelector{.value = 1},
+       .authoredOrdinal = 1});
+  context.model.model.stringWriters.push_back(
+      {.id = SkinStringWriterId{1},
+       .source = LuaCallbackId{.slot = 1, .generation = 1},
+       .authoredOrdinal = 1});
+  addText(context.model, context.resources, 1, false, SkinStringWriterId{1},
+          1);
+  context.model.model.destinations = {
+      destination(1, 1, 10.0, 10.0, 20.0, 10.0)};
+
+  const auto viewport = evaluatePlaySkinViewport(
+      {.width = 100.0, .height = 50.0},
+      {.x = 0.0, .y = 0.0, .width = 100.0, .height = 50.0}, {});
+  const auto result = context.evaluate(viewport);
+  expect(result.interactionLayout &&
+             result.interactionLayout->controlsTopmostFirst.empty() &&
+             result.interactionLayout->textsTopmostFirst.empty() &&
+             !result.interactionLayout->editableTextAtUi(
+                 uiPointForAuthored(viewport, 15.0, 15.0)),
+         "noneditable text rejects pointer focus even when it has a writer");
 }
 
 void testLaneCoverWriterUsesTypedHitAndQueueOnlyDrag() {
@@ -964,6 +1103,8 @@ int main() {
   testSliderTracksPreservePinnedDirectionsAndEndpoints();
   testOverlappingSlidersPublishReverseAuthoredTopmostOrder();
   testImageActPublishesPointerDownHitGeometry();
+  testEditableTextJoinsTopmostInteractionOrder();
+  testNoneditableTextDoesNotJoinInteractionOrder();
   testLaneCoverWriterUsesTypedHitAndQueueOnlyDrag();
   testRendererUsesLaneCoverRateIndexAndDirectPropertyFallback();
   testInvalidSliderGeometryCannotCaptureGameplayTouch();

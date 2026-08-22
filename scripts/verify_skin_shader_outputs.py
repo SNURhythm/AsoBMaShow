@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -14,6 +16,7 @@ from typing import NoReturn
 
 KNOWN_BACKENDS = ("metal", "spirv", "essl", "dx11")
 PINNED_BEATORAJA_COMMIT = "c2ed5db1a46145ed10790c3872f717e95b59db9d"
+GIT_EXECUTABLE_ENV = "ASOBMASHOW_GIT_EXECUTABLE"
 
 
 def fail(message: str) -> NoReturn:
@@ -35,15 +38,31 @@ def require_file(root: Path, relative: str) -> Path:
     return path
 
 
+def resolve_git_executable() -> str:
+    configured = os.environ.get(GIT_EXECUTABLE_ENV, "").strip()
+    if configured:
+        path = Path(configured).expanduser()
+        if not path.is_absolute() or not path.is_file():
+            fail(f"configured Git executable is unavailable: {configured}")
+        if os.name != "nt" and not os.access(path, os.X_OK):
+            fail(f"configured Git executable is unavailable: {configured}")
+        return str(path)
+    discovered = shutil.which("git")
+    if discovered is None:
+        fail(f"Git executable is unavailable; set {GIT_EXECUTABLE_ENV}")
+    return discovered
+
+
 def changed_shader_paths(root: Path) -> set[str]:
     if not (root / ".git").exists() and not any(
         parent.joinpath(".git").exists() for parent in root.parents
     ):
         return set()
+    git_executable = resolve_git_executable()
     commands = (
-        ["git", "diff", "--name-only", "--", "shader_src", "shaders"],
+        [git_executable, "diff", "--name-only", "--", "shader_src", "shaders"],
         [
-            "git",
+            git_executable,
             "diff",
             "--cached",
             "--name-only",
@@ -52,7 +71,7 @@ def changed_shader_paths(root: Path) -> set[str]:
             "shaders",
         ],
         [
-            "git",
+            git_executable,
             "ls-files",
             "--others",
             "--exclude-standard",
@@ -63,9 +82,12 @@ def changed_shader_paths(root: Path) -> set[str]:
     )
     result: set[str] = set()
     for command in commands:
-        completed = subprocess.run(
-            command, cwd=root, text=True, capture_output=True, check=False
-        )
+        try:
+            completed = subprocess.run(
+                command, cwd=root, text=True, capture_output=True, check=False
+            )
+        except OSError as error:
+            fail(f"could not run Git executable {git_executable}: {error}")
         if completed.returncode != 0:
             fail(f"could not inspect shader-tree changes: {completed.stderr.strip()}")
         result.update(line for line in completed.stdout.splitlines() if line)

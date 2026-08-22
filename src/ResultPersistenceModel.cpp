@@ -137,7 +137,17 @@ void appendChartMeta(CanonicalEncoder &encoder,
 
 void appendProvenance(CanonicalEncoder &encoder,
                       const ScoreProvenance &provenance) {
-  encoder.integer(static_cast<std::int32_t>(provenance.schemaVersion));
+  // Keep the version-one durable payload for an entirely legacy provenance
+  // stable. It has no stage proof and therefore cannot carry the v6 duration
+  // field; upgraded provenance with one or more stages encodes its true
+  // schema version and the added source fact below.
+  const int fingerprintSchemaVersion =
+      provenance.stages.empty() && provenance.ruleset.version == 0
+          ? ScoreProvenance::kDoublePlayFlipSchemaVersion
+          : (provenance.fingerprintSchemaVersion > 0
+                 ? provenance.fingerprintSchemaVersion
+                 : provenance.schemaVersion);
+  encoder.integer(static_cast<std::int32_t>(fingerprintSchemaVersion));
   encoder.string(provenance.ruleset.id);
   encoder.integer(static_cast<std::int32_t>(provenance.ruleset.version));
   encoder.string(provenance.ruleset.scoringModel);
@@ -159,6 +169,9 @@ void appendProvenance(CanonicalEncoder &encoder,
       encoder.integer(static_cast<std::int32_t>(value));
     });
     encoder.integer(static_cast<std::int32_t>(stage.totalNotes));
+    if (fingerprintSchemaVersion >= ScoreProvenance::kPlayDurationSchemaVersion) {
+      encoder.integer(stage.playDurationSeconds);
+    }
     encoder.optional(stage.authoredGaugeTotal,
                      [&](double value) { encoder.float64(value); });
     encoder.float64(stage.effectiveGaugeTotal);

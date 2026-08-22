@@ -408,15 +408,30 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
   settings.gameplayHispeed = 1.75F;
   settings.hispeedFixMode = AppSettings::HiSpeedFixMode::Off;
   settings.visibleTimeUseMilliseconds = true;
+  settings.notesDisplayTimingMilliseconds = -37;
   settings.laneBeamLengthPercent = 71;
   settings.noteStartPositionPercent = 40;
   settings.showInvisibleNotes = true;
+  settings.showPastNotes = true;
   settings.audioVideo.audio.masterVolume = 0.25F;
   settings.audioVideo.audio.keysoundVolume = 0.5F;
   settings.audioVideo.audio.bgmVolume = 0.75F;
   settings.bgaEnabled = false;
   settings.hispeedAutoAdjust = true;
   settings.markProcessedNotes = true;
+  settings.customJudge = true;
+  settings.showJudgeArea = true;
+  settings.notesDisplayTimingAutoAdjust = true;
+  settings.autoSaveReplay = {1, 2, 3, 4};
+  settings.guideSoundEffects = true;
+  settings.extraNoteDepth = 2;
+  settings.mineMode = 3;
+  settings.scrollMode = 4;
+  settings.longNoteModifierMode = 5;
+  settings.sevenToNinePattern = 6;
+  settings.sevenToNineType = 7;
+  settings.constantScroll = true;
+  settings.constantFadeInMilliseconds = 456;
   settings.judgementIndicatorEnabled = false;
   settings.judgementIndicatorY = 0.25F;
   settings.judgementIndicatorWidthScale = 0.75F;
@@ -451,17 +466,32 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
              configuration.configuredHispeed &&
              *configuration.configuredHispeed == 1.75F &&
              configuration.visibleTimeUseMilliseconds &&
+             configuration.notesDisplayTimingMilliseconds == -37 &&
              configuration.hispeedFixMode == AppSettings::HiSpeedFixMode::Off &&
              configuration.playAreaWidth == 9.5F &&
              configuration.laneBeamLengthPercent == 71 &&
              configuration.noteStartPositionPercent == 40 &&
              configuration.showInvisibleNotes &&
+             configuration.showPastNotes &&
              configuration.masterVolume == 0.25F &&
              configuration.keysoundVolume == 0.5F &&
              configuration.bgmVolume == 0.75F &&
              !configuration.bgaEnabled &&
              configuration.hispeedAutoAdjust &&
              configuration.markProcessedNotes &&
+             configuration.customJudge &&
+             configuration.showJudgeArea &&
+             configuration.notesDisplayTimingAutoAdjust &&
+             configuration.autoSaveReplay == std::array<int, 4>{1, 2, 3, 4} &&
+             configuration.guideSoundEffects &&
+             configuration.extraNoteDepth == 2 &&
+             configuration.mineMode == 3 &&
+             configuration.scrollMode == 4 &&
+             configuration.longNoteModifierMode == 5 &&
+             configuration.sevenToNinePattern == 6 &&
+             configuration.sevenToNineType == 7 &&
+             configuration.constantScroll &&
+             configuration.constantFadeInMilliseconds == 456 &&
              !configuration.judgementIndicatorEnabled &&
              configuration.judgementIndicatorY == 0.25F &&
              configuration.judgementIndicatorWidthScale == 0.75F &&
@@ -480,6 +510,47 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
              !configuration.touchVisualizationEnabled &&
              !configuration.replayGhostRenderingEnabled,
          "replay export configuration retains all gameplay presentation settings");
+}
+
+void testReplayFrameAppliesConstantScrollWindowAndFade() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.Bpm = 120.0;
+  chart.Meta.MinBpm = 120.0;
+  chart.Meta.MaxBpm = 120.0;
+  auto *measure = new bms_parser::Measure;
+  auto *timeline = new bms_parser::TimeLine(8, false);
+  timeline->Timing = 550'000;
+  timeline->Bpm = 120.0;
+  timeline->Scroll = 1.0;
+  timeline->SetNote(0, new bms_parser::Note(bms_parser::Parser::NoWav));
+  measure->TimeLines.push_back(timeline);
+  chart.Measures.push_back(measure);
+
+  AppSettings settings;
+  PlayfieldPresentationConfig configuration;
+  configuration.constantScroll = true;
+  configuration.visibleTimeDurationMilliseconds = 500;
+  configuration.constantFadeInMilliseconds = 100;
+  TestBga bga;
+  const auto created = ReplayPlayfieldPresentation::create(
+      createInfo(chart, settings, configuration, bga));
+  if (!created.presentation) {
+    expect(false, "Constant replay presentation is created");
+    return;
+  }
+
+  RenderContext context;
+  (void)created.presentation->renderFrame(
+      context, {.serial = 1, .visualTimeMicros = 0},
+      {.noteDisplayTimeMicros = 0,
+       .visibleScrollBefore = 10.0,
+       .visibleScrollAfter = 10.0});
+  const auto &projection = created.presentation->lastProjectionForTesting();
+  expect(projection.notes.size() == 1 &&
+             std::abs(projection.notes.front().opacity - 0.5) < 0.0001,
+         "every replay frame applies Constant mode's duration and fade to "
+         "the rendered projection");
 }
 
 void testReplayExportConfigCarriesBpmGuide() {
@@ -505,6 +576,7 @@ void testCourseNoSpeedReplayExportConfigOverridesProfileSettings() {
   settings.visibleTimeUseMilliseconds = true;
   settings.noteStartPositionPercent = 40;
   settings.laneCoverEnabled = true;
+  settings.constantScroll = true;
 
   bms_parser::Chart chart;
   chart.Meta.Bpm = 120.0;
@@ -520,6 +592,7 @@ void testCourseNoSpeedReplayExportConfigOverridesProfileSettings() {
              configuration.configuredHispeed &&
              *configuration.configuredHispeed == 1.0F &&
              !configuration.visibleTimeUseMilliseconds &&
+             !configuration.constantScroll &&
              configuration.hispeedFixMode == AppSettings::HiSpeedFixMode::Main &&
              configuration.laneCoverEnabled &&
              configuration.noteStartPositionPercent ==
@@ -699,6 +772,7 @@ void testReplayGameplayFrameStateMirrorsLiveTimerAndStartClocks() {
   AppSettings settings;
   settings.audioOffsetMs = 20;
   settings.visualOffsetMs = 10;
+  settings.notesDisplayTimingMilliseconds = -37;
   preparation::Plan plan;
   plan.playback = {.percent = 100};
   plan.playbackStartTimeMicros = -2'000'000;
@@ -730,6 +804,104 @@ void testReplayGameplayFrameStateMirrorsLiveTimerAndStartClocks() {
              gameplay.clock.playTimer.elapsedMillisExact &&
              gameplay.clock.playTimer.playtimeMillis == 125'000,
          "gameplay export frame keeps Timer 41 and progress authority live");
+  expect(replay_video_export::replayGameplayNoteDisplayTimeMicros(
+             gameplay, settings) == -27'000,
+         "replay projection derives note display time from the shared settings");
+}
+
+void testReplayGameplayGaugeAuthorityPreservesRecordedLowerBound() {
+  ReplayData replay;
+  replay.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
+  replay.gaugeAutoShiftLowerBound = GaugeType::Easy;
+  PlayfieldAuthorityUpdate authority;
+
+  replay_video_export::applyReplayGameplayGaugeAuthority(
+      authority, replay, GaugeType::Hard, 37.5F);
+
+  expect(authority.gaugeType == GaugeType::Hard &&
+             authority.gaugeAutoShift == GaugeAutoShiftMode::BestClear &&
+             authority.gaugeAutoShiftLowerBound == GaugeType::Easy &&
+             authority.currentGauge == 37.5F,
+         "replay export authority retains the recorded gauge auto-shift lower bound");
+}
+
+void testReplayGameplayRuntimeAuthorityCarriesApplicationClocks() {
+  PlayfieldAuthorityUpdate authority;
+
+  replay_video_export::applyReplayGameplayRuntimeAuthority(
+      authority, 60, 3'661'999, 2'000'000);
+
+  expect(authority.currentFramesPerSecond == 60 &&
+             authority.applicationUptimeMillis == 3'663'999,
+         "replay export authority advances runtime clocks from the encoded "
+         "frame even when the application loop is blocked");
+}
+
+void testReplayGameplayTargetOptionAuthorityUsesSourceDefault() {
+  PlayfieldAuthorityUpdate authority;
+
+  replay_video_export::applyReplayGameplayTargetOptionAuthority(authority);
+
+  expect(authority.targetPlayOption.has_value() &&
+             *authority.targetPlayOption == 0,
+         "replay export installs Beatoraja's default target score option");
+}
+
+void testReplayGameplaySpeedUsesNoteDisplayClock() {
+  PlayfieldChartVisualModel model;
+  model.initialBpm = 120.0;
+  model.timelines = {
+      {.id = 1,
+       .timeMicros = 1'000'000,
+       .bpm = 150.0,
+       .scrollRate = 0.5,
+       .speed = 0.5,
+       .hasSpeedObject = true},
+      {.id = 2,
+       .timeMicros = 2'000'000,
+       .bpm = 180.0,
+       .scrollRate = 1.5,
+       .speed = 1.5,
+       .hasSpeedObject = true},
+  };
+  model.speedPoints = {
+      {.timeMicros = 1'000'000, .speed = 0.5},
+      {.timeMicros = 2'000'000, .speed = 1.5},
+  };
+  replay_video_export::ReplayGameplayFrameState frame;
+  frame.clock.visualTimeMicros = 1'500'000;
+  AppSettings settings;
+  settings.notesDisplayTimingMilliseconds = 500;
+
+  const auto authority =
+      replay_video_export::replayGameplayTimelineAuthority(model, frame,
+                                                            settings);
+  expect(std::abs(authority.bpm - 180.0) < 0.000001 &&
+             std::abs(authority.scrollRate - 1.5) < 0.000001 &&
+             std::abs(authority.speedMultiplier - 1.5) < 0.000001,
+         "replay export samples BPM, SCROLL, and SPEED on the same offset "
+         "note display clock");
+
+  settings.constantScroll = true;
+  const auto constantAuthority =
+      replay_video_export::replayGameplayTimelineAuthority(model, frame,
+                                                            settings);
+  const auto noSpeedAuthority =
+      replay_video_export::replayGameplayTimelineAuthority(model, frame,
+                                                            settings, true);
+  expect(std::abs(constantAuthority.speedMultiplier - 1.0) < 0.000001 &&
+             std::abs(noSpeedAuthority.speedMultiplier - 1.5) < 0.000001,
+         "course NO SPEED disables Constant while preserving authored SPEED");
+}
+
+void testReplayGameplayFailureAnimationStartsAtFailureClock() {
+  expect(!replay_video_export::replayGameplayFailureAnimationActive(
+             999'999, 1'000'000) &&
+             replay_video_export::replayGameplayFailureAnimationActive(
+                 1'000'000, 1'000'000) &&
+             !replay_video_export::replayGameplayFailureAnimationActive(
+                 2'000'000, std::nullopt),
+         "replay export starts the failed animation at the recorded failure clock");
 }
 
 void testReplayGameplayStatePlayDeadlineMatchesPinnedBmsPlayer() {
@@ -1445,6 +1617,87 @@ void testClassicLongHeadSuppressesJudgeHudAndBgaMissClock() {
          "classic long-note head remains lane-only and does not fan out a BGA miss");
 }
 
+void testReplayGraphAuthorityMatchesTheGameplayProducer() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 1;
+  auto *measure = new bms_parser::Measure;
+  chart.Measures.push_back(measure);
+  auto *timeline = new bms_parser::TimeLine(8, false);
+  timeline->Timing = 1'000'000;
+  timeline->Bpm = 120.0;
+  timeline->Scroll = 1.0;
+  timeline->SetNote(1, new bms_parser::Note(1));
+  measure->TimeLines.push_back(timeline);
+
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(
+      definition,
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(3)),
+       .attempt = {.gaugeAutoShift = GaugeAutoShiftMode::BestClear}});
+  const GaugeStateSnapshot initialGaugeState =
+      simulation.scoreState().gaugeSnapshot();
+  (void)simulation.advanceTo(1'200'000, 1'200'000);
+  const auto judged = simulation.pressLane(
+      1, {.songTimeMicros = 1'200'000,
+          .laneBeamTimeMicros = 1'200'000});
+  expect(judged.hasJudge && judged.hasReplayEvent,
+         "replay graph fixture produces one authoritative replay event");
+  if (!judged.hasReplayEvent) {
+    return;
+  }
+
+  AppSettings settings;
+  PlayfieldPresentationConfig configuration;
+  TestBga bga;
+  PlayfieldAuthorityUpdate authority;
+  authority.gaugeRules = simulation.scoreState().gaugeRules();
+  authority.gaugeType = initialGaugeState.gaugeType;
+  authority.gaugeAutoShift = initialGaugeState.gaugeAutoShift;
+  authority.gaugeAutoShiftLowerBound =
+      initialGaugeState.gaugeAutoShiftLowerBound;
+  authority.currentGauge = initialGaugeState.currentGauge;
+  authority.graphGaugeState = initialGaugeState;
+  PlayfieldVisualState initialVisualState;
+  initialVisualState.authority = authority;
+  auto info = createInfo(chart, settings, configuration, bga);
+  info.timingWindows = Judge(3).timingWindows;
+  info.skinInput.initialState = &initialVisualState;
+  const auto created = ReplayPlayfieldPresentation::create(std::move(info));
+  expect(created.presentation != nullptr,
+         "replay graph presentation is created");
+  if (!created.presentation) {
+    return;
+  }
+  const ReplayEvent replay{
+      .action = ReplayEventAction::Press,
+      .lane = judged.replayEvent.lane,
+      .noteTimeMicros = judged.replayEvent.noteTimeMicros,
+      .songTimeMicros = judged.replayEvent.songTimeMicros,
+      .judgeTimeMicros = judged.replayEvent.judgeTimeMicros,
+      .judgement = judged.replayEvent.judgement,
+      .diffMicros = judged.replayEvent.diffMicros,
+      .gauge = judged.replayEvent.gauge,
+      .gaugeType = judged.replayEvent.gaugeType,
+      .combo = judged.replayEvent.combo,
+      .score = judged.replayEvent.score,
+  };
+  (void)created.presentation->applyReplayEvent(
+      replay,
+      makePlayfieldJudgeEventClock(replay.songTimeMicros, 0), true);
+  (void)simulation.advanceTo(1'600'000, 1'600'000);
+
+  const auto captured =
+      created.presentation->captureVisualStateForTesting(
+          {.serial = 90, .gameplayTimeMicros = 1'600'000});
+  expect(captured.skinGameplayGraph.dynamic != nullptr &&
+             *captured.skinGameplayGraph.dynamic ==
+                 simulation.skinGameplayGraphState() &&
+             captured.skinGameplayGraph.chart != nullptr &&
+             captured.skinGameplayGraph.chart->normalDistribution[1][5] == 1,
+         "replay and live simulation publish identical dynamic graph authority with shared static chart data");
+}
+
 void testReplayDuplicateTimestampUsesLiveLongNoteIdentityForJudgementCount() {
   bms_parser::Chart chart;
   chart.Meta.KeyMode = 7;
@@ -2020,6 +2273,28 @@ void testReplayExportPreparesSavedLongNoteScoreMetadata() {
          "skin model and score reducer are created");
 }
 
+void testReplayChartMetadataAuthorityUsesMatchedLibraryRecord() {
+  bms_parser::ChartMeta chartMeta;
+  chartMeta.BmsPath = "/library/set/../set/replay-chart.bms";
+  ChartMetaPathBatchReadOutcome records;
+  records.status = ChartMetaPathBatchReadStatus::Loaded;
+  records.records = {
+      {.meta = {.BmsPath = "/library/other-chart.bms"},
+       .hasDocument = false,
+       .songReviewFavorite = 1},
+      {.meta = {.BmsPath = "/library/set/replay-chart.bms"},
+       .hasDocument = true,
+       .songReviewFavorite = 9},
+  };
+
+  const auto authority = replay_video_export::projectReplayChartMetadataAuthority(
+      chartMeta, records, true, true);
+  expect(authority.songReviewFavorite == 9 && authority.chartHasDocument &&
+             authority.stageFileAvailable && authority.backBmpAvailable,
+         "replay export chart authority retains the matched SongReview, "
+         "document, stage, and back-image facts");
+}
+
 } // namespace
 
 int main() {
@@ -2045,6 +2320,7 @@ int main() {
   testReplayGhostVisibleScrollRangeSharesBuiltInOrdering();
   testExportPixelSizesMapToLogicalGameplayBounds();
   testReplayExportConfigPreservesGameplayPresentationSettings();
+  testReplayFrameAppliesConstantScrollWindowAndFade();
   testReplayExportConfigCarriesBpmGuide();
   testCourseNoSpeedReplayExportConfigOverridesProfileSettings();
   testReplayExportConfigUsesLaneRendererMainBpmTieRule();
@@ -2053,6 +2329,11 @@ int main() {
   testReplayExportJudgementAuthorityRetainsFastSlowCounters();
   testFirstExportFrameRefreshesPreparedRendererGeometry();
   testReplayGameplayFrameStateMirrorsLiveTimerAndStartClocks();
+  testReplayGameplayGaugeAuthorityPreservesRecordedLowerBound();
+  testReplayGameplayRuntimeAuthorityCarriesApplicationClocks();
+  testReplayGameplayTargetOptionAuthorityUsesSourceDefault();
+  testReplayGameplaySpeedUsesNoteDisplayClock();
+  testReplayGameplayFailureAnimationStartsAtFailureClock();
   testReplayGameplayStatePlayDeadlineMatchesPinnedBmsPlayer();
   testReplayGameplayTransitionIgnoresChartTailAfterLastLaneNote();
   testReplayAudioTailDoesNotExtendGameplayFrames();
@@ -2072,6 +2353,7 @@ int main() {
   testSelectedReadySkinReceivesOneInitialSnapshotAndSubmitsSkinFrame();
   testSelectedSkinRuntimeFailureDoesNotSubmitBuiltIn();
   testClassicLongHeadSuppressesJudgeHudAndBgaMissClock();
+  testReplayGraphAuthorityMatchesTheGameplayProducer();
   testReplayDuplicateTimestampUsesLiveLongNoteIdentityForJudgementCount();
   testBuiltInReplayPresentationPreprocessesGhostsAndMisses();
   testAppliedJudgeCarriesTheProvidedBgaClockIntoSnapshot();
@@ -2084,6 +2366,7 @@ int main() {
   testReplayAdapterCarriesStageFullComboAuthority();
   testAutoplayReplayReducerMatchesEffectiveScorableTotal();
   testReplayExportPreparesSavedLongNoteScoreMetadata();
+  testReplayChartMetadataAuthorityUsesMatchedLibraryRecord();
   bgfx::shutdown();
   SDL_Quit();
   if (failures != 0) {

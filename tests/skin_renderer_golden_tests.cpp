@@ -5,6 +5,12 @@
 #include "rendering/common.h"
 #include "skin/beatoraja/PlaySkinViewport.h"
 #include "skin/beatoraja/SkinDestinationEvaluator.h"
+#include "skin/beatoraja/SkinBpmGraphRenderer.h"
+#include "skin/beatoraja/SkinGaugeGraphRenderer.h"
+#include "skin/beatoraja/SkinGeneratedTextureRaster.h"
+#include "skin/beatoraja/SkinHitErrorVisualizerRenderer.h"
+#include "skin/beatoraja/SkinNoteDistributionGraphRenderer.h"
+#include "skin/beatoraja/SkinTimingVisualizerRenderer.h"
 #include "view/View.h"
 
 #include <bgfx/bgfx.h>
@@ -18,6 +24,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <optional>
@@ -57,7 +64,8 @@ void expect(bool value, std::string_view message) {
 
 std::vector<std::string> goldenCaseNames() {
   return {"fit_16x9", "stretch_16x9", "custom_16x9",
-          "fit_4x3",  "stretch_4x3",  "custom_4x3"};
+          "fit_4x3",  "stretch_4x3",  "custom_4x3",
+          "widgets_frame_0", "widgets_frame_1", "widgets_frame_2"};
 }
 
 struct SyntheticTexture {
@@ -90,8 +98,50 @@ struct FakeResources final : skin::SkinPreparedResourceView {
     return nullptr;
   }
 
+  const skin::PreparedSkinGeneratedTexture *prepareGeneratedTexture(
+      const skin::SkinGeneratedTextureKey &key,
+      const skin::SkinGeneratedTextureData &data) const noexcept override {
+    const auto existing = generated.find(key);
+    if (existing != generated.end()) return &existing->second;
+    if (data.width <= 0 || data.height <= 0 || data.rgba == nullptr ||
+        data.width > std::numeric_limits<std::uint16_t>::max() ||
+        data.height > std::numeric_limits<std::uint16_t>::max() ||
+        data.rgba->size() !=
+            static_cast<std::size_t>(data.width * data.height * 4))
+      return nullptr;
+    const auto *memory = bgfx::copy(
+        data.rgba->data(), static_cast<std::uint32_t>(data.rgba->size()));
+    if (memory == nullptr) return nullptr;
+    const auto texture = bgfx::createTexture2D(
+        static_cast<std::uint16_t>(data.width),
+        static_cast<std::uint16_t>(data.height), false, 1,
+        bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_NONE, memory);
+    if (!bgfx::isValid(texture)) return nullptr;
+    try {
+      const auto [inserted, accepted] = generated.emplace(
+          key, skin::PreparedSkinGeneratedTexture{
+                   .key = key, .texture = texture,
+                   .width = data.width, .height = data.height});
+      if (!accepted) bgfx::destroy(texture);
+      return accepted ? &inserted->second : nullptr;
+    } catch (...) {
+      bgfx::destroy(texture);
+      return nullptr;
+    }
+  }
+
+  void destroyGenerated() {
+    for (const auto &[key, resource] : generated) {
+      (void)key;
+      if (bgfx::isValid(resource.texture)) bgfx::destroy(resource.texture);
+    }
+    generated.clear();
+  }
+
   std::map<skin::SkinResourceId, skin::PreparedSkinResource> images;
   std::map<skin::SkinTextAtlasId, skin::PreparedSkinTextAtlas> atlases;
+  mutable std::map<skin::SkinGeneratedTextureKey,
+                   skin::PreparedSkinGeneratedTexture> generated;
 };
 
 std::uint32_t pack(const std::array<float, 4> &rgba) {
@@ -166,6 +216,7 @@ struct GoldenCase {
   unsigned width = 0;
   unsigned height = 0;
   skin::ViewportSettings viewport;
+  std::optional<int> widgetFrame;
 };
 
 std::vector<GoldenCase> goldenCases() {
@@ -188,7 +239,13 @@ std::vector<GoldenCase> goldenCases() {
        .width = 120,
        .height = 90,
        .viewport = {.mode = skin::ViewportMode::Stretch}},
-      {.name = "custom_4x3", .width = 120, .height = 90, .viewport = custom}};
+      {.name = "custom_4x3", .width = 120, .height = 90, .viewport = custom},
+      {.name = "widgets_frame_0", .width = 160, .height = 90,
+       .widgetFrame = 0},
+      {.name = "widgets_frame_1", .width = 160, .height = 90,
+       .widgetFrame = 1},
+      {.name = "widgets_frame_2", .width = 160, .height = 90,
+       .widgetFrame = 2}};
 }
 
 SyntheticTexture imageTexture() {
@@ -224,6 +281,205 @@ bgfx::TextureHandle createTexture(const SyntheticTexture &texture) {
       bgfx::TextureFormat::RGBA8, BGFX_SAMPLER_UVW_CLAMP,
       bgfx::copy(texture.rgba.data(),
                  static_cast<std::uint32_t>(texture.rgba.size())));
+}
+
+std::vector<skin::SkinDrawCommand>
+buildWidgetScene(const skin::PlaySkinViewport &viewport, int frame) {
+  std::vector<skin::SkinDrawCommand> commands;
+  commands.push_back(
+      draw(1, projectedPrimitive(viewport,
+                                 {.x = 0, .y = 0, .width = 160, .height = 90},
+                                 0xff15110dU)));
+
+  std::array<SkinJudgeDistribution, 12> judgement{};
+  for (std::size_t second = 0; second < judgement.size(); ++second) {
+    judgement[second][0] = 1 + static_cast<int>((second + frame) % 3U);
+    judgement[second][1] = static_cast<int>((second + 2U) % 4U);
+    judgement[second][2] = frame > 0 && second % 3U == 0 ? 2 : 0;
+    judgement[second][3] = frame > 1 && second % 4U == 0 ? 1 : 0;
+  }
+  const std::array<SkinBpmGraphPoint, 5> bpm{{
+      {.chartTimeMicros = 0,
+       .sourceOrder = 0,
+       .bpm = 120.0,
+       .scroll = 1.0,
+       .bpmTimesScroll = 120.0,
+       .graphSpeed = 120.0,
+       .emitsGraphPoint = true},
+      {.chartTimeMicros = 2'000'000,
+       .sourceOrder = 1,
+       .bpm = 180.0,
+       .scroll = 1.0,
+       .bpmTimesScroll = 180.0,
+       .graphSpeed = 180.0,
+       .emitsGraphPoint = true},
+      {.chartTimeMicros = 4'000'000,
+       .sourceOrder = 2,
+       .bpm = 0.0,
+       .scroll = 1.0,
+       .bpmTimesScroll = 0.0,
+       .stopMicros = 300'000,
+       .graphSpeed = 0.0,
+       .emitsGraphPoint = true},
+      {.chartTimeMicros = 6'000'000,
+       .sourceOrder = 3,
+       .bpm = 90.0,
+       .scroll = 1.0,
+       .bpmTimesScroll = 90.0,
+       .graphSpeed = 90.0,
+       .emitsGraphPoint = true},
+      {.chartTimeMicros = 8'000'000,
+       .sourceOrder = 4,
+       .bpm = 120.0,
+       .scroll = 1.0,
+       .bpmTimesScroll = 120.0,
+       .graphSpeed = 120.0,
+       .emitsGraphPoint = true},
+  }};
+  const std::array<float, 9> gaugeFrame0{22, 28, 35, 41, 48, 55, 62, 58, 66};
+  const std::array<float, 9> gaugeFrame1{66, 61, 55, 47, 42, 38, 52, 64, 72};
+  const std::array<float, 9> gaugeFrame2{72, 69, 62, 57, 51, 45, 39, 34, 29};
+  const std::span<const float> gauge = frame == 0 ? std::span{gaugeFrame0}
+                                           : frame == 1 ? std::span{gaugeFrame1}
+                                                        : std::span{gaugeFrame2};
+  const std::array<SkinJudgeWindow, 5> windows{{
+      {.minimumTimingMillis = -5, .maximumTimingMillis = 5},
+      {.minimumTimingMillis = -12, .maximumTimingMillis = 12},
+      {.minimumTimingMillis = -24, .maximumTimingMillis = 24},
+      {.minimumTimingMillis = -42, .maximumTimingMillis = 42},
+      {.minimumTimingMillis = -75, .maximumTimingMillis = 75},
+  }};
+  auto recent = emptySkinRecentJudgeTimings();
+  const std::array<std::int64_t, 6> samples{-31, 18, -8, 4, 27, -16};
+  const std::size_t visibleSamples = static_cast<std::size_t>((frame + 1) * 2);
+  for (std::size_t index = 0; index < visibleSamples; ++index) {
+    recent[index] = samples[index];
+  }
+
+  SkinGameplayGraphStateView state{
+      .judgementDistribution = judgement,
+      .bpmSeries = bpm,
+      .mainBpm = 120.0,
+      .minimumBpm = 90.0,
+      .maximumBpm = 180.0,
+      .judgeWindows = windows,
+      .recentJudgeTimingsMillis = recent,
+      .recentJudgeTimingIndex = visibleSamples - 1U,
+      .gaugeHistory = gauge,
+      .gaugeType = 0,
+      .gaugeMinimum = 0.0F,
+      .gaugeMaximum = 100.0F,
+      .gaugeBorder = 50.0F,
+      .gaugeSupported = true,
+      .judgementRevision = static_cast<std::uint64_t>(frame + 1),
+      .gaugeRevision = static_cast<std::uint64_t>(frame + 1)};
+  skin::SkinGeneratedTextureCache cache;
+  const auto geometry = [](double x, double y, double width, double height) {
+    skin::AuthoredDestinationGeometry result;
+    result.rect = {.x = x, .y = y, .width = width, .height = height};
+    result.blend = skin::SkinBlendMode::Normal;
+    result.filter = skin::SkinFilterMode::Nearest;
+    result.stretch = skin::SkinStretchMode::Stretch;
+    return result;
+  };
+  const auto append = [&](skin::SkinGeneratedTextureRasterResult rendered,
+                          std::string_view label) {
+    expect(!rendered.failure && !rendered.commands.empty(), label);
+    commands.insert(commands.end(),
+                    std::make_move_iterator(rendered.commands.begin()),
+                    std::make_move_iterator(rendered.commands.end()));
+  };
+
+  skin::SkinBpmGraphObject bpmGraph;
+  bpmGraph.delayMillis = 1'500;
+  bpmGraph.lineWidth = 2;
+  const auto bpmGeometry = geometry(4, 4, 72, 22);
+  append(skin::renderSkinBpmGraph(
+             {.sourceObject = 101,
+              .authoredOrdinal = 10,
+              .graph = bpmGraph,
+              .state = state,
+              .geometry = bpmGeometry,
+              .viewport = viewport,
+              .elapsedMillis = (frame + 1) * 500,
+              .maximumCommands = 4,
+              .maximumPrimitiveVertices = 0,
+              .cache = &cache}),
+         "real BPM widget frame emits generated pixels");
+
+  skin::SkinGaugeGraphObject gaugeGraph;
+  const auto gaugeGeometry = geometry(84, 4, 72, 22);
+  append(skin::renderSkinGaugeGraph(
+             {.sourceObject = 102,
+              .authoredOrdinal = 11,
+              .graph = gaugeGraph,
+              .state = state,
+              .geometry = gaugeGeometry,
+              .viewport = viewport,
+              .elapsedMillis = (frame + 1) * 500,
+              .maximumCommands = 4,
+              .maximumPrimitiveVertices = 0,
+              .cache = &cache}),
+         "real gauge widget frame emits generated pixels");
+
+  skin::SkinNoteDistributionGraphObject noteGraph;
+  noteGraph.type = skin::SkinNoteDistributionGraphType::Judge;
+  noteGraph.delayMillis = 0;
+  noteGraph.reverseOrder = true;
+  const auto noteGeometry = geometry(4, 34, 46, 50);
+  append(skin::renderSkinNoteDistributionGraph(
+             {.sourceObject = 103,
+              .authoredOrdinal = 12,
+              .graph = noteGraph,
+              .state = state,
+              .geometry = noteGeometry,
+              .viewport = viewport,
+              .elapsedMillis = frame * 750,
+              .startMillis = 1'000,
+              .endMillis = 10'000,
+              .currentMillis = 2'000 + frame * 3'000,
+              .maximumCommands = 4,
+              .maximumPrimitiveVertices = 0,
+              .cache = &cache}),
+         "real note-distribution widget frame emits generated pixels");
+
+  skin::SkinHitErrorVisualizerObject hit;
+  hit.width = 101;
+  hit.judgeWidthMillis = 50;
+  hit.windowLength = 6;
+  hit.emaMode = 3;
+  const auto hitGeometry = geometry(56, 34, 48, 50);
+  append(skin::renderSkinHitErrorVisualizer(
+             {.sourceObject = 104,
+              .authoredOrdinal = 13,
+              .visualizer = hit,
+              .state = state,
+              .emaMillis = samples[visibleSamples - 1U] / 2,
+              .geometry = hitGeometry,
+              .viewport = viewport,
+              .maximumCommands = 2,
+              .maximumPrimitiveVertices = 0,
+              .cache = &cache}),
+         "real hit-error widget frame emits generated pixels");
+
+  skin::SkinTimingVisualizerObject timing;
+  timing.width = 101;
+  timing.judgeWidthMillis = 50;
+  timing.lineWidth = 1;
+  timing.lineRgba = 0xffcc44ffU;
+  const auto timingGeometry = geometry(110, 34, 46, 50);
+  append(skin::renderSkinTimingVisualizer(
+             {.sourceObject = 105,
+              .authoredOrdinal = 14,
+              .visualizer = timing,
+              .state = state,
+              .geometry = timingGeometry,
+              .viewport = viewport,
+              .maximumCommands = 16,
+              .maximumPrimitiveVertices = 64,
+              .cache = &cache}),
+         "real timing widget frame emits generated pixels");
+  return commands;
 }
 
 std::vector<skin::SkinDrawCommand>
@@ -277,6 +533,72 @@ buildScene(const skin::PlaySkinViewport &viewport) {
   };
   line.vertices = {point(8, 82), point(80, 76), point(152, 84)};
   commands.push_back(draw(6, std::move(line)));
+
+  const auto appendGenerated = [&](std::uint32_t ordinal,
+                                   skin::AuthoredDestinationGeometry geometry,
+                                   skin::SkinGeneratedTextureLayer layer,
+                                   std::int64_t elapsedMillis,
+                                   int revealMillis) {
+    skin::SkinGeneratedTextureRaster raster(
+        {.sourceObject = 100U + ordinal,
+         .authoredOrdinal = ordinal,
+         .layer = layer,
+         .geometry = geometry,
+         .viewport = viewport,
+         .elapsedMillis = elapsedMillis,
+         .revealMillis = revealMillis,
+         .maximumCommands = 1,
+         .maximumPrimitiveVertices = 0,
+         .sourceWidth = 4,
+         .sourceHeight = 4,
+         .verticalFlip = false,
+         .diagnosticObject = "generated golden"});
+    if (auto *pixmap = raster.pixmap(); pixmap != nullptr) {
+      pixmap->clear(0U);
+      pixmap->fillRectangle(0, 0, 4, 4, 0xe8385080U);
+      pixmap->fillRectangle(1, 1, 3, 2, 0x38a8f0a0U);
+      pixmap->drawLine(0, 3, 3, 0, 0xffe060c0U);
+    }
+    auto lowered = raster.take();
+    expect(!lowered.failure && lowered.commands.size() == 1,
+           "generated golden Pixmap lowers to one texture command");
+    commands.insert(commands.end(),
+                    std::make_move_iterator(lowered.commands.begin()),
+                    std::make_move_iterator(lowered.commands.end()));
+  };
+
+  appendGenerated(
+      7,
+      {.rect = {.x = 7, .y = 5, .width = 34, .height = 24},
+       .rgba = {0.85F, 1.0F, 0.75F, 0.58F},
+       .blend = skin::SkinBlendMode::Normal,
+       .filter = skin::SkinFilterMode::Nearest,
+       .stretch = skin::SkinStretchMode::Stretch},
+      skin::SkinGeneratedTextureLayer::Primary, 1, 0);
+  appendGenerated(
+      8,
+      {.rect = {.x = 52, .y = 8, .width = 46, .height = 27},
+       .clip = skin::AuthoredRect{.x = 48, .y = 4, .width = 56, .height = 35},
+       .centerX = 0.5,
+       .centerY = 0.5,
+       .angleDegrees = 17.0,
+       .rgba = {0.7F, 0.8F, 1.0F, 0.62F},
+       .blend = skin::SkinBlendMode::Additive,
+       .filter = skin::SkinFilterMode::Linear,
+       .stretch = skin::SkinStretchMode::KeepAspectRatioFitInner},
+      skin::SkinGeneratedTextureLayer::Shape, 1, 0);
+  appendGenerated(
+      9,
+      {.rect = {.x = 94, .y = 39, .width = 54, .height = 27},
+       .clip = skin::AuthoredRect{.x = 100, .y = 40, .width = 38, .height = 22},
+       .centerX = 0.25,
+       .centerY = 0.75,
+       .angleDegrees = -11.0,
+       .rgba = {1.0F, 0.72F, 0.65F, 0.76F},
+       .blend = skin::SkinBlendMode::Subtractive,
+       .filter = skin::SkinFilterMode::Linear,
+       .stretch = skin::SkinStretchMode::KeepAspectRatioFitOuterTrimmed},
+      skin::SkinGeneratedTextureLayer::Shape, 50, 100);
   return commands;
 }
 
@@ -379,7 +701,9 @@ std::vector<std::uint8_t> renderGolden(const GoldenCase &fixture) {
   bgfx::touch(rendering::ui_view);
   RenderContext context;
   rendering::SkinQuadBatchRenderer renderer;
-  const auto commands = buildScene(viewport);
+  const auto commands = fixture.widgetFrame
+                            ? buildWidgetScene(viewport, *fixture.widgetFrame)
+                            : buildScene(viewport);
   renderer.begin(context, resources);
   expect(renderer.submit(commands),
          "golden scene passes whole-buffer preflight on real backend");
@@ -399,6 +723,7 @@ std::vector<std::uint8_t> renderGolden(const GoldenCase &fixture) {
   expect(currentFrame >= expectedFrame, "real Metal readback completes");
 
   bgfx::setViewFrameBuffer(rendering::ui_view, BGFX_INVALID_HANDLE);
+  resources.destroyGenerated();
   bgfx::destroy(framebuffer);
   bgfx::destroy(readback);
   bgfx::destroy(output);
@@ -461,8 +786,10 @@ void verifyGolden(const GoldenCase &fixture) {
 int main() {
   expect(goldenCaseNames() ==
              std::vector<std::string>{"fit_16x9", "stretch_16x9", "custom_16x9",
-                                      "fit_4x3", "stretch_4x3", "custom_4x3"},
-         "all six viewport goldens are covered");
+                                      "fit_4x3", "stretch_4x3", "custom_4x3",
+                                      "widgets_frame_0", "widgets_frame_1",
+                                      "widgets_frame_2"},
+         "all viewport and multi-frame gameplay widget goldens are covered");
 
   bgfx::Init init;
   init.type = bgfx::RendererType::Metal;

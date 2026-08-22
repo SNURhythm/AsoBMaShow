@@ -3,15 +3,20 @@
 #include "BeatorajaSkinConfiguration.h"
 #include "BeatorajaSkinModel.h"
 #include "LuaSkinRuntime.h"
+#include "SkinHitErrorVisualizerRenderer.h"
 #include "SkinDrawCommand.h"
+#include "SkinMovieCatalog.h"
+#include "SkinGeneratedTextureRaster.h"
 #include "SyntheticReplayGhostOverlay.h"
 #include "../SkinSafetyPolicy.h"
+#include "../../scene/play/SkinGameplayGraphState.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <map>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <variant>
 #include <vector>
@@ -74,7 +79,9 @@ struct SkinProjectedNoteView {
   // retain the historical pixel-displacement representation.
   std::optional<double> scrollSpeed;
   double authoredYDisplacement = 0.0;
+  std::optional<double> pmsPoorYDisplacement;
   bool judged = false;
+  double opacity = 1.0;
   std::uint32_t submissionOrdinal = 0;
 };
 
@@ -93,6 +100,7 @@ struct SkinProjectedLongNoteView {
   bool reactive = false;
   bool headJudged = false;
   bool tailJudged = false;
+  double opacity = 1.0;
   std::uint32_t submissionOrdinal = 0;
 };
 
@@ -108,6 +116,7 @@ struct SkinProjectedLineView {
   SkinProjectedLineKind kind = SkinProjectedLineKind::Time;
   std::optional<double> scrollSpeed;
   double authoredYDisplacement = 0.0;
+  double opacity = 1.0;
   std::uint32_t submissionOrdinal = 0;
 };
 
@@ -137,6 +146,34 @@ struct SkinNoteExpansionStateView {
   std::int64_t elapsedSinceQuarterNoteMillis = 0;
 };
 
+struct SkinPracticeMenuItemView {
+  bool available = false;
+  std::string_view label;
+  std::string_view value;
+};
+
+struct SkinPracticeJudgeCountView {
+  std::int64_t fast = 0;
+  std::int64_t slow = 0;
+};
+
+struct SkinPracticeStateView {
+  bool supported = false;
+  bool active = false;
+  bool practiceMode = false;
+  bool mediaReady = false;
+  bool horizontalInputMode = false;
+  bool inputTurbo = false;
+  int keyMode = 0;
+  std::array<SkinPracticeMenuItemView, 12> items;
+  std::size_t cursorPosition = 0;
+  int graphType = 0;
+  int startTimeMillis = 0;
+  int endTimeMillis = 10'000;
+  int frequencyPercent = 100;
+  std::array<SkinPracticeJudgeCountView, 6> judgeCounts;
+};
+
 class ISkinFrameState {
 public:
   virtual ~ISkinFrameState() = default;
@@ -152,7 +189,11 @@ public:
                 SkinFloatPropertyDomain = SkinFloatPropertyDomain::Rate) = 0;
   virtual SkinPropertyLookup<std::string_view>
   stringProperty(const SkinBuiltinPropertySelector &) = 0;
-  virtual SkinPropertyLookup<ConfigOffset> offsetProperty(int) = 0;
+  virtual SkinPropertyLookup<SkinRuntimeOffset> offsetProperty(int) = 0;
+  [[nodiscard]] virtual SkinLaneCoverStateView
+  laneCoverState() const noexcept {
+    return {};
+  }
   virtual std::int64_t timerProperty(const SkinBuiltinPropertySelector &) = 0;
   virtual std::span<const SkinProjectedNoteView>
   projectedNotes() const noexcept = 0;
@@ -160,9 +201,18 @@ public:
   projectedLongNotes() const noexcept = 0;
   virtual std::span<const SkinProjectedLineView>
   projectedLines() const noexcept = 0;
+  [[nodiscard]] virtual SkinGameplayGraphStateView
+  gameplayGraphState() const noexcept {
+    return {};
+  }
   virtual SkinGaugeStateView gaugeState() const noexcept = 0;
   virtual SkinJudgeStateView judgeState(int player) const noexcept = 0;
   virtual SkinNoteExpansionStateView noteExpansionState() const noexcept = 0;
+  [[nodiscard]] virtual SkinPracticeStateView
+  practiceState() const noexcept {
+    return {};
+  }
+  virtual bool stagePracticeVisibleItemCount(int) { return false; }
 };
 
 class ISkinGaugeRandomSource {
@@ -187,8 +237,9 @@ struct SkinFrameInputs {
   const ValidatedBeatorajaSkinModel &model;
   const BeatorajaSkinConfiguration &configuration;
   const SkinPreparedResourceView &resources;
+  const SkinPreparedMovieView *movies = nullptr;
   const PlaySkinViewport &viewport;
-  LuaSkinRuntime &runtime;
+  LuaSkinRuntime *runtime = nullptr;
   ISkinFrameState &state;
   // Pinned PlayerConfig.markprocessednote; false by Beatoraja default.
   bool markProcessedNotes = false;
@@ -242,8 +293,17 @@ struct SkinImageInteractionGeometry {
   int clickMode = 0;
 };
 
+struct SkinTextInteractionGeometry {
+  SkinObjectId sourceObject = 0;
+  std::uint32_t authoredOrdinal = 0;
+  AuthoredRect authoredRegion;
+  SkinStringWriterId writer{};
+  std::string currentValue;
+};
+
 using SkinInteractionControl =
-    std::variant<SkinSliderInteractionGeometry, SkinImageInteractionGeometry>;
+    std::variant<SkinSliderInteractionGeometry, SkinImageInteractionGeometry,
+                 SkinTextInteractionGeometry>;
 
 struct SkinLaneInteractionRegion {
   SkinObjectId sourceObject = 0;
@@ -269,6 +329,7 @@ struct SkinInteractionLayout {
   UiLogicalRect safeUiBounds;
   std::vector<SkinSliderInteractionGeometry> slidersTopmostFirst;
   std::vector<SkinImageInteractionGeometry> imagesTopmostFirst;
+  std::vector<SkinTextInteractionGeometry> textsTopmostFirst;
   // Pinned Skin.mousePressed walks every visible SkinObject in reverse draw
   // order. This heterogeneous sequence retains that cross-object ordering.
   std::vector<SkinInteractionControl> controlsTopmostFirst;
@@ -279,6 +340,8 @@ struct SkinInteractionLayout {
   authoredPointForUi(double x, double y) const noexcept;
   [[nodiscard]] PresentationUiHit
   hitTestUiControl(UiLogicalPoint point) const noexcept;
+  [[nodiscard]] const SkinTextInteractionGeometry *
+  editableTextAtUi(UiLogicalPoint point) const noexcept;
   [[nodiscard]] std::vector<PresentationUiHitRegion>
   uiHitRegions() const;
   [[nodiscard]] std::optional<SkinWriterInvocation>
@@ -320,8 +383,19 @@ public:
   [[nodiscard]] bool submit(
       const SkinCommandBuffer &, const SkinPreparedResourceView &,
       RenderContext &, rendering::SkinQuadBatchRenderer &,
+      SkinMovieCatalog *, const PlaySkinViewport &,
       const PreparedGameplayBgaFrame &, IGameplayBgaSubmitter &) const
       noexcept;
+  void setGeneratedTextureLiveCounters(
+      std::shared_ptr<SkinLiveResourceCounters> counters) noexcept {
+    generatedTextureCache_.setLiveResourceCounters(std::move(counters));
+  }
+#if defined(ASOBMASHOW_SKIN_RENDERER_TESTING)
+  [[nodiscard]] SkinGeneratedTextureCacheStats
+  generatedTextureCacheStatsForTesting() const noexcept {
+    return generatedTextureCache_.stats();
+  }
+#endif
 
 private:
   SkinFrameEvaluationResult evaluateFrameImpl(const SkinFrameInputs &,
@@ -335,6 +409,12 @@ private:
 
   std::uint64_t gaugeAnimationSessionSerial_ = 0;
   std::map<SkinObjectId, GaugeAnimationState> gaugeAnimationStates_;
+  std::uint64_t hitErrorVisualizerSessionSerial_ = 0;
+  const ValidatedBeatorajaSkinModel *hitErrorVisualizerModelIdentity_ = nullptr;
+  std::map<SkinObjectId, SkinHitErrorVisualizerPresentationState>
+      hitErrorVisualizerStates_;
+  std::uint64_t generatedTextureCacheSessionSerial_ = 0;
+  SkinGeneratedTextureCache generatedTextureCache_;
   std::uint64_t externalOwnershipSessionSerial_ = 0;
   std::uint64_t lastExternalOwnershipFrameSerial_ = 0;
 };

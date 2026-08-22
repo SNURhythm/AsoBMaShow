@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 // Renderer-independent chart-lifetime boundary used by the coordinator.
@@ -22,6 +23,10 @@ public:
   identity() const noexcept = 0;
   [[nodiscard]] virtual std::optional<skin::SkinGameplayTiming>
   selectedSkinGameplayTiming() const {
+    return std::nullopt;
+  }
+  [[nodiscard]] virtual std::optional<PmsPoorDestinationGeometry>
+  pmsPoorDestinationGeometry() const {
     return std::nullopt;
   }
   [[nodiscard]] virtual PresentationFrameOutcome prepareFrame(
@@ -60,6 +65,14 @@ public:
   virtual PresentationTouchResult
   endPresentationTouch(const PresentationTouchEvent &, bool cancelled) = 0;
   virtual void cancelPresentationTouches(long long eventMicros) = 0;
+  virtual bool focusTextInput(UiLogicalPoint, long long) { return false; }
+  [[nodiscard]] virtual bool hasFocusedTextInput() const noexcept {
+    return false;
+  }
+  virtual bool appendTextInput(std::string_view) { return false; }
+  virtual bool backspaceTextInput() { return false; }
+  virtual bool commitTextInput(long long) { return false; }
+  virtual void cancelTextInput() noexcept {}
   virtual void onLanePressed(int, JudgeResult, long long) = 0;
   virtual void onLaneReleased(int, long long) = 0;
   virtual void onJudge(JudgeResult, int, int, PlayfieldJudgeEventClock,

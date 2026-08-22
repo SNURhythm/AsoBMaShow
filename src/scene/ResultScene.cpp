@@ -371,7 +371,8 @@ ResultScene::ResultScene(
     bms_parser::Chart *reusableRetryChart,
     std::optional<ResultPacemakerData> pacemakerOverride,
     const ReplayData *analyticsSource,
-    std::optional<std::string> modernReplayAttemptId, bool retrySameAllowed)
+    std::optional<std::string> modernReplayAttemptId, bool retrySameAllowed,
+    ResultTableContext tableContext)
     : Scene(context),
       source(LocalResultSource{
           .meta = meta,
@@ -391,6 +392,7 @@ ResultScene::ResultScene(
           .persistenceOptions = std::move(persistenceOptions),
           .practiceOptions = std::move(practiceOptions),
           .courseOptions = std::move(courseOptions),
+          .tableContext = std::move(tableContext),
           .ownedReusableRetryChart = std::move(ownedReusableRetryChart),
           .pacemakerTarget = pacemaker::normalizeTargetId(
               pacemakerTarget.empty() ? context.settings.selectedPacemakerTarget
@@ -2324,8 +2326,14 @@ void ResultScene::startRetry(bool samePattern) {
           return true;
         }
         std::atomic_bool parseCancelled = false;
+        // A session-backed retry opens the skin practice menu again. That
+        // menu owns applying its filters, flip, and player modifiers, so it
+        // must always receive a pristine chart rather than the completed,
+        // already-mutated attempt.
+        const bool sessionBackedPracticeRetry = retryPracticeSession != nullptr;
         const bool reuseCurrentPattern =
-            samePattern && local->reusableRetryChart != nullptr;
+            samePattern && !sessionBackedPracticeRetry &&
+            local->reusableRetryChart != nullptr;
         std::unique_ptr<bms_parser::Chart> ownedRetryChart;
         bms_parser::Chart *retryChart = nullptr;
         if (reuseCurrentPattern) {
@@ -2378,6 +2386,7 @@ void ResultScene::startRetry(bool samePattern) {
                 ? pacemaker::kTargetOff
                 : pacemaker::normalizeTargetId(
                       context.settings.selectedPacemakerTarget);
+        applyResultTableContext(options, local->tableContext);
         options.playback = retryPlayback;
         options.ownsChart = true;
         options.requiredRulesetDescriptor = local->attemptProvenance.ruleset;
@@ -2387,6 +2396,7 @@ void ResultScene::startRetry(bool samePattern) {
         }
         if (local->practiceOptions.enabled) {
           options.practiceSession = retryPracticeSession;
+          options.practiceMenuPreservePlayOptionSeeds = samePattern;
           options.practiceMode = retryPracticeSession == nullptr;
           options.practiceLeadInMicros =
               retryPracticeSession == nullptr
@@ -2417,6 +2427,11 @@ void ResultScene::startRetry(bool samePattern) {
             options.playOption2 = retrySource.playOption2;
             options.playOption2Seed = retrySource.playOption2Seed;
           }
+        } else if (sessionBackedPracticeRetry) {
+          options.playOption = retrySource.playOption;
+          options.playOptionSeed = retrySource.playOptionSeed;
+          options.playOption2 = retrySource.playOption2;
+          options.playOption2Seed = retrySource.playOption2Seed;
         } else if (retrySource.playOption.has_value()) {
           if (samePattern &&
               play_options::usesRandomizer(*retrySource.playOption) &&
@@ -2434,7 +2449,8 @@ void ResultScene::startRetry(bool samePattern) {
           }
         }
 
-        if (!reuseCurrentPattern && retryChart->Meta.IsDP &&
+        if (!reuseCurrentPattern && !sessionBackedPracticeRetry &&
+            retryChart->Meta.IsDP &&
             retrySource.playOption2.has_value()) {
           if (samePattern &&
               play_options::usesRandomizer(*retrySource.playOption2) &&
@@ -2541,6 +2557,7 @@ void ResultScene::startReplay() {
             .replayData = replayData,
             .ownsChart = true,
         };
+        applyResultTableContext(replayOptions, local->tableContext);
         applyReplayProvenanceToStartOptions(replayOptions, *replayData);
         context.sceneManager->changeScene(
             std::make_unique<GamePlayScene>(context, std::move(replayChart),

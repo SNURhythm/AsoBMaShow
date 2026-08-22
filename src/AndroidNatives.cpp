@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <jni.h>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -772,6 +773,43 @@ std::string GetAndroidCacheDir() {
   return {};
 }
 
+std::optional<std::string> ConvertAndroidMs932ToUtf8(std::string_view value) {
+  auto *env = static_cast<JNIEnv *>(SDL_AndroidGetJNIEnv());
+  if (env == nullptr ||
+      value.size() > static_cast<std::size_t>(std::numeric_limits<jsize>::max())) {
+    return std::nullopt;
+  }
+  jbyteArray bytes = env->NewByteArray(static_cast<jsize>(value.size()));
+  jclass stringClass = env->FindClass("java/lang/String");
+  jstring charset = env->NewStringUTF("MS932");
+  if (bytes == nullptr || stringClass == nullptr || charset == nullptr) {
+    env->ExceptionClear();
+    if (bytes != nullptr) env->DeleteLocalRef(bytes);
+    if (stringClass != nullptr) env->DeleteLocalRef(stringClass);
+    if (charset != nullptr) env->DeleteLocalRef(charset);
+    return std::nullopt;
+  }
+  env->SetByteArrayRegion(
+      bytes, 0, static_cast<jsize>(value.size()),
+      reinterpret_cast<const jbyte *>(value.data()));
+  const jmethodID constructor =
+      env->GetMethodID(stringClass, "<init>", "([BLjava/lang/String;)V");
+  jobject decoded = constructor != nullptr
+                        ? env->NewObject(stringClass, constructor, bytes, charset)
+                        : nullptr;
+  std::optional<std::string> result;
+  if (!env->ExceptionCheck() && decoded != nullptr) {
+    result = jstringToUtf8(env, static_cast<jstring>(decoded));
+  } else {
+    env->ExceptionClear();
+  }
+  if (decoded != nullptr) env->DeleteLocalRef(decoded);
+  env->DeleteLocalRef(charset);
+  env->DeleteLocalRef(stringClass);
+  env->DeleteLocalRef(bytes);
+  return result;
+}
+
 bool AndroidBuildHasManageExternalStorage() {
   std::string callError;
   const std::string result = callActivityStringMethod(
@@ -1109,10 +1147,10 @@ bool ExistsAndroidTreeFile(const std::filesystem::path &path,
 }
 
 bool ListAndroidTreeChartFiles(const std::filesystem::path &rootPath,
-                               std::vector<std::filesystem::path> &chartPaths,
+                               std::vector<AndroidTreeChartFile> &chartFiles,
                                std::string &errorMessage,
                                const std::stop_token *stopToken) {
-  chartPaths.clear();
+  chartFiles.clear();
   std::string treeId;
   std::filesystem::path relativePath;
   if (!splitAndroidTreePath(rootPath, treeId, relativePath) ||
@@ -1147,7 +1185,15 @@ bool ListAndroidTreeChartFiles(const std::filesystem::path &rootPath,
       errorMessage = "Scan cancelled.";
       return false;
     }
-    chartPaths.emplace_back(line);
+    const std::size_t separator = line.rfind('\t');
+    const bool hasDocument =
+        separator != std::string::npos && separator + 2 == line.size() &&
+        (line[separator + 1] == '0' || line[separator + 1] == '1');
+    chartFiles.push_back({
+        .path = std::filesystem::path(hasDocument ? line.substr(0, separator)
+                                                   : line),
+        .hasDocument = hasDocument && line[separator + 1] == '1',
+    });
   }
   return true;
 }

@@ -11,6 +11,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 enum class GameplayViewportPersistenceDisposition : std::uint8_t {
@@ -78,6 +79,12 @@ public:
   PresentationTouchResult endPresentationTouch(const PresentationTouchEvent &,
                                                bool cancelled) override;
   void cancelPresentationTouches(long long eventMicros) override;
+  bool focusTextInput(UiLogicalPoint, long long eventMicros);
+  [[nodiscard]] bool hasFocusedTextInput() const noexcept;
+  bool appendTextInput(std::string_view utf8);
+  bool backspaceTextInput();
+  bool commitTextInput(long long eventMicros);
+  void cancelTextInput() noexcept;
   void onLanePressed(int, JudgeResult, long long) override;
   void onLaneReleased(int, long long) override;
   void onJudge(JudgeResult, int, int, PlayfieldJudgeEventClock, bool) override;
@@ -87,6 +94,8 @@ public:
   [[nodiscard]] std::optional<PresentationFailure> lastFailure() const override;
   [[nodiscard]] std::optional<skin::SkinGameplayTiming>
   selectedSkinGameplayTiming() const override;
+  [[nodiscard]] std::optional<PmsPoorDestinationGeometry>
+  pmsPoorDestinationGeometry() const override;
 
 private:
   struct PendingFrame {

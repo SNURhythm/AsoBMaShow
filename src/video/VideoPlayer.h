@@ -5,10 +5,12 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <vector>
 #include "VideoFrameLayout.h"
+#include "VideoMemoryBudget.h"
 #include "../utils/Stopwatch.h"
 #include "../rendering/common.h"
 #include <thread>
@@ -42,6 +44,13 @@ public:
     bgfx::TransientIndexBuffer indexBuffer{};
   };
 
+  struct LoadLimits {
+    int maximumDimension = std::numeric_limits<std::uint16_t>::max();
+    std::size_t maximumRgbaBytes = std::numeric_limits<std::size_t>::max();
+    std::size_t maximumDecodedBytes = std::numeric_limits<std::size_t>::max();
+    bool requirePreallocationBounds = false;
+  };
+
   VideoPlayer(Stopwatch *stopwatch);
   ~VideoPlayer();
   VideoPlayer(const VideoPlayer &) = delete;
@@ -50,6 +59,8 @@ public:
   VideoPlayer &operator=(VideoPlayer &&) = delete;
 
   bool loadVideo(const std::string &videoPath, std::atomic<bool> &isCancelled);
+  bool loadVideo(const std::string &videoPath, std::atomic<bool> &isCancelled,
+                 const LoadLimits &limits);
   void update();
   void render(bgfx::ViewId viewId, float viewX, float viewY, float viewWidth,
               float viewHeight) const;
@@ -78,6 +89,9 @@ public:
   long long getDurationMicros() const;
   int getFrameWidth() const { return videoFrameWidth; }
   int getFrameHeight() const { return videoFrameHeight; }
+  std::size_t getReservedDecodedBytes() const noexcept {
+    return reservedDecodedBytes;
+  }
   // float fps = 60.0f;
 
 private:
@@ -122,6 +136,7 @@ private:
   int videoFrameWidth;
   int videoFrameHeight;
   bool hasVideoFrame;
+  std::size_t reservedDecodedBytes = 0;
 
   bgfx::UniformHandle s_texY = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle s_texU = BGFX_INVALID_HANDLE;

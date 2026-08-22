@@ -2,8 +2,11 @@
 #include "bms_parser.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <tuple>
 
 namespace {
 
@@ -29,12 +32,15 @@ bool testStaticChartMetadata() {
   chart.Meta.MD5 = "chart-md5";
   chart.Meta.SHA256 = "chart-sha256";
   chart.Meta.Rank = 72;
+  chart.Meta.Bpm = 150.0;
   chart.Meta.MinBpm = 124.25;
   chart.Meta.MaxBpm = 248.5;
   chart.Meta.TotalLength = 123'456'789;
   chart.Meta.TotalNotes = 987;
   chart.Meta.TotalLandmineNotes = 8;
   chart.Meta.RandomValues = {2};
+  chart.Meta.BmsPath = "/charts/song/chart.bms";
+  chart.Meta.Banner = "banner.png";
   chart.Meta.StageFile = "stage.png";
   chart.Meta.BackBmp = "back.png";
   chart.ReferencedBmpTable.emplace(1, "bga.png");
@@ -47,13 +53,17 @@ bool testStaticChartMetadata() {
   const auto model = buildPlayfieldChartVisualModel(chart, 0);
   const auto &metadata = model.staticMetadata;
   if (model.chartMd5 != "chart-md5" || model.chartSha256 != "chart-sha256" ||
+      model.initialBpm != 150.0 ||
       metadata.difficulty != 3 || metadata.judgeRank != 72 ||
       metadata.minimumBpm != 124.25 || metadata.maximumBpm != 248.5 ||
       metadata.durationMicros != 123'456'789 || metadata.totalNotes != 987 ||
       metadata.totalLandmineNotes != 8 || !metadata.hasBga ||
       !metadata.hasRandomSequence || !metadata.hasBpmStop ||
       metadata.stageFilePath != "stage.png" ||
-      metadata.backBmpPath != "back.png") {
+      metadata.backBmpPath != "back.png" ||
+      metadata.stageFileResourcePath != "/charts/song/stage.png" ||
+      metadata.backBmpResourcePath != "/charts/song/back.png" ||
+      metadata.bannerResourcePath != "/charts/song/banner.png") {
     std::cerr << "chart visual model static metadata conversion failed\n";
     return false;
   }
@@ -228,6 +238,61 @@ bool testExactBeatorajaChartPropertyMetadata() {
   return true;
 }
 
+bool testSongInformationDensityMatchesPinnedConstructor() {
+  // Pinned SongInformation bins prepared notes into whole seconds. These
+  // three ordinary notes yield [1, 1, 1, 0], so density is .75 while peak and
+  // end density are 1. TOTAL remains the authored chart total.
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 3;
+  chart.Meta.Total = 100.0;
+  auto *measure = new bms_parser::Measure();
+  for (const auto [time, lane, wav] :
+       std::array<std::tuple<long long, int, int>, 3>{{
+           {0, 0, 1}, {1'000'000, 1, 2}, {2'000'000, 2, 3}}}) {
+    auto *timeline = new bms_parser::TimeLine(8, false);
+    timeline->Timing = time;
+    timeline->Bpm = 120.0;
+    timeline->SetNote(lane, new bms_parser::Note(wav));
+    measure->TimeLines.push_back(timeline);
+  }
+  chart.Measures.push_back(measure);
+
+  const auto model = buildPlayfieldChartVisualModel(chart, 1);
+  const auto &information = model.staticMetadata.songInformation;
+  if (!information || std::abs(information->density - 0.75) > 0.000001 ||
+      std::abs(information->peakDensity - 1.0) > 0.000001 ||
+      std::abs(information->endDensity - 1.0) > 0.000001 ||
+      std::abs(information->total - 100.0) > 0.000001) {
+    std::cerr << "pinned SongInformation density conversion failed\n";
+    return false;
+  }
+  return true;
+}
+
+bool testSongInformationUsesSparseDistantTimelineBuckets() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 1;
+  chart.Meta.Total = 100.0;
+  auto *measure = new bms_parser::Measure();
+  auto *timeline = new bms_parser::TimeLine(8, false);
+  constexpr long long kDistantMicros = 100'000'000'000'000LL;
+  timeline->Timing = kDistantMicros;
+  timeline->Bpm = 120.0;
+  timeline->SetNote(0, new bms_parser::Note(1));
+  measure->TimeLines.push_back(timeline);
+  chart.Measures.push_back(measure);
+
+  const auto model = buildPlayfieldChartVisualModel(chart, 1);
+  const auto &information = model.staticMetadata.songInformation;
+  constexpr double kBucketCount = 100'000'002.0;
+  return information.has_value() &&
+         std::abs(information->density - 1.0 / kBucketCount) < 0.000000001 &&
+         std::abs(information->peakDensity - 1.0) < 0.000001 &&
+         std::abs(information->endDensity - 0.2) < 0.000001;
+}
+
 bool testTerminalZeroNoteTimelinesRemainProjectionAnchors() {
   bms_parser::Chart chart;
   auto *measure = new bms_parser::Measure();
@@ -295,6 +360,38 @@ bool testParserStoredLandminesRetainTheirMineSource() {
   return true;
 }
 
+bool testSpeedObjectInterpolationUsesPinnedTimelineSemantics() {
+  // Pinned LaneRenderer#getCurrentSpeed starts at 1.0, interpolates only
+  // between authored SPEED objects, and keeps the final authored multiplier.
+  PlayfieldChartVisualModel model;
+  model.timelines = {
+      {.id = 1,
+       .timeMicros = 1'000'000,
+       .speed = 0.5,
+       .hasSpeedObject = true},
+      {.id = 2,
+       .timeMicros = 2'000'000,
+       .speed = 1.5,
+       .hasSpeedObject = true},
+      {.id = 3, .timeMicros = 3'000'000, .speed = 1.5},
+  };
+  model.speedPoints = {
+      {.timeMicros = 1'000'000, .speed = 0.5},
+      {.timeMicros = 2'000'000, .speed = 1.5},
+  };
+  PlayfieldChartVisualModel ordinaryChart;
+  ordinaryChart.timelines.resize(10'000);
+
+  return model.speedPoints.size() == 2 &&
+         std::abs(speedObjectMultiplierAtTime(model, 500'000) - 0.75) <
+             0.000001 &&
+         std::abs(speedObjectMultiplierAtTime(model, 1'500'000) - 1.0) <
+             0.000001 &&
+         std::abs(speedObjectMultiplierAtTime(model, 2'500'000) - 1.5) <
+             0.000001 &&
+         speedObjectMultiplierAtTime(ordinaryChart, 2'500'000) == 1.0;
+}
+
 } // namespace
 
 int main() {
@@ -304,10 +401,21 @@ int main() {
   if (!testExactBeatorajaChartPropertyMetadata()) {
     return EXIT_FAILURE;
   }
+  if (!testSongInformationDensityMatchesPinnedConstructor()) {
+    return EXIT_FAILURE;
+  }
+  if (!testSongInformationUsesSparseDistantTimelineBuckets()) {
+    std::cerr << "distant SongInformation timeline must stay sparse\n";
+    return EXIT_FAILURE;
+  }
   if (!testTerminalZeroNoteTimelinesRemainProjectionAnchors()) {
     return EXIT_FAILURE;
   }
   if (!testParserStoredLandminesRetainTheirMineSource()) {
+    return EXIT_FAILURE;
+  }
+  if (!testSpeedObjectInterpolationUsesPinnedTimelineSemantics()) {
+    std::cerr << "SPEED object interpolation must match LaneRenderer\n";
     return EXIT_FAILURE;
   }
 

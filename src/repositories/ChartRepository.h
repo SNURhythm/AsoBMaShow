@@ -74,6 +74,9 @@ struct ChartMetaQuery {
 
 struct ChartMetaRecord {
   bms_parser::ChartMeta meta;
+  // SongData.CONTENT_TEXT as established by Beatoraja's library scan. This
+  // is a folder-level fact, separate from BMS header metadata.
+  bool hasDocument = false;
   std::string difficultyTableLabels;
   bool courseStart = false;
   bool unavailable = false;
@@ -82,6 +85,10 @@ struct ChartMetaRecord {
   std::uint64_t archiveUncompressedSize = 0;
   int archiveFileCount = 0;
   bool favorite = false;
+  // SongReview.favorite is persisted by the pinned Beatoraja review table
+  // under this chart's SHA-256 identity.  Its bit assignments are consumed by
+  // gameplay skin image indexes 89 and 90.
+  int songReviewFavorite = 0;
 };
 
 enum class ChartMetaPathBatchReadStatus { Loaded, Invalid, StorageFailure };
@@ -171,7 +178,10 @@ public:
 
       bool UpsertChart(
           const bms_parser::ChartMeta &meta,
-          std::optional<ChartSourcePreference> sourcePreference);
+          std::optional<ChartSourcePreference> sourcePreference,
+          bool hasDocument = false);
+      bool UpdateChartHasDocument(const std::filesystem::path &path,
+                                  bool hasDocument);
       bool DeleteChart(const std::filesystem::path &path);
       bool DeleteCharts(std::span<const std::filesystem::path> paths);
       bool DeleteChartsInArchive(const std::filesystem::path &path);

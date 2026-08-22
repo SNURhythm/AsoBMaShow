@@ -1,12 +1,16 @@
 #include "view/ImageFileDecoder.h"
+#include "scene/play/GameplayBmsResourceAvailability.h"
 
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <stop_token>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -73,6 +77,152 @@ void verifyOptionalCimTree() {
              decoded->height == 2048,
          "LITONE12 graph/main.cim decodes through the gameplay resource policy");
 }
+
+void testWebpFfmpegFallback() {
+  constexpr std::array<unsigned char, 68> webp = {
+      0x52, 0x49, 0x46, 0x46, 0x3c, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42,
+      0x50, 0x56, 0x50, 0x38, 0x20, 0x30, 0x00, 0x00, 0x00, 0xd0, 0x01,
+      0x00, 0x9d, 0x01, 0x2a, 0x02, 0x00, 0x02, 0x00, 0x02, 0x00, 0x34,
+      0x25, 0xa0, 0x02, 0x74, 0xba, 0x01, 0xf8, 0x00, 0x03, 0xb0, 0x00,
+      0xfe, 0xf0, 0xc4, 0x0b, 0xff, 0x20, 0xb9, 0x61, 0x75, 0xc8, 0xd7,
+      0xff, 0x20, 0x3f, 0xe4, 0x07, 0xfc, 0x80, 0xff, 0xf8, 0xf2, 0x00,
+      0x00, 0x00};
+  std::vector<std::byte> encoded;
+  encoded.reserve(webp.size());
+  for (const unsigned char byte : webp) {
+    encoded.push_back(static_cast<std::byte>(byte));
+  }
+  const auto memoryDecoded = image_decode::decodeImageMemory(
+      encoded, {.maximumDimension = 16, .maximumEncodedBytes = 1024,
+                .maximumDecodedBytes = 1024});
+  expect(memoryDecoded && memoryDecoded->width == 2 &&
+             memoryDecoded->height == 2,
+         "WebP FFmpeg fallback decodes the bounded byte source used by "
+         "virtual resources");
+  const auto memoryResized = image_decode::decodeImageMemory(
+      encoded, {.maximumDimension = 16,
+                .maximumEncodedBytes = 1024,
+                .maximumDecodedBytes = 1024,
+                .targetWidth = 1,
+                .targetHeight = 1});
+  expect(memoryResized && memoryResized->width == 1 &&
+             memoryResized->height == 1,
+         "WebP FFmpeg byte fallback applies the requested target-size fit");
+  expect(!image_decode::decodeImageMemory(
+             encoded, {.maximumDimension = 1, .maximumEncodedBytes = 1024,
+                       .maximumDecodedBytes = 1024}),
+         "WebP FFmpeg byte fallback rejects dimensions over the decode limit");
+  const auto path = std::filesystem::temp_directory_path() /
+                    "asobmashow-image-decoder-fallback.webp";
+  {
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    output.write(reinterpret_cast<const char *>(webp.data()),
+                 static_cast<std::streamsize>(webp.size()));
+  }
+  const auto decoded = image_decode::decodeImageFile(
+      path, {.maximumDimension = 16, .maximumEncodedBytes = 1024,
+             .maximumDecodedBytes = 1024});
+  expect(decoded && decoded->width == 2 && decoded->height == 2,
+         "WebP uses the PixmapResourcePool-compatible FFmpeg fallback");
+  const auto resized = image_decode::decodeImageFile(
+      path, {.maximumDimension = 16,
+             .maximumEncodedBytes = 1024,
+             .maximumDecodedBytes = 1024,
+             .targetWidth = 1,
+             .targetHeight = 1});
+  expect(resized && resized->width == 1 && resized->height == 1,
+         "WebP FFmpeg fallback applies the requested target-size fit");
+  std::error_code error;
+  std::filesystem::remove(path, error);
+}
+
+bool waitForProbe(const gameplay::BmsResourceImageAvailabilityProbe &probe) {
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (!probe.complete() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::yield();
+  }
+  return probe.complete();
+}
+
+void testGameplayBmsResourceProbePublishesDecodedAvailabilityOffThread() {
+  const auto resources = std::filesystem::path(ASOBMASHOW_SOURCE_DIR) /
+                         "tests/fixtures/beatoraja_skin/resources";
+  const auto temporary =
+      std::filesystem::temp_directory_path() /
+      ("asobmashow-gameplay-image-probe-" +
+       std::to_string(std::chrono::steady_clock::now()
+                          .time_since_epoch()
+                          .count()));
+  std::filesystem::create_directories(temporary);
+  std::filesystem::copy_file(resources / "fixture.png",
+                             temporary / "fixture.png");
+  {
+    std::ofstream(temporary / "chart.bms") << "#TITLE probe\n";
+    std::ofstream(temporary / "corrupt-stage.png", std::ios::binary)
+        << "not an encoded image";
+  }
+  bms_parser::ChartMeta meta;
+  meta.BmsPath = temporary / "chart.bms";
+  const auto decode = [](const std::filesystem::path &path,
+                         std::stop_token stop) {
+    return image_decode::decodeImageFile(
+               path, {.maximumDimension = 40,
+                      .maximumEncodedBytes = 1024U * 1024U,
+                      .maximumDecodedBytes = 3200,
+                      .stop = stop})
+        .has_value();
+  };
+
+  const auto callerThread = std::this_thread::get_id();
+  std::atomic_bool decodedOffCallerThread{false};
+  gameplay::BmsResourceImageAvailabilityProbe valid;
+  valid.start(meta, "fixture.png", [&](const std::filesystem::path &path,
+                                        std::stop_token stop) {
+    decodedOffCallerThread.store(std::this_thread::get_id() != callerThread,
+                                 std::memory_order_release);
+    return decode(path, stop);
+  });
+  expect(waitForProbe(valid) && valid.available() &&
+             decodedOffCallerThread.load(std::memory_order_acquire),
+         "gameplay BMS image availability publishes a successful decode "
+         "without blocking the gameplay caller");
+
+  gameplay::BmsResourceImageAvailabilityProbe invalid;
+  invalid.start(meta, "corrupt-stage.png", decode);
+  expect(waitForProbe(invalid) && !invalid.available(),
+         "gameplay BMS image availability stays false when an existing "
+         "resource cannot be decoded");
+
+  std::atomic_bool cancellationStarted{false};
+  std::atomic_bool cancellationObserved{false};
+  {
+    gameplay::BmsResourceImageAvailabilityProbe cancelled;
+    cancelled.start(meta, "fixture.png",
+                    [&](const std::filesystem::path &, std::stop_token stop) {
+                      cancellationStarted.store(true,
+                                                std::memory_order_release);
+                      while (!stop.stop_requested()) {
+                        std::this_thread::yield();
+                      }
+                      cancellationObserved.store(true,
+                                                 std::memory_order_release);
+                      return false;
+                    });
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!cancellationStarted.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::yield();
+    }
+  }
+  expect(cancellationObserved.load(std::memory_order_acquire),
+         "destroying a gameplay BMS image probe cancels its decoder worker");
+
+  std::error_code error;
+  std::filesystem::remove_all(temporary, error);
+}
+
 }
 
 int main() {
@@ -174,6 +324,22 @@ int main() {
       {0x78, 0x9c, 0x63, 0x60, 0x60, 0x60, 0x64, 0x80, 0x60, 0x36, 0x13,
        0x21, 0x00, 0x00, 0xac, 0x00, 0x4f},
       {0x11, 0x22, 0x33, 0x44});
+
+  // WBMP is the standard JDK ImageIO reader not covered by LibGDX's native
+  // Pixmap loaders or stb. PixmapResourcePool reaches it on the stagefile and
+  // backbmp fallback path. This is a 2x1 Type-0 WBMP with one packed pixel
+  // byte.
+  const std::vector<std::byte> wbmp = {
+      std::byte{0x00}, std::byte{0x00}, std::byte{0x02},
+      std::byte{0x01}, std::byte{0x80}};
+  const auto decodedWbmp = image_decode::decodeImageMemory(
+      wbmp, {.maximumDimension = 16, .maximumEncodedBytes = 1024,
+             .maximumDecodedBytes = 1024});
+  expect(decodedWbmp && decodedWbmp->valid() && decodedWbmp->width == 2 &&
+             decodedWbmp->height == 1,
+         "standard JDK ImageIO WBMP fallback decodes BMS image resources");
   verifyOptionalCimTree();
+  testWebpFfmpegFallback();
+  testGameplayBmsResourceProbePublishesDecodedAvailabilityOffThread();
   return failures == 0 ? 0 : 1;
 }

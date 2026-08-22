@@ -83,9 +83,63 @@ return {
     {
       id = "rate-slider", src = "atlas",
       x = 0, y = 0, w = 10, h = 10,
-      angle = 1, range = 90, type = 800, changeable = false,
+      -- Selector 17 is the shared, source-defined master-volume rate. The
+      -- cross-format matrix compares this overlap without treating Lua-only
+      -- callbacks or LR2-only command families as equivalent.
+      angle = 1, range = 90, type = 17, changeable = false,
     },
   },
+
+  judgegraph = {
+    {
+      id = "judge-distribution", type = 2, delay = 750,
+      backTexOff = 1, orderReverse = 1, noGap = 1, noGapX = 1,
+    },
+  },
+
+  bpmgraph = {{
+    id = "bpmgraph-all", delay = 30, lineWidth = 3,
+    mainBPMColor = "010203", minBPMColor = "111213",
+    maxBPMColor = "212223", otherBPMColor = "313233",
+    stopLineColor = "414243", transitionLineColor = "515253",
+  }},
+
+  gaugegraph = {{
+    id = "gaugegraph-all",
+    color = {
+      "01020304", "11121314", "21222324", "31323334",
+      "41424344", "51525354", "61626364", "71727374",
+      "81828384", "91929394", "a1a2a3a4", "b1b2b3b4",
+      "c1c2c3c4", "d1d2d3d4", "e1e2e3e4", "f1f2f3f4",
+      "10203040", "20304050", "30405060", "40506070",
+      "50607080", "60708090", "708090a0", "8090a0b0",
+    },
+  }},
+
+  timingvisualizer = {{
+    id = "timing-all", width = 402, judgeWidthMillis = 170,
+    lineWidth = 4, lineColor = "01020304", centerColor = "11121314",
+    PGColor = "21222324", GRColor = "31323334", GDColor = "41424344",
+    BDColor = "51525354", PRColor = "61626364",
+    transparent = 0, drawDecay = 0,
+  }},
+
+  hiterrorvisualizer = {{
+    id = "hiterror-all", width = 401, judgeWidthMillis = 160,
+    lineWidth = 3, colorMode = 0, hiterrorMode = 0, emaMode = 2,
+    lineColor = "01020304", centerColor = "11121314",
+    PGColor = "21222324", GRColor = "31323334", GDColor = "41424344",
+    BDColor = "51525354", PRColor = "61626364", emaColor = "71727374",
+    alpha = 0.25, windowLength = 40, transparent = 0, drawDecay = 0,
+  }},
+
+  timingdistributiongraph = {{
+    id = "timing-distribution-all", width = 403, lineWidth = 3,
+    graphColor = "01020304", averageColor = "11121314",
+    devColor = "21222324", PGColor = "31323334", GRColor = "41424344",
+    GDColor = "51525354", BDColor = "61626364", PRColor = "71727374",
+    drawAverage = 0, drawDev = 0,
+  }},
 
   note = {
     id = "notes",
@@ -123,8 +177,37 @@ return {
     {id = "state-set", dst = {{}}},
     {id = "score", dst = {{x = 30, y = 40, w = 8, h = 12}}},
     {id = "ratio", dst = {{x = 50, y = 60, w = 8, h = 12}}},
-    {id = "rate-slider", dst = {{x = 70, y = 80, w = 10, h = 10}}},
+    {id = "rate-slider", dst = {
+      {time = 0, x = 10, y = 20, w = 100, h = 50,
+       a = 255, r = 10, g = 20, b = 30, angle = 0},
+      {time = 1500, x = 110, y = 70, w = 150, h = 80,
+       a = 128, r = 100, g = 110, b = 120, angle = 30},
+    }},
     {id = "notes", dst = {{time = 0}}},
     {id = "optional-missing", dst = {{}}},
+    {id = "judge-distribution", dst = {
+      {time = 0, x = 10, y = 20, w = 100, h = 50, a = 255, r = 10, g = 20, b = 30, angle = 0},
+      {time = 1500, x = 110, y = 70, w = 150, h = 80, a = 128, r = 100, g = 110, b = 120, angle = 30},
+    }},
+    {id = "bpmgraph-all", dst = {
+      {time = 0, x = 10, y = 20, w = 100, h = 50, a = 255, r = 10, g = 20, b = 30, angle = 0},
+      {time = 1500, x = 110, y = 70, w = 150, h = 80, a = 128, r = 100, g = 110, b = 120, angle = 30},
+    }},
+    {id = "gaugegraph-all", dst = {
+      {time = 0, x = 10, y = 20, w = 100, h = 50, a = 255, r = 10, g = 20, b = 30, angle = 0},
+      {time = 1500, x = 110, y = 70, w = 150, h = 80, a = 128, r = 100, g = 110, b = 120, angle = 30},
+    }},
+    {id = "timing-all", dst = {
+      {time = 0, x = 10, y = 20, w = 100, h = 50, a = 255, r = 10, g = 20, b = 30, angle = 0},
+      {time = 1500, x = 110, y = 70, w = 150, h = 80, a = 128, r = 100, g = 110, b = 120, angle = 30},
+    }},
+    {id = "hiterror-all", dst = {
+      {time = 0, x = 10, y = 20, w = 100, h = 50, a = 255, r = 10, g = 20, b = 30, angle = 0},
+      {time = 1500, x = 110, y = 70, w = 150, h = 80, a = 128, r = 100, g = 110, b = 120, angle = 30},
+    }},
+    {id = "timing-distribution-all", dst = {
+      {time = 0, x = 10, y = 20, w = 100, h = 50, a = 255, r = 10, g = 20, b = 30, angle = 0},
+      {time = 1500, x = 110, y = 70, w = 150, h = 80, a = 128, r = 100, g = 110, b = 120, angle = 30},
+    }},
   },
 }

@@ -964,7 +964,7 @@ void testClosedLegacyFacadeIsExactAndDiagnosed() {
     return;
   }
   expect(harness->runtime->loadHeader().value.has_value(),
-         "exact File/Gdx legacy surface executes");
+         "exact File/Gdx/Input/Controller legacy surface executes");
   expect(fs::is_directory(harness->overlayRoot / "skin/legacy-created"),
          "legacy mkdir creates only an overlay directory");
 

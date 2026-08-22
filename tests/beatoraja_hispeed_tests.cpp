@@ -111,6 +111,11 @@ void verifyLiveDurationAndGreenNumber() {
   expect(scrolledDuration.has_value() && *scrolledDuration == 660,
          "live duration divides by the current static #SCROLL rate");
 
+  const auto speedObjectDuration = gameplay_hispeed::liveDurationMilliseconds(
+      120.0, 6.06F, 0, true, 1.0, 0.5);
+  expect(speedObjectDuration.has_value() && *speedObjectDuration == 660,
+         "live duration separately divides by LaneRenderer SPEED multiplier");
+
   const auto zeroHispeedCovered = gameplay_hispeed::liveDurationMilliseconds(
       120.0, 0.0F, 100, true, 1.0);
   const auto zeroHispeedUncovered =

@@ -16,6 +16,8 @@ public:
   bgfx::TextureHandle create(const image_decode::DecodedImageData &,
                              SkinSafetyPolicy) override;
   void destroy(bgfx::TextureHandle) noexcept override;
+  bool update(bgfx::TextureHandle,
+              const image_decode::DecodedImageData &) override;
   [[nodiscard]] bool ownsCurrentThread() const noexcept override;
   [[nodiscard]] int maximumTextureDimension() const noexcept override;
   [[nodiscard]] int maximumTextureDimension(

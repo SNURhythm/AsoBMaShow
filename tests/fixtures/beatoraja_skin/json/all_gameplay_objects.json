@@ -1,0 +1,35 @@
+{
+  "type": 0,
+  "name": "Cross-format gameplay overlap",
+  "author": "AsoBMaShow tests",
+  "w": 1280,
+  "h": 720,
+  "source": [
+    {"id": "atlas", "path": "assets/atlas.png"}
+  ],
+  "slider": [
+    {
+      "id": "rate-slider",
+      "src": "atlas",
+      "x": 0,
+      "y": 0,
+      "w": 10,
+      "h": 10,
+      "angle": 1,
+      "range": 90,
+      "type": 17,
+      "changeable": false
+    }
+  ],
+  "destination": [
+    {
+      "id": "rate-slider",
+      "dst": [
+        {"time": 0, "x": 10, "y": 20, "w": 100, "h": 50,
+         "a": 255, "r": 10, "g": 20, "b": 30, "angle": 0},
+        {"time": 1500, "x": 110, "y": 70, "w": 150, "h": 80,
+         "a": 128, "r": 100, "g": 110, "b": 120, "angle": 30}
+      ]
+    }
+  ]
+}

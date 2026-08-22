@@ -1,0 +1,4 @@
+#IMAGE,included-before.png
+#INCLUDE,LR2files\Theme\FixtureSkin\header\nested.lr2skin
+#image,included-after.png
+#RESOLUTION,3

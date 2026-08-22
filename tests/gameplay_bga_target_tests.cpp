@@ -9,6 +9,7 @@
 #include "rendering/UniformCache.h"
 #include "skin/beatoraja/SkinDestinationEvaluator.cpp"
 #include "utils/Stopwatch.h"
+#include "video/VideoPlayer.h"
 
 #include <array>
 #include <atomic>
@@ -1287,6 +1288,27 @@ void testMissCompositionSuppressesBaseAndLayerWithoutFallback() {
           "backward BGA time recomputes the selected miss frame without mutation");
 }
 
+void testRealVideoAdapterHonorsBoundedGeneratedFixture() {
+  Stopwatch stopwatch;
+  stopwatch.start();
+  VideoPlayer player(&stopwatch);
+  std::atomic_bool cancelled{false};
+  const auto path = std::filesystem::path(ASOBMASHOW_SOURCE_DIR) /
+                    "tests/fixtures/beatoraja_skin/charts/"
+                    "acceptance_bga_video.mp4";
+  const VideoPlayer::LoadLimits limits{
+      .maximumDimension = 8,
+      .maximumRgbaBytes = 8U * 8U * 4U,
+      .maximumDecodedBytes = 4U * 1024U,
+      .requirePreallocationBounds = true};
+  require(player.loadVideo(path.string(), cancelled, limits) &&
+              player.getFrameWidth() == 2 && player.getFrameHeight() == 2 &&
+              player.getReservedDecodedBytes() > 0 &&
+              player.getReservedDecodedBytes() <= limits.maximumDecodedBytes,
+          "real codec adapter opens the deterministic generated 2x2 fixture "
+          "within its pre-allocation decoded budget");
+}
+
 } // namespace
 
 int main() {
@@ -1324,6 +1346,7 @@ int main() {
   testComboZeroUsesBgaClockAndRepeatedZeroRetriggers();
   testZeroStartAndFrameBoundariesAreDeterministic();
   testMissCompositionSuppressesBaseAndLayerWithoutFallback();
+  testRealVideoAdapterHonorsBoundedGeneratedFixture();
   rendering::ShaderManager::getInstance().release();
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::shutdown();

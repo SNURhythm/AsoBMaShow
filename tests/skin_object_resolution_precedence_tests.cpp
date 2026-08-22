@@ -41,6 +41,12 @@ SkinObjectResolutionStatus expectedStatus(SkinObjectResolutionKind kind) {
   case SkinObjectResolutionKind::Text:
   case SkinObjectResolutionKind::Slider:
   case SkinObjectResolutionKind::Graph:
+  case SkinObjectResolutionKind::GaugeGraph:
+  case SkinObjectResolutionKind::JudgeGraph:
+  case SkinObjectResolutionKind::BpmGraph:
+  case SkinObjectResolutionKind::HitErrorVisualizer:
+  case SkinObjectResolutionKind::TimingVisualizer:
+  case SkinObjectResolutionKind::TimingDistributionGraph:
   case SkinObjectResolutionKind::Gauge:
   case SkinObjectResolutionKind::Note:
   case SkinObjectResolutionKind::HiddenCover:
@@ -181,8 +187,9 @@ void testGameplaySpecialChainUsesPinnedOrder() {
       candidate(SkinObjectResolutionKind::Note, 1),
       candidate(SkinObjectResolutionKind::HiddenCover, 2),
       candidate(SkinObjectResolutionKind::LiftCover, 3),
-      candidate(SkinObjectResolutionKind::Bga, 4),
-      candidate(SkinObjectResolutionKind::Judge, 5),
+      candidate(SkinObjectResolutionKind::Practice, 4),
+      candidate(SkinObjectResolutionKind::Bga, 5),
+      candidate(SkinObjectResolutionKind::Judge, 6),
   };
   expectFound(resolveSkinObjectPrecedence(candidates),
               SkinObjectResolutionKind::Note, 1,
@@ -199,13 +206,12 @@ void testGameplaySpecialChainUsesPinnedOrder() {
   }
 }
 
-void testUnsupportedAndNotFoundStayDistinct() {
-  const std::array unsupported{candidate(SkinObjectResolutionKind::Practice, 7)};
-  const auto unsupportedResult = resolveSkinObjectPrecedence(unsupported);
-  expect(unsupportedResult.status == SkinObjectResolutionStatus::Unsupported &&
-             unsupportedResult.kind == SkinObjectResolutionKind::Practice &&
-             unsupportedResult.authoredIndex == 7,
-         "an unsupported pinned definition is distinct from no match");
+void testPracticeIsSupportedAndNotFoundStaysDistinct() {
+  const std::array practice{candidate(SkinObjectResolutionKind::Practice, 7)};
+  expectFound(resolveSkinObjectPrecedence(practice),
+              SkinObjectResolutionKind::Practice, 7,
+              "the pinned practice definition is a supported gameplay "
+              "special");
 
   const std::array<SkinObjectResolutionCandidate, 1> unmatched{{
       {.kind = SkinObjectResolutionKind::Image, .authoredIndex = 1, .matches = false},
@@ -216,16 +222,16 @@ void testUnsupportedAndNotFoundStayDistinct() {
          "no matching candidate reports NotFound without a winner");
 }
 
-void testUnsupportedGenericStillPreemptsLaterSupportedSpecial() {
+void testGaugeGraphIsSupportedAndPreemptsLaterSpecial() {
   const std::array candidates{
       candidate(SkinObjectResolutionKind::Note, 4),
       candidate(SkinObjectResolutionKind::GaugeGraph, 2),
   };
   const auto result = resolveSkinObjectPrecedence(candidates);
-  expect(result.status == SkinObjectResolutionStatus::Unsupported &&
+  expect(result.status == SkinObjectResolutionStatus::Found &&
              result.kind == SkinObjectResolutionKind::GaugeGraph &&
              result.authoredIndex == 2,
-         "an unsupported generic wins before a later supported gameplay special");
+         "a supported GaugeGraph wins before a later gameplay special");
 }
 
 void testCandidateLimitFailsBeforeResolution() {
@@ -247,8 +253,8 @@ int main() {
   testFirstAuthoredMatchWinsWithinPinnedLoops();
   testEveryGenericPreemptsEveryGameplaySpecial();
   testGameplaySpecialChainUsesPinnedOrder();
-  testUnsupportedAndNotFoundStayDistinct();
-  testUnsupportedGenericStillPreemptsLaterSupportedSpecial();
+  testPracticeIsSupportedAndNotFoundStaysDistinct();
+  testGaugeGraphIsSupportedAndPreemptsLaterSpecial();
   testCandidateLimitFailsBeforeResolution();
   return failures == 0 ? 0 : 1;
 }

@@ -97,6 +97,19 @@ const PresentationTouchPoint *touchFor(
   return it == touches.end() ? nullptr : &*it;
 }
 
+void testGameplaySkinIrProviderNameUsesFirstConfiguredProvider() {
+  std::map<std::string, ir::IrProviderSettings> providers{
+      {"tachi", {.enabled = false}}};
+  require(gameplaySkinFirstIrProviderName(providers) == "tachi",
+          "gameplay irname retains the first persisted provider even when it "
+          "is disabled");
+
+  providers.clear();
+  require(gameplaySkinFirstIrProviderName(providers).empty(),
+          "gameplay irname remains empty when no provider configuration "
+          "exists");
+}
+
 void testChartModelOwnsStablePointerFreeValues() {
   ChartFixture fixture;
   const auto model = buildPlayfieldChartVisualModel(fixture.chart, 0);
@@ -186,6 +199,100 @@ void testLongNoteModeUsesChartThenOverridePrecedence() {
   require(defaultHead != nullptr &&
               defaultHead->longNoteMode == ChartLongNoteMode::LN,
           "undefined long-note mode has a stable classic-LN fallback");
+}
+
+void testChartModelPublishesPinnedGraphSourceShapes() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.Bpm = 120.0;
+  chart.Meta.MinBpm = 60.0;
+  chart.Meta.MaxBpm = 180.0;
+  chart.Meta.TotalNotes = 4;
+  auto *measure = new bms_parser::Measure();
+
+  auto *normal = addTimeline(*measure, 0, 0.0, 120.0);
+  normal->SetNote(1, new bms_parser::Note(1));
+  normal->SetNote(2, new bms_parser::Note(4));
+  auto *stop = addTimeline(*measure, 1'000'000, 1.0, 180.0, -0.5);
+  stop->StopLength = 144.0;
+  stop->SetNote(7, new bms_parser::Note(2));
+  addTimeline(*measure, 1'500'000, 1.5, 180.0, -0.5);
+  auto *headTimeline = addTimeline(*measure, 2'000'000, 2.0, 60.0, 4.0);
+  auto *tailTimeline = addTimeline(*measure, 4'000'000, 4.0, 60.0, 4.0);
+  auto *head = new bms_parser::LongNote(
+      3, bms_parser::LongNoteType::LongNote);
+  auto *tail = new bms_parser::LongNote(
+      3, bms_parser::LongNoteType::LongNote);
+  head->Tail = tail;
+  tail->Head = head;
+  headTimeline->SetNote(2, head);
+  tailTimeline->SetNote(2, tail);
+  auto *mine = addTimeline(*measure, 5'000'000, 5.0, 60.0, 4.0);
+  mine->SetLandmineNote(3, new bms_parser::LandmineNote(5.0F));
+  chart.Measures.push_back(measure);
+
+  const auto model = buildPlayfieldChartVisualModel(chart, 1);
+  const auto &graph = model.skinGameplayGraph;
+  require(graph.normalDistribution.size() == 7 &&
+              graph.normalDistribution[0][5] == 2 &&
+              graph.normalDistribution[1][2] == 1 &&
+              graph.normalDistribution[2][3] == 1 &&
+              graph.normalDistribution[2][4] == 0 &&
+              graph.normalDistribution[3][4] == 1 &&
+              graph.normalDistribution[4][4] == 1 &&
+              graph.normalDistribution[5][6] == 1 &&
+              graph.normalDistribution[6] == SkinNormalDistribution{},
+          "normal distribution retains the pinned seven source buckets");
+  require(graph.mainBpm == 120.0 && graph.minimumBpm == 120.0 &&
+              graph.maximumBpm == 240.0,
+          "BPM graph derives extrema from emitted BPM-scroll speeds and "
+          "ignores non-positive speeds for its minimum");
+  require(graph.bpmSeries.size() == 8 &&
+              graph.bpmSeries[0].synthetic &&
+              graph.bpmSeries[0].graphSpeed == 120.0 &&
+              graph.bpmSeries[2].chartTimeMicros == 1'000'000 &&
+              graph.bpmSeries[2].sourceOrder == 1 &&
+              graph.bpmSeries[2].bpmTimesScroll == -90.0 &&
+              graph.bpmSeries[2].stopMicros == 1'000'000 &&
+              graph.bpmSeries[2].emitsGraphPoint &&
+              graph.bpmSeries[2].graphSpeed == 0.0 &&
+              graph.bpmSeries[3].chartTimeMicros == 1'500'000 &&
+              graph.bpmSeries[3].graphSpeed == -90.0 &&
+              graph.bpmSeries[4].chartTimeMicros == 2'000'000 &&
+              graph.bpmSeries[4].graphSpeed == 240.0 &&
+              graph.bpmSeries.back().synthetic &&
+              graph.bpmSeries.back().chartTimeMicros == 5'000'000,
+          "BPM graph retains source order, negative scroll, stop, transitions, and terminal point");
+}
+
+void testVisualStateGraphSnapshotsDetachAtProducerUpdates() {
+  ChartFixture fixture;
+  const auto model = buildPlayfieldChartVisualModel(fixture.chart, 0);
+  PlayfieldVisualStateStore store(model);
+  SkinGameplayDynamicGraphState dynamic;
+  dynamic.judgementDistribution.assign(
+      model.skinGameplayGraph.judgementDistributionSeconds, {});
+  dynamic.earlyLateDistribution.assign(
+      model.skinGameplayGraph.judgementDistributionSeconds, {});
+  dynamic.judgementDistribution[0][1] = 3;
+  const auto normalIndex =
+      static_cast<std::size_t>(gaugeTypeIndex(GaugeType::Normal));
+  dynamic.gaugeHistories[normalIndex] = {20.0F, 44.0F};
+  store.applyGameplayGraphState(dynamic);
+
+  const auto captured = store.capture({.serial = 1});
+  dynamic.judgementDistribution[0][1] = 9;
+  dynamic.gaugeHistories[normalIndex].back() = 99.0F;
+  store.applyGameplayGraphState(dynamic);
+
+  require(captured.skinGameplayGraph.chart != nullptr &&
+              captured.skinGameplayGraph.dynamic != nullptr &&
+              captured.skinGameplayGraph.dynamic
+                      ->judgementDistribution[0][1] == 3 &&
+              captured.skinGameplayGraph.dynamic
+                      ->gaugeHistories[normalIndex]
+                      .back() == 44.0F,
+          "captured graph state remains immutable after a later producer update");
 }
 
 struct ObservingPresentation final : IPlayfieldPresentationEvents {
@@ -781,8 +888,11 @@ void testPresentationCaptureKeepsAnImmutableSharedNoteSnapshot() {
 } // namespace
 
 int main() {
+  testGameplaySkinIrProviderNameUsesFirstConfiguredProvider();
   testChartModelOwnsStablePointerFreeValues();
   testLongNoteModeUsesChartThenOverridePrecedence();
+  testChartModelPublishesPinnedGraphSourceShapes();
+  testVisualStateGraphSnapshotsDetachAtProducerUpdates();
   testVisualStateCaptureAndFanoutAreCoherentValueSnapshots();
   testGameplayModeAndLaneCoverAuthorityAreCapturedByValue();
   testLaneCoverAuthorityRemainsEnabledAtZeroAmount();

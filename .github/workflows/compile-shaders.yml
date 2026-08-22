@@ -37,6 +37,15 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
+      - name: Resolve Git executable for MinGW Python
+        shell: pwsh
+        run: |
+          $gitExecutable = (Get-Command git.exe -ErrorAction Stop).Source
+          if (-not (Test-Path -LiteralPath $gitExecutable -PathType Leaf)) {
+            throw "Git executable is unavailable: $gitExecutable"
+          }
+          "ASOBMASHOW_GIT_EXECUTABLE=$gitExecutable" >> $env:GITHUB_ENV
+
       - name: Resolve shader compiler cache key
         id: shaderc-cache-key
         shell: bash

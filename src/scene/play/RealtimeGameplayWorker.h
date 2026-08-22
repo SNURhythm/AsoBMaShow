@@ -101,6 +101,7 @@ struct RealtimeGameplaySnapshot {
   std::vector<bool> lanePressed;
   std::vector<bool> longNoteHoldingByLane;
   GameplayAttemptSnapshot attempt;
+  SkinGameplayDynamicGraphState skinGameplayGraph;
   GaugeStateSnapshot gaugeState;
   std::array<JudgementFastSlowCount, JudgementCount> fastSlowCounts{};
   int fastCount = 0;

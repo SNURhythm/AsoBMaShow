@@ -39,7 +39,93 @@ std::size_t Session::abandonedAttemptCount() const {
   return abandonedAttemptCount_;
 }
 
-const Configuration &Session::configuration() const { return configuration_; }
+const Configuration &Session::configuration() const {
+  if (skinMenuAttemptConfiguration_.has_value()) {
+    return *skinMenuAttemptConfiguration_;
+  }
+  return skinMenu_.has_value() ? skinMenu_->configuration() : configuration_;
+}
+
+void Session::configureSkinMenu(SkinMenuInputs inputs) {
+  skinMenuAttemptConfiguration_.reset();
+  if (skinMenu_.has_value()) {
+    skinMenu_->refreshInputs(std::move(inputs));
+  } else {
+    skinMenu_.emplace(configuration_, std::move(inputs));
+  }
+  skinMenu_->setItemScrollPosition(skinItemScrollPosition_);
+}
+
+std::optional<SkinMenuAttemptPlan>
+Session::skinMenuAttemptPlan() const noexcept {
+  return skinMenu_.has_value()
+             ? std::optional(practice::skinMenuAttemptPlan(skinMenu_->property()))
+             : std::nullopt;
+}
+
+std::optional<SkinMenuAttemptPlan> Session::beginSkinMenuAttempt() {
+  auto attempt = skinMenuAttemptPlan();
+  if (attempt.has_value()) {
+    beginSkinMenuAttempt(*attempt);
+  }
+  return attempt;
+}
+
+void Session::beginSkinMenuAttempt(const SkinMenuAttemptPlan &attempt) {
+  Configuration configuration = skinMenu_.has_value()
+                                  ? skinMenu_->configuration()
+                                  : configuration_;
+  configuration.startMicros = attempt.startMicros;
+  configuration.endMicros = attempt.endMicros;
+  configuration.gaugeType = attempt.gaugeType;
+  configuration.startingGaugePercent = attempt.startingGaugePercent;
+  configuration.playback = attempt.playback;
+  skinMenuAttemptConfiguration_ = std::move(configuration);
+  skinMenuAttemptActivated_ = true;
+}
+
+bool Session::hasActivatedSkinMenuAttempt() const noexcept {
+  return skinMenuAttemptActivated_;
+}
+
+void Session::setSkinItemScrollPosition(float position) noexcept {
+  skinItemScrollPosition_ = position;
+  if (skinMenu_.has_value()) {
+    skinMenu_->setItemScrollPosition(position);
+  }
+}
+
+void Session::setSkinVisibleItemCount(int count) noexcept {
+  if (skinMenu_.has_value()) {
+    skinMenu_->setVisibleItemCount(count);
+  }
+}
+
+bool Session::changeSkinMenuVisibleItem(std::size_t index, bool increment) {
+  return skinMenu_.has_value() &&
+         skinMenu_->changeVisibleItem(index, increment);
+}
+
+SkinMenuState Session::skinMenuState() const {
+  return skinMenu_.has_value() ? skinMenu_->skinMenuState() : SkinMenuState{};
+}
+
+SkinMenuState Session::skinMenuState(const SkinMenuInputs &inputs) const {
+  return skinMenu_.has_value()
+             ? skinMenu_->skinMenuState()
+             : buildSkinMenuState(configuration_, inputs,
+                                  skinItemScrollPosition_);
+}
+
+Session Session::freshForRetry() const {
+  Session result(configuration_);
+  result.skinMenuAttemptActivated_ = skinMenuAttemptActivated_;
+  if (skinMenuAttemptActivated_) {
+    result.skinMenu_ = skinMenu_;
+    result.skinItemScrollPosition_ = skinItemScrollPosition_;
+  }
+  return result;
+}
 
 const ReplayData *
 completedAttemptForGhost(const Session *session,

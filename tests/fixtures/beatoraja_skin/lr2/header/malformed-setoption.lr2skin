@@ -1,0 +1,14 @@
+#INFORMATION,0,Malformed option state,fixture
+#RESOLUTION,0
+#IMAGE,resources/fixture.png
+#SETOPTION,id=777,1
+#IF,777
+#INCLUDE,missing-after-malformed.inc
+#ENDIF
+#INCLUDE,malformed-setoption.inc
+#SETOPTION,+778,+1
+#IF,778
+#INCLUDE,plus-option.inc
+#ENDIF
+#SRC_IMAGE,0,0,0,0,40,20,1,1,0,0
+#DST_IMAGE,0,0,10,360,40,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0

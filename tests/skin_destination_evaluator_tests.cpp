@@ -58,7 +58,7 @@ SkinDestinationBody animated(int acceleration = 0) {
 SkinDestinationEvaluationInputs
 inputs(std::int64_t nowMicros, std::int64_t startMicros,
        std::span<const bool> conditions = {},
-       std::span<const ConfigOffset> offsets = {},
+       std::span<const SkinRuntimeOffset> offsets = {},
        std::optional<bool> timerOff = std::nullopt) {
   return {.nowMicros = nowMicros,
           .timerStartMicros = startMicros,
@@ -168,7 +168,7 @@ void testConditionsAndOrderedOffsets() {
 
   body.conditions.clear();
   body.drawCondition.reset();
-  const std::array<ConfigOffset, 2> offsets = {
+  const std::array<SkinRuntimeOffset, 2> offsets = {
       {{.x = 14, .y = 7, .w = 20, .h = 10, .r = 10, .a = 0},
        {.x = 0, .y = 0, .w = 0, .h = 0, .r = 5, .a = 100}}};
   auto adjusted =
@@ -209,14 +209,14 @@ void testObjectAccelerationAndPinnedOffsetAlphaBranches() {
   auto fixedColor = animated();
   fixedColor.frames[0].rgba = {1, 2, 3, 100};
   fixedColor.frames[1].rgba = {1, 2, 3, 100};
-  const std::array<ConfigOffset, 1> raiseAlpha = {{{.a = 200}}};
+  const std::array<SkinRuntimeOffset, 1> raiseAlpha = {{{.a = 200}}};
   const auto fixedMidpoint = evaluateSkinDestinationAuthored(
       fixedColor, inputs(600'000, 0, {}, raiseAlpha));
   expect(fixedMidpoint.geometry && near(fixedMidpoint.geometry->rgba[3], 1.0),
          "fixed color applies and clamps alpha offsets even mid-interval");
 
   auto stepped = animated(3);
-  const std::array<ConfigOffset, 1> lowerAlpha = {{{.a = -200}}};
+  const std::array<SkinRuntimeOffset, 1> lowerAlpha = {{{.a = -200}}};
   const auto steppedMidpoint = evaluateSkinDestinationAuthored(
       stepped, inputs(600'000, 0, {}, lowerAlpha));
   expect(steppedMidpoint.geometry &&
@@ -226,7 +226,7 @@ void testObjectAccelerationAndPinnedOffsetAlphaBranches() {
 
 void testFractionalOffsetAndClipSuppression() {
   auto body = animated();
-  const std::array<ConfigOffset, 1> odd = {
+  const std::array<SkinRuntimeOffset, 1> odd = {
       {{.x = 3, .y = -5, .w = 5, .h = -3}}};
   const auto halfShift =
       evaluateSkinDestinationAuthored(body, inputs(100'000, 0, {}, odd));
@@ -237,12 +237,12 @@ void testFractionalOffsetAndClipSuppression() {
          "odd positive and negative offsets preserve Java floating half-unit "
          "shifts");
 
-  const std::array<ConfigOffset, 1> zeroWidth = {{{.w = -60}}};
+  const std::array<SkinRuntimeOffset, 1> zeroWidth = {{{.w = -60}}};
   const auto noWidthClip =
       evaluateSkinDestinationAuthored(body, inputs(100'000, 0, {}, zeroWidth));
   expect(noWidthClip.geometry && !noWidthClip.geometry->clip,
          "zero-width offset-adjusted clips are disabled");
-  const std::array<ConfigOffset, 1> negativeHeight = {{{.h = -21}}};
+  const std::array<SkinRuntimeOffset, 1> negativeHeight = {{{.h = -21}}};
   const auto noHeightClip = evaluateSkinDestinationAuthored(
       body, inputs(100'000, 0, {}, negativeHeight));
   expect(noHeightClip.geometry && !noHeightClip.geometry->clip,

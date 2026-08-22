@@ -1,18 +1,27 @@
 #include "skin/beatoraja/PlaySkinSession.h"
 
+#include "ArchiveFile.h"
+
 #include "rendering/SkinQuadBatchRenderer.h"
 #include "scene/play/PlayfieldPresentation.h"
 #include "skin/SkinStoragePaths.h"
 #include "skin/SkinConfigurationWriteQueue.h"
 #include "skin/beatoraja/GameplaySkinValidator.h"
+#include "skin/beatoraja/GameplaySkinBuiltinCatalog.h"
 #include "skin/beatoraja/LuaSkinFileSystem.h"
+#include "skin/beatoraja/LuaSkinAudioHost.h"
 #include "skin/beatoraja/PlaySkinViewport.h"
+#include "skin/beatoraja/SkinModelValidator.h"
 #include "skin/beatoraja/SyntheticReplayGhostOverlay.h"
 #include "skin/beatoraja/SkinResourceCatalog.h"
 #include "skin/package/SkinAliasDetector.h"
+#include "skin/package/SkinArchiveImporter.h"
 #include "skin/package/SkinPathPolicy.h"
 #include "skin/package/SkinTreeSnapshotter.h"
 #include "view/View.h"
+
+#include <archive.h>
+#include <archive_entry.h>
 
 #include <algorithm>
 #include <array>
@@ -28,6 +37,7 @@
 #include <new>
 #include <optional>
 #include <span>
+#include <set>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -92,6 +102,36 @@ void writeText(const fs::path &path, std::string_view value) {
   output.write(value.data(), static_cast<std::streamsize>(value.size()));
 }
 
+void writeStoredZip(const fs::path &path,
+                    const std::vector<std::pair<std::string,
+                                                std::vector<unsigned char>>>
+                        &members) {
+  archive *writer = archive_write_new();
+  expect(writer != nullptr && archive_write_set_format_zip(writer) == ARCHIVE_OK &&
+             archive_write_set_options(writer, "zip:compression=store") ==
+                 ARCHIVE_OK &&
+             archive_write_open_filename(writer, path.string().c_str()) ==
+                 ARCHIVE_OK,
+         "chart resource ZIP opens");
+  if (writer == nullptr) return;
+  for (const auto &[name, bytes] : members) {
+    archive_entry *entry = archive_entry_new();
+    archive_entry_set_pathname(entry, name.c_str());
+    archive_entry_set_filetype(entry, AE_IFREG);
+    archive_entry_set_perm(entry, 0644);
+    archive_entry_set_size(entry, static_cast<la_int64_t>(bytes.size()));
+    expect(archive_write_header(writer, entry) == ARCHIVE_OK &&
+               archive_write_data(writer, bytes.data(), bytes.size()) ==
+                   static_cast<la_ssize_t>(bytes.size()) &&
+               archive_write_finish_entry(writer) == ARCHIVE_OK,
+           "chart resource ZIP member writes");
+    archive_entry_free(entry);
+  }
+  expect(archive_write_close(writer) == ARCHIVE_OK,
+         "chart resource ZIP closes");
+  archive_write_free(writer);
+}
+
 class TempDirectory final {
 public:
   TempDirectory() {
@@ -135,6 +175,34 @@ public:
     resources_.emplace(id, std::move(resource));
   }
 
+  void addTextAtlas(SkinObjectId object, SkinTextAtlasId id) {
+    PreparedSkinTextAtlas atlas;
+    atlas.id = id;
+    atlas.texture = bgfx::TextureHandle{static_cast<std::uint16_t>(id)};
+    atlas.width = 32;
+    atlas.height = 16;
+    atlas.key.pointSize = 10;
+    atlas.ascent = 8;
+    atlas.capHeight = 8;
+    atlas.descent = -2;
+    atlas.lineHeight = 10;
+    for (const auto [codepoint, x] :
+         std::array<std::pair<char32_t, int>, 2>{{{U'A', 0}, {U'B', 8}}}) {
+      atlas.glyphs.emplace(
+          codepoint,
+          SkinPreparedGlyphMetrics{.region = {.x = x,
+                                               .y = 0,
+                                               .w = 8,
+                                               .h = 10},
+                                   .bearingX = 0,
+                                   .bearingY = 8,
+                                   .advance = 8,
+                                   .layoutOffsetY = -10});
+    }
+    textAtlasesByObject_.emplace(object, id);
+    atlases_.emplace(id, std::move(atlas));
+  }
+
   const PreparedSkinResource *find(SkinResourceId id) const noexcept override {
     const auto found = resources_.find(id);
     return found == resources_.end() ? nullptr : &found->second;
@@ -154,16 +222,21 @@ public:
                : nullptr;
   }
   const PreparedSkinTextAtlas *
-  findTextAtlas(SkinTextAtlasId) const noexcept override {
-    return nullptr;
+  findTextAtlas(SkinTextAtlasId id) const noexcept override {
+    const auto found = atlases_.find(id);
+    return found == atlases_.end() ? nullptr : &found->second;
   }
   const PreparedSkinTextAtlas *
-  findTextAtlasForObject(SkinObjectId) const noexcept override {
-    return nullptr;
+  findTextAtlasForObject(SkinObjectId object) const noexcept override {
+    const auto found = textAtlasesByObject_.find(object);
+    return found == textAtlasesByObject_.end() ? nullptr
+                                               : findTextAtlas(found->second);
   }
 
 private:
   std::map<SkinResourceId, PreparedSkinResource> resources_;
+  std::map<SkinTextAtlasId, PreparedSkinTextAtlas> atlases_;
+  std::map<SkinObjectId, SkinTextAtlasId> textAtlasesByObject_;
 };
 
 class SessionQuadBackend final : public rendering::SkinQuadBatchBackend {
@@ -314,7 +387,9 @@ public:
   stringProperty(const SkinBuiltinPropertySelector &) override {
     return {};
   }
-  SkinPropertyLookup<ConfigOffset> offsetProperty(int) override { return {}; }
+  SkinPropertyLookup<SkinRuntimeOffset> offsetProperty(int) override {
+    return {};
+  }
   std::int64_t timerProperty(const SkinBuiltinPropertySelector &) override {
     return INT64_MIN;
   }
@@ -367,6 +442,23 @@ bool hasDiagnostic(const PlaySkinFrameTransactionResult &result,
          hasDiagnostic(result.evaluation.diagnostics, code);
 }
 
+void testCallbackBindingWithoutRuntimeFailsValidation() {
+  BeatorajaSkinModel model;
+  model.header.type = 0;
+  model.booleanProperties.push_back(
+      {.id = SkinBooleanPropertyId{1},
+       .source = LuaCallbackId{.slot = 1, .generation = 1},
+       .authoredOrdinal = 1});
+  SkinModelValidator validator;
+  const auto result = validator.validate(
+      std::move(model),
+      {.builtins = gameplaySkinBuiltinCatalog(), .callbacks = std::nullopt});
+  expect(!result.model && result.criticalFailure &&
+             hasDiagnostic(result.diagnostics,
+                           "skin.model.callback_runtime_missing"),
+         "callback binding without a live Lua runtime fails closed");
+}
+
 PreparedGameplayBgaFrame bgaFrame(std::uint64_t sequence) {
   return {.sequence = sequence,
           .composition = GameplayBgaComposition::BaseThenLayer,
@@ -387,8 +479,15 @@ public:
   SessionTextureDevice() : owner_(std::this_thread::get_id()) {}
 
   bgfx::TextureHandle
-  create(const image_decode::DecodedImageData &) override {
+  create(const image_decode::DecodedImageData &image) override {
     ++createCalls;
+    CreatedImage created{.width = image.width, .height = image.height};
+    if (image.rgba) {
+      const std::size_t retained = std::min<std::size_t>(8, image.rgba->size());
+      created.firstPixels.assign(image.rgba->begin(),
+                                 image.rgba->begin() + retained);
+    }
+    createdImages.push_back(std::move(created));
     if (!ownsCurrentThread()) {
       ++wrongThreadOperations;
     }
@@ -425,6 +524,12 @@ public:
   std::size_t destroyCalls = 0;
   std::size_t wrongThreadOperations = 0;
   bool revisionLiveDuringDestroy = true;
+  struct CreatedImage {
+    int width = 0;
+    int height = 0;
+    std::vector<std::uint8_t> firstPixels;
+  };
+  std::vector<CreatedImage> createdImages;
 
 private:
   std::thread::id owner_;
@@ -434,9 +539,149 @@ private:
   std::stop_source *stopSource = nullptr;
 };
 
+class SessionMovieDevice final : public SkinMovieDevice {
+public:
+  std::optional<SkinMovieLoadResult>
+  load(const fs::path &path, const SkinMovieLoadLimits &limits,
+       std::stop_token) override {
+    ++loadCalls;
+    lastLimits = limits;
+    loadedPaths.push_back(path);
+    pathExistedDuringLoad = pathExistedDuringLoad && fs::is_regular_file(path);
+    const auto layout = skinMovieDecodedLayout(80, 40, limits);
+    if (!layout) {
+      return std::nullopt;
+    }
+    const auto handle = SkinMoviePlayerHandle{++nextHandle_};
+    live.push_back(handle);
+    if (stopAfterLoad_ != nullptr) {
+      stopAfterLoad_->request_stop();
+    }
+    return SkinMovieLoadResult{
+        .handle = handle,
+        .width = 80,
+        .height = 40,
+        .durationMillis = 1'000,
+        .decodedBytes = layout->residentBytes};
+  }
+
+  void destroy(SkinMoviePlayerHandle handle) noexcept override {
+    ++destroyCalls;
+    const auto found = std::ranges::find(live, handle);
+    if (found != live.end()) {
+      live.erase(found);
+    }
+  }
+
+  bool ownsCurrentThread() const noexcept override { return true; }
+  void beginFrame() noexcept override { ++beginFrameCalls; }
+  SkinMovieFramePreparationResult
+  prepareFrame(SkinMoviePlayerHandle, const SkinMovieCommand &command,
+               const PlaySkinViewport &) override {
+    preparedTimes.push_back(command.sourceTimeMillis);
+    return {.ready = true, .drawable = true};
+  }
+  void discardFrame() noexcept override { ++discardFrameCalls; }
+  void commitFrame() noexcept override { ++commitFrameCalls; }
+  void submitPrepared(std::size_t index) noexcept override {
+    submittedIndices.push_back(index);
+  }
+
+  void stopAfterLoad(std::stop_source &source) noexcept {
+    stopAfterLoad_ = &source;
+  }
+
+  std::size_t loadCalls = 0;
+  std::size_t destroyCalls = 0;
+  std::size_t beginFrameCalls = 0;
+  std::size_t discardFrameCalls = 0;
+  std::size_t commitFrameCalls = 0;
+  SkinMovieLoadLimits lastLimits;
+  bool pathExistedDuringLoad = true;
+  std::vector<fs::path> loadedPaths;
+  std::vector<SkinMoviePlayerHandle> live;
+  std::vector<std::int64_t> preparedTimes;
+  std::vector<std::size_t> submittedIndices;
+
+private:
+  std::uint64_t nextHandle_ = 0;
+  std::stop_source *stopAfterLoad_ = nullptr;
+};
+
+struct SessionAudioState {
+  std::vector<fs::path> loads;
+  std::vector<LuaSkinAudioIdentity> plays;
+  std::vector<LuaSkinAudioIdentity> stops;
+  std::vector<LuaSkinAudioIdentity> disposals;
+  bool backendDestroyed = false;
+};
+
+class SessionAudioBackend final : public LuaSkinAudioBackend {
+public:
+  SessionAudioBackend(std::shared_ptr<SessionAudioState> state,
+                      std::shared_ptr<SkinLiveResourceCounters> counters)
+      : state_(std::move(state)), counters_(std::move(counters)) {}
+  ~SessionAudioBackend() override { state_->backendDestroyed = true; }
+
+  float systemVolume() const noexcept override { return 0.4F; }
+  std::optional<LuaSkinAudioIdentity>
+  load(const fs::path &path, std::stop_token) noexcept override {
+    state_->loads.push_back(path);
+    const LuaSkinAudioIdentity identity{.value = ++nextIdentity_};
+    live_.insert(identity);
+    counters_->audioCreated(0);
+    return identity;
+  }
+  void play(LuaSkinAudioIdentity identity, float, bool) noexcept override {
+    state_->plays.push_back(identity);
+  }
+  void stop(LuaSkinAudioIdentity identity) noexcept override {
+    state_->stops.push_back(identity);
+  }
+  void dispose(LuaSkinAudioIdentity identity) noexcept override {
+    state_->disposals.push_back(identity);
+    if (live_.erase(identity) != 0) counters_->audioDestroyed(0);
+  }
+  LuaSkinAudioActivityCounters activityCounters() const noexcept override {
+    return {.loadAttempts = state_->loads.size(),
+            .loadsSucceeded = state_->loads.size(),
+            .liveIdentities = state_->loads.size() - state_->disposals.size()};
+  }
+
+private:
+  std::shared_ptr<SessionAudioState> state_;
+  std::shared_ptr<SkinLiveResourceCounters> counters_;
+  std::set<LuaSkinAudioIdentity> live_;
+  std::uint64_t nextIdentity_ = 0;
+};
+
+enum class MalformedPomyuNumeric {
+  None,
+  Anime,
+  Frame,
+  Size,
+  Coordinate,
+  Motion,
+  Loop,
+  FaceRectangle,
+};
+
 struct ActivationFixtureOptions {
   bool resourceBearing = false;
+  bool movieBearing = false;
+  bool audioBearing = false;
   bool requireConfiguredState = false;
+  bool legacyInputBearing = false;
+  bool repeatedPomyu = false;
+  bool oversizedPomyuWithSibling = false;
+  bool pomyuMissingCharBmp = false;
+  bool pomyuTextureMissingCharTex = false;
+  bool pomyuCp932BackslashPath = false;
+  bool pomyuRootedResourcePath = false;
+  bool pomyuLeadingBackslashPath = false;
+  bool pomyuSecondPlayerTextures = false;
+  bool pomyuSecondPlayerTextureFallback = false;
+  MalformedPomyuNumeric malformedPomyuNumeric = MalformedPomyuNumeric::None;
 };
 
 class ActivationFixture final {
@@ -450,7 +695,11 @@ public:
         entry_(*normalizeEntryPath(package_, "skin/main.luaskin").entry),
         profile_(*makeSkinProfileId(
             "66666666-6666-4666-8666-666666666666")),
-        device_(std::make_shared<SessionTextureDevice>()) {
+        device_(std::make_shared<SessionTextureDevice>()),
+        movieDevice_(std::make_shared<SessionMovieDevice>()),
+        audioState_(std::make_shared<SessionAudioState>()) {
+    audioBackend_ = std::make_shared<SessionAudioBackend>(
+        audioState_, liveResourceCounters_);
     chart_.text.title = "Artist 日本 42";
     chart_.text.subtitle = "Session subtitle";
     chart_.text.artist = "Session artist";
@@ -464,6 +713,137 @@ public:
       fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
                         "tests/fixtures/beatoraja_skin/resources/fixture.ttf",
                     source / "skin/resources/fixture.ttf");
+    }
+    if (options.movieBearing) {
+      fs::create_directories(source / "skin/resources");
+      fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
+                        "tests/fixtures/beatoraja_skin/resources/fixture.png",
+                    source / "skin/resources/source.MP4");
+    }
+    const bool hasPomyu = options.repeatedPomyu ||
+                          options.oversizedPomyuWithSibling ||
+                          options.pomyuMissingCharBmp ||
+                          options.pomyuTextureMissingCharTex ||
+                          options.pomyuCp932BackslashPath ||
+                          options.pomyuRootedResourcePath ||
+                          options.pomyuLeadingBackslashPath ||
+                          options.pomyuSecondPlayerTextures ||
+                          options.pomyuSecondPlayerTextureFallback ||
+                          options.malformedPomyuNumeric !=
+                              MalformedPomyuNumeric::None;
+    if (hasPomyu) {
+      fs::create_directories(source / "skin/characters");
+      if (options.pomyuSecondPlayerTextures ||
+          options.pomyuSecondPlayerTextureFallback) {
+        for (const std::string_view name : {
+                 "primary.png", "second.png", "texture.png", "face.png",
+                 "select.png"}) {
+          fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
+                            "tests/fixtures/beatoraja_skin/resources/fixture.png",
+                        source / "skin/characters" / name);
+        }
+        std::string chp =
+            "#CharBMP\tprimary.png\n#CharBMP2P\tsecond.png\n"
+            "#CharTex\ttexture.png\n";
+        if (options.pomyuSecondPlayerTextures) {
+          fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
+                            "tests/fixtures/beatoraja_skin/resources/fixture.png",
+                        source / "skin/characters/texture2p.png");
+          chp += "#CharTex2P\ttexture2p.png\n";
+        }
+        chp +=
+            "#CharFace\tface.png\n#SelectCG\tselect.png\n"
+            "#CharFaceUpperSize\t0\t0\t10\t10\n"
+            "#Size\t40\t20\n#00\t0\t0\t10\t10\n"
+            "#01\t10\t0\t10\t10\n#Frame\t1\t40\n"
+            "#Pattern\t1\t0001\n#Texture\t1\t0001\n";
+        writeText(source / "skin/characters/alpha.chp", chp);
+      } else if (options.malformedPomyuNumeric !=
+                 MalformedPomyuNumeric::None) {
+        fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
+                          "tests/fixtures/beatoraja_skin/resources/fixture.png",
+                      source / "skin/characters/fixture.png");
+        std::string chp =
+            "#CharBMP\tfixture.png\n#Size\t40\t20\n"
+            "#00\t0\t0\t10\t10\n#Anime\t100\n"
+            "#Frame\t1\t40\n#Loop\t1\t-1\n#Pattern\t1\t00\n"
+            "#Comment\t\x83\x65\x83\x58\x83\x67\n";
+        switch (options.malformedPomyuNumeric) {
+        case MalformedPomyuNumeric::Anime:
+          chp += "#Anime\toops\n";
+          break;
+        case MalformedPomyuNumeric::Frame:
+          chp += "#Frame\t1\toops\n";
+          break;
+        case MalformedPomyuNumeric::Size:
+          chp += "#Size\toops\t20\n";
+          break;
+        case MalformedPomyuNumeric::Coordinate:
+          chp += "#00\toops\t0\t10\t10\n";
+          break;
+        case MalformedPomyuNumeric::Motion:
+          chp += "#Pattern\toops\t00\n";
+          break;
+        case MalformedPomyuNumeric::Loop:
+          chp += "#Loop\t1\toops\n";
+          break;
+        case MalformedPomyuNumeric::FaceRectangle:
+          chp += "#CharFaceUpperSize\toops\t0\t10\t10\n";
+          break;
+        case MalformedPomyuNumeric::None:
+          break;
+        }
+        writeText(source / "skin/characters/alpha.chp", chp);
+      } else if (options.oversizedPomyuWithSibling) {
+        writeText(source / "skin/characters/alpha.chp",
+                  std::string(SkinResourcePolicy::maximumEncodedBytes + 1U,
+                              'x'));
+        writeText(source / "skin/characters/beta.chp",
+                  "#Anime\t100\n#Frame\t1\t40\n#Pattern\t1\t000102\n");
+      } else if (options.pomyuMissingCharBmp) {
+        writeText(source / "skin/characters/alpha.chp",
+                  "#Anime\t100\n#Frame\t1\t40\n#Pattern\t1\t000102\n");
+      } else if (options.pomyuTextureMissingCharTex) {
+        fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
+                          "tests/fixtures/beatoraja_skin/resources/fixture.png",
+                      source / "skin/characters/fixture.png");
+        writeText(source / "skin/characters/alpha.chp",
+                  "#CharBMP\tfixture.png\n#Anime\t100\n#Frame\t1\t40\n"
+                  "#Texture\t1\t000102\n");
+      } else if (options.pomyuCp932BackslashPath) {
+        const fs::path japaneseDirectory =
+            source / "skin/characters" /
+            fs::path("\xe2\x85\xb0\xe8\xa1\xa8~");
+        fs::create_directories(japaneseDirectory);
+        fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
+                          "tests/fixtures/beatoraja_skin/resources/fixture.png",
+                      japaneseDirectory / "fixture.png");
+        writeText(source / "skin/characters/alpha.chp",
+                  "#CharBMP\t\xfa\x40\x95\x5c~\\fixture.png\n"
+                  "#Anime\t100\n#Frame\t1\t40\n#Pattern\t1\t000102\n");
+      } else if (options.pomyuRootedResourcePath) {
+        fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
+                          "tests/fixtures/beatoraja_skin/resources/fixture.png",
+                      source / "skin/characters/rooted.png");
+        writeText(source / "skin/characters/alpha.chp",
+                  "#CharBMP\t/rooted.png\n"
+                  "#Anime\t100\n#Frame\t1\t40\n#Pattern\t1\t000102\n");
+      } else if (options.pomyuLeadingBackslashPath) {
+        fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
+                          "tests/fixtures/beatoraja_skin/resources/fixture.png",
+                      source / "skin/characters/rooted.png");
+        writeText(source / "skin/characters/alpha.chp",
+                  "#CharBMP\t\\rooted.png\n"
+                  "#Anime\t100\n#Frame\t1\t40\n#Pattern\t1\t000102\n");
+      } else {
+        fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
+                          "tests/fixtures/beatoraja_skin/resources/fixture.png",
+                      source / "skin/characters/fixture.png");
+        writeText(source / "skin/characters/alpha.chp",
+                  "#CharBMP\tfixture.png\n#Size\t40\t20\n"
+                  "#00\t0\t0\t10\t10\n#Anime\t100\n"
+                  "#Pattern\t1\t00\n");
+      }
     }
     std::string script = R"lua(
 local phase_count = (rawget(_G, "session_activation_phase_count") or 0) + 1
@@ -480,6 +860,14 @@ if skin_config then
   end
 )lua";
     }
+    if (options.legacyInputBearing) {
+      script += R"lua(
+  local Gdx = luajava.bindClass("com.badlogic.gdx.Gdx")
+  if Gdx.graphics:getWidth() ~= 640 or Gdx.graphics:getHeight() ~= 360 then
+    error("configured phase did not receive the initial legacy-input snapshot")
+  end
+)lua";
+    }
     script += R"lua(
   local marker = io.open("configured-phase-marker.txt", "w")
   if marker then
@@ -487,7 +875,53 @@ if skin_config then
     marker:close()
   end
 )lua";
-    if (options.resourceBearing) {
+    if (options.audioBearing) {
+      script += R"lua(
+  assert(main_state.audio_preload("session-audio.ogg") == true)
+  assert(main_state.audio_play("session-audio.ogg") == true)
+  assert(main_state.audio_loop("session-audio.ogg", 0.5) == true)
+)lua";
+    }
+    if (options.movieBearing && options.resourceBearing) {
+      script += R"lua(
+  return {
+    type = 0, w = 1280, h = 720,
+    source = {
+      {id = "fixture-image", path = "resources/fixture.png"},
+      {id = "movie-one", path = "resources/source.MP4"}
+    },
+    font = {{id = "fixture-font", path = "resources/fixture.ttf", type = 0}},
+    image = {
+      {id = "fixture-object", src = "fixture-image", x = 0, y = 0, w = 40, h = 20},
+      {id = "movie-object", src = "movie-one", x = 0, y = 0, w = 80, h = 40}
+    },
+    text = {{id = "runtime-title", font = "fixture-font", size = 16, ref = 10}},
+    destination = {
+      {id = "fixture-object", dst = {{x = 0, y = 0, w = 40, h = 20}}},
+      {id = "movie-object", dst = {{x = 40, y = 0, w = 80, h = 40}}},
+      {id = "runtime-title", dst = {{x = 50, y = 50, w = 500, h = 30}}}
+    }
+  }
+)lua";
+    } else if (options.movieBearing) {
+      script += R"lua(
+  return {
+    type = 0, w = 1280, h = 720,
+    source = {
+      {id = "movie-one", path = "resources/source.MP4"},
+      {id = "movie-two", path = "resources/source.MP4"}
+    },
+    image = {
+      {id = "movie-object-one", src = "movie-one", x = 0, y = 0, w = 80, h = 40},
+      {id = "movie-object-two", src = "movie-two", x = 0, y = 0, w = 80, h = 40}
+    },
+    destination = {
+      {id = "movie-object-one", dst = {{x = 0, y = 0, w = 80, h = 40}}},
+      {id = "movie-object-two", dst = {{x = 80, y = 0, w = 80, h = 40}}}
+    }
+  }
+)lua";
+    } else if (options.resourceBearing) {
       script += R"lua(
   return {
     type = 0, w = 1280, h = 720,
@@ -498,6 +932,43 @@ if skin_config then
     destination = {
       {id = "fixture-object", dst = {{x = 0, y = 0, w = 40, h = 20}}},
       {id = "runtime-title", dst = {{x = 50, y = 50, w = 500, h = 30}}}
+    }
+  }
+)lua";
+    } else if (options.pomyuSecondPlayerTextures ||
+               options.pomyuSecondPlayerTextureFallback) {
+      script += R"lua(
+  return {
+    type = 0, w = 1280, h = 720,
+    source = {{id = "shared-chara", path = "characters/alpha.chp"}},
+    pmchara = {
+      {id = "pomyu-play", src = "shared-chara", color = 2, type = 0},
+      {id = "pomyu-face", src = "shared-chara", color = 2, type = 3},
+      {id = "pomyu-select", src = "shared-chara", color = 2, type = 5},
+      {id = "pomyu-background", src = "shared-chara", color = 2, type = 1},
+      {id = "pomyu-default-type", src = "shared-chara"}
+    },
+    destination = {
+      {id = "pomyu-play", loop = 0, dst = {{x = 0, y = 0, w = 80, h = 40}}},
+      {id = "pomyu-face", loop = 0, dst = {{x = 100, y = 0, w = 80, h = 40}}},
+      {id = "pomyu-select", loop = 0, dst = {{x = 200, y = 0, w = 80, h = 40}}},
+      {id = "pomyu-background", loop = 0, dst = {{x = 300, y = 0, w = 80, h = 40}}},
+      {id = "pomyu-default-type", loop = 0, dst = {{x = 400, y = 0, w = 80, h = 40}}}
+    }
+  }
+)lua";
+    } else if (hasPomyu) {
+      script += R"lua(
+  return {
+    type = 0, w = 1280, h = 720,
+    source = {{id = "shared-chara", path = "characters/alpha.chp"}},
+    pmchara = {
+      {id = "pomyu-one", src = "shared-chara", type = 0, side = 1},
+      {id = "pomyu-two", src = "shared-chara", type = 0, side = 1}
+    },
+    destination = {
+      {id = "pomyu-one", dst = {{x = 0, y = 0, w = 64, h = 64}}},
+      {id = "pomyu-two", dst = {{x = 64, y = 0, w = 64, h = 64}}}
     }
   }
 )lua";
@@ -577,6 +1048,8 @@ return { type = 0, name = "activation shell", w = 1280, h = 720 }
             .storageRoots = roots_,
             .resourcePreparation = resources_,
             .textureDevice = device_,
+            .movieDevice = movieDevice_,
+            .audioBackend = audioBackend_,
             .liveResourceCounters = liveResourceCounters_,
             .configurationWrites = configurationWrites_,
             .stop = stop};
@@ -595,6 +1068,13 @@ return { type = 0, name = "activation shell", w = 1280, h = 720 }
   const std::shared_ptr<SessionTextureDevice> &device() const noexcept {
     return device_;
   }
+  const std::shared_ptr<SessionMovieDevice> &movieDevice() const noexcept {
+    return movieDevice_;
+  }
+  const std::shared_ptr<SessionAudioState> &audioState() const noexcept {
+    return audioState_;
+  }
+  void releaseAudioBackend() noexcept { audioBackend_.reset(); }
   const std::shared_ptr<SkinLiveResourceCounters> &liveCounters() const
       noexcept {
     return liveResourceCounters_;
@@ -613,12 +1093,727 @@ private:
   EntryProfileSettings desired_;
   SkinResourcePreparationService resources_;
   std::shared_ptr<SessionTextureDevice> device_;
+  std::shared_ptr<SessionMovieDevice> movieDevice_;
+  std::shared_ptr<SessionAudioState> audioState_;
+  std::shared_ptr<SessionAudioBackend> audioBackend_;
   std::shared_ptr<SkinLiveResourceCounters> liveResourceCounters_ =
       std::make_shared<SkinLiveResourceCounters>();
   SkinConfigurationWriteQueue configurationWrites_;
   std::optional<SkinRevisionLease> lease_;
   SkinValidationResult validation_;
 };
+
+struct ParityQuadOutput {
+  SkinObjectId object = 0;
+  SkinResourceId resource = 0;
+  std::array<std::array<float, 4>, 4> vertices{};
+  std::array<std::uint32_t, 4> colors{};
+  bool operator==(const ParityQuadOutput &) const = default;
+};
+
+struct ParityTextOutput {
+  SkinObjectId object = 0;
+  std::vector<char32_t> glyphs;
+  std::vector<char32_t> fallbackGlyphs;
+  bool operator==(const ParityTextOutput &) const = default;
+};
+
+struct ParityCommandOutput {
+  std::vector<ParityQuadOutput> quads;
+  std::vector<ParityTextOutput> texts;
+  std::size_t otherCommands = 0;
+  bool operator==(const ParityCommandOutput &) const = default;
+};
+
+ParityCommandOutput parityCommandOutput(const SkinCommandBuffer &commands) {
+  ParityCommandOutput output;
+  for (const auto &command : commands.commands) {
+    if (const auto *quad =
+            std::get_if<SkinTexturedQuadCommand>(&command.payload);
+        quad != nullptr &&
+        (command.sourceObject == 1 || command.sourceObject == 2)) {
+      ParityQuadOutput normalized{.object = command.sourceObject,
+                                  .resource = quad->resource};
+      for (std::size_t index = 0; index < quad->vertices.size(); ++index) {
+        const auto &vertex = quad->vertices[index];
+        normalized.vertices[index] = {vertex.x, vertex.y, vertex.u, vertex.v};
+        normalized.colors[index] = vertex.rgba;
+      }
+      output.quads.push_back(std::move(normalized));
+      continue;
+    }
+    if (const auto *text = std::get_if<SkinGlyphRunCommand>(&command.payload);
+        text != nullptr && command.sourceObject == 3) {
+      ParityTextOutput normalized{.object = command.sourceObject};
+      for (const auto &glyph : text->glyphs) {
+        normalized.glyphs.push_back(glyph.codepoint);
+      }
+      for (const auto &glyph : text->fallbackColorOverlays) {
+        normalized.fallbackGlyphs.push_back(glyph.codepoint);
+      }
+      output.texts.push_back(std::move(normalized));
+      continue;
+    }
+    ++output.otherCommands;
+  }
+  return output;
+}
+
+class FormatParityFixture final {
+public:
+  FormatParityFixture()
+      : roots_{.visiblePackages = temp_.root() / "visible",
+               .privateRevisions = temp_.root() / "revisions",
+               .privateCatalog = temp_.root() / "catalog",
+               .profileOverlays = temp_.root() / "overlays"},
+        package_(*normalizePackageId("GameplayFormats").package),
+        profile_(*makeSkinProfileId(
+            "88888888-8888-4888-8888-888888888888")) {
+    chart_.keyCount = 7;
+    chart_.text.title = "AV";
+    chart_.text.artist = "format fixture";
+    chart_.text.fullArtist = "format fixture";
+
+    const fs::path source = temp_.root() / "source";
+    const fs::path chartResources = temp_.root() / "chart-resources.zip";
+    fs::create_directories(source / "skin/resources");
+    fs::create_directories(source / "skin/fonts");
+    fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
+                      "tests/fixtures/beatoraja_skin/resources/fixture.png",
+                  source / "skin/resources/fixture.png");
+    std::ifstream chartImage(
+        fs::path(ASOBMASHOW_SOURCE_DIR) /
+            "tests/fixtures/beatoraja_skin/resources/fixture.png",
+        std::ios::binary);
+    const std::vector<unsigned char> chartImageBytes{
+        std::istreambuf_iterator<char>(chartImage),
+        std::istreambuf_iterator<char>()};
+    writeStoredZip(chartResources,
+                   {{"song/stage.png", chartImageBytes},
+                    {"song/back.png", chartImageBytes},
+                    {"song/banner.png", chartImageBytes}});
+    chart_.staticMetadata.stageFileResourcePath =
+        chartResources / "song/stage.png";
+    chart_.staticMetadata.backBmpResourcePath =
+        chartResources / "song/back.png";
+    chart_.staticMetadata.bannerResourcePath =
+        chartResources / "song/banner.png";
+    unavailableChart_ = chart_;
+    unavailableChart_.staticMetadata.stageFileResourcePath.clear();
+    unavailableChart_.staticMetadata.backBmpResourcePath.clear();
+    unavailableChart_.staticMetadata.bannerResourcePath.clear();
+    fs::copy_file(
+        fs::path(ASOBMASHOW_SOURCE_DIR) /
+            "tests/fixtures/beatoraja_skin/resources/bitmap-font/fixture.fnt",
+        source / "skin/fonts/fixture.fnt");
+    fs::copy_file(
+        fs::path(ASOBMASHOW_SOURCE_DIR) /
+            "tests/fixtures/beatoraja_skin/resources/bitmap-font/page.png",
+        source / "skin/fonts/page.png");
+    writeText(source / "skin/fonts/fixture.lr2font",
+              "#S,10\n#M,0\n#T,0,page.png\n"
+              "#R,65,0,9,0,6,8\n#R,86,0,15,0,7,8\n");
+
+    writeText(source / "skin/parity.luaskin", R"lua(
+local skin = {
+  type = 0, name = "Lua parity", author = "fixture", w = 640, h = 480
+}
+if skin_config then
+  skin.source = {{id = "atlas", path = "resources/fixture.png"}}
+  skin.font = {{id = "font", path = "fonts/fixture.fnt", type = 0}}
+  skin.image = {{id = "image", src = "atlas", x = 0, y = 0,
+                 w = 40, h = 20, divx = 1, divy = 1}}
+  skin.value = {{id = "number", src = "atlas", x = 0, y = 0,
+                 w = 40, h = 20, divx = 10, divy = 1,
+                 ref = 10, align = 0, digit = 3, padding = 0,
+                 zeropadding = 0, space = 0}}
+  skin.text = {{id = "text", font = "font", size = 10,
+                align = 0, ref = 10}}
+  skin.destination = {
+    {id = "image", dst = {{time = 0, x = 10, y = 100, w = 40, h = 20}}},
+    {id = "number", dst = {{time = 0, x = 60, y = 100, w = 4, h = 20}}},
+    {id = "text", dst = {{time = 0, x = 100, y = 100, w = 200, h = 40}}}
+  }
+end
+return skin
+)lua");
+
+    writeText(source / "skin/parity.json", R"json({
+  "type": 0, "name": "JSON parity", "author": "fixture", "w": 640, "h": 480,
+  "source": [{"id":"atlas","path":"resources/fixture.png"}],
+  "font": [{"id":"font","path":"fonts/fixture.fnt","type":0}],
+  "image": [{"id":"image","src":"atlas","x":0,"y":0,"w":40,"h":20,"divx":1,"divy":1}],
+  "value": [{"id":"number","src":"atlas","x":0,"y":0,"w":40,"h":20,"divx":10,"divy":1,"ref":10,"align":0,"digit":3,"padding":0,"zeropadding":0,"space":0}],
+  "text": [{"id":"text","font":"font","size":10,"align":0,"ref":10}],
+  "destination": [
+    {"id":"image","dst":[{"time":0,"x":10,"y":100,"w":40,"h":20}]},
+    {"id":"number","dst":[{"time":0,"x":60,"y":100,"w":4,"h":20}]},
+    {"id":"text","dst":[{"time":0,"x":100,"y":100,"w":200,"h":40}]}
+  ]
+})json");
+    writeText(source / "skin/commented.json", R"json(/* production comment */
+{
+  "type": 0,
+  // resource declaration
+  "source": [{"id":"atlas","path":"resources/fixture.png"}],
+  "image": [
+    /* object comment */
+    {"id":"image","src":"atlas","x":0,"y":0,"w":40,"h":20}
+  ],
+  "destination": [
+    // presentation comment
+    {"id":"image","dst":[{"x":10,"y":100,"w":40,"h":20}]}
+  ]
+}
+// accepted trailing comment
+)json");
+
+    writeText(source / "skin/parity.lr2skin", R"lr2(#INFORMATION,0,LR2 parity,fixture
+#RESOLUTION,0
+#IMAGE,resources/fixture.png
+#LR2FONT,fonts/fixture.lr2font
+#SRC_IMAGE,0,0,0,0,40,20,1,1,0,0
+#DST_IMAGE,0,0,10,360,40,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0
+#SRC_NUMBER,0,0,0,0,40,20,10,1,0,0,10,0,3,0,0
+#DST_NUMBER,0,0,60,360,4,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0
+#SRC_TEXT,0,0,10,0,0,0
+#DST_TEXT,0,0,100,340,200,40,0,255,255,255,255,0,0,0,0,0,0,0,0,0
+)lr2");
+
+    writeText(source / "skin/builtin-graphs.lr2skin", R"lr2(#INFORMATION,0,Builtin graphs,fixture
+#RESOLUTION,0
+#SRC_BARGRAPH,0,110,0,0,1,1,1,1,0,0,2,0
+#DST_BARGRAPH,0,0,10,400,40,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0
+#SRC_BARGRAPH,0,111,0,0,1,1,1,1,0,0,2,0
+#DST_BARGRAPH,0,0,60,400,40,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0
+#SRC_BARGRAPH,0,100,0,0,1,1,1,1,0,0,2,0
+#DST_BARGRAPH,0,0,110,400,40,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0
+#SRC_BARGRAPH,0,101,0,0,1,1,1,1,0,0,2,0
+#DST_BARGRAPH,0,0,160,400,40,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0
+#SRC_BARGRAPH,0,102,0,0,1,1,1,1,0,0,2,0
+#DST_BARGRAPH,0,0,210,400,40,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0
+)lr2");
+    writeText(source / "skin/unavailable-builtin-graphs.lr2skin", R"lr2(#INFORMATION,0,Unavailable builtin graphs,fixture
+#RESOLUTION,0
+#SRC_BARGRAPH,0,100,0,0,1,1,1,1,0,0,2,0
+#DST_BARGRAPH,0,0,10,400,40,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0
+#SRC_BARGRAPH,0,101,0,0,1,1,1,1,0,0,2,0
+#DST_BARGRAPH,0,0,60,400,40,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0
+#SRC_BARGRAPH,0,102,0,0,1,1,1,1,0,0,2,0
+#DST_BARGRAPH,0,0,110,400,40,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0
+)lr2");
+    writeText(source / "skin/option-state.lr2skin", R"lr2(#INFORMATION,0,Option state,fixture
+#RESOLUTION,0
+#CUSTOMOPTION,Mode,900,Selected,Unselected
+#IF,!901
+#INCLUDE,active-option.inc
+#ENDIF
+#IF,!900
+#INCLUDE,missing-selected-sibling.inc
+#ENDIF
+#IF,!9999
+#INCLUDE,missing-runtime-only.inc
+#ENDIF
+)lr2");
+    writeText(source / "skin/active-option.inc", R"lr2(#IMAGE,resources/fixture.png
+#SRC_IMAGE,0,0,0,0,40,20,1,1,0,0
+#DST_IMAGE,0,0,10,360,40,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0
+)lr2");
+    const fs::path lr2Fixtures = fs::path(ASOBMASHOW_SOURCE_DIR) /
+                                 "tests/fixtures/beatoraja_skin/lr2/header";
+    for (const std::string_view name : {"malformed-setoption.lr2skin",
+                                        "malformed-setoption.inc",
+                                        "plus-option.inc"}) {
+      fs::copy_file(lr2Fixtures / name, source / "skin" / name);
+    }
+
+    writeText(source / "skin/recoverable.lr2skin", R"lr2(#INFORMATION,0,Recoverable LR2,fixture
+#RESOLUTION,0
+#IMAGE,resources/fixture.png
+#SRC_IMAGE,0,0,0,0,40,20,1,1,0,0
+#DST_IMAGE,0,0,10,360,40,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0
+#INCLUDE,missing-optional.inc
+#RESOLUTION,bad
+#IMAGE
+#SRC_IMAGE,0,0,0,0,40,20,1,1,0,0
+#DST_IMAGE,0,0,60,360,40,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0
+)lr2");
+    writeText(source / "skin/skipped.lr2skin", R"lr2(#INFORMATION,0,Skipped LR2,fixture
+#RESOLUTION,0
+#IF,9999
+#INCLUDE,missing-skipped.inc
+#INCLUDE,cycle-a.inc
+#ENDIF
+#IMAGE,resources/fixture.png
+#SRC_IMAGE,0,0,0,0,40,20,1,1,0,0
+#DST_IMAGE,0,0,10,360,40,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0
+)lr2");
+    writeText(source / "skin/cycle-a.inc", "#INCLUDE,cycle-b.inc\n");
+    writeText(source / "skin/cycle-b.inc", "#INCLUDE,cycle-a.inc\n");
+    writeText(source / "skin/unsafe.lr2skin", R"lr2(#INFORMATION,0,Unsafe LR2,fixture
+#RESOLUTION,0
+#INCLUDE,../../outside.inc
+#IMAGE,resources/fixture.png
+)lr2");
+    writeText(source / "skin/invalid-encoding.lr2skin",
+              std::string(1, static_cast<char>(0x81)));
+
+    writeText(source / "config/settings.json",
+              R"json({"application":"configuration"})json");
+    writeText(source / "select/select.lr2skin",
+              "#INFORMATION,5,Music select,fixture\n#RESOLUTION,0\n");
+    writeText(source / "notes/readme.txt", "not a gameplay document\n");
+
+    SkinArchiveImporter importer(roots_, aliases_);
+    auto imported = importer.prepareFolder(source, package_, {}, {});
+    expect(imported.prepared.has_value(),
+           "mixed-format gameplay package imports as one candidate revision");
+    if (!imported.prepared) {
+      return;
+    }
+    std::vector<std::string> importedPaths;
+    std::size_t selectable = 0;
+    std::size_t unavailable = 0;
+    GameplaySkinValidator validator(resources_);
+    for (const auto &entry : imported.prepared->entries()) {
+      importedPaths.push_back(entry.packageRelativePath);
+      const auto validation = validator.validate(
+          imported.prepared->readView(), entry, nullptr, {});
+      selectable += validation.disposition ==
+                    SkinValidationDisposition::SelectableGameplay;
+      unavailable += validation.disposition ==
+                     SkinValidationDisposition::UnavailableType;
+    }
+    std::ranges::sort(importedPaths);
+    expect(importedPaths ==
+               std::vector<std::string>{"config/settings.json",
+                                        "select/select.lr2skin",
+                                        "skin/builtin-graphs.lr2skin",
+                                        "skin/commented.json",
+                                        "skin/invalid-encoding.lr2skin",
+                                        "skin/malformed-setoption.lr2skin",
+                                        "skin/option-state.lr2skin",
+                                        "skin/parity.json",
+                                        "skin/parity.lr2skin",
+                                        "skin/parity.luaskin",
+                                        "skin/recoverable.lr2skin",
+                                        "skin/skipped.lr2skin",
+                                        "skin/unavailable-builtin-graphs.lr2skin",
+                                        "skin/unsafe.lr2skin"} &&
+               selectable == 10 && unavailable == 2,
+           "header admission keeps gameplay and recoverable LR2 entries "
+           "selectable while fatal documents remain invalid");
+
+    fs::create_directories(roots_.visiblePackages);
+    fs::copy(source, roots_.visiblePackages / package_.directoryName,
+             fs::copy_options::recursive | fs::copy_options::overwrite_existing);
+    SkinTreeSnapshotter snapshotter(roots_, aliases_);
+    auto snapshot = snapshotter.snapshot(source, package_, {}, {});
+    expect(snapshot.prepared.has_value(),
+           "multi-format parity package snapshots");
+    if (!snapshot.prepared) {
+      return;
+    }
+    std::string error;
+    lease_ = std::move(*snapshot.prepared).publish(error);
+    expect(lease_.has_value() && error.empty(),
+           "multi-format parity revision publishes");
+  }
+
+  PlaySkinSessionCreateResult create(std::string_view path,
+                                     std::uint64_t sessionSerial,
+                                     bool chartImagesAvailable = true,
+                                     std::shared_ptr<SessionTextureDevice>
+                                         textureDevice = {}) {
+    PlaySkinSessionCreateResult failed;
+    if (!lease_) {
+      return failed;
+    }
+    const auto entry = normalizeEntryPath(package_, path).entry;
+    expect(entry.has_value(), "multi-format parity entry ID is valid");
+    if (!entry) {
+      return failed;
+    }
+    GameplaySkinValidator validator(resources_);
+    auto validation =
+        validator.validate(lease_->readView(), *entry, nullptr, {});
+    if (validation.disposition !=
+            SkinValidationDisposition::SelectableGameplay ||
+        !validation.reconciledSettings ||
+        validation.configurationDigest.empty()) {
+      failed.diagnostics = std::move(validation.diagnostics);
+      return failed;
+    }
+
+    PlayfieldVisualState initialState = stateAt(1);
+    initialState.authority.loadingState = PlayfieldLoadingState::Loaded;
+    const PlayfieldProjectionResult initialProjection = projectionAt(1);
+    const PlayfieldChartVisualModel &chartModel =
+        chartImagesAvailable ? chart_ : unavailableChart_;
+    if (!textureDevice) {
+      textureDevice = std::make_shared<SessionTextureDevice>();
+    }
+    return PlaySkinSession::create(
+        {.revision = lease_->clone(),
+         .entry = *entry,
+         .reconciledSettings = *validation.reconciledSettings,
+         .configurationDigest = validation.configurationDigest},
+        {.sessionSerial = sessionSerial,
+         .profileId = profile_,
+         .chartModel = chartModel,
+         .initialState = &initialState,
+         .initialProjection = &initialProjection,
+         .safeUiBounds = {.x = 0.0, .y = 0.0, .width = 640.0, .height = 480.0},
+         .storageRoots = roots_,
+         .resourcePreparation = resources_,
+         .builtinImageReader = archive_file::readFileBounded,
+         .textureDevice = std::move(textureDevice),
+         .liveResourceCounters = std::make_shared<SkinLiveResourceCounters>(),
+         .configurationWrites = configurationWrites_});
+  }
+
+private:
+  TempDirectory temp_;
+  SkinStorageRoots roots_;
+  SkinPackageId package_;
+  SkinProfileId profile_;
+  AcceptFiles aliases_;
+  PlayfieldChartVisualModel chart_;
+  PlayfieldChartVisualModel unavailableChart_;
+  SkinResourcePreparationService resources_;
+  SkinConfigurationWriteQueue configurationWrites_;
+  std::optional<SkinRevisionLease> lease_;
+};
+
+void testLuaJsonAndLr2SessionsEmitEquivalentSharedObjects() {
+  FormatParityFixture fixture;
+  auto lua = fixture.create("skin/parity.luaskin", 101);
+  auto json = fixture.create("skin/parity.json", 102);
+  auto lr2 = fixture.create("skin/parity.lr2skin", 103);
+  auto genericJson = fixture.create("config/settings.json", 104);
+  auto nonGameplayLr2 = fixture.create("select/select.lr2skin", 105);
+  expect(lua.session && json.session && lr2.session,
+         "Lua, JSON, and LR2 gameplay documents all create owning sessions");
+  expect(!genericJson.session && !nonGameplayLr2.session,
+         "generic JSON and non-gameplay LR2 entries are not session-capable");
+  if (!lua.session || !json.session || !lr2.session) {
+    return;
+  }
+  expect(lua.session->hasLuaRuntimeForTesting() &&
+             !json.session->hasLuaRuntimeForTesting() &&
+             !lr2.session->hasLuaRuntimeForTesting(),
+         "only the Lua gameplay session owns a Lua VM");
+
+  const auto luaFrame =
+      lua.session->prepareFrame(stateAt(2), projectionAt(2), {});
+  const auto jsonFrame =
+      json.session->prepareFrame(stateAt(2), projectionAt(2), {});
+  const auto lr2Frame =
+      lr2.session->prepareFrame(stateAt(2), projectionAt(2), {});
+  expect(luaFrame.ready() && jsonFrame.ready() && lr2Frame.ready() &&
+             luaFrame.evaluation.submitReady &&
+             jsonFrame.evaluation.submitReady &&
+             lr2Frame.evaluation.submitReady,
+         "all three gameplay formats prepare a renderable frame");
+  if (!luaFrame.evaluation.submitReady ||
+      !jsonFrame.evaluation.submitReady || !lr2Frame.evaluation.submitReady) {
+    return;
+  }
+
+  const auto luaOutput = parityCommandOutput(*luaFrame.evaluation.submitReady);
+  const auto jsonOutput = parityCommandOutput(*jsonFrame.evaluation.submitReady);
+  const auto lr2Output = parityCommandOutput(*lr2Frame.evaluation.submitReady);
+  const auto hasSharedObjects = [](const ParityCommandOutput &output) {
+    return output.otherCommands == 0 && output.quads.size() >= 2 &&
+           std::ranges::any_of(output.quads, [](const auto &quad) {
+             return quad.object == 1;
+           }) &&
+           std::ranges::any_of(output.quads, [](const auto &quad) {
+             return quad.object == 2;
+           }) &&
+           output.texts.size() == 1 && output.texts.front().object == 3 &&
+           output.texts.front().glyphs == std::vector<char32_t>{U'A', U'V'};
+  };
+  expect(hasSharedObjects(luaOutput) && luaOutput == jsonOutput &&
+             luaOutput == lr2Output,
+         "Lua, JSON, and LR2 emit equivalent image, number, and text output");
+}
+
+void testLr2ProductionRecoveryAndFatalBoundaries() {
+  FormatParityFixture fixture;
+  auto recoverable = fixture.create("skin/recoverable.lr2skin", 106);
+  auto skipped = fixture.create("skin/skipped.lr2skin", 107);
+  auto unsafe = fixture.create("skin/unsafe.lr2skin", 108);
+  auto invalidEncoding =
+      fixture.create("skin/invalid-encoding.lr2skin", 109);
+  const auto hasCode = [](const auto &result, std::string_view code) {
+    return std::ranges::any_of(result.diagnostics, [&](const auto &diagnostic) {
+      return diagnostic.code == code;
+    });
+  };
+  expect(recoverable.session &&
+             hasCode(recoverable, "skin_lr2_include_read") &&
+             hasCode(recoverable, "skin_lr2_header_command_invalid") &&
+             hasCode(recoverable, "skin_lr2_gameplay_command_invalid"),
+         "missing optional include and malformed header/gameplay lines retain "
+         "a usable production session with diagnostics");
+  if (recoverable.session) {
+    const auto frame = recoverable.session->prepareFrame(
+        stateAt(2), projectionAt(2), {});
+    expect(frame.ready() && frame.evaluation.submitReady &&
+               frame.evaluation.submitReady->commands.size() == 2,
+           "valid LR2 commands before and after recoverable failures render");
+  }
+  expect(skipped.session &&
+             !hasCode(skipped, "skin_lr2_include_read") &&
+             !hasCode(skipped, "skin_lr2_include_cycle"),
+         "false IF skips missing and cyclic includes without production "
+         "diagnostics");
+  expect(!unsafe.session && hasCode(unsafe, "skin_lr2_include_read"),
+         "an unsafe active include remains fatal at production load");
+  expect(!invalidEncoding.session &&
+             hasCode(invalidEncoding, "skin_lr2_encoding_invalid"),
+         "invalid root encoding remains fatal at production load");
+}
+
+void testLr2ProductionBuiltInGraphsOwnChartAndPlainImages() {
+  FormatParityFixture fixture;
+  auto device = std::make_shared<SessionTextureDevice>();
+  auto available =
+      fixture.create("skin/builtin-graphs.lr2skin", 110, true, device);
+  expect(available.session != nullptr,
+         "LR2 built-in graphs create a production owning session");
+  if (!available.session) {
+    return;
+  }
+  auto graphState = stateAt(2);
+  graphState.authority.loadingState = PlayfieldLoadingState::Loaded;
+  const auto frame = available.session->prepareFrame(
+      graphState, projectionAt(2), {});
+  expect(frame.ready() && frame.evaluation.submitReady &&
+             frame.evaluation.submitReady->commands.size() == 5,
+         "production resolves black, white, stage, back, and banner graphs");
+  if (frame.evaluation.submitReady &&
+      frame.evaluation.submitReady->commands.size() == 5) {
+    const auto &black = std::get<SkinTexturedQuadCommand>(
+        frame.evaluation.submitReady->commands[0].payload);
+    const auto &white = std::get<SkinTexturedQuadCommand>(
+        frame.evaluation.submitReady->commands[1].payload);
+    expect(black.resource != white.resource && black.vertices[0].u == 0.0F &&
+               black.vertices[1].u == 0.5F && white.vertices[0].u == 0.5F &&
+               white.vertices[1].u == 1.0F,
+           "production keeps exact black/white region identities on one "
+           "owned 2x1 texture");
+  }
+  const auto plain = std::ranges::find_if(
+      device->createdImages, [](const auto &created) {
+        return created.width == 2 && created.height == 1;
+      });
+  expect(plain != device->createdImages.end() &&
+             plain->firstPixels ==
+                 std::vector<std::uint8_t>{0, 0, 0, 255, 255, 255, 255, 255},
+         "production uploads the pinned opaque black and white pixels once");
+  const std::size_t created = device->createCalls;
+  available.session.reset();
+  expect(device->destroyCalls == created,
+         "session teardown destroys every built-in and chart texture exactly "
+         "once");
+
+  auto unavailable = fixture.create("skin/unavailable-builtin-graphs.lr2skin",
+                                    111, false);
+  expect(unavailable.session != nullptr,
+         "unavailable chart references do not reject the production session");
+  if (unavailable.session) {
+    const auto missingFrame = unavailable.session->prepareFrame(
+        graphState, projectionAt(2), {});
+    expect(missingFrame.ready() && missingFrame.evaluation.submitReady &&
+               missingFrame.evaluation.submitReady->commands.empty() &&
+               missingFrame.evaluation.diagnostics.empty(),
+           "unavailable stage, back, and banner references suppress before "
+           "their rate property");
+  }
+}
+
+void testLr2DeclaredFalseOptionActivatesNegatedInclude() {
+  FormatParityFixture fixture;
+  auto created = fixture.create("skin/option-state.lr2skin", 112);
+  const auto hasCode = [&](std::string_view code) {
+    return std::ranges::any_of(created.diagnostics, [&](const auto &diagnostic) {
+      return diagnostic.code == code;
+    });
+  };
+  expect(created.session && !hasCode("skin_lr2_include_read"),
+         "declared option conditions retain a usable production session and "
+         "skip selected/unknown negated include paths");
+  if (created.session) {
+    const auto frame = created.session->prepareFrame(
+        stateAt(2), projectionAt(2), {});
+    expect(frame.ready() && frame.evaluation.submitReady &&
+               frame.evaluation.submitReady->commands.size() == 1,
+           "a negated unselected declared choice executes its included image");
+  }
+}
+
+void testMalformedLr2SetOptionDoesNotDivergeFromIncludeFold() {
+  FormatParityFixture fixture;
+  auto created = fixture.create("skin/malformed-setoption.lr2skin", 114);
+  const auto countCode = [&](std::string_view code) {
+    return std::ranges::count_if(
+        created.diagnostics, [&](const SkinDiagnostic &diagnostic) {
+          return diagnostic.code == code;
+        });
+  };
+  expect(created.session && countCode("skin_lr2_include_read") == 0 &&
+             countCode("skin_lr2_gameplay_command_invalid") == 2,
+         "malformed root and included SETOPTION commands stay recoverable "
+         "without activating missing or unsafe includes");
+  if (!created.session) return;
+  const auto frame = created.session->prepareFrame(
+      stateAt(2), projectionAt(2), {});
+  expect(frame.ready() && frame.evaluation.submitReady &&
+             frame.evaluation.submitReady->commands.size() == 3,
+         "following root/included commands and a Java-valid plus-signed "
+         "SETOPTION branch all render");
+}
+
+void testCommentedJsonCreatesProductionSession() {
+  FormatParityFixture fixture;
+  auto created = fixture.create("skin/commented.json", 113);
+  expect(created.session &&
+             std::ranges::none_of(created.diagnostics,
+                                  [](const auto &diagnostic) {
+                                    return diagnostic.code ==
+                                           "skin_json_source_index_failed";
+                                  }),
+         "commented JSON remains selectable and session-capable in production");
+  if (created.session) {
+    const auto frame = created.session->prepareFrame(
+        stateAt(2), projectionAt(2), {});
+    expect(frame.ready() && frame.evaluation.submitReady &&
+               frame.evaluation.submitReady->commands.size() == 1,
+           "commented JSON retains its decoded image through production "
+           "rendering");
+  }
+}
+
+void testSessionOwnsDeduplicatedMoviesAndRollsBackBeforePublication() {
+  {
+    ActivationFixture fixture(
+        {.resourceBearing = true, .movieBearing = true});
+    if (!fixture.ready()) {
+      return;
+    }
+    auto created =
+        PlaySkinSession::create(fixture.takeActivation(), fixture.context());
+    expect(created.session && fixture.movieDevice()->loadCalls == 1 &&
+               fixture.movieDevice()->lastLimits.maximumDecodedBytes <
+                   SkinResourcePolicy::maximumSessionDecodedBytes,
+           "session resource planning debits ordinary images and text atlases "
+           "before the skin movie adapter receives its allocation budget");
+  }
+
+  {
+    ActivationFixture fixture({.movieBearing = true});
+    if (!fixture.ready()) {
+      return;
+    }
+    auto created =
+        PlaySkinSession::create(fixture.takeActivation(), fixture.context());
+    expect(created.session && fixture.movieDevice()->loadCalls == 1 &&
+               fixture.movieDevice()->destroyCalls == 0 &&
+               fixture.movieDevice()->live.size() == 1 &&
+               fixture.movieDevice()->pathExistedDuringLoad,
+           "session creation materializes and owns one player for duplicate movie source paths");
+    if (!created.session) {
+      return;
+    }
+    const fs::path materialized = fixture.movieDevice()->loadedPaths.front();
+    expect(fs::is_regular_file(materialized),
+           "the session retains its stable materialized movie while active");
+    created.session.reset();
+    expect(fixture.movieDevice()->destroyCalls == 1 &&
+               fixture.movieDevice()->live.empty() &&
+               !fs::exists(materialized),
+           "session destruction releases its movie player and materialized source exactly once");
+  }
+
+  {
+    ActivationFixture fixture({.movieBearing = true});
+    if (!fixture.ready()) {
+      return;
+    }
+    std::stop_source stop;
+    fixture.movieDevice()->stopAfterLoad(stop);
+    auto created = PlaySkinSession::create(fixture.takeActivation(),
+                                           fixture.context({}, stop.get_token()));
+    expect(!created.session && created.cancelled &&
+               fixture.movieDevice()->loadCalls == 1 &&
+               fixture.movieDevice()->destroyCalls == 1 &&
+               fixture.movieDevice()->live.empty() &&
+               !fs::exists(fixture.movieDevice()->loadedPaths.front()),
+           "cancellation after movie load prevents session publication and rolls ownership back exactly once");
+  }
+
+  {
+    ActivationFixture fixture({.movieBearing = true});
+    if (!fixture.ready()) {
+      return;
+    }
+    auto context = fixture.context();
+    context.safeUiBounds.width = 0.0;
+    auto created = PlaySkinSession::create(fixture.takeActivation(),
+                                           std::move(context));
+    expect(!created.session && fixture.movieDevice()->loadCalls == 1 &&
+               fixture.movieDevice()->destroyCalls == 1 &&
+               fixture.movieDevice()->live.empty() &&
+               !fs::exists(fixture.movieDevice()->loadedPaths.front()),
+           "a post-load session creation failure tears down the movie graph exactly once");
+  }
+}
+
+void testSessionOwnsLuaAudioAndRollsBackBeforePublication() {
+  {
+    ActivationFixture fixture({.audioBearing = true});
+    if (!fixture.ready()) {
+      return;
+    }
+    auto created =
+        PlaySkinSession::create(fixture.takeActivation(), fixture.context());
+    const auto state = fixture.audioState();
+    expect(created.session && state->loads.size() == 1 &&
+               state->loads.front().generic_string().ends_with(
+                   "/skin/session-audio.ogg") &&
+               state->plays == std::vector<LuaSkinAudioIdentity>(
+                                   3, LuaSkinAudioIdentity{.value = 1}) &&
+               state->disposals.empty(),
+           "published session retains one resolved audio identity across "
+           "preload, play, and loop calls");
+    created.session.reset();
+    expect(state->disposals ==
+               std::vector<LuaSkinAudioIdentity>{{.value = 1}},
+           "session destruction disposes its Lua audio identity exactly once");
+    const auto callsAfterDestruction = state->disposals.size();
+    fixture.releaseAudioBackend();
+    expect(state->backendDestroyed &&
+               state->disposals.size() == callsAfterDestruction,
+           "backend destruction cannot call back into the destroyed session");
+  }
+
+  {
+    ActivationFixture fixture({.audioBearing = true});
+    if (!fixture.ready()) {
+      return;
+    }
+    auto context = fixture.context();
+    context.safeUiBounds.width = 0.0;
+    auto created = PlaySkinSession::create(fixture.takeActivation(),
+                                           std::move(context));
+    expect(!created.session && fixture.audioState()->loads.size() == 1 &&
+               fixture.audioState()->disposals ==
+                   std::vector<LuaSkinAudioIdentity>{{.value = 1}},
+           "post-configured session failure rolls back loaded Lua audio once");
+  }
+}
 
 void testActivationCreatesAnOwningFreshStateSession() {
   ActivationFixture fixture;
@@ -687,6 +1882,209 @@ void testConfiguredLoadUsesTheInitializedAuthoritativeState() {
       PlaySkinSession::create(fixture.takeActivation(), fixture.context());
   expect(created.session != nullptr && created.diagnostics.empty(),
          "configured Lua load receives the initialized authoritative state");
+}
+
+void testLuaSessionCapturesLegacyInputAtEachAuthoritativeBoundary() {
+  ActivationFixture fixture({.legacyInputBearing = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  int captures = 0;
+  auto context = fixture.context();
+  context.captureLegacyInputGeneration = [&captures] {
+    ++captures;
+    LuaSkinLegacyInputGeneration generation;
+    generation.drawableWidth = captures == 1 ? 640 : 800;
+    generation.drawableHeight = captures == 1 ? 360 : 450;
+    generation.pressedGdxKeys.set(29);
+    return generation;
+  };
+  auto created =
+      PlaySkinSession::create(fixture.takeActivation(), std::move(context));
+  expect(created.session != nullptr && created.diagnostics.empty() &&
+             captures == 1,
+         "configured Lua load captures legacy input with its initial main_state boundary");
+  if (!created.session) {
+    return;
+  }
+  const auto frame = created.session->prepareFrame(
+      stateAt(2), projectionAt(2), {});
+  expect(frame.ready() && captures == 2,
+         "each later Lua frame replaces the legacy-input snapshot at the same boundary");
+}
+
+void testRepeatedPomyuObjectsShareCyclePreparation() {
+  ActivationFixture fixture({.repeatedPomyu = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  resetPomyuCyclePreparationCountersForTesting();
+  const auto created =
+      PlaySkinSession::create(fixture.takeActivation(), fixture.context());
+  expect(created.session != nullptr &&
+             pomyuCycleFileReadsForTesting() == 1 &&
+             pomyuRequirementParsesForTesting() == 1 &&
+             pomyuCycleParsesForTesting() == 1,
+         "repeated Pomyu objects share one bounded CHP read, prerequisite "
+         "scan, and cycle parse");
+}
+
+void testMalformedPomyuNumericDirectivesAbortTheCp932Character() {
+  for (const auto malformed : {
+           MalformedPomyuNumeric::Anime,
+           MalformedPomyuNumeric::Frame,
+           MalformedPomyuNumeric::Size,
+           MalformedPomyuNumeric::Coordinate,
+           MalformedPomyuNumeric::Motion,
+           MalformedPomyuNumeric::Loop,
+           MalformedPomyuNumeric::FaceRectangle,
+       }) {
+    ActivationFixture fixture({.malformedPomyuNumeric = malformed});
+    if (!fixture.ready()) {
+      continue;
+    }
+    resetPomyuCyclePreparationCountersForTesting();
+    auto created =
+        PlaySkinSession::create(fixture.takeActivation(), fixture.context());
+    if (!created.session) {
+      expect(false, "malformed optional Pomyu metadata preserves the session");
+      continue;
+    }
+    const auto frame = created.session->prepareFrame(
+        stateAt(1), projectionAt(1), {});
+    const bool drewPomyu =
+        frame.evaluation.submitReady &&
+        std::ranges::any_of(frame.evaluation.submitReady->commands,
+                            [](const SkinDrawCommand &command) {
+                              return std::holds_alternative<
+                                  SkinTexturedQuadCommand>(command.payload);
+                            });
+    expect(frame.ready() && !drewPomyu &&
+               pomyuCycleParsesForTesting() == 0,
+           "a malformed numeric Anime/Frame/Size/coordinate/motion/loop/face "
+           "field aborts the CP932 CHP before it prepares or draws");
+  }
+}
+
+void testExplicitOversizedPomyuDoesNotFallBackToSibling() {
+  ActivationFixture fixture({.oversizedPomyuWithSibling = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  resetPomyuCyclePreparationCountersForTesting();
+  (void)PlaySkinSession::create(fixture.takeActivation(), fixture.context());
+  expect(pomyuCycleFileReadsForTesting() == 1 &&
+             pomyuCycleParsesForTesting() == 0,
+         "an oversized explicit CHP does not silently borrow a sibling's "
+         "Pomyu timing metadata");
+}
+
+void testIncompletePomyuResourcesKeepDefaultCycles() {
+  for (const ActivationFixtureOptions options : {
+           ActivationFixtureOptions{.pomyuMissingCharBmp = true},
+           ActivationFixtureOptions{.pomyuTextureMissingCharTex = true}}) {
+    ActivationFixture fixture(options);
+    if (!fixture.ready()) {
+      continue;
+    }
+    resetPomyuCyclePreparationCountersForTesting();
+    (void)PlaySkinSession::create(fixture.takeActivation(), fixture.context());
+    expect(pomyuCycleFileReadsForTesting() == 1 &&
+               pomyuCycleParsesForTesting() == 0,
+           "Pomyu cycle metadata is ignored when its upstream character "
+           "image prerequisites cannot load");
+  }
+}
+
+void testPomyuResourcesUseMs932AndWindowsSeparators() {
+  ActivationFixture fixture({.pomyuCp932BackslashPath = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  resetPomyuCyclePreparationCountersForTesting();
+  const auto created =
+      PlaySkinSession::create(fixture.takeActivation(), fixture.context());
+  expect(created.session != nullptr &&
+             pomyuRequirementParsesForTesting() == 1 &&
+             pomyuCycleParsesForTesting() == 1,
+         "Pomyu character prerequisites resolve MS932 names and Windows "
+         "path separators without corrupting multibyte trail bytes");
+}
+
+void testPomyuRootedResourcePathIsRejected() {
+  ActivationFixture fixture({.pomyuRootedResourcePath = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  resetPomyuCyclePreparationCountersForTesting();
+  const auto created =
+      PlaySkinSession::create(fixture.takeActivation(), fixture.context());
+  expect(created.session != nullptr && pomyuCycleParsesForTesting() == 0,
+         "a rooted CHP image value cannot escape the Pomyu character "
+         "directory or apply unrelated timing metadata");
+}
+
+void testPomyuLeadingBackslashPathRemainsCharacterRelative() {
+  ActivationFixture fixture({.pomyuLeadingBackslashPath = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  resetPomyuCyclePreparationCountersForTesting();
+  const auto created =
+      PlaySkinSession::create(fixture.takeActivation(), fixture.context());
+  expect(created.session != nullptr && pomyuCycleParsesForTesting() == 1,
+         "a leading CHP backslash stays relative to the Pomyu character "
+         "directory like the pinned loader");
+}
+
+void testPomyuPreparationSelectsSecondPlayerTexturesAndStaticFallbacks() {
+  for (const bool hasSecondPlayerTexture : {true, false}) {
+    ActivationFixture fixture(
+        hasSecondPlayerTexture
+            ? ActivationFixtureOptions{.pomyuSecondPlayerTextures = true}
+            : ActivationFixtureOptions{
+                  .pomyuSecondPlayerTextureFallback = true});
+    if (!fixture.ready()) {
+      continue;
+    }
+    const auto created =
+        PlaySkinSession::create(fixture.takeActivation(), fixture.context());
+    expect(created.session != nullptr,
+           "Pomyu primary/2P/Texture fixture creates a session");
+    if (!created.session) {
+      continue;
+    }
+    auto state = stateAt(1);
+    state.sceneStartMicros = 0;
+    state.clock.playTimer = {.active = true,
+                             .startMicros = 0,
+                             .elapsedMillisExact = true};
+    const auto frame =
+        created.session->prepareFrame(state, projectionAt(1), {});
+    expect(frame.ready(),
+           "prepared Pomyu resources render without frame file access");
+    if (!frame.evaluation.submitReady) {
+      continue;
+    }
+    std::vector<SkinResourceId> resources;
+    for (const auto &command : frame.evaluation.submitReady->commands) {
+      if (const auto *quad =
+              std::get_if<SkinTexturedQuadCommand>(&command.payload)) {
+        resources.push_back(quad->resource);
+        expect(quad->vertices[0].x != quad->vertices[1].x &&
+                   quad->vertices[0].y != quad->vertices[3].y,
+               "animated and static Pomyu frames retain non-empty "
+               "destination geometry");
+      }
+    }
+    const std::vector<SkinResourceId> expected =
+        hasSecondPlayerTexture
+            ? std::vector<SkinResourceId>{3, 5, 6, 7, 3}
+            : std::vector<SkinResourceId>{2, 4, 5, 6, 2};
+    expect(resources == expected,
+           "Pomyu uses 2P BMP+Texture only as a complete pair and falls "
+           "missing 2P face/select images back to primary resources");
+  }
 }
 
 void testRequestedExternalGameplaySkinCreatesARealSession() {
@@ -830,7 +2228,13 @@ void testResourceSessionOwnsUploadsAndExactRuntimeStringAtlas() {
   expect(created.session && fixture.device()->createCalls == 2 &&
              fixture.device()->destroyCalls == 0 &&
              fixture.device()->wrongThreadOperations == 0 &&
-             weakRevision.hasLiveLease(),
+             weakRevision.hasLiveLease() &&
+             isCompleteSkinLoadingTelemetry(created.loadingTelemetry) &&
+             created.loadingTelemetry.resources.imageDecodes == 1 &&
+             created.loadingTelemetry.resources.fontDecodes == 1 &&
+             created.loadingTelemetry.resources.movieDecodes == 0 &&
+             created.loadingTelemetry.resources.audioDecodes == 0 &&
+             created.loadingTelemetry.resources.textureUploads == 2,
          "session owns one image and one runtime-string glyph atlas upload");
   expect(fixture.liveCounters()->snapshot() ==
              SkinLiveResourceSnapshot{.liveTextures = 2,
@@ -885,9 +2289,97 @@ void testPostUploadCancellationRollsBackResourcesOnOwnerThread() {
              fixture.device()->wrongThreadOperations == 0 &&
              fixture.device()->revisionLiveDuringDestroy &&
              !weakRevision.hasLiveLease() &&
-             fixture.liveCounters()->snapshot() == SkinLiveResourceSnapshot{},
+             fixture.liveCounters()->snapshot() == SkinLiveResourceSnapshot{} &&
+             created.loadingTelemetry.cancelled &&
+             !created.loadingTelemetry.sessionPublished &&
+             !isCompleteSkinLoadingTelemetry(created.loadingTelemetry),
          "post-upload cancellation destroys both owner-thread textures and "
          "releases the final revision pin");
+}
+
+void testPreparedSessionRunsFiveHundredFramesWithoutLoadingAgain() {
+  ActivationFixture fixture(
+      {.resourceBearing = true, .movieBearing = true, .audioBearing = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  auto created =
+      PlaySkinSession::create(fixture.takeActivation(), fixture.context());
+  expect(created.session &&
+             created.loadingTelemetry.resources.imageDecodes == 1 &&
+             created.loadingTelemetry.resources.fontDecodes == 1 &&
+             created.loadingTelemetry.resources.movieDecodes == 1 &&
+             created.loadingTelemetry.resources.audioDecodes == 1 &&
+             created.loadingTelemetry.resources.textureUploads == 2,
+         "combined fixture records each prepared resource kind exactly once");
+  if (!created.session) {
+    return;
+  }
+  expect(created.session->preparedTextureCountForTesting() ==
+                 created.loadingTelemetry.resources.textureUploads &&
+             !created.session->modelForTesting().model.objects.empty(),
+         "an owning session exposes only test-scoped model and materialized "
+         "texture acceptance facts");
+  const auto resourceEvidence =
+      created.session->resourcePreparationEvidenceForTesting();
+  const auto exhaustiveReferences = skinModelReferencedResourceIdsForTesting(
+      created.session->modelForTesting(), false);
+  expect(resourceEvidence.referencedImageResourceIds ==
+                 exhaustiveReferences.images &&
+             resourceEvidence.referencedTextObjectIds ==
+                 exhaustiveReferences.textObjects &&
+             skinResourcePreparationEvidenceCompleteForTesting(
+                 resourceEvidence) &&
+             resourceEvidence.referencedImageResourceIds ==
+                 resourceEvidence.preparedImageResourceIds &&
+             resourceEvidence.referencedTextObjectIds ==
+                 resourceEvidence.preparedTextObjectIds &&
+             !resourceEvidence.referencedImageResourceIds.empty() &&
+             !resourceEvidence.referencedTextObjectIds.empty(),
+         "resource completeness compares independent model references with "
+         "prepared image/movie and text-atlas identities");
+  auto omittedPlannerResource = resourceEvidence;
+  omittedPlannerResource.preparedImageResourceIds.pop_back();
+  expect(!skinResourcePreparationEvidenceCompleteForTesting(
+             omittedPlannerResource),
+         "independent model traversal detects one planner resource omission");
+  const auto textureCreates = fixture.device()->createCalls;
+  const auto movieLoads = fixture.movieDevice()->loadCalls;
+  const auto audioLoads = fixture.audioState()->loads.size();
+  const auto fileActivity =
+      created.session->fileActivityCountersForTesting();
+  bool framesReady = true;
+  for (std::uint64_t serial = 2; serial <= 501; ++serial) {
+    const auto frame = created.session->prepareFrame(
+        stateAt(serial), projectionAt(serial), {});
+    framesReady = framesReady && frame.ready();
+  }
+  expect(framesReady && fixture.device()->createCalls == textureCreates &&
+             fixture.movieDevice()->loadCalls == movieLoads &&
+             fixture.audioState()->loads.size() == audioLoads &&
+             fileActivity.readsPerformed > 0 &&
+             created.session->fileActivityCountersForTesting().readsPerformed ==
+                 fileActivity.readsPerformed &&
+             created.session->fileActivityCountersForTesting()
+                     .renderReadsPerformed == 0 &&
+             created.session->fileActivityCountersForTesting()
+                     .renderDirectoryScansPerformed == 0,
+         "five hundred evaluated frames perform no image/font/movie/audio "
+         "decode or upload after preparation");
+  expect(created.session->callbackWallMicrosForTesting() <=
+             static_cast<std::uint64_t>(
+                 LuaRuntimePolicy::gameplayFrame.maxWallTime.count()) *
+                 1'000U,
+         "the test-scoped callback measurement stays within the production "
+         "gameplay-frame budget");
+  const auto active = fixture.liveCounters()->snapshot();
+  expect(active.liveTextures == 2 && active.liveResources == 1 &&
+             active.liveCpuPixmaps == 0 && active.liveMovies == 1 &&
+             active.liveMovieBytes > 0 && active.liveAudioIdentities == 1,
+         "published session exposes CPU/GPU/movie/audio ownership by kind");
+  created.session.reset();
+  expect(fixture.liveCounters()->snapshot() == SkinLiveResourceSnapshot{},
+         "combined session teardown returns every resource kind to baseline");
 }
 
 void testInvalidViewportRollsBackUploadedResourcesOnOwnerThread() {
@@ -1015,6 +2507,59 @@ return {
     end
     return 0.5
   end,
+  text_writer_utf8 = function(value)
+    _G.session_text_utf8_count =
+      (rawget(_G, "session_text_utf8_count") or 0) + 1
+    if _G.session_text_utf8_count ~= 1 or value ~= "A한" then
+      error("UTF-8 text writer received the wrong exact-once value")
+    end
+  end,
+  text_writer_first = function(value)
+    if (rawget(_G, "session_text_transfer_order") or 0) ~= 0 or
+       value ~= "A1" then
+      error("first transferred text writer was not ordered")
+    end
+    _G.session_text_transfer_order = 1
+  end,
+  text_writer_second = function(value)
+    if (rawget(_G, "session_text_transfer_order") or 0) ~= 1 or
+       value ~= "B2" then
+      error("second transferred text writer was not ordered")
+    end
+    _G.session_text_transfer_order = 2
+  end,
+  text_writer_cancel = function()
+    _G.session_text_cancel_count =
+      (rawget(_G, "session_text_cancel_count") or 0) + 1
+    error("cancelled text writer was invoked")
+  end,
+  text_cancel_verify = function()
+    if (rawget(_G, "session_text_cancel_count") or 0) ~= 0 then
+      error("cancelled text edit escaped teardown")
+    end
+    return true
+  end,
+  text_utf8_count = function()
+    return rawget(_G, "session_text_utf8_count") or 0
+  end,
+  interaction_string = function(value)
+    _G.session_interaction_order =
+      (rawget(_G, "session_interaction_order") or "") .. "string,"
+    captured_main_state.event_exec(900, 11)
+  end,
+  interaction_event = function()
+    _G.session_interaction_order =
+      (rawget(_G, "session_interaction_order") or "") .. "event,"
+    captured_main_state.event_exec(900, 22)
+  end,
+  interaction_float = function()
+    _G.session_interaction_order =
+      (rawget(_G, "session_interaction_order") or "") .. "float,"
+    captured_main_state.event_exec(900, 33)
+  end,
+  interaction_order = function()
+    return rawget(_G, "session_interaction_order") or ""
+  end,
 }
 )lua");
     SkinTreeSnapshotter snapshotter(roots_, aliases_);
@@ -1052,8 +2597,21 @@ return {
     writerFail_ = header.value->callbackNamed("writer_fail");
     writerOnce_ = header.value->callbackNamed("writer_once");
     writerOnceVerify_ = header.value->callbackNamed("writer_once_verify");
+    textWriterUtf8_ = header.value->callbackNamed("text_writer_utf8");
+    textWriterFirst_ = header.value->callbackNamed("text_writer_first");
+    textWriterSecond_ = header.value->callbackNamed("text_writer_second");
+    textWriterCancel_ = header.value->callbackNamed("text_writer_cancel");
+    textCancelVerify_ = header.value->callbackNamed("text_cancel_verify");
+    textUtf8Count_ = header.value->callbackNamed("text_utf8_count");
+    interactionString_ = header.value->callbackNamed("interaction_string");
+    interactionEvent_ = header.value->callbackNamed("interaction_event");
+    interactionFloat_ = header.value->callbackNamed("interaction_float");
+    interactionOrder_ = header.value->callbackNamed("interaction_order");
     expect(writerA_ && writerB_ && writerFail_ && writerOnce_ &&
-               writerOnceVerify_,
+               writerOnceVerify_ && textWriterUtf8_ && textWriterFirst_ &&
+               textWriterSecond_ && textWriterCancel_ && textCancelVerify_ &&
+               textUtf8Count_ && interactionString_ && interactionEvent_ &&
+               interactionFloat_ && interactionOrder_,
            "session writer callbacks are retained");
     header.value.reset();
     expect(runtime_->loadConfigured({}).value.has_value(),
@@ -1066,6 +2624,14 @@ return {
         {.id = SkinFloatWriterId{2}, .source = *writerB_},
         {.id = SkinFloatWriterId{3}, .source = *writerFail_},
         {.id = SkinFloatWriterId{4}, .source = *writerOnce_},
+        {.id = SkinFloatWriterId{5}, .source = *interactionFloat_},
+    };
+    model_.model.stringWriters = {
+        {.id = SkinStringWriterId{1}, .source = *textWriterUtf8_},
+        {.id = SkinStringWriterId{2}, .source = *textWriterFirst_},
+        {.id = SkinStringWriterId{3}, .source = *textWriterSecond_},
+        {.id = SkinStringWriterId{4}, .source = *textWriterCancel_},
+        {.id = SkinStringWriterId{5}, .source = *interactionString_},
     };
     model_.model.header.width = 1280;
     model_.model.header.height = 720;
@@ -1083,7 +2649,7 @@ return {
         .chartModel = chart_,
         .model = &model_,
         .configuration = configuration_,
-        .runtime = *runtime_,
+        .runtime = runtime_.get(),
         .mutationTable = mutations_});
     session_ = std::make_unique<PlaySkinSession>(PlaySkinSessionFrameContext{
         .sessionSerial = sessionSerial,
@@ -1098,11 +2664,24 @@ return {
         .resources = resources_,
         .viewportSettings = {},
         .viewport = viewport_,
-        .runtime = *runtime_,
+        .runtime = runtime_.get(),
         .bridge = *bridge_,
         .renderer = renderer_,
         .quadRenderer = quadRenderer_,
-        .configurationWrites = configurationWrites_});
+        .configurationWrites = configurationWrites_,
+        .applyAudioVolume = [this](SkinAudioVolumeWriterTarget target,
+                                   float value) {
+          audioVolumeWrites_.emplace_back(target, value);
+        },
+        .applyPracticeItemScroll = [this](float position) {
+          practiceItemScrollWrites_.push_back(position);
+        },
+        .applyPracticeMenuItem = [this](std::size_t index, bool increment) {
+          practiceMenuItemWrites_.emplace_back(index, increment);
+        },
+        .applyPracticeVisibleItems = [this](int count) {
+          practiceVisibleItemWrites_.push_back(count);
+        }});
   }
 
   bool ready() const noexcept { return session_ != nullptr; }
@@ -1119,6 +2698,20 @@ return {
   SessionQuadBackend &quadBackend() { return quadBackend_; }
   SkinConfigurationWriteQueue &configurationWrites() {
     return configurationWrites_;
+  }
+  const std::vector<std::pair<SkinAudioVolumeWriterTarget, float>> &
+  audioVolumeWrites() const {
+    return audioVolumeWrites_;
+  }
+  const std::vector<float> &practiceItemScrollWrites() const {
+    return practiceItemScrollWrites_;
+  }
+  const std::vector<std::pair<std::size_t, bool>> &practiceMenuItemWrites()
+      const {
+    return practiceMenuItemWrites_;
+  }
+  const std::vector<int> &practiceVisibleItemWrites() const {
+    return practiceVisibleItemWrites_;
   }
 
   void addBgaMarker(std::uint32_t ordinal = 90) {
@@ -1140,7 +2733,10 @@ return {
               .authoredOrdinal = ordinal}});
   }
 
-  void addTouchGeometry(SkinFloatWriterId writer = SkinFloatWriterId{1}) {
+  void addTouchGeometry(
+      SkinFloatWriterId writer = SkinFloatWriterId{1},
+      std::optional<double> firstLaneSecondaryDestinationY = std::nullopt,
+      double destinationX = 100.0) {
     resources_.addImage(80);
     const SkinFloatPropertyId valueProperty{
         writer == SkinFloatWriterId{4} ? 2U : 1U};
@@ -1168,7 +2764,8 @@ return {
          .laneDestination = {.x = 100.0,
                              .y = 20.0,
                              .width = 80.0,
-                             .height = 500.0}},
+                             .height = 500.0},
+         .secondaryDestinationY = firstLaneSecondaryDestinationY},
         {.authoredLane = 0,
          .laneDestination = {.x = 200.0,
                              .y = 20.0,
@@ -1192,7 +2789,7 @@ return {
          .presentation =
              {.loop = 0,
               .frames = {{.timeMillis = 0,
-                          .x = 100.0,
+                          .x = destinationX,
                           .y = 100.0,
                           .width = 20.0,
                           .height = 20.0}},
@@ -1276,6 +2873,98 @@ return {
                           .authoredOrdinal = 820}});
   }
 
+  void addOrderedClickableImage(double destinationX) {
+    resources_.addImage(86);
+    model_.model.events.push_back(
+        {.id = SkinEventBindingId{2},
+         .source = *interactionEvent_,
+         .authoredOrdinal = 2});
+    SkinImageObject image;
+    image.orderedStates = {{.resource = 86,
+                            .frames = {{.x = 0, .y = 0, .w = 10, .h = 10}}}};
+    image.clickEvent = SkinEventBindingId{2};
+    image.clickMode = 2;
+    model_.model.objects.push_back(
+        {.id = 86,
+         .authoredName = "session-ordered-click-image",
+         .payload = std::move(image),
+         .authoredOrdinal = 86,
+         .critical = true});
+    model_.model.destinations.push_back(
+        {.object = 86,
+         .presentation = {.loop = 0,
+                          .frames = {{.timeMillis = 0,
+                                      .x = destinationX,
+                                      .y = 100.0,
+                                      .width = 40.0,
+                                      .height = 20.0}},
+                          .authoredOrdinal = 860}});
+  }
+
+  void addEditableText(SkinObjectId id, std::string value,
+                       SkinStringWriterId writer, double x,
+                       bool editable = true) {
+    resources_.addTextAtlas(id, id);
+    SkinTextObject text;
+    text.literal = std::move(value);
+    text.writer = writer;
+    text.pointSize = 10;
+    text.editable = editable;
+    model_.model.objects.push_back(
+        {.id = id,
+         .authoredName = "session-text-" + std::to_string(id),
+         .payload = std::move(text),
+         .authoredOrdinal = id,
+         .critical = true});
+    model_.model.destinations.push_back(
+        {.object = id,
+         .presentation = {.loop = 0,
+                          .frames = {{.timeMillis = 0,
+                                      .x = x,
+                                      .y = 100.0,
+                                      .width = 80.0,
+                                      .height = 20.0}},
+                          .authoredOrdinal = id}});
+  }
+
+  bool verifyTextCancellation(std::uint64_t frameSerial) {
+    const auto begun = runtime_->beginFrame(frameSerial);
+    if (!begun.ok) {
+      return false;
+    }
+    return !runtime_->invoke(*textCancelVerify_, {}).failure;
+  }
+
+  std::optional<std::int64_t> textUtf8Count(std::uint64_t frameSerial) {
+    const auto begun = runtime_->beginFrame(frameSerial);
+    if (!begun.ok) {
+      return std::nullopt;
+    }
+    const auto result = runtime_->invoke(*textUtf8Count_, {});
+    if (result.failure || !result.value) {
+      return std::nullopt;
+    }
+    if (const auto *value = std::get_if<std::int64_t>(&*result.value)) {
+      return *value;
+    }
+    return std::nullopt;
+  }
+
+  std::optional<std::string> interactionOrder(std::uint64_t frameSerial) {
+    const auto begun = runtime_->beginFrame(frameSerial);
+    if (!begun.ok) {
+      return std::nullopt;
+    }
+    const auto result = runtime_->invoke(*interactionOrder_, {});
+    if (result.failure || !result.value) {
+      return std::nullopt;
+    }
+    if (const auto *value = std::get_if<std::string>(&*result.value)) {
+      return *value;
+    }
+    return std::nullopt;
+  }
+
   void destroySession() { session_.reset(); }
 
 private:
@@ -1292,6 +2981,16 @@ private:
   std::optional<LuaCallbackId> writerFail_;
   std::optional<LuaCallbackId> writerOnce_;
   std::optional<LuaCallbackId> writerOnceVerify_;
+  std::optional<LuaCallbackId> textWriterUtf8_;
+  std::optional<LuaCallbackId> textWriterFirst_;
+  std::optional<LuaCallbackId> textWriterSecond_;
+  std::optional<LuaCallbackId> textWriterCancel_;
+  std::optional<LuaCallbackId> textCancelVerify_;
+  std::optional<LuaCallbackId> textUtf8Count_;
+  std::optional<LuaCallbackId> interactionString_;
+  std::optional<LuaCallbackId> interactionEvent_;
+  std::optional<LuaCallbackId> interactionFloat_;
+  std::optional<LuaCallbackId> interactionOrder_;
   PlayfieldChartVisualModel chart_;
   ValidatedBeatorajaSkinModel model_;
   BeatorajaSkinConfiguration configuration_;
@@ -1302,6 +3001,11 @@ private:
   SessionQuadBackend quadBackend_;
   rendering::SkinQuadBatchRenderer quadRenderer_;
   SkinConfigurationWriteQueue configurationWrites_;
+  std::vector<std::pair<SkinAudioVolumeWriterTarget, float>>
+      audioVolumeWrites_;
+  std::vector<float> practiceItemScrollWrites_;
+  std::vector<std::pair<std::size_t, bool>> practiceMenuItemWrites_;
+  std::vector<int> practiceVisibleItemWrites_;
   std::unique_ptr<PlaySkinStateBridge> bridge_;
   std::unique_ptr<PlaySkinSession> session_;
 };
@@ -1502,6 +3206,20 @@ void testSelectedSkinHudUsesThePublishedSkinNoteLaneSpan() {
              std::abs(hud->judgementLineY - 34.0) < 0.0001,
          "selected-skin HUD derives and projects its full lane span and "
          "judgement line from published SkinNote geometry");
+}
+
+void testPmsPoorDestinationUsesFirstSelectedSkinLane() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addTouchGeometry(SkinFloatWriterId{1}, -42.0);
+  const auto geometry = fixture.session().pmsPoorDestinationGeometry();
+  expect(geometry.has_value() &&
+             std::abs(geometry->laneOriginY - 20.0) < 0.0001 &&
+             std::abs(geometry->laneHeight - 500.0) < 0.0001 &&
+             std::abs(geometry->secondaryDestinationY + 42.0) < 0.0001,
+         "PMS dst2 forwards the selected SkinNote's source lane-zero geometry");
 }
 
 void testSyntheticStartLaneIndicatorsUseSelectedSkinLaneGeometry() {
@@ -1791,7 +3509,7 @@ void testInvalidSessionSerialDoesNotConsumeFrameOwners() {
       .configuration = fixture.configuration(),
       .resources = fixture.resources(),
       .viewport = fixture.viewport(),
-      .runtime = fixture.runtime(),
+      .runtime = &fixture.runtime(),
       .state = state,
   });
   expect(evaluation.submitReady.has_value(),
@@ -2129,6 +3847,110 @@ void testForwardCompatiblePersistedMutationsEnqueueOneExactOrderedBatch() {
          "one exact deep-owned persisted batch in authored order");
 }
 
+void testAudioVolumeMutationAppliesOnlyAfterSkinSubmission() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addBgaMarker();
+  const std::vector<SkinFrameMutation> writes{
+      SetSkinAudioVolume{.target = SkinAudioVolumeWriterTarget::Keysound,
+                         .value = 0.35F},
+  };
+  expect(fixture.session().prepareFrameForTesting(
+             stateAt(1), projectionAt(1), {}, writes) ==
+             PresentationFrameOutcome::Ready &&
+             fixture.audioVolumeWrites().empty(),
+         "audio volume mutation remains staged until the skin frame submits");
+
+  SessionBgaSubmitter bga;
+  RenderContext context;
+  const auto result = fixture.session().render(context, bgaFrame(82), bga);
+  expect(result.outcome == PresentationFrameOutcome::Ready &&
+             fixture.audioVolumeWrites().size() == 1 &&
+             fixture.audioVolumeWrites().front().first ==
+                 SkinAudioVolumeWriterTarget::Keysound &&
+             fixture.audioVolumeWrites().front().second == 0.35F,
+         "submitted skin frame applies the staged native audio writer exactly "
+         "once");
+}
+
+void testPracticeScrollMutationAppliesOnlyAfterSkinSubmission() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addBgaMarker();
+  const std::vector<SkinFrameMutation> writes{
+      SetPracticeItemScroll{.position = 0.5F},
+  };
+  expect(fixture.session().prepareFrameForTesting(
+             stateAt(1), projectionAt(1), {}, writes) ==
+             PresentationFrameOutcome::Ready &&
+             fixture.practiceItemScrollWrites().empty(),
+         "practice scroll remains staged until the skin frame submits");
+
+  SessionBgaSubmitter bga;
+  RenderContext context;
+  const auto result = fixture.session().render(context, bgaFrame(83), bga);
+  expect(result.outcome == PresentationFrameOutcome::Ready &&
+             fixture.practiceItemScrollWrites().size() == 1 &&
+             fixture.practiceItemScrollWrites().front() == 0.5F,
+         "submitted skin frame applies the staged practice viewport writer "
+         "exactly once");
+}
+
+void testPracticeMenuItemMutationAppliesOnlyAfterSkinSubmission() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addBgaMarker();
+  const std::vector<SkinFrameMutation> writes{
+      SetPracticeMenuItem{.visibleIndex = 9, .increment = false},
+  };
+  expect(fixture.session().prepareFrameForTesting(
+             stateAt(1), projectionAt(1), {}, writes) ==
+             PresentationFrameOutcome::Ready &&
+             fixture.practiceMenuItemWrites().empty(),
+         "practice item remains staged until the skin frame submits");
+
+  SessionBgaSubmitter bga;
+  RenderContext context;
+  const auto result = fixture.session().render(context, bgaFrame(84), bga);
+  expect(result.outcome == PresentationFrameOutcome::Ready &&
+             fixture.practiceMenuItemWrites().size() == 1 &&
+             fixture.practiceMenuItemWrites().front() ==
+                 std::pair<std::size_t, bool>{9, false},
+         "submitted skin frame applies the staged source practice row exactly "
+         "once");
+}
+
+void testPracticeVisibleItemsMutationAppliesOnlyAfterSkinSubmission() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addBgaMarker();
+  const std::vector<SkinFrameMutation> writes{
+      SetPracticeVisibleItems{.count = 7},
+  };
+  expect(fixture.session().prepareFrameForTesting(
+             stateAt(1), projectionAt(1), {}, writes) ==
+             PresentationFrameOutcome::Ready &&
+             fixture.practiceVisibleItemWrites().empty(),
+         "practice visible-row count remains staged until the skin frame "
+         "submits");
+
+  SessionBgaSubmitter bga;
+  RenderContext context;
+  const auto result = fixture.session().render(context, bgaFrame(85), bga);
+  expect(result.outcome == PresentationFrameOutcome::Ready &&
+             fixture.practiceVisibleItemWrites() == std::vector<int>{7},
+         "submitted skin frame applies the SkinPractice visible-row count "
+         "exactly once");
+}
+
 void testPersistenceRequestIsFullyAllocatedBeforeSkinSubmission() {
   SessionFixture fixture;
   if (!fixture.ready()) {
@@ -2227,6 +4049,291 @@ void testQueueFullAndClosedAreRecoverableOnlyAfterSuccessfulSkinDraw() {
   };
   exercise(false);
   exercise(true);
+}
+
+void testEditableTextUsesEndCursorUtf8BackspaceAndReturnCommit() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addEditableText(84, "A", SkinStringWriterId{1}, 100.0);
+  SessionBgaSubmitter bga;
+  RenderContext context;
+  const UiLogicalPoint inside{.x = 110.0F, .y = 610.0F};
+
+  expect(!fixture.session().focusTextInput(inside, 1'000),
+         "text cannot focus before its matching skin frame submits");
+  expect(fixture.session().prepareFrame(stateAt(1), projectionAt(1)) ==
+             PresentationFrameOutcome::Ready,
+         "editable text frame prepares");
+  const auto first = fixture.session().render(context, bgaFrame(1), bga);
+  expect(first.outcome == PresentationFrameOutcome::Ready &&
+             fixture.session().focusTextInput(inside, 2'000) &&
+             fixture.session().hasFocusedTextInput(),
+         "submitted editable text takes the one session focus");
+  expect(fixture.session().appendTextInput("é") &&
+             fixture.session().backspaceTextInput() &&
+             fixture.session().appendTextInput("한") &&
+             fixture.session().commitTextInput(3'000) &&
+             !fixture.session().hasFocusedTextInput() &&
+             !fixture.session().commitTextInput(3'001),
+         "text editing starts at the end, removes one UTF-8 codepoint, and "
+         "Return queues one commit");
+
+  expect(fixture.session().prepareFrame(stateAt(2), projectionAt(2)) ==
+             PresentationFrameOutcome::Ready,
+         "the queued UTF-8 value reaches its typed string writer");
+  const auto second = fixture.session().render(context, bgaFrame(2), bga);
+  expect(second.outcome == PresentationFrameOutcome::Ready &&
+             fixture.session().prepareFrame(stateAt(3), projectionAt(3)) ==
+                 PresentationFrameOutcome::Ready,
+         "a submitted commit is exact once and is not queued again");
+  const auto third = fixture.session().render(context, bgaFrame(3), bga);
+  expect(third.outcome == PresentationFrameOutcome::Ready,
+         "the post-commit frame remains renderable");
+}
+
+void testEditableTextOutsideClickCommitsAndFocusTransferIsOrdered() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addEditableText(84, "A", SkinStringWriterId{2}, 100.0);
+  fixture.addEditableText(85, "B", SkinStringWriterId{3}, 220.0);
+  SessionBgaSubmitter bga;
+  RenderContext context;
+  expect(fixture.session().prepareFrame(stateAt(1), projectionAt(1)) ==
+             PresentationFrameOutcome::Ready,
+         "focus-transfer text frame prepares");
+  const auto first = fixture.session().render(context, bgaFrame(1), bga);
+  expect(first.outcome == PresentationFrameOutcome::Ready,
+         "focus-transfer text frame submits");
+
+  expect(fixture.session().focusTextInput({.x = 110.0F, .y = 610.0F},
+                                          2'000) &&
+             fixture.session().appendTextInput("1") &&
+             fixture.session().focusTextInput({.x = 230.0F, .y = 610.0F},
+                                              3'000) &&
+             fixture.session().appendTextInput("2") &&
+             !fixture.session().focusTextInput({.x = 400.0F, .y = 300.0F},
+                                               4'000) &&
+             !fixture.session().hasFocusedTextInput(),
+         "focus transfer commits the first editor and an outside click "
+         "commits the second");
+  expect(fixture.session().prepareFrame(stateAt(2), projectionAt(2)) ==
+             PresentationFrameOutcome::Ready,
+         "focus-transfer commits invoke typed writers in pointer order");
+  const auto second = fixture.session().render(context, bgaFrame(2), bga);
+  expect(second.outcome == PresentationFrameOutcome::Ready,
+         "ordered focus-transfer commits submit with the matching frame");
+}
+
+void testEditableTextOutsideClickPreservesGlobalInteractionOrder() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addEditableText(84, "A", SkinStringWriterId{5}, 100.0);
+  fixture.addOrderedClickableImage(300.0);
+  fixture.addTouchGeometry(SkinFloatWriterId{5}, std::nullopt, 500.0);
+  SessionBgaSubmitter bga;
+  RenderContext context;
+  expect(fixture.session().prepareFrame(stateAt(1), projectionAt(1)) ==
+                 PresentationFrameOutcome::Ready &&
+             fixture.session().render(context, bgaFrame(1), bga).outcome ==
+                 PresentationFrameOutcome::Ready,
+         "heterogeneous interaction fixture publishes all three controls");
+
+  expect(fixture.session().focusTextInput({.x = 110.0F, .y = 610.0F},
+                                          1'000) &&
+             fixture.session().appendTextInput("1") &&
+             !fixture.session().focusTextInput({.x = 320.0F, .y = 610.0F},
+                                               2'000),
+         "outside click queues the focused text commit before hit dispatch");
+  const UiLogicalPoint imagePoint{.x = 320.0F, .y = 610.0F};
+  const auto imageHit = fixture.session().hitTestUiControl(imagePoint);
+  const UiLogicalPoint sliderPoint{.x = 550.0F, .y = 610.0F};
+  const auto sliderHit = fixture.session().hitTestUiControl(sliderPoint);
+  expect(imageHit.kind == PresentationUiControlKind::Image &&
+             fixture.session().beginPresentationTouch(
+                 {.pointerId = 1,
+                  .uiPoint = imagePoint,
+                  .eventMicros = 2'001,
+                  .hit = imageHit}) ==
+                 PresentationTouchResult{.consumed = true,
+                                         .excludeFromGameplay = true} &&
+             (sliderHit.kind == PresentationUiControlKind::Slider ||
+              sliderHit.kind == PresentationUiControlKind::LaneCover) &&
+             fixture.session().beginPresentationTouch(
+                 {.pointerId = 2,
+                  .uiPoint = sliderPoint,
+                  .eventMicros = 2'002,
+                  .hit = sliderHit}) ==
+                 PresentationTouchResult{.consumed = true,
+                                         .excludeFromGameplay = true},
+         "the following image event and float writer join the same queue");
+  expect(fixture.session().prepareFrame(stateAt(2), projectionAt(2)) ==
+                 PresentationFrameOutcome::Ready &&
+             fixture.session().render(context, bgaFrame(2), bga).outcome ==
+                 PresentationFrameOutcome::Ready &&
+             fixture.interactionOrder(3) ==
+                 std::optional<std::string>{"string,event,float,"},
+         "string, image-event, and float callbacks retain pointer order "
+         "across successful submission");
+}
+
+void testEditableStringWriterDoesNotRunWhenSubmissionPreflightFails() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addEditableText(84, "A", SkinStringWriterId{1}, 100.0);
+  SessionBgaSubmitter bga;
+  RenderContext context;
+  expect(fixture.session().prepareFrame(stateAt(1), projectionAt(1)) ==
+                 PresentationFrameOutcome::Ready &&
+             fixture.session().render(context, bgaFrame(1), bga).outcome ==
+                 PresentationFrameOutcome::Ready &&
+             fixture.session().focusTextInput(
+                 {.x = 110.0F, .y = 610.0F}, 1'000) &&
+             fixture.session().appendTextInput("한") &&
+             fixture.session().commitTextInput(2'000),
+         "failed-submit fixture queues one exact UTF-8 string commit");
+  expect(fixture.session().prepareFrame(stateAt(2), projectionAt(2)) ==
+             PresentationFrameOutcome::Ready,
+         "string callback remains pending while the visual frame prepares");
+  fixture.quadBackend().preflightReady = false;
+  const auto failed = fixture.session().render(context, bgaFrame(2), bga);
+  expect(failed.outcome == PresentationFrameOutcome::CriticalFailure &&
+             fixture.textUtf8Count(3) == std::optional<std::int64_t>{0},
+         "renderer preflight failure cancels the queued string without any "
+         "global Lua side effect");
+}
+
+void testEditableTextBoundsFocusedAndQueuedUtf8() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addEditableText(84, "A", SkinStringWriterId{5}, 100.0);
+  SessionBgaSubmitter bga;
+  RenderContext context;
+  expect(fixture.session().prepareFrame(stateAt(1), projectionAt(1)) ==
+                 PresentationFrameOutcome::Ready &&
+             fixture.session().render(context, bgaFrame(1), bga).outcome ==
+                 PresentationFrameOutcome::Ready,
+         "bounded editable fixture publishes its field");
+  const UiLogicalPoint point{.x = 110.0F, .y = 610.0F};
+
+  expect(fixture.session().focusTextInput(point, 500) &&
+             fixture.session().appendTextInput(std::string(32'767, 'x')) &&
+             !fixture.session().appendTextInput("x") &&
+             fixture.session().hasFocusedTextInput(),
+         "focused text accepts its exact codepoint bound and rejects the "
+         "next complete codepoint");
+  fixture.session().cancelTextInput();
+
+  std::string exactBytes(3, 'x');
+  exactBytes.reserve(65'535);
+  for (std::size_t index = 0; index < 16'383; ++index) {
+    exactBytes.append("\xF4\x8F\xBF\xBF");
+  }
+  expect(fixture.session().focusTextInput(point, 750) &&
+             fixture.session().appendTextInput(exactBytes) &&
+             !fixture.session().appendTextInput("x") &&
+             fixture.session().hasFocusedTextInput(),
+         "focused text accepts its exact byte bound and rejects the next "
+         "complete codepoint");
+  fixture.session().cancelTextInput();
+
+  expect(fixture.session().focusTextInput(point, 1'000) &&
+             !fixture.session().appendTextInput(std::string(32'768, 'x')) &&
+             fixture.session().hasFocusedTextInput(),
+         "focused text rejects a codepoint count beyond its fixed bound");
+  fixture.session().cancelTextInput();
+
+  std::string fourByteText;
+  fourByteText.reserve(65'540);
+  for (std::size_t index = 0; index < 16'385; ++index) {
+    fourByteText.append("\xF4\x8F\xBF\xBF");
+  }
+  expect(fixture.session().focusTextInput(point, 2'000) &&
+             !fixture.session().appendTextInput(fourByteText) &&
+             fixture.session().hasFocusedTextInput(),
+         "focused text rejects valid UTF-8 bytes beyond its fixed byte bound");
+  fixture.session().cancelTextInput();
+
+  std::string queuedValue;
+  queuedValue.reserve(40'000);
+  for (std::size_t index = 0; index < 10'000; ++index) {
+    queuedValue.append("\xF4\x8F\xBF\xBF");
+  }
+  expect(fixture.session().focusTextInput(point, 3'000) &&
+             fixture.session().appendTextInput(queuedValue) &&
+             fixture.session().commitTextInput(3'001) &&
+             fixture.session().prepareFrame(stateAt(2), projectionAt(2)) ==
+                 PresentationFrameOutcome::Ready &&
+             fixture.session().focusTextInput(point, 4'000) &&
+             fixture.session().appendTextInput(queuedValue) &&
+             !fixture.session().commitTextInput(4'001) &&
+             fixture.session().hasFocusedTextInput(),
+         "aggregate queued string bytes include a prepared but unsubmitted "
+         "frame and reject another commit without losing the focused edit");
+  fixture.session().cancelTextInput();
+  expect(fixture.session().render(context, bgaFrame(2), bga).outcome ==
+             PresentationFrameOutcome::Ready,
+         "the bounded pending string still completes after successful submit");
+}
+
+void testEditableTextCancellationTeardownAndNoneditableRejection() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addEditableText(84, "A", SkinStringWriterId{4}, 100.0);
+  fixture.addEditableText(85, "B", SkinStringWriterId{4}, 220.0, false);
+  SessionBgaSubmitter bga;
+  RenderContext context;
+  expect(fixture.session().prepareFrame(stateAt(1), projectionAt(1)) ==
+             PresentationFrameOutcome::Ready,
+         "cancellable text frame prepares");
+  const auto first = fixture.session().render(context, bgaFrame(1), bga);
+  const UiLogicalPoint editablePoint{.x = 110.0F, .y = 610.0F};
+  const auto textHit = fixture.session().hitTestUiControl(editablePoint);
+  expect(first.outcome == PresentationFrameOutcome::Ready &&
+             !fixture.session().focusTextInput({.x = 230.0F, .y = 610.0F},
+                                              2'000) &&
+             textHit.kind == PresentationUiControlKind::Text &&
+             fixture.session().beginPresentationTouch(
+                 {.pointerId = 77,
+                  .uiPoint = editablePoint,
+                  .eventMicros = 3'000,
+                  .hit = textHit}) ==
+                 PresentationTouchResult{.consumed = true,
+                                         .excludeFromGameplay = true} &&
+             fixture.session().appendTextInput("x"),
+         "noneditable text rejects focus while a semantic pointer captures "
+         "editable text without exposing SDL ownership");
+  (void)fixture.session().endPresentationTouch(
+      {.pointerId = 77,
+       .uiPoint = editablePoint,
+       .eventMicros = 3'001,
+       .hit = textHit},
+      false);
+  fixture.session().cancelTextInput();
+  expect(!fixture.session().hasFocusedTextInput() &&
+             fixture.session().prepareFrame(stateAt(2), projectionAt(2)) ==
+                 PresentationFrameOutcome::Ready,
+         "explicit cancellation discards the uncommitted writer");
+  const auto second = fixture.session().render(context, bgaFrame(2), bga);
+  expect(second.outcome == PresentationFrameOutcome::Ready &&
+             fixture.session().focusTextInput({.x = 110.0F, .y = 610.0F},
+                                              4'000) &&
+             fixture.session().appendTextInput("y"),
+         "a later editor can focus before session teardown");
+  fixture.destroySession();
+  expect(fixture.verifyTextCancellation(3),
+         "session teardown cancels focused text without invoking its writer");
 }
 
 void testTouchCaptureLifecycleFailsClosedAndQueuesOnlyDown() {
@@ -2699,7 +4806,7 @@ void testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin() {
       .configuration = fixture.configuration(),
       .resources = fixture.resources(),
       .viewport = fixture.viewport(),
-      .runtime = fixture.runtime(),
+      .runtime = &fixture.runtime(),
       .state = state};
   auto unrestrictedInputs = inputs;
   unrestrictedInputs.safetyPolicy = SkinSafetyPolicy(
@@ -2725,12 +4832,31 @@ void testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin() {
 } // namespace
 
 int main() {
+  testLuaJsonAndLr2SessionsEmitEquivalentSharedObjects();
+  testLr2ProductionRecoveryAndFatalBoundaries();
+  testLr2ProductionBuiltInGraphsOwnChartAndPlainImages();
+  testLr2DeclaredFalseOptionActivatesNegatedInclude();
+  testMalformedLr2SetOptionDoesNotDivergeFromIncludeFold();
+  testCommentedJsonCreatesProductionSession();
+  testSessionOwnsDeduplicatedMoviesAndRollsBackBeforePublication();
+  testSessionOwnsLuaAudioAndRollsBackBeforePublication();
+  testCallbackBindingWithoutRuntimeFailsValidation();
   testActivationCreatesAnOwningFreshStateSession();
   testConfiguredLoadUsesTheInitializedAuthoritativeState();
+  testLuaSessionCapturesLegacyInputAtEachAuthoritativeBoundary();
+  testRepeatedPomyuObjectsShareCyclePreparation();
+  testMalformedPomyuNumericDirectivesAbortTheCp932Character();
+  testExplicitOversizedPomyuDoesNotFallBackToSibling();
+  testIncompletePomyuResourcesKeepDefaultCycles();
+  testPomyuResourcesUseMs932AndWindowsSeparators();
+  testPomyuRootedResourcePathIsRejected();
+  testPomyuLeadingBackslashPathRemainsCharacterRelative();
+  testPomyuPreparationSelectsSecondPlayerTexturesAndStaticFallbacks();
   testRequestedExternalGameplaySkinCreatesARealSession();
   testActivationRejectsAReconciledDigestMismatch();
   testResourceSessionOwnsUploadsAndExactRuntimeStringAtlas();
   testPostUploadCancellationRollsBackResourcesOnOwnerThread();
+  testPreparedSessionRunsFiveHundredFramesWithoutLoadingAgain();
   testInvalidViewportRollsBackUploadedResourcesOnOwnerThread();
   testActivationCancellationAndZeroSerialDoNotPublishSessions();
   testSuccessfulFrameCommitsWriterMutationsInInputOrder();
@@ -2739,6 +4865,7 @@ int main() {
   testSerialMismatchDoesNotConsumeRuntimeFrame();
   testSyntheticReplayGhostUsesMatchingLaneGeometry();
   testSelectedSkinHudUsesThePublishedSkinNoteLaneSpan();
+  testPmsPoorDestinationUsesFirstSelectedSkinLane();
   testSyntheticStartLaneIndicatorsUseSelectedSkinLaneGeometry();
   testSyntheticReplayGhostRespectsDisabledOption();
   testSyntheticReplayGhostSkipsEventsOutsideLaneClip();
@@ -2754,8 +4881,18 @@ int main() {
   testSkinLaneTouchLayoutUsesDrawableScreenCoordinates();
   testCriticalEvaluationAndPreflightFailuresPublishNoFrameState();
   testForwardCompatiblePersistedMutationsEnqueueOneExactOrderedBatch();
+  testAudioVolumeMutationAppliesOnlyAfterSkinSubmission();
+  testPracticeScrollMutationAppliesOnlyAfterSkinSubmission();
+  testPracticeMenuItemMutationAppliesOnlyAfterSkinSubmission();
+  testPracticeVisibleItemsMutationAppliesOnlyAfterSkinSubmission();
   testPersistenceRequestIsFullyAllocatedBeforeSkinSubmission();
   testQueueFullAndClosedAreRecoverableOnlyAfterSuccessfulSkinDraw();
+  testEditableTextUsesEndCursorUtf8BackspaceAndReturnCommit();
+  testEditableTextOutsideClickCommitsAndFocusTransferIsOrdered();
+  testEditableTextOutsideClickPreservesGlobalInteractionOrder();
+  testEditableStringWriterDoesNotRunWhenSubmissionPreflightFails();
+  testEditableTextBoundsFocusedAndQueuedUtf8();
+  testEditableTextCancellationTeardownAndNoneditableRejection();
   testTouchCaptureLifecycleFailsClosedAndQueuesOnlyDown();
   testImageActTouchQueuesPinnedEventOnDown();
   testViewportChangeCancelsCapturesAndInvalidatesPublishedGeometry();

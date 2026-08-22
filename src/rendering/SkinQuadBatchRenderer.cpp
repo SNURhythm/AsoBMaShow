@@ -96,6 +96,21 @@ bool validScissor(const std::optional<skin::UiLogicalRect> &scissor) noexcept {
               static_cast<double>(std::numeric_limits<int>::max() / 4));
 }
 
+bool validDistanceField(
+    const std::optional<skin::SkinRenderState::DistanceField> &state) noexcept {
+  if (!state) {
+    return true;
+  }
+  constexpr double maximumUniformMagnitude = 4096.0;
+  return finite(state->outlineDistance) && state->outlineDistance >= 0.0 &&
+         state->outlineDistance <= 0.5 && finite(state->shadowSmoothing) &&
+         state->shadowSmoothing >= 0.0 &&
+         state->shadowSmoothing <= maximumUniformMagnitude &&
+         finite(state->shadowOffsetU) && finite(state->shadowOffsetV) &&
+         std::abs(state->shadowOffsetU) <= maximumUniformMagnitude &&
+         std::abs(state->shadowOffsetV) <= maximumUniformMagnitude;
+}
+
 const bgfx::VertexLayout &transientCapacityProbeLayout() {
   static const bgfx::VertexLayout layout = [] {
     bgfx::VertexLayout value;
@@ -132,6 +147,26 @@ public:
       return false;
     }
     return bgfx::isValid(sampler_);
+  }
+
+  bool preflightDistanceFields(
+      std::span<const skin::SkinRenderState::DistanceField> states) override {
+    if (states.empty()) {
+      return true;
+    }
+    try {
+      distanceFieldProgram_ = ShaderManager::getInstance().getProgram(
+          "vs_skin_quad.bin", "fs_skin_distance_field.bin");
+      distanceParameters_ =
+          UniformCache::getInstance().getVec4("u_distanceParameters");
+      outlineColor_ = UniformCache::getInstance().getVec4("u_outlineColor");
+      shadowColor_ = UniformCache::getInstance().getVec4("u_shadowColor");
+    } catch (...) {
+      return false;
+    }
+    return bgfx::isValid(distanceFieldProgram_) &&
+           bgfx::isValid(distanceParameters_) && bgfx::isValid(outlineColor_) &&
+           bgfx::isValid(shadowColor_);
   }
 
   bool reserve(
@@ -240,6 +275,31 @@ public:
     if (batch.textured) {
       bgfx::setTexture(0, sampler_, batch.texture, batch.samplerFlags);
     }
+    if (batch.program == SkinBatchProgram::DistanceField) {
+      if (!batch.distanceField || !bgfx::isValid(distanceFieldProgram_) ||
+          !bgfx::isValid(distanceParameters_) ||
+          !bgfx::isValid(outlineColor_) || !bgfx::isValid(shadowColor_)) {
+        return;
+      }
+      const auto &distance = *batch.distanceField;
+      const std::array<float, 4> parameters{
+          static_cast<float>(distance.outlineDistance),
+          static_cast<float>(distance.shadowSmoothing),
+          static_cast<float>(distance.shadowOffsetU),
+          static_cast<float>(distance.shadowOffsetV)};
+      const auto normalizedColor = [](const std::array<std::uint8_t, 4> &color) {
+        return std::array<float, 4>{
+            static_cast<float>(color[0]) / 255.0F,
+            static_cast<float>(color[1]) / 255.0F,
+            static_cast<float>(color[2]) / 255.0F,
+            static_cast<float>(color[3]) / 255.0F};
+      };
+      const auto outline = normalizedColor(distance.outlineRgba);
+      const auto shadow = normalizedColor(distance.shadowRgba);
+      bgfx::setUniform(distanceParameters_, parameters.data());
+      bgfx::setUniform(outlineColor_, outline.data());
+      bgfx::setUniform(shadowColor_, shadow.data());
+    }
     std::uint64_t state = batch.bgfxState;
     switch (batch.topology) {
     case SkinBatchTopology::Triangles:
@@ -258,8 +318,12 @@ public:
     } else {
       bgfx::setScissor();
     }
-    bgfx::submit(rendering::ui_view,
-                 batch.textured ? texturedProgram_ : primitiveProgram_);
+    const bgfx::ProgramHandle program =
+        batch.program == SkinBatchProgram::DistanceField
+            ? distanceFieldProgram_
+        : batch.program == SkinBatchProgram::Textured ? texturedProgram_
+                                                      : primitiveProgram_;
+    bgfx::submit(rendering::ui_view, program);
   }
 
 private:
@@ -267,6 +331,10 @@ private:
   bgfx::UniformHandle sampler_ = BGFX_INVALID_HANDLE;
   bgfx::ProgramHandle texturedProgram_ = BGFX_INVALID_HANDLE;
   bgfx::ProgramHandle primitiveProgram_ = BGFX_INVALID_HANDLE;
+  bgfx::ProgramHandle distanceFieldProgram_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle distanceParameters_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle outlineColor_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle shadowColor_ = BGFX_INVALID_HANDLE;
 };
 
 } // namespace
@@ -362,7 +430,9 @@ void SkinQuadBatchRenderer::begin(
 bool SkinQuadBatchRenderer::preflightSegment(
     std::span<const skin::SkinDrawCommand> commands,
     std::vector<SkinQuadSubmissionPlan::ResolvedCommand> &resolved,
-    std::vector<skin::SkinFilterMode> &samplers, std::size_t &vertexCount,
+    std::vector<skin::SkinFilterMode> &samplers,
+    std::vector<skin::SkinRenderState::DistanceField> &distanceFields,
+    std::size_t &vertexCount,
     std::size_t &indexCount, std::size_t &skinAllocationCount) const {
   resolved.clear();
   resolved.resize(commands.size());
@@ -383,13 +453,21 @@ bool SkinQuadBatchRenderer::preflightSegment(
       samplers.push_back(filter);
     }
   };
+  const auto addDistanceField = [&](const skin::SkinRenderState &state) {
+    if (state.distanceField &&
+        std::ranges::find(distanceFields, *state.distanceField) ==
+            distanceFields.end()) {
+      distanceFields.push_back(*state.distanceField);
+    }
+  };
 
   for (std::size_t commandIndex = 0; commandIndex < commands.size();
        ++commandIndex) {
     const auto &command = commands[commandIndex];
     auto &prepared = resolved[commandIndex];
     const auto resolveScissor = [&](const skin::SkinRenderState &state) {
-      if (!validScissor(state.scissor)) {
+      if (!validScissor(state.scissor) ||
+          !validDistanceField(state.distanceField)) {
         return false;
       }
       bool empty = false;
@@ -412,38 +490,94 @@ bool SkinQuadBatchRenderer::preflightSegment(
       }
       if (!prepared.suppressed) {
         addSampler(quad->state.filter);
+        addDistanceField(quad->state);
+      }
+      continue;
+    }
+    if (const auto *quad = std::get_if<skin::SkinGeneratedTexturedQuadCommand>(
+            &command.payload)) {
+      const auto *resource =
+          resources_->prepareGeneratedTexture(quad->key, quad->texture);
+      if (!resource || !bgfx::isValid(resource->texture) ||
+          resource->width != quad->texture.width ||
+          resource->height != quad->texture.height ||
+          !std::ranges::all_of(quad->vertices, validVertex) ||
+          !resolveScissor(quad->state)) {
+        return false;
+      }
+      prepared.texture = resource->texture;
+      if (!prepared.suppressed && !addCounts(4, 6)) {
+        return false;
+      }
+      if (!prepared.suppressed) {
+        addSampler(quad->state.filter);
+        addDistanceField(quad->state);
       }
       continue;
     }
     if (const auto *glyphs =
             std::get_if<skin::SkinGlyphRunCommand>(&command.payload)) {
       const auto *atlas = resources_->findTextAtlas(glyphs->atlas);
-      if (!atlas || !bgfx::isValid(atlas->texture) ||
-          !resolveScissor(glyphs->state)) {
+      if (!atlas || !resolveScissor(glyphs->state)) {
         return false;
       }
-      prepared.texture = atlas->texture;
+      const auto glyphTexture = [&](char32_t codepoint) {
+        const auto metric = atlas->glyphs.find(codepoint);
+        if (metric == atlas->glyphs.end()) {
+          return bgfx::TextureHandle{bgfx::kInvalidHandle};
+        }
+        if (atlas->pages.empty()) {
+          return metric->second.page == 0 ? atlas->texture
+                                          : bgfx::TextureHandle{
+                                                bgfx::kInvalidHandle};
+        }
+        if (metric->second.page >= atlas->pages.size()) {
+          return bgfx::TextureHandle{bgfx::kInvalidHandle};
+        }
+        const auto &page = atlas->pages[metric->second.page];
+        return page.available ? page.texture
+                              : bgfx::TextureHandle{bgfx::kInvalidHandle};
+      };
+      prepared.glyphTextures.reserve(glyphs->glyphs.size() +
+                                     glyphs->fallbackColorOverlays.size());
       for (const auto &glyph : glyphs->glyphs) {
-        if (!atlas->glyphs.contains(glyph.codepoint) ||
+        const auto texture = glyphTexture(glyph.codepoint);
+        if (!bgfx::isValid(texture) ||
             !std::ranges::all_of(glyph.vertices, validVertex)) {
           return false;
         }
+        prepared.glyphTextures.push_back(texture);
       }
+      for (const auto &glyph : glyphs->fallbackColorOverlays) {
+        const auto metric = atlas->glyphs.find(glyph.codepoint);
+        const auto texture = glyphTexture(glyph.codepoint);
+        if (!glyphs->state.distanceField || metric == atlas->glyphs.end() ||
+            metric->second.bitmapFontType != 0 || !bgfx::isValid(texture) ||
+            !std::ranges::all_of(glyph.vertices, validVertex)) {
+          return false;
+        }
+        prepared.glyphTextures.push_back(texture);
+      }
+      const std::size_t glyphCount =
+          glyphs->glyphs.size() + glyphs->fallbackColorOverlays.size();
       if (!prepared.suppressed &&
-          (glyphs->glyphs.size() >
+          (glyphCount >
                std::numeric_limits<std::size_t>::max() / 6U ||
-           !addCounts(glyphs->glyphs.size() * 4U,
-                      glyphs->glyphs.size() * 6U))) {
+           !addCounts(glyphCount * 4U, glyphCount * 6U))) {
         return false;
       }
-      if (!prepared.suppressed && !glyphs->glyphs.empty()) {
+      if (!prepared.suppressed && glyphCount != 0) {
         addSampler(glyphs->state.filter);
+        if (!glyphs->fallbackColorOverlays.empty()) {
+          addSampler(skin::SkinFilterMode::Linear);
+        }
+        addDistanceField(glyphs->state);
       }
       continue;
     }
     if (const auto *primitive =
             std::get_if<skin::SkinPrimitiveCommand>(&command.payload)) {
-      if (!resolveScissor(primitive->state) ||
+      if (primitive->state.distanceField || !resolveScissor(primitive->state) ||
           !std::ranges::all_of(primitive->vertices, validVertex)) {
         return false;
       }
@@ -489,6 +623,7 @@ bool SkinQuadBatchRenderer::preflightSegment(
     return left.texture.idx == right.texture.idx &&
            left.topology == right.topology && left.blend == right.blend &&
            left.filter == right.filter && left.textured == right.textured &&
+           left.distanceField == right.distanceField &&
            sameScissor(left.scissor, right.scissor);
   };
   const auto flush = [&] {
@@ -536,7 +671,19 @@ bool SkinQuadBatchRenderer::preflightSegment(
                   .blend = quad->state.blend,
                   .filter = quad->state.filter,
                   .scissor = resolved[commandIndex].scissor,
-                  .textured = true});
+                  .textured = true,
+                  .distanceField = quad->state.distanceField});
+      continue;
+    }
+    if (const auto *quad = std::get_if<skin::SkinGeneratedTexturedQuadCommand>(
+            &command.payload)) {
+      appendQuad({.texture = resolved[commandIndex].texture,
+                  .topology = SkinBatchTopology::Triangles,
+                  .blend = quad->state.blend,
+                  .filter = quad->state.filter,
+                  .scissor = resolved[commandIndex].scissor,
+                  .textured = true,
+                  .distanceField = quad->state.distanceField});
       continue;
     }
     if (const auto *glyphs =
@@ -546,10 +693,28 @@ bool SkinQuadBatchRenderer::preflightSegment(
                          .blend = glyphs->state.blend,
                          .filter = glyphs->state.filter,
                          .scissor = resolved[commandIndex].scissor,
-                         .textured = true};
+                         .textured = true,
+                         .distanceField = glyphs->state.distanceField};
       for (std::size_t glyphIndex = 0; glyphIndex < glyphs->glyphs.size();
            ++glyphIndex) {
-        appendQuad(key);
+        auto glyphKey = key;
+        glyphKey.texture =
+            resolved[commandIndex].glyphTextures[glyphIndex];
+        appendQuad(glyphKey);
+      }
+      const BatchKey overlayKey{
+          .topology = SkinBatchTopology::Triangles,
+          .blend = glyphs->state.blend,
+          .filter = skin::SkinFilterMode::Linear,
+          .scissor = resolved[commandIndex].scissor,
+          .textured = true};
+      for (std::size_t glyphIndex = 0;
+           glyphIndex < glyphs->fallbackColorOverlays.size(); ++glyphIndex) {
+        auto glyphKey = overlayKey;
+        glyphKey.texture = resolved[commandIndex]
+                               .glyphTextures[glyphs->glyphs.size() +
+                                              glyphIndex];
+        appendQuad(glyphKey);
       }
       continue;
     }
@@ -581,6 +746,7 @@ bool SkinQuadBatchRenderer::prepare(
   submittedSpan_ = true;
   plan = SkinQuadSubmissionPlan{};
   std::vector<skin::SkinFilterMode> samplers;
+  std::vector<skin::SkinRenderState::DistanceField> distanceFields;
   std::size_t totalVertexCount = 0;
   std::size_t totalIndexCount = 0;
   std::size_t skinAllocationCount = 0;
@@ -593,8 +759,9 @@ bool SkinQuadBatchRenderer::prepare(
       std::size_t vertexCount = 0;
       std::size_t indexCount = 0;
       std::size_t segmentSkinAllocationCount = 0;
-      if (!preflightSegment(commands, segment.resolved, samplers, vertexCount,
-                            indexCount, segmentSkinAllocationCount) ||
+      if (!preflightSegment(commands, segment.resolved, samplers,
+                            distanceFields, vertexCount, indexCount,
+                            segmentSkinAllocationCount) ||
           vertexCount >
               std::numeric_limits<std::size_t>::max() - totalVertexCount ||
           indexCount > std::numeric_limits<std::size_t>::max() -
@@ -628,6 +795,7 @@ bool SkinQuadBatchRenderer::prepare(
     if ((!segments.empty() || !bgaRequirements.empty()) &&
         (!backend_->preflightVertexLayouts(requiredLayouts) ||
          !backend_->preflightSamplers(samplers) ||
+         !backend_->preflightDistanceFields(distanceFields) ||
          !backend_->reserve(totalVertexCount, totalIndexCount,
                             skinAllocationCount,
                             bgaRequirements))) {
@@ -676,7 +844,19 @@ void SkinQuadBatchRenderer::submitPrepared(SkinQuadSubmissionPlan &plan,
                                   .blend = quad->state.blend,
                                   .filter = quad->state.filter,
                                   .scissor = resolved[commandIndex].scissor,
-                                  .textured = true});
+                                  .textured = true,
+                                  .distanceField = quad->state.distanceField});
+      continue;
+    }
+    if (const auto *quad = std::get_if<skin::SkinGeneratedTexturedQuadCommand>(
+            &command.payload)) {
+      appendQuad(quad->vertices, {.texture = resolved[commandIndex].texture,
+                                  .topology = SkinBatchTopology::Triangles,
+                                  .blend = quad->state.blend,
+                                  .filter = quad->state.filter,
+                                  .scissor = resolved[commandIndex].scissor,
+                                  .textured = true,
+                                  .distanceField = quad->state.distanceField});
       continue;
     }
     if (const auto *glyphs =
@@ -686,9 +866,29 @@ void SkinQuadBatchRenderer::submitPrepared(SkinQuadSubmissionPlan &plan,
                          .blend = glyphs->state.blend,
                          .filter = glyphs->state.filter,
                          .scissor = resolved[commandIndex].scissor,
-                         .textured = true};
-      for (const auto &glyph : glyphs->glyphs) {
-        appendQuad(glyph.vertices, key);
+                         .textured = true,
+                         .distanceField = glyphs->state.distanceField};
+      for (std::size_t glyphIndex = 0; glyphIndex < glyphs->glyphs.size();
+           ++glyphIndex) {
+        auto glyphKey = key;
+        glyphKey.texture =
+            resolved[commandIndex].glyphTextures[glyphIndex];
+        appendQuad(glyphs->glyphs[glyphIndex].vertices, glyphKey);
+      }
+      const BatchKey overlayKey{
+          .topology = SkinBatchTopology::Triangles,
+          .blend = glyphs->state.blend,
+          .filter = skin::SkinFilterMode::Linear,
+          .scissor = resolved[commandIndex].scissor,
+          .textured = true};
+      for (std::size_t glyphIndex = 0;
+           glyphIndex < glyphs->fallbackColorOverlays.size(); ++glyphIndex) {
+        auto glyphKey = overlayKey;
+        glyphKey.texture = resolved[commandIndex]
+                               .glyphTextures[glyphs->glyphs.size() +
+                                              glyphIndex];
+        appendQuad(glyphs->fallbackColorOverlays[glyphIndex].vertices,
+                   glyphKey);
       }
       continue;
     }
@@ -734,6 +934,7 @@ void SkinQuadBatchRenderer::requireBatch(const BatchKey &key) {
       batchKey_ && batchKey_->texture.idx == key.texture.idx &&
       batchKey_->topology == key.topology && batchKey_->blend == key.blend &&
       batchKey_->filter == key.filter && batchKey_->textured == key.textured &&
+      batchKey_->distanceField == key.distanceField &&
       sameScissor(batchKey_->scissor, key.scissor);
   if (!compatible) {
     flushBatch();
@@ -810,7 +1011,13 @@ void SkinQuadBatchRenderer::flushBatch() {
                     .scissor = batchKey_->scissor,
                     .bgfxState = skinBgfxState(batchKey_->blend),
                     .samplerFlags = skinSamplerFlags(batchKey_->filter),
-                    .textured = batchKey_->textured});
+                    .textured = batchKey_->textured,
+                    .program = batchKey_->distanceField
+                                   ? SkinBatchProgram::DistanceField
+                               : batchKey_->textured
+                                   ? SkinBatchProgram::Textured
+                                   : SkinBatchProgram::Primitive,
+                    .distanceField = batchKey_->distanceField});
   clearBatch();
 }
 

@@ -1,10 +1,13 @@
 #pragma once
 
 #include "../../CoursePlaySession.h"
+#include "../../ModernResult.h"
+#include "../../PlayOptionUtils.h"
 #include "../../ReplayData.h"
 #include "../../AppSettings.h"
 #include "../../input/InputTypes.h"
 #include "../../practice/PracticeSession.h"
+#include "../../replay/ReplayOption.h"
 #include "Pacemaker.h"
 #include "GameplayCandidateSelection.h"
 #include "GameplayRulesetPolicy.h"
@@ -18,6 +21,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -75,6 +79,9 @@ struct StartOptions {
   GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
   std::shared_ptr<ReplayData> replayData = nullptr;
   std::shared_ptr<ReplayData> gbattleRecordData = nullptr;
+  // The persisted result behind a G-Battle replay is the only current
+  // gameplay target that carries ScoreData-equivalent judge counts.
+  std::optional<result_persistence::ChartScoreWrite> targetScore;
   std::optional<std::string> playOption;
   std::optional<long long> playOptionSeed;
   std::optional<std::string> playOption2;
@@ -83,10 +90,17 @@ struct StartOptions {
   int longNoteMode = 0;
   std::string assistOption = assist_options::kOff;
   std::string pacemakerTarget = pacemaker::kTargetBest;
+  // PlayerResource receives these from the selected TableBar/HashBar path.
+  // Empty values preserve the source reset state for non-table launches.
+  std::string tableName;
+  std::string tableLevel;
   std::shared_ptr<CoursePlaySession> courseSession = nullptr;
   CourseConstraintRules courseConstraints;
   bool ownsChart = false;
   std::shared_ptr<practice::Session> practiceSession = nullptr;
+  // ResultScene sets this only for a session-backed Same Pattern retry. The
+  // skin menu may retain an unchanged player option's recorded random seed.
+  bool practiceMenuPreservePlayOptionSeeds = false;
   bool practiceMode = false;
   unsigned long long practiceLeadInMicros = 0;
   audio::PlaybackRate playback;
@@ -102,6 +116,116 @@ struct StartOptions {
   std::optional<RulesetDescriptor> requiredRulesetDescriptor;
   std::optional<ScoreStageProvenance> replayRulesetOverride;
 };
+
+[[nodiscard]] inline std::optional<long long>
+practiceMenuSelectedOptionSeed(
+    bool preserveSeeds, const std::optional<std::string> &configuredOption,
+    const std::optional<long long> &configuredSeed,
+    std::string_view selectedOption) noexcept {
+  return preserveSeeds && configuredOption.has_value() &&
+                 *configuredOption == selectedOption
+             ? configuredSeed
+             : std::nullopt;
+}
+
+inline void applySkinMenuAttemptPlanToStartOptions(
+    StartOptions &options, const practice::SkinMenuAttemptPlan &attempt) {
+  options.startPosition =
+      static_cast<unsigned long long>(std::max(0LL, attempt.startMicros));
+  options.gaugeType = attempt.gaugeType;
+  options.gaugeProfile = attempt.gaugeProfile;
+  options.gaugeAutoShift = GaugeAutoShiftMode::None;
+  options.startingGaugePercent = attempt.startingGaugePercent;
+  options.playback = attempt.playback;
+  options.doublePlayFlip = attempt.doublePlayFlip;
+  const std::string selectedPlayOption = std::string(
+      replay::beatorajaReplayOptionName(attempt.random1P).value());
+  const std::string selectedPlayOption2 = std::string(
+      replay::beatorajaReplayOptionName(attempt.random2P).value());
+  options.playOptionSeed = practiceMenuSelectedOptionSeed(
+      options.practiceMenuPreservePlayOptionSeeds, options.playOption,
+      options.playOptionSeed, selectedPlayOption);
+  options.playOption2Seed = practiceMenuSelectedOptionSeed(
+      options.practiceMenuPreservePlayOptionSeeds, options.playOption2,
+      options.playOption2Seed, selectedPlayOption2);
+  options.playOption = selectedPlayOption;
+  options.playOption2 = selectedPlayOption2;
+  options.practiceMenuPreservePlayOptionSeeds = false;
+}
+
+inline bool applyPracticePlayOptions(bms_parser::Chart &chart,
+                                     StartOptions &options,
+                                     std::string_view logContext) {
+  const auto applyForPlayer = [&](int player,
+                                  std::optional<std::string> &option,
+                                  std::optional<long long> &seed) {
+    if (!option.has_value()) {
+      return true;
+    }
+    std::optional<std::string> appliedOption;
+    std::optional<long long> appliedSeed;
+    if (!play_options::applyPlayOptionModifier(
+            chart, *option, seed, player, appliedOption, appliedSeed,
+            logContext)) {
+      return false;
+    }
+    if (appliedOption.has_value()) {
+      option = std::move(appliedOption);
+      seed = appliedSeed;
+    }
+    return true;
+  };
+
+  // BMSPlayer applies the second player before the first in practice.
+  if (chart.Meta.IsDP &&
+      !applyForPlayer(1, options.playOption2, options.playOption2Seed)) {
+    return false;
+  }
+  return applyForPlayer(0, options.playOption, options.playOptionSeed);
+}
+
+// BMSPlayer stores ScoreData.option as randomoption plus, only for a
+// two-player mode, randomoption2 * 10 and doubleoption * 100. A completed
+// Aso target keeps the equivalent option inputs in its immutable provenance;
+// project them only when an actual target score is present.
+[[nodiscard]] inline int
+targetScorePlayOption(const result_persistence::ChartScoreWrite &target,
+                      const bms_parser::ChartMeta &targetMeta) {
+  const auto optionIndex = [](const PlayerOptionProvenance &player) {
+    return replay::projectedBeatorajaReplayOptionIndex(player.option)
+        .value_or(0);
+  };
+
+  int option = optionIndex(target.provenance.player1);
+  if (targetMeta.IsDP) {
+    option += optionIndex(target.provenance.player2) * 10;
+    option += target.provenance.doublePlayFlip ? 100 : 0;
+  }
+  return option;
+}
+
+[[nodiscard]] inline std::optional<int>
+targetScorePlayOption(
+    const std::optional<result_persistence::ChartScoreWrite> &target,
+    const bms_parser::ChartMeta &targetMeta) {
+  if (!target.has_value()) {
+    return std::nullopt;
+  }
+  return targetScorePlayOption(*target, targetMeta);
+}
+
+// BMSPlayer's practice branch does not install PlayerResource.targetScoreData.
+// Every other gameplay branch resolves TargetProperty, whose freshly-created
+// ScoreData begins with option zero when no persisted target record supplies
+// a different value.
+[[nodiscard]] inline std::optional<int>
+targetScorePlayOptionForGameplay(const StartOptions &options,
+                                 const bms_parser::ChartMeta &targetMeta) {
+  if (options.practiceMode || options.practiceSession != nullptr) {
+    return std::nullopt;
+  }
+  return targetScorePlayOption(options.targetScore, targetMeta).value_or(0);
+}
 
 namespace play_start_detail {
 [[nodiscard]] inline std::optional<

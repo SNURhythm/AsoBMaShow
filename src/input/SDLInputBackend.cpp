@@ -14,6 +14,85 @@ namespace {
 
 constexpr float kIosAccelerometerTiltAxisGain = 2.5F;
 
+constexpr auto kSdlGdxKeyAliases = std::to_array<SdlGdxKeyAlias>({
+    {SDL_SCANCODE_SOFTLEFT, 1},       {SDL_SCANCODE_SOFTRIGHT, 2},
+    {SDL_SCANCODE_HOME, 3},           {SDL_SCANCODE_AC_HOME, 3},
+    {SDL_SCANCODE_AC_BACK, 4},        {SDL_SCANCODE_CALL, 5},
+    {SDL_SCANCODE_ENDCALL, 6},        {SDL_SCANCODE_0, 7},
+    {SDL_SCANCODE_1, 8},              {SDL_SCANCODE_2, 9},
+    {SDL_SCANCODE_3, 10},             {SDL_SCANCODE_4, 11},
+    {SDL_SCANCODE_5, 12},             {SDL_SCANCODE_6, 13},
+    {SDL_SCANCODE_7, 14},             {SDL_SCANCODE_8, 15},
+    {SDL_SCANCODE_9, 16},             {SDL_SCANCODE_KP_MULTIPLY, 17},
+    {SDL_SCANCODE_KP_HASH, 18},
+    {SDL_SCANCODE_UP, 19},            {SDL_SCANCODE_DOWN, 20},
+    {SDL_SCANCODE_LEFT, 21},          {SDL_SCANCODE_RIGHT, 22},
+    {SDL_SCANCODE_VOLUMEUP, 24},      {SDL_SCANCODE_VOLUMEDOWN, 25},
+    {SDL_SCANCODE_POWER, 26},         {SDL_SCANCODE_CLEAR, 28},
+    {SDL_SCANCODE_KP_CLEAR, 28},      {SDL_SCANCODE_CLEARAGAIN, 28},
+    {SDL_SCANCODE_A, 29},             {SDL_SCANCODE_KP_A, 29},
+    {SDL_SCANCODE_B, 30},             {SDL_SCANCODE_KP_B, 30},
+    {SDL_SCANCODE_C, 31},             {SDL_SCANCODE_KP_C, 31},
+    {SDL_SCANCODE_D, 32},             {SDL_SCANCODE_KP_D, 32},
+    {SDL_SCANCODE_E, 33},             {SDL_SCANCODE_KP_E, 33},
+    {SDL_SCANCODE_F, 34},             {SDL_SCANCODE_KP_F, 34},
+    {SDL_SCANCODE_G, 35},
+    {SDL_SCANCODE_H, 36},             {SDL_SCANCODE_I, 37},
+    {SDL_SCANCODE_J, 38},             {SDL_SCANCODE_K, 39},
+    {SDL_SCANCODE_L, 40},             {SDL_SCANCODE_M, 41},
+    {SDL_SCANCODE_N, 42},             {SDL_SCANCODE_O, 43},
+    {SDL_SCANCODE_P, 44},             {SDL_SCANCODE_Q, 45},
+    {SDL_SCANCODE_R, 46},             {SDL_SCANCODE_S, 47},
+    {SDL_SCANCODE_T, 48},             {SDL_SCANCODE_U, 49},
+    {SDL_SCANCODE_V, 50},             {SDL_SCANCODE_W, 51},
+    {SDL_SCANCODE_X, 52},             {SDL_SCANCODE_Y, 53},
+    {SDL_SCANCODE_Z, 54},             {SDL_SCANCODE_COMMA, 55},
+    {SDL_SCANCODE_PERIOD, 56},        {SDL_SCANCODE_KP_PERIOD, 56},
+    {SDL_SCANCODE_LALT, 57},          {SDL_SCANCODE_RALT, 58},
+    {SDL_SCANCODE_LSHIFT, 59},        {SDL_SCANCODE_RSHIFT, 60},
+    {SDL_SCANCODE_TAB, 61},           {SDL_SCANCODE_KP_TAB, 61},
+    {SDL_SCANCODE_SPACE, 62},         {SDL_SCANCODE_KP_SPACE, 62},
+    {SDL_SCANCODE_MODE, 63},          {SDL_SCANCODE_WWW, 64},
+    {SDL_SCANCODE_MAIL, 65},          {SDL_SCANCODE_RETURN, 66},
+    {SDL_SCANCODE_RETURN2, 66},       {SDL_SCANCODE_KP_ENTER, 66},
+    {SDL_SCANCODE_BACKSPACE, 67},     {SDL_SCANCODE_KP_BACKSPACE, 67},
+    {SDL_SCANCODE_GRAVE, 68},
+    {SDL_SCANCODE_MINUS, 69},         {SDL_SCANCODE_KP_MINUS, 69},
+    {SDL_SCANCODE_EQUALS, 70},        {SDL_SCANCODE_KP_EQUALS, 70},
+    {SDL_SCANCODE_KP_EQUALSAS400, 70},
+    {SDL_SCANCODE_LEFTBRACKET, 71},   {SDL_SCANCODE_RIGHTBRACKET, 72},
+    {SDL_SCANCODE_BACKSLASH, 73},      {SDL_SCANCODE_NONUSHASH, 73},
+    {SDL_SCANCODE_NONUSBACKSLASH, 73}, {SDL_SCANCODE_SEMICOLON, 74},
+    {SDL_SCANCODE_APOSTROPHE, 75},    {SDL_SCANCODE_SLASH, 76},
+    {SDL_SCANCODE_KP_DIVIDE, 76},     {SDL_SCANCODE_KP_AT, 77},
+    {SDL_SCANCODE_NUMLOCKCLEAR, 78},  {SDL_SCANCODE_KP_PLUS, 81},
+    {SDL_SCANCODE_APPLICATION, 82},   {SDL_SCANCODE_MENU, 82},
+    {SDL_SCANCODE_FIND, 84},          {SDL_SCANCODE_AC_SEARCH, 84},
+    {SDL_SCANCODE_AUDIOPLAY, 85},     {SDL_SCANCODE_AUDIOSTOP, 86},
+    {SDL_SCANCODE_STOP, 86},          {SDL_SCANCODE_AC_STOP, 86},
+    {SDL_SCANCODE_AUDIONEXT, 87},     {SDL_SCANCODE_AUDIOPREV, 88},
+    {SDL_SCANCODE_AUDIOREWIND, 89},   {SDL_SCANCODE_AUDIOFASTFORWARD, 90},
+    {SDL_SCANCODE_AUDIOMUTE, 91},     {SDL_SCANCODE_MUTE, 91},
+    {SDL_SCANCODE_PAGEUP, 92},        {SDL_SCANCODE_PAGEDOWN, 93},
+    {SDL_SCANCODE_SELECT, 109},
+    {SDL_SCANCODE_DELETE, 112},       {SDL_SCANCODE_LCTRL, 129},
+    {SDL_SCANCODE_RCTRL, 130},        {SDL_SCANCODE_ESCAPE, 131},
+    {SDL_SCANCODE_END, 132},          {SDL_SCANCODE_INSERT, 133},
+    {SDL_SCANCODE_KP_0, 144},         {SDL_SCANCODE_KP_1, 145},
+    {SDL_SCANCODE_KP_2, 146},         {SDL_SCANCODE_KP_3, 147},
+    {SDL_SCANCODE_KP_4, 148},         {SDL_SCANCODE_KP_5, 149},
+    {SDL_SCANCODE_KP_6, 150},         {SDL_SCANCODE_KP_7, 151},
+    {SDL_SCANCODE_KP_8, 152},         {SDL_SCANCODE_KP_9, 153},
+    {SDL_SCANCODE_KP_COMMA, 55},
+    {SDL_SCANCODE_KP_COLON, 243},     {SDL_SCANCODE_F1, 244},
+    {SDL_SCANCODE_F2, 245},           {SDL_SCANCODE_F3, 246},
+    {SDL_SCANCODE_F4, 247},           {SDL_SCANCODE_F5, 248},
+    {SDL_SCANCODE_F6, 249},           {SDL_SCANCODE_F7, 250},
+    {SDL_SCANCODE_F8, 251},           {SDL_SCANCODE_F9, 252},
+    {SDL_SCANCODE_F10, 253},          {SDL_SCANCODE_F11, 254},
+    {SDL_SCANCODE_F12, 255},
+});
+
 std::string copySdlString(const char *value) {
   return value == nullptr ? std::string{} : std::string(value);
 }
@@ -104,6 +183,7 @@ public:
     const char *name = controller != nullptr
                            ? SDL_GameControllerName(controller)
                            : SDL_JoystickName(joystick);
+    const char *legacyName = SDL_JoystickName(joystick);
     const char *serial = controller != nullptr
                              ? SDL_GameControllerGetSerial(controller)
                              : SDL_JoystickGetSerial(joystick);
@@ -118,11 +198,20 @@ public:
         .serial = copySdlString(serial),
         .path = pathValue,
         .name = copySdlString(name),
+        .legacyName = copySdlString(legacyName),
         .buttons = std::max(0, SDL_JoystickNumButtons(joystick)),
         .axes = std::max(0, SDL_JoystickNumAxes(joystick)),
         .hats = std::max(0, SDL_JoystickNumHats(joystick)),
         .playerIndex =
             controller != nullptr ? xinputPlayerIndex(pathValue) : -1};
+    const int retainedButtons = std::min(
+        result.buttons,
+        static_cast<int>(input::kLegacyInputMaximumButtons));
+    for (int button = 0; button < retainedButtons; ++button) {
+      if (SDL_JoystickGetButton(joystick, button) != 0) {
+        result.pressedRawButtons.push_back(button);
+      }
+    }
     openDevices_.emplace(
         instanceId, OpenDevice{.controller = controller, .joystick = joystick});
     return result;
@@ -160,6 +249,16 @@ float normalizeAxis(Sint16 value) {
 }
 
 } // namespace
+
+std::span<const SdlGdxKeyAlias> sdlGdxKeyAliases() noexcept {
+  return kSdlGdxKeyAliases;
+}
+
+int gdxKeyCodeForSdlScancode(SDL_Scancode scancode) noexcept {
+  const auto found = std::ranges::find(kSdlGdxKeyAliases, scancode,
+                                       &SdlGdxKeyAlias::scancode);
+  return found == kSdlGdxKeyAliases.end() ? -1 : found->gdxKeyCode;
+}
 
 SDLInputBackend::SDLInputBackend(
     input::InputBackendSink sink,
@@ -246,6 +345,7 @@ void SDLInputBackend::stop() {
     provider_->closeDevice(instanceId);
   }
   devices_.clear();
+  rebuildLegacyControllerGenerationLocked();
   started_ = false;
 }
 
@@ -308,10 +408,15 @@ void SDLInputBackend::handleSdlEvent(const SDL_Event &event) {
 
   case SDL_JOYBUTTONDOWN:
   case SDL_JOYBUTTONUP: {
-    const auto found = devices_.find(event.jbutton.which);
-    if (found != devices_.end() && !found->second.gameController) {
-      publishButton(found->second, event.jbutton.button,
-                    event.type == SDL_JOYBUTTONDOWN, event.jbutton.timestamp);
+    auto found = devices_.find(event.jbutton.which);
+    if (found != devices_.end()) {
+      const bool pressed = event.type == SDL_JOYBUTTONDOWN;
+      found->second.pressedRawButtons.set(event.jbutton.button, pressed);
+      rebuildLegacyControllerGenerationLocked();
+      if (!found->second.gameController) {
+        publishButton(found->second, event.jbutton.button, pressed,
+                      event.jbutton.timestamp);
+      }
     }
     return;
   }
@@ -560,12 +665,14 @@ void SDLInputBackend::registerDevice(SdlInputDeviceInfo info,
   const int advertisedAxes =
       info.gameController ? SDL_CONTROLLER_AXIS_MAX : info.axes;
   const int advertisedHats = info.gameController ? 0 : info.hats;
+  std::string displayName =
+      info.name.empty() ? (info.gameController ? "Game Controller" : "Joystick")
+                        : info.name;
+  std::string legacyName =
+      info.legacyName.empty() ? displayName : std::move(info.legacyName);
   DeviceRecord record{
       .snapshot = {.stableId = std::move(stableId),
-                   .displayName = info.name.empty()
-                                      ? (info.gameController ? "Game Controller"
-                                                             : "Joystick")
-                                      : std::move(info.name),
+                   .displayName = std::move(displayName),
                    .deviceClass = deviceClass,
                    .connected = true,
                    .buttons = advertisedButtons,
@@ -574,9 +681,18 @@ void SDLInputBackend::registerDevice(SdlInputDeviceInfo info,
       .gameController = info.gameController,
       .iosAccelerometer = iosAccelerometer,
       .playerIndex = info.playerIndex,
+      .legacyName = std::move(legacyName),
+      .legacyOrder = nextLegacyOrder_++,
       .hatValues = std::vector<Uint8>(
           static_cast<std::size_t>(std::max(0, advertisedHats)),
           SDL_HAT_CENTERED)};
+  for (const int button : info.pressedRawButtons) {
+    if (button >= 0 &&
+        static_cast<std::size_t>(button) <
+            input::kLegacyInputMaximumButtons) {
+      record.pressedRawButtons.set(static_cast<std::size_t>(button));
+    }
+  }
   if (publishConnection) {
     publishDevice(record.snapshot);
   }
@@ -585,6 +701,7 @@ void SDLInputBackend::registerDevice(SdlInputDeviceInfo info,
                                    record.snapshot.stableId);
   }
   devices_.emplace(info.instanceId, std::move(record));
+  rebuildLegacyControllerGenerationLocked();
 }
 
 void SDLInputBackend::applyIdentityRemaps(
@@ -662,11 +779,51 @@ void SDLInputBackend::removeDevice(SDL_JoystickID instanceId) {
                                     found->second.snapshot.stableId);
     }
     devices_.erase(found);
+    rebuildLegacyControllerGenerationLocked();
   }
   if (disconnected.has_value()) {
     publishDevice(std::move(*disconnected));
   }
   provider_->closeDevice(instanceId);
+}
+
+void SDLInputBackend::rebuildLegacyControllerGenerationLocked() noexcept {
+  std::array<const DeviceRecord *, input::kLegacyInputMaximumControllers>
+      ordered{};
+  std::size_t count = 0;
+  for (const auto &[instanceId, device] : devices_) {
+    (void)instanceId;
+    std::size_t position = 0;
+    while (position < count &&
+           ordered[position]->legacyOrder < device.legacyOrder) {
+      ++position;
+    }
+    if (position >= ordered.size()) {
+      continue;
+    }
+    const std::size_t newCount = std::min(count + 1, ordered.size());
+    for (std::size_t index = newCount; index > position + 1; --index) {
+      ordered[index - 1] = ordered[index - 2];
+    }
+    ordered[position] = &device;
+    count = newCount;
+  }
+
+  ++legacyControllerGeneration_.sequence;
+  legacyControllerGeneration_.controllers = {};
+  legacyControllerGeneration_.controllerCount = count;
+  for (std::size_t index = 0; index < count; ++index) {
+    legacyControllerGeneration_.controllers[index].setName(
+        ordered[index]->legacyName);
+    legacyControllerGeneration_.controllers[index].pressedButtons =
+        ordered[index]->pressedRawButtons;
+  }
+}
+
+input::LegacyInputGeneration
+SDLInputBackend::legacyControllerGeneration() const noexcept {
+  const std::lock_guard lock(devicesMutex_);
+  return legacyControllerGeneration_;
 }
 
 void SDLInputBackend::publishButton(const DeviceRecord &device, int button,

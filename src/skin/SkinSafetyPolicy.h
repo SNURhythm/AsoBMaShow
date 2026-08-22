@@ -43,8 +43,10 @@ skinSafetyGuardSeverity(SkinSafetyGuard guard) noexcept {
 class SkinSafetyPolicy final {
 public:
   constexpr explicit SkinSafetyPolicy(
-      SkinSafetyLevel level = SkinSafetyLevel::Standard) noexcept
-      : level_(level) {}
+      SkinSafetyLevel level = SkinSafetyLevel::Standard,
+      std::uint64_t maximumDocumentBytes =
+          std::numeric_limits<std::uint64_t>::max()) noexcept
+      : level_(level), maximumDocumentBytes_(maximumDocumentBytes) {}
 
   [[nodiscard]] constexpr SkinSafetyLevel level() const noexcept {
     return level_;
@@ -69,8 +71,18 @@ public:
                            : std::numeric_limits<std::uint64_t>::max();
   }
 
+  [[nodiscard]] constexpr std::uint64_t
+  documentByteLimit(std::uint64_t standardLimit) const noexcept {
+    const std::uint64_t policyLimit =
+        limit(SkinSafetyGuard::LuaDecoderLimit, standardLimit);
+    return maximumDocumentBytes_ < policyLimit ? maximumDocumentBytes_
+                                                : policyLimit;
+  }
+
 private:
   SkinSafetyLevel level_ = SkinSafetyLevel::Standard;
+  std::uint64_t maximumDocumentBytes_ =
+      std::numeric_limits<std::uint64_t>::max();
 };
 
 } // namespace skin

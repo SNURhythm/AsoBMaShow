@@ -1,8 +1,10 @@
 #include "skin/beatoraja/LuaSkinTableDecoder.h"
 #include "skin/beatoraja/GameplaySkinBuiltinCatalog.h"
+#include "skin/beatoraja/PomyuCharaCycles.h"
 #include "skin/beatoraja/SkinModelValidator.h"
 #include "skin/beatoraja/SkinCoverNormalization.h"
 #include "lua_skin_binding_test_support.h"
+#include "gameplay_skin_ledger_evidence.h"
 
 #include "skin/SkinStoragePaths.h"
 #include "skin/beatoraja/LuaSkinFileSystem.h"
@@ -260,6 +262,10 @@ public:
             .type = {.kind = SkinBindingKind::FloatProperty,
                      .floatDomain = SkinFloatPropertyDomain::Rate},
             .selector = SkinBuiltinPropertySelector{800}},
+        SkinBuiltinBindingCatalogEntry{
+            .type = {.kind = SkinBindingKind::FloatProperty,
+                     .floatDomain = SkinFloatPropertyDomain::Rate},
+            .selector = SkinBuiltinPropertySelector{17}},
         SkinBuiltinBindingCatalogEntry{
             .type = {.kind = SkinBindingKind::TimerProperty},
             .selector = SkinBuiltinPropertySelector{42}},
@@ -1435,10 +1441,891 @@ return {
          "Boolean schema fields retain LuaJ's non-nil, non-false truthiness");
 }
 
+void testPracticePositionSliderDecodesItsExecutableWriter() {
+  const auto decoded = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  source={{id='atlas',path='atlas.png'}},
+  slider={{id='practice-scroll',src='atlas',w=10,h=10,type=20,
+           changeable=true}},
+  destination={{id='practice-scroll',dst={{}}}}
+}
+)lua");
+  expect(decoded.model.has_value(), "practice-position slider model decodes");
+  if (!decoded.model) {
+    return;
+  }
+  const auto *definition = findObject(*decoded.model, "practice-scroll");
+  const auto *slider = definition != nullptr
+                           ? std::get_if<SkinSliderObject>(&definition->payload)
+                           : nullptr;
+  expect(slider != nullptr && slider->writer.has_value() &&
+             decoded.model->floatWriters.size() == 1,
+         "practice-position slider retains its executable float writer");
+  if (decoded.model->floatWriters.size() == 1) {
+    const auto *builtin = std::get_if<SkinBuiltinPropertySelector>(
+        &decoded.model->floatWriters.front().source);
+    const auto *selector =
+        builtin != nullptr ? std::get_if<int>(&builtin->value) : nullptr;
+    expect(selector != nullptr && *selector == 20,
+           "practice-position slider binds its authored type as writer source");
+  }
+}
+
+void testJudgeGraphsDecodePinnedModesAndPresentationFlags() {
+  const auto decoded = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  judgegraph={
+    {id='normal',backTexOff=2,orderReverse=-1,noGap=2,noGapX=-1},
+    {id='judge',type=1,backTexOff=1,delay=750,orderReverse=1,noGap=1,noGapX=1},
+    {id='early-late',type=2,delay=0},
+  },
+  destination={
+    {id='normal',dst={{x=0,y=0,w=100,h=50}}},
+    {id='judge',dst={{x=100,y=0,w=100,h=50}}},
+    {id='early-late',dst={{x=200,y=0,w=100,h=50}}},
+  }
+}
+)lua");
+  expect(decoded.model && decoded.model->objects.size() == 3,
+         "all three pinned judgegraph modes remain live model objects");
+  if (!decoded.model || decoded.model->objects.size() != 3) {
+    return;
+  }
+  const auto *normalDefinition = findObject(*decoded.model, "normal");
+  const auto *judgeDefinition = findObject(*decoded.model, "judge");
+  const auto *earlyLateDefinition = findObject(*decoded.model, "early-late");
+  const auto *normal = normalDefinition != nullptr
+                           ? std::get_if<SkinNoteDistributionGraphObject>(
+                                 &normalDefinition->payload)
+                           : nullptr;
+  const auto *judge = judgeDefinition != nullptr
+                          ? std::get_if<SkinNoteDistributionGraphObject>(
+                                &judgeDefinition->payload)
+                          : nullptr;
+  const auto *earlyLate = earlyLateDefinition != nullptr
+                              ? std::get_if<SkinNoteDistributionGraphObject>(
+                                    &earlyLateDefinition->payload)
+                              : nullptr;
+  expect(normal != nullptr &&
+             normal->type == SkinNoteDistributionGraphType::Normal &&
+             !normal->backgroundTextureOff && normal->delayMillis == 500 &&
+             !normal->reverseOrder && !normal->noGap &&
+             !normal->noHorizontalGap,
+         "judgegraph defaults match SkinNoteDistributionGraph");
+  expect(judge != nullptr &&
+             judge->type == SkinNoteDistributionGraphType::Judge &&
+             judge->backgroundTextureOff && judge->delayMillis == 750 &&
+             judge->reverseOrder && judge->noGap &&
+             judge->noHorizontalGap,
+         "judgegraph authored flags retain their exact equals-one semantics");
+  expect(earlyLate != nullptr &&
+             earlyLate->type == SkinNoteDistributionGraphType::EarlyLate &&
+             earlyLate->delayMillis == 0,
+         "early-late judgegraph decodes independently of judge mode");
+  expect(std::ranges::none_of(decoded.diagnostics, [](const auto &entry) {
+           return entry.code == "skin_lua_model_judgegraph_unsupported";
+         }),
+         "supported judgegraphs no longer emit the legacy unsupported diagnostic");
+
+  const auto validated =
+      test_support::validateWithAuthoredBuiltins(*decoded.model);
+  expect(validated.model && !validated.criticalFailure &&
+             std::ranges::none_of(validated.model->model.objects,
+                                  [](const auto &object) {
+                                    return std::holds_alternative<
+                                        SkinBlankObject>(object.payload);
+                                  }),
+         "valid judgegraphs remain typed through model validation");
+
+  auto invalidModel = *decoded.model;
+  auto &invalidGraph = std::get<SkinNoteDistributionGraphObject>(
+      invalidModel.objects.front().payload);
+  invalidGraph.type = static_cast<SkinNoteDistributionGraphType>(9);
+  const auto invalid = test_support::validateWithAuthoredBuiltins(
+      std::move(invalidModel));
+  expect(invalid.criticalFailure && !invalid.model &&
+             std::ranges::find_if(invalid.diagnostics, [](const auto &entry) {
+               return entry.code == "skin_lua_model_judgegraph_invalid";
+             }) != invalid.diagnostics.end(),
+         "model validation rejects an out-of-range judgegraph mode");
+
+  const auto invalidDecode = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  judgegraph={{id='invalid',type=3}},
+  destination={{id='invalid',dst={{x=0,y=0,w=10,h=10}}}}
+}
+)lua");
+  expect(!invalidDecode.model &&
+             std::ranges::find_if(invalidDecode.diagnostics,
+                                  [](const auto &entry) {
+                                    return entry.code ==
+                                           "skin_lua_model_judgegraph_invalid";
+                                  }) != invalidDecode.diagnostics.end(),
+         "decoder rejects a judgegraph constructor mode absent from the pinned implementation");
+}
+
+void testTimingVisualizerDecodesPinnedPresentationFields() {
+  const auto decoded = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  timingvisualizer={
+    {id='default'},
+    {id='custom',width=401,judgeWidthMillis=200,lineWidth=9,
+     lineColor='11223344',centerColor='55667788',PGColor='01020304',
+     GRColor='11121314',GDColor='21222324',BDColor='31323334',
+     PRColor='41424344',transparent=1,drawDecay=0},
+    {id='invalid-colour',lineColor='not-a-colour'}
+  },
+  destination={
+    {id='default',dst={{x=0,y=0,w=100,h=50}}},
+    {id='custom',dst={{x=0,y=0,w=100,h=50}}},
+    {id='invalid-colour',dst={{x=0,y=0,w=100,h=50}}}
+  }
+}
+)lua");
+  expect(decoded.model && decoded.model->objects.size() == 3,
+         "timingvisualizer declarations create one live object per destination");
+  if (!decoded.model || decoded.model->objects.size() != 3) {
+    return;
+  }
+  const auto *defaults = findObject(*decoded.model, "default");
+  const auto *custom = findObject(*decoded.model, "custom");
+  const auto *invalid = findObject(*decoded.model, "invalid-colour");
+  const auto *defaultTiming = defaults != nullptr
+                                  ? std::get_if<SkinTimingVisualizerObject>(
+                                        &defaults->payload)
+                                  : nullptr;
+  const auto *customTiming = custom != nullptr
+                                 ? std::get_if<SkinTimingVisualizerObject>(
+                                       &custom->payload)
+                                 : nullptr;
+  const auto *invalidTiming = invalid != nullptr
+                                  ? std::get_if<SkinTimingVisualizerObject>(
+                                        &invalid->payload)
+                                  : nullptr;
+  expect(defaultTiming != nullptr && defaultTiming->width == 301 &&
+             defaultTiming->judgeWidthMillis == 150 &&
+             defaultTiming->lineWidth == 1 &&
+             defaultTiming->lineRgba == 0x00ff00ffU &&
+             defaultTiming->centerRgba == 0xffffffffU &&
+             defaultTiming->judgeRgba ==
+                 std::array<std::uint32_t, 5>{0x000088ffU, 0x008800ffU,
+                                               0x888800ffU, 0x880000ffU,
+                                               0x000000ffU} &&
+             !defaultTiming->transparent && defaultTiming->drawDecay,
+         "timingvisualizer defaults retain the pinned constructor values");
+  expect(customTiming != nullptr && customTiming->width == 401 &&
+             customTiming->judgeWidthMillis == 200 &&
+             customTiming->lineWidth == 4 &&
+             customTiming->lineRgba == 0x11223344U &&
+             customTiming->centerRgba == 0x55667788U &&
+             customTiming->judgeRgba ==
+                 std::array<std::uint32_t, 5>{0x01020304U, 0x11121314U,
+                                               0x21222324U, 0x31323334U,
+                                               0U} &&
+             customTiming->transparent && !customTiming->drawDecay,
+         "timingvisualizer clamps line width, preserves custom non-poor colours, and applies flags");
+  expect(invalidTiming != nullptr && invalidTiming->lineRgba == 0xff0000ffU,
+         "timingvisualizer invalid colours use the pinned opaque-red fallback");
+  expect(std::ranges::none_of(decoded.diagnostics, [](const auto &entry) {
+           return entry.code == "skin_lua_model_timingvisualizer_unsupported";
+         }),
+         "supported timingvisualizers never emit the legacy unsupported diagnostic");
+
+  const auto validated = test_support::validateWithAuthoredBuiltins(*decoded.model);
+  expect(validated.model && !validated.criticalFailure &&
+             std::ranges::all_of(validated.model->model.objects,
+                                 [](const auto &object) {
+                                   return !std::holds_alternative<SkinBlankObject>(
+                                       object.payload);
+                                 }),
+         "valid timingvisualizers remain typed through model validation");
+}
+
+void testBpmGraphsDecodePinnedDefaultsNormalizationAndValidation() {
+  const auto decoded = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  bpmgraph={
+    {id='default'},
+    {id='fallbacks',delay=-5,lineWidth=0,
+     mainBPMColor='ghijkl',minBPMColor='---',maxBPMColor=' ',
+     otherBPMColor='?',stopLineColor='xyz',transitionLineColor=''},
+    {id='custom',delay=750,lineWidth=3,
+     mainBPMColor='##12-34-56-78',minBPMColor='aaBBcc',
+     maxBPMColor='DEADBE-EF',otherBPMColor='010203',
+     stopLineColor='f0-e1-d2',transitionLineColor='ABCDEF'}
+  },
+  destination={
+    {id='default',dst={{x=0,y=0,w=100,h=50}}},
+    {id='fallbacks',dst={{x=100,y=0,w=100,h=50}}},
+    {id='custom',dst={{x=200,y=0,w=100,h=50}}}
+  }
+}
+)lua");
+  expect(decoded.model && decoded.model->objects.size() == 3,
+         "bpmgraph declarations create one typed object per destination");
+  if (!decoded.model || decoded.model->objects.size() != 3) {
+    return;
+  }
+  const auto payload = [&](std::string_view id) {
+    const auto *definition = findObject(*decoded.model, id);
+    return definition != nullptr
+               ? std::get_if<SkinBpmGraphObject>(&definition->payload)
+               : nullptr;
+  };
+  const auto *defaults = payload("default");
+  const auto *fallbacks = payload("fallbacks");
+  const auto *custom = payload("custom");
+  expect(defaults != nullptr && defaults->delayMillis == 0 &&
+             defaults->lineWidth == 2 &&
+             defaults->mainRgba == 0x00ff00ffU &&
+             defaults->minimumRgba == 0x0000ffffU &&
+             defaults->maximumRgba == 0xff0000ffU &&
+             defaults->otherRgba == 0xffff00ffU &&
+             defaults->stopRgba == 0xff00ffffU &&
+             defaults->transitionRgba == 0x7f7f7fffU,
+         "bpmgraph defaults match the pinned constructor palette and timing");
+  expect(fallbacks != nullptr && fallbacks->delayMillis == 0 &&
+             fallbacks->lineWidth == 2 &&
+             fallbacks->mainRgba == 0x00ff00ffU &&
+             fallbacks->minimumRgba == 0x0000ffffU &&
+             fallbacks->maximumRgba == 0xff0000ffU &&
+             fallbacks->otherRgba == 0xffff00ffU &&
+             fallbacks->stopRgba == 0xff00ffffU &&
+             fallbacks->transitionRgba == 0x7f7f7fffU,
+         "nonpositive geometry and empty normalized colours retain pinned defaults");
+  expect(custom != nullptr && custom->delayMillis == 750 &&
+             custom->lineWidth == 3 && custom->mainRgba == 0x123456ffU &&
+             custom->minimumRgba == 0xaabbccffU &&
+             custom->maximumRgba == 0xdeadbeffU &&
+             custom->otherRgba == 0x010203ffU &&
+             custom->stopRgba == 0xf0e1d2ffU &&
+             custom->transitionRgba == 0xabcdefffU,
+         "bpmgraph strips nonhex characters and truncates normalized colours to six digits");
+  expect(std::ranges::none_of(decoded.diagnostics, [](const auto &entry) {
+           return entry.code == "skin_lua_model_bpmgraph_unsupported";
+         }),
+         "typed bpmgraphs emit no legacy unsupported diagnostic");
+
+  const auto validated =
+      test_support::validateWithAuthoredBuiltins(*decoded.model);
+  expect(validated.model && !validated.criticalFailure &&
+             std::ranges::all_of(validated.model->model.objects,
+                                 [](const auto &object) {
+                                   return !std::holds_alternative<
+                                       SkinBlankObject>(object.payload);
+                                 }),
+         "valid bpmgraphs remain typed through model validation");
+
+  auto invalidModel = *decoded.model;
+  std::get<SkinBpmGraphObject>(invalidModel.objects.front().payload)
+      .lineWidth = 0;
+  const auto invalid = test_support::validateWithAuthoredBuiltins(
+      std::move(invalidModel));
+  expect(invalid.criticalFailure && !invalid.model &&
+             std::ranges::find_if(invalid.diagnostics, [](const auto &entry) {
+               return entry.code == "skin_lua_model_bpmgraph_invalid";
+             }) != invalid.diagnostics.end(),
+         "model validation rejects a BPM graph outside its normalized constructor domain");
+
+  const auto shortColor = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  bpmgraph={{id='short',mainBPMColor='1-2-3'}},
+  destination={{id='short',dst={{x=0,y=0,w=10,h=10}}}}
+}
+)lua");
+  expect(!shortColor.model &&
+             std::ranges::find_if(shortColor.diagnostics,
+                                  [](const auto &entry) {
+                                    return entry.code ==
+                                           "skin_lua_model_bpmgraph_invalid";
+                                  }) != shortColor.diagnostics.end(),
+         "a nonempty normalized BPM colour shorter than six digits preserves Color.valueOf's construction failure");
+
+  const auto sharedGauge = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  bpmgraph={{id='shared'}},
+  gauge={id='shared',nodes={}},
+  destination={{id='shared',dst={{x=0,y=0,w=10,h=10}}}}
+}
+)lua");
+  const auto *shared =
+      sharedGauge.model ? findObject(*sharedGauge.model, "shared") : nullptr;
+  expect(shared != nullptr &&
+             std::holds_alternative<SkinBpmGraphObject>(shared->payload),
+         "BPM graph retains its pinned generic precedence over a same-ID gameplay Gauge");
+}
+
+void testGaugeGraphsAreTypedSupportedGameplayObjects() {
+  const auto decoded = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  gaugegraph={
+    {id='gauge-history'},
+    {id='custom',color={
+      'aBcDeF','1234567','01020304','#89AbCdEf',
+      'fedcba987','#0A1b2C345678','000007','000008',
+      '000009','00000a','00000b','00000c',
+      '00000d','00000e','00000f','000010',
+      '000011','000012','000013','000014',
+      '000015','000016','000017','000018'}},
+    {id='short',color={[1]='112233',[4]='445566'}},
+    {id='legacy-lengths',assistClearBGColor='1234567',
+     assistClearLineColor='01020304',borderlineColor='#AaBbCcDd',
+     borderColor='fedcba987'}
+  },
+  destination={
+    {id='gauge-history',dst={{x=0,y=0,w=100,h=50}}},
+    {id='custom',dst={{x=100,y=0,w=100,h=50}}},
+    {id='short',dst={{x=200,y=0,w=100,h=50}}},
+    {id='legacy-lengths',dst={{x=300,y=0,w=100,h=50}}}
+  }
+}
+)lua");
+  const auto *definition =
+      decoded.model ? findObject(*decoded.model, "gauge-history") : nullptr;
+  const auto *customDefinition =
+      decoded.model ? findObject(*decoded.model, "custom") : nullptr;
+  const auto *shortDefinition =
+      decoded.model ? findObject(*decoded.model, "short") : nullptr;
+  const auto *legacyDefinition =
+      decoded.model ? findObject(*decoded.model, "legacy-lengths") : nullptr;
+  const auto *defaults =
+      definition ? std::get_if<SkinGaugeGraphObject>(&definition->payload)
+                 : nullptr;
+  const auto *custom = customDefinition
+                           ? std::get_if<SkinGaugeGraphObject>(
+                                 &customDefinition->payload)
+                           : nullptr;
+  const auto *shortPalette =
+      shortDefinition ? std::get_if<SkinGaugeGraphObject>(
+                            &shortDefinition->payload)
+                      : nullptr;
+  const auto *legacyPalette =
+      legacyDefinition ? std::get_if<SkinGaugeGraphObject>(
+                             &legacyDefinition->payload)
+                       : nullptr;
+  expect(definition != nullptr &&
+             !std::holds_alternative<SkinBlankObject>(definition->payload),
+         "valid gaugegraph destinations decode as live typed objects");
+  expect(defaults != nullptr &&
+             defaults->rgba ==
+                 std::array<std::array<std::uint32_t, 4>, 6>{
+                     std::array<std::uint32_t, 4>{0xff0000ffU, 0x440000ffU,
+                                                   0xff00ffffU, 0x440044ffU},
+                     std::array<std::uint32_t, 4>{0xff0000ffU, 0x440000ffU,
+                                                   0x00ffffffU, 0x004444ffU},
+                     std::array<std::uint32_t, 4>{0xff0000ffU, 0x440000ffU,
+                                                   0x00ff00ffU, 0x004400ffU},
+                     std::array<std::uint32_t, 4>{0xff0000ffU, 0x440000ffU,
+                                                   0xff0000ffU, 0x440000ffU},
+                     std::array<std::uint32_t, 4>{0xffff00ffU, 0x444400ffU,
+                                                   0xffff00ffU, 0x444400ffU},
+                     std::array<std::uint32_t, 4>{0xccccccffU, 0x444444ffU,
+                                                   0xccccccffU, 0x444444ffU}},
+         "gaugegraph defaults reproduce the pinned six-category legacy palette");
+  expect(custom != nullptr &&
+             custom->rgba[0] ==
+                 std::array<std::uint32_t, 4>{0xabcdefffU, 0x123456ffU,
+                                               0x01020304U, 0x89abcdefU} &&
+             custom->rgba[1][0] == 0xfedcbaffU &&
+             custom->rgba[1][1] == 0x0a1b2cffU &&
+             custom->rgba[2][3] == 0x00000cffU &&
+             custom->rgba[5][3] == 0x000018ffU,
+         "gaugegraph custom colours preserve pinned 6/7/8/9+ digit and hash parsing");
+  const std::array<std::uint32_t, 4> blackRow{
+      0x000000ffU, 0x000000ffU, 0x000000ffU, 0x000000ffU};
+  expect(shortPalette != nullptr &&
+             shortPalette->rgba[0] ==
+                 std::array<std::uint32_t, 4>{0x112233ffU, 0x000000ffU,
+                                               0x000000ffU, 0x445566ffU} &&
+             shortPalette->rgba[1] == blackRow &&
+             shortPalette->rgba[5] == blackRow,
+         "a custom gaugegraph palette maps null and absent entries to black");
+  expect(legacyPalette != nullptr &&
+             legacyPalette->rgba[0] ==
+                 std::array<std::uint32_t, 4>{0xaabbccddU, 0xfedcbaffU,
+                                               0x01020304U, 0x123456ffU},
+         "legacy gaugegraph fields use the same mixed-case direct colour parser as custom slots");
+  expect(std::ranges::none_of(decoded.diagnostics, [](const auto &entry) {
+           return entry.code == "skin_lua_model_gaugegraph_unsupported";
+         }),
+         "valid gaugegraphs emit no legacy unsupported diagnostic");
+  if (!decoded.model) {
+    return;
+  }
+  const auto validated =
+      test_support::validateWithAuthoredBuiltins(*decoded.model);
+  expect(validated.model && !validated.criticalFailure &&
+             validated.model->disabledOptionalObjects.empty(),
+         "valid gaugegraphs remain enabled through model validation");
+
+  const auto shortColor = decodeInlineModel(R"lua(
+return {type=0,w=1280,h=720,
+ gaugegraph={{id='short-color',color={'12345'}}},
+ destination={{id='short-color',dst={{x=0,y=0,w=10,h=10}}}}}
+)lua");
+  const auto nonhexLegacy = decodeInlineModel(R"lua(
+return {type=0,w=1280,h=720,
+ gaugegraph={{id='nonhex',borderColor='12zz56'}},
+ destination={{id='nonhex',dst={{x=0,y=0,w=10,h=10}}}}}
+)lua");
+  const auto invalidGaugeColor = [](const auto &entry) {
+    return entry.code == "skin_lua_model_gaugegraph_invalid";
+  };
+  expect(!shortColor.model &&
+             std::ranges::any_of(shortColor.diagnostics,
+                                 invalidGaugeColor) &&
+             !nonhexLegacy.model &&
+             std::ranges::any_of(nonhexLegacy.diagnostics,
+                                 invalidGaugeColor),
+         "direct gaugegraph colours reject fewer than six digits and nonhex parsed channels");
+}
+
+void testTimingVisualizerParsesPoorColourOnlyWhenOpaque() {
+  const auto opaqueHashes = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  timingvisualizer={
+    {id='opaque-rgb',PRColor='#000000'},
+    {id='opaque-rgba',PRColor='#1234567F'}
+  },
+  destination={
+    {id='opaque-rgb',dst={{x=0,y=0,w=100,h=50}}},
+    {id='opaque-rgba',dst={{x=0,y=0,w=100,h=50}}}
+  }
+}
+)lua");
+  const auto *opaqueRgbDefinition =
+      opaqueHashes.model ? findObject(*opaqueHashes.model, "opaque-rgb")
+                         : nullptr;
+  const auto *opaqueRgbaDefinition =
+      opaqueHashes.model ? findObject(*opaqueHashes.model, "opaque-rgba")
+                         : nullptr;
+  const auto *opaqueRgb = opaqueRgbDefinition != nullptr
+                              ? std::get_if<SkinTimingVisualizerObject>(
+                                    &opaqueRgbDefinition->payload)
+                              : nullptr;
+  const auto *opaqueRgba = opaqueRgbaDefinition != nullptr
+                               ? std::get_if<SkinTimingVisualizerObject>(
+                                     &opaqueRgbaDefinition->payload)
+                               : nullptr;
+  expect(opaqueRgb != nullptr && opaqueRgba != nullptr &&
+             opaqueRgb->judgeRgba[4] == 0x000000ffU &&
+             opaqueRgba->judgeRgba[4] == 0x1234567fU,
+         "opaque timingvisualizers parse libGDX leading-hash RGB and RGBA PRColors");
+
+  const auto transparent = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  timingvisualizer={{id='transparent',transparent=1,PRColor='not-a-colour'}},
+  destination={{id='transparent',dst={{x=0,y=0,w=100,h=50}}}}
+}
+)lua");
+  const auto *transparentDefinition =
+      transparent.model ? findObject(*transparent.model, "transparent")
+                        : nullptr;
+  const auto *transparentTiming = transparentDefinition != nullptr
+                                      ? std::get_if<SkinTimingVisualizerObject>(
+                                            &transparentDefinition->payload)
+                                      : nullptr;
+  expect(transparentTiming != nullptr && transparentTiming->transparent &&
+             transparentTiming->judgeRgba[4] == 0U,
+         "transparent timingvisualizers ignore an invalid PRColor and retain a clear poor band");
+
+  const auto opaque = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  timingvisualizer={{id='opaque',transparent=0,PRColor='not-a-colour'}},
+  destination={{id='opaque',dst={{x=0,y=0,w=100,h=50}}}}
+}
+)lua");
+  expect(!opaque.model &&
+             std::ranges::find_if(opaque.diagnostics, [](const auto &entry) {
+               return entry.code == "skin_lua_model_timingvisualizer_invalid";
+             }) != opaque.diagnostics.end(),
+         "opaque timingvisualizers keep the pinned direct PRColor load-failure boundary");
+}
+
+void testTimingDistributionGraphRetainsPinnedConstructionFields() {
+  const auto decoded = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  timingdistributiongraph={
+    {id='default'},
+    {id='custom',width=401,lineWidth=3,graphColor='11223344',
+     averageColor='55667788',devColor='99AABBCC',PGColor='01020304',
+     GRColor='11121314',GDColor='21222324',BDColor='31323334',
+     PRColor='41424344',drawAverage=0,drawDev=2},
+    {id='ordinary-lower',width=10,lineWidth=0},
+    {id='ordinary-upper',width=10,lineWidth=99},
+    {id='negative-lower',width=-5,lineWidth=0},
+    {id='negative-upper',width=-5,lineWidth=1},
+    {id='zero-constructs',width=0,lineWidth=0}
+  },
+  destination={
+    {id='default',dst={{x=0,y=0,w=301,h=60}}},
+    {id='custom',dst={{x=0,y=0,w=401,h=60}}},
+    {id='ordinary-lower',dst={{x=0,y=0,w=10,h=60}}},
+    {id='ordinary-upper',dst={{x=0,y=0,w=10,h=60}}},
+    {id='negative-lower',dst={{x=0,y=0,w=1,h=60}}},
+    {id='negative-upper',dst={{x=0,y=0,w=1,h=60}}},
+    {id='zero-constructs',dst={{x=0,y=0,w=1,h=60}}}
+  }
+}
+)lua");
+  expect(decoded.model && decoded.model->objects.size() == 7,
+         "timingdistributiongraph declarations create one typed gameplay object per destination");
+  if (!decoded.model || decoded.model->objects.size() != 7) {
+    return;
+  }
+  const auto payload = [&](std::string_view id) {
+    const auto *definition = findObject(*decoded.model, id);
+    return definition != nullptr
+               ? std::get_if<SkinTimingDistributionGraphObject>(
+                     &definition->payload)
+               : nullptr;
+  };
+  const auto *defaults = payload("default");
+  const auto *custom = payload("custom");
+  const auto *ordinaryLower = payload("ordinary-lower");
+  const auto *ordinaryUpper = payload("ordinary-upper");
+  const auto *negativeLower = payload("negative-lower");
+  const auto *negativeUpper = payload("negative-upper");
+  const auto *zeroConstructs = payload("zero-constructs");
+  if (defaults == nullptr || custom == nullptr || ordinaryLower == nullptr ||
+      ordinaryUpper == nullptr || negativeLower == nullptr ||
+      negativeUpper == nullptr || zeroConstructs == nullptr) {
+    expect(false,
+           "timingdistributiongraph destinations retain their typed payloads");
+    return;
+  }
+  expect(defaults != nullptr && defaults->width == 301 &&
+             defaults->lineWidth == 1 &&
+             defaults->graphRgba == 0x00ff00ffU &&
+             defaults->averageRgba == 0xffffffffU &&
+             defaults->devRgba == 0xffffffffU &&
+             defaults->judgeRgba ==
+                 std::array<std::uint32_t, 5>{0x000088ffU, 0x008800ffU,
+                                               0x888800ffU, 0x880000ffU,
+                                               0x000000ffU} &&
+             defaults->drawAverage && defaults->drawDev,
+         "timingdistributiongraph defaults retain the pinned constructor values");
+  expect(custom != nullptr && custom->width == 401 &&
+             custom->lineWidth == 3 && custom->graphRgba == 0x11223344U &&
+             custom->averageRgba == 0x55667788U &&
+             custom->devRgba == 0x99aabbccU &&
+             custom->judgeRgba ==
+                 std::array<std::uint32_t, 5>{0x01020304U, 0x11121314U,
+                                               0x21222324U, 0x31323334U,
+                                               0x41424344U} &&
+             !custom->drawAverage && !custom->drawDev,
+         "timingdistributiongraph retains each authored colour and exact integer flags");
+  expect(ordinaryLower->width == 10 && ordinaryLower->lineWidth == 1 &&
+             ordinaryUpper->width == 10 && ordinaryUpper->lineWidth == 10,
+         "timingdistributiongraph preserves the pinned ordinary lower and upper line-width clamps");
+  expect(negativeLower->width == 1 && negativeLower->lineWidth == 1 &&
+             negativeUpper->width == 1 && negativeUpper->lineWidth == -5 &&
+             zeroConstructs->width == 1 && zeroConstructs->lineWidth == 1,
+         "timingdistributiongraph preserves reversed-bound clamp branches that still construct");
+  expect(std::ranges::none_of(decoded.diagnostics, [](const auto &entry) {
+           return entry.code ==
+                  "skin_lua_model_timingdistributiongraph_unsupported";
+         }),
+         "timingdistributiongraph is not reported as an unsupported gameplay widget");
+
+  const auto validated = test_support::validateWithAuthoredBuiltins(
+      *decoded.model);
+  expect(validated.model && !validated.criticalFailure &&
+             std::ranges::all_of(validated.model->model.objects,
+                                 [](const auto &object) {
+                                   return !std::holds_alternative<
+                                       SkinBlankObject>(object.payload);
+                                 }),
+         "valid timingdistributiongraphs remain typed through model validation");
+
+  auto invalidModel = *decoded.model;
+  std::get<SkinTimingDistributionGraphObject>(
+      invalidModel.objects.front().payload)
+      .lineWidth = 0;
+  const auto invalid = test_support::validateWithAuthoredBuiltins(
+      std::move(invalidModel));
+  expect(invalid.criticalFailure && !invalid.model &&
+             std::ranges::find_if(invalid.diagnostics, [](const auto &entry) {
+               return entry.code ==
+                      "skin_lua_model_timingdistributiongraph_invalid";
+             }) != invalid.diagnostics.end(),
+         "model validation rejects timingdistributiongraph geometry the pinned constructor cannot use");
+
+  const auto divideByZero = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  timingdistributiongraph={{id='divide-by-zero',width=0,lineWidth=1}},
+  destination={{id='divide-by-zero',dst={{x=0,y=0,w=1,h=60}}}}
+}
+)lua");
+  expect(!divideByZero.model &&
+             std::ranges::find_if(divideByZero.diagnostics,
+                                  [](const auto &entry) {
+                                    return entry.code ==
+                                           "skin_lua_model_timingdistributiongraph_invalid";
+                                  }) != divideByZero.diagnostics.end(),
+         "timingdistributiongraph rejects only the zero-width clamp branch that divides by zero");
+}
+
+void testHitErrorVisualizerIsTypedInsteadOfBlank() {
+  const auto decoded = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  hiterrorvisualizer={{id='hiterror'}},
+  destination={{id='hiterror',dst={{x=0,y=0,w=301,h=60}}}}
+}
+)lua");
+  const auto *definition =
+      decoded.model ? findObject(*decoded.model, "hiterror") : nullptr;
+  expect(definition != nullptr &&
+             !std::holds_alternative<SkinBlankObject>(definition->payload) &&
+             std::ranges::none_of(decoded.diagnostics, [](const auto &entry) {
+               return entry.code ==
+                      "skin_lua_model_hiterrorvisualizer_unsupported";
+             }),
+         "valid hiterrorvisualizers decode as typed objects without the legacy unsupported diagnostic");
+  if (!decoded.model) {
+    return;
+  }
+  const auto validated =
+      test_support::validateWithAuthoredBuiltins(*decoded.model);
+  expect(validated.model && !validated.criticalFailure &&
+             std::ranges::none_of(validated.model->model.objects,
+                                  [](const auto &object) {
+                                    return std::holds_alternative<
+                                        SkinBlankObject>(object.payload);
+                                  }),
+         "valid hiterrorvisualizers remain typed through model validation");
+}
+
+void testHitErrorVisualizerDecodesPinnedConstructorFields() {
+  const auto decoded = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  hiterrorvisualizer={
+    {id='default'},
+    {id='custom',width=401,judgeWidthMillis=200,lineWidth=9,
+     colorMode=2,hiterrorMode=1,emaMode=3,lineColor='11223344',
+     centerColor='55667788',PGColor='01020304',GRColor='11121314',
+     GDColor='21222324',BDColor='31323334',PRColor='not-a-colour',
+     emaColor='51525354',alpha=0.25,windowLength=500,transparent=1,
+     drawDecay=0},
+    {id='invalid',lineWidth=-9,windowLength=-3,lineColor='invalid',
+     centerColor='invalid',PGColor='invalid',GRColor='invalid',
+     GDColor='invalid',BDColor='invalid',emaColor='invalid'},
+    {id='negative',width=11,judgeWidthMillis=-1}
+  },
+  destination={
+    {id='default',dst={{x=0,y=0,w=301,h=60}}},
+    {id='custom',dst={{x=0,y=0,w=401,h=200}}},
+    {id='invalid',dst={{x=0,y=0,w=301,h=60}}},
+    {id='negative',dst={{x=0,y=0,w=11,h=60}}}
+  }
+}
+)lua");
+  const auto payload = [&](std::string_view id) {
+    const auto *definition = decoded.model ? findObject(*decoded.model, id)
+                                           : nullptr;
+    return definition != nullptr
+               ? std::get_if<SkinHitErrorVisualizerObject>(
+                     &definition->payload)
+               : nullptr;
+  };
+  const auto *defaults = payload("default");
+  const auto *custom = payload("custom");
+  const auto *invalid = payload("invalid");
+  const auto *negative = payload("negative");
+  expect(defaults != nullptr && defaults->width == 301 &&
+             defaults->judgeWidthMillis == 150 && defaults->lineWidth == 1 &&
+             defaults->colorMode == 1 && defaults->hitErrorMode == 1 &&
+             defaults->emaMode == 1 &&
+             defaults->lineRgba == 0x99ccff80U &&
+             defaults->centerRgba == 0xffffffffU &&
+             defaults->judgeRgba ==
+                 std::array<std::uint32_t, 5>{0x99ccff80U, 0xf2cb3080U,
+                                               0x14cc8f80U, 0xff1ab380U,
+                                               0xcc292980U} &&
+             defaults->emaRgba == 0xff0000ffU && defaults->alpha == 0.1F &&
+             defaults->windowLength == 30 && !defaults->transparent &&
+             defaults->drawDecay,
+         "hiterrorvisualizer defaults retain every pinned constructor value");
+  expect(custom != nullptr && custom->width == 401 &&
+             custom->judgeWidthMillis == 200 && custom->lineWidth == 4 &&
+             custom->colorMode == 0 && custom->hitErrorMode == 1 &&
+             custom->emaMode == 3 && custom->lineRgba == 0x11223344U &&
+             custom->centerRgba == 0x55667788U &&
+             custom->judgeRgba ==
+                 std::array<std::uint32_t, 5>{0x01020304U, 0x11121314U,
+                                               0x21222324U, 0x31323334U, 0U} &&
+             custom->emaRgba == 0x51525354U && custom->alpha == 0.25F &&
+             custom->windowLength == 100 && custom->transparent &&
+             !custom->drawDecay,
+         "hiterrorvisualizer clamps dimensions and applies exact integer flag and custom-colour semantics");
+  expect(invalid != nullptr && invalid->lineWidth == 1 &&
+             invalid->windowLength == 1 &&
+             invalid->lineRgba == 0xff0000ffU &&
+             invalid->centerRgba == 0xff0000ffU &&
+             invalid->judgeRgba[0] == 0xff0000ffU &&
+             invalid->judgeRgba[1] == 0xff0000ffU &&
+             invalid->judgeRgba[2] == 0xff0000ffU &&
+             invalid->judgeRgba[3] == 0xff0000ffU &&
+             invalid->emaRgba == 0xff0000ffU,
+         "validated hiterrorvisualizer colours fall back to opaque red and bounded lengths clamp");
+  expect(negative != nullptr && negative->width == 11 &&
+             negative->judgeWidthMillis == -1,
+         "hiterrorvisualizer decode preserves a source-constructible negative "
+         "judge width for the renderer's ordered reversed-bound clamp");
+
+  if (!decoded.model) {
+    return;
+  }
+  auto invalidLineModel = *decoded.model;
+  if (!invalidLineModel.objects.empty()) {
+    std::get<SkinHitErrorVisualizerObject>(
+        invalidLineModel.objects.front().payload)
+        .lineWidth = 0;
+  }
+  const auto invalidLine = test_support::validateWithAuthoredBuiltins(
+      std::move(invalidLineModel));
+  expect(invalidLine.criticalFailure && !invalidLine.model &&
+             std::ranges::find_if(invalidLine.diagnostics,
+                                  [](const auto &entry) {
+                                    return entry.code ==
+                                           "skin_lua_model_hiterrorvisualizer_invalid";
+                                  }) != invalidLine.diagnostics.end(),
+         "model validation rejects hiterrorvisualizer line widths outside the constructor clamp");
+
+  auto invalidWindowModel = *decoded.model;
+  if (!invalidWindowModel.objects.empty()) {
+    std::get<SkinHitErrorVisualizerObject>(
+        invalidWindowModel.objects.front().payload)
+        .windowLength = 101;
+  }
+  const auto invalidWindow = test_support::validateWithAuthoredBuiltins(
+      std::move(invalidWindowModel));
+  expect(invalidWindow.criticalFailure && !invalidWindow.model,
+         "model validation rejects hiterrorvisualizer windows outside the constructor clamp");
+}
+
+void testHitErrorVisualizerParsesPoorColourOnlyWhenOpaque() {
+  const auto hashes = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  hiterrorvisualizer={
+    {id='rgb',PRColor='#000000'},
+    {id='rgba',PRColor='#1234567F'},
+    {id='transparent',transparent=1,PRColor='not-a-colour'}
+  },
+  destination={
+    {id='rgb',dst={{x=0,y=0,w=301,h=60}}},
+    {id='rgba',dst={{x=0,y=0,w=301,h=60}}},
+    {id='transparent',dst={{x=0,y=0,w=301,h=60}}}
+  }
+}
+)lua");
+  const auto payload = [&](std::string_view id) {
+    const auto *definition = hashes.model ? findObject(*hashes.model, id)
+                                          : nullptr;
+    return definition != nullptr
+               ? std::get_if<SkinHitErrorVisualizerObject>(
+                     &definition->payload)
+               : nullptr;
+  };
+  const auto *rgb = payload("rgb");
+  const auto *rgba = payload("rgba");
+  const auto *transparent = payload("transparent");
+  expect(rgb != nullptr && rgba != nullptr && transparent != nullptr &&
+             rgb->judgeRgba[4] == 0x000000ffU &&
+             rgba->judgeRgba[4] == 0x1234567fU &&
+             transparent->judgeRgba[4] == 0U,
+         "hiterrorvisualizer keeps direct libGDX PR parsing only for opaque poor marks");
+
+  const auto invalid = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  hiterrorvisualizer={{id='invalid',transparent=0,PRColor='not-a-colour'}},
+  destination={{id='invalid',dst={{x=0,y=0,w=301,h=60}}}}
+}
+)lua");
+  expect(!invalid.model &&
+             std::ranges::find_if(invalid.diagnostics, [](const auto &entry) {
+               return entry.code ==
+                      "skin_lua_model_hiterrorvisualizer_invalid";
+             }) != invalid.diagnostics.end(),
+         "opaque hiterrorvisualizer retains the pinned direct PRColor load-failure boundary");
+}
+
+void testGameplayGaugeDoesNotPreemptLaterGenericVisualizerKinds() {
+  const auto verify = [](std::string_view declaration, auto payloadTag,
+                         std::string_view message) {
+    const auto decoded = decodeInlineModel(
+        "return {type=0,w=1280,h=720," + std::string(declaration) +
+        ",gauge={id='shared',nodes={}},"
+        "destination={{id='shared',dst={{x=0,y=0,w=301,h=60}}}}}");
+    const auto *definition =
+        decoded.model ? findObject(*decoded.model, "shared") : nullptr;
+    expect(definition != nullptr &&
+               std::holds_alternative<decltype(payloadTag)>(
+                   definition->payload),
+           message);
+  };
+
+  verify("hiterrorvisualizer={{id='shared'}}",
+         SkinHitErrorVisualizerObject{},
+         "same-ID HitErrorVisualizer keeps the pinned generic precedence "
+         "over gameplay Gauge");
+  verify("timingvisualizer={{id='shared'}}", SkinTimingVisualizerObject{},
+         "same-ID TimingVisualizer keeps the pinned generic precedence over "
+         "gameplay Gauge");
+  verify("timingdistributiongraph={{id='shared'}}",
+         SkinTimingDistributionGraphObject{},
+         "same-ID TimingDistributionGraph keeps the pinned generic "
+         "precedence over gameplay Gauge");
+}
+
+void testNegativeGenericDistributionGraphStaysOutsideGameplay() {
+  const auto decoded = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  source={{id='atlas',path='atlas.png'}},
+  graph={{id='select-only',src='atlas',w=11,h=1,divx=11,type=-1}},
+  destination={{id='select-only',dst={{x=0,y=0,w=100,h=20}}}}
+}
+)lua");
+  expect(decoded.model.has_value(),
+         "a select-only generic distribution declaration is noncritical");
+  if (!decoded.model) {
+    return;
+  }
+  const auto *definition = findObject(*decoded.model, "select-only");
+  expect(definition != nullptr &&
+             std::holds_alternative<SkinGraphObject>(definition->payload) &&
+             !std::holds_alternative<SkinNoteDistributionGraphObject>(
+                 definition->payload) &&
+             std::ranges::find_if(decoded.diagnostics, [](const auto &entry) {
+               return entry.code ==
+                      "skin_lua_model_distribution_graph_unsupported";
+             }) != decoded.diagnostics.end(),
+         "negative generic Graph retains the select-only invalid gameplay boundary");
+}
+
 void testOptionalVisualsAndBuiltinImagesStayLiveAcrossRepeatedDestinations() {
   const auto decoded = decodeInlineModel(R"lua(
 return {
   type=0,w=1280,h=720,
+  source={{id='unused',path='alpha.chp'}},
   bpmgraph={{id='bpm'}},
   hiterrorvisualizer={{id='hiterror'}},
   judgegraph={{id='judge'}},
@@ -1458,23 +2345,16 @@ return {
   }
 }
 )lua");
+
   expect(decoded.model && decoded.model->objects.size() == 10 &&
              decoded.model->destinations.size() == 10,
          "every authored destination, including repeated names and negative "
          "built-in image IDs, remains a live model object");
-  const std::array expectedCodes{
-      std::string_view("skin_lua_model_bpmgraph_unsupported"),
-      std::string_view("skin_lua_model_hiterrorvisualizer_unsupported"),
-      std::string_view("skin_lua_model_judgegraph_unsupported"),
-      std::string_view("skin_lua_model_timingvisualizer_unsupported"),
-      std::string_view("skin_lua_model_pmchara_unsupported"),
-  };
-  for (const auto code : expectedCodes) {
-    expect(std::ranges::find_if(decoded.diagnostics, [&](const auto &entry) {
-      return entry.code == code;
-    }) != decoded.diagnostics.end(),
-           "each authored optional unsupported array emits its exact diagnostic");
-  }
+  expect(std::ranges::none_of(decoded.diagnostics, [](const auto &entry) {
+           return entry.code == "skin_lua_model_bpmgraph_unsupported" ||
+                  entry.code == "skin_lua_model_judgegraph_unsupported";
+         }),
+         "supported BPM and judge graph arrays emit no unsupported diagnostic");
   if (decoded.model && decoded.model->objects.size() == 10) {
     const auto repeatedNames = static_cast<std::size_t>(std::count_if(
         decoded.model->objects.begin(), decoded.model->objects.end(),
@@ -1488,10 +2368,13 @@ return {
            "pinned authored order");
     const auto validated = test_support::validateWithAuthoredBuiltins(
         *decoded.model);
+    const auto *timing = findObject(*decoded.model, "timing");
     expect(validated.model && !validated.criticalFailure &&
-               validated.model->disabledOptionalObjects.empty(),
-           "optional visual widgets validate as blank render objects instead "
-           "of disabling their destinations");
+               timing != nullptr &&
+               std::holds_alternative<SkinTimingVisualizerObject>(
+                   timing->payload),
+           "timingvisualizers validate as typed render objects instead of "
+           "blank optional destinations");
   }
 
   const auto oversized = decodeInlineModel(R"lua(
@@ -1508,9 +2391,137 @@ return {type=0,w=1280,h=720,bpmgraph=definitions,destination={}}
          "unsupported identity arrays remain bounded by the shared decoded-object limit");
 }
 
+void testPomyuCharaCycleExtractionFollowsPinnedLoaderOrder() {
+  constexpr std::string_view source =
+      "#Anime\t100\n"
+      "#Frame\t1\t40\n"
+      "#Frame\t6\t50\n"
+      "#Patern\t1\t000102\n"
+      "#Texture\t6\t00010203\n"
+      "#Layer\t7\t0001\n";
+  const auto cycles = pomyuMotionCyclesFromChp(
+      source, /*type=*/0, /*side=*/1,
+      std::array<int, 8>{1, 1, 1, 1, 1, 1, 1, 1});
+  expect(cycles.has_value() &&
+             *cycles == std::array<int, 8>{120, 200, 200, 1,
+                                            1, 1,   1,   1},
+         "PomyuCharaLoader derives 1P processor cycles from the authored "
+         "Pattern, Texture, and Layer motion data in pinned order");
+
+  const auto secondPlayerCycles = pomyuMotionCyclesFromChp(
+      source, /*type=*/0, /*side=*/2,
+      std::array<int, 8>{1, 1, 1, 1, 1, 1, 1, 1});
+  expect(secondPlayerCycles.has_value() &&
+             *secondPlayerCycles == std::array<int, 8>{1, 1, 1,   1,
+                                                        1, 120, 200, 1},
+         "PomyuCharaLoader applies a PLAY pmchara's source cycles to its "
+         "side-specific processor timer slots");
+}
+
+void testPomyuCharaCycleExtractionBoundsHostileFields() {
+  std::string tabDense = "#Anime\t100\n#Frame\t1\t40\n#Pattern\t1\t000102";
+  tabDense.append(4U * 1024U * 1024U, '\t');
+  tabDense.push_back('\n');
+  const auto cycles = pomyuMotionCyclesFromChp(
+      tabDense, /*type=*/0, /*side=*/1,
+      std::array<int, 8>{1, 1, 1, 1, 1, 1, 1, 1});
+  expect(cycles.has_value() && (*cycles)[0] == 120,
+         "tab-dense CHP lines inspect only the bounded fields needed for a "
+         "Pomyu motion");
+
+  const std::string oversized =
+      "#Pattern\t1\t" + std::string(64U * 1024U + 1U, '0') + "\n";
+  expect(!pomyuMotionCyclesFromChp(
+              oversized, /*type=*/0, /*side=*/1,
+              std::array<int, 8>{1, 1, 1, 1, 1, 1, 1, 1})
+              .has_value(),
+         "oversized relevant CHP fields fail within the parser budget");
+
+  std::stop_source cancelled;
+  cancelled.request_stop();
+  expect(!pomyuMotionCyclesFromChp(
+              tabDense, /*type=*/0, /*side=*/1,
+              std::array<int, 8>{1, 1, 1, 1, 1, 1, 1, 1},
+              cancelled.get_token())
+              .has_value(),
+         "Pomyu cycle parsing observes activation cancellation");
+}
+
+void testPomyuCharaDefinitionPreservesPinnedSourceFields() {
+  const auto decoded = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  source={{id='chara',path='characters/alpha.chp'}},
+  pmchara={{id='pomyu',src='chara',color=2,type=0,side=2}},
+  destination={{id='pomyu',dst={{x=10,y=20,w=30,h=40}}}}
+}
+)lua");
+  expect(decoded.model.has_value(), "pmchara source fixture decodes");
+  if (!decoded.model) {
+    return;
+  }
+  const auto *definition = findObject(*decoded.model, "pomyu");
+  const auto *pmchara = definition != nullptr
+                             ? std::get_if<SkinPmCharaObject>(&definition->payload)
+                             : nullptr;
+  expect(pmchara != nullptr && pmchara->source == SkinResourceId{1} &&
+             pmchara->color == 2 && pmchara->type == 0 && pmchara->side == 2,
+         "a pmchara destination retains the same source, colour, type, and "
+         "side fields supplied to JsonPlaySkinObjectLoader");
+
+  const auto unresolved = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  pmchara={{id='missing-source',type=0}},
+  destination={{id='missing-source',dst={{x=10,y=20,w=30,h=40}}}}
+}
+)lua");
+  expect(unresolved.model &&
+             findObject(*unresolved.model, "missing-source") == nullptr,
+         "a pmchara without a source follows JsonPlaySkinObjectLoader's null "
+         "object path instead of rejecting the gameplay skin");
+}
+
+void testPracticeObjectClampsVisibleItemsAndKeepsItsDestination() {
+  const auto decode = [](int visibleItems) {
+    return decodeInlineModel(
+        "return {type=0,w=1280,h=720,practice={id='practice',visibleItems=" +
+        std::to_string(visibleItems) +
+        "},destination={{id='practice',dst={{x=80,y=40,w=800,h=640}}}}}");
+  };
+  const auto below = decode(-7);
+  const auto zero = decode(0);
+  const auto above = decode(99);
+  const auto defaults = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,
+  practice={id='practice'},
+  destination={{id='practice',dst={{x=80,y=40,w=800,h=640}}}}
+}
+)lua");
+  const auto practice = [](const BeatorajaSkinModelDecodeResult &decoded) {
+    if (!decoded.model) {
+      return static_cast<const SkinPracticeObject *>(nullptr);
+    }
+    const auto *definition = findObject(*decoded.model, "practice");
+    return definition != nullptr
+               ? std::get_if<SkinPracticeObject>(&definition->payload)
+               : nullptr;
+  };
+  expect(practice(below) != nullptr && practice(below)->visibleItems == 0 &&
+             practice(zero) != nullptr && practice(zero)->visibleItems == 0 &&
+             practice(above) != nullptr &&
+             practice(above)->visibleItems == 16 &&
+             practice(defaults) != nullptr &&
+             practice(defaults)->visibleItems == 10 && above.model &&
+             above.model->destinations.size() == 1,
+         "SkinPractice clamps visibleItems to 0..16 and remains the typed "
+         "owner of its authored destination");
+}
+
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
   testGameplayTimingPreservesDefaultsAndEveryAuthoredField();
   testPropertyInterningIncludesIntegerAndFloatDomains();
   testStableIdsAndPerUseFrameExpansionAreSourceNeutral();
@@ -1533,11 +2544,24 @@ int main() {
   testLiveDestinationMouseRectAndCenterNormalization();
   testGameplayTypeMustBeSupported();
   testBooleanFieldsUseLuaTruthiness();
+  testPracticePositionSliderDecodesItsExecutableWriter();
+  testJudgeGraphsDecodePinnedModesAndPresentationFlags();
+  testGaugeGraphsAreTypedSupportedGameplayObjects();
+  testBpmGraphsDecodePinnedDefaultsNormalizationAndValidation();
+  testTimingVisualizerDecodesPinnedPresentationFields();
+  testTimingVisualizerParsesPoorColourOnlyWhenOpaque();
+  testTimingDistributionGraphRetainsPinnedConstructionFields();
+  testHitErrorVisualizerIsTypedInsteadOfBlank();
+  testHitErrorVisualizerDecodesPinnedConstructorFields();
+  testHitErrorVisualizerParsesPoorColourOnlyWhenOpaque();
+  testGameplayGaugeDoesNotPreemptLaterGenericVisualizerKinds();
+  testNegativeGenericDistributionGraphStaysOutsideGameplay();
   testOptionalVisualsAndBuiltinImagesStayLiveAcrossRepeatedDestinations();
-  if (failures != 0) {
-    std::cerr << failures << " assertion(s) failed\n";
-    return 1;
-  }
-  std::cout << "beatoraja skin model tests passed\n";
-  return 0;
+  testPomyuCharaCycleExtractionFollowsPinnedLoaderOrder();
+  testPomyuCharaCycleExtractionBoundsHostileFields();
+  testPomyuCharaDefinitionPreservesPinnedSourceFields();
+  testPracticeObjectClampsVisibleItemsAndKeepsItsDestination();
+  return gameplay_skin_ledger_evidence::finish(
+      argc, argv, "beatoraja_skin_model_tests", failures,
+      "assertion(s) failed", "beatoraja skin model tests passed");
 }

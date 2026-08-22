@@ -10,11 +10,13 @@
 
 #include <cstdint>
 #include <array>
+#include <limits>
 #include <map>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -59,6 +61,8 @@ struct PlayerOptionProvenance {
 };
 
 struct ScoreStageProvenance {
+  static constexpr std::int64_t kMaximumPlayDurationSeconds =
+      std::numeric_limits<std::int32_t>::max();
   std::string chartMd5;
   std::string chartSha256;
   int longNoteMode = 0;
@@ -68,6 +72,9 @@ struct ScoreStageProvenance {
   JudgeRankSource judgeRankSource = JudgeRankSource::Unknown;
   std::optional<int> sourceJudgeRank;
   int totalNotes = 0;
+  // PlayDataAccessor.writeScoreData() adds the last playable note's whole
+  // second timestamp to PlayerData.playtime for each persisted local play.
+  std::int64_t playDurationSeconds = 0;
   std::optional<double> authoredGaugeTotal;
   double effectiveGaugeTotal = 0.0;
   gameplay::CandidateSelectionMode candidateSelection =
@@ -79,9 +86,14 @@ struct ScoreStageProvenance {
 
 struct ScoreProvenance {
   static constexpr int kDoublePlayFlipSchemaVersion = 5;
-  static constexpr int kSchemaVersion = kDoublePlayFlipSchemaVersion;
+  static constexpr int kPlayDurationSchemaVersion = 6;
+  static constexpr int kSchemaVersion = kPlayDurationSchemaVersion;
 
   int schemaVersion = kSchemaVersion;
+  // Kept only while reading an existing result. Schema upgrades normalize the
+  // public provenance shape, but its saved fingerprint must retain the wire
+  // schema that originally determined which facts were canonical.
+  int fingerprintSchemaVersion = 0;
   RulesetDescriptor ruleset;
   std::vector<ScoreStageProvenance> stages;
   GaugeType gaugeType = GaugeType::Normal;
@@ -101,7 +113,21 @@ struct ScoreProvenance {
   std::optional<int> startingGaugePercent;
   ScoreEligibility eligibility = ScoreEligibility::LegacyUnverified;
 
-  bool operator==(const ScoreProvenance &) const = default;
+  bool operator==(const ScoreProvenance &other) const {
+    return std::tie(schemaVersion, ruleset, stages, gaugeType, gaugeProfile,
+                    gaugeAutoShift, gaugeAutoShiftLowerBound, player1, player2,
+                    doublePlayFlip, assistOption, inputDevices, autoPlay,
+                    practice, clubMode, playback, judgeWindowScalePercent,
+                    startingGaugePercent, eligibility) ==
+           std::tie(other.schemaVersion, other.ruleset, other.stages,
+                    other.gaugeType, other.gaugeProfile,
+                    other.gaugeAutoShift, other.gaugeAutoShiftLowerBound,
+                    other.player1, other.player2, other.doublePlayFlip,
+                    other.assistOption, other.inputDevices, other.autoPlay,
+                    other.practice, other.clubMode, other.playback,
+                    other.judgeWindowScalePercent,
+                    other.startingGaugePercent, other.eligibility);
+  }
 
   static ScoreProvenance Legacy();
 };

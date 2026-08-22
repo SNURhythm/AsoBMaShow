@@ -151,6 +151,166 @@ bms_parser::LongNote *addLongNote(bms_parser::Measure &measure,
   return head;
 }
 
+gameplay::GameplayDefinition makeGraphRingDefinition() {
+  bms_parser::Chart chart;
+  chart.Meta.TotalNotes = 105;
+  chart.Meta.KeyMode = 7;
+  auto *measure = new bms_parser::Measure();
+  for (int index = 0; index < 105; ++index) {
+    addTimeline(*measure, static_cast<long long>(index + 1) * 1'000'000)
+        ->SetNote(1, new bms_parser::Note(index + 1));
+  }
+  chart.Measures.push_back(measure);
+  return gameplay::buildGameplayDefinition(chart, 0);
+}
+
+void testGameplayGraphAuthorityUsesPinnedBucketsRingAndReplayOrder() {
+  const auto definition = makeGraphRingDefinition();
+  const auto judge = gameplay::CompiledGameplayJudge::from(Judge(3));
+  gameplay::GameplaySimulation simulation(
+      definition, {.judge = judge,
+                   .attempt = {.gaugeHistoryCapacity = 256}});
+
+  for (int index = 0; index < 105; ++index) {
+    const auto noteTime = static_cast<long long>(index + 1) * 1'000'000;
+    const auto inputTime = noteTime + static_cast<long long>(index + 1) * 1'000;
+    (void)simulation.advanceTo(inputTime, inputTime);
+    const auto pressed = simulation.pressLane(
+        1, {.songTimeMicros = inputTime,
+            .laneBeamTimeMicros = inputTime});
+    require(pressed.hasJudge,
+            "graph ring fixture accepts every authored note judgement");
+    (void)simulation.releaseLane(
+        1, {.songTimeMicros = inputTime + 100,
+            .laneBeamTimeMicros = inputTime + 100});
+  }
+
+  const auto &graph = simulation.skinGameplayGraphState();
+  require(graph.judgementDistribution.size() == 106 &&
+              graph.judgementDistribution[1][1] == 1 &&
+              graph.judgementDistribution[21][2] == 1 &&
+              graph.judgementDistribution[61][3] == 1 &&
+              graph.earlyLateDistribution[1][1] == 1 &&
+              graph.earlyLateDistribution[21][6] == 1 &&
+              graph.earlyLateDistribution[61][7] == 1,
+          "accepted notes move through the exact six and ten source buckets");
+  require(graph.recentJudgeTimingIndex == 5 &&
+              graph.recentJudgeTimingsMillis[0] == -100 &&
+              graph.recentJudgeTimingsMillis[1] == -101 &&
+              graph.recentJudgeTimingsMillis[5] == -105 &&
+              graph.recentJudgeTimingsMillis[6] == -6 &&
+              graph.recentJudgeTimingsMillis[99] == -99,
+          "105 accepted judgements retain the latest 100 in source index order");
+  require(graph.judgeWindows[0] ==
+                  SkinJudgeWindow{.judgement = PGreat,
+                                  .minimumTimingMillis = -20,
+                                  .maximumTimingMillis = 20} &&
+              graph.judgeWindows[3] ==
+                  SkinJudgeWindow{.judgement = Bad,
+                                  .minimumTimingMillis = -280,
+                                  .maximumTimingMillis = 220} &&
+              std::ranges::all_of(
+                  graph.gaugeHistories,
+                  [](const auto &history) { return history.size() == 211; }) &&
+              graph.gaugeSupported &&
+              graph.gaugeMaximum == 100.0F,
+          "graph authority retains exact judge endpoints and gauge metadata");
+
+  SkinGameplayGraphAccumulator replayGraph(
+      makeSkinGameplayGraphNotes(definition), 106, graph.judgeWindows, 256);
+  GameplayScoreState replayGauge(
+      {.gaugeRules = simulation.scoreState().gaugeRules(), .keyMode = 7});
+  (void)replayGraph.updateGaugeState(
+      replayGauge.gaugeValues, replayGauge.gaugeType,
+      replayGauge.gaugeRules());
+  for (const auto &event : simulation.replayEvents()) {
+    if (event.judgement == None) {
+      continue;
+    }
+    (void)replayGraph.advanceGaugeHistoryTo(event.songTimeMicros);
+    replayGraph.applyJudge(event.noteId,
+                           JudgeResult(event.judgement, event.diffMicros));
+    replayGauge.applyGaugeJudgement(event.judgement);
+    replayGauge.gaugeType = event.gaugeType;
+    replayGauge.currentGauge = event.gauge;
+    replayGauge.gaugeValues[static_cast<std::size_t>(
+        gaugeTypeIndex(event.gaugeType))] = event.gauge;
+    (void)replayGraph.updateGaugeState(
+        replayGauge.gaugeValues, event.gaugeType,
+        simulation.scoreState().gaugeRules());
+  }
+  require(replayGraph.state() == graph,
+          "live and replay-driven graph producers publish identical snapshots");
+
+  gameplay::GameplaySimulation reset(
+      definition, {.judge = judge,
+                   .attempt = {.gaugeHistoryCapacity = 256}});
+  const auto &initial = reset.skinGameplayGraphState();
+  require(initial.recentJudgeTimingIndex == 0 &&
+              std::ranges::all_of(
+                  initial.recentJudgeTimingsMillis,
+                  [](std::int64_t value) {
+                    return value == kSkinEmptyJudgeTimingMillis;
+                  }) &&
+              initial.judgementDistribution[1][0] == 1 &&
+              std::ranges::all_of(
+                  initial.gaugeHistories,
+                  [](const auto &history) {
+                    return history.size() == 1;
+                  }),
+          "a new gameplay attempt resets graph histories and unjudged buckets");
+}
+
+void testGameplayGraphGaugeHistorySamplesEveryTypeEveryHalfSecond() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 1;
+  auto *measure = new bms_parser::Measure();
+  addTimeline(*measure, 10'000'000)
+      ->SetNote(1, new bms_parser::Note(1));
+  chart.Measures.push_back(measure);
+
+  gameplay::GameplaySimulation simulation(
+      gameplay::buildGameplayDefinition(chart, 0),
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(3)),
+       .attempt = {.gaugeAutoShift = GaugeAutoShiftMode::BestClear,
+                   .gaugeHistoryCapacity = 3}});
+
+  const auto &initial = simulation.skinGameplayGraphState();
+  const auto normalIndex =
+      static_cast<std::size_t>(gaugeTypeIndex(GaugeType::Normal));
+  const auto hardIndex =
+      static_cast<std::size_t>(gaugeTypeIndex(GaugeType::Hard));
+  require(initial.gaugeHistories[normalIndex] == std::vector<float>{20.0F} &&
+              initial.gaugeHistories[hardIndex] ==
+                  std::vector<float>{100.0F},
+          "gauge graph starts every gauge type with its time-zero sample");
+
+  (void)simulation.advanceTo(1'100'000, 1'100'000);
+  const auto &sampled = simulation.skinGameplayGraphState();
+  require(sampled.gaugeHistories[normalIndex] ==
+                  std::vector<float>({20.0F, 20.0F, 20.0F}) &&
+              sampled.gaugeHistories[hardIndex] ==
+                  std::vector<float>({100.0F, 100.0F, 100.0F}),
+          "flat gauge intervals remain sampled for every type at 500 ms");
+
+  SkinGameplayGraphState graphState{
+      .dynamic = std::make_shared<SkinGameplayDynamicGraphState>(sampled)};
+  const auto view = skinGameplayGraphStateView(graphState);
+  const auto activeIndex = static_cast<std::size_t>(
+      gaugeTypeIndex(sampled.gaugeType));
+  require(view.gaugeHistory.data() ==
+              graphState.dynamic->gaugeHistories[activeIndex].data(),
+          "the renderer view selects the active type's complete history "
+          "without copying it");
+
+  (void)simulation.advanceTo(2'100'000, 2'100'000);
+  require(std::ranges::all_of(
+              simulation.skinGameplayGraphState().gaugeHistories,
+              [](const auto &history) { return history.size() == 3; }),
+          "per-type gauge graph histories remain bounded after later samples");
+}
+
 struct KeysoundEntry {
   std::int64_t timingMicros = 0;
   int identity = 0;
@@ -2299,6 +2459,8 @@ void testAutoplayNormalReleaseCarriesSourceTimeWithoutReplay() {
 
 int main() {
   testCompiledJudgePreservesResolvedWindows();
+  testGameplayGraphAuthorityUsesPinnedBucketsRingAndReplayOrder();
+  testGameplayGraphGaugeHistorySamplesEveryTypeEveryHalfSecond();
   testManualKeysoundSelectionUsesFutureThenLastWithMainTies();
   testDefinitionKeysoundIndexExcludesTailsAndLandmines();
   testDefinitionUsesStableIdsAndLaneIndices();

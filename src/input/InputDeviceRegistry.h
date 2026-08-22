@@ -3,9 +3,12 @@
 #include "IInputBackend.h"
 
 #include <cstdint>
+#include <array>
+#include <bitset>
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -13,6 +16,8 @@
 #include <unordered_map>
 #include <variant>
 #include <vector>
+
+#include <SDL2/SDL_scancode.h>
 
 class InputDeviceRegistry {
 public:
@@ -59,6 +64,8 @@ public:
   void unsubscribe(std::uint64_t token);
 
   [[nodiscard]] std::vector<input::InputDeviceSnapshot> snapshot() const;
+  [[nodiscard]] input::LegacyInputGeneration
+  legacyInputGeneration(int drawableWidth, int drawableHeight) const noexcept;
   [[nodiscard]] bool isConnected(std::string_view stableId) const;
   [[nodiscard]] const std::vector<std::string> &diagnostics() const;
 
@@ -84,6 +91,12 @@ private:
   std::shared_ptr<QueueState> queueState_;
   std::vector<std::unique_ptr<IInputBackend>> backends_;
   class SDLInputBackend *sdlInputBackend_ = nullptr;
+  mutable std::mutex legacyInputMutex_;
+  std::bitset<SDL_NUM_SCANCODES> pressedSdlScancodes_;
+  std::bitset<input::kLegacyInputMaximumGdxKeyCode + 1> pressedGdxKeys_;
+  std::array<std::uint16_t, input::kLegacyInputMaximumGdxKeyCode + 1>
+      pressedGdxKeyCounts_{};
+  mutable std::uint64_t legacyInputSequence_ = 0;
   std::vector<std::shared_ptr<BackendSinkGate>> backendSinkGates_;
   std::unordered_map<std::string, input::InputDeviceSnapshot> devices_;
   std::map<std::uint64_t, InputSubscription> inputListeners_;

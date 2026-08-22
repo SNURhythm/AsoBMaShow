@@ -73,10 +73,44 @@ struct SessionPresentationWrite {
   std::uint8_t argumentCount = 0;
 };
 
+// Pinned FloatPropertyFactory.RateType exposes these three built-in
+// FloatWriter targets during BMSPlayer gameplay. They mutate Config.AudioConfig
+// rather than the skin configuration.
+enum class SkinAudioVolumeWriterTarget : std::uint8_t {
+  Master,
+  Keysound,
+  Bgm,
+};
+
+struct SetSkinAudioVolume {
+  SkinAudioVolumeWriterTarget target = SkinAudioVolumeWriterTarget::Master;
+  float value = 1.0F;
+};
+
+// FloatPropertyFactory.practice_position mutates BMSPlayer's retained
+// PracticeConfiguration viewport, independently of STATE_PRACTICE.
+struct SetPracticeItemScroll {
+  float position = 0.0F;
+};
+
+// BMSPlayer.executeEvent applies BUTTON_PRACTICE_ITEM1 through ITEM16 only
+// while STATE_PRACTICE is active. The visible row and arg1 direction are
+// value-owned until the selected skin frame has submitted.
+struct SetPracticeMenuItem {
+  std::size_t visibleIndex = 0;
+  bool increment = true;
+};
+
+struct SetPracticeVisibleItems {
+  int count = 10;
+};
+
 using PersistedSkinConfigurationWrite =
     std::variant<SetSkinOption, SetSkinFilePath, SetSkinOffset>;
 using SkinFrameMutation =
-    std::variant<SessionPresentationWrite, PersistedSkinConfigurationWrite>;
+    std::variant<SessionPresentationWrite, PersistedSkinConfigurationWrite,
+                 SetSkinAudioVolume, SetPracticeItemScroll,
+                 SetPracticeMenuItem, SetPracticeVisibleItems>;
 
 enum class SkinHostCallStatus : std::uint8_t {
   Completed,
@@ -108,8 +142,13 @@ struct PlaySkinStateBridgeContext {
   // has completed.
   const ValidatedBeatorajaSkinModel *model = nullptr;
   const BeatorajaSkinConfiguration &configuration;
-  LuaSkinRuntime &runtime;
+  LuaSkinRuntime *runtime = nullptr;
   const SkinEventMutationTable &mutationTable;
+  // PomyuCharaProcessor initializes all eight motion cycles to one
+  // millisecond. A decoded PLAY pmchara definition replaces individual
+  // entries with its authored #Frame/#Anime cycle.
+  std::array<int, 8> pomyuMotionCyclesMillis = {1, 1, 1, 1,
+                                                 1, 1, 1, 1};
 };
 
 class PlaySkinStateBridge final : public ISkinFrameState {
@@ -129,6 +168,8 @@ public:
   SkinHostCallResult invokeEventBinding(SkinEventBindingId,
                                         std::span<const int> arguments);
   SkinHostCallResult invokeWriter(SkinFloatWriterId, double normalizedValue);
+  SkinHostCallResult invokeWriter(SkinStringWriterId, std::string_view value);
+  [[nodiscard]] PlaySkinFrameCommit takeFrameCommitForContinuation();
   [[nodiscard]] PlaySkinFrameCommit commitFrame();
   void discardFrame() noexcept;
 
@@ -144,7 +185,9 @@ public:
                 SkinFloatPropertyDomain = SkinFloatPropertyDomain::Rate) override;
   SkinPropertyLookup<std::string_view>
   stringProperty(const SkinBuiltinPropertySelector &) override;
-  SkinPropertyLookup<ConfigOffset> offsetProperty(int) override;
+  SkinPropertyLookup<SkinRuntimeOffset> offsetProperty(int) override;
+  [[nodiscard]] SkinLaneCoverStateView
+  laneCoverState() const noexcept override;
   std::int64_t timerProperty(const SkinBuiltinPropertySelector &) override;
   [[nodiscard]] std::span<const SkinProjectedNoteView>
   projectedNotes() const noexcept override;
@@ -152,10 +195,15 @@ public:
   projectedLongNotes() const noexcept override;
   [[nodiscard]] std::span<const SkinProjectedLineView>
   projectedLines() const noexcept override;
+  [[nodiscard]] SkinGameplayGraphStateView
+  gameplayGraphState() const noexcept override;
   [[nodiscard]] SkinGaugeStateView gaugeState() const noexcept override;
   [[nodiscard]] SkinJudgeStateView judgeState(int) const noexcept override;
   [[nodiscard]] SkinNoteExpansionStateView
   noteExpansionState() const noexcept override;
+  [[nodiscard]] SkinPracticeStateView
+  practiceState() const noexcept override;
+  bool stagePracticeVisibleItemCount(int) override;
   [[nodiscard]] std::span<const SkinDiagnostic> diagnostics() const noexcept;
 
 private:
@@ -181,7 +229,9 @@ private:
   static LuaSkinEventExecutionResult executeHostEvent(
       void *, int, std::span<const int>) noexcept;
   [[nodiscard]] const PlayfieldVisualState *state() const noexcept;
+  void updatePinnedLaneCoverOffsets();
   void updatePinnedPlayTimers();
+  void updatePinnedPomyuTimers();
   [[nodiscard]] std::optional<int>
   numericSelector(const SkinBuiltinPropertySelector &) const noexcept;
 
@@ -194,7 +244,14 @@ private:
   std::uint64_t frameSerial_ = 0;
   std::uint64_t lastAcceptedFrameSerial_ = 0;
   std::optional<BuiltInRendererTraversal> builtInTraversal_;
+  SkinRuntimeOffset liftOffset_;
+  SkinRuntimeOffset laneCoverOffset_;
+  SkinRuntimeOffset hiddenCoverOffset_;
   PlayfieldSkinProjectionViews projection_;
+  // StringPropertyFactory resolves target neighbours from a PlayerConfig
+  // target ring. Keep their source names stable for every lookup in a frame.
+  std::vector<std::string> targetNeighbourNames_;
+  std::string targetScorePlayerName_;
   PlaySkinFrameCommit staged_;
   std::unordered_map<int, std::int64_t> customTimerValues_;
   std::unordered_map<int, std::int64_t> customEventLastExecutionMicros_;
@@ -202,6 +259,20 @@ private:
   std::int64_t musicEndTimerStartMicros_ = kPlayfieldTimestampOff;
   std::int64_t fadeoutTimerStartMicros_ = kPlayfieldTimestampOff;
   std::int64_t fullComboTimerStartMicros_ = kPlayfieldTimestampOff;
+  std::int64_t rhythmTimerStartMicros_ = kPlayfieldTimestampOff;
+  std::int64_t rhythmAccumulatorMicros_ = 0;
+  std::optional<std::int64_t> rhythmPreviousClockMicros_;
+  std::size_t rhythmSectionIndex_ = 0;
+  // PlaySkin constructs PomyuCharaProcessor for every gameplay skin. Its
+  // unconfigured motion durations are all one millisecond; a future decoded
+  // pmchara object may replace those source defaults per timer.
+  std::array<std::int64_t, 8> pomyuTimerStarts_ = {
+      kPlayfieldTimestampOff, kPlayfieldTimestampOff,
+      kPlayfieldTimestampOff, kPlayfieldTimestampOff,
+      kPlayfieldTimestampOff, kPlayfieldTimestampOff,
+      kPlayfieldTimestampOff, kPlayfieldTimestampOff};
+  std::array<int, 2> pomyuLastNotes_{};
+  std::int64_t pomyuDanceTimerStartMicros_ = kPlayfieldTimestampOff;
   std::unordered_map<int, std::int64_t> pinnedSwitchTimerStarts_;
   std::vector<SkinDiagnostic> diagnostics_;
 };

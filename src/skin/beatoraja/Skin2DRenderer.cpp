@@ -3,7 +3,12 @@
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 
 #include "Skin2DRenderer.h"
+#include "SkinBpmGraphRenderer.h"
 #include "SkinCoverNormalization.h"
+#include "SkinGaugeGraphRenderer.h"
+#include "SkinNoteDistributionGraphRenderer.h"
+#include "SkinHitErrorVisualizerRenderer.h"
+#include "SkinTimingVisualizerRenderer.h"
 
 #include <algorithm>
 #include <array>
@@ -173,12 +178,36 @@ SkinImageInteractionGeometry imageInteraction(
           .clickMode = image.clickMode};
 }
 
+SkinTextInteractionGeometry textInteraction(
+    SkinObjectId sourceObject, std::uint32_t authoredOrdinal,
+    const AuthoredDestinationGeometry &geometry, const SkinTextObject &text,
+    std::string currentValue) {
+  AuthoredRect region = geometry.rect;
+  if (text.alignment == 2) {
+    region.x -= region.width;
+  } else if (text.alignment == 1) {
+    region.x -= region.width / 2.0;
+  }
+  return {.sourceObject = sourceObject,
+          .authoredOrdinal = authoredOrdinal,
+          .authoredRegion = region,
+          .writer = *text.writer,
+          .currentValue = std::move(currentValue)};
+}
+
 bool laneCoverRateSelector(const SkinBuiltinPropertySelector &builtin) {
   if (const auto *selector = std::get_if<int>(&builtin.value)) {
     return *selector == 4 || *selector == 5;
   }
   const auto &selector = std::get<std::string>(builtin.value);
   return selector == "lanecover" || selector == "lanecover2";
+}
+
+bool pinnedLaneCoverRuntimeOffset(int id) noexcept {
+  // SkinProperty reserves 3/4/5. LaneRenderer overwrites these MainController
+  // offsets every gameplay frame, after the skin's configured offsets load.
+  return id == kSkinCoverLiftOffsetId || id == 4 ||
+         id == kSkinCoverHiddenOffsetId;
 }
 
 bool laneCoverRateProperty(const ValidatedBeatorajaSkinModel &model,
@@ -206,7 +235,8 @@ bool laneCoverRateProperty(const ValidatedBeatorajaSkinModel &model,
 bool sameState(const SkinRenderState &left,
                const SkinRenderState &right) noexcept {
   if (left.blend != right.blend || left.filter != right.filter ||
-      left.scissor.has_value() != right.scissor.has_value()) {
+      left.scissor.has_value() != right.scissor.has_value() ||
+      left.distanceField != right.distanceField) {
     return false;
   }
   return !left.scissor || sameRect(*left.scissor, *right.scissor);
@@ -227,6 +257,11 @@ bool batchCompatible(const SkinDrawCommand &left,
         }
         if constexpr (std::is_same_v<Payload, SkinTexturedQuadCommand>) {
           return leftPayload.resource == rightPayload->resource &&
+                 sameState(leftPayload.state, rightPayload->state);
+        } else if constexpr (std::is_same_v<
+                                 Payload,
+                                 SkinGeneratedTexturedQuadCommand>) {
+          return leftPayload.key == rightPayload->key &&
                  sameState(leftPayload.state, rightPayload->state);
         } else if constexpr (std::is_same_v<Payload, SkinGlyphRunCommand>) {
           return leftPayload.atlas == rightPayload->atlas &&
@@ -378,6 +413,17 @@ bool disabledOptionalObject(const FrameLookupIndex &index,
   return found != index.disabledOptionalObjects.end() && *found == id;
 }
 
+LuaCallbackResult invokeCallback(const SkinFrameInputs &inputs,
+                                 LuaCallbackId callback,
+                                 std::span<const LuaScalar> arguments = {}) {
+  if (inputs.runtime == nullptr) {
+    return {.failure = diagnostic(
+                "skin.model.callback_runtime_missing",
+                "Lua callback binding has no live gameplay runtime.")};
+  }
+  return inputs.runtime->invoke(callback, arguments);
+}
+
 ResolvedValue<bool> resolveBoolean(const SkinFrameInputs &inputs,
                                    const FrameLookupIndex &index,
                                    SkinBooleanPropertyId id) {
@@ -398,7 +444,7 @@ ResolvedValue<bool> resolveBoolean(const SkinFrameInputs &inputs,
     return {.value = found.value};
   }
   const auto invoked =
-      inputs.runtime.invoke(std::get<LuaCallbackId>(binding->source), {});
+      invokeCallback(inputs, std::get<LuaCallbackId>(binding->source));
   if (invoked.failure) {
     return {.failure = *invoked.failure};
   }
@@ -430,7 +476,7 @@ ResolvedValue<std::int64_t> resolveInteger(const SkinFrameInputs &inputs,
     return {.value = found.value};
   }
   const auto invoked =
-      inputs.runtime.invoke(std::get<LuaCallbackId>(binding->source), {});
+      invokeCallback(inputs, std::get<LuaCallbackId>(binding->source));
   if (invoked.failure) {
     return {.failure = *invoked.failure};
   }
@@ -470,7 +516,7 @@ ResolvedValue<double> resolveFloat(const SkinFrameInputs &inputs,
     return {.value = found.value};
   }
   const auto invoked =
-      inputs.runtime.invoke(std::get<LuaCallbackId>(binding->source), {});
+      invokeCallback(inputs, std::get<LuaCallbackId>(binding->source));
   if (invoked.failure) {
     return {.failure = *invoked.failure};
   }
@@ -563,7 +609,7 @@ ResolvedValue<std::string> resolveString(const SkinFrameInputs &inputs,
     return {.value = std::string(found.value)};
   }
   const auto invoked =
-      inputs.runtime.invoke(std::get<LuaCallbackId>(binding->source), {});
+      invokeCallback(inputs, std::get<LuaCallbackId>(binding->source));
   if (invoked.failure) {
     return {.failure = *invoked.failure};
   }
@@ -589,7 +635,7 @@ ResolvedValue<std::int64_t> resolveTimer(const SkinFrameInputs &inputs,
     return {.value = inputs.state.timerProperty(*builtin)};
   }
   const auto invoked =
-      inputs.runtime.invoke(std::get<LuaCallbackId>(binding->source), {});
+      invokeCallback(inputs, std::get<LuaCallbackId>(binding->source));
   if (invoked.failure) {
     return {.failure = *invoked.failure};
   }
@@ -636,6 +682,10 @@ struct SpriteSelection {
   bool suppressed = false;
   std::optional<SkinDiagnostic> failure;
 };
+
+std::int64_t selectMovieTime(const SkinFrameInputs &inputs) noexcept {
+  return std::max<std::int64_t>(0, inputs.visualTimeMicros / 1000);
+}
 
 struct AnimationSelection {
   std::size_t frame = 0;
@@ -1096,6 +1146,7 @@ NumericLoweringResult lowerNumeric(const SkinFrameInputs &inputs,
 
 struct TextLayoutInput {
   const PreparedSkinTextAtlas *atlas = nullptr;
+  std::string value;
   std::vector<char32_t> codepoints;
   bool suppressed = false;
   std::optional<SkinDiagnostic> failure;
@@ -1107,36 +1158,48 @@ TextLayoutInput prepareTextLayout(const SkinFrameInputs &inputs,
                                   const SkinTextObject &text,
                                   std::size_t maximumCodepoints) {
   TextLayoutInput result;
-  std::string value = text.literal;
+  result.value = text.literal;
   if (text.value) {
     auto resolved = resolveString(inputs, index, *text.value);
     if (resolved.failure) {
       result.failure = *resolved.failure;
       return result;
     }
-    value = std::move(*resolved.value);
+    result.value = std::move(*resolved.value);
   }
-  if (value.empty()) {
+  if (result.value.empty() && !(text.editable && text.writer)) {
     result.suppressed = true;
     return result;
   }
   result.atlas = inputs.resources.findTextAtlasForObject(object.id);
-  if (!result.atlas || result.atlas->id == 0 || result.atlas->width <= 0 ||
-      result.atlas->height <= 0 || result.atlas->lineHeight <= 0 ||
-      text.pointSize <= 0) {
+  if (!result.atlas || result.atlas->id == 0 ||
+      result.atlas->lineHeight <= 0 ||
+      (result.atlas->layoutKind != SkinTextLayoutKind::Lr2Image &&
+       text.pointSize <= 0) ||
+      (result.atlas->bitmapFont &&
+       (result.atlas->originalSize <= 0 || result.atlas->pageWidth <= 0 ||
+        result.atlas->pageHeight <= 0 || result.atlas->bitmapFontType < 0 ||
+        result.atlas->bitmapFontType > 2 ||
+        (result.atlas->layoutKind != SkinTextLayoutKind::Bitmap &&
+         result.atlas->layoutKind != SkinTextLayoutKind::Lr2Image))) ||
+      (!result.atlas->bitmapFont &&
+       (result.atlas->width <= 0 || result.atlas->height <= 0 ||
+        result.atlas->layoutKind != SkinTextLayoutKind::Scalable))) {
     result.failure =
         diagnostic("skin.renderer.text.atlas",
                    "Prepared text atlas or its fixed metrics are absent.");
     return result;
   }
 
-  result.codepoints.reserve(std::min(value.size(), maximumCodepoints));
+  result.codepoints.reserve(std::min(result.value.size(), maximumCodepoints));
   std::size_t offset = 0;
-  while (offset < value.size()) {
+  while (offset < result.value.size()) {
     utf8proc_int32_t codepoint = 0;
     const auto consumed = utf8proc_iterate(
-        reinterpret_cast<const utf8proc_uint8_t *>(value.data() + offset),
-        static_cast<utf8proc_ssize_t>(value.size() - offset), &codepoint);
+        reinterpret_cast<const utf8proc_uint8_t *>(result.value.data() +
+                                                   offset),
+        static_cast<utf8proc_ssize_t>(result.value.size() - offset),
+        &codepoint);
     if (consumed <= 0) {
       result.failure = diagnostic("skin.renderer.text.utf8",
                                   "Text property contains invalid UTF-8.");
@@ -1147,6 +1210,9 @@ TextLayoutInput prepareTextLayout(const SkinFrameInputs &inputs,
     const auto scalar = static_cast<char32_t>(codepoint);
     if (scalar != U'\n' && scalar != U'\r' &&
         !result.atlas->glyphs.contains(scalar)) {
+      if (result.atlas->bitmapFont) {
+        continue;
+      }
       result.failure = diagnostic(
           "skin.renderer.text.glyph",
           "Text property contains a glyph absent from the prepared atlas.");
@@ -1171,6 +1237,31 @@ int pairKerning(const PreparedSkinTextAtlas &atlas, char32_t left,
                 char32_t right) noexcept {
   const auto found = atlas.kerning.find({left, right});
   return found == atlas.kerning.end() ? 0 : found->second;
+}
+
+struct PreparedGlyphPageView {
+  int width = 0;
+  int height = 0;
+};
+
+std::optional<PreparedGlyphPageView>
+preparedGlyphPage(const PreparedSkinTextAtlas &atlas,
+                  const SkinPreparedGlyphMetrics &metrics) {
+  if (atlas.pages.empty()) {
+    if (metrics.page != 0 || atlas.width <= 0 || atlas.height <= 0) {
+      return std::nullopt;
+    }
+    return PreparedGlyphPageView{.width = atlas.width,
+                                 .height = atlas.height};
+  }
+  if (metrics.page >= atlas.pages.size()) {
+    return std::nullopt;
+  }
+  const auto &page = atlas.pages[metrics.page];
+  if (!page.available || page.width <= 0 || page.height <= 0) {
+    return std::nullopt;
+  }
+  return PreparedGlyphPageView{.width = page.width, .height = page.height};
 }
 
 double lineLayoutWidth(const PreparedSkinTextAtlas &atlas,
@@ -1314,7 +1405,99 @@ TextLoweringResult lowerText(const SkinFrameInputs &inputs,
                              const TextLayoutInput &prepared) {
   TextLoweringResult result;
   const auto &atlas = *prepared.atlas;
-  const double scaleY = base.rect.height / text.pointSize;
+  if (atlas.layoutKind == SkinTextLayoutKind::Lr2Image) {
+    std::vector<char32_t> glyphs;
+    glyphs.reserve(prepared.codepoints.size());
+    double measuredWidth = 0.0;
+    const double heightScale = base.rect.height / atlas.originalSize;
+    if (!std::isfinite(heightScale) || heightScale <= 0.0) {
+      result.failure = diagnostic("skin.renderer.text.geometry",
+                                  "LR2 text destination scale is invalid.");
+      return result;
+    }
+    for (const char32_t codepoint : prepared.codepoints) {
+      const auto metric = atlas.glyphs.find(codepoint);
+      if (metric == atlas.glyphs.end() ||
+          !preparedGlyphPage(atlas, metric->second)) {
+        continue;
+      }
+      glyphs.push_back(codepoint);
+      measuredWidth += metric->second.region.w * heightScale + atlas.margin;
+    }
+    if (glyphs.empty()) {
+      return result;
+    }
+    const double shrink = base.rect.width < measuredWidth && measuredWidth > 0.0
+                              ? base.rect.width / measuredWidth
+                              : 1.0;
+    const double drawnWidth = measuredWidth * shrink;
+    const double startX = text.alignment == 2   ? base.rect.x - drawnWidth
+                          : text.alignment == 1 ? base.rect.x - drawnWidth * 0.5
+                                                : base.rect.x;
+    SkinGlyphRunCommand run;
+    run.atlas = atlas.id;
+    run.glyphs.reserve(glyphs.size());
+    double dx = 0.0;
+    for (const char32_t codepoint : glyphs) {
+      const auto &metrics = atlas.glyphs.at(codepoint);
+      const auto page = preparedGlyphPage(atlas, metrics);
+      if (!page) {
+        continue;
+      }
+      const double width = metrics.region.w * heightScale * shrink;
+      auto geometry = base;
+      geometry.stretch = SkinStretchMode::Stretch;
+      geometry.angleDegrees = 0.0;
+      geometry.rect = {.x = startX + dx,
+                       .y = base.rect.y,
+                       .width = width,
+                       .height = base.rect.height};
+      const auto projected = projectSkinDestinationToUi(
+          geometry,
+          {.textureWidth = page->width,
+           .textureHeight = page->height,
+           .region = metrics.region},
+          inputs.viewport);
+      SkinGlyphInstance glyph{.codepoint = codepoint};
+      const std::uint32_t color = packAbgr(projected.rgba);
+      for (std::size_t vertex = 0; vertex < glyph.vertices.size(); ++vertex) {
+        glyph.vertices[vertex] = {
+            .x = static_cast<float>(projected.vertices[vertex][0]),
+            .y = static_cast<float>(projected.vertices[vertex][1]),
+            .u = static_cast<float>(projected.normalizedUvs[vertex][0]),
+            .v = static_cast<float>(projected.normalizedUvs[vertex][1]),
+            .rgba = color};
+      }
+      run.glyphs.push_back(std::move(glyph));
+      dx += width + atlas.margin * shrink;
+    }
+    bool emptyClip = false;
+    const auto projectedClip = projectSkinDestinationToUi(
+        base,
+        {.textureWidth = atlas.width,
+         .textureHeight = atlas.height,
+         .region = {.x = 0, .y = 0, .w = atlas.width, .h = atlas.height}},
+        inputs.viewport);
+    const auto clip = intersectClip(projectedClip.clip,
+                                    projectedSkinScissorBounds(inputs.viewport),
+                                    emptyClip);
+    if (emptyClip) {
+      return result;
+    }
+    run.state = {.blend = base.blend,
+                 .filter = SkinFilterMode::Linear,
+                 .scissor = clip};
+    result.glyphCount = run.glyphs.size();
+    result.command = SkinDrawCommand{
+        .authoredOrdinal = destination.presentation.authoredOrdinal,
+        .sourceObject = object.id,
+        .payload = std::move(run)};
+    return result;
+  }
+  const double scaleY = atlas.bitmapFont
+                            ? static_cast<double>(text.pointSize) /
+                                  atlas.originalSize
+                            : base.rect.height / text.pointSize;
   if (!std::isfinite(scaleY) || scaleY <= 0.0) {
     result.failure = diagnostic("skin.renderer.text.geometry",
                                 "Text destination scale is invalid.");
@@ -1384,6 +1567,10 @@ TextLoweringResult lowerText(const SkinFrameInputs &inputs,
         pen += pairKerning(atlas, *previous, codepoint) * scaleX;
       }
       const auto &metrics = atlas.glyphs.at(codepoint);
+      const auto page = preparedGlyphPage(atlas, metrics);
+      if (!page) {
+        continue;
+      }
       auto geometry = base;
       geometry.stretch = SkinStretchMode::Stretch;
       // SkinTextFont draws BitmapFont layouts directly and does not route
@@ -1395,8 +1582,8 @@ TextLoweringResult lowerText(const SkinFrameInputs &inputs,
                        .height = metrics.region.h * scaleY};
       const auto projected =
           projectSkinDestinationToUi(geometry,
-                                     {.textureWidth = atlas.width,
-                                      .textureHeight = atlas.height,
+                                     {.textureWidth = page->width,
+                                      .textureHeight = page->height,
                                       .region = metrics.region},
                                      inputs.viewport);
       SkinGlyphInstance glyph;
@@ -1418,6 +1605,50 @@ TextLoweringResult lowerText(const SkinFrameInputs &inputs,
   if (run.glyphs.empty()) {
     return result;
   }
+  if (atlas.bitmapFont &&
+      (atlas.bitmapFontType == 1 || atlas.bitmapFontType == 2)) {
+    const std::uint32_t fallbackColor =
+        packAbgr({1.0F, 1.0F, 1.0F, base.rgba[3]});
+    for (const auto &glyph : run.glyphs) {
+      const auto metrics = atlas.glyphs.find(glyph.codepoint);
+      if (metrics == atlas.glyphs.end() ||
+          metrics->second.bitmapFontType != 0) {
+        continue;
+      }
+      auto overlay = glyph;
+      for (auto &vertex : overlay.vertices) {
+        vertex.rgba = fallbackColor;
+      }
+      run.fallbackColorOverlays.push_back(std::move(overlay));
+    }
+  }
+  if (atlas.bitmapFont && atlas.bitmapFontType == 0 &&
+      (text.shadowOffsetX != 0.0 || text.shadowOffsetY != 0.0)) {
+    const double authoredShadowX = text.shadowOffsetX;
+    const double authoredShadowY = -text.shadowOffsetY;
+    const float shadowX = static_cast<float>(
+        inputs.viewport.authoredToUi.m00 * authoredShadowX +
+        inputs.viewport.authoredToUi.m01 * authoredShadowY);
+    const float shadowY = static_cast<float>(
+        inputs.viewport.authoredToUi.m10 * authoredShadowX +
+        inputs.viewport.authoredToUi.m11 * authoredShadowY);
+    auto shadow = run.glyphs;
+    auto shadowColor = base.rgba;
+    shadowColor[0] *= 0.5F;
+    shadowColor[1] *= 0.5F;
+    shadowColor[2] *= 0.5F;
+    const std::uint32_t packedShadow = packAbgr(shadowColor);
+    for (auto &glyph : shadow) {
+      for (auto &vertex : glyph.vertices) {
+        vertex.x += shadowX;
+        vertex.y += shadowY;
+        vertex.rgba = packedShadow;
+      }
+    }
+    shadow.insert(shadow.end(), std::make_move_iterator(run.glyphs.begin()),
+                  std::make_move_iterator(run.glyphs.end()));
+    run.glyphs = std::move(shadow);
+  }
   bool emptyClip = false;
   const auto projectedClip = projectSkinDestinationToUi(
       base,
@@ -1431,12 +1662,216 @@ TextLoweringResult lowerText(const SkinFrameInputs &inputs,
   if (emptyClip) {
     return result;
   }
-  run.state = {.blend = base.blend, .filter = base.filter, .scissor = clip};
+  run.state = {.blend = base.blend,
+               .filter = atlas.bitmapFont ? SkinFilterMode::Linear
+                                          : base.filter,
+               .scissor = clip};
+  if (atlas.bitmapFont &&
+      (atlas.bitmapFontType == 1 || atlas.bitmapFontType == 2)) {
+    run.state.distanceField = SkinRenderState::DistanceField{
+        .colored = atlas.bitmapFontType == 2,
+        .outlineDistance = std::max(0.1, 0.5 - text.outlineWidth / 2.0),
+        .outlineRgba = text.outlineRgba,
+        .shadowRgba = text.shadowRgba,
+        .shadowSmoothing = text.shadowSmoothness / 2.0,
+        .shadowOffsetU = text.shadowOffsetX / atlas.pageWidth,
+        .shadowOffsetV = text.shadowOffsetY / atlas.pageHeight};
+  }
   result.glyphCount = run.glyphs.size();
   result.command = SkinDrawCommand{.authoredOrdinal =
                                        destination.presentation.authoredOrdinal,
                                    .sourceObject = object.id,
                                    .payload = std::move(run)};
+  return result;
+}
+
+struct PracticeLoweringResult {
+  std::vector<SkinDrawCommand> commands;
+  std::optional<SkinDiagnostic> failure;
+  std::size_t glyphCount = 0;
+  std::size_t primitiveVertices = 0;
+};
+
+PracticeLoweringResult lowerPracticeLegacy(
+    const SkinFrameInputs &inputs, const FrameLookupIndex &lookupIndex,
+    const SkinObjectDefinition &object, const SkinDestination &destination,
+    const AuthoredDestinationGeometry &region,
+    const SkinPracticeStateView &practice, std::size_t maximumGlyphs,
+    std::size_t maximumCommands, std::size_t maximumPrimitiveVertices) {
+  PracticeLoweringResult result;
+  if (!practice.supported) {
+    return result;
+  }
+  if (practice.graphType < 0 || practice.graphType > 2) {
+    result.failure = diagnostic("skin.renderer.practice.state",
+                                "Practice graph type is invalid.");
+    return result;
+  }
+  const double x = region.rect.x + region.rect.width / 8.0;
+  const double y = region.rect.y + region.rect.height * 7.0 / 8.0;
+  constexpr double spacing = 22.0;
+  constexpr double pointSize = 18.0;
+  const std::array<float, 4> unfocused =
+      practice.horizontalInputMode
+          ? std::array<float, 4>{0.5F, 0.5F, 0.5F, 1.0F}
+          : std::array<float, 4>{0.0F, 1.0F, 1.0F, 1.0F};
+  const std::array<float, 4> focused =
+      practice.inputTurbo
+          ? std::array<float, 4>{1.0F, 0.5F, 0.0F, 1.0F}
+          : std::array<float, 4>{1.0F, 1.0F, 0.0F, 1.0F};
+  constexpr std::array<float, 4> orange{1.0F, 0.5F, 0.0F, 1.0F};
+  constexpr std::array<float, 4> white{1.0F, 1.0F, 1.0F, 1.0F};
+  const bool preparedTextAvailable =
+      inputs.resources.findTextAtlasForObject(object.id) != nullptr;
+
+  const auto appendText = [&](std::string value, double lineX, double lineY,
+                              std::array<float, 4> color) -> bool {
+    if (value.empty() || !preparedTextAvailable) {
+      return true;
+    }
+    if (result.commands.size() >= maximumCommands) {
+      result.failure = diagnostic(
+          "skin.renderer.command.limit",
+          "Practice text exceeds the fixed frame command limit.");
+      return false;
+    }
+    SkinTextObject text{
+        .font = 0,
+        .literal = std::move(value),
+        .pointSize = static_cast<int>(pointSize),
+        .alignment = 0,
+    };
+    const std::size_t remainingGlyphs =
+        maximumGlyphs - std::min(maximumGlyphs, result.glyphCount);
+    auto prepared = prepareTextLayout(inputs, lookupIndex, object, text,
+                                      remainingGlyphs);
+    if (prepared.failure) {
+      result.failure = std::move(prepared.failure);
+      return false;
+    }
+    if (prepared.suppressed) {
+      return true;
+    }
+    auto geometry = region;
+    geometry.rect = {.x = lineX,
+                     .y = lineY - pointSize,
+                     .width = std::max(0.0, region.rect.x + region.rect.width -
+                                               lineX),
+                     .height = pointSize};
+    geometry.angleDegrees = 0.0;
+    geometry.rgba = color;
+    geometry.blend = SkinBlendMode::Normal;
+    geometry.filter = SkinFilterMode::Linear;
+    geometry.stretch = SkinStretchMode::Stretch;
+    auto lowered = lowerText(inputs, object, destination, geometry, text,
+                             prepared);
+    if (lowered.failure) {
+      result.failure = std::move(lowered.failure);
+      return false;
+    }
+    if (lowered.command) {
+      result.glyphCount += lowered.glyphCount;
+      result.commands.push_back(std::move(*lowered.command));
+    }
+    return true;
+  };
+
+  for (std::size_t index = 0; index < practice.items.size(); ++index) {
+    const auto &item = practice.items[index];
+    if (!item.available) {
+      continue;
+    }
+    const auto color = practice.cursorPosition == index ? focused : unfocused;
+    const double itemY = y - spacing * static_cast<double>(index);
+    if (!appendText(std::string(item.label), x, itemY, color) ||
+        !appendText(std::string(item.value), x + 150.0, itemY, color)) {
+      return result;
+    }
+  }
+
+  std::string helpLine1;
+  std::string helpLine2;
+  if (practice.keyMode == 9) {
+    helpLine1 = "KEYS: 2/8=UP, 3/7=DOWN, 4=LEFT, 6=RIGHT,";
+    helpLine2 = "5=TURBO";
+  } else if (practice.keyMode == 24 || practice.keyMode == 48) {
+    helpLine1 = "KEYS: F#1/A#1=UP, G1/A1=DOWN, F1=LEFT,";
+    helpLine2 = "B1=RIGHT, D#1/G#1=TURBO";
+  } else {
+    helpLine1 = "KEYS: SCR=UP/DOWN, 2+SCR=LEFT/RIGHT, 4=TURBO";
+  }
+  if (practice.mediaReady) {
+    if (!helpLine2.empty()) {
+      helpLine2 += ". ";
+    }
+    helpLine2 += practice.keyMode == 24 || practice.keyMode == 48
+                     ? "PRESS C1 TO PLAY"
+                     : "PRESS 1KEY TO PLAY";
+  }
+  if (!appendText(std::move(helpLine1), x, y - spacing * 12.0 - 12.0,
+                  orange) ||
+      !appendText(std::move(helpLine2), x, y - spacing * 13.0 - 12.0,
+                  orange)) {
+    return result;
+  }
+
+  constexpr std::array<std::string_view, 6> judgeLabels{
+      "PGREAT :", "GREAT  :", "GOOD   :", "BAD    :", "POOR   :",
+      "KPOOR  :"};
+  for (std::size_t index = 0; index < judgeLabels.size(); ++index) {
+    const auto &counts = practice.judgeCounts[index];
+    std::string line(judgeLabels[index]);
+    line += " " + std::to_string(counts.fast + counts.slow) + " " +
+            std::to_string(counts.fast) + " " + std::to_string(counts.slow);
+    if (!appendText(std::move(line), x + 250.0,
+                    y - spacing * static_cast<double>(index), white)) {
+      return result;
+    }
+  }
+
+  auto graphGeometry = region;
+  graphGeometry.rect.height = region.rect.height / 4.0;
+  graphGeometry.angleDegrees = 0.0;
+  graphGeometry.rgba = white;
+  graphGeometry.blend = SkinBlendMode::Normal;
+  graphGeometry.filter = SkinFilterMode::Nearest;
+  graphGeometry.stretch = SkinStretchMode::Stretch;
+  const SkinNoteDistributionGraphObject graph{
+      .type = static_cast<SkinNoteDistributionGraphType>(practice.graphType)};
+  std::optional<std::int64_t> currentMillis;
+  const std::int64_t playTimerStart =
+      inputs.state.timerProperty(SkinBuiltinPropertySelector{41});
+  if (playTimerStart != INT64_MIN) {
+    currentMillis = (inputs.visualTimeMicros / 1'000 -
+                     playTimerStart / 1'000) *
+                    practice.frequencyPercent / 100;
+  }
+  const std::size_t remainingCommands =
+      maximumCommands - std::min(maximumCommands, result.commands.size());
+  auto lowered = renderSkinNoteDistributionGraph(
+      {.sourceObject = object.id,
+       .authoredOrdinal = destination.presentation.authoredOrdinal,
+       .graph = graph,
+       .state = inputs.state.gameplayGraphState(),
+       .geometry = graphGeometry,
+       .viewport = inputs.viewport,
+       .pmsMode = practice.keyMode == 9,
+       .elapsedMillis = inputs.visualTimeMicros / 1'000,
+       .startMillis = practice.startTimeMillis,
+       .endMillis = practice.endTimeMillis,
+       .currentMillis = currentMillis,
+       .maximumCommands = remainingCommands,
+       .maximumPrimitiveVertices = maximumPrimitiveVertices});
+  if (lowered.failure) {
+    result.failure = std::move(lowered.failure);
+    result.commands.clear();
+    result.glyphCount = 0;
+    return result;
+  }
+  result.primitiveVertices = lowered.primitiveVertices;
+  result.commands.insert(result.commands.end(),
+                         std::make_move_iterator(lowered.commands.begin()),
+                         std::make_move_iterator(lowered.commands.end()));
   return result;
 }
 
@@ -1540,7 +1975,7 @@ resolveDestination(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
     return result;
   }
 
-  std::vector<ConfigOffset> offsets;
+  std::vector<SkinRuntimeOffset> offsets;
   offsets.reserve(presentation.offsetIds.size());
   double relativeTranslationX = 0.0;
   double relativeTranslationY = 0.0;
@@ -1549,8 +1984,9 @@ resolveDestination(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
       continue;
     }
     const auto configured = inputs.configuration.offsetsById.find(id);
-    if (configured != inputs.configuration.offsetsById.end()) {
-      offsets.push_back(configured->second);
+    if (!pinnedLaneCoverRuntimeOffset(id) &&
+        configured != inputs.configuration.offsetsById.end()) {
+      offsets.push_back(skinRuntimeOffset(configured->second));
     } else {
       const auto dynamic = inputs.state.offsetProperty(id);
       if (!dynamic.supported) {
@@ -1627,13 +2063,14 @@ lowerPreparedQuad(const SkinFrameInputs &inputs, SkinObjectId sourceObject,
                   std::uint32_t authoredOrdinal,
                   const AuthoredDestinationGeometry &geometry,
                   SkinResourceId resourceId, int textureWidth,
-                  int textureHeight, const SkinSourceRect &region) {
+                  int textureHeight, const SkinSourceRect &region,
+                  bool allowCollapsedSource = false) {
   QuadLoweringResult result;
   if (geometry.rgba[3] <= 0.0F) {
     return result;
   }
   if (resourceId == 0 || textureWidth <= 0 || textureHeight <= 0 ||
-      region.w == 0 || region.h == 0) {
+      (!allowCollapsedSource && (region.w == 0 || region.h == 0))) {
     result.failure = diagnostic("skin.renderer.resource.missing",
                                 "Prepared image resource or region is absent.");
     return result;
@@ -1643,7 +2080,7 @@ lowerPreparedQuad(const SkinFrameInputs &inputs, SkinObjectId sourceObject,
                                  {.textureWidth = textureWidth,
                                   .textureHeight = textureHeight,
                                   .region = region},
-                                 inputs.viewport);
+                                 inputs.viewport, allowCollapsedSource);
   if (!projectedQuadFitsUpload(projected)) {
     result.failure = diagnostic(
         "skin.renderer.geometry.invalid",
@@ -1973,7 +2410,7 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
                 const SkinObjectDefinition &object,
                 const SkinDestination &destination, const SkinNoteObject &note,
                 const AuthoredDestinationGeometry *outerGeometry,
-                std::span<const ConfigOffset> offsets,
+                std::span<const SkinRuntimeOffset> offsets,
                 std::span<const ProjectionElement> mergedElements,
                 const PreparedNoteVisuals &preparedVisuals) {
   GameplayVisualLoweringResult result;
@@ -1987,6 +2424,18 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
     offsetWidth += offset.w;
     offsetHeight += offset.h;
   }
+
+  // LaneRenderer uses lane zero for the shared playfield origin and scroll
+  // height. Lift raises that origin and shortens the scroll span before every
+  // normal, long, mine, invisible-note, and line projection is evaluated.
+  const auto laneCover = inputs.state.laneCoverState();
+  const double sharedLaneOriginY = note.lanes.front().laneDestination.y;
+  const double sharedLaneHeight = note.lanes.front().laneDestination.height;
+  const double liftOffsetY =
+      laneCover.supported && laneCover.liftEnabled
+          ? sharedLaneHeight * laneCover.lift
+          : 0.0;
+  const double sharedScrollHeight = sharedLaneHeight - liftOffsetY;
 
   float expansionWidth = 1.0F;
   float expansionHeight = 1.0F;
@@ -2052,7 +2501,9 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
   const auto appendVisual = [&](const SkinLaneNotePresentation &lane,
                                 SkinNoteVisualKind kind,
                                 const SkinAuthoredRect &rect,
-                                GameplayVisualLoweringResult &output) {
+                                GameplayVisualLoweringResult &output,
+                                float opacity = 1.0F,
+                                bool pmsPoorDescent = false) {
     const auto *visual = findNoteVisual(lane, kind);
     if (!visual) {
       output.failure =
@@ -2061,19 +2512,24 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
       return;
     }
     bool emptyClip = false;
-    const auto laneClip = intersectAuthoredRects(
-        outerGeometry ? outerGeometry->clip : std::nullopt,
-        AuthoredRect{.x = lane.laneDestination.x,
-                     .y = lane.laneDestination.y,
-                     .width = lane.laneDestination.width,
-                     .height = lane.laneDestination.height},
-        emptyClip);
+    const auto laneClip =
+        pmsPoorDescent
+            ? (outerGeometry ? outerGeometry->clip : std::nullopt)
+            : intersectAuthoredRects(
+                  outerGeometry ? outerGeometry->clip : std::nullopt,
+                  AuthoredRect{.x = lane.laneDestination.x,
+                               .y = lane.laneDestination.y,
+                               .width = lane.laneDestination.width,
+                               .height = lane.laneDestination.height},
+                  emptyClip);
     if (emptyClip) {
       return;
     }
+    auto geometry = gameplayVisualGeometry(rect, laneClip);
+    geometry.rgba[3] *= opacity;
     auto lowered = lowerNoteVisual(
         inputs, index, object.id, destination.presentation.authoredOrdinal,
-        gameplayVisualGeometry(rect, laneClip),
+        geometry,
         *visual,
         &preparedVisuals[static_cast<std::size_t>(lane.authoredLane)]
                         [static_cast<std::size_t>(kind)]);
@@ -2092,6 +2548,17 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
       return;
     }
     output.primitiveVertices += lowered.primitiveVertices;
+#if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING) ||                         \
+    defined(ASOBMASHOW_SKIN_RENDERER_TESTING)
+    const auto slot = std::visit(
+        [](const auto &selected) {
+          return selected.authoredNoteSlot.value_or(-1);
+        },
+        *visual);
+    for (auto &command : lowered.commands) {
+      command.longNoteSlotForTesting = slot;
+    }
+#endif
     output.commands.insert(output.commands.end(),
                            std::make_move_iterator(lowered.commands.begin()),
                            std::make_move_iterator(lowered.commands.end()));
@@ -2115,21 +2582,24 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
     // Beatoraja LaneRenderer derives one shared rxhs from lanes[0].region,
     // then applies it to every note and timeline line. `scrollSpeed` is the
     // captured hispeed, so this is its exact skin-owned pixel conversion.
-    return authoredDisplacement * note.lanes.front().laneDestination.height *
-           *scrollSpeed;
+    return authoredDisplacement * sharedScrollHeight * *scrollSpeed;
   };
 
   const auto lowerProjectedNote = [&](const SkinProjectedNoteView &projected,
                                       GameplayVisualLoweringResult &output) {
     const auto *lane = laneAt(projected.lane);
+    const bool pmsPoorDescent = projected.pmsPoorYDisplacement.has_value();
     if (!lane || !std::isfinite(projected.authoredYDisplacement)) {
       output.failure = diagnostic(
           "skin.renderer.note.projection",
           "Projected note lane or authored displacement is invalid.");
       return;
     }
-    const double authoredY = resolveScrollDisplacement(
-        projected.authoredYDisplacement, projected.scrollSpeed);
+    const double authoredY =
+        pmsPoorDescent ? *projected.pmsPoorYDisplacement
+                        : resolveScrollDisplacement(
+                              projected.authoredYDisplacement,
+                              projected.scrollSpeed);
     if (!std::isfinite(authoredY)) {
       output.failure = diagnostic(
           "skin.renderer.note.projection",
@@ -2142,7 +2612,7 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
     case SkinProjectedNoteKind::Normal:
       // LaneRenderer selects processedImage only when PlayerConfig's
       // Mark Processed Note option is enabled; the default is normalImage.
-      kind = projected.judged && inputs.markProcessedNotes
+      kind = !pmsPoorDescent && projected.judged && inputs.markProcessedNotes
                  ? SkinNoteVisualKind::Processed
                  : SkinNoteVisualKind::Normal;
       break;
@@ -2154,24 +2624,32 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
       kind = SkinNoteVisualKind::Mine;
       break;
     }
-    if (applyOffsets && !resolveExpansion(output)) {
+    if ((applyOffsets || pmsPoorDescent) && !resolveExpansion(output)) {
       return;
     }
     const double noteHeight = lane->authoredNoteHeight.value_or(8.0);
     SkinAuthoredRect rect;
-    if (applyOffsets) {
+    if (pmsPoorDescent) {
+      rect = expandChip(lane->laneDestination.x,
+                        sharedLaneOriginY + liftOffsetY + authoredY,
+                        lane->laneDestination.width, noteHeight,
+                        lane->laneDestination.width, noteHeight);
+    } else if (applyOffsets) {
       rect = expandChip(
-          lane->laneDestination.x + offsetX, lane->laneDestination.y +
-                                               authoredY + offsetY,
+          lane->laneDestination.x + offsetX,
+          sharedLaneOriginY + liftOffsetY + authoredY + offsetY,
           lane->laneDestination.width + offsetWidth, noteHeight + offsetHeight,
           lane->laneDestination.width, noteHeight);
     } else {
       rect = {.x = lane->laneDestination.x,
-              .y = lane->laneDestination.y + authoredY,
+              .y = sharedLaneOriginY + liftOffsetY + authoredY,
               .width = lane->laneDestination.width,
               .height = noteHeight};
     }
-    appendVisual(*lane, kind, rect, output);
+    // LaneRenderer's Constant processor sets the sprite color before this
+    // row; authored destination alpha remains multiplicative.
+    appendVisual(*lane, kind, rect, output,
+                 static_cast<float>(projected.opacity), pmsPoorDescent);
   };
 
   const auto lowerProjectedLongNote =
@@ -2205,8 +2683,7 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
         }
         const auto chip =
             expandChip(lane->laneDestination.x + offsetX,
-                       lane->laneDestination.y +
-                           headY + offsetY,
+                       sharedLaneOriginY + liftOffsetY + headY + offsetY,
                        lane->laneDestination.width + offsetWidth,
                        referenceHeight + offsetHeight,
                        lane->laneDestination.width, referenceHeight);
@@ -2239,7 +2716,7 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
                       .y = chip.y + chip.height,
                       .width = chip.width,
                       .height = displacement - chip.height},
-                     output);
+                     output, static_cast<float>(projected.opacity));
         if (output.failure) {
           return;
         }
@@ -2249,12 +2726,13 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
                         .y = tailY,
                         .width = chip.width,
                         .height = chip.height},
-                       output);
+                       output, static_cast<float>(projected.opacity));
           if (output.failure) {
             return;
           }
         }
-        appendVisual(*lane, start, chip, output);
+        appendVisual(*lane, start, chip, output,
+                     static_cast<float>(projected.opacity));
       };
 
   const auto lowerProjectedLine = [&](const SkinProjectedLineView &projected,
@@ -2312,6 +2790,7 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
         continue;
       }
       evaluated.geometry->rect.y += authoredY;
+      evaluated.geometry->rgba[3] *= static_cast<float>(projected.opacity);
       // LaneRenderer invokes nested line images directly, so their own clip
       // is inert. The containing Note clip remains active for every group.
       // Unlike the thin group-image destination, the default vertical play
@@ -2618,7 +3097,8 @@ SkinInteractionLayout::hitTestUiControl(UiLogicalPoint point) const noexcept {
                 .sourceObject = candidate.sourceObject,
                 .authoredOrdinal = candidate.authoredOrdinal,
                 .writer = candidate.writer};
-          } else {
+          } else if constexpr (std::is_same_v<
+                                   T, SkinImageInteractionGeometry>) {
             if (!candidate.event || candidate.clickMode < 0 ||
                 candidate.clickMode > 3 ||
                 !contains(authored->x, authored->y, candidate.authoredRegion)) {
@@ -2630,6 +3110,17 @@ SkinInteractionLayout::hitTestUiControl(UiLogicalPoint point) const noexcept {
                 .sourceObject = candidate.sourceObject,
                 .authoredOrdinal = candidate.authoredOrdinal,
                 .eventBinding = candidate.event.value};
+          } else {
+            if (!candidate.writer ||
+                !contains(authored->x, authored->y,
+                          candidate.authoredRegion)) {
+              return std::nullopt;
+            }
+            return PresentationUiHit{
+                .kind = PresentationUiControlKind::Text,
+                .layoutRevision = revision,
+                .sourceObject = candidate.sourceObject,
+                .authoredOrdinal = candidate.authoredOrdinal};
           }
         },
         control);
@@ -2638,6 +3129,50 @@ SkinInteractionLayout::hitTestUiControl(UiLogicalPoint point) const noexcept {
     }
   }
   return {};
+}
+
+const SkinTextInteractionGeometry *
+SkinInteractionLayout::editableTextAtUi(UiLogicalPoint point) const noexcept {
+  const auto authored = authoredPointForUi(point.x, point.y);
+  if (!authored) {
+    return nullptr;
+  }
+  const auto contains = [&](const AuthoredRect &rect) {
+    return std::isfinite(rect.x) && std::isfinite(rect.y) &&
+           std::isfinite(rect.width) && std::isfinite(rect.height) &&
+           rect.width >= 0.0 && rect.height >= 0.0 && authored->x >= rect.x &&
+           authored->x <= rect.x + rect.width && authored->y >= rect.y &&
+           authored->y <= rect.y + rect.height;
+  };
+  for (const auto &control : controlsTopmostFirst) {
+    const auto match = std::visit(
+        [&](const auto &candidate)
+            -> std::pair<bool, const SkinTextInteractionGeometry *> {
+          using T = std::decay_t<decltype(candidate)>;
+          if constexpr (std::is_same_v<T, SkinSliderInteractionGeometry>) {
+            return {candidate.writer && candidate.range > 0.0 &&
+                        std::isfinite(candidate.range) &&
+                        candidate.direction >= 0 && candidate.direction <= 3 &&
+                        contains(candidate.authoredHitRegion),
+                    nullptr};
+          } else if constexpr (std::is_same_v<T,
+                                              SkinImageInteractionGeometry>) {
+            return {candidate.event && candidate.clickMode >= 0 &&
+                        candidate.clickMode <= 3 &&
+                        contains(candidate.authoredRegion),
+                    nullptr};
+          } else {
+            const bool hit = candidate.writer &&
+                             contains(candidate.authoredRegion);
+            return {hit, hit ? &candidate : nullptr};
+          }
+        },
+        control);
+    if (match.first) {
+      return match.second;
+    }
+  }
+  return nullptr;
 }
 
 std::vector<PresentationUiHitRegion>
@@ -2684,7 +3219,8 @@ SkinInteractionLayout::uiHitRegions() const {
                                  .authoredOrdinal = candidate.authoredOrdinal,
                                  .writer = candidate.writer},
                              candidate.authoredHitRegion};
-          } else {
+          } else if constexpr (std::is_same_v<
+                                   T, SkinImageInteractionGeometry>) {
             if (!candidate.event || candidate.clickMode < 0 ||
                 candidate.clickMode > 3) {
               return std::nullopt;
@@ -2695,6 +3231,16 @@ SkinInteractionLayout::uiHitRegions() const {
                                  .sourceObject = candidate.sourceObject,
                                  .authoredOrdinal = candidate.authoredOrdinal,
                                  .eventBinding = candidate.event.value},
+                             candidate.authoredRegion};
+          } else {
+            if (!candidate.writer) {
+              return std::nullopt;
+            }
+            return std::pair{PresentationUiHit{
+                                 .kind = PresentationUiControlKind::Text,
+                                 .layoutRevision = revision,
+                                 .sourceObject = candidate.sourceObject,
+                                 .authoredOrdinal = candidate.authoredOrdinal},
                              candidate.authoredRegion};
           }
         },
@@ -2912,8 +3458,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
                      "Gameplay skin session serial must be nonzero."));
       return result;
     }
-    if (beginRuntimeFrame) {
-      const auto begun = inputs.runtime.beginFrame(inputs.frameSerial);
+    if (beginRuntimeFrame && inputs.runtime != nullptr) {
+      const auto begun = inputs.runtime->beginFrame(inputs.frameSerial);
       if (!begun.ok) {
         result.diagnostics.push_back(begun.failure.value_or(
             diagnostic("skin.renderer.frame.begin",
@@ -2930,6 +3476,16 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
     if (gaugeAnimationSessionSerial_ != inputs.sessionSerial) {
       gaugeAnimationStates_.clear();
       gaugeAnimationSessionSerial_ = inputs.sessionSerial;
+    }
+    if (hitErrorVisualizerSessionSerial_ != inputs.sessionSerial ||
+        hitErrorVisualizerModelIdentity_ != &inputs.model) {
+      hitErrorVisualizerStates_.clear();
+      hitErrorVisualizerSessionSerial_ = inputs.sessionSerial;
+      hitErrorVisualizerModelIdentity_ = &inputs.model;
+    }
+    if (generatedTextureCacheSessionSerial_ != inputs.sessionSerial) {
+      generatedTextureCache_.clear();
+      generatedTextureCacheSessionSerial_ = inputs.sessionSerial;
     }
 
     std::vector<ProjectionElement> mergedProjectionElements;
@@ -2949,6 +3505,10 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       objects.push_back(&object);
     }
     std::ranges::sort(objects, {}, &SkinObjectDefinition::id);
+    const bool modelHasPracticeObject = std::ranges::any_of(
+        objects, [](const SkinObjectDefinition *object) {
+          return std::holds_alternative<SkinPracticeObject>(object->payload);
+        });
     if (std::adjacent_find(objects.begin(), objects.end(),
                            [](const auto *left, const auto *right) {
                              return left->id == right->id;
@@ -3008,7 +3568,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       const SkinDestination *destination = nullptr;
       const SkinNoteObject *note = nullptr;
       std::optional<AuthoredDestinationGeometry> geometry;
-      std::vector<ConfigOffset> offsets;
+      std::vector<SkinRuntimeOffset> offsets;
       PreparedNoteVisuals preparedVisuals;
     };
     std::vector<DeferredNoteLowering> deferredNotes;
@@ -3023,6 +3583,27 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
         return result;
       }
       if (disabledOptionalObject(lookupIndex, object->id)) {
+        continue;
+      }
+      // SkinTimingDistributionGraph.prepare() returns before SkinObject's
+      // preparation unless its state is MusicResult. Gameplay therefore skips
+      // destination conditions, timers, offsets, and command budgets.
+      if (std::holds_alternative<SkinTimingDistributionGraphObject>(
+              object->payload)) {
+        continue;
+      }
+      if (const auto *practiceObject =
+              std::get_if<SkinPracticeObject>(&object->payload);
+          practiceObject != nullptr && practiceObject->visibleItems > 0) {
+        if (!inputs.state.stagePracticeVisibleItemCount(
+                practiceObject->visibleItems)) {
+          if (reportObjectFailure(
+                  result, *object,
+                  diagnostic("skin.renderer.practice.mutation",
+                             "Practice visible-row count could not be staged."))) {
+            return result;
+          }
+        }
         continue;
       }
       // JsonSkinLoader removes ordinary empty-dst SkinObjects during
@@ -3072,17 +3653,36 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       const auto *text = std::get_if<SkinTextObject>(&object->payload);
       const auto *slider = std::get_if<SkinSliderObject>(&object->payload);
       const auto *graph = std::get_if<SkinGraphObject>(&object->payload);
+      const auto *noteDistribution =
+          std::get_if<SkinNoteDistributionGraphObject>(&object->payload);
+      const auto *gaugeGraph =
+          std::get_if<SkinGaugeGraphObject>(&object->payload);
+      const auto *bpmGraph =
+          std::get_if<SkinBpmGraphObject>(&object->payload);
+      const auto *timingVisualizer =
+          std::get_if<SkinTimingVisualizerObject>(&object->payload);
+      const auto *hitErrorVisualizer =
+          std::get_if<SkinHitErrorVisualizerObject>(&object->payload);
       const auto *gauge = std::get_if<SkinGaugeObject>(&object->payload);
       const auto *note = std::get_if<SkinNoteObject>(&object->payload);
       const auto *cover = std::get_if<SkinCoverObject>(&object->payload);
       const auto *judge = std::get_if<SkinJudgeObject>(&object->payload);
       const auto *bga = std::get_if<SkinBgaObject>(&object->payload);
+      const auto *practice =
+          std::get_if<SkinPracticeObject>(&object->payload);
       const auto *builtinImage =
           std::get_if<SkinBuiltinImageObject>(&object->payload);
+      const auto *pmChara =
+          std::get_if<SkinPmCharaObject>(&object->payload);
+      const auto *invalidInGameplay =
+          std::get_if<SkinInvalidInGameplayObject>(&object->payload);
       const auto *blank = std::get_if<SkinBlankObject>(&object->payload);
       if (!image && !number && !floating && !text && !slider && !graph &&
+          !noteDistribution && !gaugeGraph && !bpmGraph &&
+          !timingVisualizer &&
+          !hitErrorVisualizer &&
           !gauge && !note && !cover && !judge && !bga && !builtinImage &&
-          !blank) {
+          !practice && !pmChara && !invalidInGameplay && !blank) {
         if (reportObjectFailure(
                 result, *object,
                 diagnostic("skin.renderer.object.unsupported",
@@ -3096,7 +3696,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       // optional v1 widgets deliberately have no renderer yet.  Both are
       // valid authored objects that prepare as an empty draw, never a frame
       // failure or a built-in gameplay fallback trigger.
-      if (builtinImage || blank) {
+      if (builtinImage || invalidInGameplay || blank) {
         continue;
       }
 
@@ -3130,6 +3730,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
 
       std::size_t stateIndex = 0;
       SpriteSelection selected;
+      const PreparedSkinMovie *preparedMovie = nullptr;
+      std::int64_t movieTimeMillis = 0;
       std::optional<NumericLayout> numericLayout;
       std::optional<TextLayoutInput> textLayout;
       if (image) {
@@ -3158,6 +3760,10 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           if (stateIndex >= image->orderedStates.size()) {
             stateIndex = 0;
           }
+        }
+        if (inputs.movies != nullptr) {
+          preparedMovie = inputs.movies->findMovie(
+              image->orderedStates[stateIndex].resource);
         }
       } else if (number || floating) {
         numericLayout =
@@ -3235,7 +3841,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       }
 
       if (!destinationVisible && !image && !gauge && !note && !cover &&
-          !judge) {
+          !judge && !pmChara) {
         continue;
       }
 
@@ -3279,11 +3885,11 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
         destinationVisible = evaluated.geometry.has_value();
       }
       if (!destinationVisible && !image && !gauge && !note && !cover &&
-          !judge) {
+          !judge && !pmChara) {
         continue;
       }
 
-      std::vector<ConfigOffset> offsets;
+      std::vector<SkinRuntimeOffset> offsets;
       std::optional<double> coverLiftOffsetY;
       if (!judgeUsesConstructorDestinationWithoutFrame && destinationVisible) {
         offsets.reserve(destination.presentation.offsetIds.size());
@@ -3297,8 +3903,9 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
             continue;
           }
           const auto found = inputs.configuration.offsetsById.find(id);
-          if (found != inputs.configuration.offsetsById.end()) {
-            offsets.push_back(found->second);
+          if (!pinnedLaneCoverRuntimeOffset(id) &&
+              found != inputs.configuration.offsetsById.end()) {
+            offsets.push_back(skinRuntimeOffset(found->second));
             if (cover && id == kSkinCoverLiftOffsetId) {
               coverLiftOffsetY = found->second.y;
             }
@@ -3349,7 +3956,343 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
         continue;
       }
       if (!evaluated.geometry && !image && !gauge && !note && !cover &&
-          !judge) {
+          !judge && !pmChara) {
+        continue;
+      }
+
+      if (practice) {
+        if (!evaluated.geometry) {
+          continue;
+        }
+        auto lowered = lowerPracticeLegacy(
+            inputs, lookupIndex, *object, destination, *evaluated.geometry,
+            inputs.state.practiceState(),
+            skinFrameMaximumGlyphInstances(inputs) - glyphInstances,
+            skinFrameMaximumCommands(inputs) - buffer.commands.size(),
+            skinFrameMaximumPrimitiveVertices(inputs) - primitiveVertices);
+        if (lowered.failure) {
+          if (reportObjectFailure(result, *object, *lowered.failure)) {
+            return result;
+          }
+          continue;
+        }
+        glyphInstances += lowered.glyphCount;
+        primitiveVertices += lowered.primitiveVertices;
+        buffer.commands.insert(buffer.commands.end(),
+                               std::make_move_iterator(lowered.commands.begin()),
+                               std::make_move_iterator(lowered.commands.end()));
+        continue;
+      }
+
+      if (pmChara) {
+        const auto *prepared = inputs.resources.findPomyuChara(object->id);
+        if (prepared == nullptr || !evaluated.geometry) {
+          continue;
+        }
+        for (const auto &animation : prepared->animations) {
+          bool optionsMatch = true;
+          for (const int option : animation.options) {
+            if (option == 0) {
+              continue;
+            }
+            const auto resolved = inputs.state.booleanProperty(
+                SkinBuiltinPropertySelector{std::abs(option)});
+            if (!resolved.supported ||
+                resolved.value != (option > 0)) {
+              optionsMatch = false;
+              break;
+            }
+          }
+          if (!optionsMatch || animation.frames.empty()) {
+            continue;
+          }
+          std::int64_t elapsedMillis = 0;
+          if (animation.builtinTimerId) {
+            const std::int64_t start = inputs.state.timerProperty(
+                SkinBuiltinPropertySelector{*animation.builtinTimerId});
+            if (start == INT64_MIN) {
+              continue;
+            }
+            elapsedMillis = std::max<std::int64_t>(
+                0, inputs.visualTimeMicros / 1'000 - start / 1'000);
+          } else if (animation.frameMillis > 0) {
+            if (!destination.presentation.timer || timerOff) {
+              continue;
+            }
+            elapsedMillis = std::max<std::int64_t>(
+                0, inputs.visualTimeMicros / 1'000 -
+                       timerStartMicros / 1'000);
+          }
+          std::size_t frameIndex = 0;
+          if (animation.frameMillis > 0 && animation.cycleMillis > 0 &&
+              animation.frames.size() > 1) {
+            const std::size_t loopStart = std::min(
+                animation.loopStartFrame, animation.frames.size() - 1);
+            const std::int64_t introMillis =
+                static_cast<std::int64_t>(loopStart) *
+                animation.frameMillis;
+            if (loopStart != 0 && elapsedMillis < introMillis) {
+              frameIndex = std::min<std::size_t>(
+                  static_cast<std::size_t>(elapsedMillis /
+                                           animation.frameMillis),
+                  loopStart - 1);
+            } else {
+              const std::size_t repeatingFrames =
+                  animation.frames.size() - loopStart;
+              const std::int64_t repeatingMillis =
+                  static_cast<std::int64_t>(repeatingFrames) *
+                  animation.frameMillis;
+              if (repeatingMillis <= 0) {
+                continue;
+              }
+              frameIndex = loopStart + static_cast<std::size_t>(
+                  ((elapsedMillis - introMillis) % repeatingMillis) /
+                  animation.frameMillis);
+            }
+          }
+          const auto &frame = animation.frames[frameIndex];
+          if (frame.resource == 0 || frame.region.w <= 0 ||
+              frame.region.h <= 0) {
+            continue;
+          }
+          const auto *resource = inputs.resources.find(frame.resource);
+          const auto *region = inputs.resources.findResolvedRegion(
+              frame.resource, frame.region);
+          if (!resource || !region || resource->width <= 0 ||
+              resource->height <= 0) {
+            if (reportObjectFailure(
+                    result, *object,
+                    diagnostic("skin.renderer.resource.missing",
+                               "Prepared Pomyu character resource is absent."))) {
+              return result;
+            }
+            continue;
+          }
+          AuthoredDestinationGeometry geometry = *evaluated.geometry;
+          if (prepared->relativePlacement) {
+            const AuthoredRect base = geometry.rect;
+            geometry.rect = {
+                .x = base.x + frame.x * base.width /
+                                  prepared->coordinateWidth,
+                .y = base.y + base.height -
+                     (frame.y + frame.height) * base.height /
+                         prepared->coordinateHeight,
+                .width = frame.width * base.width /
+                         prepared->coordinateWidth,
+                .height = frame.height * base.height /
+                          prepared->coordinateHeight};
+            geometry.angleDegrees = frame.angleDegrees;
+            geometry.rgba = {1.0F, 1.0F, 1.0F,
+                             static_cast<float>(frame.alpha) / 255.0F};
+            geometry.blend = SkinBlendMode::Subtractive;
+            geometry.filter = SkinFilterMode::Linear;
+            geometry.stretch = SkinStretchMode::Stretch;
+          }
+          const auto projected = projectSkinDestinationToUi(
+              geometry,
+              {.textureWidth = resource->width,
+               .textureHeight = resource->height,
+               .region = region->resolved},
+              inputs.viewport);
+          bool emptyClip = false;
+          const auto clip = intersectClip(
+              projected.clip, projectedSkinScissorBounds(inputs.viewport),
+              emptyClip);
+          if (emptyClip) {
+            continue;
+          }
+          if (buffer.commands.size() >= skinFrameMaximumCommands(inputs)) {
+            if (reportObjectFailure(
+                    result, *object,
+                    diagnostic("skin.renderer.command.limit",
+                               "Pomyu commands exceed the fixed frame limit."))) {
+              return result;
+            }
+            continue;
+          }
+          SkinTexturedQuadCommand command;
+          command.resource = frame.resource;
+          command.state = {.blend = projected.blend,
+                           .filter = projected.filter,
+                           .scissor = clip};
+          const std::uint32_t color = packAbgr(projected.rgba);
+          for (std::size_t index = 0; index < command.vertices.size();
+               ++index) {
+            command.vertices[index] = {
+                .x = static_cast<float>(projected.vertices[index][0]),
+                .y = static_cast<float>(projected.vertices[index][1]),
+                .u = static_cast<float>(projected.normalizedUvs[index][0]),
+                .v = static_cast<float>(projected.normalizedUvs[index][1]),
+                .rgba = color};
+          }
+          buffer.commands.push_back(
+              {.authoredOrdinal = destination.presentation.authoredOrdinal,
+               .sourceObject = object->id,
+               .payload = std::move(command)});
+        }
+        continue;
+      }
+
+      if (noteDistribution) {
+        if (evaluated.geometry->rgba[3] <= 0.0F) {
+          continue;
+        }
+        std::optional<std::int64_t> currentMillis;
+        const std::int64_t playTimerStart =
+            inputs.state.timerProperty(SkinBuiltinPropertySelector{41});
+        if (playTimerStart != INT64_MIN) {
+          currentMillis = inputs.visualTimeMicros / 1000 -
+                          playTimerStart / 1000;
+        }
+        auto lowered = renderSkinNoteDistributionGraph(
+            {.sourceObject = object->id,
+             .authoredOrdinal = destination.presentation.authoredOrdinal,
+             .graph = *noteDistribution,
+             .state = inputs.state.gameplayGraphState(),
+             .geometry = *evaluated.geometry,
+             .viewport = inputs.viewport,
+             .pmsMode = inputs.model.model.header.type == 4,
+             .elapsedMillis = inputs.visualTimeMicros / 1000,
+             .currentMillis = currentMillis,
+             .maximumCommands =
+                 skinFrameMaximumCommands(inputs) - buffer.commands.size(),
+             .maximumPrimitiveVertices =
+                 skinFrameMaximumPrimitiveVertices(inputs) - primitiveVertices,
+             .cache = &generatedTextureCache_});
+        if (lowered.failure) {
+          if (reportObjectFailure(result, *object, *lowered.failure)) {
+            return result;
+          }
+          continue;
+        }
+        primitiveVertices += lowered.primitiveVertices;
+        buffer.commands.insert(buffer.commands.end(),
+                               std::make_move_iterator(lowered.commands.begin()),
+                               std::make_move_iterator(lowered.commands.end()));
+        continue;
+      }
+
+      if (gaugeGraph) {
+        if (evaluated.geometry->rgba[3] <= 0.0F) {
+          continue;
+        }
+        auto lowered = renderSkinGaugeGraph(
+            {.sourceObject = object->id,
+             .authoredOrdinal = destination.presentation.authoredOrdinal,
+             .graph = *gaugeGraph,
+             .state = inputs.state.gameplayGraphState(),
+             .geometry = *evaluated.geometry,
+             .viewport = inputs.viewport,
+             .elapsedMillis = inputs.visualTimeMicros / 1000,
+             .maximumCommands =
+                 skinFrameMaximumCommands(inputs) - buffer.commands.size(),
+             .maximumPrimitiveVertices =
+                 skinFrameMaximumPrimitiveVertices(inputs) - primitiveVertices,
+             .cache = &generatedTextureCache_});
+        if (lowered.failure) {
+          if (reportObjectFailure(result, *object, *lowered.failure)) {
+            return result;
+          }
+          continue;
+        }
+        primitiveVertices += lowered.primitiveVertices;
+        buffer.commands.insert(buffer.commands.end(),
+                               std::make_move_iterator(lowered.commands.begin()),
+                               std::make_move_iterator(lowered.commands.end()));
+        continue;
+      }
+
+      if (bpmGraph) {
+        if (evaluated.geometry->rgba[3] <= 0.0F) {
+          continue;
+        }
+        auto lowered = renderSkinBpmGraph(
+            {.sourceObject = object->id,
+             .authoredOrdinal = destination.presentation.authoredOrdinal,
+             .graph = *bpmGraph,
+             .state = inputs.state.gameplayGraphState(),
+             .geometry = *evaluated.geometry,
+             .viewport = inputs.viewport,
+             .elapsedMillis = inputs.visualTimeMicros / 1000,
+             .maximumCommands =
+                 skinFrameMaximumCommands(inputs) - buffer.commands.size(),
+             .maximumPrimitiveVertices =
+                 skinFrameMaximumPrimitiveVertices(inputs) - primitiveVertices,
+             .cache = &generatedTextureCache_});
+        if (lowered.failure) {
+          if (reportObjectFailure(result, *object, *lowered.failure)) {
+            return result;
+          }
+          continue;
+        }
+        primitiveVertices += lowered.primitiveVertices;
+        buffer.commands.insert(buffer.commands.end(),
+                               std::make_move_iterator(lowered.commands.begin()),
+                               std::make_move_iterator(lowered.commands.end()));
+        continue;
+      }
+
+      if (timingVisualizer) {
+        if (evaluated.geometry->rgba[3] <= 0.0F) {
+          continue;
+        }
+        auto lowered = renderSkinTimingVisualizer(
+            {.sourceObject = object->id,
+             .authoredOrdinal = destination.presentation.authoredOrdinal,
+             .visualizer = *timingVisualizer,
+             .state = inputs.state.gameplayGraphState(),
+             .geometry = *evaluated.geometry,
+             .viewport = inputs.viewport,
+             .maximumCommands =
+                 skinFrameMaximumCommands(inputs) - buffer.commands.size(),
+             .maximumPrimitiveVertices =
+                 skinFrameMaximumPrimitiveVertices(inputs) - primitiveVertices,
+             .cache = &generatedTextureCache_});
+        if (lowered.failure) {
+          if (reportObjectFailure(result, *object, *lowered.failure)) {
+            return result;
+          }
+          continue;
+        }
+        primitiveVertices += lowered.primitiveVertices;
+        buffer.commands.insert(buffer.commands.end(),
+                               std::make_move_iterator(lowered.commands.begin()),
+                               std::make_move_iterator(lowered.commands.end()));
+        continue;
+      }
+
+      if (hitErrorVisualizer) {
+        if (evaluated.geometry->rgba[3] <= 0.0F) {
+          continue;
+        }
+        auto &presentation = hitErrorVisualizerStates_[object->id];
+        const auto graphState = inputs.state.gameplayGraphState();
+        const bool indexAdvanced = advanceSkinHitErrorVisualizerEma(
+            *hitErrorVisualizer, graphState, presentation);
+        (void)indexAdvanced;
+        auto lowered = renderSkinHitErrorVisualizer(
+            {.sourceObject = object->id,
+             .authoredOrdinal = destination.presentation.authoredOrdinal,
+             .visualizer = *hitErrorVisualizer,
+             .state = graphState,
+             .emaMillis = presentation.emaMillis,
+             .geometry = *evaluated.geometry,
+             .viewport = inputs.viewport,
+             .maximumCommands =
+                 skinFrameMaximumCommands(inputs) - buffer.commands.size(),
+             .maximumPrimitiveVertices =
+                 skinFrameMaximumPrimitiveVertices(inputs) - primitiveVertices,
+             .cache = &generatedTextureCache_});
+        if (lowered.failure) {
+          if (reportObjectFailure(result, *object, *lowered.failure)) {
+            return result;
+          }
+          continue;
+        }
+        primitiveVertices += lowered.primitiveVertices;
+        buffer.commands.insert(buffer.commands.end(),
+                               std::make_move_iterator(lowered.commands.begin()),
+                               std::make_move_iterator(lowered.commands.end()));
         continue;
       }
 
@@ -3555,23 +4498,42 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
 
       if (slider || graph) {
         const SkinSpriteFrames &sprite = slider ? slider->knob : graph->fill;
-        const auto selectedSprite =
-            selectSpriteFrame(inputs, lookupIndex, sprite);
-        if (selectedSprite.failure) {
-          if (reportObjectFailure(result, *object, *selectedSprite.failure)) {
-            return result;
+        SkinResourceId sourceResource = sprite.resource;
+        const PreparedSkinResource *resource = nullptr;
+        const SkinResolvedRegion *region = nullptr;
+        if (graph && graph->builtinImageReference) {
+          const auto resolved = inputs.resources.builtinImageResource(
+              *graph->builtinImageReference);
+          if (!resolved) {
+            // SkinSourceReference returns null for an unavailable system
+            // image, suppressing the graph before its value callback.
+            continue;
           }
-          continue;
-        }
-        if (selectedSprite.suppressed || !selectedSprite.frame) {
-          continue;
+          sourceResource = *resolved;
+          resource = inputs.resources.find(sourceResource);
+          if (resource != nullptr && !resource->regionMappings.empty()) {
+            region = &resource->regionMappings.front();
+          }
+        } else {
+          const auto selectedSprite =
+              selectSpriteFrame(inputs, lookupIndex, sprite);
+          if (selectedSprite.failure) {
+            if (reportObjectFailure(result, *object,
+                                    *selectedSprite.failure)) {
+              return result;
+            }
+            continue;
+          }
+          if (selectedSprite.suppressed || !selectedSprite.frame) {
+            continue;
+          }
+          resource = inputs.resources.find(sourceResource);
+          region = inputs.resources.findResolvedRegion(
+              sourceResource, *selectedSprite.frame);
         }
         // Pinned SkinSlider/SkinGraph obtain the source image before reading
         // their RateProperty. Preserve that callback order and do not invoke a
         // value callback when the prepared source is absent.
-        const auto *resource = inputs.resources.find(sprite.resource);
-        const auto *region = inputs.resources.findResolvedRegion(
-            sprite.resource, *selectedSprite.frame);
         if (!resource || !region || resource->width <= 0 ||
             resource->height <= 0 || region->resolved.w <= 0 ||
             region->resolved.h <= 0) {
@@ -3625,7 +4587,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
             }
             lowered = lowerPreparedQuad(
                 inputs, object->id, destination.presentation.authoredOrdinal,
-                geometry, sprite.resource, resource->width, resource->height,
+                geometry, sourceResource, resource->width, resource->height,
                 region->resolved);
           }
         } else if (graph->direction < 0 || graph->direction > 1) {
@@ -3660,11 +4622,11 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
             geometry.rect.width =
                 static_cast<float>(geometry.rect.width) * objectRate;
           }
-          if (!lowered.failure && cropped.w != 0 && cropped.h != 0) {
+          if (!lowered.failure) {
             lowered = lowerPreparedQuad(
                 inputs, object->id, destination.presentation.authoredOrdinal,
-                geometry, sprite.resource, resource->width, resource->height,
-                cropped);
+                geometry, sourceResource, resource->width, resource->height,
+                cropped, true);
           }
         }
         if (lowered.failure) {
@@ -3830,6 +4792,28 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       }
 
       if (bga) {
+        const auto practiceState = inputs.state.practiceState();
+        if (practiceState.practiceMode && !modelHasPracticeObject) {
+          auto lowered = lowerPracticeLegacy(
+              inputs, lookupIndex, *object, destination, *evaluated.geometry,
+              practiceState,
+              skinFrameMaximumGlyphInstances(inputs) - glyphInstances,
+              skinFrameMaximumCommands(inputs) - buffer.commands.size(),
+              skinFrameMaximumPrimitiveVertices(inputs) - primitiveVertices);
+          if (lowered.failure) {
+            if (reportObjectFailure(result, *object, *lowered.failure)) {
+              return result;
+            }
+            continue;
+          }
+          glyphInstances += lowered.glyphCount;
+          primitiveVertices += lowered.primitiveVertices;
+          buffer.commands.insert(
+              buffer.commands.end(),
+              std::make_move_iterator(lowered.commands.begin()),
+              std::make_move_iterator(lowered.commands.end()));
+          continue;
+        }
         if (buffer.commands.size() >= skinFrameMaximumCommands(inputs)) {
           if (reportObjectFailure(
                   result, *object,
@@ -3851,16 +4835,20 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       }
 
       if (image) {
-        selected = selectSpriteFrame(inputs, lookupIndex,
-                                     image->orderedStates[stateIndex]);
-        if (selected.failure) {
-          if (reportObjectFailure(result, *object, *selected.failure)) {
-            return result;
+        if (preparedMovie != nullptr) {
+          movieTimeMillis = selectMovieTime(inputs);
+        } else {
+          selected = selectSpriteFrame(inputs, lookupIndex,
+                                       image->orderedStates[stateIndex]);
+          if (selected.failure) {
+            if (reportObjectFailure(result, *object, *selected.failure)) {
+              return result;
+            }
+            continue;
           }
-          continue;
-        }
-        if (selected.suppressed) {
-          continue;
+          if (selected.suppressed) {
+            continue;
+          }
         }
       } else if (numericLayout) {
         if (!selectNumericAnimation(inputs, lookupIndex, *numericLayout)) {
@@ -3870,7 +4858,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           }
           continue;
         }
-      } else {
+      } else if (!pmChara) {
         textLayout = prepareTextLayout(
             inputs, lookupIndex, *object, *text,
             skinFrameMaximumGlyphInstances(inputs) - glyphInstances);
@@ -3888,6 +4876,29 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
         continue;
       }
       if (evaluated.geometry->rgba[3] <= 0.0F) {
+        continue;
+      }
+
+      if (preparedMovie != nullptr) {
+        if (buffer.commands.size() >= skinFrameMaximumCommands(inputs)) {
+          if (reportObjectFailure(
+                  result, *object,
+                  diagnostic("skin.renderer.command.limit",
+                             "Movie command exceeds the fixed frame limit."))) {
+            return result;
+          }
+          continue;
+        }
+        SkinMovieCommand command{
+            .resource = preparedMovie->resource.id,
+            .sourceTimeMillis = movieTimeMillis,
+            .geometry = *evaluated.geometry,
+            .state = {.blend = evaluated.geometry->blend,
+                      .filter = evaluated.geometry->filter}};
+        buffer.commands.push_back(
+            {.authoredOrdinal = destination.presentation.authoredOrdinal,
+             .sourceObject = object->id,
+             .payload = std::move(command)});
         continue;
       }
 
@@ -3926,12 +4937,10 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           }
           continue;
         }
-        if (!lowered.command) {
-          continue;
-        }
-        if (buffer.commands.size() >= skinFrameMaximumCommands(inputs) ||
+        if (lowered.command &&
+            (buffer.commands.size() >= skinFrameMaximumCommands(inputs) ||
             lowered.glyphCount >
-                skinFrameMaximumGlyphInstances(inputs) - glyphInstances) {
+                skinFrameMaximumGlyphInstances(inputs) - glyphInstances)) {
           if (reportObjectFailure(
                   result, *object,
                   diagnostic("skin.renderer.command.limit",
@@ -3940,8 +4949,17 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           }
           continue;
         }
-        glyphInstances += lowered.glyphCount;
-        buffer.commands.push_back(std::move(*lowered.command));
+        if (text->editable && text->writer) {
+          interactionLayout.textsTopmostFirst.push_back(textInteraction(
+              object->id, destination.presentation.authoredOrdinal,
+              *evaluated.geometry, *text, textLayout->value));
+          interactionLayout.controlsTopmostFirst.push_back(
+              interactionLayout.textsTopmostFirst.back());
+        }
+        if (lowered.command) {
+          glyphInstances += lowered.glyphCount;
+          buffer.commands.push_back(std::move(*lowered.command));
+        }
         continue;
       }
 
@@ -4114,6 +5132,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
     buildAdjacentBatches(buffer);
     std::ranges::reverse(interactionLayout.slidersTopmostFirst);
     std::ranges::reverse(interactionLayout.imagesTopmostFirst);
+    std::ranges::reverse(interactionLayout.textsTopmostFirst);
     std::ranges::reverse(interactionLayout.controlsTopmostFirst);
     result.submitReady = std::move(buffer);
     result.interactionLayout = std::move(interactionLayout);

@@ -606,6 +606,61 @@ void testRateTransitionRegeneratesAndRemapsEveryFrameDomain() {
           "all nonzero frame domains remain time-correct after 48 to 44.1 kHz");
 }
 
+void testRateTransitionRemapsCommandsPastFormerQueueBoundary() {
+  SoundData sound;
+  sound.channels = 1;
+  sound.sourceSampleRate = 44100;
+  sound.sourceFrameCount = 44100;
+  sound.sourceData.resize(sound.sourceFrameCount, 1000);
+  sound.outputData = sound.sourceData;
+  sound.outputFrameCount = sound.sourceFrameCount;
+
+  AudioCallbackState state;
+  for (std::size_t index = 0; index < kAudioCommandQueueSize; ++index) {
+    require(audio::playback::EnqueueCommand(
+                state, {.type = AudioCommandType::StopAll}),
+            "the fixture advances the combined ring past its former physical "
+            "boundary");
+  }
+  audio::playback::DrainCommands(state);
+  require(state.commandReadCursor.load() == kAudioCommandQueueSize &&
+              state.commandWriteCursor.load() == kAudioCommandQueueSize,
+          "draining preserves the advanced monotonic ring cursors");
+
+  require(audio::playback::EnqueueCommand(
+              state, {.type = AudioCommandType::PlayNow,
+                      .soundData = &sound,
+                      .bus = audio::Bus::Keysound,
+                      .startFrame = 11025}) &&
+              audio::playback::EnqueueCommand(
+                  state, {.type = AudioCommandType::Schedule,
+                          .soundData = &sound,
+                          .bus = audio::Bus::Keysound,
+                          .startMicros = 2000000,
+                          .sequence = 1,
+                          .startFrame = 11025}),
+          "play and schedule commands occupy combined-ring slots beyond 4096");
+
+  std::array<SoundData *, 1> sounds{&sound};
+  auto transition =
+      audio::playback::PrepareOutputRateTransition(sounds, 44100, 48000);
+  require(transition.has_value(),
+          "the retained PCM prepares a rate transition across queued work");
+  audio::playback::CommitOutputRateTransition(std::move(*transition), state);
+
+  require(state.commandQueue[kAudioCommandQueueSize].startFrame == 12000 &&
+              state.commandQueue[kAudioCommandQueueSize + 1].startFrame ==
+                  12000,
+          "rate transition remaps the actual combined-ring play and schedule "
+          "slots");
+  audio::playback::DrainCommands(state);
+  require(state.playingSoundCount == 1 &&
+              state.playingSounds[0].sourceFrameQ32 == 12000ULL << 32 &&
+              state.scheduledSoundCount == 1 &&
+              state.scheduledSounds[0].startFrame == 12000,
+          "the remapped commands retain their frame offsets when consumed");
+}
+
 std::vector<float> mixMonoRampAtRate(int playbackRatePercent,
                                      std::uint32_t outputFrames) {
   SoundData sound;
@@ -751,6 +806,189 @@ void testBusFlowAndMixing() {
               "the left channel mixes each voice with its own bus gain");
   requireNear(mixBuffer[1], 0.3375f,
               "the right channel mixes each voice with its own bus gain");
+}
+
+void testScopedSystemSoundLoopsAtPerVoiceGainAndStopsSelectively() {
+  SoundData systemSound;
+  systemSound.channels = 1;
+  systemSound.outputData = {16384, 8192};
+  systemSound.outputFrameCount = 2;
+  SoundData bgm;
+  bgm.channels = 1;
+  bgm.outputData = {4096, 4096};
+  bgm.outputFrameCount = 2;
+
+  AudioCallbackState state;
+  require(audio::playback::AppendActiveSound(
+              state, &systemSound, audio::Bus::System, 0, 0, 0.5F, true) &&
+              audio::playback::AppendActiveSound(
+                  state, &bgm, audio::Bus::Bgm, 0),
+          "scoped system and ordinary BGM voices enter the mixer");
+  std::vector<float> output(4, 0.0F);
+  audio::playback::MixActiveSounds(state, output, 4, 1, 0.25F, 0.75F,
+                                   100);
+  requireNear(output[0], 0.253125F,
+              "system voice uses only its pinned per-voice gain");
+  requireNear(output[1], 0.140625F,
+              "system voice advances independently of the BGM bus");
+  requireNear(output[2], 0.225F,
+              "looping system voice restarts inside the same output buffer");
+  requireNear(output[3], 0.1125F,
+              "looping system voice preserves its gain after wrap");
+  require(state.playingSoundCount == 1 &&
+              state.playingSounds[0].soundData == &systemSound,
+          "looping system sound remains active after its source boundary");
+
+  require(audio::playback::AppendActiveSound(
+              state, &bgm, audio::Bus::Bgm, 0),
+          "unrelated BGM is active for selective-removal verification");
+  audio::playback::RemoveSound(state, &systemSound);
+  require(state.playingSoundCount == 1 &&
+              state.playingSounds[0].soundData == &bgm,
+          "selective removal preserves unrelated BGM ownership");
+}
+
+void testOwnerStopCommandAcknowledgesWithoutInterruptingOtherVoices() {
+  SoundData skinSound;
+  skinSound.channels = 1;
+  skinSound.outputData = {12000, 12000, 12000, 12000};
+  skinSound.outputFrameCount = 4;
+  SoundData bgm;
+  bgm.channels = 1;
+  bgm.outputData = {6000, 6000, 6000, 6000};
+  bgm.outputFrameCount = 4;
+  std::atomic_bool acknowledged = false;
+
+  AudioCallbackState state;
+  require(audio::playback::EnqueueCommand(
+              state, {.type = AudioCommandType::PlayNow,
+                      .soundData = &skinSound,
+                      .bus = audio::Bus::System}) &&
+              audio::playback::EnqueueCommand(
+                  state, {.type = AudioCommandType::PlayNow,
+                          .soundData = &bgm,
+                          .bus = audio::Bus::Bgm}),
+          "skin and BGM voices enter the callback queue");
+  audio::playback::DrainCommands(state);
+  std::vector<float> output(1, 0.0F);
+  audio::playback::MixActiveSounds(state, output, 1, 1, 1.0F, 1.0F, 100);
+  const auto bgmCursor = state.playingSounds[1].sourceFrameQ32;
+
+  require(audio::playback::EnqueueCommand(
+              state, {.type = AudioCommandType::StopOwner,
+                      .soundData = &skinSound,
+                      .acknowledgement = &acknowledged}),
+          "owner stop enters the callback queue without stopping the device");
+  audio::playback::DrainCommands(state);
+  require(acknowledged.load(std::memory_order_acquire) &&
+              state.playingSoundCount == 1 &&
+              state.playingSounds[0].soundData == &bgm &&
+              state.playingSounds[0].sourceFrameQ32 == bgmCursor,
+          "callback owner stop acknowledges retirement and preserves the "
+          "unrelated BGM position");
+  output[0] = 0.0F;
+  audio::playback::MixActiveSounds(state, output, 1, 1, 1.0F, 1.0F, 100);
+  require(state.playingSoundCount == 1 &&
+              state.playingSounds[0].sourceFrameQ32 > bgmCursor,
+          "unrelated BGM continues on the next callback buffer");
+}
+
+void testOwnerControlQueuePreservesCrossQueueSubmissionOrder() {
+  SoundData sound;
+  sound.channels = 1;
+  sound.outputData = {1000, 1000};
+  sound.outputFrameCount = 2;
+
+  AudioCallbackState stopThenPlay;
+  require(audio::playback::EnqueueOwnerControlCommand(
+              stopThenPlay,
+              {.type = AudioCommandType::StopOwner, .soundData = &sound}) &&
+              audio::playback::EnqueueCommand(
+                  stopThenPlay,
+                  {.type = AudioCommandType::PlayNow,
+                   .soundData = &sound,
+                   .bus = audio::Bus::System}),
+          "stop-then-play enters the separate owner and ordinary queues");
+  audio::playback::DrainCommands(stopThenPlay);
+  require(stopThenPlay.playingSoundCount == 1,
+          "later play wins over an earlier owner stop across queues");
+
+  AudioCallbackState playThenStop;
+  require(audio::playback::EnqueueCommand(
+              playThenStop,
+              {.type = AudioCommandType::PlayNow,
+               .soundData = &sound,
+               .bus = audio::Bus::System}) &&
+              audio::playback::EnqueueOwnerControlCommand(
+                  playThenStop,
+                  {.type = AudioCommandType::StopOwner,
+                   .soundData = &sound}),
+          "play-then-stop enters the separate ordinary and owner queues");
+  audio::playback::DrainCommands(playThenStop);
+  require(playThenStop.playingSoundCount == 0,
+          "later owner stop wins over an earlier play across queues");
+}
+
+struct CommandSnapshotInterleave {
+  AudioCallbackState *state = nullptr;
+  SoundData *sound = nullptr;
+  bool playFirst = false;
+};
+
+void enqueueCommandsAfterCallbackSnapshot(void *context) {
+  auto &interleave = *static_cast<CommandSnapshotInterleave *>(context);
+  const AudioCommand play{.type = AudioCommandType::PlayNow,
+                          .soundData = interleave.sound,
+                          .bus = audio::Bus::System};
+  const AudioCommand stop{.type = AudioCommandType::StopOwner,
+                          .soundData = interleave.sound};
+  if (interleave.playFirst) {
+    require(audio::playback::EnqueueCommand(*interleave.state, play) &&
+                audio::playback::EnqueueOwnerControlCommand(*interleave.state,
+                                                            stop),
+            "play-then-stop publishes during the callback snapshot seam");
+  } else {
+    require(audio::playback::EnqueueOwnerControlCommand(*interleave.state,
+                                                        stop) &&
+                audio::playback::EnqueueCommand(*interleave.state, play),
+            "stop-then-play publishes during the callback snapshot seam");
+  }
+}
+
+void testCallbackSnapshotNeverExposesOnlyTheLaterCrossQueueCommand() {
+  SoundData sound;
+  sound.channels = 1;
+  sound.outputData = {1000, 1000};
+  sound.outputFrameCount = 2;
+
+  AudioCallbackState playThenStop;
+  CommandSnapshotInterleave playFirst{.state = &playThenStop,
+                                      .sound = &sound,
+                                      .playFirst = true};
+  audio::playback::DrainCommands(playThenStop,
+                                 enqueueCommandsAfterCallbackSnapshot,
+                                 &playFirst);
+  require(playThenStop.playingSoundCount == 0,
+          "commands published after the coherent snapshot wait together");
+  audio::playback::DrainCommands(playThenStop);
+  require(playThenStop.playingSoundCount == 0,
+          "deferred play-then-stop retains authored order");
+
+  AudioCallbackState stopThenPlay;
+  require(audio::playback::AppendActiveSound(
+              stopThenPlay, &sound, audio::Bus::System, 0),
+          "stop-then-play interleave begins with the owner active");
+  CommandSnapshotInterleave stopFirst{.state = &stopThenPlay,
+                                      .sound = &sound,
+                                      .playFirst = false};
+  audio::playback::DrainCommands(stopThenPlay,
+                                 enqueueCommandsAfterCallbackSnapshot,
+                                 &stopFirst);
+  require(stopThenPlay.playingSoundCount == 1,
+          "the callback does not expose only the later owner control");
+  audio::playback::DrainCommands(stopThenPlay);
+  require(stopThenPlay.playingSoundCount == 1,
+          "deferred stop-then-play retains authored order");
 }
 
 void testRealtimeCommandReservationPublishesAtomically() {
@@ -965,6 +1203,16 @@ int main() {
         audio::ResamplePcm(fractionalMonoFrames, 1, 44100, 48000);
     require(fractionalUpsampled.size() == 3,
             "fractional output duration retains its final frame interval");
+    const auto projectedUpsample =
+        audio::ProjectedResampledPcmSampleCount(2, 1, 1000, 44100);
+    require(projectedUpsample == std::optional<std::size_t>{89},
+            "resample projection rounds a fractional final frame exactly");
+    require(!audio::ResampledPcmFitsSampleBudget(2, 1, 1000, 44100, 90) &&
+                audio::ResampledPcmFitsSampleBudget(2, 1, 1000, 44100, 91),
+            "combined source and projected output must fit before resampling");
+    require(!audio::ProjectedResampledPcmSampleCount(
+                 std::numeric_limits<std::size_t>::max(), 1, 1, 2),
+            "overflowing resample projections fail before allocation");
 
     require(audio::ResamplePcm({}, 2, 44100, 48000).empty(),
             "empty PCM remains empty");
@@ -1026,6 +1274,7 @@ int main() {
             "scheduled audio retains explicit keysound classification");
 
     testRateTransitionRegeneratesAndRemapsEveryFrameDomain();
+    testRateTransitionRemapsCommandsPastFormerQueueBoundary();
     testStoppedQueryInterpretationPreservesErrors();
     testUnknownBackendStateCannotPublishRateTransition();
     testStopDrainFailureCannotPublishRateTransition();
@@ -1040,6 +1289,10 @@ int main() {
     testQ32ActiveCursorRejectsUnrepresentableStartFrame();
     testScheduledOffsetsUseInversePlaybackRate();
     testBusFlowAndMixing();
+    testScopedSystemSoundLoopsAtPerVoiceGainAndStopsSelectively();
+    testOwnerStopCommandAcknowledgesWithoutInterruptingOtherVoices();
+    testOwnerControlQueuePreservesCrossQueueSubmissionOrder();
+    testCallbackSnapshotNeverExposesOnlyTheLaterCrossQueueCommand();
     testRealtimeCommandReservationPublishesAtomically();
     testRealtimeCommandReservationFailsClosedAtCapacity();
     testRealtimeCommandDeterministicallyAdmitsAtVoiceLimit();

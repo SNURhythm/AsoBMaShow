@@ -11,6 +11,7 @@
 #include "../practice/PracticeResultModel.h"
 #include "../practice/PracticeSession.h"
 #include "Scene.h"
+#include "play/GamePlayStartOptions.h"
 #include "play/RhythmState.h"
 #include "../bms_parser.hpp"
 #include "../skin/ISkin.h"
@@ -27,6 +28,19 @@
 #include <variant>
 
 struct CoursePlaySession;
+
+struct ResultTableContext {
+  std::string tableName;
+  std::string tableLevel;
+
+  bool operator==(const ResultTableContext &) const = default;
+};
+
+inline void applyResultTableContext(StartOptions &options,
+                                    const ResultTableContext &context) {
+  options.tableName = context.tableName;
+  options.tableLevel = context.tableLevel;
+}
 
 struct ResultPracticeOptions {
   bool enabled = false;
@@ -53,7 +67,7 @@ freshPracticeSessionForRetry(
     const std::shared_ptr<practice::Session> &session) {
   return session == nullptr
              ? nullptr
-             : std::make_shared<practice::Session>(session->configuration());
+             : std::make_shared<practice::Session>(session->freshForRetry());
 }
 
 enum class ResultCourseMode {
@@ -173,6 +187,7 @@ struct LocalResultSource {
   ResultPersistenceOptions persistenceOptions;
   ResultPracticeOptions practiceOptions;
   ResultCourseOptions courseOptions;
+  ResultTableContext tableContext;
   std::unique_ptr<bms_parser::Chart> ownedReusableRetryChart;
   bms_parser::Chart *reusableRetryChart = nullptr;
   std::string pacemakerTarget;
@@ -252,7 +267,7 @@ public:
       std::optional<ResultPacemakerData> pacemakerOverride = std::nullopt,
       const ReplayData *analyticsSource = nullptr,
       std::optional<std::string> modernReplayAttemptId = std::nullopt,
-      bool retrySameAllowed = true);
+      bool retrySameAllowed = true, ResultTableContext tableContext = {});
   ResultScene(ApplicationContext &context, ResultRemoteOptions remote);
   ~ResultScene() override = default;
 

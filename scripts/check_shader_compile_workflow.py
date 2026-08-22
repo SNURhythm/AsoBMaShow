@@ -50,6 +50,12 @@ workflow_required = {
     "shader working directory": "working-directory: shader_src",
     "MinGW toolchain root": "MINGW: /mingw64",
     "MinGW compiler preflight": 'test -x "$MINGW/bin/x86_64-w64-mingw32-g++.exe"',
+    "native Git executable resolution": (
+        '$gitExecutable = (Get-Command git.exe -ErrorAction Stop).Source'
+    ),
+    "native Git executable environment": (
+        '"ASOBMASHOW_GIT_EXECUTABLE=$gitExecutable" >> $env:GITHUB_ENV'
+    ),
     "forced shader regeneration": "python3 make.py clean\n          python3 make.py",
     "current shader script": "python3 make.py",
     "shader manifest write verification": (
@@ -94,6 +100,8 @@ failures.extend(
 )
 
 workflow_sequence = (
+    ("native Git executable resolution",
+     workflow_required["native Git executable resolution"]),
     ("shader compilation", "          python3 make.py\n"),
     ("shader manifest write verification",
      workflow_required["shader manifest write verification"]),

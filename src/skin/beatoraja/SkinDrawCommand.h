@@ -2,6 +2,7 @@
 
 #include "PlaySkinViewport.h"
 #include "SkinDestinationEvaluator.h"
+#include "SkinGeneratedTexture.h"
 #include "SkinResourceCatalog.h"
 
 #include <array>
@@ -22,13 +23,41 @@ struct SkinVertex {
 };
 
 struct SkinRenderState {
+  struct DistanceField {
+    bool colored = false;
+    double outlineDistance = 0.5;
+    std::array<std::uint8_t, 4> outlineRgba{255, 255, 255, 0};
+    std::array<std::uint8_t, 4> shadowRgba{255, 255, 255, 0};
+    double shadowSmoothing = 0.0;
+    double shadowOffsetU = 0.0;
+    double shadowOffsetV = 0.0;
+    auto operator<=>(const DistanceField &) const = default;
+  };
   SkinBlendMode blend = SkinBlendMode::Normal;
   SkinFilterMode filter = SkinFilterMode::Nearest;
   std::optional<UiLogicalRect> scissor;
+  std::optional<DistanceField> distanceField;
 };
 
 struct SkinTexturedQuadCommand {
   SkinResourceId resource = 0;
+  std::array<SkinVertex, 4> vertices{};
+  SkinRenderState state;
+};
+
+struct SkinMovieCommand {
+  SkinResourceId resource = 0;
+  std::int64_t sourceTimeMillis = 0;
+  AuthoredDestinationGeometry geometry;
+  SkinRenderState state;
+};
+
+// Pixmap-backed Beatoraja widgets own a source texture independently from the
+// destination which samples it. Pixels remain value-owned by the immutable
+// command buffer until whole-frame texture preflight completes.
+struct SkinGeneratedTexturedQuadCommand {
+  SkinGeneratedTextureKey key;
+  SkinGeneratedTextureData texture;
   std::array<SkinVertex, 4> vertices{};
   SkinRenderState state;
 };
@@ -41,6 +70,10 @@ struct SkinGlyphInstance {
 struct SkinGlyphRunCommand {
   SkinTextAtlasId atlas = 0;
   std::vector<SkinGlyphInstance> glyphs;
+  // Beatoraja first submits the complete distance-field layout, then redraws
+  // standard fallback-face glyphs bilinearly in white. Keeping that overlay
+  // in the same value-owned command preserves its post-layout ordering.
+  std::vector<SkinGlyphInstance> fallbackColorOverlays;
   SkinRenderState state;
 };
 
@@ -63,13 +96,18 @@ struct SkinBgaCommand {
 };
 
 using SkinDrawPayload =
-    std::variant<SkinTexturedQuadCommand, SkinGlyphRunCommand,
-                 SkinPrimitiveCommand, SkinBgaCommand>;
+    std::variant<SkinTexturedQuadCommand, SkinMovieCommand,
+                 SkinGeneratedTexturedQuadCommand,
+                 SkinGlyphRunCommand, SkinPrimitiveCommand, SkinBgaCommand>;
 
 struct SkinDrawCommand {
   std::uint32_t authoredOrdinal = 0;
   SkinObjectId sourceObject = 0;
   SkinDrawPayload payload;
+#if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING) ||                         \
+    defined(ASOBMASHOW_SKIN_RENDERER_TESTING)
+  int longNoteSlotForTesting = -1;
+#endif
 };
 
 struct SkinBatchRange {

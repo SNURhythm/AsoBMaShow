@@ -5,9 +5,12 @@
 #include "RealtimeControllerDeviceMap.h"
 
 #include <SDL2/SDL_joystick.h>
+#include <SDL2/SDL_scancode.h>
 
 #include <array>
 #include <atomic>
+#include <bitset>
+#include <compare>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -23,11 +26,22 @@ struct SdlInputDeviceInfo {
   std::string serial;
   std::string path;
   std::string name;
+  std::string legacyName;
   int buttons = 0;
   int axes = 0;
   int hats = 0;
   int playerIndex = -1;
+  std::vector<int> pressedRawButtons;
 };
+
+struct SdlGdxKeyAlias {
+  SDL_Scancode scancode = SDL_SCANCODE_UNKNOWN;
+  int gdxKeyCode = -1;
+  auto operator<=>(const SdlGdxKeyAlias &) const = default;
+};
+
+[[nodiscard]] std::span<const SdlGdxKeyAlias> sdlGdxKeyAliases() noexcept;
+[[nodiscard]] int gdxKeyCodeForSdlScancode(SDL_Scancode) noexcept;
 
 class ISdlInputDeviceProvider {
 public:
@@ -61,6 +75,8 @@ public:
       std::span<input::PhysicalInputEvent> output);
   [[nodiscard]] std::optional<std::string>
   realtimeDisconnectedDeviceId(const SDL_Event &event) const;
+  [[nodiscard]] input::LegacyInputGeneration
+  legacyControllerGeneration() const noexcept;
 
 private:
   struct DeviceRecord {
@@ -68,6 +84,9 @@ private:
     bool gameController = false;
     bool iosAccelerometer = false;
     int playerIndex = -1;
+    std::string legacyName;
+    std::bitset<input::kLegacyInputMaximumButtons> pressedRawButtons;
+    std::uint64_t legacyOrder = 0;
     std::vector<Uint8> hatValues;
   };
 
@@ -84,6 +103,7 @@ private:
                    std::uint32_t timestamp);
   void publishHat(DeviceRecord &device, int hat, Uint8 value,
                   std::uint32_t timestamp);
+  void rebuildLegacyControllerGenerationLocked() noexcept;
   [[nodiscard]] bool
   nativeRealtimeOwns(input::DeviceClass deviceClass) const noexcept;
 
@@ -91,6 +111,8 @@ private:
   std::shared_ptr<RealtimeControllerDeviceMap> realtimeControllerMap_;
   InputDeviceIdentity identity_;
   std::unordered_map<SDL_JoystickID, DeviceRecord> devices_;
+  input::LegacyInputGeneration legacyControllerGeneration_;
+  std::uint64_t nextLegacyOrder_ = 1;
   mutable std::mutex devicesMutex_;
   std::array<std::atomic_bool, 6> realtimeInputClaimed_{};
   bool started_ = false;

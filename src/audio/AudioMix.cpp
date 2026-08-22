@@ -9,7 +9,8 @@
 AudioCallbackState::AudioCallbackState()
     : playingSounds(std::make_unique<PlayingSound[]>(kMaxActiveSounds)),
       scheduledSounds(std::make_unique<ScheduledSound[]>(kMaxScheduledSounds)),
-      commandQueue(std::make_unique<AudioCommand[]>(kAudioCommandQueueSize)),
+      commandQueue(
+          std::make_unique<AudioCommand[]>(kCombinedAudioCommandQueueSize)),
       realtimeCommandQueue(
           std::make_unique<AudioCommand[]>(kRealtimeAudioCommandQueueSize)) {}
 
@@ -118,8 +119,11 @@ size_t clampFrameToSound(size_t frame, const SoundData *soundData) {
 } // namespace
 
 float EffectiveGain(Bus bus, const Volumes &volumes) {
-  const float busVolume = bus == Bus::Bgm ? ClampVolume(volumes.bgm)
-                                          : ClampVolume(volumes.keysound);
+  const float busVolume = bus == Bus::Bgm
+                              ? ClampVolume(volumes.bgm)
+                              : bus == Bus::Keysound
+                                    ? ClampVolume(volumes.keysound)
+                                    : 1.0F;
   return ClampVolume(volumes.master) * busVolume;
 }
 
@@ -129,23 +133,16 @@ Volumes VolumesFromSettings(const player_settings::AudioSettings &settings) {
           .keysound = settings.keysoundVolume};
 }
 
-std::vector<short> ResamplePcm(std::span<const short> source, int channels,
-                               int sourceRate, int targetRate) {
-  if (source.empty() || channels <= 0 || sourceRate <= 0 || targetRate <= 0) {
-    return {};
-  }
+std::optional<std::size_t>
+ProjectedResampledPcmSampleCount(std::size_t sourceSamples, int channels,
+                                 int sourceRate, int targetRate) noexcept {
+  if (channels <= 0 || sourceRate <= 0 || targetRate <= 0) return std::nullopt;
   const size_t channelCount = static_cast<size_t>(channels);
-  if (source.size() % channelCount != 0) {
-    return {};
-  }
-  if (sourceRate == targetRate) {
-    return {source.begin(), source.end()};
-  }
+  if (sourceSamples % channelCount != 0) return std::nullopt;
+  if (sourceRate == targetRate) return sourceSamples;
 
-  const size_t sourceFrames = source.size() / channelCount;
-  if (sourceFrames == 0) {
-    return {};
-  }
+  const size_t sourceFrames = sourceSamples / channelCount;
+  if (sourceFrames == 0) return std::size_t{0};
 
   const size_t sourceRateValue = static_cast<size_t>(sourceRate);
   const size_t targetRateValue = static_cast<size_t>(targetRate);
@@ -154,7 +151,7 @@ std::vector<short> ResamplePcm(std::span<const short> source, int channels,
   const size_t wholeSeconds = sourceFrames / sourceRateValue;
   const size_t remainingFrames = sourceFrames % sourceRateValue;
   if (wholeSeconds > maximumFrames / targetRateValue) {
-    return {};
+    return std::nullopt;
   }
   const size_t wholeTargetFrames = wholeSeconds * targetRateValue;
   const std::uint64_t fractionalNumerator =
@@ -164,10 +161,32 @@ std::vector<short> ResamplePcm(std::span<const short> source, int channels,
       fractionalNumerator / static_cast<std::uint64_t>(sourceRate) +
       (fractionalNumerator % static_cast<std::uint64_t>(sourceRate) != 0));
   if (fractionalTargetFrames > maximumFrames - wholeTargetFrames) {
-    return {};
+    return std::nullopt;
   }
   const size_t targetFrames = wholeTargetFrames + fractionalTargetFrames;
-  std::vector<short> output(targetFrames * channelCount);
+  return targetFrames * channelCount;
+}
+
+bool ResampledPcmFitsSampleBudget(
+    std::size_t sourceSamples, int channels, int sourceRate, int targetRate,
+    std::size_t maximumCombinedSamples) noexcept {
+  const auto outputSamples = ProjectedResampledPcmSampleCount(
+      sourceSamples, channels, sourceRate, targetRate);
+  return outputSamples && sourceSamples <= maximumCombinedSamples &&
+         *outputSamples <= maximumCombinedSamples - sourceSamples;
+}
+
+std::vector<short> ResamplePcm(std::span<const short> source, int channels,
+                               int sourceRate, int targetRate) {
+  const auto projectedSamples = ProjectedResampledPcmSampleCount(
+      source.size(), channels, sourceRate, targetRate);
+  if (!projectedSamples || source.empty()) return {};
+  if (sourceRate == targetRate) return {source.begin(), source.end()};
+
+  const size_t channelCount = static_cast<size_t>(channels);
+  const size_t sourceFrames = source.size() / channelCount;
+  const size_t targetFrames = *projectedSamples / channelCount;
+  std::vector<short> output(*projectedSamples);
 
   for (size_t targetFrame = 0; targetFrame < targetFrames; ++targetFrame) {
     const long double sourcePosition =
@@ -338,9 +357,16 @@ StopBackendAndClearCallbackState(IBackendLifecycle &backend,
   if (!stopped.success) {
     return stopped;
   }
+  DrainRealtimeCommands(callbackState);
+  DrainCommands(callbackState);
   ClearCallbackSounds(callbackState);
   callbackState.commandReadCursor.store(0, std::memory_order_release);
   callbackState.commandWriteCursor.store(0, std::memory_order_release);
+  callbackState.ordinaryCommandCount.store(0, std::memory_order_release);
+  callbackState.ownerControlCommandCount.store(0,
+                                               std::memory_order_release);
+  callbackState.ownerRetirementCommandCount.store(0,
+                                                  std::memory_order_release);
   callbackState.realtimeCommandReadCursor.store(0,
                                                 std::memory_order_release);
   callbackState.realtimeCommandWriteCursor.store(0,
@@ -441,7 +467,7 @@ void CommitOutputRateTransition(OutputRateTransition transition,
   const std::uint32_t writeCursor =
       state.commandWriteCursor.load(std::memory_order_acquire);
   for (std::uint32_t cursor = readCursor; cursor != writeCursor; ++cursor) {
-    auto &command = state.commandQueue[cursor % kAudioCommandQueueSize];
+    auto &command = state.commandQueue[cursor % kCombinedAudioCommandQueueSize];
     command.startFrame = clampFrameToSound(
         RemapFramePosition(command.startFrame, transition.previousSampleRate,
                            transition.targetSampleRate),
@@ -464,7 +490,8 @@ void CommitOutputRateTransition(OutputRateTransition transition,
 }
 
 bool AppendActiveSound(AudioCallbackState &state, SoundData *soundData, Bus bus,
-                       std::uint32_t outputOffsetFrames, size_t startFrame) {
+                       std::uint32_t outputOffsetFrames, size_t startFrame,
+                       float gain, bool loop) {
   if (soundData == nullptr || startFrame >= soundData->outputFrameCount ||
       startFrame > kQ32MaximumWholeFrame ||
       state.playingSoundCount >= kMaxActiveSounds) {
@@ -476,6 +503,8 @@ bool AppendActiveSound(AudioCallbackState &state, SoundData *soundData, Bus bus,
       .bus = bus,
       .sourceFrameQ32 = frameToQ32(startFrame),
       .outputOffsetFrames = outputOffsetFrames,
+      .gain = gain,
+      .loop = loop,
   };
   return true;
 }
@@ -540,17 +569,100 @@ void ClearCallbackSounds(AudioCallbackState &state) {
   state.scheduledSoundCount = 0;
 }
 
-bool EnqueueCommand(AudioCallbackState &state, const AudioCommand &command) {
+void RemoveSound(AudioCallbackState &state, SoundData *soundData) {
+  std::size_t active = 0;
+  while (active < state.playingSoundCount) {
+    if (state.playingSounds[active].soundData == soundData) {
+      removeActiveSoundAt(state, active);
+    } else {
+      ++active;
+    }
+  }
+  std::size_t retained = 0;
+  for (std::size_t index = 0; index < state.scheduledSoundCount; ++index) {
+    if (state.scheduledSounds[index].soundData != soundData) {
+      state.scheduledSounds[retained++] = state.scheduledSounds[index];
+    }
+  }
+  state.scheduledSoundCount = retained;
+}
+
+bool EnqueueCommand(AudioCallbackState &state, const AudioCommand &command,
+                    std::uint64_t *submissionSequence) {
   const std::uint32_t readCursor =
       state.commandReadCursor.load(std::memory_order_acquire);
   const std::uint32_t writeCursor =
       state.commandWriteCursor.load(std::memory_order_relaxed);
-  if (writeCursor - readCursor >= kAudioCommandQueueSize) {
+  if (state.ordinaryCommandCount.load(std::memory_order_acquire) >=
+          kAudioCommandQueueSize ||
+      writeCursor - readCursor >= kCombinedAudioCommandQueueSize) {
     return false;
   }
 
-  state.commandQueue[writeCursor % kAudioCommandQueueSize] = command;
+  AudioCommand submitted = command;
+  submitted.submissionSequence =
+      state.nextCommandSubmissionSequence.fetch_add(1,
+                                                    std::memory_order_relaxed);
+  submitted.admission = AudioCommandAdmission::Ordinary;
+  state.commandQueue[writeCursor % kCombinedAudioCommandQueueSize] = submitted;
+  state.ordinaryCommandCount.fetch_add(1, std::memory_order_release);
   state.commandWriteCursor.store(writeCursor + 1, std::memory_order_release);
+  if (submissionSequence != nullptr) {
+    *submissionSequence = submitted.submissionSequence;
+  }
+  return true;
+}
+
+bool EnqueueOwnerControlCommand(AudioCallbackState &state,
+                                const AudioCommand &command,
+                                std::uint64_t *submissionSequence) {
+  const std::uint32_t readCursor =
+      state.commandReadCursor.load(std::memory_order_acquire);
+  const std::uint32_t writeCursor =
+      state.commandWriteCursor.load(std::memory_order_relaxed);
+  if (state.ownerControlCommandCount.load(std::memory_order_acquire) >=
+          kOwnerControlCommandQueueSize ||
+      writeCursor - readCursor >= kCombinedAudioCommandQueueSize) {
+    return false;
+  }
+  AudioCommand submitted = command;
+  submitted.submissionSequence =
+      state.nextCommandSubmissionSequence.fetch_add(1,
+                                                    std::memory_order_relaxed);
+  submitted.admission = AudioCommandAdmission::OwnerControl;
+  state.commandQueue[writeCursor % kCombinedAudioCommandQueueSize] = submitted;
+  state.ownerControlCommandCount.fetch_add(1, std::memory_order_release);
+  state.commandWriteCursor.store(writeCursor + 1, std::memory_order_release);
+  if (submissionSequence != nullptr) {
+    *submissionSequence = submitted.submissionSequence;
+  }
+  return true;
+}
+
+bool EnqueueOwnerRetirementCommand(
+    AudioCallbackState &state, const AudioCommand &command,
+    std::uint64_t *submissionSequence) {
+  const std::uint32_t readCursor =
+      state.commandReadCursor.load(std::memory_order_acquire);
+  const std::uint32_t writeCursor =
+      state.commandWriteCursor.load(std::memory_order_relaxed);
+  if (state.ownerRetirementCommandCount.load(std::memory_order_acquire) >=
+          kOwnerControlCommandQueueSize ||
+      writeCursor - readCursor >= kCombinedAudioCommandQueueSize) {
+    return false;
+  }
+  AudioCommand submitted = command;
+  submitted.submissionSequence =
+      state.nextCommandSubmissionSequence.fetch_add(1,
+                                                    std::memory_order_relaxed);
+  submitted.admission = AudioCommandAdmission::OwnerRetirement;
+  state.commandQueue[writeCursor % kCombinedAudioCommandQueueSize] = submitted;
+  state.ownerRetirementCommandCount.fetch_add(1,
+                                              std::memory_order_release);
+  state.commandWriteCursor.store(writeCursor + 1, std::memory_order_release);
+  if (submissionSequence != nullptr) {
+    *submissionSequence = submitted.submissionSequence;
+  }
   return true;
 }
 
@@ -599,7 +711,19 @@ void DrainRealtimeCommands(AudioCallbackState &state) noexcept {
                                    .bus = command.bus,
                                    .startMicros = command.startMicros,
                                    .sequence = command.sequence,
-                                   .startFrame = command.startFrame});
+                                   .startFrame = command.startFrame,
+                                   .gain = command.gain,
+                                   .loop = command.loop});
+      break;
+    case AudioCommandType::StopOwner:
+      RemoveSound(state, command.soundData);
+      if (command.soundData != nullptr) {
+        command.soundData->ownerControlAcknowledgedSequence.store(
+            command.submissionSequence, std::memory_order_release);
+      }
+      if (command.acknowledgement != nullptr) {
+        command.acknowledgement->store(true, std::memory_order_release);
+      }
       break;
     case AudioCommandType::StopAll:
       ClearCallbackSounds(state);
@@ -611,32 +735,61 @@ void DrainRealtimeCommands(AudioCallbackState &state) noexcept {
                                         std::memory_order_release);
 }
 
-void DrainCommands(AudioCallbackState &state) {
+static void ApplyCommand(AudioCallbackState &state,
+                         const AudioCommand &command) noexcept {
+  switch (command.type) {
+  case AudioCommandType::PlayNow:
+    AppendActiveSound(state, command.soundData, command.bus, 0,
+                      command.startFrame, command.gain, command.loop);
+    break;
+  case AudioCommandType::Schedule:
+    InsertScheduledSound(state, {.soundData = command.soundData,
+                                 .bus = command.bus,
+                                 .startMicros = command.startMicros,
+                                 .sequence = command.sequence,
+                                 .startFrame = command.startFrame,
+                                 .gain = command.gain,
+                                 .loop = command.loop});
+    break;
+  case AudioCommandType::StopOwner:
+    RemoveSound(state, command.soundData);
+    if (command.soundData != nullptr) {
+      command.soundData->ownerControlAcknowledgedSequence.store(
+          command.submissionSequence, std::memory_order_release);
+    }
+    if (command.acknowledgement != nullptr) {
+      command.acknowledgement->store(true, std::memory_order_release);
+    }
+    break;
+  case AudioCommandType::StopAll:
+    ClearCallbackSounds(state);
+    break;
+  }
+}
+
+void DrainCommands(AudioCallbackState &state,
+                   CommandDrainSnapshotHook afterSnapshot,
+                   void *hookContext) {
   std::uint32_t readCursor =
       state.commandReadCursor.load(std::memory_order_relaxed);
   const std::uint32_t writeCursor =
       state.commandWriteCursor.load(std::memory_order_acquire);
+  if (afterSnapshot != nullptr) {
+    afterSnapshot(hookContext);
+  }
 
   while (readCursor != writeCursor) {
-    const AudioCommand &command =
-        state.commandQueue[readCursor % kAudioCommandQueueSize];
-    switch (command.type) {
-    case AudioCommandType::PlayNow:
-      AppendActiveSound(state, command.soundData, command.bus, 0,
-                        command.startFrame);
-      break;
-    case AudioCommandType::Schedule:
-      InsertScheduledSound(state, {.soundData = command.soundData,
-                                   .bus = command.bus,
-                                   .startMicros = command.startMicros,
-                                   .sequence = command.sequence,
-                                   .startFrame = command.startFrame});
-      break;
-    case AudioCommandType::StopAll:
-      ClearCallbackSounds(state);
-      break;
+    const AudioCommand &command = state.commandQueue[
+        readCursor++ % kCombinedAudioCommandQueueSize];
+    ApplyCommand(state, command);
+    if (command.admission == AudioCommandAdmission::OwnerControl) {
+      state.ownerControlCommandCount.fetch_sub(1, std::memory_order_release);
+    } else if (command.admission == AudioCommandAdmission::OwnerRetirement) {
+      state.ownerRetirementCommandCount.fetch_sub(1,
+                                                  std::memory_order_release);
+    } else {
+      state.ordinaryCommandCount.fetch_sub(1, std::memory_order_release);
     }
-    ++readCursor;
   }
 
   state.commandReadCursor.store(readCursor, std::memory_order_release);
@@ -659,7 +812,8 @@ void ActivateScheduledSounds(AudioCallbackState &state,
       break;
     }
     AppendActiveSound(state, scheduledSound.soundData, scheduledSound.bus,
-                      outputOffsetFrames, scheduledSound.startFrame);
+                      outputOffsetFrames, scheduledSound.startFrame,
+                      scheduledSound.gain, scheduledSound.loop);
   }
 
   if (scheduledSoundsToRemove == 0) {
@@ -701,12 +855,21 @@ void MixActiveSounds(AudioCallbackState &state, std::span<float> mixBuffer,
         std::min(playingSound.outputOffsetFrames, frameCount);
     const short *source = soundData->outputData.data();
     const int channels = soundData->channels;
-    const float gain =
-        kMixHeadroom * (playingSound.bus == Bus::Bgm ? bgmGain : keysoundGain);
+    const float busGain = playingSound.bus == Bus::Bgm
+                              ? bgmGain
+                              : playingSound.bus == Bus::Keysound
+                                    ? keysoundGain
+                                    : 1.0F;
+    const float gain = kMixHeadroom * busGain * playingSound.gain;
+    const std::uint64_t loopLengthQ32 =
+        frameToQ32(soundData->outputFrameCount);
 
     std::uint64_t positionQ32 = playingSound.sourceFrameQ32;
     bool finished = false;
     for (size_t frame = 0; frame < frameCount - outputOffsetFrames; ++frame) {
+      if (playingSound.loop && positionQ32 >= loopLengthQ32) {
+        positionQ32 %= loopLengthQ32;
+      }
       const size_t leftFrame = static_cast<size_t>(positionQ32 >> 32);
       if (leftFrame >= soundData->outputFrameCount) {
         finished = true;
@@ -753,8 +916,12 @@ void MixActiveSounds(AudioCallbackState &state, std::span<float> mixBuffer,
       positionQ32 += rateIncrement;
       if (static_cast<size_t>(positionQ32 >> 32) >=
           soundData->outputFrameCount) {
-        finished = true;
-        break;
+        if (playingSound.loop) {
+          positionQ32 %= loopLengthQ32;
+        } else {
+          finished = true;
+          break;
+        }
       }
     }
 

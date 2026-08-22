@@ -15,3 +15,7 @@
 [submodule "yoga"]
 	path = yoga
 	url = https://github.com/facebook/yoga.git
+[submodule "third_party/pcre2"]
+	path = third_party/pcre2
+	url = https://github.com/PCRE2Project/pcre2.git
+	shallow = true

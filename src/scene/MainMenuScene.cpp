@@ -5637,12 +5637,31 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
       normalizedPlayOption.empty() || normalizedPlayOption == "NORMAL";
   const SelectedChartRandomInfo chartRandomInfo =
       selectedChartRandomInfoForPath(record.meta.BmsPath);
+  std::string tableName;
+  std::string tableLevel;
+  if ((activeFolder.type == LibraryFolderItem::Type::DifficultyTable ||
+       activeFolder.type == LibraryFolderItem::Type::DifficultyLevel ||
+       activeFolder.type == LibraryFolderItem::Type::DifficultyClearMark) &&
+      activeFolder.tableId > 0) {
+    const auto table = std::ranges::find_if(
+        folderMetadataCache.tables, [this](const DifficultyTableInfo &item) {
+          return item.id == activeFolder.tableId;
+        });
+    if (table != folderMetadataCache.tables.end()) {
+      tableName = table->name;
+      if (!activeFolder.tableLevel.empty()) {
+        // TableDataAccessor builds HashBar titles as TableData.tag + level.
+        tableLevel = table->symbol + activeFolder.tableLevel;
+      }
+    }
+  }
 
   defer(
       [this, record, gaugeType, gaugeAutoShift, gaugeAutoShiftLowerBound,
        ruleset, autoKeySound, playOption, selectedLongNoteMode, assistOption,
        pacemakerTarget, playback,
-       canReusePreviewForStart, chartRandomInfo]() {
+       canReusePreviewForStart, chartRandomInfo, tableName = std::move(tableName),
+       tableLevel = std::move(tableLevel)]() {
         auto finishStart = [this]() {
           resetStartLoadingUi();
           return true;
@@ -5678,6 +5697,8 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
                                     .longNoteMode = selectedLongNoteMode,
                                     .assistOption = assistOption,
                                     .pacemakerTarget = pacemakerTarget,
+                                    .tableName = tableName,
+                                    .tableLevel = tableLevel,
                                     .playback = playback,
                                     .ruleset = ruleset,
                                 });
@@ -5733,6 +5754,8 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
                                       .longNoteMode = selectedLongNoteMode,
                                       .assistOption = assistOption,
                                       .pacemakerTarget = pacemakerTarget,
+                                      .tableName = tableName,
+                                      .tableLevel = tableLevel,
                                       .playback = playback,
                                       .ruleset = ruleset,
                                   });
@@ -5758,6 +5781,8 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
                                          .longNoteMode = selectedLongNoteMode,
                                          .assistOption = assistOption,
                                          .pacemakerTarget = pacemakerTarget,
+                                         .tableName = tableName,
+                                         .tableLevel = tableLevel,
                                          .playback = playback,
                                          .ruleset = ruleset,
                                      });
@@ -10276,9 +10301,11 @@ void MainMenuScene::startModernGBattlePlayback(
 
           struct Completion {
             replay::ChartReplayConsumerOutcome loaded;
+            result_persistence::ChartScoreWrite targetScore;
           };
           auto completion = std::make_shared<Completion>(
-              Completion{.loaded = std::move(loaded)});
+              Completion{.loaded = std::move(loaded),
+                         .targetScore = modern.result.score});
           queueReplayLoadCompletion(
               [this, completion, gaugeType, gaugeAutoShift,
                gaugeAutoShiftLowerBound, autoKeySound, ruleset,
@@ -10309,6 +10336,7 @@ void MainMenuScene::startModernGBattlePlayback(
                                .gaugeAutoShiftLowerBound =
                                    gaugeAutoShiftLowerBound,
                                .gbattleRecordData = recordData,
+                               .targetScore = completion->targetScore,
                                .playOption = recordData->playOption,
                                .playOptionSeed = recordData->playOptionSeed,
                                .playOption2 = recordData->playOption2,
@@ -10931,6 +10959,9 @@ void MainMenuScene::startAutoPlayVideoExport(
           autoPlayAssistOption, autoPlayClubMode,
           autoPlayGaugeAutoShiftLowerBound, autoPlayRuleset);
       ReplayVideoExportOptions exportOptions = options;
+      if (stopToken != nullptr) {
+        exportOptions.stop = *stopToken;
+      }
       exportOptions.renderTouchPoints = false;
       exportOptions.renderReplayGhosts = false;
       exportOptions.pacemakerTarget = pacemaker::kTargetOff;
@@ -11018,8 +11049,12 @@ void MainMenuScene::startModernReplayVideoExport(
         return;
       }
 
+      ReplayVideoExportOptions exportOptions = options;
+      if (stopToken != nullptr) {
+        exportOptions.stop = *stopToken;
+      }
       complete(ReplayVideoExporter::Export(
-          context, loaded.chart.get(), *loaded.replayData, options));
+          context, loaded.chart.get(), *loaded.replayData, exportOptions));
     } catch (const std::exception &e) {
       complete({.success = false, .message = e.what()});
     } catch (...) {
@@ -11107,8 +11142,12 @@ void MainMenuScene::startModernCourseReplayVideoExport(
         complete({.success = false, .message = "Replay export cancelled"});
         return;
       }
+      ReplayVideoExportOptions exportOptions = options;
+      if (stopToken != nullptr) {
+        exportOptions.stop = *stopToken;
+      }
       complete(ReplayVideoExporter::ExportCourseReplay(
-          context, std::move(loaded), options));
+          context, std::move(loaded), exportOptions));
     } catch (const std::exception &e) {
       complete({.success = false, .message = e.what()});
     } catch (...) {

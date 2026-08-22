@@ -115,6 +115,68 @@ void readEnum(const json &document, std::string_view key, Enum &destination,
   }
 }
 
+void readBoundedSkinString(const json &document, std::string_view key,
+                           std::string &destination,
+                           std::vector<std::string> &diagnostics) {
+  const auto found = document.find(std::string(key));
+  if (found == document.end()) {
+    return;
+  }
+  if (!found->is_string()) {
+    invalidValue(key, "expected string", diagnostics);
+    return;
+  }
+  const auto &value = found->get_ref<const std::string &>();
+  if (value.size() > AppSettings::kMaximumSkinPropertyStringBytes) {
+    invalidValue(key, "string exceeds skin property byte limit", diagnostics);
+    return;
+  }
+  destination = value;
+}
+
+void readBoundedSkinTargetList(const json &document,
+                               std::vector<std::string> &destination,
+                               std::vector<std::string> &diagnostics) {
+  constexpr std::string_view key = "skinTargetList";
+  const auto found = document.find(std::string(key));
+  if (found == document.end()) {
+    return;
+  }
+  if (!found->is_array()) {
+    invalidValue(key, "expected array", diagnostics);
+    return;
+  }
+  std::vector<std::string> bounded;
+  bounded.reserve(std::min(found->size(),
+                           AppSettings::kMaximumSkinTargetListEntries));
+  std::size_t index = 0;
+  std::size_t bytes = 0;
+  for (const auto &encoded : *found) {
+    if (index >= AppSettings::kMaximumSkinTargetListEntries) {
+      invalidValue(key, "array exceeds skin target count limit", diagnostics);
+      break;
+    }
+    if (!encoded.is_string()) {
+      invalidValue(key, "array contains a non-string value", diagnostics);
+    } else {
+      const auto &value = encoded.get_ref<const std::string &>();
+      if (value.size() > AppSettings::kMaximumSkinPropertyStringBytes) {
+        invalidValue(key, "target exceeds skin property byte limit",
+                     diagnostics);
+      } else if (value.size() >
+                 AppSettings::kMaximumSkinTargetListBytes - bytes) {
+        invalidValue(key, "array exceeds skin target byte limit", diagnostics);
+        break;
+      } else {
+        bytes += value.size();
+        bounded.push_back(value);
+      }
+    }
+    ++index;
+  }
+  destination = std::move(bounded);
+}
+
 const char *viewportModeToString(skin::ViewportMode mode) {
   switch (mode) {
   case skin::ViewportMode::Fit:
@@ -444,7 +506,23 @@ json settingsToJson(const AppSettings &settings) {
       {"prepMetronomeEnabled", settings.prepMetronomeEnabled},
       {"startLaneIndicatorsEnabled", settings.startLaneIndicatorsEnabled},
       {"showInvisibleNotes", settings.showInvisibleNotes},
+      {"showPastNotes", settings.showPastNotes},
       {"markProcessedNotes", settings.markProcessedNotes},
+      {"customJudge", settings.customJudge},
+      {"showJudgeArea", settings.showJudgeArea},
+      {"notesDisplayTimingAutoAdjust", settings.notesDisplayTimingAutoAdjust},
+      {"notesDisplayTimingMilliseconds",
+       settings.notesDisplayTimingMilliseconds},
+      {"autoSaveReplay", settings.autoSaveReplay},
+      {"guideSoundEffects", settings.guideSoundEffects},
+      {"extraNoteDepth", settings.extraNoteDepth},
+      {"mineMode", settings.mineMode},
+      {"scrollMode", settings.scrollMode},
+      {"longNoteModifierMode", settings.longNoteModifierMode},
+      {"sevenToNinePattern", settings.sevenToNinePattern},
+      {"sevenToNineType", settings.sevenToNineType},
+      {"constantScroll", settings.constantScroll},
+      {"constantFadeInMilliseconds", settings.constantFadeInMilliseconds},
       {"touchVisualizationEnabled", settings.touchVisualizationEnabled},
       {"archiveChartPreviewEnabled", settings.archiveChartPreviewEnabled},
       {"findBmsSkipUnarchivingForNonSolidArchives",
@@ -458,6 +536,10 @@ json settingsToJson(const AppSettings &settings) {
       {"laneBeamLengthPercent", settings.laneBeamLengthPercent},
       {"noteStartPositionPercent", settings.noteStartPositionPercent},
       {"laneCoverEnabled", settings.laneCoverEnabled},
+      {"liftEnabled", settings.liftEnabled},
+      {"liftRatio", settings.liftRatio},
+      {"hiddenEnabled", settings.hiddenEnabled},
+      {"hiddenRatio", settings.hiddenRatio},
       {"hispeedAutoAdjust", settings.hispeedAutoAdjust},
       {"playAreaWidth4K", settings.playAreaWidth4K},
       {"playAreaWidth5K", settings.playAreaWidth5K},
@@ -502,6 +584,12 @@ json settingsToJson(const AppSettings &settings) {
       {"selectedLnMode", settings.selectedLnMode},
       {"selectedAssistOption", settings.selectedAssistOption},
       {"selectedPacemakerTarget", settings.selectedPacemakerTarget},
+      {"skinModeFilterName", settings.skinModeFilterName},
+      {"skinSortId", settings.skinSortId},
+      {"skinDifficultyFilterName", settings.skinDifficultyFilterName},
+      {"skinChartReplicationMode", settings.skinChartReplicationMode},
+      {"skinTargetId", settings.skinTargetId},
+      {"skinTargetList", settings.skinTargetList},
       {"selectedPlaybackRatePercent", settings.selectedPlaybackRatePercent},
       {"selectedPlaybackMode", static_cast<int>(settings.selectedPlaybackMode)},
       {"defaultDifficultyTablesSeeded", settings.defaultDifficultyTablesSeeded},
@@ -567,8 +655,33 @@ AppSettings settingsFromJson(const json &document,
             settings.startLaneIndicatorsEnabled, diagnostics);
   readValue(document, "showInvisibleNotes", settings.showInvisibleNotes,
             diagnostics);
+  readValue(document, "showPastNotes", settings.showPastNotes, diagnostics);
   readValue(document, "markProcessedNotes", settings.markProcessedNotes,
             diagnostics);
+  readValue(document, "customJudge", settings.customJudge, diagnostics);
+  readValue(document, "showJudgeArea", settings.showJudgeArea, diagnostics);
+  readValue(document, "notesDisplayTimingAutoAdjust",
+            settings.notesDisplayTimingAutoAdjust, diagnostics);
+  readValue(document, "notesDisplayTimingMilliseconds",
+            settings.notesDisplayTimingMilliseconds, diagnostics);
+  readValue(document, "autoSaveReplay", settings.autoSaveReplay,
+            diagnostics);
+  readValue(document, "guideSoundEffects", settings.guideSoundEffects,
+            diagnostics);
+  readValue(document, "extraNoteDepth", settings.extraNoteDepth,
+            diagnostics);
+  readValue(document, "mineMode", settings.mineMode, diagnostics);
+  readValue(document, "scrollMode", settings.scrollMode, diagnostics);
+  readValue(document, "longNoteModifierMode", settings.longNoteModifierMode,
+            diagnostics);
+  readValue(document, "sevenToNinePattern", settings.sevenToNinePattern,
+            diagnostics);
+  readValue(document, "sevenToNineType", settings.sevenToNineType,
+            diagnostics);
+  readValue(document, "constantScroll", settings.constantScroll,
+            diagnostics);
+  readValue(document, "constantFadeInMilliseconds",
+            settings.constantFadeInMilliseconds, diagnostics);
   readValue(document, "touchVisualizationEnabled",
             settings.touchVisualizationEnabled, diagnostics);
   readValue(document, "archiveChartPreviewEnabled",
@@ -589,6 +702,10 @@ AppSettings settingsFromJson(const json &document,
             settings.noteStartPositionPercent, diagnostics);
   readValue(document, "laneCoverEnabled", settings.laneCoverEnabled,
             diagnostics);
+  readValue(document, "liftEnabled", settings.liftEnabled, diagnostics);
+  readValue(document, "liftRatio", settings.liftRatio, diagnostics);
+  readValue(document, "hiddenEnabled", settings.hiddenEnabled, diagnostics);
+  readValue(document, "hiddenRatio", settings.hiddenRatio, diagnostics);
   readValue(document, "hispeedAutoAdjust", settings.hispeedAutoAdjust,
             diagnostics);
   readValue(document, "playAreaWidth4K", settings.playAreaWidth4K, diagnostics);
@@ -661,6 +778,17 @@ AppSettings settingsFromJson(const json &document,
             diagnostics);
   readValue(document, "selectedPacemakerTarget",
             settings.selectedPacemakerTarget, diagnostics);
+  readBoundedSkinString(document, "skinModeFilterName",
+                        settings.skinModeFilterName, diagnostics);
+  readBoundedSkinString(document, "skinSortId", settings.skinSortId,
+                        diagnostics);
+  readBoundedSkinString(document, "skinDifficultyFilterName",
+                        settings.skinDifficultyFilterName, diagnostics);
+  readBoundedSkinString(document, "skinChartReplicationMode",
+                        settings.skinChartReplicationMode, diagnostics);
+  readBoundedSkinString(document, "skinTargetId", settings.skinTargetId,
+                        diagnostics);
+  readBoundedSkinTargetList(document, settings.skinTargetList, diagnostics);
   readValue(document, "selectedPlaybackRatePercent",
             settings.selectedPlaybackRatePercent, diagnostics);
   readEnum(document, "selectedPlaybackMode", settings.selectedPlaybackMode,

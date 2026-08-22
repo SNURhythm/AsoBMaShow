@@ -16,6 +16,11 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
     def setUpClass(cls):
         cls.cmake = read("CMakeLists.txt")
         cls.src_cmake = read("src/CMakeLists.txt")
+        cls.skin_cmake = read("src/skin/CMakeLists.txt")
+        cls.gitmodules = read(".gitmodules")
+        cls.xcode_project = read(
+            "ios/Xcode/AsoBMaShow/AsoBMaShow.xcodeproj/project.pbxproj"
+        )
         cls.info_plist = read("Info.plist")
         cls.macos_init = read("scripts/macos_init.sh")
         cls.macos_workflow = read(".github/workflows/macos-build.yml")
@@ -43,6 +48,14 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
         )
         self.assertIn("<string>@PROJECT_VERSION@</string>", self.info_plist)
         self.assertIn("findProperty('androidVersionName') ?: '0.0.1'", self.android_gradle)
+        self.assertIn(
+            '"-DASOBMASHOW_APPLICATION_VERSION=${androidVersionNameText}"',
+            self.android_gradle,
+        )
+        self.assertIn(
+            'ASOBMASHOW_APPLICATION_VERSION "${PROJECT_VERSION}" CACHE STRING',
+            self.cmake,
+        )
         self.assertIn('export ANDROID_VERSION_NAME="0.0.1"', self.android_deploy)
         self.assertNotIn('ANDROID_VERSION_NAME="1.0.${ANDROID_VERSION_CODE}"', self.android_deploy)
 
@@ -56,6 +69,40 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
         android_job = self.mobile_workflow.split("  android-firebase:", 1)[1]
         self.assertIn("group: android-firebase-distribution", android_job)
         self.assertIn("cancel-in-progress: false", android_job)
+
+    def test_android_enables_libcxx_stop_token_support(self):
+        android_target = self.cmake.split(
+            "target_sources(main PRIVATE "
+            "$<TARGET_OBJECTS:asobmashow_build_identity>)",
+            1,
+        )[1].split(
+            "target_compile_definitions(main PRIVATE\n"
+            "    ASOBMASHOW_ENABLE_PERF_TELEMETRY",
+            1,
+        )[0]
+        self.assertIn("_LIBCPP_ENABLE_EXPERIMENTAL", android_target)
+
+    def test_java_pattern_backend_is_repo_owned_on_cmake_platforms_and_foundation_on_ios(self):
+        self.assertIn('[submodule "third_party/pcre2"]', self.gitmodules)
+        self.assertIn(
+            "url = https://github.com/PCRE2Project/pcre2.git", self.gitmodules
+        )
+        self.assertIn("if(NOT IOS)", self.cmake)
+        self.assertIn(
+            "add_subdirectory(third_party/pcre2 EXCLUDE_FROM_ALL)", self.cmake
+        )
+        self.assertIn(
+            "target_link_libraries(${target_name} PRIVATE pcre2-8-static)",
+            self.cmake,
+        )
+        self.assertIn("LuaSkinJavaPatternPcre2.cpp", self.cmake)
+        self.assertIn("LuaSkinJavaPatternFoundation.mm", self.cmake)
+        self.assertIn("asobmashow_enable_lua_skin_java_pattern(main)", self.skin_cmake)
+        self.assertIn("PBXFileSystemSynchronizedRootGroup", self.xcode_project)
+        self.assertNotIn(
+            "skin/beatoraja/LuaSkinJavaPatternFoundation.mm,",
+            self.xcode_project.split("membershipExceptions = (", 1)[1].split(")", 1)[0],
+        )
 
     def test_android_launcher_uses_the_approved_application_icon(self):
         self.assertIn('android:icon="@mipmap/ic_launcher"', self.android_manifest)
@@ -148,6 +195,33 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
         ):
             self.assertIn(token, diagnostics)
         self.assertIn("MsvcCliDiagnostics.cpp", self.src_cmake)
+
+    def test_play_skin_session_archive_target_links_windows_system_libraries(self):
+        session_target = self.cmake.split(
+            "add_executable(play_skin_session_tests", 1
+        )[1].split("add_executable(playfield_presentation_coordinator_tests", 1)[0]
+        self.assertIn("src/ArchiveFile.cpp", session_target)
+        windows_link = re.search(
+            r"if\(WIN32\)\s*"
+            r"target_link_libraries\(play_skin_session_tests PRIVATE"
+            r"(?P<libraries>.*?)\)\s*else\(\)",
+            session_target,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(windows_link)
+        for library in ("shell32", "ole32"):
+            self.assertRegex(windows_link.group("libraries"), rf"\b{library}\b")
+
+    def test_play_skin_session_archive_target_stages_sevenzip_on_windows(self):
+        staging_function = self.cmake.split(
+            "function(asobmashow_stage_sevenzip_runtime target_name)", 1
+        )[1].split("endfunction()", 1)[0]
+        self.assertIn("if(WIN32)", staging_function)
+        self.assertIn("$<TARGET_FILE:7zip::7zip>", staging_function)
+        archive_targets = self.cmake.split(
+            "foreach(archive_file_target IN ITEMS", 1
+        )[1].split(")", 1)[0]
+        self.assertRegex(archive_targets, r"\bplay_skin_session_tests\b")
 
     def test_release_test_binaries_keep_assertion_based_fixture_setup(self):
         register_function = self.cmake.split(

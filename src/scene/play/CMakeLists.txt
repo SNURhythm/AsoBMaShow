@@ -13,6 +13,7 @@ target_sources(main PRIVATE GamePlayScene.cpp BMSRenderer.cpp
                             GameplayCandidateRules.cpp
                             CompiledGameplayJudge.cpp GameplayDefinition.cpp
                             GameplaySimulation.cpp
+                            SkinGameplayGraphState.cpp
                             RealtimeGameplayAuthorityPolicy.cpp
                             RealtimeGameplayInputBridge.cpp
                             RealtimeGameplayWorker.cpp

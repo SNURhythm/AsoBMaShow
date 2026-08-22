@@ -5,6 +5,7 @@
 #include "../../VersionedJson.h"
 #include "../../targets.h"
 #include "../GameplaySkinTraits.h"
+#include "../beatoraja/GameplaySkinSourceFormat.h"
 #include "SkinPathPolicy.h"
 
 #include <algorithm>
@@ -2248,12 +2249,12 @@ discoverEntries(SkinRevisionReadView view, std::stop_token stop,
       continue;
     }
     const fs::path relative = iterator->path().lexically_relative(view.root());
-    if (relative.extension() != ".luaskin") {
-      continue;
-    }
     const auto utf8 = relative.generic_u8string();
     const std::string path(reinterpret_cast<const char *>(utf8.data()),
                            utf8.size());
+    if (!gameplaySkinSourceFormatForPath(path)) {
+      continue;
+    }
     auto normalized = normalizeEntryPath(view.revision().package, path);
     if (!normalized.entry) {
       diagnostics.push_back(storeDiagnostic(

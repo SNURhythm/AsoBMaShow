@@ -10,6 +10,8 @@
 #include <algorithm>
 #include <cstddef>
 #include <functional>
+#include <optional>
+#include <string_view>
 #include <system_error>
 #include <thread>
 #include <utility>
@@ -57,6 +59,8 @@ void parallel_for_each_index(size_t n, Func &&func) {
 }
 
 std::string ws2s_utf8(const std::wstring &wstr);
+[[nodiscard]] std::optional<std::string>
+cp932_to_utf8(std::string_view value);
 
 class Utils {
 public:

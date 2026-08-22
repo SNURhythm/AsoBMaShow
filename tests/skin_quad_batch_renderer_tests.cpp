@@ -5,9 +5,10 @@
 #include "skin/beatoraja/Skin2DRenderer.h"
 #include "view/View.h"
 
-// This target deliberately compiles the narrow production adapter directly:
-// Task 19 keeps build-system edits out of scope while exercising the actual
-// two-phase integration rather than a test copy of its orchestration.
+// This target deliberately compiles the narrow production adapter directly
+// and links the frame-only movie catalog unit. That exercises the actual
+// two-phase integration without pulling preparation-time filesystem code into
+// this renderer test.
 #include "skin/beatoraja/Skin2DRendererSubmit.cpp"
 
 #include <array>
@@ -77,8 +78,34 @@ struct FakeResources final : skin::SkinPreparedResourceView {
     return nullptr;
   }
 
+  const skin::PreparedSkinGeneratedTexture *prepareGeneratedTexture(
+      const skin::SkinGeneratedTextureKey &key,
+      const skin::SkinGeneratedTextureData &data) const noexcept override {
+    ++generatedPreflights;
+    if (data.width <= 0 || data.height <= 0 || data.rgba == nullptr ||
+        data.rgba->size() !=
+            static_cast<std::size_t>(data.width * data.height * 4)) {
+      return nullptr;
+    }
+    auto [found, inserted] = generated.emplace(
+        key, skin::PreparedSkinGeneratedTexture{
+                 .key = key,
+                 .texture = bgfx::TextureHandle{777},
+                 .width = data.width,
+                 .height = data.height});
+    if (!inserted && (found->second.width != data.width ||
+                      found->second.height != data.height)) {
+      return nullptr;
+    }
+    return &found->second;
+  }
+
   std::map<skin::SkinResourceId, skin::PreparedSkinResource> images;
   std::map<skin::SkinTextAtlasId, skin::PreparedSkinTextAtlas> atlases;
+  mutable std::map<skin::SkinGeneratedTextureKey,
+                   skin::PreparedSkinGeneratedTexture>
+      generated;
+  mutable int generatedPreflights = 0;
 };
 
 struct CapturedBatch {
@@ -93,6 +120,8 @@ struct CapturedBatch {
   std::uint64_t bgfxState = 0;
   std::uint32_t samplerFlags = 0;
   bool textured = false;
+  rendering::SkinBatchProgram program = rendering::SkinBatchProgram::Primitive;
+  std::optional<skin::SkinRenderState::DistanceField> distanceField;
 };
 
 struct FakeBackend final : rendering::SkinQuadBatchBackend {
@@ -143,6 +172,8 @@ struct FakeBackend final : rendering::SkinQuadBatchBackend {
     captured.bgfxState = batch.bgfxState;
     captured.samplerFlags = batch.samplerFlags;
     captured.textured = batch.textured;
+    captured.program = batch.program;
+    captured.distanceField = batch.distanceField;
     batches.push_back(std::move(captured));
     if (submissionOrder != nullptr) {
       submissionOrder->push_back("quad:" + std::to_string(batch.texture.idx));
@@ -391,6 +422,134 @@ void testWholeBufferPreflightUsesExactCatalogIds() {
       "renderer never substitutes a different point-size atlas sharing a font");
 }
 
+void testDistanceFieldGlyphSubmissionSelectsProgramAndUniforms() {
+  auto prepared = resources();
+  auto &atlas = prepared.atlases.at(21);
+  atlas.bitmapFont = true;
+  atlas.bitmapFontType = 1;
+  atlas.originalSize = 20;
+  atlas.pageWidth = 128;
+  atlas.pageHeight = 64;
+  atlas.glyphs.at(U'A').bitmapFontType = 1;
+  atlas.glyphs.emplace(
+      U'V', skin::SkinPreparedGlyphMetrics{
+                .region = {.x = 8, .y = 0, .w = 8, .h = 12},
+                .bitmapFontType = 0});
+
+  skin::SkinGlyphRunCommand glyphs;
+  glyphs.atlas = 21;
+  glyphs.state = {
+      .blend = skin::SkinBlendMode::Normal,
+      .filter = skin::SkinFilterMode::Linear,
+      .distanceField = skin::SkinRenderState::DistanceField{
+          .colored = true,
+          .outlineDistance = 0.25,
+          .outlineRgba = {1, 2, 3, 4},
+          .shadowRgba = {5, 6, 7, 8},
+          .shadowSmoothing = 0.2,
+          .shadowOffsetU = 0.125,
+          .shadowOffsetV = -0.25}};
+  glyphs.glyphs.push_back({.codepoint = U'A',
+                           .vertices = quad(11, skin::SkinBlendMode::Normal,
+                                            skin::SkinFilterMode::Linear)
+                                           .vertices});
+  auto fallback = quad(11, skin::SkinBlendMode::Normal,
+                       skin::SkinFilterMode::Linear, std::nullopt, 20.0F)
+                      .vertices;
+  glyphs.glyphs.push_back({.codepoint = U'V', .vertices = fallback});
+  for (auto &vertex : fallback) {
+    vertex.rgba = 0x80ffffffU;
+  }
+  glyphs.fallbackColorOverlays.push_back(
+      {.codepoint = U'V', .vertices = fallback});
+
+  RenderContext context;
+  FakeBackend backend;
+  rendering::SkinQuadBatchRenderer renderer(backend);
+  const std::array commands{command(1, std::move(glyphs))};
+  renderer.begin(context, prepared);
+  expect(renderer.submit(commands),
+         "distance-field glyph state passes whole-span preflight");
+  renderer.flush();
+
+  const skin::SkinRenderState::DistanceField expected{
+      .colored = true,
+      .outlineDistance = 0.25,
+      .outlineRgba = {1, 2, 3, 4},
+      .shadowRgba = {5, 6, 7, 8},
+      .shadowSmoothing = 0.2,
+      .shadowOffsetU = 0.125,
+      .shadowOffsetV = -0.25};
+  expect(backend.batches.size() == 2 &&
+             backend.batches.front().program ==
+                 rendering::SkinBatchProgram::DistanceField &&
+             backend.batches.front().distanceField == expected &&
+             backend.batches.front().vertices.size() == 8 &&
+             backend.batches.back().program ==
+                 rendering::SkinBatchProgram::Textured &&
+             !backend.batches.back().distanceField &&
+             backend.batches.back().filter == skin::SkinFilterMode::Linear &&
+             backend.batches.back().vertices.size() == 4 &&
+             backend.batches.back().vertices.front().abgr == 0x80ffffffU,
+         "submission selects the distance-field program and forwards every "
+         "uploaded uniform value before the standard fallback's white "
+         "bilinear overlay");
+}
+
+void testGlyphSubmissionSplitsAdjacentBitmapPages() {
+  auto prepared = resources();
+  auto &atlas = prepared.atlases.at(21);
+  atlas.texture = BGFX_INVALID_HANDLE;
+  atlas.width = 8;
+  atlas.height = 8;
+  atlas.bitmapFont = true;
+  atlas.bitmapFontType = 0;
+  atlas.originalSize = 8;
+  atlas.pageWidth = 8;
+  atlas.pageHeight = 8;
+  atlas.pages = {{.texture = {.idx = 201},
+                  .width = 8,
+                  .height = 8,
+                  .bitmapFontType = 0,
+                  .available = true},
+                 {.texture = {.idx = 202},
+                  .width = 8,
+                  .height = 8,
+                  .bitmapFontType = 0,
+                  .available = true}};
+  atlas.glyphs.at(U'A').page = 0;
+  atlas.glyphs.emplace(
+      U'B', skin::SkinPreparedGlyphMetrics{
+                .region = {.x = 0, .y = 0, .w = 8, .h = 8},
+                .page = 1,
+                .bitmapFontType = 0});
+
+  skin::SkinGlyphRunCommand glyphs;
+  glyphs.atlas = 21;
+  glyphs.state = {.blend = skin::SkinBlendMode::Normal,
+                  .filter = skin::SkinFilterMode::Linear};
+  const auto vertices = quad(11, skin::SkinBlendMode::Normal,
+                             skin::SkinFilterMode::Linear)
+                            .vertices;
+  glyphs.glyphs = {{.codepoint = U'A', .vertices = vertices},
+                   {.codepoint = U'B', .vertices = vertices},
+                   {.codepoint = U'A', .vertices = vertices}};
+
+  RenderContext context;
+  FakeBackend backend;
+  rendering::SkinQuadBatchRenderer renderer(backend);
+  const std::array commands{command(1, std::move(glyphs))};
+  renderer.begin(context, prepared);
+  expect(renderer.submit(commands), "separate bitmap pages pass preflight");
+  renderer.flush();
+  expect(backend.batches.size() == 3 &&
+             backend.batches[0].texture.idx == 201 &&
+             backend.batches[1].texture.idx == 202 &&
+             backend.batches[2].texture.idx == 201,
+         "adjacent glyphs select their own page texture and split only when "
+         "that physical texture changes");
+}
+
 void testVerticesStatesScissorsAndSequentialFlushes() {
   auto prepared = resources();
   RenderContext context;
@@ -566,7 +725,8 @@ void testTwoPhaseSkinSubmissionPreservesMixedAuthoredOrder() {
                            skin::SkinFilterMode::Nearest)),
       }};
 
-  expect(skinRenderer.submit(buffer, prepared, context, quadRenderer, frame,
+  expect(skinRenderer.submit(buffer, prepared, context, quadRenderer,
+                             nullptr, skin::PlaySkinViewport{}, frame,
                              bgaSubmitter),
          "two-phase skin submission accepts mixed quad/BGA authored slots");
   expect(submissionOrder ==
@@ -660,7 +820,8 @@ void testCommittedSubmissionCannotReturnFallbackSignal() {
   };
 
   const bool submitted = skinRenderer.submit(
-      buffer, prepared, context, quadRenderer, frame, submitter);
+      buffer, prepared, context, quadRenderer, nullptr,
+      skin::PlaySkinViewport{}, frame, submitter);
 
   expect(submitted && invalidatedAfterFirstDraw && submitter.commitCalls == 1 &&
              submitter.finalizeCalls == 1 &&
@@ -682,7 +843,8 @@ void testBgaCompositionExpandsPlaceholdersAndMissingRolesExactly() {
     const skin::SkinCommandBuffer buffer{
         .frameSerial = 3, .commands = {command(77, bga(77))}};
     const bool submitted = skinRenderer.submit(
-        buffer, prepared, context, quadRenderer, frame, submitter);
+        buffer, prepared, context, quadRenderer, nullptr,
+        skin::PlaySkinViewport{}, frame, submitter);
     bool rolesMatch = submitter.preflightTargets.size() == expectedRoles.size();
     for (std::size_t index = 0;
          rolesMatch && index < expectedRoles.size(); ++index) {
@@ -766,7 +928,8 @@ void testTwoPhaseSubmissionFailuresAreZeroDrawAtomic() {
             command(3, quad(12, skin::SkinBlendMode::Normal,
                             skin::SkinFilterMode::Nearest)),
         }};
-    expect(skinRenderer.submit(buffer, prepared, context, quadRenderer, frame,
+    expect(skinRenderer.submit(buffer, prepared, context, quadRenderer,
+                               nullptr, skin::PlaySkinViewport{}, frame,
                                submitter) &&
                backend.reserveCalls == 1 && backend.batches.size() == 2 &&
                submitter.preflightCalls == 1 &&
@@ -791,7 +954,8 @@ void testTwoPhaseSubmissionFailuresAreZeroDrawAtomic() {
                             skin::SkinFilterMode::Nearest)),
             command(2, bga(2)),
         }};
-    expect(!skinRenderer.submit(buffer, prepared, context, quadRenderer, frame,
+    expect(!skinRenderer.submit(buffer, prepared, context, quadRenderer,
+                                nullptr, skin::PlaySkinViewport{}, frame,
                                 submitter) &&
                backend.reserveCalls == 0 && backend.batches.empty() &&
                submitter.preflightCalls == 1 &&
@@ -1010,10 +1174,49 @@ void testLargeStripsSplitWithoutUint16IndexCorruption() {
          "triangle-strip split repeats two vertices without index wrap");
 }
 
+void testGeneratedTextureCommandsMaterializeBeforeAtomicSubmission() {
+  FakeResources prepared;
+  RenderContext context;
+  FakeBackend backend;
+  rendering::SkinQuadBatchRenderer renderer(backend);
+
+  skin::SkinGeneratedTexturedQuadCommand generated;
+  generated.key = {.sourceObject = 9,
+                   .authoredOrdinal = 4,
+                   .layer = skin::SkinGeneratedTextureLayer::Shape};
+  generated.texture = {
+      .width = 2,
+      .height = 2,
+      .rgba = std::make_shared<const std::vector<std::uint8_t>>(
+          16U, 0xffU)};
+  generated.vertices = {{{.x = 1.0F, .y = 2.0F, .u = 0.0F, .v = 0.0F},
+                         {.x = 5.0F, .y = 2.0F, .u = 1.0F, .v = 0.0F},
+                         {.x = 5.0F, .y = 6.0F, .u = 1.0F, .v = 1.0F},
+                         {.x = 1.0F, .y = 6.0F, .u = 0.0F, .v = 1.0F}}};
+  generated.state = {.blend = skin::SkinBlendMode::Additive,
+                     .filter = skin::SkinFilterMode::Linear};
+  const std::array commands{command(4, std::move(generated))};
+
+  renderer.begin(context, prepared);
+  expect(renderer.submit(commands),
+         "generated texture command passes whole-span preflight");
+  renderer.flush();
+  expect(prepared.generatedPreflights == 1 && backend.reserveCalls == 1 &&
+             backend.batches.size() == 1 && backend.batches[0].textured &&
+             backend.batches[0].texture.idx == 777 &&
+             backend.batches[0].blend == skin::SkinBlendMode::Additive &&
+             backend.batches[0].filter == skin::SkinFilterMode::Linear &&
+             backend.batches[0].vertices.size() == 4,
+         "generated pixels materialize before reserve and submit as one "
+         "ordinary textured quad");
+}
+
 } // namespace
 
 int main() {
   testWholeBufferPreflightUsesExactCatalogIds();
+  testDistanceFieldGlyphSubmissionSelectsProgramAndUniforms();
+  testGlyphSubmissionSplitsAdjacentBitmapPages();
   testVerticesStatesScissorsAndSequentialFlushes();
   testExactBackendStateMapping();
   testPrimitiveTopologyAndBgaRequiresFallbackUntilIntegrated();
@@ -1029,6 +1232,7 @@ int main() {
   testVertexLayoutRegistrationRetainsAndReleasesExactHandles();
   testInvalidLaterSamplerPreventsEveryBackendSubmission();
   testLargeStripsSplitWithoutUint16IndexCorruption();
+  testGeneratedTextureCommandsMaterializeBeforeAtomicSubmission();
   if (failures != 0) {
     return 1;
   }

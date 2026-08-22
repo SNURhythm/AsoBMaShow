@@ -66,22 +66,21 @@ resultFor(const SkinObjectResolutionCandidate &candidate) {
     case Kind::Text:
     case Kind::Slider:
     case Kind::Graph:
-    case Kind::Gauge:
-    case Kind::Note:
-    case Kind::HiddenCover:
-    case Kind::LiftCover:
-    case Kind::Bga:
-    case Kind::Judge:
-      return false;
     case Kind::GaugeGraph:
     case Kind::JudgeGraph:
     case Kind::BpmGraph:
     case Kind::HitErrorVisualizer:
     case Kind::TimingVisualizer:
     case Kind::TimingDistributionGraph:
+    case Kind::Gauge:
+    case Kind::Note:
+    case Kind::HiddenCover:
+    case Kind::LiftCover:
     case Kind::Practice:
+    case Kind::Bga:
+    case Kind::Judge:
     case Kind::PmChara:
-      return true;
+      return false;
     }
     return true;
   }();

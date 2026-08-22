@@ -150,6 +150,14 @@ const char *gaugeTypeName(GaugeType value) {
     return "exhard";
   case GaugeType::Hazard:
     return "hazard";
+  // Grade gauges are a live Beatoraja practice-menu category selected from
+  // the chart key mode. The portable preset schema intentionally stores only
+  // Aso's six user-selectable gauges, so persist its established Normal
+  // fallback explicitly instead of relying on an incomplete enum switch.
+  case GaugeType::Grade:
+  case GaugeType::ExGrade:
+  case GaugeType::ExHardGrade:
+    return "normal";
   }
   return "normal";
 }

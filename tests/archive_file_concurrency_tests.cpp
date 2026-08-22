@@ -1,5 +1,6 @@
 #include "../src/ArchiveFile.h"
 #include "../src/ArchiveRAII.h"
+#include "../src/scene/play/GameplayBmsResourceAvailability.h"
 
 #include <archive_entry.h>
 
@@ -166,6 +167,69 @@ void testZipIndexPreservesFilenameBeyondEmbeddedStatBuffer() {
   assert(entries.front().path.generic_string() == entryPath);
 }
 
+bool waitForBmsResourceProbe(
+    const gameplay::BmsResourceImageAvailabilityProbe &probe) {
+  const auto deadline = std::chrono::steady_clock::now() + 2s;
+  while (!probe.complete() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::yield();
+  }
+  return probe.complete();
+}
+
+void testGameplayBmsResourceAvailabilityPublishesLoaderResult() {
+  TempDirectory temporary;
+  const auto chartPath = temporary.path() / "chart.bms";
+  const auto stageFilePath = temporary.path() / "stage.webp";
+  std::ofstream(chartPath) << "#TITLE probe\n";
+  std::ofstream(stageFilePath) << "not an encoded image";
+  bms_parser::ChartMeta meta;
+  meta.BmsPath = chartPath;
+
+  const auto exists = [](const std::filesystem::path &path, std::stop_token) {
+    return archive_file::exists(path);
+  };
+  gameplay::BmsResourceImageAvailabilityProbe existing;
+  existing.start(meta, "stage.webp", exists);
+  gameplay::BmsResourceImageAvailabilityProbe missing;
+  missing.start(meta, "missing.webp", exists);
+  std::atomic_bool emptyLoaderCalled{false};
+  gameplay::BmsResourceImageAvailabilityProbe empty;
+  empty.start(meta, {}, [&](const std::filesystem::path &, std::stop_token) {
+    emptyLoaderCalled.store(true, std::memory_order_release);
+    return true;
+  });
+
+  assert(waitForBmsResourceProbe(existing) && existing.available());
+  assert(waitForBmsResourceProbe(missing) && !missing.available());
+  assert(empty.complete() && !empty.available() &&
+         !emptyLoaderCalled.load(std::memory_order_acquire));
+}
+
+void testGameplayBmsResourceAvailabilityResolvesVirtualChartNeighbors() {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "charts.zip";
+  writeStoredZip(
+      archivePath,
+      {"folder/chart.bms", "folder/stage.webp", "folder/back.bmp"});
+  bms_parser::ChartMeta meta;
+  meta.BmsPath =
+      archive_file::makeVirtualPath(archivePath, "folder/chart.bms");
+
+  const auto exists = [](const std::filesystem::path &path, std::stop_token) {
+    return archive_file::exists(path);
+  };
+  gameplay::BmsResourceImageAvailabilityProbe stage;
+  stage.start(meta, "stage.webp", exists);
+  gameplay::BmsResourceImageAvailabilityProbe back;
+  back.start(meta, "back.bmp", exists);
+  gameplay::BmsResourceImageAvailabilityProbe missing;
+  missing.start(meta, "missing.png", exists);
+
+  assert(waitForBmsResourceProbe(stage) && stage.available());
+  assert(waitForBmsResourceProbe(back) && back.available());
+  assert(waitForBmsResourceProbe(missing) && !missing.available());
+}
+
 void testZipIndexRejectsEmbeddedNulInShortFilename() {
   TempDirectory temporary;
   const auto archivePath = temporary.path() / "nul-filename.zip";
@@ -242,6 +306,34 @@ void testBoundedReadRejectsOversizedIndexedEntryBeforeExtraction() {
       &error));
   assert(bytes.empty());
   assert(error.find("exceeds bounded read limit") != std::string::npos);
+}
+
+void testBoundedReadStreamsOrdinaryPlatformPathExactlyOnce() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "platform-resource.bin";
+  constexpr std::string_view payload = "0123456789";
+  std::ofstream(path, std::ios::binary)
+      .write(payload.data(), static_cast<std::streamsize>(payload.size()));
+
+  std::vector<unsigned char> bytes;
+  std::string error;
+  assert(archive_file::readFileBounded(path, bytes, payload.size(), &error));
+  assert(std::string_view(reinterpret_cast<const char *>(bytes.data()),
+                          bytes.size()) == payload);
+
+  bytes.assign(1, 0xff);
+  error.clear();
+  assert(!archive_file::readFileBounded(path, bytes, payload.size() - 1U,
+                                        &error));
+  assert(bytes.empty());
+  assert(error.find("exceeds bounded read limit") != std::string::npos);
+
+  std::stop_source stopped;
+  stopped.request_stop();
+  bytes.assign(1, 0xff);
+  assert(!archive_file::readFileBounded(path, bytes, payload.size(), nullptr,
+                                        stopped.get_token()));
+  assert(bytes.empty());
 }
 
 void testIndependentSevenZipCacheMissesOpenConcurrently() {
@@ -428,10 +520,13 @@ void testDebugLogRetainsNewestThousandLines() {
 int main() {
   testZipIndexAmortizesPausePolling();
   testZipIndexPreservesFilenameBeyondEmbeddedStatBuffer();
+  testGameplayBmsResourceAvailabilityPublishesLoaderResult();
+  testGameplayBmsResourceAvailabilityResolvesVirtualChartNeighbors();
   testZipIndexRejectsEmbeddedNulInShortFilename();
   testZipIndexPausePollingStillCancelsDuringLargeDirectory();
   testZipIndexUsesCommonSystemEntryFilter();
   testBoundedReadRejectsOversizedIndexedEntryBeforeExtraction();
+  testBoundedReadStreamsOrdinaryPlatformPathExactlyOnce();
   testIndependentSevenZipCacheMissesOpenConcurrently();
   testSevenZipReadUsesCurrentOperationPauseCallback();
   testEncodedHeaderSevenZipUsesSdk();

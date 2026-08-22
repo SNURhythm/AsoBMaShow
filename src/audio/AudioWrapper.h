@@ -13,8 +13,11 @@
 #include <mutex>
 #include <atomic>
 #include <cmath>
+#include <compare>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <stop_token>
 #include <unordered_map>
 
 // Simple Biquad Filter
@@ -115,6 +118,17 @@ class AudioWrapper;
 
 namespace audio {
 
+struct SkinSoundHandle {
+  std::uint64_t value = 0;
+  [[nodiscard]] explicit operator bool() const noexcept { return value != 0; }
+  auto operator<=>(const SkinSoundHandle &) const = default;
+};
+
+struct SkinSoundLoadResult {
+  std::optional<SkinSoundHandle> handle;
+  std::size_t decodedBytes = 0;
+};
+
 class RealtimeSoundHandle {
 public:
   [[nodiscard]] bool valid() const noexcept { return soundData_ != nullptr; }
@@ -148,6 +162,19 @@ public:
                      std::atomic<bool> &isCancelled);
   bool playSound(const path_t &path, audio::Bus bus,
                  long long startOffsetMicros = 0);
+  [[nodiscard]] audio::SkinSoundLoadResult
+  loadSkinSound(const path_t &path, std::atomic<bool> &isCancelled,
+                std::size_t maximumEncodedBytes,
+                std::size_t maximumTotalDecodedBytes,
+                std::stop_token stop = {}) noexcept;
+  bool playSkinSound(audio::SkinSoundHandle handle, float gain,
+                     bool loop) noexcept;
+  bool stopSkinSound(audio::SkinSoundHandle handle) noexcept;
+  bool disposeSkinSound(audio::SkinSoundHandle handle) noexcept;
+  bool retireSkinSoundForTeardown(audio::SkinSoundHandle handle) noexcept;
+  bool playSkinSound(const path_t &path, float gain, bool loop);
+  audio::playback::BackendOperationResult stopSkinSound(const path_t &path);
+  audio::playback::BackendOperationResult disposeSkinSound(const path_t &path);
   bool scheduleSound(const path_t &path, audio::Bus bus, long long startMicros);
   bool stageScheduledSound(const path_t &path, audio::Bus bus,
                            long long startMicros);
@@ -203,6 +230,17 @@ private:
   std::mutex audioCommandMutex;
   std::unordered_map<path_t, size_t>
       soundDataIndexMap; // Map to store index of SoundData in soundDataList
+  struct SkinSoundRecord {
+    std::shared_ptr<SoundData> soundData;
+    std::size_t decodedBytes = 0;
+    std::uint64_t lastPlaySequence = 0;
+    std::uint64_t pendingStopSequence = 0;
+    std::uint64_t retirementSequence = 0;
+  };
+  std::unordered_map<std::uint64_t, SkinSoundRecord> skinSounds;
+  std::vector<SkinSoundRecord> retiredSkinSounds;
+  std::size_t skinSoundDecodedBytes = 0;
+  std::uint64_t nextSkinSoundHandle = 0;
   mutable std::mutex soundDataListMutex;
   std::vector<float> mixBuffer;
   Biquad bassFilter;
@@ -234,11 +272,15 @@ private:
   bool loadDecodedSound(const path_t &path, std::vector<short> pcmData,
                         int channels, int sampleRate,
                         std::atomic<bool> &isCancelled);
+  void cleanupRetiredSkinSoundsLocked() noexcept;
+  bool retireSkinSound(audio::SkinSoundHandle handle) noexcept;
   void initializeUserData();
   void startBackendAfterConstruction();
   audio::playback::BackendOperationResult
   startDeviceWithLifecycleAndSoundLocked();
   audio::playback::BackendOperationResult
   stopSoundsWithLifecycleAndCommandLocked();
+  audio::playback::BackendOperationResult
+  mutateSkinSound(const path_t &, bool dispose);
   void clearCallbackState();
 };

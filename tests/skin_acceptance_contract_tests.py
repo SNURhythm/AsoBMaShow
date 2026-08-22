@@ -18,6 +18,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = ROOT / "tests/fixtures/beatoraja_skin/reference_manifest.json"
 VERIFIER = ROOT / "scripts/run_skin_acceptance.py"
+MODERNCHIC_VERIFIER = ROOT / "scripts/verify_modernchic_gameplay_skin.py"
+SCURO_TRACE = ROOT / "tests/fixtures/beatoraja_skin/traces/gameplay_objects_pinned_v1.json"
 PINNED_COMMIT = "c2ed5db1a46145ed10790c3872f717e95b59db9d"
 
 
@@ -62,6 +64,144 @@ class SkinAcceptanceContractTests(unittest.TestCase):
             stderr=subprocess.STDOUT,
             check=False,
         )
+
+    def modernchic_verifier(self):
+        self.assertTrue(
+            MODERNCHIC_VERIFIER.is_file(),
+            "the complete noncommitting ModernChic verifier must exist",
+        )
+        spec = importlib.util.spec_from_file_location(
+            "verify_modernchic_gameplay_skin", MODERNCHIC_VERIFIER
+        )
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        verifier = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = verifier
+        self.addCleanup(sys.modules.pop, spec.name, None)
+        spec.loader.exec_module(verifier)
+        return verifier
+
+    @staticmethod
+    def passing_modernchic_session_report() -> dict:
+        return {
+            "schemaVersion": 1,
+            "entryIdentity": "entry-d5399e62255ddbda273e7a63",
+            "sessionPublished": True,
+            "graphFamilies": {
+                name: {"declared": 1, "commands": 1}
+                for name in (
+                    "noteDistribution",
+                    "timingVisualizer",
+                    "bpmGraph",
+                    "hitErrorVisualizer",
+                )
+            },
+            "resourcePreparation": {
+                "complete": True,
+                "allReferencedResourcesPrepared": True,
+                "imageDecodes": 4,
+                "fontDecodes": 1,
+                "movieDecodes": 0,
+                "audioDecodes": 0,
+                "textureUploads": 5,
+            },
+            "callbackBudget": {
+                "frameBudgetMicros": 6_000,
+                "framesEvaluated": 3,
+                "maximumFrameWallMicros": 5_000,
+                "violationDiagnostics": [],
+            },
+            "unsupportedDiagnostics": [],
+            "unsupportedSubjects": [],
+            "diagnosticCodes": [],
+            "loading": {
+                "complete": True,
+                "totalMicros": 123_456,
+                "measuredMicros": 123_500,
+            },
+        }
+
+    def test_modernchic_verifier_requires_every_runtime_acceptance_fact(self):
+        verifier = self.modernchic_verifier()
+        trace = json.loads(SCURO_TRACE.read_text(encoding="utf-8"))
+        passing = self.passing_modernchic_session_report()
+        verifier.validate_session_report(
+            passing, trace, "entry-d5399e62255ddbda273e7a63"
+        )
+
+        mutations = (
+            lambda report: report["graphFamilies"].pop("bpmGraph"),
+            lambda report: report["graphFamilies"]["timingVisualizer"].update(commands=0),
+            lambda report: report["resourcePreparation"].update(
+                allReferencedResourcesPrepared=False
+            ),
+            lambda report: report["callbackBudget"]["violationDiagnostics"].append(
+                "skin_lua_wall_time_limit_exceeded"
+            ),
+            lambda report: report["diagnosticCodes"].append(
+                "skin_lua_execution_failed"
+            ),
+            lambda report: report["unsupportedDiagnostics"].append(
+                "skin.renderer.unsupported"
+            ),
+            lambda report: report["loading"].update(complete=False),
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                malformed = json.loads(json.dumps(passing))
+                mutation(malformed)
+                with self.assertRaises(verifier.VerificationError):
+                    verifier.validate_session_report(
+                        malformed, trace, "entry-d5399e62255ddbda273e7a63"
+                    )
+
+    def test_modernchic_verifier_requires_four_entries_and_three_runtime_modes(self):
+        verifier = self.modernchic_verifier()
+        trace = json.loads(SCURO_TRACE.read_text(encoding="utf-8"))
+        entries = [
+            {"path": f"play{keys}_hw.luaskin", "keys": keys,
+             "identity": f"entry-{keys}"}
+            for keys in (5, 7, 10, 14)
+        ]
+        matrix = []
+        for entry in entries:
+            for mode in (1, 2, 3):
+                matrix.append({
+                    "entryIdentity": entry["identity"],
+                    "keys": entry["keys"],
+                    "lnMode": mode,
+                    "sessionPublished": True,
+                    "selectorIndex": mode - 1,
+                    "drawSlots": trace["longNoteOracle"]["drawSlots"][str(mode)],
+                    "referencedImageResourceIds": [1, 2],
+                    "preparedImageResourceIds": [1, 2],
+                    "referencedTextObjectIds": [3],
+                    "preparedTextObjectIds": [3],
+                    "unsupportedDiagnostics": [],
+                })
+        verifier.validate_runtime_matrix(matrix, entries, trace)
+        for mutation in (
+            lambda value: value.pop(),
+            lambda value: value[0].update(selectorIndex=2),
+            lambda value: value[0].update(preparedImageResourceIds=[1]),
+            lambda value: value[0]["drawSlots"].update(active=[9]),
+        ):
+            malformed = json.loads(json.dumps(matrix))
+            mutation(malformed)
+            with self.assertRaises(verifier.VerificationError):
+                verifier.validate_runtime_matrix(malformed, entries, trace)
+
+    def test_scuro_trace_pins_beatoraja_long_note_slots_not_a_cyclic_shift(self):
+        verifier = self.modernchic_verifier()
+        trace = json.loads(SCURO_TRACE.read_text(encoding="utf-8"))
+        verifier.validate_long_note_trace(trace)
+        shifted = json.loads(json.dumps(trace))
+        cases = shifted["longNoteOracle"]["undefinedByModelType"]
+        modes = [case["mode"] for case in cases]
+        for index, case in enumerate(cases):
+            case["mode"] = modes[(index + 1) % len(modes)]
+        with self.assertRaises(verifier.VerificationError):
+            verifier.validate_long_note_trace(shifted)
 
     def test_default_contract_validation_is_clone_and_device_independent(self):
         result = self.invoke("validate", "--contract", str(CONTRACT))

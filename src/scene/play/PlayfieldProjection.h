@@ -19,9 +19,11 @@ namespace gameplay_visible_time {
 // derived from the same configured Hi-Speed that determines note travel.
 [[nodiscard]] inline std::optional<int> currentDurationMilliseconds(
     double bpm, float configuredHispeed, int laneCoverPercent,
-    bool laneCoverEnabled, double scrollRate = 1.0) {
+    bool laneCoverEnabled, double scrollRate = 1.0,
+    double speedMultiplier = 1.0) {
   return gameplay_hispeed::liveDurationMilliseconds(
-      bpm, configuredHispeed, laneCoverPercent, laneCoverEnabled, scrollRate);
+      bpm, configuredHispeed, laneCoverPercent, laneCoverEnabled, scrollRate,
+      speedMultiplier);
 }
 
 [[nodiscard]] constexpr int durationToGreenNumber(int duration) noexcept {
@@ -48,6 +50,7 @@ struct BuiltInRendererTraversal {
   // The raw LaneRenderer::getHispeed()-equivalent value exposed to skin
   // properties. `hispeed` remains the playback-scaled traversal speed.
   float configuredHispeed = 0.0F;
+  float baseHispeed = 0.0F;
   float hispeed = 0.0F;
   float noteVisibleUpperBound = 0.0F;
   // Raw parser lane IDs in the exact white, blue, scratch traversal order.
@@ -57,12 +60,32 @@ struct BuiltInRendererTraversal {
   std::uint32_t startRetainedOrdinal = 0;
 };
 
+// JsonPlaySkinObjectLoader applies one Note.dst2 value to every lane. The
+// LaneRenderer missed-POOR path still reads lane zero's region and destination
+// as its shared no-speed descent geometry.
+struct PmsPoorDestinationGeometry {
+  double laneOriginY = 0.0;
+  double laneHeight = 0.0;
+  double secondaryDestinationY = 0.0;
+};
+
 struct PlayfieldProjectionRequest {
+  // LaneRenderer applies PlayerConfig.judgetiming only while drawing notes.
+  // The frame clock remains the gameplay/skin clock so timers, events, and
+  // skin properties do not inherit a note-display-only adjustment.
+  std::optional<long long> noteDisplayTimeMicros;
   double visibleScrollBefore = 0.0;
   double visibleScrollAfter = 0.0;
   std::size_t maxTimelines = 0;
   std::size_t maxNotes = 0;
   bool includeInvisibleNotes = false;
+  // PlayerConfig.showpastnote. LaneRenderer retains only an unprocessed
+  // normal note after its timeline passes the judgement line.
+  bool showPastNormalNotes = false;
+  // PlayConfig.enableConstant and its two LaneRenderer time-window inputs.
+  bool constantScroll = false;
+  int constantDurationMilliseconds = 500;
+  int constantFadeInMilliseconds = 100;
   // Practice count-in still renders notes at or after this immutable chart
   // boundary. A long-note pair that begins before it remains skipped.
   std::optional<long long> minimumVisibleNoteTimeMicros;
@@ -72,6 +95,10 @@ struct PlayfieldProjectionRequest {
   // that only has an immutable visual snapshot must opt in explicitly rather
   // than projection guessing a ruleset-dependent value.
   std::int64_t latePoorTimingMicros = 0;
+  // Present only for the selected skin's single JsonSkin.note/dst2 path.
+  // The generic skin projection remains future-only when no source dst2 is
+  // configured.
+  std::optional<PmsPoorDestinationGeometry> pmsPoorDestination;
   // Selected skins consume generic DTOs only, so callers that do not submit
   // BMSRenderer's frame can omit its separate compatibility plan.
   bool buildBuiltInPlan = true;
@@ -101,6 +128,12 @@ struct ProjectedPlayfieldNote {
   std::uint32_t authoredOrdinal = 0;
   std::uint32_t retainedTimelineOrdinal = kNoRetainedTimelineOrdinal;
   bool judged = false;
+  // LaneRenderer's dst2-only missed-POOR pass. The signed authored offset is
+  // measured from the active Lift-adjusted judgement origin and must not be
+  // multiplied by the regular Hi-Speed traversal.
+  std::optional<double> pmsPoorYDisplacement;
+  // LaneRenderer's Constant fade alpha. Non-Constant and opaque rows use 1.
+  double opacity = 1.0;
   std::uint32_t submissionOrdinal = 0;
   // The built-in renderer shares one primary depth across playable notes and
   // mines in a timeline row. Skin submission order stays unique and separate.
@@ -138,6 +171,7 @@ struct ProjectedLongNoteDescriptor {
   bool tailReleasedEarly = false;
   bool tailMissedWithHead = false;
   bool tailResolvedAtOrAfterTiming = false;
+  double opacity = 1.0;
   std::uint32_t submissionOrdinal = 0;
   std::uint32_t bodyDepth = 0;
   std::uint32_t endpointDepth = 0;
@@ -150,6 +184,7 @@ struct ProjectedLineDescriptor {
   long long timeMicros = 0;
   std::uint32_t authoredOrdinal = 0;
   std::uint32_t retainedOrdinal = kNoRetainedTimelineOrdinal;
+  double opacity = 1.0;
   std::uint32_t submissionOrdinal = 0;
 };
 
@@ -237,6 +272,7 @@ public:
 #endif
 
 private:
+  std::size_t pmsPoorCursor_ = 0;
   struct CachedModelIndex {
     const PlayfieldChartVisualModel *model = nullptr;
     std::unordered_map<ChartVisualId, const ChartVisualTimeline *>

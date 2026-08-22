@@ -31,6 +31,9 @@ inline float gaugeInitialValue(GaugeType gaugeType,
     case GaugeType::Hard:
     case GaugeType::ExHard:
     case GaugeType::Hazard:
+    case GaugeType::Grade:
+    case GaugeType::ExGrade:
+    case GaugeType::ExHardGrade:
     default:
       return 100.0f;
     }
@@ -43,6 +46,9 @@ inline float gaugeInitialValue(GaugeType gaugeType,
   case GaugeType::Hard:
   case GaugeType::ExHard:
   case GaugeType::Hazard:
+  case GaugeType::Grade:
+  case GaugeType::ExGrade:
+  case GaugeType::ExHardGrade:
     return 100.0f;
   case GaugeType::AssistedEasy:
   case GaugeType::Easy:
@@ -102,6 +108,9 @@ inline float gaugeMinimumValue(GaugeType gaugeType,
   case GaugeType::Hard:
   case GaugeType::ExHard:
   case GaugeType::Hazard:
+  case GaugeType::Grade:
+  case GaugeType::ExGrade:
+  case GaugeType::ExHardGrade:
     return 0.0f;
   case GaugeType::AssistedEasy:
   case GaugeType::Easy:
@@ -151,6 +160,10 @@ inline float gaugeBorderValue(GaugeType gaugeType,
     return 80.0f;
   case GaugeType::Hard:
   case GaugeType::ExHard:
+  case GaugeType::Hazard:
+  case GaugeType::Grade:
+  case GaugeType::ExGrade:
+  case GaugeType::ExHardGrade:
   default:
     return 0.0f;
   }
@@ -162,7 +175,9 @@ inline bool gaugeIsSurvival(GaugeType gaugeType,
     return true;
   }
   return gaugeType == GaugeType::Hard || gaugeType == GaugeType::ExHard ||
-         gaugeType == GaugeType::Hazard;
+         gaugeType == GaugeType::Hazard || gaugeType == GaugeType::Grade ||
+         gaugeType == GaugeType::ExGrade ||
+         gaugeType == GaugeType::ExHardGrade;
 }
 
 inline int gaugeJudgementIndex(Judgement judgement) {
@@ -200,6 +215,9 @@ inline float gaugeBaseDeltaForJudgement(
       std::array<float, 6>{0.15f, 0.12f, 0.03f, -5.0f, -10.0f, -5.0f},
       std::array<float, 6>{0.15f, 0.06f, 0.0f, -8.0f, -16.0f, -8.0f},
       std::array<float, 6>{0.15f, 0.06f, 0.0f, -100.0f, -100.0f, -10.0f},
+      std::array<float, 6>{0.15f, 0.12f, 0.06f, -1.5f, -3.0f, -1.5f},
+      std::array<float, 6>{0.15f, 0.12f, 0.03f, -3.0f, -6.0f, -3.0f},
+      std::array<float, 6>{0.15f, 0.06f, 0.0f, -5.0f, -10.0f, -5.0f},
   };
   constexpr GaugeTable fiveKeysTable = {
       std::array<float, 6>{1.0f, 1.0f, 0.5f, -1.5f, -3.0f, -0.5f},
@@ -208,6 +226,9 @@ inline float gaugeBaseDeltaForJudgement(
       std::array<float, 6>{0.0f, 0.0f, 0.0f, -5.0f, -10.0f, -5.0f},
       std::array<float, 6>{0.0f, 0.0f, 0.0f, -10.0f, -20.0f, -10.0f},
       std::array<float, 6>{0.0f, 0.0f, 0.0f, -100.0f, -100.0f, -100.0f},
+      std::array<float, 6>{0.01f, 0.01f, 0.0f, -0.5f, -1.0f, -0.5f},
+      std::array<float, 6>{0.01f, 0.01f, 0.0f, -1.0f, -2.0f, -1.0f},
+      std::array<float, 6>{0.01f, 0.01f, 0.0f, -2.5f, -5.0f, -2.5f},
   };
   constexpr GaugeTable pmsTable = {
       std::array<float, 6>{1.0f, 1.0f, 0.5f, -1.0f, -2.0f, -2.0f},
@@ -216,6 +237,9 @@ inline float gaugeBaseDeltaForJudgement(
       std::array<float, 6>{0.15f, 0.12f, 0.03f, -5.0f, -10.0f, -10.0f},
       std::array<float, 6>{0.15f, 0.06f, 0.0f, -10.0f, -15.0f, -15.0f},
       std::array<float, 6>{0.15f, 0.06f, 0.0f, -100.0f, -100.0f, -100.0f},
+      std::array<float, 6>{0.15f, 0.12f, 0.06f, -1.5f, -3.0f, -3.0f},
+      std::array<float, 6>{0.15f, 0.12f, 0.03f, -3.0f, -6.0f, -6.0f},
+      std::array<float, 6>{0.15f, 0.06f, 0.0f, -5.0f, -10.0f, -10.0f},
   };
   constexpr GaugeTable keyboardTable = {
       std::array<float, 6>{1.0f, 1.0f, 0.5f, -1.0f, -2.0f, -1.0f},
@@ -224,6 +248,20 @@ inline float gaugeBaseDeltaForJudgement(
       std::array<float, 6>{0.2f, 0.2f, 0.1f, -4.0f, -8.0f, -4.0f},
       std::array<float, 6>{0.2f, 0.1f, 0.0f, -6.0f, -12.0f, -6.0f},
       std::array<float, 6>{0.2f, 0.1f, 0.0f, -100.0f, -100.0f, -100.0f},
+      std::array<float, 6>{0.2f, 0.2f, 0.1f, -1.5f, -3.0f, -1.5f},
+      std::array<float, 6>{0.2f, 0.2f, 0.1f, -3.0f, -6.0f, -3.0f},
+      std::array<float, 6>{0.2f, 0.1f, 0.0f, -5.0f, -10.0f, -5.0f},
+  };
+  constexpr GaugeTable lr2Table = {
+      std::array<float, 6>{1.2f, 1.2f, 0.6f, -3.2f, -4.8f, -1.6f},
+      std::array<float, 6>{1.2f, 1.2f, 0.6f, -3.2f, -4.8f, -1.6f},
+      std::array<float, 6>{1.0f, 1.0f, 0.5f, -4.0f, -6.0f, -2.0f},
+      std::array<float, 6>{0.1f, 0.1f, 0.05f, -6.0f, -10.0f, -2.0f},
+      std::array<float, 6>{0.1f, 0.1f, 0.05f, -12.0f, -20.0f, -2.0f},
+      std::array<float, 6>{0.15f, 0.06f, 0.0f, -100.0f, -100.0f, -10.0f},
+      std::array<float, 6>{0.10f, 0.10f, 0.05f, -2.0f, -3.0f, -2.0f},
+      std::array<float, 6>{0.10f, 0.10f, 0.05f, -6.0f, -10.0f, -2.0f},
+      std::array<float, 6>{0.10f, 0.10f, 0.05f, -12.0f, -20.0f, -2.0f},
   };
 
   const GaugeTable *table = &sevenKeysTable;
@@ -237,6 +275,9 @@ inline float gaugeBaseDeltaForJudgement(
   case GaugeProfile::Standard24Keys:
     table = &keyboardTable;
     break;
+  case GaugeProfile::StandardLr2:
+    table = &lr2Table;
+    break;
   default:
     break;
   }
@@ -246,13 +287,16 @@ inline float gaugeBaseDeltaForJudgement(
 inline int courseGaugeClassIndexForType(GaugeType gaugeType) {
   switch (gaugeType) {
   case GaugeType::Hard:
+  case GaugeType::ExGrade:
     return 1;
   case GaugeType::ExHard:
   case GaugeType::Hazard:
+  case GaugeType::ExHardGrade:
     return 2;
   case GaugeType::AssistedEasy:
   case GaugeType::Easy:
   case GaugeType::Normal:
+  case GaugeType::Grade:
   default:
     return 0;
   }
@@ -434,22 +478,41 @@ inline float gaugeDeltaForJudgement(GaugeType gaugeType, Judgement judgement,
 
   float delta =
       gaugeBaseDeltaForJudgement(gaugeType, judgement, profile);
-  if (profile == GaugeProfile::Standard5Keys &&
-      gaugeType == GaugeType::ExHard && delta < 0.0f) {
-    delta *= beatorajaDamageMultiplier(total, totalNotes);
+  if ((profile == GaugeProfile::Standard5Keys &&
+       gaugeType == GaugeType::ExHard) ||
+      (profile == GaugeProfile::StandardLr2 &&
+       (gaugeType == GaugeType::Hard || gaugeType == GaugeType::ExHard))) {
+    if (delta < 0.0f) {
+      delta *= beatorajaDamageMultiplier(total, totalNotes);
+    }
   }
   if (delta > 0.0f) {
     if (gaugeType == GaugeType::Hard || gaugeType == GaugeType::ExHard) {
       delta *= beatorajaHardRecoveryMultiplier(total, totalNotes);
-    } else if (gaugeType != GaugeType::Hazard) {
+    } else if (gaugeType == GaugeType::AssistedEasy ||
+               gaugeType == GaugeType::Easy || gaugeType == GaugeType::Normal) {
       delta *= static_cast<float>(total) /
                static_cast<float>(std::max(1, totalNotes));
     }
   }
-  if (gaugeType == GaugeType::Hard &&
+  if (gaugeType == GaugeType::Hard && profile != GaugeProfile::StandardLr2 &&
       gaugeReducedDamageZoneUpperBound(GameplayRuleset::Beatoraja, gaugeType,
                                        profile) > 0.0f) {
     delta = applyHardGaugeGuts(currentGauge, delta);
+  }
+  if (delta < 0.0f && gaugeType == GaugeType::Grade &&
+      profile != GaugeProfile::Standard5Keys &&
+      profile != GaugeProfile::StandardLr2) {
+    delta = applyCourseGaugeGuts(
+        profile == GaugeProfile::StandardLr2 ? GaugeProfile::CourseLR2
+                                              : GaugeProfile::Course7Keys,
+        GaugeType::Normal, currentGauge, delta);
+  }
+  if (delta < 0.0f && profile == GaugeProfile::StandardLr2 &&
+      (gaugeType == GaugeType::Hard || gaugeType == GaugeType::Grade ||
+       gaugeType == GaugeType::ExGrade)) {
+    delta = applyCourseGaugeGuts(GaugeProfile::CourseLR2, gaugeType,
+                                 currentGauge, delta);
   }
   return delta;
 }
@@ -473,6 +536,12 @@ inline ClearType clearTypeForGauge(GaugeType gaugeType, float gaugeValue,
     return ClearType::ExHardClear;
   case GaugeType::Hazard:
     return ClearType::FullCombo;
+  case GaugeType::Grade:
+    return ClearType::NormalClear;
+  case GaugeType::ExGrade:
+    return ClearType::HardClear;
+  case GaugeType::ExHardGrade:
+    return ClearType::ExHardClear;
   case GaugeType::Normal:
   default:
     return ClearType::NormalClear;
@@ -488,6 +557,8 @@ struct GaugeStateSnapshot {
   float currentGauge = 0.0f;
   std::array<float, kGaugeTypeCount> gaugeValues{};
   std::array<bool, kGaugeTypeCount> gaugeSurvivalFailed{};
+
+  bool operator==(const GaugeStateSnapshot &) const = default;
 };
 
 struct GameplayScoreConfig {
@@ -851,6 +922,12 @@ private:
       return ClearType::ExHardClear;
     case GaugeType::Hazard:
       return ClearType::FullCombo;
+    case GaugeType::Grade:
+      return ClearType::NormalClear;
+    case GaugeType::ExGrade:
+      return ClearType::HardClear;
+    case GaugeType::ExHardGrade:
+      return ClearType::ExHardClear;
     case GaugeType::Normal:
     default:
       return ClearType::NormalClear;

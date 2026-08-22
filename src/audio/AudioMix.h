@@ -15,7 +15,7 @@ struct AudioSettings;
 
 namespace audio {
 
-enum class Bus : std::uint8_t { Bgm, Keysound };
+enum class Bus : std::uint8_t { Bgm, Keysound, System };
 
 struct Volumes {
   float master = 1.0f;
@@ -26,6 +26,12 @@ struct Volumes {
 float EffectiveGain(Bus bus, const Volumes &volumes);
 Volumes VolumesFromSettings(const player_settings::AudioSettings &settings);
 
+std::optional<std::size_t>
+ProjectedResampledPcmSampleCount(std::size_t sourceSamples, int channels,
+                                 int sourceRate, int targetRate) noexcept;
+bool ResampledPcmFitsSampleBudget(std::size_t sourceSamples, int channels,
+                                  int sourceRate, int targetRate,
+                                  std::size_t maximumCombinedSamples) noexcept;
 std::vector<short> ResamplePcm(std::span<const short> source, int channels,
                                int sourceRate, int targetRate);
 
@@ -44,6 +50,7 @@ struct SoundData {
   std::vector<short> outputData;
   size_t sourceFrameCount = 0;
   size_t outputFrameCount = 0;
+  std::atomic<std::uint64_t> ownerControlAcknowledgedSequence{0};
 };
 
 struct PlayingSound {
@@ -51,6 +58,8 @@ struct PlayingSound {
   audio::Bus bus = audio::Bus::Bgm;
   std::uint64_t sourceFrameQ32 = 0;
   std::uint32_t outputOffsetFrames = 0;
+  float gain = 1.0F;
+  bool loop = false;
 };
 
 struct ScheduledSound {
@@ -59,9 +68,22 @@ struct ScheduledSound {
   long long startMicros = 0;
   std::uint64_t sequence = 0;
   size_t startFrame = 0;
+  float gain = 1.0F;
+  bool loop = false;
 };
 
-enum class AudioCommandType : std::uint8_t { PlayNow, Schedule, StopAll };
+enum class AudioCommandType : std::uint8_t {
+  PlayNow,
+  Schedule,
+  StopOwner,
+  StopAll
+};
+
+enum class AudioCommandAdmission : std::uint8_t {
+  Ordinary,
+  OwnerControl,
+  OwnerRetirement,
+};
 
 struct AudioCommand {
   AudioCommandType type = AudioCommandType::StopAll;
@@ -70,11 +92,19 @@ struct AudioCommand {
   long long startMicros = 0;
   std::uint64_t sequence = 0;
   size_t startFrame = 0;
+  float gain = 1.0F;
+  bool loop = false;
+  std::atomic_bool *acknowledgement = nullptr;
+  std::uint64_t submissionSequence = 0;
+  AudioCommandAdmission admission = AudioCommandAdmission::Ordinary;
 };
 
 constexpr size_t kMaxActiveSounds = 512;
 constexpr size_t kMaxScheduledSounds = 65536;
 constexpr size_t kAudioCommandQueueSize = 4096;
+constexpr size_t kOwnerControlCommandQueueSize = 4096;
+constexpr size_t kCombinedAudioCommandQueueSize =
+    kAudioCommandQueueSize + 2 * kOwnerControlCommandQueueSize;
 constexpr size_t kRealtimeAudioCommandQueueSize = 1024;
 
 struct RealtimeAudioCommandReservation {
@@ -91,6 +121,10 @@ struct AudioCallbackState {
   std::unique_ptr<AudioCommand[]> commandQueue;
   std::atomic<std::uint32_t> commandReadCursor{0};
   std::atomic<std::uint32_t> commandWriteCursor{0};
+  std::atomic<std::uint32_t> ordinaryCommandCount{0};
+  std::atomic<std::uint32_t> ownerControlCommandCount{0};
+  std::atomic<std::uint32_t> ownerRetirementCommandCount{0};
+  std::atomic<std::uint64_t> nextCommandSubmissionSequence{1};
   std::unique_ptr<AudioCommand[]> realtimeCommandQueue;
   std::atomic<std::uint32_t> realtimeCommandReadCursor{0};
   std::atomic<std::uint32_t> realtimeCommandWriteCursor{0};
@@ -154,18 +188,30 @@ void CommitOutputRateTransition(OutputRateTransition transition,
                                 AudioCallbackState &state);
 
 bool AppendActiveSound(AudioCallbackState &state, SoundData *soundData, Bus bus,
-                       std::uint32_t outputOffsetFrames, size_t startFrame = 0);
+                       std::uint32_t outputOffsetFrames, size_t startFrame = 0,
+                       float gain = 1.0F, bool loop = false);
 bool InsertScheduledSound(AudioCallbackState &state,
                           const ScheduledSound &scheduledSound);
 void ClearCallbackSounds(AudioCallbackState &state);
-bool EnqueueCommand(AudioCallbackState &state, const AudioCommand &command);
+void RemoveSound(AudioCallbackState &state, SoundData *soundData);
+bool EnqueueCommand(AudioCallbackState &state, const AudioCommand &command,
+                    std::uint64_t *submissionSequence = nullptr);
+bool EnqueueOwnerControlCommand(AudioCallbackState &state,
+                                const AudioCommand &command,
+                                std::uint64_t *submissionSequence = nullptr);
+bool EnqueueOwnerRetirementCommand(
+    AudioCallbackState &state, const AudioCommand &command,
+    std::uint64_t *submissionSequence = nullptr);
 std::optional<RealtimeAudioCommandReservation>
 TryReserveRealtimeCommand(const AudioCallbackState &state) noexcept;
 bool CommitRealtimeCommand(
     AudioCallbackState &state, RealtimeAudioCommandReservation reservation,
     const AudioCommand &command) noexcept;
 void DrainRealtimeCommands(AudioCallbackState &state) noexcept;
-void DrainCommands(AudioCallbackState &state);
+using CommandDrainSnapshotHook = void (*)(void *context);
+void DrainCommands(AudioCallbackState &state,
+                   CommandDrainSnapshotHook afterSnapshot = nullptr,
+                   void *hookContext = nullptr);
 void ActivateScheduledSounds(AudioCallbackState &state,
                              long long bufferStartMicros, int sampleRate,
                              std::uint32_t frameCount, int playbackRatePercent);

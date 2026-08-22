@@ -201,6 +201,62 @@ validateScript(std::string_view script,
                             desiredSettings, stop);
 }
 
+SkinValidationResult validateDocument(std::string_view entryPath,
+                                      std::string_view contents,
+                                      const std::map<std::string, std::string> &
+                                          additionalFiles = {},
+                                      SkinSafetyPolicy safetyPolicy =
+                                          SkinSafetyPolicy{}) {
+  TempDirectory temp;
+  const auto package = normalizePackageId("FormatFixture");
+  expect(package.package.has_value(), "format fixture package ID is valid");
+  if (!package.package) {
+    return {};
+  }
+  const auto entry = normalizeEntryPath(*package.package, entryPath);
+  expect(entry.entry.has_value(), "format fixture entry ID is valid");
+  if (!entry.entry) {
+    return {};
+  }
+
+  const fs::path source = temp.root() / "source";
+  writeText(source / fs::path(entryPath), contents);
+  for (const auto &[path, fileContents] : additionalFiles) {
+    writeText(source / fs::path(path), fileContents);
+  }
+  NoAliases aliases;
+  SkinTreeSnapshotter snapshotter(rootsBelow(temp.root()), aliases);
+  const auto snapshot = snapshotter.snapshot(source, *package.package, {}, {});
+  expect(snapshot.prepared.has_value(),
+         "format fixture revision snapshot is prepared");
+  if (!snapshot.prepared) {
+    return {};
+  }
+
+  SkinResourcePreparationService resources;
+  GameplaySkinValidator validator(resources);
+  return validator.validate(snapshot.prepared->readView(), *entry.entry,
+                            nullptr, {}, safetyPolicy);
+}
+
+void testLr2CallerBytePolicyIsSharedAcrossRootAndIncludes() {
+  const std::string root =
+      "#INFORMATION,0,Aggregate,fixture\n#RESOLUTION,0\n"
+      "#INCLUDE,included.inc\n";
+  const std::string included =
+      "#IMAGE,resource.png\n#STARTINPUT,123\n";
+  const std::uint64_t aggregateLimit = root.size() + included.size() - 1;
+  const auto validation = validateDocument(
+      "skin/aggregate.lr2skin", root,
+      {{"skin/included.inc", included}},
+      SkinSafetyPolicy(SkinSafetyLevel::Standard, aggregateLimit));
+  expect(validation.disposition !=
+                 SkinValidationDisposition::SelectableGameplay &&
+             hasDiagnostic(validation, "skin_lr2_byte_limit"),
+         "a caller-restricted byte policy caps LR2 root and includes as one "
+         "aggregate");
+}
+
 void testAuthoritativeCatalogAdmitsCompatibilityIntegerFactoryDomain() {
   const SkinBuiltinBindingCatalogView catalog = gameplaySkinBuiltinCatalog();
   expect(catalog.contains({.kind = SkinBindingKind::BooleanProperty},
@@ -290,6 +346,18 @@ void testAuthoritativeCatalogAdmitsCompatibilityIntegerFactoryDomain() {
   expect(!catalog.contains({.kind = SkinBindingKind::FloatWriter},
                            SkinBuiltinPropertySelector{4}),
          "catalog rejects the lane-cover writer until it is executable");
+  for (const int selector : {17, 18, 19}) {
+    expect(catalog.contains({.kind = SkinBindingKind::FloatWriter},
+                            SkinBuiltinPropertySelector{selector}),
+           "catalog admits each executable Config.AudioConfig writer");
+  }
+  expect(catalog.contains({.kind = SkinBindingKind::FloatWriter},
+                          SkinBuiltinPropertySelector{20}) &&
+             catalog.contains({.kind = SkinBindingKind::FloatWriter},
+                              SkinBuiltinPropertySelector{
+                                  "practice_position"}),
+         "catalog admits the executable practice viewport writer by numeric "
+         "and named selector");
   expect(catalog.contains({.kind = SkinBindingKind::FloatProperty,
                            .floatDomain = SkinFloatPropertyDomain::FloatValue},
                           SkinBuiltinPropertySelector{4}),
@@ -484,6 +552,47 @@ return {
          "non-gameplay Beatoraja skin types cannot appear in gameplay tabs");
 }
 
+void testCatalogAdmitsOnlyGameplayHeadersAcrossStaticFormats() {
+  const auto json = validateDocument(
+      "play/parity.json",
+      R"json({"type":0,"name":"JSON gameplay","author":"fixture","w":640,"h":480})json");
+  expect(json.disposition == SkinValidationDisposition::SelectableGameplay &&
+             json.metadata && json.metadata->displayName == "JSON gameplay" &&
+             json.metadata->skinType == 0 && json.reconciledSettings &&
+             json.configurationDigest ==
+                 skinConfigurationDigest(*json.reconciledSettings),
+         "a decoded JSON gameplay header is selectable with reconciled settings");
+
+  const auto lr2 = validateDocument(
+      "play/parity.lr2skin",
+      "#INFORMATION,0,LR2 gameplay,fixture\n#RESOLUTION,0\n");
+  expect(lr2.disposition == SkinValidationDisposition::SelectableGameplay &&
+             lr2.metadata && lr2.metadata->displayName == "LR2 gameplay" &&
+             lr2.metadata->skinType == 0 && lr2.reconciledSettings &&
+             lr2.configurationDigest ==
+                 skinConfigurationDigest(*lr2.reconciledSettings),
+         "a decoded LR2 gameplay header is selectable with reconciled settings");
+
+  const auto genericJson = validateDocument(
+      "config/settings.json", R"json({"application":"configuration"})json");
+  expect(genericJson.disposition == SkinValidationDisposition::UnavailableType &&
+             genericJson.metadata && genericJson.metadata->skinType == -1 &&
+             !genericJson.reconciledSettings &&
+             genericJson.configurationDigest.empty(),
+         "generic JSON remains unavailable rather than becoming gameplay");
+
+  const auto nonGameplayLr2 = validateDocument(
+      "select/select.lr2skin",
+      "#INFORMATION,5,Music select,fixture\n#RESOLUTION,0\n");
+  expect(nonGameplayLr2.disposition ==
+                 SkinValidationDisposition::UnavailableType &&
+             nonGameplayLr2.metadata &&
+             nonGameplayLr2.metadata->skinType == 5 &&
+             !nonGameplayLr2.reconciledSettings &&
+             nonGameplayLr2.configurationDigest.empty(),
+         "a decoded non-gameplay LR2 header remains unavailable");
+}
+
 void testCatalogDefersGameplayBindingFailureToGameplayLoading() {
   const SkinValidationResult result = validateScript(R"lua(
 return {
@@ -634,6 +743,8 @@ int main() {
   testCatalogDoesNotExecuteConfiguredLuaOrFabricateMainState();
   testCatalogKeepsBeatorajaEmptyOptionDeclarationsSelectable();
   testCatalogRejectsNonGameplayBeatorajaSkinTypes();
+  testCatalogAdmitsOnlyGameplayHeadersAcrossStaticFormats();
+  testLr2CallerBytePolicyIsSharedAcrossRootAndIncludes();
   testCatalogDefersGameplayBindingFailureToGameplayLoading();
   testCatalogDefersGameplayResourceFailureToGameplayLoading();
   testRequestedExternalGameplaySkinAvoidsConfiguredStateErrors();

@@ -1,4 +1,9 @@
 #include "skin/beatoraja/Skin2DRenderer.h"
+#include "skin/beatoraja/SkinBpmGraphRenderer.h"
+#include "skin/beatoraja/SkinGaugeGraphRenderer.h"
+#include "skin/beatoraja/SkinHitErrorVisualizerRenderer.h"
+#include "skin/beatoraja/SkinNoteDistributionGraphRenderer.h"
+#include "skin/beatoraja/SkinTimingVisualizerRenderer.h"
 
 #include "FileChecksum.h"
 #include "skin/SkinStoragePaths.h"
@@ -207,6 +212,21 @@ public:
     images_.emplace(id, std::move(resource));
   }
 
+  void addBuiltinImage(int reference, SkinResourceId resource,
+                       SkinSourceRect authored, int width = 100,
+                       int height = 100) {
+    addImage(resource, authored, width, height);
+    builtinImages_.insert_or_assign(reference, resource);
+  }
+
+  std::optional<SkinResourceId>
+  builtinImageResource(int reference) const noexcept override {
+    const auto found = builtinImages_.find(reference);
+    return found == builtinImages_.end()
+               ? std::nullopt
+               : std::optional<SkinResourceId>(found->second);
+  }
+
   const PreparedSkinResource *find(SkinResourceId id) const noexcept override {
     const auto found = images_.find(id);
     return found == images_.end() ? nullptr : &found->second;
@@ -251,10 +271,49 @@ public:
     atlases_.emplace(atlas.id, std::move(atlas));
   }
 
+  void addPomyuChara(PreparedPomyuCharaResource resource) {
+    pomyuCharas_.emplace(resource.object, std::move(resource));
+  }
+
+  const PreparedPomyuCharaResource *
+  findPomyuChara(SkinObjectId object) const noexcept override {
+    const auto found = pomyuCharas_.find(object);
+    return found == pomyuCharas_.end() ? nullptr : &found->second;
+  }
+
 private:
   std::map<SkinResourceId, PreparedSkinResource> images_;
+  std::map<int, SkinResourceId> builtinImages_;
   std::map<SkinTextAtlasId, PreparedSkinTextAtlas> atlases_;
   std::map<SkinObjectId, SkinTextAtlasId> textAtlasesByObject_;
+  std::map<SkinObjectId, PreparedPomyuCharaResource> pomyuCharas_;
+};
+
+class FakeMovies final : public SkinPreparedMovieView {
+public:
+  void addMovie(SkinMovieResource resource, int width, int height,
+                std::int64_t durationMillis) {
+    PreparedSkinMovie prepared{
+        .resource = std::move(resource),
+        .handle = SkinMoviePlayerHandle{++nextHandle_},
+        .width = width,
+        .height = height,
+        .durationMillis = durationMillis};
+    movies_.emplace(prepared.resource.id, std::move(prepared));
+  }
+
+  const PreparedSkinMovie *
+  findMovie(SkinResourceId id) const noexcept override {
+    ++findCalls;
+    const auto found = movies_.find(id);
+    return found == movies_.end() ? nullptr : &found->second;
+  }
+
+  mutable std::size_t findCalls = 0;
+
+private:
+  std::uint64_t nextHandle_ = 0;
+  std::map<SkinResourceId, PreparedSkinMovie> movies_;
 };
 
 class FakeState final : public ISkinFrameState {
@@ -275,26 +334,35 @@ public:
   SkinPropertyLookup<double>
   floatProperty(const SkinBuiltinPropertySelector &,
                 SkinFloatPropertyDomain) override {
+    ++floatCalls;
     return floatResult;
   }
   SkinPropertyLookup<std::string_view>
   stringProperty(const SkinBuiltinPropertySelector &) override {
     return stringResult;
   }
-  SkinPropertyLookup<ConfigOffset> offsetProperty(int id) override {
+  SkinPropertyLookup<SkinRuntimeOffset> offsetProperty(int id) override {
     accessOrder.push_back(3'000 + id);
     const auto found = offsets.find(id);
-    return found == offsets.end() ? SkinPropertyLookup<ConfigOffset>{}
+    return found == offsets.end() ? SkinPropertyLookup<SkinRuntimeOffset>{}
                                   : found->second;
+  }
+  [[nodiscard]] SkinLaneCoverStateView
+  laneCoverState() const noexcept override {
+    return laneCoverResult;
   }
   std::int64_t
   timerProperty(const SkinBuiltinPropertySelector &selector) override {
     ++timerCalls;
-    accessOrder.push_back(2'000 + (std::holds_alternative<int>(selector.value)
-                                       ? std::get<int>(selector.value)
-                                       : -1));
+    const int id = std::holds_alternative<int>(selector.value)
+                       ? std::get<int>(selector.value)
+                       : -1;
+    accessOrder.push_back(2'000 + id);
     if (timerSequenceIndex < timerSequence.size()) {
       return timerSequence[timerSequenceIndex++];
+    }
+    if (const auto found = timerResults.find(id); found != timerResults.end()) {
+      return found->second;
     }
     return timerResult;
   }
@@ -310,6 +378,9 @@ public:
   projectedLines() const noexcept override {
     return lines;
   }
+  SkinGameplayGraphStateView gameplayGraphState() const noexcept override {
+    return graphResult;
+  }
   SkinGaugeStateView gaugeState() const noexcept override {
     return gaugeResult;
   }
@@ -320,27 +391,41 @@ public:
     ++noteExpansionCalls;
     return noteExpansionResult;
   }
+  SkinPracticeStateView practiceState() const noexcept override {
+    return practiceResult;
+  }
+  bool stagePracticeVisibleItemCount(int count) override {
+    stagedPracticeVisibleItemCount = count;
+    return stagePracticeVisibleItemCountResult;
+  }
   std::uint64_t frameSerial() const noexcept override { return capturedSerial; }
 
   std::vector<SkinProjectedNoteView> notes;
   std::vector<SkinProjectedLongNoteView> longNotes;
   std::vector<SkinProjectedLineView> lines;
+  SkinGameplayGraphStateView graphResult;
   SkinGaugeStateView gaugeResult;
   SkinJudgeStateView judgeResult;
   SkinNoteExpansionStateView noteExpansionResult;
+  SkinPracticeStateView practiceResult;
+  SkinLaneCoverStateView laneCoverResult;
   SkinPropertyLookup<bool> booleanResult;
   SkinPropertyLookup<std::int64_t> integerResult;
   SkinPropertyLookup<double> floatResult;
   SkinPropertyLookup<std::string_view> stringResult;
   std::int64_t timerResult = INT64_MIN;
+  std::map<int, std::int64_t> timerResults;
   std::vector<std::int64_t> timerSequence;
   std::size_t timerSequenceIndex = 0;
   std::size_t booleanCalls = 0;
   std::size_t timerCalls = 0;
+  std::size_t floatCalls = 0;
   mutable std::size_t noteExpansionCalls = 0;
-  std::map<int, SkinPropertyLookup<ConfigOffset>> offsets;
+  std::map<int, SkinPropertyLookup<SkinRuntimeOffset>> offsets;
   std::vector<int> accessOrder;
   std::uint64_t capturedSerial = 1;
+  std::optional<int> stagedPracticeVisibleItemCount;
+  bool stagePracticeVisibleItemCountResult = true;
 };
 
 class FakeGaugeRandom final : public ISkinGaugeRandomSource {
@@ -417,7 +502,8 @@ evaluate(Skin2DRenderer &renderer, RuntimeHarness &runtime,
          ISkinGaugeRandomSource *gaugeRandomSource = nullptr,
          std::uint64_t sessionSerial = 1,
          bool markProcessedNotes = false,
-         const PlaySkinViewport *requestedViewport = nullptr) {
+         const PlaySkinViewport *requestedViewport = nullptr,
+         const SkinPreparedMovieView *movies = nullptr) {
   static const BeatorajaSkinConfiguration emptyConfiguration;
   const auto &configuration = configured ? *configured : emptyConfiguration;
   const auto defaultViewport = viewport();
@@ -430,11 +516,294 @@ evaluate(Skin2DRenderer &renderer, RuntimeHarness &runtime,
                                  .model = model,
                                  .configuration = configuration,
                                  .resources = resources,
+                                 .movies = movies,
                                  .viewport = playViewport,
-                                 .runtime = runtime.runtime(),
+                                 .runtime = &runtime.runtime(),
                                  .state = state,
                                  .markProcessedNotes = markProcessedNotes,
                                  .gaugeRandomSource = gaugeRandomSource});
+}
+
+void testPomyuCharaSelectsPreparedTimersFramesAndOrderedLayers() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  const SkinSourceRect ordinaryRegion{.x = 0, .y = 0, .w = 10, .h = 10};
+  resources.addImage(1, ordinaryRegion);
+  resources.addImage(3, ordinaryRegion);
+
+  PreparedPomyuCharaResource pomyu;
+  pomyu.object = 2;
+  pomyu.relativePlacement = true;
+  pomyu.coordinateWidth = 100;
+  pomyu.coordinateHeight = 100;
+  for (int timer = 0; timer < 8; ++timer) {
+    const int frameMillis = (timer + 1) * 10;
+    const SkinResourceId resource = static_cast<SkinResourceId>(100 + timer);
+    resources.addImageAtlas(
+        resource,
+        {{.x = 0, .y = timer, .w = 10, .h = 10},
+         {.x = 10, .y = timer, .w = 10, .h = 10}},
+        40, 20);
+    pomyu.animations.push_back(
+        {.motion = timer,
+         .builtinTimerId = 900 + timer,
+         .frameMillis = frameMillis,
+         .cycleMillis = frameMillis * 2,
+         .loopStartFrame = 0,
+         .frames = {{.resource = resource,
+                     .region = {.x = 0, .y = timer, .w = 10, .h = 10},
+                     .x = 10,
+                     .y = 20,
+                     .width = 30,
+                     .height = 40},
+                    {.resource = resource,
+                     .region = {.x = 10, .y = timer, .w = 10, .h = 10},
+                     .x = 10,
+                     .y = 20,
+                     .width = 30,
+                     .height = 40}}});
+  }
+  resources.addImageAtlas(
+      200,
+      {{.x = 0, .y = 10, .w = 20, .h = 10},
+       {.x = 20, .y = 10, .w = 20, .h = 10}},
+      40, 20);
+  pomyu.animations.insert(
+      pomyu.animations.begin() + 1,
+      {.motion = 0,
+       .builtinTimerId = 900,
+       .frameMillis = 10,
+       .cycleMillis = 20,
+       .loopStartFrame = 0,
+       .frames = {{.resource = 200,
+                   .region = {.x = 0, .y = 10, .w = 20, .h = 10},
+                   .x = 10,
+                   .y = 20,
+                   .width = 30,
+                   .height = 40},
+                  {.resource = 200,
+                   .region = {.x = 20, .y = 10, .w = 20, .h = 10},
+                   .x = 10,
+                   .y = 20,
+                   .width = 30,
+                   .height = 40}}});
+  resources.addPomyuChara(std::move(pomyu));
+
+  ValidatedBeatorajaSkinModel model;
+  model.model.resources = {
+      SkinImageResource{.id = 1, .authoredName = "before"},
+      SkinImageResource{.id = 3, .authoredName = "after"}};
+  model.model.objects = {
+      imageObject(1, 1, true),
+      {.id = 2,
+       .authoredName = "pomyu",
+       .payload = SkinPmCharaObject{.source = 99, .type = 0},
+       .authoredOrdinal = 2,
+       .critical = true},
+      imageObject(3, 3, true)};
+  model.model.destinations = {destination(1, 10, 10.0),
+                              destination(2, 20, 100.0),
+                              destination(3, 30, 350.0)};
+  for (auto &presented : model.model.destinations) {
+    presented.presentation.loop = 0;
+  }
+  model.model.destinations[1].presentation.frames.front().y = 100.0;
+  model.model.destinations[1].presentation.frames.front().width = 200.0;
+  model.model.destinations[1].presentation.frames.front().height = 100.0;
+
+  FakeState state;
+  for (int timer = 0; timer < 8; ++timer) {
+    state.timerResults.clear();
+    for (int id = 900; id <= 907; ++id) {
+      state.timerResults.emplace(id, INT64_MIN);
+    }
+    state.timerResults[900 + timer] = 0;
+    const int frameMillis = (timer + 1) * 10;
+    const auto result = evaluate(renderer, runtime, model, resources, state,
+                                 static_cast<std::uint64_t>(timer + 1),
+                                 static_cast<std::int64_t>(frameMillis + 1) *
+                                     1'000);
+    expect(result.submitReady.has_value(),
+           "Pomyu timer selection prepares a complete command buffer");
+    if (!result.submitReady) {
+      continue;
+    }
+    const auto &commands = result.submitReady->commands;
+    const std::size_t pomyuCommandCount = timer == 0 ? 2U : 1U;
+    expect(commands.size() == pomyuCommandCount + 2 &&
+               std::get<SkinTexturedQuadCommand>(commands.front().payload)
+                       .resource == 1 &&
+               std::get<SkinTexturedQuadCommand>(commands.back().payload)
+                       .resource == 3,
+           "Pomyu layers remain between surrounding authored destinations");
+    if (commands.size() != pomyuCommandCount + 2) {
+      continue;
+    }
+    const auto &firstPomyu =
+        std::get<SkinTexturedQuadCommand>(commands[1].payload);
+    expect(firstPomyu.resource == static_cast<SkinResourceId>(100 + timer),
+           "each pinned Pomyu timer selects its own prepared resource");
+    expect(firstPomyu.vertices[0].u < firstPomyu.vertices[1].u &&
+               firstPomyu.vertices[3].u < firstPomyu.vertices[2].u,
+           "Pomyu source rectangles preserve left-to-right orientation");
+    expect(std::abs(firstPomyu.vertices[1].x -
+                    firstPomyu.vertices[0].x - 60.0F) < 0.0001F &&
+               std::abs(std::abs(firstPomyu.vertices[3].y -
+                                 firstPomyu.vertices[0].y) -
+                        40.0F) < 0.0001F,
+           "Pomyu CHP placement scales inside the authored base rectangle");
+    expect(std::abs(firstPomyu.vertices[0].u - 0.25F) < 0.0001F &&
+               std::abs(firstPomyu.vertices[1].u - 0.5F) < 0.0001F,
+           "timer progress advances to the second prepared Pomyu frame");
+    if (timer == 0) {
+      expect(std::get<SkinTexturedQuadCommand>(commands[2].payload).resource ==
+                 200,
+             "Pattern and Texture Pomyu layers retain CHP draw order");
+    }
+  }
+}
+
+void testMovieCommandsPreserveTimingDestinationStateAndMixedOrdering() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  resources.addImage(1, {.x = 0, .y = 0, .w = 10, .h = 10});
+  resources.addImage(3, {.x = 0, .y = 0, .w = 10, .h = 10});
+  FakeMovies movies;
+  movies.addMovie(SkinMovieResource{
+                      .id = 2,
+                      .virtualPath = "movie.MP4",
+                      .timer = SkinTimerPropertyId{1},
+                      .authoredOrdinal = 2},
+                  80, 40, 1'000);
+
+  FakeState state;
+  state.timerSequence = {1'200'000, 1'200'000};
+  ValidatedBeatorajaSkinModel model;
+  model.model.resources = {
+      SkinImageResource{.id = 1, .authoredName = "before"},
+      SkinMovieResource{.id = 2,
+                        .virtualPath = "movie.MP4",
+                        .timer = SkinTimerPropertyId{1},
+                        .authoredOrdinal = 2},
+      SkinImageResource{.id = 3, .authoredName = "after"}};
+  model.model.timerProperties.push_back(
+      {.id = SkinTimerPropertyId{1},
+       .source = SkinBuiltinPropertySelector{.value = 90},
+       .authoredOrdinal = 1});
+  model.model.objects = {imageObject(1, 1, true), imageObject(2, 2, true),
+                         imageObject(3, 3, true)};
+  auto before = destination(1, 10, 10.0);
+  auto movie = destination(2, 20, 60.0);
+  auto after = destination(3, 30, 110.0);
+  before.presentation.loop = 10'000;
+  movie.presentation.loop = 10'000;
+  after.presentation.loop = 10'000;
+  auto &movieBody = movie.presentation;
+  movieBody.blend = SkinBlendMode::Additive;
+  movieBody.filter = SkinFilterMode::Linear;
+  movieBody.stretch = SkinStretchMode::KeepAspectRatioFitInner;
+  movieBody.frames.front().rgba = {10, 20, 30, 40};
+  movieBody.frames.front().clip =
+      SkinSourceRect{.x = 3, .y = 4, .w = 20, .h = 10};
+  std::get<SkinImageObject>(model.model.objects[1].payload)
+      .orderedStates.front()
+      .cycleMillis = 1'000;
+  std::get<SkinImageObject>(model.model.objects[1].payload)
+      .orderedStates.front()
+      .timer = SkinTimerPropertyId{1};
+  auto &ordinaryState =
+      std::get<SkinImageObject>(model.model.objects[0].payload)
+          .orderedStates.front();
+  ordinaryState.cycleMillis = 1'000;
+  ordinaryState.timer = SkinTimerPropertyId{1};
+  model.model.destinations = {std::move(before), std::move(movie),
+                              std::move(after)};
+
+  const auto result = evaluate(renderer, runtime, model, resources, state, 1,
+                               2'500'000, nullptr, std::nullopt, nullptr, 1,
+                               false, nullptr, &movies);
+  expect(result.submitReady && result.submitReady->commands.size() == 3 &&
+             std::holds_alternative<SkinTexturedQuadCommand>(
+                 result.submitReady->commands[0].payload) &&
+             std::holds_alternative<SkinMovieCommand>(
+                 result.submitReady->commands[1].payload) &&
+             std::holds_alternative<SkinTexturedQuadCommand>(
+                 result.submitReady->commands[2].payload) &&
+             state.timerSequenceIndex == 2,
+         "adjacent image and movie commands preserve exact authored ordering "
+         "while only the ordinary image consumes its timer");
+  if (!result.submitReady || result.submitReady->commands.size() != 3 ||
+      !std::holds_alternative<SkinMovieCommand>(
+          result.submitReady->commands[1].payload)) {
+    return;
+  }
+  const auto &command =
+      std::get<SkinMovieCommand>(result.submitReady->commands[1].payload);
+  expect(command.resource == 2 && command.sourceTimeMillis == 2'500 &&
+             command.geometry.clip && command.geometry.clip->x == 3.0 &&
+             command.geometry.clip->y == 4.0 &&
+             command.geometry.clip->width == 20.0 &&
+             command.geometry.clip->height == 10.0 &&
+             command.geometry.rgba[0] == 10.0F / 255.0F &&
+             command.geometry.rgba[3] == 40.0F / 255.0F &&
+             command.geometry.blend == SkinBlendMode::Additive &&
+             command.geometry.filter == SkinFilterMode::Linear &&
+             command.geometry.stretch ==
+                 SkinStretchMode::KeepAspectRatioFitInner &&
+             command.state.blend == SkinBlendMode::Additive &&
+             command.state.filter == SkinFilterMode::Linear,
+         "movie commands ignore image timer/cycle metadata while retaining "
+         "destination crop, tint, blend, filter, and stretch");
+
+  state.timerSequenceIndex = 0;
+  state.timerSequence = {2'400'000, 2'400'000};
+  const auto reset = evaluate(renderer, runtime, model, resources, state, 2,
+                              2'500'000, nullptr, std::nullopt, nullptr, 1,
+                              false, nullptr, &movies);
+  expect(reset.submitReady && reset.submitReady->commands.size() == 3 &&
+             std::get<SkinMovieCommand>(reset.submitReady->commands[1].payload)
+                     .sourceTimeMillis == 2'500 &&
+             state.timerSequenceIndex == 2,
+         "JSON/LR2-shaped movie timer declarations are never read and the "
+         "player alone applies its own duration loop while ordinary image "
+         "timers remain active");
+  expect(movies.findCalls > 0,
+         "frame evaluation performs only prepared movie identity lookups and cannot load or decode sources");
+}
+
+void testStaticBuiltinFrameDoesNotRequireLuaRuntime() {
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  resources.addImage(1, {.x = 0, .y = 0, .w = 10, .h = 10});
+  FakeState state;
+  state.integerResult = {.value = 0, .supported = true};
+  state.capturedSerial = 1;
+  ValidatedBeatorajaSkinModel model;
+  auto object = imageObject(1, 1, true);
+  std::get<SkinImageObject>(object.payload).stateIndex =
+      SkinIntegerPropertyId{1};
+  model.model.integerProperties.push_back(
+      {.id = SkinIntegerPropertyId{1},
+       .domain = SkinIntegerPropertyDomain::ImageIndex,
+       .source = SkinBuiltinPropertySelector{.value = 42},
+       .authoredOrdinal = 1});
+  model.model.objects.push_back(std::move(object));
+  model.model.destinations.push_back(destination(1, 1, 10.0));
+  static const BeatorajaSkinConfiguration configuration;
+  const auto result = renderer.evaluateFrame(
+      {.frameSerial = 1,
+       .sessionSerial = 1,
+       .model = model,
+       .configuration = configuration,
+       .resources = resources,
+       .viewport = viewport(),
+       .runtime = nullptr,
+       .state = state});
+  expect(result.submitReady && result.submitReady->commands.size() == 1 &&
+             result.diagnostics.empty() && state.integerResult.supported,
+         "static built-in frame evaluates without constructing a Lua runtime");
 }
 
 bool hasDiagnostic(const SkinFrameEvaluationResult &result,
@@ -459,12 +828,12 @@ void testOffsetSentinelAndSourceAwarePrecedence() {
   FakeResources resources;
   resources.addImage(1, {.x = 0, .y = 0, .w = 10, .h = 10});
   FakeState state;
-  state.offsets.emplace(5, SkinPropertyLookup<ConfigOffset>{.value = {.x = 10},
+  state.offsets.emplace(7, SkinPropertyLookup<SkinRuntimeOffset>{.value = {.x = 10},
                                                             .supported = true});
   ValidatedBeatorajaSkinModel model;
   model.model.objects = {imageObject(1, 1, true)};
   auto presented = destination(1, 10, 10.0);
-  presented.presentation.offsetIds = {0, -9, 200, 5};
+  presented.presentation.offsetIds = {0, -9, 200, 7};
   model.model.destinations = {std::move(presented)};
 
   const auto dynamic = evaluate(renderer, runtime, model, resources, state, 1);
@@ -479,7 +848,7 @@ void testOffsetSentinelAndSourceAwarePrecedence() {
   }
 
   BeatorajaSkinConfiguration configuration;
-  configuration.offsetsById.emplace(5, ConfigOffset{.x = 20});
+  configuration.offsetsById.emplace(7, ConfigOffset{.x = 20});
   const auto configured = evaluate(renderer, runtime, model, resources, state,
                                    2, 0, &configuration);
   expect(configured.submitReady && configured.submitReady->commands.size() == 1,
@@ -629,6 +998,39 @@ void testEmptyDestinationIsDroppedBeforeObjectStateResolution() {
              state.timerCalls == 0,
          "an empty destination is removed before it can resolve object state, "
          "matching Beatoraja Skin.prepare");
+}
+
+void testTimingDistributionGraphSkipsGameplayDestinationCallbacks() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  ValidatedBeatorajaSkinModel model;
+  model.model.booleanProperties.push_back({
+      .id = SkinBooleanPropertyId{1},
+      .source = runtime.failCallback(),
+      .authoredOrdinal = 1,
+  });
+  model.model.timerProperties.push_back({
+      .id = SkinTimerPropertyId{1},
+      .source = runtime.forbiddenTimerCallback(),
+      .authoredOrdinal = 2,
+  });
+  model.model.objects.push_back(
+      {.id = 1,
+       .authoredName = "timing-distribution",
+       .payload = SkinTimingDistributionGraphObject{},
+       .authoredOrdinal = 1,
+       .critical = true});
+  auto presented = destination(1, 10, 10.0);
+  presented.presentation.conditions.push_back(SkinBooleanPropertyId{1});
+  presented.presentation.timer = SkinTimerPropertyId{1};
+  model.model.destinations.push_back(std::move(presented));
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  expect(result.submitReady && result.submitReady->commands.empty() &&
+             result.diagnostics.empty(),
+         "gameplay timingdistributiongraph returns before destination callbacks and emits no commands");
 }
 
 bool hasDiagnostic(const SkinFrameEvaluationResult &result,
@@ -1136,6 +1538,270 @@ PreparedSkinTextAtlas verticalAtlas() {
   return atlas;
 }
 
+PreparedSkinTextAtlas bitmapAtlas(int type) {
+  auto atlas = avAtlas();
+  atlas.id = static_cast<SkinTextAtlasId>(70 + type);
+  atlas.bitmapFont = true;
+  atlas.bitmapFontType = type;
+  atlas.layoutKind = SkinTextLayoutKind::Bitmap;
+  atlas.originalSize = 20;
+  atlas.pageWidth = 100;
+  atlas.pageHeight = 50;
+  return atlas;
+}
+
+PreparedSkinTextAtlas lr2ImageAtlas() {
+  PreparedSkinTextAtlas atlas;
+  atlas.id = 88;
+  atlas.width = 16;
+  atlas.height = 10;
+  atlas.bitmapFont = true;
+  atlas.bitmapFontType = 0;
+  atlas.originalSize = 10;
+  atlas.pageWidth = 16;
+  atlas.pageHeight = 10;
+  atlas.lineHeight = 10;
+  atlas.capHeight = 10;
+  atlas.layoutKind = SkinTextLayoutKind::Lr2Image;
+  atlas.margin = 2;
+  atlas.pages.push_back({.texture = {.idx = 880},
+                         .width = 16,
+                         .height = 10,
+                         .bitmapFontType = 0,
+                         .available = true});
+  atlas.glyphs.emplace(
+      U'A', SkinPreparedGlyphMetrics{.region = {.x = 0, .y = 0, .w = 4, .h = 8},
+                                     .advance = 99,
+                                     .page = 0,
+                                     .bitmapFontType = 0});
+  atlas.glyphs.emplace(
+      U'B', SkinPreparedGlyphMetrics{.region = {.x = 4, .y = 0, .w = 6, .h = 8},
+                                     .advance = 99,
+                                     .page = 0,
+                                     .bitmapFontType = 0});
+  return atlas;
+}
+
+PreparedSkinTextAtlas practiceAsciiAtlas() {
+  PreparedSkinTextAtlas atlas;
+  atlas.id = 99;
+  atlas.width = 16;
+  atlas.height = 108;
+  atlas.key.pointSize = 18;
+  atlas.ascent = 14;
+  atlas.capHeight = 13;
+  atlas.descent = -4;
+  atlas.lineHeight = 18;
+  for (char32_t codepoint = 32; codepoint <= 126; ++codepoint) {
+    const int ordinal = static_cast<int>(codepoint - 32);
+    atlas.glyphs.emplace(
+        codepoint,
+        SkinPreparedGlyphMetrics{
+            .region = {.x = ordinal % 16,
+                       .y = (ordinal / 16) * 18,
+                       .w = 1,
+                       .h = 18},
+            .bearingX = 0,
+            .bearingY = 14,
+            .advance = 1,
+            .layoutOffsetY = -18});
+  }
+  return atlas;
+}
+
+std::string glyphRunText(const SkinDrawCommand &command) {
+  const auto *run = std::get_if<SkinGlyphRunCommand>(&command.payload);
+  if (run == nullptr) {
+    return {};
+  }
+  std::string result;
+  result.reserve(run->glyphs.size());
+  for (const auto &glyph : run->glyphs) {
+    if (glyph.codepoint > 0x7f) {
+      return {};
+    }
+    result.push_back(static_cast<char>(glyph.codepoint));
+  }
+  return result;
+}
+
+void testPracticePositiveViewportStagesMutationAndDrawsNothing() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  state.practiceResult.supported = true;
+  state.practiceResult.active = true;
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects.push_back(
+      {.id = 1,
+       .authoredName = "practice",
+       .payload = SkinPracticeObject{.visibleItems = 7},
+       .authoredOrdinal = 1,
+       .critical = true});
+  auto presented = destination(1, 10, 80.0);
+  presented.presentation.loop = 0;
+  presented.presentation.frames.front() =
+      {.timeMillis = 0, .x = 80.0, .y = 40.0, .width = 800.0, .height = 640.0};
+  model.model.destinations.push_back(std::move(presented));
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  expect(result.submitReady && result.submitReady->commands.empty() &&
+             result.diagnostics.empty() &&
+             state.stagedPracticeVisibleItemCount == 7,
+         "positive SkinPractice stages its retained viewport update and "
+         "emits no draw command");
+}
+
+void testPracticeZeroRendersPinnedLegacyFallbackAndSelectedGraph() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  resources.addTextAtlas(1, practiceAsciiAtlas());
+  FakeState state;
+  state.timerResults.emplace(41, 500'000);
+  state.practiceResult.supported = true;
+  state.practiceResult.active = true;
+  state.practiceResult.mediaReady = true;
+  state.practiceResult.horizontalInputMode = true;
+  state.practiceResult.inputTurbo = true;
+  state.practiceResult.keyMode = 24;
+  state.practiceResult.cursorPosition = 1;
+  state.practiceResult.items[0] =
+      {.available = true, .label = "START TIME", .value = " 0:01.0"};
+  state.practiceResult.items[1] =
+      {.available = true, .label = "END TIME", .value = " 0:05.0"};
+  state.practiceResult.graphType = 2;
+  state.practiceResult.startTimeMillis = 1'000;
+  state.practiceResult.endTimeMillis = 5'000;
+  state.practiceResult.frequencyPercent = 150;
+  for (std::size_t index = 0; index < state.practiceResult.judgeCounts.size();
+       ++index) {
+    state.practiceResult.judgeCounts[index] =
+        {.fast = static_cast<std::int64_t>(index + 1),
+         .slow = static_cast<std::int64_t>((index + 1) * 10)};
+  }
+  std::array<SkinEarlyLateDistribution, 10> buckets{};
+  buckets[0][0] = 1;
+  state.graphResult.earlyLateDistribution = buckets;
+
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects.push_back(
+      {.id = 1,
+       .authoredName = "practice",
+       .payload = SkinPracticeObject{.visibleItems = 0},
+       .authoredOrdinal = 1,
+       .critical = true});
+  auto presented = destination(1, 10, 80.0);
+  presented.presentation.loop = 0;
+  presented.presentation.frames.front() =
+      {.timeMillis = 0, .x = 80.0, .y = 40.0, .width = 800.0, .height = 640.0};
+  model.model.destinations.push_back(std::move(presented));
+
+  const auto result =
+      evaluate(renderer, runtime, model, resources, state, 1, 2'000'000);
+  expect(result.submitReady.has_value() && result.diagnostics.empty(),
+         "zero-item SkinPractice evaluates from prepared glyphs and captured "
+         "practice state");
+  if (!result.submitReady) {
+    return;
+  }
+  std::vector<std::string> text;
+  std::vector<const SkinGlyphRunCommand *> runs;
+  const SkinGeneratedTexturedQuadCommand *graphBackground = nullptr;
+  std::size_t generated = 0;
+  for (const auto &command : result.submitReady->commands) {
+    if (const auto *run = std::get_if<SkinGlyphRunCommand>(&command.payload)) {
+      text.push_back(glyphRunText(command));
+      runs.push_back(run);
+    } else if (std::holds_alternative<SkinGeneratedTexturedQuadCommand>(
+                   command.payload)) {
+      ++generated;
+      if (graphBackground == nullptr) {
+        graphBackground =
+            &std::get<SkinGeneratedTexturedQuadCommand>(command.payload);
+      }
+    }
+  }
+  const std::vector<std::string> expected{
+      "START TIME", " 0:01.0", "END TIME", " 0:05.0",
+      "KEYS: F#1/A#1=UP, G1/A1=DOWN, F1=LEFT,",
+      "B1=RIGHT, D#1/G#1=TURBO. PRESS C1 TO PLAY",
+      "PGREAT : 11 1 10", "GREAT  : 22 2 20", "GOOD   : 33 3 30",
+      "BAD    : 44 4 40", "POOR   : 55 5 50", "KPOOR  : 66 6 60"};
+  expect(text == expected,
+         "legacy fallback keeps exact source labels, values, 24K help/play "
+         "text, and total-fast-slow judge rows");
+  expect(runs.size() == expected.size() && !runs[0]->glyphs.empty() &&
+             !runs[2]->glyphs.empty() &&
+             runs[0]->glyphs.front().vertices.front().rgba == 0xff7f7f7fU &&
+             runs[2]->glyphs.front().vertices.front().rgba == 0xff007fffU,
+         "legacy fallback uses horizontal gray for unfocused rows and turbo "
+         "orange for the focused row");
+  expect(runs.size() == expected.size() &&
+             runs[0]->glyphs.front().vertices.front().x == 180.0F &&
+             runs[0]->glyphs.front().vertices.front().y == 138.0F &&
+             runs[1]->glyphs.front().vertices.front().x == 330.0F &&
+             runs[2]->glyphs.front().vertices.front().y == 160.0F &&
+             runs[6]->glyphs.front().vertices.front().x == 430.0F,
+         "legacy text uses the exact region eighth, value/judge offsets, "
+         "seven-eighths origin, and twenty-two-pixel row spacing");
+  expect(generated == 3,
+         "legacy fallback selects exactly the early/late note graph in the "
+         "bottom quarter of the practice destination");
+  expect(graphBackground != nullptr &&
+             graphBackground->vertices[0].x == 80.0F &&
+             graphBackground->vertices[0].y == 520.0F &&
+             graphBackground->vertices[2].x == 880.0F &&
+             graphBackground->vertices[2].y == 680.0F,
+         "legacy note graph occupies the exact bottom quarter of the BGA "
+         "destination region");
+  expect(!state.stagedPracticeVisibleItemCount.has_value(),
+         "legacy fallback does not mutate the retained modern viewport");
+}
+
+void testPracticeWithoutAuthoredObjectUsesBgaLegacyFallback() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  resources.addTextAtlas(1, practiceAsciiAtlas());
+  FakeState state;
+  state.practiceResult.supported = true;
+  state.practiceResult.practiceMode = true;
+  state.practiceResult.items[0] =
+      {.available = true, .label = "START TIME", .value = " 0:00.0"};
+  std::array<SkinNormalDistribution, 10> buckets{};
+  buckets[0][0] = 1;
+  state.graphResult.normalDistribution = buckets;
+
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects.push_back({.id = 1,
+                                 .authoredName = "bga",
+                                 .payload = SkinBgaObject{},
+                                 .authoredOrdinal = 1,
+                                 .critical = true});
+  auto presented = destination(1, 10, 80.0);
+  presented.presentation.loop = 0;
+  presented.presentation.frames.front() =
+      {.timeMillis = 0, .x = 80.0, .y = 40.0, .width = 800.0, .height = 640.0};
+  model.model.destinations.push_back(std::move(presented));
+
+  const auto result =
+      evaluate(renderer, runtime, model, resources, state, 1, 1'000'000);
+  bool hasStartLabel = false;
+  bool hasBga = false;
+  if (result.submitReady) {
+    for (const auto &command : result.submitReady->commands) {
+      hasStartLabel = hasStartLabel || glyphRunText(command) == "START TIME";
+      hasBga = hasBga || std::holds_alternative<SkinBgaCommand>(command.payload);
+    }
+  }
+  expect(result.submitReady && result.diagnostics.empty() && hasStartLabel &&
+             !hasBga,
+         "practice mode without an authored Practice object renders the "
+         "legacy fallback in the BGA destination instead of BGA media");
+}
+
 SkinObjectDefinition textObject(SkinObjectId id, bool critical,
                                 SkinStringPropertyId value = {}) {
   SkinTextObject text;
@@ -1195,6 +1861,177 @@ void testTextUsesPreparedMetricsKerningAndAtlasUvs() {
   expect(run.glyphs[1].codepoint == U'V' &&
              run.glyphs[1].vertices[0].x == 111.0F,
          "AV placement consumes the prepared negative pair kerning");
+}
+
+void testBitmapTextUsesPinnedScaleShadowAndDistanceFieldState() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  resources.addTextAtlas(1, bitmapAtlas(0));
+  resources.addTextAtlas(2, bitmapAtlas(1));
+  resources.addTextAtlas(3, bitmapAtlas(2));
+  FakeState state;
+  ValidatedBeatorajaSkinModel model;
+
+  auto ordinary = textObject(1, true);
+  auto &ordinaryText = std::get<SkinTextObject>(ordinary.payload);
+  ordinaryText.literal = "A";
+  ordinaryText.pointSize = 10;
+  ordinaryText.shadowRgba = {255, 255, 255, 255};
+  ordinaryText.shadowOffsetX = 4.0;
+  ordinaryText.shadowOffsetY = 2.0;
+  auto distance = textObject(2, true);
+  auto &distanceText = std::get<SkinTextObject>(distance.payload);
+  distanceText.literal = "A";
+  distanceText.pointSize = 10;
+  distanceText.outlineRgba = {1, 2, 3, 4};
+  distanceText.outlineWidth = 0.5;
+  distanceText.shadowRgba = {5, 6, 7, 8};
+  distanceText.shadowOffsetX = 4.0;
+  distanceText.shadowOffsetY = 2.0;
+  distanceText.shadowSmoothness = 0.4;
+  auto colored = textObject(3, true);
+  auto &coloredText = std::get<SkinTextObject>(colored.payload);
+  coloredText.literal = "A";
+  coloredText.pointSize = 10;
+  model.model.objects = {std::move(ordinary), std::move(distance),
+                         std::move(colored)};
+
+  auto ordinaryDestination = destination(1, 10, 100.0);
+  ordinaryDestination.presentation.frames.front().width = 100.0;
+  ordinaryDestination.presentation.frames.front().height = 40.0;
+  auto distanceDestination = destination(2, 20, 200.0);
+  distanceDestination.presentation.frames.front().width = 100.0;
+  distanceDestination.presentation.frames.front().height = 40.0;
+  auto coloredDestination = destination(3, 30, 300.0);
+  coloredDestination.presentation.frames.front().width = 100.0;
+  coloredDestination.presentation.frames.front().height = 40.0;
+  model.model.destinations = {std::move(ordinaryDestination),
+                              std::move(distanceDestination),
+                              std::move(coloredDestination)};
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  expect(result.submitReady && result.submitReady->commands.size() == 3,
+         "ordinary and both distance-field bitmap-font types lower from prepared resources");
+  if (!result.submitReady || result.submitReady->commands.size() != 3) {
+    return;
+  }
+  const auto &ordinaryRun =
+      std::get<SkinGlyphRunCommand>(result.submitReady->commands[0].payload);
+  const auto &distanceRun =
+      std::get<SkinGlyphRunCommand>(result.submitReady->commands[1].payload);
+  const auto &coloredRun =
+      std::get<SkinGlyphRunCommand>(result.submitReady->commands[2].payload);
+  expect(ordinaryRun.glyphs.size() == 2 &&
+             ordinaryRun.glyphs[0].vertices[0].x == 104.0F &&
+             ordinaryRun.glyphs[1].vertices[0].x == 100.0F &&
+             ordinaryRun.glyphs[1].vertices[1].x -
+                     ordinaryRun.glyphs[1].vertices[0].x ==
+                 5.0F &&
+             ordinaryRun.glyphs[0].vertices[0].rgba == 0xff7f7f7fU &&
+             ordinaryRun.glyphs[1].vertices[0].rgba == 0xffffffffU &&
+             ordinaryRun.state.filter == SkinFilterMode::Linear &&
+             !ordinaryRun.state.distanceField,
+         "ordinary bitmap text scales by text size over descriptor size and emits its half-tint shadow before the main glyph");
+  expect(distanceRun.state.filter == SkinFilterMode::Linear &&
+             distanceRun.state.distanceField &&
+             !distanceRun.state.distanceField->colored &&
+             distanceRun.state.distanceField->outlineDistance == 0.25 &&
+             distanceRun.state.distanceField->outlineRgba ==
+                 std::array<std::uint8_t, 4>{1, 2, 3, 4} &&
+             distanceRun.state.distanceField->shadowRgba ==
+                 std::array<std::uint8_t, 4>{5, 6, 7, 8} &&
+             distanceRun.state.distanceField->shadowSmoothing == 0.2 &&
+             distanceRun.state.distanceField->shadowOffsetU == 0.04 &&
+             distanceRun.state.distanceField->shadowOffsetV == 0.04,
+         "distance-field bitmap text carries pinned outline and normalized shadow uniforms in immutable draw state");
+  expect(coloredRun.state.distanceField &&
+             coloredRun.state.distanceField->colored,
+         "colored distance-field bitmap text preserves its distinct source type in draw state");
+}
+
+void testDistanceFieldTextAddsStandardFallbackColorOverlay() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  auto atlas = bitmapAtlas(1);
+  atlas.glyphs.at(U'A').bitmapFontType = 1;
+  atlas.glyphs.at(U'V').bitmapFontType = 0;
+  resources.addTextAtlas(1, std::move(atlas));
+  FakeState state;
+  ValidatedBeatorajaSkinModel model;
+  auto text = textObject(1, true);
+  auto &definition = std::get<SkinTextObject>(text.payload);
+  definition.literal = "AV";
+  definition.pointSize = 20;
+  model.model.objects.push_back(std::move(text));
+  auto presented = destination(1, 10, 100.0);
+  presented.presentation.frames.front().width = 100.0;
+  presented.presentation.frames.front().height = 20.0;
+  presented.presentation.frames.front().rgba = {64, 128, 191, 128};
+  model.model.destinations.push_back(std::move(presented));
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  expect(result.submitReady && result.submitReady->commands.size() == 1,
+         "mixed distance-field text lowers as one ordered glyph command");
+  if (!result.submitReady || result.submitReady->commands.size() != 1) {
+    return;
+  }
+  const auto &run = std::get<SkinGlyphRunCommand>(
+      result.submitReady->commands.front().payload);
+  expect(run.glyphs.size() == 2 && run.fallbackColorOverlays.size() == 1 &&
+             run.fallbackColorOverlays.front().codepoint == U'V' &&
+             run.fallbackColorOverlays.front().vertices.front().rgba ==
+                 0x80ffffffU,
+         "a standard fallback under a distance-field primary is redrawn "
+         "bilinearly in white with the authored alpha");
+}
+
+void testLr2ImageTextUsesHeightMarginAlignmentShrinkAndMissingNoDraw() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  resources.addTextAtlas(1, lr2ImageAtlas());
+  FakeState state;
+  ValidatedBeatorajaSkinModel model;
+  auto text = textObject(1, true);
+  auto &definition = std::get<SkinTextObject>(text.payload);
+  definition.literal = "AXB";
+  definition.pointSize = 0;
+  definition.alignment = 2;
+  definition.overflow = 0;
+  definition.wrapping = true;
+  model.model.objects.push_back(std::move(text));
+  auto presented = destination(1, 10, 100.0);
+  presented.presentation.frames.front().width = 12.0;
+  presented.presentation.frames.front().height = 20.0;
+  model.model.destinations.push_back(std::move(presented));
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  expect(result.submitReady && result.diagnostics.empty() &&
+             result.submitReady->commands.size() == 1,
+         "LR2 image text skips an absent glyph without rejecting its atlas");
+  if (!result.submitReady || result.submitReady->commands.size() != 1) {
+    return;
+  }
+  const auto &run = std::get<SkinGlyphRunCommand>(
+      result.submitReady->commands.front().payload);
+  expect(run.glyphs.size() == 2 && run.glyphs[0].codepoint == U'A' &&
+             run.glyphs[1].codepoint == U'B' &&
+             run.glyphs[0].vertices[0].x == 88.0F &&
+             run.glyphs[1].vertices[0].x == 93.0F &&
+             run.glyphs[0].vertices[1].x -
+                     run.glyphs[0].vertices[0].x ==
+                 4.0F &&
+             run.glyphs[1].vertices[1].x -
+                     run.glyphs[1].vertices[0].x ==
+                 6.0F &&
+             std::abs(run.glyphs[0].vertices[3].y -
+                      run.glyphs[0].vertices[0].y) == 20.0F,
+         "LR2 layout scales from destination height, includes one scaled "
+         "margin after each available glyph in measured right alignment, "
+         "always shrinks the complete run to destination width, and does not "
+         "require the unused point-size field");
 }
 
 void testTextVerticalPlacementMatchesPinnedBitmapFontBaseline() {
@@ -1714,6 +2551,115 @@ void testGraphCropsLeftOrBottomWithJavaTruncation() {
       vertical.vertices[2].y == 685.0F && vertical.vertices[0].v == 0.27F &&
           vertical.vertices[2].v == 0.24F,
       "vertical graph keeps the bottom three source pixels and halves height");
+}
+
+void testBuiltinReferenceGraphUsesPreparedSystemImageAndPinnedCrop() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  const SkinSourceRect region{.x = 10, .y = 20, .w = 9, .h = 7};
+  resources.addBuiltinImage(110, 31, region, 100, 100);
+  FakeState state;
+  state.floatResult = {.value = 0.5, .supported = true};
+  SkinGraphObject graph;
+  graph.builtinImageReference = 110;
+  graph.value = SkinFloatPropertyId{1};
+  graph.direction = 0;
+  ValidatedBeatorajaSkinModel model;
+  model.model.floatProperties.push_back(
+      {.id = SkinFloatPropertyId{1},
+       .domain = SkinFloatPropertyDomain::Rate,
+       .source = SkinBuiltinPropertySelector{.value = 92},
+       .authoredOrdinal = 1});
+  model.model.objects.push_back({.id = 1,
+                                 .authoredName = "builtin-graph",
+                                 .payload = std::move(graph),
+                                 .authoredOrdinal = 1,
+                                 .critical = true});
+  auto presented = destination(1, 119, 100.0);
+  presented.presentation.frames.front().width = 40.0;
+  presented.presentation.frames.front().height = 30.0;
+  model.model.destinations = {std::move(presented)};
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  expect(result.submitReady && result.submitReady->commands.size() == 1,
+         "an available built-in graph source emits one cropped quad");
+  if (result.submitReady && result.submitReady->commands.size() == 1) {
+    const auto &quad = std::get<SkinTexturedQuadCommand>(
+        result.submitReady->commands.front().payload);
+    expect(quad.resource == 31 && quad.vertices[1].x == 120.0F &&
+               quad.vertices[1].u == 0.14F,
+           "built-in graph resolves the system image before the pinned rate crop");
+  }
+}
+
+void testBuiltinReferenceGraphKeepsCollapsedOnePixelCropDrawable() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  resources.addBuiltinImage(
+      110, 31, {.x = 0, .y = 0, .w = 1, .h = 1}, 2, 1);
+  FakeState state;
+  state.floatResult = {.value = 0.5, .supported = true};
+  SkinGraphObject graph;
+  graph.builtinImageReference = 110;
+  graph.value = SkinFloatPropertyId{1};
+  graph.direction = 0;
+  ValidatedBeatorajaSkinModel model;
+  model.model.floatProperties.push_back(
+      {.id = SkinFloatPropertyId{1},
+       .domain = SkinFloatPropertyDomain::Rate,
+       .source = SkinBuiltinPropertySelector{.value = 92},
+       .authoredOrdinal = 1});
+  model.model.objects.push_back({.id = 1,
+                                 .authoredName = "builtin-one-pixel-graph",
+                                 .payload = std::move(graph),
+                                 .authoredOrdinal = 1,
+                                 .critical = true});
+  auto presented = destination(1, 120, 100.0);
+  presented.presentation.frames.front().width = 40.0;
+  presented.presentation.frames.front().height = 30.0;
+  model.model.destinations = {std::move(presented)};
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  expect(result.submitReady && result.submitReady->commands.size() == 1,
+         "a partial pinned 1x1 built-in graph still emits its scaled quad");
+  if (result.submitReady && result.submitReady->commands.size() == 1) {
+    const auto &quad = std::get<SkinTexturedQuadCommand>(
+        result.submitReady->commands.front().payload);
+    expect(quad.vertices[1].x == 120.0F && quad.vertices[0].u == 0.0F &&
+               quad.vertices[1].u == 0.0F,
+           "Java integer crop keeps nonzero destination width with collapsed "
+           "source UVs");
+  }
+}
+
+void testUnavailableBuiltinReferenceSkipsRateLookup() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  state.floatResult = {.value = 0.5, .supported = true};
+  SkinGraphObject graph;
+  graph.builtinImageReference = 100;
+  graph.value = SkinFloatPropertyId{1};
+  ValidatedBeatorajaSkinModel model;
+  model.model.floatProperties.push_back(
+      {.id = SkinFloatPropertyId{1},
+       .domain = SkinFloatPropertyDomain::Rate,
+       .source = SkinBuiltinPropertySelector{.value = 102},
+       .authoredOrdinal = 1});
+  model.model.objects.push_back({.id = 1,
+                                 .authoredName = "missing-stage-graph",
+                                 .payload = std::move(graph),
+                                 .authoredOrdinal = 1,
+                                 .critical = true});
+  model.model.destinations = {destination(1, 121, 100.0)};
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  expect(result.submitReady && result.submitReady->commands.empty() &&
+             result.diagnostics.empty() && state.floatCalls == 0,
+         "an unavailable chart reference suppresses before its rate lookup");
 }
 
 void testExplicitSliderAndGraphRatesRemainUnclamped() {
@@ -2271,7 +3217,7 @@ void testHiddenGaugeStillAdvancesAndDirectDrawIgnoresImageTransforms() {
         evaluate(renderer, runtime, model, resources, state, 1, 1'000);
     state.booleanResult.value = true;
     state.offsets.emplace(
-        5, SkinPropertyLookup<ConfigOffset>{.value = {}, .supported = true});
+        5, SkinPropertyLookup<SkinRuntimeOffset>{.value = {}, .supported = true});
     state.timerResult = 0;
     const auto visible =
         evaluate(renderer, runtime, model, resources, state, 2, 5'000);
@@ -2636,7 +3582,7 @@ void testJudgeMaxGaugeFallsBackImageAndDetailIndependently() {
   detailDestination.loop = -1;
   detailDestination.frames = {
       {.timeMillis = 0, .x = 0.0, .y = 0.0, .width = 10.0, .height = 20.0}};
-  detailDestination.offsetIds = {5};
+  detailDestination.offsetIds = {7};
 
   SkinJudgeObject judge;
   judge.grades.resize(7);
@@ -2664,7 +3610,7 @@ void testJudgeMaxGaugeFallsBackImageAndDetailIndependently() {
 
   BeatorajaSkinConfiguration configuration;
   configuration.offsetsById.emplace(
-      5, ConfigOffset{.x = 50, .y = 60, .w = 4, .h = 6});
+      7, ConfigOffset{.x = 50, .y = 60, .w = 4, .h = 6});
   const auto result = evaluate(renderer, runtime, model, resources, state, 1, 0,
                                &configuration);
   expect(result.submitReady && result.submitReady->commands.size() == 2,
@@ -2696,7 +3642,7 @@ void testHiddenJudgeStillPreparesChildrenInPinnedCallbackOrder() {
   state.booleanResult = {.value = true, .supported = true};
   state.timerResult = 0;
   state.offsets.emplace(
-      5, SkinPropertyLookup<ConfigOffset>{.value = {}, .supported = true});
+      5, SkinPropertyLookup<SkinRuntimeOffset>{.value = {}, .supported = true});
   state.judgeResult = {.supported = true,
                        .optionalZeroBasedGrade = 0,
                        .combo = 0,
@@ -3083,6 +4029,88 @@ void testLiveScrollUnitsUseSkinLaneHeightAndHispeed() {
          "long-note extent uses the same skin lane height and hispeed");
 }
 
+void testLiftUsesPinnedSharedLaneOriginAndScrollHeight() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  state.laneCoverResult = {.supported = true,
+                           .liftEnabled = true,
+                           .lift = 0.25};
+  state.notes = {{.visualId = 10,
+                  .lane = 0,
+                  .kind = SkinProjectedNoteKind::Normal,
+                  .scrollSpeed = 1.0,
+                  .authoredYDisplacement = 0.5,
+                  .submissionOrdinal = 1}};
+
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects = {{.id = 1,
+                          .authoredName = "lift-scroll-units",
+                          .payload = gameplayNoteObject(resources),
+                          .authoredOrdinal = 1,
+                          .critical = true}};
+  auto presented = destination(1, 1, 0.0);
+  presented.presentation.frames.clear();
+  model.model.destinations = {std::move(presented)};
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  expect(result.submitReady && result.submitReady->commands.size() == 1,
+         "Lift test emits its projected normal note");
+  if (!result.submitReady || result.submitReady->commands.size() != 1) {
+    return;
+  }
+  const auto &note =
+      std::get<SkinTexturedQuadCommand>(result.submitReady->commands[0].payload);
+  expect(note.vertices[0].y == 332.5F && note.vertices[2].y == 322.5F,
+         "Lift raises LaneRenderer's shared origin and shortens its scroll "
+         "height before applying Hi-Speed");
+}
+
+void testPmsDst2DescentUsesNormalSpriteAndNoHispeed() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  state.laneCoverResult = {.supported = true,
+                           .liftEnabled = true,
+                           .lift = 0.25};
+  state.notes = {{.visualId = 10,
+                  .lane = 0,
+                  .kind = SkinProjectedNoteKind::Normal,
+                  .scrollSpeed = 8.0,
+                  .authoredYDisplacement = 0.5,
+                  .pmsPoorYDisplacement = -25.0,
+                  .judged = true,
+                  .submissionOrdinal = 1}};
+
+  auto note = gameplayNoteObject(resources);
+  note.lanes.front().secondaryDestinationY = -20;
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects = {{.id = 1,
+                          .authoredName = "pms-dst2",
+                          .payload = std::move(note),
+                          .authoredOrdinal = 1,
+                          .critical = true}};
+  auto presented = destination(1, 1, 0.0);
+  presented.presentation.frames.clear();
+  model.model.destinations = {std::move(presented)};
+
+  const auto result = evaluate(renderer, runtime, model, resources, state, 1,
+                               0, nullptr, std::nullopt, nullptr, 1, true);
+  expect(result.submitReady && result.submitReady->commands.size() == 1,
+         "PMS dst2 descent emits its past normal note");
+  if (!result.submitReady || result.submitReady->commands.size() != 1) {
+    return;
+  }
+  const auto &draw =
+      std::get<SkinTexturedQuadCommand>(result.submitReady->commands[0].payload);
+  expect(draw.resource == 100 && draw.vertices[0].y == 470.0F &&
+             draw.vertices[2].y == 460.0F,
+         "PMS dst2 keeps the normal sprite and applies its raw no-speed "
+         "descent below the Lift-adjusted judgement origin");
+}
+
 void testEveryLongNoteBodyStateUsesItsDistinctVisualRole() {
   RuntimeHarness runtime;
   Skin2DRenderer renderer;
@@ -3112,6 +4140,21 @@ void testEveryLongNoteBodyStateUsesItsDistinctVisualRole() {
 
   auto note = gameplayNoteObject(resources);
   note.hcnBodySlotLayout = SkinHcnBodySlotLayout::Modern;
+  const auto setAuthoredSlot = [&](SkinNoteVisualKind kind, int slot) {
+    std::visit(
+        [slot](auto &visual) { visual.authoredNoteSlot = slot; },
+        note.lanes.front().visuals.at(kind));
+  };
+  setAuthoredSlot(SkinNoteVisualKind::LnEnd, 0);
+  setAuthoredSlot(SkinNoteVisualKind::LnStart, 1);
+  setAuthoredSlot(SkinNoteVisualKind::LnBodyActive, 2);
+  setAuthoredSlot(SkinNoteVisualKind::LnBodyInactive, 3);
+  setAuthoredSlot(SkinNoteVisualKind::HcnEnd, 4);
+  setAuthoredSlot(SkinNoteVisualKind::HcnStart, 5);
+  setAuthoredSlot(SkinNoteVisualKind::HcnBodyActive, 6);
+  setAuthoredSlot(SkinNoteVisualKind::HcnBodyInactive, 7);
+  setAuthoredSlot(SkinNoteVisualKind::HcnDamage, 9);
+  setAuthoredSlot(SkinNoteVisualKind::HcnReactive, 8);
   ValidatedBeatorajaSkinModel model;
   model.model.objects = {{.id = 1,
                           .authoredName = "long-note-roles",
@@ -3130,13 +4173,53 @@ void testEveryLongNoteBodyStateUsesItsDistinctVisualRole() {
       106, 105, 107, 104, 105, 111, 108, 109, 110,
       108, 109, 112, 108, 109, 113, 108, 109};
   std::vector<SkinResourceId> actualResources;
+  std::vector<int> actualSlots;
   for (const auto &command : result.submitReady->commands) {
     actualResources.push_back(
         std::get<SkinTexturedQuadCommand>(command.payload).resource);
+    actualSlots.push_back(command.longNoteSlotForTesting);
   }
   expect(actualResources == expectedResources,
          "LN active/inactive and HCN inactive/active/damage/reactive roles "
          "remain distinct");
+  const std::vector<int> expectedSlots = {
+      2, 1, 3, 0, 1, 7, 4, 5, 6, 4, 5, 9, 4, 5, 8, 4, 5};
+  expect(actualSlots == expectedSlots,
+         "modern long-note draw commands retain pinned Beatoraja slots");
+
+  auto &legacyNote =
+      std::get<SkinNoteObject>(model.model.objects.front().payload);
+  legacyNote.hcnBodySlotLayout = SkinHcnBodySlotLayout::Legacy;
+  std::visit([](auto &visual) { visual.authoredNoteSlot = 8; },
+             legacyNote.lanes.front().visuals.at(
+                 SkinNoteVisualKind::HcnDamage));
+  std::visit([](auto &visual) { visual.authoredNoteSlot = 9; },
+             legacyNote.lanes.front().visuals.at(
+                 SkinNoteVisualKind::HcnReactive));
+  const auto legacyResult = evaluate(renderer, runtime, model, resources, state, 2);
+  std::vector<int> legacySlots;
+  if (legacyResult.submitReady) {
+    for (const auto &command : legacyResult.submitReady->commands) {
+      legacySlots.push_back(command.longNoteSlotForTesting);
+    }
+  }
+  expect(legacySlots == expectedSlots,
+         "legacy long-note draw commands retain pinned Beatoraja slots");
+
+  auto &legacyLane = legacyNote.lanes.front();
+  std::swap(legacyLane.visuals.at(SkinNoteVisualKind::HcnDamage),
+            legacyLane.visuals.at(SkinNoteVisualKind::HcnReactive));
+  const auto swappedResult =
+      evaluate(renderer, runtime, model, resources, state, 3);
+  std::vector<int> swappedSlots;
+  if (swappedResult.submitReady) {
+    for (const auto &command : swappedResult.submitReady->commands) {
+      swappedSlots.push_back(command.longNoteSlotForTesting);
+    }
+  }
+  expect(swappedSlots != expectedSlots,
+         "observed long-note slots follow swapped authored visuals rather "
+         "than semantic renderer intent");
 }
 
 void testProjectedLineEmitsEveryLaneGroupAndIgnoresNestedClip() {
@@ -3320,8 +4403,14 @@ void testHiddenAndLiftCoversApplyDisappearLineClipping() {
   model.model.destinations = {std::move(hiddenDestination),
                               std::move(liftDestination)};
   BeatorajaSkinConfiguration configuration;
-  configuration.offsetsById.emplace(3, ConfigOffset{.y = 10});
-  configuration.offsetsById.emplace(5, ConfigOffset{.y = 20});
+  configuration.offsetsById.emplace(3, ConfigOffset{.y = 100});
+  configuration.offsetsById.emplace(5, ConfigOffset{.y = 200});
+  state.offsets.emplace(
+      3, SkinPropertyLookup<SkinRuntimeOffset>{.value = {.y = 10.5},
+                                                .supported = true});
+  state.offsets.emplace(
+      5, SkinPropertyLookup<SkinRuntimeOffset>{.value = {.y = 20.25},
+                                                .supported = true});
 
   const auto result = evaluate(renderer, runtime, model, resources, state, 1, 0,
                                &configuration);
@@ -3335,15 +4424,16 @@ void testHiddenAndLiftCoversApplyDisappearLineClipping() {
   const auto &lift = std::get<SkinTexturedQuadCommand>(
       result.submitReady->commands[1].payload);
   expect(hidden.state.scissor && hidden.state.scissor->x == 100.0 &&
-             hidden.state.scissor->y == 490.0 &&
+             hidden.state.scissor->y == 489.25 &&
              hidden.state.scissor->width == 100.0 &&
-             hidden.state.scissor->height == 70.0,
-         "hidden cover links its disappear line to Lift after offsets");
+             hidden.state.scissor->height == 70.25,
+         "hidden cover uses the fractional runtime Lift offset after the "
+         "configured offset is installed");
   expect(lift.state.scissor && lift.state.scissor->x == 300.0 &&
-             lift.state.scissor->y == 510.0 &&
+             lift.state.scissor->y == 509.5 &&
              lift.state.scissor->width == 100.0 &&
-             lift.state.scissor->height == 60.0,
-         "lift cover uses its fixed authored disappear line");
+             lift.state.scissor->height == 60.5,
+         "lift cover applies the same fractional runtime Lift offset");
 }
 
 void testUnclippedCoverUsesProjectedSkinResolutionScissor() {
@@ -3780,6 +4870,33 @@ void testHiddenNoteStillPreparesEveryLaneSourceInPinnedOrder() {
          "and processed sources before drawing nothing");
 }
 
+SkinDestination noteDistributionDestination(SkinObjectId object,
+                                             double width = 100.0,
+                                             double height = 100.0) {
+  auto value = destination(object, object, 0.0);
+  value.presentation.loop = 0;
+  value.presentation.frames.front().y = 0.0;
+  value.presentation.frames.front().width = width;
+  value.presentation.frames.front().height = height;
+  return value;
+}
+
+std::vector<const SkinGeneratedTexturedQuadCommand *>
+generatedCommands(const SkinFrameEvaluationResult &result) {
+  std::vector<const SkinGeneratedTexturedQuadCommand *> generated;
+  if (!result.submitReady) {
+    return generated;
+  }
+  for (const auto &command : result.submitReady->commands) {
+    if (const auto *texture =
+            std::get_if<SkinGeneratedTexturedQuadCommand>(&command.payload)) {
+      generated.push_back(texture);
+    }
+  }
+  return generated;
+}
+
+
 std::int64_t fixtureFixed(double value) {
   // Floating-point to_chars implementations can choose different shortest
   // spellings for the same value. Store micro-units as integers so fixture
@@ -4159,8 +5276,744 @@ evaluateAllV1Fixture(const PlaySkinViewport &viewport) {
                                  .configuration = configuration,
                                  .resources = resources,
                                  .viewport = viewport,
-                                 .runtime = runtime.runtime(),
+                                 .runtime = &runtime.runtime(),
                                  .state = state});
+}
+
+const SkinGeneratedTexturedQuadCommand *generatedTexture(
+    const SkinDrawCommand &command) {
+  return std::get_if<SkinGeneratedTexturedQuadCommand>(&command.payload);
+}
+
+std::uint32_t generatedRgba(const SkinGeneratedTexturedQuadCommand &command,
+                            int x, int y) {
+  if (command.texture.rgba == nullptr || x < 0 || y < 0 ||
+      x >= command.texture.width || y >= command.texture.height) return 0;
+  const std::size_t offset =
+      (static_cast<std::size_t>(y) * command.texture.width + x) * 4U;
+  const auto &pixels = *command.texture.rgba;
+  return (static_cast<std::uint32_t>(pixels[offset]) << 24U) |
+         (static_cast<std::uint32_t>(pixels[offset + 1U]) << 16U) |
+         (static_cast<std::uint32_t>(pixels[offset + 2U]) << 8U) |
+         pixels[offset + 3U];
+}
+
+float generatedMinimumX(const SkinGeneratedTexturedQuadCommand &command) {
+  return std::ranges::min(command.vertices, {}, &SkinVertex::x).x;
+}
+
+float generatedMaximumX(const SkinGeneratedTexturedQuadCommand &command) {
+  return std::ranges::max(command.vertices, {}, &SkinVertex::x).x;
+}
+
+std::array<SkinJudgeWindow, 5> generatedJudgeWindows();
+
+void testSoftwarePixmapMatchesPinnedGdx2dCompositing() {
+  expect(!SkinSoftwarePixmap::create(
+              SkinResourcePolicy::maximumDimension + 1, 1),
+         "software Pixmap rejects oversized dimensions before allocation");
+  auto pixmap = SkinSoftwarePixmap::create(5, 5);
+  expect(pixmap.has_value(), "bounded software Pixmap allocates");
+  if (!pixmap) return;
+  pixmap->fillRectangle(0, 0, 3, 3, 0xff000080U);
+  pixmap->fillRectangle(1, 1, 3, 3, 0x00ff0080U);
+  pixmap->drawLine(0, 4, 4, 0, 0x0000ff80U);
+  pixmap->fillTriangle(2, 0, 4, 4, 0, 4, 0xffffff80U);
+  const SkinGeneratedTexturedQuadCommand command{
+      .texture = {.width = 5, .height = 5, .rgba = pixmap->pixels()}};
+  expect(generatedRgba(command, 0, 0) == 0x80000080U &&
+             generatedRgba(command, 1, 1) == 0x408000bfU &&
+             pixmap->maximumAlpha() >= 0xbfU,
+         "software Pixmap uses gdx2d RGBA8888 SourceOver for overlapping "
+         "primitives rather than independently blending them at destination");
+  auto linePixmap = SkinSoftwarePixmap::create(5, 5);
+  auto trianglePixmap = SkinSoftwarePixmap::create(5, 5);
+  if (!linePixmap || !trianglePixmap) return;
+  linePixmap->drawLine(0, 4, 4, 0, 0x0000ff80U);
+  trianglePixmap->fillTriangle(2, 0, 4, 4, 0, 4, 0xffffff80U);
+  const SkinGeneratedTexturedQuadCommand lineCommand{
+      .texture = {.width = 5, .height = 5, .rgba = linePixmap->pixels()}};
+  const SkinGeneratedTexturedQuadCommand triangleCommand{
+      .texture = {.width = 5,
+                  .height = 5,
+                  .rgba = trianglePixmap->pixels()}};
+  expect(generatedRgba(lineCommand, 2, 2) == 0x00008080U &&
+             generatedRgba(lineCommand, 2, 1) == 0U &&
+             generatedRgba(triangleCommand, 2, 2) == 0x80808080U,
+         "software Pixmap matches pinned Bresenham line and scanline triangle "
+         "coverage before texture upload");
+  trianglePixmap->clear(0U);
+  trianglePixmap->fillTriangle(std::numeric_limits<int>::min(), 0,
+                               std::numeric_limits<int>::max(), 4, 0, 2,
+                               0xffffffffU);
+  expect(trianglePixmap->maximumAlpha() == 0xffU,
+         "software Pixmap bounds extreme triangle arithmetic without signed "
+         "overflow before clipping it to the canvas");
+}
+
+std::vector<SkinBpmGraphPoint> generatedBpmGimmickSeries() {
+  return {
+      {.chartTimeMicros = 0,
+       .bpm = 120.0,
+       .scroll = 1.0,
+       .bpmTimesScroll = 120.0,
+       .graphSpeed = 120.0,
+       .emitsGraphPoint = true,
+       .synthetic = true},
+      {.chartTimeMicros = 1'000'000,
+       .bpm = 15.0,
+       .scroll = 0.5,
+       .bpmTimesScroll = 7.5,
+       .graphSpeed = 7.5,
+       .emitsGraphPoint = true},
+      {.chartTimeMicros = 2'000'000,
+       .bpm = 240.0,
+       .scroll = 8.0,
+       .bpmTimesScroll = 1920.0,
+       .graphSpeed = 1920.0,
+       .emitsGraphPoint = true},
+      {.chartTimeMicros = 3'000'000,
+       .bpm = 120.0,
+       .scroll = 2.0,
+       .bpmTimesScroll = 240.0,
+       .graphSpeed = 240.0,
+       .emitsGraphPoint = true},
+      {.chartTimeMicros = 4'000'000,
+       .bpm = 120.0,
+       .scroll = 1.0,
+       .bpmTimesScroll = 120.0,
+       .stopMicros = 500'000,
+       .graphSpeed = 0.0,
+       .emitsGraphPoint = true},
+      {.chartTimeMicros = 5'000'000,
+       .bpm = 120.0,
+       .scroll = 1.0,
+       .bpmTimesScroll = 120.0,
+       .graphSpeed = 120.0,
+       .emitsGraphPoint = true,
+       .synthetic = true},
+  };
+}
+
+void testGeneratedBpmPixmapPreservesSourceRasterRevealAndIntegration() {
+  SkinBpmGraphObject graph;
+  graph.delayMillis = 1'000;
+  const auto series = generatedBpmGimmickSeries();
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 0.0, .y = 0.0, .width = 80.0, .height = 80.0};
+  geometry.rgba = {0.5F, 1.0F, 1.0F, 0.5F};
+  geometry.blend = SkinBlendMode::Additive;
+  geometry.filter = SkinFilterMode::Linear;
+  const auto rendered = renderSkinBpmGraph(
+      {.sourceObject = 7,
+       .authoredOrdinal = 9,
+       .graph = graph,
+       .state = {.bpmSeries = series,
+                 .mainBpm = 120.0,
+                 .minimumBpm = 7.5,
+                 .maximumBpm = 1920.0},
+       .geometry = geometry,
+       .viewport = viewport(),
+       .elapsedMillis = 500,
+       .maximumCommands = 1,
+       .maximumPrimitiveVertices = 0});
+  const auto *texture = rendered.commands.size() == 1
+                            ? generatedTexture(rendered.commands.front())
+                            : nullptr;
+  expect(!rendered.failure && texture != nullptr &&
+             texture->texture.width == 80 && texture->texture.height == 80 &&
+             generatedRgba(*texture, 13, 2) == graph.transitionRgba &&
+             generatedRgba(*texture, 0, 39) == graph.mainRgba &&
+             generatedRgba(*texture, 14, 0) == graph.minimumRgba &&
+             generatedRgba(*texture, 27, 78) == graph.maximumRgba &&
+             generatedRgba(*texture, 53, 0) == graph.stopRgba &&
+             generatedMinimumX(*texture) == 0.0F &&
+             generatedMaximumX(*texture) == 40.0F &&
+             texture->state.blend == SkinBlendMode::Additive &&
+             texture->state.filter == SkinFilterMode::Linear &&
+             texture->vertices.front().rgba == 0x7fffff7fU,
+         "BPM Pixmap precomposes pinned log bands and transition overlap, "
+         "then reveals and destination-modulates one texture command");
+
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  state.graphResult = {.bpmSeries = series,
+                       .mainBpm = 120.0,
+                       .minimumBpm = 7.5,
+                       .maximumBpm = 1920.0};
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects = {{.id = 1,
+                          .authoredName = "bpm",
+                          .payload = SkinBpmGraphObject{},
+                          .authoredOrdinal = 1}};
+  model.model.destinations = {noteDistributionDestination(1, 80.0, 80.0)};
+  const auto integrated = evaluate(renderer, runtime, model, resources, state);
+  const auto steady = evaluate(renderer, runtime, model, resources, state, 2,
+                               16'000);
+  const auto cacheStats = renderer.generatedTextureCacheStatsForTesting();
+  expect(integrated.submitReady && integrated.diagnostics.empty() &&
+             steady.submitReady && steady.diagnostics.empty() &&
+             generatedCommands(integrated).size() == 1 &&
+             generatedCommands(steady).size() == 1 &&
+             cacheStats.pixmapAllocations == 2 &&
+             cacheStats.rasterizations == 1 && cacheStats.reuses == 1,
+         "Skin2DRenderer publishes and reuses one session-owned BPM Pixmap "
+         "without a steady-frame CPU allocation");
+}
+
+SkinGameplayGraphStateView generatedGaugeState(std::span<const float> history,
+                                                int type = 0) {
+  return {.gaugeHistory = history,
+          .gaugeType = type,
+          .gaugeMinimum = 2.0F,
+          .gaugeMaximum = 100.0F,
+          .gaugeBorder = 80.0F,
+          .gaugeSupported = true};
+}
+
+void testGeneratedGaugePixmapPreservesLayersCrossingAndBudget() {
+  SkinGaugeGraphObject graph;
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 0.0, .y = 0.0, .width = 100.0, .height = 100.0};
+  const std::array<float, 2> rising{20.0F, 90.0F};
+  const auto rendered = renderSkinGaugeGraph(
+      {.sourceObject = 8,
+       .authoredOrdinal = 10,
+       .graph = graph,
+       .state = generatedGaugeState(rising),
+       .geometry = geometry,
+       .viewport = viewport(),
+       .elapsedMillis = 750,
+       .maximumCommands = 2,
+       .maximumPrimitiveVertices = 0});
+  const auto *background = rendered.commands.size() == 2
+                               ? generatedTexture(rendered.commands[0])
+                               : nullptr;
+  const auto *shape = rendered.commands.size() == 2
+                          ? generatedTexture(rendered.commands[1])
+                          : nullptr;
+  expect(!rendered.failure && background != nullptr && shape != nullptr &&
+             generatedRgba(*background, 10, 10) == graph.rgba[0][3] &&
+             generatedRgba(*background, 10, 90) == graph.rgba[0][1] &&
+             generatedRgba(*shape, 0, 20) == graph.rgba[0][2] &&
+             generatedRgba(*shape, 0, 80) == graph.rgba[0][0] &&
+             generatedRgba(*shape, 20, 88) == graph.rgba[0][0] &&
+             generatedMaximumX(*shape) == 50.0F &&
+             shape->vertices[1].u == 0.5F,
+         "gauge background and crossing shape retain separate source Pixmaps "
+         "and the 1500ms reveal crops rather than stretches the shape");
+  const auto bounded = renderSkinGaugeGraph(
+      {.sourceObject = 8,
+       .authoredOrdinal = 10,
+       .graph = graph,
+       .state = generatedGaugeState(rising),
+       .geometry = geometry,
+       .viewport = viewport(),
+       .elapsedMillis = 1'500,
+       .maximumCommands = 1,
+       .maximumPrimitiveVertices = 0});
+  expect(bounded.failure && bounded.commands.empty(),
+         "gauge generated-layer command overflow remains atomic");
+}
+
+void testGeneratedNotePixmapPreservesPmsOrderGapsCursorAndFloatReveal() {
+  std::array<SkinJudgeDistribution, 2> distribution{};
+  distribution[0][0] = 1;
+  distribution[0][1] = 1;
+  SkinGameplayGraphStateView state;
+  state.judgementDistribution = distribution;
+  SkinNoteDistributionGraphObject graph;
+  graph.type = SkinNoteDistributionGraphType::Judge;
+  graph.backgroundTextureOff = true;
+  graph.delayMillis = 1'000;
+  graph.reverseOrder = true;
+  graph.noGap = true;
+  graph.noHorizontalGap = true;
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 0.0, .y = 0.0, .width = 100.5, .height = 100.0};
+  const auto rendered = renderSkinNoteDistributionGraph(
+      {.sourceObject = 9,
+       .authoredOrdinal = 11,
+       .graph = graph,
+       .state = state,
+       .geometry = geometry,
+       .viewport = viewport(),
+       .pmsMode = true,
+       .elapsedMillis = 500,
+       .startMillis = 0,
+       .maximumCommands = 3,
+       .maximumPrimitiveVertices = 0});
+  const auto *shape = rendered.commands.size() == 2
+                          ? generatedTexture(rendered.commands[0])
+                          : nullptr;
+  const auto *cursor = rendered.commands.size() == 2
+                           ? generatedTexture(rendered.commands[1])
+                           : nullptr;
+  expect(!rendered.failure && rendered.commands.size() == 2 &&
+             shape != nullptr && cursor != nullptr &&
+             generatedRgba(*shape, 0, 0) == 0xff5eb0ffU &&
+             generatedRgba(*shape, 4, 4) == 0xff5eb0ffU &&
+             generatedRgba(*shape, 0, 5) == 0x555555ffU &&
+             generatedRgba(*cursor, 0, 0) == 0x80ff80ffU &&
+             generatedMaximumX(*shape) == 50.25F &&
+             shape->vertices[1].u == 0.5F,
+         "note distribution precomposes PMS reverse order and no-gap cells, "
+         "keeps cursor separate, and preserves its float destination reveal");
+}
+
+void testGeneratedHitErrorPixmapPreservesEmaAndDestinationState() {
+  SkinHitErrorVisualizerObject visualizer;
+  visualizer.width = 101;
+  visualizer.judgeWidthMillis = 50;
+  visualizer.lineWidth = 1;
+  visualizer.windowLength = 3;
+  visualizer.hitErrorMode = false;
+  visualizer.emaMode = 3;
+  visualizer.centerRgba = 0x20406080U;
+  visualizer.emaRgba = 0xff0000ffU;
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 10.0, .y = 20.0, .width = 202.0, .height = 12.0};
+  geometry.clip = AuthoredRect{.x = 0.0,
+                               .y = 0.0,
+                               .width = 200.0,
+                               .height = 100.0};
+  geometry.rgba = {0.5F, 0.5F, 0.5F, 0.5F};
+  geometry.blend = SkinBlendMode::Additive;
+  geometry.filter = SkinFilterMode::Linear;
+  const auto rendered = renderSkinHitErrorVisualizer(
+      {.sourceObject = 10,
+       .authoredOrdinal = 12,
+       .visualizer = visualizer,
+       .state = {},
+       .emaMillis = 10,
+       .geometry = geometry,
+       .viewport = viewport(),
+       .maximumCommands = 1,
+       .maximumPrimitiveVertices = 0});
+  const auto *texture = rendered.commands.size() == 1
+                            ? generatedTexture(rendered.commands.front())
+                            : nullptr;
+  expect(!rendered.failure && texture != nullptr &&
+             generatedRgba(*texture, 40, 5) == visualizer.emaRgba &&
+             generatedRgba(*texture, 50, 5) == 0x10203080U &&
+             texture->state.blend == SkinBlendMode::Additive &&
+             texture->state.filter == SkinFilterMode::Linear &&
+             texture->state.scissor.has_value() &&
+             texture->vertices.front().rgba == 0x7f7f7f7fU,
+         "hit-error line, triangle, and centre overlap in one Pixmap before "
+         "destination tint, filtering, blend, and clip");
+
+  SkinHitErrorVisualizerPresentationState presentation;
+  auto recent = emptySkinRecentJudgeTimings();
+  recent[1] = 20;
+  const auto windows = generatedJudgeWindows();
+  SkinGameplayGraphStateView state{.judgeWindows = windows,
+                                   .recentJudgeTimingsMillis = recent,
+                                   .recentJudgeTimingIndex = 1};
+  visualizer.alpha = 0.5F;
+  expect(advanceSkinHitErrorVisualizerEma(visualizer, state, presentation) &&
+             presentation.emaMillis == 10 &&
+             !advanceSkinHitErrorVisualizerEma(visualizer, state,
+                                               presentation),
+         "hit-error EMA advances exactly once for each recent-index change");
+}
+
+void testGeneratedTimingPixmapPreservesBandsLinesAndZeroAlphaBudget() {
+  SkinTimingVisualizerObject visualizer;
+  visualizer.centerRgba = 0xffffffffU;
+  visualizer.drawDecay = false;
+  const auto windows = generatedJudgeWindows();
+  auto recent = emptySkinRecentJudgeTimings();
+  recent[1] = 0;
+  recent[2] = 10;
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 0.0, .y = 0.0, .width = 301.0, .height = 100.0};
+  const auto rendered = renderSkinTimingVisualizer(
+      {.sourceObject = 11,
+       .authoredOrdinal = 13,
+       .visualizer = visualizer,
+       .state = {.judgeWindows = windows,
+                 .recentJudgeTimingsMillis = recent,
+                 .recentJudgeTimingIndex = 0},
+       .geometry = geometry,
+       .viewport = viewport(),
+       .maximumCommands = 3,
+       .maximumPrimitiveVertices = 8});
+  const auto *background = !rendered.commands.empty()
+                               ? generatedTexture(rendered.commands.front())
+                               : nullptr;
+  expect(!rendered.failure && background != nullptr &&
+             rendered.commands.size() == 3 &&
+             rendered.primitiveVertices == 8 &&
+             generatedRgba(*background, 147, 0) ==
+                 visualizer.judgeRgba[0] &&
+             generatedRgba(*background, 142, 0) ==
+                 visualizer.judgeRgba[1] &&
+             generatedRgba(*background, 132, 0) ==
+                 visualizer.judgeRgba[2] &&
+             generatedRgba(*background, 122, 0) ==
+                 visualizer.judgeRgba[3] &&
+             generatedRgba(*background, 102, 0) ==
+                 visualizer.judgeRgba[4] &&
+             std::holds_alternative<SkinPrimitiveCommand>(
+                 rendered.commands[1].payload) &&
+             std::holds_alternative<SkinPrimitiveCommand>(
+                 rendered.commands[2].payload),
+         "timing background bands precompose once while recent white-source "
+         "line draws retain their independent destination blending");
+
+  geometry.rgba = {0.0F, 0.0F, 0.0F, 0.001F};
+  const auto explicitLines = renderSkinTimingVisualizer(
+      {.sourceObject = 11,
+       .authoredOrdinal = 13,
+       .visualizer = visualizer,
+       .state = {.judgeWindows = windows,
+                 .recentJudgeTimingsMillis = recent,
+                 .recentJudgeTimingIndex = 0},
+       .geometry = geometry,
+       .viewport = viewport(),
+       .maximumCommands = 0,
+       .maximumPrimitiveVertices = 0});
+  expect(explicitLines.failure.has_value(),
+         "timing recent lines retain their explicit source color and consume "
+         "their own budget even when destination tint hides the background");
+}
+
+void testTimingRecentLinesUseExplicitColorZeroAngleAndPerLineStretch() {
+  SkinTimingVisualizerObject visualizer;
+  visualizer.lineRgba = 0x336699ffU;
+  visualizer.centerRgba = 0U;
+  visualizer.judgeRgba.fill(0U);
+  visualizer.drawDecay = false;
+  auto recent = emptySkinRecentJudgeTimings();
+  recent[0] = 0;
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 10.0, .y = 20.0, .width = 100.0, .height = 50.0};
+  geometry.clip = AuthoredRect{.x = 0.0, .y = 0.0,
+                               .width = 200.0, .height = 200.0};
+  geometry.angleDegrees = 90.0;
+  geometry.rgba = {0.0F, 1.0F, 0.0F, 0.25F};
+  geometry.blend = SkinBlendMode::Additive;
+  geometry.filter = SkinFilterMode::Linear;
+  geometry.stretch = SkinStretchMode::KeepAspectRatioFitInner;
+  const auto rendered = renderSkinTimingVisualizer(
+      {.sourceObject = 91,
+       .authoredOrdinal = 92,
+       .visualizer = visualizer,
+       .state = {.judgeWindows = generatedJudgeWindows(),
+                 .recentJudgeTimingsMillis = recent,
+                 .recentJudgeTimingIndex = 0},
+       .geometry = geometry,
+       .viewport = viewport(),
+       .maximumCommands = 2,
+       .maximumPrimitiveVertices = 4});
+  const auto *line = rendered.commands.size() == 2
+                         ? std::get_if<SkinPrimitiveCommand>(
+                               &rendered.commands[1].payload)
+                         : nullptr;
+  if (line == nullptr || line->vertices.size() != 4) {
+    expect(false, "timing recent line lowers to one stretched solid quad");
+    return;
+  }
+  const auto [minimumX, maximumX] = std::ranges::minmax(
+      line->vertices, {}, &SkinVertex::x);
+  const auto [minimumY, maximumY] = std::ranges::minmax(
+      line->vertices, {}, &SkinVertex::y);
+  expect(!rendered.failure && line->state.blend == SkinBlendMode::Additive &&
+             line->state.filter == SkinFilterMode::Linear &&
+             line->state.scissor.has_value() &&
+             std::ranges::all_of(line->vertices, [](const SkinVertex &vertex) {
+               return vertex.rgba == 0xff996633U;
+             }) &&
+             std::abs((maximumX.x - minimumX.x) - 1.0F) < 0.001F &&
+             std::abs((maximumY.y - minimumY.y) - 1.0F) < 0.001F,
+         "timing line ignores destination tint/angle, preserves state, and "
+         "applies fit-inner to its own 1x1 source");
+}
+
+void testGeneratedPixmapCacheBoundsCpuBeforeAllocationAndHonorsCadence() {
+  SkinGeneratedTextureCache cache(
+      {.maximumTextures = 2, .maximumBytes = 64});
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 0.0, .y = 0.0, .width = 2.0, .height = 2.0};
+  const auto render = [&](SkinObjectId object, std::uint64_t revision,
+                          std::int64_t nowMillis, int cadenceMillis) {
+    SkinGeneratedTextureRaster raster(
+        {.sourceObject = object,
+         .authoredOrdinal = static_cast<std::uint32_t>(object),
+         .geometry = geometry,
+         .viewport = viewport(),
+         .elapsedMillis = nowMillis,
+         .maximumCommands = 1,
+         .maximumPrimitiveVertices = 0,
+         .diagnosticObject = "cache cadence fixture",
+         .cache = &cache,
+         .contentRevision = revision,
+         .minimumUpdateIntervalMillis = cadenceMillis});
+    if (raster.drawable()) {
+      raster.appendRectangle(0, 0, 2, 2,
+                             revision == 1 ? 0xff0000ffU : 0x00ff00ffU);
+    }
+    return raster.take();
+  };
+
+  const auto first = render(1, 1, 0, 50);
+  const auto reused = render(1, 1, 10, 50);
+  const auto deferred = render(1, 2, 49, 50);
+  const auto refreshed = render(1, 2, 50, 50);
+  const auto second = render(2, 1, 0, 0);
+  const auto rejected = render(3, 1, 0, 0);
+  const auto firstTexture = first.commands.empty()
+                                ? nullptr
+                                : generatedTexture(first.commands.front());
+  const auto deferredTexture = deferred.commands.empty()
+                                   ? nullptr
+                                   : generatedTexture(deferred.commands.front());
+  const auto refreshedTexture = refreshed.commands.empty()
+                                    ? nullptr
+                                    : generatedTexture(refreshed.commands.front());
+  const auto stats = cache.stats();
+  expect(firstTexture && deferredTexture && refreshedTexture &&
+             !reused.failure && !second.failure && rejected.failure &&
+             generatedRgba(*firstTexture, 0, 0) == 0xff0000ffU &&
+             generatedRgba(*deferredTexture, 0, 0) == 0xff0000ffU &&
+             generatedRgba(*refreshedTexture, 0, 0) == 0x00ff00ffU &&
+             stats.pixmapAllocations == 4 && stats.rasterizations == 3 &&
+             stats.alphaScans == 3 && stats.reuses == 2 &&
+             stats.allocatedBytes == 64,
+         "session Pixmap cache preflights aggregate double-buffer bytes, "
+         "reuses steady pixels and alpha, and refreshes only at the declared "
+         "cadence");
+}
+
+void testGeneratedGaugeCacheRefreshesEveryPublishedHistoryRevision() {
+  SkinGeneratedTextureCache cache;
+  SkinGaugeGraphObject graph;
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 0.0, .y = 0.0, .width = 20.0, .height = 10.0};
+  const std::array<float, 3> firstHistory{20.0F, 40.0F, 60.0F};
+  const std::array<float, 3> secondHistory{80.0F, 50.0F, 30.0F};
+  const auto render = [&](std::span<const float> history,
+                          std::uint64_t revision) {
+    return renderSkinGaugeGraph(
+        {.sourceObject = 41,
+         .authoredOrdinal = 42,
+         .graph = graph,
+         .state = {.gaugeHistory = history,
+                   .gaugeType = 0,
+                   .gaugeMaximum = 100.0F,
+                   .gaugeBorder = 50.0F,
+                   .gaugeSupported = true,
+                   .gaugeRevision = revision},
+         .geometry = geometry,
+         .viewport = viewport(),
+         .elapsedMillis = 1'500,
+         .maximumCommands = 2,
+         .maximumPrimitiveVertices = 0,
+         .cache = &cache});
+  };
+
+  const auto first = render(firstHistory, 1);
+  const auto changed = render(secondHistory, 2);
+  const auto stats = cache.stats();
+  const auto *firstShape = first.commands.size() == 2
+                               ? generatedTexture(first.commands[1])
+                               : nullptr;
+  const auto *changedShape = changed.commands.size() == 2
+                                 ? generatedTexture(changed.commands[1])
+                                 : nullptr;
+  expect(firstShape && changedShape && !first.failure && !changed.failure &&
+             firstShape->texture.contentRevision !=
+                 changedShape->texture.contentRevision &&
+             stats.rasterizations == 3 && stats.alphaScans == 3 &&
+             stats.reuses == 1,
+         "only the gauge shape Pixmap refreshes on each published history "
+         "revision when the gauge type is unchanged");
+}
+
+std::array<SkinJudgeWindow, 5> generatedJudgeWindows() {
+  return {{{.minimumTimingMillis = -5, .maximumTimingMillis = 5},
+           {.minimumTimingMillis = -10, .maximumTimingMillis = 10},
+           {.minimumTimingMillis = -20, .maximumTimingMillis = 20},
+           {.minimumTimingMillis = -30, .maximumTimingMillis = 30},
+           {.minimumTimingMillis = -50, .maximumTimingMillis = 50}}};
+}
+
+void testGeneratedPixmapWidgetsMatchSourceLayersAndPixels() {
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 0.0, .y = 0.0, .width = 100.0, .height = 50.0};
+
+  SkinBpmGraphObject bpm;
+  const std::array<SkinBpmGraphPoint, 2> bpmSeries{{
+      {.chartTimeMicros = 0, .graphSpeed = 120.0, .emitsGraphPoint = true},
+      {.chartTimeMicros = 1'000'000,
+       .graphSpeed = 180.0,
+       .emitsGraphPoint = true}}};
+  const auto bpmResult = renderSkinBpmGraph(
+      {.sourceObject = 1, .authoredOrdinal = 2, .graph = bpm,
+       .state = {.bpmSeries = bpmSeries, .mainBpm = 120.0},
+       .geometry = geometry, .viewport = viewport(), .elapsedMillis = 1'000,
+       .maximumCommands = 1, .maximumPrimitiveVertices = 0});
+  const auto *bpmTexture = bpmResult.commands.size() == 1
+                               ? generatedTexture(bpmResult.commands[0])
+                               : nullptr;
+  expect(!bpmResult.failure && bpmTexture != nullptr &&
+             bpmResult.primitiveVertices == 0 &&
+             bpmTexture->key.layer == SkinGeneratedTextureLayer::Primary,
+         "BPM Pixmap is one cached generated texture command");
+
+  SkinGaugeGraphObject gauge;
+  const std::array<float, 3> history{20.0F, 60.0F, 40.0F};
+  const auto gaugeResult = renderSkinGaugeGraph(
+      {.sourceObject = 2, .authoredOrdinal = 3, .graph = gauge,
+       .state = {.gaugeHistory = history, .gaugeType = 0,
+                 .gaugeMaximum = 100.0F, .gaugeBorder = 50.0F,
+                 .gaugeSupported = true},
+       .geometry = geometry, .viewport = viewport(), .elapsedMillis = 1'500,
+       .maximumCommands = 2, .maximumPrimitiveVertices = 0});
+  expect(!gaugeResult.failure && gaugeResult.commands.size() == 2 &&
+             generatedTexture(gaugeResult.commands[0]) != nullptr &&
+             generatedTexture(gaugeResult.commands[1]) != nullptr &&
+             generatedTexture(gaugeResult.commands[0])->key.layer ==
+                 SkinGeneratedTextureLayer::Background &&
+             generatedTexture(gaugeResult.commands[1])->key.layer ==
+                 SkinGeneratedTextureLayer::Shape,
+         "Gauge preserves separate cached background and shape Pixmaps");
+
+  const std::array<SkinNormalDistribution, 1> distribution{{
+      SkinNormalDistribution{1, 1, 0, 0, 0, 0, 0}}};
+  SkinGameplayGraphStateView noteState;
+  noteState.normalDistribution = distribution;
+  SkinNoteDistributionGraphObject graph;
+  geometry.rect = {.x = 0.0, .y = 0.0, .width = 5.0, .height = 100.0};
+  const auto note = renderSkinNoteDistributionGraph(
+      {.sourceObject = 3, .authoredOrdinal = 4, .graph = graph,
+       .state = noteState, .geometry = geometry, .viewport = viewport(),
+       .elapsedMillis = 500, .maximumCommands = 3,
+       .maximumPrimitiveVertices = 0});
+  expect(!note.failure && note.commands.size() == 2 &&
+             generatedTexture(note.commands[0]) != nullptr &&
+             generatedTexture(note.commands[1]) != nullptr &&
+             generatedRgba(*generatedTexture(note.commands[1]), 0, 0) ==
+                 0x44ff44ffU &&
+             generatedRgba(*generatedTexture(note.commands[1]), 0, 5) ==
+                 0x228822ffU,
+         "Note distribution precomposes ordered chips into its shape Pixmap");
+}
+
+void testGeneratedPixmapHitErrorTimingAndZeroAlphaContracts() {
+  SkinHitErrorVisualizerObject hit;
+  hit.width = 11;
+  hit.judgeWidthMillis = -1;
+  hit.lineWidth = 1;
+  hit.windowLength = 1;
+  hit.hitErrorMode = true;
+  hit.emaMode = 0;
+  hit.centerRgba = 0xffffff80U;
+  hit.judgeRgba.fill(0xff000080U);
+  auto recent = emptySkinRecentJudgeTimings();
+  recent[0] = 0;
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 0.0, .y = 0.0, .width = 11.0, .height = 2.0};
+  const auto rendered = renderSkinHitErrorVisualizer(
+      {.sourceObject = 4, .authoredOrdinal = 5, .visualizer = hit,
+       .state = {.judgeWindows = generatedJudgeWindows(),
+                 .recentJudgeTimingsMillis = recent,
+                 .recentJudgeTimingIndex = 0},
+       .geometry = geometry, .viewport = viewport(),
+       .maximumCommands = 1, .maximumPrimitiveVertices = 0});
+  const auto *hitTexture = rendered.commands.size() == 1
+                               ? generatedTexture(rendered.commands[0])
+                               : nullptr;
+  expect(!rendered.failure && hitTexture != nullptr &&
+             generatedRgba(*hitTexture, 5, 0) == 0x80808080U,
+         "negative judge width remains drawable and uses the ordered reversed "
+         "clamp before Pixmap clipping");
+
+  SkinTimingVisualizerObject timing;
+  timing.centerRgba = 0U;
+  timing.judgeRgba.fill(0U);
+  geometry.rect = {.x = 0.0, .y = 0.0, .width = 301.0, .height = 20.0};
+  const auto timingResult = renderSkinTimingVisualizer(
+      {.sourceObject = 5, .authoredOrdinal = 6, .visualizer = timing,
+       .state = {}, .geometry = geometry, .viewport = viewport(),
+       .maximumCommands = 1, .maximumPrimitiveVertices = 0});
+  const auto *timingTexture = timingResult.commands.size() == 1
+                                  ? generatedTexture(timingResult.commands[0])
+                                  : nullptr;
+  expect(!timingResult.failure && timingTexture != nullptr &&
+             generatedRgba(*timingTexture, 0, 0) == 0x0000003eU,
+         "timing grid uses the pinned 0x3f input alpha and gdx2d SourceOver "
+         "stores its exact transparent-canvas result");
+
+  SkinNormalDistribution emptyDistribution{};
+  const std::array<SkinNormalDistribution, 1> emptyData{emptyDistribution};
+  SkinGameplayGraphStateView noteState;
+  noteState.normalDistribution = emptyData;
+  SkinNoteDistributionGraphObject transparentGraph;
+  transparentGraph.backgroundTextureOff = true;
+  geometry.rect = {.x = 0.0, .y = 0.0, .width = 5.0, .height = 100.0};
+  geometry.rgba[3] = 0.5F / 255.0F;
+  const auto invisible = renderSkinNoteDistributionGraph(
+      {.sourceObject = 6, .authoredOrdinal = 7, .graph = transparentGraph,
+       .state = noteState, .geometry = geometry, .viewport = viewport(),
+       .elapsedMillis = 500, .startMillis = 0, .maximumCommands = 0,
+       .maximumPrimitiveVertices = 0});
+  expect(!invisible.failure && invisible.commands.empty(),
+         "post-modulation alpha-zero generated layers consume no command budget");
+
+  geometry.rgba[3] = 0.001F;
+  geometry.rect = {.x = 0.0, .y = 0.0, .width = 20.0, .height = 20.0};
+  const std::array<SkinBpmGraphPoint, 2> bpmSeries{{
+      {.chartTimeMicros = 0,
+       .graphSpeed = 120.0,
+       .emitsGraphPoint = true},
+      {.chartTimeMicros = 1'000'000,
+       .graphSpeed = 120.0,
+       .emitsGraphPoint = true}}};
+  const auto invisibleBpm = renderSkinBpmGraph(
+      {.sourceObject = 7,
+       .authoredOrdinal = 8,
+       .graph = SkinBpmGraphObject{},
+       .state = {.bpmSeries = bpmSeries, .mainBpm = 120.0},
+       .geometry = geometry,
+       .viewport = viewport(),
+       .maximumCommands = 0,
+       .maximumPrimitiveVertices = 0});
+  const std::array<float, 2> gaugeHistory{20.0F, 90.0F};
+  const auto invisibleGauge = renderSkinGaugeGraph(
+      {.sourceObject = 8,
+       .authoredOrdinal = 9,
+       .graph = SkinGaugeGraphObject{},
+       .state = generatedGaugeState(gaugeHistory),
+       .geometry = geometry,
+       .viewport = viewport(),
+       .elapsedMillis = 1'500,
+       .maximumCommands = 0,
+       .maximumPrimitiveVertices = 0});
+  SkinHitErrorVisualizerObject faintHit;
+  faintHit.width = 11;
+  faintHit.windowLength = 1;
+  faintHit.hitErrorMode = false;
+  faintHit.emaMode = 0;
+  faintHit.centerRgba = 0xffffff01U;
+  geometry.rgba[3] = 0.5F;
+  const auto invisibleHit = renderSkinHitErrorVisualizer(
+      {.sourceObject = 9,
+       .authoredOrdinal = 10,
+       .visualizer = faintHit,
+       .state = {},
+       .geometry = geometry,
+       .viewport = viewport(),
+       .maximumCommands = 0,
+       .maximumPrimitiveVertices = 0});
+  expect(!invisibleBpm.failure && invisibleBpm.commands.empty() &&
+             !invisibleGauge.failure && invisibleGauge.commands.empty() &&
+             !invisibleHit.failure && invisibleHit.commands.empty(),
+         "BPM, gauge, and hit-error generated Pixmaps also suppress packed "
+         "post-tint alpha zero before budget admission");
 }
 
 void testDesktopAndIpadFitCommandFixtures() {
@@ -4251,6 +6104,9 @@ void testDesktopAndIpadFitCommandFixtures() {
 } // namespace
 
 int main() {
+  testPomyuCharaSelectsPreparedTimersFramesAndOrderedLayers();
+  testMovieCommandsPreserveTimingDestinationStateAndMixedOrdering();
+  testStaticBuiltinFrameDoesNotRequireLuaRuntime();
   testCapturedFrameSerialMustMatchCallbacksAndProjection();
   testOffsetSentinelAndSourceAwarePrecedence();
   testCriticalFailureCannotExposePartialBuffer();
@@ -4259,6 +6115,7 @@ int main() {
   testBuiltinImageStateAndOutOfRangeFallback();
   testHiddenImageStillSelectsSourceAfterRuntimeSuppression();
   testEmptyDestinationIsDroppedBeforeObjectStateResolution();
+  testTimingDistributionGraphSkipsGameplayDestinationCallbacks();
   testProjectionOrdinalIrregularitiesNeverDiscardAGameplayFrame();
   testLargeProjectionDoesNotHitAnAppSpecificFrameLimit();
   testBindingAndDisabledLookupsStayLogarithmicAtModelLimits();
@@ -4269,6 +6126,12 @@ int main() {
   testFalseDestinationSkipsNumericSourceTimerAfterValueLookup();
   testLuaFractionalNumberUsesPinnedIntegerCoercion();
   testTextUsesPreparedMetricsKerningAndAtlasUvs();
+  testBitmapTextUsesPinnedScaleShadowAndDistanceFieldState();
+  testDistanceFieldTextAddsStandardFallbackColorOverlay();
+  testLr2ImageTextUsesHeightMarginAlignmentShrinkAndMissingNoDraw();
+  testPracticePositiveViewportStagesMutationAndDrawsNothing();
+  testPracticeZeroRendersPinnedLegacyFallbackAndSelectedGraph();
+  testPracticeWithoutAuthoredObjectUsesBgaLegacyFallback();
   testTextVerticalPlacementMatchesPinnedBitmapFontBaseline();
   testMissingTextGlyphHonorsCriticalityWithoutPartialCommands();
   testFalseDestinationSkipsTextValueCallback();
@@ -4280,6 +6143,9 @@ int main() {
   testSliderDirectionsMoveBeforeSharedProjection();
   testNonCardinalSliderDirectionDrawsWithoutMotion();
   testGraphCropsLeftOrBottomWithJavaTruncation();
+  testBuiltinReferenceGraphUsesPreparedSystemImageAndPinnedCrop();
+  testBuiltinReferenceGraphKeepsCollapsedOnePixelCropDrawable();
+  testUnavailableBuiltinReferenceSkipsRateLookup();
   testExplicitSliderAndGraphRatesRemainUnclamped();
   testNegativeGraphsUseAbsoluteIntrinsicSizeForStretching();
   testExtremeFiniteSliderAndGraphRatesFailWithoutPublishing();
@@ -4300,6 +6166,8 @@ int main() {
   testCriticalJudgeRequiresSupportedState();
   testNoteLongNoteAndLineCommandsPreserveMergedProjectionOrder();
   testLiveScrollUnitsUseSkinLaneHeightAndHispeed();
+  testLiftUsesPinnedSharedLaneOriginAndScrollHeight();
+  testPmsDst2DescentUsesNormalSpriteAndNoHispeed();
   testEveryLongNoteBodyStateUsesItsDistinctVisualRole();
   testProjectedLineEmitsEveryLaneGroupAndIgnoresNestedClip();
   testSynthesizedNoteFallbacksHonorMarkProcessedNote();
@@ -4312,6 +6180,17 @@ int main() {
   testNoteExpansionUsesCapturedQuarterNotePhase();
   testNoteLineCallbacksRunAfterTopLevelPreparationAndOnlyWhenDrawable();
   testHiddenNoteStillPreparesEveryLaneSourceInPinnedOrder();
+  testSoftwarePixmapMatchesPinnedGdx2dCompositing();
+  testGeneratedBpmPixmapPreservesSourceRasterRevealAndIntegration();
+  testGeneratedGaugePixmapPreservesLayersCrossingAndBudget();
+  testGeneratedNotePixmapPreservesPmsOrderGapsCursorAndFloatReveal();
+  testGeneratedHitErrorPixmapPreservesEmaAndDestinationState();
+  testGeneratedTimingPixmapPreservesBandsLinesAndZeroAlphaBudget();
+  testTimingRecentLinesUseExplicitColorZeroAngleAndPerLineStretch();
+  testGeneratedPixmapCacheBoundsCpuBeforeAllocationAndHonorsCadence();
+  testGeneratedGaugeCacheRefreshesEveryPublishedHistoryRevision();
+  testGeneratedPixmapWidgetsMatchSourceLayersAndPixels();
+  testGeneratedPixmapHitErrorTimingAndZeroAlphaContracts();
   testDesktopAndIpadFitCommandFixtures();
   return failures == 0 ? 0 : 1;
 }

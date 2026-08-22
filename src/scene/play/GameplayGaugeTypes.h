@@ -6,7 +6,17 @@
 #include <algorithm>
 #include <cstddef>
 
-enum class GaugeType { AssistedEasy, Easy, Normal, Hard, ExHard, Hazard };
+enum class GaugeType {
+  AssistedEasy,
+  Easy,
+  Normal,
+  Hard,
+  ExHard,
+  Hazard,
+  Grade,
+  ExGrade,
+  ExHardGrade,
+};
 
 enum class GaugeAutoShiftMode {
   None = 0,
@@ -82,6 +92,7 @@ enum class GaugeProfile {
   Standard5Keys,
   Standard9Keys,
   Standard24Keys,
+  StandardLr2,
 };
 
 enum class ClearType {
@@ -112,7 +123,7 @@ inline constexpr int kClearTypeNormalClearRank = 300;
 inline constexpr int kClearTypeHardClearRank = 400;
 inline constexpr int kClearTypeExHardClearRank = 500;
 inline constexpr int kClearTypeFullComboRank = 600;
-inline constexpr std::size_t kGaugeTypeCount = 6;
+inline constexpr std::size_t kGaugeTypeCount = 9;
 
 namespace clear_policy {
 [[nodiscard]] inline bool
@@ -173,6 +184,12 @@ inline int gaugeTypeIndex(GaugeType gaugeType) {
     return 4;
   case GaugeType::Hazard:
     return 5;
+  case GaugeType::Grade:
+    return 6;
+  case GaugeType::ExGrade:
+    return 7;
+  case GaugeType::ExHardGrade:
+    return 8;
   default:
     return 2;
   }
@@ -192,6 +209,12 @@ inline GaugeType gaugeTypeAtIndex(int index) {
     return GaugeType::ExHard;
   case 5:
     return GaugeType::Hazard;
+  case 6:
+    return GaugeType::Grade;
+  case 7:
+    return GaugeType::ExGrade;
+  case 8:
+    return GaugeType::ExHardGrade;
   default:
     return GaugeType::Normal;
   }
@@ -211,6 +234,12 @@ inline const char *gaugeTypeToLabel(GaugeType gaugeType) {
     return "EX-HARD";
   case GaugeType::Hazard:
     return "HAZARD";
+  case GaugeType::Grade:
+    return "GRADE";
+  case GaugeType::ExGrade:
+    return "EX GRADE";
+  case GaugeType::ExHardGrade:
+    return "EXHARD GRADE";
   default:
     return "NORMAL";
   }
@@ -230,6 +259,12 @@ inline const char *gaugeTypeToShortLabel(GaugeType gaugeType) {
     return "EX-HARD";
   case GaugeType::Hazard:
     return "HAZARD";
+  case GaugeType::Grade:
+    return "CLASS";
+  case GaugeType::ExGrade:
+    return "EX-CLASS";
+  case GaugeType::ExHardGrade:
+    return "EXH-CLASS";
   default:
     return "NORMAL";
   }
@@ -249,6 +284,12 @@ inline int gaugeTypeToClearRank(GaugeType gaugeType) {
     return kClearTypeExHardClearRank;
   case GaugeType::Hazard:
     return kClearTypeFullComboRank;
+  case GaugeType::Grade:
+    return kClearTypeNormalClearRank;
+  case GaugeType::ExGrade:
+    return kClearTypeHardClearRank;
+  case GaugeType::ExHardGrade:
+    return kClearTypeExHardClearRank;
   default:
     return kClearTypeNormalClearRank;
   }
@@ -267,6 +308,7 @@ inline bool gaugeProfileIsCourse(GaugeProfile profile) {
   case GaugeProfile::Standard5Keys:
   case GaugeProfile::Standard9Keys:
   case GaugeProfile::Standard24Keys:
+  case GaugeProfile::StandardLr2:
   default:
     return false;
   }
@@ -307,10 +349,14 @@ inline const char *courseGaugeTypeToShortLabel(GaugeType gaugeType) {
     return "EX-CLASS";
   case GaugeType::ExHard:
   case GaugeType::Hazard:
+  case GaugeType::ExHardGrade:
     return "EXH-CLASS";
+  case GaugeType::ExGrade:
+    return "EX-CLASS";
   case GaugeType::AssistedEasy:
   case GaugeType::Easy:
   case GaugeType::Normal:
+  case GaugeType::Grade:
   default:
     return "CLASS";
   }

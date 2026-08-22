@@ -37,6 +37,7 @@ bool PlayfieldAuthorityUpdate::operator==(
     const PlayfieldAuthorityUpdate &other) const {
   return currentBpm == other.currentBpm &&
          currentScrollRate == other.currentScrollRate &&
+         currentSpeedMultiplier == other.currentSpeedMultiplier &&
          judgementCounters == other.judgementCounters &&
          judgementFastSlowCounters == other.judgementFastSlowCounters &&
          comboBreak == other.comboBreak && gaugeType == other.gaugeType &&
@@ -44,16 +45,37 @@ bool PlayfieldAuthorityUpdate::operator==(
          stageCombo == other.stageCombo &&
          stagePassedNotes == other.stagePassedNotes &&
          bestScore == other.bestScore &&
+         persistedScore == other.persistedScore &&
+         rivalScore == other.rivalScore &&
+         playerScoreHistory == other.playerScoreHistory &&
          sameTarget(bestScoreTarget, other.bestScoreTarget) &&
          gaugeAutoShift == other.gaugeAutoShift &&
+         gaugeAutoShiftLowerBound == other.gaugeAutoShiftLowerBound &&
          currentGauge == other.currentGauge && gaugeRules == other.gaugeRules &&
+         graphGaugeState == other.graphGaugeState &&
          sameTarget(pacemakerTarget, other.pacemakerTarget) &&
          sameSnapshot(pacemakerStatus, other.pacemakerStatus) &&
          player1RandomOption == other.player1RandomOption &&
          player2RandomOption == other.player2RandomOption &&
          doublePlayOption == other.doublePlayOption &&
+         targetPlayOption == other.targetPlayOption &&
+         songReviewFavorite == other.songReviewFavorite &&
+         chartHasDocument == other.chartHasDocument &&
+         stageFileAvailable == other.stageFileAvailable &&
+         backBmpAvailable == other.backBmpAvailable &&
          playerName == other.playerName &&
+         irProviderName == other.irProviderName &&
+         irAccountName == other.irAccountName &&
          playOptionLabel == other.playOptionLabel &&
+         tableName == other.tableName && tableLevel == other.tableLevel &&
+         tableFullName == other.tableFullName &&
+         currentFramesPerSecond == other.currentFramesPerSecond &&
+         modeFilterName == other.modeFilterName && sortId == other.sortId &&
+         difficultyFilterName == other.difficultyFilterName &&
+         chartReplicationMode == other.chartReplicationMode &&
+         skinTargetId == other.skinTargetId &&
+         skinTargetList == other.skinTargetList &&
+         applicationUptimeMillis == other.applicationUptimeMillis &&
          autoPlayMarkVisible == other.autoPlayMarkVisible &&
          gameplayMode == other.gameplayMode &&
          loadingState == other.loadingState &&
@@ -68,11 +90,13 @@ bool PlayfieldAuthorityUpdate::operator==(
          liftEnabled == other.liftEnabled && liftRatio == other.liftRatio &&
          hiddenEnabled == other.hiddenEnabled &&
          hiddenRatio == other.hiddenRatio &&
+         failureAnimationActive == other.failureAnimationActive &&
          laneCoverAdjustmentHeld == other.laneCoverAdjustmentHeld &&
          laneCoverChanged == other.laneCoverChanged &&
          laneCoverChangeKind == other.laneCoverChangeKind &&
          resetLaneCoverVisibleTimeReference ==
-             other.resetLaneCoverVisibleTimeReference;
+             other.resetLaneCoverVisibleTimeReference &&
+         practiceMenuActive == other.practiceMenuActive;
 }
 
 PlayfieldVisualStateStore::PlayfieldVisualStateStore(
@@ -101,6 +125,13 @@ void PlayfieldVisualStateStore::resetModel(
     notes_->push_back({.id = note.id});
   }
   noteIndices_ = std::move(noteIndices);
+  skinGameplayChartGraph_ =
+      std::make_shared<SkinGameplayChartGraphState>(model.skinGameplayGraph);
+  SkinGameplayGraphAccumulator initialGraph(
+      model.skinGameplayGraph.judgementNotes,
+      model.skinGameplayGraph.judgementDistributionSeconds, {}, 0);
+  skinGameplayDynamicGraph_ =
+      std::make_shared<SkinGameplayDynamicGraphState>(initialGraph.state());
   replayTouchSamples_.clear();
   replayTouchCursor_ = 0;
   lastReplayTouchTimeMicros_ = -1;
@@ -128,6 +159,12 @@ void PlayfieldVisualStateStore::setConfiguration(
 void PlayfieldVisualStateStore::applyAuthorityUpdate(
     const PlayfieldAuthorityUpdate &update) {
   authority_ = update;
+}
+
+void PlayfieldVisualStateStore::applyGameplayGraphState(
+    const SkinGameplayDynamicGraphState &state) {
+  skinGameplayDynamicGraph_ =
+      std::make_shared<SkinGameplayDynamicGraphState>(state);
 }
 
 void PlayfieldVisualStateStore::setNoteState(NotePresentationState state) {
@@ -281,6 +318,9 @@ PlayfieldVisualStateStore::capture(PlayfieldFrameClock clock,
       .notes = includeNotes && notes_ ? *notes_
                                       : std::vector<NotePresentationState>{},
       .touches = touches_,
+      .skinGameplayGraph =
+          {.chart = skinGameplayChartGraph_,
+           .dynamic = skinGameplayDynamicGraph_},
       .lastJudge = lastJudge_,
       .lastJudgeVisualMicros = lastJudgeVisualMicros_,
       .bgaMiss = bgaMissTracker_.snapshot(),

@@ -99,7 +99,12 @@ AppSettings makeDistinctSettings() {
   value.prepMetronomeEnabled = true;
   value.startLaneIndicatorsEnabled = false;
   value.showInvisibleNotes = true;
+  value.showPastNotes = true;
+  value.notesDisplayTimingMilliseconds = -67;
+  value.constantFadeInMilliseconds = -75;
   value.markProcessedNotes = true;
+  value.customJudge = true;
+  value.showJudgeArea = true;
   value.touchVisualizationEnabled = false;
   value.archiveChartPreviewEnabled = false;
   value.findBmsSkipUnarchivingForNonSolidArchives = true;
@@ -111,6 +116,10 @@ AppSettings makeDistinctSettings() {
   value.laneLength = 10.25f;
   value.laneBeamLengthPercent = 61;
   value.noteStartPositionPercent = 33;
+  value.liftEnabled = true;
+  value.liftRatio = 0.63F;
+  value.hiddenEnabled = true;
+  value.hiddenRatio = 0.37F;
   value.hispeedAutoAdjust = true;
   value.playAreaWidth4K = 5.1f;
   value.playAreaWidth5K = 5.2f;
@@ -155,7 +164,16 @@ void testLegacyFixtureLoadsEverySetting() {
   AppSettings expected = makeDistinctSettings();
   expected.audioVideo = player_settings::defaultAudioVideoSettingsForPlatform();
   expected.findBmsSkipUnarchivingForNonSolidArchives = false;
+  expected.showPastNotes = false;
+  expected.notesDisplayTimingMilliseconds = 0;
+  expected.constantFadeInMilliseconds = 100;
   expected.markProcessedNotes = false;
+  expected.customJudge = false;
+  expected.showJudgeArea = false;
+  expected.liftEnabled = false;
+  expected.liftRatio = 0.1F;
+  expected.hiddenEnabled = false;
+  expected.hiddenRatio = 0.1F;
   expected.skin.safetyLevel = skin::SkinSafetyLevel::Standard;
   // The retired floating-cover UI field must not silently opt legacy users
   // into current-BPM Hi-Speed Auto Adjust.
@@ -249,17 +267,31 @@ void testJsonRoundTripIncludesAudioAndVideo() {
   expect(readFile(path).find("\"startLaneIndicatorsEnabled\": false") !=
              std::string::npos,
          "saved JSON includes the start lane indicator setting");
+  expect(readFile(path).find("\"showPastNotes\": true") !=
+             std::string::npos,
+         "saved JSON includes the Beatoraja past-note setting");
+  expect(readFile(path).find("\"notesDisplayTimingMilliseconds\": -67") !=
+             std::string::npos,
+         "saved JSON includes the Beatoraja display-timing setting");
+  expect(readFile(path).find("\"constantFadeInMilliseconds\": -75") !=
+             std::string::npos,
+         "saved JSON includes the Beatoraja Constant fade setting");
   expect(readFile(path).find("\"markProcessedNotes\": true") !=
              std::string::npos,
          "saved JSON includes the Beatoraja processed-note marker setting");
-  expect(readFile(path).find("\"gameplayHispeed\": 1.75") !=
+  const std::string saved = readFile(path);
+  expect(saved.find("\"gameplayHispeed\": 1.75") !=
                  std::string::npos &&
-             readFile(path).find("\"hispeedMargin\": 0.5") !=
+             saved.find("\"hispeedMargin\": 0.5") !=
                  std::string::npos &&
-             readFile(path).find("\"laneCoverEnabled\": false") !=
+             saved.find("\"laneCoverEnabled\": false") !=
                  std::string::npos,
          "saved JSON includes source-faithful Hi-Speed and lane-cover state");
-  const std::string saved = readFile(path);
+  expect(saved.find("\"liftEnabled\": true") != std::string::npos &&
+             saved.find("\"liftRatio\":") != std::string::npos &&
+             saved.find("\"hiddenEnabled\": true") != std::string::npos &&
+             saved.find("\"hiddenRatio\":") != std::string::npos,
+         "saved JSON includes the pinned PlayConfig Lift and HIDDEN state");
   expect(saved.find("\"hispeedAutoAdjust\": true") != std::string::npos,
          "saved JSON persists the Beatoraja Hi-Speed Auto Adjust setting");
   expect(saved.find("floatingLaneCoverEnabled") == std::string::npos,
@@ -291,6 +323,186 @@ void testJsonRoundTripIncludesAudioAndVideo() {
          "saved JSON includes non-secret IR provider settings");
   expect(readFile(path).find("sentinel-api-key") == std::string::npos,
          "serialized settings contain no API key material");
+}
+
+void testGameplaySkinPlayerConfigSelectorsRoundTrip() {
+  TempDirectory temp;
+  const auto path = temp.path() / "gameplay-skin-player-config.json";
+  AppSettings expected;
+  expected.notesDisplayTimingAutoAdjust = true;
+  expected.autoSaveReplay = {1, 2, 3, 10};
+  expected.guideSoundEffects = true;
+  expected.extraNoteDepth = 23;
+  expected.mineMode = 3;
+  expected.scrollMode = 1;
+  expected.longNoteModifierMode = 4;
+  expected.sevenToNinePattern = 6;
+  expected.sevenToNineType = 2;
+  expected.constantScroll = true;
+
+  std::string error;
+  expect(AppSettingsStore::Save(path, expected, error),
+         "gameplay skin PlayerConfig selector settings save: " + error);
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.status == AppSettingsLoadStatus::Loaded &&
+             loaded.settings.notesDisplayTimingAutoAdjust ==
+                 expected.notesDisplayTimingAutoAdjust &&
+             loaded.settings.autoSaveReplay == expected.autoSaveReplay &&
+             loaded.settings.guideSoundEffects == expected.guideSoundEffects &&
+             loaded.settings.extraNoteDepth == expected.extraNoteDepth &&
+             loaded.settings.mineMode == expected.mineMode &&
+             loaded.settings.scrollMode == expected.scrollMode &&
+             loaded.settings.longNoteModifierMode ==
+                 expected.longNoteModifierMode &&
+             loaded.settings.sevenToNinePattern == expected.sevenToNinePattern &&
+             loaded.settings.sevenToNineType == expected.sevenToNineType &&
+             loaded.settings.constantScroll == expected.constantScroll,
+         "gameplay skin PlayerConfig selectors survive settings round trip");
+}
+
+void testGameplaySkinPlayerConfigSelectorsUseBeatorajaBounds() {
+  AppSettings lower;
+  lower.notesDisplayTimingMilliseconds = -501;
+  lower.constantFadeInMilliseconds = -1001;
+  lower.extraNoteDepth = -1;
+  lower.mineMode = -1;
+  lower.scrollMode = -1;
+  lower.longNoteModifierMode = -1;
+  lower.sevenToNinePattern = -1;
+  lower.sevenToNineType = -1;
+  lower.sanitize();
+  expect(lower.notesDisplayTimingMilliseconds == -500 &&
+             lower.constantFadeInMilliseconds == -1000 &&
+             lower.extraNoteDepth == 0 && lower.mineMode == 0 &&
+             lower.scrollMode == 0 && lower.longNoteModifierMode == 0 &&
+             lower.sevenToNinePattern == 0 && lower.sevenToNineType == 0,
+         "gameplay skin PlayerConfig selectors clamp to Beatoraja's lower "
+         "bounds");
+
+  AppSettings upper;
+  upper.notesDisplayTimingMilliseconds = 501;
+  upper.constantFadeInMilliseconds = 1001;
+  upper.extraNoteDepth = 101;
+  upper.mineMode = 5;
+  upper.scrollMode = 3;
+  upper.longNoteModifierMode = 6;
+  upper.sevenToNinePattern = 7;
+  upper.sevenToNineType = 3;
+  upper.sanitize();
+  expect(upper.notesDisplayTimingMilliseconds == 500 &&
+             upper.constantFadeInMilliseconds == 1000 &&
+             upper.extraNoteDepth == 100 && upper.mineMode == 4 &&
+             upper.scrollMode == 2 && upper.longNoteModifierMode == 5 &&
+             upper.sevenToNinePattern == 6 && upper.sevenToNineType == 2,
+         "gameplay skin PlayerConfig selectors clamp to Beatoraja's upper "
+         "bounds");
+}
+
+void testPlayerConfigurationSkinStringsRoundTrip() {
+  // The values are StringPropertyFactory's direct PlayerConfig outputs, not
+  // labels synthesized by a gameplay skin.
+  TempDirectory temp;
+  const auto path = temp.path() / "player-config-skin-strings.json";
+  AppSettings settings;
+  settings.skinModeFilterName = "24KEY";
+  settings.skinSortId = "MISSCOUNT";
+  settings.skinDifficultyFilterName = "LONG NOTE CHART";
+  settings.skinChartReplicationMode = "RIVALCHART";
+
+  std::string error;
+  expect(AppSettingsStore::Save(path, settings, error),
+         "player-config skin strings save successfully: " + error);
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.status == AppSettingsLoadStatus::Loaded &&
+             loaded.settings.skinModeFilterName == "24KEY" &&
+             loaded.settings.skinSortId == "MISSCOUNT" &&
+             loaded.settings.skinDifficultyFilterName == "LONG NOTE CHART" &&
+             loaded.settings.skinChartReplicationMode == "RIVALCHART",
+         "PlayerConfig string values survive settings persistence verbatim");
+}
+
+void testConfiguredTargetListSkinStringsRoundTrip() {
+  // The bridge must keep PlayerConfig.targetid and targetlist raw: source
+  // TargetProperty performs lookup and fallback only when a skin asks.
+  TempDirectory temp;
+  const auto path = temp.path() / "target-list-skin-strings.json";
+  AppSettings settings;
+  settings.skinTargetId = "custom-target";
+  settings.skinTargetList = {"custom-target", "RATE_50", "RIVAL_2"};
+
+  std::string error;
+  expect(AppSettingsStore::Save(path, settings, error),
+         "target-list skin strings save successfully: " + error);
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.status == AppSettingsLoadStatus::Loaded &&
+             loaded.settings.skinTargetId == "custom-target" &&
+             loaded.settings.skinTargetList ==
+                 std::vector<std::string>{"custom-target", "RATE_50", "RIVAL_2"},
+         "PlayerConfig target strings survive settings persistence verbatim");
+}
+
+void testPlayerConfigurationSkinStringsAreBounded() {
+  const std::string oversized(
+      AppSettings::kMaximumSkinPropertyStringBytes + 1, 'x');
+  AppSettings direct;
+  direct.skinModeFilterName = oversized;
+  direct.skinSortId = oversized;
+  direct.skinDifficultyFilterName = oversized;
+  direct.skinChartReplicationMode = oversized;
+  direct.skinTargetId = oversized;
+  direct.skinTargetList.assign(
+      AppSettings::kMaximumSkinTargetListEntries + 50, "target");
+  direct.skinTargetList.front() = oversized;
+  direct.sanitize();
+  std::size_t directTargetBytes = 0;
+  for (const auto &target : direct.skinTargetList) {
+    directTargetBytes += target.size();
+  }
+  expect(direct.skinModeFilterName == "ALL" &&
+             direct.skinSortId == "TITLE" &&
+             direct.skinDifficultyFilterName == "ALL" &&
+             direct.skinChartReplicationMode == "RIVALCHART" &&
+             direct.skinTargetId == "MAX" &&
+             direct.skinTargetList.size() ==
+                 AppSettings::kMaximumSkinTargetListEntries &&
+             directTargetBytes <= AppSettings::kMaximumSkinTargetListBytes &&
+             std::ranges::none_of(
+                 direct.skinTargetList, [](const std::string &value) {
+                   return value.size() >
+                          AppSettings::kMaximumSkinPropertyStringBytes;
+                 }),
+         "sanitization bounds every per-frame PlayerConfig skin string");
+
+  TempDirectory temp;
+  const auto path = temp.path() / "bounded-player-config-strings.json";
+  nlohmann::json targetList = nlohmann::json::array();
+  targetList.push_back(oversized);
+  for (std::size_t index = 0;
+       index < AppSettings::kMaximumSkinTargetListEntries + 50; ++index) {
+    targetList.push_back("target-" + std::to_string(index));
+  }
+  const nlohmann::json document = {
+      {"schemaVersion", AppSettingsStore::kCurrentSchemaVersion},
+      {"skinModeFilterName", oversized},
+      {"skinSortId", oversized},
+      {"skinDifficultyFilterName", oversized},
+      {"skinChartReplicationMode", oversized},
+      {"skinTargetId", oversized},
+      {"skinTargetList", std::move(targetList)},
+  };
+  writeFile(path, document.dump());
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.status == AppSettingsLoadStatus::Loaded &&
+             loaded.settings.skinModeFilterName == "ALL" &&
+             loaded.settings.skinSortId == "TITLE" &&
+             loaded.settings.skinDifficultyFilterName == "ALL" &&
+             loaded.settings.skinChartReplicationMode == "RIVALCHART" &&
+             loaded.settings.skinTargetId == "MAX" &&
+             loaded.settings.skinTargetList.size() <=
+                 AppSettings::kMaximumSkinTargetListEntries &&
+             hasDiagnostic(loaded.diagnostics, "skinTargetList", "limit"),
+         "settings decode rejects oversized PlayerConfig strings before "
+         "copying them into the runtime settings object");
 }
 
 void testGameplaySkinTraitSelectionsSurviveRestart() {
@@ -1011,7 +1223,16 @@ void testVersionFixturesAndNoRewrite() {
   AppSettings expectedV0 = makeDistinctSettings();
   expectedV0.findBmsSkipUnarchivingForNonSolidArchives = false;
   expectedV0.hispeedAutoAdjust = false;
+  expectedV0.showPastNotes = false;
+  expectedV0.notesDisplayTimingMilliseconds = 0;
+  expectedV0.constantFadeInMilliseconds = 100;
   expectedV0.markProcessedNotes = false;
+  expectedV0.customJudge = false;
+  expectedV0.showJudgeArea = false;
+  expectedV0.liftEnabled = false;
+  expectedV0.liftRatio = 0.1F;
+  expectedV0.hiddenEnabled = false;
+  expectedV0.hiddenRatio = 0.1F;
   expectedV0.skin.safetyLevel = skin::SkinSafetyLevel::Standard;
   expect(v0.settings == expectedV0, "v0 migration is lossless");
 
@@ -1297,6 +1518,11 @@ void testAtomicFirstSaveCreatesRelativeNestedParents() {
 int main() {
   testLegacyFixtureLoadsEverySetting();
   testJsonRoundTripIncludesAudioAndVideo();
+  testGameplaySkinPlayerConfigSelectorsRoundTrip();
+  testGameplaySkinPlayerConfigSelectorsUseBeatorajaBounds();
+  testPlayerConfigurationSkinStringsRoundTrip();
+  testConfiguredTargetListSkinStringsRoundTrip();
+  testPlayerConfigurationSkinStringsAreBounded();
   testGameplaySkinTraitSelectionsSurviveRestart();
   testBpmGuideAssistOptionPersists();
   testSchemaThreeMigrationDisablesCompatibility();

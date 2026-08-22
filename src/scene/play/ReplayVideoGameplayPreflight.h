@@ -6,10 +6,12 @@
 #include "../../CoursePlaySession.h"
 #include "../../PreparationPlan.h"
 #include "../../ReplayVideoExporter.h"
+#include "../../repositories/ChartRepository.h"
 #include "../../video/RendererAccessCoordinator.h"
 
-#include <memory>
+#include <cstdint>
 #include <map>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -18,6 +20,19 @@
 namespace replay_video_export {
 
 inline constexpr long long kReplayResultScreenTailMicros = 10'000'000;
+
+struct ReplayChartMetadataAuthority {
+  int songReviewFavorite = 0;
+  bool chartHasDocument = false;
+  bool stageFileAvailable = false;
+  bool backBmpAvailable = false;
+};
+
+[[nodiscard]] ReplayChartMetadataAuthority
+projectReplayChartMetadataAuthority(const bms_parser::ChartMeta &,
+                                    const ChartMetaPathBatchReadOutcome &,
+                                    bool stageFileAvailable,
+                                    bool backBmpAvailable);
 
 // Export callers may provide an already-parsed chart instead of going through
 // play_options::prepareReplayChart. Apply the replay's recorded long-note
@@ -48,6 +63,30 @@ struct ReplayGameplayFrameState {
   long long sceneStartMicros = kPlayfieldTimestampOff;
   long long playStartMicros = kPlayfieldTimestampOff;
 };
+
+[[nodiscard]] long long
+replayGameplayNoteDisplayTimeMicros(const ReplayGameplayFrameState &,
+                                    const AppSettings &) noexcept;
+
+[[nodiscard]] ChartVisualTimelineAuthority replayGameplayTimelineAuthority(
+    const PlayfieldChartVisualModel &, const ReplayGameplayFrameState &,
+    const AppSettings &, bool noSpeed = false) noexcept;
+
+[[nodiscard]] bool replayGameplayFailureAnimationActive(
+    long long gameplayTimeMicros,
+    std::optional<long long> failureMicros) noexcept;
+
+void applyReplayGameplayGaugeAuthority(PlayfieldAuthorityUpdate &,
+                                       const ReplayData &, GaugeType,
+                                       float currentGauge) noexcept;
+
+void applyReplayGameplayRuntimeAuthority(PlayfieldAuthorityUpdate &,
+                                         int currentFramesPerSecond,
+                                         std::int64_t exportStartUptimeMillis,
+                                         long long exportElapsedMicros) noexcept;
+
+void applyReplayGameplayTargetOptionAuthority(
+    PlayfieldAuthorityUpdate &) noexcept;
 
 [[nodiscard]] ReplayGameplayFrameState replayGameplayFrameState(
     const preparation::Plan &, const bms_parser::Chart &, const ReplayData &,

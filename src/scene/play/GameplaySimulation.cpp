@@ -81,7 +81,47 @@ GameplaySimulationConfig withCompiledGaugeRules(
       config.judge.rules().ruleset, meta, config.attempt.gaugeProfile);
   return config;
 }
+
+std::array<SkinJudgeWindow, 5>
+skinJudgeWindows(const CompiledGameplayJudge &judge) {
+  std::array<SkinJudgeWindow, 5> result{};
+  const auto &windows =
+      judge.rules()
+          .contexts[static_cast<std::size_t>(JudgeWindowContext::Normal)]
+          .windows;
+  for (std::size_t index = 0; index < result.size(); ++index) {
+    const auto &window = windows[index];
+    result[index] = {
+        .judgement = window.judgement,
+        .minimumTimingMillis =
+            -static_cast<int>(window.lateMicros / 1000),
+        .maximumTimingMillis =
+            -static_cast<int>(window.earlyMicros / 1000),
+    };
+  }
+  return result;
+}
 } // namespace
+
+std::vector<SkinGameplayGraphNote>
+makeSkinGameplayGraphNotes(const GameplayDefinition &definition) {
+  std::vector<SkinGameplayGraphNote> result;
+  result.reserve(definition.noteCount());
+  for (NoteId id = 0; id < definition.noteCount(); ++id) {
+    const auto &note = definition.note(id);
+    const bool classicTail = note.kind == NoteKind::LongTail &&
+                             note.longNoteRule == LongNoteRule::Classic;
+    result.push_back({
+        .sourceId = id,
+        .second = static_cast<int>(note.timingMicros / 1'000'000),
+        .countsTowardJudgement =
+            note.kind != NoteKind::Landmine && !classicTail,
+        .redirectSourceId = classicTail ? note.pairId
+                                        : kInvalidSkinGameplayGraphSourceId,
+    });
+  }
+  return result;
+}
 
 GameplaySimulation::GameplaySimulation(const GameplayDefinition &definition,
                                        GameplaySimulationConfig config)
@@ -119,6 +159,19 @@ GameplaySimulation::GameplaySimulation(const GameplayDefinition &definition,
           : config_.attempt.lightAssistClearMark
                 ? AssistClearMark::LightAssistedEasy
                 : AssistClearMark::None);
+  const std::size_t graphSecondCount =
+      static_cast<std::size_t>(
+          std::max<std::int64_t>(0,
+                                 definition_.metadata()
+                                     .finalTimelineTimeMicros) /
+          1'000'000) +
+      1;
+  skinGameplayGraph_.reset(
+      makeSkinGameplayGraphNotes(definition_), graphSecondCount,
+      skinJudgeWindows(config_.judge), config_.attempt.gaugeHistoryCapacity);
+  (void)skinGameplayGraph_.updateGaugeState(
+      scoreState_.gaugeValues, scoreState_.gaugeType,
+      scoreState_.gaugeRules());
   laneStates_.reserve(definition.lanes().size());
   for (const auto &lane : definition.lanes()) {
     laneStates_.push_back({.lane = lane.lane});
@@ -163,6 +216,11 @@ GameplaySearchStats GameplaySimulation::lastAdvanceStats() const noexcept {
 
 const GameplayScoreState &GameplaySimulation::scoreState() const noexcept {
   return scoreState_;
+}
+
+const SkinGameplayDynamicGraphState &
+GameplaySimulation::skinGameplayGraphState() const noexcept {
+  return skinGameplayGraph_.state();
 }
 
 GameplayAttemptSnapshot GameplaySimulation::snapshot() const noexcept {
@@ -226,11 +284,15 @@ GameplayFinalSummary GameplaySimulation::finalSummary() const noexcept {
   return finalSummary_;
 }
 
-void GameplaySimulation::commitJudge(const JudgeResult &judge) {
+void GameplaySimulation::commitJudge(NoteId id, const JudgeResult &judge) {
   const bool wasSurvivalFailed = scoreState_.activeGaugeFailed();
   const bool wasGaugeHistoryOverflowed =
       scoreState_.gaugeHistoryOverflowed();
   scoreState_.commitJudge(judge);
+  skinGameplayGraph_.applyJudge(id, judge);
+  (void)skinGameplayGraph_.updateGaugeState(
+      scoreState_.gaugeValues, scoreState_.gaugeType,
+      scoreState_.gaugeRules());
   observeGaugeMutation(wasSurvivalFailed, wasGaugeHistoryOverflowed);
 }
 
@@ -239,6 +301,9 @@ void GameplaySimulation::applyGaugeDelta(float delta) {
   const bool wasGaugeHistoryOverflowed =
       scoreState_.gaugeHistoryOverflowed();
   scoreState_.applyGaugeDelta(delta);
+  (void)skinGameplayGraph_.updateGaugeState(
+      scoreState_.gaugeValues, scoreState_.gaugeType,
+      scoreState_.gaugeRules());
   observeGaugeMutation(wasSurvivalFailed, wasGaugeHistoryOverflowed);
 }
 
@@ -248,6 +313,9 @@ void GameplaySimulation::applyGaugeJudgementRate(Judgement judgement,
   const bool wasGaugeHistoryOverflowed =
       scoreState_.gaugeHistoryOverflowed();
   scoreState_.applyGaugeJudgementRate(judgement, rate);
+  (void)skinGameplayGraph_.updateGaugeState(
+      scoreState_.gaugeValues, scoreState_.gaugeType,
+      scoreState_.gaugeRules());
   observeGaugeMutation(wasSurvivalFailed, wasGaugeHistoryOverflowed);
 }
 
@@ -408,7 +476,7 @@ GameplayInputResult GameplaySimulation::commitMiss(NoteId id,
   result.noteId = id;
   result.hasJudge = true;
   result.judge = judge;
-  commitJudge(result.judge);
+  commitJudge(id, result.judge);
   result.hasReplayEvent = true;
   result.replayEvent = {
       .action = GameplayReplayAction::Miss,
@@ -458,7 +526,7 @@ GameplayInputResult GameplaySimulation::commitAutomaticRelease(
   result.noteId = tailId;
   result.hasJudge = true;
   result.judge = applied;
-  commitJudge(result.judge);
+  commitJudge(tailId, result.judge);
   result.hasReplayEvent = true;
   result.replayEvent = {
       .action = GameplayReplayAction::Release,
@@ -581,7 +649,7 @@ void GameplaySimulation::processAtTiming(NoteId id, std::int64_t songTimeMicros,
   press.laneVisual = {LaneVisualAction::Press, note.lane, songTimeMicros,
                       visualTimeMicros, press.judge};
   if (press.hasJudge) {
-    commitJudge(press.judge);
+    commitJudge(id, press.judge);
   }
   press.hasReplayEvent = true;
   press.replayEvent = {
@@ -753,6 +821,7 @@ void GameplaySimulation::integrateHellChargeInterval(
           gaining ? activeDelta : -activeDelta;
     }
     currentMicros = intervalEnd;
+    (void)skinGameplayGraph_.advanceGaugeHistoryTo(currentMicros);
 
     while (true) {
       NoteId nextHeadId = kInvalidNoteId;
@@ -1416,7 +1485,7 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
     multiBad.hasJudge = true;
     multiBad.judge =
         JudgeResult(Bad, judgedTime - multiBadNote.timingMicros);
-    commitJudge(multiBad.judge);
+    commitJudge(multiBadId, multiBad.judge);
     multiBad.hasReplayEvent = true;
     multiBad.replayEvent = {
         .action = GameplayReplayAction::MultiBad,
@@ -1463,7 +1532,7 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
       result.hasJudge = true;
     }
     if (result.hasJudge) {
-      commitJudge(result.judge);
+      commitJudge(selected, result.judge);
     }
     result.hasReplayEvent = true;
     result.replayEvent = {
@@ -1572,7 +1641,7 @@ GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
 
   result.hasJudge = true;
   result.judge = applied;
-  commitJudge(result.judge);
+  commitJudge(selected, result.judge);
   result.hasReplayEvent = true;
   result.replayEvent = {
       .action = GameplayReplayAction::Release,

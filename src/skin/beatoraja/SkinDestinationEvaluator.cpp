@@ -61,9 +61,9 @@ double interpolate(double lower, double upper, double rate) {
   return lower + (upper - lower) * rate;
 }
 
-void applyRectOffset(AuthoredRect &rect, const ConfigOffset &offset) {
-  rect.x += static_cast<double>(offset.x) - static_cast<double>(offset.w) / 2.0;
-  rect.y += static_cast<double>(offset.y) - static_cast<double>(offset.h) / 2.0;
+void applyRectOffset(AuthoredRect &rect, const SkinRuntimeOffset &offset) {
+  rect.x += offset.x - offset.w / 2.0;
+  rect.y += offset.y - offset.h / 2.0;
   rect.width += offset.w;
   rect.height += offset.h;
 }
@@ -398,20 +398,22 @@ evaluateSkinDestinationAuthored(const SkinDestinationBody &destination,
 UiDestinationGeometry
 projectSkinDestinationToUi(const AuthoredDestinationGeometry &destination,
                            const SkinSourceRegionGeometry &source,
-                           const PlaySkinViewport &viewport) {
+                           const PlaySkinViewport &viewport,
+                           bool allowCollapsedSource) {
   UiDestinationGeometry result;
   result.rgba = destination.rgba;
   result.blend = destination.blend;
   result.filter = destination.filter;
   if (!viewport.valid || source.textureWidth <= 0 ||
-      source.textureHeight <= 0 || source.region.w == 0 ||
-      source.region.h == 0) {
+      source.textureHeight <= 0 ||
+      (!allowCollapsedSource &&
+       (source.region.w == 0 || source.region.h == 0))) {
     return result;
   }
 
-  auto rect = destination.rect;
-  auto region = source.region;
-  applyStretch(rect, region, destination.stretch);
+  auto stretched = stretchSkinDestinationAuthored(destination, source);
+  const auto &rect = stretched.rect;
+  const auto &region = stretched.region;
   const double radians = destination.angleDegrees * std::numbers::pi / 180.0;
   const double cosine = std::cos(radians);
   const double sine = std::sin(radians);
@@ -456,6 +458,15 @@ projectSkinDestinationToUi(const AuthoredDestinationGeometry &destination,
                       .width = std::abs(bottomRight[0] - topLeft[0]),
                       .height = std::abs(bottomRight[1] - topLeft[1])};
   }
+  return result;
+}
+
+SkinStretchedDestinationGeometry
+stretchSkinDestinationAuthored(const AuthoredDestinationGeometry &destination,
+                               const SkinSourceRegionGeometry &source) {
+  SkinStretchedDestinationGeometry result{.rect = destination.rect,
+                                          .region = source.region};
+  applyStretch(result.rect, result.region, destination.stretch);
   return result;
 }
 

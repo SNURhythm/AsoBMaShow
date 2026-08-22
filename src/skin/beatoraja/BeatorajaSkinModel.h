@@ -159,9 +159,33 @@ struct SkinImageResource {
   std::uint32_t authoredOrdinal = 0;
 };
 
+struct SkinMovieResource {
+  SkinResourceId id = 0;
+  std::string virtualPath;
+  std::optional<SkinTimerPropertyId> timer;
+  std::uint32_t authoredOrdinal = 0;
+};
+
 struct SkinFontFallbackResource {
   std::string virtualPath;
   int type = 0;
+};
+
+struct SkinBitmapFontResource {
+  SkinResourceId id = 0;
+  std::string virtualPath;
+  int type = 0;
+  int originalSize = 0;
+  std::uint32_t authoredOrdinal = 0;
+};
+
+struct SkinBitmapGlyph {
+  char32_t codepoint = 0;
+  int page = 0;
+  SkinSourceRect region;
+  int xOffset = 0;
+  int yOffset = 0;
+  int xAdvance = 0;
 };
 
 struct SkinFontResource {
@@ -171,16 +195,21 @@ struct SkinFontResource {
   int type = 0;
   std::vector<SkinFontFallbackResource> fallbacks;
   std::uint32_t authoredOrdinal = 0;
+  std::optional<SkinBitmapFontResource> bitmap;
 };
 
 using SkinResourceDefinition =
-    std::variant<SkinImageResource, SkinFontResource>;
+    std::variant<SkinImageResource, SkinFontResource, SkinMovieResource>;
 
 struct SkinSpriteFrames {
   SkinResourceId resource = 0;
   std::vector<SkinSourceRect> frames;
   int cycleMillis = 0;
   std::optional<SkinTimerPropertyId> timer;
+  // Present only for note visuals loaded from Beatoraja's raw positional
+  // longImage array. It follows the authored visual through normalization and
+  // lowering so acceptance observes the selected resource, not an enum guess.
+  std::optional<int> authoredNoteSlot;
 };
 
 struct SkinImageObject {
@@ -273,8 +302,104 @@ struct SkinSliderObject {
 
 struct SkinGraphObject {
   SkinSpriteFrames fill;
+  // LR2 SkinGraph accepts SkinSourceReference IDs (100+) in place of an
+  // authored sprite sheet. An unavailable system image suppresses the graph
+  // before its value property is read.
+  std::optional<int> builtinImageReference;
   std::variant<SkinFloatPropertyId, SkinSliderObject::IntegerRangeSource> value;
   int direction = 0;
+};
+
+enum class SkinNoteDistributionGraphType : std::uint8_t {
+  Normal,
+  Judge,
+  EarlyLate,
+};
+
+struct SkinNoteDistributionGraphObject {
+  SkinNoteDistributionGraphType type = SkinNoteDistributionGraphType::Normal;
+  bool backgroundTextureOff = false;
+  int delayMillis = 500;
+  bool reverseOrder = false;
+  bool noGap = false;
+  bool noHorizontalGap = false;
+};
+
+struct SkinBpmGraphObject {
+  int delayMillis = 0;
+  int lineWidth = 2;
+  std::uint32_t mainRgba = 0x00ff00ffU;
+  std::uint32_t minimumRgba = 0x0000ffffU;
+  std::uint32_t maximumRgba = 0xff0000ffU;
+  std::uint32_t otherRgba = 0xffff00ffU;
+  std::uint32_t stopRgba = 0xff00ffffU;
+  std::uint32_t transitionRgba = 0x7f7f7fffU;
+};
+
+struct SkinGaugeGraphObject {
+  // Rows hold {above-line, above-background, below-line, below-background}
+  // for the six pinned gauge colour categories.
+  std::array<std::array<std::uint32_t, 4>, 6> rgba{
+      std::array<std::uint32_t, 4>{0xff0000ffU, 0x440000ffU, 0xff00ffffU,
+                                    0x440044ffU},
+      std::array<std::uint32_t, 4>{0xff0000ffU, 0x440000ffU, 0x00ffffffU,
+                                    0x004444ffU},
+      std::array<std::uint32_t, 4>{0xff0000ffU, 0x440000ffU, 0x00ff00ffU,
+                                    0x004400ffU},
+      std::array<std::uint32_t, 4>{0xff0000ffU, 0x440000ffU, 0xff0000ffU,
+                                    0x440000ffU},
+      std::array<std::uint32_t, 4>{0xffff00ffU, 0x444400ffU, 0xffff00ffU,
+                                    0x444400ffU},
+      std::array<std::uint32_t, 4>{0xccccccffU, 0x444444ffU, 0xccccccffU,
+                                    0x444444ffU},
+  };
+};
+
+struct SkinTimingVisualizerObject {
+  int width = 301;
+  int judgeWidthMillis = 150;
+  int lineWidth = 1;
+  std::array<std::uint32_t, 5> judgeRgba{0x000088ffU, 0x008800ffU,
+                                          0x888800ffU, 0x880000ffU,
+                                          0x000000ffU};
+  std::uint32_t lineRgba = 0x00ff00ffU;
+  std::uint32_t centerRgba = 0xffffffffU;
+  bool transparent = false;
+  bool drawDecay = true;
+};
+
+// The pinned SkinTimingDistributionGraph is constructed by common loading,
+// then prepare() exits before destination preparation outside MusicResult.
+struct SkinTimingDistributionGraphObject {
+  int width = 301;
+  int lineWidth = 1;
+  std::uint32_t graphRgba = 0x00ff00ffU;
+  std::uint32_t averageRgba = 0xffffffffU;
+  std::uint32_t devRgba = 0xffffffffU;
+  std::array<std::uint32_t, 5> judgeRgba{0x000088ffU, 0x008800ffU,
+                                          0x888800ffU, 0x880000ffU,
+                                          0x000000ffU};
+  bool drawAverage = true;
+  bool drawDev = true;
+};
+
+struct SkinHitErrorVisualizerObject {
+  int width = 301;
+  int judgeWidthMillis = 150;
+  int lineWidth = 1;
+  bool colorMode = true;
+  bool hitErrorMode = true;
+  int emaMode = 1;
+  std::array<std::uint32_t, 5> judgeRgba{0x99ccff80U, 0xf2cb3080U,
+                                         0x14cc8f80U, 0xff1ab380U,
+                                         0xcc292980U};
+  std::uint32_t lineRgba = 0x99ccff80U;
+  std::uint32_t centerRgba = 0xffffffffU;
+  std::uint32_t emaRgba = 0xff0000ffU;
+  float alpha = 0.1F;
+  int windowLength = 30;
+  bool transparent = false;
+  bool drawDecay = true;
 };
 
 enum class SkinGaugeAnimationType : std::uint8_t {
@@ -349,6 +474,7 @@ enum class SkinNoteVisualKind : std::uint8_t {
 
 struct SkinSynthesizedNoteVisual {
   SkinNoteVisualKind kind = SkinNoteVisualKind::Hidden;
+  std::optional<int> authoredNoteSlot;
 };
 
 using SkinNoteVisual =
@@ -394,6 +520,7 @@ struct SkinCoverObject {
 struct SkinNestedObjectPresentation {
   SkinObjectId object = 0;
   SkinDestinationBody destination;
+  SkinSourceLocation source;
 };
 
 struct SkinJudgeGradePresentation {
@@ -409,11 +536,40 @@ struct SkinJudgeObject {
 
 struct SkinBgaObject {};
 
+struct SkinPracticeObject {
+  int visibleItems = 10;
+};
+
+// JsonPlaySkinObjectLoader resolves each pmchara through its named `source`
+// entry and forwards these normalized fields to PomyuCharaLoader. Rendering
+// support is intentionally separate from its timer-cycle authority.
+struct SkinPmCharaObject {
+  SkinResourceId source = 0;
+  std::string sourceName;
+  std::string sourcePath;
+  int color = 1;
+  int type = 0;
+  int side = 1;
+};
+
 // JsonSkinLoader recognizes every negative destination ID before resolving
 // authored definitions.  The upstream source reference can legitimately have
 // no texture for an unknown ID, in which case SkinImage simply does not draw.
 struct SkinBuiltinImageObject {
   int referenceId = 0;
+};
+
+enum class SkinInvalidInGameplayKind : std::uint8_t {
+  SelectDistributionGraph,
+};
+
+// JsonSkinObjectLoader constructs the select-screen SkinDistributionGraph for
+// a negative generic Graph.type even when JsonPlaySkinObjectLoader is active.
+// Its prepare method hard-casts MainState to MusicSelector, so the construct
+// is source-defined invalid in BMSPlayer rather than a note-distribution graph.
+struct SkinInvalidInGameplayObject {
+  SkinInvalidInGameplayKind kind =
+      SkinInvalidInGameplayKind::SelectDistributionGraph;
 };
 
 // These gameplay widgets are accepted by the pinned loader.  Their rendering
@@ -424,8 +580,15 @@ struct SkinBlankObject {};
 using SkinObjectPayload =
     std::variant<SkinImageObject, SkinNumberObject, SkinFloatObject,
                  SkinTextObject, SkinSliderObject, SkinGraphObject,
-                 SkinGaugeObject, SkinNoteObject, SkinCoverObject,
-                 SkinJudgeObject, SkinBgaObject, SkinBuiltinImageObject,
+                 SkinNoteDistributionGraphObject, SkinGaugeGraphObject,
+                 SkinBpmGraphObject,
+                 SkinTimingVisualizerObject,
+                 SkinTimingDistributionGraphObject,
+                 SkinHitErrorVisualizerObject,
+                 SkinGaugeObject,
+                 SkinNoteObject, SkinCoverObject, SkinJudgeObject,
+                 SkinBgaObject, SkinPracticeObject, SkinBuiltinImageObject,
+                 SkinPmCharaObject, SkinInvalidInGameplayObject,
                  SkinBlankObject>;
 
 struct SkinObjectDefinition {
@@ -434,11 +597,13 @@ struct SkinObjectDefinition {
   SkinObjectPayload payload;
   std::uint32_t authoredOrdinal = 0;
   bool critical = false;
+  SkinSourceLocation source;
 };
 
 struct SkinDestination {
   SkinObjectId object = 0;
   SkinDestinationBody presentation;
+  SkinSourceLocation source;
 };
 
 struct SkinCustomTimer {
@@ -460,6 +625,7 @@ struct SkinGameplayTiming {
   int inputMillis = 0;
   int sceneMillis = 0;
   int closeMillis = 0;
+  int loadStartMillis = 0;
   int loadEndMillis = 0;
   int playStartMillis = 0;
   int judgeTimerMillis = 1;

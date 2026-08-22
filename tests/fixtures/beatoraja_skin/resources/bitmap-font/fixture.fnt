@@ -1,0 +1,13 @@
+info face="AsoBMaShow Fixture" size=10 bold=0 italic=0 charset="" unicode=1 stretchH=100 smooth=1 aa=1 padding=0,0,0,0 spacing=1,1
+common lineHeight=12 base=9 scaleW=40 scaleH=20 pages=2 packed=0
+page id=0 file="page.png"
+page id=1 file="page.png"
+chars count=6
+char id=32 x=0 y=0 width=4 height=1 xoffset=0 yoffset=9 xadvance=5 page=0 chnl=15
+char id=63 x=4 y=0 width=5 height=8 xoffset=0 yoffset=1 xadvance=6 page=0 chnl=15
+char id=65 x=9 y=0 width=6 height=8 xoffset=1 yoffset=1 xadvance=7 page=0 chnl=15
+char id=86 x=15 y=0 width=7 height=8 xoffset=0 yoffset=1 xadvance=8 page=1 chnl=15
+char id=12316 x=22 y=0 width=8 height=8 xoffset=0 yoffset=1 xadvance=9 page=1 chnl=15
+char id=128578 x=30 y=0 width=8 height=8 xoffset=0 yoffset=1 xadvance=9 page=1 chnl=15
+kernings count=1
+kerning first=65 second=86 amount=-2

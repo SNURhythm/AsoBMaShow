@@ -97,4 +97,31 @@ void BgfxSkinTextureDevice::destroy(bgfx::TextureHandle texture) noexcept {
   bgfx::destroy(texture);
 }
 
+bool BgfxSkinTextureDevice::update(
+    bgfx::TextureHandle texture,
+    const image_decode::DecodedImageData &image) {
+  if (!ownsCurrentThread() || !bgfx::isValid(texture) || image.width <= 0 ||
+      image.height <= 0 ||
+      image.width > std::numeric_limits<std::uint16_t>::max() ||
+      image.height > std::numeric_limits<std::uint16_t>::max() ||
+      image.rgba == nullptr) {
+    return false;
+  }
+  const auto byteCount = static_cast<std::uint64_t>(image.width) *
+                         static_cast<std::uint64_t>(image.height) * 4U;
+  if (byteCount > std::numeric_limits<std::uint32_t>::max() ||
+      image.rgba->size() != static_cast<std::size_t>(byteCount)) {
+    return false;
+  }
+  const bgfx::Memory *memory = bgfx::copy(
+      image.rgba->data(), static_cast<std::uint32_t>(byteCount));
+  if (memory == nullptr) {
+    return false;
+  }
+  bgfx::updateTexture2D(texture, 0, 0, 0, 0,
+                        static_cast<std::uint16_t>(image.width),
+                        static_cast<std::uint16_t>(image.height), memory);
+  return true;
+}
+
 } // namespace skin

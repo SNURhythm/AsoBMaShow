@@ -315,6 +315,39 @@ void InputDeviceRegistry::handleSdlEvent(const SDL_Event &event) {
   for (const auto &backend : backends_) {
     backend->handleSdlEvent(event);
   }
+  if (event.type == SDL_WINDOWEVENT &&
+      event.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
+    const std::lock_guard lock(legacyInputMutex_);
+    pressedSdlScancodes_.reset();
+    pressedGdxKeys_.reset();
+    pressedGdxKeyCounts_.fill(0);
+    return;
+  }
+  if (event.type == SDL_KEYDOWN || event.type == SDL_KEYUP) {
+    const int scancode = static_cast<int>(event.key.keysym.scancode);
+    if (scancode >= 0 && scancode < SDL_NUM_SCANCODES) {
+      const bool pressed = event.type == SDL_KEYDOWN;
+      const std::lock_guard lock(legacyInputMutex_);
+      const bool wasPressed =
+          pressedSdlScancodes_.test(static_cast<std::size_t>(scancode));
+      if (wasPressed == pressed) {
+        return;
+      }
+      pressedSdlScancodes_.set(static_cast<std::size_t>(scancode), pressed);
+      const int gdxKeyCode = gdxKeyCodeForSdlScancode(
+          static_cast<SDL_Scancode>(scancode));
+      if (gdxKeyCode >= 0 &&
+          static_cast<std::size_t>(gdxKeyCode) < pressedGdxKeys_.size()) {
+        auto &count = pressedGdxKeyCounts_[static_cast<std::size_t>(gdxKeyCode)];
+        if (pressed) {
+          ++count;
+        } else if (count != 0) {
+          --count;
+        }
+        pressedGdxKeys_.set(static_cast<std::size_t>(gdxKeyCode), count != 0);
+      }
+    }
+  }
 }
 
 void InputDeviceRegistry::handleSdlEventAndDispatch(const SDL_Event &event) {
@@ -484,6 +517,21 @@ std::vector<input::InputDeviceSnapshot> InputDeviceRegistry::snapshot() const {
     result.push_back(device);
   }
   std::ranges::sort(result, {}, &input::InputDeviceSnapshot::stableId);
+  return result;
+}
+
+input::LegacyInputGeneration InputDeviceRegistry::legacyInputGeneration(
+    int drawableWidth, int drawableHeight) const noexcept {
+  input::LegacyInputGeneration result =
+      sdlInputBackend_ == nullptr
+          ? input::LegacyInputGeneration{}
+          : sdlInputBackend_->legacyControllerGeneration();
+  const std::lock_guard lock(legacyInputMutex_);
+  result.sequence = ++legacyInputSequence_;
+  result.drawableWidth = std::max(0, drawableWidth);
+  result.drawableHeight = std::max(0, drawableHeight);
+  result.anyKeyPressed = pressedSdlScancodes_.any();
+  result.pressedGdxKeys = pressedGdxKeys_;
   return result;
 }
 

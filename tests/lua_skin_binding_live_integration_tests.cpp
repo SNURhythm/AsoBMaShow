@@ -419,13 +419,15 @@ void testValidationPreservesDeadCallbacksAndWrongBuiltinDomain() {
                      }),
       optionalDead.destinations.end());
   const auto dead = SkinModelValidator{}.validate(
-      std::move(optionalDead), {.builtins = builtins, .callbacks = {}});
+      std::move(optionalDead),
+      {.builtins = builtins, .callbacks = LuaCallbackLivenessView{}});
   expect(dead.model && !dead.criticalFailure &&
              dead.model->disabledOptionalObjects.empty(),
          "dead callback generation remains a runtime factory lookup concern");
 
   const auto criticalDead = SkinModelValidator{}.validate(
-      *decoded.model, {.builtins = builtins, .callbacks = {}});
+      *decoded.model,
+      {.builtins = builtins, .callbacks = LuaCallbackLivenessView{}});
   expect(criticalDead.model && !criticalDead.criticalFailure &&
              criticalDead.model->disabledOptionalObjects.empty(),
          "dead callback generation does not reject a critical object");

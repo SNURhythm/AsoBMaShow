@@ -1,4 +1,6 @@
 #include "scene/play/GameplaySkinSessionFactory.h"
+#include "skin/beatoraja/LuaSkinAudioHost.h"
+#include "skin/beatoraja/LuaSkinHttpClient.h"
 
 #include "rendering/common.h"
 #include "skin/beatoraja/GameplaySkinValidator.h"
@@ -9,11 +11,14 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -124,6 +129,49 @@ struct HistoryFixture {
   skin::SkinDiagnosticHistory history{catalog};
 };
 
+class FactoryAudioBackend final : public skin::LuaSkinAudioBackend {
+public:
+  float systemVolume() const noexcept override { return 1.0F; }
+  std::optional<skin::LuaSkinAudioIdentity>
+  load(const fs::path &, std::stop_token stop) noexcept override {
+    std::unique_lock lock(mutex);
+    loadedStop = stop;
+    loadEntered = true;
+    condition.notify_all();
+    std::stop_callback cancellation(stop, [this] { condition.notify_all(); });
+    condition.wait(lock, [this, stop] {
+      return !blockLoad || stop.stop_requested();
+    });
+    if (stop.stop_requested()) {
+      return std::nullopt;
+    }
+    return skin::LuaSkinAudioIdentity{.value = 1};
+  }
+  void play(skin::LuaSkinAudioIdentity, float, bool) noexcept override {}
+  void stop(skin::LuaSkinAudioIdentity) noexcept override {}
+  void dispose(skin::LuaSkinAudioIdentity) noexcept override {}
+
+  std::stop_token loadedStop;
+  bool blockLoad = false;
+  bool loadEntered = false;
+  std::mutex mutex;
+  std::condition_variable condition;
+
+  bool waitUntilLoadEntered() {
+    std::unique_lock lock(mutex);
+    return condition.wait_for(lock, std::chrono::seconds(2),
+                              [this] { return loadEntered; });
+  }
+};
+
+class FactoryHttpTransport final : public skin::LuaSkinHttpTransport {
+public:
+  skin::LuaSkinHttpOpenResult open(std::string_view, int,
+                                   skin::LuaSkinHttpLimits) override {
+    return {.failure = "factory fixture does not perform HTTP"};
+  }
+};
+
 GameplaySkinSessionServices
 failedAcquireServices(HistoryFixture &fixture, skin::SkinDiagnostic failure) {
   const auto entry = fixtureEntry();
@@ -154,7 +202,18 @@ struct ReadyFixture {
       std::make_shared<skin::SkinLiveResourceCounters>();
   std::shared_ptr<FactoryTextureDevice> textureDevice =
       std::make_shared<FactoryTextureDevice>();
+  std::shared_ptr<FactoryAudioBackend> audioBackend =
+      std::make_shared<FactoryAudioBackend>();
+  bool audioBackendForwarded = false;
+  bool httpTransportForwarded = false;
+  bool httpStopForwarded = false;
+  std::stop_token httpStop;
+  bool legacyInputCaptureForwarded = false;
+  bool exerciseAudioPreparation = false;
+  std::optional<skin::LuaSkinLegacyInputGeneration> capturedLegacyInput;
   skin::SkinConfigurationWriteQueue writes;
+  std::stop_source stopSource;
+  std::stop_token expectedStop;
   PlayfieldChartVisualModel chart;
   PlayfieldVisualState state;
   PlayfieldProjectionResult projection;
@@ -185,6 +244,7 @@ struct ReadyFixture {
     state.clock.serial = 1;
     state.authority.loadingState = PlayfieldLoadingState::Loaded;
     projection.frameSerial = state.clock.serial;
+    expectedStop = stopSource.get_token();
   }
 
   GameplaySkinSessionServices services() {
@@ -219,12 +279,38 @@ struct ReadyFixture {
             .storageRoots = &roots,
             .resourcePreparation = &resources,
             .liveResourceCounters = counters,
+            .createHttpTransport = [this](std::stop_token stop) {
+              httpStop = stop;
+              httpStopForwarded = stop.stop_possible() &&
+                                  stop == expectedStop;
+              return std::make_unique<FactoryHttpTransport>();
+            },
+            .audioBackend = audioBackend,
+            .captureLegacyInputGeneration = [] {
+              return skin::LuaSkinLegacyInputGeneration{
+                  .drawableWidth = 111, .drawableHeight = 222};
+            },
             .configurationWrites = &writes,
             .diagnosticHistory = &history,
+            .stop = expectedStop,
             .createSessionForTesting =
-                [textureDevice =
-                     textureDevice](skin::ValidatedSkinActivation activation,
-                                    skin::PlaySkinSessionContext context) {
+                [this, textureDevice = textureDevice](
+                    skin::ValidatedSkinActivation activation,
+                    skin::PlaySkinSessionContext context) {
+                  audioBackendForwarded =
+                      context.audioBackend == audioBackend;
+                  httpTransportForwarded = context.httpTransport != nullptr;
+                  legacyInputCaptureForwarded =
+                      static_cast<bool>(context.captureLegacyInputGeneration);
+                  if (context.captureLegacyInputGeneration) {
+                    capturedLegacyInput =
+                        context.captureLegacyInputGeneration();
+                  }
+                  if (exerciseAudioPreparation && context.audioBackend) {
+                    (void)context.audioBackend->load(
+                        roots.visiblePackages / "preparation-audio.wav",
+                        context.stop);
+                  }
                   context.textureDevice = textureDevice;
                   return skin::PlaySkinSession::create(std::move(activation),
                                                        std::move(context));
@@ -289,8 +375,118 @@ void factoryTransfersTheOwningSessionExactlyOnce() {
   const auto ready =
       createGameplaySkinSession(fixture.services(), fixture.input());
   expect(ready.disposition == GameplaySkinSessionDisposition::Ready &&
-             ready.session != nullptr,
-         "factory transfers the owning session exactly once");
+             ready.session != nullptr && fixture.audioBackendForwarded &&
+             fixture.httpTransportForwarded && fixture.httpStopForwarded &&
+             fixture.legacyInputCaptureForwarded &&
+             fixture.capturedLegacyInput &&
+             fixture.capturedLegacyInput->drawableWidth == 111 &&
+             fixture.capturedLegacyInput->drawableHeight == 222,
+         "factory transfers the owning session, cancellable HTTP transport, "
+         "narrow audio backend, and legacy-input capture exactly once");
+}
+
+void factorySuppliesTheValueOnlyProductionLegacyInputCapture() {
+  ReadyFixture fixture;
+  if (!fixture.lease) {
+    return;
+  }
+  auto services = fixture.services();
+  services.captureLegacyInputGeneration = {};
+  const auto ready =
+      createGameplaySkinSession(std::move(services), fixture.input());
+  expect(ready.disposition == GameplaySkinSessionDisposition::Ready &&
+             ready.session != nullptr && fixture.capturedLegacyInput &&
+             fixture.capturedLegacyInput->drawableWidth ==
+                 rendering::render_width &&
+             fixture.capturedLegacyInput->drawableHeight ==
+                 rendering::render_height,
+         "factory defaults to a value-only production drawable/input/controller snapshot");
+}
+
+void factoryOwnerCancellationReachesHttpAndAudioPreparation() {
+  ReadyFixture fixture;
+  if (!fixture.lease) {
+    return;
+  }
+  GameplaySkinSessionStopOwner owner;
+  fixture.expectedStop = owner.token();
+  fixture.exerciseAudioPreparation = true;
+  const auto ready =
+      createGameplaySkinSession(fixture.services(), fixture.input());
+  expect(ready.disposition == GameplaySkinSessionDisposition::Ready &&
+             ready.session != nullptr && fixture.httpStopForwarded &&
+             fixture.audioBackend->loadedStop.stop_possible() &&
+             !fixture.audioBackend->loadedStop.stop_requested(),
+         "production stop owner reaches HTTP construction and audio preparation");
+  owner.requestStop();
+  expect(fixture.audioBackend->loadedStop.stop_requested(),
+         "cancelling through the session owner reaches prepared audio work");
+}
+
+void productionOwnerCancelsBlockedPreparationBeforeSessionPublication() {
+  ReadyFixture fixture;
+  if (!fixture.lease) {
+    return;
+  }
+  GameplaySkinSessionStopOwner owner;
+  const auto cancellation = owner.handle();
+  fixture.expectedStop = owner.token();
+  fixture.exerciseAudioPreparation = true;
+  fixture.audioBackend->blockLoad = true;
+
+  auto result = std::async(std::launch::async, [&fixture] {
+    return createGameplaySkinSession(fixture.services(), fixture.input());
+  });
+  expect(fixture.audioBackend->waitUntilLoadEntered(),
+         "production owner fixture reaches blocking audio preparation");
+  cancellation.requestStop();
+  const bool returnedBeforeRelease =
+      result.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+  if (!returnedBeforeRelease) {
+    fixture.audioBackend->blockLoad = false;
+    fixture.audioBackend->condition.notify_all();
+  }
+  auto cancelled = result.get();
+  expect(returnedBeforeRelease && fixture.httpStopForwarded &&
+             fixture.httpStop.stop_requested() &&
+             fixture.audioBackend->loadedStop.stop_requested(),
+         "externally reachable production owner cancels blocked HTTP/audio work");
+  expect(cancelled.disposition == GameplaySkinSessionDisposition::Failed &&
+             cancelled.session == nullptr,
+         "cancelled synchronous preparation never publishes a gameplay session");
+}
+
+void replayOwnerForwardsExternalCancellationDuringBlockedPreparation() {
+  ReadyFixture fixture;
+  if (!fixture.lease) {
+    return;
+  }
+  std::stop_source exportCancellation;
+  GameplaySkinSessionStopOwner owner(exportCancellation.get_token());
+  fixture.expectedStop = owner.token();
+  fixture.exerciseAudioPreparation = true;
+  fixture.audioBackend->blockLoad = true;
+
+  auto result = std::async(std::launch::async, [&fixture] {
+    return createGameplaySkinSession(fixture.services(), fixture.input());
+  });
+  expect(fixture.audioBackend->waitUntilLoadEntered(),
+         "replay owner fixture reaches blocking audio preparation");
+  exportCancellation.request_stop();
+  const bool returnedBeforeRelease =
+      result.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+  if (!returnedBeforeRelease) {
+    fixture.audioBackend->blockLoad = false;
+    fixture.audioBackend->condition.notify_all();
+  }
+  auto cancelled = result.get();
+  expect(returnedBeforeRelease && fixture.httpStopForwarded &&
+             fixture.httpStop.stop_requested() &&
+             fixture.audioBackend->loadedStop.stop_requested() &&
+             cancelled.disposition == GameplaySkinSessionDisposition::Failed &&
+             cancelled.session == nullptr,
+         "replay export cancellation reaches HTTP/audio preparation and "
+         "prevents session publication");
 }
 
 } // namespace
@@ -300,5 +496,9 @@ int main() {
   factoryKeepsBuiltInPresentationWhenAcquisitionIsUnavailable();
   factoryPreservesLifecycleDiagnosticAndRecordsIt();
   factoryTransfersTheOwningSessionExactlyOnce();
+  factorySuppliesTheValueOnlyProductionLegacyInputCapture();
+  factoryOwnerCancellationReachesHttpAndAudioPreparation();
+  productionOwnerCancelsBlockedPreparationBeforeSessionPublication();
+  replayOwnerForwardsExternalCancellationDuringBlockedPreparation();
   return failures == 0 ? 0 : 1;
 }

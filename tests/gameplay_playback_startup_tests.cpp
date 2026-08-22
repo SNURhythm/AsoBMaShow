@@ -134,6 +134,108 @@ bool testCompletionPersistenceRoutes() {
              "ineligible attempts do not acquire a persistence route");
 }
 
+bool testPracticeMenuSamePatternSeedSelection() {
+  const std::optional<std::string> configuredOption = "RANDOM";
+  const std::optional<long long> configuredSeed = 1234;
+  return expect(practiceMenuSelectedOptionSeed(
+                    true, configuredOption, configuredSeed, "RANDOM") ==
+                    configuredSeed,
+                "Same Pattern keeps an unchanged practice random seed") &&
+         expect(!practiceMenuSelectedOptionSeed(
+                     true, configuredOption, configuredSeed, "MIRROR")
+                     .has_value(),
+                "changing the practice menu option drops the old random seed") &&
+         expect(!practiceMenuSelectedOptionSeed(
+                     false, configuredOption, configuredSeed, "RANDOM")
+                     .has_value(),
+                "new-pattern practice retries do not reuse random seeds");
+}
+
+bool testRetainedSkinMenuAttemptProjectsCompleteRetryOptions() {
+  StartOptions options;
+  options.playOption = "RANDOM";
+  options.playOptionSeed = 1234;
+  options.playOption2 = "MIRROR";
+  options.playOption2Seed = 5678;
+  options.practiceMenuPreservePlayOptionSeeds = true;
+  const practice::SkinMenuAttemptPlan attempt{
+      .startMicros = 1'250'000,
+      .endMicros = 4'750'000,
+      .gaugeType = GaugeType::Hard,
+      .gaugeProfile = GaugeProfile::Standard9Keys,
+      .startingGaugePercent = 42,
+      .judgeRank = 75,
+      .total = 320.0,
+      .playback = {.percent = 200,
+                   .mode = audio::PlaybackMode::PitchShift},
+      .random1P = 2,
+      .random2P = 1,
+      .doublePlayFlip = true,
+  };
+
+  applySkinMenuAttemptPlanToStartOptions(options, attempt);
+
+  return expect(options.startPosition == 1'250'000 &&
+                    options.gaugeType == GaugeType::Hard &&
+                    options.gaugeProfile == GaugeProfile::Standard9Keys &&
+                    options.gaugeAutoShift == GaugeAutoShiftMode::None &&
+                    options.startingGaugePercent == 42 &&
+                    options.playback == attempt.playback &&
+                    options.doublePlayFlip &&
+                    options.playOption == "RANDOM" &&
+                    options.playOptionSeed == 1234 &&
+                    options.playOption2 == "MIRROR" &&
+                    options.playOption2Seed == 5678,
+                "retained practice menu plan projects every runtime option") &&
+         expect(!options.practiceMenuPreservePlayOptionSeeds,
+                "attempt projection consumes the retry-only seed policy");
+}
+
+bool testBuiltInPracticeAppliesConfiguredViewerModifiers() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  auto *measure = new bms_parser::Measure;
+  auto *timeline = new bms_parser::TimeLine(8, false);
+  auto *note = new bms_parser::Note(1);
+  timeline->Timing = 1'000'000;
+  timeline->SetNote(0, note);
+  measure->TimeLines.push_back(timeline);
+  chart.Measures.push_back(measure);
+  StartOptions options;
+  options.playOption = "MIRROR";
+
+  return expect(applyPracticePlayOptions(chart, options, "practice fallback"),
+                "built-in practice accepts the configured viewer modifier") &&
+         expect(timeline->Notes[0] == nullptr &&
+                    timeline->Notes[6] == note && note->Lane == 6 &&
+                    options.playOption == "MIRROR",
+                "built-in practice applies the viewer modifier before play");
+}
+
+bool testBuiltInPracticeCapturesGeneratedModifierSeed() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  auto *measure = new bms_parser::Measure;
+  auto *timeline = new bms_parser::TimeLine(8, false);
+  timeline->SetNote(0, new bms_parser::Note(1));
+  measure->TimeLines.push_back(timeline);
+  chart.Measures.push_back(measure);
+  StartOptions options;
+  options.playOption = "RANDOM";
+
+  if (!expect(applyPracticePlayOptions(chart, options, "practice fallback"),
+              "built-in practice applies a seeded random modifier") ||
+      !expect(options.playOptionSeed.has_value(),
+              "random practice modifier publishes its generated seed")) {
+    return false;
+  }
+  const ScoreProvenance captured = captureScoreProvenanceAtPlayStart(
+      options, chart.Meta,
+      std::map<Judgement, std::pair<long long, long long>>{});
+  return expect(captured.player1.seed == options.playOptionSeed,
+                "built-in practice provenance captures the generated seed");
+}
+
 bool testCourseRetrySameUsesValidatedSetupWithoutReplayInput() {
   auto session = std::make_shared<CoursePlaySession>();
   session->autoKeySound = true;
@@ -224,6 +326,10 @@ int main() {
   if (!testLocalReplaySetupCapture() ||
       !testSavedChartRandomBranchAuthority() ||
       !testCompletionPersistenceRoutes() ||
+      !testPracticeMenuSamePatternSeedSelection() ||
+      !testRetainedSkinMenuAttemptProjectsCompleteRetryOptions() ||
+      !testBuiltInPracticeAppliesConfiguredViewerModifiers() ||
+      !testBuiltInPracticeCapturesGeneratedModifierSeed() ||
       !testCourseRetrySameUsesValidatedSetupWithoutReplayInput()) {
     return 1;
   }

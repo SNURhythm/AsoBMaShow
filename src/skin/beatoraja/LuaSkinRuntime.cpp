@@ -5,6 +5,8 @@
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 
 #include "LuaSkinFileSystem.h"
+#include "LuaSkinAudioHost.h"
+#include "LuaSkinHttpClient.h"
 #include "LuaSkinHostModules.h"
 
 extern "C" {
@@ -909,6 +911,9 @@ struct LuaSkinRuntime::Impl {
   std::shared_ptr<LuaRuntimeShared> shared;
   lua_State *state = nullptr;
   std::unique_ptr<LuaSkinFileSystem> fileSystem;
+  std::unique_ptr<LuaSkinHttpTransport> httpTransport;
+  std::unique_ptr<LuaSkinAudioHost> audioHost;
+  std::unique_ptr<LuaSkinLegacyInputHost> legacyInputHost;
   std::unique_ptr<LuaSkinHostModules> hostModules;
 
   ~Impl() {
@@ -1199,6 +1204,16 @@ LuaRuntimeCreateResult LuaSkinRuntime::create(LuaSkinRuntimeOptions options) {
   impl->shared = shared;
   impl->state = state;
   impl->fileSystem = std::move(options.fileSystem);
+  impl->httpTransport = std::move(options.httpTransport);
+  try {
+    impl->audioHost = std::make_unique<LuaSkinAudioHost>(
+        *impl->fileSystem, std::move(options.audioBackend), options.stop);
+    impl->legacyInputHost = std::make_unique<LuaSkinLegacyInputHost>(
+        std::move(options.legacyInputSnapshot));
+  } catch (...) {
+    return {.failure = makeDiagnostic("skin_lua_runtime_create_failed",
+                                      "Lua session host allocation failed")};
+  }
 
   lua_pushlightuserdata(state, &kRuntimeRegistryKey);
   lua_pushlightuserdata(state, shared.get());
@@ -1212,6 +1227,9 @@ LuaRuntimeCreateResult LuaSkinRuntime::create(LuaSkinRuntimeOptions options) {
   auto installed = LuaSkinHostModules::create(
       state,
       {.fileSystem = impl->fileSystem.get(),
+       .httpTransport = impl->httpTransport.get(),
+       .audioHost = impl->audioHost.get(),
+       .legacyInputHost = impl->legacyInputHost.get(),
        .maximumSourceBytes = loadBudget.maxAllocatorBytes,
        .maximumModuleSearchTemplates =
            options.safetyPolicy.enforces(SkinSafetyGuard::LuaResourceBudget)
@@ -1285,13 +1303,44 @@ LuaOperationResult LuaSkinRuntime::enterRenderPhase() {
                 transition.failure ? transition.failure->message
                                    : "Lua filesystem transition failed")};
   }
+  impl_->audioHost->enterRenderPhase();
   impl_->phase = LuaRuntimePhase::Render;
   return {.ok = true};
 }
 
+SkinFileActivityCounters LuaSkinRuntime::fileActivityCounters() const noexcept {
+  return impl_ && impl_->fileSystem ? impl_->fileSystem->activityCounters()
+                                   : SkinFileActivityCounters{};
+}
+
+#if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
+std::uint64_t LuaSkinRuntime::callbackFrameWallMicrosForTesting() const noexcept {
+  if (!impl_ || !impl_->shared) return 0;
+  const auto micros = std::chrono::duration_cast<std::chrono::microseconds>(
+      impl_->shared->frameWallUsed);
+  return micros.count() <= 0 ? 0U
+                             : static_cast<std::uint64_t>(micros.count());
+}
+#endif
+
 void LuaSkinRuntime::setFrameState(ISkinFrameState *state) noexcept {
   if (impl_ && impl_->hostModules) {
     impl_->hostModules->setFrameState(state);
+  }
+}
+
+bool LuaSkinRuntime::setLegacyInputSnapshot(
+    LuaSkinLegacyInputSnapshot snapshot) noexcept {
+  if (impl_ && impl_->legacyInputHost) {
+    return impl_->legacyInputHost->publish(std::move(snapshot));
+  }
+  return false;
+}
+
+void LuaSkinRuntime::setLegacyInputGeneration(
+    LuaSkinLegacyInputGeneration generation) noexcept {
+  if (impl_ && impl_->legacyInputHost) {
+    impl_->legacyInputHost->publish(std::move(generation));
   }
 }
 
@@ -1349,8 +1398,10 @@ LuaCallbackResult LuaSkinRuntime::invoke(LuaCallbackId callback,
                         .callbackReference =
                             impl_->shared->callbackReferences[callback.slot - 1],
                         .arguments = arguments};
+  impl_->hostModules->setFrameCallbackActive(true);
   const int protectedStatus =
       lua_cpcall(impl_->state, invokeArgument, &request);
+  impl_->hostModules->setFrameCallbackActive(false);
   if (!impl_->shared->budgetViolated &&
       Clock::now() > impl_->shared->executionDeadline) {
     impl_->shared->budgetViolated = true;

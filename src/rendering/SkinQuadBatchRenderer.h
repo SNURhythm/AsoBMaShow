@@ -38,6 +38,12 @@ enum class SkinBatchTopology : std::uint8_t {
   TriangleStrip,
 };
 
+enum class SkinBatchProgram : std::uint8_t {
+  Primitive,
+  Textured,
+  DistanceField,
+};
+
 struct SkinQuadBackendBatch {
   std::span<const SkinQuadGpuVertex> vertices;
   std::span<const std::uint16_t> indices;
@@ -49,6 +55,8 @@ struct SkinQuadBackendBatch {
   std::uint64_t bgfxState = 0;
   std::uint32_t samplerFlags = 0;
   bool textured = false;
+  SkinBatchProgram program = SkinBatchProgram::Primitive;
+  std::optional<skin::SkinRenderState::DistanceField> distanceField;
 };
 
 // createVertexLayout is the only bgfx API that can prove a transient vertex
@@ -153,6 +161,13 @@ public:
   virtual bool
   preflightSamplers(std::span<const skin::SkinFilterMode> filters) = 0;
 
+  // Distance-field programs and uniforms are fallible GPU resources and must
+  // be ready before reserve/commit. Test backends may accept them by default.
+  virtual bool preflightDistanceFields(
+      std::span<const skin::SkinRenderState::DistanceField>) {
+    return true;
+  }
+
   // Called once after whole-command-buffer validation and before the first
   // submission. A false result leaves the frame completely unsubmitted.
   virtual bool reserve(
@@ -189,6 +204,7 @@ public:
 private:
   struct ResolvedCommand {
     bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
+    std::vector<bgfx::TextureHandle> glyphTextures;
     std::optional<skin::UiLogicalRect> scissor;
     bool suppressed = false;
   };
@@ -245,12 +261,15 @@ private:
     skin::SkinFilterMode filter = skin::SkinFilterMode::Nearest;
     std::optional<skin::UiLogicalRect> scissor;
     bool textured = false;
+    std::optional<skin::SkinRenderState::DistanceField> distanceField;
   };
 
   [[nodiscard]] bool preflightSegment(
       std::span<const skin::SkinDrawCommand> commands,
       std::vector<SkinQuadSubmissionPlan::ResolvedCommand> &resolved,
-      std::vector<skin::SkinFilterMode> &samplers, std::size_t &vertexCount,
+      std::vector<skin::SkinFilterMode> &samplers,
+      std::vector<skin::SkinRenderState::DistanceField> &distanceFields,
+      std::size_t &vertexCount,
       std::size_t &indexCount, std::size_t &skinAllocationCount) const;
   void appendQuad(const std::array<skin::SkinVertex, 4> &, const BatchKey &);
   void appendPrimitive(const skin::SkinPrimitiveCommand &, const BatchKey &);
