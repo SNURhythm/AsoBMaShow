@@ -693,6 +693,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/SkinStoragePaths.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/PlaySkinViewport.cpp
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
@@ -742,6 +743,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/SkinStoragePaths.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/PlaySkinViewport.cpp
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
@@ -1009,6 +1011,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/SkinStoragePaths.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
             src/skin/package/SkinAliasDetector.cpp
@@ -1055,6 +1058,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
             src/skin/package/SkinAliasDetector.cpp
@@ -1105,6 +1109,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
             src/skin/beatoraja/NumericGlyphAtlas.cpp
@@ -1166,6 +1171,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
             src/skin/beatoraja/NumericGlyphAtlas.cpp
@@ -1227,6 +1233,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
             src/skin/beatoraja/NumericGlyphAtlas.cpp
@@ -1289,6 +1296,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
             src/skin/beatoraja/NumericGlyphAtlas.cpp
@@ -1351,6 +1359,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
             src/skin/beatoraja/NumericGlyphAtlas.cpp
@@ -1412,6 +1421,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/SkinStoragePaths.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
             src/skin/package/SkinAliasDetector.cpp
@@ -1463,6 +1473,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
             src/skin/beatoraja/NumericGlyphAtlas.cpp
@@ -3745,6 +3756,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
             src/skin/beatoraja/NumericGlyphAtlas.cpp
@@ -4653,6 +4665,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
             src/skin/beatoraja/NumericGlyphAtlas.cpp
@@ -4752,6 +4765,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/PlaySkinStateBridge.cpp
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
@@ -4817,6 +4831,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
             src/skin/beatoraja/NumericGlyphAtlas.cpp
@@ -4966,6 +4981,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
             src/skin/beatoraja/NumericGlyphAtlas.cpp

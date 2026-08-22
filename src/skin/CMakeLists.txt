@@ -4,6 +4,7 @@ target_sources(main PRIVATE
     SkinCommitCoordinator.cpp
     SkinStoragePaths.cpp
     beatoraja/LuaSkinFileSystem.cpp
+    beatoraja/LuaSkinHttpClient.cpp
     beatoraja/SkinCompatibilityDiagnostics.cpp
     beatoraja/SkinDiagnosticHistory.cpp
     beatoraja/GameplaySkinSourceFormat.cpp

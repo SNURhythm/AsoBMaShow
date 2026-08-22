@@ -1,5 +1,6 @@
 #include "skin/beatoraja/LuaSkinFileIo.h"
 #include "skin/beatoraja/LuaSkinHostModules.h"
+#include "skin/beatoraja/LuaSkinHttpClient.h"
 #include "skin/beatoraja/LuaSkinRuntime.h"
 #include "skin/beatoraja/Skin2DRenderer.h"
 
@@ -17,6 +18,7 @@ extern "C" {
 }
 
 #include <atomic>
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -76,6 +78,100 @@ public:
   SkinRejectedLinkKind inspectNoFollow(const fs::path &) const override {
     return SkinRejectedLinkKind::None;
   }
+};
+
+struct FakeHttpCall {
+  std::string url;
+  int timeoutMilliseconds = 0;
+  LuaSkinHttpLimits limits;
+};
+
+struct FakeHttpState {
+  std::vector<FakeHttpCall> calls;
+  bool destroyed = false;
+};
+
+class FakeHttpTransport final : public LuaSkinHttpTransport {
+public:
+  explicit FakeHttpTransport(std::shared_ptr<FakeHttpState> state)
+      : state_(std::move(state)) {}
+
+  ~FakeHttpTransport() override { state_->destroyed = true; }
+
+  LuaSkinHttpResult get(std::string_view url, int timeoutMilliseconds,
+                        LuaSkinHttpLimits limits) override {
+    state_->calls.push_back({.url = std::string(url),
+                             .timeoutMilliseconds = timeoutMilliseconds,
+                             .limits = limits});
+    if (url.ends_with("/transport-error")) {
+      return {.failure = "fixture transport failure"};
+    }
+    if (url.ends_with("/utf8")) {
+      return {.response = LuaSkinHttpResponse{
+                  .responseCode = 200,
+                  .body = "alpha\r\n\xED\x95\x9C\xEA\xB8\x80\nomega"}};
+    }
+    if (url.ends_with("/malformed")) {
+      return {.response = LuaSkinHttpResponse{
+                  .responseCode = 200, .body = std::string("\xFF\n", 2)}};
+    }
+    if (url.ends_with("/truncated-utf8")) {
+      return {.response = LuaSkinHttpResponse{
+                  .responseCode = 200,
+                  .body = std::string("\xE2\x82\n", 3)}};
+    }
+    if (url.ends_with("/line-limit")) {
+      std::string body;
+      body.reserve(2 * 1025);
+      for (int index = 0; index < 1025; ++index) {
+        body += "x\n";
+      }
+      return {.response = LuaSkinHttpResponse{
+                  .responseCode = 200, .body = std::move(body)}};
+    }
+    if (url.ends_with("/char-limit")) {
+      return {.response = LuaSkinHttpResponse{
+                  .responseCode = 200, .body = std::string(65536, 'a')}};
+    }
+    if (url.ends_with("/char-limit-with-newline")) {
+      return {.response = LuaSkinHttpResponse{
+                  .responseCode = 200,
+                  .body = std::string(32768, 'a') + "\n" +
+                          std::string(32768, 'b')}};
+    }
+    if (url.ends_with("/utf16-limit")) {
+      std::string body;
+      body.reserve(32768 * 4);
+      for (int index = 0; index < 32768; ++index) {
+        body.append("\xF0\x9F\x98\x80", 4);
+      }
+      return {.response = LuaSkinHttpResponse{
+                  .responseCode = 200, .body = std::move(body)}};
+    }
+    if (url.ends_with("/utf16-overflow")) {
+      std::string body;
+      body.reserve(32768 * 4 + 1);
+      for (int index = 0; index < 32768; ++index) {
+        body.append("\xF0\x9F\x98\x80", 4);
+      }
+      body.push_back('x');
+      return {.response = LuaSkinHttpResponse{
+                  .responseCode = 200, .body = std::move(body)}};
+    }
+    if (url.ends_with("/char-overflow")) {
+      return {.response = LuaSkinHttpResponse{
+                  .responseCode = 200, .body = std::string(65537, 'a')}};
+    }
+    if (url.ends_with("/legacy")) {
+      return {.response = LuaSkinHttpResponse{
+                  .responseCode = 206,
+                  .body = "first\r\n\xED\x95\x9C\xEA\xB8\x80\nlast"}};
+    }
+    return {.response = LuaSkinHttpResponse{.responseCode = 204, .body = "ok"}};
+  }
+
+private:
+  std::shared_ptr<FakeHttpState> state_;
 };
 
 struct RuntimeHarness {
@@ -254,6 +350,122 @@ assert(file:read("*a") == "utf8-host-path")
 assert(file:close())
 return {}
 )lua");
+    writeText(source / "skin/http_surface.luaskin", R"lua(
+if not skin_config then
+  assert(next(main_state) == nil)
+  return {type = 0}
+end
+
+local http_names = {http_get = true, http_get_lines = true}
+local http_count = 0
+for name, value in pairs(main_state) do
+  if name:sub(1, 5) == "http_" then
+    assert(http_names[name] and type(value) == "function",
+           "unexpected main_state HTTP member: " .. tostring(name))
+    http_count = http_count + 1
+  end
+end
+assert(http_count == 2)
+
+local lines, lines_ok = main_state.http_get_lines("https://fixture/utf8")
+assert(lines_ok == true and #lines == 3)
+assert(lines[1] == "alpha" and lines[2] == "\237\149\156\234\184\128" and lines[3] == "omega")
+local text, text_ok = main_state.http_get("http://fixture/utf8")
+assert(text_ok == true and text == "alpha\n\237\149\156\234\184\128\nomega")
+
+local bounded, bounded_ok = main_state.http_get_lines("https://fixture/line-limit")
+assert(bounded_ok == true and #bounded == 1024 and bounded[1024] == "x")
+local exact, exact_ok = main_state.http_get("https://fixture/char-limit")
+assert(exact_ok == true and #exact == 65536)
+local exact_with_newline, newline_ok = main_state.http_get("https://fixture/char-limit-with-newline")
+assert(newline_ok == true and #exact_with_newline == 65537)
+local utf16_exact, utf16_exact_ok = main_state.http_get("https://fixture/utf16-limit")
+assert(utf16_exact_ok == true and #utf16_exact == 131072)
+local overflow, overflow_error = main_state.http_get_lines("https://fixture/char-overflow")
+assert(overflow == nil and overflow_error == "response is too large")
+local utf16_overflow, utf16_overflow_error = main_state.http_get_lines("https://fixture/utf16-overflow")
+assert(utf16_overflow == nil and utf16_overflow_error == "response is too large")
+
+local malformed, malformed_ok = main_state.http_get_lines("https://fixture/malformed")
+assert(malformed_ok == true and #malformed == 1 and malformed[1] == "\239\191\189")
+local truncated, truncated_ok = main_state.http_get_lines("https://fixture/truncated-utf8")
+assert(truncated_ok == true and #truncated == 1 and truncated[1] == "\239\191\189")
+assert(select(2, main_state.http_get("https://fixture/timeout-low", 0)) == true)
+assert(select(2, main_state.http_get("https://fixture/timeout-high", 999999)) == true)
+local failed, failure = main_state.http_get("https://fixture/transport-error")
+assert(failed == nil and failure == "fixture transport failure")
+local denied, denial = main_state.http_get("file:///tmp/denied")
+assert(denied == nil and denial == "unsupported scheme: file")
+local missing_scheme, missing_scheme_error = main_state.http_get("fixture/missing-scheme")
+assert(missing_scheme == nil and missing_scheme_error == "unsupported scheme: null")
+assert(not pcall(function() main_state.http_get() end))
+
+local url = luajava.newInstance("java.net.URL", "https://fixture/legacy")
+local url_members = 0
+for name in pairs(url) do assert(name == "openConnection"); url_members = url_members + 1 end
+assert(url_members == 1)
+local connection = url:openConnection()
+local connection_members = {
+  setRequestMethod = true, setConnectTimeout = true, connect = true,
+  getResponseCode = true, getInputStream = true,
+}
+local connection_count = 0
+for name in pairs(connection) do
+  assert(connection_members[name]); connection_count = connection_count + 1
+end
+assert(connection_count == 5)
+assert(connection:setRequestMethod("GET") == nil)
+assert(connection:setConnectTimeout(-7) == nil)
+assert(connection:connect() == nil and connection:connect() == nil)
+assert(connection:getResponseCode() == 206)
+local input = connection:getInputStream()
+assert(luajava.newInstance("java.io.InputStreamReader", input) == input)
+local reader = luajava.newInstance("java.io.BufferedReader", input)
+assert(reader == input)
+local reader_members = 0
+for name in pairs(reader) do assert(name == "readLine"); reader_members = reader_members + 1 end
+assert(reader_members == 1)
+assert(reader:readLine() == "first")
+assert(reader:readLine() == "\237\149\156\234\184\128")
+assert(reader:readLine() == "last")
+assert(reader:readLine() == nil and reader:readLine() == nil)
+
+local default_connection = luajava.newInstance("java.net.URL", "https://fixture/default"):openConnection()
+assert(default_connection:getResponseCode() == 204)
+local maximum_connection = luajava.newInstance("java.net.URL", "https://fixture/maximum"):openConnection()
+maximum_connection:setConnectTimeout(999999)
+assert(maximum_connection:getResponseCode() == 204)
+
+local bad_method = luajava.newInstance("java.net.URL", "https://fixture/bad-method"):openConnection()
+local bad_method_ok, bad_method_error = pcall(function() bad_method:setRequestMethod("POST") end)
+assert(not bad_method_ok and tostring(bad_method_error):find("Legacy Lua skin HTTP method denied: POST", 1, true))
+local bad_scheme = luajava.newInstance("java.net.URL", "file:///tmp/denied"):openConnection()
+local bad_scheme_ok, bad_scheme_error = pcall(function() bad_scheme:connect() end)
+assert(not bad_scheme_ok and tostring(bad_scheme_error):find("Legacy Lua skin HTTP connection failed: unsupported scheme: file", 1, true))
+local bad_transport = luajava.newInstance("java.net.URL", "https://fixture/transport-error"):openConnection()
+local bad_transport_ok, bad_transport_error = pcall(function() bad_transport:getResponseCode() end)
+assert(not bad_transport_ok and tostring(bad_transport_error):find("Legacy Lua skin HTTP connection failed: fixture transport failure", 1, true))
+local too_large = luajava.newInstance("java.net.URL", "https://fixture/char-overflow"):openConnection()
+local too_large_ok, too_large_error = pcall(function() too_large:getInputStream() end)
+assert(not too_large_ok and tostring(too_large_error):find("Legacy Lua skin HTTP read failed: response is too large", 1, true))
+
+for _, probe in ipairs({
+  function() return url.denied end,
+  function() return connection.denied end,
+  function() return reader.denied end,
+  function() return url.openConnection({}) end,
+  function() return connection.getResponseCode({}) end,
+  function() return reader.readLine({}) end,
+  function() return luajava.newInstance("java.lang.Runtime", "x") end,
+  function() return luajava.newInstance("java.io.BufferedReader", "not-a-reader") end,
+}) do
+  assert(not pcall(probe), "nonallowlisted legacy HTTP authority must be denied")
+end
+assert(luajava.newInstance("java.io.InputStreamReader", "passthrough") == "passthrough")
+local arbitrary_reader = {}
+assert(luajava.newInstance("java.io.BufferedReader", arbitrary_reader) == arbitrary_reader)
+return {}
+)lua");
     writeText(source / "skin/parts/frame/red/panel.png", "selected");
     writeText(source / "skin/parts/frame/blue/panel.png",
               "random-fallback-must-not-win");
@@ -307,6 +519,26 @@ return {}
     auto runtime = LuaSkinRuntime::create(
         {.purpose = purpose, .fileSystem = std::move(fileSystem)});
     expect(runtime.runtime != nullptr, "host contract runtime creates");
+    if (!runtime.runtime) {
+      return std::nullopt;
+    }
+    return RuntimeHarness{.runtime = std::move(runtime.runtime),
+                          .fileSystem = borrowed};
+  }
+
+  std::optional<RuntimeHarness>
+  createWithHttp(std::string_view entryName, LuaRuntimePurpose purpose,
+                 std::unique_ptr<LuaSkinHttpTransport> httpTransport) {
+    auto fileSystem = createFileSystem(entryName);
+    if (!fileSystem) {
+      return std::nullopt;
+    }
+    LuaSkinFileSystem *borrowed = fileSystem.get();
+    auto runtime = LuaSkinRuntime::create(
+        {.purpose = purpose,
+         .fileSystem = std::move(fileSystem),
+         .httpTransport = std::move(httpTransport)});
+    expect(runtime.runtime != nullptr, "HTTP host contract runtime creates");
     if (!runtime.runtime) {
       return std::nullopt;
     }
@@ -676,6 +908,64 @@ void testPinnedMainStateFileSurfaceAndClosedLegacyFileFacade() {
          "captured file functions retain pinned behavior during render");
 }
 
+void testPinnedBoundedHttpAndClosedLegacyReaderFacade() {
+  auto state = std::make_shared<FakeHttpState>();
+  {
+    auto harness = fixture().createWithHttp(
+        "http_surface.luaskin", LuaRuntimePurpose::Gameplay,
+        std::make_unique<FakeHttpTransport>(state));
+    if (!harness) {
+      return;
+    }
+    expect(!state->destroyed,
+           "HTTP transport remains owned for the Lua session lifetime");
+    expect(harness->runtime->loadHeader().value.has_value(),
+           "HTTP fixture sees an empty header main_state module");
+    const auto configured =
+        harness->runtime->loadConfigured(happyConfiguration());
+    if (!configured.value && configured.failure) {
+      std::cerr << "HTTP surface diagnostic: " << configured.failure->code
+                << ": " << configured.failure->message << '\n';
+    }
+    expect(configured.value.has_value() && !configured.failure,
+           "bounded modern HTTP and closed legacy URL/reader facades execute");
+
+    const auto callsFor = [&](std::string_view url) {
+      return static_cast<int>(std::ranges::count_if(
+          state->calls, [&](const FakeHttpCall &call) {
+            return call.url == url;
+          }));
+    };
+    const auto timeoutFor = [&](std::string_view url) {
+      const auto found = std::ranges::find_if(
+          state->calls,
+          [&](const FakeHttpCall &call) { return call.url == url; });
+      return found != state->calls.end() ? found->timeoutMilliseconds : -1;
+    };
+    expect(timeoutFor("https://fixture/utf8") == 1000,
+           "modern HTTP uses the pinned default timeout");
+    expect(timeoutFor("https://fixture/timeout-low") == 1 &&
+               timeoutFor("https://fixture/timeout-high") == 5000,
+           "modern HTTP clamps timeout to one through five thousand milliseconds");
+    expect(timeoutFor("https://fixture/legacy") == 1 &&
+               timeoutFor("https://fixture/default") == 1000 &&
+               timeoutFor("https://fixture/maximum") == 5000,
+           "legacy HTTP uses the same pinned default and clamped timeout");
+    expect(callsFor("https://fixture/legacy") == 1,
+           "legacy connect, response, and reader access share one GET");
+    expect(callsFor("file:///tmp/denied") == 0 &&
+               callsFor("https://fixture/bad-method") == 0,
+           "denied schemes and methods never reach the transport");
+    expect(std::ranges::all_of(state->calls, [](const FakeHttpCall &call) {
+             return call.limits.maximumLines == 1024 &&
+                    call.limits.maximumCharacters == 65536;
+           }),
+           "every transport call receives the pinned response bounds");
+  }
+  expect(state->destroyed,
+         "HTTP transport is destroyed with its owning Lua session");
+}
+
 void testIoLinesUsesTheVirtualSkinFileSystem() {
   auto harness = fixture().create("io_lines.luaskin",
                                   LuaRuntimePurpose::Validation);
@@ -864,6 +1154,7 @@ int main() {
   testUnsupportedDirectMainStateLookupsRaise();
   testSelectedMainStateSurfaceUsesBoundConfiguredState();
   testPinnedMainStateFileSurfaceAndClosedLegacyFileFacade();
+  testPinnedBoundedHttpAndClosedLegacyReaderFacade();
   testIoLinesUsesTheVirtualSkinFileSystem();
   testIoReadClampsHugeRequestedCountToAvailableBytes();
   testIoOpenReadsUtf8NamedSkinFiles();

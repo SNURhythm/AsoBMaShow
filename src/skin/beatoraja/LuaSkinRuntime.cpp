@@ -5,6 +5,7 @@
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 
 #include "LuaSkinFileSystem.h"
+#include "LuaSkinHttpClient.h"
 #include "LuaSkinHostModules.h"
 
 extern "C" {
@@ -909,6 +910,7 @@ struct LuaSkinRuntime::Impl {
   std::shared_ptr<LuaRuntimeShared> shared;
   lua_State *state = nullptr;
   std::unique_ptr<LuaSkinFileSystem> fileSystem;
+  std::unique_ptr<LuaSkinHttpTransport> httpTransport;
   std::unique_ptr<LuaSkinHostModules> hostModules;
 
   ~Impl() {
@@ -1199,6 +1201,7 @@ LuaRuntimeCreateResult LuaSkinRuntime::create(LuaSkinRuntimeOptions options) {
   impl->shared = shared;
   impl->state = state;
   impl->fileSystem = std::move(options.fileSystem);
+  impl->httpTransport = std::move(options.httpTransport);
 
   lua_pushlightuserdata(state, &kRuntimeRegistryKey);
   lua_pushlightuserdata(state, shared.get());
@@ -1212,6 +1215,7 @@ LuaRuntimeCreateResult LuaSkinRuntime::create(LuaSkinRuntimeOptions options) {
   auto installed = LuaSkinHostModules::create(
       state,
       {.fileSystem = impl->fileSystem.get(),
+       .httpTransport = impl->httpTransport.get(),
        .maximumSourceBytes = loadBudget.maxAllocatorBytes,
        .maximumModuleSearchTemplates =
            options.safetyPolicy.enforces(SkinSafetyGuard::LuaResourceBudget)

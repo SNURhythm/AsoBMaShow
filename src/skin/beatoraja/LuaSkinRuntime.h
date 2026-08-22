@@ -1,6 +1,7 @@
 #pragma once
 
 #include "BeatorajaSkinConfiguration.h"
+#include "LuaSkinHttpClient.h"
 #include "SkinCompatibilityDiagnostics.h"
 #include "../SkinSafetyPolicy.h"
 #include "../package/SkinPackageTypes.h"
@@ -229,6 +230,7 @@ struct LuaSkinRuntimeOptions {
   LuaRuntimePurpose purpose = LuaRuntimePurpose::Catalog;
   std::unique_ptr<LuaSkinFileSystem> fileSystem;
   SkinSafetyPolicy safetyPolicy{};
+  std::unique_ptr<LuaSkinHttpTransport> httpTransport;
 };
 
 class LuaSkinRuntime final {

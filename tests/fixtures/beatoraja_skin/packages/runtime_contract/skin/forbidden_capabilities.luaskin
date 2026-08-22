@@ -33,13 +33,22 @@ assert(first_luajava == second_luajava)
 assert(first_luajava == luajava)
 assert(type(luajava.bindClass) == "function")
 assert(type(luajava.new) == "function")
-assert(luajava.newInstance == nil)
+assert(type(luajava.newInstance) == "function")
 
 local export_count = 0
 for _ in pairs(luajava) do
   export_count = export_count + 1
 end
-assert(export_count == 2)
+assert(export_count == 3)
+
+local url = luajava.newInstance("java.net.URL", "https://fixture/unavailable")
+local connection = url:openConnection()
+local connected, connection_error = pcall(function() connection:connect() end)
+assert(not connected)
+assert(tostring(connection_error):find(
+  "Legacy Lua skin HTTP connection failed: HTTP transport is unavailable",
+  1, true))
+assert(not pcall(luajava.newInstance, "java.lang.Runtime", "x"))
 
 local gdx = luajava.bindClass("com.badlogic.gdx.Gdx")
 assert(gdx.app == nil)

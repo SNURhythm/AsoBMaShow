@@ -7,6 +7,7 @@
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 
 #include "LuaSkinFileSystem.h"
+#include "LuaSkinHttpClient.h"
 #include "Skin2DRenderer.h"
 
 extern "C" {
@@ -34,6 +35,10 @@ namespace skin {
 namespace {
 
 constexpr const char *kHandleMetatable = "AsoBMaShow.LuaSkinFileHandle";
+constexpr const char *kLegacyHttpConnectionMetatable =
+    "AsoBMaShow.LegacyLuaHttpConnection";
+constexpr const char *kLegacyHttpReaderMetatable =
+    "AsoBMaShow.LegacyLuaHttpReader";
 constexpr const char *kErrorPrefix = "@ASOBMSKIN:";
 struct LuaFileHandle;
 using SharedLuaFileHandle = std::shared_ptr<LuaFileHandle>;
@@ -229,6 +234,7 @@ int bitReplace(lua_State *state) {
 struct LuaSkinHostModulesImpl {
   lua_State *state = nullptr;
   LuaSkinFileSystem *fileSystem = nullptr;
+  LuaSkinHttpTransport *httpTransport = nullptr;
   std::size_t maximumSourceBytes = std::numeric_limits<std::size_t>::max();
   std::size_t maximumModuleSearchTemplates =
       std::numeric_limits<std::size_t>::max();
@@ -273,6 +279,11 @@ struct LuaSkinHostModulesImpl {
     const std::string_view diagnosticAuthority =
         authority == "java.net.URL" || authority == "java.io.File.member" ||
                 authority == "java.io.File.constructor" ||
+                authority == "java.net.URL.member" ||
+                authority == "java.net.URL.connection.member" ||
+                authority == "java.io.BufferedReader.member" ||
+                authority == "java.net.URL.constructor" ||
+                authority == "java.io.BufferedReader.constructor" ||
                 authority == "bindClass"
             ? authority
             : "unknown_legacy_authority";
@@ -869,6 +880,76 @@ int mainStateFileCountLines(lua_State *state) {
   return 1;
 }
 
+int pushHttpFailure(lua_State *state, std::string_view message) {
+  lua_pushnil(state);
+  lua_pushlstring(state, message.data(), message.size());
+  return 2;
+}
+
+LuaSkinHttpLinesResult mainStateHttpLines(lua_State *state,
+                                         LuaSkinHostModulesImpl &impl) {
+  std::size_t urlSize = 0;
+  const char *url = luaL_checklstring(state, 1, &urlSize);
+  const int timeout = boundedIntegerArgument(
+      state, 2, LuaSkinHttpClient::defaultTimeoutMilliseconds, true);
+  LuaSkinHttpClient client(impl.httpTransport);
+  LuaSkinHttpResult fetched =
+      client.get(std::string_view(url, urlSize), timeout);
+  if (fetched.failure) {
+    return {.failure = std::move(fetched.failure)};
+  }
+  if (!fetched.response) {
+    return {.failure = "HTTP transport returned no response"};
+  }
+  return LuaSkinHttpClient::readLines(fetched.response->body);
+}
+
+int mainStateHttpGetLines(lua_State *state) {
+  LuaSkinHostModulesImpl *impl = host(state);
+  LuaSkinHttpLinesResult result = mainStateHttpLines(state, *impl);
+  if (result.failure) {
+    return pushHttpFailure(state, *result.failure);
+  }
+  lua_createtable(state, static_cast<int>(result.lines.size()), 0);
+  int index = 1;
+  for (const std::string &line : result.lines) {
+    lua_pushlstring(state, line.data(), line.size());
+    lua_rawseti(state, -2, index++);
+  }
+  lua_pushboolean(state, 1);
+  return 2;
+}
+
+int mainStateHttpGet(lua_State *state) {
+  LuaSkinHostModulesImpl *impl = host(state);
+  LuaSkinHttpLinesResult result = mainStateHttpLines(state, *impl);
+  if (result.failure) {
+    return pushHttpFailure(state, *result.failure);
+  }
+  try {
+    std::size_t size = result.lines.empty() ? 0 : result.lines.size() - 1;
+    for (const std::string &line : result.lines) {
+      if (line.size() > std::numeric_limits<std::size_t>::max() - size) {
+        return pushHttpFailure(state, "HTTP response allocation failed");
+      }
+      size += line.size();
+    }
+    std::string text;
+    text.reserve(size);
+    for (std::size_t index = 0; index < result.lines.size(); ++index) {
+      if (index != 0) {
+        text.push_back('\n');
+      }
+      text += result.lines[index];
+    }
+    lua_pushlstring(state, text.data(), text.size());
+    lua_pushboolean(state, 1);
+    return 2;
+  } catch (...) {
+    return pushHttpFailure(state, "HTTP response allocation failed");
+  }
+}
+
 void populateMainState(lua_State *state, LuaSkinHostModulesImpl *impl) {
   lua_getglobal(state, "main_state");
   if (!lua_istable(state, -1)) {
@@ -927,6 +1008,10 @@ void populateMainState(lua_State *state, LuaSkinHostModulesImpl *impl) {
   lua_setfield(state, -2, "file_clear");
   installClosure(state, impl, mainStateFileCountLines);
   lua_setfield(state, -2, "file_count_lines");
+  installClosure(state, impl, mainStateHttpGet);
+  lua_setfield(state, -2, "http_get");
+  installClosure(state, impl, mainStateHttpGetLines);
+  lua_setfield(state, -2, "http_get_lines");
   lua_pop(state, 1);
 }
 
@@ -1750,6 +1835,301 @@ bool sameUpvalueTable(lua_State *state, int argument, int upvalue) {
          lua_rawequal(state, argument, lua_upvalueindex(upvalue));
 }
 
+void installClosedMemberMetatable(lua_State *, LuaSkinHostModulesImpl *,
+                                  lua_CFunction);
+
+struct LegacyHttpConnection {
+  std::string url;
+  int timeoutMilliseconds = LuaSkinHttpClient::defaultTimeoutMilliseconds;
+  bool connected = false;
+  std::optional<LuaSkinHttpResponse> response;
+
+  std::optional<std::string>
+  connect(LuaSkinHttpTransport *transport) noexcept {
+    if (connected) {
+      return std::nullopt;
+    }
+    LuaSkinHttpClient client(transport);
+    LuaSkinHttpResult fetched = client.get(url, timeoutMilliseconds);
+    if (fetched.failure) {
+      return std::move(fetched.failure);
+    }
+    if (!fetched.response) {
+      return std::string("HTTP transport returned no response");
+    }
+    response = std::move(fetched.response);
+    connected = true;
+    return std::nullopt;
+  }
+};
+
+struct LegacyHttpReader {
+  std::vector<std::string> lines;
+  std::size_t position = 0;
+};
+
+using SharedLegacyHttpConnection = std::shared_ptr<LegacyHttpConnection>;
+using SharedLegacyHttpReader = std::shared_ptr<LegacyHttpReader>;
+
+template <typename Shared>
+int legacyHttpSharedGc(lua_State *state) {
+  auto *shared = static_cast<Shared *>(lua_touserdata(state, 1));
+  shared->~Shared();
+  return 0;
+}
+
+void pushLegacyHttpShared(lua_State *state,
+                          const SharedLegacyHttpConnection &connection) {
+  void *storage = lua_newuserdata(state, sizeof(SharedLegacyHttpConnection));
+  new (storage) SharedLegacyHttpConnection(connection);
+  luaL_getmetatable(state, kLegacyHttpConnectionMetatable);
+  lua_setmetatable(state, -2);
+}
+
+void pushLegacyHttpShared(lua_State *state,
+                          const SharedLegacyHttpReader &reader) {
+  void *storage = lua_newuserdata(state, sizeof(SharedLegacyHttpReader));
+  new (storage) SharedLegacyHttpReader(reader);
+  luaL_getmetatable(state, kLegacyHttpReaderMetatable);
+  lua_setmetatable(state, -2);
+}
+
+SharedLegacyHttpConnection &legacyHttpConnection(lua_State *state,
+                                                 int upvalue = 2) {
+  return *static_cast<SharedLegacyHttpConnection *>(luaL_checkudata(
+      state, lua_upvalueindex(upvalue), kLegacyHttpConnectionMetatable));
+}
+
+SharedLegacyHttpReader &legacyHttpReader(lua_State *state, int upvalue = 2) {
+  return *static_cast<SharedLegacyHttpReader *>(luaL_checkudata(
+      state, lua_upvalueindex(upvalue), kLegacyHttpReaderMetatable));
+}
+
+int legacyUrlMemberDenied(lua_State *state) {
+  LuaSkinHostModulesImpl *impl = host(state);
+  impl->reportLegacyDenial("java.net.URL.member");
+  return raiseStoredError(state, impl);
+}
+
+int legacyConnectionMemberDenied(lua_State *state) {
+  LuaSkinHostModulesImpl *impl = host(state);
+  impl->reportLegacyDenial("java.net.URL.connection.member");
+  return raiseStoredError(state, impl);
+}
+
+int legacyReaderMemberDenied(lua_State *state) {
+  LuaSkinHostModulesImpl *impl = host(state);
+  impl->reportLegacyDenial("java.io.BufferedReader.member");
+  return raiseStoredError(state, impl);
+}
+
+int raiseLegacyHttpFailure(lua_State *state, std::string_view prefix,
+                           std::string_view failure) {
+  lua_pushlstring(state, prefix.data(), prefix.size());
+  lua_pushlstring(state, failure.data(), failure.size());
+  lua_concat(state, 2);
+  return lua_error(state);
+}
+
+bool legacyHttpReceiver(lua_State *state, int arguments,
+                        int tableUpvalue = 3) {
+  return lua_gettop(state) == arguments &&
+         sameUpvalueTable(state, 1, tableUpvalue);
+}
+
+void pushLegacyConnectionObject(
+    lua_State *state, LuaSkinHostModulesImpl *impl,
+    const SharedLegacyHttpConnection &connection);
+
+int legacyOpenConnection(lua_State *state) {
+  LuaSkinHostModulesImpl *impl = host(state, 1);
+  if (!legacyHttpReceiver(state, 1)) {
+    impl->reportLegacyDenial("java.net.URL.member");
+    return raiseStoredError(state, impl);
+  }
+  pushLegacyConnectionObject(state, impl, legacyHttpConnection(state));
+  return 1;
+}
+
+void pushLegacyUrlObject(lua_State *state, LuaSkinHostModulesImpl *impl,
+                         std::string_view url) {
+  auto connection = std::make_shared<LegacyHttpConnection>();
+  connection->url.assign(url);
+
+  lua_createtable(state, 0, 1);
+  const int tableIndex = lua_gettop(state);
+  lua_pushlightuserdata(state, impl);
+  pushLegacyHttpShared(state, connection);
+  lua_pushvalue(state, tableIndex);
+  lua_pushcclosure(state, legacyOpenConnection, 3);
+  lua_setfield(state, tableIndex, "openConnection");
+  installClosedMemberMetatable(state, impl, legacyUrlMemberDenied);
+}
+
+int legacySetRequestMethod(lua_State *state) {
+  LuaSkinHostModulesImpl *impl = host(state, 1);
+  if (!legacyHttpReceiver(state, 2)) {
+    impl->reportLegacyDenial("java.net.URL.connection.member");
+    return raiseStoredError(state, impl);
+  }
+  const char *method = luaL_checkstring(state, 2);
+  if (std::string_view(method) != "GET") {
+    return luaL_error(state, "Legacy Lua skin HTTP method denied: %s", method);
+  }
+  return 0;
+}
+
+int legacySetConnectTimeout(lua_State *state) {
+  LuaSkinHostModulesImpl *impl = host(state, 1);
+  if (!legacyHttpReceiver(state, 2)) {
+    impl->reportLegacyDenial("java.net.URL.connection.member");
+    return raiseStoredError(state, impl);
+  }
+  legacyHttpConnection(state)->timeoutMilliseconds =
+      LuaSkinHttpClient::clampTimeout(
+          boundedIntegerArgument(state, 2, 0, false));
+  return 0;
+}
+
+int legacyConnect(lua_State *state) {
+  LuaSkinHostModulesImpl *impl = host(state, 1);
+  if (!legacyHttpReceiver(state, 1)) {
+    impl->reportLegacyDenial("java.net.URL.connection.member");
+    return raiseStoredError(state, impl);
+  }
+  SharedLegacyHttpConnection &connection = legacyHttpConnection(state);
+  if (const auto failure = connection->connect(impl->httpTransport)) {
+    return raiseLegacyHttpFailure(
+        state, "Legacy Lua skin HTTP connection failed: ", *failure);
+  }
+  return 0;
+}
+
+int legacyGetResponseCode(lua_State *state) {
+  LuaSkinHostModulesImpl *impl = host(state, 1);
+  if (!legacyHttpReceiver(state, 1)) {
+    impl->reportLegacyDenial("java.net.URL.connection.member");
+    return raiseStoredError(state, impl);
+  }
+  SharedLegacyHttpConnection &connection = legacyHttpConnection(state);
+  if (const auto failure = connection->connect(impl->httpTransport)) {
+    return raiseLegacyHttpFailure(
+        state, "Legacy Lua skin HTTP connection failed: ", *failure);
+  }
+  lua_pushinteger(state, connection->response->responseCode);
+  return 1;
+}
+
+int legacyReadLine(lua_State *state) {
+  LuaSkinHostModulesImpl *impl = host(state, 1);
+  if (!legacyHttpReceiver(state, 1)) {
+    impl->reportLegacyDenial("java.io.BufferedReader.member");
+    return raiseStoredError(state, impl);
+  }
+  SharedLegacyHttpReader &reader = legacyHttpReader(state);
+  if (reader->position >= reader->lines.size()) {
+    return 0;
+  }
+  const std::string &line = reader->lines[reader->position++];
+  lua_pushlstring(state, line.data(), line.size());
+  return 1;
+}
+
+void pushLegacyReaderObject(lua_State *state, LuaSkinHostModulesImpl *impl,
+                            LuaSkinHttpLinesResult result) {
+  auto reader = std::make_shared<LegacyHttpReader>();
+  reader->lines = std::move(result.lines);
+
+  lua_createtable(state, 0, 1);
+  const int tableIndex = lua_gettop(state);
+  lua_pushlightuserdata(state, impl);
+  pushLegacyHttpShared(state, reader);
+  lua_pushvalue(state, tableIndex);
+  lua_pushcclosure(state, legacyReadLine, 3);
+  lua_setfield(state, tableIndex, "readLine");
+  installClosedMemberMetatable(state, impl, legacyReaderMemberDenied);
+}
+
+int legacyGetInputStream(lua_State *state) {
+  LuaSkinHostModulesImpl *impl = host(state, 1);
+  if (!legacyHttpReceiver(state, 1)) {
+    impl->reportLegacyDenial("java.net.URL.connection.member");
+    return raiseStoredError(state, impl);
+  }
+  SharedLegacyHttpConnection &connection = legacyHttpConnection(state);
+  if (const auto failure = connection->connect(impl->httpTransport)) {
+    return raiseLegacyHttpFailure(
+        state, "Legacy Lua skin HTTP connection failed: ", *failure);
+  }
+  LuaSkinHttpLinesResult result =
+      LuaSkinHttpClient::readLines(connection->response->body);
+  if (result.failure) {
+    return raiseLegacyHttpFailure(state,
+                                  "Legacy Lua skin HTTP read failed: ",
+                                  *result.failure);
+  }
+  try {
+    pushLegacyReaderObject(state, impl, std::move(result));
+    return 1;
+  } catch (...) {
+    return luaL_error(state,
+                      "Legacy Lua skin HTTP read failed: allocation failed");
+  }
+}
+
+void pushLegacyConnectionObject(
+    lua_State *state, LuaSkinHostModulesImpl *impl,
+    const SharedLegacyHttpConnection &connection) {
+  lua_createtable(state, 0, 5);
+  const int tableIndex = lua_gettop(state);
+  const auto member = [&](const char *name, lua_CFunction function) {
+    lua_pushlightuserdata(state, impl);
+    pushLegacyHttpShared(state, connection);
+    lua_pushvalue(state, tableIndex);
+    lua_pushcclosure(state, function, 3);
+    lua_setfield(state, tableIndex, name);
+  };
+  member("setRequestMethod", legacySetRequestMethod);
+  member("setConnectTimeout", legacySetConnectTimeout);
+  member("connect", legacyConnect);
+  member("getResponseCode", legacyGetResponseCode);
+  member("getInputStream", legacyGetInputStream);
+  installClosedMemberMetatable(state, impl, legacyConnectionMemberDenied);
+}
+
+int legacyNewInstance(lua_State *state) {
+  LuaSkinHostModulesImpl *impl = host(state);
+  std::size_t classSize = 0;
+  const char *className = luaL_checklstring(state, 1, &classSize);
+  const std::string_view requested(className, classSize);
+  if (requested == "java.net.URL") {
+    std::size_t urlSize = 0;
+    const char *url = luaL_checklstring(state, 2, &urlSize);
+    try {
+      pushLegacyUrlObject(state, impl, std::string_view(url, urlSize));
+      return 1;
+    } catch (...) {
+      return luaL_error(state,
+                        "Legacy Lua skin HTTP connection failed: allocation failed");
+    }
+  }
+  if (requested == "java.io.InputStreamReader") {
+    lua_pushvalue(state, 2);
+    return 1;
+  }
+  if (requested == "java.io.BufferedReader") {
+    if (!lua_istable(state, 2)) {
+      impl->reportLegacyDenial("java.io.BufferedReader.constructor");
+      return luaL_error(state, "Legacy Lua skin reader access denied");
+    }
+    lua_pushvalue(state, 2);
+    return 1;
+  }
+  impl->reportLegacyDenial("java.net.URL.constructor");
+  return luaL_error(state, "Legacy Lua skin constructor access denied: %s",
+                    className);
+}
+
 enum class LegacyListStatus : std::uint8_t {
   Success,
   OrdinaryFailure,
@@ -2060,6 +2440,23 @@ void installFileMetatable(lua_State *state) {
   lua_pop(state, 1);
 }
 
+void installLegacyHttpMetatables(lua_State *state) {
+  luaL_newmetatable(state, kLegacyHttpConnectionMetatable);
+  lua_pushcfunction(
+      state, legacyHttpSharedGc<SharedLegacyHttpConnection>);
+  lua_setfield(state, -2, "__gc");
+  lua_pushboolean(state, 0);
+  lua_setfield(state, -2, "__metatable");
+  lua_pop(state, 1);
+
+  luaL_newmetatable(state, kLegacyHttpReaderMetatable);
+  lua_pushcfunction(state, legacyHttpSharedGc<SharedLegacyHttpReader>);
+  lua_setfield(state, -2, "__gc");
+  lua_pushboolean(state, 0);
+  lua_setfield(state, -2, "__metatable");
+  lua_pop(state, 1);
+}
+
 int installHost(lua_State *state) {
   auto *impl = static_cast<LuaSkinHostModulesImpl *>(lua_touserdata(state, 1));
   openLibrary(state, "", luaopen_base);
@@ -2108,6 +2505,7 @@ int installHost(lua_State *state) {
 
   installBit32(state);
   installFileMetatable(state);
+  installLegacyHttpMetatables(state);
   lua_newtable(state);
   lua_setglobal(state, "main_state");
 
@@ -2139,6 +2537,8 @@ int installHost(lua_State *state) {
   lua_setfield(state, -2, "bindClass");
   installClosure(state, impl, legacyNew);
   lua_setfield(state, -2, "new");
+  installClosure(state, impl, legacyNewInstance);
+  lua_setfield(state, -2, "newInstance");
   lua_pushvalue(state, -1);
   lua_setglobal(state, "luajava");
   lua_getglobal(state, "package");
@@ -2245,6 +2645,7 @@ LuaSkinHostModules::create(lua_State *state,
   }
   impl->state = state;
   impl->fileSystem = options.fileSystem;
+  impl->httpTransport = options.httpTransport;
   impl->maximumSourceBytes = options.maximumSourceBytes;
   impl->maximumModuleSearchTemplates = options.maximumModuleSearchTemplates;
   impl->allowProcessGlobalOperations = options.allowProcessGlobalOperations;
