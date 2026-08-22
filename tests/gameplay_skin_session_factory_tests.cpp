@@ -130,7 +130,7 @@ class FactoryAudioBackend final : public skin::LuaSkinAudioBackend {
 public:
   float systemVolume() const noexcept override { return 1.0F; }
   std::optional<skin::LuaSkinAudioIdentity>
-  load(const fs::path &) noexcept override {
+  load(const fs::path &, std::stop_token) noexcept override {
     return std::nullopt;
   }
   void play(skin::LuaSkinAudioIdentity, float, bool) noexcept override {}

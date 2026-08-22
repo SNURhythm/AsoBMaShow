@@ -136,10 +136,7 @@ replayGameplaySkinSessionServices(ApplicationContext &context) {
           .createHttpTransport = [](std::stop_token stop) {
             return skin::createLuaSkinProductionHttpTransport(stop);
           },
-          .audioBackend = skin::createLuaSkinApplicationAudioBackend(
-              context.jukebox.audioRuntime(), [&context] {
-                return context.settings.audioVideo.audio.masterVolume;
-              }),
+          .audioBackend = skin::createLuaSkinNoOutputAudioBackend(),
           .configurationWrites = context.skinConfigurationWriteQueue.get(),
           .diagnosticHistory = context.skinDiagnosticHistory.get()};
 #else

@@ -71,7 +71,8 @@ sf_count_t memoryFileTell(void *userData) {
 
 bool decodeAudioFile(SNDFILE *file, const path_t &displayPath,
                      std::vector<short> &buffer, SF_INFO &fileInfo,
-                     std::atomic<bool> &isCancelled) {
+                     std::atomic<bool> &isCancelled,
+                     std::size_t maximumPcmSamples) {
   UniqueResource<SNDFILE, sf_close> fileHandle(file);
   if (!file) {
     SDL_Log("Failed to open audio file %s, error: %s",
@@ -82,11 +83,22 @@ bool decodeAudioFile(SNDFILE *file, const path_t &displayPath,
   if (isCancelled) {
     return false;
   }
+  if (fileInfo.frames < 0 || fileInfo.channels <= 0 ||
+      static_cast<std::uintmax_t>(fileInfo.frames) >
+          static_cast<std::uintmax_t>(maximumPcmSamples) /
+              static_cast<std::uintmax_t>(fileInfo.channels)) {
+    SDL_Log("Decoded audio exceeds the PCM sample limit for %s",
+            path_t_to_utf8(displayPath).c_str());
+    return false;
+  }
+  const std::size_t sampleCount =
+      static_cast<std::size_t>(fileInfo.frames) *
+      static_cast<std::size_t>(fileInfo.channels);
   // Prepare a buffer to hold the PCM data
-  buffer.resize(fileInfo.frames * fileInfo.channels, 0);
+  buffer.resize(sampleCount, 0);
   // Read through libsndfile's floating-point path, then convert explicitly.
   // Direct int16 reads can produce audible differences for some keysounds.
-  std::vector<double> tempBuffer(fileInfo.frames * fileInfo.channels);
+  std::vector<double> tempBuffer(sampleCount);
   if (isCancelled) {
     return false;
   }
@@ -141,26 +153,59 @@ bool decodeAudioBytesToPCM(const path_t &displayPath,
       .tell = memoryFileTell,
   };
   SNDFILE *file = sf_open_virtual(&io, SFM_READ, &fileInfo, &memoryFile);
-  return decodeAudioFile(file, displayPath, buffer, fileInfo, isCancelled);
+  return decodeAudioFile(file, displayPath, buffer, fileInfo, isCancelled,
+                         std::numeric_limits<std::size_t>::max());
 }
 
 // Function to decode audio file to PCM
 bool decodeAudioToPCM(const path_t &filePath, std::vector<short> &buffer,
                       SF_INFO &fileInfo, std::atomic<bool> &isCancelled) {
+  return decodeAudioToPCMBounded(filePath, buffer, fileInfo, isCancelled, {});
+}
+
+bool decodeAudioToPCMBounded(const path_t &filePath,
+                             std::vector<short> &buffer, SF_INFO &fileInfo,
+                             std::atomic<bool> &isCancelled,
+                             AudioDecodeLimits limits, std::stop_token stop) {
   fileInfo = {};
   const std::filesystem::path fsPath(filePath);
   if (archive_file::isVirtualPath(fsPath)) {
     std::vector<unsigned char> bytes;
     std::string errorMessage;
-    if (!archive_file::readFile(fsPath, bytes, &errorMessage)) {
+    if (!archive_file::readFileBounded(fsPath, bytes,
+                                       limits.maximumEncodedBytes,
+                                       &errorMessage, stop)) {
       SDL_Log("Failed to read archived audio file %s: %s",
               path_t_to_utf8(filePath).c_str(), errorMessage.c_str());
       return false;
     }
-    return decodeAudioBytesToPCM(filePath, bytes, buffer, fileInfo,
-                                 isCancelled);
+    MemoryAudioFile memoryFile{
+        .data = bytes.data(),
+        .size = static_cast<sf_count_t>(bytes.size()),
+        .offset = 0,
+    };
+    SF_VIRTUAL_IO io{
+        .get_filelen = memoryFileLength,
+        .seek = memoryFileSeek,
+        .read = memoryFileRead,
+        .write = memoryFileWrite,
+        .tell = memoryFileTell,
+    };
+    SNDFILE *file = sf_open_virtual(&io, SFM_READ, &fileInfo, &memoryFile);
+    return decodeAudioFile(file, filePath, buffer, fileInfo, isCancelled,
+                           limits.maximumPcmSamples);
+  }
+
+  std::error_code sizeError;
+  const std::uintmax_t encodedBytes = std::filesystem::file_size(fsPath,
+                                                                 sizeError);
+  if (!sizeError && encodedBytes > limits.maximumEncodedBytes) {
+    SDL_Log("Encoded audio exceeds the byte limit for %s",
+            path_t_to_utf8(filePath).c_str());
+    return false;
   }
 
   SNDFILE *file = asobmashow::audio::openSoundFile(fsPath, SFM_READ, fileInfo);
-  return decodeAudioFile(file, filePath, buffer, fileInfo, isCancelled);
+  return decodeAudioFile(file, filePath, buffer, fileInfo, isCancelled,
+                         limits.maximumPcmSamples);
 }

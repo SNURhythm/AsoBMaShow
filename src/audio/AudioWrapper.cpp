@@ -639,6 +639,9 @@ AudioWrapper::~AudioWrapper() {
     clearCallbackState();
     soundDataList.clear();
     soundDataIndexMap.clear();
+    skinSounds.clear();
+    retiredSkinSounds.clear();
+    skinSoundDecodedBytes = 0;
   }
 }
 
@@ -918,6 +921,208 @@ bool AudioWrapper::playSound(const path_t &path, audio::Bus bus,
     }
   }
   return true;
+}
+
+void AudioWrapper::cleanupRetiredSkinSoundsLocked() noexcept {
+  for (auto found = retiredSkinSounds.begin();
+       found != retiredSkinSounds.end();) {
+    if (found->acknowledgement != nullptr &&
+        found->acknowledgement->load(std::memory_order_acquire)) {
+      skinSoundDecodedBytes -= found->decodedBytes;
+      found = retiredSkinSounds.erase(found);
+    } else {
+      ++found;
+    }
+  }
+}
+
+audio::SkinSoundLoadResult AudioWrapper::loadSkinSound(
+    const path_t &path, std::atomic<bool> &isCancelled,
+    std::size_t maximumEncodedBytes,
+    std::size_t maximumTotalDecodedBytes, std::stop_token stop) noexcept {
+  try {
+    if (isCancelled || maximumTotalDecodedBytes == 0) {
+      return {};
+    }
+
+    std::shared_ptr<SoundData> privateSound;
+    {
+      std::lock_guard<std::mutex> lock(soundDataListMutex);
+      cleanupRetiredSkinSoundsLocked();
+      if (const auto shared = soundDataIndexMap.find(path);
+          shared != soundDataIndexMap.end()) {
+        const auto &source = soundDataList[shared->second];
+        if (source == nullptr ||
+            source->sourceData.size() >
+                std::numeric_limits<std::size_t>::max() -
+                    source->outputData.size()) {
+          return {};
+        }
+        const std::size_t samples =
+            source->sourceData.size() + source->outputData.size();
+        if (samples > std::numeric_limits<std::size_t>::max() / sizeof(short)) {
+          return {};
+        }
+        const std::size_t decodedBytes = samples * sizeof(short);
+        if (decodedBytes > maximumTotalDecodedBytes ||
+            skinSoundDecodedBytes >
+                maximumTotalDecodedBytes - decodedBytes) {
+          return {};
+        }
+        privateSound = std::make_shared<SoundData>();
+        privateSound->channels = source->channels;
+        privateSound->sourceSampleRate = source->sourceSampleRate;
+        privateSound->sourceData = source->sourceData;
+        privateSound->outputData = source->outputData;
+        privateSound->sourceFrameCount = source->sourceFrameCount;
+        privateSound->outputFrameCount = source->outputFrameCount;
+      }
+    }
+
+    if (privateSound == nullptr) {
+      std::vector<short> pcmData;
+      SF_INFO sfInfo{};
+      const std::size_t maximumSamples =
+          maximumTotalDecodedBytes / sizeof(short);
+      if (!decodeAudioToPCMBounded(
+              path, pcmData, sfInfo, isCancelled,
+              {.maximumEncodedBytes = maximumEncodedBytes,
+               .maximumPcmSamples = maximumSamples},
+              stop) ||
+          isCancelled || sfInfo.channels <= 0 || sfInfo.samplerate <= 0 ||
+          pcmData.size() % static_cast<std::size_t>(sfInfo.channels) != 0) {
+        return {};
+      }
+      privateSound = std::make_shared<SoundData>();
+      privateSound->channels = sfInfo.channels;
+      privateSound->sourceSampleRate = sfInfo.samplerate;
+      privateSound->sourceData = std::move(pcmData);
+      privateSound->sourceFrameCount =
+          privateSound->sourceData.size() /
+          static_cast<std::size_t>(privateSound->channels);
+      privateSound->outputData = audio::ResamplePcm(
+          privateSound->sourceData, privateSound->channels,
+          privateSound->sourceSampleRate,
+          currentSampleRate.load(std::memory_order_acquire));
+      if ((!privateSound->sourceData.empty() &&
+           privateSound->outputData.empty()) ||
+          isCancelled) {
+        return {};
+      }
+      privateSound->outputFrameCount =
+          privateSound->outputData.size() /
+          static_cast<std::size_t>(privateSound->channels);
+    }
+
+    if (privateSound->sourceData.size() >
+        std::numeric_limits<std::size_t>::max() -
+            privateSound->outputData.size()) {
+      return {};
+    }
+    const std::size_t sampleCount = privateSound->sourceData.size() +
+                                    privateSound->outputData.size();
+    if (sampleCount >
+        std::numeric_limits<std::size_t>::max() / sizeof(short)) {
+      return {};
+    }
+    const std::size_t decodedBytes = sampleCount * sizeof(short);
+
+    std::lock_guard<std::mutex> lock(soundDataListMutex);
+    cleanupRetiredSkinSoundsLocked();
+    if (isCancelled || decodedBytes > maximumTotalDecodedBytes ||
+        skinSoundDecodedBytes > maximumTotalDecodedBytes - decodedBytes) {
+      return {};
+    }
+    audio::SkinSoundHandle handle{.value = ++nextSkinSoundHandle};
+    if (!handle) {
+      handle.value = ++nextSkinSoundHandle;
+    }
+    auto [unused, inserted] = skinSounds.emplace(
+        handle.value,
+        SkinSoundRecord{.soundData = std::move(privateSound),
+                        .decodedBytes = decodedBytes});
+    (void)unused;
+    if (!inserted) {
+      return {};
+    }
+    skinSoundDecodedBytes += decodedBytes;
+    return {.handle = handle, .decodedBytes = decodedBytes};
+  } catch (...) {
+    return {};
+  }
+}
+
+bool AudioWrapper::playSkinSound(audio::SkinSoundHandle handle, float gain,
+                                 bool loop) noexcept {
+  try {
+    std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
+    std::lock_guard<std::mutex> soundDataLock(soundDataListMutex);
+    cleanupRetiredSkinSoundsLocked();
+    const auto found = skinSounds.find(handle.value);
+    if (found == skinSounds.end() || found->second.soundData == nullptr) {
+      return false;
+    }
+    const auto started = startDeviceWithLifecycleAndSoundLocked();
+    if (!started.success) {
+      return false;
+    }
+    std::lock_guard<std::mutex> commandLock(audioCommandMutex);
+    return audio::playback::EnqueueCommand(
+        callbackState,
+        {.type = AudioCommandType::PlayNow,
+         .soundData = found->second.soundData.get(),
+         .bus = audio::Bus::System,
+         .gain = gain,
+         .loop = loop});
+  } catch (...) {
+    return false;
+  }
+}
+
+bool AudioWrapper::stopSkinSound(audio::SkinSoundHandle handle) noexcept {
+  try {
+    std::lock_guard<std::mutex> soundDataLock(soundDataListMutex);
+    cleanupRetiredSkinSoundsLocked();
+    const auto found = skinSounds.find(handle.value);
+    if (found == skinSounds.end() || found->second.soundData == nullptr) {
+      return true;
+    }
+    std::lock_guard<std::mutex> commandLock(audioCommandMutex);
+    return audio::playback::EnqueueCommand(
+        callbackState, {.type = AudioCommandType::StopOwner,
+                        .soundData = found->second.soundData.get()});
+  } catch (...) {
+    return false;
+  }
+}
+
+bool AudioWrapper::disposeSkinSound(audio::SkinSoundHandle handle) noexcept {
+  try {
+    std::lock_guard<std::mutex> soundDataLock(soundDataListMutex);
+    cleanupRetiredSkinSoundsLocked();
+    const auto found = skinSounds.find(handle.value);
+    if (found == skinSounds.end() || found->second.soundData == nullptr) {
+      return true;
+    }
+    found->second.acknowledgement = std::make_shared<std::atomic_bool>(false);
+    {
+      std::lock_guard<std::mutex> commandLock(audioCommandMutex);
+      if (!audio::playback::EnqueueCommand(
+              callbackState,
+              {.type = AudioCommandType::StopOwner,
+               .soundData = found->second.soundData.get(),
+               .acknowledgement = found->second.acknowledgement.get()})) {
+        retiredSkinSounds.push_back(std::move(found->second));
+        skinSounds.erase(found);
+        return false;
+      }
+    }
+    retiredSkinSounds.push_back(std::move(found->second));
+    skinSounds.erase(found);
+    return true;
+  } catch (...) {
+    return false;
+  }
 }
 
 bool AudioWrapper::playSkinSound(const path_t &path, float gain, bool loop) {
@@ -1241,6 +1446,17 @@ AudioWrapper::startDeviceWithLifecycleAndSoundLocked() {
       sounds.push_back(soundData.get());
     }
   }
+  for (const auto &[identity, record] : skinSounds) {
+    (void)identity;
+    if (record.soundData != nullptr) {
+      sounds.push_back(record.soundData.get());
+    }
+  }
+  for (const auto &record : retiredSkinSounds) {
+    if (record.soundData != nullptr) {
+      sounds.push_back(record.soundData.get());
+    }
+  }
 
   auto result = audio::playback::EnsureBackendStartedAtOutputRate(
       *backend, sounds, callbackState, targetSampleRate, currentSampleRate,
@@ -1344,6 +1560,9 @@ audio::playback::BackendOperationResult AudioWrapper::unloadSounds() {
   }
   soundDataList.clear();
   soundDataIndexMap.clear();
+  skinSounds.clear();
+  retiredSkinSounds.clear();
+  skinSoundDecodedBytes = 0;
   return {.success = true};
 }
 
@@ -1399,6 +1618,17 @@ bool AudioWrapper::restart(const audio::StreamRequest &request,
   for (const auto &soundData : soundDataList) {
     if (soundData != nullptr) {
       sounds.push_back(soundData.get());
+    }
+  }
+  for (const auto &[identity, record] : skinSounds) {
+    (void)identity;
+    if (record.soundData != nullptr) {
+      sounds.push_back(record.soundData.get());
+    }
+  }
+  for (const auto &record : retiredSkinSounds) {
+    if (record.soundData != nullptr) {
+      sounds.push_back(record.soundData.get());
     }
   }
   const int previousSampleRate =

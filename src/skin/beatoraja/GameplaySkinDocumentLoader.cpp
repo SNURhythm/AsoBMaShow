@@ -124,7 +124,8 @@ DecodedGameplaySkinDocument decodeLua(GameplaySkinDocumentRequest &request,
        .fileSystem = std::move(request.luaFileSystem),
        .safetyPolicy = request.safetyPolicy,
        .httpTransport = std::move(request.luaHttpTransport),
-       .audioBackend = std::move(request.luaAudioBackend)});
+       .audioBackend = std::move(request.luaAudioBackend),
+       .stop = request.stop});
   if (!runtime.runtime) {
     appendFailure(result.diagnostics, std::move(runtime.failure),
                   "skin_lua_runtime_create_failed",

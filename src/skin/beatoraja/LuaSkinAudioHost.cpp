@@ -17,8 +17,10 @@ SkinFileFailure audioFailure(std::string_view path,
 
 LuaSkinAudioHost::LuaSkinAudioHost(
     LuaSkinFileSystem &fileSystem,
-    std::shared_ptr<LuaSkinAudioBackend> backend) noexcept
-    : fileSystem_(&fileSystem), backend_(std::move(backend)) {}
+    std::shared_ptr<LuaSkinAudioBackend> backend, std::stop_token stop,
+    LuaSkinAudioPolicy policy) noexcept
+    : fileSystem_(&fileSystem), backend_(std::move(backend)), stop_(stop),
+      policy_(policy) {}
 
 LuaSkinAudioHost::~LuaSkinAudioHost() {
   if (!backend_) {
@@ -62,11 +64,19 @@ LuaSkinAudioHost::load(std::string_view authored,
     if (auto found = loaded_.find(resolved); found != loaded_.end()) {
       return &found->second;
     }
+    if (loaded_.size() >= policy_.maximumIdentities) {
+      result.failure = audioFailure(authored,
+                                    "skin audio identity quota exceeded");
+      return nullptr;
+    }
     auto [inserted, unused] =
         loaded_.emplace(std::move(resolved), LoadedIdentity{});
     (void)unused;
-    if (backend_) {
-      inserted->second = backend_->load(inserted->first);
+    // Render callbacks may address only identities declared or preloaded while
+    // the configured document was prepared. Unknown render-time paths remain
+    // cached misses so a callback never synchronously decodes audio.
+    if (backend_ && !renderPhase_ && !stop_.stop_requested()) {
+      inserted->second = backend_->load(inserted->first, stop_);
       if (inserted->second && !*inserted->second) {
         inserted->second.reset();
       }

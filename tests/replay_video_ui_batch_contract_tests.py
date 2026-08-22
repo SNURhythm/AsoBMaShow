@@ -10,6 +10,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReplayVideoUiBatchContracts(unittest.TestCase):
+    def test_lua_skin_audio_never_uses_the_live_mixer(self) -> None:
+        source = (ROOT / "src/ReplayVideoExporter.cpp").read_text(encoding="utf-8")
+        start = source.index("replayGameplaySkinSessionServices")
+        end = source.index("replayExportPersistedScore", start)
+        services = source[start:end]
+        self.assertIn("createLuaSkinNoOutputAudioBackend", services)
+        self.assertNotIn("createLuaSkinApplicationAudioBackend", services)
+        self.assertNotIn("jukebox.audioRuntime", services)
+
     def test_every_gameplay_presentation_render_is_scoped(self) -> None:
         source = (ROOT / "src/ReplayVideoExporter.cpp").read_text(encoding="utf-8")
         gameplay_calls = list(

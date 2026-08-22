@@ -243,7 +243,7 @@ public:
   float systemVolume() const noexcept override { return 0.25F; }
 
   std::optional<LuaSkinAudioIdentity>
-  load(const fs::path &path) noexcept override {
+  load(const fs::path &path, std::stop_token) noexcept override {
     const std::string value = path.generic_string();
     state_->loads.push_back(value);
     if (value.ends_with("/missing.ogg")) {
@@ -645,7 +645,11 @@ assert(main_state.audio_loop("coerce.ogg", "not-a-number") == true)
 assert(main_state.audio_play("coerce.ogg", "0.5") == true)
 assert(main_state.audio_play("skin/ForeignSkin/secret.ogg", 1) == true)
 assert(main_state.audio_preload() == true)
-return {}
+return {
+  render_miss = function()
+    return main_state.audio_play("render-miss.ogg", 1)
+  end,
+}
 )lua");
     writeText(source / "skin/legacy_input_surface.luaskin", R"lua(
 if not skin_config then return {type = 0} end
@@ -1300,6 +1304,18 @@ void testPinnedAudioSurfaceOwnsResolvedBackendIdentities() {
     }
     expect(configured.value.has_value() && !configured.failure,
            "all five pinned audio functions execute and return true");
+    const auto renderMiss = configured.value
+                                ? configured.value->callbackNamed("render_miss")
+                                : std::nullopt;
+    expect(renderMiss.has_value() && harness->runtime->enterRenderPhase().ok &&
+               harness->runtime->beginFrame(1).ok,
+           "audio fixture retains its render-time miss probe");
+    if (renderMiss) {
+      const auto invoked = harness->runtime->invoke(*renderMiss, {});
+      expect(invoked.value == std::optional<LuaScalar>{true} &&
+                 !invoked.failure && state->loads.size() == 8,
+             "render-time unknown audio fails closed without synchronous backend load");
+    }
     expect(state->loads.size() == 8 &&
                state->loads[0].ends_with("/skin/sound.ogg") &&
                state->loads[1].ends_with("/skin/loop.ogg") &&
@@ -1376,6 +1392,33 @@ void testPinnedAudioSurfaceOwnsResolvedBackendIdentities() {
              state->destroyed,
          "Lua session teardown disposes every remaining identity exactly once "
          "before releasing the backend");
+}
+
+void testAudioHostBoundsIdentitiesAndHonorsSessionCancellation() {
+  auto fileSystem = fixture().createFileSystem("audio_surface.luaskin");
+  auto state = std::make_shared<FakeAudioState>();
+  if (!fileSystem) {
+    expect(false, "audio quota fixture creates a filesystem");
+    return;
+  }
+  LuaSkinAudioHost bounded(
+      *fileSystem, std::make_shared<FakeAudioBackend>(state), {},
+      {.maximumIdentities = 2});
+  expect(bounded.play("one.ogg", 1.0F, false).ok() &&
+             bounded.play("two.ogg", 1.0F, false).ok() &&
+             !bounded.play("three.ogg", 1.0F, false).ok() &&
+             state->loads.size() == 2,
+         "audio identity quota fails closed before a third backend load");
+
+  std::stop_source cancelled;
+  cancelled.request_stop();
+  auto cancelledState = std::make_shared<FakeAudioState>();
+  LuaSkinAudioHost stopped(*fileSystem,
+                           std::make_shared<FakeAudioBackend>(cancelledState),
+                           cancelled.get_token());
+  expect(stopped.play("cancelled.ogg", 1.0F, false).ok() &&
+             cancelledState->loads.empty(),
+         "cancelled sessions cache an audio miss without entering the decoder backend");
 }
 
 void testPinnedLegacyInputSurfaceUsesImmutableSnapshots() {
@@ -1623,6 +1666,7 @@ int main() {
   testPinnedMainStateFileSurfaceAndClosedLegacyFileFacade();
   testPinnedBoundedHttpAndClosedLegacyReaderFacade();
   testPinnedAudioSurfaceOwnsResolvedBackendIdentities();
+  testAudioHostBoundsIdentitiesAndHonorsSessionCancellation();
   testPinnedLegacyInputSurfaceUsesImmutableSnapshots();
   testIoLinesUsesTheVirtualSkinFileSystem();
   testIoReadClampsHugeRequestedCountToAvailableBytes();

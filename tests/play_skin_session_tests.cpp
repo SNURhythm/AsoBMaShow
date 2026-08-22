@@ -623,7 +623,7 @@ public:
 
   float systemVolume() const noexcept override { return 0.4F; }
   std::optional<LuaSkinAudioIdentity>
-  load(const fs::path &path) noexcept override {
+  load(const fs::path &path, std::stop_token) noexcept override {
     state_->loads.push_back(path);
     return LuaSkinAudioIdentity{.value = ++nextIdentity_};
   }

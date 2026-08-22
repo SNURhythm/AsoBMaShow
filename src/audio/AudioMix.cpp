@@ -627,6 +627,12 @@ void DrainRealtimeCommands(AudioCallbackState &state) noexcept {
                                    .gain = command.gain,
                                    .loop = command.loop});
       break;
+    case AudioCommandType::StopOwner:
+      RemoveSound(state, command.soundData);
+      if (command.acknowledgement != nullptr) {
+        command.acknowledgement->store(true, std::memory_order_release);
+      }
+      break;
     case AudioCommandType::StopAll:
       ClearCallbackSounds(state);
       break;
@@ -659,6 +665,12 @@ void DrainCommands(AudioCallbackState &state) {
                                    .startFrame = command.startFrame,
                                    .gain = command.gain,
                                    .loop = command.loop});
+      break;
+    case AudioCommandType::StopOwner:
+      RemoveSound(state, command.soundData);
+      if (command.acknowledgement != nullptr) {
+        command.acknowledgement->store(true, std::memory_order_release);
+      }
       break;
     case AudioCommandType::StopAll:
       ClearCallbackSounds(state);

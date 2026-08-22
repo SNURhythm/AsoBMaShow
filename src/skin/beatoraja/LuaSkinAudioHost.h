@@ -3,11 +3,13 @@
 #include "LuaSkinFileSystem.h"
 
 #include <compare>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <map>
 #include <memory>
 #include <optional>
+#include <stop_token>
 #include <string_view>
 
 namespace skin {
@@ -25,7 +27,7 @@ public:
   virtual ~LuaSkinAudioBackend() = default;
   [[nodiscard]] virtual float systemVolume() const noexcept = 0;
   [[nodiscard]] virtual std::optional<LuaSkinAudioIdentity>
-  load(const std::filesystem::path &) noexcept = 0;
+  load(const std::filesystem::path &, std::stop_token) noexcept = 0;
   virtual void play(LuaSkinAudioIdentity, float volume, bool loop) noexcept = 0;
   virtual void stop(LuaSkinAudioIdentity) noexcept = 0;
   virtual void dispose(LuaSkinAudioIdentity) noexcept = 0;
@@ -36,10 +38,15 @@ struct LuaSkinAudioOperationResult {
   [[nodiscard]] bool ok() const noexcept { return !failure.has_value(); }
 };
 
+struct LuaSkinAudioPolicy {
+  std::size_t maximumIdentities = 256;
+};
+
 class LuaSkinAudioHost final {
 public:
   LuaSkinAudioHost(LuaSkinFileSystem &,
-                   std::shared_ptr<LuaSkinAudioBackend>) noexcept;
+                   std::shared_ptr<LuaSkinAudioBackend>,
+                   std::stop_token = {}, LuaSkinAudioPolicy = {}) noexcept;
   ~LuaSkinAudioHost();
 
   LuaSkinAudioHost(const LuaSkinAudioHost &) = delete;
@@ -53,6 +60,7 @@ public:
   stop(std::string_view path) noexcept;
   [[nodiscard]] LuaSkinAudioOperationResult
   dispose(std::string_view path) noexcept;
+  void enterRenderPhase() noexcept { renderPhase_ = true; }
 
 private:
   using LoadedIdentity = std::optional<LuaSkinAudioIdentity>;
@@ -64,6 +72,9 @@ private:
 
   LuaSkinFileSystem *fileSystem_ = nullptr;
   std::shared_ptr<LuaSkinAudioBackend> backend_;
+  std::stop_token stop_;
+  LuaSkinAudioPolicy policy_;
+  bool renderPhase_ = false;
   std::map<std::filesystem::path, LoadedIdentity> loaded_;
 };
 

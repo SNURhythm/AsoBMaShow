@@ -793,6 +793,51 @@ void testScopedSystemSoundLoopsAtPerVoiceGainAndStopsSelectively() {
           "selective removal preserves unrelated BGM ownership");
 }
 
+void testOwnerStopCommandAcknowledgesWithoutInterruptingOtherVoices() {
+  SoundData skinSound;
+  skinSound.channels = 1;
+  skinSound.outputData = {12000, 12000, 12000, 12000};
+  skinSound.outputFrameCount = 4;
+  SoundData bgm;
+  bgm.channels = 1;
+  bgm.outputData = {6000, 6000, 6000, 6000};
+  bgm.outputFrameCount = 4;
+  std::atomic_bool acknowledged = false;
+
+  AudioCallbackState state;
+  require(audio::playback::EnqueueCommand(
+              state, {.type = AudioCommandType::PlayNow,
+                      .soundData = &skinSound,
+                      .bus = audio::Bus::System}) &&
+              audio::playback::EnqueueCommand(
+                  state, {.type = AudioCommandType::PlayNow,
+                          .soundData = &bgm,
+                          .bus = audio::Bus::Bgm}),
+          "skin and BGM voices enter the callback queue");
+  audio::playback::DrainCommands(state);
+  std::vector<float> output(1, 0.0F);
+  audio::playback::MixActiveSounds(state, output, 1, 1, 1.0F, 1.0F, 100);
+  const auto bgmCursor = state.playingSounds[1].sourceFrameQ32;
+
+  require(audio::playback::EnqueueCommand(
+              state, {.type = AudioCommandType::StopOwner,
+                      .soundData = &skinSound,
+                      .acknowledgement = &acknowledged}),
+          "owner stop enters the callback queue without stopping the device");
+  audio::playback::DrainCommands(state);
+  require(acknowledged.load(std::memory_order_acquire) &&
+              state.playingSoundCount == 1 &&
+              state.playingSounds[0].soundData == &bgm &&
+              state.playingSounds[0].sourceFrameQ32 == bgmCursor,
+          "callback owner stop acknowledges retirement and preserves the "
+          "unrelated BGM position");
+  output[0] = 0.0F;
+  audio::playback::MixActiveSounds(state, output, 1, 1, 1.0F, 1.0F, 100);
+  require(state.playingSoundCount == 1 &&
+              state.playingSounds[0].sourceFrameQ32 > bgmCursor,
+          "unrelated BGM continues on the next callback buffer");
+}
+
 void testRealtimeCommandReservationPublishesAtomically() {
   SoundData keysound;
   keysound.channels = 1;
@@ -1081,6 +1126,7 @@ int main() {
     testScheduledOffsetsUseInversePlaybackRate();
     testBusFlowAndMixing();
     testScopedSystemSoundLoopsAtPerVoiceGainAndStopsSelectively();
+    testOwnerStopCommandAcknowledgesWithoutInterruptingOtherVoices();
     testRealtimeCommandReservationPublishesAtomically();
     testRealtimeCommandReservationFailsClosedAtCapacity();
     testRealtimeCommandDeterministicallyAdmitsAtVoiceLimit();

@@ -15,6 +15,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -234,6 +235,7 @@ struct LuaSkinRuntimeOptions {
   SkinSafetyPolicy safetyPolicy{};
   std::unique_ptr<LuaSkinHttpTransport> httpTransport;
   std::shared_ptr<LuaSkinAudioBackend> audioBackend;
+  std::stop_token stop;
   LuaSkinLegacyInputSnapshot legacyInputSnapshot;
 };
 

@@ -65,7 +65,12 @@ struct ScheduledSound {
   bool loop = false;
 };
 
-enum class AudioCommandType : std::uint8_t { PlayNow, Schedule, StopAll };
+enum class AudioCommandType : std::uint8_t {
+  PlayNow,
+  Schedule,
+  StopOwner,
+  StopAll
+};
 
 struct AudioCommand {
   AudioCommandType type = AudioCommandType::StopAll;
@@ -76,6 +81,7 @@ struct AudioCommand {
   size_t startFrame = 0;
   float gain = 1.0F;
   bool loop = false;
+  std::atomic_bool *acknowledgement = nullptr;
 };
 
 constexpr size_t kMaxActiveSounds = 512;

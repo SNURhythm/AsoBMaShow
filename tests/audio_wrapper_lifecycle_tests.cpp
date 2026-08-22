@@ -27,6 +27,12 @@ bool decodeAudioToPCM(const path_t &, std::vector<short> &, SF_INFO &,
   return false;
 }
 
+bool decodeAudioToPCMBounded(const path_t &, std::vector<short> &, SF_INFO &,
+                             std::atomic<bool> &, AudioDecodeLimits,
+                             std::stop_token) {
+  return false;
+}
+
 bool decodeAudioBytesToPCM(const path_t &, const std::vector<unsigned char> &,
                            std::vector<short> &, SF_INFO &,
                            std::atomic<bool> &) {
@@ -1766,25 +1772,103 @@ void testLuaSkinProductionAdapterPreservesUnrelatedAudioOwnership() {
   float systemVolume = 0.3F;
   auto backend = skin::createLuaSkinApplicationAudioBackend(
       *fixture.wrapper, [&systemVolume] { return systemVolume; });
+  auto secondSessionBackend = skin::createLuaSkinApplicationAudioBackend(
+      *fixture.wrapper, [&systemVolume] { return systemVolume; });
   require(backend != nullptr && backend->systemVolume() == 0.3F,
           "production adapter reads the current application system volume");
-  require(!backend->load(std::filesystem::path(PATH("missing-device-audio")))
+  require(!backend->load(std::filesystem::path(PATH("missing-device-audio")), {})
                .has_value(),
           "production adapter fails closed when the decoder-backed sound is genuinely unavailable");
 
-  const auto identity = backend->load(std::filesystem::path(skinPath));
-  require(identity.has_value(),
-          "production adapter resolves a decoder-backed audio identity");
-  backend->play(*identity, 0.6F, true);
-  backend->stop(*identity);
+  const auto firstIdentity = backend->load(std::filesystem::path(skinPath), {});
+  const auto secondIdentity =
+      secondSessionBackend->load(std::filesystem::path(skinPath), {});
+  require(firstIdentity.has_value() && secondIdentity.has_value(),
+          "two skin sessions load private same-path identities");
+  backend->play(*firstIdentity, 0.6F, true);
+  secondSessionBackend->play(*secondIdentity, 0.4F, true);
+  const int stopsBefore = fixture.control->stopCalls.load();
+  const int startsBefore = fixture.control->startCalls.load();
+  backend->stop(*firstIdentity);
   require(fixture.wrapper->getSoundDurationMicros(skinPath).has_value() &&
-              fixture.wrapper->getSoundDurationMicros(retainedPath).has_value(),
-          "selective stop retains decoded skin and unrelated chart audio");
-  backend->dispose(*identity);
-  require(!fixture.wrapper->getSoundDurationMicros(skinPath).has_value() &&
               fixture.wrapper->getSoundDurationMicros(retainedPath).has_value() &&
-              fixture.wrapper->playSound(retainedPath, audio::Bus::Bgm),
-          "selective dispose releases only the skin identity and keeps BGM playable");
+              fixture.control->stopCalls.load() == stopsBefore &&
+              fixture.control->startCalls.load() == startsBefore,
+          "selective stop retains shared chart audio without cycling the device");
+  backend->dispose(*firstIdentity);
+  secondSessionBackend->dispose(*secondIdentity);
+  require(fixture.wrapper->getSoundDurationMicros(skinPath).has_value() &&
+              fixture.wrapper->getSoundDurationMicros(retainedPath).has_value() &&
+              fixture.wrapper->playSound(skinPath, audio::Bus::Keysound) &&
+              fixture.wrapper->playSound(retainedPath, audio::Bus::Bgm) &&
+              fixture.control->stopCalls.load() == stopsBefore &&
+              fixture.control->startCalls.load() == startsBefore,
+          "selective dispose releases private voices without mutating same-path "
+          "keysound or unrelated BGM ownership");
+}
+
+void testReplayLuaAudioBackendIsExplicitlyNoOutputAndCancellable() {
+  auto backend = skin::createLuaSkinNoOutputAudioBackend();
+  require(backend != nullptr && backend->systemVolume() == 0.0F,
+          "replay Lua audio backend advertises explicit no-output volume");
+  const auto identity = backend->load(PATH("replay-skin-sound.ogg"), {});
+  require(identity.has_value(),
+          "no-output replay backend preserves skin identity semantics");
+  backend->play(*identity, 1.0F, true);
+  backend->stop(*identity);
+  backend->dispose(*identity);
+  std::stop_source cancelled;
+  cancelled.request_stop();
+  require(!backend->load(PATH("cancelled-replay-sound.ogg"),
+                         cancelled.get_token())
+               .has_value(),
+          "no-output replay backend honors its export session stop token");
+}
+
+void testLuaSkinRetirementWaitsForCallbackWhileChartClockContinues() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  const path_t sharedPath = PATH("callback-shared-skin-and-chart.ogg");
+  require(wrapper.loadGeneratedSound(sharedPath,
+                                     std::vector<short>(64, 12000), 1, 44100),
+          "callback fixture retains same-path chart PCM");
+  auto backend = skin::createLuaSkinApplicationAudioBackend(
+      wrapper, [] { return 1.0F; },
+      {.maximumIdentities = 2,
+       .maximumEncodedBytes = 1024,
+       .maximumDecodedBytes = 256});
+  const auto identity = backend->load(std::filesystem::path(sharedPath), {});
+  require(identity.has_value() &&
+              wrapper.playSound(sharedPath, audio::Bus::Bgm),
+          "callback fixture starts private skin and shared chart owners");
+  backend->play(*identity, 0.5F, true);
+  require(control->renderCallback != nullptr,
+          "callback fixture exposes the running production mixer");
+
+  stopwatch.start();
+  std::array<std::int16_t, 8> first{};
+  control->renderCallback(first.data(), 4, 2, control->renderUserData);
+  const long long beforeStop = wrapper.getTimeMicros();
+  control->events.clear();
+  backend->dispose(*identity);
+  require(!backend->load(std::filesystem::path(sharedPath), {}).has_value(),
+          "disposed PCM remains quota-accounted until callback acknowledgement");
+
+  std::array<std::int16_t, 8> second{};
+  control->renderCallback(second.data(), 4, 2, control->renderUserData);
+  const long long afterStop = wrapper.getTimeMicros();
+  const auto replacement =
+      backend->load(std::filesystem::path(sharedPath), {});
+  stopwatch.pause();
+  require(replacement.has_value() && afterStop > beforeStop &&
+              std::ranges::any_of(second, [](std::int16_t sample) {
+                return sample != 0;
+              }) &&
+              control->events.empty(),
+          "callback acknowledgement releases private PCM while same-path BGM "
+          "and the chart clock continue without device stop or restart");
 }
 
 } // namespace
@@ -1821,6 +1905,8 @@ int main() {
     testRealtimeReservationExcludesLifecycleResetUntilCommit();
     testRealtimeReservationDoesNotContendOnUnrelatedLifecycleWork();
     testLuaSkinProductionAdapterPreservesUnrelatedAudioOwnership();
+    testReplayLuaAudioBackendIsExplicitlyNoOutputAndCancellable();
+    testLuaSkinRetirementWaitsForCallbackWhileChartClockContinues();
     return 0;
   } catch (const std::exception &error) {
     std::cerr << "audio_wrapper_lifecycle_tests: " << error.what() << '\n';

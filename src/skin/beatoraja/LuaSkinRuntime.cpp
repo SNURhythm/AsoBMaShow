@@ -1207,7 +1207,7 @@ LuaRuntimeCreateResult LuaSkinRuntime::create(LuaSkinRuntimeOptions options) {
   impl->httpTransport = std::move(options.httpTransport);
   try {
     impl->audioHost = std::make_unique<LuaSkinAudioHost>(
-        *impl->fileSystem, std::move(options.audioBackend));
+        *impl->fileSystem, std::move(options.audioBackend), options.stop);
     impl->legacyInputHost = std::make_unique<LuaSkinLegacyInputHost>(
         std::move(options.legacyInputSnapshot));
   } catch (...) {
@@ -1303,6 +1303,7 @@ LuaOperationResult LuaSkinRuntime::enterRenderPhase() {
                 transition.failure ? transition.failure->message
                                    : "Lua filesystem transition failed")};
   }
+  impl_->audioHost->enterRenderPhase();
   impl_->phase = LuaRuntimePhase::Render;
   return {.ok = true};
 }
