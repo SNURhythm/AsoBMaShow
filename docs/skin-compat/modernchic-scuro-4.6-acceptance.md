@@ -1,8 +1,8 @@
 # ModernChic/SCURO 4.6 acceptance record
 
-Status: **pending**. Task 1 pins the source/package contract; milestone closure
-requires every schema-v2 completion criterion to be `pass` with external
-evidence.
+Automated gameplay compatibility status: **pass** (2026-08-22). External
+physical iPad evidence remains **pending**; milestone closure still requires
+every schema-v2 completion criterion to be `pass` with external evidence.
 
 ## Official package provenance
 
@@ -28,6 +28,53 @@ The archive and extraction live outside the repository. The equal, independently
 computed tree digests bind the audited source tree to the exact official ZIP.
 The repository contains only hashes, opaque inventory IDs, public provenance,
 and the selected entry identity.
+
+## Automated gameplay compatibility evidence
+
+The local, noncommitting verifier ran against the exact archive above and the
+pinned Beatoraja checkout at
+`c2ed5db1a46145ed10790c3872f717e95b59db9d`:
+
+```bash
+python3 scripts/verify_modernchic_gameplay_skin.py \
+  --skin /Users/xf/Downloads/Skins/ModernChic460.zip \
+  --beatoraja-root ../beatoraja
+```
+
+The verifier safely extracted into a temporary directory, repeated the
+archive/tree/selected-closure audit, loaded `play7_hw.luaskin` through a real
+`PlaySkinSession`, evaluated three fixed gameplay frames, emitted only a
+sanitized JSON report, and deleted the temporary package. The headless movie
+device seam verifies materialization, decoded-memory accounting, frame
+lifecycle, and owner-thread destruction without retaining or redistributing
+movie bytes.
+
+| Automated fact | 2026-08-22 result |
+| --- | --- |
+| Session publication | pass |
+| Unsupported diagnostics / selectors | 0 / 0 |
+| Note-distribution graphs | 3 declared / 9 commands |
+| Timing visualizers | 1 declared / 12 commands |
+| BPM graphs | 3 declared / 3 commands |
+| Hit-error visualizers | 1 declared / 3 commands |
+| Resource preparation | complete; all referenced resources prepared |
+| Image / font / movie / audio decodes | 22 / 5 / 1 / 0 |
+| Texture uploads | 27 |
+| Lua callback frames / maximum wall time / budget | 3 / 36 us / 6,000 us |
+| Loading telemetry / independently measured load | 1,874,421 us / 1,878,029 us |
+| Other diagnostic codes | `skin.renderer.text.glyph` |
+
+The remaining glyph diagnostic is not an unsupported gameplay object, field,
+API, or selector diagnostic and does not prevent frame publication or the four
+required graph families. It is retained in the report rather than reclassified
+or hidden.
+
+The source/fixture trace pins the exact Beatoraja `LaneRenderer.drawLongNote`
+rule and JBMS constants. Undefined model type `0`, `1`, or `2` selects Aso
+mode `1` (LN), `2` (CN), or `3` (HCN), respectively; an explicit note type
+`1`, `2`, or `3` overrides the model. The fixture also pins the exact body,
+cap, reactive, and damaged slots for every mode, and its negative contract
+rejects a cyclic mode shift.
 
 ## Author terms and screenshot decision
 

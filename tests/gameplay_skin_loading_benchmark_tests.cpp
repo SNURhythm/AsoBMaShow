@@ -16,7 +16,10 @@
 #include "skin/package/SkinPathPolicy.h"
 #include "skin/package/SkinTreeSnapshotter.h"
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -25,6 +28,7 @@
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -108,11 +112,51 @@ private:
   std::uint16_t next_ = 1;
 };
 
+class BenchmarkMovieDevice final : public SkinMovieDevice {
+public:
+  std::optional<SkinMovieLoadResult>
+  load(const fs::path &path, const SkinMovieLoadLimits &limits,
+       std::stop_token stop) override {
+    if (stop.stop_requested() || !fs::is_regular_file(path)) {
+      materializedPathsValid = false;
+      return std::nullopt;
+    }
+    const auto layout = skinMovieDecodedLayout(80, 40, limits);
+    if (!layout) return std::nullopt;
+    ++loaded;
+    return SkinMovieLoadResult{
+        .handle = SkinMoviePlayerHandle{loaded},
+        .width = 80,
+        .height = 40,
+        .durationMillis = 1'000,
+        .decodedBytes = layout->residentBytes};
+  }
+
+  void destroy(SkinMoviePlayerHandle) noexcept override { ++destroyed; }
+  bool ownsCurrentThread() const noexcept override { return true; }
+  void beginFrame() noexcept override {}
+  SkinMovieFramePreparationResult
+  prepareFrame(SkinMoviePlayerHandle, const SkinMovieCommand &,
+               const PlaySkinViewport &) override {
+    return {.ready = true, .drawable = false};
+  }
+  void discardFrame() noexcept override {}
+  void commitFrame() noexcept override {}
+  void submitPrepared(std::size_t) noexcept override {}
+
+  std::uint64_t loaded = 0;
+  std::uint64_t destroyed = 0;
+  bool materializedPathsValid = true;
+};
+
 struct BenchmarkOptions {
   bool benchmark = false;
+  bool acceptanceReport = false;
   bool warm = false;
   std::size_t samples = 1;
   std::optional<fs::path> skin;
+  std::optional<std::string> entry;
+  std::optional<std::string> entryIdentity;
   bool luaOnly = false;
 };
 
@@ -122,6 +166,8 @@ std::optional<BenchmarkOptions> parseOptions(int argc, char **argv) {
     const std::string_view argument(argv[index]);
     if (argument == "--benchmark") {
       result.benchmark = true;
+    } else if (argument == "--acceptance-report") {
+      result.acceptanceReport = true;
     } else if (argument == "--mode" && index + 1 < argc) {
       const std::string_view mode(argv[++index]);
       if (mode != "cold" && mode != "warm") return std::nullopt;
@@ -135,6 +181,10 @@ std::optional<BenchmarkOptions> parseOptions(int argc, char **argv) {
       if (result.samples == 0 || result.samples > 100) return std::nullopt;
     } else if (argument == "--skin" && index + 1 < argc) {
       result.skin = fs::path(argv[++index]);
+    } else if (argument == "--entry" && index + 1 < argc) {
+      result.entry = argv[++index];
+    } else if (argument == "--entry-identity" && index + 1 < argc) {
+      result.entryIdentity = argv[++index];
     } else if (argument == "--format" && index + 1 < argc) {
       if (std::string_view(argv[++index]) != "lua") return std::nullopt;
       result.luaOnly = true;
@@ -142,12 +192,18 @@ std::optional<BenchmarkOptions> parseOptions(int argc, char **argv) {
       return std::nullopt;
     }
   }
+  if (result.benchmark && result.acceptanceReport) return std::nullopt;
+  if (result.acceptanceReport &&
+      (!result.skin || !result.entry || !result.entryIdentity)) {
+    return std::nullopt;
+  }
   return result;
 }
 
 class BenchmarkFixture final {
 public:
-  BenchmarkFixture(const std::optional<fs::path> &localSkin, bool luaOnly)
+  BenchmarkFixture(const std::optional<fs::path> &localSkin, bool luaOnly,
+                   std::optional<std::string> selectedEntry = std::nullopt)
       : roots_{.visiblePackages = temp_.root() / "visible",
                .privateRevisions = temp_.root() / "revisions",
                .privateCatalog = temp_.root() / "catalog",
@@ -159,11 +215,25 @@ public:
     chart_.text.title = "loading benchmark";
     chart_.text.artist = "AsoBMaShow tests";
     chart_.text.fullArtist = chart_.text.artist;
+    chart_.text.auditedStringProperties = {{12, chart_.text.title}};
     initialState_.clock.serial = 1;
     initialState_.clock.visualTimeMicros = 0;
     initialState_.clock.gameplayTimeMicros = 0;
     initialState_.authority.loadingState = PlayfieldLoadingState::Loaded;
+    initialState_.authority.currentGauge = 50.0F;
+    initialState_.authority.gaugeType = GaugeType::Normal;
+    initialState_.authority.gaugeRules.compiled = true;
+    initialState_.authority.gaugeRules
+        .gauges[gaugeTypeIndex(GaugeType::Normal)] = {
+        .initial = 20.0F,
+        .minimum = 2.0F,
+        .maximum = 100.0F,
+        .clearBorder = 80.0F};
+    initialState_.lastJudge = JudgeResult(PGreat, 0);
+    initialState_.lastJudgeVisualMicros = 0;
+    initialState_.combo = 1;
     initialProjection_.frameSerial = 1;
+    prepareAcceptanceState();
 
     fs::path source = temp_.root() / "source";
     if (localSkin) {
@@ -171,6 +241,7 @@ public:
     } else {
       prepareSyntheticFormats(source, luaOnly);
     }
+    if (selectedEntry) entryPaths_ = {std::move(*selectedEntry)};
     fs::create_directories(roots_.visiblePackages);
     fs::copy(source, roots_.visiblePackages / package_.directoryName,
              fs::copy_options::recursive |
@@ -213,6 +284,7 @@ public:
     std::uint64_t total = 0;
     for (const auto &entry : entries_) {
       auto device = std::make_shared<BenchmarkTextureDevice>();
+      auto movieDevice = std::make_shared<BenchmarkMovieDevice>();
       auto counters = std::make_shared<SkinLiveResourceCounters>();
       auto created = PlaySkinSession::create(
           {.revision = lease_->clone(),
@@ -231,6 +303,7 @@ public:
            .storageRoots = roots_,
            .resourcePreparation = preparation,
            .textureDevice = device,
+           .movieDevice = movieDevice,
            .liveResourceCounters = counters,
            .configurationWrites = configurationWrites_});
       if (!created.session) {
@@ -243,6 +316,8 @@ public:
 #endif
       created.session.reset();
       if (device->created != device->destroyed ||
+          !movieDevice->materializedPathsValid ||
+          movieDevice->loaded != movieDevice->destroyed ||
           counters->snapshot() != SkinLiveResourceSnapshot{}) {
         return std::nullopt;
       }
@@ -254,6 +329,186 @@ public:
     return total;
   }
 
+  std::optional<nlohmann::json>
+  acceptanceReport(std::string_view entryIdentity) {
+    if (!ready() || entries_.size() != 1 || entryIdentity.empty()) {
+      return std::nullopt;
+    }
+    constexpr std::array<std::string_view, 4> familyNames{
+        "noteDistribution", "timingVisualizer", "bpmGraph",
+        "hitErrorVisualizer"};
+    std::map<std::string, std::size_t, std::less<>> declared;
+    std::map<std::string, std::size_t, std::less<>> commands;
+    for (const auto family : familyNames) {
+      declared.emplace(family, 0U);
+      commands.emplace(family, 0U);
+    }
+    std::set<std::string, std::less<>> diagnosticCodes;
+    std::set<std::string, std::less<>> unsupportedDiagnostics;
+    std::set<std::string, std::less<>> unsupportedSubjects;
+    std::set<std::string, std::less<>> budgetDiagnostics;
+    const auto rememberDiagnostic = [&](const SkinDiagnostic &diagnostic) {
+      diagnosticCodes.insert(diagnostic.code);
+      if (diagnostic.code.find("unsupported") != std::string::npos) {
+        unsupportedDiagnostics.insert(diagnostic.code);
+      }
+      if (diagnostic.code == "skin.play_state.unsupported" &&
+          diagnostic.virtualPath.find('/') == std::string::npos &&
+          diagnostic.virtualPath.find('\\') == std::string::npos) {
+        unsupportedSubjects.insert(diagnostic.virtualPath);
+      }
+      if (diagnostic.code == "skin_lua_instruction_limit_exceeded" ||
+          diagnostic.code == "skin_lua_wall_time_limit_exceeded" ||
+          diagnostic.code == "skin_lua_frame_budget_exceeded") {
+        budgetDiagnostics.insert(diagnostic.code);
+      }
+    };
+
+    SkinResourcePreparationService preparation;
+    auto device = std::make_shared<BenchmarkTextureDevice>();
+    auto movieDevice = std::make_shared<BenchmarkMovieDevice>();
+    auto counters = std::make_shared<SkinLiveResourceCounters>();
+    const auto started = std::chrono::steady_clock::now();
+    auto created = PlaySkinSession::create(
+        {.revision = lease_->clone(),
+         .entry = entries_.front().entry,
+         .reconciledSettings = entries_.front().settings,
+         .configurationDigest = entries_.front().digest},
+        {.sessionSerial = 700,
+         .profileId = profile_,
+         .chartModel = chart_,
+         .initialState = &initialState_,
+         .initialProjection = &initialProjection_,
+         .safeUiBounds = {.x = 0.0,
+                          .y = 0.0,
+                          .width = 1280.0,
+                          .height = 720.0},
+         .storageRoots = roots_,
+         .resourcePreparation = preparation,
+         .textureDevice = device,
+         .movieDevice = movieDevice,
+         .liveResourceCounters = counters,
+         .configurationWrites = configurationWrites_});
+    const auto measuredLoadMicros =
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - started);
+    for (const auto &diagnostic : created.diagnostics) {
+      rememberDiagnostic(diagnostic);
+    }
+
+    nlohmann::json report = {
+        {"schemaVersion", 1},
+        {"entryIdentity", entryIdentity},
+        {"sessionPublished", created.session != nullptr},
+        {"graphFamilies", nlohmann::json::object()},
+        {"resourcePreparation",
+         {{"complete", isCompleteSkinLoadingTelemetry(created.loadingTelemetry)},
+          {"allReferencedResourcesPrepared", false},
+          {"imageDecodes", created.loadingTelemetry.resources.imageDecodes},
+          {"fontDecodes", created.loadingTelemetry.resources.fontDecodes},
+          {"movieDecodes", created.loadingTelemetry.resources.movieDecodes},
+          {"audioDecodes", created.loadingTelemetry.resources.audioDecodes},
+          {"textureUploads",
+           created.loadingTelemetry.resources.textureUploads}}},
+        {"callbackBudget",
+         {{"frameBudgetMicros",
+           static_cast<std::uint64_t>(
+               LuaRuntimePolicy::gameplayFrame.maxWallTime.count()) *
+               1'000U},
+          {"framesEvaluated", 0},
+          {"maximumFrameWallMicros", 0},
+          {"violationDiagnostics", nlohmann::json::array()}}},
+        {"unsupportedDiagnostics", nlohmann::json::array()},
+        {"unsupportedSubjects", nlohmann::json::array()},
+        {"diagnosticCodes", nlohmann::json::array()},
+        {"loading",
+         {{"complete", isCompleteSkinLoadingTelemetry(created.loadingTelemetry)},
+          {"totalMicros", created.loadingTelemetry.totalMicros},
+          {"measuredMicros",
+           measuredLoadMicros.count() <= 0 ? 0 : measuredLoadMicros.count()}}}};
+
+    if (created.session) {
+      std::map<SkinObjectId, std::string> familyByObject;
+      for (const auto &object : created.session->modelForTesting().model.objects) {
+        std::string family;
+        if (std::holds_alternative<SkinNoteDistributionGraphObject>(
+                object.payload)) {
+          family = "noteDistribution";
+        } else if (std::holds_alternative<SkinTimingVisualizerObject>(
+                       object.payload)) {
+          family = "timingVisualizer";
+        } else if (std::holds_alternative<SkinBpmGraphObject>(object.payload)) {
+          family = "bpmGraph";
+        } else if (std::holds_alternative<SkinHitErrorVisualizerObject>(
+                       object.payload)) {
+          family = "hitErrorVisualizer";
+        }
+        if (!family.empty()) {
+          ++declared[family];
+          familyByObject.emplace(object.id, std::move(family));
+        }
+      }
+
+      std::uint64_t maximumCallbackMicros = 0;
+      int framesEvaluated = 0;
+      for (std::uint64_t serial = 2; serial <= 4; ++serial) {
+        auto state = initialState_;
+        auto projection = initialProjection_;
+        state.clock.serial = serial;
+        state.clock.visualTimeMicros = static_cast<long long>(serial) * 750'000;
+        state.clock.gameplayTimeMicros = state.clock.visualTimeMicros;
+        state.clock.playTimer = {.active = true,
+                                 .startMicros = 0,
+                                 .elapsedMillisExact = true,
+                                 .playtimeMillis = 12'000};
+        projection.frameSerial = serial;
+        const auto frame = created.session->prepareFrame(state, projection, {});
+        for (const auto &diagnostic : frame.diagnostics) {
+          rememberDiagnostic(diagnostic);
+        }
+        for (const auto &diagnostic : frame.evaluation.diagnostics) {
+          rememberDiagnostic(diagnostic);
+        }
+        maximumCallbackMicros = std::max(
+            maximumCallbackMicros,
+            created.session->callbackWallMicrosForTesting());
+        if (!frame.ready() || !frame.evaluation.submitReady) continue;
+        ++framesEvaluated;
+        for (const auto &command : frame.evaluation.submitReady->commands) {
+          const auto found = familyByObject.find(command.sourceObject);
+          if (found != familyByObject.end()) ++commands[found->second];
+        }
+      }
+      report["callbackBudget"]["framesEvaluated"] = framesEvaluated;
+      report["callbackBudget"]["maximumFrameWallMicros"] =
+          maximumCallbackMicros;
+      report["resourcePreparation"]["allReferencedResourcesPrepared"] =
+          created.session->preparedTextureCountForTesting() ==
+              created.loadingTelemetry.resources.textureUploads &&
+          movieDevice->materializedPathsValid &&
+          movieDevice->loaded == created.loadingTelemetry.resources.movieDecodes;
+    }
+    for (const auto family : familyNames) {
+      report["graphFamilies"][family] = {
+          {"declared", declared[std::string(family)]},
+          {"commands", commands[std::string(family)]}};
+    }
+    for (const auto &code : budgetDiagnostics) {
+      report["callbackBudget"]["violationDiagnostics"].push_back(code);
+    }
+    for (const auto &code : unsupportedDiagnostics) {
+      report["unsupportedDiagnostics"].push_back(code);
+    }
+    for (const auto &subject : unsupportedSubjects) {
+      report["unsupportedSubjects"].push_back(subject);
+    }
+    for (const auto &code : diagnosticCodes) {
+      report["diagnosticCodes"].push_back(code);
+    }
+    created.session.reset();
+    return report;
+  }
+
   std::size_t formatCount() const noexcept { return entries_.size(); }
 
 private:
@@ -263,16 +518,84 @@ private:
     std::string digest;
   };
 
+  void prepareAcceptanceState() {
+    chart_.skinGameplayGraph.mainBpm = 120.0;
+    chart_.skinGameplayGraph.minimumBpm = 90.0;
+    chart_.skinGameplayGraph.maximumBpm = 180.0;
+    chart_.skinGameplayGraph.normalDistribution.resize(12);
+    for (std::size_t second = 0;
+         second < chart_.skinGameplayGraph.normalDistribution.size();
+         ++second) {
+      chart_.skinGameplayGraph.normalDistribution[second] = {
+          1 + static_cast<int>(second % 3U), 2, 1, 0, 0, 0, 0};
+    }
+    chart_.skinGameplayGraph.bpmSeries = {
+        {.chartTimeMicros = 0,
+         .sourceOrder = 0,
+         .bpm = 120.0,
+         .scroll = 1.0,
+         .bpmTimesScroll = 120.0,
+         .graphSpeed = 120.0,
+         .emitsGraphPoint = true},
+        {.chartTimeMicros = 4'000'000,
+         .sourceOrder = 1,
+         .bpm = 180.0,
+         .scroll = 1.0,
+         .bpmTimesScroll = 180.0,
+         .graphSpeed = 180.0,
+         .emitsGraphPoint = true},
+        {.chartTimeMicros = 8'000'000,
+         .sourceOrder = 2,
+         .bpm = 90.0,
+         .scroll = 1.0,
+         .bpmTimesScroll = 90.0,
+         .graphSpeed = 90.0,
+         .emitsGraphPoint = true}};
+
+    auto dynamic = std::make_shared<SkinGameplayDynamicGraphState>();
+    dynamic->judgementDistribution.resize(12);
+    dynamic->earlyLateDistribution.resize(12);
+    for (std::size_t second = 0;
+         second < dynamic->judgementDistribution.size(); ++second) {
+      dynamic->judgementDistribution[second] = {1, 2, 1, 1, 0, 0};
+      dynamic->earlyLateDistribution[second] = {1, 1, 1, 1, 1,
+                                                 1, 1, 1, 0, 0};
+    }
+    dynamic->judgeWindows = {{{.minimumTimingMillis = -5,
+                               .maximumTimingMillis = 5},
+                              {.minimumTimingMillis = -12,
+                               .maximumTimingMillis = 12},
+                              {.minimumTimingMillis = -24,
+                               .maximumTimingMillis = 24},
+                              {.minimumTimingMillis = -42,
+                               .maximumTimingMillis = 42},
+                              {.minimumTimingMillis = -75,
+                               .maximumTimingMillis = 75}}};
+    dynamic->recentJudgeTimingsMillis[0] = -24;
+    dynamic->recentJudgeTimingsMillis[1] = 11;
+    dynamic->recentJudgeTimingsMillis[2] = -5;
+    dynamic->recentJudgeTimingIndex = 2;
+    dynamic->judgementRevision = 1;
+    initialState_.skinGameplayGraph = {
+        .chart = std::make_shared<SkinGameplayChartGraphState>(
+            chart_.skinGameplayGraph),
+        .dynamic = std::move(dynamic)};
+  }
+
   void prepareSyntheticFormats(const fs::path &source, bool luaOnly) {
     constexpr int objectCount = 48;
     fs::create_directories(source / "skin/resources");
     fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
                       "tests/fixtures/beatoraja_skin/resources/fixture.png",
                   source / "skin/resources/fixture.png");
+    writeText(source / "skin/resources/fixture.mp4", "bounded movie fixture");
     writeText(source / "skin/parity.luaskin", R"lua(
 local skin = {type=0, name="Lua loading", author="fixture", w=1280, h=720}
 if skin_config then
-  skin.source = {{id="atlas", path="resources/fixture.png"}}
+  local benchmark_full_title = main_state.text(12)
+  local benchmark_gauge_type = main_state.gauge_type()
+  skin.source = {{id="atlas", path="resources/fixture.png"},
+                 {id="movie-source", path="resources/fixture.mp4"}}
   skin.image = {}
   skin.destination = {}
   for index = 1, 48 do
@@ -283,6 +606,30 @@ if skin_config then
                   w=40, h=20}}
     }
   end
+  skin.image[#skin.image + 1] = {
+    id="movie", src="movie-source", x=0, y=0, w=80, h=40
+  }
+  skin.destination[#skin.destination + 1] = {
+    id="movie", dst={{x=0, y=0, w=80, h=40}}
+  }
+  skin.judgegraph = {{id="note-distribution", type=1, delay=0}}
+  skin.bpmgraph = {{id="bpm-graph", delay=0, lineWidth=2}}
+  skin.timingvisualizer = {{id="timing-visualizer", width=101,
+                            judgeWidth=50, lineWidth=1}}
+  skin.hiterrorvisualizer = {{id="hit-error-visualizer", width=101,
+                              judgeWidth=50, lineWidth=1, windowLength=6}}
+  skin.destination[#skin.destination + 1] = {
+    id="note-distribution", dst={{x=20, y=100, w=220, h=100}}
+  }
+  skin.destination[#skin.destination + 1] = {
+    id="bpm-graph", dst={{x=260, y=100, w=220, h=100}}
+  }
+  skin.destination[#skin.destination + 1] = {
+    id="timing-visualizer", dst={{x=500, y=100, w=220, h=100}}
+  }
+  skin.destination[#skin.destination + 1] = {
+    id="hit-error-visualizer", dst={{x=740, y=100, w=220, h=100}}
+  }
 end
 return skin
 )lua");
@@ -405,13 +752,21 @@ int main(int argc, char **argv) {
   const auto options = parseOptions(argc, argv);
   if (!options) {
     std::cerr << "usage: gameplay_skin_loading_benchmark_tests "
-                 "[--benchmark --mode cold|warm --samples N] [--skin PATH]\n";
+                 "[--benchmark --mode cold|warm --samples N] [--skin PATH] "
+                 "[--acceptance-report --skin PATH --entry PATH "
+                 "--entry-identity ID]\n";
     return 2;
   }
-  BenchmarkFixture fixture(options->skin, options->luaOnly);
+  BenchmarkFixture fixture(options->skin, options->luaOnly, options->entry);
   if (!fixture.ready()) {
     std::cerr << "gameplay skin loading benchmark fixture is unavailable\n";
     return 1;
+  }
+  if (options->acceptanceReport) {
+    const auto report = fixture.acceptanceReport(*options->entryIdentity);
+    if (!report) return 1;
+    std::cout << report->dump() << '\n';
+    return 0;
   }
   if (!options->benchmark) {
     const auto cold = runSamples(fixture, false, 1);
@@ -420,6 +775,18 @@ int main(int argc, char **argv) {
                fixture.formatCount() ==
                    (ASOBMASHOW_BENCHMARK_HAS_STATIC_FORMATS ? 3U : 1U),
            "cold and warm production session creation covers Lua/JSON/LR2");
+    BenchmarkFixture acceptanceFixture({}, true, "skin/parity.luaskin");
+    const auto acceptance =
+        acceptanceFixture.acceptanceReport("entry-synthetic-fixture");
+    expect(acceptance && (*acceptance)["sessionPublished"] == true &&
+               (*acceptance)["resourcePreparation"]["complete"] == true &&
+               (*acceptance)["callbackBudget"]["framesEvaluated"] == 3 &&
+               (*acceptance)["graphFamilies"]["noteDistribution"]["commands"] > 0 &&
+               (*acceptance)["graphFamilies"]["timingVisualizer"]["commands"] > 0 &&
+               (*acceptance)["graphFamilies"]["bpmGraph"]["commands"] > 0 &&
+               (*acceptance)["graphFamilies"]["hitErrorVisualizer"]["commands"] > 0,
+           "acceptance reporter exercises production loading and all four "
+           "gameplay graph command families");
     if (failures == 0) {
       std::cout << "Gameplay skin loading benchmark tests passed\n";
     }

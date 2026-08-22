@@ -1313,6 +1313,16 @@ SkinFileActivityCounters LuaSkinRuntime::fileActivityCounters() const noexcept {
                                    : SkinFileActivityCounters{};
 }
 
+#if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
+std::uint64_t LuaSkinRuntime::callbackFrameWallMicrosForTesting() const noexcept {
+  if (!impl_ || !impl_->shared) return 0;
+  const auto micros = std::chrono::duration_cast<std::chrono::microseconds>(
+      impl_->shared->frameWallUsed);
+  return micros.count() <= 0 ? 0U
+                             : static_cast<std::uint64_t>(micros.count());
+}
+#endif
+
 void LuaSkinRuntime::setFrameState(ISkinFrameState *state) noexcept {
   if (impl_ && impl_->hostModules) {
     impl_->hostModules->setFrameState(state);

@@ -379,6 +379,21 @@ PlaySkinSession::fileActivityCountersForTesting() const noexcept {
              ? owned_->runtime->fileActivityCounters()
              : SkinFileActivityCounters{};
 }
+
+const ValidatedBeatorajaSkinModel &
+PlaySkinSession::modelForTesting() const noexcept {
+  return context_.model;
+}
+
+std::size_t PlaySkinSession::preparedTextureCountForTesting() const noexcept {
+  return owned_ && owned_->resources ? owned_->resources->textureCount() : 0U;
+}
+
+std::uint64_t PlaySkinSession::callbackWallMicrosForTesting() const noexcept {
+  return context_.runtime
+             ? context_.runtime->callbackFrameWallMicrosForTesting()
+             : 0U;
+}
 #endif
 
 PlaySkinSessionCreateResult

@@ -212,6 +212,9 @@ public:
   [[nodiscard]] bool hasLuaRuntimeForTesting() const noexcept;
   [[nodiscard]] SkinFileActivityCounters
   fileActivityCountersForTesting() const noexcept;
+  [[nodiscard]] const ValidatedBeatorajaSkinModel &modelForTesting() const noexcept;
+  [[nodiscard]] std::size_t preparedTextureCountForTesting() const noexcept;
+  [[nodiscard]] std::uint64_t callbackWallMicrosForTesting() const noexcept;
   // Focused transaction-core seam. Application code cannot supply an
   // external writer span or observe an unpublished bridge commit.
   [[nodiscard]] PlaySkinFrameTransactionResult prepareFrame(

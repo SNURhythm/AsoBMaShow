@@ -254,6 +254,9 @@ public:
   LuaOperationResult enterRenderPhase();
   [[nodiscard]] SkinFileActivityCounters
   fileActivityCounters() const noexcept;
+#if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
+  [[nodiscard]] std::uint64_t callbackFrameWallMicrosForTesting() const noexcept;
+#endif
   void setFrameState(ISkinFrameState *) noexcept;
   [[nodiscard]] bool
   setLegacyInputSnapshot(LuaSkinLegacyInputSnapshot) noexcept;

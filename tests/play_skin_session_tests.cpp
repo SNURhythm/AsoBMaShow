@@ -2315,6 +2315,11 @@ void testPreparedSessionRunsFiveHundredFramesWithoutLoadingAgain() {
   if (!created.session) {
     return;
   }
+  expect(created.session->preparedTextureCountForTesting() ==
+                 created.loadingTelemetry.resources.textureUploads &&
+             !created.session->modelForTesting().model.objects.empty(),
+         "an owning session exposes only test-scoped model and materialized "
+         "texture acceptance facts");
   const auto textureCreates = fixture.device()->createCalls;
   const auto movieLoads = fixture.movieDevice()->loadCalls;
   const auto audioLoads = fixture.audioState()->loads.size();
@@ -2338,6 +2343,12 @@ void testPreparedSessionRunsFiveHundredFramesWithoutLoadingAgain() {
                      .renderDirectoryScansPerformed == 0,
          "five hundred evaluated frames perform no image/font/movie/audio "
          "decode or upload after preparation");
+  expect(created.session->callbackWallMicrosForTesting() <=
+             static_cast<std::uint64_t>(
+                 LuaRuntimePolicy::gameplayFrame.maxWallTime.count()) *
+                 1'000U,
+         "the test-scoped callback measurement stays within the production "
+         "gameplay-frame budget");
   const auto active = fixture.liveCounters()->snapshot();
   expect(active.liveTextures == 2 && active.liveResources == 1 &&
              active.liveCpuPixmaps == 0 && active.liveMovies == 1 &&

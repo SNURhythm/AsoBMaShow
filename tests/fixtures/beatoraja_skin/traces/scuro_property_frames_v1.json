@@ -9,6 +9,50 @@
     "TimerPropertyFactory": "getTimerProperty",
     "MainStatePropertyLuaApiExporter": "export"
   },
+  "longNoteSelectorOracle": {
+    "source": {
+      "path": "src/bms/player/beatoraja/play/LaneRenderer.java",
+      "symbol": "LaneRenderer.drawLongNote",
+      "jarConstants": "lib/jbms-parser.jar",
+      "rule": "explicit LongNote type wins; TYPE_UNDEFINED selects by BMSModel lntype 0=LN, 1=CN, 2=HCN"
+    },
+    "undefinedByModelType": [
+      {
+        "modelLntype": 0,
+        "asoResolvedLnMode": 1,
+        "mode": "LN",
+        "bodyActive": 2,
+        "bodyInactive": 3,
+        "end": null,
+        "start": 1
+      },
+      {
+        "modelLntype": 1,
+        "asoResolvedLnMode": 2,
+        "mode": "CN",
+        "bodyActive": 2,
+        "bodyInactive": 3,
+        "end": 0,
+        "start": 1
+      },
+      {
+        "modelLntype": 2,
+        "asoResolvedLnMode": 3,
+        "mode": "HCN",
+        "bodyActive": 6,
+        "bodyInactive": 7,
+        "bodyReactive": 8,
+        "bodyDamaged": 9,
+        "end": 4,
+        "start": 5
+      }
+    ],
+    "explicitTypeOverridesModel": [
+      {"noteType": 1, "mode": "LN"},
+      {"noteType": 2, "mode": "CN"},
+      {"noteType": 3, "mode": "HCN"}
+    ]
+  },
   "cases": [
     {
       "name": "frame-lifetime",
