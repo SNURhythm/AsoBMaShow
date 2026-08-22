@@ -32,10 +32,14 @@ struct ResultSkinData {
   const RhythmState *state;
   const bms_parser::ChartMeta *meta;
   ApplicationContext *context;
+  bool irOnline = false;
   View **outGraphPlaceholder = nullptr;
   bool showControls = true;
   bool showTimingAnalytics = false;
   bool showResultGraph = true;
+  std::string playerName;
+  std::string tableName;
+  std::string tableLevel;
   std::string playModeLabel;
   std::string laneOrderLabel;
   std::string difficultyLabel;

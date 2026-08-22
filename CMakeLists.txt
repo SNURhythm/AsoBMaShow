@@ -5000,6 +5000,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/path.cpp
             src/rendering/SkinQuadBatchRenderer.cpp
             src/rendering/UniformCache.cpp
+            src/scene/play/GameplayGaugeRules.cpp
             src/scene/play/PlayfieldChartVisualModel.cpp
             src/scene/play/PlayfieldProjection.cpp
             src/scene/play/SkinGameplayGraphState.cpp

@@ -226,6 +226,19 @@ bool requireObject(lua_State *state, int index, std::size_t depth,
   return true;
 }
 
+bool isEmptyTable(lua_State *state, int index) {
+  if (!lua_istable(state, index) || !lua_checkstack(state, 2)) {
+    return false;
+  }
+  const int tableIndex = absoluteIndex(state, index);
+  lua_pushnil(state);
+  if (lua_next(state, tableIndex) == 0) {
+    return true;
+  }
+  lua_pop(state, 2);
+  return false;
+}
+
 bool rawGetField(lua_State *state, int index, std::string_view name,
                  DecodeRequest &request) {
   if (!lua_checkstack(state, 2)) {
@@ -309,8 +322,7 @@ bool stringField(lua_State *state, int index, std::string_view name,
   const bool ok =
       copyString(state, -1, output, maximumBytes, allowEmpty, request);
   if (!ok && !request.result.diagnostics.empty() &&
-      request.result.diagnostics.front().code ==
-          "skin_lua_header_limit_exceeded") {
+      request.result.diagnostics.front().code.starts_with("skin_lua_header_")) {
     request.result.diagnostics.front().message +=
         " [field: " + std::string(name) + "]";
   }
@@ -345,6 +357,11 @@ bool integerField(lua_State *state, int index, std::string_view name,
     return false;
   }
   const bool ok = integerAt(state, -1, output, request);
+  if (!ok && !request.result.diagnostics.empty() &&
+      request.result.diagnostics.front().code.starts_with("skin_lua_header_")) {
+    request.result.diagnostics.front().message +=
+        " [field: " + std::string(name) + "]";
+  }
   lua_pop(state, 1);
   return ok;
 }
@@ -593,8 +610,15 @@ bool decodeObjectArrayField(lua_State *state, int rootIndex,
     const bool ok = forEachHeaderTableValue(
         state, -1, request, [&](lua_State *state, int valueIndex) {
           output.emplace_back();
-          return decodeElement(state, valueIndex, depth + 1, output.back(),
-                               request);
+          const bool decoded = decodeElement(state, valueIndex, depth + 1,
+                                             output.back(), request);
+          if (!decoded && !request.result.diagnostics.empty() &&
+              request.result.diagnostics.front().code.starts_with(
+                  "skin_lua_header_")) {
+            request.result.diagnostics.front().message +=
+                " [array: " + std::string(field) + "]";
+          }
+          return decoded;
         });
     lua_pop(state, 1);
     return ok;
@@ -609,6 +633,13 @@ bool decodeObjectArrayField(lua_State *state, int rootIndex,
     lua_rawgeti(state, tableIndex, static_cast<int>(position));
     output.emplace_back();
     if (!decodeElement(state, -1, depth + 1, output.back(), request)) {
+      if (!request.result.diagnostics.empty() &&
+          request.result.diagnostics.front().code.starts_with(
+              "skin_lua_header_")) {
+        request.result.diagnostics.front().message +=
+            " [array: " + std::string(field) + ", index: " +
+            std::to_string(position) + "]";
+      }
       return false;
     }
     lua_pop(state, 1);
@@ -3941,7 +3972,9 @@ void decodeGameplayProtected(lua_State *state, int index,
       request->result.model.reset();
       return;
     }
-    if (!lua_isnil(state, -1)) {
+    if (lua_istable(state, -1) && isEmptyTable(state, -1)) {
+      request->gauge.reset();
+    } else if (!lua_isnil(state, -1)) {
       if (!decodeRawGauge(state, -1, 2, *request->gauge, request->decoding)) {
         transferDecodeDiagnostics(*request);
         request->result.model.reset();

@@ -1118,6 +1118,147 @@ private:
   SkinValidationResult validation_;
 };
 
+class ExternalResultSkinFixture final {
+public:
+  ExternalResultSkinFixture(const fs::path &source, std::string_view entryPath)
+      : roots_{.visiblePackages = temp_.root() / "visible",
+               .privateRevisions = temp_.root() / "revisions",
+               .privateCatalog = temp_.root() / "catalog",
+               .profileOverlays = temp_.root() / "overlays"},
+        package_(*normalizePackageId("ExternalResultSkin").package),
+        profile_(*makeSkinProfileId(
+            "77777777-7777-4777-8777-777777777777")),
+        state_(nullptr, false) {
+    // Real result state has at least one resolved judgement.  Several shipped
+    // Beatoraja skins derive graph dimensions from this distribution, where an
+    // all-zero synthetic state would instead manufacture NaN Lua numbers.
+    state_.judgeCount[PGreat] = meta_.TotalNotes;
+    state_.judgementFastSlowCount[PGreat].fast = 1;
+    const auto normalizedEntry = normalizeEntryPath(package_, entryPath);
+    expect(normalizedEntry.entry.has_value(),
+           "external result skin entry path is valid");
+    if (!normalizedEntry.entry) {
+      return;
+    }
+    entry_ = *normalizedEntry.entry;
+    const fs::path stagedSource = temp_.root() / "source";
+    if (!copyLuaSources(source, stagedSource)) {
+      return;
+    }
+    std::error_code error;
+    fs::create_directories(roots_.visiblePackages, error);
+    if (error || !copyLuaSources(stagedSource,
+                                 roots_.visiblePackages / package_.directoryName)) {
+      return;
+    }
+    SkinTreeSnapshotter snapshotter(roots_, aliases_);
+    auto snapshot = snapshotter.snapshot(stagedSource, package_, {}, {});
+    expect(snapshot.prepared.has_value(),
+           "external result skin immutable revision snapshots");
+    if (!snapshot.prepared) {
+      return;
+    }
+    std::string publishError;
+    lease_ = std::move(*snapshot.prepared).publish(publishError);
+    expect(lease_.has_value() && publishError.empty(),
+           "external result skin revision publishes");
+    if (!lease_) {
+      return;
+    }
+    GameplaySkinValidator validator(resources_);
+    validation_ = validator.validate(lease_->readView(), entry_, nullptr, {});
+    if (validation_.disposition != SkinValidationDisposition::SelectableGameplay) {
+      for (const auto &diagnostic : validation_.diagnostics) {
+        std::cerr << "external result validation diagnostic: "
+                  << diagnostic.code << ": " << diagnostic.message << '\n';
+      }
+    }
+    expect(validation_.disposition == SkinValidationDisposition::SelectableGameplay &&
+               validation_.reconciledSettings.has_value() &&
+               !validation_.configurationDigest.empty(),
+           "external result skin validates as selectable");
+  }
+
+  GameplaySkinDocumentLoadResult configure() {
+    if (!lease_ || !validation_.reconciledSettings ||
+        validation_.configurationDigest.empty()) {
+      return {};
+    }
+    const auto format = gameplaySkinSourceFormatForPath(entry_.packageRelativePath);
+    if (!format) {
+      return {};
+    }
+    const auto revision = lease_->readView();
+    auto document = LuaSkinFileSystem::create(
+        {.revision = revision, .entry = entry_, .storageRoots = roots_,
+         .safetyPolicy = SkinSafetyPolicy{}});
+    auto lua = LuaSkinFileSystem::create(
+        {.revision = revision, .entry = entry_, .storageRoots = roots_,
+         .profileId = profile_, .allowDataWrites = true,
+         .safetyPolicy = SkinSafetyPolicy{}});
+    if (!document.fileSystem || !lua.fileSystem) {
+      return {};
+    }
+    ResultSkinData data{.state = &state_, .meta = &meta_, .context = nullptr};
+    GameplaySkinDocumentLoader loader;
+    return loader.load(
+        {.sourceFormat = *format,
+         .entry = entry_,
+         .documentFileSystem = *document.fileSystem,
+         .luaFileSystem = std::move(lua.fileSystem),
+         .desiredSettings = &*validation_.reconciledSettings,
+         .expectedConfigurationDigest = validation_.configurationDigest,
+         .luaPurpose = LuaRuntimePurpose::Gameplay,
+         .loadConfiguredLua = [&data](
+                                  LuaSkinRuntime &runtime,
+                                  const BeatorajaSkinConfiguration &configuration,
+                                  std::vector<SkinDiagnostic> &) {
+           ResultSkinStateBridge bridge(data, 1, 0);
+           runtime.setFrameState(&bridge);
+           auto loaded = runtime.loadConfigured(configuration);
+           runtime.setFrameState(nullptr);
+           return loaded;
+         }});
+  }
+
+private:
+  static bool copyLuaSources(const fs::path &source, const fs::path &target) {
+    std::error_code error;
+    for (fs::recursive_directory_iterator iterator(source, error), end;
+         !error && iterator != end; iterator.increment(error)) {
+      if (!iterator->is_regular_file(error)) {
+        continue;
+      }
+      const auto extension = iterator->path().extension();
+      if (extension != ".lua" && extension != ".luaskin") {
+        continue;
+      }
+      const fs::path destination =
+          target / iterator->path().lexically_relative(source);
+      fs::create_directories(destination.parent_path(), error);
+      if (error) {
+        break;
+      }
+      fs::copy_file(iterator->path(), destination,
+                    fs::copy_options::overwrite_existing, error);
+    }
+    expect(!error, "external result skin Lua sources copy into the fixture");
+    return !error;
+  }
+
+  TempDirectory temp_;
+  SkinStorageRoots roots_;
+  SkinPackageId package_;
+  SkinEntryId entry_;
+  SkinProfileId profile_;
+  AcceptFiles aliases_;
+  RhythmState state_;
+  bms_parser::ChartMeta meta_{.TotalNotes = 100, .Bpm = 120.0};
+  SkinResourcePreparationService resources_;
+  std::optional<SkinRevisionLease> lease_;
+  SkinValidationResult validation_;
+};
+
 struct ParityQuadOutput {
   SkinObjectId object = 0;
   SkinResourceId resource = 0;
@@ -4856,6 +4997,75 @@ void testResultLuaSessionBindsMainStateDuringConfiguredLoad() {
          "result Lua session configures against the result main_state");
 }
 
+void testResultBridgeSupportsBeatorajaIrAvailabilityProperties() {
+  ResultSkinStateBridge bridge({}, 1, 0);
+  const auto offline = bridge.booleanProperty({50});
+  const auto online = bridge.booleanProperty({51});
+  expect(offline.supported && offline.value && online.supported && !online.value,
+         "result bridge mirrors Beatoraja's offline IR properties when no IR "
+         "provider is active");
+}
+
+void testResultBridgeMatchesBeatorajaResultScoreFamilies() {
+  RhythmState state(nullptr, false);
+  state.judgeCount[PGreat] = 10;
+  state.judgeCount[Bad] = 2;
+  state.judgeCount[Poor] = 3;
+  state.judgeCount[Kpoor] = 4;
+  state.judgementFastSlowCount[Great].fast = 5;
+  state.judgementFastSlowCount[Poor].slow = 6;
+  bms_parser::ChartMeta meta{.TotalNotes = 10};
+  ResultSkinStateBridge bridge({.state = &state, .meta = &meta}, 1, 0);
+
+  const auto rank = bridge.booleanProperty({220});
+  const auto negatedRank = bridge.booleanProperty({-220});
+  const auto poor = bridge.integerProperty({114}, {});
+  const auto miss = bridge.integerProperty({420}, {});
+  const auto poorPlusMiss = bridge.integerProperty({426}, {});
+  const auto badPoorMiss = bridge.integerProperty({427}, {});
+  const auto scoreRate = bridge.integerProperty({102}, {});
+  const auto scoreRateAfterDot = bridge.integerProperty({103}, {});
+  expect(rank.supported && rank.value && negatedRank.supported &&
+             !negatedRank.value && poor.supported && poor.value == 3 &&
+             miss.supported && miss.value == 4 && poorPlusMiss.supported &&
+             poorPlusMiss.value == 7 && badPoorMiss.supported &&
+             badPoorMiss.value == 9 && scoreRate.supported &&
+             scoreRate.value == 100 && scoreRateAfterDot.supported &&
+             scoreRateAfterDot.value == 0,
+         "result bridge follows Beatoraja's negated options, score rate, and "
+         "Poor-versus-Miss result families");
+}
+
+void testRequestedExternalResultSkinCreatesSession() {
+  const char *configuredRoot =
+      std::getenv("ASOBMASHOW_EXTERNAL_RESULT_SKIN_ROOT");
+  if (configuredRoot == nullptr || *configuredRoot == '\0') {
+    return;
+  }
+  const fs::path source(configuredRoot);
+  expect(fs::is_directory(source),
+         "requested external result skin root is a readable directory");
+  if (!fs::is_directory(source)) {
+    return;
+  }
+  const char *configuredEntry =
+      std::getenv("ASOBMASHOW_EXTERNAL_RESULT_SKIN_ENTRY");
+  const std::string entryPath =
+      configuredEntry != nullptr && *configuredEntry != '\0'
+          ? configuredEntry
+          : "result.luaskin";
+  ExternalResultSkinFixture fixture(source, entryPath);
+  auto configured = fixture.configure();
+  if (!configured.document) {
+    for (const auto &diagnostic : configured.diagnostics) {
+      std::cerr << "external result session diagnostic: " << diagnostic.code
+                << ": " << diagnostic.message << '\n';
+    }
+  }
+  expect(configured.document.has_value(),
+         "requested external result skin configures its result document");
+}
+
 } // namespace
 
 int main() {
@@ -4928,6 +5138,9 @@ int main() {
   testSuccessfulGeometryChangesOnlyHitRevisionAndTeardownDiscardsState();
   testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin();
   testResultLuaSessionBindsMainStateDuringConfiguredLoad();
+  testResultBridgeSupportsBeatorajaIrAvailabilityProperties();
+  testResultBridgeMatchesBeatorajaResultScoreFamilies();
+  testRequestedExternalResultSkinCreatesSession();
   if (failures != 0) {
     std::cerr << failures << " play skin session test(s) failed\n";
     return 1;

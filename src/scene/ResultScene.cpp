@@ -597,6 +597,10 @@ ResultSkinData ResultScene::makeResultSkinData() const {
       local == nullptr ? nullptr : &local->meta,
       &context,
   };
+  data.playerName = context.profileManager.activeProfile().displayName;
+  data.irOnline = std::ranges::any_of(
+      context.settings.irProviders,
+      [](const auto &provider) { return provider.second.enabled; });
   if (remote != nullptr) {
     data.presentation = &remote->presentation;
     return data;
@@ -604,6 +608,8 @@ ResultSkinData ResultScene::makeResultSkinData() const {
   if (local == nullptr) {
     return data;
   }
+  data.tableName = local->tableContext.tableName;
+  data.tableLevel = local->tableContext.tableLevel;
   data.playModeLabel = local->playModeLabel;
   data.laneOrderLabel = local->laneOrderLabel;
   data.difficultyLabel = local->difficultyLabel;
