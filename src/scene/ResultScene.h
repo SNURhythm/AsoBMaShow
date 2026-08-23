@@ -280,6 +280,7 @@ public:
 
   void init() override;
   void update(float dt) override;
+  EventHandleResult handleEvents(SDL_Event &event) override;
   bool renderViewBeforeScene(const View *view) const override;
   void renderScene() override;
   void cleanupScene() override;
@@ -313,6 +314,7 @@ private:
   void setResultPhotoExportPresentation(ResultPhotoExportPresentation);
   void handleResultSkinRenderFailure();
   void appendResultSkinRenderDiagnostics();
+  [[nodiscard]] bool queueResultSkinPointerEvent(SDL_Event &event);
   void buildCourseExitConfirmation();
   void showCourseExitConfirmation();
   void hideCourseExitConfirmation();

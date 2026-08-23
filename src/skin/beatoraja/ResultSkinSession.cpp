@@ -291,12 +291,43 @@ bool ResultSkinSession::render(RenderContext &renderContext,
         "Result skin viewport could not be evaluated from its selected settings."));
     return false;
   }
+  if (runtime_ != nullptr) {
+    const auto begun = runtime_->beginFrame(frameSerial);
+    if (!begun.ok) {
+      lastDiagnostics_.push_back(begun.failure.value_or(failure(
+          "skin.result_session.frame_begin_failed",
+          "Result Lua runtime rejected the render frame.")));
+      return false;
+    }
+    for (const auto &invocation : queuedEventInvocations_) {
+      const auto binding = std::ranges::find_if(
+          model_.model.events, [&](const SkinEventBinding &candidate) {
+            return candidate.id.value == invocation.eventBinding;
+          });
+      if (binding == model_.model.events.end() ||
+          !std::holds_alternative<LuaCallbackId>(binding->source)) {
+        continue;
+      }
+      const std::array<LuaScalar, 1> arguments{
+          LuaScalar{static_cast<std::int64_t>(invocation.argument)}};
+      const auto callback = runtime_->invoke(
+          std::get<LuaCallbackId>(binding->source), arguments);
+      if (callback.failure) {
+        lastDiagnostics_.push_back(std::move(*callback.failure));
+        queuedEventInvocations_.clear();
+        return false;
+      }
+    }
+  }
+  queuedEventInvocations_.clear();
+  SkinExternalFrameOwnership ownership(frameSerial, 1);
   auto evaluated = renderer_.evaluateFrame(
       {.frameSerial = frameSerial, .sessionSerial = 1,
        .visualTimeMicros = elapsedMillis * 1000, .model = model_,
        .configuration = configuration_, .resources = *resources_, .movies = movies_.get(),
        .viewport = viewport,
-       .runtime = runtime_.get(), .state = bridge, .safetyPolicy = safetyPolicy_});
+       .runtime = runtime_.get(), .state = bridge, .safetyPolicy = safetyPolicy_},
+      std::move(ownership));
   if (!evaluated.submitReady) {
     lastDiagnostics_ = std::move(evaluated.diagnostics);
     if (lastDiagnostics_.empty()) {
@@ -314,11 +345,34 @@ bool ResultSkinSession::render(RenderContext &renderContext,
         "Result skin frame submission could not be prepared."));
     return false;
   }
+  publishedInteractionLayout_ = std::move(evaluated.interactionLayout);
   return true;
 }
 
 std::vector<SkinDiagnostic> ResultSkinSession::takeLastDiagnostics() {
   return std::exchange(lastDiagnostics_, {});
+}
+
+bool ResultSkinSession::queuePointerDown(UiLogicalPoint point,
+                                         long long eventMicros) {
+  if (!publishedInteractionLayout_ || queuedEventInvocations_.size() >= 64) {
+    return false;
+  }
+  const PresentationUiHit hit = publishedInteractionLayout_->hitTestUiControl(point);
+  if (hit.kind != PresentationUiControlKind::Image) return false;
+  const auto invocation = publishedInteractionLayout_->eventInvocationFor(
+      hit, point, eventMicros);
+  if (!invocation) return false;
+  const auto binding = std::ranges::find_if(
+      model_.model.events, [&](const SkinEventBinding &candidate) {
+        return candidate.id.value == invocation->eventBinding;
+      });
+  if (binding == model_.model.events.end() ||
+      !std::holds_alternative<LuaCallbackId>(binding->source)) {
+    return false;
+  }
+  queuedEventInvocations_.push_back(*invocation);
+  return true;
 }
 
 const SkinEntryId &ResultSkinSession::entry() const noexcept { return entry_; }

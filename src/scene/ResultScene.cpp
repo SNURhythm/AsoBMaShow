@@ -3591,6 +3591,35 @@ void ResultScene::update(float dt) {
   }
 }
 
+bool ResultScene::queueResultSkinPointerEvent(SDL_Event &event) {
+#if !ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  (void)event;
+  return false;
+#else
+  if (!resultSkinSession) return false;
+  UiLogicalPoint point;
+  switch (event.type) {
+  case SDL_MOUSEBUTTONDOWN:
+    if (event.button.button != SDL_BUTTON_LEFT) return false;
+    point = {.x = static_cast<float>(event.button.x),
+             .y = static_cast<float>(event.button.y)};
+    break;
+  case SDL_FINGERDOWN:
+    point = {.x = event.tfinger.x * rendering::window_width,
+             .y = event.tfinger.y * rendering::window_height};
+    break;
+  default:
+    return false;
+  }
+  return resultSkinSession->queuePointerDown(point, nowMicros());
+#endif
+}
+
+EventHandleResult ResultScene::handleEvents(SDL_Event &event) {
+  if (queueResultSkinPointerEvent(event)) return {};
+  return Scene::handleEvents(event);
+}
+
 bool ResultScene::renderViewBeforeScene(const View *view) const {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   return view != rootLayout ||

@@ -13,6 +13,7 @@
 #include <chrono>
 #include <memory>
 #include <stop_token>
+#include <vector>
 
 struct RenderContext;
 
@@ -57,6 +58,7 @@ public:
                             std::uint64_t frameSerial,
                             std::int64_t elapsedMillis);
   [[nodiscard]] std::vector<SkinDiagnostic> takeLastDiagnostics();
+  [[nodiscard]] bool queuePointerDown(UiLogicalPoint, long long eventMicros);
   [[nodiscard]] const SkinEntryId &entry() const noexcept;
 
 private:
@@ -79,6 +81,8 @@ private:
   Skin2DRenderer renderer_;
   std::unique_ptr<rendering::SkinQuadBatchRenderer> quadRenderer_;
   std::vector<SkinDiagnostic> lastDiagnostics_;
+  std::optional<SkinInteractionLayout> publishedInteractionLayout_;
+  std::vector<SkinEventInvocation> queuedEventInvocations_;
 };
 
 } // namespace skin

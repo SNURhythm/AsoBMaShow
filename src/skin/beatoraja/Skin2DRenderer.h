@@ -31,6 +31,7 @@ class SkinQuadBatchRenderer;
 namespace skin {
 
 class PlaySkinSession;
+class ResultSkinSession;
 class Skin2DRenderer;
 
 // Move-only proof that PlaySkinSession has already opened the matching Lua
@@ -56,6 +57,7 @@ private:
   bool consumed_ = false;
 
   friend class PlaySkinSession;
+  friend class ResultSkinSession;
   friend class Skin2DRenderer;
 };
 
