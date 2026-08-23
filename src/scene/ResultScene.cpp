@@ -2199,6 +2199,7 @@ void ResultScene::buildResultTouchControls() {
   if (local != nullptr) {
     if (isCourseStageResult()) {
       availability.next = true;
+      availability.exportPhoto = !local->autoPlayResult;
     } else if (isCourseFinalResult()) {
       const auto &course = local->courseOptions;
       availability.replay = course.session != nullptr &&

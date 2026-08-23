@@ -474,6 +474,11 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
                   "isCourseStageResult() &&\n"
                   "        !current->courseOptions.savedResultBrowsing",
                   "result skin failure back actions retain live-course confirmation");
+  requireContains(result,
+                  "if (isCourseStageResult()) {\n"
+                  "      availability.next = true;\n"
+                  "      availability.exportPhoto = !local->autoPlayResult;",
+                  "selected course-stage skins retain the native photo-export action");
   requireContains(session,
                   "data.pacemaker ? data.pacemaker->label : \"\"",
                   "result font atlases include the pacemaker selector string");
