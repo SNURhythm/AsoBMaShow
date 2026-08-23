@@ -5153,6 +5153,24 @@ void testResultBridgeMatchesResultAliasesAndTimerUnits() {
          "result aliases and timers match Beatoraja result properties");
 }
 
+void testResultBridgeExposesResultTimingDistributionStatistics() {
+  ResultSkinStateBridge bridge({.timingAverageMillis = -12.34,
+                                 .timingStandardDeviationMillis = 8.76},
+                                1, 0);
+  const auto average = bridge.integerProperty({374}, {});
+  const auto averageFraction = bridge.integerProperty({375}, {});
+  const auto deviation = bridge.integerProperty({376}, {});
+  const auto deviationFraction = bridge.integerProperty({377}, {});
+  const auto floatDeviation = bridge.floatProperty({376}, {});
+  expect(average.supported && average.value == -12 &&
+             averageFraction.supported && averageFraction.value == -34 &&
+             deviation.supported && deviation.value == 8 &&
+             deviationFraction.supported && deviationFraction.value == 76 &&
+             floatDeviation.supported &&
+             std::abs(floatDeviation.value - 8.76) < 0.000001,
+         "result timing statistic properties use the completed timing distribution");
+}
+
 void testResultBridgeUsesRemotePresentationValues() {
   ResultPresentationModel remote{
       .score = 1400,
@@ -5363,6 +5381,7 @@ int main() {
   testResultBridgeKeepsAutoplayOptionsOffOnResultScreens();
   testResultBridgeMatchesBeatorajaResultScoreFamilies();
   testResultBridgeMatchesResultAliasesAndTimerUnits();
+  testResultBridgeExposesResultTimingDistributionStatistics();
   testResultBridgeUsesRemotePresentationValues();
   testResultBridgePreservesCompletedGameplayGraph();
   testRequestedExternalResultSkinCreatesSession();

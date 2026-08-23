@@ -653,7 +653,25 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
                  ? std::optional<int>(data_.previousBest->clearType)
                  : std::optional<int>(kClearTypeFailedRank);
     case 372: case 373: case 374: case 375:
+      if (*id == 374 && data_.timingAverageMillis) {
+        return static_cast<int>(*data_.timingAverageMillis);
+      }
+      if (*id == 375 && data_.timingAverageMillis) {
+        const double average = *data_.timingAverageMillis;
+        const int fraction = static_cast<int>(std::abs(average) * 100.0) % 100;
+        return average < 0.0 ? -fraction : fraction;
+      }
       return std::numeric_limits<int>::min();
+    case 376:
+      return data_.timingStandardDeviationMillis
+                 ? std::optional<int>(static_cast<int>(
+                       *data_.timingStandardDeviationMillis))
+                 : std::optional<int>(std::numeric_limits<int>::min());
+    case 377:
+      return data_.timingStandardDeviationMillis
+                 ? std::optional<int>(static_cast<int>(
+                       *data_.timingStandardDeviationMillis * 100.0) % 100)
+                 : std::optional<int>(std::numeric_limits<int>::min());
     case 402: case 403: case 404:
       return 0;
     case 1163:
@@ -743,6 +761,9 @@ SkinPropertyLookup<double> ResultSkinStateBridge::floatProperty(
     // FloatType.timing_average exposes TimingDistribution's fixed 150 ms
     // array center (not its measured mean) divided by 1000.
     return supported(0.15);
+  }
+  if (*id == 376 && data_.timingStandardDeviationMillis) {
+    return supported(*data_.timingStandardDeviationMillis);
   }
   if (*id == 1107) {
     const auto value = finalGauge();

@@ -33,6 +33,9 @@
 #include "ResultSkinFailurePresentation.h"
 #include "ResultTouchControls.h"
 
+#include <cmath>
+#include <vector>
+
 #include "../rendering/Color.h"
 #include "../rendering/SimpleBatchRenderer.h"
 #include "../rendering/common.h"
@@ -110,6 +113,41 @@ std::optional<int> rankingBadPoints(const RhythmState &state) {
     return it == state.judgeCount.end() ? 0 : it->second;
   };
   return ir::calculateIrBadPoints(count(Bad), count(Poor), count(Kpoor));
+}
+
+struct ResultTimingStatistics {
+  double averageMillis = 0.0;
+  double standardDeviationMillis = 0.0;
+};
+
+std::optional<ResultTimingStatistics>
+resultTimingStatistics(const ReplayData *replay) {
+  if (replay == nullptr) return std::nullopt;
+  constexpr long long rangeMicros = 150'000;
+  std::vector<long long> timings;
+  timings.reserve(replay->events.size());
+  for (const auto &event : replay->events) {
+    const bool timingEvent =
+        (event.action == ReplayEventAction::Press ||
+         event.action == ReplayEventAction::MultiBad ||
+         event.action == ReplayEventAction::Release) &&
+        event.judgement != None && event.judgement != Kpoor &&
+        event.diffMicros >= -rangeMicros && event.diffMicros <= rangeMicros;
+    if (timingEvent) timings.push_back(event.diffMicros);
+  }
+  if (timings.empty()) return std::nullopt;
+  long double sum = 0.0;
+  for (const auto timing : timings) sum += timing;
+  const long double mean = sum / timings.size();
+  long double squared = 0.0;
+  for (const auto timing : timings) {
+    const long double delta = timing - mean;
+    squared += delta * delta;
+  }
+  return ResultTimingStatistics{
+      .averageMillis = static_cast<double>(mean / 1'000.0L),
+      .standardDeviationMillis = static_cast<double>(
+          std::sqrt(squared / timings.size()) / 1'000.0L)};
 }
 
 void drawResultGaugeGraphPrimitive(
@@ -662,6 +700,17 @@ ResultSkinData ResultScene::makeResultSkinData() const {
   data.pacemaker = pacemakerDataForCurrentResult();
   data.presentation = &local->presentation;
   data.gameplayGraph = local->gameplayGraph;
+  const ReplayData *timingReplay = local->analyticsData
+                                       ? &*local->analyticsData
+                                       : (local->presentationReplay
+                                              ? &*local->presentationReplay
+                                              : (local->retryData
+                                                     ? &*local->retryData
+                                                     : nullptr));
+  if (const auto timing = resultTimingStatistics(timingReplay)) {
+    data.timingAverageMillis = timing->averageMillis;
+    data.timingStandardDeviationMillis = timing->standardDeviationMillis;
+  }
   return data;
 }
 
