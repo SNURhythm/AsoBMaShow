@@ -683,6 +683,8 @@ struct ActivationFixtureOptions {
   bool requireConfiguredState = false;
   bool requireResultConfiguredState = false;
   bool resultEventExec = false;
+  bool resultNestedEventExec = false;
+  bool resultIntervalEventExec = false;
   bool staticResultCustomEvent = false;
   bool legacyInputBearing = false;
   bool repeatedPomyu = false;
@@ -992,6 +994,36 @@ if skin_config then
       {id = "pomyu-one", dst = {{x = 0, y = 0, w = 64, h = 64}}},
       {id = "pomyu-two", dst = {{x = 64, y = 0, w = 64, h = 64}}}
     }
+  }
+)lua";
+    } else if (options.resultNestedEventExec) {
+      script += "\n  return { type = " +
+                std::to_string(options.skinType) + R"lua(, w = 1280, h = 720,
+    customEvents = {
+      {id = 1000, action = function()
+        assert(main_state.event_exec(1001))
+      end},
+      {id = 1001, action = function()
+        assert(main_state.event_exec(1002))
+      end},
+      {id = 1002, action = 210}
+    },
+    customTimers = {{id = 10000, timer = function()
+      assert(main_state.event_exec(1000))
+      return 0
+    end}}
+  }
+)lua";
+    } else if (options.resultIntervalEventExec) {
+      script += "\n  return { type = " +
+                std::to_string(options.skinType) + R"lua(, w = 1280, h = 720,
+    customEvents = {{id = 1000, action = 210, condition = function()
+      return true
+    end, minInterval = 1000}},
+    customTimers = {{id = 10000, timer = function()
+      assert(main_state.event_exec(1000))
+      return 0
+    end}}
   }
 )lua";
     } else if (options.resultEventExec) {
@@ -5051,6 +5083,38 @@ void testResultLuaSessionRoutesOpenIrEvent() {
          "routing its open_ir action through ResultScene");
 }
 
+void testResultLuaSessionDefersNestedCustomEventsToTheNextFrame() {
+  ActivationFixture fixture({.skinType = 7, .resultNestedEventExec = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  auto created = ResultSkinSession::create(fixture.takeActivation(),
+                                           fixture.resultContext());
+  RenderContext context;
+  expect(created.session != nullptr &&
+             created.session->render(context, {}, 1, 0) &&
+             created.session->takeQueuedBuiltinEventIds().empty() &&
+             created.session->render(context, {}, 2, 1) &&
+             created.session->takeQueuedBuiltinEventIds() ==
+                 std::vector<int>{210},
+         "nested result Lua custom events remain queued for the following frame");
+}
+
+void testResultLuaSessionManualCustomEventSuppressesAutomaticRepeat() {
+  ActivationFixture fixture({.skinType = 7, .resultIntervalEventExec = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  auto created = ResultSkinSession::create(fixture.takeActivation(),
+                                           fixture.resultContext());
+  RenderContext context;
+  expect(created.session != nullptr &&
+             created.session->render(context, {}, 1, 0) &&
+             created.session->takeQueuedBuiltinEventIds() ==
+                 std::vector<int>{210},
+         "manual result custom events advance the shared automatic interval clock");
+}
+
 void testStaticResultSessionRunsCustomBuiltinEvent() {
   ActivationFixture fixture({.skinType = 7, .staticResultCustomEvent = true});
   if (!fixture.ready()) {
@@ -5321,9 +5385,13 @@ void testResultBridgeConvertsClearRanksToBeatorajaImageIndexes() {
   }, 1, 0);
   const auto failedCurrent = failed.integerProperty(
       {370}, SkinIntegerPropertyDomain::ImageIndex);
+  ResultSkinStateBridge noPreviousScore({}, 1, 0);
+  const auto noPrevious = noPreviousScore.integerProperty(
+      {371}, SkinIntegerPropertyDomain::ImageIndex);
   expect(current.supported && current.value == 8 &&
              previous.supported && previous.value == 4 &&
-             failedCurrent.supported && failedCurrent.value == 1,
+             failedCurrent.supported && failedCurrent.value == 1 &&
+             noPrevious.supported && noPrevious.value == 0,
          "result clear image indexes use Beatoraja ClearType IDs");
 }
 
@@ -5633,6 +5701,8 @@ int main() {
   testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin();
   testResultLuaSessionBindsMainStateDuringConfiguredLoad();
   testResultLuaSessionRoutesOpenIrEvent();
+  testResultLuaSessionDefersNestedCustomEventsToTheNextFrame();
+  testResultLuaSessionManualCustomEventSuppressesAutomaticRepeat();
   testStaticResultSessionRunsCustomBuiltinEvent();
   testResultSessionRefreshesForAsynchronousRankingNames();
   testResultSessionRefreshesForAllStringSelectors();

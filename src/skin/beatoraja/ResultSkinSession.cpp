@@ -354,7 +354,11 @@ bool ResultSkinSession::render(RenderContext &renderContext,
                                const ResultSkinData &data,
                                std::uint64_t frameSerial,
                                std::int64_t elapsedMillis) {
-  lastDiagnostics_ = std::exchange(pendingDiagnostics_, {});
+  lastDiagnostics_.insert(lastDiagnostics_.end(),
+                          std::make_move_iterator(pendingDiagnostics_.begin()),
+                          std::make_move_iterator(pendingDiagnostics_.end()));
+  pendingDiagnostics_.clear();
+  currentEventMicros_ = std::max<std::int64_t>(0, elapsedMillis) * 1000;
   if (!resources_ || !movies_ || frameSerial == 0) {
     lastDiagnostics_.push_back(failure(
         "skin.result_session.frame_invalid",
@@ -476,7 +480,8 @@ bool ResultSkinSession::render(RenderContext &renderContext,
     }
     customEventLastExecutionMicros_.insert_or_assign(event.id, now);
   }
-  for (const auto &invocation : queuedEventInvocations_) {
+  auto queuedInvocations = std::exchange(queuedEventInvocations_, {});
+  for (const auto &invocation : queuedInvocations) {
     if (runtime_ == nullptr) {
       lastDiagnostics_.push_back(failure(
           "skin.result_session.custom_event_runtime_missing",
@@ -509,7 +514,6 @@ bool ResultSkinSession::render(RenderContext &renderContext,
       return false;
     }
   }
-  queuedEventInvocations_.clear();
   SkinExternalFrameOwnership ownership(frameSerial, 1);
   auto evaluated = renderer_.evaluateFrame(
       {.frameSerial = frameSerial, .sessionSerial = 1,
@@ -567,7 +571,11 @@ bool ResultSkinSession::queueEvent(int eventId, std::span<const int> arguments,
           model_.model.customEvents, [eventId](const SkinCustomEvent &event) {
             return event.id == eventId;
           }); custom != model_.model.customEvents.end()) {
-    return queueEventBinding(custom->action, arguments, eventMicros);
+    if (!queueEventBinding(custom->action, arguments, eventMicros)) {
+      return false;
+    }
+    customEventLastExecutionMicros_.insert_or_assign(custom->id, eventMicros);
+    return true;
   }
 
   // open_ir is the only EventFactory action with an AsoBMaShow result
@@ -650,7 +658,9 @@ LuaSkinEventExecutionResult ResultSkinSession::executeHostEvent(
   }
   auto &session = *static_cast<ResultSkinSession *>(opaque);
   try {
-    if (session.queueEvent(eventId, arguments, 0)) return {};
+    if (session.queueEvent(eventId, arguments, session.currentEventMicros_)) {
+      return {};
+    }
     return {.failure = SkinDiagnostic{
                 .code = "skin_lua_event_execution_failed",
                 .message = "Result skin event could not be queued."}};

@@ -1911,6 +1911,10 @@ void ResultScene::retryResultPersistence() {
           persistenceOptions.outcome.diagnostic.c_str());
   local->previousBestLoaded = false;
   loadPreviousBest();
+  if (persistenceOptions.chartOutcome->durable()) {
+    local->playerHistory.reset();
+    loadPlayerHistory();
+  }
   rebuildLocalPresentation(makeTimingAnalyticsModel());
   defer(
       [this]() {
@@ -4036,7 +4040,10 @@ bool ResultScene::queueResultSkinPointerEvent(SDL_Event &event) {
   default:
     return false;
   }
-  if (!resultSkinSession->queuePointerDown(point, nowMicros())) return false;
+  const long long eventMicros = resultSkinStartedMicros == 0
+                                    ? 0
+                                    : std::max(0LL, nowMicros() - resultSkinStartedMicros);
+  if (!resultSkinSession->queuePointerDown(point, eventMicros)) return false;
   consumeResultSkinBuiltinEvents();
   return true;
 #endif

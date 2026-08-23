@@ -123,6 +123,7 @@ private:
   std::unordered_map<int, std::int64_t> customEventLastExecutionMicros_;
   std::unordered_set<int> reportedUnsupportedEventIds_;
   std::vector<std::string> preparedRuntimeStrings_;
+  std::int64_t currentEventMicros_ = 0;
 };
 
 } // namespace skin

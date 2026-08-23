@@ -523,8 +523,9 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
                             ? std::optional<int>(data_.previousLampBest->clearType)
                             : (data_.previousBest
                                    ? std::optional<int>(data_.previousBest->clearType)
-                                   : std::optional<int>(kClearTypeFailedRank));
-      return supported<std::int64_t>(beatorajaClearTypeImageIndex(*lamp));
+                                   : std::nullopt);
+      return supported<std::int64_t>(lamp ? beatorajaClearTypeImageIndex(*lamp)
+                                          : 0);
     }
     case 390: case 391: case 392: case 393: case 394:
     case 395: case 396: case 397: case 398: case 399: {
@@ -579,8 +580,23 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
                  : std::nullopt;
     };
     switch (*id) {
+    case 20:
+      return data_.context != nullptr
+                 ? std::optional<int>(data_.context->currentFramesPerSecond.load(
+                       std::memory_order_acquire))
+                 : std::optional<int>(std::numeric_limits<int>::min());
     case 21: case 22: case 23: case 24: case 25: case 26:
       return localCalendarField(*id);
+    case 27: case 28: case 29: {
+      const std::int64_t uptime = data_.context != nullptr
+                                       ? std::max<std::int64_t>(
+                                             0, data_.context->applicationUptimeMillis.load(
+                                                    std::memory_order_acquire))
+                                       : 0;
+      return *id == 27   ? uptime / 3'600'000
+             : *id == 28 ? (uptime / 60'000) % 60
+                         : (uptime / 1'000) % 60;
+    }
     case 12: case 79:
       return std::numeric_limits<int>::min();
     case 17:
