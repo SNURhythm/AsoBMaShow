@@ -489,6 +489,7 @@ bool ResultSkinSession::render(RenderContext &renderContext,
         "Result skin frame submission could not be prepared."));
     return false;
   }
+  lastDiagnostics_ = std::move(evaluated.diagnostics);
   publishedInteractionLayout_ = std::move(evaluated.interactionLayout);
   return true;
 }

@@ -506,6 +506,11 @@ courseTimingStatisticsForSession(const CoursePlaySession &session) {
   long double judgeDurationTotal = 0.0;
   int judgeNoteTotal = 0;
   for (const auto &stage : session.completedResults) {
+    if (stage.skinAverageJudgeMicros) {
+      const int notes = std::max(0, stage.meta.TotalNotes);
+      judgeDurationTotal += notes * *stage.skinAverageJudgeMicros;
+      judgeNoteTotal += notes;
+    }
     if (stage.skinTimingSampleCount == 0 ||
         !stage.skinTimingAverageMillis ||
         !stage.skinTimingStandardDeviationMillis) {
@@ -517,18 +522,18 @@ courseTimingStatisticsForSession(const CoursePlaySession &session) {
     result.timingSampleCount += stage.skinTimingSampleCount;
     sum += count * mean;
     sumSquares += count * (deviation * deviation + mean * mean);
-    if (stage.skinAverageJudgeMicros) {
-      const int notes = std::max(0, stage.meta.TotalNotes);
-      judgeDurationTotal += notes * *stage.skinAverageJudgeMicros;
-      judgeNoteTotal += notes;
-    }
     for (std::size_t index = 0;
          index < result.distribution.size() &&
          index < stage.skinTimingDistribution.size(); ++index) {
       result.distribution[index] += stage.skinTimingDistribution[index];
     }
   }
-  if (result.timingSampleCount == 0) return std::nullopt;
+  if (result.timingSampleCount == 0) {
+    if (judgeNoteTotal == 0) return std::nullopt;
+    result.averageJudgeMicros = static_cast<long long>(
+        judgeDurationTotal / judgeNoteTotal);
+    return result;
+  }
   const long double count = result.timingSampleCount;
   const long double mean = sum / count;
   result.hasTimingSamples = true;
@@ -931,6 +936,7 @@ ResultSkinData ResultScene::makeResultSkinData() const {
       [](const auto &provider) { return provider.second.enabled; });
   if (remote != nullptr) {
     data.presentation = &remote->presentation;
+    data.playModeLabel = remote->presentation.playtype.value_or("");
     data.difficultyLabel = remote->score.difficulty.value_or("");
     data.playLevelOverride = remote->score.levelNumber
                                  ? std::optional<float>(static_cast<float>(
@@ -4047,10 +4053,11 @@ void ResultScene::renderScene() {
     }
     const long long elapsedMillis =
         std::max(0LL, (nowMicros() - resultSkinStartedMicros) / 1000LL);
-    if (!resultSkinSession->render(
+    const bool rendered = resultSkinSession->render(
         renderContext, skinData,
-        std::max<std::uint64_t>(1, context.currentFrame), elapsedMillis)) {
-      appendResultSkinRenderDiagnostics();
+        std::max<std::uint64_t>(1, context.currentFrame), elapsedMillis);
+    appendResultSkinRenderDiagnostics();
+    if (!rendered) {
       handleResultSkinRenderFailure();
     }
   }

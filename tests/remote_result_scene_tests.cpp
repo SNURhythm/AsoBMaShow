@@ -75,6 +75,16 @@ void requireContains(const std::string &source, const std::string &token,
   require(source.find(token) != std::string::npos, message);
 }
 
+void requireOrdered(const std::string &source, const std::string &first,
+                    const std::string &second, const char *message) {
+  const std::size_t firstPosition = source.find(first);
+  const std::size_t secondPosition = source.find(second);
+  require(firstPosition != std::string::npos &&
+              secondPosition != std::string::npos &&
+              firstPosition < secondPosition,
+          message);
+}
+
 void testRemoteSourceOwnsOnlyValidatedRemoteData() {
   static_assert(std::is_constructible_v<ResultScene, ApplicationContext &,
                                         ResultRemoteOptions>);
@@ -404,6 +414,34 @@ void testLocalRegressionContractsRemainPresent() {
   }
 }
 
+void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
+  const std::string result = readSource("src/scene/ResultScene.cpp");
+  const std::string session =
+      readSource("src/skin/beatoraja/ResultSkinSession.cpp");
+
+  requireContains(result,
+                  "data.playModeLabel = remote->presentation.playtype.value_or(\"\");",
+                  "remote result skins project the remote play mode string");
+  requireOrdered(result, "if (stage.skinAverageJudgeMicros) {",
+                 "if (stage.skinTimingSampleCount == 0 ||",
+                 "course judge duration includes zero-timing stages");
+  requireContains(result,
+                  "if (result.timingSampleCount == 0) {\n"
+                  "    if (judgeNoteTotal == 0) return std::nullopt;",
+                  "all-miss courses retain their judge-duration result");
+  requireContains(session,
+                  "lastDiagnostics_ = std::move(evaluated.diagnostics);\n"
+                  "  publishedInteractionLayout_",
+                  "successful result frames retain non-fatal diagnostics");
+  requireContains(result,
+                  "const bool rendered = resultSkinSession->render(\n"
+                  "        renderContext, skinData,\n"
+                  "        std::max<std::uint64_t>(1, context.currentFrame), elapsedMillis);\n"
+                  "    appendResultSkinRenderDiagnostics();\n"
+                  "    if (!rendered) {",
+                  "ResultScene publishes diagnostics from successful result frames");
+}
+
 } // namespace
 
 int main() {
@@ -416,6 +454,7 @@ int main() {
   testRemoteRecallRejectsStaleSelectionBeforeAndAfterLookup();
   testResultTableContextRestoresRetryLaunchOptions();
   testLocalRegressionContractsRemainPresent();
+  testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent();
   std::cout << "remote result scene tests passed\n";
   return 0;
 }
