@@ -247,7 +247,7 @@ bool ResultSkinSession::render(RenderContext &renderContext,
   skinData.skinName = model_.model.header.name;
   skinData.skinAuthor = model_.model.header.author;
   ResultSkinStateBridge bridge(std::move(skinData), frameSerial, elapsedMillis,
-                               &configuration_);
+                               &configuration_, &model_.model);
   LuaFrameStateBinding frameState(runtime_.get(), &bridge);
   const auto &header = model_.model.header;
   const auto viewport = evaluatePlaySkinViewport(

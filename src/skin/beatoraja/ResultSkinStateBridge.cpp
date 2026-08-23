@@ -79,10 +79,11 @@ Judgement beatorajaJudgement(int index) {
 ResultSkinStateBridge::ResultSkinStateBridge(ResultSkinData data,
                                              std::uint64_t frameSerial,
                                              std::int64_t elapsedMillis,
-                                             const BeatorajaSkinConfiguration *configuration)
+                                             const BeatorajaSkinConfiguration *configuration,
+                                             const BeatorajaSkinModel *model)
     : data_(std::move(data)), frameSerial_(frameSerial),
       elapsedMillis_(std::max<std::int64_t>(0, elapsedMillis)),
-      configuration_(configuration) {
+      configuration_(configuration), model_(model) {
   if (data_.state != nullptr) {
     gaugeHistory_ = data_.state->gaugeHistory;
   } else if (data_.presentation != nullptr &&
@@ -754,7 +755,13 @@ std::int64_t ResultSkinStateBridge::timerProperty(
   if (!id) return kTimerOff;
   // Result timers are timestamps, not elapsed values. MusicResult and
   // CourseResult start their graph/update timers at result-scene origin.
-  return *id == 1 || *id == 150 || *id == 151 || *id == 152 ? 0 : kTimerOff;
+  if (*id == 150 || *id == 151 || *id == 152) return 0;
+  if (*id == 1) {
+    const auto start = static_cast<std::int64_t>(
+        std::max(0, model_ != nullptr ? model_->timing.inputMillis : 0)) * 1'000;
+    return elapsedMillis_ * 1'000 >= start ? start : kTimerOff;
+  }
+  return kTimerOff;
 }
 
 std::span<const SkinProjectedNoteView>

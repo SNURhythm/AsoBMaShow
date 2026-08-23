@@ -17,7 +17,8 @@ class ResultSkinStateBridge final : public ISkinFrameState {
 public:
   ResultSkinStateBridge(ResultSkinData data, std::uint64_t frameSerial,
                         std::int64_t elapsedMillis,
-                        const BeatorajaSkinConfiguration *configuration = nullptr);
+                        const BeatorajaSkinConfiguration *configuration = nullptr,
+                        const BeatorajaSkinModel *model = nullptr);
 
   std::uint64_t frameSerial() const noexcept override;
   SkinPropertyLookup<bool>
@@ -59,6 +60,7 @@ private:
   std::vector<float> gaugeHistory_;
   std::uint64_t gaugeRevision_ = 0;
   const BeatorajaSkinConfiguration *configuration_ = nullptr;
+  const BeatorajaSkinModel *model_ = nullptr;
 };
 
 } // namespace skin
