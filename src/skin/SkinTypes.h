@@ -50,6 +50,7 @@ struct ResultSkinData {
   std::optional<float> playLevelOverride;
   std::string chartMd5;
   std::string chartSha256;
+  bool autoPlayResult = false;
   std::optional<std::string> headerDifficultyLabelOverride;
   std::optional<std::string> currentClearLabelOverride;
   std::optional<int> currentClearRankOverride;

@@ -171,7 +171,8 @@ ResultSkinSessionCreateResult ResultSkinSession::create(
                                   LuaSkinRuntime &runtime,
                                   const BeatorajaSkinConfiguration &configuration,
                                   std::vector<SkinDiagnostic> &) {
-           ResultSkinStateBridge bridge(context.initialData, 1, 0);
+           ResultSkinStateBridge bridge(context.initialData, 1, 0,
+                                        &configuration);
            LuaFrameStateBinding frameState(&runtime, &bridge);
            return runtime.loadConfigured(configuration);
          },
@@ -192,7 +193,10 @@ ResultSkinSessionCreateResult ResultSkinSession::create(
           activation.entry.packageRelativePath));
       return result;
     }
-    const auto runtimeStrings = resultRuntimeStrings(context.initialData);
+    ResultSkinData resourceData = context.initialData;
+    resourceData.skinName = document.model.model.header.name;
+    resourceData.skinAuthor = document.model.model.header.author;
+    const auto runtimeStrings = resultRuntimeStrings(resourceData);
     auto planned = context.resourcePreparation.decodeAndPlan(
         {.revision = activation.revision.clone(), .entry = activation.entry,
          .fileSystem = *resourceFiles.fileSystem, .model = document.model,
@@ -242,7 +246,8 @@ bool ResultSkinSession::render(RenderContext &renderContext,
   ResultSkinData skinData = data;
   skinData.skinName = model_.model.header.name;
   skinData.skinAuthor = model_.model.header.author;
-  ResultSkinStateBridge bridge(std::move(skinData), frameSerial, elapsedMillis);
+  ResultSkinStateBridge bridge(std::move(skinData), frameSerial, elapsedMillis,
+                               &configuration_);
   LuaFrameStateBinding frameState(runtime_.get(), &bridge);
   const auto &header = model_.model.header;
   const auto viewport = evaluatePlaySkinViewport(

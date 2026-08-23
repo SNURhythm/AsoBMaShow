@@ -78,9 +78,11 @@ Judgement beatorajaJudgement(int index) {
 
 ResultSkinStateBridge::ResultSkinStateBridge(ResultSkinData data,
                                              std::uint64_t frameSerial,
-                                             std::int64_t elapsedMillis)
+                                             std::int64_t elapsedMillis,
+                                             const BeatorajaSkinConfiguration *configuration)
     : data_(std::move(data)), frameSerial_(frameSerial),
-      elapsedMillis_(std::max<std::int64_t>(0, elapsedMillis)) {
+      elapsedMillis_(std::max<std::int64_t>(0, elapsedMillis)),
+      configuration_(configuration) {
   if (data_.state != nullptr) {
     gaugeHistory_ = data_.state->gaugeHistory;
   } else if (data_.presentation != nullptr &&
@@ -210,11 +212,13 @@ SkinPropertyLookup<bool> ResultSkinStateBridge::booleanProperty(
     return supported(*id == 51 ? irOnline : !irOnline);
   }
   if (*id == 1 || *id == 2 || *id == 3 || *id == 5 || *id == 21 ||
-      *id == 22 || *id == 23 || *id == 33 || *id == 80 || *id == 1030 ||
+      *id == 22 || *id == 23 || *id == 80 || *id == 1030 ||
       *id == 1031 || *id == 290 || *id == 291 || *id == 292 || *id == 293) {
     return supported(false);
   }
-  if (*id == 32 || *id == 81) return supported(true);
+  if (*id == 32) return supported(!data_.autoPlayResult);
+  if (*id == 33) return supported(data_.autoPlayResult);
+  if (*id == 81) return supported(true);
   if (*id == 1008) return supported(!data_.tableName.empty());
   if (*id >= 150 && *id <= 155) {
     const int difficulty = data_.meta != nullptr ? data_.meta->Difficulty : 0;
@@ -502,11 +506,16 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
       return std::numeric_limits<int>::min();
     case 368: return 0;
     case 370:
-      return data_.state
-                 ? std::optional<int>(data_.state->getClearTypeRank())
-                 : std::nullopt;
+      return data_.currentClearRankOverride
+                 ? data_.currentClearRankOverride
+                 : (data_.presentation ? data_.presentation->lampRank
+                                       : (data_.state ? std::optional<int>(
+                                             data_.state->getClearTypeRank())
+                                                      : std::nullopt));
     case 371:
-      return data_.previousBest
+      return data_.previousLampBest
+                 ? std::optional<int>(data_.previousLampBest->clearType)
+                 : data_.previousBest
                  ? std::optional<int>(data_.previousBest->clearType)
                  : std::optional<int>(kClearTypeFailedRank);
     case 372: case 373: case 374: case 375:
@@ -718,7 +727,18 @@ SkinPropertyLookup<std::string_view> ResultSkinStateBridge::stringProperty(
 }
 
 SkinPropertyLookup<SkinRuntimeOffset>
-ResultSkinStateBridge::offsetProperty(int) { return unsupported<SkinRuntimeOffset>(); }
+ResultSkinStateBridge::offsetProperty(int id) {
+  if (id < 0 || id > SkinCommandPolicy::maximumBeatorajaOffsetId) {
+    return unsupported<SkinRuntimeOffset>();
+  }
+  if (configuration_ != nullptr) {
+    if (const auto found = configuration_->offsetsById.find(id);
+        found != configuration_->offsetsById.end()) {
+      return supported(skinRuntimeOffset(found->second));
+    }
+  }
+  return supported(SkinRuntimeOffset{});
+}
 
 std::int64_t ResultSkinStateBridge::timerProperty(
     const SkinBuiltinPropertySelector &selector) {

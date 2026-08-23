@@ -641,6 +641,7 @@ ResultSkinData ResultScene::makeResultSkinData() const {
     data.currentClearLabelOverride = local->currentClearLabelOverride;
   }
   data.currentClearRankOverride = local->currentClearRankOverride;
+  data.autoPlayResult = local->autoPlayResult;
   if (local->courseOptions.session != nullptr) {
     data.courseTitles = local->courseOptions.session->beatorajaSkinStageTitles();
   }
