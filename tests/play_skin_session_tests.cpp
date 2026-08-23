@@ -685,6 +685,7 @@ struct ActivationFixtureOptions {
   bool resultEventExec = false;
   bool resultNestedEventExec = false;
   bool resultIntervalEventExec = false;
+  bool resultRecursiveEventExec = false;
   bool staticResultCustomEvent = false;
   bool legacyInputBearing = false;
   bool repeatedPomyu = false;
@@ -1020,6 +1021,16 @@ if skin_config then
     customEvents = {{id = 1000, action = 210, condition = function()
       return true
     end, minInterval = 1000}},
+    customTimers = {{id = 10000, timer = function()
+      assert(main_state.event_exec(1000))
+      return 0
+    end}}
+  }
+)lua";
+    } else if (options.resultRecursiveEventExec) {
+      script += "\n  return { type = " +
+                std::to_string(options.skinType) + R"lua(, w = 1280, h = 720,
+    customEvents = {{id = 1000, action = 1000}},
     customTimers = {{id = 10000, timer = function()
       assert(main_state.event_exec(1000))
       return 0
@@ -5115,6 +5126,22 @@ void testResultLuaSessionManualCustomEventSuppressesAutomaticRepeat() {
          "manual result custom events advance the shared automatic interval clock");
 }
 
+void testResultLuaSessionRejectsRecursiveCustomEvents() {
+  ActivationFixture fixture({.skinType = 7, .resultRecursiveEventExec = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  auto created = ResultSkinSession::create(fixture.takeActivation(),
+                                           fixture.resultContext());
+  RenderContext context;
+  expect(created.session != nullptr &&
+             !created.session->render(context, {}, 1, 0) &&
+             hasDiagnostic(created.session->takeLastDiagnostics(),
+                           "skin.result_session.custom_event_cycle"),
+         "recursive result custom events fail with a skin diagnostic instead of "
+         "recursing through the event dispatcher");
+}
+
 void testStaticResultSessionRunsCustomBuiltinEvent() {
   ActivationFixture fixture({.skinType = 7, .staticResultCustomEvent = true});
   if (!fixture.ready()) {
@@ -5703,6 +5730,7 @@ int main() {
   testResultLuaSessionRoutesOpenIrEvent();
   testResultLuaSessionDefersNestedCustomEventsToTheNextFrame();
   testResultLuaSessionManualCustomEventSuppressesAutomaticRepeat();
+  testResultLuaSessionRejectsRecursiveCustomEvents();
   testStaticResultSessionRunsCustomBuiltinEvent();
   testResultSessionRefreshesForAsynchronousRankingNames();
   testResultSessionRefreshesForAllStringSelectors();

@@ -92,9 +92,11 @@ private:
                     std::vector<std::string> preparedRuntimeStrings);
   static LuaSkinEventExecutionResult executeHostEvent(
       void *, int, std::span<const int>) noexcept;
-  [[nodiscard]] bool queueEvent(int, std::span<const int>, long long);
+  [[nodiscard]] bool queueEvent(int, std::span<const int>, long long,
+                                std::span<const int> resolutionPath = {});
   [[nodiscard]] bool queueEventBinding(SkinEventBindingId,
-                                       std::span<const int>, long long);
+                                       std::span<const int>, long long,
+                                       std::span<const int> resolutionPath = {});
   void reportUnsupportedEvent(int);
 
   SkinRevisionLease revision_;

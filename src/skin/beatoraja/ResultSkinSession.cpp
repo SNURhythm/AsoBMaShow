@@ -560,7 +560,8 @@ std::vector<int> ResultSkinSession::takeQueuedBuiltinEventIds() {
 }
 
 bool ResultSkinSession::queueEvent(int eventId, std::span<const int> arguments,
-                                   long long eventMicros) {
+                                   long long eventMicros,
+                                   std::span<const int> resolutionPath) {
   if (arguments.size() > 2) {
     lastDiagnostics_.push_back(failure(
         "skin.result_session.event_argument_count",
@@ -571,7 +572,17 @@ bool ResultSkinSession::queueEvent(int eventId, std::span<const int> arguments,
           model_.model.customEvents, [eventId](const SkinCustomEvent &event) {
             return event.id == eventId;
           }); custom != model_.model.customEvents.end()) {
-    if (!queueEventBinding(custom->action, arguments, eventMicros)) {
+    if (std::ranges::find(resolutionPath, eventId) != resolutionPath.end()) {
+      lastDiagnostics_.push_back(failure(
+          "skin.result_session.custom_event_cycle",
+          "Result skin custom event action references itself recursively."));
+      return false;
+    }
+    std::vector<int> nestedResolutionPath(resolutionPath.begin(),
+                                          resolutionPath.end());
+    nestedResolutionPath.push_back(eventId);
+    if (!queueEventBinding(custom->action, arguments, eventMicros,
+                           nestedResolutionPath)) {
       return false;
     }
     customEventLastExecutionMicros_.insert_or_assign(custom->id, eventMicros);
@@ -598,7 +609,8 @@ bool ResultSkinSession::queueEvent(int eventId, std::span<const int> arguments,
 
 bool ResultSkinSession::queueEventBinding(SkinEventBindingId id,
                                           std::span<const int> arguments,
-                                          long long eventMicros) {
+                                          long long eventMicros,
+                                          std::span<const int> resolutionPath) {
   const auto binding = std::ranges::find_if(
       model_.model.events, [id](const SkinEventBinding &candidate) {
         return candidate.id == id;
@@ -618,7 +630,7 @@ bool ResultSkinSession::queueEventBinding(SkinEventBindingId id,
           "Result custom event action is not a numeric event ID."));
       return false;
     }
-    return queueEvent(*eventId, arguments, eventMicros);
+    return queueEvent(*eventId, arguments, eventMicros, resolutionPath);
   }
   if (runtime_ == nullptr) {
     lastDiagnostics_.push_back(failure(

@@ -446,6 +446,14 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
                   "const int playerOffset = player == 1 ? keyCount : 0;",
                   "generated 2P result patterns use replay-local lane ordinals");
   requireContains(result,
+                  "data.replayLaneShufflePattern1P = resultReplayLanePattern(\n"
+                  "          *currentMeta, session.playOption, session.playOptionSeed, 0);",
+                  "course result skins reconstruct the final stage's 1P lane pattern");
+  requireContains(result,
+                  "data.replayLaneShufflePattern2P = resultReplayLanePattern(\n"
+                  "            *currentMeta, session.playOption2, session.playOption2Seed, 1);",
+                  "course result skins reconstruct the final stage's 2P lane pattern");
+  requireContains(result,
                   "const ReplayData *stageReplay = nullptr;",
                   "saved course stages retain the current replay setup");
   requireContains(result,

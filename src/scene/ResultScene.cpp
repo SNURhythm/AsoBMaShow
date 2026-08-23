@@ -1092,6 +1092,12 @@ ResultSkinData ResultScene::makeResultSkinData() const {
     if (const auto *currentMeta = session.currentMeta(); currentMeta != nullptr) {
       data.replayKeyMode = currentMeta->KeyMode;
       data.keyModeOverride = currentMeta->KeyMode;
+      data.replayLaneShufflePattern1P = resultReplayLanePattern(
+          *currentMeta, session.playOption, session.playOptionSeed, 0);
+      if (currentMeta->IsDP) {
+        data.replayLaneShufflePattern2P = resultReplayLanePattern(
+            *currentMeta, session.playOption2, session.playOption2Seed, 1);
+      }
     }
   }
   return data;
