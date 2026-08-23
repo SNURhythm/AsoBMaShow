@@ -3585,13 +3585,6 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       if (disabledOptionalObject(lookupIndex, object->id)) {
         continue;
       }
-      // SkinTimingDistributionGraph.prepare() returns before SkinObject's
-      // preparation unless its state is MusicResult. Gameplay therefore skips
-      // destination conditions, timers, offsets, and command budgets.
-      if (std::holds_alternative<SkinTimingDistributionGraphObject>(
-              object->payload)) {
-        continue;
-      }
       if (const auto *practiceObject =
               std::get_if<SkinPracticeObject>(&object->payload);
           practiceObject != nullptr && practiceObject->visibleItems > 0) {
@@ -3661,6 +3654,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           std::get_if<SkinBpmGraphObject>(&object->payload);
       const auto *timingVisualizer =
           std::get_if<SkinTimingVisualizerObject>(&object->payload);
+      const auto *timingDistribution =
+          std::get_if<SkinTimingDistributionGraphObject>(&object->payload);
       const auto *hitErrorVisualizer =
           std::get_if<SkinHitErrorVisualizerObject>(&object->payload);
       const auto *gauge = std::get_if<SkinGaugeObject>(&object->payload);
@@ -3679,7 +3674,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       const auto *blank = std::get_if<SkinBlankObject>(&object->payload);
       if (!image && !number && !floating && !text && !slider && !graph &&
           !noteDistribution && !gaugeGraph && !bpmGraph &&
-          !timingVisualizer &&
+          !timingVisualizer && !timingDistribution &&
           !hitErrorVisualizer &&
           !gauge && !note && !cover && !judge && !bga && !builtinImage &&
           !practice && !pmChara && !invalidInGameplay && !blank) {
@@ -4245,6 +4240,34 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
              .viewport = inputs.viewport,
              .maximumCommands =
                  skinFrameMaximumCommands(inputs) - buffer.commands.size(),
+             .maximumPrimitiveVertices =
+                 skinFrameMaximumPrimitiveVertices(inputs) - primitiveVertices,
+             .cache = &generatedTextureCache_});
+        if (lowered.failure) {
+          if (reportObjectFailure(result, *object, *lowered.failure)) {
+            return result;
+          }
+          continue;
+        }
+        primitiveVertices += lowered.primitiveVertices;
+        buffer.commands.insert(buffer.commands.end(),
+                               std::make_move_iterator(lowered.commands.begin()),
+                               std::make_move_iterator(lowered.commands.end()));
+        continue;
+      }
+
+      if (timingDistribution) {
+        if (evaluated.geometry->rgba[3] <= 0.0F) {
+          continue;
+        }
+        auto lowered = renderSkinTimingDistributionGraph(
+            {.sourceObject = object->id,
+             .authoredOrdinal = destination.presentation.authoredOrdinal,
+             .graph = *timingDistribution,
+             .state = inputs.state.gameplayGraphState(),
+             .geometry = *evaluated.geometry,
+             .viewport = inputs.viewport,
+             .maximumCommands = skinFrameMaximumCommands(inputs) - buffer.commands.size(),
              .maximumPrimitiveVertices =
                  skinFrameMaximumPrimitiveVertices(inputs) - primitiveVertices,
              .cache = &generatedTextureCache_});

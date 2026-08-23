@@ -985,6 +985,11 @@ SkinGameplayGraphStateView
 ResultSkinStateBridge::gameplayGraphState() const noexcept {
   SkinGameplayGraphStateView result =
       skinGameplayGraphStateView(data_.gameplayGraph);
+  result.timingDistribution = data_.timingDistribution;
+  result.timingDistributionCenter = data_.timingDistributionCenter;
+  result.timingDistributionAverageMillis = data_.timingAverageMillis;
+  result.timingDistributionStandardDeviationMillis =
+      data_.timingStandardDeviationMillis;
   if (!result.gaugeHistory.empty() || !gaugeHistory_.empty()) {
     if (result.gaugeHistory.empty()) {
       result.gaugeHistory = gaugeHistory_;
@@ -1005,6 +1010,7 @@ ResultSkinStateBridge::gameplayGraphState() const noexcept {
   if (!result.normalDistribution.empty() || !result.judgementDistribution.empty() ||
       !result.earlyLateDistribution.empty() || !result.bpmSeries.empty() ||
       !result.gaugeHistory.empty() || !result.judgeWindows.empty() ||
+      !result.timingDistribution.empty() ||
       !result.recentJudgeTimingsMillis.empty()) {
     return result;
   }

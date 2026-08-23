@@ -76,6 +76,8 @@ struct ResultSkinData {
   std::optional<double> timingAverageMillis;
   std::optional<double> timingStandardDeviationMillis;
   std::optional<long long> averageJudgeMicros;
+  std::vector<int> timingDistribution;
+  int timingDistributionCenter = 150;
   // Captured at the gameplay-to-result boundary. The shared immutable graph
   // snapshots keep every graph-capable Beatoraja result object on the same
   // authoritative data that gameplay rendered on its final frame.

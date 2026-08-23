@@ -120,6 +120,7 @@ struct ResultTimingStatistics {
   double averageMillis = 0.0;
   double standardDeviationMillis = 0.0;
   long long averageJudgeMicros = 0;
+  std::vector<int> distribution = std::vector<int>(301, 0);
 };
 
 std::optional<ResultTimingStatistics>
@@ -127,6 +128,7 @@ resultTimingStatistics(const ReplayData *replay, int totalNotes) {
   if (replay == nullptr || totalNotes <= 0) return std::nullopt;
   constexpr long long rangeMicros = 150'000;
   std::vector<long long> timings;
+  std::vector<int> distribution(301, 0);
   timings.reserve(replay->events.size());
   long long durationMicros = 0;
   int playedNotes = 0;
@@ -148,6 +150,12 @@ resultTimingStatistics(const ReplayData *replay, int totalNotes) {
         event.judgement != None && event.judgement != Kpoor &&
         event.diffMicros >= -rangeMicros && event.diffMicros <= rangeMicros;
     if (timingEvent) timings.push_back(event.diffMicros);
+    if (timingEvent) {
+      const int millis = static_cast<int>(event.diffMicros / 1'000LL);
+      if (millis >= -150 && millis <= 150) {
+        ++distribution[static_cast<std::size_t>(millis + 150)];
+      }
+    }
   }
   long double mean = 0.0;
   long double squared = 0.0;
@@ -164,11 +172,13 @@ resultTimingStatistics(const ReplayData *replay, int totalNotes) {
       .hasTimingSamples = !timings.empty(),
       .averageMillis = static_cast<double>(mean / 1'000.0L),
       .standardDeviationMillis = static_cast<double>(
-          std::sqrt(squared / timings.size()) / 1'000.0L),
+          timings.empty() ? 0.0L
+                          : std::sqrt(squared / timings.size()) / 1'000.0L),
       .averageJudgeMicros =
           (durationMicros + static_cast<long long>(totalNotes - playedNotes) *
                                 1'000'000LL) /
-          totalNotes};
+          totalNotes,
+      .distribution = std::move(distribution)};
 }
 
 void drawResultGaugeGraphPrimitive(
@@ -738,6 +748,7 @@ ResultSkinData ResultScene::makeResultSkinData() const {
       data.timingStandardDeviationMillis = timing->standardDeviationMillis;
     }
     data.averageJudgeMicros = timing->averageJudgeMicros;
+    data.timingDistribution = timing->distribution;
   }
   return data;
 }
