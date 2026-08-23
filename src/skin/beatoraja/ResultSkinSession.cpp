@@ -514,6 +514,25 @@ bool ResultSkinSession::queuePointerDown(UiLogicalPoint point,
   const auto *builtin =
       std::get_if<SkinBuiltinPropertySelector>(&binding->source);
   const auto *id = builtin == nullptr ? nullptr : std::get_if<int>(&builtin->value);
+  if (id != nullptr) {
+    const auto custom = std::ranges::find_if(
+        model_.model.customEvents, [id](const SkinCustomEvent &event) {
+          return event.id == *id;
+        });
+    if (custom != model_.model.customEvents.end()) {
+      const auto action = std::ranges::find_if(
+          model_.model.events, [custom](const SkinEventBinding &event) {
+            return event.id == custom->action;
+          });
+      if (action != model_.model.events.end() &&
+          std::holds_alternative<LuaCallbackId>(action->source)) {
+        queuedEventInvocations_.push_back(
+            {.eventBinding = action->id.value, .argument = invocation->argument,
+             .eventMicros = invocation->eventMicros});
+        return true;
+      }
+    }
+  }
   // EventFactory exposes this result-state event as open_ir.  In AsoBMaShow
   // its equivalent is the selected chart's in-app ranking surface.  Other
   // numeric events have no Result/CourseResult implementation in Beatoraja

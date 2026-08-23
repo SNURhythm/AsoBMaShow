@@ -1057,6 +1057,18 @@ ResultSkinData ResultScene::makeResultSkinData() const {
           setupReplay->chartMeta, setupReplay->playOption2,
           setupReplay->playOption2Seed, 1);
     }
+  } else if (isCourseFinalResult() && local->courseOptions.session != nullptr) {
+    const auto &session = *local->courseOptions.session;
+    if (session.playOption) {
+      data.replayRandomOption1P =
+          replay::projectedBeatorajaReplayOptionIndex(*session.playOption);
+    }
+    if (session.playOption2) {
+      data.replayRandomOption2P =
+          replay::projectedBeatorajaReplayOptionIndex(*session.playOption2);
+    }
+    data.replayDoublePlayOption = session.playOption2 ? 1 : 0;
+    data.replayKeyMode = local->meta.KeyMode;
   }
   return data;
 }
