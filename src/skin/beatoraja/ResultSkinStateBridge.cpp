@@ -233,7 +233,9 @@ SkinPropertyLookup<bool> ResultSkinStateBridge::booleanProperty(
   // BooleanPropertyFactory evaluates this pair only for BMSPlayer. A result
   // MainState therefore exposes neither option, including AUTO PLAY results.
   if (*id == 32 || *id == 33) return supported(false);
-  if (*id == 81) return supported(true);
+  // OPTION_LOADED is a BMSPlayer-only loading-state property. AbstractResult
+  // reaches the factory's false branch rather than claiming player loading.
+  if (*id == 81) return supported(false);
   if (*id == 1008) return supported(!data_.tableName.empty());
   if (*id >= 150 && *id <= 155) {
     const int difficulty = data_.meta != nullptr ? data_.meta->Difficulty : 0;

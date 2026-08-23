@@ -5033,8 +5033,9 @@ void testResultBridgeKeepsAutoplayOptionsOffOnResultScreens() {
   ResultSkinStateBridge bridge({.autoPlayResult = true}, 1, 0);
   const auto autoplayOff = bridge.booleanProperty({32});
   const auto autoplayOn = bridge.booleanProperty({33});
+  const auto loaded = bridge.booleanProperty({81});
   expect(autoplayOff.supported && !autoplayOff.value && autoplayOn.supported &&
-             !autoplayOn.value,
+             !autoplayOn.value && loaded.supported && !loaded.value,
          "Beatoraja exposes neither autoplay option from an AbstractResult");
 }
 
