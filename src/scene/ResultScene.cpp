@@ -181,20 +181,36 @@ std::optional<std::vector<int>> resultReplayLanePattern(
       keyOffset + static_cast<std::size_t>(keyCount) > keys.size()) {
     return std::nullopt;
   }
-  std::vector<int> pattern;
-  pattern.reserve(static_cast<std::size_t>(keyCount +
+  const int playerOffset = player == 1 ? keyCount : 0;
+  std::vector<int> sourceLanes;
+  sourceLanes.reserve(static_cast<std::size_t>(keyCount +
       (static_cast<std::size_t>(player) < scratches.size() ? 1 : 0)));
+  for (int key = 0; key < keyCount; ++key) {
+    sourceLanes.push_back(keys[keyOffset + static_cast<std::size_t>(key)]);
+  }
+  if (static_cast<std::size_t>(player) < scratches.size()) {
+    sourceLanes.push_back(scratches[static_cast<std::size_t>(player)]);
+  }
+  std::vector<int> pattern;
+  pattern.reserve(sourceLanes.size());
+  const auto appendSourceOrdinal = [&](int sourceLane) {
+    const auto source = std::ranges::find(sourceLanes, sourceLane);
+    if (source == sourceLanes.end()) return false;
+    pattern.push_back(static_cast<int>(source - sourceLanes.begin()) +
+                      playerOffset);
+    return true;
+  };
   for (int key = 0; key < keyCount; ++key) {
     const auto found = sourceByDestination.find(
         keys[keyOffset + static_cast<std::size_t>(key)]);
     if (found == sourceByDestination.end()) return std::nullopt;
-    pattern.push_back(found->second);
+    if (!appendSourceOrdinal(found->second)) return std::nullopt;
   }
   if (static_cast<std::size_t>(player) < scratches.size()) {
     const auto scratch = sourceByDestination.find(
         scratches[static_cast<std::size_t>(player)]);
     if (scratch == sourceByDestination.end()) return std::nullopt;
-    pattern.push_back(scratch->second);
+    if (!appendSourceOrdinal(scratch->second)) return std::nullopt;
   }
   return pattern;
 }
@@ -2428,7 +2444,15 @@ void ResultScene::handleResultSkinRenderFailure() {
   back->setBackgroundColors(ui_theme::primaryAction(),
                             ui_theme::primaryActionHover(),
                             ui_theme::primaryActionPressed());
-  back->setOnClickListener([this]() { exitResult(); });
+  back->setOnClickListener([this]() {
+    const auto *current = localSource();
+    if (current != nullptr && isCourseStageResult() &&
+        !current->courseOptions.savedResultBrowsing) {
+      showCourseExitConfirmation();
+    } else {
+      exitResult();
+    }
+  });
   notice->addView(back);
 
   resultSkinFailureNotice = notice;
@@ -3140,6 +3164,7 @@ void ResultScene::showSavedCourseStage() {
     return;
   }
   const auto &result = session->completedResults[session->currentIndex];
+  const ReplayData *stageReplay = nullptr;
   ScoreProvenance provenance = ScoreProvenance::Legacy();
   if (session->modernCourseResultBrowsing) {
     if (session->currentIndex >= session->stageProvenance.size() ||
@@ -3157,11 +3182,12 @@ void ResultScene::showSavedCourseStage() {
     const auto &replay =
         session->courseReplayData->stages[session->currentIndex].replay;
     session->applyReplayStagePlayOptions(replay);
+    stageReplay = &replay;
     provenance = replay.provenance;
   }
   context.sceneManager->changeScene(
       std::make_unique<ResultScene>(
-          context, result.meta, result.state, provenance, nullptr,
+          context, result.meta, result.state, provenance, stageReplay,
           ResultPersistenceOptions{}, nullptr, ResultPracticeOptions{}, false,
           ResultCourseOptions{.mode = ResultCourseMode::Stage,
                               .session = session,

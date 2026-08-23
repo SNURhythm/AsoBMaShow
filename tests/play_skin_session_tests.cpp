@@ -5058,6 +5058,30 @@ void testResultSessionRefreshesForAsynchronousRankingNames() {
          "their configured Lua runtime");
 }
 
+void testResultSessionRefreshesForAllStringSelectors() {
+  ActivationFixture fixture({.skinType = 7, .resourceBearing = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  auto created = ResultSkinSession::create(fixture.takeActivation(),
+                                           fixture.resultContext());
+  const ResultSkinData stringSelectorData{
+      .pacemaker = ResultPacemakerData{.label = "MAX -"},
+      .chartMd5 = "0123456789abcdef0123456789abcdef",
+      .chartSha256 =
+          "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  };
+  expect(created.session != nullptr &&
+             created.session->requiresRuntimeStringRefresh(stringSelectorData),
+         "result font atlases refresh for pacemaker and chart-hash strings");
+  if (created.session == nullptr) {
+    return;
+  }
+  expect(created.session->refreshRuntimeStrings(stringSelectorData) &&
+             !created.session->requiresRuntimeStringRefresh(stringSelectorData),
+         "result font atlases retain every dynamically projected string");
+}
+
 void testResultSessionRejectsConfiguredModelForAnotherResultTarget() {
   ActivationFixture fixture({.skinType = 7, .configuredSkinType = 15});
   if (!fixture.ready()) {
@@ -5534,6 +5558,7 @@ int main() {
   testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin();
   testResultLuaSessionBindsMainStateDuringConfiguredLoad();
   testResultSessionRefreshesForAsynchronousRankingNames();
+  testResultSessionRefreshesForAllStringSelectors();
   testResultSessionRejectsConfiguredModelForAnotherResultTarget();
   testResultBridgeSupportsBeatorajaIrAvailabilityProperties();
   testResultBridgeKeepsAutoplayOptionsOffOnResultScreens();

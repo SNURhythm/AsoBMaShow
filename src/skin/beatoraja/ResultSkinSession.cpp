@@ -82,6 +82,18 @@ std::vector<std::string> resultRuntimeStrings(const ResultSkinData &data) {
     appendRuntimeString(strings, data.meta->Artist);
     appendRuntimeString(strings, data.meta->SubArtist);
     appendRuntimeString(strings, data.meta->Genre);
+    appendRuntimeString(strings, data.meta->MD5);
+    appendRuntimeString(strings, data.meta->SHA256);
+    if (!data.courseTitle.empty()) {
+      appendRuntimeString(strings, data.courseTitle);
+    } else if (!data.meta->SubTitle.empty()) {
+      appendRuntimeString(strings, data.meta->Title + " " +
+                                       data.meta->SubTitle);
+    }
+    if (!data.meta->SubArtist.empty()) {
+      appendRuntimeString(strings, data.meta->Artist + " " +
+                                       data.meta->SubArtist);
+    }
   }
   if (data.presentation != nullptr) {
     appendRuntimeString(strings, data.presentation->title);
@@ -100,6 +112,14 @@ std::vector<std::string> resultRuntimeStrings(const ResultSkinData &data) {
                             &data.difficultyLabel, &data.skinName,
                             &data.skinAuthor, &data.courseTitle}) {
     appendRuntimeString(strings, *value);
+  }
+  appendRuntimeString(strings,
+                      data.pacemaker ? data.pacemaker->label : "");
+  appendRuntimeString(strings, data.chartMd5);
+  appendRuntimeString(strings, data.chartSha256);
+  appendRuntimeString(strings, ASOBMASHOW_APPLICATION_VERSION);
+  if (!data.tableName.empty() && !data.tableLevel.empty()) {
+    appendRuntimeString(strings, data.tableName + " " + data.tableLevel);
   }
   for (const auto &title : data.courseTitles) appendRuntimeString(strings, title);
   for (const auto &entry : data.irRankingEntries) {

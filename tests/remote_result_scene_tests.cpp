@@ -440,6 +440,26 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
                   "    appendResultSkinRenderDiagnostics();\n"
                   "    if (!rendered) {",
                   "ResultScene publishes diagnostics from successful result frames");
+  requireContains(result,
+                  "const int playerOffset = player == 1 ? keyCount : 0;",
+                  "generated 2P result patterns use replay-local lane ordinals");
+  requireContains(result,
+                  "const ReplayData *stageReplay = nullptr;",
+                  "saved course stages retain the current replay setup");
+  requireContains(result,
+                  "context, result.meta, result.state, provenance, stageReplay,",
+                  "saved course stages project setup through the result scene");
+  requireContains(result,
+                  "isCourseStageResult() &&\n"
+                  "        !current->courseOptions.savedResultBrowsing",
+                  "result skin failure back actions retain live-course confirmation");
+  requireContains(session,
+                  "data.pacemaker ? data.pacemaker->label : \"\"",
+                  "result font atlases include the pacemaker selector string");
+  requireContains(session, "data.chartMd5",
+                  "result font atlases include chart MD5 selector strings");
+  requireContains(session, "data.chartSha256",
+                  "result font atlases include chart SHA-256 selector strings");
 }
 
 } // namespace
