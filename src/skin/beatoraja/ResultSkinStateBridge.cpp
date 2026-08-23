@@ -237,6 +237,15 @@ SkinPropertyLookup<bool> ResultSkinStateBridge::booleanProperty(
   // reaches the factory's false branch rather than claiming player loading.
   if (*id == 81) return supported(false);
   if (*id == 1008) return supported(!data_.tableName.empty());
+  if (*id >= 2241 && *id <= 2246) {
+    const Judgement judgement = *id == 2241 ? PGreat
+                                : *id == 2242 ? Great
+                                : *id == 2243 ? Good
+                                : *id == 2244 ? Bad
+                                : *id == 2245 ? Poor
+                                              : Kpoor;
+    return supported(count(judgement).value_or(0) > 0);
+  }
   if (*id >= 150 && *id <= 155) {
     const int difficulty = data_.meta != nullptr ? data_.meta->Difficulty : 0;
     return supported(*id == 150 ? difficulty <= 0 || difficulty > 5
@@ -255,6 +264,13 @@ SkinPropertyLookup<bool> ResultSkinStateBridge::booleanProperty(
     const int keyMode = data_.keyModeOverride.value_or(
         data_.meta != nullptr ? data_.meta->KeyMode : 0);
     return supported(keyMode == (*id == 1160 ? 24 : 48));
+  }
+  if (*id == 1046) {
+    const GaugeType type = data_.state ? data_.state->gaugeType
+                                       : GaugeType::Normal;
+    const int index = gaugeTypeIndex(type);
+    return supported(index == 0 || index == 1 || index == 4 || index == 5 ||
+                     index == 7 || index == 8);
   }
   if (*id == 170 || *id == 171) {
     // ResultSkinData retains only ChartMeta.  Its BGA presence is not part of
@@ -502,6 +518,7 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
     case 123: case 136: case 158:
       return targetRate() ? std::optional<int>(scoreRateParts(*targetRate()).second)
                           : std::optional<int>(std::numeric_limits<int>::min());
+    case 108:
     case 128:
       return currentScore && targetScore
                  ? std::optional<int>(*currentScore - *targetScore)
@@ -524,8 +541,14 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
                  ? std::optional<int>(*maxCombo() - *previousCombo)
                  : std::optional<int>(std::numeric_limits<int>::min());
     case 176:
+      return data_.previousBest && data_.previousBest->badPoints
+                 ? data_.previousBest->badPoints
+                 : std::optional<int>(std::numeric_limits<int>::min());
     case 178:
-      return std::numeric_limits<int>::min();
+      return badPoints() && data_.previousBest && data_.previousBest->badPoints
+                 ? std::optional<int>(*badPoints() -
+                                      *data_.previousBest->badPoints)
+                 : std::optional<int>(std::numeric_limits<int>::min());
     case 154:
       return currentScore && maximum ? resultNextRank(*currentScore, *maximum)
                                       : std::nullopt;

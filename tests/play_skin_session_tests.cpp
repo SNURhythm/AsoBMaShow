@@ -5081,6 +5081,10 @@ void testResultBridgeMatchesBeatorajaResultScoreFamilies() {
   const auto updatedCombo = bridge.booleanProperty({331});
   const auto drawnMissCount = bridge.booleanProperty({1332});
   const auto targetWin = bridge.booleanProperty({352});
+  const auto goodExists = bridge.booleanProperty({2243});
+  const auto missExists = bridge.booleanProperty({2246});
+  const auto targetMissCount = bridge.integerProperty({176}, {});
+  const auto differenceMissCount = bridge.integerProperty({178}, {});
   expect(rank.supported && rank.value && lowerRank.supported && lowerRank.value &&
              negatedRank.supported &&
              !negatedRank.value && poor.supported && poor.value == 3 &&
@@ -5101,7 +5105,10 @@ void testResultBridgeMatchesBeatorajaResultScoreFamilies() {
              resultRank.supported && resultRank.value && updatedScore.supported &&
              updatedScore.value && updatedCombo.supported && updatedCombo.value &&
              drawnMissCount.supported && drawnMissCount.value && targetWin.supported &&
-             targetWin.value,
+             targetWin.value && goodExists.supported && !goodExists.value &&
+             missExists.supported && missExists.value &&
+             targetMissCount.supported && targetMissCount.value == 9 &&
+             differenceMissCount.supported && differenceMissCount.value == 0,
          "result bridge matches Beatoraja result rank, update, and point properties");
 }
 
