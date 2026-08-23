@@ -299,9 +299,14 @@ resultTimingStatistics(const ReplayData *replay, int totalNotes,
          event.action == ReplayEventAction::Release) &&
         event.judgement != None && event.judgement != Kpoor &&
         event.diffMicros >= -rangeMicros && event.diffMicros <= rangeMicros;
-    if (timingEvent && countsInResult(event)) timings.push_back(event.diffMicros);
+    // ReplayEvent stores input-minus-note, while AbstractResult's timing
+    // distribution uses Beatoraja's note-minus-input convention.
+    const long long beatorajaDiffMicros = -event.diffMicros;
     if (timingEvent && countsInResult(event)) {
-      const int millis = static_cast<int>(event.diffMicros / 1'000LL);
+      timings.push_back(beatorajaDiffMicros);
+    }
+    if (timingEvent && countsInResult(event)) {
+      const int millis = static_cast<int>(beatorajaDiffMicros / 1'000LL);
       if (millis >= -150 && millis <= 150) {
         ++distribution[static_cast<std::size_t>(millis + 150)];
       }
@@ -4055,6 +4060,36 @@ bool ResultScene::queueResultSkinPointerEvent(SDL_Event &event) {
 void ResultScene::consumeResultSkinBuiltinEvents() {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (!resultSkinSession) return;
+  bool audioSettingsChanged = false;
+  for (const auto &write : resultSkinSession->takeQueuedAudioVolumeWrites()) {
+    switch (write.selector) {
+    case 17:
+      audioSettingsChanged = audioSettingsChanged ||
+          context.settings.audioVideo.audio.masterVolume != write.value;
+      context.settings.audioVideo.audio.masterVolume = write.value;
+      break;
+    case 18:
+      audioSettingsChanged = audioSettingsChanged ||
+          context.settings.audioVideo.audio.keysoundVolume != write.value;
+      context.settings.audioVideo.audio.keysoundVolume = write.value;
+      break;
+    case 19:
+      audioSettingsChanged = audioSettingsChanged ||
+          context.settings.audioVideo.audio.bgmVolume != write.value;
+      context.settings.audioVideo.audio.bgmVolume = write.value;
+      break;
+    default:
+      break;
+    }
+  }
+  if (audioSettingsChanged) {
+    // FloatPropertyFactory's result-state writers mutate the application
+    // AudioConfig. Apply and persist the same three fields that gameplay does.
+    (void)context.audioDeviceManager.apply(context.settings.audioVideo.audio);
+    if (!context.saveSettings()) {
+      SDL_Log("Failed to save result skin audio settings");
+    }
+  }
   for (const int eventId : resultSkinSession->takeQueuedBuiltinEventIds()) {
     if (eventId == 210) openRankings();
   }

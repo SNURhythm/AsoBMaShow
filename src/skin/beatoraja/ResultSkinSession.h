@@ -53,6 +53,11 @@ struct ResultSkinSessionCreateResult {
   std::vector<SkinDiagnostic> diagnostics;
 };
 
+struct ResultSkinAudioVolumeWrite {
+  int selector = 0;
+  float value = 1.0F;
+};
+
 class ResultSkinSession final {
 public:
   static ResultSkinSessionCreateResult create(ValidatedSkinActivation,
@@ -70,6 +75,8 @@ public:
   [[nodiscard]] bool refreshRuntimeStrings(const ResultSkinData &);
   [[nodiscard]] std::vector<SkinDiagnostic> takeLastDiagnostics();
   [[nodiscard]] std::vector<int> takeQueuedBuiltinEventIds();
+  [[nodiscard]] std::vector<ResultSkinAudioVolumeWrite>
+  takeQueuedAudioVolumeWrites();
   [[nodiscard]] bool queuePointerDown(UiLogicalPoint, long long eventMicros);
   [[nodiscard]] const SkinEntryId &entry() const noexcept;
 
@@ -79,6 +86,10 @@ private:
     std::array<int, 2> arguments{};
     std::size_t argumentCount = 0;
     long long eventMicros = 0;
+  };
+  struct QueuedWriterInvocation {
+    SkinFloatWriterId writer{};
+    double normalizedValue = 0.0;
   };
 
   ResultSkinSession(SkinRevisionLease, SkinEntryId,
@@ -100,6 +111,7 @@ private:
   [[nodiscard]] bool queueEventBinding(SkinEventBindingId,
                                        std::span<const int>, long long,
                                        std::span<const int> resolutionPath = {});
+  [[nodiscard]] bool queueWriterInvocation(const SkinWriterInvocation &);
   void reportUnsupportedEvent(int);
 
   SkinRevisionLease revision_;
@@ -125,6 +137,8 @@ private:
   std::optional<SkinInteractionLayout> publishedInteractionLayout_;
   std::vector<QueuedEventInvocation> queuedEventInvocations_;
   std::vector<int> queuedBuiltinEventIds_;
+  std::vector<QueuedWriterInvocation> queuedWriterInvocations_;
+  std::vector<ResultSkinAudioVolumeWrite> queuedAudioVolumeWrites_;
   std::unordered_map<int, std::size_t> customEventLastDefinitionIndexes_;
   std::unordered_map<int, std::size_t> customTimerLastDefinitionIndexes_;
   std::unordered_map<int, std::int64_t> customEventLastExecutionMicros_;

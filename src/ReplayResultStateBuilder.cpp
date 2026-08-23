@@ -351,6 +351,40 @@ SkinGameplayGraphState BuildSkinGameplayGraphState(
   return {.chart = std::move(chartGraph), .dynamic = std::move(dynamic)};
 }
 
+SkinGameplayGraphState BuildSkinGameplayChartGraphState(
+    bms_parser::Chart &chart, const RhythmState &state) {
+  const PlayfieldChartVisualModel model =
+      buildPlayfieldChartVisualModel(chart, chart.Meta.LnMode);
+  auto chartGraph =
+      std::make_shared<SkinGameplayChartGraphState>(model.skinGameplayGraph);
+  auto dynamic = std::make_shared<SkinGameplayDynamicGraphState>();
+  dynamic->gaugeHistories = state.gaugeHistories;
+  const int activeGaugeIndex = gaugeTypeIndex(state.gaugeType);
+  if (activeGaugeIndex >= 0 &&
+      static_cast<std::size_t>(activeGaugeIndex) <
+          dynamic->gaugeHistories.size() &&
+      dynamic->gaugeHistories[static_cast<std::size_t>(activeGaugeIndex)]
+          .empty()) {
+    dynamic->gaugeHistories[static_cast<std::size_t>(activeGaugeIndex)] =
+        state.gaugeHistory;
+  }
+  dynamic->gaugeType = state.gaugeType;
+  if (activeGaugeIndex >= 0 &&
+      static_cast<std::size_t>(activeGaugeIndex) <
+          state.gaugeRules().gauges.size()) {
+    const auto &gauge = state.gaugeRules().gauges[
+        static_cast<std::size_t>(activeGaugeIndex)];
+    dynamic->gaugeMinimum = gauge.minimum;
+    dynamic->gaugeMaximum = gauge.maximum;
+    dynamic->gaugeBorder = gauge.clearBorder;
+    dynamic->gaugeSupported = true;
+  }
+  // This snapshot has no replay events. A distinct revision prevents an old
+  // replay-backed gauge texture from being retained when result data changes.
+  dynamic->gaugeRevision = 1;
+  return {.chart = std::move(chartGraph), .dynamic = std::move(dynamic)};
+}
+
 std::optional<long long>
 FindGaugeFailureMicros(bms_parser::Chart &chart, const ReplayData &replay,
                        GaugeProfile gaugeProfile,

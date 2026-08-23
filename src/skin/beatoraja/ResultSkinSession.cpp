@@ -10,6 +10,7 @@
 #include "../../rendering/common.h"
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <limits>
 #include <map>
@@ -60,6 +61,22 @@ SkinDiagnostic failure(std::string code, std::string message,
                        std::string path = {}) {
   return {.code = std::move(code), .message = std::move(message),
           .virtualPath = std::move(path), .severity = DiagnosticSeverity::Error};
+}
+
+std::optional<int>
+resultFloatWriterSelector(const SkinBuiltinPropertySelector &selector) {
+  if (const auto *value = std::get_if<int>(&selector.value)) {
+    return *value;
+  }
+  const auto *name = std::get_if<std::string>(&selector.value);
+  if (name == nullptr) {
+    return std::nullopt;
+  }
+  if (*name == "mastervolume") return 17;
+  if (*name == "keyvolume") return 18;
+  if (*name == "bgmvolume") return 19;
+  if (*name == "practice_position") return 20;
+  return std::nullopt;
 }
 
 bool hasErrors(const std::vector<SkinDiagnostic> &diagnostics) {
@@ -545,6 +562,37 @@ bool ResultSkinSession::render(RenderContext &renderContext,
       return false;
     }
   }
+  auto queuedWriters = std::exchange(queuedWriterInvocations_, {});
+  for (const auto &invocation : queuedWriters) {
+    if (runtime_ == nullptr) {
+      lastDiagnostics_.push_back(failure(
+          "skin.result_session.writer_runtime_missing",
+          "Result skin writer callback requires a Lua runtime."));
+      queuedWriterInvocations_.clear();
+      return false;
+    }
+    const auto binding = std::ranges::find_if(
+        model_.model.floatWriters, [&](const SkinFloatWriterBinding &candidate) {
+          return candidate.id == invocation.writer;
+        });
+    if (binding == model_.model.floatWriters.end() ||
+        !std::holds_alternative<LuaCallbackId>(binding->source)) {
+      lastDiagnostics_.push_back(failure(
+          "skin.result_session.writer_binding_missing",
+          "Result skin writer binding is absent."));
+      queuedWriterInvocations_.clear();
+      return false;
+    }
+    const std::array<LuaScalar, 1> arguments{
+        LuaScalar{invocation.normalizedValue}};
+    const auto callback = runtime_->invoke(
+        std::get<LuaCallbackId>(binding->source), arguments);
+    if (callback.failure) {
+      lastDiagnostics_.push_back(std::move(*callback.failure));
+      queuedWriterInvocations_.clear();
+      return false;
+    }
+  }
   SkinExternalFrameOwnership ownership(frameSerial, 1);
   auto evaluated = renderer_.evaluateFrame(
       {.frameSerial = frameSerial, .sessionSerial = 1,
@@ -590,6 +638,11 @@ std::vector<int> ResultSkinSession::takeQueuedBuiltinEventIds() {
   return std::exchange(queuedBuiltinEventIds_, {});
 }
 
+std::vector<ResultSkinAudioVolumeWrite>
+ResultSkinSession::takeQueuedAudioVolumeWrites() {
+  return std::exchange(queuedAudioVolumeWrites_, {});
+}
+
 bool ResultSkinSession::queueEvent(int eventId, std::span<const int> arguments,
                                    long long eventMicros,
                                    std::span<const int> resolutionPath) {
@@ -627,7 +680,9 @@ bool ResultSkinSession::queueEvent(int eventId, std::span<const int> arguments,
     reportUnsupportedEvent(eventId);
     return true;
   }
-  if (queuedEventInvocations_.size() + queuedBuiltinEventIds_.size() >= 64) {
+  if (queuedEventInvocations_.size() + queuedBuiltinEventIds_.size() +
+          queuedWriterInvocations_.size() + queuedAudioVolumeWrites_.size() >=
+      64) {
     lastDiagnostics_.push_back(failure(
         "skin.result_session.event_queue_full",
         "Result skin event queue reached its frame limit."));
@@ -668,7 +723,9 @@ bool ResultSkinSession::queueEventBinding(SkinEventBindingId id,
         "Result custom event callback requires a Lua runtime."));
     return false;
   }
-  if (queuedEventInvocations_.size() + queuedBuiltinEventIds_.size() >= 64) {
+  if (queuedEventInvocations_.size() + queuedBuiltinEventIds_.size() +
+          queuedWriterInvocations_.size() + queuedAudioVolumeWrites_.size() >=
+      64) {
     lastDiagnostics_.push_back(failure(
         "skin.result_session.event_queue_full",
         "Result skin event queue reached its frame limit."));
@@ -679,6 +736,74 @@ bool ResultSkinSession::queueEventBinding(SkinEventBindingId id,
                                     .eventMicros = eventMicros};
   std::ranges::copy(arguments, invocation.arguments.begin());
   queuedEventInvocations_.push_back(std::move(invocation));
+  return true;
+}
+
+bool ResultSkinSession::queueWriterInvocation(
+    const SkinWriterInvocation &invocation) {
+  if (!std::isfinite(invocation.normalizedValue)) {
+    lastDiagnostics_.push_back(failure(
+        "skin.result_session.writer_value_nonfinite",
+        "Result skin writer input must be finite."));
+    return false;
+  }
+  const auto binding = std::ranges::find_if(
+      model_.model.floatWriters, [&](const SkinFloatWriterBinding &candidate) {
+        return candidate.id == invocation.writer;
+      });
+  if (binding == model_.model.floatWriters.end()) {
+    lastDiagnostics_.push_back(failure(
+        "skin.result_session.writer_missing",
+        "Result skin writer ID is not present in the validated model."));
+    return false;
+  }
+  if (const auto *builtin =
+          std::get_if<SkinBuiltinPropertySelector>(&binding->source)) {
+    const auto selector = resultFloatWriterSelector(*builtin);
+    if (!selector) {
+      lastDiagnostics_.push_back(failure(
+          "skin.result_session.writer_builtin_unsupported",
+          "Result skin built-in writer has no result-context equivalent."));
+      return false;
+    }
+    if (*selector == 20) {
+      // FloatPropertyFactory only mutates practice-position on BMSPlayer.
+      // AbstractResult accepts this writer as an inert successful operation.
+      return true;
+    }
+    if (*selector < 17 || *selector > 19 ||
+        queuedEventInvocations_.size() + queuedBuiltinEventIds_.size() +
+                queuedWriterInvocations_.size() +
+                queuedAudioVolumeWrites_.size() >=
+            64) {
+      lastDiagnostics_.push_back(failure(
+          "skin.result_session.writer_queue_full",
+          "Result skin writer queue reached its frame limit."));
+      return false;
+    }
+    queuedAudioVolumeWrites_.push_back(
+        {.selector = *selector,
+         .value = static_cast<float>(std::clamp(
+             invocation.normalizedValue, 0.0F, 1.0F))});
+    return true;
+  }
+  if (runtime_ == nullptr) {
+    lastDiagnostics_.push_back(failure(
+        "skin.result_session.writer_runtime_missing",
+        "Result skin writer callback requires a Lua runtime."));
+    return false;
+  }
+  if (queuedEventInvocations_.size() + queuedBuiltinEventIds_.size() +
+          queuedWriterInvocations_.size() + queuedAudioVolumeWrites_.size() >=
+      64) {
+    lastDiagnostics_.push_back(failure(
+        "skin.result_session.writer_queue_full",
+        "Result skin writer queue reached its frame limit."));
+    return false;
+  }
+  queuedWriterInvocations_.push_back(
+      {.writer = invocation.writer,
+       .normalizedValue = std::clamp(invocation.normalizedValue, 0.0F, 1.0F)});
   return true;
 }
 
@@ -782,23 +907,30 @@ bool ResultSkinSession::queuePointerDown(UiLogicalPoint point,
                                          long long eventMicros) {
   if (!resultSkinInputAvailable(model_.model.timing.inputMillis, eventMicros) ||
       !publishedInteractionLayout_ ||
-      queuedEventInvocations_.size() + queuedBuiltinEventIds_.size() >= 64) {
+      queuedEventInvocations_.size() + queuedBuiltinEventIds_.size() +
+              queuedWriterInvocations_.size() +
+              queuedAudioVolumeWrites_.size() >=
+          64) {
     return false;
   }
   const PresentationUiHit hit = publishedInteractionLayout_->hitTestUiControl(point);
-  if (hit.kind != PresentationUiControlKind::Image) return false;
-  const auto invocation = publishedInteractionLayout_->eventInvocationFor(
-      hit, point, eventMicros);
-  if (!invocation) return false;
-  const auto binding = std::ranges::find_if(
-      model_.model.events, [&](const SkinEventBinding &candidate) {
-        return candidate.id.value == invocation->eventBinding;
-      });
-  if (binding == model_.model.events.end()) {
-    return false;
+  if (hit.kind == PresentationUiControlKind::Image) {
+    const auto invocation = publishedInteractionLayout_->eventInvocationFor(
+        hit, point, eventMicros);
+    if (!invocation) return false;
+    const auto binding = std::ranges::find_if(
+        model_.model.events, [&](const SkinEventBinding &candidate) {
+          return candidate.id.value == invocation->eventBinding;
+        });
+    if (binding == model_.model.events.end()) {
+      return false;
+    }
+    return queueEventBinding(binding->id, {&invocation->argument, 1},
+                             invocation->eventMicros);
   }
-  return queueEventBinding(binding->id, {&invocation->argument, 1},
-                           invocation->eventMicros);
+  const auto invocation = publishedInteractionLayout_->writerInvocationFor(
+      hit, point, eventMicros);
+  return invocation && queueWriterInvocation(*invocation);
 }
 
 const SkinEntryId &ResultSkinSession::entry() const noexcept { return entry_; }

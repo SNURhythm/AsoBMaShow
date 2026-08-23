@@ -271,7 +271,7 @@ std::optional<int> ResultSkinStateBridge::integerSelector(
       return 119 + index;
     }
   }
-  static constexpr std::array<std::pair<std::string_view, int>, 38> aliases{{
+  static constexpr std::array<std::pair<std::string_view, int>, 41> aliases{{
       {"rival", 1}, {"player", 2}, {"target", 3},
       {"title", 10}, {"fulltitle", 12}, {"subtitle", 11},
       {"genre", 13}, {"artist", 14}, {"subartist", 15},
@@ -288,6 +288,7 @@ std::optional<int> ResultSkinStateBridge::integerSelector(
       {"targetscorerate", 115}, {"rate_pgreat", 140},
       {"rate_great", 141}, {"rate_good", 142}, {"rate_bad", 143},
       {"rate_poor", 144}, {"rate_maxcombo", 145}, {"rate_exscore", 147},
+      {"mastervolume", 17}, {"keyvolume", 18}, {"bgmvolume", 19},
   }};
   for (const auto &[alias, id] : aliases) {
     if (*name == alias) return id;
@@ -650,6 +651,24 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
              data_.playerHistory->judgementCounts[1] +
              data_.playerHistory->judgementCounts[2] +
              data_.playerHistory->judgementCounts[3];
+    case 57:
+      return data_.context != nullptr
+                 ? std::optional<int>(static_cast<int>(
+                       data_.context->settings.audioVideo.audio.masterVolume *
+                       100.0F))
+                 : std::nullopt;
+    case 58:
+      return data_.context != nullptr
+                 ? std::optional<int>(static_cast<int>(
+                       data_.context->settings.audioVideo.audio.keysoundVolume *
+                       100.0F))
+                 : std::nullopt;
+    case 59:
+      return data_.context != nullptr
+                 ? std::optional<int>(static_cast<int>(
+                       data_.context->settings.audioVideo.audio.bgmVolume *
+                       100.0F))
+                 : std::nullopt;
     case 100: {
       // ScoreDataProperty.getNowScore is a mode-specific score point, not EX
       // score. At a result screen the result's final combo and judgement
@@ -668,7 +687,8 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
       case 7:
       case 14:
         numerator = 150'000LL * perfect + 100'000LL * great +
-                    20'000LL * good + 50'000LL * data_.state->combo;
+                    20'000LL * good +
+                    50'000LL * maxCombo().value_or(0);
         break;
       case 9:
         numerator = 100'000LL * perfect + 70'000LL * great + 40'000LL * good;
@@ -910,6 +930,21 @@ SkinPropertyLookup<double> ResultSkinStateBridge::floatProperty(
                                        static_cast<float>(*maximum))
                : std::nullopt;
   };
+  if (data_.context != nullptr) {
+    switch (*id) {
+    case 17:
+      return supported(
+          static_cast<double>(data_.context->settings.audioVideo.audio.masterVolume));
+    case 18:
+      return supported(static_cast<double>(
+          data_.context->settings.audioVideo.audio.keysoundVolume));
+    case 19:
+      return supported(
+          static_cast<double>(data_.context->settings.audioVideo.audio.bgmVolume));
+    default:
+      break;
+    }
+  }
   if (*id == 1102 || *id == 1115 || *id == 155) {
     const auto value = rate();
     return value ? supported(*value) : unsupported<double>();

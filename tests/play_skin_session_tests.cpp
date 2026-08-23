@@ -5414,7 +5414,8 @@ void testResultBridgeUsesProjectedKeyModeForScorePoint() {
   RhythmState state(nullptr, false);
   state.judgeCount[PGreat] = 1;
   state.judgeCount[Great] = 1;
-  state.combo = 1;
+  state.combo = 0;
+  state.maxCombo = 1;
   bms_parser::ChartMeta courseMeta{.KeyMode = 0, .TotalNotes = 2};
   ResultSkinStateBridge bridge({.state = &state,
                                  .meta = &courseMeta,
@@ -5422,7 +5423,7 @@ void testResultBridgeUsesProjectedKeyModeForScorePoint() {
                                 1, 0);
   const auto point = bridge.integerProperty({100}, {});
   expect(point.supported && point.value == 150'000,
-         "result score point uses the result's projected key mode");
+         "result score point uses the result's projected key mode and maximum combo");
 }
 
 void testResultBridgeMatchesResultAliasesAndTimerUnits() {

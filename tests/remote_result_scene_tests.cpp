@@ -475,10 +475,11 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
                   "auto replay = consumer.load(*exact.record,",
                   "saved course result recall loads its retained replay when available");
   requireContains(mainMenu,
-                  "replay_result::BuildSkinGameplayGraphState(*stage.chart,",
-                  "saved course result recall reconstructs every stage skin graph");
+                  "index < graphReplays.size()\n"
+                  "                ? replay_result::BuildSkinGameplayGraphState(",
+                  "saved course result recall uses a replay graph when retained");
   requireOrdered(mainMenu, "auto view = std::move(*recalled.value);",
-                 "replay_result::BuildSkinGameplayGraphState(*stage.chart,",
+                 "replay_result::BuildSkinGameplayGraphState(",
                  "saved course graph reconstruction occurs before ResultScene uses it");
   requireContains(result,
                   "} else if (isCourseStageResult()) {",
@@ -529,6 +530,18 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
   requireContains(result,
                   "data.irOnline = !context.irAccountNameSnapshot().empty();",
                   "result IR selector state requires an authenticated runtime account");
+  requireContains(result,
+                  "const long long beatorajaDiffMicros = -event.diffMicros;",
+                  "replay timing samples use Beatoraja's result-sign convention");
+  requireContains(mainMenu,
+                  "replay_result::BuildSkinGameplayChartGraphState(\n"
+                  "                      *stage.chart, stage.state)",
+                  "replay-less saved course stages preserve authored graph data without "
+                  "synthetic judgement samples");
+  requireContains(session, "writerInvocationFor(",
+                  "result sliders resolve their authored writer invocation");
+  requireContains(result, "takeQueuedAudioVolumeWrites()",
+                  "ResultScene applies result-skin audio volume writer output");
 }
 
 } // namespace

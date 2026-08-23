@@ -11577,15 +11577,13 @@ void MainMenuScene::startModernCourseReplayResultRecall(
            ++index) {
         auto &stage = view.completedStages[index];
         session->entries[index].meta = stage.chart->Meta;
-        const ReplayData emptyReplay;
-        const ReplayData &graphReplay = index < graphReplays.size()
-                                            ? graphReplays[index]
-                                            : emptyReplay;
         session->completedResults.emplace_back(
             stage.chart->Meta, stage.state,
-            replay_result::BuildSkinGameplayGraphState(*stage.chart,
-                                                        graphReplay,
-                                                        stage.state));
+            index < graphReplays.size()
+                ? replay_result::BuildSkinGameplayGraphState(
+                      *stage.chart, graphReplays[index], stage.state)
+                : replay_result::BuildSkinGameplayChartGraphState(
+                      *stage.chart, stage.state));
         session->ownedResultBrowseCharts.push_back(stage.chart);
         session->stageProvenance[index] = stage.result.score.provenance;
         session->modernCourseChartPaths.push_back(stage.chart->Meta.BmsPath);

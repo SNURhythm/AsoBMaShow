@@ -160,6 +160,23 @@ int main() {
               << std::endl;
     return 1;
   }
+  const SkinGameplayGraphState replayLessGraph =
+      replay_result::BuildSkinGameplayChartGraphState(replayGraphChart,
+                                                       replayGraphResult);
+  if (replayLessGraph.chart == nullptr || replayLessGraph.dynamic == nullptr ||
+      replayLessGraph.chart->normalDistribution !=
+          replayGraph.chart->normalDistribution ||
+      replayLessGraph.chart->bpmSeries != replayGraph.chart->bpmSeries ||
+      !replayLessGraph.dynamic->judgementDistribution.empty() ||
+      !replayLessGraph.dynamic->earlyLateDistribution.empty() ||
+      replayLessGraph.dynamic->gaugeHistories[static_cast<std::size_t>(
+          gaugeTypeIndex(GaugeType::Normal))] !=
+          replayGraphResult.gaugeHistoryFor(GaugeType::Normal)) {
+    std::cerr << "replay-less result graph must retain only authored chart and "
+                 "captured gauge data"
+              << std::endl;
+    return 1;
+  }
   const std::array<SkinGameplayGraphState, 2> replayCourseGraphs{
       replayGraph, replayGraph};
   const SkinGameplayGraphState replayCourseGraph =

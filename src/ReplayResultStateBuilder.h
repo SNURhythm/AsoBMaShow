@@ -27,6 +27,12 @@ RhythmState BuildResultState(bms_parser::Chart &chart,
     bms_parser::Chart &chart, const ReplayData &replay,
     const RhythmState &state);
 
+// A durable result can exist without its replay. Preserve chart-authored
+// distributions and the captured gauge history in that case, while leaving
+// replay-derived judgement and fast/slow distributions unavailable.
+[[nodiscard]] SkinGameplayGraphState BuildSkinGameplayChartGraphState(
+    bms_parser::Chart &chart, const RhythmState &state);
+
 std::optional<long long> FindGaugeFailureMicros(
     bms_parser::Chart &chart, const ReplayData &replay,
     GaugeProfile gaugeProfile = GaugeProfile::Standard,
