@@ -354,7 +354,7 @@ bool ResultSkinSession::render(RenderContext &renderContext,
                                const ResultSkinData &data,
                                std::uint64_t frameSerial,
                                std::int64_t elapsedMillis) {
-  lastDiagnostics_.clear();
+  lastDiagnostics_ = std::exchange(pendingDiagnostics_, {});
   if (!resources_ || !movies_ || frameSerial == 0) {
     lastDiagnostics_.push_back(failure(
         "skin.result_session.frame_invalid",
@@ -425,71 +425,88 @@ bool ResultSkinSession::render(RenderContext &renderContext,
       }
       bridge.setCustomTimer(timer.id, value);
   }
-  if (runtime_ != nullptr) {
-    for (const auto &event : model_.model.customEvents) {
-      if (!event.condition) continue;
-      bool active = false;
-      {
-        const auto condition = std::ranges::find_if(
-            model_.model.booleanProperties,
-            [&](const SkinBooleanPropertyBinding &candidate) {
-              return candidate.id == *event.condition;
-            });
-        if (condition == model_.model.booleanProperties.end()) {
-          lastDiagnostics_.push_back(failure("skin.result_session.custom_event_condition_missing",
-              "Result custom event condition is absent."));
-          return false;
-        }
-        if (const auto *builtin = std::get_if<SkinBuiltinPropertySelector>(
-                &condition->source)) {
-          active = bridge.booleanProperty(*builtin).value;
-        } else {
-          const auto callback = runtime_->invoke(
-              std::get<LuaCallbackId>(condition->source), {});
-          active = callback.value && std::holds_alternative<bool>(*callback.value) &&
-                   std::get<bool>(*callback.value);
-          if (callback.failure || !callback.value ||
-              !std::holds_alternative<bool>(*callback.value)) {
-            lastDiagnostics_.push_back(callback.failure.value_or(failure(
-                "skin.result_session.custom_event_condition_type",
-                "Result custom event condition did not return a boolean.")));
-            return false;
-          }
-        }
-      }
-      if (!active) continue;
-      const auto previous = customEventLastExecutionMicros_.find(event.id);
-      const std::int64_t now = elapsedMillis * 1000;
-      if (previous != customEventLastExecutionMicros_.end() &&
-          now - previous->second < static_cast<std::int64_t>(event.minimumIntervalMillis) * 1000) continue;
-      const auto action = std::ranges::find_if(model_.model.events,
-          [&](const SkinEventBinding &candidate) { return candidate.id == event.action; });
-      if (action != model_.model.events.end() &&
-          std::holds_alternative<LuaCallbackId>(action->source)) {
-        const auto callback = runtime_->invoke(
-            std::get<LuaCallbackId>(action->source), {});
-        if (callback.failure) { lastDiagnostics_.push_back(*callback.failure); return false; }
-      }
-      customEventLastExecutionMicros_.insert_or_assign(event.id, now);
-    }
-    for (const auto &invocation : queuedEventInvocations_) {
-      const auto binding = std::ranges::find_if(
-          model_.model.events, [&](const SkinEventBinding &candidate) {
-            return candidate.id.value == invocation.eventBinding;
+  for (const auto &event : model_.model.customEvents) {
+    if (!event.condition) continue;
+    bool active = false;
+    {
+      const auto condition = std::ranges::find_if(
+          model_.model.booleanProperties,
+          [&](const SkinBooleanPropertyBinding &candidate) {
+            return candidate.id == *event.condition;
           });
-      if (binding == model_.model.events.end() ||
-          !std::holds_alternative<LuaCallbackId>(binding->source)) {
-        continue;
-      }
-      const std::array<LuaScalar, 1> arguments{
-          LuaScalar{static_cast<std::int64_t>(invocation.argument)}};
-      const auto callback = runtime_->invoke(
-          std::get<LuaCallbackId>(binding->source), arguments);
-      if (callback.failure) {
-        lastDiagnostics_.push_back(std::move(*callback.failure));
-        queuedEventInvocations_.clear();
+      if (condition == model_.model.booleanProperties.end()) {
+        lastDiagnostics_.push_back(failure(
+            "skin.result_session.custom_event_condition_missing",
+            "Result custom event condition is absent."));
         return false;
       }
+      if (const auto *builtin = std::get_if<SkinBuiltinPropertySelector>(
+              &condition->source)) {
+        active = bridge.booleanProperty(*builtin).value;
+      } else {
+        if (runtime_ == nullptr) {
+          lastDiagnostics_.push_back(failure(
+              "skin.result_session.custom_event_runtime_missing",
+              "Result custom event callback requires a Lua runtime."));
+          return false;
+        }
+        const auto callback = runtime_->invoke(
+            std::get<LuaCallbackId>(condition->source), {});
+        active = callback.value && std::holds_alternative<bool>(*callback.value) &&
+                 std::get<bool>(*callback.value);
+        if (callback.failure || !callback.value ||
+            !std::holds_alternative<bool>(*callback.value)) {
+          lastDiagnostics_.push_back(callback.failure.value_or(failure(
+              "skin.result_session.custom_event_condition_type",
+              "Result custom event condition did not return a boolean.")));
+          return false;
+        }
+      }
+    }
+    if (!active) continue;
+    const std::int64_t now = elapsedMillis * 1000;
+    const auto previous = customEventLastExecutionMicros_.find(event.id);
+    if (previous != customEventLastExecutionMicros_.end() &&
+        now - previous->second <
+            static_cast<std::int64_t>(event.minimumIntervalMillis) * 1000) {
+      continue;
+    }
+    if (!queueEventBinding(event.action, {}, now)) {
+      return false;
+    }
+    customEventLastExecutionMicros_.insert_or_assign(event.id, now);
+  }
+  for (const auto &invocation : queuedEventInvocations_) {
+    if (runtime_ == nullptr) {
+      lastDiagnostics_.push_back(failure(
+          "skin.result_session.custom_event_runtime_missing",
+          "Result custom event callback requires a Lua runtime."));
+      queuedEventInvocations_.clear();
+      return false;
+    }
+    const auto binding = std::ranges::find_if(
+        model_.model.events, [&](const SkinEventBinding &candidate) {
+          return candidate.id == invocation.eventBinding;
+        });
+    if (binding == model_.model.events.end() ||
+        !std::holds_alternative<LuaCallbackId>(binding->source)) {
+      lastDiagnostics_.push_back(failure(
+          "skin.result_session.custom_event_binding_missing",
+          "Result custom event action binding is absent."));
+      queuedEventInvocations_.clear();
+      return false;
+    }
+    std::array<LuaScalar, 2> arguments{};
+    for (std::size_t index = 0; index < invocation.argumentCount; ++index) {
+      arguments[index] = static_cast<std::int64_t>(invocation.arguments[index]);
+    }
+    const auto callback = runtime_->invoke(
+        std::get<LuaCallbackId>(binding->source),
+        std::span<const LuaScalar>{arguments.data(), invocation.argumentCount});
+    if (callback.failure) {
+      lastDiagnostics_.push_back(std::move(*callback.failure));
+      queuedEventInvocations_.clear();
+      return false;
     }
   }
   queuedEventInvocations_.clear();
@@ -503,8 +520,10 @@ bool ResultSkinSession::render(RenderContext &renderContext,
        .gaugeRandomSource = gaugeRandom_.get()},
       std::move(ownership));
   if (!evaluated.submitReady) {
-    lastDiagnostics_ = std::move(evaluated.diagnostics);
-    if (lastDiagnostics_.empty()) {
+    lastDiagnostics_.insert(lastDiagnostics_.end(),
+                            std::make_move_iterator(evaluated.diagnostics.begin()),
+                            std::make_move_iterator(evaluated.diagnostics.end()));
+    if (!hasErrors(lastDiagnostics_)) {
       lastDiagnostics_.push_back(failure(
           "skin.result_session.frame_evaluation_failed",
           "Result skin frame evaluation did not produce a drawable command buffer."));
@@ -513,13 +532,17 @@ bool ResultSkinSession::render(RenderContext &renderContext,
   }
   if (!renderer_.submit(*evaluated.submitReady, *resources_, renderContext,
                         *quadRenderer_, movies_.get(), viewport)) {
-    lastDiagnostics_ = std::move(evaluated.diagnostics);
+    lastDiagnostics_.insert(lastDiagnostics_.end(),
+                            std::make_move_iterator(evaluated.diagnostics.begin()),
+                            std::make_move_iterator(evaluated.diagnostics.end()));
     lastDiagnostics_.push_back(failure(
         "skin.result_session.frame_submission_failed",
         "Result skin frame submission could not be prepared."));
     return false;
   }
-  lastDiagnostics_ = std::move(evaluated.diagnostics);
+  lastDiagnostics_.insert(lastDiagnostics_.end(),
+                          std::make_move_iterator(evaluated.diagnostics.begin()),
+                          std::make_move_iterator(evaluated.diagnostics.end()));
   publishedInteractionLayout_ = std::move(evaluated.interactionLayout);
   return true;
 }
@@ -532,29 +555,105 @@ std::vector<int> ResultSkinSession::takeQueuedBuiltinEventIds() {
   return std::exchange(queuedBuiltinEventIds_, {});
 }
 
+bool ResultSkinSession::queueEvent(int eventId, std::span<const int> arguments,
+                                   long long eventMicros) {
+  if (arguments.size() > 2) {
+    lastDiagnostics_.push_back(failure(
+        "skin.result_session.event_argument_count",
+        "Result skin events accept no more than two arguments."));
+    return false;
+  }
+  if (const auto custom = std::ranges::find_if(
+          model_.model.customEvents, [eventId](const SkinCustomEvent &event) {
+            return event.id == eventId;
+          }); custom != model_.model.customEvents.end()) {
+    return queueEventBinding(custom->action, arguments, eventMicros);
+  }
+
+  // open_ir is the only EventFactory action with an AsoBMaShow result
+  // transition. Replay-save and selector-only events have no equivalent here;
+  // preserve Beatoraja's successful no-op behavior and emit one contextual
+  // warning instead of rejecting the skin.
+  if (eventId != 210) {
+    reportUnsupportedEvent(eventId);
+    return true;
+  }
+  if (queuedEventInvocations_.size() + queuedBuiltinEventIds_.size() >= 64) {
+    lastDiagnostics_.push_back(failure(
+        "skin.result_session.event_queue_full",
+        "Result skin event queue reached its frame limit."));
+    return false;
+  }
+  queuedBuiltinEventIds_.push_back(eventId);
+  return true;
+}
+
+bool ResultSkinSession::queueEventBinding(SkinEventBindingId id,
+                                          std::span<const int> arguments,
+                                          long long eventMicros) {
+  const auto binding = std::ranges::find_if(
+      model_.model.events, [id](const SkinEventBinding &candidate) {
+        return candidate.id == id;
+      });
+  if (binding == model_.model.events.end()) {
+    lastDiagnostics_.push_back(failure(
+        "skin.result_session.custom_event_binding_missing",
+        "Result custom event action binding is absent."));
+    return false;
+  }
+  if (const auto *builtin =
+          std::get_if<SkinBuiltinPropertySelector>(&binding->source)) {
+    const auto *eventId = std::get_if<int>(&builtin->value);
+    if (eventId == nullptr) {
+      lastDiagnostics_.push_back(failure(
+          "skin.result_session.custom_event_binding_invalid",
+          "Result custom event action is not a numeric event ID."));
+      return false;
+    }
+    return queueEvent(*eventId, arguments, eventMicros);
+  }
+  if (runtime_ == nullptr) {
+    lastDiagnostics_.push_back(failure(
+        "skin.result_session.custom_event_runtime_missing",
+        "Result custom event callback requires a Lua runtime."));
+    return false;
+  }
+  if (queuedEventInvocations_.size() + queuedBuiltinEventIds_.size() >= 64) {
+    lastDiagnostics_.push_back(failure(
+        "skin.result_session.event_queue_full",
+        "Result skin event queue reached its frame limit."));
+    return false;
+  }
+  QueuedEventInvocation invocation{.eventBinding = binding->id,
+                                    .argumentCount = arguments.size(),
+                                    .eventMicros = eventMicros};
+  std::ranges::copy(arguments, invocation.arguments.begin());
+  queuedEventInvocations_.push_back(std::move(invocation));
+  return true;
+}
+
+void ResultSkinSession::reportUnsupportedEvent(int eventId) {
+  if (!reportedUnsupportedEventIds_.insert(eventId).second) return;
+  pendingDiagnostics_.push_back(
+      {.code = "skin.result_session.event_unavailable",
+       .message = "Result skin event " + std::to_string(eventId) +
+                  " has no equivalent in this result context.",
+       .severity = DiagnosticSeverity::Warning});
+}
+
 LuaSkinEventExecutionResult ResultSkinSession::executeHostEvent(
-    void *opaque, int eventId, std::span<const int>) noexcept {
+    void *opaque, int eventId, std::span<const int> arguments) noexcept {
   if (opaque == nullptr) {
     return {.failure = SkinDiagnostic{
                 .code = "skin_lua_event_executor_unavailable",
                 .message = "Skin event executor has no active result session."}};
   }
-  if (eventId != 210) {
-    return {.failure = SkinDiagnostic{
-                .code = "skin_lua_event_unsupported",
-                .message = "This result skin event is not supported."}};
-  }
   auto &session = *static_cast<ResultSkinSession *>(opaque);
-  if (session.queuedBuiltinEventIds_.size() >= 64) {
-    return {.failure = SkinDiagnostic{
-                .code = "skin.result_session.event_queue_full",
-                .message = "Result skin event queue reached its frame limit."}};
-  }
   try {
-    // Beatoraja's zero-argument open_ir Event ignores supplied arguments.
-    // Route its result equivalent through ResultScene after this frame.
-    session.queuedBuiltinEventIds_.push_back(eventId);
-    return {};
+    if (session.queueEvent(eventId, arguments, 0)) return {};
+    return {.failure = SkinDiagnostic{
+                .code = "skin_lua_event_execution_failed",
+                .message = "Result skin event could not be queued."}};
   } catch (...) {
     return {.failure = SkinDiagnostic{
                 .code = "skin_lua_event_execution_failed",
@@ -645,40 +744,8 @@ bool ResultSkinSession::queuePointerDown(UiLogicalPoint point,
   if (binding == model_.model.events.end()) {
     return false;
   }
-  if (std::holds_alternative<LuaCallbackId>(binding->source)) {
-    queuedEventInvocations_.push_back(*invocation);
-    return true;
-  }
-  const auto *builtin =
-      std::get_if<SkinBuiltinPropertySelector>(&binding->source);
-  const auto *id = builtin == nullptr ? nullptr : std::get_if<int>(&builtin->value);
-  if (id != nullptr) {
-    const auto custom = std::ranges::find_if(
-        model_.model.customEvents, [id](const SkinCustomEvent &event) {
-          return event.id == *id;
-        });
-    if (custom != model_.model.customEvents.end()) {
-      const auto action = std::ranges::find_if(
-          model_.model.events, [custom](const SkinEventBinding &event) {
-            return event.id == custom->action;
-          });
-      if (action != model_.model.events.end() &&
-          std::holds_alternative<LuaCallbackId>(action->source)) {
-        queuedEventInvocations_.push_back(
-            {.eventBinding = action->id.value, .argument = invocation->argument,
-             .eventMicros = invocation->eventMicros});
-        return true;
-      }
-    }
-  }
-  // EventFactory exposes this result-state event as open_ir.  In AsoBMaShow
-  // its equivalent is the selected chart's in-app ranking surface.  Other
-  // numeric events have no Result/CourseResult implementation in Beatoraja
-  // (or require persistence semantics AsoBMaShow does not expose), so keep
-  // them unclaimed rather than inventing incompatible navigation behavior.
-  if (id == nullptr || *id != 210) return false;
-  queuedBuiltinEventIds_.push_back(*id);
-  return true;
+  return queueEventBinding(binding->id, {&invocation->argument, 1},
+                           invocation->eventMicros);
 }
 
 const SkinEntryId &ResultSkinSession::entry() const noexcept { return entry_; }

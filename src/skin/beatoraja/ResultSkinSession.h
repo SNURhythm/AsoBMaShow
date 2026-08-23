@@ -10,11 +10,14 @@
 #include "../SkinStoragePaths.h"
 #include "../package/SkinActivationCommitStore.h"
 
+#include <array>
 #include <chrono>
+#include <cstddef>
 #include <memory>
 #include <span>
 #include <stop_token>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 struct RenderContext;
@@ -68,6 +71,13 @@ public:
   [[nodiscard]] const SkinEntryId &entry() const noexcept;
 
 private:
+  struct QueuedEventInvocation {
+    SkinEventBindingId eventBinding{};
+    std::array<int, 2> arguments{};
+    std::size_t argumentCount = 0;
+    long long eventMicros = 0;
+  };
+
   ResultSkinSession(SkinRevisionLease, SkinEntryId,
                     ValidatedBeatorajaSkinModel, BeatorajaSkinConfiguration,
                     std::unique_ptr<LuaSkinRuntime>,
@@ -82,6 +92,10 @@ private:
                     std::vector<std::string> preparedRuntimeStrings);
   static LuaSkinEventExecutionResult executeHostEvent(
       void *, int, std::span<const int>) noexcept;
+  [[nodiscard]] bool queueEvent(int, std::span<const int>, long long);
+  [[nodiscard]] bool queueEventBinding(SkinEventBindingId,
+                                       std::span<const int>, long long);
+  void reportUnsupportedEvent(int);
 
   SkinRevisionLease revision_;
   SkinEntryId entry_;
@@ -102,10 +116,12 @@ private:
   Skin2DRenderer renderer_;
   std::unique_ptr<rendering::SkinQuadBatchRenderer> quadRenderer_;
   std::vector<SkinDiagnostic> lastDiagnostics_;
+  std::vector<SkinDiagnostic> pendingDiagnostics_;
   std::optional<SkinInteractionLayout> publishedInteractionLayout_;
-  std::vector<SkinEventInvocation> queuedEventInvocations_;
+  std::vector<QueuedEventInvocation> queuedEventInvocations_;
   std::vector<int> queuedBuiltinEventIds_;
   std::unordered_map<int, std::int64_t> customEventLastExecutionMicros_;
+  std::unordered_set<int> reportedUnsupportedEventIds_;
   std::vector<std::string> preparedRuntimeStrings_;
 };
 

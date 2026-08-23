@@ -947,9 +947,7 @@ ResultSkinData ResultScene::makeResultSkinData() const {
       &context,
   };
   data.playerName = context.profileManager.activeProfile().displayName;
-  data.irOnline = std::ranges::any_of(
-      context.settings.irProviders,
-      [](const auto &provider) { return provider.second.enabled; });
+  data.irOnline = !context.irAccountNameSnapshot().empty();
   if (remote != nullptr) {
     data.presentation = &remote->presentation;
     data.playModeLabel = remote->presentation.playtype.value_or("");

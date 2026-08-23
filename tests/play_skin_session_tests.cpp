@@ -683,6 +683,7 @@ struct ActivationFixtureOptions {
   bool requireConfiguredState = false;
   bool requireResultConfiguredState = false;
   bool resultEventExec = false;
+  bool staticResultCustomEvent = false;
   bool legacyInputBearing = false;
   bool repeatedPomyu = false;
   bool oversizedPomyuWithSibling = false;
@@ -704,7 +705,10 @@ public:
                .privateCatalog = temp_.root() / "catalog",
                .profileOverlays = temp_.root() / "overlays"},
         package_(*normalizePackageId("ActivationContract").package),
-        entry_(*normalizeEntryPath(package_, "skin/main.luaskin").entry),
+        entry_(*normalizeEntryPath(
+            package_, options.staticResultCustomEvent ? "skin/main.json"
+                                                     : "skin/main.luaskin")
+                    .entry),
         profile_(*makeSkinProfileId(
             "66666666-6666-4666-8666-666666666666")),
         device_(std::make_shared<SessionTextureDevice>()),
@@ -993,8 +997,9 @@ if skin_config then
     } else if (options.resultEventExec) {
       script += "\n  return { type = " +
                 std::to_string(options.skinType) + R"lua(, w = 1280, h = 720,
+    customEvents = {{id = 1000, action = 210}},
     customTimers = {{id = 10000, timer = function()
-      assert(main_state.event_exec(210, 17, 23))
+      assert(main_state.event_exec(1000, 17, 23))
       return 0
     end}}
   }
@@ -1011,6 +1016,14 @@ if skin_config then
               "end\nreturn { type = " + std::to_string(options.skinType) +
               ", name = \"activation shell\", w = 1280, h = 720 }\n";
     writeText(source / "skin/main.luaskin", script);
+    if (options.staticResultCustomEvent) {
+      writeText(source / "skin/main.json", R"json({
+  "type": 7,
+  "w": 1280,
+  "h": 720,
+  "customEvents": [{"id": 1000, "action": 210, "condition": 50}]
+})json");
+    }
 
     // Runtime execution follows the installed, Files-visible package exactly
     // as Beatoraja follows its selected skin directory.  Keep the immutable
@@ -5034,7 +5047,23 @@ void testResultLuaSessionRoutesOpenIrEvent() {
              created.session->render(context, {}, 1, 0) &&
              created.session->takeQueuedBuiltinEventIds() ==
                  std::vector<int>{210},
-         "result Lua main_state.event_exec routes open_ir through ResultScene");
+         "result Lua main_state.event_exec resolves a custom event before "
+         "routing its open_ir action through ResultScene");
+}
+
+void testStaticResultSessionRunsCustomBuiltinEvent() {
+  ActivationFixture fixture({.skinType = 7, .staticResultCustomEvent = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  auto created = ResultSkinSession::create(fixture.takeActivation(),
+                                           fixture.resultContext());
+  RenderContext context;
+  expect(created.session != nullptr &&
+             created.session->render(context, {}, 1, 0) &&
+             created.session->takeQueuedBuiltinEventIds() ==
+                 std::vector<int>{210},
+         "static result custom events evaluate built-in conditions and actions");
 }
 
 void testResultSessionRefreshesForAsynchronousRankingNames() {
@@ -5604,6 +5633,7 @@ int main() {
   testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin();
   testResultLuaSessionBindsMainStateDuringConfiguredLoad();
   testResultLuaSessionRoutesOpenIrEvent();
+  testStaticResultSessionRunsCustomBuiltinEvent();
   testResultSessionRefreshesForAsynchronousRankingNames();
   testResultSessionRefreshesForAllStringSelectors();
   testResultSessionRejectsConfiguredModelForAnotherResultTarget();

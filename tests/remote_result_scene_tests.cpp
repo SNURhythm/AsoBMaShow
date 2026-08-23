@@ -430,7 +430,9 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
                   "    if (judgeNoteTotal == 0) return std::nullopt;",
                   "all-miss courses retain their judge-duration result");
   requireContains(session,
-                  "lastDiagnostics_ = std::move(evaluated.diagnostics);\n"
+                  "lastDiagnostics_.insert(lastDiagnostics_.end(),\n"
+                  "                          std::make_move_iterator(evaluated.diagnostics.begin()),\n"
+                  "                          std::make_move_iterator(evaluated.diagnostics.end()));\n"
                   "  publishedInteractionLayout_",
                   "successful result frames retain non-fatal diagnostics");
   requireContains(result,
@@ -475,6 +477,9 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
                   "      consumeResultSkinBuiltinEvents();\n"
                   "    }",
                   "successful result Lua frames dispatch queued built-in actions");
+  requireContains(result,
+                  "data.irOnline = !context.irAccountNameSnapshot().empty();",
+                  "result IR selector state requires an authenticated runtime account");
 }
 
 } // namespace
