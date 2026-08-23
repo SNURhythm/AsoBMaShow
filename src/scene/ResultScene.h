@@ -353,6 +353,7 @@ private:
   Button *resultTouchControlsRestore = nullptr;
   View *resultSkinFailureNotice = nullptr;
   bool resultTouchControlsHidden = false;
+  bool resultSkinActivationFailed = false;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   std::unique_ptr<skin::ResultSkinSession> resultSkinSession;
   long long resultSkinStartedMicros = 0;

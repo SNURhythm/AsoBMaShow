@@ -474,6 +474,7 @@ bool ResultScene::startSelectedResultSkin() {
 #if !ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   return false;
 #else
+  resultSkinActivationFailed = false;
   const auto appendDiagnostic =
       [this](const skin::SkinEntryId &entry, std::string revisionDigest,
              std::string configurationDigest,
@@ -515,6 +516,7 @@ bool ResultScene::startSelectedResultSkin() {
     if (acquisition.disposition ==
             skin::GameplaySkinAcquisitionDisposition::Failed &&
         acquisition.failure) {
+      resultSkinActivationFailed = true;
       const auto &failure = *acquisition.failure;
       appendDiagnostic(failure.entry.value_or(skin::SkinEntryId{}),
                        failure.revisionDigest, failure.configurationDigest,
@@ -543,6 +545,7 @@ bool ResultScene::startSelectedResultSkin() {
        .liveResourceCounters = context.skinLiveResourceCounters,
        .safetyPolicy = skin::SkinSafetyPolicy(acquisition.request->safetyLevel)});
   if (!created.session) {
+    resultSkinActivationFailed = true;
     for (auto &diagnostic : created.diagnostics) {
       appendDiagnostic(entry, revisionDigest, configurationDigest,
                        std::move(diagnostic));
@@ -1919,10 +1922,12 @@ void ResultScene::handleResultSkinRenderFailure() {
 #if !ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   return;
 #else
-  if (resultSkinSession == nullptr || rootLayout == nullptr) {
+  if (rootLayout == nullptr) {
     return;
   }
-  SDL_Log("Result skin rendering failed; restoring application controls.");
+  const bool renderFailed = resultSkinSession != nullptr;
+  SDL_Log(renderFailed ? "Result skin rendering failed; restoring application controls."
+                       : "Result skin could not start; showing application controls.");
   resultSkinSession.reset();
   const auto presentation = makeResultSkinFailurePresentation(true);
   if (presentation.restoreTouchControls) {
@@ -1950,7 +1955,9 @@ void ResultScene::handleResultSkinRenderFailure() {
   notice->setZIndex(2300);
 
   auto *message = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
-  message->setText("Result skin stopped rendering. Application controls are restored.");
+  message->setText(renderFailed
+                       ? "Result skin stopped rendering. Application controls are restored."
+                       : "Result skin could not start. Application controls are available.");
   message->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   message->setWrap(true);
   message->setFlexGrow(1.0F);
@@ -3301,6 +3308,9 @@ void ResultScene::init() {
   const bool selectedResultSkin = startSelectedResultSkin();
   if (!selectedResultSkin) {
     skin->buildLayout("Result", rootLayout, &data);
+    if (resultSkinActivationFailed) {
+      handleResultSkinRenderFailure();
+    }
   }
   if (local != nullptr) {
     const bool hasPersistenceResult =
