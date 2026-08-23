@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../bms_parser.hpp"
+#include "../scene/play/SkinGameplayGraphState.h"
 #include "../scene/play/RhythmState.h"
 #include "../context.h"
 
@@ -16,6 +17,7 @@ struct ResultPreviousBestData {
   int maxScore = 0;
   int maxCombo = 0;
   int comboBreak = 0;
+  std::optional<int> badPoints;
   float finalGauge = 0.0f;
   int clearType = kClearTypeFailedRank;
   std::string createdAt;
@@ -44,6 +46,7 @@ struct ResultSkinData {
   std::string playModeLabel;
   std::string laneOrderLabel;
   std::string difficultyLabel;
+  std::string courseTitle;
   std::vector<std::string> courseTitles;
   std::string skinName;
   std::string skinAuthor;
@@ -58,4 +61,8 @@ struct ResultSkinData {
   std::optional<ResultPreviousBestData> previousLampBest;
   std::optional<ResultPacemakerData> pacemaker;
   const ResultPresentationModel *presentation = nullptr;
+  // Captured at the gameplay-to-result boundary. The shared immutable graph
+  // snapshots keep every graph-capable Beatoraja result object on the same
+  // authoritative data that gameplay rendered on its final frame.
+  SkinGameplayGraphState gameplayGraph;
 };

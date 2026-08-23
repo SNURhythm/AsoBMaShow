@@ -5341,8 +5341,10 @@ void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
     }
   }
 
+  const SkinGameplayGraphState resultGameplayGraph =
+      capturedPlayfieldVisualState.skinGameplayGraph;
   defer(
-      [this, capturePolicy]() {
+      [this, capturePolicy, resultGameplayGraph]() {
         const ReplayData *presentationReplay =
             shouldPersistRecordedReplay() ? &recordedReplay : nullptr;
         const ReplayData *retrySource =
@@ -5429,7 +5431,8 @@ void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
                     : std::nullopt,
                 true,
                 ResultTableContext{.tableName = options.tableName,
-                                   .tableLevel = options.tableLevel}),
+                                   .tableLevel = options.tableLevel},
+                resultGameplayGraph),
             false);
         return false;
       },

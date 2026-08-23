@@ -36,6 +36,13 @@ int resultRank(int score, int maximum) {
   return 0;
 }
 
+std::pair<int, int> scoreRateParts(double rate) {
+  // ScoreDataProperty preserves Java float intermediates before truncating.
+  const auto javaRate = static_cast<float>(rate);
+  return {static_cast<int>(static_cast<float>(javaRate * 100.0F)),
+          static_cast<int>(static_cast<float>(javaRate * 10'000.0F)) % 100};
+}
+
 std::optional<int> resultNextRank(int score, int maximum) {
   if (maximum <= 0) return std::nullopt;
   for (int rank = 0; rank < 27; rank += 3) {
@@ -273,6 +280,55 @@ SkinPropertyLookup<bool> ResultSkinStateBridge::booleanProperty(
     return supported(static_cast<long long>(*currentScore) * 27 >=
                      static_cast<long long>(*maximum) * threshold);
   }
+  if (((*id >= 200 && *id <= 207) || (*id >= 300 && *id <= 307) ||
+       (*id >= 340 && *id <= 347)) && currentScore && maximum) {
+    const int first = *id >= 340 ? 340 : *id >= 300 ? 300 : 200;
+    return supported(resultRank(*currentScore, *maximum) == 7 - (*id - first));
+  }
+  if (*id >= 320 && *id <= 327 && data_.previousBest && maximum) {
+    return supported(resultRank(data_.previousBest->score, *maximum) ==
+                     7 - (*id - 320));
+  }
+  if ((*id == 330 || *id == 1330) && currentScore && data_.previousBest) {
+    return supported(*id == 330 ? *currentScore > data_.previousBest->score
+                                : *currentScore == data_.previousBest->score);
+  }
+  if ((*id == 331 || *id == 1331) && data_.previousBest) {
+    const auto combo = maxCombo();
+    return combo ? supported(*id == 331 ? *combo > data_.previousBest->maxCombo
+                                        : *combo == data_.previousBest->maxCombo)
+                 : unsupported<bool>();
+  }
+  if ((*id == 332 || *id == 1332) && data_.previousBest &&
+      data_.previousBest->badPoints) {
+    const auto currentBadPoints = data_.presentation && !data_.state
+                                      ? data_.presentation->badPoints
+                                      : (data_.state
+                                             ? std::optional<int>(
+                                                   count(Bad).value_or(0) +
+                                                   count(Poor).value_or(0) +
+                                                   count(Kpoor).value_or(0))
+                                             : std::nullopt);
+    if (!currentBadPoints) return unsupported<bool>();
+    return supported(*id == 332
+                         ? *currentBadPoints < *data_.previousBest->badPoints
+                         : *currentBadPoints == *data_.previousBest->badPoints);
+  }
+  if ((*id == 335 || *id == 1335) && currentScore && maximum &&
+      data_.previousBest) {
+    const auto currentRate = static_cast<float>(*currentScore) / *maximum;
+    const auto bestRate = static_cast<float>(data_.previousBest->score) / *maximum;
+    return supported(*id == 335 ? currentRate > bestRate : currentRate == bestRate);
+  }
+  if ((*id == 336 || *id == 1336) && currentScore && data_.pacemaker) {
+    return supported(*id == 336 ? *currentScore > data_.pacemaker->targetScore
+                                : *currentScore == data_.pacemaker->targetScore);
+  }
+  if ((*id >= 352 && *id <= 354) && currentScore && data_.pacemaker) {
+    return supported(*id == 352 ? *currentScore > data_.pacemaker->targetScore
+                                : *id == 353 ? *currentScore < data_.pacemaker->targetScore
+                                             : *currentScore == data_.pacemaker->targetScore);
+  }
   if (*id == 190 || *id == 191) {
     const bool stageFile = data_.meta != nullptr && !data_.meta->StageFile.empty();
     return supported(*id == 191 ? stageFile : !stageFile);
@@ -350,6 +406,7 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
                                  ? std::optional<int>(data_.pacemaker->targetScore)
                                  : std::nullopt;
     const auto badPoints = [this]() -> std::optional<int> {
+      if (data_.presentation && !data_.state) return data_.presentation->badPoints;
       if (!data_.state) return std::nullopt;
       return count(Bad).value_or(0) + count(Poor).value_or(0) +
              count(Kpoor).value_or(0);
@@ -378,7 +435,35 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
     case 12: case 17: case 18: case 19: case 30: case 31: case 32:
     case 33: case 34: case 35: case 36: case 37: case 79: case 333:
       return std::numeric_limits<int>::min();
-    case 100: return currentScore;
+    case 100: {
+      // ScoreDataProperty.getNowScore is a mode-specific score point, not EX
+      // score. At a result screen the result's final combo and judgement
+      // counts are the same inputs Beatoraja uses for this calculation.
+      if (!data_.state || !notes || *notes <= 0) return std::nullopt;
+      const long long perfect = count(PGreat).value_or(0);
+      const long long great = count(Great).value_or(0);
+      const long long good = count(Good).value_or(0);
+      long long numerator = 0;
+      switch (data_.meta != nullptr ? data_.meta->KeyMode : 0) {
+      case 5:
+      case 10:
+        numerator = 100'000LL * (perfect + great) + 50'000LL * good;
+        break;
+      case 7:
+      case 14:
+        numerator = 150'000LL * perfect + 100'000LL * great +
+                    20'000LL * good + 50'000LL * data_.state->combo;
+        break;
+      case 9:
+        numerator = 100'000LL * perfect + 70'000LL * great + 40'000LL * good;
+        break;
+      default:
+        numerator = 1'000'000LL * perfect + 700'000LL * great +
+                    400'000LL * good;
+        break;
+      }
+      return static_cast<int>(numerator / *notes);
+    }
     case 71: case 101: case 171: return currentScore;
     case 72: return maximum;
     case 74: case 106: return notes;
@@ -392,31 +477,21 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
                  ? std::optional<int>(static_cast<int>(
                        std::lround(data_.meta->PlayLevel)))
                  : std::nullopt;
-    case 115:
-      if (const auto rate = scoreRate()) {
-        return static_cast<int>(*rate * 100);
-      }
-      return std::nullopt;
-    case 102: case 155:
-      if (const auto rate = scoreRate()) return static_cast<int>(*rate * 100);
-      return std::nullopt;
-    case 103: case 156:
-      if (const auto rate = scoreRate()) return static_cast<int>(*rate * 10'000) % 100;
-      return std::nullopt;
+    case 102: case 115: case 155:
+      return scoreRate() ? std::optional<int>(scoreRateParts(*scoreRate()).first)
+                         : std::nullopt;
+    case 103: case 116: case 156:
+      return scoreRate() ? std::optional<int>(scoreRateParts(*scoreRate()).second)
+                         : std::nullopt;
     case 104:
       return data_.state ? std::optional<int>(data_.state->combo) : std::nullopt;
-    case 116:
-      if (const auto rate = scoreRate()) {
-        return static_cast<int>(*rate * 10'000) % 100;
-      }
-      return std::nullopt;
     case 121: case 151: return targetScore.value_or(std::numeric_limits<int>::min());
     case 122: case 135: case 157:
-      if (const auto rate = targetRate()) return static_cast<int>(*rate * 100);
-      return std::numeric_limits<int>::min();
+      return targetRate() ? std::optional<int>(scoreRateParts(*targetRate()).first)
+                          : std::optional<int>(std::numeric_limits<int>::min());
     case 123: case 136: case 158:
-      if (const auto rate = targetRate()) return static_cast<int>(*rate * 10'000) % 100;
-      return std::numeric_limits<int>::min();
+      return targetRate() ? std::optional<int>(scoreRateParts(*targetRate()).second)
+                          : std::optional<int>(std::numeric_limits<int>::min());
     case 128:
       return currentScore && targetScore
                  ? std::optional<int>(*currentScore - *targetScore)
@@ -502,10 +577,10 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
                                                : std::nullopt);
     case 179: case 180: return std::numeric_limits<int>::min();
     case 183:
-      if (const auto rate = previousRate()) return static_cast<int>(*rate * 100);
+      if (const auto rate = previousRate()) return scoreRateParts(*rate).first;
       return std::numeric_limits<int>::min();
     case 184:
-      if (const auto rate = previousRate()) return static_cast<int>(*rate * 10'000) % 100;
+      if (const auto rate = previousRate()) return scoreRateParts(*rate).second;
       return std::numeric_limits<int>::min();
     case 380: case 381: case 382: case 383: case 384:
     case 385: case 386: case 387: case 388: case 389:
@@ -641,13 +716,18 @@ SkinPropertyLookup<std::string_view> ResultSkinStateBridge::stringProperty(
     stringValue_ = data_.playerName;
     break;
   case 10:
-    stringValue_ = data_.presentation ? data_.presentation->title
-                                      : (data_.meta ? data_.meta->Title : "");
+    stringValue_ = !data_.courseTitle.empty()
+                       ? data_.courseTitle
+                       : (data_.presentation ? data_.presentation->title
+                                             : (data_.meta ? data_.meta->Title : ""));
     break;
   case 12:
-    stringValue_ = data_.presentation ? data_.presentation->title
-                                      : (data_.meta ? data_.meta->Title : "");
-    if (data_.meta != nullptr && !data_.meta->SubTitle.empty()) {
+    stringValue_ = !data_.courseTitle.empty()
+                       ? data_.courseTitle
+                       : (data_.presentation ? data_.presentation->title
+                                             : (data_.meta ? data_.meta->Title : ""));
+    if (data_.courseTitle.empty() && data_.meta != nullptr &&
+        !data_.meta->SubTitle.empty()) {
       stringValue_ += " " + data_.meta->SubTitle;
     }
     break;
@@ -773,6 +853,31 @@ ResultSkinStateBridge::projectedLines() const noexcept { return {}; }
 
 SkinGameplayGraphStateView
 ResultSkinStateBridge::gameplayGraphState() const noexcept {
+  SkinGameplayGraphStateView result =
+      skinGameplayGraphStateView(data_.gameplayGraph);
+  if (!result.gaugeHistory.empty() || !gaugeHistory_.empty()) {
+    if (result.gaugeHistory.empty()) {
+      result.gaugeHistory = gaugeHistory_;
+      result.gaugeRevision = gaugeRevision_;
+    }
+    if (!result.gaugeSupported) {
+      const GaugeType type = data_.state ? data_.state->gaugeType
+                                         : GaugeType::Normal;
+      const GaugeProfile profile = data_.state ? data_.state->gaugeProfile
+                                               : GaugeProfile::Standard;
+      result.gaugeType = gaugeTypeIndex(type);
+      result.gaugeMinimum = gaugeMinimumValue(type, profile);
+      result.gaugeMaximum = gaugeMaximumValue(type, profile);
+      result.gaugeBorder = gaugeBorderValue(type, profile);
+      result.gaugeSupported = true;
+    }
+  }
+  if (!result.normalDistribution.empty() || !result.judgementDistribution.empty() ||
+      !result.earlyLateDistribution.empty() || !result.bpmSeries.empty() ||
+      !result.gaugeHistory.empty() || !result.judgeWindows.empty() ||
+      !result.recentJudgeTimingsMillis.empty()) {
+    return result;
+  }
   if (gaugeHistory_.empty()) return {};
   const GaugeType type = data_.state ? data_.state->gaugeType : GaugeType::Normal;
   const GaugeProfile profile = data_.state ? data_.state->gaugeProfile

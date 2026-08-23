@@ -203,6 +203,7 @@ struct LocalResultSource {
   std::optional<std::string> currentClearLabelOverride;
   std::optional<int> currentClearRankOverride;
   ResultPresentationModel presentation;
+  SkinGameplayGraphState gameplayGraph;
   bool replayResult = false;
   bool retrySameAllowed = true;
   bool autoPlayResult = false;
@@ -271,7 +272,8 @@ public:
       std::optional<ResultPacemakerData> pacemakerOverride = std::nullopt,
       const ReplayData *analyticsSource = nullptr,
       std::optional<std::string> modernReplayAttemptId = std::nullopt,
-      bool retrySameAllowed = true, ResultTableContext tableContext = {});
+      bool retrySameAllowed = true, ResultTableContext tableContext = {},
+      SkinGameplayGraphState gameplayGraph = {});
   ResultScene(ApplicationContext &context, ResultRemoteOptions remote);
   ~ResultScene() override;
 

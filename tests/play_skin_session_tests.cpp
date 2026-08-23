@@ -5046,12 +5046,14 @@ void testResultBridgeMatchesBeatorajaResultScoreFamilies() {
   state.judgeCount[Kpoor] = 4;
   state.judgementFastSlowCount[Great].fast = 5;
   state.judgementFastSlowCount[Poor].slow = 6;
-  bms_parser::ChartMeta meta{.TotalNotes = 10};
+  bms_parser::ChartMeta meta{.KeyMode = 0, .TotalNotes = 10};
   state.maxCombo = 7;
   ResultSkinStateBridge bridge({
       .state = &state,
       .meta = &meta,
-      .previousBest = ResultPreviousBestData{.score = 12},
+      .previousBest = ResultPreviousBestData{.score = 12,
+                                              .maxCombo = 6,
+                                              .badPoints = 9},
       .pacemaker = ResultPacemakerData{.targetScore = 18},
   }, 1, 0);
 
@@ -5064,12 +5066,20 @@ void testResultBridgeMatchesBeatorajaResultScoreFamilies() {
   const auto badPoorMiss = bridge.integerProperty({427}, {});
   const auto scoreRate = bridge.integerProperty({102}, {});
   const auto scoreRateAfterDot = bridge.integerProperty({103}, {});
+  const auto point = bridge.integerProperty({100}, {});
   const auto bestRate = bridge.floatProperty({112}, {});
   const auto targetRate = bridge.floatProperty({114}, {});
   const auto pGreatRate = bridge.floatProperty({"rate_pgreat"}, {});
   const auto comboRate = bridge.floatProperty({145}, {});
   const auto imageFavorite = bridge.integerProperty(
       {90}, SkinIntegerPropertyDomain::ImageIndex);
+  const auto nowRank = bridge.booleanProperty({200});
+  const auto notNowRank = bridge.booleanProperty({207});
+  const auto resultRank = bridge.booleanProperty({300});
+  const auto updatedScore = bridge.booleanProperty({330});
+  const auto updatedCombo = bridge.booleanProperty({331});
+  const auto drawnMissCount = bridge.booleanProperty({1332});
+  const auto targetWin = bridge.booleanProperty({352});
   expect(rank.supported && rank.value && lowerRank.supported && lowerRank.value &&
              negatedRank.supported &&
              !negatedRank.value && poor.supported && poor.value == 3 &&
@@ -5085,6 +5095,13 @@ void testResultBridgeMatchesBeatorajaResultScoreFamilies() {
              imageFavorite.supported && imageFavorite.value == 0,
          "result bridge follows Beatoraja's negated options, score rate, and "
          "Poor-versus-Miss result families");
+  expect(point.supported && point.value == 1'000'000 && nowRank.supported &&
+             nowRank.value && notNowRank.supported && !notNowRank.value &&
+             resultRank.supported && resultRank.value && updatedScore.supported &&
+             updatedScore.value && updatedCombo.supported && updatedCombo.value &&
+             drawnMissCount.supported && drawnMissCount.value && targetWin.supported &&
+             targetWin.value,
+         "result bridge matches Beatoraja result rank, update, and point properties");
 }
 
 void testResultBridgeMatchesResultAliasesAndTimerUnits() {
@@ -5094,6 +5111,7 @@ void testResultBridgeMatchesResultAliasesAndTimerUnits() {
   ResultSkinStateBridge bridge({.meta = &meta,
                                  .playModeLabel = "7K",
                                  .laneOrderLabel = "MIRROR",
+                                 .courseTitle = "Course title",
                                  .courseTitles = {"First stage", "Second stage"},
                                  .skinName = "Result skin",
                                  .skinAuthor = "Skin author"},
@@ -5110,8 +5128,8 @@ void testResultBridgeMatchesResultAliasesAndTimerUnits() {
   const auto skinName = std::string(bridge.stringProperty({50}).value);
   const auto skinAuthor = std::string(bridge.stringProperty({51}).value);
   expect(level.supported && level.value == 12 && fullTitleProperty.supported &&
-             fullTitle == "Title Subtitle" && mode == "7K" && order == "MIRROR" &&
-             namedTitle == "Title" && firstCourseTitle == "First stage" &&
+             fullTitle == "Course title" && mode == "7K" && order == "MIRROR" &&
+             namedTitle == "Course title" && firstCourseTitle == "First stage" &&
              chartMinutes.supported && chartMinutes.value == 2 &&
              chartSeconds.supported && chartSeconds.value == 5 &&
              skinName == "Result skin" && skinAuthor == "Skin author" &&
@@ -5178,6 +5196,45 @@ void testResultBridgeUsesRemotePresentationValues() {
              difficulty == "ANOTHER" && chartMd5Property.supported &&
              chartMd5 == "remote-md5",
          "remote result properties project presentation scores, timing, and gauges");
+}
+
+void testResultBridgePreservesCompletedGameplayGraph() {
+  auto chart = std::make_shared<SkinGameplayChartGraphState>();
+  chart->normalDistribution = {{{1, 2, 3, 4, 5, 6, 7}}};
+  chart->bpmSeries = {{.chartTimeMicros = 0, .bpm = 150.0,
+                       .bpmTimesScroll = 150.0, .graphSpeed = 150.0}};
+  chart->mainBpm = 150.0;
+  chart->minimumBpm = 120.0;
+  chart->maximumBpm = 180.0;
+  auto dynamic = std::make_shared<SkinGameplayDynamicGraphState>();
+  dynamic->judgementDistribution = {{{1, 2, 3, 4, 5, 6}}};
+  dynamic->earlyLateDistribution = {{{6, 5, 4, 3, 2, 1, 0, 0, 0, 0}}};
+  dynamic->recentJudgeTimingsMillis[0] = 12;
+  dynamic->recentJudgeTimingIndex = 1;
+  dynamic->judgeWindows[0] = {.judgement = PGreat,
+                              .minimumTimingMillis = -20,
+                              .maximumTimingMillis = 20};
+  dynamic->gaugeHistories[gaugeTypeIndex(GaugeType::Normal)] = {20.0F, 80.0F};
+  dynamic->gaugeType = GaugeType::Normal;
+  dynamic->gaugeMinimum = 2.0F;
+  dynamic->gaugeMaximum = 100.0F;
+  dynamic->gaugeBorder = 80.0F;
+  dynamic->gaugeSupported = true;
+  dynamic->judgementRevision = 11;
+  dynamic->gaugeRevision = 12;
+
+  ResultSkinStateBridge bridge({.gameplayGraph = {.chart = std::move(chart),
+                                                   .dynamic = std::move(dynamic)}},
+                                1, 0);
+  const auto graph = bridge.gameplayGraphState();
+  expect(graph.normalDistribution.size() == 1 &&
+             graph.judgementDistribution.size() == 1 &&
+             graph.earlyLateDistribution.size() == 1 &&
+             graph.bpmSeries.size() == 1 && graph.judgeWindows.size() == 5 &&
+             graph.recentJudgeTimingsMillis.size() == kSkinRecentJudgeTimingCapacity &&
+             graph.recentJudgeTimingIndex == 1 && graph.gaugeHistory.size() == 2 &&
+             graph.judgementRevision == 11 && graph.gaugeRevision == 12,
+         "result bridge preserves the completed gameplay graph snapshot");
 }
 
 void testRequestedExternalResultSkinCreatesSession() {
@@ -5288,6 +5345,7 @@ int main() {
   testResultBridgeMatchesBeatorajaResultScoreFamilies();
   testResultBridgeMatchesResultAliasesAndTimerUnits();
   testResultBridgeUsesRemotePresentationValues();
+  testResultBridgePreservesCompletedGameplayGraph();
   testRequestedExternalResultSkinCreatesSession();
   if (failures != 0) {
     std::cerr << failures << " play skin session test(s) failed\n";

@@ -384,7 +384,7 @@ ResultScene::ResultScene(
     std::optional<ResultPacemakerData> pacemakerOverride,
     const ReplayData *analyticsSource,
     std::optional<std::string> modernReplayAttemptId, bool retrySameAllowed,
-    ResultTableContext tableContext)
+    ResultTableContext tableContext, SkinGameplayGraphState gameplayGraph)
     : Scene(context),
       source(LocalResultSource{
           .meta = meta,
@@ -405,6 +405,7 @@ ResultScene::ResultScene(
           .practiceOptions = std::move(practiceOptions),
           .courseOptions = std::move(courseOptions),
           .tableContext = std::move(tableContext),
+          .gameplayGraph = std::move(gameplayGraph),
           .ownedReusableRetryChart = std::move(ownedReusableRetryChart),
           .pacemakerTarget = pacemaker::normalizeTargetId(
               pacemakerTarget.empty() ? context.settings.selectedPacemakerTarget
@@ -647,11 +648,15 @@ ResultSkinData ResultScene::makeResultSkinData() const {
   data.autoPlayResult = local->autoPlayResult;
   if (local->courseOptions.session != nullptr) {
     data.courseTitles = local->courseOptions.session->beatorajaSkinStageTitles();
+    if (isCourseFinalResult()) {
+      data.courseTitle = local->courseOptions.session->courseName;
+    }
   }
   data.previousBest = local->previousBest;
   data.previousLampBest = local->previousLampBest;
   data.pacemaker = pacemakerDataForCurrentResult();
   data.presentation = &local->presentation;
+  data.gameplayGraph = local->gameplayGraph;
   return data;
 }
 
