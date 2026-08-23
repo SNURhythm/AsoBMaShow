@@ -840,13 +840,12 @@ ResultSkinData ResultScene::makeResultSkinData() const {
                                               : (local->retryData
                                                      ? &*local->retryData
                                                      : nullptr));
-  if (const auto timing = resultTimingStatistics(timingReplay, local->meta.TotalNotes)) {
-    if (timing->hasTimingSamples) {
-      data.timingAverageMillis = timing->averageMillis;
-      data.timingStandardDeviationMillis = timing->standardDeviationMillis;
-    }
-    data.averageJudgeMicros = timing->averageJudgeMicros;
-    data.timingDistribution = timing->distribution;
+  if (local->skinTimingStatisticsPrepared) {
+    data.timingAverageMillis = local->skinTimingAverageMillis;
+    data.timingStandardDeviationMillis =
+        local->skinTimingStandardDeviationMillis;
+    data.averageJudgeMicros = local->skinAverageJudgeMicros;
+    data.timingDistribution = local->skinTimingDistribution;
   }
   if (timingReplay != nullptr) {
     data.replayKeyMode = timingReplay->chartMeta.KeyMode;
@@ -3574,6 +3573,24 @@ void ResultScene::init() {
     if (isCourseFinalResult()) {
       (void)persistModernCourseResult();
     }
+    const ReplayData *timingReplay = local->analyticsData
+                                         ? &*local->analyticsData
+                                         : (local->presentationReplay
+                                                ? &*local->presentationReplay
+                                                : (local->retryData
+                                                       ? &*local->retryData
+                                                       : nullptr));
+    if (const auto timing = resultTimingStatistics(timingReplay,
+                                                   local->meta.TotalNotes)) {
+      if (timing->hasTimingSamples) {
+        local->skinTimingAverageMillis = timing->averageMillis;
+        local->skinTimingStandardDeviationMillis =
+            timing->standardDeviationMillis;
+      }
+      local->skinAverageJudgeMicros = timing->averageJudgeMicros;
+      local->skinTimingDistribution = timing->distribution;
+    }
+    local->skinTimingStatisticsPrepared = true;
   }
 
   rootLayout =

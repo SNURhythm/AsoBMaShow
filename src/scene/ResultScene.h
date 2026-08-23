@@ -205,6 +205,11 @@ struct LocalResultSource {
   std::optional<int> currentClearRankOverride;
   ResultPresentationModel presentation;
   SkinGameplayGraphState gameplayGraph;
+  bool skinTimingStatisticsPrepared = false;
+  std::optional<double> skinTimingAverageMillis;
+  std::optional<double> skinTimingStandardDeviationMillis;
+  std::optional<long long> skinAverageJudgeMicros;
+  std::vector<int> skinTimingDistribution;
   bool replayResult = false;
   bool retrySameAllowed = true;
   bool autoPlayResult = false;
