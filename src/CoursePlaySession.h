@@ -2,6 +2,7 @@
 
 #include "LongNoteModeUtils.h"
 #include "ReplayData.h"
+#include "scene/play/SkinGameplayGraphState.h"
 #include "bms_parser.hpp"
 #include "replay/CourseContinuation.h"
 #include "replay/CourseReplayCapture.h"
@@ -275,10 +276,12 @@ struct CoursePlayEntry {
 struct CoursePlayChartResult {
   bms_parser::ChartMeta meta;
   RhythmState state;
+  SkinGameplayGraphState gameplayGraph;
 
   CoursePlayChartResult(const bms_parser::ChartMeta &meta,
-                        const RhythmState &state)
-      : meta(meta), state(state) {}
+                        const RhythmState &state,
+                        SkinGameplayGraphState gameplayGraph = {})
+      : meta(meta), state(state), gameplayGraph(std::move(gameplayGraph)) {}
 };
 
 struct CoursePlaySession {
@@ -470,10 +473,11 @@ struct CoursePlaySession {
     return 0;
   }
 
-  void recordResult(const bms_parser::ChartMeta &meta,
-                    const RhythmState &state) {
+  void recordResult(const bms_parser::ChartMeta &meta, const RhythmState &state,
+                    SkinGameplayGraphState gameplayGraph = {}) {
     if (completedResults.size() > currentIndex) {
-      completedResults[currentIndex] = CoursePlayChartResult(meta, state);
+      completedResults[currentIndex] =
+          CoursePlayChartResult(meta, state, std::move(gameplayGraph));
       completedResults.erase(completedResults.begin() +
                                  static_cast<std::ptrdiff_t>(currentIndex + 1),
                              completedResults.end());
@@ -483,7 +487,7 @@ struct CoursePlaySession {
       const auto &entry = entries[completedResults.size()];
       completedResults.emplace_back(entry.meta, RhythmState(nullptr, false));
     }
-    completedResults.emplace_back(meta, state);
+    completedResults.emplace_back(meta, state, std::move(gameplayGraph));
   }
 
   void recordReplayStage(const ReplayData &replay) {

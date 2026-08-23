@@ -59,6 +59,7 @@
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace {
@@ -197,9 +198,56 @@ struct ResultTimingStatistics {
 };
 
 std::optional<ResultTimingStatistics>
-resultTimingStatistics(const ReplayData *replay, int totalNotes) {
+resultTimingStatistics(const ReplayData *replay, int totalNotes,
+                       bms_parser::Chart *chart) {
   if (replay == nullptr || totalNotes <= 0) return std::nullopt;
   constexpr long long rangeMicros = 150'000;
+  std::unordered_map<std::string, bms_parser::Note *> notes;
+  std::unordered_set<const bms_parser::LongNote *> classicHeadsWithTailResult;
+  if (chart != nullptr) {
+    for (auto *measure : chart->Measures) {
+      if (measure == nullptr) continue;
+      for (auto *timeline : measure->TimeLines) {
+        if (timeline == nullptr) continue;
+        for (auto *note : timeline->Notes) {
+          if (note != nullptr) {
+            notes.emplace(replay_note::key(note->Lane, timeline->Timing), note);
+          }
+        }
+      }
+    }
+    for (const auto &event : replay->events) {
+      if (event.judgement == None ||
+          (event.action != ReplayEventAction::Release &&
+           event.action != ReplayEventAction::Miss)) {
+        continue;
+      }
+      const auto found = notes.find(
+          replay_note::key(event.lane, event.noteTimeMicros));
+      if (found == notes.end() || !found->second->IsLongNote()) continue;
+      const auto *tail =
+          static_cast<const bms_parser::LongNote *>(found->second);
+      if (tail->IsTail() && tail->Head != nullptr &&
+          !effectiveLongNoteIsCharge(tail, chart)) {
+        classicHeadsWithTailResult.insert(tail->Head);
+      }
+    }
+  }
+  const auto countsInResult = [&](const ReplayEvent &event) {
+    if (chart == nullptr || event.action != ReplayEventAction::Press) {
+      return true;
+    }
+    const auto found = notes.find(
+        replay_note::key(event.lane, event.noteTimeMicros));
+    if (found == notes.end() || !found->second->IsLongNote()) return true;
+    const auto *longNote =
+        static_cast<const bms_parser::LongNote *>(found->second);
+    const JudgeResult judge(event.judgement, event.diffMicros);
+    return longNote->IsTail() || !judge.isNotePlayed() ||
+           effectiveLongNoteIsCharge(longNote, chart) ||
+           (event.judgement == Bad &&
+            !classicHeadsWithTailResult.contains(longNote));
+  };
   std::vector<long long> timings;
   std::vector<int> distribution(301, 0);
   timings.reserve(replay->events.size());
@@ -212,7 +260,8 @@ resultTimingStatistics(const ReplayData *replay, int totalNotes) {
          event.action == ReplayEventAction::Release) &&
         (event.judgement == PGreat || event.judgement == Great ||
          event.judgement == Good || event.judgement == Bad);
-    if (scoreTimingEvent && playedNotes < totalNotes) {
+    if (scoreTimingEvent && countsInResult(event) &&
+        playedNotes < totalNotes) {
       durationMicros += std::llabs(event.diffMicros);
       ++playedNotes;
     }
@@ -222,8 +271,8 @@ resultTimingStatistics(const ReplayData *replay, int totalNotes) {
          event.action == ReplayEventAction::Release) &&
         event.judgement != None && event.judgement != Kpoor &&
         event.diffMicros >= -rangeMicros && event.diffMicros <= rangeMicros;
-    if (timingEvent) timings.push_back(event.diffMicros);
-    if (timingEvent) {
+    if (timingEvent && countsInResult(event)) timings.push_back(event.diffMicros);
+    if (timingEvent && countsInResult(event)) {
       const int millis = static_cast<int>(event.diffMicros / 1'000LL);
       if (millis >= -150 && millis <= 150) {
         ++distribution[static_cast<std::size_t>(millis + 150)];
@@ -374,6 +423,66 @@ int totalNotesForCourse(const CoursePlaySession &session) {
     }
   }
   return total;
+}
+
+SkinGameplayGraphState
+courseGameplayGraphForSession(const CoursePlaySession &session) {
+  auto chart = std::make_shared<SkinGameplayChartGraphState>();
+  auto dynamic = std::make_shared<SkinGameplayDynamicGraphState>();
+  bool hasGraph = false;
+  std::int64_t chartTimeOffset = 0;
+  for (const auto &stage : session.completedResults) {
+    if (!stage.gameplayGraph.chart || !stage.gameplayGraph.dynamic) continue;
+    hasGraph = true;
+    const auto &stageChart = *stage.gameplayGraph.chart;
+    const auto &stageDynamic = *stage.gameplayGraph.dynamic;
+    chart->normalDistribution.insert(chart->normalDistribution.end(),
+                                     stageChart.normalDistribution.begin(),
+                                     stageChart.normalDistribution.end());
+    chart->judgementNotes.insert(chart->judgementNotes.end(),
+                                 stageChart.judgementNotes.begin(),
+                                 stageChart.judgementNotes.end());
+    for (auto point : stageChart.bpmSeries) {
+      point.chartTimeMicros += chartTimeOffset;
+      chart->bpmSeries.push_back(point);
+    }
+    chart->judgementDistributionSeconds +=
+        stageChart.judgementDistributionSeconds;
+    chart->mainBpm = stageChart.mainBpm;
+    chart->minimumBpm = chart->minimumBpm == 0.0
+                            ? stageChart.minimumBpm
+                            : std::min(chart->minimumBpm, stageChart.minimumBpm);
+    chart->maximumBpm = std::max(chart->maximumBpm, stageChart.maximumBpm);
+    dynamic->judgementDistribution.insert(
+        dynamic->judgementDistribution.end(),
+        stageDynamic.judgementDistribution.begin(),
+        stageDynamic.judgementDistribution.end());
+    dynamic->earlyLateDistribution.insert(
+        dynamic->earlyLateDistribution.end(),
+        stageDynamic.earlyLateDistribution.begin(),
+        stageDynamic.earlyLateDistribution.end());
+    for (std::size_t index = 0; index < dynamic->gaugeHistories.size();
+         ++index) {
+      const auto &history = stageDynamic.gaugeHistories[index];
+      dynamic->gaugeHistories[index].insert(
+          dynamic->gaugeHistories[index].end(), history.begin(), history.end());
+    }
+    dynamic->recentJudgeTimingsMillis = stageDynamic.recentJudgeTimingsMillis;
+    dynamic->recentJudgeTimingIndex = stageDynamic.recentJudgeTimingIndex;
+    dynamic->judgeWindows = stageDynamic.judgeWindows;
+    dynamic->gaugeType = stageDynamic.gaugeType;
+    dynamic->gaugeMinimum = stageDynamic.gaugeMinimum;
+    dynamic->gaugeMaximum = stageDynamic.gaugeMaximum;
+    dynamic->gaugeBorder = stageDynamic.gaugeBorder;
+    dynamic->gaugeSupported = stageDynamic.gaugeSupported;
+    dynamic->judgementRevision += stageDynamic.judgementRevision;
+    dynamic->gaugeRevision += stageDynamic.gaugeRevision;
+    chartTimeOffset += static_cast<std::int64_t>(
+        stageChart.judgementDistributionSeconds) * 1'000'000LL;
+  }
+  return hasGraph ? SkinGameplayGraphState{.chart = std::move(chart),
+                                            .dynamic = std::move(dynamic)}
+                  : SkinGameplayGraphState{};
 }
 
 long long totalPlayLengthForCourse(const CoursePlaySession &session) {
@@ -2980,7 +3089,10 @@ void ResultScene::showCourseResult() {
           ResultCourseOptions{.mode = ResultCourseMode::CourseResult,
                               .session = session,
                               .savedResultBrowsing =
-                                  local->courseOptions.savedResultBrowsing}),
+                                  local->courseOptions.savedResultBrowsing},
+          std::string{}, std::unique_ptr<bms_parser::Chart>{}, nullptr,
+          std::nullopt, nullptr, std::nullopt, true, ResultTableContext{},
+          courseGameplayGraphForSession(*session)),
       false);
 }
 
@@ -3580,8 +3692,8 @@ void ResultScene::init() {
                                                 : (local->retryData
                                                        ? &*local->retryData
                                                        : nullptr));
-    if (const auto timing = resultTimingStatistics(timingReplay,
-                                                   local->meta.TotalNotes)) {
+    if (const auto timing = resultTimingStatistics(
+            timingReplay, local->meta.TotalNotes, local->reusableRetryChart)) {
       if (timing->hasTimingSamples) {
         local->skinTimingAverageMillis = timing->averageMillis;
         local->skinTimingStandardDeviationMillis =
@@ -3780,7 +3892,11 @@ bool ResultScene::queueResultSkinPointerEvent(SDL_Event &event) {
   default:
     return false;
   }
-  return resultSkinSession->queuePointerDown(point, nowMicros());
+  if (!resultSkinSession->queuePointerDown(point, nowMicros())) return false;
+  for (const int eventId : resultSkinSession->takeQueuedBuiltinEventIds()) {
+    if (eventId == 210) openRankings();
+  }
+  return true;
 #endif
 }
 
@@ -3807,10 +3923,19 @@ void ResultScene::renderScene() {
   if (resultSkinSession) {
     RenderContext renderContext(context.uiBatchRenderer);
     RenderContext::UiBatchScope uiBatchScope(renderContext);
+    ResultSkinData skinData = makeResultSkinData();
+    if (resultSkinSession->requiresRuntimeStringRefresh(skinData)) {
+      resultSkinSession.reset();
+      if (!startSelectedResultSkin()) {
+        handleResultSkinRenderFailure();
+        return;
+      }
+      skinData = makeResultSkinData();
+    }
     const long long elapsedMillis =
         std::max(0LL, (nowMicros() - resultSkinStartedMicros) / 1000LL);
     if (!resultSkinSession->render(
-        renderContext, makeResultSkinData(),
+        renderContext, skinData,
         std::max<std::uint64_t>(1, context.currentFrame), elapsedMillis)) {
       appendResultSkinRenderDiagnostics();
       handleResultSkinRenderFailure();

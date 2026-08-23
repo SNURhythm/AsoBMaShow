@@ -58,7 +58,10 @@ public:
   [[nodiscard]] bool render(RenderContext &, const ResultSkinData &,
                             std::uint64_t frameSerial,
                             std::int64_t elapsedMillis);
+  [[nodiscard]] bool
+  requiresRuntimeStringRefresh(const ResultSkinData &) const;
   [[nodiscard]] std::vector<SkinDiagnostic> takeLastDiagnostics();
+  [[nodiscard]] std::vector<int> takeQueuedBuiltinEventIds();
   [[nodiscard]] bool queuePointerDown(UiLogicalPoint, long long eventMicros);
   [[nodiscard]] const SkinEntryId &entry() const noexcept;
 
@@ -68,7 +71,8 @@ private:
                     std::unique_ptr<LuaSkinRuntime>,
                     std::unique_ptr<SkinResourceCatalog>,
                     std::unique_ptr<SkinMovieCatalog>,
-                    SkinSafetyPolicy, ViewportSettings);
+                    SkinSafetyPolicy, ViewportSettings,
+                    std::vector<std::string> preparedRuntimeStrings);
 
   SkinRevisionLease revision_;
   SkinEntryId entry_;
@@ -84,7 +88,9 @@ private:
   std::vector<SkinDiagnostic> lastDiagnostics_;
   std::optional<SkinInteractionLayout> publishedInteractionLayout_;
   std::vector<SkinEventInvocation> queuedEventInvocations_;
+  std::vector<int> queuedBuiltinEventIds_;
   std::unordered_map<int, std::int64_t> customEventLastExecutionMicros_;
+  std::vector<std::string> preparedRuntimeStrings_;
 };
 
 } // namespace skin

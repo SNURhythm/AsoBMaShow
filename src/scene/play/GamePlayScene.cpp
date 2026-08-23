@@ -5341,10 +5341,8 @@ void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
     }
   }
 
-  const SkinGameplayGraphState resultGameplayGraph =
-      capturedPlayfieldVisualState.skinGameplayGraph;
   defer(
-      [this, capturePolicy, resultGameplayGraph]() {
+      [this, capturePolicy]() {
         const ReplayData *presentationReplay =
             shouldPersistRecordedReplay() ? &recordedReplay : nullptr;
         const ReplayData *retrySource =
@@ -5404,14 +5402,28 @@ void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
         const bms_parser::ChartMeta resultMeta = chart->Meta;
         std::unique_ptr<bms_parser::Chart> ownedReusableRetryChart;
         bms_parser::Chart *reusableRetryChart = nullptr;
-        if (!isCoursePlayback()) {
-          if (ownedChart != nullptr) {
-            ownedReusableRetryChart = std::move(ownedChart);
-            reusableRetryChart = ownedReusableRetryChart.get();
-            chart = reusableRetryChart;
-          } else {
-            reusableRetryChart = chart;
-          }
+        if (ownedChart != nullptr) {
+          ownedReusableRetryChart = std::move(ownedChart);
+          reusableRetryChart = ownedReusableRetryChart.get();
+          chart = reusableRetryChart;
+        } else {
+          reusableRetryChart = chart;
+        }
+        const long long resultGameplayTimeMicros =
+            getGameplayTimeMicros(context.jukebox.getTimeMicros());
+        const SkinGameplayGraphState resultGameplayGraph =
+            playfieldVisualStateStore
+                ->capture({.serial = ++playfieldFrameSerial,
+                           .visualTimeMicros =
+                               getVisualTimeMicros(resultGameplayTimeMicros),
+                           .gameplayTimeMicros = resultGameplayTimeMicros,
+                           .replayTouchTimeMicros = resultGameplayTimeMicros,
+                           .bgaTimeMicros = resultGameplayTimeMicros,
+                           .playTimer = {}}, false)
+                .skinGameplayGraph;
+        if (isCoursePlayback() && options.courseSession != nullptr) {
+          options.courseSession->recordResult(chart->Meta, *state,
+                                              resultGameplayGraph);
         }
         context.sceneManager->changeScene(
             std::make_unique<ResultScene>(

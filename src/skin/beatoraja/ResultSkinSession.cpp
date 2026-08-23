@@ -65,6 +65,9 @@ std::vector<std::string> resultRuntimeStrings(const ResultSkinData &data) {
     appendRuntimeString(strings, *value);
   }
   for (const auto &title : data.courseTitles) appendRuntimeString(strings, title);
+  for (const auto &entry : data.irRankingEntries) {
+    appendRuntimeString(strings, entry.playerName);
+  }
   return strings;
 }
 
@@ -107,12 +110,14 @@ ResultSkinSession::ResultSkinSession(
     std::unique_ptr<LuaSkinRuntime> runtime,
     std::unique_ptr<SkinResourceCatalog> resources,
     std::unique_ptr<SkinMovieCatalog> movies, SkinSafetyPolicy safetyPolicy,
-    ViewportSettings viewportSettings)
+    ViewportSettings viewportSettings,
+    std::vector<std::string> preparedRuntimeStrings)
     : revision_(std::move(revision)), entry_(std::move(entry)),
       model_(std::move(model)), configuration_(std::move(configuration)),
       runtime_(std::move(runtime)), resources_(std::move(resources)),
       movies_(std::move(movies)),
       safetyPolicy_(safetyPolicy), viewportSettings_(viewportSettings),
+      preparedRuntimeStrings_(std::move(preparedRuntimeStrings)),
       quadRenderer_(std::make_unique<rendering::SkinQuadBatchRenderer>()) {}
 
 ResultSkinSession::~ResultSkinSession() = default;
@@ -199,7 +204,7 @@ ResultSkinSessionCreateResult ResultSkinSession::create(
     ResultSkinData resourceData = context.initialData;
     resourceData.skinName = document.model.model.header.name;
     resourceData.skinAuthor = document.model.model.header.author;
-    const auto runtimeStrings = resultRuntimeStrings(resourceData);
+    auto runtimeStrings = resultRuntimeStrings(resourceData);
     auto planned = context.resourcePreparation.decodeAndPlan(
         {.revision = activation.revision.clone(), .entry = activation.entry,
          .fileSystem = *resourceFiles.fileSystem, .model = document.model,
@@ -254,7 +259,8 @@ ResultSkinSessionCreateResult ResultSkinSession::create(
         std::move(document.model), std::move(document.configuration),
         std::move(document.luaRuntime), std::move(uploaded.catalog),
         std::move(preparedMovies.catalog),
-        context.safetyPolicy, activation.reconciledSettings.viewport));
+        context.safetyPolicy, activation.reconciledSettings.viewport,
+        std::move(runtimeStrings)));
   } catch (...) {
     result.session.reset();
     result.diagnostics.push_back(failure("skin.result_session.create_failed",
@@ -429,9 +435,23 @@ std::vector<SkinDiagnostic> ResultSkinSession::takeLastDiagnostics() {
   return std::exchange(lastDiagnostics_, {});
 }
 
+std::vector<int> ResultSkinSession::takeQueuedBuiltinEventIds() {
+  return std::exchange(queuedBuiltinEventIds_, {});
+}
+
+bool ResultSkinSession::requiresRuntimeStringRefresh(
+    const ResultSkinData &data) const {
+  const auto runtimeStrings = resultRuntimeStrings(data);
+  return std::ranges::any_of(runtimeStrings, [this](const std::string &value) {
+    return std::ranges::find(preparedRuntimeStrings_, value) ==
+           preparedRuntimeStrings_.end();
+  });
+}
+
 bool ResultSkinSession::queuePointerDown(UiLogicalPoint point,
                                          long long eventMicros) {
-  if (!publishedInteractionLayout_ || queuedEventInvocations_.size() >= 64) {
+  if (!publishedInteractionLayout_ ||
+      queuedEventInvocations_.size() + queuedBuiltinEventIds_.size() >= 64) {
     return false;
   }
   const PresentationUiHit hit = publishedInteractionLayout_->hitTestUiControl(point);
@@ -443,11 +463,23 @@ bool ResultSkinSession::queuePointerDown(UiLogicalPoint point,
       model_.model.events, [&](const SkinEventBinding &candidate) {
         return candidate.id.value == invocation->eventBinding;
       });
-  if (binding == model_.model.events.end() ||
-      !std::holds_alternative<LuaCallbackId>(binding->source)) {
+  if (binding == model_.model.events.end()) {
     return false;
   }
-  queuedEventInvocations_.push_back(*invocation);
+  if (std::holds_alternative<LuaCallbackId>(binding->source)) {
+    queuedEventInvocations_.push_back(*invocation);
+    return true;
+  }
+  const auto *builtin =
+      std::get_if<SkinBuiltinPropertySelector>(&binding->source);
+  const auto *id = builtin == nullptr ? nullptr : std::get_if<int>(&builtin->value);
+  // EventFactory exposes this result-state event as open_ir.  In AsoBMaShow
+  // its equivalent is the selected chart's in-app ranking surface.  Other
+  // numeric events have no Result/CourseResult implementation in Beatoraja
+  // (or require persistence semantics AsoBMaShow does not expose), so keep
+  // them unclaimed rather than inventing incompatible navigation behavior.
+  if (id == nullptr || *id != 210) return false;
+  queuedBuiltinEventIds_.push_back(*id);
   return true;
 }
 

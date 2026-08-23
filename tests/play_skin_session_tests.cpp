@@ -5006,6 +5006,23 @@ void testResultLuaSessionBindsMainStateDuringConfiguredLoad() {
          "application audio backend");
 }
 
+void testResultSessionRefreshesForAsynchronousRankingNames() {
+  ActivationFixture fixture({.skinType = 7});
+  if (!fixture.ready()) {
+    return;
+  }
+  auto context = fixture.resultContext();
+  auto created = ResultSkinSession::create(fixture.takeActivation(),
+                                           std::move(context));
+  expect(created.session != nullptr &&
+             !created.session->requiresRuntimeStringRefresh({}) &&
+             created.session->requiresRuntimeStringRefresh(
+                 {.irRankingEntries = {{.rank = 1,
+                                       .playerName = "\xE3\x83\x86\xE3\x82\xB9\xE3\x83\x88"}}}),
+         "result sessions rebuild their prepared text resources when an "
+         "asynchronous IR ranking introduces a player name");
+}
+
 void testResultSessionRejectsConfiguredModelForAnotherResultTarget() {
   ActivationFixture fixture({.skinType = 7, .configuredSkinType = 15});
   if (!fixture.ready()) {
@@ -5481,6 +5498,7 @@ int main() {
   testSuccessfulGeometryChangesOnlyHitRevisionAndTeardownDiscardsState();
   testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin();
   testResultLuaSessionBindsMainStateDuringConfiguredLoad();
+  testResultSessionRefreshesForAsynchronousRankingNames();
   testResultSessionRejectsConfiguredModelForAnotherResultTarget();
   testResultBridgeSupportsBeatorajaIrAvailabilityProperties();
   testResultBridgeKeepsAutoplayOptionsOffOnResultScreens();
