@@ -191,6 +191,7 @@ std::optional<std::vector<int>> resultReplayLanePattern(
 
 struct ResultTimingStatistics {
   bool hasTimingSamples = false;
+  std::size_t timingSampleCount = 0;
   double averageMillis = 0.0;
   double standardDeviationMillis = 0.0;
   long long averageJudgeMicros = 0;
@@ -292,6 +293,7 @@ resultTimingStatistics(const ReplayData *replay, int totalNotes,
   }
   return ResultTimingStatistics{
       .hasTimingSamples = !timings.empty(),
+      .timingSampleCount = timings.size(),
       .averageMillis = static_cast<double>(mean / 1'000.0L),
       .standardDeviationMillis = static_cast<double>(
           timings.empty() ? 0.0L
@@ -483,6 +485,40 @@ courseGameplayGraphForSession(const CoursePlaySession &session) {
   return hasGraph ? SkinGameplayGraphState{.chart = std::move(chart),
                                             .dynamic = std::move(dynamic)}
                   : SkinGameplayGraphState{};
+}
+
+std::optional<ResultTimingStatistics>
+courseTimingStatisticsForSession(const CoursePlaySession &session) {
+  ResultTimingStatistics result;
+  result.distribution.assign(301, 0);
+  long double sum = 0.0;
+  long double sumSquares = 0.0;
+  for (const auto &stage : session.completedResults) {
+    if (stage.skinTimingSampleCount == 0 ||
+        !stage.skinTimingAverageMillis ||
+        !stage.skinTimingStandardDeviationMillis) {
+      continue;
+    }
+    const long double count = stage.skinTimingSampleCount;
+    const long double mean = *stage.skinTimingAverageMillis;
+    const long double deviation = *stage.skinTimingStandardDeviationMillis;
+    result.timingSampleCount += stage.skinTimingSampleCount;
+    sum += count * mean;
+    sumSquares += count * (deviation * deviation + mean * mean);
+    for (std::size_t index = 0;
+         index < result.distribution.size() &&
+         index < stage.skinTimingDistribution.size(); ++index) {
+      result.distribution[index] += stage.skinTimingDistribution[index];
+    }
+  }
+  if (result.timingSampleCount == 0) return std::nullopt;
+  const long double count = result.timingSampleCount;
+  const long double mean = sum / count;
+  result.hasTimingSamples = true;
+  result.averageMillis = static_cast<double>(mean);
+  result.standardDeviationMillis = static_cast<double>(std::sqrt(
+      std::max(0.0L, sumSquares / count - mean * mean)));
+  return result;
 }
 
 long long totalPlayLengthForCourse(const CoursePlaySession &session) {
@@ -796,12 +832,12 @@ bool ResultScene::startSelectedResultSkin() {
            }, {}, context.skinLiveResourceCounters),
        .liveResourceCounters = context.skinLiveResourceCounters,
        .safetyPolicy = skin::SkinSafetyPolicy(acquisition.request->safetyLevel)});
+  for (auto &diagnostic : created.diagnostics) {
+    appendDiagnostic(entry, revisionDigest, configurationDigest,
+                     std::move(diagnostic));
+  }
   if (!created.session) {
     resultSkinActivationFailed = true;
-    for (auto &diagnostic : created.diagnostics) {
-      appendDiagnostic(entry, revisionDigest, configurationDigest,
-                       std::move(diagnostic));
-    }
     return false;
   }
   resultSkinSession = std::move(created.session);
@@ -898,6 +934,22 @@ ResultSkinData ResultScene::makeResultSkinData() const {
       else if (*remote->score.gauge == "HARD") data.gaugeTypeOverride = GaugeType::Hard;
       else if (*remote->score.gauge == "EX-HARD") data.gaugeTypeOverride = GaugeType::ExHard;
       else if (*remote->score.gauge == "HAZARD") data.gaugeTypeOverride = GaugeType::Hazard;
+    }
+    if (remote->presentation.random) {
+      data.laneOrderLabel = *remote->presentation.random;
+      const std::size_t separator = data.laneOrderLabel.find(" / ");
+      const std::string_view player1(data.laneOrderLabel.data(),
+                                     separator == std::string::npos
+                                         ? data.laneOrderLabel.size()
+                                         : separator);
+      data.replayRandomOption1P =
+          replay::projectedBeatorajaReplayOptionIndex(player1);
+      if (separator != std::string::npos) {
+        const std::string_view player2(data.laneOrderLabel.data() + separator + 3,
+                                       data.laneOrderLabel.size() - separator - 3);
+        data.replayRandomOption2P =
+            replay::projectedBeatorajaReplayOptionIndex(player2);
+      }
     }
     data.chartMd5 = remote->score.chartMd5;
     data.chartSha256 = remote->score.chartSha256;
@@ -3696,15 +3748,33 @@ void ResultScene::init() {
                                                 : (local->retryData
                                                        ? &*local->retryData
                                                        : nullptr));
-    if (const auto timing = resultTimingStatistics(
-            timingReplay, local->meta.TotalNotes, local->reusableRetryChart)) {
+    const auto timing = isCourseFinalResult() &&
+                                local->courseOptions.session != nullptr
+                            ? courseTimingStatisticsForSession(
+                                  *local->courseOptions.session)
+                            : resultTimingStatistics(
+                                  timingReplay, local->meta.TotalNotes,
+                                  local->reusableRetryChart);
+    if (timing) {
       if (timing->hasTimingSamples) {
+        local->skinTimingSampleCount = timing->timingSampleCount;
         local->skinTimingAverageMillis = timing->averageMillis;
         local->skinTimingStandardDeviationMillis =
             timing->standardDeviationMillis;
       }
       local->skinAverageJudgeMicros = timing->averageJudgeMicros;
       local->skinTimingDistribution = timing->distribution;
+    }
+    if (isCourseStageResult() && local->courseOptions.session != nullptr &&
+        local->courseOptions.session->currentIndex <
+            local->courseOptions.session->completedResults.size()) {
+      auto &stage = local->courseOptions.session->completedResults[
+          local->courseOptions.session->currentIndex];
+      stage.skinTimingSampleCount = local->skinTimingSampleCount;
+      stage.skinTimingAverageMillis = local->skinTimingAverageMillis;
+      stage.skinTimingStandardDeviationMillis =
+          local->skinTimingStandardDeviationMillis;
+      stage.skinTimingDistribution = local->skinTimingDistribution;
     }
     local->skinTimingStatisticsPrepared = true;
   }

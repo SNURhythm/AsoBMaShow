@@ -277,6 +277,10 @@ struct CoursePlayChartResult {
   bms_parser::ChartMeta meta;
   RhythmState state;
   SkinGameplayGraphState gameplayGraph;
+  std::size_t skinTimingSampleCount = 0;
+  std::optional<double> skinTimingAverageMillis;
+  std::optional<double> skinTimingStandardDeviationMillis;
+  std::vector<int> skinTimingDistribution;
 
   CoursePlayChartResult(const bms_parser::ChartMeta &meta,
                         const RhythmState &state,

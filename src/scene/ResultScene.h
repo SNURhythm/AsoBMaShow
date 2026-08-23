@@ -206,6 +206,7 @@ struct LocalResultSource {
   ResultPresentationModel presentation;
   SkinGameplayGraphState gameplayGraph;
   bool skinTimingStatisticsPrepared = false;
+  std::size_t skinTimingSampleCount = 0;
   std::optional<double> skinTimingAverageMillis;
   std::optional<double> skinTimingStandardDeviationMillis;
   std::optional<long long> skinAverageJudgeMicros;
