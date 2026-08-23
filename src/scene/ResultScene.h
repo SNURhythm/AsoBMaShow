@@ -310,6 +310,7 @@ private:
   void setResultTouchControlsHidden(bool hidden);
   void setResultPhotoExportPresentation(ResultPhotoExportPresentation);
   void handleResultSkinRenderFailure();
+  void appendResultSkinRenderDiagnostics();
   void buildCourseExitConfirmation();
   void showCourseExitConfirmation();
   void hideCourseExitConfirmation();
@@ -360,6 +361,9 @@ private:
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   std::unique_ptr<skin::ResultSkinSession> resultSkinSession;
   long long resultSkinStartedMicros = 0;
+  skin::SkinEntryId resultSkinEntry;
+  std::string resultSkinRevisionDigest;
+  std::string resultSkinConfigurationDigest;
 #endif
   View *normalResultActions = nullptr;
   View *resultPersistenceStatus = nullptr;

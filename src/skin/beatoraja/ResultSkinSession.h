@@ -56,6 +56,7 @@ public:
   [[nodiscard]] bool render(RenderContext &, const ResultSkinData &,
                             std::uint64_t frameSerial,
                             std::int64_t elapsedMillis);
+  [[nodiscard]] std::vector<SkinDiagnostic> takeLastDiagnostics();
   [[nodiscard]] const SkinEntryId &entry() const noexcept;
 
 private:
@@ -77,6 +78,7 @@ private:
   ViewportSettings viewportSettings_{};
   Skin2DRenderer renderer_;
   std::unique_ptr<rendering::SkinQuadBatchRenderer> quadRenderer_;
+  std::vector<SkinDiagnostic> lastDiagnostics_;
 };
 
 } // namespace skin

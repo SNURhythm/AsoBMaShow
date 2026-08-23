@@ -266,7 +266,13 @@ bool ResultSkinSession::render(RenderContext &renderContext,
                                const ResultSkinData &data,
                                std::uint64_t frameSerial,
                                std::int64_t elapsedMillis) {
-  if (!resources_ || !movies_ || frameSerial == 0) return false;
+  lastDiagnostics_.clear();
+  if (!resources_ || !movies_ || frameSerial == 0) {
+    lastDiagnostics_.push_back(failure(
+        "skin.result_session.frame_invalid",
+        "Result skin frame has no prepared resources or valid frame serial."));
+    return false;
+  }
   ResultSkinData skinData = data;
   skinData.skinName = model_.model.header.name;
   skinData.skinAuthor = model_.model.header.author;
@@ -279,17 +285,40 @@ bool ResultSkinSession::render(RenderContext &renderContext,
        .height = static_cast<double>(header.height)},
       {.x = 0.0, .y = 0.0, .width = static_cast<double>(rendering::window_width),
        .height = static_cast<double>(rendering::window_height)}, viewportSettings_);
-  if (!viewport.valid) return false;
+  if (!viewport.valid) {
+    lastDiagnostics_.push_back(failure(
+        "skin.result_session.viewport_invalid",
+        "Result skin viewport could not be evaluated from its selected settings."));
+    return false;
+  }
   auto evaluated = renderer_.evaluateFrame(
       {.frameSerial = frameSerial, .sessionSerial = 1,
        .visualTimeMicros = elapsedMillis * 1000, .model = model_,
        .configuration = configuration_, .resources = *resources_, .movies = movies_.get(),
        .viewport = viewport,
        .runtime = runtime_.get(), .state = bridge, .safetyPolicy = safetyPolicy_});
-  return evaluated.submitReady && renderer_.submit(*evaluated.submitReady,
-                                                    *resources_, renderContext,
-                                                    *quadRenderer_, movies_.get(),
-                                                    viewport);
+  if (!evaluated.submitReady) {
+    lastDiagnostics_ = std::move(evaluated.diagnostics);
+    if (lastDiagnostics_.empty()) {
+      lastDiagnostics_.push_back(failure(
+          "skin.result_session.frame_evaluation_failed",
+          "Result skin frame evaluation did not produce a drawable command buffer."));
+    }
+    return false;
+  }
+  if (!renderer_.submit(*evaluated.submitReady, *resources_, renderContext,
+                        *quadRenderer_, movies_.get(), viewport)) {
+    lastDiagnostics_ = std::move(evaluated.diagnostics);
+    lastDiagnostics_.push_back(failure(
+        "skin.result_session.frame_submission_failed",
+        "Result skin frame submission could not be prepared."));
+    return false;
+  }
+  return true;
+}
+
+std::vector<SkinDiagnostic> ResultSkinSession::takeLastDiagnostics() {
+  return std::exchange(lastDiagnostics_, {});
 }
 
 const SkinEntryId &ResultSkinSession::entry() const noexcept { return entry_; }

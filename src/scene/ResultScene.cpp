@@ -613,6 +613,9 @@ bool ResultScene::startSelectedResultSkin() {
     return false;
   }
   resultSkinSession = std::move(created.session);
+  resultSkinEntry = entry;
+  resultSkinRevisionDigest = revisionDigest;
+  resultSkinConfigurationDigest = configurationDigest;
   resultSkinStartedMicros = nowMicros();
   return true;
 #endif
@@ -2075,6 +2078,25 @@ void ResultScene::handleResultSkinRenderFailure() {
   resultSkinFailureNotice = notice;
   rootLayout->addView(notice);
   rootLayout->applyYogaLayout();
+#endif
+}
+
+void ResultScene::appendResultSkinRenderDiagnostics() {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (!resultSkinSession || !context.skinDiagnosticHistory) return;
+  for (auto diagnostic : resultSkinSession->takeLastDiagnostics()) {
+    try {
+      context.skinDiagnosticHistory->append({
+          .entry = resultSkinEntry,
+          .revisionDigest = resultSkinRevisionDigest,
+          .configurationDigest = resultSkinConfigurationDigest,
+          .phase = skin::SkinDiagnosticPhase::Session,
+          .diagnostic = std::move(diagnostic),
+          .luaLine = std::nullopt,
+          .frameSerial = context.currentFrame});
+    } catch (...) {
+    }
+  }
 #endif
 }
 
@@ -3564,6 +3586,7 @@ void ResultScene::renderScene() {
     if (!resultSkinSession->render(
         renderContext, makeResultSkinData(),
         std::max<std::uint64_t>(1, context.currentFrame), elapsedMillis)) {
+      appendResultSkinRenderDiagnostics();
       handleResultSkinRenderFailure();
     }
   }
