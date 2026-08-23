@@ -405,6 +405,23 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
   if (!id) return unsupported<std::int64_t>();
   if (domain == SkinIntegerPropertyDomain::ImageIndex) {
     switch (*id) {
+    case 40: {
+      const GaugeType type = data_.state ? data_.state->gaugeType
+                                         : GaugeType::Normal;
+      return supported<std::int64_t>(gaugeTypeIndex(type));
+    }
+    case 42:
+      return data_.replayRandomOption1P
+                 ? supported<std::int64_t>(*data_.replayRandomOption1P)
+                 : unsupported<std::int64_t>();
+    case 43:
+      return data_.replayRandomOption2P
+                 ? supported<std::int64_t>(*data_.replayRandomOption2P)
+                 : unsupported<std::int64_t>();
+    case 54:
+      return data_.replayDoublePlayOption
+                 ? supported<std::int64_t>(*data_.replayDoublePlayOption)
+                 : unsupported<std::int64_t>();
     case 89:
     case 90:
       // Result snapshots do not retain persistent song-review flags. Match

@@ -5153,6 +5153,29 @@ void testResultBridgeMatchesResultAliasesAndTimerUnits() {
          "result aliases and timers match Beatoraja result properties");
 }
 
+void testResultBridgeUsesCapturedReplayImageIndexes() {
+  RhythmState state(nullptr, false);
+  state.gaugeType = GaugeType::Hard;
+  ResultSkinStateBridge bridge({.state = &state,
+                                 .replayRandomOption1P = 2,
+                                 .replayRandomOption2P = 9,
+                                 .replayDoublePlayOption = 1},
+                                1, 0);
+  const auto gauge = bridge.integerProperty(
+      {40}, SkinIntegerPropertyDomain::ImageIndex);
+  const auto random1P = bridge.integerProperty(
+      {42}, SkinIntegerPropertyDomain::ImageIndex);
+  const auto random2P = bridge.integerProperty(
+      {43}, SkinIntegerPropertyDomain::ImageIndex);
+  const auto doublePlay = bridge.integerProperty(
+      {54}, SkinIntegerPropertyDomain::ImageIndex);
+  expect(gauge.supported && gauge.value == gaugeTypeIndex(GaugeType::Hard) &&
+             random1P.supported && random1P.value == 2 &&
+             random2P.supported && random2P.value == 9 &&
+             doublePlay.supported && doublePlay.value == 1,
+         "result image indexes use the immutable played gauge and replay options");
+}
+
 void testResultBridgeExposesPlayerHistoryProperties() {
   ResultSkinStateBridge bridge({
       .playerHistory = ResultPlayerHistoryData{
@@ -5417,6 +5440,7 @@ int main() {
   testResultBridgeKeepsAutoplayOptionsOffOnResultScreens();
   testResultBridgeMatchesBeatorajaResultScoreFamilies();
   testResultBridgeMatchesResultAliasesAndTimerUnits();
+  testResultBridgeUsesCapturedReplayImageIndexes();
   testResultBridgeExposesPlayerHistoryProperties();
   testResultBridgeExposesResultTimingDistributionStatistics();
   testResultBridgeUsesRemotePresentationValues();

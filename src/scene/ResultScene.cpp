@@ -6,6 +6,7 @@
 #include "../PlayOptionUtils.h"
 #include "../repositories/ReplayRepository.h"
 #include "../replay/CourseReplayConsumer.h"
+#include "../replay/ReplayOption.h"
 #include "../ResultImageExporter.h"
 #include "../ResultContracts.h"
 #include "../ResultPresentationUtils.h"
@@ -749,6 +750,18 @@ ResultSkinData ResultScene::makeResultSkinData() const {
     }
     data.averageJudgeMicros = timing->averageJudgeMicros;
     data.timingDistribution = timing->distribution;
+  }
+  if (timingReplay != nullptr) {
+    if (timingReplay->playOption) {
+      data.replayRandomOption1P =
+          replay::projectedBeatorajaReplayOptionIndex(*timingReplay->playOption);
+    }
+    if (timingReplay->playOption2) {
+      data.replayRandomOption2P =
+          replay::projectedBeatorajaReplayOptionIndex(*timingReplay->playOption2);
+    }
+    data.replayDoublePlayOption =
+        timingReplay->provenance.doublePlayFlip ? 1 : 0;
   }
   return data;
 }
