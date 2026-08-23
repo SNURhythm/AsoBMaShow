@@ -13,6 +13,7 @@
 #include <chrono>
 #include <memory>
 #include <stop_token>
+#include <unordered_map>
 #include <vector>
 
 struct RenderContext;
@@ -83,6 +84,7 @@ private:
   std::vector<SkinDiagnostic> lastDiagnostics_;
   std::optional<SkinInteractionLayout> publishedInteractionLayout_;
   std::vector<SkinEventInvocation> queuedEventInvocations_;
+  std::unordered_map<int, std::int64_t> customEventLastExecutionMicros_;
 };
 
 } // namespace skin

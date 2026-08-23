@@ -1075,6 +1075,10 @@ std::int64_t ResultSkinStateBridge::timerProperty(
   const auto id = integerSelector(selector);
   constexpr auto kTimerOff = std::numeric_limits<std::int64_t>::min();
   if (!id) return kTimerOff;
+  if (const auto custom = customTimerValues_.find(*id);
+      custom != customTimerValues_.end()) {
+    return custom->second;
+  }
   // Result timers are timestamps, not elapsed values. MusicResult and
   // CourseResult start their graph/update timers at result-scene origin.
   if (*id == 150 || *id == 151 || *id == 152) return 0;
@@ -1084,6 +1088,10 @@ std::int64_t ResultSkinStateBridge::timerProperty(
     return elapsedMillis_ * 1'000 >= start ? start : kTimerOff;
   }
   return kTimerOff;
+}
+
+void ResultSkinStateBridge::setCustomTimer(int id, std::int64_t value) {
+  customTimerValues_.insert_or_assign(id, value);
 }
 
 std::span<const SkinProjectedNoteView>

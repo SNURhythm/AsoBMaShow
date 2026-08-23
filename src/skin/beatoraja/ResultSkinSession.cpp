@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <limits>
 #include <map>
 #include <string>
 #include <vector>
@@ -298,6 +299,81 @@ bool ResultSkinSession::render(RenderContext &renderContext,
           "skin.result_session.frame_begin_failed",
           "Result Lua runtime rejected the render frame.")));
       return false;
+    }
+    for (const auto &timer : model_.model.customTimers) {
+      std::int64_t value = std::numeric_limits<std::int64_t>::min();
+      if (timer.timer) {
+        const auto binding = std::ranges::find_if(
+            model_.model.timerProperties, [&](const SkinTimerPropertyBinding &candidate) {
+              return candidate.id == *timer.timer;
+            });
+        if (binding == model_.model.timerProperties.end()) {
+          lastDiagnostics_.push_back(failure("skin.result_session.custom_timer_missing",
+              "Result custom timer binding is absent."));
+          return false;
+        }
+        if (const auto *builtin = std::get_if<SkinBuiltinPropertySelector>(
+                &binding->source)) {
+          value = bridge.timerProperty(*builtin);
+        } else {
+          const auto callback = runtime_->invoke(
+              std::get<LuaCallbackId>(binding->source), {});
+          if (callback.failure || !callback.value ||
+              !std::holds_alternative<std::int64_t>(*callback.value)) {
+            lastDiagnostics_.push_back(callback.failure.value_or(failure(
+                "skin.result_session.custom_timer_type",
+                "Result custom timer did not return an integer timestamp.")));
+            return false;
+          }
+          value = std::get<std::int64_t>(*callback.value);
+        }
+      }
+      bridge.setCustomTimer(timer.id, value);
+    }
+    for (const auto &event : model_.model.customEvents) {
+      bool active = !event.condition;
+      if (event.condition) {
+        const auto condition = std::ranges::find_if(
+            model_.model.booleanProperties,
+            [&](const SkinBooleanPropertyBinding &candidate) {
+              return candidate.id == *event.condition;
+            });
+        if (condition == model_.model.booleanProperties.end()) {
+          lastDiagnostics_.push_back(failure("skin.result_session.custom_event_condition_missing",
+              "Result custom event condition is absent."));
+          return false;
+        }
+        if (const auto *builtin = std::get_if<SkinBuiltinPropertySelector>(
+                &condition->source)) {
+          active = bridge.booleanProperty(*builtin).value;
+        } else {
+          const auto callback = runtime_->invoke(
+              std::get<LuaCallbackId>(condition->source), {});
+          active = callback.value && std::holds_alternative<bool>(*callback.value) &&
+                   std::get<bool>(*callback.value);
+          if (callback.failure || !callback.value ||
+              !std::holds_alternative<bool>(*callback.value)) {
+            lastDiagnostics_.push_back(callback.failure.value_or(failure(
+                "skin.result_session.custom_event_condition_type",
+                "Result custom event condition did not return a boolean.")));
+            return false;
+          }
+        }
+      }
+      if (!active) continue;
+      const auto previous = customEventLastExecutionMicros_.find(event.id);
+      const std::int64_t now = elapsedMillis * 1000;
+      if (previous != customEventLastExecutionMicros_.end() &&
+          now - previous->second < static_cast<std::int64_t>(event.minimumIntervalMillis) * 1000) continue;
+      const auto action = std::ranges::find_if(model_.model.events,
+          [&](const SkinEventBinding &candidate) { return candidate.id == event.action; });
+      if (action != model_.model.events.end() &&
+          std::holds_alternative<LuaCallbackId>(action->source)) {
+        const auto callback = runtime_->invoke(
+            std::get<LuaCallbackId>(action->source), {});
+        if (callback.failure) { lastDiagnostics_.push_back(*callback.failure); return false; }
+      }
+      customEventLastExecutionMicros_.insert_or_assign(event.id, now);
     }
     for (const auto &invocation : queuedEventInvocations_) {
       const auto binding = std::ranges::find_if(

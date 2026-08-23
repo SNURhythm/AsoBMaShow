@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace skin {
@@ -41,6 +42,7 @@ public:
   SkinGaugeStateView gaugeState() const noexcept override;
   SkinJudgeStateView judgeState(int player) const noexcept override;
   SkinNoteExpansionStateView noteExpansionState() const noexcept override;
+  void setCustomTimer(int, std::int64_t);
 
 private:
   [[nodiscard]] std::optional<int> integerSelector(
@@ -61,6 +63,7 @@ private:
   std::uint64_t gaugeRevision_ = 0;
   const BeatorajaSkinConfiguration *configuration_ = nullptr;
   const BeatorajaSkinModel *model_ = nullptr;
+  std::unordered_map<int, std::int64_t> customTimerValues_;
 };
 
 } // namespace skin
