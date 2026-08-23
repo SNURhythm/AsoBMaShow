@@ -687,6 +687,7 @@ struct ActivationFixtureOptions {
   bool resultIntervalEventExec = false;
   bool resultRecursiveEventExec = false;
   bool resultDuplicateEventExec = false;
+  bool resultDuplicateTimerExec = false;
   bool staticResultCustomEvent = false;
   bool legacyInputBearing = false;
   bool repeatedPomyu = false;
@@ -1049,6 +1050,18 @@ if skin_config then
       assert(main_state.event_exec(1000))
       return 0
     end}}
+  }
+)lua";
+    } else if (options.resultDuplicateTimerExec) {
+      script += "\n  return { type = " +
+                std::to_string(options.skinType) + R"lua(, w = 1280, h = 720,
+    customTimers = {
+      {id = 10000, timer = function()
+        assert(main_state.event_exec(210))
+        return 0
+      end},
+      {id = 10000, timer = function() return 0 end}
+    }
   }
 )lua";
     } else if (options.resultEventExec) {
@@ -5171,6 +5184,20 @@ void testResultLuaSessionUsesTheLastDuplicateCustomEventDefinition() {
          "actions with the final Beatoraja definition");
 }
 
+void testResultLuaSessionUsesTheLastDuplicateCustomTimerDefinition() {
+  ActivationFixture fixture({.skinType = 7, .resultDuplicateTimerExec = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  auto created = ResultSkinSession::create(fixture.takeActivation(),
+                                           fixture.resultContext());
+  RenderContext context;
+  expect(created.session != nullptr &&
+             created.session->render(context, {}, 1, 0) &&
+             created.session->takeQueuedBuiltinEventIds().empty(),
+         "duplicate result custom timers replace the obsolete timer callback");
+}
+
 void testStaticResultSessionRunsCustomBuiltinEvent() {
   ActivationFixture fixture({.skinType = 7, .staticResultCustomEvent = true});
   if (!fixture.ready()) {
@@ -5761,6 +5788,7 @@ int main() {
   testResultLuaSessionManualCustomEventSuppressesAutomaticRepeat();
   testResultLuaSessionRejectsRecursiveCustomEvents();
   testResultLuaSessionUsesTheLastDuplicateCustomEventDefinition();
+  testResultLuaSessionUsesTheLastDuplicateCustomTimerDefinition();
   testStaticResultSessionRunsCustomBuiltinEvent();
   testResultSessionRefreshesForAsynchronousRankingNames();
   testResultSessionRefreshesForAllStringSelectors();

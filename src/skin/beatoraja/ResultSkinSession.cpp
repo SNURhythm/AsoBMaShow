@@ -201,6 +201,10 @@ ResultSkinSession::ResultSkinSession(
     customEventLastDefinitionIndexes_.insert_or_assign(
         model_.model.customEvents[index].id, index);
   }
+  for (std::size_t index = 0; index < model_.model.customTimers.size(); ++index) {
+    customTimerLastDefinitionIndexes_.insert_or_assign(
+        model_.model.customTimers[index].id, index);
+  }
 }
 
 ResultSkinSession::~ResultSkinSession() = default;
@@ -399,40 +403,48 @@ bool ResultSkinSession::render(RenderContext &renderContext,
       return false;
     }
   }
-  for (const auto &timer : model_.model.customTimers) {
-      std::int64_t value = std::numeric_limits<std::int64_t>::min();
-      if (timer.timer) {
-        const auto binding = std::ranges::find_if(
-            model_.model.timerProperties, [&](const SkinTimerPropertyBinding &candidate) {
-              return candidate.id == *timer.timer;
-            });
-        if (binding == model_.model.timerProperties.end()) {
-          lastDiagnostics_.push_back(failure("skin.result_session.custom_timer_missing",
-              "Result custom timer binding is absent."));
-          return false;
-        }
-        if (const auto *builtin = std::get_if<SkinBuiltinPropertySelector>(
-                &binding->source)) {
-          value = bridge.timerProperty(*builtin);
-        } else if (runtime_ != nullptr) {
-          const auto callback = runtime_->invoke(
-              std::get<LuaCallbackId>(binding->source), {});
-          if (callback.failure || !callback.value ||
-              !std::holds_alternative<std::int64_t>(*callback.value)) {
-            lastDiagnostics_.push_back(callback.failure.value_or(failure(
-                "skin.result_session.custom_timer_type",
-                "Result custom timer did not return an integer timestamp.")));
-            return false;
-          }
-          value = std::get<std::int64_t>(*callback.value);
-        } else {
-          lastDiagnostics_.push_back(failure(
-              "skin.result_session.custom_timer_runtime_missing",
-              "Result custom timer callback requires a Lua runtime."));
-          return false;
-        }
+  for (std::size_t timerIndex = 0;
+       timerIndex < model_.model.customTimers.size(); ++timerIndex) {
+    const auto &timer = model_.model.customTimers[timerIndex];
+    const auto lastDefinition =
+        customTimerLastDefinitionIndexes_.find(timer.id);
+    if (lastDefinition == customTimerLastDefinitionIndexes_.end() ||
+        lastDefinition->second != timerIndex) {
+      continue;
+    }
+    std::int64_t value = std::numeric_limits<std::int64_t>::min();
+    if (timer.timer) {
+      const auto binding = std::ranges::find_if(
+          model_.model.timerProperties, [&](const SkinTimerPropertyBinding &candidate) {
+            return candidate.id == *timer.timer;
+          });
+      if (binding == model_.model.timerProperties.end()) {
+        lastDiagnostics_.push_back(failure("skin.result_session.custom_timer_missing",
+            "Result custom timer binding is absent."));
+        return false;
       }
-      bridge.setCustomTimer(timer.id, value);
+      if (const auto *builtin = std::get_if<SkinBuiltinPropertySelector>(
+              &binding->source)) {
+        value = bridge.timerProperty(*builtin);
+      } else if (runtime_ != nullptr) {
+        const auto callback = runtime_->invoke(
+            std::get<LuaCallbackId>(binding->source), {});
+        if (callback.failure || !callback.value ||
+            !std::holds_alternative<std::int64_t>(*callback.value)) {
+          lastDiagnostics_.push_back(callback.failure.value_or(failure(
+              "skin.result_session.custom_timer_type",
+              "Result custom timer did not return an integer timestamp.")));
+          return false;
+        }
+        value = std::get<std::int64_t>(*callback.value);
+      } else {
+        lastDiagnostics_.push_back(failure(
+            "skin.result_session.custom_timer_runtime_missing",
+            "Result custom timer callback requires a Lua runtime."));
+        return false;
+      }
+    }
+    bridge.setCustomTimer(timer.id, value);
   }
   for (std::size_t eventIndex = 0;
        eventIndex < model_.model.customEvents.size(); ++eventIndex) {
