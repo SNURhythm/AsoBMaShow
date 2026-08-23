@@ -88,10 +88,20 @@ std::uint64_t ResultSkinStateBridge::frameSerial() const noexcept {
 }
 
 std::optional<int> ResultSkinStateBridge::count(Judgement judgement) const noexcept {
-  if (data_.state == nullptr) return std::nullopt;
-  const auto found = data_.state->judgeCount.find(judgement);
-  return found == data_.state->judgeCount.end() ? std::optional<int>(0)
-                                                 : found->second;
+  if (data_.state != nullptr) {
+    const auto found = data_.state->judgeCount.find(judgement);
+    return found == data_.state->judgeCount.end() ? std::optional<int>(0)
+                                                   : found->second;
+  }
+  if (data_.presentation == nullptr) return std::nullopt;
+  const char *label = judgement == PGreat ? "P-GREAT" : judgement == Great ? "GREAT"
+                       : judgement == Good ? "GOOD" : judgement == Bad ? "BAD"
+                       : judgement == Poor ? "POOR" : nullptr;
+  if (label == nullptr) return std::nullopt;
+  for (const auto &row : data_.presentation->judgements) {
+    if (row.label == label) return row.total;
+  }
+  return std::nullopt;
 }
 
 std::optional<int> ResultSkinStateBridge::score() const noexcept {
@@ -203,8 +213,11 @@ SkinPropertyLookup<bool> ResultSkinStateBridge::booleanProperty(
     return supported(*id == 195 ? backBmp : !backBmp);
   }
   if (*id == 90 || *id == 91) {
-    const bool clear = data_.state != nullptr &&
-                       data_.state->getClearTypeRank() > kClearTypeFailedRank;
+    const auto lamp = data_.state != nullptr
+                          ? std::optional<int>(data_.state->getClearTypeRank())
+                          : (data_.presentation ? data_.presentation->lampRank
+                                                : std::nullopt);
+    const bool clear = lamp && *lamp > kClearTypeFailedRank;
     return supported(*id == 90 ? clear : !clear);
   }
   if (*id >= 300 && *id <= 307 && currentScore && maximum) {

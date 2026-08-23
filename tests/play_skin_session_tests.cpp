@@ -5055,6 +5055,25 @@ void testResultBridgeMatchesResultAliasesAndTimerUnits() {
          "result aliases and timers match Beatoraja result properties");
 }
 
+void testResultBridgeUsesRemotePresentationValues() {
+  ResultPresentationModel remote{
+      .score = 1400,
+      .maxScore = 2000,
+      .lampRank = 3,
+      .judgements = {{.label = "P-GREAT", .total = 800},
+                     {.label = "GREAT", .total = 100},
+                     {.label = "GOOD", .total = 50},
+                     {.label = "BAD", .total = 20},
+                     {.label = "POOR", .total = 10}},
+  };
+  ResultSkinStateBridge bridge({.presentation = &remote}, 1, 0);
+  const auto poor = bridge.integerProperty({114}, {});
+  expect(bridge.booleanProperty({90}).supported &&
+             bridge.booleanProperty({90}).value && poor.supported &&
+             poor.value == 10,
+         "remote result properties use the authoritative presentation");
+}
+
 void testRequestedExternalResultSkinCreatesSession() {
   const char *configuredRoot =
       std::getenv("ASOBMASHOW_EXTERNAL_RESULT_SKIN_ROOT");
@@ -5160,6 +5179,7 @@ int main() {
   testResultBridgeSupportsBeatorajaIrAvailabilityProperties();
   testResultBridgeMatchesBeatorajaResultScoreFamilies();
   testResultBridgeMatchesResultAliasesAndTimerUnits();
+  testResultBridgeUsesRemotePresentationValues();
   testRequestedExternalResultSkinCreatesSession();
   if (failures != 0) {
     std::cerr << failures << " play skin session test(s) failed\n";
