@@ -480,6 +480,13 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
   requireContains(result,
                   "meta.LnMode = normalizeChartLongNoteModeValue(session.longNoteMode);",
                   "course result metadata retains the selected long-note mode");
+  requireContains(result, "meta.Rank = currentMeta->Rank;",
+                  "course result metadata retains the current stage judge rank");
+  requireContains(result, "courseGraphPaddingForEntry(",
+                  "course result graphs pad unplayed stages after an early failure");
+  requireContains(result,
+                  "dynamic->gaugeHistories[gaugeIndex] = courseState.gaugeHistory;",
+                  "course result graph gauge history follows the padded aggregate state");
   requireContains(mainMenu,
                   "auto replay = consumer.load(*exact.record,",
                   "saved course result recall loads its retained replay when available");

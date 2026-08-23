@@ -69,11 +69,18 @@ combineSkinGameplayGraphStates(std::span<const SkinGameplayGraphState> stages) {
     }
     chart->judgementDistributionSeconds +=
         stageChart.judgementDistributionSeconds;
-    chart->mainBpm = stageChart.mainBpm;
-    chart->minimumBpm = chart->minimumBpm == 0.0
-                            ? stageChart.minimumBpm
-                            : std::min(chart->minimumBpm, stageChart.minimumBpm);
-    chart->maximumBpm = std::max(chart->maximumBpm, stageChart.maximumBpm);
+    if (stageChart.mainBpm > 0.0) {
+      chart->mainBpm = stageChart.mainBpm;
+    }
+    if (stageChart.minimumBpm > 0.0) {
+      chart->minimumBpm = chart->minimumBpm == 0.0
+                              ? stageChart.minimumBpm
+                              : std::min(chart->minimumBpm,
+                                         stageChart.minimumBpm);
+    }
+    if (stageChart.maximumBpm > 0.0) {
+      chart->maximumBpm = std::max(chart->maximumBpm, stageChart.maximumBpm);
+    }
     dynamic->judgementDistribution.insert(
         dynamic->judgementDistribution.end(),
         stageDynamic.judgementDistribution.begin(),

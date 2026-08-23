@@ -460,13 +460,77 @@ int totalNotesForCourse(const CoursePlaySession &session) {
 }
 
 SkinGameplayGraphState
-courseGameplayGraphForSession(const CoursePlaySession &session) {
+courseGraphPaddingForEntry(const CoursePlayEntry &entry, GaugeType gaugeType) {
+  const std::int64_t playLength = std::max(0LL, entry.meta.PlayLength);
+  const std::size_t judgementSeconds =
+      static_cast<std::size_t>(playLength / 1'000'000LL) + 1;
+  const int gaugeIndex = gaugeTypeIndex(gaugeType);
+  const int gaugeSamples =
+      std::max(1, static_cast<int>((playLength + 500000LL) / 500000LL));
+
+  auto chart = std::make_shared<SkinGameplayChartGraphState>();
+  chart->normalDistribution.assign(judgementSeconds + 1, {});
+  chart->judgementDistributionSeconds = judgementSeconds;
+
+  auto dynamic = std::make_shared<SkinGameplayDynamicGraphState>();
+  dynamic->judgementDistribution.assign(judgementSeconds, {});
+  dynamic->earlyLateDistribution.assign(judgementSeconds, {});
+  dynamic->gaugeType = gaugeType;
+  if (gaugeIndex >= 0 &&
+      static_cast<std::size_t>(gaugeIndex) < dynamic->gaugeHistories.size()) {
+    dynamic->gaugeHistories[static_cast<std::size_t>(gaugeIndex)].assign(
+        static_cast<std::size_t>(gaugeSamples), 0.0F);
+  }
+  return {.chart = std::move(chart), .dynamic = std::move(dynamic)};
+}
+
+SkinGameplayGraphState courseGameplayGraphForSession(
+    const CoursePlaySession &session, const RhythmState &courseState) {
   std::vector<SkinGameplayGraphState> stages;
-  stages.reserve(session.completedResults.size());
+  stages.reserve(session.entries.size());
   for (const auto &stage : session.completedResults) {
     stages.push_back(stage.gameplayGraph);
   }
-  return combineSkinGameplayGraphStates(stages);
+  for (std::size_t index = session.completedResults.size();
+       index < session.entries.size(); ++index) {
+    stages.push_back(
+        courseGraphPaddingForEntry(session.entries[index], session.gaugeType));
+  }
+
+  SkinGameplayGraphState combined = combineSkinGameplayGraphStates(stages);
+  if (combined.chart == nullptr || combined.dynamic == nullptr) {
+    return combined;
+  }
+
+  auto chart = std::make_shared<SkinGameplayChartGraphState>(*combined.chart);
+  const std::int64_t courseDurationMicros =
+      static_cast<std::int64_t>(chart->judgementDistributionSeconds) *
+      1'000'000LL;
+  const auto lastBpm = std::find_if(
+      chart->bpmSeries.rbegin(), chart->bpmSeries.rend(),
+      [](const SkinBpmGraphPoint &point) { return point.emitsGraphPoint; });
+  if (lastBpm != chart->bpmSeries.rend() &&
+      lastBpm->chartTimeMicros < courseDurationMicros) {
+    auto continuation = *lastBpm;
+    continuation.chartTimeMicros = courseDurationMicros;
+    continuation.emitsGraphPoint = true;
+    continuation.synthetic = true;
+    chart->bpmSeries.push_back(continuation);
+  }
+
+  auto dynamic =
+      std::make_shared<SkinGameplayDynamicGraphState>(*combined.dynamic);
+  const int gaugeType = gaugeTypeIndex(courseState.gaugeType);
+  if (gaugeType >= 0 &&
+      static_cast<std::size_t>(gaugeType) < dynamic->gaugeHistories.size()) {
+    const std::size_t gaugeIndex = static_cast<std::size_t>(gaugeType);
+    dynamic->gaugeHistories[gaugeIndex] = courseState.gaugeHistory;
+  }
+  dynamic->gaugeType = courseState.gaugeType;
+  dynamic->gaugeSupported = false;
+  combined.chart = std::move(chart);
+  combined.dynamic = std::move(dynamic);
+  return combined;
 }
 
 std::optional<ResultTimingStatistics>
@@ -561,6 +625,11 @@ courseResultMetaForSession(const CoursePlaySession &session) {
       session.courseName, session.courseGroupName, session.entries.size(),
       totalNotesForCourse(session), totalPlayLengthForCourse(session));
   meta.LnMode = normalizeChartLongNoteModeValue(session.longNoteMode);
+  if (const auto *currentMeta = session.currentMeta(); currentMeta != nullptr) {
+    meta.Rank = currentMeta->Rank;
+  } else if (!session.completedResults.empty()) {
+    meta.Rank = session.completedResults.back().meta.Rank;
+  }
   return meta;
 }
 
@@ -3267,7 +3336,7 @@ void ResultScene::showCourseResult() {
                                   local->courseOptions.savedResultBrowsing},
           std::string{}, std::unique_ptr<bms_parser::Chart>{}, nullptr,
           std::nullopt, nullptr, std::nullopt, true, ResultTableContext{},
-          courseGameplayGraphForSession(*session)),
+          courseGameplayGraphForSession(*session, courseState)),
       false);
 }
 
