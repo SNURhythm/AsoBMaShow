@@ -808,6 +808,18 @@ PlaySkinStateBridge::PlaySkinStateBridge(PlaySkinStateBridgeContext context)
       found != context_.configuration.offsetsById.end()) {
     hiddenCoverOffset_ = skinRuntimeOffset(found->second);
   }
+  if (context_.model != nullptr) {
+    for (std::size_t index = 0;
+         index < context_.model->model.customTimers.size(); ++index) {
+      customTimerLastDefinitionIndexes_.insert_or_assign(
+          context_.model->model.customTimers[index].id, index);
+    }
+    for (std::size_t index = 0;
+         index < context_.model->model.customEvents.size(); ++index) {
+      customEventLastDefinitionIndexes_.insert_or_assign(
+          context_.model->model.customEvents[index].id, index);
+    }
+  }
 }
 
 PlaySkinStateBridge::~PlaySkinStateBridge() { closeFrame(); }
@@ -1230,9 +1242,17 @@ SkinHostCallResult PlaySkinStateBridge::updateCustomObjects() {
        .severity = DiagnosticSeverity::Warning});
 
   SkinHostCallResult result;
-  // IntMap iteration in the pinned target is not reproducible from IDs alone.
-  // The validated model preserves declaration order, so use it directly.
-  for (const auto &timer : context_.model->model.customTimers) {
+  // Skin stores custom objects in IntMaps, so later declarations replace an
+  // earlier definition with the same ID.  The model retains source entries;
+  // evaluate only the final one for each ID.
+  for (std::size_t timerIndex = 0;
+       timerIndex < context_.model->model.customTimers.size(); ++timerIndex) {
+    const auto &timer = context_.model->model.customTimers[timerIndex];
+    const auto lastDefinition = customTimerLastDefinitionIndexes_.find(timer.id);
+    if (lastDefinition == customTimerLastDefinitionIndexes_.end() ||
+        lastDefinition->second != timerIndex) {
+      continue;
+    }
     const auto updated = updateCustomTimer(timer);
     result.callbacksInvoked += updated.callbacksInvoked;
     if (updated.status != SkinHostCallStatus::Completed) {
@@ -1243,7 +1263,14 @@ SkinHostCallResult PlaySkinStateBridge::updateCustomObjects() {
       return result;
     }
   }
-  for (const auto &event : context_.model->model.customEvents) {
+  for (std::size_t eventIndex = 0;
+       eventIndex < context_.model->model.customEvents.size(); ++eventIndex) {
+    const auto &event = context_.model->model.customEvents[eventIndex];
+    const auto lastDefinition = customEventLastDefinitionIndexes_.find(event.id);
+    if (lastDefinition == customEventLastDefinitionIndexes_.end() ||
+        lastDefinition->second != eventIndex) {
+      continue;
+    }
     const auto updated = updateCustomEvent(event);
     result.callbacksInvoked += updated.callbacksInvoked;
     if (updated.status != SkinHostCallStatus::Completed) {
@@ -1295,18 +1322,16 @@ PlaySkinStateBridge::executeEvent(int eventId, std::span<const int> arguments) {
   }
 
   if (context_.model != nullptr) {
-    if (const auto event = std::ranges::find_if(
-            context_.model->model.customEvents,
-            [eventId](const SkinCustomEvent &candidate) {
-              return candidate.id == eventId;
-            }); event != context_.model->model.customEvents.end()) {
-      auto invoked = invokeCustomEvent(*event, arguments);
+    if (const auto eventIndex = customEventLastDefinitionIndexes_.find(eventId);
+        eventIndex != customEventLastDefinitionIndexes_.end()) {
+      const auto &event = context_.model->model.customEvents[eventIndex->second];
+      auto invoked = invokeCustomEvent(event, arguments);
       if (invoked.status == SkinHostCallStatus::Completed) {
         try {
           // Pinned CustomEvent.execute shares this clock with automatic update,
           // so a manual invocation suppresses the same event until minInterval.
           customEventLastExecutionMicros_.insert_or_assign(
-              event->id, skinStateClockMicros(*state_));
+              event.id, skinStateClockMicros(*state_));
         } catch (...) {
           reportDiagnostic({.code = "skin.play_state.custom_event_clock_failed",
                             .message =
