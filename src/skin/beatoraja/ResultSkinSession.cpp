@@ -175,7 +175,10 @@ bool ResultSkinSession::render(RenderContext &renderContext,
                                std::uint64_t frameSerial,
                                std::int64_t elapsedMillis) {
   if (!resources_ || frameSerial == 0) return false;
-  ResultSkinStateBridge bridge(data, frameSerial, elapsedMillis);
+  ResultSkinData skinData = data;
+  skinData.skinName = model_.model.header.name;
+  skinData.skinAuthor = model_.model.header.author;
+  ResultSkinStateBridge bridge(std::move(skinData), frameSerial, elapsedMillis);
   LuaFrameStateBinding frameState(runtime_.get(), &bridge);
   const auto &header = model_.model.header;
   const auto viewport = evaluatePlaySkinViewport(

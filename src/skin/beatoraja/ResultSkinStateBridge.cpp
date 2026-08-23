@@ -175,10 +175,11 @@ std::optional<int> ResultSkinStateBridge::integerSelector(
   if (value != nullptr) return *value;
   const auto *name = std::get_if<std::string>(&selector.value);
   if (name == nullptr) return std::nullopt;
-  static constexpr std::array<std::pair<std::string_view, int>, 25> aliases{{
+  static constexpr std::array<std::pair<std::string_view, int>, 27> aliases{{
       {"title", 10}, {"fulltitle", 12}, {"subtitle", 11},
       {"artist", 14}, {"subartist", 15}, {"mode", 60},
-      {"sort", 61}, {"difficulty", 62}, {"nowbpm", 92},
+      {"sort", 61}, {"difficulty", 62}, {"skinname", 50},
+      {"skinauthor", 51}, {"nowbpm", 92},
       {"score_rate", 1102}, {"total_rate", 1115},
       {"score_rate2", 155}, {"scorerate", 110},
       {"scorerate_final", 111}, {"bestscorerate_now", 112},
@@ -650,6 +651,12 @@ SkinPropertyLookup<std::string_view> ResultSkinStateBridge::stringProperty(
                               ? data_.meta->Artist
                               : data_.meta->Artist + " " + data_.meta->SubArtist)
                        : "";
+    break;
+  case 50:
+    stringValue_ = data_.skinName;
+    break;
+  case 51:
+    stringValue_ = data_.skinAuthor;
     break;
   case 1010:
     stringValue_ = ASOBMASHOW_APPLICATION_VERSION;

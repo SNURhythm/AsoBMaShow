@@ -5083,7 +5083,9 @@ void testResultBridgeMatchesResultAliasesAndTimerUnits() {
   ResultSkinStateBridge bridge({.meta = &meta,
                                  .playModeLabel = "7K",
                                  .laneOrderLabel = "MIRROR",
-                                 .courseTitles = {"First stage", "Second stage"}},
+                                 .courseTitles = {"First stage", "Second stage"},
+                                 .skinName = "Result skin",
+                                 .skinAuthor = "Skin author"},
                                 1, 125);
   const auto level = bridge.integerProperty({45}, {});
   const auto fullTitleProperty = bridge.stringProperty({12});
@@ -5094,11 +5096,14 @@ void testResultBridgeMatchesResultAliasesAndTimerUnits() {
   const auto firstCourseTitle = std::string(bridge.stringProperty({150}).value);
   const auto chartMinutes = bridge.integerProperty({1163}, {});
   const auto chartSeconds = bridge.integerProperty({1164}, {});
+  const auto skinName = std::string(bridge.stringProperty({50}).value);
+  const auto skinAuthor = std::string(bridge.stringProperty({51}).value);
   expect(level.supported && level.value == 12 && fullTitleProperty.supported &&
              fullTitle == "Title Subtitle" && mode == "7K" && order == "MIRROR" &&
              namedTitle == "Title" && firstCourseTitle == "First stage" &&
              chartMinutes.supported && chartMinutes.value == 2 &&
              chartSeconds.supported && chartSeconds.value == 5 &&
+             skinName == "Result skin" && skinAuthor == "Skin author" &&
              bridge.timerProperty({1}) == 125'000 &&
              bridge.timerProperty({100}) == INT64_MIN,
          "result aliases and timers match Beatoraja result properties");
