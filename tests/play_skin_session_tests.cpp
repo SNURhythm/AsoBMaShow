@@ -5036,6 +5036,25 @@ void testResultBridgeMatchesBeatorajaResultScoreFamilies() {
          "Poor-versus-Miss result families");
 }
 
+void testResultBridgeMatchesResultAliasesAndTimerUnits() {
+  bms_parser::ChartMeta meta{.Title = "Title", .SubTitle = "Subtitle",
+                             .PlayLevel = 12.0F};
+  ResultSkinStateBridge bridge({.meta = &meta,
+                                 .playModeLabel = "7K",
+                                 .laneOrderLabel = "MIRROR"},
+                                1, 125);
+  const auto level = bridge.integerProperty({45}, {});
+  const auto fullTitleProperty = bridge.stringProperty({12});
+  const auto fullTitle = std::string(fullTitleProperty.value);
+  const auto mode = std::string(bridge.stringProperty({60}).value);
+  const auto order = std::string(bridge.stringProperty({61}).value);
+  expect(level.supported && level.value == 12 && fullTitleProperty.supported &&
+             fullTitle == "Title Subtitle" && mode == "7K" && order == "MIRROR" &&
+             bridge.timerProperty({1}) == 125'000 &&
+             bridge.timerProperty({100}) == INT64_MIN,
+         "result aliases and timers match Beatoraja result properties");
+}
+
 void testRequestedExternalResultSkinCreatesSession() {
   const char *configuredRoot =
       std::getenv("ASOBMASHOW_EXTERNAL_RESULT_SKIN_ROOT");
@@ -5140,6 +5159,7 @@ int main() {
   testResultLuaSessionBindsMainStateDuringConfiguredLoad();
   testResultBridgeSupportsBeatorajaIrAvailabilityProperties();
   testResultBridgeMatchesBeatorajaResultScoreFamilies();
+  testResultBridgeMatchesResultAliasesAndTimerUnits();
   testRequestedExternalResultSkinCreatesSession();
   if (failures != 0) {
     std::cerr << failures << " play skin session test(s) failed\n";

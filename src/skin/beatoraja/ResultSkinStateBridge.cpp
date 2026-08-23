@@ -275,7 +275,7 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
     case 74: case 106: return notes;
     case 75: case 105: case 174: return maxCombo();
     case 76: case 177: return badPoints();
-    case 96:
+    case 45: case 46: case 47: case 48: case 49: case 96:
       return data_.meta
                  ? std::optional<int>(static_cast<int>(
                        std::lround(data_.meta->PlayLevel)))
@@ -468,9 +468,16 @@ SkinPropertyLookup<std::string_view> ResultSkinStateBridge::stringProperty(
   case 2:
     stringValue_ = data_.playerName;
     break;
-  case 10: case 12:
+  case 10:
     stringValue_ = data_.presentation ? data_.presentation->title
                                       : (data_.meta ? data_.meta->Title : "");
+    break;
+  case 12:
+    stringValue_ = data_.presentation ? data_.presentation->title
+                                      : (data_.meta ? data_.meta->Title : "");
+    if (data_.meta != nullptr && !data_.meta->SubTitle.empty()) {
+      stringValue_ += " " + data_.meta->SubTitle;
+    }
     break;
   case 11:
     stringValue_ = data_.meta ? data_.meta->SubTitle : "";
@@ -524,6 +531,12 @@ SkinPropertyLookup<std::string_view> ResultSkinStateBridge::stringProperty(
   case 62:
     stringValue_ = data_.difficultyLabel;
     break;
+  case 60:
+    stringValue_ = data_.playModeLabel;
+    break;
+  case 61:
+    stringValue_ = data_.laneOrderLabel;
+    break;
   default:
     if ((*id >= 120 && *id <= 129) || (*id >= 150 && *id <= 159) ||
         (*id >= 200 && *id <= 219) || (*id >= 1040 && *id <= 1075)) {
@@ -541,8 +554,11 @@ ResultSkinStateBridge::offsetProperty(int) { return unsupported<SkinRuntimeOffse
 std::int64_t ResultSkinStateBridge::timerProperty(
     const SkinBuiltinPropertySelector &selector) {
   const auto id = integerSelector(selector);
-  if (!id) return -1;
-  return *id == 0 || *id == 1 || *id == 150 || *id == 152 ? elapsedMillis_ : -1;
+  constexpr auto kTimerOff = std::numeric_limits<std::int64_t>::min();
+  if (!id) return kTimerOff;
+  return *id == 0 || *id == 1 || *id == 150 || *id == 152
+             ? elapsedMillis_ * 1'000
+             : kTimerOff;
 }
 
 std::span<const SkinProjectedNoteView>
