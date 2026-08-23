@@ -1067,8 +1067,12 @@ ResultSkinData ResultScene::makeResultSkinData() const {
       data.replayRandomOption2P =
           replay::projectedBeatorajaReplayOptionIndex(*session.playOption2);
     }
-    data.replayDoublePlayOption = session.playOption2 ? 1 : 0;
-    data.replayKeyMode = local->meta.KeyMode;
+    data.replayDoublePlayOption =
+        local->attemptProvenance.doublePlayFlip ? 1 : 0;
+    if (const auto *currentMeta = session.currentMeta(); currentMeta != nullptr) {
+      data.replayKeyMode = currentMeta->KeyMode;
+      data.keyModeOverride = currentMeta->KeyMode;
+    }
   }
   return data;
 }

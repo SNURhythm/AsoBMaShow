@@ -345,7 +345,8 @@ bool ResultSkinSession::render(RenderContext &renderContext,
           "Result Lua runtime rejected the render frame.")));
       return false;
     }
-    for (const auto &timer : model_.model.customTimers) {
+  }
+  for (const auto &timer : model_.model.customTimers) {
       std::int64_t value = std::numeric_limits<std::int64_t>::min();
       if (timer.timer) {
         const auto binding = std::ranges::find_if(
@@ -360,7 +361,7 @@ bool ResultSkinSession::render(RenderContext &renderContext,
         if (const auto *builtin = std::get_if<SkinBuiltinPropertySelector>(
                 &binding->source)) {
           value = bridge.timerProperty(*builtin);
-        } else {
+        } else if (runtime_ != nullptr) {
           const auto callback = runtime_->invoke(
               std::get<LuaCallbackId>(binding->source), {});
           if (callback.failure || !callback.value ||
@@ -371,10 +372,16 @@ bool ResultSkinSession::render(RenderContext &renderContext,
             return false;
           }
           value = std::get<std::int64_t>(*callback.value);
+        } else {
+          lastDiagnostics_.push_back(failure(
+              "skin.result_session.custom_timer_runtime_missing",
+              "Result custom timer callback requires a Lua runtime."));
+          return false;
         }
       }
       bridge.setCustomTimer(timer.id, value);
-    }
+  }
+  if (runtime_ != nullptr) {
     for (const auto &event : model_.model.customEvents) {
       if (!event.condition) continue;
       bool active = false;
