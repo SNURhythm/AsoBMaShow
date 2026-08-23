@@ -482,6 +482,13 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
                   "course result metadata retains the selected long-note mode");
   requireContains(result, "meta.Rank = currentMeta->Rank;",
                   "course result metadata retains the current stage judge rank");
+  requireContains(result,
+                  "meta.BmsPath = currentMeta->BmsPath;\n"
+                  "    meta.Folder = currentMeta->Folder;\n"
+                  "    meta.StageFile = currentMeta->StageFile;\n"
+                  "    meta.BackBmp = currentMeta->BackBmp;\n"
+                  "    meta.Banner = currentMeta->Banner;",
+                  "course result metadata retains the current stage artwork");
   requireContains(result, "courseGraphPaddingForEntry(",
                   "course result graphs pad unplayed stages after an early failure");
   requireContains(result,

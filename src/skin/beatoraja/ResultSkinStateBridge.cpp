@@ -579,6 +579,12 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
                  : unsupported<std::int64_t>();
     }
     default:
+      // IntegerPropertyFactory accepts its entire unsigned image-index cache
+      // domain. Result-only state has no source for other legal indexes, so
+      // use frame zero just as the gameplay bridge does.
+      if (*id >= 0 && *id <= 65'535) {
+        return supported<std::int64_t>(0);
+      }
       return unsupported<std::int64_t>();
     }
   }

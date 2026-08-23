@@ -5486,6 +5486,16 @@ void testResultBridgeUsesCapturedReplayImageIndexes() {
          "result image indexes use the immutable played gauge and replay options");
 }
 
+void testResultBridgeFallsBackToFrameZeroForLegalImageIndexes() {
+  ResultSkinStateBridge bridge({}, 1, 0);
+  const auto legal = bridge.integerProperty(
+      {10}, SkinIntegerPropertyDomain::ImageIndex);
+  const auto outOfRange = bridge.integerProperty(
+      {65'536}, SkinIntegerPropertyDomain::ImageIndex);
+  expect(legal.supported && legal.value == 0 && !outOfRange.supported,
+         "result image-index properties retain Beatoraja's legal frame-zero fallback");
+}
+
 void testResultBridgeProjectsLongNoteModeImageIndex() {
   for (const auto [mode, expected] :
        std::array<std::pair<int, std::int64_t>, 3>{{{1, 0}, {2, 1}, {3, 2}}}) {
@@ -5916,6 +5926,7 @@ int main() {
   testResultBridgeUsesProjectedKeyModeForScorePoint();
   testResultBridgeMatchesResultAliasesAndTimerUnits();
   testResultBridgeUsesCapturedReplayImageIndexes();
+  testResultBridgeFallsBackToFrameZeroForLegalImageIndexes();
   testResultBridgeProjectsLongNoteModeImageIndex();
   testResultBridgeMatchesBeatorajaTableFullString();
   testResultBridgeDoesNotInventRemoteGaugeImageIndex();

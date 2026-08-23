@@ -627,8 +627,19 @@ courseResultMetaForSession(const CoursePlaySession &session) {
   meta.LnMode = normalizeChartLongNoteModeValue(session.longNoteMode);
   if (const auto *currentMeta = session.currentMeta(); currentMeta != nullptr) {
     meta.Rank = currentMeta->Rank;
+    meta.BmsPath = currentMeta->BmsPath;
+    meta.Folder = currentMeta->Folder;
+    meta.StageFile = currentMeta->StageFile;
+    meta.BackBmp = currentMeta->BackBmp;
+    meta.Banner = currentMeta->Banner;
   } else if (!session.completedResults.empty()) {
-    meta.Rank = session.completedResults.back().meta.Rank;
+    const auto &lastMeta = session.completedResults.back().meta;
+    meta.Rank = lastMeta.Rank;
+    meta.BmsPath = lastMeta.BmsPath;
+    meta.Folder = lastMeta.Folder;
+    meta.StageFile = lastMeta.StageFile;
+    meta.BackBmp = lastMeta.BackBmp;
+    meta.Banner = lastMeta.Banner;
   }
   return meta;
 }
