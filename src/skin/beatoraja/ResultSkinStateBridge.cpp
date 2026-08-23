@@ -1,5 +1,6 @@
 #include "ResultSkinStateBridge.h"
 
+#include "../../LongNoteModeUtils.h"
 #include "../../scene/ResultPresentationModel.h"
 
 #include <algorithm>
@@ -476,9 +477,13 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
   if (domain == SkinIntegerPropertyDomain::ImageIndex) {
     switch (*id) {
     case 40: {
-      const GaugeType type = data_.state ? data_.state->gaugeType
-                                         : data_.gaugeTypeOverride.value_or(GaugeType::Normal);
-      return supported<std::int64_t>(gaugeTypeIndex(type));
+      if (data_.state != nullptr) {
+        return supported<std::int64_t>(gaugeTypeIndex(data_.state->gaugeType));
+      }
+      return data_.gaugeTypeOverride
+                 ? supported<std::int64_t>(
+                       gaugeTypeIndex(*data_.gaugeTypeOverride))
+                 : unsupported<std::int64_t>();
     }
     case 42:
       return data_.replayRandomOption1P
@@ -491,6 +496,12 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
     case 54:
       return data_.replayDoublePlayOption
                  ? supported<std::int64_t>(*data_.replayDoublePlayOption)
+                 : unsupported<std::int64_t>();
+    case 308:
+      return data_.meta != nullptr
+                 ? supported<std::int64_t>(
+                       long_note_mode::normalizeSelectedValue(data_.meta->LnMode) -
+                       long_note_mode::kLnValue)
                  : unsupported<std::int64_t>();
     case 450: case 451: case 452: case 453: case 454:
     case 455: case 456: case 457: case 458:

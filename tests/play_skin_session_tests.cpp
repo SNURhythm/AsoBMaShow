@@ -5485,6 +5485,33 @@ void testResultBridgeUsesCapturedReplayImageIndexes() {
          "result image indexes use the immutable played gauge and replay options");
 }
 
+void testResultBridgeProjectsLongNoteModeImageIndex() {
+  for (const auto [mode, expected] :
+       std::array<std::pair<int, std::int64_t>, 3>{{{1, 0}, {2, 1}, {3, 2}}}) {
+    bms_parser::ChartMeta meta{.LnMode = mode};
+    ResultSkinStateBridge bridge({.meta = &meta}, 1, 0);
+    const auto value = bridge.integerProperty(
+        {308}, SkinIntegerPropertyDomain::ImageIndex);
+    expect(value.supported && value.value == expected,
+           "result LN mode image index compacts LN/CN/HCN like Beatoraja");
+  }
+}
+
+void testResultBridgeDoesNotInventRemoteGaugeImageIndex() {
+  ResultPresentationModel remote{.score = 100, .maxScore = 200};
+  ResultSkinStateBridge unknown({.presentation = &remote}, 1, 0);
+  const auto unavailable = unknown.integerProperty(
+      {40}, SkinIntegerPropertyDomain::ImageIndex);
+  ResultSkinStateBridge known({.presentation = &remote,
+                               .gaugeTypeOverride = GaugeType::Hard},
+                              1, 0);
+  const auto explicitGauge = known.integerProperty(
+      {40}, SkinIntegerPropertyDomain::ImageIndex);
+  expect(!unavailable.supported && explicitGauge.supported &&
+             explicitGauge.value == gaugeTypeIndex(GaugeType::Hard),
+         "remote results do not substitute NORMAL when their gauge is absent");
+}
+
 void testResultBridgeConvertsClearRanksToBeatorajaImageIndexes() {
   ResultSkinStateBridge bridge({
       .currentClearRankOverride = kClearTypeFullComboRank,
@@ -5833,6 +5860,8 @@ int main() {
   testResultBridgeUsesProjectedKeyModeForScorePoint();
   testResultBridgeMatchesResultAliasesAndTimerUnits();
   testResultBridgeUsesCapturedReplayImageIndexes();
+  testResultBridgeProjectsLongNoteModeImageIndex();
+  testResultBridgeDoesNotInventRemoteGaugeImageIndex();
   testResultBridgeConvertsClearRanksToBeatorajaImageIndexes();
   testResultBridgeProjectsIrRankingRows();
   testResultBridgeProjectsReplayLaneAssignments();

@@ -416,6 +416,7 @@ void testLocalRegressionContractsRemainPresent() {
 
 void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
   const std::string result = readSource("src/scene/ResultScene.cpp");
+  const std::string mainMenu = readSource("src/scene/MainMenuScene.cpp");
   const std::string session =
       readSource("src/skin/beatoraja/ResultSkinSession.cpp");
 
@@ -470,6 +471,15 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
   requireContains(result,
                   "context, result.meta, result.state, provenance, stageReplay,",
                   "saved course stages project setup through the result scene");
+  requireContains(mainMenu,
+                  "auto replay = consumer.load(*exact.record,",
+                  "saved course result recall loads its retained replay when available");
+  requireContains(mainMenu,
+                  "replay_result::BuildSkinGameplayGraphState(*stage.chart,",
+                  "saved course result recall reconstructs every stage skin graph");
+  requireOrdered(mainMenu, "auto view = std::move(*recalled.value);",
+                 "replay_result::BuildSkinGameplayGraphState(*stage.chart,",
+                 "saved course graph reconstruction occurs before ResultScene uses it");
   requireContains(result,
                   "} else if (isCourseStageResult()) {",
                   "saved modern course stages project durable setup provenance");

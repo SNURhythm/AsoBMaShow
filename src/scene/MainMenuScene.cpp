@@ -11,6 +11,7 @@
 #include <algorithm>
 #include "../repositories/ReplayRepository.h"
 #include "../ReplayAutoPlay.h"
+#include "../ReplayResultStateBuilder.h"
 #include "../ReplayVideoExporter.h"
 #include "../ModernResultRecallBuilder.h"
 #include "../PlayOptionUtils.h"
@@ -11531,6 +11532,24 @@ void MainMenuScene::startModernCourseReplayResultRecall(
       }
 
       auto view = std::move(*recalled.value);
+      std::vector<ReplayData> graphReplays;
+      if (exact.record->replayFile) {
+        auto consumer =
+            replay::makeRuntimeCourseReplayConsumer(context.replayRepository);
+        auto replay = consumer.load(*exact.record,
+                                    currentSelection->completedChartPaths,
+                                    *cancelled);
+        if (replay.ready() && replay.replayData != nullptr &&
+            replay.replayData->stages.size() == view.completedStages.size()) {
+          graphReplays.reserve(replay.replayData->stages.size());
+          for (auto &stage : replay.replayData->stages) {
+            graphReplays.push_back(std::move(stage.replay));
+          }
+        }
+      }
+      if (cancelled->load()) {
+        return;
+      }
       auto session = std::make_shared<CoursePlaySession>();
       session->courseId = view.result.legacyCourseId;
       session->courseKey = view.result.courseKey;
@@ -11558,7 +11577,15 @@ void MainMenuScene::startModernCourseReplayResultRecall(
            ++index) {
         auto &stage = view.completedStages[index];
         session->entries[index].meta = stage.chart->Meta;
-        session->completedResults.emplace_back(stage.chart->Meta, stage.state);
+        const ReplayData emptyReplay;
+        const ReplayData &graphReplay = index < graphReplays.size()
+                                            ? graphReplays[index]
+                                            : emptyReplay;
+        session->completedResults.emplace_back(
+            stage.chart->Meta, stage.state,
+            replay_result::BuildSkinGameplayGraphState(*stage.chart,
+                                                        graphReplay,
+                                                        stage.state));
         session->ownedResultBrowseCharts.push_back(stage.chart);
         session->stageProvenance[index] = stage.result.score.provenance;
         session->modernCourseChartPaths.push_back(stage.chart->Meta.BmsPath);
