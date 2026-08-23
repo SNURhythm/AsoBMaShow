@@ -5056,6 +5056,7 @@ void testResultBridgeMatchesBeatorajaResultScoreFamilies() {
   }, 1, 0);
 
   const auto rank = bridge.booleanProperty({220});
+  const auto lowerRank = bridge.booleanProperty({221});
   const auto negatedRank = bridge.booleanProperty({-220});
   const auto poor = bridge.integerProperty({114}, {});
   const auto miss = bridge.integerProperty({420}, {});
@@ -5069,7 +5070,8 @@ void testResultBridgeMatchesBeatorajaResultScoreFamilies() {
   const auto comboRate = bridge.floatProperty({145}, {});
   const auto imageFavorite = bridge.integerProperty(
       {90}, SkinIntegerPropertyDomain::ImageIndex);
-  expect(rank.supported && rank.value && negatedRank.supported &&
+  expect(rank.supported && rank.value && lowerRank.supported && lowerRank.value &&
+             negatedRank.supported &&
              !negatedRank.value && poor.supported && poor.value == 3 &&
              miss.supported && miss.value == 4 && poorPlusMiss.supported &&
              poorPlusMiss.value == 7 && badPoorMiss.supported &&

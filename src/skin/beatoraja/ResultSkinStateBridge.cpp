@@ -265,7 +265,12 @@ SkinPropertyLookup<bool> ResultSkinStateBridge::booleanProperty(
     return supported(*id == 179 ? random : !random);
   }
   if (*id >= 220 && *id <= 227 && currentScore && maximum) {
-    return supported(resultRank(*currentScore, *maximum) == 227 - *id);
+    // SkinProperty OPTION_AAA through OPTION_F are cumulative `qualifyRank`
+    // thresholds, unlike the exact result-rank families (200/300/340).
+    constexpr std::array<int, 8> lowerBounds{0, 6, 9, 12, 15, 18, 21, 24};
+    const int threshold = lowerBounds[static_cast<std::size_t>(227 - *id)];
+    return supported(static_cast<long long>(*currentScore) * 27 >=
+                     static_cast<long long>(*maximum) * threshold);
   }
   if (*id == 190 || *id == 191) {
     const bool stageFile = data_.meta != nullptr && !data_.meta->StageFile.empty();
