@@ -116,17 +116,31 @@ std::optional<int> rankingBadPoints(const RhythmState &state) {
 }
 
 struct ResultTimingStatistics {
+  bool hasTimingSamples = false;
   double averageMillis = 0.0;
   double standardDeviationMillis = 0.0;
+  long long averageJudgeMicros = 0;
 };
 
 std::optional<ResultTimingStatistics>
-resultTimingStatistics(const ReplayData *replay) {
-  if (replay == nullptr) return std::nullopt;
+resultTimingStatistics(const ReplayData *replay, int totalNotes) {
+  if (replay == nullptr || totalNotes <= 0) return std::nullopt;
   constexpr long long rangeMicros = 150'000;
   std::vector<long long> timings;
   timings.reserve(replay->events.size());
+  long long durationMicros = 0;
+  int playedNotes = 0;
   for (const auto &event : replay->events) {
+    const bool scoreTimingEvent =
+        (event.action == ReplayEventAction::Press ||
+         event.action == ReplayEventAction::MultiBad ||
+         event.action == ReplayEventAction::Release) &&
+        (event.judgement == PGreat || event.judgement == Great ||
+         event.judgement == Good || event.judgement == Bad);
+    if (scoreTimingEvent && playedNotes < totalNotes) {
+      durationMicros += std::llabs(event.diffMicros);
+      ++playedNotes;
+    }
     const bool timingEvent =
         (event.action == ReplayEventAction::Press ||
          event.action == ReplayEventAction::MultiBad ||
@@ -135,19 +149,26 @@ resultTimingStatistics(const ReplayData *replay) {
         event.diffMicros >= -rangeMicros && event.diffMicros <= rangeMicros;
     if (timingEvent) timings.push_back(event.diffMicros);
   }
-  if (timings.empty()) return std::nullopt;
-  long double sum = 0.0;
-  for (const auto timing : timings) sum += timing;
-  const long double mean = sum / timings.size();
+  long double mean = 0.0;
   long double squared = 0.0;
-  for (const auto timing : timings) {
-    const long double delta = timing - mean;
-    squared += delta * delta;
+  if (!timings.empty()) {
+    long double sum = 0.0;
+    for (const auto timing : timings) sum += timing;
+    mean = sum / timings.size();
+    for (const auto timing : timings) {
+      const long double delta = timing - mean;
+      squared += delta * delta;
+    }
   }
   return ResultTimingStatistics{
+      .hasTimingSamples = !timings.empty(),
       .averageMillis = static_cast<double>(mean / 1'000.0L),
       .standardDeviationMillis = static_cast<double>(
-          std::sqrt(squared / timings.size()) / 1'000.0L)};
+          std::sqrt(squared / timings.size()) / 1'000.0L),
+      .averageJudgeMicros =
+          (durationMicros + static_cast<long long>(totalNotes - playedNotes) *
+                                1'000'000LL) /
+          totalNotes};
 }
 
 void drawResultGaugeGraphPrimitive(
@@ -707,9 +728,12 @@ ResultSkinData ResultScene::makeResultSkinData() const {
                                               : (local->retryData
                                                      ? &*local->retryData
                                                      : nullptr));
-  if (const auto timing = resultTimingStatistics(timingReplay)) {
-    data.timingAverageMillis = timing->averageMillis;
-    data.timingStandardDeviationMillis = timing->standardDeviationMillis;
+  if (const auto timing = resultTimingStatistics(timingReplay, local->meta.TotalNotes)) {
+    if (timing->hasTimingSamples) {
+      data.timingAverageMillis = timing->averageMillis;
+      data.timingStandardDeviationMillis = timing->standardDeviationMillis;
+    }
+    data.averageJudgeMicros = timing->averageJudgeMicros;
   }
   return data;
 }

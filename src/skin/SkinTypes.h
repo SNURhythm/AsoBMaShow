@@ -66,6 +66,7 @@ struct ResultSkinData {
   // completed replay in chart-time milliseconds, bounded to ±150 ms.
   std::optional<double> timingAverageMillis;
   std::optional<double> timingStandardDeviationMillis;
+  std::optional<long long> averageJudgeMicros;
   // Captured at the gameplay-to-result boundary. The shared immutable graph
   // snapshots keep every graph-capable Beatoraja result object on the same
   // authoritative data that gameplay rendered on its final frame.

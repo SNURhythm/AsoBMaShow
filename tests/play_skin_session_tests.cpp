@@ -5155,14 +5155,19 @@ void testResultBridgeMatchesResultAliasesAndTimerUnits() {
 
 void testResultBridgeExposesResultTimingDistributionStatistics() {
   ResultSkinStateBridge bridge({.timingAverageMillis = -12.34,
-                                 .timingStandardDeviationMillis = 8.76},
+                                 .timingStandardDeviationMillis = 8.76,
+                                 .averageJudgeMicros = 1'234'560},
                                 1, 0);
+  const auto duration = bridge.integerProperty({372}, {});
+  const auto durationFraction = bridge.integerProperty({373}, {});
   const auto average = bridge.integerProperty({374}, {});
   const auto averageFraction = bridge.integerProperty({375}, {});
   const auto deviation = bridge.integerProperty({376}, {});
   const auto deviationFraction = bridge.integerProperty({377}, {});
   const auto floatDeviation = bridge.floatProperty({376}, {});
-  expect(average.supported && average.value == -12 &&
+  expect(duration.supported && duration.value == 1234 &&
+             durationFraction.supported && durationFraction.value == 56 &&
+             average.supported && average.value == -12 &&
              averageFraction.supported && averageFraction.value == -34 &&
              deviation.supported && deviation.value == 8 &&
              deviationFraction.supported && deviationFraction.value == 76 &&

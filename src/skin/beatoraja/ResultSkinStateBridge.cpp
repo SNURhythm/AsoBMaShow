@@ -652,7 +652,17 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
                  : data_.previousBest
                  ? std::optional<int>(data_.previousBest->clearType)
                  : std::optional<int>(kClearTypeFailedRank);
-    case 372: case 373: case 374: case 375:
+    case 372:
+      return data_.averageJudgeMicros
+                 ? std::optional<int>(static_cast<int>(
+                       *data_.averageJudgeMicros / 1'000LL))
+                 : std::optional<int>(std::numeric_limits<int>::min());
+    case 373:
+      return data_.averageJudgeMicros
+                 ? std::optional<int>(static_cast<int>(
+                       (*data_.averageJudgeMicros / 10LL) % 100LL))
+                 : std::optional<int>(std::numeric_limits<int>::min());
+    case 374: case 375:
       if (*id == 374 && data_.timingAverageMillis) {
         return static_cast<int>(*data_.timingAverageMillis);
       }
@@ -761,6 +771,9 @@ SkinPropertyLookup<double> ResultSkinStateBridge::floatProperty(
     // FloatType.timing_average exposes TimingDistribution's fixed 150 ms
     // array center (not its measured mean) divided by 1000.
     return supported(0.15);
+  }
+  if (*id == 372 && data_.averageJudgeMicros) {
+    return supported(static_cast<double>(*data_.averageJudgeMicros) / 1'000.0);
   }
   if (*id == 376 && data_.timingStandardDeviationMillis) {
     return supported(*data_.timingStandardDeviationMillis);
