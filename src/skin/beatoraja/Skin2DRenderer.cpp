@@ -4321,7 +4321,17 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
 
       if (gauge) {
         const auto gaugeState = inputs.state.gaugeState();
-        const float gaugeValue = static_cast<float>(gaugeState.value);
+        float gaugeValue = static_cast<float>(gaugeState.value);
+        if (inputs.model.model.header.type == 7 ||
+            inputs.model.model.header.type == 15) {
+          const std::int64_t elapsedMillis = inputs.visualTimeMicros / 1'000;
+          const double progress = std::clamp(
+              static_cast<double>(elapsedMillis - gauge->resultStartMillis) /
+                  static_cast<double>(gauge->resultEndMillis -
+                                      gauge->resultStartMillis),
+              0.0, 1.0);
+          gaugeValue *= static_cast<float>(progress);
+        }
         const float gaugeMinimum = static_cast<float>(gaugeState.minimum);
         const float gaugeMaximum = static_cast<float>(gaugeState.maximum);
         const float gaugeBorder = static_cast<float>(gaugeState.border);
