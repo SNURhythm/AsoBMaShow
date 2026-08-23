@@ -103,6 +103,7 @@ ResultSkinSessionCreateResult ResultSkinSession::create(
         {.sourceFormat = *format, .entry = activation.entry,
          .documentFileSystem = *resourceFiles.fileSystem,
          .luaFileSystem = std::move(luaFiles),
+         .luaAudioBackend = std::move(context.audioBackend),
          .desiredSettings = &activation.reconciledSettings,
          .expectedConfigurationDigest = activation.configurationDigest,
          .luaPurpose = LuaRuntimePurpose::Gameplay,
@@ -120,11 +121,14 @@ ResultSkinSessionCreateResult ResultSkinSession::create(
       return result;
     }
     auto document = std::move(*loaded.document);
-    const auto type = skinTargetTraitForType(document.header.type);
+    const int configuredType = document.model.model.header.type;
+    const auto type = skinTargetTraitForType(configuredType);
     if (!type || (type->kind != SkinTargetKind::Result &&
-                  type->kind != SkinTargetKind::CourseResult)) {
+                  type->kind != SkinTargetKind::CourseResult) ||
+        (context.expectedSkinType != 0 &&
+         configuredType != context.expectedSkinType)) {
       result.diagnostics.push_back(failure("skin.result_session.type_mismatch",
-          "Loaded document is not a Beatoraja result skin.",
+          "Configured document does not match the selected Beatoraja result target.",
           activation.entry.packageRelativePath));
       return result;
     }

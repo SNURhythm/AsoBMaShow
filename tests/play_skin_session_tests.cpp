@@ -669,6 +669,7 @@ enum class MalformedPomyuNumeric {
 
 struct ActivationFixtureOptions {
   int skinType = 0;
+  int configuredSkinType = -1;
   bool resourceBearing = false;
   bool movieBearing = false;
   bool audioBearing = false;
@@ -983,7 +984,10 @@ if skin_config then
   }
 )lua";
     } else {
-      script += "\n  return { type = " + std::to_string(options.skinType) +
+      const int configuredSkinType = options.configuredSkinType >= 0
+                                         ? options.configuredSkinType
+                                         : options.skinType;
+      script += "\n  return { type = " + std::to_string(configuredSkinType) +
                 ", w = 1280, h = 720 }\n";
     }
     script += "\nend\nif phase_count ~= 1 then\n"
@@ -1067,6 +1071,7 @@ if skin_config then
             .resourcePreparation = resources_,
             .initialData = std::move(initialData),
             .textureDevice = device_,
+            .audioBackend = audioBackend_,
             .liveResourceCounters = liveResourceCounters_};
   }
 
@@ -4987,14 +4992,32 @@ void testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin() {
 
 void testResultLuaSessionBindsMainStateDuringConfiguredLoad() {
   ActivationFixture fixture({.skinType = 7,
+                             .audioBearing = true,
                              .requireResultConfiguredState = true});
   if (!fixture.ready()) {
     return;
   }
   auto created = ResultSkinSession::create(fixture.takeActivation(),
                                            fixture.resultContext());
-  expect(created.session != nullptr && created.diagnostics.empty(),
-         "result Lua session configures against the result main_state");
+  expect(created.session != nullptr && created.diagnostics.empty() &&
+             fixture.audioState()->loads.size() == 1 &&
+             fixture.audioState()->plays.size() == 3,
+         "result Lua session configures against the result main_state and "
+         "application audio backend");
+}
+
+void testResultSessionRejectsConfiguredModelForAnotherResultTarget() {
+  ActivationFixture fixture({.skinType = 7, .configuredSkinType = 15});
+  if (!fixture.ready()) {
+    return;
+  }
+  auto context = fixture.resultContext();
+  context.expectedSkinType = 7;
+  auto created = ResultSkinSession::create(fixture.takeActivation(),
+                                           std::move(context));
+  expect(!created.session && hasDiagnostic(created.diagnostics,
+                                            "skin.result_session.type_mismatch"),
+         "result session rejects a configured model for another result target");
 }
 
 void testResultBridgeSupportsBeatorajaIrAvailabilityProperties() {
@@ -5213,6 +5236,7 @@ int main() {
   testSuccessfulGeometryChangesOnlyHitRevisionAndTeardownDiscardsState();
   testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin();
   testResultLuaSessionBindsMainStateDuringConfiguredLoad();
+  testResultSessionRejectsConfiguredModelForAnotherResultTarget();
   testResultBridgeSupportsBeatorajaIrAvailabilityProperties();
   testResultBridgeMatchesBeatorajaResultScoreFamilies();
   testResultBridgeMatchesResultAliasesAndTimerUnits();

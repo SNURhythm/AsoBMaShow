@@ -1,6 +1,7 @@
 #pragma once
 
 #include "GameplaySkinDocumentLoader.h"
+#include "LuaSkinAudioHost.h"
 #include "ResultSkinStateBridge.h"
 #include "Skin2DRenderer.h"
 #include "SkinResourceCatalog.h"
@@ -19,6 +20,9 @@ namespace rendering { class SkinQuadBatchRenderer; }
 namespace skin {
 
 struct ResultSkinSessionContext {
+  // Exact Beatoraja SkinType selected for this result surface (7 or 15).
+  // Zero is retained only for older test callers that do not select a target.
+  int expectedSkinType = 0;
   SkinProfileId profileId;
   SkinStorageRoots storageRoots;
   SkinResourcePreparationService &resourcePreparation;
@@ -26,6 +30,7 @@ struct ResultSkinSessionContext {
   // the immutable result data available for that one-time configured phase.
   ResultSkinData initialData;
   std::shared_ptr<SkinTextureDevice> textureDevice;
+  std::shared_ptr<LuaSkinAudioBackend> audioBackend;
   std::shared_ptr<SkinLiveResourceCounters> liveResourceCounters;
   SkinSafetyPolicy safetyPolicy{};
   std::stop_token stop;

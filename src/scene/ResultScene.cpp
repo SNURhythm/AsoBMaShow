@@ -41,6 +41,7 @@
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 #include "../skin/GameplaySkinLifecycle.h"
 #include "../skin/beatoraja/BgfxSkinTextureDevice.h"
+#include "../skin/beatoraja/LuaSkinApplicationAudioBackend.h"
 #include "../skin/beatoraja/ResultSkinSession.h"
 #endif
 
@@ -528,10 +529,15 @@ bool ResultScene::startSelectedResultSkin() {
   auto created = skin::ResultSkinSession::create(
       std::move(acquisition.request->activation),
       {.profileId = *profileId,
+       .expectedSkinType = skinType,
        .storageRoots = *context.skinStorageRoots,
        .resourcePreparation = *context.skinResourcePreparationService,
        .initialData = makeResultSkinData(),
        .textureDevice = std::make_shared<skin::BgfxSkinTextureDevice>(),
+       .audioBackend = skin::createLuaSkinApplicationAudioBackend(
+           context.jukebox.audioRuntime(), [&context] {
+             return context.settings.audioVideo.audio.masterVolume;
+           }, {}, context.skinLiveResourceCounters),
        .liveResourceCounters = context.skinLiveResourceCounters,
        .safetyPolicy = skin::SkinSafetyPolicy(acquisition.request->safetyLevel)});
   if (!created.session) {
