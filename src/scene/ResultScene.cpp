@@ -1012,13 +1012,12 @@ ResultSkinData ResultScene::makeResultSkinData() const {
                                                           : nullptr);
   if (setupReplay != nullptr) {
     data.replayKeyMode = setupReplay->chartMeta.KeyMode;
-    if (setupReplay->playOption) {
-      data.replayRandomOption1P =
-          replay::projectedBeatorajaReplayOptionIndex(*setupReplay->playOption);
-    }
-    if (setupReplay->playOption2) {
+    data.replayRandomOption1P = replay::projectedBeatorajaReplayOptionIndex(
+        setupReplay->playOption.value_or("NORMAL"));
+    if (setupReplay->chartMeta.IsDP) {
       data.replayRandomOption2P =
-          replay::projectedBeatorajaReplayOptionIndex(*setupReplay->playOption2);
+          replay::projectedBeatorajaReplayOptionIndex(
+              setupReplay->playOption2.value_or("NORMAL"));
     }
     data.replayDoublePlayOption =
         setupReplay->provenance.doublePlayFlip ? 1 : 0;
@@ -1037,13 +1036,12 @@ ResultSkinData ResultScene::makeResultSkinData() const {
   } else if (local->practiceOptions.enabled) {
     const auto &practice = local->practiceOptions;
     data.replayKeyMode = local->meta.KeyMode;
-    if (practice.playOption) {
-      data.replayRandomOption1P =
-          replay::projectedBeatorajaReplayOptionIndex(*practice.playOption);
-    }
-    if (practice.playOption2) {
+    data.replayRandomOption1P = replay::projectedBeatorajaReplayOptionIndex(
+        practice.playOption.value_or("NORMAL"));
+    if (local->meta.IsDP) {
       data.replayRandomOption2P =
-          replay::projectedBeatorajaReplayOptionIndex(*practice.playOption2);
+          replay::projectedBeatorajaReplayOptionIndex(
+              practice.playOption2.value_or("NORMAL"));
     }
     data.replayDoublePlayOption =
         local->attemptProvenance.doublePlayFlip ? 1 : 0;
@@ -1053,21 +1051,40 @@ ResultSkinData ResultScene::makeResultSkinData() const {
       data.replayLaneShufflePattern2P = resultReplayLanePattern(
           local->meta, practice.playOption2, practice.playOption2Seed, 1);
     }
+  } else if (isCourseStageResult()) {
+    const auto &provenance = local->attemptProvenance;
+    const std::optional<std::string> player1Option{provenance.player1.option};
+    const std::optional<std::string> player2Option{provenance.player2.option};
+    data.replayKeyMode = local->meta.KeyMode;
+    data.replayRandomOption1P =
+        replay::projectedBeatorajaReplayOptionIndex(
+            local->attemptProvenance.player1.option);
+    if (local->meta.IsDP) {
+      data.replayRandomOption2P =
+          replay::projectedBeatorajaReplayOptionIndex(
+              local->attemptProvenance.player2.option);
+    }
+    data.replayDoublePlayOption = provenance.doublePlayFlip ? 1 : 0;
+    data.replayLaneShufflePattern1P = resultReplayLanePattern(
+        local->meta, player1Option, provenance.player1.seed, 0);
+    if (local->meta.IsDP) {
+      data.replayLaneShufflePattern2P = resultReplayLanePattern(
+          local->meta, player2Option, provenance.player2.seed, 1);
+    }
   } else if (isCourseFinalResult() && local->courseOptions.session != nullptr) {
     const auto &session = *local->courseOptions.session;
-    if (session.playOption) {
-      data.replayRandomOption1P =
-          replay::projectedBeatorajaReplayOptionIndex(*session.playOption);
-    }
-    if (session.playOption2) {
-      data.replayRandomOption2P =
-          replay::projectedBeatorajaReplayOptionIndex(*session.playOption2);
-    }
+    data.replayRandomOption1P = replay::projectedBeatorajaReplayOptionIndex(
+        session.playOption.value_or("NORMAL"));
     data.replayDoublePlayOption =
         local->attemptProvenance.doublePlayFlip ? 1 : 0;
     if (const auto *currentMeta = session.currentMeta(); currentMeta != nullptr) {
       data.replayKeyMode = currentMeta->KeyMode;
       data.keyModeOverride = currentMeta->KeyMode;
+      if (currentMeta->IsDP) {
+        data.replayRandomOption2P =
+            replay::projectedBeatorajaReplayOptionIndex(
+                session.playOption2.value_or("NORMAL"));
+      }
       data.replayLaneShufflePattern1P = resultReplayLanePattern(
           *currentMeta, session.playOption, session.playOptionSeed, 0);
       if (currentMeta->IsDP) {

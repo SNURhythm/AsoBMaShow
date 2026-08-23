@@ -5213,6 +5213,13 @@ void testStaticResultSessionRunsCustomBuiltinEvent() {
          "static result custom events evaluate built-in conditions and actions");
 }
 
+void testResultSkinInputAvailabilityMatchesResultTimer() {
+  expect(!resultSkinInputAvailable(1'000, 999'999) &&
+             resultSkinInputAvailable(1'000, 1'000'000) &&
+             resultSkinInputAvailable(-1, 0),
+         "result pointer input uses the same threshold as timer 1");
+}
+
 void testResultSessionRefreshesForAsynchronousRankingNames() {
   ActivationFixture fixture(
       {.skinType = 7, .resourceBearing = true, .audioBearing = true});
@@ -5316,6 +5323,16 @@ void testResultBridgeKeepsAutoplayOptionsOffOnResultScreens() {
          "Beatoraja exposes neither autoplay option from an AbstractResult");
 }
 
+void testResultBridgeRecognizesScratchLongNotes() {
+  bms_parser::ChartMeta meta{.TotalLongNotes = 0, .TotalBackSpinNotes = 1};
+  ResultSkinStateBridge bridge({.meta = &meta}, 1, 0);
+  const auto noLongNote = bridge.booleanProperty({172});
+  const auto longNote = bridge.booleanProperty({173});
+  expect(noLongNote.supported && !noLongNote.value && longNote.supported &&
+             longNote.value,
+         "result LN options count scratch long notes as long notes");
+}
+
 void testResultBridgeMatchesBeatorajaResultScoreFamilies() {
   RhythmState state(nullptr, false);
   state.judgeCount[PGreat] = 10;
@@ -5391,6 +5408,21 @@ void testResultBridgeMatchesBeatorajaResultScoreFamilies() {
              targetMissCount.supported && targetMissCount.value == 9 &&
              differenceMissCount.supported && differenceMissCount.value == 0,
          "result bridge matches Beatoraja result rank, update, and point properties");
+}
+
+void testResultBridgeUsesProjectedKeyModeForScorePoint() {
+  RhythmState state(nullptr, false);
+  state.judgeCount[PGreat] = 1;
+  state.judgeCount[Great] = 1;
+  state.combo = 1;
+  bms_parser::ChartMeta courseMeta{.KeyMode = 0, .TotalNotes = 2};
+  ResultSkinStateBridge bridge({.state = &state,
+                                 .meta = &courseMeta,
+                                 .keyModeOverride = 7},
+                                1, 0);
+  const auto point = bridge.integerProperty({100}, {});
+  expect(point.supported && point.value == 150'000,
+         "result score point uses the result's projected key mode");
 }
 
 void testResultBridgeMatchesResultAliasesAndTimerUnits() {
@@ -5790,12 +5822,15 @@ int main() {
   testResultLuaSessionUsesTheLastDuplicateCustomEventDefinition();
   testResultLuaSessionUsesTheLastDuplicateCustomTimerDefinition();
   testStaticResultSessionRunsCustomBuiltinEvent();
+  testResultSkinInputAvailabilityMatchesResultTimer();
   testResultSessionRefreshesForAsynchronousRankingNames();
   testResultSessionRefreshesForAllStringSelectors();
   testResultSessionRejectsConfiguredModelForAnotherResultTarget();
   testResultBridgeSupportsBeatorajaIrAvailabilityProperties();
   testResultBridgeKeepsAutoplayOptionsOffOnResultScreens();
+  testResultBridgeRecognizesScratchLongNotes();
   testResultBridgeMatchesBeatorajaResultScoreFamilies();
+  testResultBridgeUsesProjectedKeyModeForScorePoint();
   testResultBridgeMatchesResultAliasesAndTimerUnits();
   testResultBridgeUsesCapturedReplayImageIndexes();
   testResultBridgeConvertsClearRanksToBeatorajaImageIndexes();

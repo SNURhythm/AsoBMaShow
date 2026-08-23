@@ -471,6 +471,21 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
                   "context, result.meta, result.state, provenance, stageReplay,",
                   "saved course stages project setup through the result scene");
   requireContains(result,
+                  "} else if (isCourseStageResult()) {",
+                  "saved modern course stages project durable setup provenance");
+  requireContains(result,
+                  "local->attemptProvenance.player1.option",
+                  "saved modern course stages retain the first-player option");
+  requireContains(result,
+                  "local->attemptProvenance.player2.option",
+                  "saved modern course stages retain the second-player option");
+  requireContains(result,
+                  "setupReplay->playOption.value_or(\"NORMAL\")",
+                  "replay-backed normal plays publish the 1P image index");
+  requireContains(result,
+                  "setupReplay->playOption2.value_or(\"NORMAL\")",
+                  "replay-backed normal double plays publish the 2P image index");
+  requireContains(result,
                   "isCourseStageResult() &&\n"
                   "        !current->courseOptions.savedResultBrowsing",
                   "result skin failure back actions retain live-course confirmation");

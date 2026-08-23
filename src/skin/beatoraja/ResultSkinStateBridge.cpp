@@ -365,7 +365,8 @@ SkinPropertyLookup<bool> ResultSkinStateBridge::booleanProperty(
   }
   if (*id == 172 || *id == 173) {
     const bool hasLongNote = data_.meta != nullptr &&
-                             data_.meta->TotalLongNotes > 0;
+                             (data_.meta->TotalLongNotes > 0 ||
+                              data_.meta->TotalBackSpinNotes > 0);
     return supported(*id == 173 ? hasLongNote : !hasLongNote);
   }
   if (*id == 174 || *id == 175) {
@@ -647,7 +648,8 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
       const long long great = count(Great).value_or(0);
       const long long good = count(Good).value_or(0);
       long long numerator = 0;
-      switch (data_.meta != nullptr ? data_.meta->KeyMode : 0) {
+      switch (data_.keyModeOverride.value_or(
+          data_.meta != nullptr ? data_.meta->KeyMode : 0)) {
       case 5:
       case 10:
         numerator = 100'000LL * (perfect + great) + 50'000LL * good;

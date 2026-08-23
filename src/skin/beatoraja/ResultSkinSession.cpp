@@ -169,6 +169,12 @@ private:
 
 } // namespace
 
+bool resultSkinInputAvailable(int inputMillis, long long eventMicros) noexcept {
+  const long long thresholdMicros =
+      static_cast<long long>(std::max(0, inputMillis)) * 1'000;
+  return std::max(0LL, eventMicros) >= thresholdMicros;
+}
+
 ResultSkinSession::ResultSkinSession(
     SkinRevisionLease revision, SkinEntryId entry,
     ValidatedBeatorajaSkinModel model, BeatorajaSkinConfiguration configuration,
@@ -774,7 +780,8 @@ bool ResultSkinSession::refreshRuntimeStrings(const ResultSkinData &data) {
 
 bool ResultSkinSession::queuePointerDown(UiLogicalPoint point,
                                          long long eventMicros) {
-  if (!publishedInteractionLayout_ ||
+  if (!resultSkinInputAvailable(model_.model.timing.inputMillis, eventMicros) ||
+      !publishedInteractionLayout_ ||
       queuedEventInvocations_.size() + queuedBuiltinEventIds_.size() >= 64) {
     return false;
   }

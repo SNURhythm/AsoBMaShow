@@ -26,6 +26,9 @@ namespace rendering { class SkinQuadBatchRenderer; }
 
 namespace skin {
 
+[[nodiscard]] bool resultSkinInputAvailable(int inputMillis,
+                                            long long eventMicros) noexcept;
+
 struct ResultSkinSessionContext {
   // Exact Beatoraja SkinType selected for this result surface (7 or 15).
   // Zero is retained only for older test callers that do not select a target.
