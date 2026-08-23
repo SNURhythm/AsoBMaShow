@@ -1,5 +1,6 @@
 #include "ResultScene.h"
 #include "../CourseConstraintUtils.h"
+#include "../ArchiveFile.h"
 #include "../CourseIdentity.h"
 #include "../CoursePlaySession.h"
 #include "../PlayOptionUtils.h"
@@ -534,8 +535,9 @@ bool ResultScene::startSelectedResultSkin() {
        .resourcePreparation = *context.skinResourcePreparationService,
        .initialData = makeResultSkinData(),
        .textureDevice = std::make_shared<skin::BgfxSkinTextureDevice>(),
+       .builtinImageReader = archive_file::readFileBounded,
        .audioBackend = skin::createLuaSkinApplicationAudioBackend(
-           context.jukebox.audioRuntime(), [&context] {
+           context.jukebox.audioRuntime(), [this] {
              return context.settings.audioVideo.audio.masterVolume;
            }, {}, context.skinLiveResourceCounters),
        .liveResourceCounters = context.skinLiveResourceCounters,

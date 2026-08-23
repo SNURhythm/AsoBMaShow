@@ -9,6 +9,10 @@
 #include "../../rendering/common.h"
 
 #include <algorithm>
+#include <filesystem>
+#include <map>
+#include <string>
+#include <vector>
 
 namespace skin {
 namespace {
@@ -23,6 +27,61 @@ bool hasErrors(const std::vector<SkinDiagnostic> &diagnostics) {
   return std::ranges::any_of(diagnostics, [](const auto &diagnostic) {
     return diagnostic.severity == DiagnosticSeverity::Error;
   });
+}
+
+void appendRuntimeString(std::vector<std::string> &strings,
+                         std::string_view value) {
+  if (!value.empty() && std::ranges::find(strings, value) == strings.end()) {
+    strings.emplace_back(value);
+  }
+}
+
+std::vector<std::string> resultRuntimeStrings(const ResultSkinData &data) {
+  std::vector<std::string> strings;
+  if (data.meta != nullptr) {
+    appendRuntimeString(strings, data.meta->Title);
+    appendRuntimeString(strings, data.meta->SubTitle);
+    appendRuntimeString(strings, data.meta->Artist);
+    appendRuntimeString(strings, data.meta->SubArtist);
+    appendRuntimeString(strings, data.meta->Genre);
+  }
+  if (data.presentation != nullptr) {
+    appendRuntimeString(strings, data.presentation->title);
+    if (data.presentation->artist) {
+      appendRuntimeString(strings, *data.presentation->artist);
+    }
+    if (data.presentation->difficulty) {
+      appendRuntimeString(strings, *data.presentation->difficulty);
+    }
+    if (data.presentation->playtype) {
+      appendRuntimeString(strings, *data.presentation->playtype);
+    }
+  }
+  for (const auto *value : {&data.playerName, &data.tableName, &data.tableLevel,
+                            &data.playModeLabel, &data.laneOrderLabel,
+                            &data.difficultyLabel, &data.skinName,
+                            &data.skinAuthor}) {
+    appendRuntimeString(strings, *value);
+  }
+  for (const auto &title : data.courseTitles) appendRuntimeString(strings, title);
+  return strings;
+}
+
+std::map<int, std::filesystem::path>
+resultBuiltinImagePaths(const ResultSkinData &data) {
+  std::map<int, std::filesystem::path> paths;
+  if (data.meta == nullptr) return paths;
+  const std::filesystem::path directory =
+      !data.meta->BmsPath.empty() ? data.meta->BmsPath.parent_path()
+                                  : data.meta->Folder;
+  const auto add = [&paths, &directory](int reference,
+                                        const std::filesystem::path &declared) {
+    if (!declared.empty()) paths.emplace(reference, (directory / declared).lexically_normal());
+  };
+  add(100, data.meta->StageFile);
+  add(101, data.meta->BackBmp);
+  add(102, data.meta->Banner);
+  return paths;
 }
 
 class LuaFrameStateBinding final {
@@ -45,11 +104,12 @@ ResultSkinSession::ResultSkinSession(
     SkinRevisionLease revision, SkinEntryId entry,
     ValidatedBeatorajaSkinModel model, BeatorajaSkinConfiguration configuration,
     std::unique_ptr<LuaSkinRuntime> runtime,
-    std::unique_ptr<SkinResourceCatalog> resources, SkinSafetyPolicy safetyPolicy)
+    std::unique_ptr<SkinResourceCatalog> resources, SkinSafetyPolicy safetyPolicy,
+    ViewportSettings viewportSettings)
     : revision_(std::move(revision)), entry_(std::move(entry)),
       model_(std::move(model)), configuration_(std::move(configuration)),
       runtime_(std::move(runtime)), resources_(std::move(resources)),
-      safetyPolicy_(safetyPolicy),
+      safetyPolicy_(safetyPolicy), viewportSettings_(viewportSettings),
       quadRenderer_(std::make_unique<rendering::SkinQuadBatchRenderer>()) {}
 
 ResultSkinSession::~ResultSkinSession() = default;
@@ -132,11 +192,15 @@ ResultSkinSessionCreateResult ResultSkinSession::create(
           activation.entry.packageRelativePath));
       return result;
     }
+    const auto runtimeStrings = resultRuntimeStrings(context.initialData);
     auto planned = context.resourcePreparation.decodeAndPlan(
         {.revision = activation.revision.clone(), .entry = activation.entry,
          .fileSystem = *resourceFiles.fileSystem, .model = document.model,
-         .configuration = document.configuration, .requiredRuntimeStrings = {},
-         .builtinImagePaths = {}, .safetyPolicy = context.safetyPolicy,
+         .configuration = document.configuration,
+         .requiredRuntimeStrings = runtimeStrings,
+         .builtinImagePaths = resultBuiltinImagePaths(context.initialData),
+         .builtinImageReader = std::move(context.builtinImageReader),
+         .safetyPolicy = context.safetyPolicy,
          .stop = context.stop});
     result.diagnostics.insert(result.diagnostics.end(),
                               std::make_move_iterator(planned.diagnostics.begin()),
@@ -161,7 +225,7 @@ ResultSkinSessionCreateResult ResultSkinSession::create(
         std::move(activation.revision), std::move(activation.entry),
         std::move(document.model), std::move(document.configuration),
         std::move(document.luaRuntime), std::move(uploaded.catalog),
-        context.safetyPolicy));
+        context.safetyPolicy, activation.reconciledSettings.viewport));
   } catch (...) {
     result.session.reset();
     result.diagnostics.push_back(failure("skin.result_session.create_failed",
@@ -185,7 +249,7 @@ bool ResultSkinSession::render(RenderContext &renderContext,
       {.width = static_cast<double>(header.width),
        .height = static_cast<double>(header.height)},
       {.x = 0.0, .y = 0.0, .width = static_cast<double>(rendering::window_width),
-       .height = static_cast<double>(rendering::window_height)}, {});
+       .height = static_cast<double>(rendering::window_height)}, viewportSettings_);
   if (!viewport.valid) return false;
   auto evaluated = renderer_.evaluateFrame(
       {.frameSerial = frameSerial, .sessionSerial = 1,

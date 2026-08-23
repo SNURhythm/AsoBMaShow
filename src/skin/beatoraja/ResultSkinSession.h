@@ -30,6 +30,7 @@ struct ResultSkinSessionContext {
   // the immutable result data available for that one-time configured phase.
   ResultSkinData initialData;
   std::shared_ptr<SkinTextureDevice> textureDevice;
+  SkinBuiltinImageReader builtinImageReader;
   std::shared_ptr<LuaSkinAudioBackend> audioBackend;
   std::shared_ptr<SkinLiveResourceCounters> liveResourceCounters;
   SkinSafetyPolicy safetyPolicy{};
@@ -60,7 +61,7 @@ private:
                     ValidatedBeatorajaSkinModel, BeatorajaSkinConfiguration,
                     std::unique_ptr<LuaSkinRuntime>,
                     std::unique_ptr<SkinResourceCatalog>,
-                    SkinSafetyPolicy);
+                    SkinSafetyPolicy, ViewportSettings);
 
   SkinRevisionLease revision_;
   SkinEntryId entry_;
@@ -69,6 +70,7 @@ private:
   std::unique_ptr<LuaSkinRuntime> runtime_;
   std::unique_ptr<SkinResourceCatalog> resources_;
   SkinSafetyPolicy safetyPolicy_{};
+  ViewportSettings viewportSettings_{};
   Skin2DRenderer renderer_;
   std::unique_ptr<rendering::SkinQuadBatchRenderer> quadRenderer_;
 };
