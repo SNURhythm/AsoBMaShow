@@ -301,6 +301,7 @@ private:
   void retryIrResult();
   void openRankings();
   void refreshRankingsButton();
+  void requestSelectedResultSkinRankings();
   [[nodiscard]] bool rankingsAvailable() const;
   [[nodiscard]] ir::IrResultPresentation makeIrResultPresentation() const;
   void refreshResultSummary();

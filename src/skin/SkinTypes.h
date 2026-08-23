@@ -39,6 +39,14 @@ struct ResultPlayerHistoryData {
   std::int64_t playDurationSeconds = 0;
 };
 
+struct ResultIrRankingEntryData {
+  int rank = 0;
+  std::string playerName;
+  int score = 0;
+  int clearType = kClearTypeFailedRank;
+  bool currentUser = false;
+};
+
 struct ResultSkinData {
   const RhythmState *state;
   const bms_parser::ChartMeta *meta;
@@ -65,6 +73,10 @@ struct ResultSkinData {
   std::optional<int> replayRandomOption1P;
   std::optional<int> replayRandomOption2P;
   std::optional<int> replayDoublePlayOption;
+  int replayKeyMode = 0;
+  std::optional<std::vector<int>> replayLaneShufflePattern1P;
+  std::optional<std::vector<int>> replayLaneShufflePattern2P;
+  std::vector<ResultIrRankingEntryData> irRankingEntries;
   std::string chartMd5;
   std::string chartSha256;
   bool autoPlayResult = false;

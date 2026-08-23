@@ -58,6 +58,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <utility>
 
 namespace {
@@ -114,6 +115,77 @@ std::optional<int> rankingBadPoints(const RhythmState &state) {
     return it == state.judgeCount.end() ? 0 : it->second;
   };
   return ir::calculateIrBadPoints(count(Bad), count(Poor), count(Kpoor));
+}
+
+void projectResultIrRanking(
+    ResultSkinData &data, const ApplicationContext &context,
+    std::string_view providerId, std::string_view serverOrigin,
+    const std::optional<ir::IrChartQuery> &chart) {
+  if (context.irRankingService == nullptr || !chart) return;
+  const ir::IrRankingSnapshot snapshot = context.irRankingService->snapshot();
+  if (snapshot.state != ir::IrRankingSnapshotState::Succeeded ||
+      !snapshot.request || !snapshot.ranking ||
+      snapshot.request->profileId != context.profileManager.activeProfile().id ||
+      snapshot.request->providerId != providerId ||
+      snapshot.request->serverOrigin != serverOrigin ||
+      snapshot.request->chart != *chart) {
+    return;
+  }
+  constexpr std::size_t visibleRows = 10;
+  const auto &entries = snapshot.ranking->entries;
+  data.irRankingEntries.reserve(std::min(entries.size(), visibleRows));
+  for (std::size_t index = 0; index < entries.size() && index < visibleRows;
+       ++index) {
+    const auto &entry = entries[index];
+    data.irRankingEntries.push_back({.rank = entry.rank,
+                                     .playerName = entry.playerName,
+                                     .score = entry.score,
+                                     .clearType = entry.clearType,
+                                     .currentUser = entry.currentUser});
+  }
+}
+
+std::optional<std::vector<int>> resultReplayLanePattern(
+    const bms_parser::ChartMeta &meta, const std::optional<std::string> &option,
+    const std::optional<long long> &seed, int player) {
+  const auto optionIndex = option
+                               ? replay::projectedBeatorajaReplayOptionIndex(*option)
+                               : std::nullopt;
+  if (!optionIndex || (*optionIndex != 2 && *optionIndex != 3 &&
+                       *optionIndex != 8)) {
+    return std::nullopt;
+  }
+  const auto laneOrder = play_options::laneOrderForPlayOption(
+      meta, option, seed, player);
+  if (!laneOrder) return std::nullopt;
+  const auto destinations = meta.GetTotalLaneIndices();
+  if (destinations.size() != laneOrder->size()) return std::nullopt;
+  std::unordered_map<int, int> sourceByDestination;
+  for (std::size_t index = 0; index < destinations.size(); ++index) {
+    sourceByDestination.emplace(destinations[index], (*laneOrder)[index]);
+  }
+  const int keyCount = meta.KeyMode == 10 ? 5
+                       : meta.KeyMode == 14 ? 7
+                                            : meta.KeyMode;
+  const auto keys = meta.GetKeyLaneIndices();
+  const auto scratches = meta.GetScratchLaneIndices();
+  const std::size_t keyOffset = player == 0 ? 0 : static_cast<std::size_t>(keyCount);
+  if (keyCount <= 0 || keyOffset + static_cast<std::size_t>(keyCount) > keys.size() ||
+      static_cast<std::size_t>(player) >= scratches.size()) {
+    return std::nullopt;
+  }
+  std::vector<int> pattern;
+  pattern.reserve(static_cast<std::size_t>(keyCount + 1));
+  for (int key = 0; key < keyCount; ++key) {
+    const auto found = sourceByDestination.find(
+        keys[keyOffset + static_cast<std::size_t>(key)]);
+    if (found == sourceByDestination.end()) return std::nullopt;
+    pattern.push_back(found->second);
+  }
+  const auto scratch = sourceByDestination.find(scratches[static_cast<std::size_t>(player)]);
+  if (scratch == sourceByDestination.end()) return std::nullopt;
+  pattern.push_back(scratch->second);
+  return pattern;
 }
 
 struct ResultTimingStatistics {
@@ -705,6 +777,8 @@ ResultSkinData ResultScene::makeResultSkinData() const {
     }
     data.chartMd5 = remote->score.chartMd5;
     data.chartSha256 = remote->score.chartSha256;
+    projectResultIrRanking(data, context, remote->providerId,
+                           remote->serverOrigin, remote->rankingQuery);
     return data;
   }
   if (local == nullptr) {
@@ -736,6 +810,13 @@ ResultSkinData ResultScene::makeResultSkinData() const {
   data.playerHistory = local->playerHistory;
   data.presentation = &local->presentation;
   data.gameplayGraph = local->gameplayGraph;
+  const auto localRankingQuery = ir::makeBokutachiRankingQuery(local->meta);
+  const auto provider = context.settings.irProviders.find(ir::kTachiProviderId);
+  if (localRankingQuery.value && provider != context.settings.irProviders.end()) {
+    projectResultIrRanking(data, context, ir::kTachiProviderId,
+                           provider->second.serverOrigin,
+                           localRankingQuery.value);
+  }
   const ReplayData *timingReplay = local->analyticsData
                                        ? &*local->analyticsData
                                        : (local->presentationReplay
@@ -752,6 +833,7 @@ ResultSkinData ResultScene::makeResultSkinData() const {
     data.timingDistribution = timing->distribution;
   }
   if (timingReplay != nullptr) {
+    data.replayKeyMode = timingReplay->chartMeta.KeyMode;
     if (timingReplay->playOption) {
       data.replayRandomOption1P =
           replay::projectedBeatorajaReplayOptionIndex(*timingReplay->playOption);
@@ -762,6 +844,18 @@ ResultSkinData ResultScene::makeResultSkinData() const {
     }
     data.replayDoublePlayOption =
         timingReplay->provenance.doublePlayFlip ? 1 : 0;
+    data.replayLaneShufflePattern1P = timingReplay->laneShufflePattern1P;
+    data.replayLaneShufflePattern2P = timingReplay->laneShufflePattern2P;
+    if (!data.replayLaneShufflePattern1P) {
+      data.replayLaneShufflePattern1P = resultReplayLanePattern(
+          timingReplay->chartMeta, timingReplay->playOption,
+          timingReplay->playOptionSeed, 0);
+    }
+    if (!data.replayLaneShufflePattern2P && timingReplay->chartMeta.IsDP) {
+      data.replayLaneShufflePattern2P = resultReplayLanePattern(
+          timingReplay->chartMeta, timingReplay->playOption2,
+          timingReplay->playOption2Seed, 1);
+    }
   }
   return data;
 }
@@ -2303,6 +2397,29 @@ void ResultScene::refreshRankingsButton() {
   }
 }
 
+void ResultScene::requestSelectedResultSkinRankings() {
+  if (!rankingsAvailable() || context.irRankingService == nullptr) return;
+  const auto *remote = remoteSource();
+  const auto *local = localSource();
+  if (remote != nullptr && remote->rankingQuery) {
+    context.irRankingService->open(
+        {.profileId = context.profileManager.activeProfile().id,
+         .providerId = remote->providerId,
+         .serverOrigin = remote->serverOrigin,
+         .chart = *remote->rankingQuery});
+    return;
+  }
+  if (local == nullptr) return;
+  const auto query = ir::makeBokutachiRankingQuery(local->meta);
+  const auto settings = context.settings.irProviders.find(ir::kTachiProviderId);
+  if (!query.value || settings == context.settings.irProviders.end()) return;
+  context.irRankingService->open(
+      {.profileId = context.profileManager.activeProfile().id,
+       .providerId = ir::kTachiProviderId,
+       .serverOrigin = settings->second.serverOrigin,
+       .chart = *query.value});
+}
+
 void ResultScene::openRankings() {
   if (!rankingsAvailable() || rankingOverlayPortal == nullptr ||
       context.irRankingService == nullptr) {
@@ -3514,6 +3631,7 @@ void ResultScene::init() {
   rootLayout->addView(rankingOverlayPortal);
 
   if (selectedResultSkin) {
+    requestSelectedResultSkinRankings();
     buildResultTouchControls();
   }
 

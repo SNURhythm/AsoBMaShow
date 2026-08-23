@@ -5176,6 +5176,52 @@ void testResultBridgeUsesCapturedReplayImageIndexes() {
          "result image indexes use the immutable played gauge and replay options");
 }
 
+void testResultBridgeProjectsIrRankingRows() {
+  ResultSkinStateBridge bridge({
+      .irRankingEntries = {{.rank = 1,
+                            .playerName = "Top player",
+                            .score = 1998,
+                            .clearType = kClearTypeFullComboRank},
+                           {.rank = 2,
+                            .playerName = "Current player",
+                            .score = 1888,
+                            .clearType = kClearTypeHardClearRank,
+                            .currentUser = true}},
+  }, 1, 0);
+  const auto currentRank = bridge.integerProperty({179}, {});
+  const auto firstScore = bridge.integerProperty({380}, {});
+  const auto secondRank = bridge.integerProperty({391}, {});
+  const auto secondLamp = bridge.integerProperty(
+      {391}, SkinIntegerPropertyDomain::ImageIndex);
+  const auto secondName = bridge.stringProperty({121});
+  expect(currentRank.supported && currentRank.value == 2 &&
+             firstScore.supported && firstScore.value == 1998 &&
+             secondRank.supported && secondRank.value == 2 &&
+             secondLamp.supported && secondLamp.value == kClearTypeHardClearRank &&
+             secondName.supported && secondName.value == "Current player",
+         "result IR ranking properties use the active ranking snapshot");
+}
+
+void testResultBridgeProjectsReplayLaneAssignments() {
+  ResultSkinStateBridge bridge({
+      .replayRandomOption1P = 8,
+      .replayRandomOption2P = 2,
+      .replayKeyMode = 14,
+      .replayLaneShufflePattern1P = std::vector<int>{3, 0, 1, 2, 4, 5, 6, 7},
+      .replayLaneShufflePattern2P = std::vector<int>{9, 8, 10, 11, 12, 13, 14, 15},
+  }, 1, 0);
+  const auto firstKey = bridge.integerProperty(
+      {450}, SkinIntegerPropertyDomain::ImageIndex);
+  const auto firstScratch = bridge.integerProperty(
+      {459}, SkinIntegerPropertyDomain::ImageIndex);
+  const auto secondKey = bridge.integerProperty(
+      {460}, SkinIntegerPropertyDomain::ImageIndex);
+  expect(firstKey.supported && firstKey.value == 4 &&
+             firstScratch.supported && firstScratch.value == 8 &&
+             secondKey.supported && secondKey.value == 3,
+         "result lane-assignment indexes retain Beatoraja replay patterns");
+}
+
 void testResultBridgeExposesPlayerHistoryProperties() {
   ResultSkinStateBridge bridge({
       .playerHistory = ResultPlayerHistoryData{
@@ -5441,6 +5487,8 @@ int main() {
   testResultBridgeMatchesBeatorajaResultScoreFamilies();
   testResultBridgeMatchesResultAliasesAndTimerUnits();
   testResultBridgeUsesCapturedReplayImageIndexes();
+  testResultBridgeProjectsIrRankingRows();
+  testResultBridgeProjectsReplayLaneAssignments();
   testResultBridgeExposesPlayerHistoryProperties();
   testResultBridgeExposesResultTimingDistributionStatistics();
   testResultBridgeUsesRemotePresentationValues();

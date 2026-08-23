@@ -79,6 +79,10 @@ struct ReplayData {
   std::optional<long long> playOptionSeed;
   std::optional<std::string> playOption2;
   std::optional<long long> playOption2Seed;
+  // Stock Beatoraja replays retain these lane assignments separately from
+  // chart randomization. Result skins use them for pattern_1p/2p indexes.
+  std::optional<std::vector<int>> laneShufflePattern1P;
+  std::optional<std::vector<int>> laneShufflePattern2P;
   std::string assistOption = assist_options::kOff;
   GaugeType initialGaugeType = GaugeType::Normal;
   GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;

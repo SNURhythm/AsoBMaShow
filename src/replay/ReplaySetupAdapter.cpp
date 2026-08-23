@@ -28,6 +28,8 @@ std::optional<ReplayData> makeReplayDataFromSetup(
     result.playOptionSeed = setup.player1.seed;
     result.playOption2 = setup.player2.option;
     result.playOption2Seed = setup.player2.seed;
+    result.laneShufflePattern1P = setup.player1.laneShufflePattern;
+    result.laneShufflePattern2P = setup.player2.laneShufflePattern;
     result.assistOption = setup.assistOption;
     result.initialGaugeType = setup.initialGaugeType;
     result.gaugeAutoShift = setup.gaugeAutoShift;

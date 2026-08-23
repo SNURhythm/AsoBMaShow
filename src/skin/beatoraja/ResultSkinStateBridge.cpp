@@ -82,6 +82,43 @@ Judgement beatorajaJudgement(int index) {
   }
 }
 
+bool hasBeatorajaLaneAssignment(int option) {
+  // Random.OPTION_GENERAL's lane-changing result choices.
+  return option == 2 || option == 3 || option == 8;
+}
+
+SkinPropertyLookup<std::int64_t> resultLaneAssignment(
+    const ResultSkinData &data, int player, int key) {
+  const auto &option = player == 0 ? data.replayRandomOption1P
+                                   : data.replayRandomOption2P;
+  const auto &pattern = player == 0 ? data.replayLaneShufflePattern1P
+                                    : data.replayLaneShufflePattern2P;
+  const int keyCount = data.replayKeyMode == 10 ? 5
+                       : data.replayKeyMode == 14 ? 7
+                                                  : data.replayKeyMode;
+  if (keyCount <= 0 ||
+      (player == 1 && data.replayKeyMode != 10 && data.replayKeyMode != 14)) {
+    return supported<std::int64_t>(0);
+  }
+  if (!option || !hasBeatorajaLaneAssignment(*option) || !pattern) {
+    return supported<std::int64_t>(0);
+  }
+  int index = key;
+  if (key == -1) {
+    // Random.RANDOM_EX alone changes the source scratch lane.
+    if (*option != 8) return supported<std::int64_t>(0);
+    index = keyCount;
+  } else if (key < 0 || key >= keyCount) {
+    return supported<std::int64_t>(0);
+  }
+  if (static_cast<std::size_t>(index) >= pattern->size()) {
+    return supported<std::int64_t>(0);
+  }
+  const int sideOffset = player == 1 ? keyCount : 0;
+  return supported<std::int64_t>((*pattern)[static_cast<std::size_t>(index)] +
+                                 1 - sideOffset);
+}
+
 } // namespace
 
 ResultSkinStateBridge::ResultSkinStateBridge(ResultSkinData data,
@@ -202,6 +239,18 @@ std::optional<int> ResultSkinStateBridge::integerSelector(
     if (parsed.ec == std::errc{} && parsed.ptr == suffix.data() + suffix.size() &&
         index >= 1 && index <= 10) {
       return 149 + index;
+    }
+  }
+  constexpr std::string_view rankingPrefix = "rankingname";
+  if (name->starts_with(rankingPrefix)) {
+    const std::string_view suffix(name->data() + rankingPrefix.size(),
+                                  name->size() - rankingPrefix.size());
+    int index = 0;
+    const auto parsed = std::from_chars(suffix.data(), suffix.data() + suffix.size(),
+                                        index);
+    if (parsed.ec == std::errc{} && parsed.ptr == suffix.data() + suffix.size() &&
+        index >= 1 && index <= 10) {
+      return 119 + index;
     }
   }
   static constexpr std::array<std::pair<std::string_view, int>, 38> aliases{{
@@ -422,6 +471,16 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
       return data_.replayDoublePlayOption
                  ? supported<std::int64_t>(*data_.replayDoublePlayOption)
                  : unsupported<std::int64_t>();
+    case 450: case 451: case 452: case 453: case 454:
+    case 455: case 456: case 457: case 458:
+      return resultLaneAssignment(data_, 0, *id - 450);
+    case 459:
+      return resultLaneAssignment(data_, 0, -1);
+    case 460: case 461: case 462: case 463: case 464:
+    case 465: case 466:
+      return resultLaneAssignment(data_, 1, *id - 460);
+    case 469:
+      return resultLaneAssignment(data_, 1, -1);
     case 89:
     case 90:
       // Result snapshots do not retain persistent song-review flags. Match
@@ -445,6 +504,14 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
                                    ? std::optional<int>(data_.previousBest->clearType)
                                    : std::optional<int>(kClearTypeFailedRank));
       return supported<std::int64_t>(*lamp);
+    }
+    case 390: case 391: case 392: case 393: case 394:
+    case 395: case 396: case 397: case 398: case 399: {
+      const std::size_t index = static_cast<std::size_t>(*id - 390);
+      return index < data_.irRankingEntries.size()
+                 ? supported<std::int64_t>(
+                       data_.irRankingEntries[index].clearType)
+                 : unsupported<std::int64_t>();
     }
     default:
       return unsupported<std::int64_t>();
@@ -681,7 +748,12 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
       return data_.state ? std::optional<int>(data_.state->comboBreak)
                          : (data_.presentation ? data_.presentation->comboBreak
                                                : std::nullopt);
-    case 179: case 180: return std::numeric_limits<int>::min();
+    case 179:
+      for (const auto &entry : data_.irRankingEntries) {
+        if (entry.currentUser) return entry.rank;
+      }
+      return std::numeric_limits<int>::min();
+    case 180: return std::numeric_limits<int>::min();
     case 183:
       if (const auto rate = previousRate()) return scoreRateParts(*rate).first;
       return std::numeric_limits<int>::min();
@@ -689,10 +761,19 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
       if (const auto rate = previousRate()) return scoreRateParts(*rate).second;
       return std::numeric_limits<int>::min();
     case 380: case 381: case 382: case 383: case 384:
-    case 385: case 386: case 387: case 388: case 389:
+    case 385: case 386: case 387: case 388: case 389: {
+      const std::size_t index = static_cast<std::size_t>(*id - 380);
+      return index < data_.irRankingEntries.size()
+                 ? std::optional<int>(data_.irRankingEntries[index].score)
+                 : std::optional<int>(std::numeric_limits<int>::min());
+    }
     case 390: case 391: case 392: case 393: case 394:
-    case 395: case 396: case 397: case 398: case 399:
-      return std::numeric_limits<int>::min();
+    case 395: case 396: case 397: case 398: case 399: {
+      const std::size_t index = static_cast<std::size_t>(*id - 390);
+      return index < data_.irRankingEntries.size()
+                 ? std::optional<int>(data_.irRankingEntries[index].rank)
+                 : std::optional<int>(std::numeric_limits<int>::min());
+    }
     case 368: return 0;
     case 370:
       return data_.currentClearRankOverride
@@ -936,6 +1017,14 @@ SkinPropertyLookup<std::string_view> ResultSkinStateBridge::stringProperty(
   case 62:
     stringValue_ = data_.difficultyLabel;
     break;
+  case 120: case 121: case 122: case 123: case 124:
+  case 125: case 126: case 127: case 128: case 129: {
+    const std::size_t index = static_cast<std::size_t>(*id - 120);
+    stringValue_ = index < data_.irRankingEntries.size()
+                       ? data_.irRankingEntries[index].playerName
+                       : "";
+    break;
+  }
   case 60:
     stringValue_ = data_.playModeLabel;
     break;
