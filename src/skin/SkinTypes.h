@@ -68,6 +68,8 @@ struct ResultSkinData {
   std::string skinAuthor;
   std::optional<float> playLevelOverride;
   std::optional<int> keyModeOverride;
+  std::optional<GaugeType> gaugeTypeOverride;
+  std::optional<int> difficultyOverride;
   // Result image-index properties expose the choices captured with the
   // completed replay, rather than the currently editable player settings.
   std::optional<int> replayRandomOption1P;

@@ -60,7 +60,7 @@ std::vector<std::string> resultRuntimeStrings(const ResultSkinData &data) {
   for (const auto *value : {&data.playerName, &data.tableName, &data.tableLevel,
                             &data.playModeLabel, &data.laneOrderLabel,
                             &data.difficultyLabel, &data.skinName,
-                            &data.skinAuthor}) {
+                            &data.skinAuthor, &data.courseTitle}) {
     appendRuntimeString(strings, *value);
   }
   for (const auto &title : data.courseTitles) appendRuntimeString(strings, title);

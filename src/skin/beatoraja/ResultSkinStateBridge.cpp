@@ -314,7 +314,8 @@ SkinPropertyLookup<bool> ResultSkinStateBridge::booleanProperty(
     return supported(count(judgement).value_or(0) > 0);
   }
   if (*id >= 150 && *id <= 155) {
-    const int difficulty = data_.meta != nullptr ? data_.meta->Difficulty : 0;
+    const int difficulty = data_.difficultyOverride.value_or(
+        data_.meta != nullptr ? data_.meta->Difficulty : 0);
     return supported(*id == 150 ? difficulty <= 0 || difficulty > 5
                                 : difficulty == *id - 150);
   }
@@ -334,7 +335,7 @@ SkinPropertyLookup<bool> ResultSkinStateBridge::booleanProperty(
   }
   if (*id == 1046) {
     const GaugeType type = data_.state ? data_.state->gaugeType
-                                       : GaugeType::Normal;
+                                       : data_.gaugeTypeOverride.value_or(GaugeType::Normal);
     const int index = gaugeTypeIndex(type);
     return supported(index == 0 || index == 1 || index == 4 || index == 5 ||
                      index == 7 || index == 8);
@@ -435,10 +436,12 @@ SkinPropertyLookup<bool> ResultSkinStateBridge::booleanProperty(
     return supported(*id == 195 ? backBmp : !backBmp);
   }
   if (*id == 90 || *id == 91) {
-    const auto lamp = data_.state != nullptr
+    const auto lamp = data_.currentClearRankOverride
+                          ? data_.currentClearRankOverride
+                          : (data_.state != nullptr
                           ? std::optional<int>(data_.state->getClearTypeRank())
                           : (data_.presentation ? data_.presentation->lampRank
-                                                : std::nullopt);
+                                                : std::nullopt));
     const bool clear = lamp && *lamp > kClearTypeFailedRank;
     return supported(*id == 90 ? clear : !clear);
   }
@@ -456,7 +459,7 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
     switch (*id) {
     case 40: {
       const GaugeType type = data_.state ? data_.state->gaugeType
-                                         : GaugeType::Normal;
+                                         : data_.gaugeTypeOverride.value_or(GaugeType::Normal);
       return supported<std::int64_t>(gaugeTypeIndex(type));
     }
     case 42:
@@ -743,7 +746,8 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
       return data_.state ? std::optional<int>(count(Bad).value_or(0) +
                                                count(Poor).value_or(0) +
                                                count(Kpoor).value_or(0))
-                         : std::nullopt;
+                         : (data_.presentation ? data_.presentation->badPoints
+                                               : std::nullopt);
     case 425:
       return data_.state ? std::optional<int>(data_.state->comboBreak)
                          : (data_.presentation ? data_.presentation->comboBreak
@@ -978,7 +982,9 @@ SkinPropertyLookup<std::string_view> ResultSkinStateBridge::stringProperty(
                        ? (data_.meta->SubArtist.empty()
                               ? data_.meta->Artist
                               : data_.meta->Artist + " " + data_.meta->SubArtist)
-                       : "";
+                       : (data_.presentation && data_.presentation->artist
+                              ? *data_.presentation->artist
+                              : "");
     break;
   case 50:
     stringValue_ = data_.skinName;
@@ -1103,7 +1109,7 @@ ResultSkinStateBridge::gameplayGraphState() const noexcept {
     }
     if (!result.gaugeSupported) {
       const GaugeType type = data_.state ? data_.state->gaugeType
-                                         : GaugeType::Normal;
+                                         : data_.gaugeTypeOverride.value_or(GaugeType::Normal);
       const GaugeProfile profile = data_.state ? data_.state->gaugeProfile
                                                : GaugeProfile::Standard;
       result.gaugeType = gaugeTypeIndex(type);
@@ -1121,7 +1127,8 @@ ResultSkinStateBridge::gameplayGraphState() const noexcept {
     return result;
   }
   if (gaugeHistory_.empty()) return {};
-  const GaugeType type = data_.state ? data_.state->gaugeType : GaugeType::Normal;
+  const GaugeType type = data_.state ? data_.state->gaugeType
+                                     : data_.gaugeTypeOverride.value_or(GaugeType::Normal);
   const GaugeProfile profile = data_.state ? data_.state->gaugeProfile
                                            : GaugeProfile::Standard;
   return {.gaugeHistory = gaugeHistory_,
@@ -1136,7 +1143,8 @@ ResultSkinStateBridge::gameplayGraphState() const noexcept {
 SkinGaugeStateView ResultSkinStateBridge::gaugeState() const noexcept {
   const auto value = finalGauge();
   if (!value) return {};
-  const GaugeType type = data_.state ? data_.state->gaugeType : GaugeType::Normal;
+  const GaugeType type = data_.state ? data_.state->gaugeType
+                                     : data_.gaugeTypeOverride.value_or(GaugeType::Normal);
   const GaugeProfile profile = data_.state ? data_.state->gaugeProfile
                                            : GaugeProfile::Standard;
   return {.supported = true,

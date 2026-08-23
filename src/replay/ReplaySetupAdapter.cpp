@@ -30,6 +30,16 @@ std::optional<ReplayData> makeReplayDataFromSetup(
     result.playOption2Seed = setup.player2.seed;
     result.laneShufflePattern1P = setup.player1.laneShufflePattern;
     result.laneShufflePattern2P = setup.player2.laneShufflePattern;
+    if (result.laneShufflePattern2P) {
+      const int keysPerPlayer = setup.chart.keyMode == 10 ? 5
+                                : setup.chart.keyMode == 14 ? 7
+                                                             : 0;
+      if (keysPerPlayer > 0) {
+        for (int &lane : *result.laneShufflePattern2P) {
+          lane += keysPerPlayer;
+        }
+      }
+    }
     result.assistOption = setup.assistOption;
     result.initialGaugeType = setup.initialGaugeType;
     result.gaugeAutoShift = setup.gaugeAutoShift;

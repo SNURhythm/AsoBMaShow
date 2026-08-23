@@ -775,6 +775,21 @@ ResultSkinData ResultScene::makeResultSkinData() const {
     } else if (remote->score.game == "bms-14k") {
       data.keyModeOverride = 14;
     }
+    if (remote->score.difficulty) {
+      if (*remote->score.difficulty == "BEGINNER") data.difficultyOverride = 1;
+      else if (*remote->score.difficulty == "NORMAL") data.difficultyOverride = 2;
+      else if (*remote->score.difficulty == "HYPER") data.difficultyOverride = 3;
+      else if (*remote->score.difficulty == "ANOTHER") data.difficultyOverride = 4;
+      else if (*remote->score.difficulty == "INSANE") data.difficultyOverride = 5;
+    }
+    if (remote->score.gauge) {
+      if (*remote->score.gauge == "ASSIST EASY") data.gaugeTypeOverride = GaugeType::AssistedEasy;
+      else if (*remote->score.gauge == "EASY") data.gaugeTypeOverride = GaugeType::Easy;
+      else if (*remote->score.gauge == "NORMAL") data.gaugeTypeOverride = GaugeType::Normal;
+      else if (*remote->score.gauge == "HARD") data.gaugeTypeOverride = GaugeType::Hard;
+      else if (*remote->score.gauge == "EX-HARD") data.gaugeTypeOverride = GaugeType::ExHard;
+      else if (*remote->score.gauge == "HAZARD") data.gaugeTypeOverride = GaugeType::Hazard;
+    }
     data.chartMd5 = remote->score.chartMd5;
     data.chartSha256 = remote->score.chartSha256;
     projectResultIrRanking(data, context, remote->providerId,
@@ -811,7 +826,8 @@ ResultSkinData ResultScene::makeResultSkinData() const {
   data.presentation = &local->presentation;
   data.gameplayGraph = local->gameplayGraph;
   const auto localRankingQuery = ir::makeBokutachiRankingQuery(local->meta);
-  const auto provider = context.settings.irProviders.find(ir::kTachiProviderId);
+  const auto provider = context.settings.irProviders.find(
+      std::string(ir::kTachiProviderId));
   if (localRankingQuery.value && provider != context.settings.irProviders.end()) {
     projectResultIrRanking(data, context, ir::kTachiProviderId,
                            provider->second.serverOrigin,
@@ -2402,7 +2418,7 @@ void ResultScene::requestSelectedResultSkinRankings() {
   const auto *remote = remoteSource();
   const auto *local = localSource();
   if (remote != nullptr && remote->rankingQuery) {
-    context.irRankingService->open(
+    (void)context.irRankingService->open(
         {.profileId = context.profileManager.activeProfile().id,
          .providerId = remote->providerId,
          .serverOrigin = remote->serverOrigin,
@@ -2411,11 +2427,12 @@ void ResultScene::requestSelectedResultSkinRankings() {
   }
   if (local == nullptr) return;
   const auto query = ir::makeBokutachiRankingQuery(local->meta);
-  const auto settings = context.settings.irProviders.find(ir::kTachiProviderId);
+  const auto settings = context.settings.irProviders.find(
+      std::string(ir::kTachiProviderId));
   if (!query.value || settings == context.settings.irProviders.end()) return;
-  context.irRankingService->open(
+  (void)context.irRankingService->open(
       {.profileId = context.profileManager.activeProfile().id,
-       .providerId = ir::kTachiProviderId,
+       .providerId = std::string(ir::kTachiProviderId),
        .serverOrigin = settings->second.serverOrigin,
        .chart = *query.value});
 }
@@ -3731,13 +3748,17 @@ bool ResultScene::queueResultSkinPointerEvent(SDL_Event &event) {
   UiLogicalPoint point;
   switch (event.type) {
   case SDL_MOUSEBUTTONDOWN:
-    if (event.button.button != SDL_BUTTON_LEFT) return false;
-    point = {.x = static_cast<float>(event.button.x),
-             .y = static_cast<float>(event.button.y)};
+    if (event.button.button != SDL_BUTTON_LEFT ||
+        event.button.which == SDL_TOUCH_MOUSEID) {
+      return false;
+    }
+    rendering::screenToUi(event.button.x * rendering::widthScale,
+                          event.button.y * rendering::heightScale,
+                          point.x, point.y);
     break;
   case SDL_FINGERDOWN:
-    point = {.x = event.tfinger.x * rendering::window_width,
-             .y = event.tfinger.y * rendering::window_height};
+    rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, point.x,
+                              point.y);
     break;
   default:
     return false;
@@ -3747,8 +3768,11 @@ bool ResultScene::queueResultSkinPointerEvent(SDL_Event &event) {
 }
 
 EventHandleResult ResultScene::handleEvents(SDL_Event &event) {
+  // Result overlays and touch controls are rendered above a selected skin and
+  // must receive the corresponding pointer event first.
+  if (rootLayout != nullptr && !rootLayout->handleEvents(event)) return {};
   if (queueResultSkinPointerEvent(event)) return {};
-  return Scene::handleEvents(event);
+  return {};
 }
 
 bool ResultScene::renderViewBeforeScene(const View *view) const {
