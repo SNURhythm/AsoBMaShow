@@ -2,7 +2,9 @@
 #include "../src/ReplayResultStateBuilder.h"
 #include "../src/ReplayAutoPlay.h"
 #include "../src/scene/play/Pacemaker.h"
+#include "../src/scene/play/SkinGameplayGraphState.h"
 
+#include <array>
 #include <cmath>
 #include <iostream>
 
@@ -85,6 +87,98 @@ int main() {
       replay_result::BuildResultState(chart, practiceGaugeReplay);
   if (practiceGaugeState.currentGauge != 37.0f) {
     std::cerr << "export result state must restore the recorded starting gauge"
+              << std::endl;
+    return 1;
+  }
+
+  bms_parser::Chart replayGraphChart;
+  replayGraphChart.Meta.KeyMode = 7;
+  replayGraphChart.Meta.Bpm = 120.0;
+  replayGraphChart.Meta.MinBpm = 120.0;
+  replayGraphChart.Meta.MaxBpm = 120.0;
+  replayGraphChart.Meta.TotalNotes = 2;
+  auto *replayGraphMeasure = new bms_parser::Measure();
+  const auto addReplayGraphNote = [&](int lane, long long timeMicros) {
+    auto *timeline = new bms_parser::TimeLine(8, false);
+    timeline->Timing = timeMicros;
+    timeline->BeatPosition = static_cast<double>(timeMicros) / 500'000.0;
+    timeline->Bpm = 120.0;
+    timeline->SetNote(lane, new bms_parser::Note(lane));
+    replayGraphMeasure->TimeLines.push_back(timeline);
+  };
+  addReplayGraphNote(1, 1'000'000);
+  addReplayGraphNote(2, 2'000'000);
+  replayGraphChart.Measures.push_back(replayGraphMeasure);
+  ReplayData replayGraphReplay;
+  replayGraphReplay.initialGaugeType = GaugeType::Normal;
+  replayGraphReplay.events = {
+      {.action = ReplayEventAction::Press,
+       .lane = 1,
+       .noteTimeMicros = 1'000'000,
+       .songTimeMicros = 1'004'000,
+       .judgeTimeMicros = 1'004'000,
+       .judgement = PGreat,
+       .diffMicros = -4'000,
+       .gauge = 73.0f,
+       .gaugeType = GaugeType::Normal,
+       .combo = 1,
+       .score = 2},
+      {.action = ReplayEventAction::MultiBad,
+       .lane = 2,
+       .noteTimeMicros = 2'000'000,
+       .songTimeMicros = 2'005'000,
+       .judgeTimeMicros = 2'005'000,
+       .judgement = Great,
+       .diffMicros = 5'000,
+       .gauge = 67.0f,
+       .gaugeType = GaugeType::Normal,
+       .combo = 2,
+       .score = 3},
+  };
+  const RhythmState replayGraphResult =
+      replay_result::BuildResultState(replayGraphChart, replayGraphReplay);
+  const SkinGameplayGraphState replayGraph =
+      replay_result::BuildSkinGameplayGraphState(replayGraphChart,
+                                                  replayGraphReplay,
+                                                  replayGraphResult);
+  if (replayGraph.chart == nullptr || replayGraph.dynamic == nullptr ||
+      replayGraph.chart->normalDistribution.size() < 3 ||
+      replayGraph.chart->normalDistribution[1][5] != 1 ||
+      replayGraph.chart->normalDistribution[2][5] != 1 ||
+      replayGraph.dynamic->judgementDistribution.size() < 3 ||
+      replayGraph.dynamic->judgementDistribution[1][1] != 1 ||
+      replayGraph.dynamic->judgementDistribution[2][2] != 1 ||
+      replayGraph.dynamic->earlyLateDistribution[1][1] != 1 ||
+      replayGraph.dynamic->earlyLateDistribution[2][6] != 1 ||
+      replayGraph.dynamic->recentJudgeTimingsMillis[1] != 4 ||
+      replayGraph.dynamic->recentJudgeTimingsMillis[2] != -5 ||
+      replayGraph.dynamic->gaugeHistories[static_cast<std::size_t>(
+          gaugeTypeIndex(GaugeType::Normal))] !=
+          replayGraphResult.gaugeHistoryFor(GaugeType::Normal)) {
+    std::cerr << "recalled replay graph must retain independent note, "
+                 "judgement, early-late, timing, and gauge data"
+              << std::endl;
+    return 1;
+  }
+  const std::array<SkinGameplayGraphState, 2> replayCourseGraphs{
+      replayGraph, replayGraph};
+  const SkinGameplayGraphState replayCourseGraph =
+      combineSkinGameplayGraphStates(replayCourseGraphs);
+  if (replayCourseGraph.chart == nullptr || replayCourseGraph.dynamic == nullptr ||
+      replayCourseGraph.chart->normalDistribution.size() !=
+          replayGraph.chart->normalDistribution.size() * 2 ||
+      replayCourseGraph.dynamic->judgementDistribution.size() !=
+          replayGraph.dynamic->judgementDistribution.size() * 2 ||
+      replayCourseGraph.dynamic
+              ->gaugeHistories[static_cast<std::size_t>(
+                  gaugeTypeIndex(GaugeType::Normal))]
+              .size() !=
+          replayGraph.dynamic
+                  ->gaugeHistories[static_cast<std::size_t>(
+                      gaugeTypeIndex(GaugeType::Normal))]
+                  .size() *
+              2) {
+    std::cerr << "course replay graph must concatenate the stage graph data"
               << std::endl;
     return 1;
   }

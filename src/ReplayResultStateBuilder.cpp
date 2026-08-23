@@ -1,8 +1,10 @@
 #include "ReplayResultStateBuilder.h"
 
 #include "CoursePlaySession.h"
+#include "scene/play/PlayfieldChartVisualModel.h"
 
 #include <algorithm>
+#include <array>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -117,6 +119,99 @@ void syncReplayResultGaugeSnapshot(RhythmState &state,
     typedHistory.push_back(event.gauge);
   }
 }
+
+std::array<SkinJudgeWindow, 5>
+replaySkinJudgeWindows(const bms_parser::Chart &chart,
+                       const ReplayData &replay) {
+  constexpr std::array<Judgement, 5> order = {
+      PGreat, Great, Good, Bad, Kpoor};
+  std::array<SkinJudgeWindow, 5> result{};
+  for (std::size_t index = 0; index < order.size(); ++index) {
+    result[index].judgement = order[index];
+  }
+  const ScoreStageProvenance *stage =
+      score_provenance::uniqueStageForChart(replay.provenance, chart.Meta);
+  if (stage == nullptr) {
+    return result;
+  }
+  for (const auto &window : stage->effectiveJudgeWindows) {
+    if (window.context != gameplay::JudgeWindowContext::Normal) {
+      continue;
+    }
+    const auto found = std::ranges::find(order, window.judgement);
+    if (found == order.end()) {
+      continue;
+    }
+    auto &target = result[static_cast<std::size_t>(
+        std::distance(order.begin(), found))];
+    target.minimumTimingMillis =
+        -static_cast<int>(window.lateMicros / 1'000);
+    target.maximumTimingMillis =
+        -static_cast<int>(window.earlyMicros / 1'000);
+  }
+  return result;
+}
+
+struct ReplayGraphNoteKey {
+  long long timeMicros = 0;
+  int lane = -1;
+  ChartVisualNoteSource source = ChartVisualNoteSource::Playable;
+
+  bool operator==(const ReplayGraphNoteKey &) const = default;
+};
+
+struct ReplayGraphNoteKeyHash {
+  [[nodiscard]] std::size_t
+  operator()(const ReplayGraphNoteKey &key) const noexcept {
+    std::size_t hash = std::hash<long long>{}(key.timeMicros);
+    hash ^= std::hash<int>{}(key.lane) + 0x9e3779b9U + (hash << 6U) +
+            (hash >> 2U);
+    hash ^= std::hash<unsigned int>{}(static_cast<unsigned int>(key.source)) +
+            0x9e3779b9U + (hash << 6U) + (hash >> 2U);
+    return hash;
+  }
+};
+
+using ReplayGraphNoteLookup =
+    std::unordered_map<ReplayGraphNoteKey, const ChartVisualNote *,
+                       ReplayGraphNoteKeyHash>;
+
+ReplayGraphNoteLookup
+buildReplayGraphNoteLookup(const PlayfieldChartVisualModel &model) {
+  std::unordered_map<ChartVisualId, long long> timelineTimes;
+  timelineTimes.reserve(model.timelines.size());
+  for (const auto &timeline : model.timelines) {
+    timelineTimes.emplace(timeline.id, timeline.timeMicros);
+  }
+
+  ReplayGraphNoteLookup lookup;
+  lookup.reserve(model.notes.size());
+  for (const auto &note : model.notes) {
+    const auto timeline = timelineTimes.find(note.timelineId);
+    if (timeline == timelineTimes.end()) {
+      continue;
+    }
+    // Match GamePlayScene::buildReplayNoteLookup(): later parser/model notes
+    // replace earlier notes with the same replay key.
+    lookup.insert_or_assign(
+        {.timeMicros = timeline->second, .lane = note.lane, .source = note.source},
+        &note);
+  }
+  return lookup;
+}
+
+const ChartVisualNote *replayGraphNote(const ReplayGraphNoteLookup &lookup,
+                                       const ReplayEvent &event) {
+  if (event.noteTimeMicros < 0) {
+    return nullptr;
+  }
+  const ChartVisualNoteSource source =
+      event.action == ReplayEventAction::Mine ? ChartVisualNoteSource::Mine
+                                              : ChartVisualNoteSource::Playable;
+  const auto found = lookup.find(
+      {.timeMicros = event.noteTimeMicros, .lane = event.lane, .source = source});
+  return found == lookup.end() ? nullptr : found->second;
+}
 } // namespace
 
 namespace replay_result {
@@ -204,6 +299,56 @@ RhythmState BuildResultState(bms_parser::Chart &chart,
     state.currentGauge = replay.finalGauge;
   }
   return state;
+}
+
+SkinGameplayGraphState BuildSkinGameplayGraphState(
+    bms_parser::Chart &chart, const ReplayData &replay,
+    const RhythmState &state) {
+  const PlayfieldChartVisualModel model =
+      buildPlayfieldChartVisualModel(chart, chart.Meta.LnMode);
+  auto chartGraph =
+      std::make_shared<SkinGameplayChartGraphState>(model.skinGameplayGraph);
+  const auto lookup = buildReplayNoteLookup(chart);
+  const auto classicHeadsWithTailResult =
+      classicLongHeadsWithRecordedTailResult(chart, lookup, replay);
+  SkinGameplayGraphAccumulator accumulator(
+      model.skinGameplayGraph.judgementNotes,
+      model.skinGameplayGraph.judgementDistributionSeconds,
+      replaySkinJudgeWindows(chart, replay), 0);
+  (void)accumulator.updateGaugeState(state.gaugeValues, state.gaugeType,
+                                     state.gaugeRules());
+
+  const ReplayGraphNoteLookup graphNotes = buildReplayGraphNoteLookup(model);
+  for (const ReplayEvent &event : replay.events) {
+    if (event.action == ReplayEventAction::Gauge ||
+        event.action == ReplayEventAction::Mine ||
+        !replayEventCountsInResult(chart, lookup,
+                                   classicHeadsWithTailResult, event)) {
+      continue;
+    }
+    const ChartVisualNote *note = replayGraphNote(graphNotes, event);
+    if (note != nullptr) {
+      accumulator.applyJudge(note->id,
+                             JudgeResult(event.judgement, event.diffMicros));
+    }
+  }
+
+  auto dynamic =
+      std::make_shared<SkinGameplayDynamicGraphState>(accumulator.state());
+  dynamic->gaugeHistories = state.gaugeHistories;
+  const int activeGaugeIndex = gaugeTypeIndex(state.gaugeType);
+  if (activeGaugeIndex >= 0 &&
+      static_cast<std::size_t>(activeGaugeIndex) <
+          dynamic->gaugeHistories.size() &&
+      dynamic->gaugeHistories[static_cast<std::size_t>(activeGaugeIndex)]
+          .empty()) {
+    dynamic->gaugeHistories[static_cast<std::size_t>(activeGaugeIndex)] =
+        state.gaugeHistory;
+  }
+  // The immutable replay-state history replaces the accumulator's sampled
+  // collection, so force a distinct renderer cache revision.
+  ++dynamic->gaugeRevision;
+  return {.chart = std::move(chartGraph), .dynamic = std::move(dynamic)};
 }
 
 std::optional<long long>

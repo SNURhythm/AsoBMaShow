@@ -2101,6 +2101,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ScoreProvenance.cpp
         src/bms_parser.cpp
         src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/PlayfieldChartVisualModel.cpp
+        src/scene/play/SkinGameplayGraphState.cpp
     )
     target_include_directories(replay_summary_list_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(replay_summary_list_tests PRIVATE cxx_std_23)

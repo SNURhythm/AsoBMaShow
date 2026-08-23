@@ -4,6 +4,7 @@
 #include "../CourseIdentity.h"
 #include "../CoursePlaySession.h"
 #include "../PlayOptionUtils.h"
+#include "../ReplayResultStateBuilder.h"
 #include "../repositories/ReplayRepository.h"
 #include "../replay/CourseReplayConsumer.h"
 #include "../replay/ReplayOption.h"
@@ -455,62 +456,12 @@ int totalNotesForCourse(const CoursePlaySession &session) {
 
 SkinGameplayGraphState
 courseGameplayGraphForSession(const CoursePlaySession &session) {
-  auto chart = std::make_shared<SkinGameplayChartGraphState>();
-  auto dynamic = std::make_shared<SkinGameplayDynamicGraphState>();
-  bool hasGraph = false;
-  std::int64_t chartTimeOffset = 0;
+  std::vector<SkinGameplayGraphState> stages;
+  stages.reserve(session.completedResults.size());
   for (const auto &stage : session.completedResults) {
-    if (!stage.gameplayGraph.chart || !stage.gameplayGraph.dynamic) continue;
-    hasGraph = true;
-    const auto &stageChart = *stage.gameplayGraph.chart;
-    const auto &stageDynamic = *stage.gameplayGraph.dynamic;
-    chart->normalDistribution.insert(chart->normalDistribution.end(),
-                                     stageChart.normalDistribution.begin(),
-                                     stageChart.normalDistribution.end());
-    chart->judgementNotes.insert(chart->judgementNotes.end(),
-                                 stageChart.judgementNotes.begin(),
-                                 stageChart.judgementNotes.end());
-    for (auto point : stageChart.bpmSeries) {
-      point.chartTimeMicros += chartTimeOffset;
-      chart->bpmSeries.push_back(point);
-    }
-    chart->judgementDistributionSeconds +=
-        stageChart.judgementDistributionSeconds;
-    chart->mainBpm = stageChart.mainBpm;
-    chart->minimumBpm = chart->minimumBpm == 0.0
-                            ? stageChart.minimumBpm
-                            : std::min(chart->minimumBpm, stageChart.minimumBpm);
-    chart->maximumBpm = std::max(chart->maximumBpm, stageChart.maximumBpm);
-    dynamic->judgementDistribution.insert(
-        dynamic->judgementDistribution.end(),
-        stageDynamic.judgementDistribution.begin(),
-        stageDynamic.judgementDistribution.end());
-    dynamic->earlyLateDistribution.insert(
-        dynamic->earlyLateDistribution.end(),
-        stageDynamic.earlyLateDistribution.begin(),
-        stageDynamic.earlyLateDistribution.end());
-    for (std::size_t index = 0; index < dynamic->gaugeHistories.size();
-         ++index) {
-      const auto &history = stageDynamic.gaugeHistories[index];
-      dynamic->gaugeHistories[index].insert(
-          dynamic->gaugeHistories[index].end(), history.begin(), history.end());
-    }
-    dynamic->recentJudgeTimingsMillis = stageDynamic.recentJudgeTimingsMillis;
-    dynamic->recentJudgeTimingIndex = stageDynamic.recentJudgeTimingIndex;
-    dynamic->judgeWindows = stageDynamic.judgeWindows;
-    dynamic->gaugeType = stageDynamic.gaugeType;
-    dynamic->gaugeMinimum = stageDynamic.gaugeMinimum;
-    dynamic->gaugeMaximum = stageDynamic.gaugeMaximum;
-    dynamic->gaugeBorder = stageDynamic.gaugeBorder;
-    dynamic->gaugeSupported = stageDynamic.gaugeSupported;
-    dynamic->judgementRevision += stageDynamic.judgementRevision;
-    dynamic->gaugeRevision += stageDynamic.gaugeRevision;
-    chartTimeOffset += static_cast<std::int64_t>(
-        stageChart.judgementDistributionSeconds) * 1'000'000LL;
+    stages.push_back(stage.gameplayGraph);
   }
-  return hasGraph ? SkinGameplayGraphState{.chart = std::move(chart),
-                                            .dynamic = std::move(dynamic)}
-                  : SkinGameplayGraphState{};
+  return combineSkinGameplayGraphStates(stages);
 }
 
 std::optional<ResultTimingStatistics>
@@ -753,6 +704,12 @@ ResultScene::ResultScene(
   local.reusableRetryChart = local.ownedReusableRetryChart != nullptr
                                  ? local.ownedReusableRetryChart.get()
                                  : reusableRetryChart;
+  if ((local.gameplayGraph.chart == nullptr ||
+       local.gameplayGraph.dynamic == nullptr) &&
+      local.reusableRetryChart != nullptr && local.analyticsData.has_value()) {
+    local.gameplayGraph = replay_result::BuildSkinGameplayGraphState(
+        *local.reusableRetryChart, *local.analyticsData, local.resultState);
+  }
   const play_options::PlayModeDisplayLabel display =
       resultPlayModeDisplayLabel(local.meta, local.presentationReplay,
                                  local.retryData, local.practiceOptions);
@@ -3219,7 +3176,10 @@ void ResultScene::showSavedCourseStage() {
           ResultPersistenceOptions{}, nullptr, ResultPracticeOptions{}, false,
           ResultCourseOptions{.mode = ResultCourseMode::Stage,
                               .session = session,
-                              .savedResultBrowsing = true}),
+                              .savedResultBrowsing = true},
+          std::string{}, std::unique_ptr<bms_parser::Chart>{}, nullptr,
+          std::nullopt, nullptr, std::nullopt, true, ResultTableContext{},
+          result.gameplayGraph),
       false);
 }
 

@@ -3416,6 +3416,7 @@ bool GamePlayScene::reset() {
                                        : options.assistOption;
   state->setAssistClearMark(clear_policy::assistClearMarkRequired(
       assistOption, chart->Meta.MinBpm, chart->Meta.MaxBpm, options.playback));
+  resetSkinGameplayGraph();
   initializeStartPositionState();
   configurePacemakerTarget();
   updatePacemakerStatus();
@@ -4679,7 +4680,7 @@ void GamePlayScene::finalizePracticeRangeMisses() {
         note != nullptr && note->Timeline != nullptr ? note->Timeline->Timing
                                                      : finalizationTimeMicros;
     const JudgeResult miss(Poor, finalizationTimeMicros - noteTimeMicros);
-    onJudge(miss, judgeEventClock(finalizationTimeMicros), false);
+    onJudge(miss, judgeEventClock(finalizationTimeMicros), false, note);
     appendReplayEvent(ReplayEventAction::Miss, note->Lane, note,
                       finalizationTimeMicros, finalizationTimeMicros, miss);
   }
@@ -4876,6 +4877,7 @@ GamePlayScene::judgeEventClock(long long songTimeMicros) const {
 
 void GamePlayScene::initializePlayfieldVisualNoteSources() {
   playfieldVisualNoteSources.clear();
+  skinGameplayGraphSourceIds.clear();
   if (chart == nullptr) {
     return;
   }
@@ -4908,7 +4910,85 @@ void GamePlayScene::initializePlayfieldVisualNoteSources() {
   if (playfieldVisualNoteSources.size() !=
       playfieldChartVisualModel.notes.size()) {
     playfieldVisualNoteSources.clear();
+    return;
   }
+  skinGameplayGraphSourceIds.reserve(playfieldVisualNoteSources.size());
+  for (std::size_t index = 0; index < playfieldVisualNoteSources.size();
+       ++index) {
+    skinGameplayGraphSourceIds.emplace(playfieldVisualNoteSources[index],
+                                       playfieldChartVisualModel.notes[index]
+                                           .id);
+  }
+}
+
+void GamePlayScene::resetSkinGameplayGraph() {
+  std::array<SkinJudgeWindow, 5> windows{};
+  if (rulesetPolicyBuild.policy.has_value()) {
+    const auto &sourceWindows =
+        rulesetPolicyBuild.policy->judge.rules()
+            .contexts[static_cast<std::size_t>(
+                gameplay::JudgeWindowContext::Normal)]
+            .windows;
+    for (std::size_t index = 0;
+         index < windows.size() && index < sourceWindows.size(); ++index) {
+      const auto &window = sourceWindows[index];
+      windows[index] = {
+          .judgement = window.judgement,
+          .minimumTimingMillis = -static_cast<int>(window.lateMicros / 1'000),
+          .maximumTimingMillis =
+              -static_cast<int>(window.earlyMicros / 1'000),
+      };
+    }
+  }
+  const long long lastTimelineMicros =
+      playfieldChartVisualModel.timelines.empty()
+          ? 0
+          : std::max(0LL,
+                     playfieldChartVisualModel.timelines.back().timeMicros);
+  const std::size_t gaugeHistoryCapacity = std::max({
+      std::size_t{4096}, playfieldChartVisualModel.notes.size(),
+      static_cast<std::size_t>(lastTimelineMicros / 500'000) + 2,
+  });
+  skinGameplayGraph.reset(
+      playfieldChartVisualModel.skinGameplayGraph.judgementNotes,
+      playfieldChartVisualModel.skinGameplayGraph.judgementDistributionSeconds,
+      windows, gaugeHistoryCapacity);
+  updateSkinGameplayGraph(0);
+}
+
+void GamePlayScene::updateSkinGameplayGraph(long long gameplayTimeMicros) {
+  if (realtimeGameplayAuthorityActive() || state == nullptr ||
+      playfieldVisualStateStore == nullptr) {
+    return;
+  }
+  const bool changed = skinGameplayGraph.updateGaugeState(
+                           state->gaugeValues, state->gaugeType,
+                           state->gaugeRules()) ||
+                       skinGameplayGraph.advanceGaugeHistoryTo(
+                           gameplayTimeMicros);
+  if (changed) {
+    playfieldVisualStateStore->applyGameplayGraphState(
+        skinGameplayGraph.state());
+  }
+}
+
+void GamePlayScene::recordSkinGameplayGraphJudge(
+    const bms_parser::Note *note, const JudgeResult &judgeResult,
+    long long gameplayTimeMicros) {
+  if (realtimeGameplayAuthorityActive() || note == nullptr ||
+      state == nullptr || playfieldVisualStateStore == nullptr) {
+    return;
+  }
+  const auto source = skinGameplayGraphSourceIds.find(note);
+  if (source == skinGameplayGraphSourceIds.end()) {
+    return;
+  }
+  skinGameplayGraph.applyJudge(source->second, judgeResult);
+  (void)skinGameplayGraph.updateGaugeState(state->gaugeValues,
+                                           state->gaugeType,
+                                           state->gaugeRules());
+  (void)skinGameplayGraph.advanceGaugeHistoryTo(gameplayTimeMicros);
+  playfieldVisualStateStore->applyGameplayGraphState(skinGameplayGraph.state());
 }
 
 void GamePlayScene::capturePlayfieldVisualState(
@@ -4918,6 +4998,7 @@ void GamePlayScene::capturePlayfieldVisualState(
   if (playfieldVisualStateStore == nullptr || state == nullptr) {
     return;
   }
+  updateSkinGameplayGraph(gameplayTimeMicros);
 
   const auto laneCover = gameplayLaneCoverAuthority(
       playfieldLaneCoverPercent, playfieldLaneCoverEnabled);
@@ -6172,7 +6253,7 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
           transaction.hasReplayEvent ? transaction.replayEvent.songTimeMicros
                                      : inputContext.songTimeMicros;
       onJudge(transaction.judge, judgeEventClock(eventSongTimeMicros),
-              !options.autoPlay || isReplayPlayback());
+              !options.autoPlay || isReplayPlayback(), transaction.note);
     }
     if (transaction.hasReplayEvent) {
       const auto &event = transaction.replayEvent;
@@ -6231,7 +6312,7 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay,
           transaction.hasReplayEvent ? transaction.replayEvent.songTimeMicros
                                      : inputContext.songTimeMicros;
       onJudge(transaction.judge, judgeEventClock(eventSongTimeMicros),
-              !options.autoPlay || isReplayPlayback());
+              !options.autoPlay || isReplayPlayback(), transaction.note);
     }
     if (transaction.hasReplayEvent) {
       const auto &event = transaction.replayEvent;
@@ -6296,14 +6377,14 @@ void GamePlayScene::checkPassedTimeline(long long time) {
                   JudgeResult(Poor, judgedTime - timeline->Timing);
               if (!longNote->IsTail()) {
                 markLongNoteMissed(longNote, judgedTime);
-                onJudge(poorResult, eventClock, false);
+                onJudge(poorResult, eventClock, false, note);
                 appendReplayEvent(ReplayEventAction::Miss, note->Lane, note,
                                   time, judgedTime, poorResult);
                 if (longNote->Tail != nullptr && !longNote->Tail->IsPlayed) {
                   markLongNoteMissed(longNote->Tail, judgedTime,
                                      !longNoteTailJudgedBeforeTiming(
                                          longNote->Tail, judgedTime));
-                  onJudge(poorResult, eventClock, false);
+                  onJudge(poorResult, eventClock, false, longNote->Tail);
                   appendReplayEvent(ReplayEventAction::Miss,
                                     longNote->Tail->Lane, longNote->Tail, time,
                                     judgedTime, poorResult);
@@ -6315,7 +6396,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
               if (longNote->Head != nullptr) {
                 longNote->Head->IsHolding = false;
               }
-              onJudge(poorResult, eventClock, false);
+              onJudge(poorResult, eventClock, false, note);
               appendReplayEvent(ReplayEventAction::Miss, note->Lane, note, time,
                                 judgedTime, poorResult);
               continue;
@@ -6328,7 +6409,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
           }
           const auto poorResult =
               JudgeResult(Poor, judgedTime - timeline->Timing);
-          onJudge(poorResult, eventClock, false);
+          onJudge(poorResult, eventClock, false, note);
           appendReplayEvent(ReplayEventAction::Miss, note->Lane, note, time,
                             judgedTime, poorResult);
         }
@@ -6378,7 +6459,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
                       : judgeClassicLongNoteRelease(
                             rulesetPolicyBuild.policy->judge, chart->Meta,
                             options.longNoteMode, longNote, judgedTime);
-              onJudge(judgeResult, eventClock, false);
+              onJudge(judgeResult, eventClock, false, note);
               appendReplayEvent(ReplayEventAction::Release, note->Lane, note,
                                 time, judgedTime, judgeResult);
               if (options.autoPlay) {
@@ -6539,7 +6620,7 @@ void GamePlayScene::applyReplayEvent(const ReplayEvent &event,
           longNote->Tail != nullptr && !longNote->Tail->IsPlayed) {
         longNote->Tail->Play(event.judgeTimeMicros);
       }
-      onJudge(recordedJudge, eventClock, false);
+      onJudge(recordedJudge, eventClock, false, note);
       applyReplayGauge(event);
     }
     break;
@@ -6578,8 +6659,9 @@ void GamePlayScene::applyReplayEvent(const ReplayEvent &event,
   }
   case ReplayEventAction::Miss:
     if (event.judgement != None) {
-      markReplayMissedNote(findReplayNote(event), event.judgeTimeMicros);
-      onJudge(recordedJudge, eventClock, false);
+      auto *note = findReplayNote(event);
+      markReplayMissedNote(note, event.judgeTimeMicros);
+      onJudge(recordedJudge, eventClock, false, note);
       applyReplayGauge(event);
     }
     break;
@@ -6629,6 +6711,7 @@ void GamePlayScene::applyReplayGauge(const ReplayEvent &event) {
   } else {
     typedHistory.push_back(event.gauge);
   }
+  updateSkinGameplayGraph(event.songTimeMicros);
   updateGaugeStatusText();
 }
 
@@ -6759,12 +6842,14 @@ void GamePlayScene::expireGimmickNote(bms_parser::Note *note,
 
 void GamePlayScene::onJudge(const JudgeResult &judgeResult,
                             PlayfieldJudgeEventClock clock,
-                            bool recordTimingSample) {
+                            bool recordTimingSample,
+                            const bms_parser::Note *graphNote) {
   if (state == nullptr || state->isEnding) {
     return;
   }
   const int previousCount = state->judgeCount[judgeResult.judgement];
   state->commitJudge(judgeResult);
+  recordSkinGameplayGraphJudge(graphNote, judgeResult, clock.songTimeMicros);
   const int judgementCount = previousCount + 1;
   presentationEventFanout->onJudge(judgeResult, state->combo,
                                    state->getScore(), clock,
@@ -7121,7 +7206,7 @@ JudgeResult GamePlayScene::pressNote(bms_parser::Note *note,
               effectiveLongNoteIsCharge(longNote, chart, options.longNoteMode);
           if (chargeLongNote) {
             onJudge(judgeResult, judgeEventClock(eventSongTimeMicros),
-                    !options.autoPlay || isReplayPlayback());
+                    !options.autoPlay || isReplayPlayback(), note);
           }
           if (recordEvent) {
             appendReplayEvent(ReplayEventAction::Press, note->Lane, note,
@@ -7134,7 +7219,7 @@ JudgeResult GamePlayScene::pressNote(bms_parser::Note *note,
       note->Press(pressedTime);
     }
     onJudge(judgeResult, judgeEventClock(eventSongTimeMicros),
-            !options.autoPlay || isReplayPlayback());
+            !options.autoPlay || isReplayPlayback(), note);
     if (recordEvent) {
       appendReplayEvent(ReplayEventAction::Press, note->Lane, note,
                         eventSongTimeMicros,
@@ -7182,7 +7267,7 @@ JudgeResult GamePlayScene::releaseNote(bms_parser::Note *Note,
                   options.longNoteMode, LongNote, ReleasedTime);
   }
   onJudge(appliedJudge, judgeEventClock(eventSongTimeMicros),
-          !options.autoPlay || isReplayPlayback());
+          !options.autoPlay || isReplayPlayback(), Note);
   if (recordEvent) {
     appendReplayEvent(ReplayEventAction::Release, Note->Lane, Note,
                       eventSongTimeMicros,

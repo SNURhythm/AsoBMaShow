@@ -137,6 +137,12 @@ struct SkinGameplayGraphStateView {
 [[nodiscard]] SkinGameplayGraphStateView
 skinGameplayGraphStateView(const SkinGameplayGraphState &) noexcept;
 
+// Course result consumers concatenate completed chart snapshots. Keeping the
+// merge here lets interactive, saved, and exported results share the same
+// graph authority.
+[[nodiscard]] SkinGameplayGraphState combineSkinGameplayGraphStates(
+    std::span<const SkinGameplayGraphState> stages);
+
 class SkinGameplayGraphAccumulator {
 public:
   SkinGameplayGraphAccumulator() = default;
