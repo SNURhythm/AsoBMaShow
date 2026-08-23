@@ -5048,8 +5048,10 @@ void testResultBridgeMatchesResultAliasesAndTimerUnits() {
   const auto fullTitle = std::string(fullTitleProperty.value);
   const auto mode = std::string(bridge.stringProperty({60}).value);
   const auto order = std::string(bridge.stringProperty({61}).value);
+  const auto namedTitle = std::string(bridge.stringProperty({std::string("title")}).value);
   expect(level.supported && level.value == 12 && fullTitleProperty.supported &&
              fullTitle == "Title Subtitle" && mode == "7K" && order == "MIRROR" &&
+             namedTitle == "Title" &&
              bridge.timerProperty({1}) == 125'000 &&
              bridge.timerProperty({100}) == INT64_MIN,
          "result aliases and timers match Beatoraja result properties");

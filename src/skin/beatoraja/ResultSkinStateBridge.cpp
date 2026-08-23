@@ -129,7 +129,21 @@ std::optional<int> ResultSkinStateBridge::maxCombo() const noexcept {
 std::optional<int> ResultSkinStateBridge::integerSelector(
     const SkinBuiltinPropertySelector &selector) const noexcept {
   const auto *value = std::get_if<int>(&selector.value);
-  return value ? std::optional<int>(*value) : std::nullopt;
+  if (value != nullptr) return *value;
+  const auto *name = std::get_if<std::string>(&selector.value);
+  if (name == nullptr) return std::nullopt;
+  static constexpr std::array<std::pair<std::string_view, int>, 15> aliases{{
+      {"title", 10}, {"fulltitle", 12}, {"subtitle", 11},
+      {"artist", 14}, {"subartist", 15}, {"mode", 60},
+      {"sort", 61}, {"difficulty", 62}, {"nowbpm", 92},
+      {"score_rate", 1102}, {"total_rate", 1115},
+      {"score_rate2", 155}, {"scorerate", 110},
+      {"scorerate_final", 111}, {"rate_pgreat", 140},
+  }};
+  for (const auto &[alias, id] : aliases) {
+    if (*name == alias) return id;
+  }
+  return std::nullopt;
 }
 
 SkinPropertyLookup<bool> ResultSkinStateBridge::booleanProperty(
@@ -443,6 +457,10 @@ SkinPropertyLookup<double> ResultSkinStateBridge::floatProperty(
                : std::nullopt;
   };
   if (*id == 1102 || *id == 1115 || *id == 155) {
+    const auto value = rate();
+    return value ? supported(*value) : unsupported<double>();
+  }
+  if (*id >= 110 && *id <= 115) {
     const auto value = rate();
     return value ? supported(*value) : unsupported<double>();
   }
