@@ -1481,6 +1481,16 @@ void ResultScene::updateResultPersistencePresentation() {
     return;
   }
   const bool decisionRequired = persistenceDecisionRequired();
+  if (resultTouchControlsOverlay != nullptr &&
+      resultTouchControlsDecisionRequired != decisionRequired) {
+    resultTouchControlsOverlay->setVisible(false);
+    resultTouchControlsOverlay->setDisplay(YGDisplayNone);
+    resultTouchControlsOverlay = nullptr;
+    resultTouchControlsPanel = nullptr;
+    resultTouchControlsRestore = nullptr;
+    resultTouchExportPhotoText = nullptr;
+    buildResultTouchControls();
+  }
   if (normalResultActions != nullptr) {
     normalResultActions->setVisible(!decisionRequired);
     normalResultActions->setDisplay(decisionRequired ? YGDisplayNone
@@ -1712,7 +1722,7 @@ void ResultScene::buildResultTouchControls() {
       availability.retrySame = course.session != nullptr &&
                               course.session->modernCourseResultBrowsing &&
                               course.session->modernCourseRetrySameAllowed;
-      availability.exportPhoto = true;
+      availability.exportPhoto = !local->autoPlayResult;
     } else {
       availability.replay = local->replayResult;
       availability.retry = !local->replayResult;
@@ -1724,7 +1734,7 @@ void ResultScene::buildResultTouchControls() {
                                    : play_options::hasSamePatternRandomization(
                                          local->meta));
       availability.rankings = true;
-      availability.exportPhoto = true;
+      availability.exportPhoto = !local->autoPlayResult;
       // A selected skin does not build the native timing-section picker.
       // Do not expose an action that cannot produce a practice request.
       availability.selectSection = false;
@@ -1739,6 +1749,7 @@ void ResultScene::buildResultTouchControls() {
     availability.replay = false;
     availability.next = false;
   }
+  resultTouchControlsDecisionRequired = persistenceDecisionRequired();
 
   const auto presentation = makeResultTouchControlPresentation(
       {.skinSelected = true,

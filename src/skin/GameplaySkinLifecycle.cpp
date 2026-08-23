@@ -1355,10 +1355,12 @@ GameplaySkinLifecycle::acquireForSkinType(int skinType, bool chartBoundary) {
         .revisionDigest =
             acquired.activation->revision.revision().lowercaseSha256,
         .configurationDigest = requestedConfigurationDigest};
-    const auto chainGeneration = ++impl_->nextChainGeneration;
-    impl_->writer.emplace(Impl::WriterChain{
-        .generation = chainGeneration, .identity = identity, .base = base});
-    impl_->currentIdentity = identity;
+    if (chartBoundary) {
+      const auto chainGeneration = ++impl_->nextChainGeneration;
+      impl_->writer.emplace(Impl::WriterChain{
+          .generation = chainGeneration, .identity = identity, .base = base});
+      impl_->currentIdentity = identity;
+    }
     return {.disposition = GameplaySkinAcquisitionDisposition::Ready,
             .request = GameplaySkinActivationRequest{
                 .sessionSerial = sessionSerial,

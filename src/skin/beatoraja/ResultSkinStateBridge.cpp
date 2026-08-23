@@ -329,7 +329,8 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
   const auto currentScore = score();
   const auto maximum = maxScore();
   const auto notes = data_.meta ? std::optional<int>(data_.meta->TotalNotes)
-                                : std::nullopt;
+                                : (maximum ? std::optional<int>(*maximum / 2)
+                                           : std::nullopt);
   const auto result = [this, id, currentScore, maximum, notes]()
       -> std::optional<int> {
     const auto previousScore = data_.previousBest
