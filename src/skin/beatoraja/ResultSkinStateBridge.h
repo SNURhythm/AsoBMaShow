@@ -47,12 +47,16 @@ private:
   [[nodiscard]] std::optional<int> score() const noexcept;
   [[nodiscard]] std::optional<int> maxScore() const noexcept;
   [[nodiscard]] std::optional<int> maxCombo() const noexcept;
+  [[nodiscard]] std::optional<float> finalGauge() const noexcept;
+  [[nodiscard]] std::optional<int>
+  timing(Judgement judgement, bool early) const noexcept;
 
   ResultSkinData data_;
   std::uint64_t frameSerial_ = 0;
   std::int64_t elapsedMillis_ = 0;
   std::string stringValue_;
   std::vector<float> gaugeHistory_;
+  std::uint64_t gaugeRevision_ = 0;
 };
 
 } // namespace skin

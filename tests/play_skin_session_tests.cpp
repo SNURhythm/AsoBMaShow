@@ -5015,7 +5015,13 @@ void testResultBridgeMatchesBeatorajaResultScoreFamilies() {
   state.judgementFastSlowCount[Great].fast = 5;
   state.judgementFastSlowCount[Poor].slow = 6;
   bms_parser::ChartMeta meta{.TotalNotes = 10};
-  ResultSkinStateBridge bridge({.state = &state, .meta = &meta}, 1, 0);
+  state.maxCombo = 7;
+  ResultSkinStateBridge bridge({
+      .state = &state,
+      .meta = &meta,
+      .previousBest = ResultPreviousBestData{.score = 12},
+      .pacemaker = ResultPacemakerData{.targetScore = 18},
+  }, 1, 0);
 
   const auto rank = bridge.booleanProperty({220});
   const auto negatedRank = bridge.booleanProperty({-220});
@@ -5025,13 +5031,24 @@ void testResultBridgeMatchesBeatorajaResultScoreFamilies() {
   const auto badPoorMiss = bridge.integerProperty({427}, {});
   const auto scoreRate = bridge.integerProperty({102}, {});
   const auto scoreRateAfterDot = bridge.integerProperty({103}, {});
+  const auto bestRate = bridge.floatProperty({112}, {});
+  const auto targetRate = bridge.floatProperty({114}, {});
+  const auto pGreatRate = bridge.floatProperty({"rate_pgreat"}, {});
+  const auto comboRate = bridge.floatProperty({145}, {});
+  const auto imageFavorite = bridge.integerProperty(
+      {90}, SkinIntegerPropertyDomain::ImageIndex);
   expect(rank.supported && rank.value && negatedRank.supported &&
              !negatedRank.value && poor.supported && poor.value == 3 &&
              miss.supported && miss.value == 4 && poorPlusMiss.supported &&
              poorPlusMiss.value == 7 && badPoorMiss.supported &&
              badPoorMiss.value == 9 && scoreRate.supported &&
              scoreRate.value == 100 && scoreRateAfterDot.supported &&
-             scoreRateAfterDot.value == 0,
+             scoreRateAfterDot.value == 0 && bestRate.supported &&
+             std::abs(bestRate.value - 0.6) < 0.000001 &&
+             targetRate.supported && std::abs(targetRate.value - 0.9) < 0.000001 &&
+             pGreatRate.supported && std::abs(pGreatRate.value - 1.0) < 0.000001 &&
+             comboRate.supported && std::abs(comboRate.value - 0.7) < 0.000001 &&
+             imageFavorite.supported && imageFavorite.value == 0,
          "result bridge follows Beatoraja's negated options, score rate, and "
          "Poor-versus-Miss result families");
 }
@@ -5062,18 +5079,36 @@ void testResultBridgeUsesRemotePresentationValues() {
       .score = 1400,
       .maxScore = 2000,
       .lampRank = 3,
+      .finalGauge = 79.96F,
+      .maxCombo = 720,
       .judgements = {{.label = "P-GREAT", .total = 800},
-                     {.label = "GREAT", .total = 100},
+                     {.label = "GREAT", .total = 100, .early = 0, .late = 0},
                      {.label = "GOOD", .total = 50},
                      {.label = "BAD", .total = 20},
                      {.label = "POOR", .total = 10}},
+      .fast = 12,
+      .slow = 8,
+      .gaugeSeries = {{.points = {20.0F, 50.0F, 79.96F},
+                       .maximum = 100.0F}},
   };
   ResultSkinStateBridge bridge({.presentation = &remote}, 1, 0);
   const auto poor = bridge.integerProperty({114}, {});
+  const auto finalGauge = bridge.integerProperty({107}, {});
+  const auto gaugeDecimal = bridge.integerProperty({407}, {});
+  const auto fastGreat = bridge.integerProperty({412}, {});
+  const auto totalFast = bridge.integerProperty({423}, {});
+  const auto graph = bridge.gameplayGraphState();
   expect(bridge.booleanProperty({90}).supported &&
              bridge.booleanProperty({90}).value && poor.supported &&
-             poor.value == 10,
-         "remote result properties use the authoritative presentation");
+             poor.value == 10 && finalGauge.supported &&
+             finalGauge.value == 79 && gaugeDecimal.supported &&
+             gaugeDecimal.value == 9 && fastGreat.supported &&
+             fastGreat.value == 0 && totalFast.supported &&
+             totalFast.value == 12 && graph.gaugeSupported &&
+             graph.gaugeHistory.size() == 3 && graph.gaugeRevision != 0 &&
+             std::abs(bridge.floatProperty({1107}, {}).value - 79.96) < 0.0001 &&
+             bridge.judgeState(0).supported && bridge.judgeState(0).combo == 720,
+         "remote result properties project presentation scores, timing, and gauges");
 }
 
 void testRequestedExternalResultSkinCreatesSession() {
