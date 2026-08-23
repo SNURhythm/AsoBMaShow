@@ -563,6 +563,10 @@ beatorajaSongInformation(const bms_parser::Chart &chart,
 
 } // namespace
 
+std::optional<int> beatorajaParseInt(std::string_view value) {
+  return javaParseInt(value);
+}
+
 std::vector<std::string> PlayfieldChartVisualModel::runtimeStrings() const {
   std::vector<std::string> result;
   result.reserve(6 + text.auditedStringProperties.size());
@@ -632,7 +636,7 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
       .mainBpm = beatorajaMainBpm(chart, longNoteModeOverride),
       .durationMicros = chart.Meta.TotalLength,
       .authoredPlayLevel = chart.Meta.PlayLevelText,
-      .playLevel = javaParseInt(chart.Meta.PlayLevelText).value_or(0),
+      .playLevel = beatorajaParseInt(chart.Meta.PlayLevelText).value_or(0),
       .normalKeyNotes = noteCounts.normalKey,
       .longKeyNotes = noteCounts.longKey,
       .normalScratchNotes = noteCounts.normalScratch,

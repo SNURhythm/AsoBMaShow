@@ -9,6 +9,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace bms_parser {
@@ -18,6 +19,11 @@ class Chart;
 using ChartVisualId = std::uint32_t;
 inline constexpr std::uint32_t kNoRetainedTimelineOrdinal =
     std::numeric_limits<std::uint32_t>::max();
+
+// Beatoraja parses #PLAYLEVEL through Java Integer.parseInt, including its
+// Unicode decimal-digit and overflow behavior. Result and gameplay skins must
+// share this conversion so their level selectors agree.
+[[nodiscard]] std::optional<int> beatorajaParseInt(std::string_view value);
 
 enum class ChartVisualNoteKind : std::uint8_t {
   Normal,

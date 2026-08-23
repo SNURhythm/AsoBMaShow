@@ -5522,6 +5522,51 @@ void testResultBridgeDoesNotInventRemoteGaugeImageIndex() {
          "remote results do not substitute NORMAL when their gauge is absent");
 }
 
+void testResultBridgeKeepsResultPropertyContractsForAbsentAndStaticData() {
+  bms_parser::ChartMeta meta{.Rank = 2,
+                             .PlayLevel = 12.5,
+                             .PlayLevelText = "12.5",
+                             .TotalNotes = 100};
+  ResultSkinStateBridge firstPlay({.meta = &meta}, 1, 0);
+  const auto previousRank = firstPlay.booleanProperty({320});
+  const auto noPreviousRank = firstPlay.booleanProperty({-320});
+  const auto veryHard = firstPlay.booleanProperty({180});
+  const auto hardRank = firstPlay.booleanProperty({181});
+  const auto normalRank = firstPlay.booleanProperty({182});
+  const auto authoredLevel = firstPlay.integerProperty({96}, {});
+
+  RhythmState normalState(nullptr, false);
+  normalState.gaugeType = GaugeType::Normal;
+  ResultSkinStateBridge normal({.state = &normalState, .meta = &meta}, 1, 0);
+  RhythmState hardState(nullptr, false);
+  hardState.gaugeType = GaugeType::Hard;
+  ResultSkinStateBridge hardResult({.state = &hardState, .meta = &meta}, 1, 0);
+  const auto normalGauge = normal.booleanProperty({42});
+  const auto normalHardGauge = normal.booleanProperty({43});
+  const auto hardGauge = hardResult.booleanProperty({42});
+  const auto hardHardGauge = hardResult.booleanProperty({43});
+
+  ResultPresentationModel remote{.finalGauge = 72.0F,
+                                 .gaugeSeries = {{.points = {30.0F, 72.0F},
+                                                  .maximum = 100.0F}}};
+  ResultSkinStateBridge unknownRemoteGauge({.presentation = &remote}, 1, 0);
+  const auto remoteGauge = unknownRemoteGauge.gaugeState();
+  const auto remoteGraph = unknownRemoteGauge.gameplayGraphState();
+
+  expect(previousRank.supported && !previousRank.value &&
+             noPreviousRank.supported && noPreviousRank.value &&
+             veryHard.supported && !veryHard.value && hardRank.supported &&
+             !hardRank.value && normalRank.supported && normalRank.value &&
+             authoredLevel.supported && authoredLevel.value == 0 &&
+             normalGauge.supported && normalGauge.value &&
+             normalHardGauge.supported && !normalHardGauge.value &&
+             hardGauge.supported && !hardGauge.value &&
+             hardHardGauge.supported && hardHardGauge.value &&
+             !remoteGauge.supported && !remoteGraph.gaugeSupported,
+         "result bridge preserves Beatoraja result conditions and does not "
+         "invent metadata for unknown remote gauges");
+}
+
 void testResultBridgeConvertsClearRanksToBeatorajaImageIndexes() {
   ResultSkinStateBridge bridge({
       .currentClearRankOverride = kClearTypeFullComboRank,
@@ -5669,7 +5714,8 @@ void testResultBridgeUsesRemotePresentationValues() {
                                  .difficultyLabel = "ANOTHER",
                                  .chartMd5 = "remote-md5",
                                  .chartSha256 = "remote-sha256",
-                                 .keyModeOverride = 7},
+                                 .keyModeOverride = 7,
+                                 .gaugeTypeOverride = GaugeType::Normal},
                                 1, 0);
   const auto poor = bridge.integerProperty({114}, {});
   const auto finalGauge = bridge.integerProperty({107}, {});
@@ -5873,6 +5919,7 @@ int main() {
   testResultBridgeProjectsLongNoteModeImageIndex();
   testResultBridgeMatchesBeatorajaTableFullString();
   testResultBridgeDoesNotInventRemoteGaugeImageIndex();
+  testResultBridgeKeepsResultPropertyContractsForAbsentAndStaticData();
   testResultBridgeConvertsClearRanksToBeatorajaImageIndexes();
   testResultBridgeProjectsIrRankingRows();
   testResultBridgeProjectsReplayLaneAssignments();

@@ -1,6 +1,7 @@
 #include "ResultSkinStateBridge.h"
 
 #include "../../LongNoteModeUtils.h"
+#include "../../scene/play/PlayfieldChartVisualModel.h"
 #include "../../scene/ResultPresentationModel.h"
 
 #include <algorithm>
@@ -43,6 +44,11 @@ std::pair<int, int> scoreRateParts(double rate) {
   const auto javaRate = static_cast<float>(rate);
   return {static_cast<int>(static_cast<float>(javaRate * 100.0F)),
           static_cast<int>(static_cast<float>(javaRate * 10'000.0F)) % 100};
+}
+
+std::optional<GaugeType> resultGaugeType(const ResultSkinData &data) {
+  return data.state != nullptr ? std::optional<GaugeType>(data.state->gaugeType)
+                               : data.gaugeTypeOverride;
 }
 
 std::optional<int> resultNextRank(int score, int maximum) {
@@ -352,10 +358,15 @@ SkinPropertyLookup<bool> ResultSkinStateBridge::booleanProperty(
         data_.meta != nullptr ? data_.meta->KeyMode : 0);
     return supported(keyMode == (*id == 1160 ? 24 : 48));
   }
+  if (*id == 42 || *id == 43) {
+    const auto type = resultGaugeType(data_);
+    const int index = type ? gaugeTypeIndex(*type) : -1;
+    return supported(*id == 42 ? index >= 0 && index <= 2 : index >= 3);
+  }
   if (*id == 1046) {
-    const GaugeType type = data_.state ? data_.state->gaugeType
-                                       : data_.gaugeTypeOverride.value_or(GaugeType::Normal);
-    const int index = gaugeTypeIndex(type);
+    const auto type = resultGaugeType(data_);
+    if (!type) return supported(false);
+    const int index = gaugeTypeIndex(*type);
     return supported(index == 0 || index == 1 || index == 4 || index == 5 ||
                      index == 7 || index == 8);
   }
@@ -399,9 +410,28 @@ SkinPropertyLookup<bool> ResultSkinStateBridge::booleanProperty(
     const int first = *id >= 340 ? 340 : *id >= 300 ? 300 : 200;
     return supported(resultRank(*currentScore, *maximum) == 7 - (*id - first));
   }
-  if (*id >= 320 && *id <= 327 && data_.previousBest && maximum) {
-    return supported(resultRank(data_.previousBest->score, *maximum) ==
-                     7 - (*id - 320));
+  if (*id >= 320 && *id <= 327) {
+    return supported(data_.previousBest && maximum &&
+                     resultRank(data_.previousBest->score, *maximum) ==
+                         7 - (*id - 320));
+  }
+  if (*id >= 180 && *id <= 184) {
+    if (data_.meta == nullptr) return supported(false);
+    const int judgeRank = data_.meta->Rank;
+    switch (*id) {
+    case 180:
+      return supported(judgeRank == 0 || (judgeRank >= 10 && judgeRank < 35));
+    case 181:
+      return supported(judgeRank == 1 || (judgeRank >= 35 && judgeRank < 60));
+    case 182:
+      return supported(judgeRank == 2 || (judgeRank >= 60 && judgeRank < 85));
+    case 183:
+      return supported(judgeRank == 3 || (judgeRank >= 85 && judgeRank < 110));
+    case 184:
+      return supported(judgeRank == 4 || judgeRank >= 110);
+    default:
+      break;
+    }
   }
   if ((*id == 330 || *id == 1330) && currentScore && data_.previousBest) {
     return supported(*id == 330 ? *currentScore > data_.previousBest->score
@@ -710,8 +740,12 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
                  ? std::optional<int>(static_cast<int>(
                        std::lround(*data_.playLevelOverride)))
                  : data_.meta
-                 ? std::optional<int>(static_cast<int>(
-                       std::lround(data_.meta->PlayLevel)))
+                 ? std::optional<int>(data_.meta->PlayLevelText.empty()
+                                          ? static_cast<int>(
+                                                std::lround(data_.meta->PlayLevel))
+                                          : beatorajaParseInt(
+                                                data_.meta->PlayLevelText)
+                                                .value_or(0))
                  : std::nullopt;
     case 102: case 115: case 155:
       return scoreRate() ? std::optional<int>(scoreRateParts(*scoreRate()).first)
@@ -1186,6 +1220,9 @@ SkinGameplayGraphStateView
 ResultSkinStateBridge::gameplayGraphState() const noexcept {
   SkinGameplayGraphStateView result =
       skinGameplayGraphStateView(data_.gameplayGraph);
+  const auto type = resultGaugeType(data_);
+  const GaugeProfile profile = data_.state ? data_.state->gaugeProfile
+                                           : GaugeProfile::Standard;
   result.timingDistribution = data_.timingDistribution;
   result.timingDistributionCenter = data_.timingDistributionCenter;
   result.timingDistributionAverageMillis = data_.timingAverageMillis;
@@ -1196,15 +1233,11 @@ ResultSkinStateBridge::gameplayGraphState() const noexcept {
       result.gaugeHistory = gaugeHistory_;
       result.gaugeRevision = gaugeRevision_;
     }
-    if (!result.gaugeSupported) {
-      const GaugeType type = data_.state ? data_.state->gaugeType
-                                         : data_.gaugeTypeOverride.value_or(GaugeType::Normal);
-      const GaugeProfile profile = data_.state ? data_.state->gaugeProfile
-                                               : GaugeProfile::Standard;
-      result.gaugeType = gaugeTypeIndex(type);
-      result.gaugeMinimum = gaugeMinimumValue(type, profile);
-      result.gaugeMaximum = gaugeMaximumValue(type, profile);
-      result.gaugeBorder = gaugeBorderValue(type, profile);
+    if (!result.gaugeSupported && type) {
+      result.gaugeType = gaugeTypeIndex(*type);
+      result.gaugeMinimum = gaugeMinimumValue(*type, profile);
+      result.gaugeMaximum = gaugeMaximumValue(*type, profile);
+      result.gaugeBorder = gaugeBorderValue(*type, profile);
       result.gaugeSupported = true;
     }
   }
@@ -1216,32 +1249,30 @@ ResultSkinStateBridge::gameplayGraphState() const noexcept {
     return result;
   }
   if (gaugeHistory_.empty()) return {};
-  const GaugeType type = data_.state ? data_.state->gaugeType
-                                     : data_.gaugeTypeOverride.value_or(GaugeType::Normal);
-  const GaugeProfile profile = data_.state ? data_.state->gaugeProfile
-                                           : GaugeProfile::Standard;
+  if (!type) {
+    return {.gaugeHistory = gaugeHistory_, .gaugeRevision = gaugeRevision_};
+  }
   return {.gaugeHistory = gaugeHistory_,
-          .gaugeType = gaugeTypeIndex(type),
-          .gaugeMinimum = gaugeMinimumValue(type, profile),
-          .gaugeMaximum = gaugeMaximumValue(type, profile),
-          .gaugeBorder = gaugeBorderValue(type, profile),
+          .gaugeType = gaugeTypeIndex(*type),
+          .gaugeMinimum = gaugeMinimumValue(*type, profile),
+          .gaugeMaximum = gaugeMaximumValue(*type, profile),
+          .gaugeBorder = gaugeBorderValue(*type, profile),
           .gaugeSupported = true,
           .gaugeRevision = gaugeRevision_};
 }
 
 SkinGaugeStateView ResultSkinStateBridge::gaugeState() const noexcept {
   const auto value = finalGauge();
-  if (!value) return {};
-  const GaugeType type = data_.state ? data_.state->gaugeType
-                                     : data_.gaugeTypeOverride.value_or(GaugeType::Normal);
+  const auto type = resultGaugeType(data_);
+  if (!value || !type) return {};
   const GaugeProfile profile = data_.state ? data_.state->gaugeProfile
                                            : GaugeProfile::Standard;
   return {.supported = true,
           .value = *value,
-          .gaugeType = gaugeTypeIndex(type),
-          .minimum = gaugeMinimumValue(type, profile),
-          .maximum = gaugeMaximumValue(type, profile),
-          .border = gaugeBorderValue(type, profile)};
+          .gaugeType = gaugeTypeIndex(*type),
+          .minimum = gaugeMinimumValue(*type, profile),
+          .maximum = gaugeMaximumValue(*type, profile),
+          .border = gaugeBorderValue(*type, profile)};
 }
 
 SkinJudgeStateView ResultSkinStateBridge::judgeState(int player) const noexcept {
