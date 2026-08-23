@@ -454,6 +454,17 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
                   "            *currentMeta, session.playOption2, session.playOption2Seed, 1);",
                   "course result skins reconstruct the final stage's 2P lane pattern");
   requireContains(result,
+                  "} else if (local->practiceOptions.enabled) {",
+                  "practice result skins project their non-persisted replay setup");
+  requireContains(result,
+                  "data.replayLaneShufflePattern1P = resultReplayLanePattern(\n"
+                  "        local->meta, practice.playOption, practice.playOptionSeed, 0);",
+                  "practice result skins reconstruct the 1P lane pattern");
+  requireContains(result,
+                  "data.replayLaneShufflePattern2P = resultReplayLanePattern(\n"
+                  "          local->meta, practice.playOption2, practice.playOption2Seed, 1);",
+                  "practice result skins reconstruct the 2P lane pattern");
+  requireContains(result,
                   "const ReplayData *stageReplay = nullptr;",
                   "saved course stages retain the current replay setup");
   requireContains(result,

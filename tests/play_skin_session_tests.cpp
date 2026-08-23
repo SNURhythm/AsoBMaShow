@@ -686,6 +686,7 @@ struct ActivationFixtureOptions {
   bool resultNestedEventExec = false;
   bool resultIntervalEventExec = false;
   bool resultRecursiveEventExec = false;
+  bool resultDuplicateEventExec = false;
   bool staticResultCustomEvent = false;
   bool legacyInputBearing = false;
   bool repeatedPomyu = false;
@@ -1031,6 +1032,19 @@ if skin_config then
       script += "\n  return { type = " +
                 std::to_string(options.skinType) + R"lua(, w = 1280, h = 720,
     customEvents = {{id = 1000, action = 1000}},
+    customTimers = {{id = 10000, timer = function()
+      assert(main_state.event_exec(1000))
+      return 0
+    end}}
+  }
+)lua";
+    } else if (options.resultDuplicateEventExec) {
+      script += "\n  return { type = " +
+                std::to_string(options.skinType) + R"lua(, w = 1280, h = 720,
+    customEvents = {
+      {id = 1000, action = 210, condition = function() return true end},
+      {id = 1000, action = 999, condition = function() return true end}
+    },
     customTimers = {{id = 10000, timer = function()
       assert(main_state.event_exec(1000))
       return 0
@@ -5142,6 +5156,21 @@ void testResultLuaSessionRejectsRecursiveCustomEvents() {
          "recursing through the event dispatcher");
 }
 
+void testResultLuaSessionUsesTheLastDuplicateCustomEventDefinition() {
+  ActivationFixture fixture({.skinType = 7, .resultDuplicateEventExec = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  auto created = ResultSkinSession::create(fixture.takeActivation(),
+                                           fixture.resultContext());
+  RenderContext context;
+  expect(created.session != nullptr &&
+             created.session->render(context, {}, 1, 0) &&
+             created.session->takeQueuedBuiltinEventIds().empty(),
+         "duplicate result custom events replace both automatic and manual "
+         "actions with the final Beatoraja definition");
+}
+
 void testStaticResultSessionRunsCustomBuiltinEvent() {
   ActivationFixture fixture({.skinType = 7, .staticResultCustomEvent = true});
   if (!fixture.ready()) {
@@ -5731,6 +5760,7 @@ int main() {
   testResultLuaSessionDefersNestedCustomEventsToTheNextFrame();
   testResultLuaSessionManualCustomEventSuppressesAutomaticRepeat();
   testResultLuaSessionRejectsRecursiveCustomEvents();
+  testResultLuaSessionUsesTheLastDuplicateCustomEventDefinition();
   testStaticResultSessionRunsCustomBuiltinEvent();
   testResultSessionRefreshesForAsynchronousRankingNames();
   testResultSessionRefreshesForAllStringSelectors();

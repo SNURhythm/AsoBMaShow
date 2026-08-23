@@ -196,7 +196,12 @@ ResultSkinSession::ResultSkinSession(
           resultGaugeRandomSeed(entry_))),
       safetyPolicy_(safetyPolicy), viewportSettings_(viewportSettings),
       preparedRuntimeStrings_(std::move(preparedRuntimeStrings)),
-      quadRenderer_(std::make_unique<rendering::SkinQuadBatchRenderer>()) {}
+      quadRenderer_(std::make_unique<rendering::SkinQuadBatchRenderer>()) {
+  for (std::size_t index = 0; index < model_.model.customEvents.size(); ++index) {
+    customEventLastDefinitionIndexes_.insert_or_assign(
+        model_.model.customEvents[index].id, index);
+  }
+}
 
 ResultSkinSession::~ResultSkinSession() = default;
 
@@ -429,7 +434,15 @@ bool ResultSkinSession::render(RenderContext &renderContext,
       }
       bridge.setCustomTimer(timer.id, value);
   }
-  for (const auto &event : model_.model.customEvents) {
+  for (std::size_t eventIndex = 0;
+       eventIndex < model_.model.customEvents.size(); ++eventIndex) {
+    const auto &event = model_.model.customEvents[eventIndex];
+    const auto lastDefinition =
+        customEventLastDefinitionIndexes_.find(event.id);
+    if (lastDefinition == customEventLastDefinitionIndexes_.end() ||
+        lastDefinition->second != eventIndex) {
+      continue;
+    }
     if (!event.condition) continue;
     bool active = false;
     {
@@ -568,10 +581,9 @@ bool ResultSkinSession::queueEvent(int eventId, std::span<const int> arguments,
         "Result skin events accept no more than two arguments."));
     return false;
   }
-  if (const auto custom = std::ranges::find_if(
-          model_.model.customEvents, [eventId](const SkinCustomEvent &event) {
-            return event.id == eventId;
-          }); custom != model_.model.customEvents.end()) {
+  if (const auto customIndex = customEventLastDefinitionIndexes_.find(eventId);
+      customIndex != customEventLastDefinitionIndexes_.end()) {
+    const auto &custom = model_.model.customEvents[customIndex->second];
     if (std::ranges::find(resolutionPath, eventId) != resolutionPath.end()) {
       lastDiagnostics_.push_back(failure(
           "skin.result_session.custom_event_cycle",
@@ -581,11 +593,11 @@ bool ResultSkinSession::queueEvent(int eventId, std::span<const int> arguments,
     std::vector<int> nestedResolutionPath(resolutionPath.begin(),
                                           resolutionPath.end());
     nestedResolutionPath.push_back(eventId);
-    if (!queueEventBinding(custom->action, arguments, eventMicros,
+    if (!queueEventBinding(custom.action, arguments, eventMicros,
                            nestedResolutionPath)) {
       return false;
     }
-    customEventLastExecutionMicros_.insert_or_assign(custom->id, eventMicros);
+    customEventLastExecutionMicros_.insert_or_assign(custom.id, eventMicros);
     return true;
   }
 
