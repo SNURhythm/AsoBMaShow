@@ -104,11 +104,13 @@ ResultSkinSession::ResultSkinSession(
     SkinRevisionLease revision, SkinEntryId entry,
     ValidatedBeatorajaSkinModel model, BeatorajaSkinConfiguration configuration,
     std::unique_ptr<LuaSkinRuntime> runtime,
-    std::unique_ptr<SkinResourceCatalog> resources, SkinSafetyPolicy safetyPolicy,
+    std::unique_ptr<SkinResourceCatalog> resources,
+    std::unique_ptr<SkinMovieCatalog> movies, SkinSafetyPolicy safetyPolicy,
     ViewportSettings viewportSettings)
     : revision_(std::move(revision)), entry_(std::move(entry)),
       model_(std::move(model)), configuration_(std::move(configuration)),
       runtime_(std::move(runtime)), resources_(std::move(resources)),
+      movies_(std::move(movies)),
       safetyPolicy_(safetyPolicy), viewportSettings_(viewportSettings),
       quadRenderer_(std::make_unique<rendering::SkinQuadBatchRenderer>()) {}
 
@@ -212,6 +214,27 @@ ResultSkinSessionCreateResult ResultSkinSession::create(
     if (planned.cancelled || !planned.plan || hasErrors(result.diagnostics)) {
       return result;
     }
+    auto movieDevice = std::move(context.movieDevice);
+#if ASOBMASHOW_ENABLE_SKIN_MOVIE_DEVICE
+    if (!movieDevice) movieDevice = createSkinMovieDevice();
+#endif
+    auto preparedMovies = SkinMovieCatalog::prepare(
+        {.fileSystem = *resourceFiles.fileSystem,
+         .model = document.model,
+         .configuration = document.configuration,
+         .device = std::move(movieDevice),
+         .safetyPolicy = context.safetyPolicy,
+         .liveResourceCounters = context.liveResourceCounters,
+         .stop = context.stop,
+         .sessionDecodedBytes = planned.plan->decodedBytes});
+    result.diagnostics.insert(
+        result.diagnostics.end(),
+        std::make_move_iterator(preparedMovies.diagnostics.begin()),
+        std::make_move_iterator(preparedMovies.diagnostics.end()));
+    if (preparedMovies.cancelled || !preparedMovies.catalog ||
+        hasErrors(result.diagnostics)) {
+      return result;
+    }
     auto uploaded = SkinResourceCatalog::upload(std::move(*planned.plan),
                                                 context.textureDevice,
                                                 context.liveResourceCounters);
@@ -229,6 +252,7 @@ ResultSkinSessionCreateResult ResultSkinSession::create(
         std::move(activation.revision), std::move(activation.entry),
         std::move(document.model), std::move(document.configuration),
         std::move(document.luaRuntime), std::move(uploaded.catalog),
+        std::move(preparedMovies.catalog),
         context.safetyPolicy, activation.reconciledSettings.viewport));
   } catch (...) {
     result.session.reset();
@@ -242,7 +266,7 @@ bool ResultSkinSession::render(RenderContext &renderContext,
                                const ResultSkinData &data,
                                std::uint64_t frameSerial,
                                std::int64_t elapsedMillis) {
-  if (!resources_ || frameSerial == 0) return false;
+  if (!resources_ || !movies_ || frameSerial == 0) return false;
   ResultSkinData skinData = data;
   skinData.skinName = model_.model.header.name;
   skinData.skinAuthor = model_.model.header.author;
@@ -259,11 +283,13 @@ bool ResultSkinSession::render(RenderContext &renderContext,
   auto evaluated = renderer_.evaluateFrame(
       {.frameSerial = frameSerial, .sessionSerial = 1,
        .visualTimeMicros = elapsedMillis * 1000, .model = model_,
-       .configuration = configuration_, .resources = *resources_, .viewport = viewport,
+       .configuration = configuration_, .resources = *resources_, .movies = movies_.get(),
+       .viewport = viewport,
        .runtime = runtime_.get(), .state = bridge, .safetyPolicy = safetyPolicy_});
   return evaluated.submitReady && renderer_.submit(*evaluated.submitReady,
                                                     *resources_, renderContext,
-                                                    *quadRenderer_);
+                                                    *quadRenderer_, movies_.get(),
+                                                    viewport);
 }
 
 const SkinEntryId &ResultSkinSession::entry() const noexcept { return entry_; }

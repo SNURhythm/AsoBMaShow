@@ -157,6 +157,83 @@ bool Skin2DRenderer::submitOverlay(
 bool Skin2DRenderer::submit(
     const SkinCommandBuffer &buffer,
     const SkinPreparedResourceView &resources, RenderContext &context,
+    rendering::SkinQuadBatchRenderer &renderer, SkinMovieCatalog *movies,
+    const PlaySkinViewport &viewport) const noexcept {
+  std::vector<std::span<const SkinDrawCommand>> quadSegments;
+  std::vector<const SkinMovieCommand *> movieCommands;
+  std::vector<SubmissionStep> steps;
+  try {
+    quadSegments.reserve(buffer.commands.size() / 2U + 1U);
+    movieCommands.reserve(buffer.commands.size());
+    steps.reserve(buffer.commands.size());
+    std::size_t quadStart = 0;
+    const auto appendQuadSegment = [&](std::size_t end) {
+      if (end == quadStart) return;
+      quadSegments.emplace_back(buffer.commands.data() + quadStart,
+                                end - quadStart);
+      steps.push_back({.kind = SubmissionStepKind::QuadSegment,
+                       .index = quadSegments.size() - 1U});
+    };
+    for (std::size_t index = 0; index < buffer.commands.size(); ++index) {
+      const auto *movie =
+          std::get_if<SkinMovieCommand>(&buffer.commands[index].payload);
+      if (movie != nullptr) {
+        appendQuadSegment(index);
+        movieCommands.push_back(movie);
+        steps.push_back({.kind = SubmissionStepKind::MovieTarget,
+                         .index = movieCommands.size() - 1U});
+        quadStart = index + 1U;
+        continue;
+      }
+      // Result MainState has no BMSResource BGA frame to submit.  Ignore an
+      // authored BGA marker rather than sending it to the quad renderer.
+      if (std::holds_alternative<SkinBgaCommand>(buffer.commands[index].payload)) {
+        appendQuadSegment(index);
+        quadStart = index + 1U;
+      }
+    }
+    appendQuadSegment(buffer.commands.size());
+  } catch (...) {
+    return false;
+  }
+
+  renderer.begin(context, resources);
+  SkinMovieCatalogFrameResult moviePlan;
+  try {
+    moviePlan = movies != nullptr
+                    ? movies->prepareFrame(movieCommands, viewport)
+                    : SkinMovieCatalogFrameResult{
+                          .ready = movieCommands.empty()};
+  } catch (...) {
+    if (movies != nullptr) movies->discardFrame();
+    return false;
+  }
+  if (!moviePlan.ready) {
+    if (movies != nullptr) movies->discardFrame();
+    return false;
+  }
+  rendering::SkinQuadSubmissionPlan quadPlan;
+  if (!renderer.prepare(quadSegments, quadPlan, moviePlan.requirements)) {
+    renderer.discardPrepared(quadPlan);
+    if (movies != nullptr) movies->discardFrame();
+    return false;
+  }
+  if (movies != nullptr) movies->commitFrame();
+  for (const auto &step : steps) {
+    if (step.kind == SubmissionStepKind::QuadSegment) {
+      renderer.submitPrepared(quadPlan, step.index);
+      renderer.flush();
+    } else {
+      movies->submitPrepared(step.index);
+    }
+  }
+  if (movies != nullptr) movies->discardFrame();
+  return true;
+}
+
+bool Skin2DRenderer::submit(
+    const SkinCommandBuffer &buffer,
+    const SkinPreparedResourceView &resources, RenderContext &context,
     rendering::SkinQuadBatchRenderer &renderer,
     SkinMovieCatalog *movies, const PlaySkinViewport &viewport,
     const PreparedGameplayBgaFrame &bgaFrame,

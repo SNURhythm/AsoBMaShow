@@ -4,6 +4,7 @@
 #include "LuaSkinAudioHost.h"
 #include "ResultSkinStateBridge.h"
 #include "Skin2DRenderer.h"
+#include "SkinMovieCatalog.h"
 #include "SkinResourceCatalog.h"
 
 #include "../SkinStoragePaths.h"
@@ -30,6 +31,7 @@ struct ResultSkinSessionContext {
   // the immutable result data available for that one-time configured phase.
   ResultSkinData initialData;
   std::shared_ptr<SkinTextureDevice> textureDevice;
+  std::shared_ptr<SkinMovieDevice> movieDevice;
   SkinBuiltinImageReader builtinImageReader;
   std::shared_ptr<LuaSkinAudioBackend> audioBackend;
   std::shared_ptr<SkinLiveResourceCounters> liveResourceCounters;
@@ -61,6 +63,7 @@ private:
                     ValidatedBeatorajaSkinModel, BeatorajaSkinConfiguration,
                     std::unique_ptr<LuaSkinRuntime>,
                     std::unique_ptr<SkinResourceCatalog>,
+                    std::unique_ptr<SkinMovieCatalog>,
                     SkinSafetyPolicy, ViewportSettings);
 
   SkinRevisionLease revision_;
@@ -69,6 +72,7 @@ private:
   BeatorajaSkinConfiguration configuration_;
   std::unique_ptr<LuaSkinRuntime> runtime_;
   std::unique_ptr<SkinResourceCatalog> resources_;
+  std::unique_ptr<SkinMovieCatalog> movies_;
   SkinSafetyPolicy safetyPolicy_{};
   ViewportSettings viewportSettings_{};
   Skin2DRenderer renderer_;
