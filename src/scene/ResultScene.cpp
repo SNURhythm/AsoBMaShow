@@ -177,21 +177,25 @@ std::optional<std::vector<int>> resultReplayLanePattern(
   const auto keys = meta.GetKeyLaneIndices();
   const auto scratches = meta.GetScratchLaneIndices();
   const std::size_t keyOffset = player == 0 ? 0 : static_cast<std::size_t>(keyCount);
-  if (keyCount <= 0 || keyOffset + static_cast<std::size_t>(keyCount) > keys.size() ||
-      static_cast<std::size_t>(player) >= scratches.size()) {
+  if (keyCount <= 0 ||
+      keyOffset + static_cast<std::size_t>(keyCount) > keys.size()) {
     return std::nullopt;
   }
   std::vector<int> pattern;
-  pattern.reserve(static_cast<std::size_t>(keyCount + 1));
+  pattern.reserve(static_cast<std::size_t>(keyCount +
+      (static_cast<std::size_t>(player) < scratches.size() ? 1 : 0)));
   for (int key = 0; key < keyCount; ++key) {
     const auto found = sourceByDestination.find(
         keys[keyOffset + static_cast<std::size_t>(key)]);
     if (found == sourceByDestination.end()) return std::nullopt;
     pattern.push_back(found->second);
   }
-  const auto scratch = sourceByDestination.find(scratches[static_cast<std::size_t>(player)]);
-  if (scratch == sourceByDestination.end()) return std::nullopt;
-  pattern.push_back(scratch->second);
+  if (static_cast<std::size_t>(player) < scratches.size()) {
+    const auto scratch = sourceByDestination.find(
+        scratches[static_cast<std::size_t>(player)]);
+    if (scratch == sourceByDestination.end()) return std::nullopt;
+    pattern.push_back(scratch->second);
+  }
   return pattern;
 }
 
@@ -499,6 +503,8 @@ courseTimingStatisticsForSession(const CoursePlaySession &session) {
   result.distribution.assign(301, 0);
   long double sum = 0.0;
   long double sumSquares = 0.0;
+  long double judgeDurationTotal = 0.0;
+  int judgeNoteTotal = 0;
   for (const auto &stage : session.completedResults) {
     if (stage.skinTimingSampleCount == 0 ||
         !stage.skinTimingAverageMillis ||
@@ -511,6 +517,11 @@ courseTimingStatisticsForSession(const CoursePlaySession &session) {
     result.timingSampleCount += stage.skinTimingSampleCount;
     sum += count * mean;
     sumSquares += count * (deviation * deviation + mean * mean);
+    if (stage.skinAverageJudgeMicros) {
+      const int notes = std::max(0, stage.meta.TotalNotes);
+      judgeDurationTotal += notes * *stage.skinAverageJudgeMicros;
+      judgeNoteTotal += notes;
+    }
     for (std::size_t index = 0;
          index < result.distribution.size() &&
          index < stage.skinTimingDistribution.size(); ++index) {
@@ -524,6 +535,10 @@ courseTimingStatisticsForSession(const CoursePlaySession &session) {
   result.averageMillis = static_cast<double>(mean);
   result.standardDeviationMillis = static_cast<double>(std::sqrt(
       std::max(0.0L, sumSquares / count - mean * mean)));
+  if (judgeNoteTotal > 0) {
+    result.averageJudgeMicros = static_cast<long long>(
+        judgeDurationTotal / judgeNoteTotal);
+  }
   return result;
 }
 
@@ -3782,6 +3797,7 @@ void ResultScene::init() {
       stage.skinTimingAverageMillis = local->skinTimingAverageMillis;
       stage.skinTimingStandardDeviationMillis =
           local->skinTimingStandardDeviationMillis;
+      stage.skinAverageJudgeMicros = local->skinAverageJudgeMicros;
       stage.skinTimingDistribution = local->skinTimingDistribution;
     }
     local->skinTimingStatisticsPrepared = true;

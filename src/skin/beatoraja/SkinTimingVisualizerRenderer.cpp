@@ -407,8 +407,22 @@ SkinTimingDistributionGraphRenderResult renderSkinTimingDistributionGraph(
     return center + static_cast<int>(std::lround(
                         static_cast<double>(millis) / lineWidth));
   };
+  const int sourceCenter = request.state.timingDistributionCenter;
+  const auto aggregatedBucket = [&](int offset) {
+    int value = 0;
+    const int first = sourceCenter + offset * lineWidth;
+    for (int column = 0; column < lineWidth; ++column) {
+      const int source = first + column;
+      if (source >= 0 && static_cast<std::size_t>(source) <
+                             request.state.timingDistribution.size()) {
+        value += request.state.timingDistribution[static_cast<std::size_t>(source)];
+      }
+    }
+    return value;
+  };
   int maximum = 10;
-  for (const int value : request.state.timingDistribution) {
+  for (int offset = -center; offset < graphWidth - center; ++offset) {
+    const int value = aggregatedBucket(offset);
     if (maximum < value) maximum = value / 10 * 10 + 10;
   }
   std::uint64_t revision = 1469598103934665603ULL;
@@ -475,17 +489,8 @@ SkinTimingDistributionGraphRenderResult renderSkinTimingDistributionGraph(
     raster.appendLine(scaledX(average - deviation), 0,
                       scaledX(average - deviation), maximum, request.graph.devRgba);
   }
-  const int sourceCenter = request.state.timingDistributionCenter;
   for (int offset = -center; offset < graphWidth - center; ++offset) {
-    int value = 0;
-    const int first = sourceCenter + offset * lineWidth;
-    for (int column = 0; column < lineWidth; ++column) {
-      const int source = first + column;
-      if (source >= 0 && static_cast<std::size_t>(source) <
-                             request.state.timingDistribution.size()) {
-        value += request.state.timingDistribution[static_cast<std::size_t>(source)];
-      }
-    }
+    const int value = aggregatedBucket(offset);
     if (value > 0) {
       raster.appendRectangle(center + offset, maximum - value, 1, value,
                              request.graph.graphRgba);

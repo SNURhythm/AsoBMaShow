@@ -280,6 +280,7 @@ struct CoursePlayChartResult {
   std::size_t skinTimingSampleCount = 0;
   std::optional<double> skinTimingAverageMillis;
   std::optional<double> skinTimingStandardDeviationMillis;
+  std::optional<long long> skinAverageJudgeMicros;
   std::vector<int> skinTimingDistribution;
 
   CoursePlayChartResult(const bms_parser::ChartMeta &meta,

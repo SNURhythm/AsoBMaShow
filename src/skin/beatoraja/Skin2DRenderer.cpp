@@ -3656,6 +3656,10 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           std::get_if<SkinTimingVisualizerObject>(&object->payload);
       const auto *timingDistribution =
           std::get_if<SkinTimingDistributionGraphObject>(&object->payload);
+      if (timingDistribution && inputs.model.model.header.type != 7 &&
+          inputs.model.model.header.type != 15) {
+        continue;
+      }
       const auto *hitErrorVisualizer =
           std::get_if<SkinHitErrorVisualizerObject>(&object->payload);
       const auto *gauge = std::get_if<SkinGaugeObject>(&object->payload);
