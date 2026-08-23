@@ -29,6 +29,7 @@
 #include "ResultSkinApplicationOverlays.h"
 #include "ResultSkinLayering.h"
 #include "ResultPhotoExportPresentation.h"
+#include "ResultSkinFailurePresentation.h"
 #include "ResultTouchControls.h"
 
 #include "../rendering/Color.h"
@@ -1887,6 +1888,68 @@ void ResultScene::setResultTouchControlsHidden(bool hidden) {
   }
 }
 
+void ResultScene::handleResultSkinRenderFailure() {
+#if !ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  return;
+#else
+  if (resultSkinSession == nullptr || rootLayout == nullptr) {
+    return;
+  }
+  SDL_Log("Result skin rendering failed; restoring application controls.");
+  resultSkinSession.reset();
+  const auto presentation = makeResultSkinFailurePresentation(true);
+  if (presentation.restoreTouchControls) {
+    setResultTouchControlsHidden(false);
+  }
+  if (!presentation.showNotice || resultSkinFailureNotice != nullptr) {
+    return;
+  }
+
+  auto *notice = new View();
+  notice->setName("resultSkinFailureNotice");
+  notice->setPositionType(YGPositionTypeAbsolute);
+  notice->setPosition(Edge::Left, 24.0F);
+  notice->setPosition(Edge::Right, 24.0F);
+  notice->setPosition(Edge::Top, 24.0F);
+  notice->setFlexDirection(FlexDirection::Row);
+  notice->setAlignItems(YGAlignCenter);
+  notice->setJustifyContent(YGJustifySpaceBetween);
+  notice->setPadding(Edge::All, 16.0F);
+  notice->setGap(16.0F);
+  notice->setCornerRadius(ui_theme::panelRadius());
+  notice->setBackgroundColor(ui_theme::resultPanelStrong());
+  notice->setBorderColor(ui_theme::withAlpha(ui_theme::coral(), 210));
+  notice->setBorderWidth(1);
+  notice->setZIndex(2300);
+
+  auto *message = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+  message->setText("Result skin stopped rendering. Application controls are restored.");
+  message->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  message->setWrap(true);
+  message->setFlexGrow(1.0F);
+  notice->addView(message);
+
+  auto *back = new Button();
+  auto *backText = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+  backText->setText("Back");
+  backText->setAlign(TextView::CENTER);
+  backText->setVAlign(TextView::MIDDLE);
+  backText->setColor(ui_theme::sdl(ui_theme::textOn(ui_theme::primaryAction())));
+  back->setContentView(backText);
+  back->setSize(128, 48);
+  back->setCornerRadius(ui_theme::controlRadius());
+  back->setBackgroundColors(ui_theme::primaryAction(),
+                            ui_theme::primaryActionHover(),
+                            ui_theme::primaryActionPressed());
+  back->setOnClickListener([this]() { exitResult(); });
+  notice->addView(back);
+
+  resultSkinFailureNotice = notice;
+  rootLayout->addView(notice);
+  rootLayout->applyYogaLayout();
+#endif
+}
+
 void ResultScene::addRemoteButtons() {
   const auto *remote = remoteSource();
   if (remote == nullptr || rootLayout == nullptr) {
@@ -3367,9 +3430,11 @@ void ResultScene::renderScene() {
     RenderContext::UiBatchScope uiBatchScope(renderContext);
     const long long elapsedMillis =
         std::max(0LL, (nowMicros() - resultSkinStartedMicros) / 1000LL);
-    (void)resultSkinSession->render(
+    if (!resultSkinSession->render(
         renderContext, makeResultSkinData(),
-        std::max<std::uint64_t>(1, context.currentFrame), elapsedMillis);
+        std::max<std::uint64_t>(1, context.currentFrame), elapsedMillis)) {
+      handleResultSkinRenderFailure();
+    }
   }
 #endif
   if (persistenceDetailsModalRoot != nullptr) {
@@ -3392,6 +3457,7 @@ void ResultScene::cleanupScene() {
   resultTouchControlsOverlay = nullptr;
   resultTouchControlsPanel = nullptr;
   resultTouchControlsRestore = nullptr;
+  resultSkinFailureNotice = nullptr;
   resultTouchControlsHidden = false;
   normalResultActions = nullptr;
   resultPersistenceStatus = nullptr;

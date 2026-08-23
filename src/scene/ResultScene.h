@@ -307,6 +307,7 @@ private:
   void buildResultTouchControls();
   void setResultTouchControlsHidden(bool hidden);
   void setResultPhotoExportPresentation(ResultPhotoExportPresentation);
+  void handleResultSkinRenderFailure();
   void buildCourseExitConfirmation();
   void showCourseExitConfirmation();
   void hideCourseExitConfirmation();
@@ -350,6 +351,7 @@ private:
   View *resultTouchControlsOverlay = nullptr;
   View *resultTouchControlsPanel = nullptr;
   Button *resultTouchControlsRestore = nullptr;
+  View *resultSkinFailureNotice = nullptr;
   bool resultTouchControlsHidden = false;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   std::unique_ptr<skin::ResultSkinSession> resultSkinSession;

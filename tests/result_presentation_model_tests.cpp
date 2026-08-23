@@ -1,5 +1,6 @@
 #include "scene/ResultPresentationModel.h"
 #include "scene/ResultPhotoExportPresentation.h"
+#include "scene/ResultSkinFailurePresentation.h"
 #include "scene/ResultSkinApplicationOverlays.h"
 #include "scene/ResultSkinLayering.h"
 #include "scene/ResultTouchControls.h"
@@ -1143,6 +1144,15 @@ void testResultPhotoExportLabelsDoNotRequireNativeButton() {
                  "Export Failed",
          "touch and native export controls share export status labels");
 }
+
+void testResultSkinFailureRestoresAUsableApplicationState() {
+  const auto failure = makeResultSkinFailurePresentation(true);
+  expect(failure.showNotice && failure.restoreTouchControls,
+         "a result skin render failure visibly restores application controls");
+  const auto noFailure = makeResultSkinFailurePresentation(false);
+  expect(!noFailure.showNotice && !noFailure.restoreTouchControls,
+         "a healthy result skin has no failure presentation");
+}
 } // namespace
 
 int main() {
@@ -1177,6 +1187,7 @@ int main() {
   testSelectedResultSkinDefersRootOverlaysUntilAfterSkin();
   testSelectedResultSkinKeepsRequiredApplicationOverlays();
   testResultPhotoExportLabelsDoNotRequireNativeButton();
+  testResultSkinFailureRestoresAUsableApplicationState();
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::shutdown();
   if (failures != 0) {
