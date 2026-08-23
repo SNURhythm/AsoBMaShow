@@ -5159,7 +5159,8 @@ void testResultBridgeUsesRemotePresentationValues() {
                                  .playLevelOverride = 12.7F,
                                  .difficultyLabel = "ANOTHER",
                                  .chartMd5 = "remote-md5",
-                                 .chartSha256 = "remote-sha256"},
+                                 .chartSha256 = "remote-sha256",
+                                 .keyModeOverride = 7},
                                 1, 0);
   const auto poor = bridge.integerProperty({114}, {});
   const auto finalGauge = bridge.integerProperty({107}, {});
@@ -5179,6 +5180,9 @@ void testResultBridgeUsesRemotePresentationValues() {
          "remote result difficulty uses remote difficulty");
   expect(chartMd5Property.supported && chartMd5 == "remote-md5",
          "remote result chart hash uses remote metadata");
+  expect(bridge.booleanProperty({160}).supported &&
+             bridge.booleanProperty({160}).value,
+         "remote result key-mode options use the remote game type");
   expect(bridge.booleanProperty({90}).supported &&
              bridge.booleanProperty({90}).value && poor.supported &&
              poor.value == 10 && finalGauge.supported &&

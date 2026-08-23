@@ -625,6 +625,11 @@ ResultSkinData ResultScene::makeResultSkinData() const {
                                  ? std::optional<float>(static_cast<float>(
                                        *remote->score.levelNumber))
                                  : std::nullopt;
+    if (remote->score.game == "bms-7k") {
+      data.keyModeOverride = 7;
+    } else if (remote->score.game == "bms-14k") {
+      data.keyModeOverride = 14;
+    }
     data.chartMd5 = remote->score.chartMd5;
     data.chartSha256 = remote->score.chartSha256;
     return data;

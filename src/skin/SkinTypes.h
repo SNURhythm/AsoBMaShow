@@ -51,6 +51,7 @@ struct ResultSkinData {
   std::string skinName;
   std::string skinAuthor;
   std::optional<float> playLevelOverride;
+  std::optional<int> keyModeOverride;
   std::string chartMd5;
   std::string chartSha256;
   bool autoPlayResult = false;

@@ -96,9 +96,15 @@ ResultSkinStateBridge::ResultSkinStateBridge(ResultSkinData data,
   } else if (data_.presentation != nullptr &&
              !data_.presentation->gaugeSeries.empty()) {
     const auto &series = data_.presentation->gaugeSeries.front();
-    gaugeHistory_.reserve(series.points.size());
-    for (const auto point : series.points) {
-      gaugeHistory_.push_back(point.value_or(0.0F));
+    // SkinGameplayGraphStateView has a dense gauge span. Never turn an IR
+    // service's missing sample into a fabricated 0% point: omit this graph
+    // until it can be represented losslessly.
+    if (std::ranges::all_of(series.points,
+                            [](const auto &point) { return point.has_value(); })) {
+      gaugeHistory_.reserve(series.points.size());
+      for (const auto point : series.points) {
+        gaugeHistory_.push_back(*point);
+      }
     }
   }
   // Result snapshots are immutable for the lifetime of one bridge/session.
@@ -235,7 +241,8 @@ SkinPropertyLookup<bool> ResultSkinStateBridge::booleanProperty(
                                 : difficulty == *id - 150);
   }
   if (*id >= 160 && *id <= 164) {
-    const int keyMode = data_.meta != nullptr ? data_.meta->KeyMode : 0;
+    const int keyMode = data_.keyModeOverride.value_or(
+        data_.meta != nullptr ? data_.meta->KeyMode : 0);
     return supported((*id == 160 && keyMode == 7) ||
                      (*id == 161 && keyMode == 5) ||
                      (*id == 162 && keyMode == 14) ||
@@ -243,7 +250,8 @@ SkinPropertyLookup<bool> ResultSkinStateBridge::booleanProperty(
                      (*id == 164 && keyMode == 9));
   }
   if (*id == 1160 || *id == 1161) {
-    const int keyMode = data_.meta != nullptr ? data_.meta->KeyMode : 0;
+    const int keyMode = data_.keyModeOverride.value_or(
+        data_.meta != nullptr ? data_.meta->KeyMode : 0);
     return supported(keyMode == (*id == 1160 ? 24 : 48));
   }
   if (*id == 170 || *id == 171) {
