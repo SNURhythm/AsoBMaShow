@@ -5138,6 +5138,7 @@ void testResultBridgeUsesRemotePresentationValues() {
   const auto fastGreat = bridge.integerProperty({412}, {});
   const auto totalFast = bridge.integerProperty({423}, {});
   const auto graph = bridge.gameplayGraphState();
+  const auto gauge = bridge.gaugeState();
   const auto level = bridge.integerProperty({45}, {});
   const auto difficultyProperty = bridge.stringProperty({62});
   const std::string difficulty(difficultyProperty.value);
@@ -5157,6 +5158,9 @@ void testResultBridgeUsesRemotePresentationValues() {
              fastGreat.value == 0 && totalFast.supported &&
              totalFast.value == 12 && graph.gaugeSupported &&
              graph.gaugeHistory.size() == 3 && graph.gaugeRevision != 0 &&
+             gauge.supported && std::abs(gauge.value - 79.96) < 0.0001 &&
+             gauge.minimum == 2.0 && gauge.maximum == 100.0 &&
+             gauge.border == 80.0 &&
              std::abs(bridge.floatProperty({1107}, {}).value - 79.96) < 0.0001 &&
              bridge.judgeState(0).supported && bridge.judgeState(0).combo == 720 &&
              level.supported && level.value == 13 && difficultyProperty.supported &&

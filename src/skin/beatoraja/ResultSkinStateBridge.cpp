@@ -773,10 +773,17 @@ ResultSkinStateBridge::gameplayGraphState() const noexcept {
 }
 
 SkinGaugeStateView ResultSkinStateBridge::gaugeState() const noexcept {
-  if (!data_.state) return {};
-  return {.supported = true, .value = data_.state->currentGauge,
-          .gaugeType = gaugeTypeIndex(data_.state->gaugeType), .minimum = 0.0,
-          .maximum = 100.0, .border = 80.0};
+  const auto value = finalGauge();
+  if (!value) return {};
+  const GaugeType type = data_.state ? data_.state->gaugeType : GaugeType::Normal;
+  const GaugeProfile profile = data_.state ? data_.state->gaugeProfile
+                                           : GaugeProfile::Standard;
+  return {.supported = true,
+          .value = *value,
+          .gaugeType = gaugeTypeIndex(type),
+          .minimum = gaugeMinimumValue(type, profile),
+          .maximum = gaugeMaximumValue(type, profile),
+          .border = gaugeBorderValue(type, profile)};
 }
 
 SkinJudgeStateView ResultSkinStateBridge::judgeState(int player) const noexcept {
