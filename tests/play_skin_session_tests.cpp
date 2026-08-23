@@ -5115,7 +5115,7 @@ void testResultBridgeMatchesResultAliasesAndTimerUnits() {
              chartMinutes.supported && chartMinutes.value == 2 &&
              chartSeconds.supported && chartSeconds.value == 5 &&
              skinName == "Result skin" && skinAuthor == "Skin author" &&
-             bridge.timerProperty({1}) == 125'000 &&
+             bridge.timerProperty({1}) == 0 &&
              bridge.timerProperty({100}) == INT64_MIN,
          "result aliases and timers match Beatoraja result properties");
 }
