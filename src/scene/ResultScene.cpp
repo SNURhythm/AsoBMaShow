@@ -1714,11 +1714,19 @@ void ResultScene::buildResultTouchControls() {
                                          local->meta));
       availability.rankings = true;
       availability.exportPhoto = true;
-      availability.selectSection = true;
+      // A selected skin does not build the native timing-section picker.
+      // Do not expose an action that cannot produce a practice request.
+      availability.selectSection = false;
     }
   } else if (remote != nullptr) {
     availability.rankings = remote->rankingQuery.has_value();
     availability.exportPhoto = true;
+  }
+  if (persistenceDecisionRequired()) {
+    availability.retry = false;
+    availability.retrySame = false;
+    availability.replay = false;
+    availability.next = false;
   }
 
   const auto presentation = makeResultTouchControlPresentation(
@@ -1783,7 +1791,7 @@ void ResultScene::buildResultTouchControls() {
                                              *local->retryData)
                                        : play_options::hasSamePatternRandomization(
                                              local->meta));
-        startRetry(!canRetrySame);
+        startRetry(local->practiceOptions.enabled || !canRetrySame);
       };
       break;
     case ResultTouchControlAction::RetrySame:
