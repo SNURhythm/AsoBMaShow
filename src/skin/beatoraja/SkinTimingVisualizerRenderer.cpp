@@ -403,6 +403,10 @@ SkinTimingDistributionGraphRenderResult renderSkinTimingDistributionGraph(
   const int lineWidth = std::clamp(request.graph.lineWidth, 1, width);
   const int graphWidth = std::max(1, width / lineWidth);
   const int center = graphWidth / 2;
+  const auto scaledX = [center, lineWidth](int millis) {
+    return center + static_cast<int>(std::lround(
+                        static_cast<double>(millis) / lineWidth));
+  };
   int maximum = 10;
   for (const int value : request.state.timingDistribution) {
     if (maximum < value) maximum = value / 10 * 10 + 10;
@@ -436,8 +440,10 @@ SkinTimingDistributionGraphRenderResult renderSkinTimingDistributionGraph(
                               index < request.state.judgeWindows.size();
        ++index) {
     const auto &window = request.state.judgeWindows[index];
-    const int left = center + std::clamp(window.minimumTimingMillis, -center, center);
-    const int right = center + std::clamp(window.maximumTimingMillis, -center, center) + 1;
+    const int left = std::clamp(scaledX(window.minimumTimingMillis), 0,
+                                graphWidth);
+    const int right = std::clamp(scaledX(window.maximumTimingMillis) + 1, 0,
+                                 graphWidth);
     if (beforeLeft > left) {
       raster.appendRectangle(left, 0, beforeLeft - left, maximum,
                              request.graph.judgeRgba[index]);
@@ -454,8 +460,8 @@ SkinTimingDistributionGraphRenderResult renderSkinTimingDistributionGraph(
     raster.appendLine(x, 0, x, 1, gridColor);
   }
   if (request.graph.drawAverage && request.state.timingDistributionAverageMillis) {
-    const int x = center + static_cast<int>(std::round(
-                               *request.state.timingDistributionAverageMillis));
+    const int x = scaledX(static_cast<int>(std::lround(
+        *request.state.timingDistributionAverageMillis)));
     raster.appendLine(x, 0, x, maximum, request.graph.averageRgba);
   }
   if (request.graph.drawDev && request.state.timingDistributionAverageMillis &&
@@ -464,19 +470,22 @@ SkinTimingDistributionGraphRenderResult renderSkinTimingDistributionGraph(
         *request.state.timingDistributionAverageMillis));
     const int deviation = static_cast<int>(std::round(
         *request.state.timingDistributionStandardDeviationMillis));
-    raster.appendLine(center + average + deviation, 0,
-                      center + average + deviation, maximum, request.graph.devRgba);
-    raster.appendLine(center + average - deviation, 0,
-                      center + average - deviation, maximum, request.graph.devRgba);
+    raster.appendLine(scaledX(average + deviation), 0,
+                      scaledX(average + deviation), maximum, request.graph.devRgba);
+    raster.appendLine(scaledX(average - deviation), 0,
+                      scaledX(average - deviation), maximum, request.graph.devRgba);
   }
   const int sourceCenter = request.state.timingDistributionCenter;
   for (int offset = -center; offset < graphWidth - center; ++offset) {
-    const int source = sourceCenter + offset;
-    if (source < 0 || static_cast<std::size_t>(source) >=
-                          request.state.timingDistribution.size()) {
-      continue;
+    int value = 0;
+    const int first = sourceCenter + offset * lineWidth;
+    for (int column = 0; column < lineWidth; ++column) {
+      const int source = first + column;
+      if (source >= 0 && static_cast<std::size_t>(source) <
+                             request.state.timingDistribution.size()) {
+        value += request.state.timingDistribution[static_cast<std::size_t>(source)];
+      }
     }
-    const int value = request.state.timingDistribution[static_cast<std::size_t>(source)];
     if (value > 0) {
       raster.appendRectangle(center + offset, maximum - value, 1, value,
                              request.graph.graphRgba);

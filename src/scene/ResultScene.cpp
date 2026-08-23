@@ -956,29 +956,33 @@ ResultSkinData ResultScene::makeResultSkinData() const {
     data.averageJudgeMicros = local->skinAverageJudgeMicros;
     data.timingDistribution = local->skinTimingDistribution;
   }
-  if (timingReplay != nullptr) {
-    data.replayKeyMode = timingReplay->chartMeta.KeyMode;
-    if (timingReplay->playOption) {
+  const ReplayData *setupReplay = local->presentationReplay
+                                      ? &*local->presentationReplay
+                                      : (local->retryData ? &*local->retryData
+                                                          : nullptr);
+  if (setupReplay != nullptr) {
+    data.replayKeyMode = setupReplay->chartMeta.KeyMode;
+    if (setupReplay->playOption) {
       data.replayRandomOption1P =
-          replay::projectedBeatorajaReplayOptionIndex(*timingReplay->playOption);
+          replay::projectedBeatorajaReplayOptionIndex(*setupReplay->playOption);
     }
-    if (timingReplay->playOption2) {
+    if (setupReplay->playOption2) {
       data.replayRandomOption2P =
-          replay::projectedBeatorajaReplayOptionIndex(*timingReplay->playOption2);
+          replay::projectedBeatorajaReplayOptionIndex(*setupReplay->playOption2);
     }
     data.replayDoublePlayOption =
-        timingReplay->provenance.doublePlayFlip ? 1 : 0;
-    data.replayLaneShufflePattern1P = timingReplay->laneShufflePattern1P;
-    data.replayLaneShufflePattern2P = timingReplay->laneShufflePattern2P;
+        setupReplay->provenance.doublePlayFlip ? 1 : 0;
+    data.replayLaneShufflePattern1P = setupReplay->laneShufflePattern1P;
+    data.replayLaneShufflePattern2P = setupReplay->laneShufflePattern2P;
     if (!data.replayLaneShufflePattern1P) {
       data.replayLaneShufflePattern1P = resultReplayLanePattern(
-          timingReplay->chartMeta, timingReplay->playOption,
-          timingReplay->playOptionSeed, 0);
+          setupReplay->chartMeta, setupReplay->playOption,
+          setupReplay->playOptionSeed, 0);
     }
-    if (!data.replayLaneShufflePattern2P && timingReplay->chartMeta.IsDP) {
+    if (!data.replayLaneShufflePattern2P && setupReplay->chartMeta.IsDP) {
       data.replayLaneShufflePattern2P = resultReplayLanePattern(
-          timingReplay->chartMeta, timingReplay->playOption2,
-          timingReplay->playOption2Seed, 1);
+          setupReplay->chartMeta, setupReplay->playOption2,
+          setupReplay->playOption2Seed, 1);
     }
   }
   return data;

@@ -337,8 +337,9 @@ bool ResultSkinSession::render(RenderContext &renderContext,
       bridge.setCustomTimer(timer.id, value);
     }
     for (const auto &event : model_.model.customEvents) {
-      bool active = !event.condition;
-      if (event.condition) {
+      if (!event.condition) continue;
+      bool active = false;
+      {
         const auto condition = std::ranges::find_if(
             model_.model.booleanProperties,
             [&](const SkinBooleanPropertyBinding &candidate) {

@@ -330,6 +330,10 @@ void readSkinProfileSettings(const json &document,
         readSkinEntryId(*selected, "skin.selected7KeyEntry", diagnostics);
   }
   const auto selectedSkinEntries = found->find("selectedSkinEntries");
+  if (selectedSkinEntries != found->end()) {
+    destination.selected7KeyEntry.reset();
+    destination.gameplayCompatibilityEnabled = false;
+  }
   const auto legacyGameplayEntries = found->find("selectedGameplayEntries");
   if (const auto selectedEntries =
           selectedSkinEntries != found->end() ? selectedSkinEntries
