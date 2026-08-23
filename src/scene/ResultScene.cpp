@@ -722,6 +722,7 @@ ResultSkinData ResultScene::makeResultSkinData() const {
   data.previousBest = local->previousBest;
   data.previousLampBest = local->previousLampBest;
   data.pacemaker = pacemakerDataForCurrentResult();
+  data.playerHistory = local->playerHistory;
   data.presentation = &local->presentation;
   data.gameplayGraph = local->gameplayGraph;
   const ReplayData *timingReplay = local->analyticsData
@@ -937,6 +938,18 @@ void ResultScene::loadDifficultyLabel() {
   }
   local->difficultyLabel = result_presentation::difficultyLabelForChart(
       context.chartRepository, local->meta);
+}
+
+void ResultScene::loadPlayerHistory() {
+  auto *local = localSource();
+  if (local == nullptr || local->playerHistory.has_value()) return;
+  const PlayerScoreHistorySnapshot snapshot =
+      context.scoreRepository.LoadPlayerScoreHistory();
+  local->playerHistory = ResultPlayerHistoryData{
+      .playCount = snapshot.playCount,
+      .clearCount = snapshot.clearCount,
+      .judgementCounts = snapshot.judgementCounts,
+      .playDurationSeconds = snapshot.playDurationSeconds};
 }
 
 bool ResultScene::persistenceDecisionRequired() const {
@@ -3399,6 +3412,7 @@ void ResultScene::init() {
     }
     loadDifficultyLabel();
     loadPreviousBest();
+    loadPlayerHistory();
     if (isCourseFinalResult()) {
       (void)persistModernCourseResult();
     }

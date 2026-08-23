@@ -5153,6 +5153,30 @@ void testResultBridgeMatchesResultAliasesAndTimerUnits() {
          "result aliases and timers match Beatoraja result properties");
 }
 
+void testResultBridgeExposesPlayerHistoryProperties() {
+  ResultSkinStateBridge bridge({
+      .playerHistory = ResultPlayerHistoryData{
+          .playCount = 130,
+          .clearCount = 91,
+          .judgementCounts = {1000, 900, 80, 20, 10},
+          .playDurationSeconds = 3'661}},
+      1, 0);
+  const auto playCount = bridge.integerProperty({30}, {});
+  const auto failureCount = bridge.integerProperty({32}, {});
+  const auto great = bridge.integerProperty({34}, {});
+  const auto notes = bridge.integerProperty({333}, {});
+  const auto hours = bridge.integerProperty({17}, {});
+  const auto minutes = bridge.integerProperty({18}, {});
+  const auto seconds = bridge.integerProperty({19}, {});
+  expect(playCount.supported && playCount.value == 130 &&
+             failureCount.supported && failureCount.value == 39 &&
+             great.supported && great.value == 900 && notes.supported &&
+             notes.value == 2'000 && hours.supported && hours.value == 1 &&
+             minutes.supported && minutes.value == 1 && seconds.supported &&
+             seconds.value == 1,
+         "result bridge exposes Beatoraja PlayerData history properties");
+}
+
 void testResultBridgeExposesResultTimingDistributionStatistics() {
   ResultSkinStateBridge bridge({.timingAverageMillis = -12.34,
                                  .timingStandardDeviationMillis = 8.76,
@@ -5386,6 +5410,7 @@ int main() {
   testResultBridgeKeepsAutoplayOptionsOffOnResultScreens();
   testResultBridgeMatchesBeatorajaResultScoreFamilies();
   testResultBridgeMatchesResultAliasesAndTimerUnits();
+  testResultBridgeExposesPlayerHistoryProperties();
   testResultBridgeExposesResultTimingDistributionStatistics();
   testResultBridgeUsesRemotePresentationValues();
   testResultBridgePreservesCompletedGameplayGraph();

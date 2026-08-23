@@ -6,6 +6,7 @@
 #include "../context.h"
 
 #include <optional>
+#include <array>
 #include <string>
 #include <vector>
 
@@ -29,6 +30,13 @@ struct ResultPacemakerData {
   int targetScore = 0;
   int delta = 0;
   bool usesReplayProgression = false;
+};
+
+struct ResultPlayerHistoryData {
+  int playCount = 0;
+  int clearCount = 0;
+  std::array<int, 5> judgementCounts{};
+  std::int64_t playDurationSeconds = 0;
 };
 
 struct ResultSkinData {
@@ -61,6 +69,7 @@ struct ResultSkinData {
   std::optional<ResultPreviousBestData> previousBest;
   std::optional<ResultPreviousBestData> previousLampBest;
   std::optional<ResultPacemakerData> pacemaker;
+  std::optional<ResultPlayerHistoryData> playerHistory;
   const ResultPresentationModel *presentation = nullptr;
   // AbstractResult's result-only timing distribution is computed from the
   // completed replay in chart-time milliseconds, bounded to ±150 ms.

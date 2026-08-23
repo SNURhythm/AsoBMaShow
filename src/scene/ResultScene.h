@@ -195,6 +195,7 @@ struct LocalResultSource {
   bms_parser::Chart *reusableRetryChart = nullptr;
   std::string pacemakerTarget;
   std::optional<ResultPacemakerData> pacemakerOverride;
+  std::optional<ResultPlayerHistoryData> playerHistory;
   std::optional<std::string> modernReplayAttemptId;
   std::string playModeLabel;
   std::string laneOrderLabel;
@@ -287,6 +288,7 @@ private:
   bool startSelectedResultSkin();
   void loadDifficultyLabel();
   void loadPreviousBest();
+  void loadPlayerHistory();
   bool persistModernCourseResult();
   void addResultPersistenceStatus();
   void retryResultPersistence();

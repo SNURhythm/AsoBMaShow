@@ -476,9 +476,47 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
     switch (*id) {
     case 21: case 22: case 23: case 24: case 25: case 26:
       return localCalendarField(*id);
-    case 12: case 17: case 18: case 19: case 30: case 31: case 32:
-    case 33: case 34: case 35: case 36: case 37: case 79: case 333:
+    case 12: case 79:
       return std::numeric_limits<int>::min();
+    case 17:
+      return data_.playerHistory
+                 ? std::optional<int>(static_cast<int>(
+                       data_.playerHistory->playDurationSeconds / 3600))
+                 : std::optional<int>(std::numeric_limits<int>::min());
+    case 18:
+      return data_.playerHistory
+                 ? std::optional<int>(static_cast<int>(
+                       (data_.playerHistory->playDurationSeconds / 60) % 60))
+                 : std::optional<int>(std::numeric_limits<int>::min());
+    case 19:
+      return data_.playerHistory
+                 ? std::optional<int>(static_cast<int>(
+                       data_.playerHistory->playDurationSeconds % 60))
+                 : std::optional<int>(std::numeric_limits<int>::min());
+    case 30:
+      return data_.playerHistory
+                 ? std::optional<int>(data_.playerHistory->playCount)
+                 : std::optional<int>(std::numeric_limits<int>::min());
+    case 31:
+      return data_.playerHistory
+                 ? std::optional<int>(data_.playerHistory->clearCount)
+                 : std::optional<int>(std::numeric_limits<int>::min());
+    case 32:
+      return data_.playerHistory
+                 ? std::optional<int>(data_.playerHistory->playCount -
+                                      data_.playerHistory->clearCount)
+                 : std::optional<int>(std::numeric_limits<int>::min());
+    case 33: case 34: case 35: case 36: case 37:
+      return data_.playerHistory
+                 ? std::optional<int>(data_.playerHistory->judgementCounts[
+                       static_cast<std::size_t>(*id - 33)])
+                 : std::optional<int>(std::numeric_limits<int>::min());
+    case 333:
+      if (!data_.playerHistory) return std::numeric_limits<int>::min();
+      return data_.playerHistory->judgementCounts[0] +
+             data_.playerHistory->judgementCounts[1] +
+             data_.playerHistory->judgementCounts[2] +
+             data_.playerHistory->judgementCounts[3];
     case 100: {
       // ScoreDataProperty.getNowScore is a mode-specific score point, not EX
       // score. At a result screen the result's final combo and judgement
