@@ -216,8 +216,9 @@ SkinPropertyLookup<bool> ResultSkinStateBridge::booleanProperty(
       *id == 1031 || *id == 290 || *id == 291 || *id == 292 || *id == 293) {
     return supported(false);
   }
-  if (*id == 32) return supported(!data_.autoPlayResult);
-  if (*id == 33) return supported(data_.autoPlayResult);
+  // BooleanPropertyFactory evaluates this pair only for BMSPlayer. A result
+  // MainState therefore exposes neither option, including AUTO PLAY results.
+  if (*id == 32 || *id == 33) return supported(false);
   if (*id == 81) return supported(true);
   if (*id == 1008) return supported(!data_.tableName.empty());
   if (*id >= 150 && *id <= 155) {

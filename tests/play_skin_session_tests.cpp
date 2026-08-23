@@ -5029,6 +5029,15 @@ void testResultBridgeSupportsBeatorajaIrAvailabilityProperties() {
          "provider is active");
 }
 
+void testResultBridgeKeepsAutoplayOptionsOffOnResultScreens() {
+  ResultSkinStateBridge bridge({.autoPlayResult = true}, 1, 0);
+  const auto autoplayOff = bridge.booleanProperty({32});
+  const auto autoplayOn = bridge.booleanProperty({33});
+  expect(autoplayOff.supported && !autoplayOff.value && autoplayOn.supported &&
+             !autoplayOn.value,
+         "Beatoraja exposes neither autoplay option from an AbstractResult");
+}
+
 void testResultBridgeMatchesBeatorajaResultScoreFamilies() {
   RhythmState state(nullptr, false);
   state.judgeCount[PGreat] = 10;
@@ -5273,6 +5282,7 @@ int main() {
   testResultLuaSessionBindsMainStateDuringConfiguredLoad();
   testResultSessionRejectsConfiguredModelForAnotherResultTarget();
   testResultBridgeSupportsBeatorajaIrAvailabilityProperties();
+  testResultBridgeKeepsAutoplayOptionsOffOnResultScreens();
   testResultBridgeMatchesBeatorajaResultScoreFamilies();
   testResultBridgeMatchesResultAliasesAndTimerUnits();
   testResultBridgeUsesRemotePresentationValues();
