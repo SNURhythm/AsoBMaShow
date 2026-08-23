@@ -5072,6 +5072,8 @@ void testResultBridgeMatchesBeatorajaResultScoreFamilies() {
   const auto targetRate = bridge.floatProperty({114}, {});
   const auto pGreatRate = bridge.floatProperty({"rate_pgreat"}, {});
   const auto comboRate = bridge.floatProperty({145}, {});
+  const auto exscoreRate = bridge.floatProperty({147}, {});
+  const auto timingAverageFloat = bridge.floatProperty({374}, {});
   const auto imageFavorite = bridge.integerProperty(
       {90}, SkinIntegerPropertyDomain::ImageIndex);
   const auto nowRank = bridge.booleanProperty({200});
@@ -5097,6 +5099,8 @@ void testResultBridgeMatchesBeatorajaResultScoreFamilies() {
              targetRate.supported && std::abs(targetRate.value - 0.9) < 0.000001 &&
              pGreatRate.supported && std::abs(pGreatRate.value - 1.0) < 0.000001 &&
              comboRate.supported && std::abs(comboRate.value - 0.7) < 0.000001 &&
+             exscoreRate.supported && exscoreRate.value == 0.0 &&
+             timingAverageFloat.supported && timingAverageFloat.value == 0.15 &&
              imageFavorite.supported && imageFavorite.value == 0,
          "result bridge follows Beatoraja's negated options, score rate, and "
          "Poor-versus-Miss result families");

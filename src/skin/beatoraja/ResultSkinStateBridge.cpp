@@ -716,8 +716,15 @@ SkinPropertyLookup<double> ResultSkinStateBridge::floatProperty(
                : unsupported<double>();
   }
   if (*id == 147) {
-    const auto value = rate();
-    return value ? supported(*value) : unsupported<double>();
+    // RateType.rate_exscore delegates to createSelectedScoreRate, whose
+    // AbstractResult branch is the same zero fallback as non-selection
+    // MainStates.
+    return supported(0.0);
+  }
+  if (*id == 374) {
+    // FloatType.timing_average exposes TimingDistribution's fixed 150 ms
+    // array center (not its measured mean) divided by 1000.
+    return supported(0.15);
   }
   if (*id == 1107) {
     const auto value = finalGauge();
