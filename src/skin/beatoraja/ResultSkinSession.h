@@ -60,6 +60,7 @@ public:
                             std::int64_t elapsedMillis);
   [[nodiscard]] bool
   requiresRuntimeStringRefresh(const ResultSkinData &) const;
+  [[nodiscard]] bool refreshRuntimeStrings(const ResultSkinData &);
   [[nodiscard]] std::vector<SkinDiagnostic> takeLastDiagnostics();
   [[nodiscard]] std::vector<int> takeQueuedBuiltinEventIds();
   [[nodiscard]] bool queuePointerDown(UiLogicalPoint, long long eventMicros);
@@ -71,6 +72,11 @@ private:
                     std::unique_ptr<LuaSkinRuntime>,
                     std::unique_ptr<SkinResourceCatalog>,
                     std::unique_ptr<SkinMovieCatalog>,
+                    SkinProfileId, SkinStorageRoots,
+                    SkinResourcePreparationService &,
+                    std::shared_ptr<SkinTextureDevice>,
+                    SkinBuiltinImageReader,
+                    std::shared_ptr<SkinLiveResourceCounters>,
                     SkinSafetyPolicy, ViewportSettings,
                     std::vector<std::string> preparedRuntimeStrings);
 
@@ -81,6 +87,12 @@ private:
   std::unique_ptr<LuaSkinRuntime> runtime_;
   std::unique_ptr<SkinResourceCatalog> resources_;
   std::unique_ptr<SkinMovieCatalog> movies_;
+  SkinProfileId profileId_;
+  SkinStorageRoots storageRoots_;
+  SkinResourcePreparationService *resourcePreparation_ = nullptr;
+  std::shared_ptr<SkinTextureDevice> textureDevice_;
+  SkinBuiltinImageReader builtinImageReader_;
+  std::shared_ptr<SkinLiveResourceCounters> liveResourceCounters_;
   std::unique_ptr<ISkinGaugeRandomSource> gaugeRandom_;
   SkinSafetyPolicy safetyPolicy_{};
   ViewportSettings viewportSettings_{};

@@ -482,6 +482,10 @@ public:
   bgfx::TextureHandle
   create(const image_decode::DecodedImageData &image) override {
     ++createCalls;
+    if (failNextCreate_) {
+      failNextCreate_ = false;
+      return BGFX_INVALID_HANDLE;
+    }
     CreatedImage created{.width = image.width, .height = image.height};
     if (image.rgba) {
       const std::size_t retained = std::min<std::size_t>(8, image.rgba->size());
@@ -521,6 +525,8 @@ public:
     stopSource = &source;
   }
 
+  void failNextCreate() noexcept { failNextCreate_ = true; }
+
   std::size_t createCalls = 0;
   std::size_t destroyCalls = 0;
   std::size_t wrongThreadOperations = 0;
@@ -538,6 +544,7 @@ private:
   std::optional<SkinRevisionWeakPin> observedRevision;
   std::optional<std::size_t> stopAfterCreateCalls;
   std::stop_source *stopSource = nullptr;
+  bool failNextCreate_ = false;
 };
 
 class SessionMovieDevice final : public SkinMovieDevice {
@@ -933,9 +940,8 @@ if skin_config then
   }
 )lua";
     } else if (options.resourceBearing) {
-      script += R"lua(
-  return {
-    type = 0, w = 1280, h = 720,
+      script += "\n  return {\n    type = " +
+                std::to_string(options.skinType) + R"lua(, w = 1280, h = 720,
     source = {{id = "fixture-image", path = "resources/fixture.png"}},
     font = {{id = "fixture-font", path = "resources/fixture.ttf", type = 0}},
     image = {{id = "fixture-object", src = "fixture-image", x = 0, y = 0, w = 40, h = 20}},
@@ -5007,20 +5013,49 @@ void testResultLuaSessionBindsMainStateDuringConfiguredLoad() {
 }
 
 void testResultSessionRefreshesForAsynchronousRankingNames() {
-  ActivationFixture fixture({.skinType = 7});
+  ActivationFixture fixture(
+      {.skinType = 7, .resourceBearing = true, .audioBearing = true});
   if (!fixture.ready()) {
     return;
   }
-  auto context = fixture.resultContext();
+  auto context = fixture.resultContext({.courseTitle = "Initial result"});
   auto created = ResultSkinSession::create(fixture.takeActivation(),
                                            std::move(context));
-  expect(created.session != nullptr &&
-             !created.session->requiresRuntimeStringRefresh({}) &&
-             created.session->requiresRuntimeStringRefresh(
-                 {.irRankingEntries = {{.rank = 1,
-                                       .playerName = "\xE3\x83\x86\xE3\x82\xB9\xE3\x83\x88"}}}),
-         "result sessions rebuild their prepared text resources when an "
-         "asynchronous IR ranking introduces a player name");
+  const ResultSkinData rankedData{
+      .courseTitle = "Initial result",
+      .irRankingEntries = {{.rank = 1,
+                            .playerName = "\xE3\x83\x86\xE3\x82\xB9\xE3\x83\x88"}}};
+  expect(created.session != nullptr,
+         "result session accepts a result-typed resource skin");
+  expect(fixture.device()->createCalls == 2,
+         "result session uploads its image and runtime text atlas");
+  expect(fixture.liveCounters()->snapshot() ==
+             SkinLiveResourceSnapshot{.liveTextures = 2,
+                                      .liveResources = 1,
+                                      .liveAudioIdentities = 1},
+         "result session accounts for its result-typed resources");
+  if (!created.session) {
+    return;
+  }
+  const auto activeResources = fixture.liveCounters()->snapshot();
+  const auto initialTextureCreates = fixture.device()->createCalls;
+  const auto initialTextureDestroys = fixture.device()->destroyCalls;
+  fixture.device()->failNextCreate();
+  const bool refreshFailed =
+      !created.session->refreshRuntimeStrings(rankedData);
+  expect(refreshFailed &&
+             created.session->requiresRuntimeStringRefresh(rankedData) &&
+             fixture.device()->destroyCalls == initialTextureDestroys &&
+             fixture.liveCounters()->snapshot() == activeResources,
+         "a failed result text refresh retains the published resource catalog");
+  expect(created.session->refreshRuntimeStrings(rankedData) &&
+             !created.session->requiresRuntimeStringRefresh(rankedData) &&
+             fixture.device()->createCalls == initialTextureCreates + 3 &&
+             fixture.device()->destroyCalls == initialTextureDestroys + 2 &&
+             fixture.liveCounters()->snapshot() == activeResources &&
+             fixture.audioState()->loads.size() == 1,
+         "result sessions replace runtime glyph atlases without recreating "
+         "their configured Lua runtime");
 }
 
 void testResultSessionRejectsConfiguredModelForAnotherResultTarget() {

@@ -4039,12 +4039,11 @@ void ResultScene::renderScene() {
     RenderContext::UiBatchScope uiBatchScope(renderContext);
     ResultSkinData skinData = makeResultSkinData();
     if (resultSkinSession->requiresRuntimeStringRefresh(skinData)) {
-      resultSkinSession.reset();
-      if (!startSelectedResultSkin()) {
+      if (!resultSkinSession->refreshRuntimeStrings(skinData)) {
+        appendResultSkinRenderDiagnostics();
         handleResultSkinRenderFailure();
         return;
       }
-      skinData = makeResultSkinData();
     }
     const long long elapsedMillis =
         std::max(0LL, (nowMicros() - resultSkinStartedMicros) / 1000LL);

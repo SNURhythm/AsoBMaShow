@@ -146,13 +146,24 @@ ResultSkinSession::ResultSkinSession(
     ValidatedBeatorajaSkinModel model, BeatorajaSkinConfiguration configuration,
     std::unique_ptr<LuaSkinRuntime> runtime,
     std::unique_ptr<SkinResourceCatalog> resources,
-    std::unique_ptr<SkinMovieCatalog> movies, SkinSafetyPolicy safetyPolicy,
+    std::unique_ptr<SkinMovieCatalog> movies, SkinProfileId profileId,
+    SkinStorageRoots storageRoots,
+    SkinResourcePreparationService &resourcePreparation,
+    std::shared_ptr<SkinTextureDevice> textureDevice,
+    SkinBuiltinImageReader builtinImageReader,
+    std::shared_ptr<SkinLiveResourceCounters> liveResourceCounters,
+    SkinSafetyPolicy safetyPolicy,
     ViewportSettings viewportSettings,
     std::vector<std::string> preparedRuntimeStrings)
     : revision_(std::move(revision)), entry_(std::move(entry)),
       model_(std::move(model)), configuration_(std::move(configuration)),
       runtime_(std::move(runtime)), resources_(std::move(resources)),
-      movies_(std::move(movies)),
+      movies_(std::move(movies)), profileId_(std::move(profileId)),
+      storageRoots_(std::move(storageRoots)),
+      resourcePreparation_(&resourcePreparation),
+      textureDevice_(std::move(textureDevice)),
+      builtinImageReader_(std::move(builtinImageReader)),
+      liveResourceCounters_(std::move(liveResourceCounters)),
       gaugeRandom_(std::make_unique<DeterministicResultGaugeRandomSource>(
           resultGaugeRandomSeed(entry_))),
       safetyPolicy_(safetyPolicy), viewportSettings_(viewportSettings),
@@ -250,7 +261,7 @@ ResultSkinSessionCreateResult ResultSkinSession::create(
          .configuration = document.configuration,
          .requiredRuntimeStrings = runtimeStrings,
          .builtinImagePaths = resultBuiltinImagePaths(context.initialData),
-         .builtinImageReader = std::move(context.builtinImageReader),
+         .builtinImageReader = context.builtinImageReader,
          .safetyPolicy = context.safetyPolicy,
          .stop = context.stop});
     result.diagnostics.insert(result.diagnostics.end(),
@@ -297,7 +308,10 @@ ResultSkinSessionCreateResult ResultSkinSession::create(
         std::move(activation.revision), std::move(activation.entry),
         std::move(document.model), std::move(document.configuration),
         std::move(document.luaRuntime), std::move(uploaded.catalog),
-        std::move(preparedMovies.catalog),
+        std::move(preparedMovies.catalog), std::move(context.profileId),
+        std::move(context.storageRoots), context.resourcePreparation,
+        std::move(context.textureDevice), std::move(context.builtinImageReader),
+        std::move(context.liveResourceCounters),
         context.safetyPolicy, activation.reconciledSettings.viewport,
         std::move(runtimeStrings)));
   } catch (...) {
@@ -494,6 +508,62 @@ bool ResultSkinSession::requiresRuntimeStringRefresh(
     return std::ranges::find(preparedRuntimeStrings_, value) ==
            preparedRuntimeStrings_.end();
   });
+}
+
+bool ResultSkinSession::refreshRuntimeStrings(const ResultSkinData &data) {
+  lastDiagnostics_.clear();
+  if (!requiresRuntimeStringRefresh(data)) return true;
+  if (resourcePreparation_ == nullptr || !textureDevice_ ||
+      !liveResourceCounters_) {
+    lastDiagnostics_.push_back(failure(
+        "skin.result_session.refresh_context_invalid",
+        "Result skin resources cannot refresh without their session services."));
+    return false;
+  }
+  try {
+    auto resourceFiles = LuaSkinFileSystem::create(
+        {.revision = revision_.readView(), .entry = entry_,
+         .storageRoots = storageRoots_, .profileId = profileId_,
+         .safetyPolicy = safetyPolicy_});
+    if (!resourceFiles.fileSystem) {
+      lastDiagnostics_.push_back(failure(
+          "skin.result_session.refresh_filesystem_create_failed",
+          resourceFiles.failure ? resourceFiles.failure->message
+                                : "Result skin refresh filesystem could not be created."));
+      return false;
+    }
+    ResultSkinData resourceData = data;
+    resourceData.skinName = model_.model.header.name;
+    resourceData.skinAuthor = model_.model.header.author;
+    auto runtimeStrings = resultRuntimeStrings(resourceData);
+    auto planned = resourcePreparation_->decodeAndPlan(
+        {.revision = revision_.clone(), .entry = entry_,
+         .fileSystem = *resourceFiles.fileSystem, .model = model_,
+         .configuration = configuration_, .requiredRuntimeStrings = runtimeStrings,
+         .builtinImagePaths = resultBuiltinImagePaths(data),
+         .builtinImageReader = builtinImageReader_, .safetyPolicy = safetyPolicy_});
+    lastDiagnostics_.insert(lastDiagnostics_.end(),
+                            std::make_move_iterator(planned.diagnostics.begin()),
+                            std::make_move_iterator(planned.diagnostics.end()));
+    if (planned.cancelled || !planned.plan || hasErrors(lastDiagnostics_)) {
+      return false;
+    }
+    auto uploaded = SkinResourceCatalog::upload(
+        std::move(*planned.plan), textureDevice_, liveResourceCounters_);
+    lastDiagnostics_.insert(lastDiagnostics_.end(),
+                            std::make_move_iterator(uploaded.diagnostics.begin()),
+                            std::make_move_iterator(uploaded.diagnostics.end()));
+    if (!uploaded.catalog || hasErrors(lastDiagnostics_)) return false;
+    uploaded.catalog->enterRenderPhase();
+    resources_ = std::move(uploaded.catalog);
+    preparedRuntimeStrings_ = std::move(runtimeStrings);
+    return true;
+  } catch (...) {
+    lastDiagnostics_.push_back(failure(
+        "skin.result_session.refresh_failed",
+        "Result skin text resources could not be refreshed."));
+    return false;
+  }
 }
 
 bool ResultSkinSession::queuePointerDown(UiLogicalPoint point,
