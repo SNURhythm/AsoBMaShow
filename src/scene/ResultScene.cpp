@@ -632,6 +632,9 @@ ResultSkinData ResultScene::makeResultSkinData() const {
     data.currentClearLabelOverride = local->currentClearLabelOverride;
   }
   data.currentClearRankOverride = local->currentClearRankOverride;
+  if (local->courseOptions.session != nullptr) {
+    data.courseTitles = local->courseOptions.session->beatorajaSkinStageTitles();
+  }
   data.previousBest = local->previousBest;
   data.previousLampBest = local->previousLampBest;
   data.pacemaker = pacemakerDataForCurrentResult();

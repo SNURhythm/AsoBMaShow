@@ -6,6 +6,7 @@
 
 #include <optional>
 #include <string>
+#include <vector>
 
 class View;
 struct ResultPresentationModel;
@@ -43,6 +44,7 @@ struct ResultSkinData {
   std::string playModeLabel;
   std::string laneOrderLabel;
   std::string difficultyLabel;
+  std::vector<std::string> courseTitles;
   std::optional<std::string> headerDifficultyLabelOverride;
   std::optional<std::string> currentClearLabelOverride;
   std::optional<int> currentClearRankOverride;

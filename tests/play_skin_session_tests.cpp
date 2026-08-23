@@ -5078,10 +5078,12 @@ void testResultBridgeMatchesBeatorajaResultScoreFamilies() {
 
 void testResultBridgeMatchesResultAliasesAndTimerUnits() {
   bms_parser::ChartMeta meta{.Title = "Title", .SubTitle = "Subtitle",
-                             .PlayLevel = 12.0F};
+                             .PlayLevel = 12.0F,
+                             .PlayLength = 125'000'000};
   ResultSkinStateBridge bridge({.meta = &meta,
                                  .playModeLabel = "7K",
-                                 .laneOrderLabel = "MIRROR"},
+                                 .laneOrderLabel = "MIRROR",
+                                 .courseTitles = {"First stage", "Second stage"}},
                                 1, 125);
   const auto level = bridge.integerProperty({45}, {});
   const auto fullTitleProperty = bridge.stringProperty({12});
@@ -5089,9 +5091,14 @@ void testResultBridgeMatchesResultAliasesAndTimerUnits() {
   const auto mode = std::string(bridge.stringProperty({60}).value);
   const auto order = std::string(bridge.stringProperty({61}).value);
   const auto namedTitle = std::string(bridge.stringProperty({std::string("title")}).value);
+  const auto firstCourseTitle = std::string(bridge.stringProperty({150}).value);
+  const auto chartMinutes = bridge.integerProperty({1163}, {});
+  const auto chartSeconds = bridge.integerProperty({1164}, {});
   expect(level.supported && level.value == 12 && fullTitleProperty.supported &&
              fullTitle == "Title Subtitle" && mode == "7K" && order == "MIRROR" &&
-             namedTitle == "Title" &&
+             namedTitle == "Title" && firstCourseTitle == "First stage" &&
+             chartMinutes.supported && chartMinutes.value == 2 &&
+             chartSeconds.supported && chartSeconds.value == 5 &&
              bridge.timerProperty({1}) == 125'000 &&
              bridge.timerProperty({100}) == INT64_MIN,
          "result aliases and timers match Beatoraja result properties");

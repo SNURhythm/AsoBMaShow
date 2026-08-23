@@ -509,6 +509,16 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
       return std::numeric_limits<int>::min();
     case 402: case 403: case 404:
       return 0;
+    case 1163:
+      return data_.meta
+                 ? std::optional<int>(static_cast<int>(
+                       (data_.meta->PlayLength / 60'000'000LL) % 60LL))
+                 : std::nullopt;
+    case 1164:
+      return data_.meta
+                 ? std::optional<int>(static_cast<int>(
+                       (data_.meta->PlayLength / 1'000'000LL) % 60LL))
+                 : std::nullopt;
     case 90: return data_.meta ? std::optional<int>(static_cast<int>(data_.meta->MaxBpm)) : std::nullopt;
     case 91: return data_.meta ? std::optional<int>(static_cast<int>(data_.meta->MinBpm)) : std::nullopt;
     case 92: return data_.meta ? std::optional<int>(static_cast<int>(data_.meta->Bpm)) : std::nullopt;
@@ -678,8 +688,16 @@ SkinPropertyLookup<std::string_view> ResultSkinStateBridge::stringProperty(
   case 61:
     stringValue_ = data_.laneOrderLabel;
     break;
+  case 150: case 151: case 152: case 153: case 154:
+  case 155: case 156: case 157: case 158: case 159: {
+    const std::size_t index = static_cast<std::size_t>(*id - 150);
+    stringValue_ = index < data_.courseTitles.size()
+                       ? data_.courseTitles[index]
+                       : "";
+    break;
+  }
   default:
-    if ((*id >= 120 && *id <= 129) || (*id >= 150 && *id <= 159) ||
+    if ((*id >= 120 && *id <= 129) ||
         (*id >= 200 && *id <= 219) || (*id >= 1040 && *id <= 1075)) {
       stringValue_.clear();
       break;
