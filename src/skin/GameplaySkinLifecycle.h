@@ -114,7 +114,8 @@ public:
   catalogSnapshot() const noexcept;
   [[nodiscard]] GameplaySkinAcquisition
   acquireForNextChart(int keyMode = 7);
-  [[nodiscard]] GameplaySkinAcquisition acquireForSkinType(int skinType);
+  [[nodiscard]] GameplaySkinAcquisition
+  acquireForSkinType(int skinType, bool chartBoundary = true);
   void recordPresentationFailure(const PresentationFailure &);
   void shutdown() noexcept;
 

@@ -1267,7 +1267,7 @@ GameplaySkinLifecycle::acquireForNextChart(int keyMode) {
 }
 
 GameplaySkinAcquisition
-GameplaySkinLifecycle::acquireForSkinType(int skinType) {
+GameplaySkinLifecycle::acquireForSkinType(int skinType, bool chartBoundary) {
   if (impl_->stopped || !impl_->initialized || !impl_->acquisitionReady ||
       !impl_->activeProfile ||
       !impl_->deps.snapshotProfile || !impl_->deps.acquireActivation) {
@@ -1277,10 +1277,13 @@ GameplaySkinLifecycle::acquireForSkinType(int skinType) {
                     "skin.lifecycle.acquisition_unavailable",
                     "The selected gameplay skin could not be acquired")}};
   }
-  // Every call is a chart boundary. A failed/disabled acquisition must not
-  // leave the preceding chart's identity eligible for writers or Reset Layout.
-  impl_->discardWriterChain();
-  impl_->currentIdentity.reset();
+  if (chartBoundary) {
+    // A gameplay chart boundary must not leave the preceding chart identity
+    // eligible for writers or Reset Layout. Result-skin discovery is
+    // read-only and must let that final writer chain drain instead.
+    impl_->discardWriterChain();
+    impl_->currentIdentity.reset();
+  }
   std::optional<SkinEntryId> requestedEntry;
   std::string requestedConfigurationDigest;
   try {

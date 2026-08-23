@@ -509,7 +509,7 @@ bool ResultScene::startSelectedResultSkin() {
   if (!profileId) return false;
   const int skinType = isCourseFinalResult() ? 15 : 7;
   auto acquisition =
-      context.gameplaySkinLifecycle->acquireForSkinType(skinType);
+      context.gameplaySkinLifecycle->acquireForSkinType(skinType, false);
   if (acquisition.disposition !=
           skin::GameplaySkinAcquisitionDisposition::Ready ||
       !acquisition.request) {
