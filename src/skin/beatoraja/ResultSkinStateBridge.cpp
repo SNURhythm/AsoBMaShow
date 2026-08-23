@@ -373,7 +373,10 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
     case 75: case 105: case 174: return maxCombo();
     case 76: case 177: return badPoints();
     case 45: case 46: case 47: case 48: case 49: case 96:
-      return data_.meta
+      return data_.playLevelOverride
+                 ? std::optional<int>(static_cast<int>(
+                       std::lround(*data_.playLevelOverride)))
+                 : data_.meta
                  ? std::optional<int>(static_cast<int>(
                        std::lround(data_.meta->PlayLevel)))
                  : std::nullopt;
@@ -681,10 +684,10 @@ SkinPropertyLookup<std::string_view> ResultSkinStateBridge::stringProperty(
     stringValue_.clear();
     break;
   case 1030:
-    stringValue_ = data_.meta ? data_.meta->MD5 : "";
+    stringValue_ = data_.meta ? data_.meta->MD5 : data_.chartMd5;
     break;
   case 1031:
-    stringValue_ = data_.meta ? data_.meta->SHA256 : "";
+    stringValue_ = data_.meta ? data_.meta->SHA256 : data_.chartSha256;
     break;
   case 62:
     stringValue_ = data_.difficultyLabel;

@@ -47,6 +47,9 @@ struct ResultSkinData {
   std::vector<std::string> courseTitles;
   std::string skinName;
   std::string skinAuthor;
+  std::optional<float> playLevelOverride;
+  std::string chartMd5;
+  std::string chartSha256;
   std::optional<std::string> headerDifficultyLabelOverride;
   std::optional<std::string> currentClearLabelOverride;
   std::optional<int> currentClearRankOverride;

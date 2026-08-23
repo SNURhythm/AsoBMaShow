@@ -5126,13 +5126,29 @@ void testResultBridgeUsesRemotePresentationValues() {
       .gaugeSeries = {{.points = {20.0F, 50.0F, 79.96F},
                        .maximum = 100.0F}},
   };
-  ResultSkinStateBridge bridge({.presentation = &remote}, 1, 0);
+  ResultSkinStateBridge bridge({.presentation = &remote,
+                                 .playLevelOverride = 12.7F,
+                                 .difficultyLabel = "ANOTHER",
+                                 .chartMd5 = "remote-md5",
+                                 .chartSha256 = "remote-sha256"},
+                                1, 0);
   const auto poor = bridge.integerProperty({114}, {});
   const auto finalGauge = bridge.integerProperty({107}, {});
   const auto gaugeDecimal = bridge.integerProperty({407}, {});
   const auto fastGreat = bridge.integerProperty({412}, {});
   const auto totalFast = bridge.integerProperty({423}, {});
   const auto graph = bridge.gameplayGraphState();
+  const auto level = bridge.integerProperty({45}, {});
+  const auto difficultyProperty = bridge.stringProperty({62});
+  const std::string difficulty(difficultyProperty.value);
+  const auto chartMd5Property = bridge.stringProperty({1030});
+  const std::string chartMd5(chartMd5Property.value);
+  expect(level.supported && level.value == 13,
+         "remote result level uses remote level number");
+  expect(difficultyProperty.supported && difficulty == "ANOTHER",
+         "remote result difficulty uses remote difficulty");
+  expect(chartMd5Property.supported && chartMd5 == "remote-md5",
+         "remote result chart hash uses remote metadata");
   expect(bridge.booleanProperty({90}).supported &&
              bridge.booleanProperty({90}).value && poor.supported &&
              poor.value == 10 && finalGauge.supported &&
@@ -5142,7 +5158,10 @@ void testResultBridgeUsesRemotePresentationValues() {
              totalFast.value == 12 && graph.gaugeSupported &&
              graph.gaugeHistory.size() == 3 && graph.gaugeRevision != 0 &&
              std::abs(bridge.floatProperty({1107}, {}).value - 79.96) < 0.0001 &&
-             bridge.judgeState(0).supported && bridge.judgeState(0).combo == 720,
+             bridge.judgeState(0).supported && bridge.judgeState(0).combo == 720 &&
+             level.supported && level.value == 13 && difficultyProperty.supported &&
+             difficulty == "ANOTHER" && chartMd5Property.supported &&
+             chartMd5 == "remote-md5",
          "remote result properties project presentation scores, timing, and gauges");
 }
 

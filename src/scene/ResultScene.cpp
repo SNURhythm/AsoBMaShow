@@ -616,6 +616,13 @@ ResultSkinData ResultScene::makeResultSkinData() const {
       [](const auto &provider) { return provider.second.enabled; });
   if (remote != nullptr) {
     data.presentation = &remote->presentation;
+    data.difficultyLabel = remote->score.difficulty.value_or("");
+    data.playLevelOverride = remote->score.levelNumber
+                                 ? std::optional<float>(static_cast<float>(
+                                       *remote->score.levelNumber))
+                                 : std::nullopt;
+    data.chartMd5 = remote->score.chartMd5;
+    data.chartSha256 = remote->score.chartSha256;
     return data;
   }
   if (local == nullptr) {
