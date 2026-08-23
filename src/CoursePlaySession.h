@@ -300,6 +300,13 @@ struct CoursePlaySession {
   std::vector<CoursePlayEntry> entries;
   std::vector<CoursePlayChartResult> completedResults;
   std::vector<std::shared_ptr<bms_parser::Chart>> ownedResultBrowseCharts;
+  // Saved modern-course browsing retains replay-prepared charts separately
+  // from the recalled chart metadata. They are result-only evidence for
+  // replay-derived graphs and timing statistics; they must not make the
+  // course replay action available on a result-record browser.
+  std::vector<std::shared_ptr<bms_parser::Chart>>
+      ownedResultBrowseReplayCharts;
+  std::shared_ptr<CourseReplayData> resultBrowseReplayData = nullptr;
   std::vector<std::unique_ptr<bms_parser::Chart>> preparedCourseCharts;
   std::vector<CourseReplayStageData> replayStages;
   GameplayRuleset ruleset = kDefaultGameplayRuleset;
@@ -416,6 +423,22 @@ struct CoursePlaySession {
   courseReplayStage(std::size_t index) const {
     return hasCourseReplayStage(index) ? &courseReplayData->stages[index]
                                        : nullptr;
+  }
+
+  [[nodiscard]] const ReplayData *resultBrowseStageReplay(
+      std::size_t index) const {
+    return resultBrowseReplayData != nullptr &&
+                   index < resultBrowseReplayData->stages.size()
+               ? &resultBrowseReplayData->stages[index].replay
+               : nullptr;
+  }
+
+  [[nodiscard]] bms_parser::Chart *resultBrowseReplayChart(
+      std::size_t index) const {
+    return index < ownedResultBrowseReplayCharts.size() &&
+                   ownedResultBrowseReplayCharts[index] != nullptr
+               ? ownedResultBrowseReplayCharts[index].get()
+               : nullptr;
   }
 
   [[nodiscard]] std::shared_ptr<ReplayData>

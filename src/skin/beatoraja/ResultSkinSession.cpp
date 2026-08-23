@@ -136,9 +136,7 @@ std::vector<std::string> resultRuntimeStrings(const ResultSkinData &data) {
   appendRuntimeString(strings, data.chartMd5);
   appendRuntimeString(strings, data.chartSha256);
   appendRuntimeString(strings, ASOBMASHOW_APPLICATION_VERSION);
-  if (!data.tableName.empty() && !data.tableLevel.empty()) {
-    appendRuntimeString(strings, data.tableName + " " + data.tableLevel);
-  }
+  appendRuntimeString(strings, data.tableLevel + data.tableName);
   for (const auto &title : data.courseTitles) appendRuntimeString(strings, title);
   for (const auto &entry : data.irRankingEntries) {
     appendRuntimeString(strings, entry.playerName);
@@ -426,6 +424,37 @@ bool ResultSkinSession::render(RenderContext &renderContext,
       return false;
     }
   }
+  auto queuedWriters = std::exchange(queuedWriterInvocations_, {});
+  for (const auto &invocation : queuedWriters) {
+    if (runtime_ == nullptr) {
+      lastDiagnostics_.push_back(failure(
+          "skin.result_session.writer_runtime_missing",
+          "Result skin writer callback requires a Lua runtime."));
+      queuedWriterInvocations_.clear();
+      return false;
+    }
+    const auto binding = std::ranges::find_if(
+        model_.model.floatWriters, [&](const SkinFloatWriterBinding &candidate) {
+          return candidate.id == invocation.writer;
+        });
+    if (binding == model_.model.floatWriters.end() ||
+        !std::holds_alternative<LuaCallbackId>(binding->source)) {
+      lastDiagnostics_.push_back(failure(
+          "skin.result_session.writer_binding_missing",
+          "Result skin writer binding is absent."));
+      queuedWriterInvocations_.clear();
+      return false;
+    }
+    const std::array<LuaScalar, 1> arguments{
+        LuaScalar{invocation.normalizedValue}};
+    const auto callback = runtime_->invoke(
+        std::get<LuaCallbackId>(binding->source), arguments);
+    if (callback.failure) {
+      lastDiagnostics_.push_back(std::move(*callback.failure));
+      queuedWriterInvocations_.clear();
+      return false;
+    }
+  }
   for (std::size_t timerIndex = 0;
        timerIndex < model_.model.customTimers.size(); ++timerIndex) {
     const auto &timer = model_.model.customTimers[timerIndex];
@@ -559,37 +588,6 @@ bool ResultSkinSession::render(RenderContext &renderContext,
     if (callback.failure) {
       lastDiagnostics_.push_back(std::move(*callback.failure));
       queuedEventInvocations_.clear();
-      return false;
-    }
-  }
-  auto queuedWriters = std::exchange(queuedWriterInvocations_, {});
-  for (const auto &invocation : queuedWriters) {
-    if (runtime_ == nullptr) {
-      lastDiagnostics_.push_back(failure(
-          "skin.result_session.writer_runtime_missing",
-          "Result skin writer callback requires a Lua runtime."));
-      queuedWriterInvocations_.clear();
-      return false;
-    }
-    const auto binding = std::ranges::find_if(
-        model_.model.floatWriters, [&](const SkinFloatWriterBinding &candidate) {
-          return candidate.id == invocation.writer;
-        });
-    if (binding == model_.model.floatWriters.end() ||
-        !std::holds_alternative<LuaCallbackId>(binding->source)) {
-      lastDiagnostics_.push_back(failure(
-          "skin.result_session.writer_binding_missing",
-          "Result skin writer binding is absent."));
-      queuedWriterInvocations_.clear();
-      return false;
-    }
-    const std::array<LuaScalar, 1> arguments{
-        LuaScalar{invocation.normalizedValue}};
-    const auto callback = runtime_->invoke(
-        std::get<LuaCallbackId>(binding->source), arguments);
-    if (callback.failure) {
-      lastDiagnostics_.push_back(std::move(*callback.failure));
-      queuedWriterInvocations_.clear();
       return false;
     }
   }

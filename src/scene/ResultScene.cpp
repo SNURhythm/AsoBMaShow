@@ -477,27 +477,55 @@ courseTimingStatisticsForSession(const CoursePlaySession &session) {
   long double sumSquares = 0.0;
   long double judgeDurationTotal = 0.0;
   int judgeNoteTotal = 0;
-  for (const auto &stage : session.completedResults) {
-    if (stage.skinAverageJudgeMicros) {
+  for (std::size_t index = 0; index < session.completedResults.size();
+       ++index) {
+    const auto &stage = session.completedResults[index];
+    const auto replayTiming =
+        stage.skinTimingDistribution.empty()
+            ? resultTimingStatistics(session.resultBrowseStageReplay(index),
+                                     stage.meta.TotalNotes,
+                                     session.resultBrowseReplayChart(index))
+            : std::nullopt;
+    const auto averageJudgeMicros =
+        stage.skinAverageJudgeMicros
+            ? stage.skinAverageJudgeMicros
+            : (replayTiming
+                   ? std::optional<long long>(replayTiming->averageJudgeMicros)
+                   : std::nullopt);
+    if (averageJudgeMicros) {
       const int notes = std::max(0, stage.meta.TotalNotes);
-      judgeDurationTotal += notes * *stage.skinAverageJudgeMicros;
+      judgeDurationTotal += notes * *averageJudgeMicros;
       judgeNoteTotal += notes;
     }
-    if (stage.skinTimingSampleCount == 0 ||
-        !stage.skinTimingAverageMillis ||
-        !stage.skinTimingStandardDeviationMillis) {
+    const std::size_t sampleCount =
+        stage.skinTimingDistribution.empty() && replayTiming
+            ? replayTiming->timingSampleCount
+            : stage.skinTimingSampleCount;
+    const auto averageMillis =
+        stage.skinTimingDistribution.empty() && replayTiming
+            ? std::optional<double>(replayTiming->averageMillis)
+            : stage.skinTimingAverageMillis;
+    const auto standardDeviationMillis =
+        stage.skinTimingDistribution.empty() && replayTiming
+            ? std::optional<double>(replayTiming->standardDeviationMillis)
+            : stage.skinTimingStandardDeviationMillis;
+    const auto &distribution =
+        stage.skinTimingDistribution.empty() && replayTiming
+            ? replayTiming->distribution
+            : stage.skinTimingDistribution;
+    if (sampleCount == 0 || !averageMillis || !standardDeviationMillis) {
       continue;
     }
-    const long double count = stage.skinTimingSampleCount;
-    const long double mean = *stage.skinTimingAverageMillis;
-    const long double deviation = *stage.skinTimingStandardDeviationMillis;
-    result.timingSampleCount += stage.skinTimingSampleCount;
+    const long double count = sampleCount;
+    const long double mean = *averageMillis;
+    const long double deviation = *standardDeviationMillis;
+    result.timingSampleCount += sampleCount;
     sum += count * mean;
     sumSquares += count * (deviation * deviation + mean * mean);
     for (std::size_t index = 0;
          index < result.distribution.size() &&
-         index < stage.skinTimingDistribution.size(); ++index) {
-      result.distribution[index] += stage.skinTimingDistribution[index];
+         index < distribution.size(); ++index) {
+      result.distribution[index] += distribution[index];
     }
   }
   if (result.timingSampleCount == 0) {
@@ -529,9 +557,11 @@ long long totalPlayLengthForCourse(const CoursePlaySession &session) {
 
 bms_parser::ChartMeta
 courseResultMetaForSession(const CoursePlaySession &session) {
-  return result_presentation::courseResultMeta(
+  auto meta = result_presentation::courseResultMeta(
       session.courseName, session.courseGroupName, session.entries.size(),
       totalNotesForCourse(session), totalPlayLengthForCourse(session));
+  meta.LnMode = normalizeChartLongNoteModeValue(session.longNoteMode);
+  return meta;
 }
 
 void appendMissingCourseGaugeHistory(RhythmState &state,
@@ -2470,8 +2500,10 @@ void ResultScene::handleResultSkinRenderFailure() {
 
 void ResultScene::appendResultSkinRenderDiagnostics() {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
-  if (!resultSkinSession || !context.skinDiagnosticHistory) return;
-  for (auto diagnostic : resultSkinSession->takeLastDiagnostics()) {
+  if (!resultSkinSession) return;
+  auto diagnostics = resultSkinSession->takeLastDiagnostics();
+  if (!context.skinDiagnosticHistory) return;
+  for (auto &diagnostic : diagnostics) {
     try {
       context.skinDiagnosticHistory->append({
           .entry = resultSkinEntry,
@@ -3172,6 +3204,7 @@ void ResultScene::showSavedCourseStage() {
   }
   const auto &result = session->completedResults[session->currentIndex];
   const ReplayData *stageReplay = nullptr;
+  bms_parser::Chart *replayChart = nullptr;
   ScoreProvenance provenance = ScoreProvenance::Legacy();
   if (session->modernCourseResultBrowsing) {
     if (session->currentIndex >= session->stageProvenance.size() ||
@@ -3180,6 +3213,11 @@ void ResultScene::showSavedCourseStage() {
       return;
     }
     provenance = *session->stageProvenance[session->currentIndex];
+    stageReplay = session->resultBrowseStageReplay(session->currentIndex);
+    replayChart = session->resultBrowseReplayChart(session->currentIndex);
+    if (stageReplay != nullptr) {
+      session->applyReplayStagePlayOptions(*stageReplay);
+    }
   } else {
     if (session->courseReplayData == nullptr ||
         session->currentIndex >= session->courseReplayData->stages.size()) {
@@ -3199,8 +3237,8 @@ void ResultScene::showSavedCourseStage() {
           ResultCourseOptions{.mode = ResultCourseMode::Stage,
                               .session = session,
                               .savedResultBrowsing = true},
-          std::string{}, std::unique_ptr<bms_parser::Chart>{}, nullptr,
-          std::nullopt, nullptr, std::nullopt, true, ResultTableContext{},
+          std::string{}, std::unique_ptr<bms_parser::Chart>{}, replayChart,
+          std::nullopt, stageReplay, std::nullopt, true, ResultTableContext{},
           result.gameplayGraph),
       false);
 }

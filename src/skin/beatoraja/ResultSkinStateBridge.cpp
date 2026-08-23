@@ -1085,9 +1085,7 @@ SkinPropertyLookup<std::string_view> ResultSkinStateBridge::stringProperty(
     stringValue_ = data_.tableLevel;
     break;
   case 1003:
-    stringValue_ = data_.tableName.empty() ? "" : data_.tableLevel.empty()
-                                                ? data_.tableName
-                                                : data_.tableName + " " + data_.tableLevel;
+    stringValue_ = data_.tableLevel + data_.tableName;
     break;
   case 1020:
   case 1021:

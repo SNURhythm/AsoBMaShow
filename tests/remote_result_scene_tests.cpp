@@ -419,13 +419,16 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
   const std::string mainMenu = readSource("src/scene/MainMenuScene.cpp");
   const std::string session =
       readSource("src/skin/beatoraja/ResultSkinSession.cpp");
+  const std::string bridge =
+      readSource("src/skin/beatoraja/ResultSkinStateBridge.cpp");
 
   requireContains(result,
                   "data.playModeLabel = remote->presentation.playtype.value_or(\"\");",
                   "remote result skins project the remote play mode string");
-  requireOrdered(result, "if (stage.skinAverageJudgeMicros) {",
-                 "if (stage.skinTimingSampleCount == 0 ||",
-                 "course judge duration includes zero-timing stages");
+  requireOrdered(result, "const auto replayTiming =",
+                 "if (sampleCount == 0 || !averageMillis || !standardDeviationMillis)",
+                 "course timing falls back to retained replay data before "
+                 "discarding zero-sample stages");
   requireContains(result,
                   "if (result.timingSampleCount == 0) {\n"
                   "    if (judgeNoteTotal == 0) return std::nullopt;",
@@ -471,13 +474,24 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
   requireContains(result,
                   "context, result.meta, result.state, provenance, stageReplay,",
                   "saved course stages project setup through the result scene");
+  requireContains(result,
+                  "stageReplay = session->resultBrowseStageReplay(session->currentIndex);",
+                  "saved course stage timing retains its replay source");
+  requireContains(result,
+                  "meta.LnMode = normalizeChartLongNoteModeValue(session.longNoteMode);",
+                  "course result metadata retains the selected long-note mode");
   requireContains(mainMenu,
                   "auto replay = consumer.load(*exact.record,",
                   "saved course result recall loads its retained replay when available");
   requireContains(mainMenu,
-                  "index < graphReplays.size()\n"
-                  "                ? replay_result::BuildSkinGameplayGraphState(",
-                  "saved course result recall uses a replay graph when retained");
+                  "session->resultBrowseReplayData = std::move(resultBrowseReplayData);",
+                  "saved course result recall retains its replay for later result timing");
+  requireContains(mainMenu,
+                  "const ReplayData *firstReplay = session->resultBrowseStageReplay(0);",
+                  "the initially displayed saved course stage receives its retained replay");
+  requireContains(mainMenu,
+                  "*replayChart, *stageReplay, stage.state",
+                  "saved course graph reconstruction uses the replay-prepared chart");
   requireOrdered(mainMenu, "auto view = std::move(*recalled.value);",
                  "replay_result::BuildSkinGameplayGraphState(",
                  "saved course graph reconstruction occurs before ResultScene uses it");
@@ -540,6 +554,19 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
                   "synthetic judgement samples");
   requireContains(session, "writerInvocationFor(",
                   "result sliders resolve their authored writer invocation");
+  requireOrdered(session,
+                 "auto queuedWriters = std::exchange(queuedWriterInvocations_, {});",
+                 "for (std::size_t timerIndex = 0;",
+                 "result Lua writers run before custom timer and event evaluation");
+  requireOrdered(result,
+                 "auto diagnostics = resultSkinSession->takeLastDiagnostics();",
+                 "if (!context.skinDiagnosticHistory) return;",
+                 "result render diagnostics are drained even without a history sink");
+  requireContains(bridge, "stringValue_ = data_.tableLevel + data_.tableName;",
+                  "result tablefull matches Beatoraja's level-first value");
+  requireContains(session,
+                  "appendRuntimeString(strings, data.tableLevel + data.tableName);",
+                  "result font atlases include the exact tablefull string");
   requireContains(result, "takeQueuedAudioVolumeWrites()",
                   "ResultScene applies result-skin audio volume writer output");
 }

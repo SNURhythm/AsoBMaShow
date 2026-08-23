@@ -5498,6 +5498,15 @@ void testResultBridgeProjectsLongNoteModeImageIndex() {
   }
 }
 
+void testResultBridgeMatchesBeatorajaTableFullString() {
+  ResultSkinStateBridge bridge({.tableName = "Insane Table",
+                                 .tableLevel = "★12"},
+                                1, 0);
+  const auto tableFull = bridge.stringProperty({1003});
+  expect(tableFull.supported && tableFull.value == "★12Insane Table",
+         "result tablefull preserves Beatoraja's level-first concatenation");
+}
+
 void testResultBridgeDoesNotInventRemoteGaugeImageIndex() {
   ResultPresentationModel remote{.score = 100, .maxScore = 200};
   ResultSkinStateBridge unknown({.presentation = &remote}, 1, 0);
@@ -5862,6 +5871,7 @@ int main() {
   testResultBridgeMatchesResultAliasesAndTimerUnits();
   testResultBridgeUsesCapturedReplayImageIndexes();
   testResultBridgeProjectsLongNoteModeImageIndex();
+  testResultBridgeMatchesBeatorajaTableFullString();
   testResultBridgeDoesNotInventRemoteGaugeImageIndex();
   testResultBridgeConvertsClearRanksToBeatorajaImageIndexes();
   testResultBridgeProjectsIrRankingRows();

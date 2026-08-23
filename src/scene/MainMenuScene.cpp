@@ -11532,7 +11532,8 @@ void MainMenuScene::startModernCourseReplayResultRecall(
       }
 
       auto view = std::move(*recalled.value);
-      std::vector<ReplayData> graphReplays;
+      std::shared_ptr<CourseReplayData> resultBrowseReplayData;
+      std::vector<std::shared_ptr<bms_parser::Chart>> resultBrowseReplayCharts;
       if (exact.record->replayFile) {
         auto consumer =
             replay::makeRuntimeCourseReplayConsumer(context.replayRepository);
@@ -11540,10 +11541,12 @@ void MainMenuScene::startModernCourseReplayResultRecall(
                                     currentSelection->completedChartPaths,
                                     *cancelled);
         if (replay.ready() && replay.replayData != nullptr &&
-            replay.replayData->stages.size() == view.completedStages.size()) {
-          graphReplays.reserve(replay.replayData->stages.size());
-          for (auto &stage : replay.replayData->stages) {
-            graphReplays.push_back(std::move(stage.replay));
+            replay.replayData->stages.size() == view.completedStages.size() &&
+            replay.charts.size() == view.completedStages.size()) {
+          resultBrowseReplayData = std::move(replay.replayData);
+          resultBrowseReplayCharts.reserve(replay.charts.size());
+          for (auto &chart : replay.charts) {
+            resultBrowseReplayCharts.emplace_back(std::move(chart));
           }
         }
       }
@@ -11572,16 +11575,22 @@ void MainMenuScene::startModernCourseReplayResultRecall(
       session->stageProvenance.resize(view.completedStages.size());
       session->completedResults.reserve(view.completedStages.size());
       session->ownedResultBrowseCharts.reserve(view.completedStages.size());
+      session->ownedResultBrowseReplayCharts =
+          std::move(resultBrowseReplayCharts);
+      session->resultBrowseReplayData = std::move(resultBrowseReplayData);
       session->modernCourseChartPaths.reserve(view.completedStages.size());
       for (std::size_t index = 0; index < view.completedStages.size();
            ++index) {
         auto &stage = view.completedStages[index];
         session->entries[index].meta = stage.chart->Meta;
+        const ReplayData *stageReplay = session->resultBrowseStageReplay(index);
+        bms_parser::Chart *replayChart =
+            session->resultBrowseReplayChart(index);
         session->completedResults.emplace_back(
             stage.chart->Meta, stage.state,
-            index < graphReplays.size()
+            stageReplay != nullptr && replayChart != nullptr
                 ? replay_result::BuildSkinGameplayGraphState(
-                      *stage.chart, graphReplays[index], stage.state)
+                      *replayChart, *stageReplay, stage.state)
                 : replay_result::BuildSkinGameplayChartGraphState(
                       *stage.chart, stage.state));
         session->ownedResultBrowseCharts.push_back(stage.chart);
@@ -11616,16 +11625,25 @@ void MainMenuScene::startModernCourseReplayResultRecall(
         const auto &first = session->completedResults.front();
         const ScoreProvenance firstProvenance =
             *session->stageProvenance.front();
+        const ReplayData *firstReplay = session->resultBrowseStageReplay(0);
+        bms_parser::Chart *firstReplayChart =
+            session->resultBrowseReplayChart(0);
+        if (firstReplay != nullptr) {
+          session->applyReplayStagePlayOptions(*firstReplay);
+        }
         replayResultRecallInProgress = false;
         context.sceneManager->changeScene(
             std::make_unique<ResultScene>(
-                context, first.meta, first.state, firstProvenance, nullptr,
+                context, first.meta, first.state, firstProvenance, firstReplay,
                 ResultPersistenceOptions{}, nullptr, ResultPracticeOptions{},
                 false,
                 ResultCourseOptions{.mode = ResultCourseMode::Stage,
                                     .session = session,
-                                    .savedResultBrowsing = true}),
-            true);
+                                    .savedResultBrowsing = true},
+                profileSelections.pacemakerTarget,
+                std::unique_ptr<bms_parser::Chart>{}, firstReplayChart,
+                std::nullopt, firstReplay),
+                true);
       });
     } catch (...) {
       queueReplayLoadCompletion([this]() {
