@@ -5135,6 +5135,8 @@ void testResultBridgeMatchesResultAliasesAndTimerUnits() {
   const auto order = std::string(bridge.stringProperty({61}).value);
   const auto namedTitle = std::string(bridge.stringProperty({std::string("title")}).value);
   const auto firstCourseTitle = std::string(bridge.stringProperty({150}).value);
+  const auto namedCourseTitle =
+      std::string(bridge.stringProperty({std::string("coursetitle1")}).value);
   const auto chartMinutes = bridge.integerProperty({1163}, {});
   const auto chartSeconds = bridge.integerProperty({1164}, {});
   const auto skinName = std::string(bridge.stringProperty({50}).value);
@@ -5142,6 +5144,7 @@ void testResultBridgeMatchesResultAliasesAndTimerUnits() {
   expect(level.supported && level.value == 12 && fullTitleProperty.supported &&
              fullTitle == "Course title" && mode == "7K" && order == "MIRROR" &&
              namedTitle == "Course title" && firstCourseTitle == "First stage" &&
+             namedCourseTitle == "First stage" &&
              chartMinutes.supported && chartMinutes.value == 2 &&
              chartSeconds.supported && chartSeconds.value == 5 &&
              skinName == "Result skin" && skinAuthor == "Skin author" &&

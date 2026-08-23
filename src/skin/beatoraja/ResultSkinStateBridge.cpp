@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <ctime>
@@ -191,11 +192,28 @@ std::optional<int> ResultSkinStateBridge::integerSelector(
   if (value != nullptr) return *value;
   const auto *name = std::get_if<std::string>(&selector.value);
   if (name == nullptr) return std::nullopt;
-  static constexpr std::array<std::pair<std::string_view, int>, 27> aliases{{
+  constexpr std::string_view coursePrefix = "coursetitle";
+  if (name->starts_with(coursePrefix)) {
+    const std::string_view suffix(name->data() + coursePrefix.size(),
+                                  name->size() - coursePrefix.size());
+    int index = 0;
+    const auto parsed = std::from_chars(suffix.data(), suffix.data() + suffix.size(),
+                                        index);
+    if (parsed.ec == std::errc{} && parsed.ptr == suffix.data() + suffix.size() &&
+        index >= 1 && index <= 10) {
+      return 149 + index;
+    }
+  }
+  static constexpr std::array<std::pair<std::string_view, int>, 38> aliases{{
+      {"rival", 1}, {"player", 2}, {"target", 3},
       {"title", 10}, {"fulltitle", 12}, {"subtitle", 11},
-      {"artist", 14}, {"subartist", 15}, {"mode", 60},
+      {"genre", 13}, {"artist", 14}, {"subartist", 15},
+      {"fullartist", 16}, {"mode", 60},
       {"sort", 61}, {"difficulty", 62}, {"skinname", 50},
       {"skinauthor", 51}, {"nowbpm", 92},
+      {"tablename", 1001}, {"tablelevel", 1002}, {"tablefull", 1003},
+      {"version", 1010}, {"songhashmd5", 1030},
+      {"songhashsha256", 1031},
       {"score_rate", 1102}, {"total_rate", 1115},
       {"score_rate2", 155}, {"scorerate", 110},
       {"scorerate_final", 111}, {"bestscorerate_now", 112},
