@@ -144,6 +144,12 @@ void projectResultIrRanking(
                                      .clearType = entry.clearType,
                                      .currentUser = entry.currentUser});
   }
+  for (const auto &entry : entries) {
+    if (entry.currentUser) {
+      data.irCurrentUserRank = entry.rank;
+      break;
+    }
+  }
 }
 
 std::optional<std::vector<int>> resultReplayLanePattern(
@@ -844,7 +850,7 @@ bool ResultScene::startSelectedResultSkin() {
   resultSkinEntry = entry;
   resultSkinRevisionDigest = revisionDigest;
   resultSkinConfigurationDigest = configurationDigest;
-  resultSkinStartedMicros = nowMicros();
+  if (resultSkinStartedMicros == 0) resultSkinStartedMicros = nowMicros();
   return true;
 #endif
 }
@@ -1816,6 +1822,8 @@ void ResultScene::retryResultPersistence() {
           ->retryable()) {
     (void)persistModernCourseResult();
     loadPreviousBest();
+    local->playerHistory.reset();
+    loadPlayerHistory();
     rebuildLocalPresentation(makeTimingAnalyticsModel());
     defer(
         [this]() {
@@ -3737,10 +3745,10 @@ void ResultScene::init() {
     }
     loadDifficultyLabel();
     loadPreviousBest();
-    loadPlayerHistory();
     if (isCourseFinalResult()) {
       (void)persistModernCourseResult();
     }
+    loadPlayerHistory();
     const ReplayData *timingReplay = local->analyticsData
                                          ? &*local->analyticsData
                                          : (local->presentationReplay

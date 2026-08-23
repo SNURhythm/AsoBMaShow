@@ -18,6 +18,43 @@
 namespace skin {
 namespace {
 
+class DeterministicResultGaugeRandomSource final
+    : public ISkinGaugeRandomSource {
+public:
+  explicit DeterministicResultGaugeRandomSource(std::uint64_t seed) noexcept
+      : seed_(seed) {}
+
+  std::optional<std::uint32_t>
+  next(SkinObjectId object, std::uint64_t animationEpoch,
+       std::uint32_t exclusiveUpperBound) override {
+    if (exclusiveUpperBound == 0) return std::nullopt;
+    std::uint64_t value = seed_ ^ (static_cast<std::uint64_t>(object) << 32U) ^
+                          animationEpoch;
+    value += 0x9e3779b97f4a7c15ULL;
+    value = (value ^ (value >> 30U)) * 0xbf58476d1ce4e5b9ULL;
+    value = (value ^ (value >> 27U)) * 0x94d049bb133111ebULL;
+    value ^= value >> 31U;
+    return static_cast<std::uint32_t>(value % exclusiveUpperBound);
+  }
+
+private:
+  std::uint64_t seed_ = 0;
+};
+
+std::uint64_t resultGaugeRandomSeed(const SkinEntryId &entry) noexcept {
+  std::uint64_t seed = 1469598103934665603ULL;
+  const auto append = [&seed](std::string_view text) {
+    for (const unsigned char byte : text) {
+      seed ^= byte;
+      seed *= 1099511628211ULL;
+    }
+  };
+  append(entry.package.directoryName);
+  append(entry.package.collisionKey);
+  append(entry.packageRelativePath);
+  return seed;
+}
+
 SkinDiagnostic failure(std::string code, std::string message,
                        std::string path = {}) {
   return {.code = std::move(code), .message = std::move(message),
@@ -116,6 +153,8 @@ ResultSkinSession::ResultSkinSession(
       model_(std::move(model)), configuration_(std::move(configuration)),
       runtime_(std::move(runtime)), resources_(std::move(resources)),
       movies_(std::move(movies)),
+      gaugeRandom_(std::make_unique<DeterministicResultGaugeRandomSource>(
+          resultGaugeRandomSeed(entry_))),
       safetyPolicy_(safetyPolicy), viewportSettings_(viewportSettings),
       preparedRuntimeStrings_(std::move(preparedRuntimeStrings)),
       quadRenderer_(std::make_unique<rendering::SkinQuadBatchRenderer>()) {}
@@ -409,7 +448,8 @@ bool ResultSkinSession::render(RenderContext &renderContext,
        .visualTimeMicros = elapsedMillis * 1000, .model = model_,
        .configuration = configuration_, .resources = *resources_, .movies = movies_.get(),
        .viewport = viewport,
-       .runtime = runtime_.get(), .state = bridge, .safetyPolicy = safetyPolicy_},
+       .runtime = runtime_.get(), .state = bridge, .safetyPolicy = safetyPolicy_,
+       .gaugeRandomSource = gaugeRandom_.get()},
       std::move(ownership));
   if (!evaluated.submitReady) {
     lastDiagnostics_ = std::move(evaluated.diagnostics);

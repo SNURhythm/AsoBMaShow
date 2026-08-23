@@ -81,6 +81,7 @@ private:
   std::unique_ptr<LuaSkinRuntime> runtime_;
   std::unique_ptr<SkinResourceCatalog> resources_;
   std::unique_ptr<SkinMovieCatalog> movies_;
+  std::unique_ptr<ISkinGaugeRandomSource> gaugeRandom_;
   SkinSafetyPolicy safetyPolicy_{};
   ViewportSettings viewportSettings_{};
   Skin2DRenderer renderer_;

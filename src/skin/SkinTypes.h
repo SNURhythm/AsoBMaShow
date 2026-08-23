@@ -79,6 +79,7 @@ struct ResultSkinData {
   std::optional<std::vector<int>> replayLaneShufflePattern1P;
   std::optional<std::vector<int>> replayLaneShufflePattern2P;
   std::vector<ResultIrRankingEntryData> irRankingEntries;
+  std::optional<int> irCurrentUserRank;
   std::string chartMd5;
   std::string chartSha256;
   bool autoPlayResult = false;

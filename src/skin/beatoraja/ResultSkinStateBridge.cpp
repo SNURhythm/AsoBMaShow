@@ -753,6 +753,7 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
                          : (data_.presentation ? data_.presentation->comboBreak
                                                : std::nullopt);
     case 179:
+      if (data_.irCurrentUserRank) return data_.irCurrentUserRank;
       for (const auto &entry : data_.irRankingEntries) {
         if (entry.currentUser) return entry.rank;
       }
