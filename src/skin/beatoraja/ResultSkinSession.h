@@ -12,6 +12,7 @@
 
 #include <chrono>
 #include <memory>
+#include <span>
 #include <stop_token>
 #include <unordered_map>
 #include <vector>
@@ -79,6 +80,8 @@ private:
                     std::shared_ptr<SkinLiveResourceCounters>,
                     SkinSafetyPolicy, ViewportSettings,
                     std::vector<std::string> preparedRuntimeStrings);
+  static LuaSkinEventExecutionResult executeHostEvent(
+      void *, int, std::span<const int>) noexcept;
 
   SkinRevisionLease revision_;
   SkinEntryId entry_;

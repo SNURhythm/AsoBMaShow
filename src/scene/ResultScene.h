@@ -321,6 +321,7 @@ private:
   void setResultPhotoExportPresentation(ResultPhotoExportPresentation);
   void handleResultSkinRenderFailure();
   void appendResultSkinRenderDiagnostics();
+  void consumeResultSkinBuiltinEvents();
   [[nodiscard]] bool queueResultSkinPointerEvent(SDL_Event &event);
   void buildCourseExitConfirmation();
   void showCourseExitConfirmation();

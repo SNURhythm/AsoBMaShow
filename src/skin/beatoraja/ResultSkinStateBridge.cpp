@@ -87,6 +87,23 @@ bool hasBeatorajaLaneAssignment(int option) {
   return option == 2 || option == 3 || option == 8;
 }
 
+int beatorajaClearTypeImageIndex(int rank) noexcept {
+  // Result image properties expose ClearType.id, not AsoBMaShow's durable
+  // clear-rank values. ClearType.getClearTypeByID falls back to NoPlay (0)
+  // for an unrecognized value, so preserve that upstream fallback here.
+  switch (rank) {
+  case kClearTypeFailedRank: return 1;
+  case kClearTypeAssistedEasyClearRank: return 2;
+  case kClearTypeLightAssistedEasyClearRank: return 3;
+  case kClearTypeEasyClearRank: return 4;
+  case kClearTypeNormalClearRank: return 5;
+  case kClearTypeHardClearRank: return 6;
+  case kClearTypeExHardClearRank: return 7;
+  case kClearTypeFullComboRank: return 8;
+  default: return 0;
+  }
+}
+
 SkinPropertyLookup<std::int64_t> resultLaneAssignment(
     const ResultSkinData &data, int player, int key) {
   const auto &option = player == 0 ? data.replayRandomOption1P
@@ -497,7 +514,8 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
                                                   : (data_.state ? std::optional<int>(
                                                         data_.state->getClearTypeRank())
                                                                  : std::nullopt));
-      return lamp ? supported<std::int64_t>(*lamp)
+      return lamp ? supported<std::int64_t>(
+                        beatorajaClearTypeImageIndex(*lamp))
                   : unsupported<std::int64_t>();
     }
     case 371: {
@@ -506,14 +524,14 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
                             : (data_.previousBest
                                    ? std::optional<int>(data_.previousBest->clearType)
                                    : std::optional<int>(kClearTypeFailedRank));
-      return supported<std::int64_t>(*lamp);
+      return supported<std::int64_t>(beatorajaClearTypeImageIndex(*lamp));
     }
     case 390: case 391: case 392: case 393: case 394:
     case 395: case 396: case 397: case 398: case 399: {
       const std::size_t index = static_cast<std::size_t>(*id - 390);
       return index < data_.irRankingEntries.size()
-                 ? supported<std::int64_t>(
-                       data_.irRankingEntries[index].clearType)
+                 ? supported<std::int64_t>(beatorajaClearTypeImageIndex(
+                       data_.irRankingEntries[index].clearType))
                  : unsupported<std::int64_t>();
     }
     default:

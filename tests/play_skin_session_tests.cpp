@@ -682,6 +682,7 @@ struct ActivationFixtureOptions {
   bool audioBearing = false;
   bool requireConfiguredState = false;
   bool requireResultConfiguredState = false;
+  bool resultEventExec = false;
   bool legacyInputBearing = false;
   bool repeatedPomyu = false;
   bool oversizedPomyuWithSibling = false;
@@ -987,6 +988,15 @@ if skin_config then
       {id = "pomyu-one", dst = {{x = 0, y = 0, w = 64, h = 64}}},
       {id = "pomyu-two", dst = {{x = 64, y = 0, w = 64, h = 64}}}
     }
+  }
+)lua";
+    } else if (options.resultEventExec) {
+      script += "\n  return { type = " +
+                std::to_string(options.skinType) + R"lua(, w = 1280, h = 720,
+    customTimers = {{id = 10000, timer = function()
+      assert(main_state.event_exec(210, 17, 23))
+      return 0
+    end}}
   }
 )lua";
     } else {
@@ -5012,6 +5022,21 @@ void testResultLuaSessionBindsMainStateDuringConfiguredLoad() {
          "application audio backend");
 }
 
+void testResultLuaSessionRoutesOpenIrEvent() {
+  ActivationFixture fixture({.skinType = 7, .resultEventExec = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  auto created = ResultSkinSession::create(fixture.takeActivation(),
+                                           fixture.resultContext());
+  RenderContext context;
+  expect(created.session != nullptr &&
+             created.session->render(context, {}, 1, 0) &&
+             created.session->takeQueuedBuiltinEventIds() ==
+                 std::vector<int>{210},
+         "result Lua main_state.event_exec routes open_ir through ResultScene");
+}
+
 void testResultSessionRefreshesForAsynchronousRankingNames() {
   ActivationFixture fixture(
       {.skinType = 7, .resourceBearing = true, .audioBearing = true});
@@ -5252,6 +5277,27 @@ void testResultBridgeUsesCapturedReplayImageIndexes() {
          "result image indexes use the immutable played gauge and replay options");
 }
 
+void testResultBridgeConvertsClearRanksToBeatorajaImageIndexes() {
+  ResultSkinStateBridge bridge({
+      .currentClearRankOverride = kClearTypeFullComboRank,
+      .previousLampBest = ResultPreviousBestData{
+          .clearType = kClearTypeEasyClearRank},
+  }, 1, 0);
+  const auto current = bridge.integerProperty(
+      {370}, SkinIntegerPropertyDomain::ImageIndex);
+  const auto previous = bridge.integerProperty(
+      {371}, SkinIntegerPropertyDomain::ImageIndex);
+  ResultSkinStateBridge failed({
+      .currentClearRankOverride = kClearTypeFailedRank,
+  }, 1, 0);
+  const auto failedCurrent = failed.integerProperty(
+      {370}, SkinIntegerPropertyDomain::ImageIndex);
+  expect(current.supported && current.value == 8 &&
+             previous.supported && previous.value == 4 &&
+             failedCurrent.supported && failedCurrent.value == 1,
+         "result clear image indexes use Beatoraja ClearType IDs");
+}
+
 void testResultBridgeProjectsIrRankingRows() {
   ResultSkinStateBridge bridge({
       .irRankingEntries = {{.rank = 1,
@@ -5273,7 +5319,7 @@ void testResultBridgeProjectsIrRankingRows() {
   expect(currentRank.supported && currentRank.value == 2 &&
              firstScore.supported && firstScore.value == 1998 &&
              secondRank.supported && secondRank.value == 2 &&
-             secondLamp.supported && secondLamp.value == kClearTypeHardClearRank &&
+             secondLamp.supported && secondLamp.value == 6 &&
              secondName.supported && secondName.value == "Current player",
          "result IR ranking properties use the active ranking snapshot");
 }
@@ -5557,6 +5603,7 @@ int main() {
   testSuccessfulGeometryChangesOnlyHitRevisionAndTeardownDiscardsState();
   testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin();
   testResultLuaSessionBindsMainStateDuringConfiguredLoad();
+  testResultLuaSessionRoutesOpenIrEvent();
   testResultSessionRefreshesForAsynchronousRankingNames();
   testResultSessionRefreshesForAllStringSelectors();
   testResultSessionRejectsConfiguredModelForAnotherResultTarget();
@@ -5565,6 +5612,7 @@ int main() {
   testResultBridgeMatchesBeatorajaResultScoreFamilies();
   testResultBridgeMatchesResultAliasesAndTimerUnits();
   testResultBridgeUsesCapturedReplayImageIndexes();
+  testResultBridgeConvertsClearRanksToBeatorajaImageIndexes();
   testResultBridgeProjectsIrRankingRows();
   testResultBridgeProjectsReplayLaneAssignments();
   testResultBridgeExposesPlayerHistoryProperties();

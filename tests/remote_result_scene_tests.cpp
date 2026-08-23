@@ -460,6 +460,21 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
                   "result font atlases include chart MD5 selector strings");
   requireContains(session, "data.chartSha256",
                   "result font atlases include chart SHA-256 selector strings");
+  requireContains(
+      session,
+      "LuaFrameStateBinding frameState(\n"
+      "      runtime_.get(), &bridge,\n"
+      "      {.context = this, .execute = &ResultSkinSession::executeHostEvent});",
+      "result Lua frames bind their supported ResultScene event executor");
+  requireContains(session, "runtime_->setEventExecutor(executor);",
+                  "result Lua frame binding installs its event executor");
+  requireContains(session, "runtime_->setEventExecutor({});",
+                  "result Lua frame teardown clears its event executor");
+  requireContains(result,
+                  "if (rendered) {\n"
+                  "      consumeResultSkinBuiltinEvents();\n"
+                  "    }",
+                  "successful result Lua frames dispatch queued built-in actions");
 }
 
 } // namespace

@@ -4039,10 +4039,17 @@ bool ResultScene::queueResultSkinPointerEvent(SDL_Event &event) {
     return false;
   }
   if (!resultSkinSession->queuePointerDown(point, nowMicros())) return false;
+  consumeResultSkinBuiltinEvents();
+  return true;
+#endif
+}
+
+void ResultScene::consumeResultSkinBuiltinEvents() {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (!resultSkinSession) return;
   for (const int eventId : resultSkinSession->takeQueuedBuiltinEventIds()) {
     if (eventId == 210) openRankings();
   }
-  return true;
 #endif
 }
 
@@ -4085,6 +4092,9 @@ void ResultScene::renderScene() {
     appendResultSkinRenderDiagnostics();
     if (!rendered) {
       handleResultSkinRenderFailure();
+    }
+    if (rendered) {
+      consumeResultSkinBuiltinEvents();
     }
   }
 #endif

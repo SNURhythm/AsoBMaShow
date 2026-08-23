@@ -3,6 +3,7 @@
 #include "BgfxSkinTextureDevice.h"
 #include "GameplaySkinSourceFormat.h"
 #include "LuaSkinFileSystem.h"
+#include "LuaSkinHostModules.h"
 #include "PlaySkinViewport.h"
 #include "../SkinTargetTraits.h"
 #include "../../rendering/SkinQuadBatchRenderer.h"
@@ -147,12 +148,19 @@ resultBuiltinImagePaths(const ResultSkinData &data) {
 
 class LuaFrameStateBinding final {
 public:
-  LuaFrameStateBinding(LuaSkinRuntime *runtime, ISkinFrameState *state)
+  LuaFrameStateBinding(LuaSkinRuntime *runtime, ISkinFrameState *state,
+                       LuaSkinEventExecutor executor = {})
       : runtime_(runtime) {
-    if (runtime_ != nullptr) runtime_->setFrameState(state);
+    if (runtime_ != nullptr) {
+      runtime_->setFrameState(state);
+      runtime_->setEventExecutor(executor);
+    }
   }
   ~LuaFrameStateBinding() {
-    if (runtime_ != nullptr) runtime_->setFrameState(nullptr);
+    if (runtime_ != nullptr) {
+      runtime_->setEventExecutor({});
+      runtime_->setFrameState(nullptr);
+    }
   }
 
 private:
@@ -358,7 +366,9 @@ bool ResultSkinSession::render(RenderContext &renderContext,
   skinData.skinAuthor = model_.model.header.author;
   ResultSkinStateBridge bridge(std::move(skinData), frameSerial, elapsedMillis,
                                &configuration_, &model_.model);
-  LuaFrameStateBinding frameState(runtime_.get(), &bridge);
+  LuaFrameStateBinding frameState(
+      runtime_.get(), &bridge,
+      {.context = this, .execute = &ResultSkinSession::executeHostEvent});
   const auto &header = model_.model.header;
   const auto viewport = evaluatePlaySkinViewport(
       {.width = static_cast<double>(header.width),
@@ -520,6 +530,36 @@ std::vector<SkinDiagnostic> ResultSkinSession::takeLastDiagnostics() {
 
 std::vector<int> ResultSkinSession::takeQueuedBuiltinEventIds() {
   return std::exchange(queuedBuiltinEventIds_, {});
+}
+
+LuaSkinEventExecutionResult ResultSkinSession::executeHostEvent(
+    void *opaque, int eventId, std::span<const int>) noexcept {
+  if (opaque == nullptr) {
+    return {.failure = SkinDiagnostic{
+                .code = "skin_lua_event_executor_unavailable",
+                .message = "Skin event executor has no active result session."}};
+  }
+  if (eventId != 210) {
+    return {.failure = SkinDiagnostic{
+                .code = "skin_lua_event_unsupported",
+                .message = "This result skin event is not supported."}};
+  }
+  auto &session = *static_cast<ResultSkinSession *>(opaque);
+  if (session.queuedBuiltinEventIds_.size() >= 64) {
+    return {.failure = SkinDiagnostic{
+                .code = "skin.result_session.event_queue_full",
+                .message = "Result skin event queue reached its frame limit."}};
+  }
+  try {
+    // Beatoraja's zero-argument open_ir Event ignores supplied arguments.
+    // Route its result equivalent through ResultScene after this frame.
+    session.queuedBuiltinEventIds_.push_back(eventId);
+    return {};
+  } catch (...) {
+    return {.failure = SkinDiagnostic{
+                .code = "skin_lua_event_execution_failed",
+                .message = "Result skin event could not be queued."}};
+  }
 }
 
 bool ResultSkinSession::requiresRuntimeStringRefresh(
