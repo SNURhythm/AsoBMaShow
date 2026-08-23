@@ -28,6 +28,7 @@
 #include "ResultGaugeHistory.h"
 #include "ResultSkinApplicationOverlays.h"
 #include "ResultSkinLayering.h"
+#include "ResultPhotoExportPresentation.h"
 #include "ResultTouchControls.h"
 
 #include "../rendering/Color.h"
@@ -1828,6 +1829,9 @@ void ResultScene::buildResultTouchControls() {
     text->setAlign(TextView::CENTER);
     text->setVAlign(TextView::MIDDLE);
     text->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+    if (action == ResultTouchControlAction::ExportPhoto) {
+      resultTouchExportPhotoText = text;
+    }
     button->setContentView(text);
     button->setSize(142, 48);
     button->setCornerRadius(ui_theme::controlRadius());
@@ -2335,8 +2339,7 @@ bool ResultScene::recordCourseStageRestTime() {
 void ResultScene::exportPhoto() {
   const auto *local = localSource();
   const auto *remote = remoteSource();
-  if ((local != nullptr && local->autoPlayResult) ||
-      resultPhotoExportInProgress || exportPhotoButtonText == nullptr) {
+  if ((local != nullptr && local->autoPlayResult) || resultPhotoExportInProgress) {
     return;
   }
 
@@ -2345,7 +2348,7 @@ void ResultScene::exportPhoto() {
   }
 
   resultPhotoExportInProgress = true;
-  exportPhotoButtonText->setText("Saving...");
+  setResultPhotoExportPresentation(ResultPhotoExportPresentation::Saving);
   ResultImageExportResult result;
   if (remote != nullptr) {
     result = ResultImageExporter::Export(context, remote->presentation);
@@ -2363,12 +2366,11 @@ void ResultScene::exportPhoto() {
   resultPhotoExportInProgress = false;
 
   if (result.success) {
-    exportPhotoButtonText->setText(
-        result.message == "Saved to Photos" ? "Saved" : "Exported");
+    setResultPhotoExportPresentation(ResultPhotoExportPresentation::Saved);
     SDL_Log("Result image exported: %s (%s)",
             fspath_to_utf8(result.outputPath).c_str(), result.message.c_str());
   } else {
-    exportPhotoButtonText->setText("Export Failed");
+    setResultPhotoExportPresentation(ResultPhotoExportPresentation::Failed);
     SDL_Log("Result image export failed: %s (%s)", result.message.c_str(),
             fspath_to_utf8(result.outputPath).c_str());
   }
@@ -2378,8 +2380,8 @@ void ResultScene::exportPhoto() {
 
   defer(
       [this]() {
-        if (!resultPhotoExportInProgress && exportPhotoButtonText != nullptr) {
-          exportPhotoButtonText->setText("Export Photo");
+        if (!resultPhotoExportInProgress) {
+          setResultPhotoExportPresentation(ResultPhotoExportPresentation::Ready);
           if (rootLayout != nullptr) {
             rootLayout->applyYogaLayout();
           }
@@ -2387,6 +2389,17 @@ void ResultScene::exportPhoto() {
         return true;
       },
       result.success ? 1800 : 1400, true);
+}
+
+void ResultScene::setResultPhotoExportPresentation(
+    ResultPhotoExportPresentation presentation) {
+  const std::string label(resultPhotoExportLabel(presentation));
+  if (exportPhotoButtonText != nullptr) {
+    exportPhotoButtonText->setText(label);
+  }
+  if (resultTouchExportPhotoText != nullptr) {
+    resultTouchExportPhotoText->setText(label);
+  }
 }
 
 void ResultScene::continueCourse() {

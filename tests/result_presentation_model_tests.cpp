@@ -1,4 +1,5 @@
 #include "scene/ResultPresentationModel.h"
+#include "scene/ResultPhotoExportPresentation.h"
 #include "scene/ResultSkinApplicationOverlays.h"
 #include "scene/ResultSkinLayering.h"
 #include "scene/ResultTouchControls.h"
@@ -1130,6 +1131,18 @@ void testSelectedResultSkinKeepsRequiredApplicationOverlays() {
              !savedCourse.buildsCourseExitConfirmation,
          "saved course browsing does not add application recovery overlays");
 }
+
+void testResultPhotoExportLabelsDoNotRequireNativeButton() {
+  expect(resultPhotoExportLabel(ResultPhotoExportPresentation::Ready) ==
+             "Export Photo" &&
+             resultPhotoExportLabel(ResultPhotoExportPresentation::Saving) ==
+                 "Saving..." &&
+             resultPhotoExportLabel(ResultPhotoExportPresentation::Saved) ==
+                 "Saved" &&
+             resultPhotoExportLabel(ResultPhotoExportPresentation::Failed) ==
+                 "Export Failed",
+         "touch and native export controls share export status labels");
+}
 } // namespace
 
 int main() {
@@ -1163,6 +1176,7 @@ int main() {
   testResultTouchControlsHideAndRestorePresentation();
   testSelectedResultSkinDefersRootOverlaysUntilAfterSkin();
   testSelectedResultSkinKeepsRequiredApplicationOverlays();
+  testResultPhotoExportLabelsDoNotRequireNativeButton();
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::shutdown();
   if (failures != 0) {

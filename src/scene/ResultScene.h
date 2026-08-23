@@ -1,4 +1,6 @@
 #pragma once
+
+#include "ResultPhotoExportPresentation.h"
 #include "../CanonicalDigest.h"
 #include "../ReplayData.h"
 #include "../ResultPersistenceCoordinator.h"
@@ -304,6 +306,7 @@ private:
   void addCourseButtons();
   void buildResultTouchControls();
   void setResultTouchControlsHidden(bool hidden);
+  void setResultPhotoExportPresentation(ResultPhotoExportPresentation);
   void buildCourseExitConfirmation();
   void showCourseExitConfirmation();
   void hideCourseExitConfirmation();
@@ -373,6 +376,7 @@ private:
   View *courseExitConfirmation = nullptr;
   Button *exportPhotoButton = nullptr;
   TextView *exportPhotoButtonText = nullptr;
+  TextView *resultTouchExportPhotoText = nullptr;
   Button *practiceSectionButton = nullptr;
   TextView *practiceSectionButtonText = nullptr;
   std::unique_ptr<ISkin> skin;
