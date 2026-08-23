@@ -394,6 +394,27 @@ struct CoursePlaySession {
     return validCurrentIndex() ? &entries[currentIndex].meta : nullptr;
   }
 
+  [[nodiscard]] const ScoreProvenance *
+  currentOrLastCompletedStageProvenance() const {
+    const auto provenanceAt = [this](std::size_t index) {
+      return index < completedResults.size() && index < stageProvenance.size() &&
+                     stageProvenance[index].has_value()
+                 ? &*stageProvenance[index]
+                 : static_cast<const ScoreProvenance *>(nullptr);
+    };
+    if (const auto *current = provenanceAt(currentIndex); current != nullptr) {
+      return current;
+    }
+    const std::size_t completed =
+        std::min(completedResults.size(), stageProvenance.size());
+    for (std::size_t index = completed; index > 0; --index) {
+      if (const auto *last = provenanceAt(index - 1); last != nullptr) {
+        return last;
+      }
+    }
+    return nullptr;
+  }
+
   [[nodiscard]] bool hasCourseReplayStage(std::size_t index) const {
     return courseReplayData != nullptr &&
            index < courseReplayData->stages.size();

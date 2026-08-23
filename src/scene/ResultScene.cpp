@@ -1188,23 +1188,47 @@ ResultSkinData ResultScene::makeResultSkinData() const {
     }
   } else if (isCourseFinalResult() && local->courseOptions.session != nullptr) {
     const auto &session = *local->courseOptions.session;
+    const bool hasReplayBackedSetup =
+        session.playOption.has_value() || session.playOptionSeed.has_value() ||
+        session.playOption2.has_value() || session.playOption2Seed.has_value();
+    const ScoreProvenance *stageProvenance =
+        hasReplayBackedSetup
+            ? nullptr
+            : session.currentOrLastCompletedStageProvenance();
+    const std::optional<std::string> player1Option =
+        stageProvenance == nullptr
+            ? session.playOption
+            : std::optional<std::string>{stageProvenance->player1.option};
+    const std::optional<long long> player1Seed =
+        stageProvenance == nullptr ? session.playOptionSeed
+                                   : stageProvenance->player1.seed;
+    const std::optional<std::string> player2Option =
+        stageProvenance == nullptr
+            ? session.playOption2
+            : std::optional<std::string>{stageProvenance->player2.option};
+    const std::optional<long long> player2Seed =
+        stageProvenance == nullptr ? session.playOption2Seed
+                                   : stageProvenance->player2.seed;
     data.replayRandomOption1P = replay::projectedBeatorajaReplayOptionIndex(
-        session.playOption.value_or("NORMAL"));
+        player1Option.value_or("NORMAL"));
     data.replayDoublePlayOption =
-        local->attemptProvenance.doublePlayFlip ? 1 : 0;
+        (stageProvenance == nullptr ? local->attemptProvenance.doublePlayFlip
+                                    : stageProvenance->doublePlayFlip)
+            ? 1
+            : 0;
     if (const auto *currentMeta = session.currentMeta(); currentMeta != nullptr) {
       data.replayKeyMode = currentMeta->KeyMode;
       data.keyModeOverride = currentMeta->KeyMode;
       if (currentMeta->IsDP) {
         data.replayRandomOption2P =
             replay::projectedBeatorajaReplayOptionIndex(
-                session.playOption2.value_or("NORMAL"));
+                player2Option.value_or("NORMAL"));
       }
       data.replayLaneShufflePattern1P = resultReplayLanePattern(
-          *currentMeta, session.playOption, session.playOptionSeed, 0);
+          *currentMeta, player1Option, player1Seed, 0);
       if (currentMeta->IsDP) {
         data.replayLaneShufflePattern2P = resultReplayLanePattern(
-            *currentMeta, session.playOption2, session.playOption2Seed, 1);
+            *currentMeta, player2Option, player2Seed, 1);
       }
     }
   }

@@ -295,6 +295,37 @@ void testOverlongLiveRestDropsOnlyReplayAttachment() {
          "live gauge and combo state remain available for the next stage");
 }
 
+void testResultSkinUsesCurrentOrLastCompletedStageProvenance() {
+  CoursePlaySession session;
+  session.entries.resize(3);
+  session.completedResults.emplace_back(bms_parser::ChartMeta{},
+                                        RhythmState(nullptr, false));
+  session.completedResults.emplace_back(bms_parser::ChartMeta{},
+                                        RhythmState(nullptr, false));
+
+  ScoreProvenance first = ScoreProvenance::Legacy();
+  first.player1.option = "RANDOM";
+  first.player1.seed = 123;
+  ScoreProvenance last = ScoreProvenance::Legacy();
+  last.player1.option = "S-RANDOM";
+  last.player1.seed = 456;
+  session.recordStageProvenance(0, first);
+  session.recordStageProvenance(1, last);
+
+  session.currentIndex = 2;
+  const ScoreProvenance *recovered =
+      session.currentOrLastCompletedStageProvenance();
+  expect(recovered != nullptr && recovered->player1.option == "S-RANDOM" &&
+             recovered->player1.seed == 456,
+         "course final results recover the last completed stage setup");
+
+  session.currentIndex = 0;
+  recovered = session.currentOrLastCompletedStageProvenance();
+  expect(recovered != nullptr && recovered->player1.option == "RANDOM" &&
+             recovered->player1.seed == 123,
+         "course results prefer the current completed stage setup");
+}
+
 #endif
 
 } // namespace
@@ -308,6 +339,7 @@ int main() {
   testScoreOverflowAndCompletedCourseCannotAdvance();
   testCompletedStageRestUsesTheSameValidatedStateTransition();
   testOverlongLiveRestDropsOnlyReplayAttachment();
+  testResultSkinUsesCurrentOrLastCompletedStageProvenance();
 #else
   expect(false, "CourseContinuation contract is not implemented");
 #endif
