@@ -952,6 +952,14 @@ bool ResultSkinSession::queuePointerMove(const PresentationUiHit &capturedHit,
   return invocation && queueWriterInvocation(*invocation);
 }
 
+int ResultSkinSession::sceneMillis() const noexcept {
+  return model_.model.timing.sceneMillis;
+}
+
+int ResultSkinSession::fadeoutMillis() const noexcept {
+  return model_.model.timing.fadeoutMillis;
+}
+
 const SkinEntryId &ResultSkinSession::entry() const noexcept { return entry_; }
 
 } // namespace skin

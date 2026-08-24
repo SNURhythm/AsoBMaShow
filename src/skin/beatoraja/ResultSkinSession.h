@@ -81,6 +81,8 @@ public:
                                       PresentationUiHit *capturedHit = nullptr);
   [[nodiscard]] bool queuePointerMove(const PresentationUiHit &, UiLogicalPoint,
                                       long long eventMicros);
+  [[nodiscard]] int sceneMillis() const noexcept;
+  [[nodiscard]] int fadeoutMillis() const noexcept;
   [[nodiscard]] const SkinEntryId &entry() const noexcept;
 
 private:

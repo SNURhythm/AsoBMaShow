@@ -578,6 +578,25 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
       "  updateSkinGameplayGraph(finalGameplayTimeMicros);\n\n"
       "  SDL_Log(\"Active survival gauge failed\");",
       "survival failure publishes the terminal gauge before result capture");
+  requireContains(session, "int ResultSkinSession::sceneMillis() const noexcept",
+                  "result skin sessions expose their authored scene duration");
+  requireContains(session,
+                  "int ResultSkinSession::fadeoutMillis() const noexcept",
+                  "result skin sessions expose their authored fadeout duration");
+  requireContains(
+      result,
+      "if (!resultSkinFadeoutStartedMillis) {\n"
+      "        resultSkinFadeoutStartedMillis = elapsedMillis;\n"
+      "      } else if (elapsedMillis - *resultSkinFadeoutStartedMillis >\n"
+      "                 resultSkinSession->fadeoutMillis()) {\n"
+      "        if (isCourseStageResult()) {\n"
+      "          continueCourse();\n"
+      "        } else {\n"
+      "          exitResult();\n"
+      "        }\n"
+      "        return;\n"
+      "      }",
+      "finite result scenes preserve Beatoraja's fadeout before the next lifecycle");
   requireOrdered(session,
                  "auto queuedWriters = std::exchange(queuedWriterInvocations_, {});",
                  "for (std::size_t timerIndex = 0;",

@@ -2539,6 +2539,7 @@ void ResultScene::handleResultSkinRenderFailure() {
   SDL_Log(renderFailed ? "Result skin rendering failed; restoring application controls."
                        : "Result skin could not start; showing application controls.");
   resultSkinSession.reset();
+  resultSkinFadeoutStartedMillis.reset();
   resultSkinMouseCapture.reset();
   resultSkinTouchCaptures.clear();
   const auto presentation = makeResultSkinFailurePresentation(true);
@@ -4287,6 +4288,11 @@ void ResultScene::consumeResultSkinBuiltinEvents() {
 }
 
 EventHandleResult ResultScene::handleEvents(SDL_Event &event) {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (resultSkinFadeoutStartedMillis) {
+    return {};
+  }
+#endif
   // Result overlays and touch controls are rendered above a selected skin and
   // must receive the corresponding pointer event first.
   const bool resultSkinPointerContinuation =
@@ -4325,6 +4331,19 @@ void ResultScene::renderScene() {
     }
     const long long elapsedMillis =
         std::max(0LL, (nowMicros() - resultSkinStartedMicros) / 1000LL);
+    if (elapsedMillis > resultSkinSession->sceneMillis()) {
+      if (!resultSkinFadeoutStartedMillis) {
+        resultSkinFadeoutStartedMillis = elapsedMillis;
+      } else if (elapsedMillis - *resultSkinFadeoutStartedMillis >
+                 resultSkinSession->fadeoutMillis()) {
+        if (isCourseStageResult()) {
+          continueCourse();
+        } else {
+          exitResult();
+        }
+        return;
+      }
+    }
     const bool rendered = resultSkinSession->render(
         renderContext, skinData,
         std::max<std::uint64_t>(1, context.currentFrame), elapsedMillis);
@@ -4350,6 +4369,7 @@ void ResultScene::renderScene() {
 void ResultScene::cleanupScene() {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   resultSkinSession.reset();
+  resultSkinFadeoutStartedMillis.reset();
   resultSkinMouseCapture.reset();
   resultSkinTouchCaptures.clear();
 #endif

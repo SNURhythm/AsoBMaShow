@@ -374,6 +374,7 @@ private:
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   std::unique_ptr<skin::ResultSkinSession> resultSkinSession;
   long long resultSkinStartedMicros = 0;
+  std::optional<long long> resultSkinFadeoutStartedMillis;
   std::optional<PresentationUiHit> resultSkinMouseCapture;
   std::unordered_map<SDL_FingerID, PresentationUiHit> resultSkinTouchCaptures;
   skin::SkinEntryId resultSkinEntry;

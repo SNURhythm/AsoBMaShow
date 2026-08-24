@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <limits>
 #include <utility>
+#include <vector>
 
 namespace {
 void advanceRevision(std::uint64_t &value) noexcept {
@@ -48,6 +49,8 @@ SkinGameplayGraphState
 combineSkinGameplayGraphStates(std::span<const SkinGameplayGraphState> stages) {
   auto chart = std::make_shared<SkinGameplayChartGraphState>();
   auto dynamic = std::make_shared<SkinGameplayDynamicGraphState>();
+  std::vector<std::int64_t> recentJudgeTimings;
+  recentJudgeTimings.reserve(kSkinRecentJudgeTimingCapacity);
   bool hasGraph = false;
   std::int64_t chartTimeOffset = 0;
   for (const auto &stage : stages) {
@@ -57,6 +60,10 @@ combineSkinGameplayGraphStates(std::span<const SkinGameplayGraphState> stages) {
     hasGraph = true;
     const auto &stageChart = *stage.chart;
     const auto &stageDynamic = *stage.dynamic;
+    if (!chart->normalDistribution.empty() &&
+        !stageChart.normalDistribution.empty()) {
+      chart->normalDistribution.pop_back();
+    }
     chart->normalDistribution.insert(chart->normalDistribution.end(),
                                      stageChart.normalDistribution.begin(),
                                      stageChart.normalDistribution.end());
@@ -95,8 +102,21 @@ combineSkinGameplayGraphStates(std::span<const SkinGameplayGraphState> stages) {
       dynamic->gaugeHistories[index].insert(
           dynamic->gaugeHistories[index].end(), history.begin(), history.end());
     }
-    dynamic->recentJudgeTimingsMillis = stageDynamic.recentJudgeTimingsMillis;
-    dynamic->recentJudgeTimingIndex = stageDynamic.recentJudgeTimingIndex;
+    for (std::size_t offset = 1;
+         offset <= stageDynamic.recentJudgeTimingsMillis.size(); ++offset) {
+      const std::size_t index =
+          (stageDynamic.recentJudgeTimingIndex + offset) %
+          stageDynamic.recentJudgeTimingsMillis.size();
+      const std::int64_t timing = stageDynamic.recentJudgeTimingsMillis[index];
+      if (timing != kSkinEmptyJudgeTimingMillis) {
+        recentJudgeTimings.push_back(timing);
+      }
+    }
+    if (recentJudgeTimings.size() > kSkinRecentJudgeTimingCapacity) {
+      recentJudgeTimings.erase(
+          recentJudgeTimings.begin(),
+          recentJudgeTimings.end() - kSkinRecentJudgeTimingCapacity);
+    }
     dynamic->judgeWindows = stageDynamic.judgeWindows;
     dynamic->gaugeType = stageDynamic.gaugeType;
     dynamic->gaugeMinimum = stageDynamic.gaugeMinimum;
@@ -107,6 +127,12 @@ combineSkinGameplayGraphStates(std::span<const SkinGameplayGraphState> stages) {
     dynamic->gaugeRevision += stageDynamic.gaugeRevision;
     chartTimeOffset += static_cast<std::int64_t>(
         stageChart.judgementDistributionSeconds) * 1'000'000LL;
+  }
+  for (const std::int64_t timing : recentJudgeTimings) {
+    dynamic->recentJudgeTimingIndex =
+        (dynamic->recentJudgeTimingIndex + 1) %
+        dynamic->recentJudgeTimingsMillis.size();
+    dynamic->recentJudgeTimingsMillis[dynamic->recentJudgeTimingIndex] = timing;
   }
   return hasGraph ? SkinGameplayGraphState{.chart = std::move(chart),
                                             .dynamic = std::move(dynamic)}

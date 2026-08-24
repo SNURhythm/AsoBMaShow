@@ -183,7 +183,7 @@ int main() {
       combineSkinGameplayGraphStates(replayCourseGraphs);
   if (replayCourseGraph.chart == nullptr || replayCourseGraph.dynamic == nullptr ||
       replayCourseGraph.chart->normalDistribution.size() !=
-          replayGraph.chart->normalDistribution.size() * 2 ||
+          replayGraph.chart->normalDistribution.size() * 2 - 1 ||
       replayCourseGraph.dynamic->judgementDistribution.size() !=
           replayGraph.dynamic->judgementDistribution.size() * 2 ||
       replayCourseGraph.dynamic
@@ -194,7 +194,12 @@ int main() {
                   ->gaugeHistories[static_cast<std::size_t>(
                       gaugeTypeIndex(GaugeType::Normal))]
                   .size() *
-              2) {
+              2 ||
+      replayCourseGraph.dynamic->recentJudgeTimingIndex != 4 ||
+      replayCourseGraph.dynamic->recentJudgeTimingsMillis[1] != 4 ||
+      replayCourseGraph.dynamic->recentJudgeTimingsMillis[2] != -5 ||
+      replayCourseGraph.dynamic->recentJudgeTimingsMillis[3] != 4 ||
+      replayCourseGraph.dynamic->recentJudgeTimingsMillis[4] != -5) {
     std::cerr << "course replay graph must concatenate the stage graph data"
               << std::endl;
     return 1;
