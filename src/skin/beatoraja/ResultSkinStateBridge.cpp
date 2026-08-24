@@ -474,16 +474,16 @@ SkinPropertyLookup<bool> ResultSkinStateBridge::booleanProperty(
                                              : *currentScore == data_.pacemaker->targetScore);
   }
   if (*id == 190 || *id == 191) {
-    const bool stageFile = data_.meta != nullptr && !data_.meta->StageFile.empty();
-    return supported(*id == 191 ? stageFile : !stageFile);
+    return supported(*id == 191 ? data_.stageFileAvailable
+                                : !data_.stageFileAvailable);
   }
   if (*id == 192 || *id == 193) {
-    const bool banner = data_.meta != nullptr && !data_.meta->Banner.empty();
-    return supported(*id == 193 ? banner : !banner);
+    return supported(*id == 193 ? data_.bannerAvailable
+                                : !data_.bannerAvailable);
   }
   if (*id == 194 || *id == 195) {
-    const bool backBmp = data_.meta != nullptr && !data_.meta->BackBmp.empty();
-    return supported(*id == 195 ? backBmp : !backBmp);
+    return supported(*id == 195 ? data_.backBmpAvailable
+                                : !data_.backBmpAvailable);
   }
   if (*id == 90 || *id == 91) {
     const auto lamp = data_.currentClearRankOverride

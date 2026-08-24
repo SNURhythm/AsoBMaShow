@@ -2539,6 +2539,8 @@ void ResultScene::handleResultSkinRenderFailure() {
   SDL_Log(renderFailed ? "Result skin rendering failed; restoring application controls."
                        : "Result skin could not start; showing application controls.");
   resultSkinSession.reset();
+  resultSkinMouseCapture.reset();
+  resultSkinTouchCaptures.clear();
   const auto presentation = makeResultSkinFailurePresentation(true);
   if (presentation.restoreTouchControls) {
     setResultTouchControlsHidden(false);
@@ -4173,6 +4175,9 @@ bool ResultScene::queueResultSkinPointerEvent(SDL_Event &event) {
 #else
   if (!resultSkinSession) return false;
   UiLogicalPoint point;
+  const long long eventMicros = resultSkinStartedMicros == 0
+                                    ? 0
+                                    : std::max(0LL, nowMicros() - resultSkinStartedMicros);
   switch (event.type) {
   case SDL_MOUSEBUTTONDOWN:
     if (event.button.button != SDL_BUTTON_LEFT ||
@@ -4183,17 +4188,60 @@ bool ResultScene::queueResultSkinPointerEvent(SDL_Event &event) {
                           event.button.y * rendering::heightScale,
                           point.x, point.y);
     break;
+  case SDL_MOUSEMOTION:
+    if (event.motion.which == SDL_TOUCH_MOUSEID || !resultSkinMouseCapture) {
+      return false;
+    }
+    rendering::screenToUi(event.motion.x * rendering::widthScale,
+                          event.motion.y * rendering::heightScale,
+                          point.x, point.y);
+    (void)resultSkinSession->queuePointerMove(*resultSkinMouseCapture, point,
+                                              eventMicros);
+    consumeResultSkinBuiltinEvents();
+    return true;
+  case SDL_MOUSEBUTTONUP:
+    if (event.button.button != SDL_BUTTON_LEFT ||
+        event.button.which == SDL_TOUCH_MOUSEID || !resultSkinMouseCapture) {
+      return false;
+    }
+    resultSkinMouseCapture.reset();
+    return true;
   case SDL_FINGERDOWN:
     rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, point.x,
                               point.y);
     break;
+  case SDL_FINGERMOTION: {
+    const auto capture = resultSkinTouchCaptures.find(event.tfinger.fingerId);
+    if (capture == resultSkinTouchCaptures.end()) {
+      return false;
+    }
+    rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, point.x,
+                              point.y);
+    (void)resultSkinSession->queuePointerMove(capture->second, point,
+                                              eventMicros);
+    consumeResultSkinBuiltinEvents();
+    return true;
+  }
+  case SDL_FINGERUP:
+    if (resultSkinTouchCaptures.erase(event.tfinger.fingerId) == 0) {
+      return false;
+    }
+    return true;
   default:
     return false;
   }
-  const long long eventMicros = resultSkinStartedMicros == 0
-                                    ? 0
-                                    : std::max(0LL, nowMicros() - resultSkinStartedMicros);
-  if (!resultSkinSession->queuePointerDown(point, eventMicros)) return false;
+  PresentationUiHit hit;
+  if (!resultSkinSession->queuePointerDown(point, eventMicros, &hit)) {
+    return false;
+  }
+  if (hit.kind == PresentationUiControlKind::Slider ||
+      hit.kind == PresentationUiControlKind::LaneCover) {
+    if (event.type == SDL_MOUSEBUTTONDOWN) {
+      resultSkinMouseCapture = hit;
+    } else {
+      resultSkinTouchCaptures.insert_or_assign(event.tfinger.fingerId, hit);
+    }
+  }
   consumeResultSkinBuiltinEvents();
   return true;
 #endif
@@ -4241,6 +4289,12 @@ void ResultScene::consumeResultSkinBuiltinEvents() {
 EventHandleResult ResultScene::handleEvents(SDL_Event &event) {
   // Result overlays and touch controls are rendered above a selected skin and
   // must receive the corresponding pointer event first.
+  const bool resultSkinPointerContinuation =
+      event.type == SDL_MOUSEMOTION || event.type == SDL_MOUSEBUTTONUP ||
+      event.type == SDL_FINGERMOTION || event.type == SDL_FINGERUP;
+  if (resultSkinPointerContinuation && queueResultSkinPointerEvent(event)) {
+    return {};
+  }
   if (rootLayout != nullptr && !rootLayout->handleEvents(event)) return {};
   if (queueResultSkinPointerEvent(event)) return {};
   return {};
@@ -4296,6 +4350,8 @@ void ResultScene::renderScene() {
 void ResultScene::cleanupScene() {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   resultSkinSession.reset();
+  resultSkinMouseCapture.reset();
+  resultSkinTouchCaptures.clear();
 #endif
   rankingsModal.reset();
   rootLayout = nullptr;

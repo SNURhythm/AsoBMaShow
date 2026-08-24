@@ -5537,6 +5537,10 @@ bool GamePlayScene::finishIfGaugeFailed() {
     return false;
   }
 
+  const long long finalGameplayTimeMicros =
+      getGameplayTimeMicros(context.jukebox.getTimeMicros());
+  updateSkinGameplayGraph(finalGameplayTimeMicros);
+
   SDL_Log("Active survival gauge failed");
   state->isEnding = true;
   context.jukebox.stop();

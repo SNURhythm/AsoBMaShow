@@ -1748,10 +1748,18 @@ PresentationTouchResult PlaySkinSession::updatePresentationTouch(
       captures_, [&](const TouchCapture &candidate) {
         return candidate.active && candidate.pointerId == event.pointerId;
       });
-  return capture != captures_.end() && capture->hit == event.hit
-             ? PresentationTouchResult{.consumed = true,
-                                       .excludeFromGameplay = true}
-             : PresentationTouchResult{};
+  if (capture == captures_.end() || capture->hit != event.hit) {
+    return {};
+  }
+  if ((capture->hit.kind == PresentationUiControlKind::Slider ||
+       capture->hit.kind == PresentationUiControlKind::LaneCover) &&
+      publishedLayout_.has_value()) {
+    if (const auto writerInvocation = publishedLayout_->writerInvocationFor(
+            capture->hit, event.uiPoint, event.eventMicros)) {
+      (void)enqueueInteraction(*writerInvocation);
+    }
+  }
+  return {.consumed = true, .excludeFromGameplay = true};
 }
 
 PresentationTouchResult PlaySkinSession::endPresentationTouch(

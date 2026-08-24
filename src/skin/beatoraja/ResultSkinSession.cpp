@@ -398,6 +398,9 @@ bool ResultSkinSession::render(RenderContext &renderContext,
   ResultSkinData skinData = data;
   skinData.skinName = model_.model.header.name;
   skinData.skinAuthor = model_.model.header.author;
+  skinData.stageFileAvailable = resources_->builtinImageResource(100).has_value();
+  skinData.bannerAvailable = resources_->builtinImageResource(102).has_value();
+  skinData.backBmpAvailable = resources_->builtinImageResource(101).has_value();
   ResultSkinStateBridge bridge(std::move(skinData), frameSerial, elapsedMillis,
                                &configuration_, &model_.model);
   LuaFrameStateBinding frameState(
@@ -902,7 +905,8 @@ bool ResultSkinSession::refreshRuntimeStrings(const ResultSkinData &data) {
 }
 
 bool ResultSkinSession::queuePointerDown(UiLogicalPoint point,
-                                         long long eventMicros) {
+                                         long long eventMicros,
+                                         PresentationUiHit *capturedHit) {
   if (!resultSkinInputAvailable(model_.model.timing.inputMillis, eventMicros) ||
       !publishedInteractionLayout_ ||
       queuedEventInvocations_.size() + queuedBuiltinEventIds_.size() +
@@ -928,6 +932,23 @@ bool ResultSkinSession::queuePointerDown(UiLogicalPoint point,
   }
   const auto invocation = publishedInteractionLayout_->writerInvocationFor(
       hit, point, eventMicros);
+  if (!invocation || !queueWriterInvocation(*invocation)) {
+    return false;
+  }
+  if (capturedHit != nullptr) {
+    *capturedHit = hit;
+  }
+  return true;
+}
+
+bool ResultSkinSession::queuePointerMove(const PresentationUiHit &capturedHit,
+                                         UiLogicalPoint point,
+                                         long long eventMicros) {
+  if (!publishedInteractionLayout_) {
+    return false;
+  }
+  const auto invocation = publishedInteractionLayout_->writerInvocationFor(
+      capturedHit, point, eventMicros);
   return invocation && queueWriterInvocation(*invocation);
 }
 

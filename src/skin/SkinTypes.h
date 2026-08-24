@@ -52,6 +52,12 @@ struct ResultSkinData {
   const bms_parser::ChartMeta *meta;
   ApplicationContext *context;
   bool irOnline = false;
+  // Result artwork selectors describe textures that the selected skin can
+  // actually draw. A nonempty chart declaration alone is insufficient when
+  // the file cannot be read or decoded during result-resource preparation.
+  bool stageFileAvailable = false;
+  bool bannerAvailable = false;
+  bool backBmpAvailable = false;
   View **outGraphPlaceholder = nullptr;
   bool showControls = true;
   bool showTimingAnalytics = false;

@@ -2743,6 +2743,18 @@ return {
   writer_a = function(value)
     captured_main_state.event_exec(900, math.floor(value * 100 + 0.5))
   end,
+  writer_drag = function(value)
+    _G.session_writer_drag_values =
+      (rawget(_G, "session_writer_drag_values") or "") ..
+      math.floor(value * 100 + 0.5) .. ","
+    captured_main_state.event_exec(900, math.floor(value * 100 + 0.5))
+  end,
+  writer_drag_value = function()
+    return 0.5
+  end,
+  writer_drag_values = function()
+    return rawget(_G, "session_writer_drag_values") or ""
+  end,
   writer_b = function(value)
     captured_main_state.event_exec(901, math.floor(value * 100 + 0.5))
   end,
@@ -2853,6 +2865,9 @@ return {
       return;
     }
     writerA_ = header.value->callbackNamed("writer_a");
+    writerDrag_ = header.value->callbackNamed("writer_drag");
+    writerDragValue_ = header.value->callbackNamed("writer_drag_value");
+    writerDragValues_ = header.value->callbackNamed("writer_drag_values");
     writerB_ = header.value->callbackNamed("writer_b");
     writerFail_ = header.value->callbackNamed("writer_fail");
     writerOnce_ = header.value->callbackNamed("writer_once");
@@ -2867,7 +2882,9 @@ return {
     interactionEvent_ = header.value->callbackNamed("interaction_event");
     interactionFloat_ = header.value->callbackNamed("interaction_float");
     interactionOrder_ = header.value->callbackNamed("interaction_order");
-    expect(writerA_ && writerB_ && writerFail_ && writerOnce_ &&
+    expect(writerA_ && writerDrag_ && writerDragValue_ && writerDragValues_ &&
+               writerB_ &&
+               writerFail_ && writerOnce_ &&
                writerOnceVerify_ && textWriterUtf8_ && textWriterFirst_ &&
                textWriterSecond_ && textWriterCancel_ && textCancelVerify_ &&
                textUtf8Count_ && interactionString_ && interactionEvent_ &&
@@ -2885,6 +2902,7 @@ return {
         {.id = SkinFloatWriterId{3}, .source = *writerFail_},
         {.id = SkinFloatWriterId{4}, .source = *writerOnce_},
         {.id = SkinFloatWriterId{5}, .source = *interactionFloat_},
+        {.id = SkinFloatWriterId{6}, .source = *writerDrag_},
     };
     model_.model.stringWriters = {
         {.id = SkinStringWriterId{1}, .source = *textWriterUtf8_},
@@ -2998,17 +3016,22 @@ return {
       std::optional<double> firstLaneSecondaryDestinationY = std::nullopt,
       double destinationX = 100.0) {
     resources_.addImage(80);
-    const SkinFloatPropertyId valueProperty{
-        writer == SkinFloatWriterId{4} ? 2U : 1U};
+    const bool dynamicValue = writer == SkinFloatWriterId{4} ||
+                              writer == SkinFloatWriterId{6};
+    const SkinFloatPropertyId valueProperty{dynamicValue ? 2U : 1U};
+    const std::variant<SkinBuiltinPropertySelector, LuaCallbackId> valueSource =
+        writer == SkinFloatWriterId{4}
+            ? std::variant<SkinBuiltinPropertySelector, LuaCallbackId>{
+                  *writerOnceVerify_}
+            : (writer == SkinFloatWriterId{6}
+                   ? std::variant<SkinBuiltinPropertySelector, LuaCallbackId>{
+                         *writerDragValue_}
+                   : std::variant<SkinBuiltinPropertySelector, LuaCallbackId>{
+                         SkinBuiltinPropertySelector{.value = 4}});
     model_.model.floatProperties.push_back(
         {.id = valueProperty,
          .domain = SkinFloatPropertyDomain::Rate,
-         .source = writer == SkinFloatWriterId{4}
-                       ? std::variant<SkinBuiltinPropertySelector,
-                                      LuaCallbackId>{*writerOnceVerify_}
-                       : std::variant<SkinBuiltinPropertySelector,
-                                      LuaCallbackId>{
-                             SkinBuiltinPropertySelector{.value = 4}},
+         .source = valueSource,
          .authoredOrdinal = 1});
     SkinSliderObject slider;
     slider.knob = {.resource = 80,
@@ -3210,6 +3233,21 @@ return {
     return std::nullopt;
   }
 
+  std::optional<std::string> writerDragValues(std::uint64_t frameSerial) {
+    const auto begun = runtime_->beginFrame(frameSerial);
+    if (!begun.ok) {
+      return std::nullopt;
+    }
+    const auto result = runtime_->invoke(*writerDragValues_, {});
+    if (result.failure || !result.value) {
+      return std::nullopt;
+    }
+    if (const auto *value = std::get_if<std::string>(&*result.value)) {
+      return *value;
+    }
+    return std::nullopt;
+  }
+
   std::optional<std::string> interactionOrder(std::uint64_t frameSerial) {
     const auto begun = runtime_->beginFrame(frameSerial);
     if (!begun.ok) {
@@ -3237,6 +3275,9 @@ private:
   std::optional<PreparedSkinRevision> prepared_;
   std::unique_ptr<LuaSkinRuntime> runtime_;
   std::optional<LuaCallbackId> writerA_;
+  std::optional<LuaCallbackId> writerDrag_;
+  std::optional<LuaCallbackId> writerDragValue_;
+  std::optional<LuaCallbackId> writerDragValues_;
   std::optional<LuaCallbackId> writerB_;
   std::optional<LuaCallbackId> writerFail_;
   std::optional<LuaCallbackId> writerOnce_;
@@ -4596,13 +4637,13 @@ void testEditableTextCancellationTeardownAndNoneditableRejection() {
          "session teardown cancels focused text without invoking its writer");
 }
 
-void testTouchCaptureLifecycleFailsClosedAndQueuesOnlyDown() {
+void testTouchCaptureLifecycleKeepsWritingCapturedSlidersDuringDrag() {
   SessionFixture fixture;
   if (!fixture.ready()) {
     return;
   }
   fixture.addBgaMarker();
-  fixture.addTouchGeometry(SkinFloatWriterId{4});
+  fixture.addTouchGeometry(SkinFloatWriterId{6});
   expect(fixture.session().prepareFrame(stateAt(1), projectionAt(1)) ==
              PresentationFrameOutcome::Ready,
          "touch fixture prepares");
@@ -4615,39 +4656,40 @@ void testTouchCaptureLifecycleFailsClosedAndQueuesOnlyDown() {
   const auto hit = fixture.session().hitTestUiControl(point);
   const PresentationTouchEvent down{
       .pointerId = 1, .uiPoint = point, .eventMicros = 1'000, .hit = hit};
-  expect(hit.kind == PresentationUiControlKind::Slider && hit.writer &&
+  expect(hit.kind == PresentationUiControlKind::Slider && hit.writer,
+         "touch fixture exposes an authored slider hit");
+  expect(fixture.session().beginPresentationTouch(down) ==
+             PresentationTouchResult{.consumed = true,
+                                     .excludeFromGameplay = true} &&
              fixture.session().beginPresentationTouch(down) ==
-                 PresentationTouchResult{.consumed = true,
-                                         .excludeFromGameplay = true} &&
-             fixture.session().beginPresentationTouch(down) ==
-                 PresentationTouchResult{} &&
-             fixture.session().updatePresentationTouch(
-                 {.pointerId = 1,
-                  .uiPoint = {.x = 180.0F, .y = 610.0F},
-                  .eventMicros = 1'001,
-                  .hit = hit}) ==
-                 PresentationTouchResult{.consumed = true,
-                                         .excludeFromGameplay = true} &&
-             fixture.session().endPresentationTouch(
-                 {.pointerId = 1,
-                  .uiPoint = point,
-                  .eventMicros = 1'002,
-                  .hit = hit},
-                 false) ==
-                 PresentationTouchResult{.consumed = true,
-                                         .excludeFromGameplay = true} &&
+                 PresentationTouchResult{},
+         "Down captures a slider exactly once");
+  expect(fixture.session().updatePresentationTouch(
+             {.pointerId = 1,
+              .uiPoint = {.x = 180.0F, .y = 610.0F},
+              .eventMicros = 1'001,
+              .hit = hit}) ==
+             PresentationTouchResult{.consumed = true,
+                                     .excludeFromGameplay = true},
+         "a captured slider Move stays consumed");
+  expect(fixture.session().endPresentationTouch(
+             {.pointerId = 1,
+              .uiPoint = point,
+              .eventMicros = 1'002,
+              .hit = hit},
+             false) ==
+             PresentationTouchResult{.consumed = true,
+                                     .excludeFromGameplay = true} &&
              fixture.session().updatePresentationTouch(down) ==
                  PresentationTouchResult{},
-         "Down captures once, Move stays consumed without writing, and Up "
-         "clears the capture");
+         "Up clears the slider capture");
 
   expect(fixture.session().prepareFrame(stateAt(2), projectionAt(2)) ==
              PresentationFrameOutcome::Ready &&
              fixture.session().render(context, bgaFrame(92), bga).outcome ==
                  PresentationFrameOutcome::Ready,
-         "one valid Down queues exactly one writer for the next frame while "
-         "Move and Up queue none");
-
+         "a slider drag queues its Down and in-track Move values for the next "
+         "frame");
   auto stale = hit;
   ++stale.layoutRevision;
   auto forged = hit;
@@ -4734,6 +4776,10 @@ void testTouchCaptureLifecycleFailsClosedAndQueuesOnlyDown() {
                   .eventMicros = 55,
                   .hit = hit}) == PresentationTouchResult{},
          "a cancelled matching End consumes and releases without a writer");
+  expect(fixture.writerDragValues(3) ==
+             std::optional<std::string>{"50,80,"},
+         "dragging a captured gameplay slider invokes its writer at each "
+         "in-track pointer position");
 }
 
 void testImageActTouchQueuesPinnedEventOnDown() {
@@ -5311,6 +5357,45 @@ void testResultBridgeSupportsBeatorajaIrAvailabilityProperties() {
   expect(offline.supported && offline.value && online.supported && !online.value,
          "result bridge mirrors Beatoraja's offline IR properties when no IR "
          "provider is active");
+}
+
+void testResultBridgeUsesPreparedArtworkAvailability() {
+  bms_parser::ChartMeta declared{
+      .StageFile = "missing-stage.png",
+      .Banner = "missing-banner.png",
+      .BackBmp = "missing-backbmp.png"};
+  ResultSkinStateBridge unavailable({.meta = &declared}, 1, 0);
+  ResultSkinStateBridge prepared({.meta = &declared,
+                                  .stageFileAvailable = true,
+                                  .bannerAvailable = true,
+                                  .backBmpAvailable = true},
+                                 1, 0);
+  const auto stageFallback = unavailable.booleanProperty({190});
+  const auto stageArtwork = unavailable.booleanProperty({191});
+  const auto bannerFallback = unavailable.booleanProperty({192});
+  const auto bannerArtwork = unavailable.booleanProperty({193});
+  const auto backBmpFallback = unavailable.booleanProperty({194});
+  const auto backBmpArtwork = unavailable.booleanProperty({195});
+  expect(stageFallback.supported && stageFallback.value &&
+             stageArtwork.supported && !stageArtwork.value &&
+             bannerFallback.supported && bannerFallback.value &&
+             bannerArtwork.supported && !bannerArtwork.value &&
+             backBmpFallback.supported && backBmpFallback.value &&
+             backBmpArtwork.supported && !backBmpArtwork.value &&
+             prepared.booleanProperty({190}).supported &&
+             !prepared.booleanProperty({190}).value &&
+             prepared.booleanProperty({191}).supported &&
+             prepared.booleanProperty({191}).value &&
+             prepared.booleanProperty({192}).supported &&
+             !prepared.booleanProperty({192}).value &&
+             prepared.booleanProperty({193}).supported &&
+             prepared.booleanProperty({193}).value &&
+             prepared.booleanProperty({194}).supported &&
+             !prepared.booleanProperty({194}).value &&
+             prepared.booleanProperty({195}).supported &&
+             prepared.booleanProperty({195}).value,
+         "result artwork selectors follow successfully prepared resources, not "
+         "unreadable chart declarations");
 }
 
 void testResultBridgeKeepsAutoplayOptionsOffOnResultScreens() {
@@ -5900,7 +5985,7 @@ int main() {
   testEditableStringWriterDoesNotRunWhenSubmissionPreflightFails();
   testEditableTextBoundsFocusedAndQueuedUtf8();
   testEditableTextCancellationTeardownAndNoneditableRejection();
-  testTouchCaptureLifecycleFailsClosedAndQueuesOnlyDown();
+  testTouchCaptureLifecycleKeepsWritingCapturedSlidersDuringDrag();
   testImageActTouchQueuesPinnedEventOnDown();
   testViewportChangeCancelsCapturesAndInvalidatesPublishedGeometry();
   testViewportGeometryChangeCancelsOldInputAndPreservesSessionIdentity();
@@ -5920,6 +6005,7 @@ int main() {
   testResultSessionRefreshesForAllStringSelectors();
   testResultSessionRejectsConfiguredModelForAnotherResultTarget();
   testResultBridgeSupportsBeatorajaIrAvailabilityProperties();
+  testResultBridgeUsesPreparedArtworkAvailability();
   testResultBridgeKeepsAutoplayOptionsOffOnResultScreens();
   testResultBridgeRecognizesScratchLongNotes();
   testResultBridgeMatchesBeatorajaResultScoreFamilies();

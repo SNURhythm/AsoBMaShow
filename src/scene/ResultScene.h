@@ -28,6 +28,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <variant>
 
 struct CoursePlaySession;
@@ -373,6 +374,8 @@ private:
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   std::unique_ptr<skin::ResultSkinSession> resultSkinSession;
   long long resultSkinStartedMicros = 0;
+  std::optional<PresentationUiHit> resultSkinMouseCapture;
+  std::unordered_map<SDL_FingerID, PresentationUiHit> resultSkinTouchCaptures;
   skin::SkinEntryId resultSkinEntry;
   std::string resultSkinRevisionDigest;
   std::string resultSkinConfigurationDigest;

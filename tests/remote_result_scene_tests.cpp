@@ -416,6 +416,8 @@ void testLocalRegressionContractsRemainPresent() {
 
 void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
   const std::string result = readSource("src/scene/ResultScene.cpp");
+  const std::string gameplay =
+      readSource("src/scene/play/GamePlayScene.cpp");
   const std::string mainMenu = readSource("src/scene/MainMenuScene.cpp");
   const std::string session =
       readSource("src/skin/beatoraja/ResultSkinSession.cpp");
@@ -569,6 +571,13 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
                   "synthetic judgement samples");
   requireContains(session, "writerInvocationFor(",
                   "result sliders resolve their authored writer invocation");
+  requireContains(
+      gameplay,
+      "const long long finalGameplayTimeMicros =\n"
+      "      getGameplayTimeMicros(context.jukebox.getTimeMicros());\n"
+      "  updateSkinGameplayGraph(finalGameplayTimeMicros);\n\n"
+      "  SDL_Log(\"Active survival gauge failed\");",
+      "survival failure publishes the terminal gauge before result capture");
   requireOrdered(session,
                  "auto queuedWriters = std::exchange(queuedWriterInvocations_, {});",
                  "for (std::size_t timerIndex = 0;",

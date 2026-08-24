@@ -77,7 +77,10 @@ public:
   [[nodiscard]] std::vector<int> takeQueuedBuiltinEventIds();
   [[nodiscard]] std::vector<ResultSkinAudioVolumeWrite>
   takeQueuedAudioVolumeWrites();
-  [[nodiscard]] bool queuePointerDown(UiLogicalPoint, long long eventMicros);
+  [[nodiscard]] bool queuePointerDown(UiLogicalPoint, long long eventMicros,
+                                      PresentationUiHit *capturedHit = nullptr);
+  [[nodiscard]] bool queuePointerMove(const PresentationUiHit &, UiLogicalPoint,
+                                      long long eventMicros);
   [[nodiscard]] const SkinEntryId &entry() const noexcept;
 
 private:
