@@ -490,8 +490,15 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
                   "    meta.Folder = currentMeta->Folder;\n"
                   "    meta.StageFile = currentMeta->StageFile;\n"
                   "    meta.BackBmp = currentMeta->BackBmp;\n"
-                  "    meta.Banner = currentMeta->Banner;",
+                  "    meta.Banner = currentMeta->Banner;\n"
+                  "    meta.TotalLongNotes = currentMeta->TotalLongNotes;\n"
+                  "    meta.TotalBackSpinNotes = currentMeta->TotalBackSpinNotes;",
                   "course result metadata retains the current stage artwork");
+  requireContains(result,
+                  "meta.Banner = lastMeta.Banner;\n"
+                  "    meta.TotalLongNotes = lastMeta.TotalLongNotes;\n"
+                  "    meta.TotalBackSpinNotes = lastMeta.TotalBackSpinNotes;",
+                  "course result metadata retains completed-stage long-note counts");
   requireContains(result, "courseGraphPaddingForEntry(",
                   "course result graphs pad unplayed stages after an early failure");
   requireContains(result,
@@ -585,7 +592,11 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
                   "result skin sessions expose their authored fadeout duration");
   requireContains(
       result,
-      "if (!resultSkinFadeoutStartedMillis) {\n"
+      "if (persistenceDecisionRequired()) {\n"
+      "      resultSkinFadeoutStartedMillis.reset();\n"
+      "    } else if (!courseReplayRestOwnsTransition &&\n"
+      "               elapsedMillis > resultSkinSession->sceneMillis()) {\n"
+      "      if (!resultSkinFadeoutStartedMillis) {\n"
       "        resultSkinFadeoutStartedMillis = elapsedMillis;\n"
       "      } else if (elapsedMillis - *resultSkinFadeoutStartedMillis >\n"
       "                 resultSkinSession->fadeoutMillis()) {\n"
@@ -596,7 +607,13 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
       "        }\n"
       "        return;\n"
       "      }",
-      "finite result scenes preserve Beatoraja's fadeout before the next lifecycle");
+      "finite result scenes wait for persistence and replay rest timing before transitions");
+  requireContains(result,
+                  "const bool courseReplayRestOwnsTransition =\n"
+                  "        local != nullptr && isCourseStageResult() &&\n"
+                  "        local->courseOptions.session != nullptr &&\n"
+                  "        local->courseOptions.session->courseReplayPlayback;",
+                  "course replay uses its recorded stage-rest timer as the transition authority");
   requireOrdered(session,
                  "auto queuedWriters = std::exchange(queuedWriterInvocations_, {});",
                  "for (std::size_t timerIndex = 0;",

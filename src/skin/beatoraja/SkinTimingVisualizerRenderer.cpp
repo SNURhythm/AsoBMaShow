@@ -347,6 +347,8 @@ renderSkinTimingVisualizer(const SkinTimingVisualizerRenderRequest &request) {
   auto lineRequest = request;
   lineRequest.maximumCommands -=
       std::min(lineRequest.maximumCommands, result.commands.size());
+  lineRequest.maximumPrimitiveVertices -=
+      std::min(lineRequest.maximumPrimitiveVertices, result.primitiveVertices);
   PrimitiveBuilder builder(lineRequest, request.geometry, pixelWidth);
   const double judgeWidthRate =
       static_cast<double>(request.visualizer.width) /
@@ -386,7 +388,7 @@ renderSkinTimingVisualizer(const SkinTimingVisualizerRenderRequest &request) {
   }
   auto lines = builder.take();
   if (lines.failure) return lines;
-  result.primitiveVertices = lines.primitiveVertices;
+  result.primitiveVertices += lines.primitiveVertices;
   result.commands.insert(result.commands.end(),
                          std::make_move_iterator(lines.commands.begin()),
                          std::make_move_iterator(lines.commands.end()));

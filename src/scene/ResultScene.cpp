@@ -632,6 +632,8 @@ courseResultMetaForSession(const CoursePlaySession &session) {
     meta.StageFile = currentMeta->StageFile;
     meta.BackBmp = currentMeta->BackBmp;
     meta.Banner = currentMeta->Banner;
+    meta.TotalLongNotes = currentMeta->TotalLongNotes;
+    meta.TotalBackSpinNotes = currentMeta->TotalBackSpinNotes;
   } else if (!session.completedResults.empty()) {
     const auto &lastMeta = session.completedResults.back().meta;
     meta.Rank = lastMeta.Rank;
@@ -640,6 +642,8 @@ courseResultMetaForSession(const CoursePlaySession &session) {
     meta.StageFile = lastMeta.StageFile;
     meta.BackBmp = lastMeta.BackBmp;
     meta.Banner = lastMeta.Banner;
+    meta.TotalLongNotes = lastMeta.TotalLongNotes;
+    meta.TotalBackSpinNotes = lastMeta.TotalBackSpinNotes;
   }
   return meta;
 }
@@ -4331,7 +4335,15 @@ void ResultScene::renderScene() {
     }
     const long long elapsedMillis =
         std::max(0LL, (nowMicros() - resultSkinStartedMicros) / 1000LL);
-    if (elapsedMillis > resultSkinSession->sceneMillis()) {
+    const auto *local = localSource();
+    const bool courseReplayRestOwnsTransition =
+        local != nullptr && isCourseStageResult() &&
+        local->courseOptions.session != nullptr &&
+        local->courseOptions.session->courseReplayPlayback;
+    if (persistenceDecisionRequired()) {
+      resultSkinFadeoutStartedMillis.reset();
+    } else if (!courseReplayRestOwnsTransition &&
+               elapsedMillis > resultSkinSession->sceneMillis()) {
       if (!resultSkinFadeoutStartedMillis) {
         resultSkinFadeoutStartedMillis = elapsedMillis;
       } else if (elapsedMillis - *resultSkinFadeoutStartedMillis >
