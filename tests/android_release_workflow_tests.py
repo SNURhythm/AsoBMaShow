@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import re
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
@@ -84,6 +85,46 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
             "std::string GetAndroidInternalFilesDir()", 1
         )[1].split("std::string GetAndroidCacheDir()", 1)[0]
         self.assertNotIn("GetAndroidExternalFilesDir()", internal_files)
+
+    def test_android_credentials_are_excluded_from_backup_and_transfer(self):
+        android_namespace = "http://schemas.android.com/apk/res/android"
+        application = ET.fromstring(self.manifest).find("application")
+        self.assertIsNotNone(application)
+        self.assertEqual(
+            application.get(f"{{{android_namespace}}}allowBackup"), "true"
+        )
+        self.assertEqual(
+            application.get(f"{{{android_namespace}}}fullBackupContent"),
+            "@xml/backup_rules",
+        )
+        self.assertEqual(
+            application.get(f"{{{android_namespace}}}dataExtractionRules"),
+            "@xml/data_extraction_rules",
+        )
+
+        legacy_rules = ET.parse(
+            ROOT / "android/app/src/main/res/xml/backup_rules.xml"
+        ).getroot()
+        self.assertEqual(legacy_rules.tag, "full-backup-content")
+        self.assertEqual(
+            {(node.get("domain"), node.get("path")) for node in legacy_rules},
+            {("file", "profiles")},
+        )
+
+        extraction_rules = ET.parse(
+            ROOT / "android/app/src/main/res/xml/data_extraction_rules.xml"
+        ).getroot()
+        self.assertEqual(extraction_rules.tag, "data-extraction-rules")
+        for section_name in ("cloud-backup", "device-transfer"):
+            section = extraction_rules.find(section_name)
+            self.assertIsNotNone(section)
+            self.assertEqual(
+                {
+                    (node.get("domain"), node.get("path"))
+                    for node in section.findall("exclude")
+                },
+                {("file", "profiles")},
+            )
 
     def test_android_lint_is_fatal_and_runs_before_firebase_deploy(self):
         self.assertIn("abortOnError true", self.gradle)
