@@ -26,6 +26,7 @@ ios_pods_cache_valid() {
   for configuration in debug release; do
     aggregate_config="${pods_dir}/Target Support Files/Pods-AsoBMaShow/Pods-AsoBMaShow.${configuration}.xcconfig"
     [ -f "${aggregate_config}" ] || return 1
+    # shellcheck disable=SC2016 # SRCROOT must stay literal in CocoaPods output.
     grep -Fqx 'PODS_ROOT = ${SRCROOT}/Pods' "${aggregate_config}" || return 1
   done
 
