@@ -5689,8 +5689,8 @@ void testResultBridgeUsesSourceImageIndexFactoryFallbacks() {
   const auto resultConstant = bridge.integerProperty(
       {.value = std::string{"constant"}},
       SkinIntegerPropertyDomain::ImageIndex);
-  const auto unknown = bridge.integerProperty(
-      {64}, SkinIntegerPropertyDomain::ImageIndex);
+  const auto unmapped = bridge.integerProperty(
+      {13}, SkinIntegerPropertyDomain::ImageIndex);
   const auto outOfRange = bridge.integerProperty(
       {65'536}, SkinIntegerPropertyDomain::ImageIndex);
   const auto skinSelect = bridge.integerProperty(
@@ -5710,9 +5710,19 @@ void testResultBridgeUsesSourceImageIndexFactoryFallbacks() {
              shadowedSkinSelect.supported && shadowedSkinSelect.value == minimum &&
              judge.supported && judge.value == 0 &&
              extendedJudge.supported && extendedJudge.value == 0 &&
-             !unknown.supported && !outOfRange.supported,
-         "result image-index properties use IntegerPropertyFactory's exact "
-         "per-selector result fallback without inventing generic frame zero");
+             unmapped.supported && unmapped.value == 0 && !outOfRange.supported,
+         "result image-index properties preserve SkinImage's frame-zero "
+         "fallback when the numeric factory leaves its ref unset");
+}
+
+void testResultBridgeResolvesImageNamesBeforeValueAliases() {
+  ResultSkinStateBridge bridge({}, 1, 0);
+  const auto mode = bridge.integerProperty(
+      {.value = std::string{"mode"}}, SkinIntegerPropertyDomain::ImageIndex);
+  const auto minimum = static_cast<std::int64_t>(std::numeric_limits<int>::min());
+  expect(mode.supported && mode.value == minimum,
+         "result image property names use IndexType before the conflicting "
+         "IntegerProperty ValueType aliases");
 }
 
 void testResultBridgeRetainsResultConfigurationProperties() {
@@ -6648,6 +6658,7 @@ int main() {
   testResultBridgeMatchesResultAliasesAndTimerUnits();
   testResultBridgeUsesCapturedReplayImageIndexes();
   testResultBridgeUsesSourceImageIndexFactoryFallbacks();
+  testResultBridgeResolvesImageNamesBeforeValueAliases();
   testResultBridgeRetainsResultConfigurationProperties();
   testResultBridgeRetainsResultIntegerFactoryFallbacks();
   testResultBridgeRetainsAuthenticatedScoreDate();

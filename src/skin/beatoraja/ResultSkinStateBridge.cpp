@@ -720,10 +720,14 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
   }
   const auto id = integerSelector(selector);
   const auto imageId = [&]() -> std::optional<int> {
-    if (id || domain != SkinIntegerPropertyDomain::ImageIndex) return id;
-    const auto *name = std::get_if<std::string>(&selector.value);
-    return name == nullptr ? std::nullopt
-                           : beatorajaImageIndexPropertySelector(*name);
+    if (domain != SkinIntegerPropertyDomain::ImageIndex) return id;
+    if (const auto *name = std::get_if<std::string>(&selector.value)) {
+      // IntegerPropertyFactory has independent name namespaces for ValueType
+      // and IndexType. Resolve a named image selector in its own namespace
+      // before considering aliases such as ValueType.mode (ID 60).
+      return beatorajaImageIndexPropertySelector(*name);
+    }
+    return id;
   }();
   if (!imageId) return unsupported<std::int64_t>();
   if (domain == SkinIntegerPropertyDomain::ImageIndex) {
@@ -965,7 +969,15 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
       // source fallback is -1, not the generic image-cache frame zero.
       return supported<std::int64_t>(-1);
     default:
-      return unsupported<std::int64_t>();
+      // SkinImage stores a null ref when getImageIndexProperty(int) has no
+      // factory property. Its prepare path then uses frame zero, so retain
+      // that behavior for numeric selectors admitted by the catalog.
+      const bool numericInFactoryRange =
+          std::holds_alternative<int>(selector.value) && *imageId >= 0 &&
+          *imageId < 65'536;
+      return numericInFactoryRange
+                 ? supported<std::int64_t>(0)
+                 : unsupported<std::int64_t>();
     }
   }
   const auto currentScore = score();

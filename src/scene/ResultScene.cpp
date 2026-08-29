@@ -469,7 +469,6 @@ courseGraphPaddingForEntry(const CoursePlayEntry &entry, GaugeType gaugeType) {
   const std::int64_t playLength = std::max(0LL, entry.meta.PlayLength);
   const std::size_t judgementSeconds =
       static_cast<std::size_t>(playLength / 1'000'000LL) + 1;
-  const int gaugeIndex = gaugeTypeIndex(gaugeType);
   const int gaugeSamples =
       std::max(1, static_cast<int>((playLength + 500000LL) / 500000LL));
 
@@ -481,10 +480,8 @@ courseGraphPaddingForEntry(const CoursePlayEntry &entry, GaugeType gaugeType) {
   dynamic->judgementDistribution.assign(judgementSeconds, {});
   dynamic->earlyLateDistribution.assign(judgementSeconds, {});
   dynamic->gaugeType = gaugeType;
-  if (gaugeIndex >= 0 &&
-      static_cast<std::size_t>(gaugeIndex) < dynamic->gaugeHistories.size()) {
-    dynamic->gaugeHistories[static_cast<std::size_t>(gaugeIndex)].assign(
-        static_cast<std::size_t>(gaugeSamples), 0.0F);
+  for (auto &history : dynamic->gaugeHistories) {
+    history.assign(static_cast<std::size_t>(gaugeSamples), 0.0F);
   }
   return {.chart = std::move(chart), .dynamic = std::move(dynamic)};
 }
