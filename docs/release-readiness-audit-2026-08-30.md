@@ -26,11 +26,11 @@ software is free of every defect or vulnerability.
 
 | Severity | Finding | Resolution |
 | --- | --- | --- |
-| High | Android targeted API 35 immediately before Google Play's 2026-08-31 API 36 deadline and lacked a repository-owned, checksum-pinned Gradle wrapper. | Moved to compile/target API 36, AGP 8.10.1, Gradle 8.11.1 with verified checksums, and NDK r28. Gradle and the deploy wrapper now validate the installed NDK revision from `source.properties`, and the native libraries pass 16 KiB ELF alignment checks. |
+| High | Android targeted API 35 immediately before Google Play's 2026-08-31 API 36 deadline and lacked a repository-owned, checksum-pinned Gradle wrapper. | Moved to compile/target API 36, AGP 8.10.1, Gradle 8.11.1 with verified checksums, and NDK r28. Gradle and the deploy wrapper now validate the installed NDK revision from `source.properties`; AGP is explicitly bound to that validated path, including standalone NDK installations. The native libraries pass 16 KiB ELF alignment checks. |
 | High | Vendored SQLite 3.43.1 predates SQLite's 3.43.2 JSON-parser use-after-free fix and later memory-safety fixes. | Updated the exact upstream amalgamation to SQLite 3.53.4 and pinned a release-policy minimum. |
 | High | The iOS release bundle contained dependencies with current OSV advisories in ActiveSupport, concurrent-ruby, Excon, Faraday, JSON, and JWT. | Updated Fastlane and the affected dependency graph. OSV Scanner reports no known vulnerability in the resulting `Gemfile.lock`. |
 | Medium | Android's private IR API-key file was eligible for cloud backup and device transfer. | Kept general user-data backup enabled but excluded the entire `profiles` subtree in both legacy and Android 12+ backup rule formats. |
-| Medium | Desktop/iOS downloads could follow an HTTPS response to HTTP; HTTPS difficulty-table metadata could also load an HTTP data document. | Redirect policy is now derived from the initial URL across curl, `NSURLSession`, and Android: HTTPS origins reject HTTP and non-HTTP downgrades, while direct legacy HTTP origins retain HTTP/HTTPS compatibility. Mixed-content difficulty-table references are rejected before a request is made. |
+| Medium | Desktop/iOS downloads could follow an HTTPS response to HTTP; HTTPS difficulty-table metadata could also load an HTTP data document. | Redirect policy is now derived from the initial URL across curl, `NSURLSession`, and Android: HTTPS origins reject HTTP and non-HTTP downgrades, while direct legacy HTTP origins retain HTTP/HTTPS compatibility. Mixed-content difficulty-table references are rejected before a request is made, with URL schemes compared case-insensitively. |
 | Medium | Fresh `develop` introduced an arm64 libc++ compile failure by mixing `optional<long long>` and `optional<int64_t>` in replay provenance selection. | Normalized the provenance branch to the replay seed type explicitly. Both Android product flavors now complete native compilation and packaging. |
 | Medium | Fresh `develop` split an LR2 graph rectangle that the pinned Beatoraja loader intentionally shares, changing compatibility behavior. | Restored the shared graph dimensions and verified them against the pinned Java oracle. |
 | Low | Split settings translation units emitted duplicate internal-linkage helper bodies and unused-function warnings; other first-party functions and locals were dead. | Converted header-defined helpers to ODR-safe `inline` functions and removed unused wrappers, locals, and the obsolete course replay builder. |
@@ -115,7 +115,7 @@ gitignored and were not added by this branch.
 | Security regression | SQL-injection-shaped playlist names and HTTPS mixed-content rejection passed. |
 | Undefined behavior | Six ownership/storage-focused UBSan targets passed; address/leak sanitizer limitation documented above. |
 | Allocator diagnostics | Six ownership/storage-focused targets passed with Apple malloc diagnostics enabled. |
-| Android policy tests | 11/11 release workflow tests and 24/24 cross-platform contract tests passed. |
+| Android policy tests | 11/11 release workflow tests and 24/24 cross-platform contract tests passed. A native Gradle configuration probe also confirmed that a standalone-style `ANDROID_NDK_HOME` is passed through as AGP's NDK path and CMake's Android NDK. |
 | Android builds | Play and Firebase debug unit tests, lint, assembly, and Java/native compilation passed after the rebase. Production signing material is not present in this worktree, so the signed release flavor remains an external gate. |
 | Android native ABI | APKs passed 16 KiB zip alignment and v2 signature verification; `libmain.so` has GNU RELRO, immediate binding, and a non-executable stack. The audit's full native-library ELF `LOAD` alignment check passed at 0x4000. |
 | iOS policy tests | 49/49 setup, 18/18 workflow, 16/16 artifact-audit, and 3/3 documentation tests passed. |
@@ -148,8 +148,9 @@ These are release operations, not unresolved source defects:
 
 This branch was rebased onto the updated `develop` tip before final
 verification. The review findings were reproduced and resolved as focused
-commits: safe legacy HTTP redirect behavior was preserved, the installed NDK
-revision is read from metadata rather than inferred from its directory name,
+commits: safe legacy HTTP redirect behavior was preserved, URL-scheme security
+checks now handle mixed case, the installed NDK revision is read from metadata
+rather than inferred from its directory name, AGP uses the validated NDK path,
 and release scripts are insulated from caller `CDPATH`. The rebase also exposed
 and fixed the Android arm64 seed-type compile failure, the LR2 graph-rectangle
 compatibility regression, stale skin/lifecycle test contracts, callback-budget
