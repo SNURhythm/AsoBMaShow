@@ -69,7 +69,7 @@ struct LayoutMetrics {
   int modeCardHeight = 180;
 };
 
-static SafeAreaInsets getSafeAreaInsetsUi() {
+inline SafeAreaInsets getSafeAreaInsetsUi() {
   SafeAreaInsets insets;
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   const IOSNormalizedSafeAreaInsets normalized =
@@ -84,7 +84,7 @@ static SafeAreaInsets getSafeAreaInsetsUi() {
   return insets;
 }
 
-static LayoutMetrics resolveLayoutMetrics() {
+inline LayoutMetrics resolveLayoutMetrics() {
   LayoutMetrics metrics;
   metrics.safe = getSafeAreaInsetsUi();
   metrics.compact = rendering::window_height < 980;
@@ -168,11 +168,11 @@ static LayoutMetrics resolveLayoutMetrics() {
   return metrics;
 }
 
-static bool sameColor(const Color &lhs, const Color &rhs) {
+inline bool sameColor(const Color &lhs, const Color &rhs) {
   return lhs.r == rhs.r && lhs.g == rhs.g && lhs.b == rhs.b && lhs.a == rhs.a;
 }
 
-static View::ThemeColorProvider themeTextColorProvider(const Color &color) {
+inline View::ThemeColorProvider themeTextColorProvider(const Color &color) {
   if (sameColor(color, ui_theme::textPrimary())) {
     return ui_theme::textPrimary;
   }
@@ -197,7 +197,7 @@ static View::ThemeColorProvider themeTextColorProvider(const Color &color) {
   return {};
 }
 
-static View::ThemeColorProvider themeSurfaceColorProvider(const Color &color) {
+inline View::ThemeColorProvider themeSurfaceColorProvider(const Color &color) {
   if (sameColor(color, ui_theme::control())) {
     return ui_theme::control;
   }
@@ -246,7 +246,7 @@ static View::ThemeColorProvider themeSurfaceColorProvider(const Color &color) {
   return {};
 }
 
-static TextView *makeText(const std::string &text, int size, const Color &color,
+inline TextView *makeText(const std::string &text, int size, const Color &color,
                           TextView::TextAlign align = TextView::LEFT,
                           TextView::TextVAlign valign = TextView::TOP) {
   auto *view = new TextView(kFontPath, size);
@@ -263,7 +263,7 @@ static TextView *makeText(const std::string &text, int size, const Color &color,
   return view;
 }
 
-static TextView *makeWrappedText(const std::string &text, int size,
+inline TextView *makeWrappedText(const std::string &text, int size,
                                  const Color &color,
                                  TextView::TextAlign align = TextView::LEFT,
                                  TextView::TextVAlign valign = TextView::TOP) {
@@ -272,7 +272,7 @@ static TextView *makeWrappedText(const std::string &text, int size,
   return view;
 }
 
-static Button *makeButton(int width, int height, TextView *label,
+inline Button *makeButton(int width, int height, TextView *label,
                           const Color &normalBackground,
                           const Color &hoverBackground,
                           const Color &pressedBackground,
@@ -309,7 +309,7 @@ static Button *makeButton(int width, int height, TextView *label,
   return button;
 }
 
-static Button *makeControlButton(int width, int height, TextView *label) {
+inline Button *makeControlButton(int width, int height, TextView *label) {
   auto *button = makeButton(
       width, height, label, ui_theme::control(), ui_theme::controlHover(),
       ui_theme::controlPressed(), ui_theme::hairline(),
@@ -321,7 +321,7 @@ static Button *makeControlButton(int width, int height, TextView *label) {
   return button;
 }
 
-static Button *makeAccentButton(int width, int height, TextView *label,
+inline Button *makeAccentButton(int width, int height, TextView *label,
                                 const Color &accent) {
   const auto accentProvider = themeSurfaceColorProvider(accent);
   const bool light = ui_theme::activeMode() == ui_theme::ThemeMode::Light;
@@ -359,7 +359,7 @@ static Button *makeAccentButton(int width, int height, TextView *label,
   return button;
 }
 
-static Button *makeStepButton(const LayoutMetrics &metrics, int width,
+inline Button *makeStepButton(const LayoutMetrics &metrics, int width,
                               const std::string &label) {
   return makeControlButton(width, metrics.actionButtonHeight,
                            makeText(label, metrics.bodyTextSize + 4,
@@ -367,7 +367,7 @@ static Button *makeStepButton(const LayoutMetrics &metrics, int width,
                                     TextView::MIDDLE));
 }
 
-static Button *makeResetButton(const LayoutMetrics &metrics) {
+inline Button *makeResetButton(const LayoutMetrics &metrics) {
   return makeAccentButton(metrics.resetButtonWidth, metrics.actionButtonHeight,
                           makeText("Reset", metrics.bodyTextSize + 4,
                                    ui_theme::textPrimary(), TextView::CENTER,
@@ -375,7 +375,7 @@ static Button *makeResetButton(const LayoutMetrics &metrics) {
                           ui_theme::coral());
 }
 
-static TextInputBox *makeNumericInput(const LayoutMetrics &metrics) {
+inline TextInputBox *makeNumericInput(const LayoutMetrics &metrics) {
   auto *input = new TextInputBox(kFontPath, metrics.bodyTextSize + 6);
   input->setText("");
   input->setSize(metrics.offsetValueWidth, metrics.actionButtonHeight);
@@ -387,7 +387,7 @@ static TextInputBox *makeNumericInput(const LayoutMetrics &metrics) {
   return input;
 }
 
-static TextInputBox *makeTextInput(const LayoutMetrics &metrics, int minWidth) {
+inline TextInputBox *makeTextInput(const LayoutMetrics &metrics, int minWidth) {
   auto *input = new TextInputBox(kFontPath, metrics.bodyTextSize);
   input->setText("");
   input->setSize(minWidth, metrics.actionButtonHeight);
@@ -400,7 +400,7 @@ static TextInputBox *makeTextInput(const LayoutMetrics &metrics, int minWidth) {
   return input;
 }
 
-static View *makeInputFrame(const LayoutMetrics &metrics, TextInputBox *input) {
+inline View *makeInputFrame(const LayoutMetrics &metrics, TextInputBox *input) {
   auto *value = new View();
   value->setWidth(static_cast<float>(metrics.offsetValueWidth));
   value->setHeight(static_cast<float>(metrics.actionButtonHeight));
@@ -412,7 +412,7 @@ static View *makeInputFrame(const LayoutMetrics &metrics, TextInputBox *input) {
   return value;
 }
 
-static View *makeCard(const LayoutMetrics &metrics, const std::string &title,
+inline View *makeCard(const LayoutMetrics &metrics, const std::string &title,
                       const std::string &description, View *body, int minHeight,
                       int width = 0) {
   auto *card = new View();
@@ -445,7 +445,7 @@ static View *makeCard(const LayoutMetrics &metrics, const std::string &title,
   return card;
 }
 
-static View *makeSummaryRow(const LayoutMetrics &metrics,
+inline View *makeSummaryRow(const LayoutMetrics &metrics,
                             const std::string &label, TextView **valueOut) {
   auto *row = new View();
   row->setFlexDirection(FlexDirection::Row);
@@ -463,22 +463,22 @@ static View *makeSummaryRow(const LayoutMetrics &metrics,
   return row;
 }
 
-static int clampOffset(int value) {
+inline int clampOffset(int value) {
   return std::clamp(value, AppSettings::kMinAudioOffsetMs,
                     AppSettings::kMaxAudioOffsetMs);
 }
 
-static int clampVisualOffset(int value) {
+inline int clampVisualOffset(int value) {
   return std::clamp(value, AppSettings::kMinVisualOffsetMs,
                     AppSettings::kMaxVisualOffsetMs);
 }
 
-static int clampBgaBrightness(int value) {
+inline int clampBgaBrightness(int value) {
   return std::clamp(value, AppSettings::kMinBgaBrightnessPercent,
                     AppSettings::kMaxBgaBrightnessPercent);
 }
 
-static float clampBgaBlur(float value) {
+inline float clampBgaBlur(float value) {
   if (!std::isfinite(value)) {
     return AppSettings::kDefaultBgaBlurStrength;
   }
@@ -486,7 +486,7 @@ static float clampBgaBlur(float value) {
                     AppSettings::kMaxBgaBlurStrength);
 }
 
-static float clampLaneAngle(float value) {
+inline float clampLaneAngle(float value) {
   if (!std::isfinite(value)) {
     return AppSettings::kDefaultLaneAngleDegrees;
   }
@@ -494,7 +494,7 @@ static float clampLaneAngle(float value) {
                     AppSettings::kMaxLaneAngleDegrees);
 }
 
-static float clampLaneLength(float value) {
+inline float clampLaneLength(float value) {
   if (!std::isfinite(value)) {
     return AppSettings::kDefaultLaneLength;
   }
@@ -502,17 +502,17 @@ static float clampLaneLength(float value) {
                     AppSettings::kMaxLaneLength);
 }
 
-static int clampLaneBeamLengthPercent(int value) {
+inline int clampLaneBeamLengthPercent(int value) {
   return std::clamp(value, AppSettings::kMinLaneBeamLengthPercent,
                     AppSettings::kMaxLaneBeamLengthPercent);
 }
 
-static int clampNoteStartPositionPercent(int value) {
+inline int clampNoteStartPositionPercent(int value) {
   return std::clamp(value, AppSettings::kMinNoteStartPositionPercent,
                     AppSettings::kMaxNoteStartPositionPercent);
 }
 
-static float clampPlayAreaWidth(float value) {
+inline float clampPlayAreaWidth(float value) {
   if (!std::isfinite(value)) {
     return AppSettings::kDefaultPlayAreaWidth;
   }
@@ -520,7 +520,7 @@ static float clampPlayAreaWidth(float value) {
                     AppSettings::kMaxPlayAreaWidth);
 }
 
-static float clampJudgementIndicatorY(float value) {
+inline float clampJudgementIndicatorY(float value) {
   if (!std::isfinite(value)) {
     return AppSettings::kDefaultJudgementIndicatorY;
   }
@@ -528,24 +528,24 @@ static float clampJudgementIndicatorY(float value) {
                     AppSettings::kMaxJudgementIndicatorY);
 }
 
-static int judgementIndicatorYToPercent(float value) {
+inline int judgementIndicatorYToPercent(float value) {
   return static_cast<int>(
       std::lround(clampJudgementIndicatorY(value) * 100.0f));
 }
 
-static float judgementIndicatorPercentToY(int percent) {
+inline float judgementIndicatorPercentToY(int percent) {
   return clampJudgementIndicatorY(static_cast<float>(percent) / 100.0f);
 }
 
-static int clampJudgementIndicatorRangeMilliseconds(int value) {
+inline int clampJudgementIndicatorRangeMilliseconds(int value) {
   return judgement_indicator::clampEditableRangeMilliseconds(value);
 }
 
-static std::string formatJudgementIndicatorRangeLabel(int value) {
+inline std::string formatJudgementIndicatorRangeLabel(int value) {
   return judgement_indicator::formatRangeLabel(value);
 }
 
-static float clampJudgementTextY(float value) {
+inline float clampJudgementTextY(float value) {
   if (!std::isfinite(value)) {
     return AppSettings::kDefaultJudgementTextY;
   }
@@ -553,16 +553,16 @@ static float clampJudgementTextY(float value) {
                     AppSettings::kMaxJudgementTextY);
 }
 
-static int judgementTextYToPercent(float value) {
+inline int judgementTextYToPercent(float value) {
   return static_cast<int>(
       std::lround(clampJudgementTextY(value) * 100.0f));
 }
 
-static float judgementTextPercentToY(int percent) {
+inline float judgementTextPercentToY(int percent) {
   return clampJudgementTextY(static_cast<float>(percent) / 100.0f);
 }
 
-static float clampJudgementIndicatorWidthScale(float value) {
+inline float clampJudgementIndicatorWidthScale(float value) {
   if (!std::isfinite(value)) {
     return AppSettings::kDefaultJudgementIndicatorWidthScale;
   }
@@ -570,17 +570,17 @@ static float clampJudgementIndicatorWidthScale(float value) {
                     AppSettings::kMaxJudgementIndicatorWidthScale);
 }
 
-static int judgementIndicatorWidthScaleToPercent(float value) {
+inline int judgementIndicatorWidthScaleToPercent(float value) {
   return static_cast<int>(
       std::lround(clampJudgementIndicatorWidthScale(value) * 100.0f));
 }
 
-static float judgementIndicatorWidthPercentToScale(int percent) {
+inline float judgementIndicatorWidthPercentToScale(int percent) {
   return clampJudgementIndicatorWidthScale(static_cast<float>(percent) /
                                            100.0f);
 }
 
-static int adjustVisibleTimeDurationMilliseconds(int currentMilliseconds,
+inline int adjustVisibleTimeDurationMilliseconds(int currentMilliseconds,
                                                  bool useMilliseconds,
                                                  int delta) {
   if (useMilliseconds) {
@@ -593,15 +593,15 @@ static int adjustVisibleTimeDurationMilliseconds(int currentMilliseconds,
       delta);
 }
 
-static std::string formatOffsetLabel(int offsetMs) {
+inline std::string formatOffsetLabel(int offsetMs) {
   return (offsetMs > 0 ? "+" : "") + std::to_string(offsetMs) + " ms";
 }
 
-static std::string formatOffsetInputValue(int offsetMs) {
+inline std::string formatOffsetInputValue(int offsetMs) {
   return std::to_string(offsetMs);
 }
 
-static std::string formatVisibleTimeLabel(int milliseconds,
+inline std::string formatVisibleTimeLabel(int milliseconds,
                                           bool useMilliseconds) {
   if (useMilliseconds) {
     return std::to_string(milliseconds) + " ms";
@@ -611,7 +611,7 @@ static std::string formatVisibleTimeLabel(int milliseconds,
          " green";
 }
 
-static std::string formatVisibleTimeInputValue(int milliseconds,
+inline std::string formatVisibleTimeInputValue(int milliseconds,
                                                bool useMilliseconds) {
   if (useMilliseconds) {
     return std::to_string(milliseconds);
@@ -620,7 +620,7 @@ static std::string formatVisibleTimeInputValue(int milliseconds,
       AppSettings::durationMillisecondsToGreenNumber(milliseconds));
 }
 
-static std::string formatVisibleTimeBpmStrategyLabel(
+inline std::string formatVisibleTimeBpmStrategyLabel(
     AppSettings::HiSpeedFixMode mode) {
   switch (mode) {
   case AppSettings::HiSpeedFixMode::Off:
@@ -637,45 +637,45 @@ static std::string formatVisibleTimeBpmStrategyLabel(
   return "Main BPM";
 }
 
-static std::string formatFloatValue(float value, int precision = 1) {
+inline std::string formatFloatValue(float value, int precision = 1) {
   std::ostringstream stream;
   stream << std::fixed << std::setprecision(precision) << value;
   return stream.str();
 }
 
-static std::string formatBgaBrightnessLabel(int percent) {
+inline std::string formatBgaBrightnessLabel(int percent) {
   return std::to_string(percent) + "%";
 }
 
-static std::string formatBgaBlurLabel(float strength) {
+inline std::string formatBgaBlurLabel(float strength) {
   return formatFloatValue(strength, 1);
 }
 
-static std::string formatLaneAngleLabel(float degrees) {
+inline std::string formatLaneAngleLabel(float degrees) {
   return formatFloatValue(degrees, 1) + " deg";
 }
 
-static std::string formatLaneLengthLabel(float length) {
+inline std::string formatLaneLengthLabel(float length) {
   return formatFloatValue(length, 1);
 }
 
-static std::string formatLaneBeamLengthLabel(int percent) {
+inline std::string formatLaneBeamLengthLabel(int percent) {
   return std::to_string(clampLaneBeamLengthPercent(percent)) + "%";
 }
 
-static std::string formatNoteStartPositionLabel(int percent) {
+inline std::string formatNoteStartPositionLabel(int percent) {
   return std::to_string(clampNoteStartPositionPercent(percent)) + "%";
 }
 
-static std::string formatJudgementPercentLabel(int percent) {
+inline std::string formatJudgementPercentLabel(int percent) {
   return std::to_string(std::clamp(percent, 0, 100)) + "%";
 }
 
-static std::string formatPlayAreaWidthLabel(float width) {
+inline std::string formatPlayAreaWidthLabel(float width) {
   return formatFloatValue(clampPlayAreaWidth(width), 1);
 }
 
-static std::string formatJudgementIndicatorRenderModeLabel(
+inline std::string formatJudgementIndicatorRenderModeLabel(
     AppSettings::JudgementIndicatorRenderMode mode) {
   switch (mode) {
   case AppSettings::JudgementIndicatorRenderMode::World3D:
@@ -686,7 +686,7 @@ static std::string formatJudgementIndicatorRenderModeLabel(
   return "3D Space";
 }
 
-static std::string formatJudgementCounterPositionLabel(
+inline std::string formatJudgementCounterPositionLabel(
     AppSettings::JudgementCounterPosition position) {
   switch (position) {
   case AppSettings::JudgementCounterPosition::Top:
@@ -699,7 +699,7 @@ static std::string formatJudgementCounterPositionLabel(
   return "Top";
 }
 
-static std::string formatJudgementTimingDisplayCriteriaLabel(
+inline std::string formatJudgementTimingDisplayCriteriaLabel(
     AppSettings::JudgementTimingDisplayCriteria criteria) {
   switch (criteria) {
   case AppSettings::JudgementTimingDisplayCriteria::PGreatOrBelow:
@@ -716,7 +716,7 @@ static std::string formatJudgementTimingDisplayCriteriaLabel(
   return "GREAT OR BELOW";
 }
 
-static std::string
+inline std::string
 formatGaugeBarPositionLabel(AppSettings::GaugeBarPosition position) {
   switch (position) {
   case AppSettings::GaugeBarPosition::World:
@@ -729,7 +729,7 @@ formatGaugeBarPositionLabel(AppSettings::GaugeBarPosition position) {
   return "World";
 }
 
-static std::string formatBgaDisplayModeLabel(AppSettings::BgaDisplayMode mode) {
+inline std::string formatBgaDisplayModeLabel(AppSettings::BgaDisplayMode mode) {
   switch (mode) {
   case AppSettings::BgaDisplayMode::Fit:
     return "Fit";
@@ -741,7 +741,7 @@ static std::string formatBgaDisplayModeLabel(AppSettings::BgaDisplayMode mode) {
   return "Fit";
 }
 
-static std::string
+inline std::string
 formatNotePriorityModeLabel(AppSettings::NotePriorityMode mode) {
   switch (mode) {
   case AppSettings::NotePriorityMode::Lowest:
@@ -756,7 +756,7 @@ formatNotePriorityModeLabel(AppSettings::NotePriorityMode mode) {
   return "Lowest";
 }
 
-static std::string formatUiThemeModeLabel(AppSettings::UiThemeMode mode) {
+inline std::string formatUiThemeModeLabel(AppSettings::UiThemeMode mode) {
   switch (mode) {
   case AppSettings::UiThemeMode::Dark:
     return "Dark";
@@ -766,22 +766,22 @@ static std::string formatUiThemeModeLabel(AppSettings::UiThemeMode mode) {
   return "Dark";
 }
 
-static std::string formatTableCount(int chartCount) {
+inline std::string formatTableCount(int chartCount) {
   return std::to_string(chartCount) + (chartCount == 1 ? " chart" : " charts");
 }
 
-static std::string formatTableSource(const std::string &sourceUrl) {
+inline std::string formatTableSource(const std::string &sourceUrl) {
   if (sourceUrl.empty()) {
     return "No source URL";
   }
   return sourceUrl;
 }
 
-static std::string formatChartEntryPath(const ChartEntry &entry) {
+inline std::string formatChartEntryPath(const ChartEntry &entry) {
   return path_t_to_utf8(entry.path);
 }
 
-static std::string formatChartEntryName(const ChartEntry &entry) {
+inline std::string formatChartEntryName(const ChartEntry &entry) {
   if (!entry.removable) {
     return "Default BMS";
   }
@@ -793,7 +793,7 @@ static std::string formatChartEntryName(const ChartEntry &entry) {
   return fspath_to_utf8(name);
 }
 
-static std::string formatChartEntrySource(const ChartEntry &entry) {
+inline std::string formatChartEntrySource(const ChartEntry &entry) {
   const std::string pathText = formatChartEntryPath(entry);
   if (!entry.removable) {
     return pathText +
@@ -808,7 +808,7 @@ static std::string formatChartEntrySource(const ChartEntry &entry) {
   return pathText;
 }
 
-static std::string formatImportProgressText(int current, int total) {
+inline std::string formatImportProgressText(int current, int total) {
   if (total <= 0) {
     return "Preparing";
   }
@@ -817,7 +817,7 @@ static std::string formatImportProgressText(int current, int total) {
          (total == 1 ? " table" : " tables");
 }
 
-static AppSettings::BgaDisplayMode
+inline AppSettings::BgaDisplayMode
 nextBgaDisplayMode(AppSettings::BgaDisplayMode mode) {
   switch (mode) {
   case AppSettings::BgaDisplayMode::Fit:
@@ -830,7 +830,7 @@ nextBgaDisplayMode(AppSettings::BgaDisplayMode mode) {
   return AppSettings::BgaDisplayMode::Fit;
 }
 
-static AppSettings::NotePriorityMode
+inline AppSettings::NotePriorityMode
 nextNotePriorityMode(AppSettings::NotePriorityMode mode) {
   switch (mode) {
   case AppSettings::NotePriorityMode::Lowest:
@@ -845,7 +845,7 @@ nextNotePriorityMode(AppSettings::NotePriorityMode mode) {
   return AppSettings::NotePriorityMode::Lowest;
 }
 
-static AppSettings::JudgementIndicatorRenderMode
+inline AppSettings::JudgementIndicatorRenderMode
 nextJudgementIndicatorRenderMode(
     AppSettings::JudgementIndicatorRenderMode mode) {
   switch (mode) {
@@ -857,7 +857,7 @@ nextJudgementIndicatorRenderMode(
   return AppSettings::JudgementIndicatorRenderMode::World3D;
 }
 
-static AppSettings::JudgementCounterPosition
+inline AppSettings::JudgementCounterPosition
 nextJudgementCounterPosition(
     AppSettings::JudgementCounterPosition position) {
   switch (position) {
@@ -871,7 +871,7 @@ nextJudgementCounterPosition(
   return AppSettings::JudgementCounterPosition::Top;
 }
 
-static AppSettings::JudgementTimingDisplayCriteria
+inline AppSettings::JudgementTimingDisplayCriteria
 nextJudgementTimingDisplayCriteria(
     AppSettings::JudgementTimingDisplayCriteria criteria) {
   switch (criteria) {
@@ -889,7 +889,7 @@ nextJudgementTimingDisplayCriteria(
   return AppSettings::JudgementTimingDisplayCriteria::GreatOrBelow;
 }
 
-static AppSettings::GaugeBarPosition
+inline AppSettings::GaugeBarPosition
 nextGaugeBarPosition(AppSettings::GaugeBarPosition position) {
   switch (position) {
   case AppSettings::GaugeBarPosition::World:
@@ -902,7 +902,7 @@ nextGaugeBarPosition(AppSettings::GaugeBarPosition position) {
   return AppSettings::GaugeBarPosition::World;
 }
 
-static AppSettings::UiThemeMode nextUiThemeMode(AppSettings::UiThemeMode mode) {
+inline AppSettings::UiThemeMode nextUiThemeMode(AppSettings::UiThemeMode mode) {
   switch (mode) {
   case AppSettings::UiThemeMode::Dark:
     return AppSettings::UiThemeMode::Light;

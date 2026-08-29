@@ -113,7 +113,6 @@ private:
       // scroll to the selected item
       if (changed) {
         const float previousOffset = scrollOffset;
-        int itemsSize = std::max(1, itemCount()) * itemHeight;
         int selectedY = selectedIndex * itemHeight;
         if (selectedY < scrollOffset) {
           scrollOffset = selectedY;
