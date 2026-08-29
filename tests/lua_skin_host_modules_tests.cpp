@@ -943,8 +943,12 @@ public:
                                                                          : 900,
               .supported = true};
     }
-    if (selector.value == decltype(selector.value){std::string{"exscore"}}) {
+    if (selector.value == decltype(selector.value){71}) {
       return {.value = 456, .supported = true};
+    }
+    if (selector.value ==
+        decltype(selector.value){std::string{"lua_gauge_type"}}) {
+      return {.value = 3, .supported = true};
     }
     if (selector.value == decltype(selector.value){std::string{"judge:2"}}) {
       return {.value = 7, .supported = true};
@@ -956,17 +960,24 @@ public:
   }
   SkinPropertyLookup<double>
   floatProperty(const SkinBuiltinPropertySelector &selector,
-                SkinFloatPropertyDomain) override {
-    if (selector.value == decltype(selector.value){std::string{"rate"}}) {
+                SkinFloatPropertyDomain domain) override {
+    if (selector.value == decltype(selector.value){1102} &&
+        domain == SkinFloatPropertyDomain::FloatValue) {
       return {.value = 91.25, .supported = true};
     }
-    if (selector.value == decltype(selector.value){std::string{"volume_bg"}}) {
+    if (selector.value == decltype(selector.value){std::string{"lua_gauge"}}) {
+      return {.value = 62.5, .supported = true};
+    }
+    if (selector.value == decltype(selector.value){19} &&
+        domain == SkinFloatPropertyDomain::Rate) {
       return {.value = 0.3, .supported = true};
     }
-    if (selector.value == decltype(selector.value){std::string{"volume_key"}}) {
+    if (selector.value == decltype(selector.value){18} &&
+        domain == SkinFloatPropertyDomain::Rate) {
       return {.value = 0.4, .supported = true};
     }
-    if (selector.value == decltype(selector.value){std::string{"volume_sys"}}) {
+    if (selector.value == decltype(selector.value){17} &&
+        domain == SkinFloatPropertyDomain::Rate) {
       return {.value = 0.5, .supported = true};
     }
     return {};
