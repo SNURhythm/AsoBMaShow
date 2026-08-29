@@ -1033,6 +1033,70 @@ void testTimingDistributionGraphSkipsGameplayDestinationCallbacks() {
          "gameplay timingdistributiongraph returns before destination callbacks and emits no commands");
 }
 
+void testTimingVisualizerSkipsResultDestinationCallbacks() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  ValidatedBeatorajaSkinModel model;
+  model.model.header.type = 7;
+  model.model.booleanProperties.push_back({
+      .id = SkinBooleanPropertyId{1},
+      .source = runtime.failCallback(),
+      .authoredOrdinal = 1,
+  });
+  model.model.timerProperties.push_back({
+      .id = SkinTimerPropertyId{1},
+      .source = runtime.forbiddenTimerCallback(),
+      .authoredOrdinal = 2,
+  });
+  model.model.objects.push_back(
+      {.id = 1,
+       .authoredName = "timing-visualizer",
+       .payload = SkinTimingVisualizerObject{},
+       .authoredOrdinal = 1,
+       .critical = true});
+  auto presented = destination(1, 10, 10.0);
+  presented.presentation.conditions.push_back(SkinBooleanPropertyId{1});
+  presented.presentation.timer = SkinTimerPropertyId{1};
+  model.model.destinations.push_back(std::move(presented));
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  expect(result.submitReady && result.submitReady->commands.empty() &&
+             result.diagnostics.empty(),
+         "timingvisualizer is BMSPlayer-only and skips result destination "
+         "callbacks");
+}
+
+void testTimingDistributionGraphSkipsCourseResult() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  const std::array<int, 301> distribution = [] {
+    std::array<int, 301> result{};
+    result[150] = 1;
+    return result;
+  }();
+  state.graphResult.timingDistribution = distribution;
+  state.graphResult.timingDistributionCenter = 150;
+  ValidatedBeatorajaSkinModel model;
+  model.model.header.type = 15;
+  model.model.objects.push_back(
+      {.id = 1,
+       .authoredName = "timing-distribution",
+       .payload = SkinTimingDistributionGraphObject{},
+       .authoredOrdinal = 1,
+       .critical = true});
+  model.model.destinations.push_back(destination(1, 1, 10.0));
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  expect(result.submitReady && result.submitReady->commands.empty() &&
+             result.diagnostics.empty(),
+         "timingdistributiongraph is MusicResult-only and stays hidden on a "
+         "course result");
+}
+
 bool hasDiagnostic(const SkinFrameEvaluationResult &result,
                    std::string_view code) {
   return std::ranges::any_of(result.diagnostics, [&](const auto &diagnostic) {
@@ -3054,6 +3118,44 @@ void testGaugeMapsFamiliesRolesAndPartGeometry() {
                quad.vertices[1].x == 50.0F + 40.0F * part,
            "gauge part geometry slices the destination left to right");
   }
+}
+
+void testResultGaugeRevealCapsAtTheFinalGaugeValue() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  state.gaugeResult = {.supported = true,
+                       .value = 40.0,
+                       .gaugeType = 0,
+                       .minimum = 0.0,
+                       .maximum = 100.0,
+                       .border = 0.0};
+  ValidatedBeatorajaSkinModel model;
+  model.model.header.type = 7;
+  auto gauge = gaugeObject(resources, SkinGaugeAnimationType::Increase, 5);
+  gauge.animationRange = 0;
+  gauge.resultStartMillis = 0;
+  gauge.resultEndMillis = 1'000;
+  model.model.objects = {{.id = 1,
+                          .authoredName = "result-gauge",
+                          .payload = std::move(gauge),
+                          .authoredOrdinal = 1,
+                          .critical = true}};
+  auto presented = destination(1, 1, 10.0);
+  presented.presentation.loop = 0;
+  model.model.destinations.push_back(std::move(presented));
+
+  const auto result = evaluate(renderer, runtime, model, resources, state, 1,
+                               500'000);
+  const auto *secondPart = result.submitReady &&
+                                   result.submitReady->commands.size() == 5
+                               ? std::get_if<SkinTexturedQuadCommand>(
+                                     &result.submitReady->commands[1].payload)
+                               : nullptr;
+  expect(secondPart != nullptr && secondPart->resource == 104,
+         "result gauge reveal grows to max and caps at the final gauge value "
+         "instead of scaling that value by progress");
 }
 
 void testGaugeSegmentSelectionRoundsAtJavaFloatBoundary() {
@@ -5518,6 +5620,37 @@ void testGeneratedGaugePixmapPreservesLayersCrossingAndBudget() {
          "gauge generated-layer command overflow remains atomic");
 }
 
+void testGeneratedCourseGaugePixmapMarksStageBoundaries() {
+  SkinGaugeGraphObject graph;
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 0.0, .y = 0.0, .width = 100.0, .height = 100.0};
+  const std::array<float, 4> history{10.0F, 20.0F, 30.0F, 40.0F};
+  const std::array<std::size_t, 2> sections{2, 4};
+  const auto rendered = renderSkinGaugeGraph(
+      {.sourceObject = 9,
+       .authoredOrdinal = 11,
+       .graph = graph,
+       .state = {.gaugeHistory = history,
+                 .gaugeHistorySections = sections,
+                 .gaugeType = 0,
+                 .gaugeMaximum = 100.0F,
+                 .gaugeBorder = 80.0F,
+                 .gaugeSupported = true},
+       .geometry = geometry,
+       .viewport = viewport(),
+       .elapsedMillis = 1'500,
+       .maximumCommands = 2,
+       .maximumPrimitiveVertices = 0});
+  const auto *shape = rendered.commands.size() == 2
+                          ? generatedTexture(rendered.commands[1])
+                          : nullptr;
+  expect(!rendered.failure && shape != nullptr &&
+             generatedRgba(*shape, 25, 70) == 0xffffffffU &&
+             generatedRgba(*shape, 75, 70) != 0xffffffffU,
+         "course gauge graphs mark source stage boundaries but not the final "
+         "history endpoint");
+}
+
 void testGeneratedNotePixmapPreservesPmsOrderGapsCursorAndFloatReveal() {
   std::array<SkinJudgeDistribution, 2> distribution{};
   distribution[0][0] = 1;
@@ -5833,6 +5966,52 @@ void testGeneratedGaugeCacheRefreshesEveryPublishedHistoryRevision() {
          "revision when the gauge type is unchanged");
 }
 
+void testGeneratedGaugeCacheRefreshesForCourseSectionChanges() {
+  SkinGeneratedTextureCache cache;
+  SkinGaugeGraphObject graph;
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 0.0, .y = 0.0, .width = 20.0, .height = 10.0};
+  const std::array<float, 4> history{20.0F, 40.0F, 60.0F, 80.0F};
+  const std::array<std::size_t, 1> sections{2};
+  const auto render = [&](std::span<const std::size_t> sectionOffsets) {
+    return renderSkinGaugeGraph(
+        {.sourceObject = 43,
+         .authoredOrdinal = 44,
+         .graph = graph,
+         .state = {.gaugeHistory = history,
+                   .gaugeHistorySections = sectionOffsets,
+                   .gaugeType = 0,
+                   .gaugeMaximum = 100.0F,
+                   .gaugeBorder = 50.0F,
+                   .gaugeSupported = true,
+                   .gaugeRevision = 1},
+         .geometry = geometry,
+         .viewport = viewport(),
+         .elapsedMillis = 1'500,
+         .maximumCommands = 2,
+         .maximumPrimitiveVertices = 0,
+         .cache = &cache});
+  };
+
+  const auto withoutSections = render({});
+  const auto withSections = render(sections);
+  const auto *firstShape = withoutSections.commands.size() == 2
+                               ? generatedTexture(withoutSections.commands[1])
+                               : nullptr;
+  const auto *sectionedShape = withSections.commands.size() == 2
+                                   ? generatedTexture(withSections.commands[1])
+                                   : nullptr;
+  const auto stats = cache.stats();
+  expect(firstShape && sectionedShape && !withoutSections.failure &&
+             !withSections.failure &&
+             firstShape->texture.contentRevision !=
+                 sectionedShape->texture.contentRevision &&
+             generatedRgba(*sectionedShape, 5, 0) == 0xffffffffU &&
+             stats.rasterizations == 3 && stats.reuses == 1,
+         "gauge Pixmap cache includes course stage boundaries in its content "
+         "identity");
+}
+
 std::array<SkinJudgeWindow, 5> generatedJudgeWindows() {
   return {{{.minimumTimingMillis = -5, .maximumTimingMillis = 5},
            {.minimumTimingMillis = -10, .maximumTimingMillis = 10},
@@ -5901,6 +6080,34 @@ void testGeneratedPixmapWidgetsMatchSourceLayersAndPixels() {
              generatedRgba(*generatedTexture(note.commands[1]), 0, 5) ==
                  0x228822ffU,
          "Note distribution precomposes ordered chips into its shape Pixmap");
+}
+
+void testTimingDistributionKeepsOneMillisecondPerSourcePixel() {
+  SkinTimingDistributionGraphObject graph;
+  graph.width = 12;
+  graph.lineWidth = 3;
+  graph.graphRgba = 0x112233ffU;
+  graph.judgeRgba.fill(0U);
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 0.0, .y = 0.0, .width = 12.0, .height = 10.0};
+  const std::array<int, 9> distribution{0, 0, 0, 0, 0, 1, 0, 0, 0};
+  const auto rendered = renderSkinTimingDistributionGraph(
+      {.sourceObject = 31,
+       .authoredOrdinal = 32,
+       .graph = graph,
+       .state = {.timingDistribution = distribution,
+                 .timingDistributionCenter = 4},
+       .geometry = geometry,
+       .viewport = viewport(),
+       .maximumCommands = 1,
+       .maximumPrimitiveVertices = 0});
+  const auto *texture = rendered.commands.size() == 1
+                            ? generatedTexture(rendered.commands.front())
+                            : nullptr;
+  expect(!rendered.failure && texture != nullptr &&
+             generatedRgba(*texture, 3, 9) == graph.graphRgba,
+         "timing distribution lineWidth scales the source Pixmap instead of "
+         "aggregating or relocating millisecond buckets");
 }
 
 void testGeneratedPixmapHitErrorTimingAndZeroAlphaContracts() {
@@ -6116,6 +6323,8 @@ int main() {
   testHiddenImageStillSelectsSourceAfterRuntimeSuppression();
   testEmptyDestinationIsDroppedBeforeObjectStateResolution();
   testTimingDistributionGraphSkipsGameplayDestinationCallbacks();
+  testTimingVisualizerSkipsResultDestinationCallbacks();
+  testTimingDistributionGraphSkipsCourseResult();
   testProjectionOrdinalIrregularitiesNeverDiscardAGameplayFrame();
   testLargeProjectionDoesNotHitAnAppSpecificFrameLimit();
   testBindingAndDisabledLookupsStayLogarithmicAtModelLimits();
@@ -6154,6 +6363,7 @@ int main() {
   testDescendingIntegerGraphRatesUsePinnedDirection();
   testIntegerGraphOverflowRangeDoesNotRejectTheFrame();
   testGaugeMapsFamiliesRolesAndPartGeometry();
+  testResultGaugeRevealCapsAtTheFinalGaugeValue();
   testGaugeSegmentSelectionRoundsAtJavaFloatBoundary();
   testGaugeAnimationUsesStrictDeadlineAndFlickerOverlayOrder();
   testHiddenGaugeStillAdvancesAndDirectDrawIgnoresImageTransforms();
@@ -6183,13 +6393,16 @@ int main() {
   testSoftwarePixmapMatchesPinnedGdx2dCompositing();
   testGeneratedBpmPixmapPreservesSourceRasterRevealAndIntegration();
   testGeneratedGaugePixmapPreservesLayersCrossingAndBudget();
+  testGeneratedCourseGaugePixmapMarksStageBoundaries();
   testGeneratedNotePixmapPreservesPmsOrderGapsCursorAndFloatReveal();
   testGeneratedHitErrorPixmapPreservesEmaAndDestinationState();
   testGeneratedTimingPixmapPreservesBandsLinesAndZeroAlphaBudget();
   testTimingRecentLinesUseExplicitColorZeroAngleAndPerLineStretch();
   testGeneratedPixmapCacheBoundsCpuBeforeAllocationAndHonorsCadence();
   testGeneratedGaugeCacheRefreshesEveryPublishedHistoryRevision();
+  testGeneratedGaugeCacheRefreshesForCourseSectionChanges();
   testGeneratedPixmapWidgetsMatchSourceLayersAndPixels();
+  testTimingDistributionKeepsOneMillisecondPerSourcePixel();
   testGeneratedPixmapHitErrorTimingAndZeroAlphaContracts();
   testDesktopAndIpadFitCommandFixtures();
   return failures == 0 ? 0 : 1;

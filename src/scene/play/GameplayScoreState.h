@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <map>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -791,6 +792,13 @@ public:
                                : AssistClearMark::None);
   }
 
+  // A recalled result has an authenticated clear rank independent of its
+  // reconstructed gauge snapshot. Keep that presentation fact separate from
+  // the live gauge calculation used while playing.
+  void restoreClearTypeRankForResult(int rank) {
+    recalledClearTypeRank_ = rank;
+  }
+
   void applyGaugeJudgement(Judgement judgement) {
     applyGaugeJudgementRate(judgement, 1.0f);
   }
@@ -869,11 +877,12 @@ public:
   }
 
   [[nodiscard]] int getClearTypeRank() const {
-    return clearTypeToRank(getClearType());
+    return recalledClearTypeRank_.value_or(clearTypeToRank(getClearType()));
   }
 
   [[nodiscard]] const char *getClearTypeLabel() const {
-    return clearTypeToLabel(getClearType());
+    return recalledClearTypeRank_ ? clearTypeRankToLabel(*recalledClearTypeRank_)
+                                  : clearTypeToLabel(getClearType());
   }
 
   [[nodiscard]] bool activeGaugeFailed() const {
@@ -888,6 +897,7 @@ public:
   ~GameplayScoreState() {}
 
 private:
+  std::optional<int> recalledClearTypeRank_;
   [[nodiscard]] const CompiledGaugeDefinition &
   gaugeDefinition(GaugeType type) const noexcept {
     return gaugeRules_.gauges[gaugeTypeIndex(type)];

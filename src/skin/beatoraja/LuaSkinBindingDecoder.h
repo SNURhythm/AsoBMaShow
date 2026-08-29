@@ -47,13 +47,17 @@ struct SkinBuiltinBindingCatalogRange {
   int last = -1;
 };
 
+using SkinBuiltinBindingCatalogNameMatcher =
+    bool (*)(SkinBindingType, std::string_view) noexcept;
+
 class SkinBuiltinBindingCatalogView final {
 public:
   SkinBuiltinBindingCatalogView() noexcept = default;
   explicit SkinBuiltinBindingCatalogView(
       std::span<const SkinBuiltinBindingCatalogEntry> entries,
-      std::span<const SkinBuiltinBindingCatalogRange> ranges = {}) noexcept
-      : entries_(entries), ranges_(ranges) {}
+      std::span<const SkinBuiltinBindingCatalogRange> ranges = {},
+      SkinBuiltinBindingCatalogNameMatcher nameMatcher = nullptr) noexcept
+      : entries_(entries), ranges_(ranges), nameMatcher_(nameMatcher) {}
 
   [[nodiscard]] bool
   contains(SkinBindingType type,
@@ -73,6 +77,10 @@ public:
         }
       }
     }
+    if (const auto *name = std::get_if<std::string>(&selector.value);
+        name != nullptr && nameMatcher_ != nullptr) {
+      return nameMatcher_(type, *name);
+    }
     return false;
   }
 
@@ -88,6 +96,7 @@ private:
 
   std::span<const SkinBuiltinBindingCatalogEntry> entries_;
   std::span<const SkinBuiltinBindingCatalogRange> ranges_;
+  SkinBuiltinBindingCatalogNameMatcher nameMatcher_ = nullptr;
 };
 
 struct SkinBindingCatalogView {

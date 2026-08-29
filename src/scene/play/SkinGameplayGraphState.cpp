@@ -35,6 +35,7 @@ skinGameplayGraphStateView(const SkinGameplayGraphState &state) noexcept {
       view.gaugeHistory =
           state.dynamic->gaugeHistories[static_cast<std::size_t>(gaugeIndex)];
     }
+    view.gaugeHistorySections = state.dynamic->gaugeHistorySections;
     view.gaugeType = gaugeIndex;
     view.gaugeMinimum = state.dynamic->gaugeMinimum;
     view.gaugeMaximum = state.dynamic->gaugeMaximum;
@@ -87,6 +88,57 @@ combineSkinGameplayGraphStates(std::span<const SkinGameplayGraphState> stages) {
     }
     if (stageChart.maximumBpm > 0.0) {
       chart->maximumBpm = std::max(chart->maximumBpm, stageChart.maximumBpm);
+    }
+    if (stageChart.normalKeyNotes) {
+      chart->normalKeyNotes = stageChart.normalKeyNotes;
+    }
+    if (stageChart.longKeyNotes) {
+      chart->longKeyNotes = stageChart.longKeyNotes;
+    }
+    if (stageChart.normalScratchNotes) {
+      chart->normalScratchNotes = stageChart.normalScratchNotes;
+    }
+    if (stageChart.longScratchNotes) {
+      chart->longScratchNotes = stageChart.longScratchNotes;
+    }
+    if (stageChart.peakDensity) {
+      chart->peakDensity = stageChart.peakDensity;
+    }
+    if (stageChart.endDensity) {
+      chart->endDensity = stageChart.endDensity;
+    }
+    if (stageChart.averageDensity) {
+      chart->averageDensity = stageChart.averageDensity;
+    }
+    if (stageChart.totalGauge) {
+      chart->totalGauge = stageChart.totalGauge;
+    }
+    if (stageChart.selectedLongNoteMode) {
+      chart->selectedLongNoteMode = stageChart.selectedLongNoteMode;
+    }
+    if (stageChart.hasAnyLongNote) {
+      chart->hasAnyLongNote = stageChart.hasAnyLongNote;
+    }
+    if (stageChart.hasUndefinedLongNote) {
+      chart->hasUndefinedLongNote = stageChart.hasUndefinedLongNote;
+    }
+    if (stageChart.hasLongNote) {
+      chart->hasLongNote = stageChart.hasLongNote;
+    }
+    if (stageChart.hasChargeNote) {
+      chart->hasChargeNote = stageChart.hasChargeNote;
+    }
+    if (stageChart.hasHellChargeNote) {
+      chart->hasHellChargeNote = stageChart.hasHellChargeNote;
+    }
+    if (stageChart.hasBga) {
+      chart->hasBga = stageChart.hasBga;
+    }
+    if (stageChart.hasRandomSequence) {
+      chart->hasRandomSequence = stageChart.hasRandomSequence;
+    }
+    if (stageChart.hasBpmStop) {
+      chart->hasBpmStop = stageChart.hasBpmStop;
     }
     dynamic->judgementDistribution.insert(
         dynamic->judgementDistribution.end(),

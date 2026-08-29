@@ -696,6 +696,22 @@ int pushNamedInteger(lua_State *state, std::string_view name) {
   return 1;
 }
 
+int pushIntegerProperty(lua_State *state, int id, std::string_view name) {
+  auto *current = frameState(state);
+  if (current == nullptr) {
+    return luaL_error(state, "main_state.%.*s has no configured state",
+                      static_cast<int>(name.size()), name.data());
+  }
+  const auto result = current->integerProperty(
+      {.value = id}, SkinIntegerPropertyDomain::IntegerValue);
+  if (!result.supported) {
+    return luaL_error(state, "unsupported main_state.%.*s",
+                      static_cast<int>(name.size()), name.data());
+  }
+  lua_pushnumber(state, static_cast<lua_Number>(result.value));
+  return 1;
+}
+
 int pushNamedFloat(lua_State *state, std::string_view name) {
   auto *current = frameState(state);
   if (current == nullptr) {
@@ -704,6 +720,23 @@ int pushNamedFloat(lua_State *state, std::string_view name) {
   }
   const auto result = current->floatProperty(
       {.value = std::string{name}}, SkinFloatPropertyDomain::Rate);
+  if (!result.supported) {
+    return luaL_error(state, "unsupported main_state.%.*s",
+                      static_cast<int>(name.size()), name.data());
+  }
+  lua_pushnumber(state, static_cast<lua_Number>(result.value));
+  return 1;
+}
+
+int pushFloatProperty(lua_State *state, int id,
+                      SkinFloatPropertyDomain domain, std::string_view name) {
+  auto *current = frameState(state);
+  if (current == nullptr) {
+    return luaL_error(state, "main_state.%.*s has no configured state",
+                      static_cast<int>(name.size()), name.data());
+  }
+  const auto result =
+      current->floatProperty({.value = id}, domain);
   if (!result.supported) {
     return luaL_error(state, "unsupported main_state.%.*s",
                       static_cast<int>(name.size()), name.data());
@@ -728,29 +761,20 @@ int mainStateEventIndex(lua_State *state) {
 }
 
 int mainStateExscore(lua_State *state) {
-  return pushNamedInteger(state, "exscore");
+  // MainStatePropertyLuaApiExporter reads ScoreDataProperty.getNowEXScore(),
+  // which is IntegerPropertyFactory's current-score selector rather than the
+  // result-only Lua alias.
+  return pushIntegerProperty(state, 71, "exscore");
 }
 
 int mainStateGauge(lua_State *state) {
-  auto *current = frameState(state);
-  const auto gauge =
-      current == nullptr ? SkinGaugeStateView{} : current->gaugeState();
-  if (!gauge.supported) {
-    return luaL_error(state, "main_state.gauge has no configured state");
-  }
-  lua_pushnumber(state, static_cast<lua_Number>(gauge.value));
-  return 1;
+  // Beatoraja returns a gauge only for BMSPlayer and returns zero from all
+  // result MainStates. Keep this distinct from the result gauge renderer.
+  return pushNamedFloat(state, "lua_gauge");
 }
 
 int mainStateGaugeType(lua_State *state) {
-  auto *current = frameState(state);
-  const auto gauge =
-      current == nullptr ? SkinGaugeStateView{} : current->gaugeState();
-  if (!gauge.supported) {
-    return luaL_error(state, "main_state.gauge_type has no configured state");
-  }
-  lua_pushnumber(state, static_cast<lua_Number>(gauge.gaugeType));
-  return 1;
+  return pushNamedInteger(state, "lua_gauge_type");
 }
 
 int mainStateJudge(lua_State *state) {
@@ -758,20 +782,44 @@ int mainStateJudge(lua_State *state) {
   return pushNamedInteger(state, "judge:" + std::to_string(judge));
 }
 
-int mainStateRate(lua_State *state) { return pushNamedFloat(state, "rate"); }
+int mainStateRate(lua_State *state) {
+  return pushFloatProperty(state, 1102, SkinFloatPropertyDomain::FloatValue,
+                           "rate");
+}
+
+int mainStateRateBest(lua_State *state) {
+  return pushFloatProperty(state, 112, SkinFloatPropertyDomain::Rate,
+                           "rate_best");
+}
+
+int mainStateExscoreBest(lua_State *state) {
+  return pushIntegerProperty(state, 150, "exscore_best");
+}
+
+int mainStateRateRival(lua_State *state) {
+  return pushFloatProperty(state, 115, SkinFloatPropertyDomain::Rate,
+                           "rate_rival");
+}
+
+int mainStateExscoreRival(lua_State *state) {
+  return pushIntegerProperty(state, 121, "exscore_rival");
+}
 
 int mainStateTime(lua_State *state) { return pushNamedInteger(state, "time"); }
 
 int mainStateVolumeBg(lua_State *state) {
-  return pushNamedFloat(state, "volume_bg");
+  return pushFloatProperty(state, 19, SkinFloatPropertyDomain::Rate,
+                           "volume_bg");
 }
 
 int mainStateVolumeKey(lua_State *state) {
-  return pushNamedFloat(state, "volume_key");
+  return pushFloatProperty(state, 18, SkinFloatPropertyDomain::Rate,
+                           "volume_key");
 }
 
 int mainStateVolumeSys(lua_State *state) {
-  return pushNamedFloat(state, "volume_sys");
+  return pushFloatProperty(state, 17, SkinFloatPropertyDomain::Rate,
+                           "volume_sys");
 }
 
 std::string luaToJString(lua_State *state, int index) {
@@ -1081,6 +1129,14 @@ void populateMainState(lua_State *state, LuaSkinHostModulesImpl *impl) {
   lua_setfield(state, -2, "judge");
   installClosure(state, impl, mainStateRate);
   lua_setfield(state, -2, "rate");
+  installClosure(state, impl, mainStateRateBest);
+  lua_setfield(state, -2, "rate_best");
+  installClosure(state, impl, mainStateExscoreBest);
+  lua_setfield(state, -2, "exscore_best");
+  installClosure(state, impl, mainStateRateRival);
+  lua_setfield(state, -2, "rate_rival");
+  installClosure(state, impl, mainStateExscoreRival);
+  lua_setfield(state, -2, "exscore_rival");
   installClosure(state, impl, mainStateTime);
   lua_setfield(state, -2, "time");
   installClosure(state, impl, mainStateVolumeBg);

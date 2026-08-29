@@ -3654,6 +3654,13 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           std::get_if<SkinBpmGraphObject>(&object->payload);
       const auto *timingVisualizer =
           std::get_if<SkinTimingVisualizerObject>(&object->payload);
+      // SkinTimingVisualizer.prepare accepts BMSPlayer only and returns
+      // before SkinObject.prepare for either result state. Keep its result
+      // declaration inert, including all destination callbacks.
+      if (timingVisualizer && (inputs.model.model.header.type == 7 ||
+                               inputs.model.model.header.type == 15)) {
+        continue;
+      }
       const auto *timingDistribution =
           std::get_if<SkinTimingDistributionGraphObject>(&object->payload);
       if (timingDistribution && inputs.model.model.header.type != 7 &&
@@ -4261,6 +4268,12 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       }
 
       if (timingDistribution) {
+        // SkinTimingDistributionGraph.prepare accepts MusicResult only. A
+        // course-result skin may declare the object, but Beatoraja keeps it
+        // hidden rather than visualizing the aggregate course snapshot.
+        if (inputs.model.model.header.type != 7) {
+          continue;
+        }
         if (evaluated.geometry->rgba[3] <= 0.0F) {
           continue;
         }
@@ -4326,19 +4339,23 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       if (gauge) {
         const auto gaugeState = inputs.state.gaugeState();
         float gaugeValue = static_cast<float>(gaugeState.value);
-        if (inputs.model.model.header.type == 7 ||
-            inputs.model.model.header.type == 15) {
-          const std::int64_t elapsedMillis = inputs.visualTimeMicros / 1'000;
-          const double progress = std::clamp(
-              static_cast<double>(elapsedMillis - gauge->resultStartMillis) /
-                  static_cast<double>(gauge->resultEndMillis -
-                                      gauge->resultStartMillis),
-              0.0, 1.0);
-          gaugeValue *= static_cast<float>(progress);
-        }
         const float gaugeMinimum = static_cast<float>(gaugeState.minimum);
         const float gaugeMaximum = static_cast<float>(gaugeState.maximum);
         const float gaugeBorder = static_cast<float>(gaugeState.border);
+        if (inputs.model.model.header.type == 7 ||
+            inputs.model.model.header.type == 15) {
+          const std::int64_t elapsedMillis = inputs.visualTimeMicros / 1'000;
+          if (elapsedMillis < gauge->resultStartMillis) {
+            gaugeValue = gaugeMinimum;
+          } else if (elapsedMillis < gauge->resultEndMillis) {
+            const float reveal = gaugeMaximum * static_cast<float>(
+                elapsedMillis - gauge->resultStartMillis) /
+                static_cast<float>(gauge->resultEndMillis -
+                                   gauge->resultStartMillis);
+            gaugeValue = std::min(gaugeValue,
+                                  std::max(reveal, gaugeMinimum));
+          }
+        }
         const bool modelValid =
             gauge->orderedNodes.size() == 36 && gauge->parts >= 1 &&
             gauge->parts <= 512 && gauge->animationRange >= 0 &&

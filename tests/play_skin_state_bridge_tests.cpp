@@ -97,6 +97,15 @@ local captured_main_state = require("main_state")
 return {
   type=0,
   probe_timer=function() return captured_main_state.timer(41) end,
+  probe_main_state_rate=function() return captured_main_state.rate() end,
+  probe_main_state_exscore=function() return captured_main_state.exscore() end,
+  probe_main_state_rate_best=function() return captured_main_state.rate_best() end,
+  probe_main_state_exscore_best=function() return captured_main_state.exscore_best() end,
+  probe_main_state_rate_rival=function() return captured_main_state.rate_rival() end,
+  probe_main_state_exscore_rival=function() return captured_main_state.exscore_rival() end,
+  probe_main_state_gauge=function() return captured_main_state.gauge() end,
+  probe_main_state_gauge_type=function() return captured_main_state.gauge_type() end,
+  probe_main_state_time=function() return captured_main_state.time() end,
   normalized_writer=function(value)
     assert(value >= 0 and value <= 1)
     captured_main_state.event_exec(900, math.floor(value * 100 + 0.5))
@@ -232,7 +241,11 @@ private:
              "custom_stage_then_fail", "custom_budget",
              "custom_stage", "custom_after_budget", "custom_event_second",
              "duplicate_event_obsolete", "duplicate_event_final",
-             "custom_trace"}) {
+             "custom_trace", "probe_main_state_rate",
+             "probe_main_state_exscore", "probe_main_state_rate_best",
+             "probe_main_state_exscore_best", "probe_main_state_rate_rival",
+             "probe_main_state_exscore_rival", "probe_main_state_gauge",
+             "probe_main_state_gauge_type", "probe_main_state_time"}) {
       if (const auto callback = value.callbackNamed(name)) {
         callbacks_.insert_or_assign(std::string{name}, *callback);
       }
@@ -780,6 +793,74 @@ void testBridgeOwnsSnapshotAndClosesEachFrameExactlyOnce() {
          "discard is an idempotent frame closure");
 }
 
+void testMainStateConvenienceAccessorsUseCanonicalSourceProperties() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+  PlayfieldChartVisualModel chart;
+  chart.staticMetadata.totalNotes = 200;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = &runtime.runtime(),
+                              .mutationTable = mutations});
+
+  auto state = stateAt(73);
+  state.score = 100;
+  state.authority.stagePassedNotes = 100;
+  state.authority.judgementCounters = {{PGreat, 100}};
+  state.authority.bestScore = 120;
+  state.authority.bestScoreTarget = {.enabled = true,
+                                     .finalScore = 120,
+                                     .totalNotes = 200};
+  state.authority.pacemakerTarget = {.enabled = true,
+                                     .finalScore = 160,
+                                     .totalNotes = 200};
+  bridge.beginFrame(state, projectionAt(73));
+  expect(runtime.runtime().beginFrame(73).ok,
+         "main_state convenience-accessor runtime frame begins");
+
+  const auto number = [&](std::string_view name) -> std::optional<double> {
+    const auto value = runtime.runtime().invoke(runtime.callback(name), {});
+    if (!value.value) {
+      return std::nullopt;
+    }
+    if (const auto *integer = std::get_if<std::int64_t>(&*value.value)) {
+      return static_cast<double>(*integer);
+    }
+    if (const auto *floating = std::get_if<double>(&*value.value)) {
+      return *floating;
+    }
+    return std::nullopt;
+  };
+  const auto closeTo = [](std::optional<double> actual, double expected) {
+    return actual && std::abs(*actual - expected) < 0.0000001;
+  };
+  expect(closeTo(number("probe_main_state_rate"), 0.5),
+         "main_state.rate uses ScoreDataProperty's current rate");
+  expect(closeTo(number("probe_main_state_exscore"), 100.0),
+         "main_state.exscore uses ScoreDataProperty's current EX score");
+  expect(closeTo(number("probe_main_state_rate_best"), 0.15),
+         "main_state.rate_best uses ScoreDataProperty's current best rate");
+  expect(closeTo(number("probe_main_state_exscore_best"), 120.0),
+         "main_state.exscore_best uses ScoreDataProperty's best EX score");
+  expect(closeTo(number("probe_main_state_rate_rival"), 0.4),
+         "main_state.rate_rival uses ScoreDataProperty's rival final rate");
+  expect(closeTo(number("probe_main_state_exscore_rival"), 160.0),
+         "main_state.exscore_rival uses ScoreDataProperty's rival EX score");
+  expect(closeTo(number("probe_main_state_gauge"), 62.0) &&
+             closeTo(number("probe_main_state_gauge_type"),
+                     static_cast<double>(gaugeTypeIndex(GaugeType::Normal))) &&
+             closeTo(number("probe_main_state_time"), 2'500'000.0),
+         "main_state gameplay-only gauge and clock helpers use BMSPlayer state");
+  bridge.discardFrame();
+
+}
+
 void testFramePropertiesUseAuthoritativeGaugeAndTimerRules() {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
@@ -822,6 +903,15 @@ void testFramePropertiesUseAuthoritativeGaugeAndTimerRules() {
              !autoplayOn.value,
          "the full pinned BooleanPropertyFactory domain includes the "
          "autoplay pair with AsoBMaShow's non-autoplay gameplay state");
+  const auto namedBga = bridge.booleanProperty({.value = std::string{"bgaon"}});
+  const auto namedNoBga =
+      bridge.booleanProperty({.value = std::string{"!bgaon"}});
+  const auto namedPractice =
+      bridge.booleanProperty({.value = std::string{"practice_item1"}});
+  expect(namedBga.supported && !namedBga.value && namedNoBga.supported &&
+             namedNoBga.value && namedPractice.supported && !namedPractice.value,
+         "BooleanPropertyFactory names and !-prefixed names resolve in their "
+         "own source namespace, including practice-item patterns");
   for (const int id : {603, 1002, 1177, 2246, 3000, 3015, 3020, 3035}) {
     const auto value = bridge.booleanProperty({id});
     expect(value.supported && !value.value,
@@ -2605,6 +2695,14 @@ void testPlayTimerPropertiesMatchPinnedJavaConversions() {
            "gameplay catalog admits each executable signed BooleanProperty "
            "selector");
   }
+  for (const std::string_view name : {"bgaon", "!bgaon", "result_clear",
+                                      "!result_clear", "practice_item1",
+                                      "!practice_item1", "practice_item16_selected",
+                                      "!practice_item16_selected"}) {
+    expect(catalog.contains({.kind = SkinBindingKind::BooleanProperty},
+                            SkinBuiltinPropertySelector{std::string(name)}),
+           "gameplay catalog admits each named BooleanPropertyFactory selector");
+  }
   for (const int id : {161, 162, 163, 164}) {
     expect(catalog.contains({.kind = SkinBindingKind::IntegerProperty,
                              .integerDomain =
@@ -3738,6 +3836,7 @@ int main() {
   testMarkProcessedNoteImageIndexTracksPlayerConfiguration();
   testUndefinedLongNoteImageIndexMatchesBeatorajaPlayerConfig();
   testBridgeOwnsSnapshotAndClosesEachFrameExactlyOnce();
+  testMainStateConvenienceAccessorsUseCanonicalSourceProperties();
   testFramePropertiesUseAuthoritativeGaugeAndTimerRules();
   testGameplayModeAndLoadingBooleanProperties();
   testExistingGameplayStatePropertyWiring();

@@ -5006,6 +5006,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/scene/play/PlayfieldChartVisualModel.cpp
             src/scene/play/PlayfieldProjection.cpp
             src/scene/play/SkinGameplayGraphState.cpp
+            src/settings/AudioVideoSettings.cpp
             src/skin/SkinConfigurationWriteQueue.cpp
             src/skin/SkinProfileSettings.cpp
             src/skin/SkinStoragePaths.cpp

@@ -427,14 +427,18 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
   requireContains(result,
                   "data.playModeLabel = remote->presentation.playtype.value_or(\"\");",
                   "remote result skins project the remote play mode string");
-  requireOrdered(result, "const auto replayTiming =",
-                 "if (sampleCount == 0 || !averageMillis || !standardDeviationMillis)",
-                 "course timing falls back to retained replay data before "
-                 "discarding zero-sample stages");
+  requireContains(
+      result,
+      "const int clearRank = replay_clear_mark::effectiveClearRank(\n"
+      "        local.resultState.getClearTypeRank(), local.resultState.maxCombo,\n"
+      "        local.resultState.comboBreak,",
+      "View Result derives its persisted full-combo mark instead of reverting "
+      "to the reconstructed gauge clear");
   requireContains(result,
-                  "if (result.timingSampleCount == 0) {\n"
-                  "    if (judgeNoteTotal == 0) return std::nullopt;",
-                  "all-miss courses retain their judge-duration result");
+                  "const auto timing = isCourseFinalResult()\n"
+                  "                            ? std::optional<ResultTimingStatistics>{}",
+                  "course results retain Beatoraja's empty timing distribution "
+                  "instead of combining MusicResult replay timing data");
   requireContains(session,
                   "lastDiagnostics_.insert(lastDiagnostics_.end(),\n"
                   "                          std::make_move_iterator(evaluated.diagnostics.begin()),\n"
@@ -502,8 +506,8 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
   requireContains(result, "courseGraphPaddingForEntry(",
                   "course result graphs pad unplayed stages after an early failure");
   requireContains(result,
-                  "dynamic->gaugeHistories[gaugeIndex] = courseState.gaugeHistory;",
-                  "course result graph gauge history follows the padded aggregate state");
+                  "SkinGaugeGraphObject concatenates each stage's 500 ms gauge log.",
+                  "course result graph retains the source-sampled stage gauge logs");
   requireContains(mainMenu,
                   "auto replay = consumer.load(*exact.record,",
                   "saved course result recall loads its retained replay when available");
@@ -571,6 +575,12 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
   requireContains(result,
                   "const long long beatorajaDiffMicros = -event.diffMicros;",
                   "replay timing samples use Beatoraja's result-sign convention");
+  requireContains(
+      result,
+      "const int timingMillis = static_cast<int>(index) - 150;\n"
+      "    timingSampleCount += count;\n"
+      "    timingSum += static_cast<long long>(count) * timingMillis;",
+      "replay timing statistics use Beatoraja's integer-millisecond distribution");
   requireContains(mainMenu,
                   "replay_result::BuildSkinGameplayChartGraphState(\n"
                   "                      *stage.chart, stage.state)",

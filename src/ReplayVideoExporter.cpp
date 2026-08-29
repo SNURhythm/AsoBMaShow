@@ -31,6 +31,7 @@
 #include "scene/play/ReplayPlayfieldPresentation.h"
 #include "scene/play/ReplayVideoGameplayPreflight.h"
 #include "skin/DefaultSkin.h"
+#include "skin/ResultSkinConfiguration.h"
 #include "skin/beatoraja/LuaSkinApplicationAudioBackend.h"
 #include "skin/beatoraja/LuaSkinCurlHttpTransport.h"
 #include "view/ImageView.h"
@@ -2803,6 +2804,9 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
         result_presentation::difficultyLabelForChart(context.chartRepository,
                                                       chart.Meta);
     ResultSkinData resultSkinData = {&replayResultState, &chart.Meta, &context};
+    resultSkinData.configuration = makeResultSkinConfiguration(settings);
+    resultSkinData.configuration->irAccountName = context.irAccountNameSnapshot();
+    resultSkinData.songReviewFavorite = chartMetadataAuthority.songReviewFavorite;
     resultSkinData.gameplayGraph = replay_result::BuildSkinGameplayGraphState(
         chart, resultReplay, replayResultState);
     resultSkinData.outGraphPlaceholder = &resultGraphPlaceholder;
@@ -3463,6 +3467,12 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
         std::make_unique<View>(0, 0, rendering::window_width,
                                rendering::window_height);
     ResultSkinData data = {&courseState, &courseMeta, &context};
+    data.configuration = makeResultSkinConfiguration(settings);
+    data.configuration->irAccountName = context.irAccountNameSnapshot();
+    if (!stages.empty() && stages.back().chart != nullptr) {
+      data.songReviewFavorite = replayExportChartMetadataAuthority(
+          context, stages.back().chart->Meta).songReviewFavorite;
+    }
     std::vector<SkinGameplayGraphState> stageGraphs;
     stageGraphs.reserve(stages.size());
     for (const auto &stage : stages) {
@@ -3477,11 +3487,9 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     data.laneOrderLabel = display.laneOrder;
     data.difficultyLabel = "Course";
     data.headerDifficultyLabelOverride = "COURSE";
-    const bool fullCombo = result_presentation::isFullComboCourseResult(
-        replay.completedCharts, replay.totalCharts, stages.size(), courseState,
-        courseMeta);
-    const int clearRank = clear_policy::fullComboRankForPlayback(
-        replay.clearType, fullCombo, replay.provenance.playback);
+    // The replay carries the final course lamp; reconstructed stage state is
+    // insufficient to derive every persisted result class.
+    const int clearRank = replay.clearType;
     data.currentClearLabelOverride = clearTypeRankToLabel(clearRank);
     data.currentClearRankOverride = clearRank;
     DefaultSkin resultSkin;
@@ -3773,6 +3781,9 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
           std::make_unique<View>(0, 0, rendering::window_width,
                                  rendering::window_height);
       ResultSkinData data = {&stage.resultState, &chart.Meta, &context};
+      data.configuration = makeResultSkinConfiguration(settings);
+      data.configuration->irAccountName = context.irAccountNameSnapshot();
+      data.songReviewFavorite = chartMetadataAuthority.songReviewFavorite;
       data.gameplayGraph = stage.gameplayGraph;
       data.outGraphPlaceholder = &stageResultGraphPlaceholder;
       data.showControls = false;

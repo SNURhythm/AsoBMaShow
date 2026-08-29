@@ -1,5 +1,11 @@
 #include "ResultSkinStateBridge.h"
 
+#include "BeatorajaBooleanPropertyNames.h"
+#include "BeatorajaIntegerPropertyNames.h"
+#include "BeatorajaStringPropertyNames.h"
+#include "BeatorajaTargetPropertyNames.h"
+#include "GameplaySkinBuiltinCatalog.h"
+
 #include "../../LongNoteModeUtils.h"
 #include "../../scene/play/PlayfieldChartVisualModel.h"
 #include "../../scene/ResultPresentationModel.h"
@@ -12,6 +18,7 @@
 #include <cmath>
 #include <ctime>
 #include <limits>
+#include <memory>
 
 namespace skin {
 namespace {
@@ -63,11 +70,9 @@ std::optional<int> resultNextRank(int score, int maximum) {
   return maximum - score;
 }
 
-int localCalendarField(int id) {
-  const std::time_t now = std::chrono::system_clock::to_time_t(
-      std::chrono::system_clock::now());
+int localCalendarField(int id, std::time_t time) {
   std::tm local{};
-  localtime_r(&now, &local);
+  localtime_r(&time, &local);
   switch (id) {
   case 21: return local.tm_year + 1900;
   case 22: return local.tm_mon + 1;
@@ -77,6 +82,12 @@ int localCalendarField(int id) {
   case 26: return local.tm_sec;
   default: return std::numeric_limits<int>::min();
   }
+}
+
+int currentLocalCalendarField(int id) {
+  return localCalendarField(
+      id, std::chrono::system_clock::to_time_t(
+              std::chrono::system_clock::now()));
 }
 
 Judgement beatorajaJudgement(int index) {
@@ -111,6 +122,17 @@ int beatorajaClearTypeImageIndex(int rank) noexcept {
   }
 }
 
+int javaDoubleToInt(double value) noexcept {
+  if (std::isnan(value)) return 0;
+  if (value >= static_cast<double>(std::numeric_limits<int>::max())) {
+    return std::numeric_limits<int>::max();
+  }
+  if (value <= static_cast<double>(std::numeric_limits<int>::min())) {
+    return std::numeric_limits<int>::min();
+  }
+  return static_cast<int>(value);
+}
+
 SkinPropertyLookup<std::int64_t> resultLaneAssignment(
     const ResultSkinData &data, int player, int key) {
   const auto &option = player == 0 ? data.replayRandomOption1P
@@ -141,6 +163,122 @@ SkinPropertyLookup<std::int64_t> resultLaneAssignment(
   const int sideOffset = player == 1 ? keyCount : 0;
   return supported<std::int64_t>((*pattern)[static_cast<std::size_t>(index)] +
                                  1 - sideOffset);
+}
+
+std::optional<int>
+resultFloatSelector(const SkinBuiltinPropertySelector &selector) {
+  if (const auto *value = std::get_if<int>(&selector.value)) {
+    return *value;
+  }
+  const auto *name = std::get_if<std::string>(&selector.value);
+  if (name == nullptr) {
+    return std::nullopt;
+  }
+  // This mirrors FloatPropertyFactory's name table. Lua's convenience
+  // helpers use `rate` and the three volume names directly, while authored
+  // skins can use every factory name below.
+  static constexpr std::array<std::pair<std::string_view, int>, 75> aliases{{
+      {"rate", 110},
+      {"volume_sys", 17}, {"volume_key", 18}, {"volume_bg", 19},
+      {"musicselect_position", 1}, {"lanecover", 4},
+      {"lanecover2", 5}, {"music_progress", 6},
+      {"skinselect_position", 7}, {"ranking_position", 8},
+      {"mastervolume", 17}, {"keyvolume", 18}, {"bgmvolume", 19},
+      {"practice_position", 20}, {"music_progress_bar", 101},
+      {"load_progress", 102}, {"level", 103},
+      {"level_beginner", 105}, {"level_normal", 106},
+      {"level_hyper", 107}, {"level_another", 108}, {"level_insane", 109},
+      {"score_rate", 1102}, {"total_rate", 1115},
+      {"score_rate2", 155}, {"scorerate", 110},
+      {"scorerate_final", 111}, {"bestscorerate_now", 112},
+      {"bestscorerate", 113}, {"targetscorerate_now", 114},
+      {"targetscorerate", 115}, {"rate_pgreat", 140},
+      {"rate_great", 141}, {"rate_good", 142}, {"rate_bad", 143},
+      {"rate_poor", 144}, {"rate_maxcombo", 145},
+      {"rate_exscore", 147}, {"duration_average", 372},
+      {"timing_average", 374}, {"timign_stddev", 376},
+      {"perfect_rate", 85}, {"great_rate", 86}, {"good_rate", 87},
+      {"bad_rate", 88}, {"poor_rate", 89},
+      {"rival_perfect_rate", 285}, {"rival_great_rate", 286},
+      {"rival_good_rate", 287}, {"rival_bad_rate", 288},
+      {"rival_poor_rate", 289}, {"best_rate", 183},
+      {"rival_rate", 122}, {"target_rate", 135}, {"target_rate2", 157},
+      {"hispeed", 310}, {"groovegauge_1p", 1107},
+      {"chart_averagedensity", 367}, {"chart_enddensity", 362},
+      {"chart_peakdensity", 360}, {"chart_totalgauge", 368},
+      {"loading_progress", 165}, {"ir_totalclearrate", 227},
+      {"ir_totalfullcomborate", 229},
+      {"ir_player_noplay_rate", 203}, {"ir_player_failed_rate", 211},
+      {"ir_player_assist_rate", 205},
+      {"ir_player_lightassist_rate", 207},
+      {"ir_player_easy_rate", 213}, {"ir_player_normal_rate", 215},
+      {"ir_player_hard_rate", 217}, {"ir_player_exhard_rate", 209},
+      {"ir_player_fullcombo_rate", 219},
+      {"ir_player_perfect_rate", 223}, {"ir_player_max_rate", 225},
+  }};
+  for (const auto &[alias, id] : aliases) {
+    if (*name == alias) {
+      return id;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<int> resultIrIntegerSelector(std::string_view name) {
+  // IntegerPropertyFactory's three IR clear-statistic property patterns use
+  // the same names in a non-contiguous ID order. Keep the source's arrays
+  // together so names and numeric IDs cannot drift apart.
+  constexpr std::array<std::string_view, 11> clearTypes{{
+      "noplay", "failed", "assist", "lightassist", "easy", "normal",
+      "hard", "exhard", "fullcombo", "perfect", "max",
+  }};
+  constexpr std::array<int, 11> clearCounts{{
+      202, 210, 204, 206, 212, 214, 216, 208, 218, 222, 224,
+  }};
+  constexpr std::array<int, 11> clearRates{{
+      203, 211, 205, 207, 213, 215, 217, 209, 219, 223, 225,
+  }};
+  constexpr std::array<int, 11> clearRateAfterDots{{
+      230, 234, 231, 232, 235, 236, 237, 233, 238, 239, 240,
+  }};
+  constexpr std::string_view prefix = "ir_player_";
+  const auto match = [&](std::string_view suffix,
+                         const std::array<int, 11> &ids) -> std::optional<int> {
+    for (std::size_t index = 0; index < clearTypes.size(); ++index) {
+      const std::size_t clearTypeOffset = prefix.size();
+      if (name.size() == prefix.size() + clearTypes[index].size() +
+                             suffix.size() &&
+          name.starts_with(prefix) && name.ends_with(suffix) &&
+          name.substr(clearTypeOffset, clearTypes[index].size()) ==
+              clearTypes[index]) {
+        return ids[index];
+      }
+    }
+    return std::nullopt;
+  };
+  if (const auto id = match("", clearCounts)) return id;
+  if (const auto id = match("_rate", clearRates)) return id;
+  return match("_rate_afterdot", clearRateAfterDots);
+}
+
+std::optional<int> resultNumberedRankingSelector(std::string_view name) {
+  constexpr std::array<std::pair<std::string_view, int>, 4> prefixes{{
+      {"ranking_exscore", 380}, {"ranking_index", 390},
+      {"playertype_ranking", 380}, {"cleartype_ranking", 390},
+  }};
+  for (const auto &[prefix, firstId] : prefixes) {
+    if (!name.starts_with(prefix)) continue;
+    const std::string_view suffix = name.substr(prefix.size());
+    int index = 0;
+    const auto parsed = std::from_chars(suffix.data(),
+                                        suffix.data() + suffix.size(), index);
+    if (parsed.ec == std::errc{} &&
+        parsed.ptr == suffix.data() + suffix.size() && index >= 1 &&
+        index <= 10) {
+      return firstId + index - 1;
+    }
+  }
+  return std::nullopt;
 }
 
 } // namespace
@@ -253,6 +391,9 @@ std::optional<int> ResultSkinStateBridge::integerSelector(
   if (value != nullptr) return *value;
   const auto *name = std::get_if<std::string>(&selector.value);
   if (name == nullptr) return std::nullopt;
+  if (const auto id = beatorajaIntegerValuePropertySelector(*name)) return id;
+  if (const auto id = resultIrIntegerSelector(*name)) return id;
+  if (const auto id = resultNumberedRankingSelector(*name)) return id;
   constexpr std::string_view coursePrefix = "coursetitle";
   if (name->starts_with(coursePrefix)) {
     const std::string_view suffix(name->data() + coursePrefix.size(),
@@ -277,7 +418,7 @@ std::optional<int> ResultSkinStateBridge::integerSelector(
       return 119 + index;
     }
   }
-  static constexpr std::array<std::pair<std::string_view, int>, 41> aliases{{
+  static constexpr std::array<std::pair<std::string_view, int>, 43> aliases{{
       {"rival", 1}, {"player", 2}, {"target", 3},
       {"title", 10}, {"fulltitle", 12}, {"subtitle", 11},
       {"genre", 13}, {"artist", 14}, {"subartist", 15},
@@ -295,6 +436,7 @@ std::optional<int> ResultSkinStateBridge::integerSelector(
       {"rate_great", 141}, {"rate_good", 142}, {"rate_bad", 143},
       {"rate_poor", 144}, {"rate_maxcombo", 145}, {"rate_exscore", 147},
       {"mastervolume", 17}, {"keyvolume", 18}, {"bgmvolume", 19},
+      {"cleartype", 370}, {"cleartype_target", 371},
   }};
   for (const auto &[alias, id] : aliases) {
     if (*name == alias) return id;
@@ -304,7 +446,11 @@ std::optional<int> ResultSkinStateBridge::integerSelector(
 
 SkinPropertyLookup<bool> ResultSkinStateBridge::booleanProperty(
     const SkinBuiltinPropertySelector &selector) {
-  const auto id = integerSelector(selector);
+  const auto id = [&]() -> std::optional<int> {
+    if (const auto *numeric = std::get_if<int>(&selector.value)) return *numeric;
+    return beatorajaBooleanPropertySelector(
+        std::get<std::string>(selector.value));
+  }();
   if (!id) return unsupported<bool>();
   if (*id < 0) {
     if (*id == std::numeric_limits<int>::min()) return unsupported<bool>();
@@ -313,6 +459,24 @@ SkinPropertyLookup<bool> ResultSkinStateBridge::booleanProperty(
   }
   const auto currentScore = score();
   const auto maximum = maxScore();
+  const auto previousScore = data_.previousBest
+                                 ? std::optional<int>(data_.previousBest->score)
+                                 : data_.state != nullptr ? std::optional<int>(0)
+                                                          : std::nullopt;
+  const auto previousCombo = data_.previousBest
+                                 ? std::optional<int>(data_.previousBest->maxCombo)
+                                 : data_.state != nullptr ? std::optional<int>(0)
+                                                          : std::nullopt;
+  const auto previousBadPoints =
+      data_.previousBest && data_.previousBest->badPoints
+          ? data_.previousBest->badPoints
+          : data_.state != nullptr
+                ? std::optional<int>(std::numeric_limits<int>::max())
+                : std::nullopt;
+  const auto targetScore = data_.pacemaker
+                               ? std::optional<int>(data_.pacemaker->targetScore)
+                               : data_.state != nullptr ? std::optional<int>(0)
+                                                        : std::nullopt;
   const bool irOnline = data_.irOnline;
   if (*id == 50 || *id == 51) {
     return supported(*id == 51 ? irOnline : !irOnline);
@@ -371,21 +535,28 @@ SkinPropertyLookup<bool> ResultSkinStateBridge::booleanProperty(
                      index == 7 || index == 8);
   }
   if (*id == 170 || *id == 171) {
-    // ResultSkinData retains only ChartMeta.  Its BGA presence is not part of
-    // that immutable result payload, matching Beatoraja's false result when
-    // BMSResource has no loaded BGA.
-    return supported(*id == 170);
+    const auto *chart = data_.gameplayGraph.chart.get();
+    const bool hasBga = chart && chart->hasBga && *chart->hasBga;
+    return supported(*id == 171 ? hasBga : !hasBga);
+  }
+  if (*id == 1177) {
+    const auto *chart = data_.gameplayGraph.chart.get();
+    // SongDataBooleanProperty reads the prepared chart's BpmStop flag, not
+    // the runtime BPM graph. Retain that flag with the result snapshot.
+    return supported(chart && chart->hasBpmStop && *chart->hasBpmStop);
   }
   if (*id == 172 || *id == 173) {
-    const bool hasLongNote = data_.meta != nullptr &&
-                             (data_.meta->TotalLongNotes > 0 ||
-                              data_.meta->TotalBackSpinNotes > 0);
+    const auto *chart = data_.gameplayGraph.chart.get();
+    const bool hasLongNote = chart && chart->hasAnyLongNote
+                                 ? *chart->hasAnyLongNote
+                                 : data_.meta != nullptr &&
+                                       (data_.meta->TotalLongNotes > 0 ||
+                                        data_.meta->TotalBackSpinNotes > 0);
     return supported(*id == 173 ? hasLongNote : !hasLongNote);
   }
   if (*id == 174 || *id == 175) {
-    // ChartMeta does not retain BMS document-event presence; use the same
-    // no-document result as a resource without an authored text document.
-    return supported(*id == 174);
+    return supported(*id == 175 ? data_.chartHasDocument
+                                : !data_.chartHasDocument);
   }
   if (*id == 176 || *id == 177) {
     const bool changes = data_.meta != nullptr &&
@@ -393,8 +564,11 @@ SkinPropertyLookup<bool> ResultSkinStateBridge::booleanProperty(
     return supported(*id == 177 ? changes : !changes);
   }
   if (*id == 178 || *id == 179) {
-    const bool random = data_.meta != nullptr &&
-                        !data_.meta->RandomValues.empty();
+    const auto *chart = data_.gameplayGraph.chart.get();
+    const bool random = chart && chart->hasRandomSequence
+                            ? *chart->hasRandomSequence
+                            : data_.meta != nullptr &&
+                                  !data_.meta->RandomValues.empty();
     return supported(*id == 179 ? random : !random);
   }
   if (*id >= 220 && *id <= 227 && currentScore && maximum) {
@@ -411,8 +585,8 @@ SkinPropertyLookup<bool> ResultSkinStateBridge::booleanProperty(
     return supported(resultRank(*currentScore, *maximum) == 7 - (*id - first));
   }
   if (*id >= 320 && *id <= 327) {
-    return supported(data_.previousBest && maximum &&
-                     resultRank(data_.previousBest->score, *maximum) ==
+    return supported(previousScore && maximum &&
+                     resultRank(*previousScore, *maximum) ==
                          7 - (*id - 320));
   }
   if (*id >= 180 && *id <= 184) {
@@ -433,18 +607,17 @@ SkinPropertyLookup<bool> ResultSkinStateBridge::booleanProperty(
       break;
     }
   }
-  if ((*id == 330 || *id == 1330) && currentScore && data_.previousBest) {
-    return supported(*id == 330 ? *currentScore > data_.previousBest->score
-                                : *currentScore == data_.previousBest->score);
+  if ((*id == 330 || *id == 1330) && currentScore && previousScore) {
+    return supported(*id == 330 ? *currentScore > *previousScore
+                                : *currentScore == *previousScore);
   }
-  if ((*id == 331 || *id == 1331) && data_.previousBest) {
+  if ((*id == 331 || *id == 1331) && previousCombo) {
     const auto combo = maxCombo();
-    return combo ? supported(*id == 331 ? *combo > data_.previousBest->maxCombo
-                                        : *combo == data_.previousBest->maxCombo)
+    return combo ? supported(*id == 331 ? *combo > *previousCombo
+                                        : *combo == *previousCombo)
                  : unsupported<bool>();
   }
-  if ((*id == 332 || *id == 1332) && data_.previousBest &&
-      data_.previousBest->badPoints) {
+  if ((*id == 332 || *id == 1332) && previousBadPoints) {
     const auto currentBadPoints = data_.presentation && !data_.state
                                       ? data_.presentation->badPoints
                                       : (data_.state
@@ -454,24 +627,23 @@ SkinPropertyLookup<bool> ResultSkinStateBridge::booleanProperty(
                                                    count(Kpoor).value_or(0))
                                              : std::nullopt);
     if (!currentBadPoints) return unsupported<bool>();
-    return supported(*id == 332
-                         ? *currentBadPoints < *data_.previousBest->badPoints
-                         : *currentBadPoints == *data_.previousBest->badPoints);
+    return supported(*id == 332 ? *currentBadPoints < *previousBadPoints
+                                : *currentBadPoints == *previousBadPoints);
   }
   if ((*id == 335 || *id == 1335) && currentScore && maximum &&
-      data_.previousBest) {
+      previousScore) {
     const auto currentRate = static_cast<float>(*currentScore) / *maximum;
-    const auto bestRate = static_cast<float>(data_.previousBest->score) / *maximum;
+    const auto bestRate = static_cast<float>(*previousScore) / *maximum;
     return supported(*id == 335 ? currentRate > bestRate : currentRate == bestRate);
   }
-  if ((*id == 336 || *id == 1336) && currentScore && data_.pacemaker) {
-    return supported(*id == 336 ? *currentScore > data_.pacemaker->targetScore
-                                : *currentScore == data_.pacemaker->targetScore);
+  if ((*id == 336 || *id == 1336) && currentScore && targetScore) {
+    return supported(*id == 336 ? *currentScore > *targetScore
+                                : *currentScore == *targetScore);
   }
-  if ((*id >= 352 && *id <= 354) && currentScore && data_.pacemaker) {
-    return supported(*id == 352 ? *currentScore > data_.pacemaker->targetScore
-                                : *id == 353 ? *currentScore < data_.pacemaker->targetScore
-                                             : *currentScore == data_.pacemaker->targetScore);
+  if ((*id >= 352 && *id <= 354) && currentScore && targetScore) {
+    return supported(*id == 352 ? *currentScore > *targetScore
+                                : *id == 353 ? *currentScore < *targetScore
+                                             : *currentScore == *targetScore);
   }
   if (*id == 190 || *id == 191) {
     return supported(*id == 191 ? data_.stageFileAvailable
@@ -498,15 +670,88 @@ SkinPropertyLookup<bool> ResultSkinStateBridge::booleanProperty(
   if (*id >= 300 && *id <= 307 && currentScore && maximum) {
     return supported(resultRank(*currentScore, *maximum) == 307 - *id);
   }
+  if (isPinnedBeatorajaBooleanPropertyId(*id)) {
+    // BooleanPropertyFactory has a false branch for every official property
+    // outside the current Result state family. Preserve that source fallback
+    // instead of treating a valid authored selector as an invalid skin.
+    return supported(false);
+  }
   return unsupported<bool>();
 }
 
 SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
     const SkinBuiltinPropertySelector &selector, SkinIntegerPropertyDomain domain) {
+  if (domain == SkinIntegerPropertyDomain::IntegerValue) {
+    if (const auto *name = std::get_if<std::string>(&selector.value)) {
+      if (*name == "lua_gauge_type") {
+        // MainStatePropertyLuaApiExporter exposes gauges only for BMSPlayer;
+        // AbstractResult returns zero even though result gauge objects render.
+        return supported<std::int64_t>(0);
+      }
+      if (*name == "exscore") {
+        return score() ? supported<std::int64_t>(*score())
+                       : unsupported<std::int64_t>();
+      }
+      if (*name == "time") {
+        return supported<std::int64_t>(elapsedMillis_ * 1'000);
+      }
+      constexpr std::string_view judgePrefix = "judge:";
+      if (name->starts_with(judgePrefix)) {
+        int index = -1;
+        const std::string_view suffix(name->data() + judgePrefix.size(),
+                                      name->size() - judgePrefix.size());
+        const auto parsed = std::from_chars(
+            suffix.data(), suffix.data() + suffix.size(), index);
+        if (parsed.ec == std::errc{} &&
+            parsed.ptr == suffix.data() + suffix.size()) {
+          const Judgement judgement = index == 0   ? PGreat
+                                     : index == 1 ? Great
+                                     : index == 2 ? Good
+                                     : index == 3 ? Bad
+                                     : index == 4 ? Poor
+                                     : index == 5 ? Kpoor
+                                                  : None;
+          return supported<std::int64_t>(
+              judgement == None ? 0 : count(judgement).value_or(0));
+        }
+        return supported<std::int64_t>(0);
+      }
+    }
+  }
   const auto id = integerSelector(selector);
-  if (!id) return unsupported<std::int64_t>();
+  const auto imageId = [&]() -> std::optional<int> {
+    if (id || domain != SkinIntegerPropertyDomain::ImageIndex) return id;
+    const auto *name = std::get_if<std::string>(&selector.value);
+    return name == nullptr ? std::nullopt
+                           : beatorajaImageIndexPropertySelector(*name);
+  }();
+  if (!imageId) return unsupported<std::int64_t>();
   if (domain == SkinIntegerPropertyDomain::ImageIndex) {
-    switch (*id) {
+    const auto *configuration = data_.configuration
+                                    ? std::addressof(*data_.configuration)
+                                    : nullptr;
+    if ((*imageId >= 500 && *imageId <= 519) ||
+        (*imageId >= 1510 && *imageId <= 1699)) {
+      // IntegerPropertyFactory creates judge image properties before its
+      // result-only selectors. AbstractResult is not a BMSPlayer, so their
+      // documented value is zero (rather than an absent property).
+      return supported<std::int64_t>(0);
+    }
+    if ((*imageId >= 170 && *imageId <= 185) ||
+        (*imageId >= 386 && *imageId <= 388)) {
+      // SkinPropertyMapper recognizes these as skin-selection controls.
+      // They are valid image properties, but only SkinConfiguration can
+      // evaluate them; an AbstractResult therefore receives MIN_VALUE.
+      // This deliberately precedes the 380-389 ranking pattern because
+      // Beatoraja's 24-key skin selectors shadow 386-388.
+      return supported<std::int64_t>(std::numeric_limits<int>::min());
+    }
+    switch (*imageId) {
+    case 10:
+    case 11:
+    case 12:
+      // MusicSelector-only filters have no AbstractResult branch.
+      return supported<std::int64_t>(std::numeric_limits<int>::min());
     case 40: {
       if (data_.state != nullptr) {
         return supported<std::int64_t>(gaugeTypeIndex(data_.state->gaugeType));
@@ -528,7 +773,125 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
       return data_.replayDoublePlayOption
                  ? supported<std::int64_t>(*data_.replayDoublePlayOption)
                  : unsupported<std::int64_t>();
+    case 55:
+      return configuration
+                 ? supported<std::int64_t>(configuration->hispeedFixMode)
+                 : supported<std::int64_t>(std::numeric_limits<int>::min());
+    case 61:
+    case 62:
+    case 63:
+      // The target ScoreData option is distinct from the displayed target
+      // score. It is unavailable until a result transport retains it.
+      return supported<std::int64_t>(std::numeric_limits<int>::min());
+    case 72:
+      // Config.BGA_ON is 0 and Config.BGA_OFF is 2. Aso has no source
+      // equivalent of Config.BGA_AUTO, so retain only those two states.
+      return configuration
+                 ? supported<std::int64_t>(configuration->bgaEnabled ? 0 : 2)
+                 : supported<std::int64_t>(std::numeric_limits<int>::min());
+    case 75:
+      return configuration
+                 ? supported<std::int64_t>(
+                       configuration->notesDisplayTimingAutoAdjust ? 1 : 0)
+                 : supported<std::int64_t>(std::numeric_limits<int>::min());
+    case 78:
+      return supported<std::int64_t>(
+          configuration != nullptr ? configuration->gaugeAutoShiftImageIndex
+                                   : std::numeric_limits<int>::min());
+    case 301:
+    case 303:
+      return configuration
+                 ? supported<std::int64_t>(
+                       *imageId == 301
+                           ? (configuration->customJudge ? 1 : 0)
+                           : (configuration->showJudgeArea ? 1 : 0))
+                 : supported<std::int64_t>(std::numeric_limits<int>::min());
+    case 302:
+    case 304:
+    case 307:
+      if (configuration == nullptr) {
+        return supported<std::int64_t>(std::numeric_limits<int>::min());
+      }
+      return supported<std::int64_t>(
+          *imageId == 302 ? (configuration->scrollMode == 1 ? 1 : 0)
+          : *imageId == 304 ? (configuration->longNoteModifierMode == 1 ? 1 : 0)
+                            : (configuration->mineMode == 1 ? 1 : 0));
+    case 305:
+      return configuration
+                 ? supported<std::int64_t>(
+                       configuration->markProcessedNotes ? 1 : 0)
+                 : supported<std::int64_t>(std::numeric_limits<int>::min());
+    case 306:
+      return configuration
+                 ? supported<std::int64_t>(configuration->bpmGuideEnabled ? 1
+                                                                           : 0)
+                 : supported<std::int64_t>(std::numeric_limits<int>::min());
+    case 321: case 322: case 323: case 324:
+      return configuration
+                 ? supported<std::int64_t>(configuration->autoSaveReplay[
+                       static_cast<std::size_t>(*imageId - 321)])
+                 : supported<std::int64_t>(std::numeric_limits<int>::min());
+    case 330: case 331: case 332:
+      if (configuration == nullptr) {
+        return supported<std::int64_t>(std::numeric_limits<int>::min());
+      }
+      return supported<std::int64_t>(
+          *imageId == 330 ? (configuration->laneCoverEnabled ? 1 : 0)
+          : *imageId == 331 ? (configuration->liftEnabled ? 1 : 0)
+                            : (configuration->hiddenEnabled ? 1 : 0));
+    case 340:
+      return configuration
+                 ? supported<std::int64_t>(
+                       configuration->judgeAlgorithmImageIndex)
+                 : supported<std::int64_t>(std::numeric_limits<int>::min());
+    case 341:
+      return configuration
+                 ? supported<std::int64_t>(
+                       configuration->bottomShiftableGaugeImageIndex)
+                 : supported<std::int64_t>(std::numeric_limits<int>::min());
+    case 342:
+      return configuration
+                 ? supported<std::int64_t>(
+                       configuration->hispeedAutoAdjust ? 1 : 0)
+                 : supported<std::int64_t>(std::numeric_limits<int>::min());
+    case 343:
+      return configuration
+                 ? supported<std::int64_t>(
+                       configuration->guideSoundEffects ? 1 : 0)
+                 : supported<std::int64_t>(std::numeric_limits<int>::min());
+    case 350: case 351: case 352: case 353:
+      if (configuration == nullptr) {
+        return supported<std::int64_t>(std::numeric_limits<int>::min());
+      }
+      return supported<std::int64_t>(
+          *imageId == 350   ? configuration->extraNoteDepth
+          : *imageId == 351 ? configuration->mineMode
+          : *imageId == 352 ? configuration->scrollMode
+                             : configuration->longNoteModifierMode);
+    case 360: case 361:
+      if (configuration == nullptr) {
+        return supported<std::int64_t>(std::numeric_limits<int>::min());
+      }
+      return supported<std::int64_t>(
+          *imageId == 360 ? configuration->sevenToNinePattern
+                           : configuration->sevenToNineType);
     case 308:
+      if (const auto *chart = data_.gameplayGraph.chart.get();
+          chart != nullptr && chart->hasAnyLongNote &&
+          chart->hasUndefinedLongNote && chart->hasLongNote &&
+          chart->hasChargeNote && chart->hasHellChargeNote &&
+          *chart->hasAnyLongNote && !*chart->hasUndefinedLongNote) {
+        const int mode = *chart->hasLongNote       ? long_note_mode::kLnValue
+                         : *chart->hasChargeNote   ? long_note_mode::kCnValue
+                                                    : long_note_mode::kHcnValue;
+        return supported<std::int64_t>(mode - long_note_mode::kLnValue);
+      }
+      if (const auto *chart = data_.gameplayGraph.chart.get();
+          chart != nullptr && chart->selectedLongNoteMode) {
+        return supported<std::int64_t>(
+            long_note_mode::normalizeSelectedValue(*chart->selectedLongNoteMode) -
+            long_note_mode::kLnValue);
+      }
       return data_.meta != nullptr
                  ? supported<std::int64_t>(
                        long_note_mode::normalizeSelectedValue(data_.meta->LnMode) -
@@ -536,20 +899,28 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
                  : unsupported<std::int64_t>();
     case 450: case 451: case 452: case 453: case 454:
     case 455: case 456: case 457: case 458:
-      return resultLaneAssignment(data_, 0, *id - 450);
+      return resultLaneAssignment(data_, 0, *imageId - 450);
     case 459:
       return resultLaneAssignment(data_, 0, -1);
     case 460: case 461: case 462: case 463: case 464:
     case 465: case 466:
-      return resultLaneAssignment(data_, 1, *id - 460);
+      return resultLaneAssignment(data_, 1, *imageId - 460);
     case 469:
       return resultLaneAssignment(data_, 1, -1);
     case 89:
     case 90:
-      // Result snapshots do not retain persistent song-review flags. Match
-      // Beatoraja's no-flag image index rather than leaking ValueType's BPM
-      // selector into this separate factory domain.
-      return supported<std::int64_t>(0);
+      if (!data_.songReviewFavorite) {
+        return supported<std::int64_t>(std::numeric_limits<int>::min());
+      }
+      {
+        const int favoriteBit = *imageId == 89 ? 1 : 2;
+        const int invisibleBit = *imageId == 89 ? 4 : 8;
+        const int favorite = *data_.songReviewFavorite;
+        return supported<std::int64_t>(
+            (favorite & invisibleBit) != 0 ? 2
+            : (favorite & favoriteBit) != 0 ? 1
+                                               : 0);
+      }
     case 370: {
       const auto lamp = data_.currentClearRankOverride
                             ? data_.currentClearRankOverride
@@ -570,21 +941,30 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
       return supported<std::int64_t>(lamp ? beatorajaClearTypeImageIndex(*lamp)
                                           : 0);
     }
+    case 380: case 381: case 382: case 383: case 384:
+    case 385: case 389: {
+      const std::size_t index = static_cast<std::size_t>(*imageId - 380);
+      // RankingData distinguishes only You, Rival, and None. The application
+      // ranking snapshot retains current-user identity but no rival roster,
+      // so preserve the two source states it can represent exactly.
+      return index < data_.irRankingEntries.size()
+                 ? supported<std::int64_t>(
+                       data_.irRankingEntries[index].currentUser ? 1 : 0)
+                 : supported<std::int64_t>(std::numeric_limits<int>::min());
+    }
     case 390: case 391: case 392: case 393: case 394:
     case 395: case 396: case 397: case 398: case 399: {
-      const std::size_t index = static_cast<std::size_t>(*id - 390);
+      const std::size_t index = static_cast<std::size_t>(*imageId - 390);
       return index < data_.irRankingEntries.size()
                  ? supported<std::int64_t>(beatorajaClearTypeImageIndex(
                        data_.irRankingEntries[index].clearType))
-                 : unsupported<std::int64_t>();
+                 : supported<std::int64_t>(std::numeric_limits<int>::min());
     }
+    case 400:
+      // IndexType.constant intentionally has no AbstractResult branch; its
+      // source fallback is -1, not the generic image-cache frame zero.
+      return supported<std::int64_t>(-1);
     default:
-      // IntegerPropertyFactory accepts its entire unsigned image-index cache
-      // domain. Result-only state has no source for other legal indexes, so
-      // use frame zero just as the gameplay bridge does.
-      if (*id >= 0 && *id <= 65'535) {
-        return supported<std::int64_t>(0);
-      }
       return unsupported<std::int64_t>();
     }
   }
@@ -593,17 +973,26 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
   const auto notes = data_.meta ? std::optional<int>(data_.meta->TotalNotes)
                                 : (maximum ? std::optional<int>(*maximum / 2)
                                            : std::nullopt);
-  const auto result = [this, id, currentScore, maximum, notes]()
+  const auto result = [this, id, imageId, currentScore, maximum, notes]()
       -> std::optional<int> {
+    const auto *configuration = data_.configuration
+                                    ? std::addressof(*data_.configuration)
+                                    : nullptr;
+    // AbstractResult always supplies an old ScoreData: a first play uses the
+    // default score (EX 0, combo 0) and no configured target uses score 0.
+    // A remote result has neither source object, so preserve absence there.
     const auto previousScore = data_.previousBest
                                    ? std::optional<int>(data_.previousBest->score)
-                                   : std::nullopt;
+                                   : data_.state != nullptr ? std::optional<int>(0)
+                                                            : std::nullopt;
     const auto previousCombo = data_.previousBest
                                    ? std::optional<int>(data_.previousBest->maxCombo)
-                                   : std::nullopt;
+                                   : data_.state != nullptr ? std::optional<int>(0)
+                                                            : std::nullopt;
     const auto targetScore = data_.pacemaker
                                  ? std::optional<int>(data_.pacemaker->targetScore)
-                                 : std::nullopt;
+                                 : data_.state != nullptr ? std::optional<int>(0)
+                                                          : std::nullopt;
     const auto badPoints = [this]() -> std::optional<int> {
       if (data_.presentation && !data_.state) return data_.presentation->badPoints;
       if (!data_.state) return std::nullopt;
@@ -628,14 +1017,19 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
                                          *maximum)
                  : std::nullopt;
     };
-    switch (*id) {
+    switch (*imageId) {
+    case 10:
+      return configuration
+                 ? std::optional<int>(static_cast<int>(
+                       configuration->gameplayHispeed * 100.0F))
+                 : std::optional<int>(std::numeric_limits<int>::min());
     case 20:
       return data_.context != nullptr
                  ? std::optional<int>(data_.context->currentFramesPerSecond.load(
                        std::memory_order_acquire))
                  : std::optional<int>(std::numeric_limits<int>::min());
     case 21: case 22: case 23: case 24: case 25: case 26:
-      return localCalendarField(*id);
+      return currentLocalCalendarField(*imageId);
     case 27: case 28: case 29: {
       const std::int64_t uptime = data_.context != nullptr
                                        ? std::max<std::int64_t>(
@@ -646,7 +1040,21 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
              : *id == 28 ? (uptime / 60'000) % 60
                          : (uptime / 1'000) % 60;
     }
-    case 12: case 79:
+    case 12:
+      return configuration
+                 ? std::optional<int>(
+                       configuration->notesDisplayTimingMilliseconds)
+                 : std::optional<int>(std::numeric_limits<int>::min());
+    case 14:
+    case 314:
+    case 315:
+    case 316:
+      // LaneRenderer-only covers have no AbstractResult branch.
+      return std::numeric_limits<int>::min();
+    case 77:
+    case 78:
+    case 79:
+      // Per-chart play counts are MusicSelector-only.
       return std::numeric_limits<int>::min();
     case 17:
       return data_.playerHistory
@@ -705,6 +1113,10 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
                        data_.context->settings.audioVideo.audio.bgmVolume *
                        100.0F))
                  : std::nullopt;
+    case 165:
+      // MusicResult is entered only after BMSResource preparation, so the
+      // source's combined BGA/audio load progress is complete.
+      return 100;
     case 100: {
       // ScoreDataProperty.getNowScore is a mode-specific score point, not EX
       // score. At a result screen the result's final combo and judgement
@@ -741,6 +1153,11 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
     case 74: case 106: return notes;
     case 75: case 105: case 174: return maxCombo();
     case 76: case 177: return badPoints();
+    case 80: case 81: case 82: case 83: case 84:
+      return count(beatorajaJudgement(*id - 80));
+    case 85: case 86: case 87: case 88: case 89:
+      if (!notes || *notes <= 0) return std::numeric_limits<int>::min();
+      return count(beatorajaJudgement(*id - 85)).value_or(0) * 100 / *notes;
     case 45: case 46: case 47: case 48: case 49: case 96:
       return data_.playLevelOverride
                  ? std::optional<int>(static_cast<int>(
@@ -802,6 +1219,16 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
     case 154:
       return currentScore && maximum ? resultNextRank(*currentScore, *maximum)
                                       : std::nullopt;
+    case 160:
+      return std::numeric_limits<int>::min();
+    case 161:
+    case 162:
+      // TIMER_PLAY is off in AbstractResult, so TimerManager's now-time is
+      // zero even though the property itself remains valid.
+      return 0;
+    case 163:
+    case 164:
+      return std::numeric_limits<int>::min();
     case 107:
       return finalGauge() ? std::optional<int>(static_cast<int>(*finalGauge()))
                           : std::nullopt;
@@ -865,13 +1292,76 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
         if (entry.currentUser) return entry.rank;
       }
       return std::numeric_limits<int>::min();
+    case 200:
+    case 220:
+      return std::numeric_limits<int>::min();
     case 180: return std::numeric_limits<int>::min();
+    case 202: case 204: case 206: case 208: case 210: case 212:
+    case 214: case 216: case 218: case 222: case 224:
+    case 203: case 205: case 207: case 209: case 211: case 213:
+    case 215: case 217: case 219: case 223: case 225:
+    case 226: case 227: case 228: case 229:
+    case 230: case 231: case 232: case 233: case 234: case 235:
+    case 236: case 237: case 238: case 239: case 240: case 241: case 242:
+      // A result ranking needs the source RankingData clear-count histogram.
+      // The app's compact IR row snapshot intentionally does not fabricate
+      // it from visible rows, so retain Integer.MIN_VALUE exactly as source.
+      return std::numeric_limits<int>::min();
     case 183:
       if (const auto rate = previousRate()) return scoreRateParts(*rate).first;
       return std::numeric_limits<int>::min();
     case 184:
       if (const auto rate = previousRate()) return scoreRateParts(*rate).second;
       return std::numeric_limits<int>::min();
+    case 243: case 244: case 245: case 246:
+    case 247: case 248: case 249:
+      if (!data_.currentScoreDateUnixSeconds ||
+          *data_.currentScoreDateUnixSeconds <= 0 ||
+          *data_.currentScoreDateUnixSeconds >
+              std::numeric_limits<int>::max()) {
+        return std::numeric_limits<int>::min();
+      }
+      if (*id == 243) {
+        return static_cast<int>(*data_.currentScoreDateUnixSeconds);
+      }
+      return localCalendarField(*id - 223,
+                                static_cast<std::time_t>(
+                                    *data_.currentScoreDateUnixSeconds));
+    case 271:
+      return targetScore.value_or(std::numeric_limits<int>::min());
+    case 280: case 281: case 282: case 283: case 284:
+    case 285: case 286: case 287: case 288: case 289:
+    case 300:
+    case 320: case 321: case 322: case 323: case 324:
+    case 325: case 326: case 327: case 328: case 329: case 330:
+      return std::numeric_limits<int>::min();
+    case 310:
+      return configuration
+                 ? std::optional<int>(static_cast<int>(
+                       configuration->gameplayHispeed))
+                 : std::optional<int>(std::numeric_limits<int>::min());
+    case 311:
+      return configuration
+                 ? std::optional<int>(static_cast<int>(
+                       configuration->gameplayHispeed * 100.0F) % 100)
+                 : std::optional<int>(std::numeric_limits<int>::min());
+    case 312:
+      return configuration
+                 ? std::optional<int>(
+                       configuration->visibleTimeDurationMilliseconds)
+                 : std::optional<int>(std::numeric_limits<int>::min());
+    case 313:
+      return configuration
+                 ? std::optional<int>(
+                       configuration->visibleTimeDurationMilliseconds * 3 / 5)
+                 : std::optional<int>(std::numeric_limits<int>::min());
+    case 1312: case 1313: case 1314: case 1315:
+    case 1316: case 1317: case 1318: case 1319:
+    case 1320: case 1321: case 1322: case 1323:
+    case 1324: case 1325: case 1326: case 1327:
+      // IntegerPropertyFactory creates this numeric range for every state;
+      // only BMSPlayer has a LaneRenderer, so AbstractResult returns zero.
+      return 0;
     case 380: case 381: case 382: case 383: case 384:
     case 385: case 386: case 387: case 388: case 389: {
       const std::size_t index = static_cast<std::size_t>(*id - 380);
@@ -886,31 +1376,83 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
                  ? std::optional<int>(data_.irRankingEntries[index].rank)
                  : std::optional<int>(std::numeric_limits<int>::min());
     }
-    case 368: return 0;
-    case 370:
-      return data_.currentClearRankOverride
-                 ? data_.currentClearRankOverride
-                 : (data_.presentation ? data_.presentation->lampRank
-                                       : (data_.state ? std::optional<int>(
-                                             data_.state->getClearTypeRank())
-                                                      : std::nullopt));
-    case 371:
-      return data_.previousLampBest
-                 ? std::optional<int>(data_.previousLampBest->clearType)
-                 : data_.previousBest
-                 ? std::optional<int>(data_.previousBest->clearType)
-                 : std::optional<int>(kClearTypeFailedRank);
+    case 350:
+      return data_.gameplayGraph.chart &&
+                     data_.gameplayGraph.chart->normalKeyNotes
+                 ? data_.gameplayGraph.chart->normalKeyNotes
+                 : std::optional<int>(std::numeric_limits<int>::min());
+    case 351:
+      return data_.gameplayGraph.chart &&
+                     data_.gameplayGraph.chart->longKeyNotes
+                 ? data_.gameplayGraph.chart->longKeyNotes
+                 : std::optional<int>(std::numeric_limits<int>::min());
+    case 352:
+      return data_.gameplayGraph.chart &&
+                     data_.gameplayGraph.chart->normalScratchNotes
+                 ? data_.gameplayGraph.chart->normalScratchNotes
+                 : std::optional<int>(std::numeric_limits<int>::min());
+    case 353:
+      return data_.gameplayGraph.chart &&
+                     data_.gameplayGraph.chart->longScratchNotes
+                 ? data_.gameplayGraph.chart->longScratchNotes
+                 : std::optional<int>(std::numeric_limits<int>::min());
+    case 360:
+    case 361:
+    case 362:
+    case 363:
+    case 364:
+    case 365: {
+      const auto *chart = data_.gameplayGraph.chart.get();
+      const auto value = *id <= 361 ? (chart ? chart->peakDensity : std::nullopt)
+                         : *id <= 363 ? (chart ? chart->endDensity : std::nullopt)
+                                      : (chart ? chart->averageDensity : std::nullopt);
+      if (!value) return std::numeric_limits<int>::min();
+      return *id % 2 == 0 ? javaDoubleToInt(*value)
+                          : javaDoubleToInt(*value * 100.0) % 100;
+    }
+    case 368:
+      if (data_.gameplayGraph.chart && data_.gameplayGraph.chart->totalGauge) {
+        return javaDoubleToInt(*data_.gameplayGraph.chart->totalGauge);
+      }
+      return data_.meta ? std::optional<int>(javaDoubleToInt(data_.meta->Total))
+                        : std::optional<int>(std::numeric_limits<int>::min());
+    case 370: {
+      const auto lamp = data_.currentClearRankOverride
+                            ? data_.currentClearRankOverride
+                            : (data_.presentation ? data_.presentation->lampRank
+                                                  : (data_.state ? std::optional<int>(
+                                                        data_.state->getClearTypeRank())
+                                                                 : std::nullopt));
+      return lamp ? std::optional<int>(beatorajaClearTypeImageIndex(*lamp))
+                  : std::nullopt;
+    }
+    case 371: {
+      const auto lamp = data_.previousLampBest
+                            ? std::optional<int>(data_.previousLampBest->clearType)
+                            : (data_.previousBest
+                                   ? std::optional<int>(data_.previousBest->clearType)
+                                   : std::nullopt);
+      return lamp ? std::optional<int>(beatorajaClearTypeImageIndex(*lamp))
+                  : std::optional<int>(0);
+    }
     case 372:
+      if (data_.courseResult) return 0;
       return data_.averageJudgeMicros
                  ? std::optional<int>(static_cast<int>(
                        *data_.averageJudgeMicros / 1'000LL))
-                 : std::optional<int>(std::numeric_limits<int>::min());
+                 : data_.state != nullptr ? std::optional<int>(0)
+                                          : std::optional<int>(
+                                                std::numeric_limits<int>::min());
     case 373:
+      if (data_.courseResult) return 0;
       return data_.averageJudgeMicros
                  ? std::optional<int>(static_cast<int>(
                        (*data_.averageJudgeMicros / 10LL) % 100LL))
-                 : std::optional<int>(std::numeric_limits<int>::min());
+                 : data_.state != nullptr ? std::optional<int>(0)
+                                          : std::optional<int>(
+                                                std::numeric_limits<int>::min());
     case 374: case 375:
+      if (data_.courseResult) return 0;
       if (*id == 374 && data_.timingAverageMillis) {
         return static_cast<int>(*data_.timingAverageMillis);
       }
@@ -919,18 +1461,37 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
         const int fraction = static_cast<int>(std::abs(average) * 100.0) % 100;
         return average < 0.0 ? -fraction : fraction;
       }
+      // MusicResult initializes TimingDistribution before collecting replay
+      // samples. With none, its documented defaults are Float.MAX_VALUE for
+      // average and -1 for standard deviation; Java's float-to-int cast is
+      // saturating, while the fractional average is 47.
+      if (data_.state != nullptr) {
+        return *id == 374 ? std::numeric_limits<int>::max() : 47;
+      }
       return std::numeric_limits<int>::min();
     case 376:
+      if (data_.courseResult) return 0;
       return data_.timingStandardDeviationMillis
                  ? std::optional<int>(static_cast<int>(
                        *data_.timingStandardDeviationMillis))
-                 : std::optional<int>(std::numeric_limits<int>::min());
+                 : data_.state != nullptr ? std::optional<int>(-1)
+                                          : std::optional<int>(
+                                                std::numeric_limits<int>::min());
     case 377:
+      if (data_.courseResult) return 0;
       return data_.timingStandardDeviationMillis
                  ? std::optional<int>(static_cast<int>(
                        *data_.timingStandardDeviationMillis * 100.0) % 100)
-                 : std::optional<int>(std::numeric_limits<int>::min());
+                 : data_.state != nullptr ? std::optional<int>(0)
+                                          : std::optional<int>(
+                                                std::numeric_limits<int>::min());
+    case 400:
+      return data_.meta ? std::optional<int>(data_.meta->Rank) : std::nullopt;
     case 402: case 403: case 404:
+      return 0;
+    case 525: case 526: case 527:
+      // IntegerPropertyFactory's judge-duration properties are BMSPlayer
+      // only; AbstractResult returns its documented zero fallback.
       return 0;
     case 1163:
       return data_.meta
@@ -942,9 +1503,29 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
                  ? std::optional<int>(static_cast<int>(
                        (data_.meta->PlayLength / 1'000'000LL) % 60LL))
                  : std::nullopt;
-    case 90: return data_.meta ? std::optional<int>(static_cast<int>(data_.meta->MaxBpm)) : std::nullopt;
-    case 91: return data_.meta ? std::optional<int>(static_cast<int>(data_.meta->MinBpm)) : std::nullopt;
-    case 92: return data_.meta ? std::optional<int>(static_cast<int>(data_.meta->Bpm)) : std::nullopt;
+    case 90:
+      return data_.gameplayGraph.chart &&
+                     data_.gameplayGraph.chart->maximumBpm > 0.0
+                 ? std::optional<int>(static_cast<int>(
+                       data_.gameplayGraph.chart->maximumBpm))
+                 : (data_.meta ? std::optional<int>(
+                       static_cast<int>(data_.meta->MaxBpm))
+                               : std::nullopt);
+    case 91:
+      return data_.gameplayGraph.chart &&
+                     data_.gameplayGraph.chart->minimumBpm > 0.0
+                 ? std::optional<int>(static_cast<int>(
+                       data_.gameplayGraph.chart->minimumBpm))
+                 : (data_.meta ? std::optional<int>(
+                       static_cast<int>(data_.meta->MinBpm))
+                               : std::nullopt);
+    case 92:
+      return data_.gameplayGraph.chart && data_.gameplayGraph.chart->mainBpm > 0.0
+                 ? std::optional<int>(static_cast<int>(
+                       data_.gameplayGraph.chart->mainBpm))
+                 : (data_.meta ? std::optional<int>(
+                       static_cast<int>(data_.meta->Bpm))
+                               : std::nullopt);
     default: return std::nullopt;
     }
   }();
@@ -953,7 +1534,13 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
 
 SkinPropertyLookup<double> ResultSkinStateBridge::floatProperty(
     const SkinBuiltinPropertySelector &selector, SkinFloatPropertyDomain) {
-  const auto id = integerSelector(selector);
+  if (const auto *name = std::get_if<std::string>(&selector.value);
+      name != nullptr && *name == "lua_gauge") {
+    // MainStatePropertyLuaApiExporter.getGauge returns zero for result
+    // MainStates, independently of the gauge that SkinGauge draws.
+    return supported(0.0);
+  }
+  const auto id = resultFloatSelector(selector);
   if (!id) return unsupported<double>();
   const auto currentScore = score();
   const auto maximum = maxScore();
@@ -970,6 +1557,18 @@ SkinPropertyLookup<double> ResultSkinStateBridge::floatProperty(
                                        static_cast<float>(*maximum))
                : std::nullopt;
   };
+  // AbstractResult always constructs an old ScoreData and a target score
+  // value. A first play therefore exposes zero-valued rate families rather
+  // than an absent property; remote results still preserve their lack of
+  // source ScoreData.
+  const auto previousScore = data_.previousBest
+                                 ? std::optional<int>(data_.previousBest->score)
+                                 : data_.state != nullptr ? std::optional<int>(0)
+                                                          : std::nullopt;
+  const auto targetScore = data_.pacemaker
+                               ? std::optional<int>(data_.pacemaker->targetScore)
+                               : data_.state != nullptr ? std::optional<int>(0)
+                                                        : std::nullopt;
   if (data_.context != nullptr) {
     switch (*id) {
     case 17:
@@ -985,6 +1584,41 @@ SkinPropertyLookup<double> ResultSkinStateBridge::floatProperty(
       break;
     }
   }
+  if (*id == 310) {
+    return data_.configuration
+               ? supported(static_cast<double>(data_.configuration->gameplayHispeed))
+               : supported(static_cast<double>(std::numeric_limits<float>::min()));
+  }
+  if (*id == 165) {
+    // Result scenes begin only after chart audio and BGA preparation has
+    // completed, which is the completed BMSResource branch upstream.
+    return supported(1.0);
+  }
+  if (*id == 102) {
+    // Result scenes start after the resource's BGA/audio preparation branch
+    // has completed. This mirrors both source load-progress selectors.
+    return supported(1.0);
+  }
+  if (*id == 1 || *id == 4 || *id == 5 || *id == 6 || *id == 7 ||
+      *id == 8 || *id == 20 || *id == 101 || *id == 103 ||
+      (*id >= 105 && *id <= 109)) {
+    // These RateType values are MusicSelector, BMSPlayer, or
+    // SkinConfiguration-only. AbstractResult returns their source zero.
+    return supported(0.0);
+  }
+  if (*id >= 285 && *id <= 289) {
+    // AsoBMaShow has no independent rival ScoreData cache for a completed
+    // result. FloatPropertyFactory returns Float.MIN_VALUE in that case.
+    return supported(static_cast<double>(std::numeric_limits<float>::min()));
+  }
+  if (*id == 203 || *id == 205 || *id == 207 || *id == 209 ||
+      *id == 211 || *id == 213 || *id == 215 || *id == 217 ||
+      *id == 219 || *id == 223 || *id == 225 || *id == 227 ||
+      *id == 229) {
+    // The ranking snapshot retains visible rows only, not the clear-count
+    // histogram required by the source IR aggregate-rate properties.
+    return supported(static_cast<double>(std::numeric_limits<float>::min()));
+  }
   if (*id == 1102 || *id == 1115 || *id == 155) {
     const auto value = rate();
     return value ? supported(*value) : unsupported<double>();
@@ -994,15 +1628,11 @@ SkinPropertyLookup<double> ResultSkinStateBridge::floatProperty(
     return value ? supported(*value) : unsupported<double>();
   }
   if (*id == 112 || *id == 113) {
-    const auto value = scoreRate(data_.previousBest
-                                     ? std::optional<int>(data_.previousBest->score)
-                                     : std::nullopt);
+    const auto value = scoreRate(previousScore);
     return value ? supported(*value) : unsupported<double>();
   }
   if (*id == 114 || *id == 115) {
-    const auto value = scoreRate(data_.pacemaker
-                                     ? std::optional<int>(data_.pacemaker->targetScore)
-                                     : std::nullopt);
+    const auto value = scoreRate(targetScore);
     return value ? supported(*value) : unsupported<double>();
   }
   if ((*id >= 85 && *id <= 89) || (*id >= 140 && *id <= 144)) {
@@ -1030,36 +1660,68 @@ SkinPropertyLookup<double> ResultSkinStateBridge::floatProperty(
     // MainStates.
     return supported(0.0);
   }
+  if (*id == 360 || *id == 362 || *id == 367) {
+    const auto *chart = data_.gameplayGraph.chart.get();
+    const auto value = *id == 360 ? (chart ? chart->peakDensity : std::nullopt)
+                       : *id == 362 ? (chart ? chart->endDensity : std::nullopt)
+                                    : (chart ? chart->averageDensity : std::nullopt);
+    return value ? supported(*value)
+                 : supported(static_cast<double>(std::numeric_limits<float>::min()));
+  }
+  if (*id == 368) {
+    if (data_.gameplayGraph.chart && data_.gameplayGraph.chart->totalGauge) {
+      return supported(*data_.gameplayGraph.chart->totalGauge);
+    }
+    return data_.meta != nullptr
+               ? supported(data_.meta->Total)
+               : supported(static_cast<double>(std::numeric_limits<float>::min()));
+  }
   if (*id == 374) {
     // FloatType.timing_average exposes TimingDistribution's fixed 150 ms
     // array center (not its measured mean) divided by 1000.
     return supported(0.15);
   }
+  if (*id == 372 && data_.courseResult) {
+    return supported(0.0);
+  }
   if (*id == 372 && data_.averageJudgeMicros) {
     return supported(static_cast<double>(*data_.averageJudgeMicros) / 1'000.0);
   }
+  if (*id == 376 && data_.courseResult) {
+    return supported(0.0);
+  }
   if (*id == 376 && data_.timingStandardDeviationMillis) {
     return supported(*data_.timingStandardDeviationMillis);
+  }
+  if (*id == 376 && data_.state != nullptr) {
+    return supported(-1.0);
   }
   if (*id == 1107) {
     const auto value = finalGauge();
     return value ? supported(static_cast<double>(*value)) : unsupported<double>();
   }
-  if (*id == 183 && data_.previousBest && maximum && *maximum > 0) {
-    return supported(static_cast<double>(data_.previousBest->score) / *maximum);
+  if (*id == 183 && previousScore && maximum && *maximum > 0) {
+    return supported(static_cast<double>(*previousScore) / *maximum);
   }
-  if ((*id == 122 || *id == 135 || *id == 157) && data_.pacemaker &&
+  if ((*id == 122 || *id == 135 || *id == 157) && targetScore &&
       maximum && *maximum > 0) {
-    return supported(static_cast<double>(data_.pacemaker->targetScore) /
-                     *maximum);
+    return supported(static_cast<double>(*targetScore) / *maximum);
   }
   return unsupported<double>();
 }
 
 SkinPropertyLookup<std::string_view> ResultSkinStateBridge::stringProperty(
     const SkinBuiltinPropertySelector &selector) {
-  const auto id = integerSelector(selector);
+  const auto id = [&]() -> std::optional<int> {
+    if (const auto *name = std::get_if<std::string>(&selector.value)) {
+      return beatorajaStringPropertySelector(*name);
+    }
+    return integerSelector(selector);
+  }();
   if (!id) return unsupported<std::string_view>();
+  const auto *configuration = data_.configuration
+                                  ? std::addressof(*data_.configuration)
+                                  : nullptr;
   switch (*id) {
   case 1:
     stringValue_.clear();
@@ -1115,6 +1777,22 @@ SkinPropertyLookup<std::string_view> ResultSkinStateBridge::stringProperty(
   case 51:
     stringValue_ = data_.skinAuthor;
     break;
+  case 30:
+  case 1000:
+    stringValue_.clear();
+    break;
+  case 60:
+    stringValue_ = configuration ? configuration->modeFilterName : "";
+    break;
+  case 61:
+    stringValue_ = configuration ? configuration->sortId : "";
+    break;
+  case 62:
+    stringValue_ = configuration ? configuration->difficultyFilterName : "";
+    break;
+  case 86:
+    stringValue_ = configuration ? configuration->chartReplicationMode : "";
+    break;
   case 1010:
     stringValue_ = ASOBMASHOW_APPLICATION_VERSION;
     break;
@@ -1128,10 +1806,13 @@ SkinPropertyLookup<std::string_view> ResultSkinStateBridge::stringProperty(
     stringValue_ = data_.tableLevel + data_.tableName;
     break;
   case 1020:
+    stringValue_ = configuration ? configuration->irName : "";
+    break;
   case 1021:
+    stringValue_ = configuration ? configuration->irAccountName : "";
+    break;
   case 119:
   case 149:
-  case 219:
   case 220:
     stringValue_.clear();
     break;
@@ -1141,9 +1822,6 @@ SkinPropertyLookup<std::string_view> ResultSkinStateBridge::stringProperty(
   case 1031:
     stringValue_ = data_.meta ? data_.meta->SHA256 : data_.chartSha256;
     break;
-  case 62:
-    stringValue_ = data_.difficultyLabel;
-    break;
   case 120: case 121: case 122: case 123: case 124:
   case 125: case 126: case 127: case 128: case 129: {
     const std::size_t index = static_cast<std::size_t>(*id - 120);
@@ -1152,12 +1830,6 @@ SkinPropertyLookup<std::string_view> ResultSkinStateBridge::stringProperty(
                        : "";
     break;
   }
-  case 60:
-    stringValue_ = data_.playModeLabel;
-    break;
-  case 61:
-    stringValue_ = data_.laneOrderLabel;
-    break;
   case 150: case 151: case 152: case 153: case 154:
   case 155: case 156: case 157: case 158: case 159: {
     const std::size_t index = static_cast<std::size_t>(*id - 150);
@@ -1166,9 +1838,23 @@ SkinPropertyLookup<std::string_view> ResultSkinStateBridge::stringProperty(
                        : "";
     break;
   }
+  case 200: case 201: case 202: case 203: case 204:
+  case 205: case 206: case 207: case 208: case 209:
+  case 210: case 211: case 212: case 213: case 214:
+  case 215: case 216: case 217: case 218: case 219: {
+    if (configuration == nullptr) {
+      stringValue_.clear();
+      break;
+    }
+    const auto names = beatorajaTargetNeighbourNames(
+        configuration->skinTargetId, configuration->skinTargetList);
+    stringValue_ = names[static_cast<std::size_t>(*id - 200)];
+    break;
+  }
   default:
-    if ((*id >= 120 && *id <= 129) ||
-        (*id >= 200 && *id <= 219) || (*id >= 1040 && *id <= 1075)) {
+    if ((*id >= 40 && *id <= 49) || (*id >= 100 && *id <= 119) ||
+        (*id >= 240 && *id <= 283) ||
+        (*id >= 1040 && *id <= 1095)) {
       stringValue_.clear();
       break;
     }
@@ -1229,11 +1915,13 @@ ResultSkinStateBridge::gameplayGraphState() const noexcept {
   const auto type = resultGaugeType(data_);
   const GaugeProfile profile = data_.state ? data_.state->gaugeProfile
                                            : GaugeProfile::Standard;
-  result.timingDistribution = data_.timingDistribution;
-  result.timingDistributionCenter = data_.timingDistributionCenter;
-  result.timingDistributionAverageMillis = data_.timingAverageMillis;
-  result.timingDistributionStandardDeviationMillis =
-      data_.timingStandardDeviationMillis;
+  if (!data_.courseResult) {
+    result.timingDistribution = data_.timingDistribution;
+    result.timingDistributionCenter = data_.timingDistributionCenter;
+    result.timingDistributionAverageMillis = data_.timingAverageMillis;
+    result.timingDistributionStandardDeviationMillis =
+        data_.timingStandardDeviationMillis;
+  }
   if (!result.gaugeHistory.empty() || !gaugeHistory_.empty()) {
     if (result.gaugeHistory.empty()) {
       result.gaugeHistory = gaugeHistory_;
