@@ -84,6 +84,7 @@ tasks.register('syncNativeAssets', Sync) {
 android {
     namespace 'com.snurhythm.asobmashow'
     compileSdk 36
+    ndkPath androidNdkRoot
 
     buildFeatures {
         buildConfig true

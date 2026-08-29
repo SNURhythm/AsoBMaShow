@@ -52,6 +52,7 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("source.properties", self.gradle)
         self.assertIn("Pkg.Revision", self.gradle)
         self.assertNotIn("file(androidNdkRoot).name", self.gradle)
+        self.assertRegex(self.gradle, r"(?m)^\s*ndkPath androidNdkRoot$")
 
         wrapper = ROOT / "android/gradle/wrapper/gradle-wrapper.properties"
         self.assertTrue(wrapper.is_file(), "repository-owned Gradle wrapper is missing")
