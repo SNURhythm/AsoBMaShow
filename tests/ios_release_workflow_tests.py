@@ -13,6 +13,7 @@ FASTFILE = ROOT / "ios/Xcode/AsoBMaShow/fastlane/Fastfile"
 WORKFLOW = ROOT / ".github/workflows/mobile-beta-deploy.yml"
 VERIFY_SCRIPT = ROOT / "scripts/ios_release_verify.sh"
 DEPLOY_SCRIPT = ROOT / "scripts/ios_firebase_deploy.sh"
+GEMFILE_LOCK = ROOT / "ios/Xcode/AsoBMaShow/Gemfile.lock"
 
 RELEASE_CRITICAL_SKIN_TESTS = {
     "skin_path_policy_tests": "skin_path_policy_tests",
@@ -96,6 +97,32 @@ class IOSReleaseWorkflowTests(unittest.TestCase):
         cls.fastfile = FASTFILE.read_text(encoding="utf-8")
         cls.workflow = WORKFLOW.read_text(encoding="utf-8")
         cls.verify_script = VERIFY_SCRIPT.read_text(encoding="utf-8")
+        cls.gemfile_lock = GEMFILE_LOCK.read_text(encoding="utf-8")
+
+    def test_release_tool_dependencies_include_known_security_fixes(self):
+        minimum_versions = {
+            "activesupport": (7, 2, 3, 1),
+            "concurrent-ruby": (1, 3, 7),
+            "excon": (1, 5, 0),
+            "faraday": (1, 10, 6),
+            "fastlane": (2, 238, 0),
+            "json": (2, 19, 9),
+            "jwt": (2, 10, 3),
+        }
+        for gem_name, minimum in minimum_versions.items():
+            with self.subTest(gem=gem_name):
+                match = re.search(
+                    rf"^    {re.escape(gem_name)} \((\d+(?:\.\d+)+)\)$",
+                    self.gemfile_lock,
+                    flags=re.MULTILINE,
+                )
+                self.assertIsNotNone(match, f"{gem_name} is not locked")
+                locked = tuple(int(part) for part in match.group(1).split("."))
+                width = max(len(locked), len(minimum))
+                self.assertGreaterEqual(
+                    locked + (0,) * (width - len(locked)),
+                    minimum + (0,) * (width - len(minimum)),
+                )
 
     def test_distribution_lanes_are_explicit_and_cannot_route_by_accident(self):
         self.assertIn("lane :firebase do", self.fastfile)
