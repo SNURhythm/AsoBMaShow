@@ -1066,8 +1066,7 @@ ResultSkinData ResultScene::makeResultSkinData() const {
   data.headerDifficultyLabelOverride = local->headerDifficultyLabelOverride;
   if (local->autoPlayResult) {
     data.currentClearLabelOverride = "AUTO PLAY";
-  }
-  if (local->currentClearLabelOverride.has_value()) {
+  } else if (local->currentClearLabelOverride.has_value()) {
     data.currentClearLabelOverride = local->currentClearLabelOverride;
   }
   data.currentClearRankOverride = local->currentClearRankOverride;

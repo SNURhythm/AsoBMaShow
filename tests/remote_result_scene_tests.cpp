@@ -434,6 +434,13 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
       "        local.resultState.comboBreak,",
       "View Result derives its persisted full-combo mark instead of reverting "
       "to the reconstructed gauge clear");
+  requireContains(
+      result,
+      "if (local->autoPlayResult) {\n"
+      "    data.currentClearLabelOverride = \"AUTO PLAY\";\n"
+      "  } else if (local->currentClearLabelOverride.has_value()) {",
+      "autoplay keeps its built-in label while result-skin clear selectors retain "
+      "Beatoraja's calculated clear rank");
   requireContains(result,
                   "const auto timing = isCourseFinalResult()\n"
                   "                            ? std::optional<ResultTimingStatistics>{}",
