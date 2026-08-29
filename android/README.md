@@ -22,7 +22,7 @@ Build from the repository root with a configured Android SDK/NDK and `VCPKG_ROOT
 export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
 export ANDROID_SDK_ROOT=$ANDROID_HOME
 export VCPKG_ROOT=/Users/xf/vcpkg
-SDL/android-project/gradlew -p android assembleDebug
+android/gradlew -p android assembleDebug
 ```
 
 For the same build through the Firebase helper without uploading:

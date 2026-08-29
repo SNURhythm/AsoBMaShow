@@ -15,8 +15,11 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.gradle = read("android/app/build.gradle")
+        cls.root_gradle = read("android/build.gradle")
         cls.lint_config = read("android/app/lint.xml")
         cls.workflow = read(".github/workflows/mobile-beta-deploy.yml")
+        cls.deploy_script = read("scripts/android_firebase_deploy.sh")
+        cls.android_readme = read("android/README.md")
         cls.manifest = read("android/app/src/main/AndroidManifest.xml")
         cls.activity = read(
             "android/app/src/main/java/com/snurhythm/asobmashow/"
@@ -33,6 +36,34 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
             "SDL/android-project/app/src/main/java/org/libsdl/app/"
             "HIDDeviceManager.java"
         )
+
+    def test_android_release_toolchain_meets_api_36_policy(self):
+        self.assertRegex(self.gradle, r"(?m)^\s*compileSdk 36$")
+        self.assertRegex(self.gradle, r"(?m)^\s*targetSdk 36$")
+        self.assertIn(
+            "id 'com.android.application' version '8.10.1' apply false",
+            self.root_gradle,
+        )
+        self.assertIn("28.2.13676358", self.gradle)
+
+        wrapper = ROOT / "android/gradle/wrapper/gradle-wrapper.properties"
+        self.assertTrue(wrapper.is_file(), "repository-owned Gradle wrapper is missing")
+        wrapper_properties = wrapper.read_text(encoding="utf-8")
+        self.assertIn("gradle-8.11.1-bin.zip", wrapper_properties)
+        self.assertIn(
+            "distributionSha256Sum="
+            "f397b287023acdba1e9f6fc5ea72d22dd63669d59ed4a289a29b1a76eee151c6",
+            wrapper_properties,
+        )
+
+    def test_android_release_entrypoints_use_repository_wrapper(self):
+        expected_wrapper = "android/gradlew"
+        self.assertIn(expected_wrapper, self.deploy_script)
+        self.assertNotIn("SDL/android-project/gradlew", self.deploy_script)
+        self.assertIn(expected_wrapper, self.workflow)
+        self.assertNotIn("SDL/android-project/gradlew", self.workflow)
+        self.assertIn(expected_wrapper, self.android_readme)
+        self.assertTrue((ROOT / expected_wrapper).is_file())
 
     def test_android_sqlite_snapshots_use_private_cache(self):
         self.assertIn("GetAndroidCacheDir()", self.sqlite_raii)
@@ -76,7 +107,7 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
 
         android_job = self.workflow.split("  android-firebase:", 1)[1]
         self.assertIn(
-            "SDL/android-project/gradlew -p android lintFirebaseDebug",
+            "android/gradlew -p android lintFirebaseDebug",
             android_job,
         )
         lint_index = android_job.index("lintFirebaseDebug")

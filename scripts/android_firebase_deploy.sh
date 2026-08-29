@@ -4,7 +4,8 @@ export LANG=en_US.UTF-8
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ANDROID_DIR="${ROOT_DIR}/android"
-GRADLEW="${ROOT_DIR}/SDL/android-project/gradlew"
+GRADLEW="${ROOT_DIR}/android/gradlew"
+REQUIRED_ANDROID_NDK_VERSION="28.2.13676358"
 BUILD_ONLY=0
 SKIP_BUILD=0
 VARIANT="firebaseRelease"
@@ -331,17 +332,10 @@ setup_android_env() {
   fi
   if [ -z "${ANDROID_NDK_HOME:-}" ] ||
      [ ! -f "${ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake" ]; then
-    if [ -n "${ANDROID_HOME:-}" ] &&
-       [ -f "${ANDROID_HOME}/ndk-bundle/build/cmake/android.toolchain.cmake" ]; then
-      ndk_candidate="${ANDROID_HOME}/ndk-bundle"
-    elif [ -n "${ANDROID_HOME:-}" ] && [ -d "${ANDROID_HOME}/ndk" ]; then
-      ndk_candidate="$(
-        find "${ANDROID_HOME}/ndk" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*' 2>/dev/null |
-          sort -r |
-          head -n 1
-      )"
+    if [ -n "${ANDROID_HOME:-}" ]; then
+      ndk_candidate="${ANDROID_HOME}/ndk/${REQUIRED_ANDROID_NDK_VERSION}"
     fi
-    if [ -n "${ndk_candidate}" ]; then
+    if [ -f "${ndk_candidate}/build/cmake/android.toolchain.cmake" ]; then
       export ANDROID_NDK_HOME="${ndk_candidate}"
     fi
   fi
@@ -356,6 +350,10 @@ setup_android_env() {
 
   if [ ! -f "${ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake" ]; then
     echo "ANDROID_NDK_HOME does not contain build/cmake/android.toolchain.cmake: ${ANDROID_NDK_HOME}" >&2
+    exit 1
+  fi
+  if [ "$(basename "${ANDROID_NDK_HOME}")" != "${REQUIRED_ANDROID_NDK_VERSION}" ]; then
+    echo "Android NDK ${REQUIRED_ANDROID_NDK_VERSION} is required; got ${ANDROID_NDK_HOME}." >&2
     exit 1
   fi
 }
