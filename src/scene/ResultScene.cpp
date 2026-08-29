@@ -1128,14 +1128,16 @@ ResultSkinData ResultScene::makeResultSkinData() const {
             : std::optional<std::string>{stageProvenance->player1.option};
     const std::optional<long long> player1Seed =
         stageProvenance == nullptr ? session.playOptionSeed
-                                   : stageProvenance->player1.seed;
+                                   : std::optional<long long>{
+                                         stageProvenance->player1.seed};
     const std::optional<std::string> player2Option =
         stageProvenance == nullptr
             ? session.playOption2
             : std::optional<std::string>{stageProvenance->player2.option};
     const std::optional<long long> player2Seed =
         stageProvenance == nullptr ? session.playOption2Seed
-                                   : stageProvenance->player2.seed;
+                                   : std::optional<long long>{
+                                         stageProvenance->player2.seed};
     data.replayRandomOption1P = replay::projectedBeatorajaReplayOptionIndex(
         player1Option.value_or("NORMAL"));
     data.replayDoublePlayOption =
