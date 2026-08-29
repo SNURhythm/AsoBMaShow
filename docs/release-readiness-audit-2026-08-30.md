@@ -13,7 +13,7 @@ software is free of every defect or vulnerability.
 
 ## Scope
 
-- Base: `origin/main` at `23f02213`
+- Base: `origin/develop` at `e018a47fad69`
 - Audited areas: first-party C, C++, Objective-C++, Java, shell, Ruby release
   tooling, Gradle/Xcode/CMake configuration, GitHub Actions, vendored SQLite,
   mobile backup behavior, network transports, archive handling, persistence,
@@ -26,13 +26,16 @@ software is free of every defect or vulnerability.
 
 | Severity | Finding | Resolution |
 | --- | --- | --- |
-| High | Android targeted API 35 immediately before Google Play's 2026-08-31 API 36 deadline and lacked a repository-owned, checksum-pinned Gradle wrapper. | Moved to compile/target API 36, AGP 8.10.1, Gradle 8.11.1 with verified checksums, and NDK r28. The native libraries pass 16 KiB ELF alignment checks. |
+| High | Android targeted API 35 immediately before Google Play's 2026-08-31 API 36 deadline and lacked a repository-owned, checksum-pinned Gradle wrapper. | Moved to compile/target API 36, AGP 8.10.1, Gradle 8.11.1 with verified checksums, and NDK r28. Gradle and the deploy wrapper now validate the installed NDK revision from `source.properties`, and the native libraries pass 16 KiB ELF alignment checks. |
 | High | Vendored SQLite 3.43.1 predates SQLite's 3.43.2 JSON-parser use-after-free fix and later memory-safety fixes. | Updated the exact upstream amalgamation to SQLite 3.53.4 and pinned a release-policy minimum. |
 | High | The iOS release bundle contained dependencies with current OSV advisories in ActiveSupport, concurrent-ruby, Excon, Faraday, JSON, and JWT. | Updated Fastlane and the affected dependency graph. OSV Scanner reports no known vulnerability in the resulting `Gemfile.lock`. |
 | Medium | Android's private IR API-key file was eligible for cloud backup and device transfer. | Kept general user-data backup enabled but excluded the entire `profiles` subtree in both legacy and Android 12+ backup rule formats. |
-| Medium | Desktop/iOS downloads could follow an HTTPS response to HTTP; HTTPS difficulty-table metadata could also load an HTTP data document. | HTTPS requests now reject HTTP and non-HTTP redirects across curl, `NSURLSession`, and Android. Mixed-content difficulty-table references are rejected before a request is made. Direct legacy HTTP sources remain supported where the platform permits them. |
+| Medium | Desktop/iOS downloads could follow an HTTPS response to HTTP; HTTPS difficulty-table metadata could also load an HTTP data document. | Redirect policy is now derived from the initial URL across curl, `NSURLSession`, and Android: HTTPS origins reject HTTP and non-HTTP downgrades, while direct legacy HTTP origins retain HTTP/HTTPS compatibility. Mixed-content difficulty-table references are rejected before a request is made. |
+| Medium | Fresh `develop` introduced an arm64 libc++ compile failure by mixing `optional<long long>` and `optional<int64_t>` in replay provenance selection. | Normalized the provenance branch to the replay seed type explicitly. Both Android product flavors now complete native compilation and packaging. |
+| Medium | Fresh `develop` split an LR2 graph rectangle that the pinned Beatoraja loader intentionally shares, changing compatibility behavior. | Restored the shared graph dimensions and verified them against the pinned Java oracle. |
 | Low | Split settings translation units emitted duplicate internal-linkage helper bodies and unused-function warnings; other first-party functions and locals were dead. | Converted header-defined helpers to ODR-safe `inline` functions and removed unused wrappers, locals, and the obsolete course replay builder. |
-| Low | Release scripts emitted actionable ShellCheck diagnostics. | Corrected the scripts and documented the one intentionally literal CocoaPods expression. ShellCheck is clean. |
+| Low | Release scripts emitted actionable ShellCheck diagnostics and could inherit a hostile caller `CDPATH`. | Corrected the scripts, isolated directory changes from caller `CDPATH`, documented the one intentionally literal CocoaPods expression, and added a hostile-environment regression. ShellCheck is clean. |
+| Low | The resource-catalog test passed only after the desktop app had copied runtime assets into the build directory. | Made its runtime asset working directory explicit so the clean iOS release verifier is independent of target build order. |
 | Low | FFmpeg and x264 license files shipped, but the top-level notice did not describe them or their GPL release obligations. | Added explicit FFmpeg/x264 notice and release-checklist sections. |
 
 Relevant policy and upstream references:
@@ -65,7 +68,8 @@ Relevant policy and upstream references:
 
 ### Secrets
 
-Gitleaks 8.30.1 scanned the complete Git history (3,194 commits). Twelve
+Gitleaks 8.30.1 scanned the complete Git history at the original audit point
+(3,194 commits). Twelve
 candidates were manually reviewed as generated-code keywords, test
 placeholders, or public Firebase client configuration. No private signing key,
 service credential, bearer token, or production password was confirmed.
@@ -107,15 +111,15 @@ gitignored and were not added by this branch.
 | Area | Result |
 | --- | --- |
 | Desktop configure/build | Clean Debug configure and `main` build passed. |
-| Desktop tests | 186/186 CTest tests passed in parallel. |
+| Desktop tests | 282/282 CTest tests passed with six-way parallel scheduling; deadline-sensitive and exact fault-injection suites are explicitly isolated. |
 | Security regression | SQL-injection-shaped playlist names and HTTPS mixed-content rejection passed. |
 | Undefined behavior | Six ownership/storage-focused UBSan targets passed; address/leak sanitizer limitation documented above. |
 | Allocator diagnostics | Six ownership/storage-focused targets passed with Apple malloc diagnostics enabled. |
-| Android policy tests | 10/10 release workflow tests and 15/15 cross-platform contract tests passed. |
-| Android builds | Play and Firebase debug unit tests, lint, assembly, and Java/native compilation passed. |
-| Android native ABI | Every shipped native library has a minimum ELF `LOAD` alignment of 0x4000; APK zip alignment passed `-P 16`. |
-| iOS policy tests | 24/24 setup, 12/12 workflow, 9/9 artifact-audit, and 3/3 documentation tests passed. |
-| iOS build | `scripts/ios_release_verify.sh` passed its native tests, unsigned device build, and artifact audit without distribution. |
+| Android policy tests | 11/11 release workflow tests and 24/24 cross-platform contract tests passed. |
+| Android builds | Play and Firebase debug unit tests, lint, assembly, and Java/native compilation passed after the rebase. Production signing material is not present in this worktree, so the signed release flavor remains an external gate. |
+| Android native ABI | APKs passed 16 KiB zip alignment and v2 signature verification; `libmain.so` has GNU RELRO, immediate binding, and a non-executable stack. The audit's full native-library ELF `LOAD` alignment check passed at 0x4000. |
+| iOS policy tests | 49/49 setup, 18/18 workflow, 16/16 artifact-audit, and 3/3 documentation tests passed. |
+| iOS build | `scripts/ios_release_verify.sh` passed 66/66 native release-critical tests, an unsigned arm64 device build under Xcode 26, and the resulting `.app` artifact audit without distribution. |
 | Release scripts | `shellcheck scripts/*.sh` passed. |
 | Dependency advisories | Final iOS Ruby OSV scan passed with no known advisories. |
 | Secret history | Full-history Gitleaks scan completed; all candidates reviewed as non-secret. |
@@ -139,3 +143,14 @@ These are release operations, not unresolved source defects:
   disclosures, and store terms. This audit is not legal advice.
 - Confirm crash reporting/operational monitoring and rollback ownership for
   the production rollout.
+
+## Rebase and review closure
+
+This branch was rebased onto the updated `develop` tip before final
+verification. The review findings were reproduced and resolved as focused
+commits: safe legacy HTTP redirect behavior was preserved, the installed NDK
+revision is read from metadata rather than inferred from its directory name,
+and release scripts are insulated from caller `CDPATH`. The rebase also exposed
+and fixed the Android arm64 seed-type compile failure, the LR2 graph-rectangle
+compatibility regression, stale skin/lifecycle test contracts, callback-budget
+test coupling, and the clean-build runtime-font dependency described above.
