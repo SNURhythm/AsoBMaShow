@@ -1352,6 +1352,10 @@ bool ResultScene::persistModernCourseResult() {
     session.modernCoursePersistenceOutcome =
         context.persistModernCourse(*session.modernCourseAttempt);
   }
+  if (session.modernCoursePlayedAtUnixMillis > 0) {
+    local->currentScoreDateUnixSeconds =
+        session.modernCoursePlayedAtUnixMillis / 1'000;
+  }
   const auto &outcome = *session.modernCoursePersistenceOutcome;
   applyModernCoursePersistencePresentation(session, local->persistenceOptions);
   SDL_Log("Modern course persistence state=%d diagnostic=%s",

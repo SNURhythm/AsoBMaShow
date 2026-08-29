@@ -551,6 +551,10 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
                   "} else if (isCourseStageResult()) {",
                   "saved modern course stages project durable setup provenance");
   requireContains(result,
+                  "local->currentScoreDateUnixSeconds =\n"
+                  "        session.modernCoursePlayedAtUnixMillis / 1'000;",
+                  "course persistence refreshes the immediate result score date");
+  requireContains(result,
                   "local->attemptProvenance.player1.option",
                   "saved modern course stages retain the first-player option");
   requireContains(result,

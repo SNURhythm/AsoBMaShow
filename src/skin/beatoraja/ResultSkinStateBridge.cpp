@@ -1485,21 +1485,21 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
                        (data_.meta->PlayLength / 1'000'000LL) % 60LL))
                  : std::nullopt;
     case 90:
-      return data_.gameplayGraph.chart &&
-                     data_.gameplayGraph.chart->maximumBpm > 0.0
-                 ? std::optional<int>(static_cast<int>(
-                       data_.gameplayGraph.chart->maximumBpm))
-                 : (data_.meta ? std::optional<int>(
-                       static_cast<int>(data_.meta->MaxBpm))
-                               : std::nullopt);
+      return data_.meta
+                 ? std::optional<int>(javaDoubleToInt(data_.meta->MaxBpm))
+                 : (data_.gameplayGraph.chart &&
+                            data_.gameplayGraph.chart->maximumBpm > 0.0
+                        ? std::optional<int>(javaDoubleToInt(
+                              data_.gameplayGraph.chart->maximumBpm))
+                        : std::nullopt);
     case 91:
-      return data_.gameplayGraph.chart &&
-                     data_.gameplayGraph.chart->minimumBpm > 0.0
-                 ? std::optional<int>(static_cast<int>(
-                       data_.gameplayGraph.chart->minimumBpm))
-                 : (data_.meta ? std::optional<int>(
-                       static_cast<int>(data_.meta->MinBpm))
-                               : std::nullopt);
+      return data_.meta
+                 ? std::optional<int>(javaDoubleToInt(data_.meta->MinBpm))
+                 : (data_.gameplayGraph.chart &&
+                            data_.gameplayGraph.chart->minimumBpm > 0.0
+                        ? std::optional<int>(javaDoubleToInt(
+                              data_.gameplayGraph.chart->minimumBpm))
+                        : std::nullopt);
     case 92:
       return data_.gameplayGraph.chart && data_.gameplayGraph.chart->mainBpm > 0.0
                  ? std::optional<int>(static_cast<int>(

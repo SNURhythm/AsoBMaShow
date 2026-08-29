@@ -6577,6 +6577,23 @@ void testResultBridgePreservesCompletedGameplayGraph() {
          "result bridge preserves the completed gameplay graph snapshot");
 }
 
+void testResultBridgeUsesRawChartBpmForResultProperties() {
+  bms_parser::ChartMeta meta;
+  meta.MinBpm = 120.0;
+  meta.MaxBpm = 180.0;
+  auto chart = std::make_shared<SkinGameplayChartGraphState>();
+  chart->minimumBpm = 60.0;
+  chart->maximumBpm = 360.0;
+  ResultSkinStateBridge bridge(
+      {.meta = &meta, .gameplayGraph = {.chart = std::move(chart)}}, 1, 0);
+  const auto maximum = bridge.integerProperty({90}, {});
+  const auto minimum = bridge.integerProperty({91}, {});
+  expect(maximum.supported && maximum.value == 180 && minimum.supported &&
+             minimum.value == 120,
+         "result BPM properties use raw chart BPM rather than graph scroll "
+         "speeds");
+}
+
 void testRequestedExternalResultSkinCreatesSession() {
   const char *configuredRoot =
       std::getenv("ASOBMASHOW_EXTERNAL_RESULT_SKIN_ROOT");
@@ -6727,6 +6744,7 @@ int main() {
   testCourseResultBridgeDoesNotInventMusicResultTimingStatistics();
   testResultBridgeUsesRemotePresentationValues();
   testResultBridgePreservesCompletedGameplayGraph();
+  testResultBridgeUsesRawChartBpmForResultProperties();
   testRequestedExternalResultSkinCreatesSession();
   if (failures != 0) {
     std::cerr << failures << " play skin session test(s) failed\n";
