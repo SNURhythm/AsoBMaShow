@@ -862,7 +862,11 @@ return {
     }
     LuaSkinFileSystem *borrowed = fileSystem.get();
     auto runtime = LuaSkinRuntime::create(
-        {.purpose = purpose, .fileSystem = std::move(fileSystem)});
+        {.purpose = purpose,
+         .fileSystem = std::move(fileSystem),
+         // This fixture characterizes captured file-facade behavior, while
+         // dedicated runtime tests cover the production callback budgets.
+         .safetyPolicy = SkinSafetyPolicy(SkinSafetyLevel::Unrestricted)});
     expect(runtime.runtime != nullptr, "writable host contract runtime creates");
     if (!runtime.runtime) {
       return std::nullopt;

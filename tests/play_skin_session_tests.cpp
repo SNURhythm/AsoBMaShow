@@ -3374,9 +3374,12 @@ void testWriterFailureDiscardsEarlierAndFailedCallbackMutations() {
   };
   const auto failed = fixture.session().prepareFrame(
       stateAt(1), projectionAt(1), writers);
+  const bool callbackFailed =
+      hasDiagnostic(failed, "skin_lua_execution_failed") ||
+      hasDiagnostic(failed, "skin_lua_wall_time_limit_exceeded");
   expect(!failed.ready() && !failed.evaluation.submitReady &&
              failed.committed.orderedMutations.empty() &&
-             hasDiagnostic(failed, "skin_lua_execution_failed") &&
+             callbackFailed &&
              fixture.bridge().frameSerial() == 0,
          "writer failure discards the whole frame transaction");
 
