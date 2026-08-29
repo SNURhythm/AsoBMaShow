@@ -4,3 +4,4 @@
 *.hpp text
 *.h text
 *.cpp text
+src/sqlite3.c -whitespace

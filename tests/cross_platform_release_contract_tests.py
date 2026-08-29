@@ -31,6 +31,7 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
         cls.main = read("src/main.cpp")
         cls.audio_decoder = read("src/audio/decoder.cpp")
         cls.replay_store = read("src/replay/ReplayFileStore.cpp")
+        cls.sqlite_header = read("src/sqlite3.h")
         cls.macos_triplet = read("vcpkg-triplets/arm64-osx-asobmashow.cmake")
         cls.play_skin_state_bridge = read(
             "src/skin/beatoraja/PlaySkinStateBridge.cpp"
@@ -40,6 +41,15 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
             "src/skin/beatoraja/SkinDestinationEvaluator.cpp"
         )
         cls.msvc_test_diagnostics = read("tests/support/MsvcTestDiagnostics.cpp")
+
+    def test_vendored_sqlite_includes_audited_memory_safety_fixes(self):
+        version_match = re.search(
+            r"^#define SQLITE_VERSION_NUMBER\s+(\d+)$",
+            self.sqlite_header,
+            flags=re.MULTILINE,
+        )
+        self.assertIsNotNone(version_match)
+        self.assertGreaterEqual(int(version_match.group(1)), 3_053_004)
 
     def test_public_version_is_0_0_1_on_desktop_and_android(self):
         self.assertRegex(
