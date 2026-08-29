@@ -6239,7 +6239,13 @@ void testResultBridgeMapsNamedResultAndRankingProperties() {
              catalog.contains(value,
                               SkinBuiltinPropertySelector{"ranking_exscore+01"}) &&
              catalog.contains(image,
-                              SkinBuiltinPropertySelector{"cleartype_ranking+02"}),
+                              SkinBuiltinPropertySelector{"cleartype_ranking+02"}) &&
+             catalog.contains(value,
+                              SkinBuiltinPropertySelector{"ir_player_failed"}) &&
+             catalog.contains(
+                 value, SkinBuiltinPropertySelector{"ir_player_failed_rate"}) &&
+             catalog.contains(value, SkinBuiltinPropertySelector{
+                                         "ir_player_failed_rate_afterdot"}),
          "result bridge retains source names and domains for result and "
          "ranking properties");
 }

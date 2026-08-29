@@ -224,43 +224,6 @@ resultFloatSelector(const SkinBuiltinPropertySelector &selector) {
   return std::nullopt;
 }
 
-std::optional<int> resultIrIntegerSelector(std::string_view name) {
-  // IntegerPropertyFactory's three IR clear-statistic property patterns use
-  // the same names in a non-contiguous ID order. Keep the source's arrays
-  // together so names and numeric IDs cannot drift apart.
-  constexpr std::array<std::string_view, 11> clearTypes{{
-      "noplay", "failed", "assist", "lightassist", "easy", "normal",
-      "hard", "exhard", "fullcombo", "perfect", "max",
-  }};
-  constexpr std::array<int, 11> clearCounts{{
-      202, 210, 204, 206, 212, 214, 216, 208, 218, 222, 224,
-  }};
-  constexpr std::array<int, 11> clearRates{{
-      203, 211, 205, 207, 213, 215, 217, 209, 219, 223, 225,
-  }};
-  constexpr std::array<int, 11> clearRateAfterDots{{
-      230, 234, 231, 232, 235, 236, 237, 233, 238, 239, 240,
-  }};
-  constexpr std::string_view prefix = "ir_player_";
-  const auto match = [&](std::string_view suffix,
-                         const std::array<int, 11> &ids) -> std::optional<int> {
-    for (std::size_t index = 0; index < clearTypes.size(); ++index) {
-      const std::size_t clearTypeOffset = prefix.size();
-      if (name.size() == prefix.size() + clearTypes[index].size() +
-                             suffix.size() &&
-          name.starts_with(prefix) && name.ends_with(suffix) &&
-          name.substr(clearTypeOffset, clearTypes[index].size()) ==
-              clearTypes[index]) {
-        return ids[index];
-      }
-    }
-    return std::nullopt;
-  };
-  if (const auto id = match("", clearCounts)) return id;
-  if (const auto id = match("_rate", clearRates)) return id;
-  return match("_rate_afterdot", clearRateAfterDots);
-}
-
 std::optional<int> resultNumberedRankingSelector(std::string_view name) {
   constexpr std::array<std::pair<std::string_view, int>, 4> prefixes{{
       {"ranking_exscore", 380}, {"ranking_index", 390},
@@ -392,7 +355,6 @@ std::optional<int> ResultSkinStateBridge::integerSelector(
   const auto *name = std::get_if<std::string>(&selector.value);
   if (name == nullptr) return std::nullopt;
   if (const auto id = beatorajaIntegerValuePropertySelector(*name)) return id;
-  if (const auto id = resultIrIntegerSelector(*name)) return id;
   if (const auto id = resultNumberedRankingSelector(*name)) return id;
   constexpr std::string_view coursePrefix = "coursetitle";
   if (name->starts_with(coursePrefix)) {

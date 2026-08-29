@@ -11454,6 +11454,12 @@ void MainMenuScene::startModernReplayResultRecall(
             const bms_parser::ChartMeta meta = chart->Meta;
             const std::string attemptId = result.result.attemptId;
             const ScoreProvenance provenance = result.result.score.provenance;
+            const SkinGameplayGraphState gameplayGraph =
+                completion->retryData != nullptr
+                    ? replay_result::BuildSkinGameplayGraphState(
+                          *chart, *completion->retryData, result.state)
+                    : replay_result::BuildSkinGameplayChartGraphState(
+                          *chart, result.state);
             replayResultRecallInProgress = false;
             context.sceneManager->changeScene(
                 std::make_unique<ResultScene>(
@@ -11463,7 +11469,7 @@ void MainMenuScene::startModernReplayResultRecall(
                     profileSelections.pacemakerTarget, std::move(chart),
                     nullptr, std::nullopt, completion->retryData.get(),
                     attemptId, completion->retryData != nullptr,
-                    ResultTableContext{}, SkinGameplayGraphState{},
+                    ResultTableContext{}, gameplayGraph,
                     result.result.playedAtUnixMillis),
                 true);
           });

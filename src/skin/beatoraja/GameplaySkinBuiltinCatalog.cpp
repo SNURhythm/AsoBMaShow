@@ -86,6 +86,43 @@ std::optional<int> numberedPropertySelector(std::string_view name,
              : std::nullopt;
 }
 
+std::optional<int> irClearIntegerPropertySelector(
+    std::string_view name) noexcept {
+  // IntegerPropertyFactory's three IR clear-statistic patterns share their
+  // skin-facing name arrays but use non-contiguous numeric IDs.
+  constexpr std::array<std::string_view, 11> clearTypes{{
+      "noplay", "failed", "assist", "lightassist", "easy", "normal",
+      "hard", "exhard", "fullcombo", "perfect", "max",
+  }};
+  constexpr std::array<int, 11> clearCounts{{
+      202, 210, 204, 206, 212, 214, 216, 208, 218, 222, 224,
+  }};
+  constexpr std::array<int, 11> clearRates{{
+      203, 211, 205, 207, 213, 215, 217, 209, 219, 223, 225,
+  }};
+  constexpr std::array<int, 11> clearRateAfterDots{{
+      230, 234, 231, 232, 235, 236, 237, 233, 238, 239, 240,
+  }};
+  constexpr std::string_view prefix = "ir_player_";
+  const auto match = [&](std::string_view suffix,
+                         const std::array<int, 11> &ids) -> std::optional<int> {
+    for (std::size_t index = 0; index < clearTypes.size(); ++index) {
+      const std::size_t clearTypeOffset = prefix.size();
+      if (name.size() == prefix.size() + clearTypes[index].size() +
+                             suffix.size() &&
+          name.starts_with(prefix) && name.ends_with(suffix) &&
+          name.substr(clearTypeOffset, clearTypes[index].size()) ==
+              clearTypes[index]) {
+        return ids[index];
+      }
+    }
+    return std::nullopt;
+  };
+  if (const auto id = match("", clearCounts)) return id;
+  if (const auto id = match("_rate", clearRates)) return id;
+  return match("_rate_afterdot", clearRateAfterDots);
+}
+
 std::vector<SkinBuiltinBindingCatalogEntry> makeCatalog() {
   std::vector<SkinBuiltinBindingCatalogEntry> entries;
   entries.reserve(600);
@@ -427,7 +464,10 @@ beatorajaIntegerValuePropertySelector(std::string_view name) noexcept {
   if (const auto id = numberedPropertySelector(name, "ranking_exscore", 380)) {
     return id;
   }
-  return numberedPropertySelector(name, "ranking_index", 390);
+  if (const auto id = numberedPropertySelector(name, "ranking_index", 390)) {
+    return id;
+  }
+  return irClearIntegerPropertySelector(name);
 }
 
 std::span<const BeatorajaNamedBooleanProperty>

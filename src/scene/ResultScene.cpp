@@ -831,7 +831,7 @@ ResultScene::ResultScene(
         session, local.resultState, local.attemptProvenance);
     local.currentClearLabelOverride = clearTypeRankToLabel(clearRank);
     local.currentClearRankOverride = clearRank;
-  } else if (!local.modernReplayAttemptId.has_value()) {
+  } else {
     const int maximumScore =
         result_contract::maximumScoreForNotes(local.meta.TotalNotes).value_or(0);
     const int clearRank = replay_clear_mark::effectiveClearRank(

@@ -436,6 +436,13 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
       "to the reconstructed gauge clear");
   requireContains(
       result,
+      "} else {\n"
+      "    const int maximumScore =\n"
+      "        result_contract::maximumScoreForNotes(local.meta.TotalNotes).value_or(0);",
+      "persisted chart results derive Beatoraja's full-combo rank before "
+      "their modern record is recalled");
+  requireContains(
+      result,
       "if (local->autoPlayResult) {\n"
       "    data.currentClearLabelOverride = \"AUTO PLAY\";\n"
       "  } else if (local->currentClearLabelOverride.has_value()) {",
@@ -534,7 +541,7 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
                   "*replayChart, *stageReplay, stage.state",
                   "saved course graph reconstruction uses the replay-prepared chart");
   requireOrdered(mainMenu, "auto view = std::move(*recalled.value);",
-                 "replay_result::BuildSkinGameplayGraphState(",
+                 "*replayChart, *stageReplay, stage.state",
                  "saved course graph reconstruction occurs before ResultScene uses it");
   requireContains(result,
                   "} else if (isCourseStageResult()) {",
@@ -599,6 +606,15 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
                   "                      *stage.chart, stage.state)",
                   "replay-less saved course stages preserve authored graph data without "
                   "synthetic judgement samples");
+  requireContains(
+      mainMenu,
+      "const SkinGameplayGraphState gameplayGraph =\n"
+      "                completion->retryData != nullptr\n"
+      "                    ? replay_result::BuildSkinGameplayGraphState(\n"
+      "                          *chart, *completion->retryData, result.state)\n"
+      "                    : replay_result::BuildSkinGameplayChartGraphState(\n"
+      "                          *chart, result.state);",
+      "replay-less saved chart results retain prepared chart graph metadata");
   requireContains(session, "writerInvocationFor(",
                   "result sliders resolve their authored writer invocation");
   requireContains(
