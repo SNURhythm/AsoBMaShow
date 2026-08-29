@@ -28,8 +28,12 @@ makeResultSkinConfiguration(const AppSettings &settings) {
                                                                        : 0;
   const int bottomShiftableGaugeImageIndex =
       settings.selectedGaugeAutoShiftLowerBound == "easy"   ? 1
-      : settings.selectedGaugeAutoShiftLowerBound == "normal" ? 2
-                                                               : 0;
+      : settings.selectedGaugeAutoShiftLowerBound == "normal" ||
+              settings.selectedGaugeAutoShiftLowerBound == "hard" ||
+              settings.selectedGaugeAutoShiftLowerBound == "exhard" ||
+              settings.selectedGaugeAutoShiftLowerBound == "hazard"
+          ? 2
+          : 0;
   return {
       .gameplayHispeed = settings.gameplayHispeed,
       .notesDisplayTimingMilliseconds =

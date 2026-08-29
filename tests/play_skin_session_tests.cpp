@@ -5896,6 +5896,20 @@ void testResultSkinConfigurationCarriesPlayerConfigAcrossResultSurfaces() {
          "one shared source-compatible configuration snapshot");
 }
 
+void testResultSkinConfigurationClampsExtendedGaugeLowerBounds() {
+  const auto configuredLowerBound = [](const char *value) {
+    AppSettings settings;
+    settings.selectedGaugeAutoShiftLowerBound = value;
+    return makeResultSkinConfiguration(settings).bottomShiftableGaugeImageIndex;
+  };
+
+  expect(configuredLowerBound("hard") == 2 &&
+             configuredLowerBound("exhard") == 2 &&
+             configuredLowerBound("hazard") == 2,
+         "result bottom-shiftable gauge follows PlayerConfig's Normal upper "
+         "bound when Aso's extended lower-bound options are selected");
+}
+
 void testResultBridgeSharesSourceStringPropertyResolution() {
   ResultSkinConfigurationData configuration{
       .modeFilterName = "7 KEYS",
@@ -6669,6 +6683,7 @@ int main() {
   testResultBridgeRetainsResultIntegerFactoryFallbacks();
   testResultBridgeRetainsAuthenticatedScoreDate();
   testResultSkinConfigurationCarriesPlayerConfigAcrossResultSurfaces();
+  testResultSkinConfigurationClampsExtendedGaugeLowerBounds();
   testResultBridgeSharesSourceStringPropertyResolution();
   testResultBridgeProjectsLongNoteModeImageIndex();
   testResultBridgeMatchesBeatorajaTableFullString();
