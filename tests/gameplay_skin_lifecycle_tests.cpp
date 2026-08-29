@@ -95,13 +95,31 @@ public:
     currentLease = &*firstLease;
     owner.profileId = profile;
     owner.generation = 5;
-    owner.settings.gameplayCompatibilityEnabled = true;
-    owner.settings.selected7KeyEntry = entry;
-    owner.settings.selectedGameplayEntries.emplace(0, entry);
     owner.settings.entries[entry].options["choice"] = 0;
+    setSelectedSkinEntries({{0, entry}});
     activeEntrySettings.emplace(entry, owner.settings.entries.at(entry));
     activatedEntries.push_back(entry);
     catalog = std::make_shared<SkinPackageCatalogSnapshot>();
+  }
+
+  void setSelectedSkinEntries(std::map<int, SkinEntryId> selections) {
+    owner.settings.selectedSkinEntries = std::move(selections);
+    owner.settings.selectedGameplayEntries.clear();
+    owner.settings.selected7KeyEntry.reset();
+    owner.settings.gameplayCompatibilityEnabled = false;
+    owner.settings.sanitize();
+  }
+
+  void selectSkinEntry(int skinType, const SkinEntryId &selected) {
+    auto selections = owner.settings.selectedSkinEntries;
+    selections.insert_or_assign(skinType, selected);
+    setSelectedSkinEntries(std::move(selections));
+  }
+
+  void clearSelectedSkinEntry(int skinType) {
+    auto selections = owner.settings.selectedSkinEntries;
+    selections.erase(skinType);
+    setSelectedSkinEntries(std::move(selections));
   }
 
   GameplaySkinLifecycleDependencies dependencies() {
@@ -523,8 +541,8 @@ void testStartupRestoresPersistedSelectionWithoutRescan() {
 
 void testStartupRevalidatesEverySelectedTraitFromCurrentGeneration() {
   LifecycleFake fake;
-  fake.owner.settings.selectedGameplayEntries.emplace(1, fake.secondEntry);
   fake.owner.settings.entries[fake.secondEntry].options["choice"] = 5;
+  fake.selectSkinEntry(1, fake.secondEntry);
   fake.simulateRestart();
 
   GameplaySkinLifecycle lifecycle(fake.dependencies());
@@ -560,8 +578,8 @@ void testStartupRevalidatesEverySelectedTraitFromCurrentGeneration() {
 
 void testStartupRevalidationDoesNotRestoreAClearedEntry() {
   LifecycleFake fake;
-  fake.owner.settings.selectedGameplayEntries.emplace(1, fake.secondEntry);
   fake.owner.settings.entries[fake.secondEntry].options["choice"] = 5;
+  fake.selectSkinEntry(1, fake.secondEntry);
   fake.simulateRestart();
 
   GameplaySkinLifecycle lifecycle(fake.dependencies());
@@ -578,7 +596,7 @@ void testStartupRevalidationDoesNotRestoreAClearedEntry() {
 
   // The second startup revalidation is still queued while the first finishes.
   // A user clear must win over that stale queued item.
-  fake.owner.settings.selectedGameplayEntries.erase(1);
+  fake.clearSelectedSkinEntry(1);
   ++fake.owner.generation;
   lifecycle.poll();
 
@@ -588,8 +606,7 @@ void testStartupRevalidationDoesNotRestoreAClearedEntry() {
 
 void testStartupRevalidationKeepsAnEntrySelectedDuringTraitNormalization() {
   LifecycleFake fake;
-  fake.owner.settings.selectedGameplayEntries.clear();
-  fake.owner.settings.selectedGameplayEntries.emplace(1, fake.entry);
+  fake.setSelectedSkinEntries({{1, fake.entry}});
   fake.simulateRestart();
 
   GameplaySkinLifecycle lifecycle(fake.dependencies());
@@ -598,8 +615,7 @@ void testStartupRevalidationKeepsAnEntrySelectedDuringTraitNormalization() {
   // Profile recovery can normalize the trait map after startup queued work
   // from its first snapshot. The selected entry is unchanged, so recovery
   // must continue rather than leaving it without a process-local activation.
-  fake.owner.settings.selectedGameplayEntries.clear();
-  fake.owner.settings.selectedGameplayEntries.emplace(2, fake.entry);
+  fake.setSelectedSkinEntries({{2, fake.entry}});
   ++fake.owner.generation;
   lifecycle.poll();
 
@@ -910,9 +926,7 @@ void testDisabledNextChartClearsThePreviousSessionIdentity() {
       .entry = chart->activation.entry,
       .revisionDigest = chart->activation.revision.revision().lowercaseSha256,
       .configurationDigest = chart->activation.configurationDigest};
-  fake.owner.settings.selectedGameplayEntries.clear();
-  fake.owner.settings.selected7KeyEntry.reset();
-  fake.owner.settings.gameplayCompatibilityEnabled = false;
+  fake.setSelectedSkinEntries({});
   ++fake.owner.generation;
   require(!lifecycle.acquireForNextChart() &&
               lifecycle.requestViewportReset(identity, {}).disposition ==
@@ -922,10 +936,7 @@ void testDisabledNextChartClearsThePreviousSessionIdentity() {
 
 void testNextChartAcquisitionUsesTheMatchingKeymodeTrait() {
   LifecycleFake fake;
-  fake.owner.settings.selectedGameplayEntries.clear();
-  fake.owner.settings.selectedGameplayEntries.emplace(1, fake.entry);
-  fake.owner.settings.selected7KeyEntry.reset();
-  fake.owner.settings.gameplayCompatibilityEnabled = true;
+  fake.setSelectedSkinEntries({{1, fake.entry}});
   GameplaySkinLifecycle lifecycle(fake.dependencies());
   lifecycle.startAfterProfileInitialization(fake.profile);
 
