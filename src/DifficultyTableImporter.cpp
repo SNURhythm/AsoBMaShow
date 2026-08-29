@@ -173,9 +173,31 @@ std::string trimUrlForBase(std::string url) {
   return url;
 }
 
+constexpr char asciiLower(char value) noexcept {
+  return value >= 'A' && value <= 'Z' ? static_cast<char>(value + ('a' - 'A'))
+                                      : value;
+}
+
+bool startsWithAsciiCaseInsensitive(std::string_view value,
+                                    std::string_view prefix) noexcept {
+  if (value.size() < prefix.size()) {
+    return false;
+  }
+  for (std::size_t index = 0; index < prefix.size(); ++index) {
+    if (asciiLower(value[index]) != asciiLower(prefix[index])) {
+      return false;
+    }
+  }
+  return true;
+}
+
 std::string resolveUrl(const std::string &baseUrl, const std::string &link) {
-  if (link.starts_with("http://") || link.starts_with("https://")) {
-    if (baseUrl.starts_with("https://") && link.starts_with("http://")) {
+  const bool linkUsesHttp =
+      startsWithAsciiCaseInsensitive(link, "http://");
+  const bool linkUsesHttps =
+      startsWithAsciiCaseInsensitive(link, "https://");
+  if (linkUsesHttp || linkUsesHttps) {
+    if (startsWithAsciiCaseInsensitive(baseUrl, "https://") && linkUsesHttp) {
       return "";
     }
     return link;
@@ -229,7 +251,8 @@ std::string resolveUrl(const std::string &baseUrl, const std::string &link) {
 
 std::string jsonUrlAt(const json &object, const char *key) {
   const std::string value = trimCopy(jsonStringAt(object, key));
-  if (value.starts_with("http://") || value.starts_with("https://") ||
+  if (startsWithAsciiCaseInsensitive(value, "http://") ||
+      startsWithAsciiCaseInsensitive(value, "https://") ||
       value.starts_with("//") || value.starts_with("/")) {
     return value;
   }
@@ -244,7 +267,8 @@ std::string jsonUrlAt(const json &object, const char *key) {
 bool looksLikeDifficultyTableListItem(const json &item) {
   if (item.is_string()) {
     const std::string url = trimCopy(item.get<std::string>());
-    return url.starts_with("http://") || url.starts_with("https://") ||
+    return startsWithAsciiCaseInsensitive(url, "http://") ||
+           startsWithAsciiCaseInsensitive(url, "https://") ||
            url.starts_with("//") || url.starts_with("/");
   }
   if (!item.is_object() || item.contains("md5") || item.contains("sha256")) {
@@ -866,8 +890,8 @@ bool DifficultyTableImporter::ImportFromUrl(
     }
     return false;
   }
-  if (!trimmedUrl.starts_with("http://") &&
-      !trimmedUrl.starts_with("https://")) {
+  if (!startsWithAsciiCaseInsensitive(trimmedUrl, "http://") &&
+      !startsWithAsciiCaseInsensitive(trimmedUrl, "https://")) {
     if (errorMessage != nullptr) {
       *errorMessage = "Table URL must start with http:// or https://";
     }
@@ -1073,7 +1097,8 @@ bool DifficultyTableImporter::UpdateFromSourceUrl(
     return false;
   }
   const std::string sourceUrl = trimCopy(table->sourceUrl);
-  if (!sourceUrl.starts_with("http://") && !sourceUrl.starts_with("https://")) {
+  if (!startsWithAsciiCaseInsensitive(sourceUrl, "http://") &&
+      !startsWithAsciiCaseInsensitive(sourceUrl, "https://")) {
     if (errorMessage != nullptr) {
       *errorMessage = "Difficulty table does not have an updateable source URL";
     }

@@ -205,34 +205,43 @@ void testInjectedFetcherAndProgress() {
 }
 
 void testHttpsTableRejectsInsecureDataUrl() {
-  TempDirectory temporary;
-  ChartRepository repository(temporary.path() / "chart.db");
-  assert(repository.EnsureReady());
-  auto session = repository.OpenSession();
-  assert(session.has_value());
+  auto rejects = [](const std::string &sourceUrl,
+                    const std::string &insecureDataUrl) {
+    TempDirectory temporary;
+    ChartRepository repository(temporary.path() / "chart.db");
+    assert(repository.EnsureReady());
+    auto session = repository.OpenSession();
+    assert(session.has_value());
 
-  const std::string sourceUrl = "https://example.test/table/header.json";
-  const std::string insecureDataUrl = "http://example.test/table/data.json";
-  std::vector<std::string> requestedUrls;
-  DifficultyTableImporter importer(
-      [&](const std::string &url, std::string *) -> std::optional<std::string> {
-        requestedUrls.push_back(url);
-        if (url == sourceUrl) {
-          return "{\"name\":\"Mixed Content\",\"symbol\":\"M\","
-                 "\"data_url\":\"" +
-                 insecureDataUrl + "\"}";
-        }
-        if (url == insecureDataUrl) {
-          return "[]";
-        }
-        return std::nullopt;
-      });
+    std::vector<std::string> requestedUrls;
+    DifficultyTableImporter importer(
+        [&](const std::string &url,
+            std::string *) -> std::optional<std::string> {
+          requestedUrls.push_back(url);
+          if (url == sourceUrl) {
+            return "{\"name\":\"Mixed Content\",\"symbol\":\"M\","
+                   "\"data_url\":\"" +
+                   insecureDataUrl + "\"}";
+          }
+          if (url == insecureDataUrl) {
+            return "[]";
+          }
+          return std::nullopt;
+        });
 
-  std::string error;
-  assert(!importer.ImportFromUrl(*session, sourceUrl, &error));
-  assert((requestedUrls == std::vector<std::string>{sourceUrl}));
-  assert(error == "HTTPS difficulty tables cannot load data over HTTP");
-  assert(session->SelectDifficultyTables().empty());
+    std::string error;
+    assert(!importer.ImportFromUrl(*session, sourceUrl, &error));
+    assert((requestedUrls == std::vector<std::string>{sourceUrl}));
+    assert(error == "HTTPS difficulty tables cannot load data over HTTP");
+    assert(session->SelectDifficultyTables().empty());
+  };
+
+  rejects("https://example.test/table/header.json",
+          "http://example.test/table/data.json");
+  rejects("HTTPS://example.test/table/header.json",
+          "http://example.test/table/data.json");
+  rejects("https://example.test/table/header.json",
+          "HtTp://example.test/table/data.json");
 }
 
 void testListImportKeepsBoundedConcurrencyAndSkipsExistingSources() {
