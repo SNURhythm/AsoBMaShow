@@ -307,7 +307,22 @@ set_android_version_code() {
   fi
 }
 
+android_ndk_revision() {
+  local source_properties="$1/source.properties"
+  [ -f "${source_properties}" ] || return 1
+  awk -F= '
+    $1 ~ /^[[:space:]]*Pkg\.Revision[[:space:]]*$/ {
+      revision = $2
+      sub(/^[[:space:]]*/, "", revision)
+      sub(/[[:space:]]*$/, "", revision)
+      print revision
+      exit
+    }
+  ' "${source_properties}"
+}
+
 setup_android_env() {
+  local installed_ndk_version=""
   local ndk_candidate=""
 
   if [ -z "${ANDROID_HOME:-}" ] &&
@@ -352,8 +367,9 @@ setup_android_env() {
     echo "ANDROID_NDK_HOME does not contain build/cmake/android.toolchain.cmake: ${ANDROID_NDK_HOME}" >&2
     exit 1
   fi
-  if [ "$(basename "${ANDROID_NDK_HOME}")" != "${REQUIRED_ANDROID_NDK_VERSION}" ]; then
-    echo "Android NDK ${REQUIRED_ANDROID_NDK_VERSION} is required; got ${ANDROID_NDK_HOME}." >&2
+  installed_ndk_version="$(android_ndk_revision "${ANDROID_NDK_HOME}" || true)"
+  if [ "${installed_ndk_version}" != "${REQUIRED_ANDROID_NDK_VERSION}" ]; then
+    echo "Android NDK ${REQUIRED_ANDROID_NDK_VERSION} is required; found '${installed_ndk_version:-unknown}' in ${ANDROID_NDK_HOME}." >&2
     exit 1
   fi
 }

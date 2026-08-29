@@ -17,11 +17,20 @@ def androidNdkRoot = System.getenv('ANDROID_NDK_HOME')
 if ((androidNdkRoot == null || androidNdkRoot.trim().isEmpty()) && androidSdkRoot != null) {
     androidNdkRoot = file("${androidSdkRoot}/ndk/${requiredAndroidNdkVersion}").absolutePath
 }
+def androidNdkProperties = new Properties()
+def androidNdkPropertiesFile = androidNdkRoot == null
+        ? null
+        : file("${androidNdkRoot}/source.properties")
+if (androidNdkPropertiesFile != null && androidNdkPropertiesFile.isFile()) {
+    androidNdkPropertiesFile.withInputStream { androidNdkProperties.load(it) }
+}
+def installedAndroidNdkVersion = androidNdkProperties.getProperty('Pkg.Revision', '').trim()
 if (androidNdkRoot == null || androidNdkRoot.trim().isEmpty() ||
-        file(androidNdkRoot).name != requiredAndroidNdkVersion ||
+        installedAndroidNdkVersion != requiredAndroidNdkVersion ||
         !file("${androidNdkRoot}/build/cmake/android.toolchain.cmake").isFile()) {
     throw new GradleException(
-            "Android NDK ${requiredAndroidNdkVersion} is required. Set ANDROID_NDK_HOME to that installation or install it under ANDROID_HOME/ndk."
+            "Android NDK ${requiredAndroidNdkVersion} is required; found '${installedAndroidNdkVersion ?: 'unknown'}'. " +
+                    "Set ANDROID_NDK_HOME to that installation or install it under ANDROID_HOME/ndk."
     )
 }
 

@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
+import os
 import re
+import subprocess
+import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -46,6 +49,9 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
             self.root_gradle,
         )
         self.assertIn("28.2.13676358", self.gradle)
+        self.assertIn("source.properties", self.gradle)
+        self.assertIn("Pkg.Revision", self.gradle)
+        self.assertNotIn("file(androidNdkRoot).name", self.gradle)
 
         wrapper = ROOT / "android/gradle/wrapper/gradle-wrapper.properties"
         self.assertTrue(wrapper.is_file(), "repository-owned Gradle wrapper is missing")
@@ -135,6 +141,46 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
             'throw new IOException("HTTPS download redirected to insecure HTTP.")',
             self.activity,
         )
+
+    def test_android_deploy_accepts_standalone_ndk_directory_name(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            android_home = root / "sdk"
+            android_home.mkdir()
+            vcpkg_root = root / "vcpkg"
+            vcpkg_root.mkdir()
+            ndk_root = root / "android-ndk-r28c"
+            (ndk_root / "build/cmake").mkdir(parents=True)
+            (ndk_root / "build/cmake/android.toolchain.cmake").touch()
+            (ndk_root / "source.properties").write_text(
+                "Pkg.Desc = Android NDK\nPkg.Revision = 28.2.13676358\n",
+                encoding="utf-8",
+            )
+
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "ANDROID_HOME": str(android_home),
+                    "ANDROID_SDK_ROOT": str(android_home),
+                    "ANDROID_NDK_HOME": str(ndk_root),
+                    "VCPKG_ROOT": str(vcpkg_root),
+                }
+            )
+            result = subprocess.run(
+                [
+                    str(ROOT / "scripts/android_firebase_deploy.sh"),
+                    "--build-only",
+                    "--skip-build",
+                    "--variant",
+                    "firebaseDebug",
+                ],
+                cwd=ROOT,
+                env=environment,
+                text=True,
+                capture_output=True,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_android_lint_is_fatal_and_runs_before_firebase_deploy(self):
         self.assertIn("abortOnError true", self.gradle)
