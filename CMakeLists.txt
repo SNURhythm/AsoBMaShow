@@ -6883,6 +6883,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endforeach()
     if (TARGET skin_resource_catalog_tests)
         asobmashow_register_test(skin_resource_catalog_tests)
+        # The platform-asset bridge resolves the same repository-relative
+        # assets path used by the desktop runtime. Keep this test independent
+        # from whether the main target happened to copy assets into its output.
+        set_tests_properties(skin_resource_catalog_tests PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     endif()
     if (TARGET skin_live_resource_counters_tests)
         asobmashow_register_test(skin_live_resource_counters_tests)
