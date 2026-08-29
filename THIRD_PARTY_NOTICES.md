@@ -85,3 +85,39 @@ Release checklist:
 - Keep `assets/fonts/fa-solid-900.ttf` and `assets/legal/fontawesome-free.txt`
   in app bundles and release archives when music player icon controls are
   shipped.
+
+## FFmpeg
+
+AsoBMaShow links FFmpeg for replay video and audio export. The vcpkg manifest
+enables FFmpeg's `gpl` and `x264` features, so the resulting FFmpeg libraries
+are distributed under GPL-2.0-or-later rather than LGPL terms.
+
+Current desktop vcpkg package checked for this notice: `ffmpeg` 8.1.2#2.
+
+The complete vcpkg-provided FFmpeg license text is checked in at
+`assets/legal/ffmpeg.txt`. The iOS library generation script refreshes this
+file from the package used to create the shipped XCFramework.
+
+Release checklist:
+
+- Keep `assets/legal/ffmpeg.txt` in app bundles and release archives.
+- When updating FFmpeg or regenerating the iOS XCFramework, refresh the notice
+  from the exact package used for the binary.
+- Make the corresponding AsoBMaShow source, build scripts, vcpkg manifest, and
+  any other GPL-required source available to binary recipients.
+
+## x264
+
+AsoBMaShow links x264 through FFmpeg for H.264 replay video export.
+
+Current desktop vcpkg package checked for this notice: `x264` 0.164.3108#2.
+x264 is distributed under GPL-2.0 terms in this build. Its complete
+vcpkg-provided license text is checked in at `assets/legal/x264.txt`.
+
+Release checklist:
+
+- Keep `assets/legal/x264.txt` in app bundles and release archives.
+- When updating x264 or regenerating iOS libraries, refresh the notice from
+  the exact package used for the binary.
+- Preserve the GPL source-availability obligations described above for
+  binaries that include x264.
